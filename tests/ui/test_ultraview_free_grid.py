@@ -10,6 +10,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     clamp_rect,
     export_grid_metrics,
     grid_metrics,
+    group_translate_rects,
     hit_handle,
     keep_aspect_resize,
     legal_grid_rect,
@@ -19,6 +20,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     rects_overlap,
     snapped_move_rect,
     snapped_resize_rect,
+    union_grid_rect,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.ultraview_state import (
@@ -171,3 +173,26 @@ def test_resize_handle_snaps_clamps_and_keeps_aspect():
     assert session.badge() == "8×4"
     assert session.candidate.column_span <= 12
     assert session.candidate.row_span <= 8
+
+
+def test_union_and_group_translate_reject_overflow_or_union_collision():
+    first = GridRect(0, 0, 6, 3)
+    second = GridRect(6, 0, 6, 3)
+    blocker = GridRect(0, 3, 4, 3)
+    union = union_grid_rect((first, second))
+    assert union == GridRect(0, 0, 12, 3)
+    selected = {
+        make_ref("time", "a"): first,
+        make_ref("time", "b"): second,
+    }
+    down, legal_down = group_translate_rects(selected, (), 0, 1)
+    assert legal_down is True
+    assert down[make_ref("time", "a")] == GridRect(0, 1, 6, 3)
+    assert down[make_ref("time", "b")] == GridRect(6, 1, 6, 3)
+    _overflow, legal_right = group_translate_rects(selected, (), 1, 0)
+    assert legal_right is False
+    _blocked, legal_blocked = group_translate_rects(selected, (blocker,), 0, 1)
+    assert legal_blocked is False
+    empty, legal_empty = group_translate_rects({}, (), 1, 0)
+    assert legal_empty is False
+    assert empty == {}

@@ -102,6 +102,7 @@ class UltraViewPage(QWidget):
     select_board_requested = pyqtSignal(str)
     free_grid_toggled = pyqtSignal(bool)
     free_grid_geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
+    free_grid_group_geometry_requested = pyqtSignal(object)
     free_grid_preset_requested = pyqtSignal(str, str, str)
     organize_free_grid_requested = pyqtSignal()
     free_grid_undo_requested = pyqtSignal()
@@ -227,6 +228,9 @@ class UltraViewPage(QWidget):
 
         self._free_grid.ref_dropped.connect(self._on_free_grid_ref_dropped)
         self._free_grid.geometry_requested.connect(self.free_grid_geometry_requested)
+        self._free_grid.group_geometry_requested.connect(
+            self.free_grid_group_geometry_requested
+        )
         self._free_grid.preset_requested.connect(self.free_grid_preset_requested)
         self._free_grid.open_source_requested.connect(self.open_source_requested)
         self._free_grid.focus_requested.connect(self._on_focus)
@@ -609,6 +613,8 @@ class UltraViewPage(QWidget):
         if isinstance(popup, QMenu) and popup.isVisible():
             popup.close()
             return True
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID and self._free_grid.clear_selection():
+            return True
         return False
 
     def resizeEvent(self, event) -> None:  # noqa: N802
@@ -800,6 +806,8 @@ class UltraViewPage(QWidget):
         self._library.set_selected(ref.section, ref.view_id)
         if ref in self._board.unplaced:
             self._tray.set_expanded(True)
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            self._free_grid.select_only(ref.section, ref.view_id)
         self._refresh_projection()
         self.selection_changed.emit(ref.section, ref.view_id)
 

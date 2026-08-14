@@ -223,6 +223,35 @@ def test_free_grid_legalizes_collisions_and_template_conversion_keeps_tray():
     assert tray_ref in board.unplaced
 
 
+def test_set_free_grid_rects_is_atomic_and_rejects_overflow():
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    first = _ref("time", "one")
+    second = _ref("fft", "two")
+    uvs.add_ref(board, first)
+    uvs.add_ref(board, second)
+    assert uvs.set_free_grid_rect(board, first, uvs.GridRect(0, 0, 4, 3)) == []
+    assert uvs.set_free_grid_rect(board, second, uvs.GridRect(6, 0, 4, 3)) == []
+    assert uvs.set_free_grid_rects(
+        board,
+        [
+            (first, uvs.GridRect(0, 1, 4, 3)),
+            (second, uvs.GridRect(6, 1, 4, 3)),
+        ],
+    ) == []
+    assert uvs.free_grid_placement_for(board, first).rect == uvs.GridRect(0, 1, 4, 3)
+    assert uvs.free_grid_placement_for(board, second).rect == uvs.GridRect(6, 1, 4, 3)
+    assert uvs.set_free_grid_rects(
+        board,
+        [(first, uvs.GridRect(0, 1, 4, 3)), (second, uvs.GridRect(0, 1, 4, 3))],
+    ) == ["grid_collision"]
+    assert uvs.free_grid_placement_for(board, second).rect == uvs.GridRect(6, 1, 4, 3)
+    assert uvs.set_free_grid_rects(
+        board, [(first, uvs.GridRect(1, 1, 12, 3))]
+    ) == ["invalid_grid_rect"]
+    assert uvs.free_grid_placement_for(board, first).rect == uvs.GridRect(0, 1, 4, 3)
+
+
 def test_template_to_free_grid_uses_stable_non_overlapping_conversion_maps():
     for layout_id in uvs.LAYOUT_SLOTS:
         board = _filled(layout_id)

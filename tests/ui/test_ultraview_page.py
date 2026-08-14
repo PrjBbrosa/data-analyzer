@@ -1675,6 +1675,103 @@ def test_free_grid_alt_shift_arrow_uses_keyboard_resize(qtbot):
     assert requested == [("time", "key-1", 0, 0, 7, 3, "keyboard-resize")]
 
 
+def _selection_view_ids(free) -> set[str]:
+    return {ref.view_id for ref in free.gesture().selection()}
+
+
+def _marquee(board, start: QPoint, end: QPoint, *, shift: bool = False) -> None:
+    modifiers = Qt.ShiftModifier if shift else Qt.NoModifier
+    QTest.mousePress(board, Qt.LeftButton, modifiers, start)
+    _send_mouse_move(board, end, modifiers=modifiers)
+    QTest.mouseRelease(board, Qt.LeftButton, modifiers, end)
+
+
+def test_free_grid_marquee_selects_intersecting_cards(qtbot):
+    harness = _Harness(qtbot)
+    free, (left, right) = _prepare_free_grid(harness, qtbot, "box-0", "box-1")
+    start = QPoint(8, max(left.geometry().bottom(), right.geometry().bottom()) + 16)
+    end = QPoint(
+        max(left.geometry().right(), right.geometry().right()) - 8,
+        min(left.geometry().top(), right.geometry().top()) + 8,
+    )
+    assert start.y() < free.height()
+    _marquee(free, start, end)
+    assert _selection_view_ids(free) == {"box-0", "box-1"}
+    assert left.model().selected and right.model().selected
+    assert free.ghost_overlay()._handles_rect is None
+    assert len(free.ghost_overlay()._selection_rects) == 2
+
+
+def test_free_grid_shift_click_toggles_selection(qtbot):
+    harness = _Harness(qtbot)
+    free, (left, right) = _prepare_free_grid(harness, qtbot, "shift-0", "shift-1")
+    _select_card(left)
+    QTest.mouseClick(right, Qt.LeftButton, Qt.ShiftModifier, QPoint(40, 40))
+    assert _selection_view_ids(free) == {"shift-0", "shift-1"}
+    QTest.mouseClick(left, Qt.LeftButton, Qt.ShiftModifier, QPoint(40, 40))
+    assert _selection_view_ids(free) == {"shift-1"}
+    assert not left.model().selected
+    assert right.model().selected
+
+
+def test_free_grid_group_move_commits_once_and_keeps_relative_layout(qtbot):
+    harness = _Harness(qtbot)
+    free, (left, right) = _prepare_free_grid(harness, qtbot, "grp-0", "grp-1")
+    _select_card(left)
+    QTest.mouseClick(right, Qt.LeftButton, Qt.ShiftModifier, QPoint(40, 40))
+    requested = []
+    group = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    harness.page.free_grid_group_geometry_requested.connect(group.append)
+    metrics = free.metrics()
+    unit = metrics.row_height + metrics.gutter
+    _drag_card(left, QPoint(24, 24), QPoint(24, 24 + unit))
+    assert requested == []
+    assert group == [
+        (
+            ("time", "grp-0", 0, 1, 6, 3),
+            ("time", "grp-1", 6, 1, 6, 3),
+        )
+    ]
+
+
+def test_free_grid_group_illegal_move_toasts_without_commit(qtbot):
+    harness = _Harness(qtbot)
+    free, (left, right) = _prepare_free_grid(harness, qtbot, "bad-0", "bad-1")
+    _select_card(left)
+    QTest.mouseClick(right, Qt.LeftButton, Qt.ShiftModifier, QPoint(40, 40))
+    group = []
+    toasts = []
+    harness.page.free_grid_group_geometry_requested.connect(group.append)
+    harness.page.feedback_requested.connect(toasts.append)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _drag_card(left, QPoint(24, 24), QPoint(24 + unit, 24))
+    assert group == []
+    assert toasts == ["目标位置与其他卡片重叠"]
+
+
+def test_free_grid_delete_and_backspace_apply_to_whole_selection(qtbot):
+    harness = _Harness(qtbot)
+    free, (left, right) = _prepare_free_grid(harness, qtbot, "del-0", "del-1")
+    _select_card(left)
+    QTest.mouseClick(right, Qt.LeftButton, Qt.ShiftModifier, QPoint(40, 40))
+    left.setFocus(Qt.OtherFocusReason)
+    qtbot.keyClick(left, Qt.Key_Backspace)
+    assert set(harness.unplaced) == {("time", "del-0"), ("time", "del-1")}
+
+
+def test_free_grid_escape_clears_selection(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "esc-sel")
+    _select_card(card)
+    assert _selection_view_ids(free) == {"esc-sel"}
+    assert harness.page.handle_escape() is True
+    assert _selection_view_ids(free) == set()
+    assert free.ghost_overlay()._handles_rect is None
+    assert harness.page.handle_escape() is False
+
+
 def test_make_layout_mime_has_no_product_references():
     forbidden = {"make_layout_mime", "ULTRAVIEW_LAYOUT_MIME", "extract_layout_strings"}
     hits = []

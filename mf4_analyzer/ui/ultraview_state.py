@@ -824,6 +824,39 @@ def set_free_grid_rect(board: UltraViewBoardState, ref: UltraViewRef, rect: Grid
     return [_warn("unknown_ref", f"{ref.section}/{ref.view_id}")]
 
 
+def set_free_grid_rects(
+    board: UltraViewBoardState,
+    updates: Sequence[tuple[UltraViewRef, GridRect]],
+) -> list[str]:
+    """Apply several free-grid moves atomically. Overflow is not clamped."""
+    if board.layout_mode != LAYOUT_MODE_FREE_GRID:
+        return [_warn("not_free_grid")]
+    if not updates:
+        return []
+    by_ref = {item.ref: item for item in board.free_grid}
+    proposed: dict[UltraViewRef, GridRect] = {}
+    for ref, rect in updates:
+        if ref not in by_ref:
+            return [_warn("unknown_ref", f"{ref.section}/{ref.view_id}")]
+        legal = _legal_grid_rect(rect)
+        if legal is None or legal != rect:
+            return [_warn("invalid_grid_rect")]
+        proposed[ref] = legal
+    new_rects = {
+        item.ref: proposed.get(item.ref, item.rect) for item in board.free_grid
+    }
+    items = tuple(new_rects.items())
+    for index, (_ref_a, rect_a) in enumerate(items):
+        for _ref_b, rect_b in items[index + 1 :]:
+            if _grid_overlaps(rect_a, rect_b):
+                return [_warn("grid_collision")]
+    for item in board.free_grid:
+        replacement = proposed.get(item.ref)
+        if replacement is not None:
+            item.rect = replacement
+    return []
+
+
 def free_grid_placement_for(
     board: UltraViewBoardState, ref: UltraViewRef
 ) -> FreeGridPlacement | None:

@@ -6,7 +6,7 @@ or call analysis entry points. Preview records are duck-typed.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Mapping, Sequence
 
@@ -1936,7 +1936,9 @@ class FreeGridCard(UltraViewCard):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
             already_selected = bool(self._model.selected)
-            self.selected.emit(self._model.section, self._model.view_id)
+            shift = bool(event.modifiers() & Qt.ShiftModifier)
+            if not shift and not already_selected:
+                self.selected.emit(self._model.section, self._model.view_id)
             handler = getattr(self.parentWidget(), "handle_card_mouse_press", None)
             if callable(handler):
                 handler(self, event, already_selected)
@@ -1982,6 +1984,10 @@ class FreeGridCard(UltraViewCard):
                 )
                 event.accept()
                 return
+        handler = getattr(self.parentWidget(), "handle_selection_key", None)
+        if callable(handler) and handler(event):
+            event.accept()
+            return
         super().keyPressEvent(event)
 
 
@@ -1990,6 +1996,7 @@ class FreeGridBoard(QWidget):
 
     ref_dropped = pyqtSignal(str, str)
     geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
+    group_geometry_requested = pyqtSignal(object)
     preset_requested = pyqtSignal(str, str, str)
     open_source_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
@@ -2008,6 +2015,7 @@ class FreeGridBoard(QWidget):
         self.setObjectName("ultraViewFreeGrid")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setMinimumSize(240, 160)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._placements: dict[UltraViewRef, FreeGridPlacement] = {}
@@ -2021,6 +2029,7 @@ class FreeGridBoard(QWidget):
         self._replace = ReplaceHoverController(self)
         self._replace.armed.connect(self._on_replace_armed)
         self._replace.cleared.connect(self._on_replace_cleared)
+        self._pending_shift_toggle: UltraViewRef | None = None
 
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
@@ -2038,10 +2047,32 @@ class FreeGridBoard(QWidget):
         return self._overlay
 
     def cancel_gesture(self) -> bool:
-        session = self._gesture.session()
-        if session is None:
+        cancelled = False
+        if self._pending_shift_toggle is not None:
+            self._pending_shift_toggle = None
+            cancelled = True
+        if self._gesture.session() is not None:
+            self._finish_gesture(commit=False)
+            cancelled = True
+        if self._gesture.cancel_marquee():
+            self._release_mouse_if_grabbed()
+            self._overlay.set_marquee(None)
+            self._sync_selection_handles()
+            cancelled = True
+        return cancelled
+
+    def select_only(self, section: str, view_id: str) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        self._gesture.select_only(ref)
+        self._apply_selection_flags()
+
+    def clear_selection(self) -> bool:
+        if not self._gesture.selection():
             return False
-        self._finish_gesture(commit=False)
+        self._gesture.clear_selection()
+        self._apply_selection_flags()
         return True
 
     def card_for(self, section: str, view_id: str) -> FreeGridCard | None:
@@ -2081,8 +2112,9 @@ class FreeGridBoard(QWidget):
                 f"宽 {placement.rect.column_span} 高 {placement.rect.row_span}"
             )
         self._sync_metrics()
+        self._gesture.restrict_selection(self._placements)
         self._raise_overlay()
-        self._sync_selection_handles()
+        self._apply_selection_flags()
 
     def _connect_card(self, card: FreeGridCard) -> None:
         card.open_source_requested.connect(self.open_source_requested)
@@ -2129,7 +2161,7 @@ class FreeGridBoard(QWidget):
             if widget is not None:
                 widget.setGeometry(*rect_to_pixels(placement.rect, self._metrics))
         self._raise_overlay()
-        self._sync_selection_handles()
+        self._apply_selection_flags()
 
     def _grid_at(self, pos: QPoint, *, column_span: int = 1, row_span: int = 1) -> tuple[int, int]:
         legal = legal_grid_rect(
@@ -2147,24 +2179,29 @@ class FreeGridBoard(QWidget):
         mapped = card.mapTo(self, local)
         return mapped.x(), mapped.y()
 
+    def _apply_selection_flags(self) -> None:
+        selected = self._gesture.selection()
+        for ref, widget in self._widgets.items():
+            model = widget.model()
+            flag = ref in selected
+            if model.selected == flag:
+                continue
+            updated = replace(model, selected=flag)
+            self._models[ref] = updated
+            widget.apply_model(updated)
+        self._sync_selection_handles()
+
     def _sync_selection_handles(self) -> None:
-        if self._gesture.is_active():
+        if self._gesture.is_active() or self._gesture.marquee() is not None:
             return
-        selected = next((model for model in self._models.values() if model.selected), None)
-        if selected is None:
-            self._overlay.set_selection_handles(None)
-            return
-        ref = parse_ref_payload(
-            {"section": selected.section, "view_id": selected.view_id}
-        )
-        widget = self._widgets.get(ref) if ref is not None else None
-        if widget is None:
-            self._overlay.set_selection_handles(None)
-            return
-        geom = widget.geometry()
-        self._overlay.set_selection_handles(
-            (geom.x(), geom.y(), geom.width(), geom.height())
-        )
+        rects = []
+        for ref in self._gesture.selection():
+            widget = self._widgets.get(ref)
+            if widget is None:
+                continue
+            geom = widget.geometry()
+            rects.append((geom.x(), geom.y(), geom.width(), geom.height()))
+        self._overlay.set_selection_rects(rects, handles=len(rects) == 1)
 
     def handle_card_mouse_press(
         self,
@@ -2180,21 +2217,52 @@ class FreeGridBoard(QWidget):
         placement = self._placements.get(ref) if ref is not None else None
         if ref is None or placement is None:
             return
+        self._pending_shift_toggle = None
+        if event.modifiers() & Qt.ShiftModifier:
+            handle = None
+            if already_selected and len(self._gesture.selection()) == 1:
+                handle = hit_handle(
+                    (0, 0, card.width(), card.height()),
+                    (event.pos().x(), event.pos().y()),
+                )
+            if handle is not None:
+                board_pos = self._board_pos(card, event.pos())
+                grab = (event.pos().x(), event.pos().y())
+                self._gesture.press_resize(ref, placement.rect, handle, board_pos, grab)
+                return
+            self._pending_shift_toggle = ref
+            return
+        if ref not in self._gesture.selection():
+            self._gesture.select_only(ref)
+            self._apply_selection_flags()
         handle = None
-        if already_selected:
+        if already_selected and len(self._gesture.selection()) == 1:
             handle = hit_handle(
                 (0, 0, card.width(), card.height()),
                 (event.pos().x(), event.pos().y()),
             )
         board_pos = self._board_pos(card, event.pos())
         grab = (event.pos().x(), event.pos().y())
+        group_origins = None
+        if handle is None:
+            group_origins = {
+                item: self._placements[item].rect
+                for item in self._gesture.selection()
+                if item in self._placements
+            }
         if handle is not None:
             self._gesture.press_resize(ref, placement.rect, handle, board_pos, grab)
         else:
-            self._gesture.press(ref, placement.rect, board_pos, grab)
+            self._gesture.press(
+                ref, placement.rect, board_pos, grab, group_origins=group_origins
+            )
 
     def handle_card_mouse_hover(self, card: FreeGridCard, event: QMouseEvent) -> None:
-        if not card.model().selected or self._gesture.is_armed():
+        if (
+            not card.model().selected
+            or len(self._gesture.selection()) != 1
+            or self._gesture.is_armed()
+        ):
             card.unsetCursor()
             return
         handle = hit_handle(
@@ -2216,6 +2284,8 @@ class FreeGridBoard(QWidget):
     def handle_card_mouse_release(self, card: FreeGridCard, event: QMouseEvent) -> None:
         if event.button() != Qt.LeftButton:
             return
+        if self._finish_pending_shift_toggle():
+            return
         if self._gesture.is_armed():
             self._update_gesture_at(
                 self._board_pos(card, event.pos()),
@@ -2223,8 +2293,40 @@ class FreeGridBoard(QWidget):
             )
         self._finish_gesture(commit=True)
 
+    def _finish_pending_shift_toggle(self) -> bool:
+        ref = self._pending_shift_toggle
+        self._pending_shift_toggle = None
+        if ref is None:
+            return False
+        self._gesture.toggle_selected(ref)
+        self._apply_selection_flags()
+        return True
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        if self._card_at(event.pos()) is not None:
+            super().mousePressEvent(event)
+            return
+        additive = bool(event.modifiers() & Qt.ShiftModifier)
+        if not additive:
+            self._gesture.clear_selection()
+            self._apply_selection_flags()
+        self._gesture.begin_marquee((event.pos().x(), event.pos().y()), additive)
+        self._overlay.set_marquee(self._gesture.marquee_rect())
+        event.accept()
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         grabbed = QWidget.mouseGrabber() is self
+        if self._gesture.marquee() is not None and (
+            event.buttons() & Qt.LeftButton or grabbed
+        ):
+            self._gesture.update_marquee((event.pos().x(), event.pos().y()))
+            self._overlay.set_marquee(self._gesture.marquee_rect())
+            if QWidget.mouseGrabber() is None:
+                self.grabMouse()
+            return
         if self._gesture.is_armed() and (event.buttons() & Qt.LeftButton or grabbed):
             self._update_gesture_at(
                 (event.pos().x(), event.pos().y()),
@@ -2234,6 +2336,16 @@ class FreeGridBoard(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._gesture.marquee() is not None:
+            session = self._gesture.take_marquee()
+            self._release_mouse_if_grabbed()
+            self._overlay.set_marquee(None)
+            if session is not None:
+                self._finish_marquee(session)
+            self.setFocus(Qt.OtherFocusReason)
+            return
+        if event.button() == Qt.LeftButton and self._finish_pending_shift_toggle():
+            return
         if self._gesture.is_armed() and event.button() == Qt.LeftButton:
             self._update_gesture_at(
                 (event.pos().x(), event.pos().y()),
@@ -2242,6 +2354,47 @@ class FreeGridBoard(QWidget):
             self._finish_gesture(commit=True)
             return
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if self.handle_selection_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def handle_selection_key(self, event: QKeyEvent) -> bool:
+        key = event.key()
+        if key not in (Qt.Key_Delete, Qt.Key_Backspace):
+            return False
+        refs = [ref for ref in self._gesture.selection() if ref in self._widgets]
+        if not refs:
+            return False
+        for ref in refs:
+            if key == Qt.Key_Delete:
+                self.remove_ref_requested.emit(ref.section, ref.view_id)
+            else:
+                self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
+        return True
+
+    def _finish_marquee(self, session) -> None:
+        x, y, width, height = session.rect()
+        if width < 4 and height < 4:
+            self._sync_selection_handles()
+            return
+        box = QRect(x, y, width, height)
+        hits = [
+            ref
+            for ref, widget in self._widgets.items()
+            if widget.geometry().intersects(box)
+        ]
+        if session.additive:
+            self._gesture.add_to_selection(hits)
+        else:
+            self._gesture.set_selection(hits)
+        self._apply_selection_flags()
+
+    def _release_mouse_if_grabbed(self) -> None:
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
 
     def _update_gesture_at(
         self, board_pos: tuple[int, int], *, keep_aspect: bool = False
@@ -2257,17 +2410,32 @@ class FreeGridBoard(QWidget):
             return
         if QWidget.mouseGrabber() is None:
             self.grabMouse()
-        card = self._widgets.get(session.ref)
-        if card is not None and card.graphicsEffect() is None:
-            self.drag_started.emit("layout")
+        members = session.group_origins or {session.ref: session.origin}
+        started = False
+        for ref in members:
+            card = self._widgets.get(ref)
+            if card is None or card.graphicsEffect() is not None:
+                continue
+            if not started:
+                self.drag_started.emit("layout")
+                started = True
             effect = QGraphicsOpacityEffect(card)
             effect.setOpacity(0.4)
             card.setGraphicsEffect(effect)
-        image = getattr(card, "_raw_image", None) if card is not None else None
-        self._overlay.set_move_preview(
-            image,
-            session.ghost_pixels(self._metrics, board_pos),
-            session.highlight_pixels(self._metrics),
+        ghosts = []
+        ghost_rects = session.group_ghost_pixels(self._metrics, board_pos)
+        refs = list(members)
+        if len(ghost_rects) != len(refs):
+            refs = [session.ref]
+            ghost_rects = (session.ghost_pixels(self._metrics, board_pos),)
+        for ref, ghost in zip(refs, ghost_rects):
+            card = self._widgets.get(ref)
+            image = getattr(card, "_raw_image", None) if card is not None else None
+            ghosts.append((image, ghost))
+        highlights = session.group_highlight_pixels(self._metrics)
+        self._overlay.set_move_previews(
+            ghosts,
+            highlights,
             legal=session.legal,
             badge=session.badge(),
             handles=session.handle is not None,
@@ -2275,19 +2443,23 @@ class FreeGridBoard(QWidget):
 
     def _finish_gesture(self, *, commit: bool) -> None:
         session = self._gesture.take()
-        if QWidget.mouseGrabber() is self:
-            self.releaseMouse()
+        self._release_mouse_if_grabbed()
         if session is None:
             return
-        card = self._widgets.get(session.ref)
-        if card is not None:
-            card.setGraphicsEffect(None)
-            card.unsetCursor()
+        members = session.group_origins or {session.ref: session.origin}
+        for ref in members:
+            card = self._widgets.get(ref)
+            if card is not None:
+                card.setGraphicsEffect(None)
+                card.unsetCursor()
         self._overlay.clear()
         self._sync_selection_handles()
         if session.active:
             self.drag_finished.emit()
         if not commit or not session.active:
+            return
+        if session.is_group_move():
+            self._commit_group_move(session)
             return
         candidate = self._legal_grid_rect(session.candidate)
         if not session.legal or not rect_is_available(
@@ -2297,6 +2469,36 @@ class FreeGridBoard(QWidget):
             return
         reason = "drag-resize" if session.handle else "drag-move"
         self._request_geometry(session.ref, candidate, reason)
+
+    def _commit_group_move(self, session) -> None:
+        if not session.legal:
+            self.feedback_requested.emit("目标位置与其他卡片重叠")
+            return
+        updates = []
+        for ref, rect in sorted(
+            session.group_candidates.items(),
+            key=lambda item: (item[0].section, item[0].view_id),
+        ):
+            placement = self._placements.get(ref)
+            if placement is None:
+                return
+            candidate = self._legal_grid_rect(rect)
+            if candidate != rect:
+                self.feedback_requested.emit("目标位置与其他卡片重叠")
+                return
+            if candidate != placement.rect:
+                updates.append(
+                    (
+                        ref.section,
+                        ref.view_id,
+                        candidate.column,
+                        candidate.row,
+                        candidate.column_span,
+                        candidate.row_span,
+                    )
+                )
+        if updates:
+            self.group_geometry_requested.emit(tuple(updates))
 
     def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
         placement = self._placements.get(ref)

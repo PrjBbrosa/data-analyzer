@@ -213,6 +213,7 @@ def test_page_signals_have_one_receiver_until_shutdown(qapp, qtbot):
     assert uv.choose_and_export_png in slots
     assert uv._on_board_name in slots
     assert uv._on_free_grid_geometry in slots
+    assert uv._on_free_grid_group_geometry in slots
     assert uv._on_free_grid_undo in slots
     compose_calls = {"n": 0}
     orig = uv._compose_board
@@ -346,6 +347,49 @@ def test_free_grid_undo_clears_history_when_membership_changes(qapp, qtbot, monk
     assert history.undo == []
     assert history.redo == []
     assert any("撤销记录已清除" in msg for msg, _ in toasts)
+
+
+def test_free_grid_group_geometry_is_one_undo_entry(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    time_ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    fft_ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    add_ref(uv.board, time_ref)
+    add_ref(uv.board, fft_ref)
+    uv._on_free_grid_toggled(True)
+    first = uv.board.free_grid[0]
+    second = uv.board.free_grid[1]
+    first_before = first.rect
+    second_before = second.rect
+    uv._on_free_grid_group_geometry(
+        (
+            (
+                first.ref.section,
+                first.ref.view_id,
+                first.rect.column,
+                first.rect.row + 1,
+                first.rect.column_span,
+                first.rect.row_span,
+            ),
+            (
+                second.ref.section,
+                second.ref.view_id,
+                second.rect.column,
+                second.rect.row + 1,
+                second.rect.column_span,
+                second.rect.row_span,
+            ),
+        )
+    )
+    assert uv.board.free_grid[0].rect.row == first_before.row + 1
+    assert uv.board.free_grid[1].rect.row == second_before.row + 1
+    history = uv._grid_histories[uv.board.board_id]
+    assert len(history.undo) == 1
+    uv._on_free_grid_undo()
+    assert uv.board.free_grid[0].rect == first_before
+    assert uv.board.free_grid[1].rect == second_before
+    assert len(history.redo) == 1
 
 
 def test_layout_expand_and_shrink_toast_both_directions(qapp, qtbot, monkeypatch):

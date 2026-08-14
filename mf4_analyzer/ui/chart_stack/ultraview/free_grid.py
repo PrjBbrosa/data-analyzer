@@ -6,7 +6,7 @@ metrics.  No helper here knows about widgets, preview pixels, or MainWindow.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
@@ -351,3 +351,42 @@ def rect_is_available(
         item.ref != excluding and rects_overlap(candidate, item.rect)
         for item in placements
     )
+
+
+def union_grid_rect(rects: Iterable[GridRect]) -> GridRect | None:
+    """Axis-aligned bounding box of ``rects``. Empty input returns ``None``."""
+    items = tuple(rects)
+    if not items:
+        return None
+    left = min(item.column for item in items)
+    top = min(item.row for item in items)
+    right = max(item.column + item.column_span for item in items)
+    bottom = max(item.row + item.row_span for item in items)
+    return GridRect(left, top, right - left, bottom - top)
+
+
+def group_translate_rects(
+    selected: Mapping[UltraViewRef, GridRect],
+    others: Iterable[GridRect],
+    column_delta: int,
+    row_delta: int,
+) -> tuple[dict[UltraViewRef, GridRect], bool]:
+    """Rigid-translate a selection. Illegal if any member would clamp or the
+    union collides with a non-selected rectangle (spec §9)."""
+    translated: dict[UltraViewRef, GridRect] = {}
+    in_bounds = True
+    for ref, rect in selected.items():
+        raw = GridRect(
+            rect.column + int(column_delta),
+            rect.row + int(row_delta),
+            rect.column_span,
+            rect.row_span,
+        )
+        if raw != clamp_rect(raw):
+            in_bounds = False
+        translated[ref] = raw
+    union = union_grid_rect(translated.values())
+    if union is None:
+        return translated, False
+    legal = in_bounds and not any(rects_overlap(union, other) for other in others)
+    return translated, legal

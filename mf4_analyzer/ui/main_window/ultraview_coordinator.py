@@ -65,6 +65,7 @@ from ..ultraview_state import (
     set_layout,
     set_active_board,
     set_free_grid_rect,
+    set_free_grid_rects,
     set_workspace_preview_sidecar,
     swap_slots,
     template_to_free_grid,
@@ -805,6 +806,7 @@ class UltraViewCoordinator(QObject):
             (page.select_board_requested, self._on_select_board),
             (page.free_grid_toggled, self._on_free_grid_toggled),
             (page.free_grid_geometry_requested, self._on_free_grid_geometry),
+            (page.free_grid_group_geometry_requested, self._on_free_grid_group_geometry),
             (page.free_grid_preset_requested, self._on_free_grid_preset),
             (page.organize_free_grid_requested, self._on_organize_free_grid),
             (page.free_grid_undo_requested, self._on_free_grid_undo),
@@ -1173,6 +1175,28 @@ class UltraViewCoordinator(QObject):
             ref,
             GridRect(int(column), int(row), int(column_span), int(row_span)),
         )
+        self._commit_grid_change(board, before, warnings)
+
+    def _on_free_grid_group_geometry(self, updates) -> None:
+        board = active_board(self._workspace)
+        before = self._grid_snapshot(board)
+        parsed: list[tuple[UltraViewRef, GridRect]] = []
+        for item in tuple(updates or ()):
+            if not isinstance(item, (tuple, list)) or len(item) != 6:
+                return
+            section, view_id, column, row, column_span, row_span = item
+            ref = parse_ref_payload({"section": section, "view_id": view_id})
+            if ref is None:
+                return
+            parsed.append(
+                (
+                    ref,
+                    GridRect(int(column), int(row), int(column_span), int(row_span)),
+                )
+            )
+        if not parsed:
+            return
+        warnings = set_free_grid_rects(board, parsed)
         self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_preset(self, section: str, view_id: str, preset: str) -> None:
