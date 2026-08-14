@@ -3,17 +3,22 @@ from __future__ import annotations
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_COLUMN_WIDTH,
+    HANDLE_HIT_PX,
     candidate_move,
     candidate_resize,
+    candidate_resize_handle,
     clamp_rect,
     export_grid_metrics,
     grid_metrics,
+    hit_handle,
+    keep_aspect_resize,
     legal_grid_rect,
     pixels_to_grid_delta,
     rect_is_available,
     rect_to_pixels,
     rects_overlap,
     snapped_move_rect,
+    snapped_resize_rect,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.ultraview_state import (
@@ -127,3 +132,42 @@ def test_gesture_move_uses_snapped_move_rect_and_reports_collision():
     cancelled = gesture.cancel()
     assert cancelled is session
     assert gesture.is_armed() is False
+
+
+def test_handle_hit_zones_are_at_least_eight_px_and_corners_win():
+    card = (0, 0, 120, 80)
+    assert HANDLE_HIT_PX >= 8
+    assert hit_handle(card, (4, 4)) == "nw"
+    assert hit_handle(card, (116, 4)) == "ne"
+    assert hit_handle(card, (60, 4)) == "n"
+    assert hit_handle(card, (116, 40)) == "e"
+    assert hit_handle(card, (4, 40)) == "w"
+    assert hit_handle(card, (60, 20)) is None
+    east = hit_handle(card, (120 - HANDLE_HIT_PX, 40))
+    assert east == "e"
+    assert hit_handle(card, (120 - HANDLE_HIT_PX - 1, 40)) is None
+
+
+def test_resize_handle_snaps_clamps_and_keeps_aspect():
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 6, 3)
+    unit = metrics.column_width + metrics.gutter
+    grown = snapped_resize_rect(origin, (unit * 2, 0), metrics, "e")
+    assert grown == GridRect(0, 0, 8, 3)
+    assert grown.column_span <= 12
+    clamped = candidate_resize_handle(origin, "e", 40, 0)
+    assert clamped.column_span == 12
+    assert clamped.row_span == 3
+    shrunk = candidate_resize_handle(origin, "e", -40, 0)
+    assert shrunk.column_span == 2
+    ratio = keep_aspect_resize(origin, GridRect(0, 0, 8, 3), "e")
+    assert ratio == GridRect(0, 0, 8, 4)
+    gesture = FreeGridGesture()
+    gesture.press_resize(make_ref("time", "a"), origin, "e", (100, 50), (4, 50))
+    session = gesture.update(
+        (100 + unit * 2, 50), metrics, [_placement("a", origin)], 1, keep_aspect=True
+    )
+    assert session is not None
+    assert session.badge() == "8×4"
+    assert session.candidate.column_span <= 12
+    assert session.candidate.row_span <= 8

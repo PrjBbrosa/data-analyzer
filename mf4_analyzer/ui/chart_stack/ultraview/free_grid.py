@@ -190,6 +190,157 @@ def candidate_resize(
     )
 
 
+HANDLE_HIT_PX = 8
+HANDLE_VISUAL_PX = 6
+HANDLE_NAMES = ("nw", "n", "ne", "w", "e", "sw", "s", "se")
+_HANDLE_WEST = frozenset({"w", "nw", "sw"})
+_HANDLE_EAST = frozenset({"e", "ne", "se"})
+_HANDLE_NORTH = frozenset({"n", "nw", "ne"})
+_HANDLE_SOUTH = frozenset({"s", "sw", "se"})
+_HANDLE_CORNERS = ("nw", "ne", "sw", "se")
+
+
+def handle_hit_rects(
+    card_px: Rect, hit: int = HANDLE_HIT_PX
+) -> dict[str, Rect]:
+    """Axis-aligned hit zones. Corners are ``hit×hit`` and take priority."""
+    x, y, width, height = (int(card_px[0]), int(card_px[1]), int(card_px[2]), int(card_px[3]))
+    zone = max(HANDLE_HIT_PX, int(hit))
+    inner_w = max(1, width - 2 * zone)
+    inner_h = max(1, height - 2 * zone)
+    return {
+        "nw": (x, y, zone, zone),
+        "n": (x + zone, y, inner_w, zone),
+        "ne": (x + width - zone, y, zone, zone),
+        "w": (x, y + zone, zone, inner_h),
+        "e": (x + width - zone, y + zone, zone, inner_h),
+        "sw": (x, y + height - zone, zone, zone),
+        "s": (x + zone, y + height - zone, inner_w, zone),
+        "se": (x + width - zone, y + height - zone, zone, zone),
+    }
+
+
+def hit_handle(
+    card_px: Rect, pos: tuple[int, int], hit: int = HANDLE_HIT_PX
+) -> str | None:
+    px, py = int(pos[0]), int(pos[1])
+    zones = handle_hit_rects(card_px, hit)
+    for name in _HANDLE_CORNERS:
+        x, y, width, height = zones[name]
+        if x <= px < x + width and y <= py < y + height:
+            return name
+    for name in ("n", "s", "w", "e"):
+        x, y, width, height = zones[name]
+        if x <= px < x + width and y <= py < y + height:
+            return name
+    return None
+
+
+def handle_visual_rects(card_px: Rect, size: int = HANDLE_VISUAL_PX) -> dict[str, Rect]:
+    x, y, width, height = (int(card_px[0]), int(card_px[1]), int(card_px[2]), int(card_px[3]))
+    half = max(2, int(size)) // 2
+    anchors = {
+        "nw": (x, y),
+        "n": (x + width // 2, y),
+        "ne": (x + width, y),
+        "w": (x, y + height // 2),
+        "e": (x + width, y + height // 2),
+        "sw": (x, y + height),
+        "s": (x + width // 2, y + height),
+        "se": (x + width, y + height),
+    }
+    box = max(2, int(size))
+    return {
+        name: (ax - half, ay - half, box, box) for name, (ax, ay) in anchors.items()
+    }
+
+
+def candidate_resize_handle(
+    rect: GridRect, handle: str, column_delta: int, row_delta: int
+) -> GridRect:
+    """Resize by moving the named edge/corner; unmoved edges stay put."""
+    left = rect.column
+    top = rect.row
+    right = rect.column + rect.column_span
+    bottom = rect.row + rect.row_span
+    if handle in _HANDLE_WEST:
+        left += int(column_delta)
+        left = max(0, min(left, right - GRID_MIN_COLUMN_SPAN))
+        left = max(right - GRID_MAX_COLUMN_SPAN, left)
+    elif handle in _HANDLE_EAST:
+        right += int(column_delta)
+        right = min(GRID_COLUMNS, max(right, left + GRID_MIN_COLUMN_SPAN))
+        right = min(left + GRID_MAX_COLUMN_SPAN, right)
+    if handle in _HANDLE_NORTH:
+        top += int(row_delta)
+        top = max(0, min(top, bottom - GRID_MIN_ROW_SPAN))
+        top = max(bottom - GRID_MAX_ROW_SPAN, top)
+    elif handle in _HANDLE_SOUTH:
+        bottom += int(row_delta)
+        bottom = min(MAX_GRID_ROWS, max(bottom, top + GRID_MIN_ROW_SPAN))
+        bottom = min(top + GRID_MAX_ROW_SPAN, bottom)
+    return clamp_rect(GridRect(left, top, right - left, bottom - top))
+
+
+def keep_aspect_resize(origin: GridRect, candidate: GridRect, handle: str) -> GridRect:
+    """Lock the dragged primary span and round the other to the origin ratio."""
+    ratio = origin.column_span / float(origin.row_span)
+    dc = abs(candidate.column_span - origin.column_span)
+    dr = abs(candidate.row_span - origin.row_span)
+    edge_horizontal = handle in _HANDLE_WEST or handle in _HANDLE_EAST
+    edge_vertical = handle in _HANDLE_NORTH or handle in _HANDLE_SOUTH
+    if edge_horizontal and not edge_vertical:
+        cols = candidate.column_span
+        rows = min(
+            GRID_MAX_ROW_SPAN,
+            max(GRID_MIN_ROW_SPAN, int(round(cols / ratio))),
+        )
+    elif edge_vertical and not edge_horizontal:
+        rows = candidate.row_span
+        cols = min(
+            GRID_MAX_COLUMN_SPAN,
+            max(GRID_MIN_COLUMN_SPAN, int(round(rows * ratio))),
+        )
+    elif dc >= dr:
+        cols = candidate.column_span
+        rows = min(
+            GRID_MAX_ROW_SPAN,
+            max(GRID_MIN_ROW_SPAN, int(round(cols / ratio))),
+        )
+    else:
+        rows = candidate.row_span
+        cols = min(
+            GRID_MAX_COLUMN_SPAN,
+            max(GRID_MIN_COLUMN_SPAN, int(round(rows * ratio))),
+        )
+    column = (
+        origin.column + origin.column_span - cols
+        if handle in _HANDLE_WEST
+        else origin.column
+    )
+    row = (
+        origin.row + origin.row_span - rows
+        if handle in _HANDLE_NORTH
+        else origin.row
+    )
+    return clamp_rect(GridRect(column, row, cols, rows))
+
+
+def snapped_resize_rect(
+    origin: GridRect,
+    pixel_delta: tuple[int, int],
+    metrics: GridMetrics,
+    handle: str,
+    *,
+    keep_aspect: bool = False,
+) -> GridRect:
+    column_delta, row_delta = pixels_to_grid_delta(pixel_delta, metrics)
+    candidate = candidate_resize_handle(origin, handle, column_delta, row_delta)
+    if keep_aspect:
+        candidate = keep_aspect_resize(origin, candidate, handle)
+    return clamp_rect(candidate)
+
+
 def rect_is_available(
     candidate: GridRect,
     placements: Iterable[FreeGridPlacement],

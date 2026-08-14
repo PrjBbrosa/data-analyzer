@@ -1438,7 +1438,9 @@ def _prepare_free_grid(harness, qtbot, *view_ids):
     return free, cards
 
 
-def _send_mouse_move(widget, pos: QPoint, buttons=Qt.LeftButton) -> None:
+def _send_mouse_move(
+    widget, pos: QPoint, buttons=Qt.LeftButton, modifiers=Qt.NoModifier
+) -> None:
     # QTest.mouseMove() is cursor-based and a no-op on offscreen; send the same
     # QMouseEvent through the widget so press/move/release stay a real sequence.
     event = QMouseEvent(
@@ -1447,17 +1449,32 @@ def _send_mouse_move(widget, pos: QPoint, buttons=Qt.LeftButton) -> None:
         widget.mapToGlobal(pos),
         Qt.NoButton,
         buttons,
-        Qt.NoModifier,
+        modifiers,
     )
     QApplication.sendEvent(widget, event)
 
 
-def _drag_card(card, start: QPoint, end: QPoint, *, release: bool = True) -> None:
-    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+def _drag_card(
+    card,
+    start: QPoint,
+    end: QPoint,
+    *,
+    release: bool = True,
+    modifiers=Qt.NoModifier,
+) -> None:
+    QTest.mousePress(card, Qt.LeftButton, modifiers, start)
     QTest.mouseMove(card, end)
-    _send_mouse_move(card, end)
+    _send_mouse_move(card, end, modifiers=modifiers)
     if release:
-        QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, end)
+        QTest.mouseRelease(card, Qt.LeftButton, modifiers, end)
+
+
+def _select_card(card) -> None:
+    QTest.mouseClick(card, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
+
+
+def _east_handle_pos(card) -> QPoint:
+    return QPoint(max(0, card.width() - 4), max(0, card.height() // 2))
 
 
 def test_free_grid_click_within_threshold_does_not_move(qtbot):
@@ -1473,7 +1490,8 @@ def test_free_grid_click_within_threshold_does_not_move(qtbot):
     assert selected == [("time", "click-0")]
     assert requested == []
     assert not free.gesture().is_armed()
-    assert not free.ghost_overlay().is_showing()
+    assert free.ghost_overlay()._handles_rect is not None
+    assert free.ghost_overlay()._ghost_rect is None
 
 
 def test_free_grid_drag_past_threshold_shows_ghost_and_commits_legal_move(qtbot):
@@ -1491,7 +1509,8 @@ def test_free_grid_drag_past_threshold_shows_ghost_and_commits_legal_move(qtbot)
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
     assert requested == [("time", "move-0", 6, 0, 6, 3, "drag-move")]
     assert not free.gesture().is_armed()
-    assert not free.ghost_overlay().is_showing()
+    assert free.ghost_overlay()._ghost_rect is None
+    assert free.ghost_overlay()._handles_rect is not None
 
 
 def test_free_grid_illegal_drop_reverts_and_toasts_without_commit(qtbot):
@@ -1510,7 +1529,7 @@ def test_free_grid_illegal_drop_reverts_and_toasts_without_commit(qtbot):
     assert requested == []
     assert toasts == ["目标位置与其他卡片重叠"]
     assert not free.gesture().is_armed()
-    assert not free.ghost_overlay().is_showing()
+    assert free.ghost_overlay()._ghost_rect is None
     assert card.geometry().topLeft() == origin.topLeft()
     assert other.geometry().topLeft() != origin.topLeft()
 
@@ -1529,7 +1548,114 @@ def test_free_grid_escape_cancels_active_move_without_commit(qtbot):
     assert harness.page.handle_escape() is True
     assert requested == []
     assert not free.gesture().is_armed()
-    assert not free.ghost_overlay().is_showing()
+    assert free.ghost_overlay()._ghost_rect is None
+
+
+def test_free_grid_selected_card_shows_handles_and_east_cursor(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "handle-0")
+    _select_card(card)
+    qtbot.wait(10)
+    card = harness.page.card_widget("time", "handle-0")
+    assert card is not None
+    assert card.model().selected
+    overlay = free.ghost_overlay()
+    assert overlay._handles_rect is not None
+    _send_mouse_move(card, _east_handle_pos(card), buttons=Qt.NoButton)
+    assert card.cursor().shape() == Qt.SizeHorCursor
+
+
+def test_free_grid_resize_handle_snaps_shows_badge_and_commits(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "resize-0")
+    _select_card(card)
+    qtbot.wait(10)
+    card = harness.page.card_widget("time", "resize-0")
+    assert card is not None
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = _east_handle_pos(card)
+    end = QPoint(start.x() + unit * 2, start.y())
+    _drag_card(card, start, end, release=False)
+    session = free.gesture().session()
+    assert session is not None and session.handle == "e"
+    assert session.badge() == "8×3"
+    assert free.ghost_overlay()._badge == "8×3"
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, end)
+    assert requested == [("time", "resize-0", 0, 0, 8, 3, "drag-resize")]
+
+
+def test_free_grid_shift_resize_keeps_aspect_ratio(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "ratio-0")
+    _select_card(card)
+    qtbot.wait(10)
+    card = harness.page.card_widget("time", "ratio-0")
+    assert card is not None
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = _east_handle_pos(card)
+    end = QPoint(start.x() + unit * 2, start.y())
+    _drag_card(card, start, end, modifiers=Qt.ShiftModifier)
+    assert requested == [("time", "ratio-0", 0, 0, 8, 4, "drag-resize")]
+
+
+def test_free_grid_resize_span_clamps_to_grid_limits(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "clamp-0")
+    _select_card(card)
+    qtbot.wait(10)
+    card = harness.page.card_widget("time", "clamp-0")
+    assert card is not None
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = _east_handle_pos(card)
+    _drag_card(card, start, QPoint(start.x() + unit * 20, start.y()))
+    assert requested == [("time", "clamp-0", 0, 0, 12, 3, "drag-resize")]
+    _select_card(card)
+    qtbot.wait(10)
+    card = harness.page.card_widget("time", "clamp-0")
+    requested.clear()
+    start = _east_handle_pos(card)
+    _drag_card(card, start, QPoint(start.x() - unit * 20, start.y()))
+    assert requested == [("time", "clamp-0", 0, 0, 2, 3, "drag-resize")]
+
+
+def test_free_grid_illegal_resize_toasts_without_commit(qtbot):
+    harness = _Harness(qtbot)
+    free, (card, _other) = _prepare_free_grid(harness, qtbot, "hit-0", "hit-1")
+    _select_card(card)
+    qtbot.wait(10)
+    card = harness.page.card_widget("time", "hit-0")
+    assert card is not None
+    requested = []
+    toasts = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    harness.page.feedback_requested.connect(toasts.append)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = _east_handle_pos(card)
+    _drag_card(card, start, QPoint(start.x() + unit * 2, start.y()))
+    assert requested == []
+    assert toasts == ["目标位置与其他卡片重叠"]
+
+
+def test_free_grid_alt_shift_arrow_uses_keyboard_resize(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "key-1")
+    card = harness.page.card_widget("time", "key-1")
+    assert card is not None
+    card.setFocus(Qt.OtherFocusReason)
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    qtbot.keyClick(card, Qt.Key_Right, Qt.AltModifier | Qt.ShiftModifier)
+    assert requested == [("time", "key-1", 0, 0, 7, 3, "keyboard-resize")]
 
 
 def test_make_layout_mime_has_no_product_references():
