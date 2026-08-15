@@ -11,6 +11,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     ISLAND_HEIGHT,
     OVERLAY_ANCHOR_GLOBAL,
     RAIL_CONTENT_HEIGHT,
+    RAIL_TO_CANVAS_GAP,
     RAIL_WIDTH,
     SAFE_MARGIN,
     CardContextPlacement,
@@ -64,21 +65,22 @@ def test_standard_stage_keeps_canvas_target_and_separates_chrome():
     layout = calculate_floating_layout((1280, 800))
     safe = layout.stage.inset(SAFE_MARGIN)
 
+    fit_left = SAFE_MARGIN + RAIL_WIDTH + RAIL_TO_CANVAS_GAP
     assert SAFE_MARGIN == 12
-    assert RAIL_WIDTH == 48
+    assert RAIL_WIDTH == 56
     assert ISLAND_HEIGHT == 40
     assert layout.board == Rect(0, 0, 1280, 800)
-    assert layout.fit == Rect(78, 64, 1190, 676)
-    assert layout.board.width >= 1190
+    assert layout.fit == Rect(fit_left, 64, 1182, 676)
+    assert layout.board.width >= 1182
     assert layout.board.height >= 700
-    assert layout.fit.width >= 1190
+    assert layout.fit.width >= 1182
     assert layout.rail.height <= RAIL_CONTENT_HEIGHT + 8
     assert layout.content_inset_bottom > 0
     assert layout.board_island.left == safe.left
     assert layout.status_island.left == safe.left
     assert layout.global_island.right == safe.right
     assert layout.navigation_island.right == safe.right
-    assert layout.fit.left == safe.left + RAIL_WIDTH + 18
+    assert layout.fit.left == fit_left
     assert layout.rail.top == safe.top + (safe.height - layout.rail.height) // 2
 
     for rect in layout.persistent_rects:
@@ -90,9 +92,9 @@ def test_compact_stage_keeps_canvas_target_without_forced_width():
     layout = calculate_floating_layout((800, 560))
 
     assert layout.board == Rect(0, 0, 800, 560)
-    assert layout.fit.x == 78
+    assert layout.fit.x == SAFE_MARGIN + RAIL_WIDTH + RAIL_TO_CANVAS_GAP
     assert layout.fit.y == 64
-    assert layout.fit.width >= 710
+    assert layout.fit.width >= 700
     assert layout.board.width >= 710
     assert layout.board.height >= 470
     for rect in layout.persistent_rects:

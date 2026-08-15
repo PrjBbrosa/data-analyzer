@@ -5,7 +5,7 @@ owners: [codex]
 keywords: [qt, pyqt, qmenu, qcombobox, qss, rounded, popup, focus-frame, popupWidth]
 paths: [mf4_analyzer/ui_kit/style.qss, mf4_analyzer/ui_kit/menus.py, mf4_analyzer/ui_kit/combo_popup_shell.py, mf4_analyzer/ui_kit/widgets/searchable_combo.py, mf4_analyzer/ui/view_tabbar.py, mf4_analyzer/ui/inspector_sections.py, mf4_analyzer/ui/widgets/channel_config_manager.py]
 checks: [rg -n "QMenu\\(" mf4_analyzer -g "*.py", rg -n "prepare_combo_popup|popupWidth|popupMinWidth|popupMaxWidth" mf4_analyzer/ui_kit tests/ui/test_combo_popup_shell.py, git diff --check]
-tests: [tests/ui/test_combo_popup_shell.py, tests/ui/test_view_tabbar.py, tests/ui/test_inspector.py, tests/ui/test_channel_config_manager.py]
+tests: [tests/ui/test_combo_popup_shell.py, tests/ui/test_qmenu_density.py, tests/ui/test_view_tabbar.py, tests/ui/test_inspector.py, tests/ui/test_channel_config_manager.py]
 ---
 
 # Codex Qt Rounded Popup Chrome
@@ -20,7 +20,9 @@ frames behind rounded menus and double blue outlines around selected combo rows.
 Rule: Rounded popup visuals must suppress the native backing chrome as well as
 draw the custom content before the first visible frame. For `QMenu`, route new
 project menus through `apply_rounded_menu_chrome()` or an equivalent
-transparent, frameless, no-drop-shadow shell. For `QComboBox`, keep popup
+transparent, frameless, no-drop-shadow shell. Nested `addMenu()` windows need
+the same shell (`add_rounded_submenu()`); do not assume the parent chrome
+covers them. For `QComboBox`, keep popup
 shell, first-frame list/viewport background, and width policy centralized in
 `prepare_combo_popup()`; use `popupWidth`, `popupMinWidth`, or `popupMaxWidth`
 dynamic properties for width changes instead of per-combo ad hoc geometry. For

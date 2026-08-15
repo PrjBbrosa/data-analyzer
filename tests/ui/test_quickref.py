@@ -369,6 +369,9 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "点行切换" in haystack
     assert "拖拽排序" in haystack
     assert "行尾复制" in haystack
+    assert "一键更新源" in haystack
+    assert "实心按钮" in haystack
+    assert "从左侧 View 库添加对比" in haystack
     assert "⋯" not in haystack
     assert "Alt+拖" not in haystack
     assert "Option 拖动" not in haystack

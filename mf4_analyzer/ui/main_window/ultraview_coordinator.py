@@ -450,6 +450,10 @@ class UltraViewCoordinator(QObject):
         self._page_hooks: list[tuple[Any, Any, Any]] = []
         self._stack_hooks: list[tuple[Any, Any, Any]] = []
         self._manager_hooks: list[tuple[Any, Any, Any]] = []
+        self._sync_work_queue: list[UltraViewRef] = []
+        self._sync_current_ref: UltraViewRef | None = None
+        self._sync_nav_busy = False
+        self._sync_nav_needs_raise = False
         self.attach()
 
     @property
@@ -1053,41 +1057,91 @@ class UltraViewCoordinator(QObject):
             page.arm_replacement(section, view_id)
 
     def sync_preview(self, section: str, view_id: str) -> None:
-        """Recapture one Board card from the live source View. Never recomputes."""
+        """Recapture one Board card from the live source View. Never recomputes.
+
+        Hidden sources navigate then grab. Multiple syncs in one turn are
+        serialized so the last ``navigate_to_view`` cannot steal an earlier
+        canvas before its grab runs.
+        """
         if self._inactive():
             return
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
+        if ref == self._sync_current_ref or ref in self._sync_work_queue:
+            return
+        self._sync_work_queue.append(ref)
+        self._pump_sync_work()
+
+    def _pump_sync_work(self) -> None:
+        if self._inactive() or self._sync_nav_busy:
+            return
+        if not self._sync_work_queue:
+            if self._sync_nav_needs_raise:
+                self._sync_nav_needs_raise = False
+                self._raise_ultraview_sheet()
+            return
+        ref = self._sync_work_queue.pop(0)
+        self._sync_nav_busy = True
+        self._sync_current_ref = ref
         widget = self._sync_capture_widget(ref)
         if widget is not None:
             self._request_user_sync(ref, widget)
+            self._finish_sync_item(ref)
             return
         if not self._ref_exists(ref):
             self._toast("找不到原 View，无法同步", "warning")
+            self._finish_sync_item(ref, wait_capture=False)
             return
         window = self._window
         navigate = getattr(window, "navigate_to_view", None) if window is not None else None
-        if callable(navigate) and navigate(section, view_id):
+        if callable(navigate) and navigate(ref.section, ref.view_id):
+            self._sync_nav_needs_raise = True
             QTimer.singleShot(0, partial(self._sync_preview_after_navigate, ref))
             return
         self._toast("请先打开原 View 再同步", "warning")
+        self._finish_sync_item(ref, wait_capture=False)
 
     def _sync_preview_after_navigate(self, ref) -> None:
-        if self._inactive() or ref is None:
-            return
-        widget = self._sync_capture_widget(ref)
-        if widget is None:
-            widget = self._visible_widget_for(ref.section)
-            if widget is not None and self._active_ref(ref.section) == ref:
-                self.bind_canvas(widget, ref)
-            else:
-                widget = None
-        if widget is None:
-            self._toast("请先打开原 View 再同步", "warning")
-            return
-        self._request_user_sync(ref, widget)
-        self._raise_ultraview_sheet()
+        try:
+            if self._inactive() or ref is None:
+                return
+            widget = self._sync_capture_widget(ref)
+            if widget is None:
+                widget = self._visible_widget_for(ref.section)
+                if widget is not None and self._active_ref(ref.section) == ref:
+                    self.bind_canvas(widget, ref)
+                else:
+                    widget = None
+            if widget is None:
+                self._toast("请先打开原 View 再同步", "warning")
+                return
+            self._request_user_sync(ref, widget)
+        finally:
+            self._finish_sync_item(ref)
+
+    def _finish_sync_item(self, ref, *, wait_capture: bool = True) -> None:
+        coord_ref = weakref.ref(self)
+
+        def _advance():
+            coord = coord_ref()
+            if coord is None or coord._inactive():
+                return
+            if wait_capture and any(key[0] == ref for key in coord._queued):
+                QTimer.singleShot(0, _advance)
+                return
+            if coord._sync_current_ref == ref:
+                coord._sync_current_ref = None
+            coord._sync_nav_busy = False
+            coord._pump_sync_work()
+
+        QTimer.singleShot(0, _advance)
+
+    def _clear_sync_work(self) -> None:
+        self._sync_work_queue.clear()
+        self._sync_current_ref = None
+        self._sync_nav_busy = False
+        self._sync_nav_needs_raise = False
 
     def _sync_capture_widget(self, ref):
         candidates = []
@@ -1896,6 +1950,7 @@ class UltraViewCoordinator(QObject):
             return
         self._shutdown = True
         self._reset_page_runtime()
+        self._clear_sync_work()
         self._drop_all_timers()
         self._disconnect_hooks()
         self._disconnect_page_hooks()
@@ -1923,6 +1978,7 @@ class UltraViewCoordinator(QObject):
         if self._shutdown:
             return
         self._reset_page_runtime()
+        self._clear_sync_work()
         self._drop_all_timers()
         self._disconnect_hooks()
         if _alive(self._store):
@@ -2936,6 +2992,7 @@ class UltraViewCoordinator(QObject):
             timer.stop()
             timer.deleteLater()
         self._queued.clear()
+        self._clear_sync_work()
 
     def _disconnect_hooks(self) -> None:
         for obj, signal, slot in self._hooks:

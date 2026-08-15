@@ -11,6 +11,11 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import grid_metrics
+from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
+    RAIL_TO_CANVAS_GAP,
+    RAIL_WIDTH,
+    SAFE_MARGIN,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     QUALITY_FAST,
     QUALITY_SMOOTH,
@@ -100,7 +105,7 @@ def test_zoom_at_cursor_keeps_the_logical_point_fixed():
 
 
 def test_zoom_at_cursor_accounts_for_fit_origin_offset():
-    origin = (78.0, 64.0)
+    origin = (float(SAFE_MARGIN + RAIL_WIDTH + RAIL_TO_CANVAS_GAP), 64.0)
     cursor = (400.0, 220.0)
     scroll = (0.0, 0.0)
     before, after = 1.0, 1.1

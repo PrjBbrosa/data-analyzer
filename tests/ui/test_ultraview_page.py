@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QGraphicsDropShadowEffect,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QToolButton,
@@ -61,6 +62,7 @@ from mf4_analyzer.ui.ultraview_state import (
     STATUS_MISSING,
     STATUS_ORPHANED,
     STATUS_STALE,
+    STATUS_FRESH,
     ULTRAVIEW_REF_MIME,
     FreeGridPlacement,
     GridRect,
@@ -990,6 +992,58 @@ def test_stale_card_sync_button_emits_page_intent(qtbot):
     assert not sync_btn.isVisible()
 
 
+def test_sync_all_rail_emits_placed_and_unplaced_stale_refs(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "stale-a", "fresh-b")
+    tray_ref = make_ref("time", "stale-tray")
+    add_ref(harness.board, tray_ref)
+    move_to_unplaced(harness.board, tray_ref)
+    harness.page.set_board(harness.board)
+    placed_stale = make_ref("time", "stale-a")
+    placed_fresh = make_ref("time", "fresh-b")
+    for ref, title in (
+        (placed_stale, "过期甲"),
+        (placed_fresh, "最新乙"),
+        (tray_ref, "托盘过期"),
+    ):
+        harness.page.set_preview(
+            ref,
+            FakePreview(ref=ref, image=_image(), title=title, captured_digest="old"),
+        )
+    harness.page.set_ref_status(placed_stale, STATUS_STALE, True)
+    harness.page.set_ref_status(placed_fresh, STATUS_FRESH, True)
+    harness.page.set_ref_status(tray_ref, STATUS_STALE, True)
+
+    rail = harness.page.tool_rail()
+    button = rail.sync_all_button()
+    assert rail.stale_count() == 2
+    assert button.isEnabled()
+    badge = rail.findChild(QLabel, "ultraViewRailSyncAllBadge")
+    assert badge is not None and badge.isVisible()
+    assert badge.text() == "2"
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert harness.synced == [("time", "stale-a"), ("time", "stale-tray")]
+
+
+def test_sync_all_rail_without_stale_emits_feedback(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "fresh-0")
+    ref = make_ref("time", "fresh-0")
+    harness.page.set_preview(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="道路输入", captured_digest="now"),
+    )
+    harness.page.set_ref_status(ref, STATUS_FRESH, True)
+    messages: list[str] = []
+    harness.page.feedback_requested.connect(messages.append)
+    rail = harness.page.tool_rail()
+    assert rail.stale_count() == 0
+    assert not rail.sync_all_button().isEnabled()
+    harness.page._on_sync_all_requested()
+    assert messages == ["没有需要更新的预览"]
+    assert harness.synced == []
+
+
 def test_focus_layer_caps_at_raw_100_percent_and_has_open_button(qtbot, qapp):
     harness = _Harness(qtbot)
     ref = make_ref("time", "time-1")
@@ -1456,26 +1510,26 @@ def test_card_focus_button_fits_inside_rounded_chrome(qtbot, qapp):
     qapp.processEvents()
     card = harness.page.card_widget("time", "time-1")
     assert card is not None
-    button = card.findChild(QToolButton, "ultraViewCardFocusButton")
-    assert button is not None
-    assert button.isVisible() is True
-    mapped = QRect(button.mapTo(card, QPoint(0, 0)), button.size())
+    bar = card.action_bar()
+    assert bar is not None and bar.isVisible()
+    assert bar.objectName() == "ultraViewCardActionBar"
+    mapped = QRect(bar.mapTo(card, QPoint(0, 0)), bar.size())
     assert card.rect().adjusted(1, 1, -1, -1).contains(mapped)
-    assert button.width() == 24
-    assert button.height() == 24
-    assert mapped.left() >= 6
-    assert mapped.top() >= 4
-    assert mapped.right() <= card.width() - 6
+    assert mapped.top() >= 2
+    assert mapped.right() <= card.width() - 4
     assert mapped.bottom() <= card.header_height()
-    assert not button.icon().isNull()
-    grabbed = button.grab().toImage()
-    blues = 0
-    for x in range(0, grabbed.width(), 2):
-        for y in range(0, grabbed.height(), 2):
-            pixel = QColor(grabbed.pixel(x, y))
-            if pixel.blue() > pixel.red() + 8 and pixel.blue() > 140:
-                blues += 1
-    assert blues >= 8, "focus chip must render a visible blue fill/stroke"
+    for action in ("open", "focus", "fit", "more"):
+        button = card.action_button(action)
+        assert button is not None
+        assert button.isVisible()
+        assert button.text() == ""
+        assert button.toolTip()
+        assert button.accessibleName()
+        assert button.focusPolicy() == Qt.TabFocus
+        assert not button.icon().isNull()
+        assert button.width() == 22
+        assert button.height() == 22
+    assert harness.page.card_context_island().isHidden()
 
 
 def test_card_swap_clears_replacement_arm_then_add_is_pure(qtbot):
@@ -1796,6 +1850,44 @@ def _drag_card(
 
 def _select_card(card) -> None:
     QTest.mouseClick(card, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
+
+
+def _size_submenu(menu: QMenu) -> QMenu:
+    for action in menu.actions():
+        if action.text() == "自由网格尺寸" and action.menu() is not None:
+            return action.menu()
+    raise AssertionError("missing 自由网格尺寸 submenu")
+
+
+def _assert_rounded_menu_shell(menu: QMenu) -> None:
+    assert menu.testAttribute(Qt.WA_TranslucentBackground)
+    flags = menu.windowFlags()
+    assert bool(flags & Qt.NoDropShadowWindowHint)
+    assert bool(flags & Qt.FramelessWindowHint)
+
+
+def test_free_grid_size_context_submenu_uses_rounded_popup_shell(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "size-ctx")
+    menu = card.make_context_menu()
+    _assert_rounded_menu_shell(menu)
+    _assert_rounded_menu_shell(_size_submenu(menu))
+
+
+def test_free_grid_size_overflow_submenu_uses_rounded_popup_shell(qtbot, monkeypatch):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "size-more")
+    captured: list[QMenu] = []
+
+    def _fake_exec(self, *args, **kwargs):
+        captured.append(self)
+        return None
+
+    monkeypatch.setattr(QMenu, "exec_", _fake_exec)
+    harness.page._show_card_more_menu("time", "size-more")
+    assert captured
+    _assert_rounded_menu_shell(captured[0])
+    _assert_rounded_menu_shell(_size_submenu(captured[0]))
 
 
 def _east_handle_pos(card) -> QPoint:
@@ -2334,11 +2426,13 @@ def test_free_grid_escape_clears_selection(qtbot):
     island = harness.page.card_context_island()
     assert _selection_view_ids(free) == {"esc-sel"}
     assert harness.page.selected_ref() == ("time", "esc-sel")
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert harness.page.handle_escape() is True
     assert _selection_view_ids(free) == set()
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert free.ghost_overlay()._handles_rect is None
     assert harness.page.handle_escape() is False
     assert not island.isVisible()
@@ -2353,11 +2447,13 @@ def test_template_escape_hides_card_context_island(qtbot):
     _select_card(card)
     island = harness.page.card_context_island()
     assert harness.page.selected_ref() == ("time", "time-1")
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert card.model().selected
     assert harness.page.handle_escape() is True
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert not card.model().selected
     assert harness.page.handle_escape() is False
 
@@ -2376,11 +2472,13 @@ def test_free_grid_empty_click_hides_card_context_island(qtbot):
     free, (card,) = _prepare_free_grid(harness, qtbot, "empty-click")
     _select_card(card)
     island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     QTest.mouseClick(free, Qt.LeftButton, Qt.NoModifier, QPoint(4, 4))
     assert harness.page.selected_ref() is None
     assert _selection_view_ids(free) == set()
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
 
 
 def test_free_grid_blank_press_dismisses_the_library(qtbot):
@@ -2457,11 +2555,13 @@ def test_template_gutter_click_hides_card_context_island(qtbot):
     assert card is not None
     _select_card(card)
     island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     grid = harness.page.board_grid()
     QTest.mouseClick(grid, Qt.LeftButton, Qt.NoModifier, _gutter_point(grid))
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
 
 
 def test_board_host_padding_click_hides_card_context_island(qtbot):
@@ -2471,12 +2571,14 @@ def test_board_host_padding_click_hides_card_context_island(qtbot):
     assert card is not None
     _select_card(card)
     island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     QTest.mouseClick(
         harness.page._board_host, Qt.LeftButton, Qt.NoModifier, QPoint(2, 2)
     )
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
 
 
 def test_make_layout_mime_has_no_product_references():
@@ -3018,6 +3120,41 @@ def test_floating_chrome_projects_edge_rhythm_and_compact_tool_rail(qtbot, width
     assert abs((2 * rail.y() + rail.height()) - host.height()) <= 1
 
 
+def test_empty_board_library_cta_and_canvas_hint_retract_after_cards(qtbot):
+    harness = _Harness(qtbot)
+    qtbot.wait(20)
+    page = harness.page
+    library = page.tool_rail().panel_button(PANEL_LIBRARY)
+    hint = page.canvas_host().findChild(QLabel, "ultraViewEmptyBoardHint")
+    assert library is not None and hint is not None
+    assert library.property("emptyCta") == "true"
+    assert hint.isVisible()
+    assert "View 库" in hint.text()
+
+    QTest.mouseClick(library, Qt.LeftButton)
+    qtbot.wait(20)
+    assert page.active_panel() == PANEL_LIBRARY
+    assert library.property("emptyCta") == "true"
+    assert not hint.isVisible()
+
+    QTest.mouseClick(library, Qt.LeftButton)
+    qtbot.wait(20)
+    assert page.active_panel() is None
+    assert hint.isVisible()
+
+    page.set_presentation_active(True)
+    assert not hint.isVisible()
+    page.set_presentation_active(False)
+    qtbot.wait(20)
+    assert hint.isVisible()
+    assert library.property("emptyCta") == "true"
+
+    add_ref(harness.board, make_ref("time", "time-1"))
+    page.set_board(harness.board)
+    assert library.property("emptyCta") != "true"
+    assert not hint.isVisible()
+
+
 def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
@@ -3520,13 +3657,28 @@ def test_autofit_button_disabled_in_template_mode(qtbot):
     harness.page.set_board(harness.board)
     card = harness.page.card_widget("time", "a")
     assert card is not None
-    _select_card(card)
-    qtbot.wait(10)
-    button = harness.page.card_context_island().button("fit")
+    button = card.action_button("fit")
     assert button is not None
+    assert button.isVisible()
     assert not button.isEnabled()
     assert "自由网格" in button.toolTip()
     assert harness.page.board().layout_mode == LAYOUT_MODE_TEMPLATE
+
+
+def test_autofit_button_enabled_on_free_grid_without_selecting(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "fit-ready")
+    button = card.action_button("fit")
+    assert button is not None
+    assert button.isVisible()
+    assert button.isEnabled()
+    assert "按原图比例" in button.toolTip()
+    requested = []
+    harness.page.free_grid_autofit_requested.connect(
+        lambda section, view_id: requested.append((section, view_id))
+    )
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert requested == [("time", "fit-ready")]
 
 
 def test_card_context_residents_do_not_overlap_at_800px(qtbot):
@@ -3536,42 +3688,27 @@ def test_card_context_residents_do_not_overlap_at_800px(qtbot):
     harness.page.set_board(harness.board)
     card = harness.page.card_widget("time", "time-1")
     assert card is not None
-    _select_card(card)
     qtbot.wait(20)
-    island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert harness.page.card_context_island().isHidden()
+    bar = card.action_bar()
+    assert bar.isVisible()
     visible_actions = [
         button.property("contextAction")
-        for button in island.findChildren(QToolButton)
+        for button in bar.findChildren(QToolButton)
         if button.isVisible()
     ]
-    assert "open" in visible_actions
-    assert "focus" in visible_actions
-    assert "more" in visible_actions
-    assert "copy" not in visible_actions
-    assert "unplaced" not in visible_actions
+    assert visible_actions == ["open", "focus", "fit", "more"]
     boxes = [
         button.geometry()
-        for button in island.findChildren(QToolButton)
+        for button in bar.findChildren(QToolButton)
         if button.isVisible()
     ]
     for index, first in enumerate(boxes):
         for second in boxes[index + 1 :]:
             assert not first.intersects(second)
-    host = harness.page._canvas_host
-    island_rect = island.geometry()
-    for other in (
-        harness.page.tool_rail(),
-        harness.page.board_island(),
-        harness.page.global_island(),
-        harness.page.navigation_island(),
-        harness.page.status_island(),
-    ):
-        if not other.isVisible():
-            continue
-        other_rect = other.geometry()
-        assert not island_rect.intersects(other_rect), (island_rect, other.objectName(), other_rect)
-    del host
+    mapped = QRect(bar.mapTo(card, QPoint(0, 0)), bar.size())
+    assert card.rect().contains(mapped)
+
 
 def test_template_title_only_lod_hides_preview_backing_and_keeps_type(qtbot):
     harness = _Harness(qtbot)

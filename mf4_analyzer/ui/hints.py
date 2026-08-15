@@ -608,6 +608,13 @@ _HINTS = (
         priority=55,
     ),
     Hint(
+        id="ultraview.empty_board",
+        text="空板时左侧实心按钮打开 View 库添加对比",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=92,
+    ),
+    Hint(
         id="ultraview.direct_manip",
         text="直接拖卡片即可移动，不必再按 Option",
         surface="context",
@@ -714,7 +721,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.card_menu",
-        text="常驻打开聚焦，过期才同步，更多里复制",
+        text="右上角打开聚焦，更多里复制",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
@@ -725,6 +732,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=79,
+    ),
+    Hint(
+        id="ultraview.sync_all",
+        text="左栏可一键更新已变化源",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=78,
     ),
     Hint(
         id="ultraview.escape",

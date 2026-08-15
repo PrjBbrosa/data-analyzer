@@ -306,6 +306,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         title="谱图（FFT-时间 / 阶次）",
         rows=(
             QuickRow("取频率 / 阶次切片", gesture="点击谱图某时刻"),
+            QuickRow(
+                "切片跟随谱图视野",
+                sub="Inspector 该轴为自动时；手动范围仍以 Inspector 为准",
+                gesture="缩放 / 平移 / Home",
+            ),
             QuickRow("调色阶", sub="双击重置", gesture="拖 colorbar"),
             QuickRow("调谱图/切片高度", sub="双击重置", gesture="拖分隔条"),
         ),
@@ -459,7 +464,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "总览卡片右键",
-                sub="打开原 View · 同步到最新 · 复制本卡图像 · 移到未放置 · 移除；选中条常驻打开/聚焦/更多，过期才出现同步，复制/未放置/重绑/移除在更多和右键里",
+                sub="打开原 View · 同步到最新 · 复制本卡图像 · 移到未放置 · 移除；右上角胶囊可直接打开/聚焦/适应/更多，过期才出现同步，复制/未放置/重绑/移除在更多和右键里",
             ),
         ),
     ),
@@ -468,7 +473,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         rows=(
             QuickRow(
                 "View 库",
-                sub="左侧窄轨打开；钉住后点画布不收起，Esc 仍关闭。按分析类型直接浏览，标题可折叠，＋加入或移出 Board",
+                sub="空板时左侧实心按钮是添加入口，画布旁会提示「从左侧 View 库添加对比」。钉住后点画布不收起，Esc 仍关闭。按分析类型直接浏览，标题可折叠，＋加入或移出 Board",
                 gesture="库标题图钉",
             ),
             QuickRow(
@@ -498,7 +503,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "尺寸预设",
                 sub="小 / 标准 / 宽 / 高 / 大 / 横幅，或「按原图比例」把卡片缩到贴合预览图宽高比（只缩不放）；放不下则拒绝并保持原布局，不静默改邻卡。模板模式下该操作不可用",
-                gesture="卡片右键 / 选中条",
+                gesture="卡片右键 / 右上角",
             ),
             QuickRow(
                 "撤销 / 重做",
@@ -512,8 +517,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "源已变化",
-                sub="预览与当前图面不一致（缩放、游标、标注或结果）。点同步抓取最新画面，不重新计算",
-                gesture="卡片「同步」",
+                sub="预览与当前图面不一致（缩放、游标、标注或结果）。点同步抓取最新画面，不重新计算。左侧工具栏「一键更新源」可一次更新全部已变化预览",
+                gesture="卡片「同步」 / 左栏「一键更新源」",
             ),
             QuickRow(
                 "缩略图 / 整板概览",

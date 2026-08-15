@@ -39,13 +39,17 @@ from mf4_analyzer.ui_kit.icons import Icons, icon_device_pixel_ratio
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, parse_ref_payload
 
+from .floating_layout import RAIL_CONTENT_HEIGHT, RAIL_WIDTH
+
 
 PANEL_LIBRARY = "library"
 PANEL_LAYOUT = "layout"
 PANEL_FILTER = "filter"
 PANEL_UNPLACED = "unplaced"
 PANEL_BOARDS = "boards"
-RAIL_MIN_HEIGHT = 196
+RAIL_MIN_HEIGHT = RAIL_CONTENT_HEIGHT
+RAIL_BUTTON_SIZE = 36
+RAIL_ICON_SIZE = 20
 BOARD_POPOVER_WIDTH = 260
 BOARD_ROW_HEIGHT = 36
 _BOARD_CURRENT_ROLE = Qt.UserRole + 1
@@ -177,17 +181,19 @@ def _icon_button(
     icon: QIcon,
     tooltip: str,
     accessible_name: str,
+    size: int = 32,
+    icon_size: int = 18,
 ) -> QToolButton:
     """Create one consistent, keyboard-accessible icon-only control."""
     button = QToolButton(parent)
     button.setObjectName(object_name)
     button.setIcon(icon)
-    button.setIconSize(QSize(18, 18))
+    button.setIconSize(QSize(icon_size, icon_size))
     button.setToolButtonStyle(Qt.ToolButtonIconOnly)
     button.setAutoRaise(True)
     button.setAutoFillBackground(False)
     button.setAttribute(Qt.WA_StyledBackground, True)
-    button.setFixedSize(32, 32)
+    button.setFixedSize(size, size)
     button.setFocusPolicy(Qt.TabFocus)
     button.setToolTip(tooltip)
     button.setAccessibleName(accessible_name)
@@ -197,6 +203,25 @@ def _icon_button(
     button.setProperty("modeActive", "false")
     button.setProperty("panelOpen", "false")
     return button
+
+
+def _rail_button(
+    parent: QWidget,
+    *,
+    object_name: str,
+    icon: QIcon,
+    tooltip: str,
+    accessible_name: str,
+) -> QToolButton:
+    return _icon_button(
+        parent,
+        object_name=object_name,
+        icon=icon,
+        tooltip=tooltip,
+        accessible_name=accessible_name,
+        size=RAIL_BUTTON_SIZE,
+        icon_size=RAIL_ICON_SIZE,
+    )
 
 
 class _ElidedLabel(QLabel):
@@ -438,11 +463,17 @@ class CanvasHost(QFrame):
 
 
 class ToolRail(QFrame):
-    """The fixed 48 px left rail; Page owns which requested panel opens."""
+    """The fixed left rail; Page owns which requested panel opens.
+
+    Empty-board CTA state is a local visual flag (``set_empty_board``).  The
+    rail never reads ``UltraViewBoardState``; Page decides when the canvas
+    has no placed cards.
+    """
 
     panel_requested = pyqtSignal(str)
     free_grid_toggled = pyqtSignal(bool)
     ref_dropped = pyqtSignal(str, str)
+    sync_all_requested = pyqtSignal()
 
     _PANEL_SPECS: tuple[tuple[str, str, str, Callable[..., QIcon]], ...] = (
         (PANEL_LIBRARY, "Library", "打开 View 库", Icons.ultraview_library),
@@ -457,20 +488,23 @@ class ToolRail(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(True)
         self.setProperty("surface", "island")
-        self.setFixedWidth(48)
+        self.setFixedWidth(RAIL_WIDTH)
         self._buttons: dict[str, QToolButton] = {}
         self._icon_factories: dict[str, Callable[..., QIcon]] = {}
         self._badges: dict[str, QLabel] = {}
         self._active_panel: str | None = None
         self._filter_active = False
         self._free_grid_enabled = False
+        self._empty_board = False
+        self._stale_count = 0
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(4)
-        # Visual order: Library, FreeGrid, Layout, Filter, divider, Unplaced.
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(5)
+        # Visual order: Library, FreeGrid, Layout, Filter, divider, Unplaced,
+        # SyncAll.
         for index, (panel_id, short_name, tooltip, icon_factory) in enumerate(self._PANEL_SPECS):
             if index == 1:
-                self._free_grid = _icon_button(
+                self._free_grid = _rail_button(
                     self,
                     object_name="ultraViewRailFreeGridButton",
                     icon=Icons.ultraview_free_grid(ULTRAVIEW_MUTED),
@@ -486,7 +520,7 @@ class ToolRail(QFrame):
                 divider.setFrameShape(QFrame.HLine)
                 divider.setFixedHeight(1)
                 root.addWidget(divider, 0)
-            button = _icon_button(
+            button = _rail_button(
                 self,
                 object_name=f"ultraViewRail{short_name}Button",
                 icon=icon_factory(ULTRAVIEW_MUTED),
@@ -515,6 +549,23 @@ class ToolRail(QFrame):
         self._filter_dot.setToolTip("轴量纲或范围不一致")
         self._filter_dot.setAccessibleName("轴一致性警告")
         self._filter_dot.hide()
+        self._sync_all = _rail_button(
+            self,
+            object_name="ultraViewRailSyncAllButton",
+            icon=Icons.ultraview_sync(ULTRAVIEW_MUTED),
+            tooltip="一键更新源",
+            accessible_name="一键更新全部已变化的预览",
+        )
+        self._sync_all.clicked.connect(self._on_sync_all_clicked)
+        root.addWidget(self._sync_all, 0, Qt.AlignHCenter)
+        self._sync_all_badge = QLabel(self)
+        self._sync_all_badge.setObjectName("ultraViewRailSyncAllBadge")
+        self._sync_all_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._sync_all_badge.setAlignment(Qt.AlignCenter)
+        self._sync_all_badge.setMinimumSize(14, 14)
+        self._sync_all_badge.setProperty("role", "badge")
+        self._sync_all_badge.hide()
+        self.set_stale_count(0)
         self.set_active_panel(None)
 
     def panel_button(self, panel_id: str) -> QToolButton | None:
@@ -522,6 +573,43 @@ class ToolRail(QFrame):
 
     def free_grid_button(self) -> QToolButton:
         return self._free_grid
+
+    def sync_all_button(self) -> QToolButton:
+        return self._sync_all
+
+    def set_stale_count(self, count: int) -> None:
+        """Show how many Board previews are stale; zero disables the action."""
+        try:
+            value = max(0, int(count or 0))
+        except (TypeError, ValueError):
+            value = 0
+        self._stale_count = value
+        self._sync_all.setEnabled(value > 0)
+        _set_flag(self._sync_all, "attention", value > 0)
+        badge = self._sync_all_badge
+        badge.setText(str(value) if value else "")
+        badge.setToolTip(f"{value} 个预览源已变化" if value else "")
+        badge.setAccessibleName(f"已变化预览：{value}" if value else "")
+        if value > 0:
+            badge.adjustSize()
+            hint = badge.sizeHint()
+            badge.resize(max(14, hint.width()), max(14, hint.height()))
+            badge.show()
+        else:
+            badge.hide()
+        self._sync_all.setToolTip(
+            "一键更新源" if value else "没有需要更新的预览"
+        )
+        self._sync_all.setAccessibleName(
+            "一键更新全部已变化的预览" if value else "一键更新源（当前没有已变化预览）"
+        )
+        self._sync_all.setIcon(
+            Icons.ultraview_sync(_ultraview_icon_color(active=value > 0))
+        )
+        self._position_badges()
+
+    def stale_count(self) -> int:
+        return self._stale_count
 
     def active_panel(self) -> str | None:
         return self._active_panel
@@ -553,6 +641,14 @@ class ToolRail(QFrame):
         self._free_grid_enabled = bool(enabled)
         self._sync_button_states()
 
+    def set_empty_board(self, empty: bool) -> None:
+        """Paint View 库 as the empty-canvas primary CTA; retracts once cards exist."""
+        wanted = bool(empty)
+        if self._empty_board == wanted:
+            return
+        self._empty_board = wanted
+        self._sync_button_states()
+
     def _sync_button_states(self) -> None:
         for candidate, button in self._buttons.items():
             mode_active = (
@@ -561,13 +657,20 @@ class ToolRail(QFrame):
                 candidate == PANEL_LAYOUT and not self._free_grid_enabled
             )
             panel_open = candidate == self._active_panel
+            empty_cta = candidate == PANEL_LIBRARY and self._empty_board
             _set_flag(button, "modeActive", mode_active)
             _set_flag(button, "panelOpen", panel_open)
+            _set_flag(button, "emptyCta", empty_cta)
             _set_flag(button, "active", False)
             button.setChecked(panel_open)
             factory = self._icon_factories.get(candidate)
             if factory is not None:
-                button.setIcon(factory(_ultraview_icon_color(active=mode_active or panel_open)))
+                if empty_cta:
+                    button.setIcon(factory(ULTRAVIEW_PRESENTATION_ICON))
+                else:
+                    button.setIcon(
+                        factory(_ultraview_icon_color(active=mode_active or panel_open))
+                    )
         blocked = self._free_grid.blockSignals(True)
         self._free_grid.setChecked(self._free_grid_enabled)
         self._free_grid.blockSignals(blocked)
@@ -577,6 +680,13 @@ class ToolRail(QFrame):
         self._free_grid.setIcon(
             Icons.ultraview_free_grid(_ultraview_icon_color(active=self._free_grid_enabled))
         )
+        sync_all = getattr(self, "_sync_all", None)
+        if sync_all is not None:
+            sync_all.setIcon(
+                Icons.ultraview_sync(
+                    _ultraview_icon_color(active=self._stale_count > 0)
+                )
+            )
 
     def set_badge(self, panel_id: str, count: int | None) -> None:
         """Set an exact count badge; zero/None intentionally shows no badge."""
@@ -615,7 +725,7 @@ class ToolRail(QFrame):
         self._position_badges()
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(48, max(RAIL_MIN_HEIGHT, super().sizeHint().height()))
+        return QSize(RAIL_WIDTH, max(RAIL_MIN_HEIGHT, super().sizeHint().height()))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -636,6 +746,14 @@ class ToolRail(QFrame):
             y = max(0, button.y() + 2)
             self._filter_dot.move(x, y)
             self._filter_dot.raise_()
+        badge = getattr(self, "_sync_all_badge", None)
+        button = getattr(self, "_sync_all", None)
+        if badge is not None and button is not None and not badge.isHidden():
+            x = button.x() + button.width() - max(8, badge.width() // 2)
+            y = max(0, button.y() - 2)
+            x = min(max(0, x), max(0, self.width() - badge.width()))
+            badge.move(x, y)
+            badge.raise_()
 
     def _on_panel_clicked(self) -> None:
         button = self.sender()
@@ -647,6 +765,9 @@ class ToolRail(QFrame):
 
     def _on_free_grid_clicked(self) -> None:
         self.free_grid_toggled.emit(self._free_grid.isChecked())
+
+    def _on_sync_all_clicked(self) -> None:
+        self.sync_all_requested.emit()
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasFormat(ULTRAVIEW_REF_MIME):

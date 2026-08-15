@@ -3354,6 +3354,150 @@ def test_y_slice_uses_visible_time_range(qapp):
     c.deleteLater()
 
 
+def test_x_slice_follows_live_heatmap_y_zoom(qapp):
+    """Inspector-auto frequency axis: zooming the map Y must re-clip the
+    bottom slice. plot_result seeds the slice once; later ViewBox range
+    changes used to leave the 1D curve on the full 0–500 Hz axis."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+
+    assert c._slice_dir == 'x'
+    assert c._panel_freq_range is None
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(0.0, abs=1e-6)
+    assert sx1 == pytest.approx(500.0, abs=1e-6)
+
+    c._plot.setYRange(100.0, 300.0, padding=0)
+    qapp.processEvents()
+
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) >= 100.0 - 1e-6
+    assert np.nanmax(xs) <= 300.0 + 1e-6
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(100.0, abs=1e-6)
+    assert sx1 == pytest.approx(300.0, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_y_slice_follows_live_heatmap_x_zoom(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    c.set_slice_direction('y')
+    qapp.processEvents()
+
+    assert c._panel_time_range is None
+    c._plot.setXRange(0.5, 1.5, padding=0)
+    qapp.processEvents()
+
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) >= 0.5 - 1e-6
+    assert np.nanmax(xs) <= 1.5 + 1e-6
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(0.5, abs=1e-6)
+    assert sx1 == pytest.approx(1.5, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_home_restores_slice_to_full_heatmap_extents(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    c._plot.setYRange(100.0, 300.0, padding=0)
+    qapp.processEvents()
+    c.reset_view_to_data_extents()
+    qapp.processEvents()
+
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) == pytest.approx(0.0, abs=1e-6)
+    assert np.nanmax(xs) == pytest.approx(500.0, abs=1e-6)
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(0.0, abs=1e-6)
+    assert sx1 == pytest.approx(500.0, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_manual_panel_freq_range_ignores_heatmap_y_zoom(qapp):
+    """Inspector-manual frequency window still owns the slice X axis."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(
+        _spec_result(), amplitude_mode='amplitude_db', z_auto=True,
+        y_auto=False, y_min=100.0, y_max=300.0,
+    )
+    qapp.processEvents()
+    c._plot.setYRange(50.0, 400.0, padding=0)
+    qapp.processEvents()
+
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) >= 100.0 - 1e-6
+    assert np.nanmax(xs) <= 300.0 + 1e-6
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(100.0, abs=1e-6)
+    assert sx1 == pytest.approx(300.0, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_shift_wheel_on_map_refreshes_x_slice(qapp):
+    """Ctrl/Shift wheel uses setYRange and does not emit
+    sigRangeChangedManually; the slice must still follow the map."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+    (hy0_before, hy1_before) = c._plot.vb.viewRange()[1]
+    mid = 0.5 * (hy0_before + hy1_before)
+    consumed = c._handle_wheel_dispatch(
+        delta=120,
+        modifiers=Qt.ShiftModifier,
+        x_pos=1.0,
+        y_pos=mid,
+        view_box=c._plot.vb,
+    )
+    assert consumed is True
+    (hy0, hy1) = c._plot.vb.viewRange()[1]
+    assert (hy1 - hy0) < (hy1_before - hy0_before)
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(hy0, abs=1e-6)
+    assert sx1 == pytest.approx(hy1, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_slice_plot_zoom_does_not_reset_from_heatmap(qapp):
+    """Zooming the 1D strip itself must not be overwritten by the map's
+    still-full frequency range."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+    c._slice_plot.setXRange(100.0, 200.0, padding=0)
+    qapp.processEvents()
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(100.0, abs=1e-6)
+    assert sx1 == pytest.approx(200.0, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
 def test_order_x_slice_uses_visible_order_range(qapp):
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
@@ -3374,6 +3518,37 @@ def test_order_x_slice_uses_visible_order_range(qapp):
     qapp.processEvents()
 
     assert c._slice_dir == 'x'
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) >= 1.0 - 1e-6
+    assert np.nanmax(xs) <= 5.0 + 1e-6
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(1.0, abs=1e-6)
+    assert sx1 == pytest.approx(5.0, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_order_x_slice_follows_live_heatmap_y_zoom(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    times = np.linspace(0.0, 4.0, 5)
+    orders = np.array([0.0, 1.0, 2.0, 5.0, 10.0])
+    matrix = np.arange(
+        orders.size * times.size, dtype=float
+    ).reshape(orders.size, times.size)
+    c.plot_or_update_heatmap(
+        matrix, (0.0, 4.0), (0.0, 10.0),
+        x_label='Time (s)', y_label='Order',
+        x_coords=times, y_coords=orders,
+    )
+    c._seed_slice()
+    qapp.processEvents()
+    assert c._panel_freq_range is None
+    c._plot.setYRange(1.0, 5.0, padding=0)
+    qapp.processEvents()
+
     xs, _ = c._slice_curve.getData()
     assert np.nanmin(xs) >= 1.0 - 1e-6
     assert np.nanmax(xs) <= 5.0 + 1e-6

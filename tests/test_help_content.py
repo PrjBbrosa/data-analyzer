@@ -268,6 +268,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "Ctrl+滚轮", "适应", "25%", "300%", "只缩不放", "双击",
         "标题卡", "类型标签", "完整 ghost",
         "点行切换", "拖拽排序", "行尾复制",
+        "一键更新源",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (

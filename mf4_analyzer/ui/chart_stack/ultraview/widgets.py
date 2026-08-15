@@ -71,7 +71,7 @@ from mf4_analyzer.ui.ultraview_state import (
     section_search_haystack,
 )
 from mf4_analyzer.ui_kit.icons import Icons
-from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.menus import add_rounded_submenu, apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.widgets import SearchField
 
 from .chrome import ULTRAVIEW_MUTED
@@ -1714,10 +1714,84 @@ class EmptySlotWidget(QFrame):
         self.ref_dropped.emit(self._slot_id, section, view_id)
 
 
+class _CardActionBar(QFrame):
+    """Always-visible top-right capsule: open, focus, fit, more."""
+
+    _FIT_TOOLTIP = "按原图比例调整卡片"
+    _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewCardActionBar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(3, 2, 3, 2)
+        layout.setSpacing(1)
+        self._buttons: dict[str, QToolButton] = {}
+        for action, object_name, icon, tooltip in (
+            (
+                "open",
+                "ultraViewCardOpenButton",
+                Icons.ultraview_open_source(ULTRAVIEW_MUTED),
+                "打开原 View",
+            ),
+            (
+                "focus",
+                "ultraViewCardFocusButton",
+                Icons.expand_focus(ULTRAVIEW_MUTED),
+                "临时放大预览",
+            ),
+            (
+                "fit",
+                "ultraViewCardFitButton",
+                Icons.ultraview_fit_to_image(ULTRAVIEW_MUTED),
+                self._FIT_TOOLTIP,
+            ),
+            (
+                "more",
+                "ultraViewCardMoreButton",
+                Icons.menu(ULTRAVIEW_MUTED),
+                "更多卡片操作",
+            ),
+        ):
+            button = QToolButton(self)
+            button.setObjectName(object_name)
+            button.setIcon(icon)
+            button.setIconSize(QSize(14, 14))
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setAutoRaise(True)
+            button.setAutoFillBackground(False)
+            button.setAttribute(Qt.WA_StyledBackground, True)
+            button.setFixedSize(22, 22)
+            button.setFocusPolicy(Qt.TabFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(tooltip)
+            button.setAccessibleName(tooltip)
+            button.setProperty("role", "cardAction")
+            button.setProperty("chrome", "ultraview")
+            button.setProperty("contextAction", action)
+            self._buttons[action] = button
+            layout.addWidget(button, 0)
+
+    def button(self, action: str) -> QToolButton | None:
+        return self._buttons.get(str(action))
+
+    def set_fit_enabled(self, enabled: bool) -> None:
+        button = self._buttons.get("fit")
+        if button is None:
+            return
+        button.setEnabled(bool(enabled))
+        tip = self._FIT_TOOLTIP if enabled else self._FIT_DISABLED_TOOLTIP
+        button.setToolTip(tip)
+        button.setAccessibleName(tip)
+
+
 class UltraViewCard(QFrame):
     open_source_requested = pyqtSignal(str, str)
     sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
+    autofit_requested = pyqtSignal(str, str)
     rebind_arm_requested = pyqtSignal(str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
     remove_ref_requested = pyqtSignal(str, str)
@@ -1793,19 +1867,12 @@ class UltraViewCard(QFrame):
         self._sync_btn.clicked.connect(self._emit_sync)
         self._sync_btn.hide()
         header.addWidget(self._sync_btn, 0, Qt.AlignVCenter)
-        self._focus_btn = QToolButton(self._header)
-        self._focus_btn.setObjectName("ultraViewCardFocusButton")
-        self._focus_btn.setIcon(Icons.expand_focus())
-        self._focus_btn.setIconSize(QSize(16, 16))
-        self._focus_btn.setToolTip("临时放大")
-        self._focus_btn.setAccessibleName("临时放大")
-        self._focus_btn.setFocusPolicy(Qt.TabFocus)
-        self._focus_btn.setCursor(Qt.PointingHandCursor)
-        self._focus_btn.setAutoRaise(False)
-        self._focus_btn.setFixedSize(24, 24)
-        self._focus_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        self._focus_btn.clicked.connect(self._emit_focus)
-        header.addWidget(self._focus_btn, 0, Qt.AlignVCenter)
+        self._action_bar = _CardActionBar(self._header)
+        self._action_bar.button("open").clicked.connect(self._emit_open_source)
+        self._action_bar.button("focus").clicked.connect(self._emit_focus)
+        self._action_bar.button("fit").clicked.connect(self._emit_autofit)
+        self._action_bar.button("more").clicked.connect(self._emit_more)
+        header.addWidget(self._action_bar, 0, Qt.AlignVCenter)
         root.addWidget(self._header, 0)
 
         self._image = QLabel(self)
@@ -1852,6 +1919,34 @@ class UltraViewCard(QFrame):
 
     def slot_id(self) -> str:
         return self._model.slot_id
+
+    def action_bar(self) -> QFrame:
+        return self._action_bar
+
+    def action_button(self, action: str) -> QToolButton | None:
+        return self._action_bar.button(action)
+
+    def _fit_is_enabled(self) -> bool:
+        return False
+
+    def _sync_action_bar(self) -> None:
+        vis = lod_visibility(self._lod_level)
+        show = bool(vis.body_actions) and not self._lod_presentation
+        self._action_bar.setVisible(show)
+        self._action_bar.set_fit_enabled(show and self._fit_is_enabled())
+
+    def _emit_autofit(self, _checked: bool = False) -> None:
+        if not self._fit_is_enabled():
+            return
+        self.autofit_requested.emit(self._model.section, self._model.view_id)
+
+    def _emit_more(self, _checked: bool = False) -> None:
+        menu = self.make_context_menu()
+        button = self._action_bar.button("more")
+        if button is None:
+            menu.popup(self.mapToGlobal(QPoint(self.width(), 0)))
+            return
+        menu.popup(button.mapToGlobal(QPoint(0, button.height())))
 
     def header_height(self) -> int:
         return self._header.height()
@@ -1969,7 +2064,7 @@ class UltraViewCard(QFrame):
         has_status = bool(self._status.text())
         self._status.setVisible(bool(vis.trust and has_status))
         self._sync_btn.setVisible(bool(vis.trust and self._model.status == STATUS_STALE))
-        self._focus_btn.setVisible(bool(vis.body_actions))
+        self._sync_action_bar()
         footer = bool(vis.footer and self._lod_show_source)
         self._footer.setVisible(footer)
         self._footer.setFixedHeight(CARD_FOOTER_HEIGHT if footer else 0)
@@ -2763,16 +2858,18 @@ class FreeGridCard(UltraViewCard):
 
     layout_key_requested = pyqtSignal(str, str, int, int, bool)
     preset_requested = pyqtSignal(str, str, str)
-    autofit_requested = pyqtSignal(str, str)
 
     def __init__(self, model: CardViewModel, parent: QWidget | None = None) -> None:
         super().__init__(model, parent)
         self.setMouseTracking(True)
         self.setAcceptDrops(False)
 
+    def _fit_is_enabled(self) -> bool:
+        return True
+
     def make_context_menu(self) -> QMenu:
         menu = super().make_context_menu()
-        size_menu = menu.addMenu("自由网格尺寸")
+        size_menu = add_rounded_submenu(menu, "自由网格尺寸")
         for preset, label in (
             ("small", "小 3 × 2"),
             ("standard", "标准 4 × 3"),

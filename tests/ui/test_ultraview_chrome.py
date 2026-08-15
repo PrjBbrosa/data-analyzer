@@ -14,6 +14,10 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     PANEL_LAYOUT,
     PANEL_LIBRARY,
     PANEL_UNPLACED,
+    RAIL_BUTTON_SIZE,
+    RAIL_CONTENT_HEIGHT,
+    RAIL_ICON_SIZE,
+    RAIL_WIDTH,
     BoardIsland,
     CanvasHost,
     CardContextIsland,
@@ -130,6 +134,53 @@ def test_tool_rail_free_grid_is_a_mode_toggle_not_a_panel(qtbot):
     assert button.isChecked()
     assert button.property("modeActive") == "true"
     assert panels == []
+
+
+def test_tool_rail_sync_all_sits_below_unplaced_and_is_not_a_panel(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+    QTest.qWait(1)
+
+    unplaced = rail.panel_button(PANEL_UNPLACED)
+    button = rail.sync_all_button()
+    assert unplaced is not None
+    assert unplaced.y() < button.y()
+    assert button.objectName() == "ultraViewRailSyncAllButton"
+    assert button.text() == ""
+    assert button.toolTip() == "没有需要更新的预览"
+    assert "一键更新源" in button.accessibleName()
+    assert button.focusPolicy() == Qt.TabFocus
+    assert not button.isEnabled()
+    assert rail.stale_count() == 0
+
+    panels: list[str] = []
+    syncs: list[int] = []
+    rail.panel_requested.connect(panels.append)
+    rail.sync_all_requested.connect(lambda: syncs.append(1))
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert panels == []
+    assert syncs == []
+
+    rail.set_stale_count(3)
+    assert rail.stale_count() == 3
+    assert button.isEnabled()
+    assert button.toolTip() == "一键更新源"
+    assert button.accessibleName() == "一键更新全部已变化的预览"
+    assert button.property("attention") == "true"
+    badge = rail.findChild(QLabel, "ultraViewRailSyncAllBadge")
+    assert badge is not None and badge.isVisible()
+    assert badge.text() == "3"
+    assert badge.width() <= 28
+    assert badge.height() <= 20
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert syncs == [1]
+    assert panels == []
+
+    rail.set_stale_count(0)
+    assert not button.isEnabled()
+    assert not badge.isVisible()
+    assert button.property("attention") == "false"
 
 
 def test_compare_rail_stacks_filters_vertically(qtbot):
@@ -267,7 +318,7 @@ def test_canvas_host_pinned_overlay_ignores_canvas_click(qtbot):
 def test_tool_rail_accepts_a_real_view_ref_drop_for_unplaced(qtbot):
     rail = ToolRail()
     qtbot.addWidget(rail)
-    rail.resize(48, 220)
+    rail.resize(RAIL_WIDTH, RAIL_CONTENT_HEIGHT)
     rail.show()
     mime = make_ref_mime("time", "view-12")
     received: list[tuple[str, str]] = []
@@ -647,7 +698,9 @@ def test_presentation_click_cycle_restores_idle_role(qtbot):
 
 
 def _icon_mean_color(button: QToolButton) -> QColor:
-    image = button.icon().pixmap(18, 18).toImage()
+    size = button.iconSize()
+    side = max(16, int(size.width()), int(size.height()))
+    image = button.icon().pixmap(side, side).toImage()
     total = [0, 0, 0]
     count = 0
     for x in range(image.width()):
@@ -735,3 +788,36 @@ def test_tool_rail_icon_color_tracks_mode_and_panel_open(qtbot):
     idle = _icon_mean_color(island.presentation_button())
     assert island.presentation_button().property("role") == "icon"
     assert _color_distance(idle, rest_presentation) < 12
+
+
+def test_tool_rail_empty_board_paints_library_as_primary_cta(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+    library = rail.panel_button(PANEL_LIBRARY)
+    layout = rail.panel_button(PANEL_LAYOUT)
+    assert library is not None and layout is not None
+    assert rail.sizeHint().width() == RAIL_WIDTH
+    assert rail.sizeHint().height() >= RAIL_CONTENT_HEIGHT
+    assert library.size() == QSize(RAIL_BUTTON_SIZE, RAIL_BUTTON_SIZE)
+    assert library.iconSize() == QSize(RAIL_ICON_SIZE, RAIL_ICON_SIZE)
+    assert library.property("emptyCta") != "true"
+    rest = _icon_mean_color(library)
+    rail.set_empty_board(True)
+    assert library.property("emptyCta") == "true"
+    assert layout.property("emptyCta") != "true"
+    cta = _icon_mean_color(library)
+    assert _color_distance(rest, cta) > 12
+    assert (cta.red() + cta.green() + cta.blue()) > (
+        rest.red() + rest.green() + rest.blue()
+    ) + 30
+    rail.set_active_panel(PANEL_LIBRARY)
+    still_cta = _icon_mean_color(library)
+    assert library.property("panelOpen") == "true"
+    assert library.property("emptyCta") == "true"
+    assert _color_distance(still_cta, cta) < 12
+    rail.set_empty_board(False)
+    assert library.property("emptyCta") != "true"
+    retracted = _icon_mean_color(library)
+    assert _color_distance(retracted, cta) > 12
+    assert retracted.blue() >= retracted.red()

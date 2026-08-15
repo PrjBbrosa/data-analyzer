@@ -304,7 +304,7 @@ class _SliceStrip(_CanvasBackref):
         self._slice_plot.setYRange(lo - pad, hi + pad, padding=0)
         self.schedule_idle_quality()
 
-    def _apply_slice(self) -> None:
+    def _apply_slice(self, *, refresh_chrome: bool = True) -> None:
         """Render the slice curve + marker for the current direction/index."""
         m = self._matrix_disp
         if m is None or self._slice_curve is None:
@@ -313,7 +313,6 @@ class _SliceStrip(_CanvasBackref):
         if xc is None:
             return
         nrows, ncols = m.shape[0], m.shape[1]
-        amp_label = self._current_amplitude_axis_label()
         if self._slice_dir == 'y':
             # Fix a Y position (frequency / order) → curve = amplitude vs time.
             # Horizontal axis is TIME → panel x_* range (when manual).
@@ -324,14 +323,15 @@ class _SliceStrip(_CanvasBackref):
             mask = self._slice_visible_mask(xc, lo, hi)
             self._slice_curve.setData(xc[mask], m[idx, :][mask])
             self._set_slice_x_range(lo, hi, xc[mask])
-            self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
             self._apply_slice_amp_range(m[idx, :][mask])
-            self._slice_marker_updating = True
-            try:
-                self._slice_marker.setAngle(0)
-                self._slice_marker.setValue(float(yc[idx]))
-            finally:
-                self._slice_marker_updating = False
+            if refresh_chrome:
+                self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
+                self._slice_marker_updating = True
+                try:
+                    self._slice_marker.setAngle(0)
+                    self._slice_marker.setValue(float(yc[idx]))
+                finally:
+                    self._slice_marker_updating = False
             fixed_val, fixed_lbl = float(yc[idx]), self._y_label
         else:
             # Fix a time → curve = amplitude vs Y (frequency / order).
@@ -343,16 +343,20 @@ class _SliceStrip(_CanvasBackref):
             mask = self._slice_visible_mask(yc, lo, hi)
             self._slice_curve.setData(yc[mask], m[:, idx][mask])
             self._set_slice_x_range(lo, hi, yc[mask])
-            self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
             self._apply_slice_amp_range(m[:, idx][mask])
-            self._slice_marker_updating = True
-            try:
-                self._slice_marker.setAngle(90)
-                self._slice_marker.setValue(float(xc[idx]))
-            finally:
-                self._slice_marker_updating = False
+            if refresh_chrome:
+                self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
+                self._slice_marker_updating = True
+                try:
+                    self._slice_marker.setAngle(90)
+                    self._slice_marker.setValue(float(xc[idx]))
+                finally:
+                    self._slice_marker_updating = False
             fixed_val, fixed_lbl = float(xc[idx]), self._x_label
         self._apply_slice_curve_aa_state()
+        if not refresh_chrome:
+            return
+        amp_label = self._current_amplitude_axis_label()
         self._slice_plot.setLabel('left', amp_label)
         _hide_plot_title(self._slice_plot)
         self._slice_marker.setVisible(True)

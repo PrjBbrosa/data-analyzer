@@ -4,9 +4,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QMenu
 
-from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.menus import add_rounded_submenu, apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.popup_shell import POPUP_SHELL_FLAGS
 
 QSS_PATH = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
 
@@ -77,3 +79,41 @@ def test_rounded_menu_chrome_opt_in_check_gutter(qtbot):
     checked = apply_rounded_menu_chrome(QMenu(), gutter="check")
     qtbot.addWidget(checked)
     assert checked.property("gutter") == "check"
+
+
+def _assert_rounded_menu_shell(menu: QMenu) -> None:
+    assert menu.testAttribute(Qt.WA_TranslucentBackground), (
+        "rounded QMenu popups need WA_TranslucentBackground, "
+        "otherwise the native rectangular backing shows outside the radius"
+    )
+    flags = menu.windowFlags()
+    assert bool(flags & Qt.NoDropShadowWindowHint), (
+        "rounded QMenu popups on macOS need NoDropShadowWindowHint, "
+        "otherwise the native rectangular shadow can remain behind the radius"
+    )
+    assert bool(flags & Qt.FramelessWindowHint), (
+        "rounded QMenu popups need FramelessWindowHint so the platform frame "
+        "does not draw square corners around the transparent shell"
+    )
+    assert (flags & POPUP_SHELL_FLAGS) == POPUP_SHELL_FLAGS
+
+
+def test_rounded_menu_chrome_covers_submenu_added_later(qtbot):
+    """``addMenu`` after chrome used to leave a square native backing."""
+    menu = apply_rounded_menu_chrome(QMenu())
+    qtbot.addWidget(menu)
+    submenu = menu.addMenu("自由网格尺寸")
+    assert not submenu.testAttribute(Qt.WA_TranslucentBackground)
+
+    menu.aboutToShow.emit()
+
+    _assert_rounded_menu_shell(submenu)
+
+
+def test_add_rounded_submenu_applies_shell_immediately(qtbot):
+    menu = apply_rounded_menu_chrome(QMenu())
+    qtbot.addWidget(menu)
+    submenu = add_rounded_submenu(menu, "自由网格尺寸")
+
+    _assert_rounded_menu_shell(submenu)
+    assert menu.property("gutter") == "check"
