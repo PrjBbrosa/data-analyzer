@@ -1,0 +1,39 @@
+# Task 0 baseline — f85f2323 (2026-08-16)
+
+# UV (18 current files; plan's historical 850 count no longer applies):
+# 581 passed, 127 warnings in 147.43s (0:02:27)
+# Command: TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python
+#          -m pytest -p no:cacheprovider tests/ui/test_ultraview_*.py -q
+
+# Main suite (separate process; `--ignore=tests/acquisition_ui`):
+# 7134 passed, 12 failed, 13 skipped, 3 deselected, 2390 warnings in 2591.62s
+# (0:43:11). The expected 9 order-pollution failures are present:
+#
+# - tests/ui/test_batch_output_panel.py::test_batch_render_style_sliders_drag_and_sync_to_recipe
+#   (_slider_x, _slider_y, _slider_font)
+# - tests/ui/test_chart_stack.py::test_time_toolbar_has_no_loc_label_to_jostle_right_controls
+# - tests/ui/test_pill_switch.py::test_pill_switch_keeps_44x24_geometry_and_centered_knob_at_each_dpr
+#   (2-False-11.0, 2-True-33.0)
+# - tests/ui/test_ultraview_chrome.py::test_tool_rail_emits_requested_panel_and_projects_active_badge
+# - tests/ui/test_ultraview_chrome.py::test_tool_rail_empty_board_paints_library_as_primary_cta
+# - tests/ui/test_ultraview_entry.py::test_rail_fitter_shrinks_to_compact_and_restores_full
+#
+# Task 0 mismatch: these three deterministic failures are outside that known
+# set and therefore block this plan before Task 1:
+#
+# - tests/test_verify_ultraview_visuals.py::test_ultraview_visual_harness_geometry_and_contact_sheet
+#   (harness still requires visible selected-card floating actions)
+# - tests/ui/test_ultraview_chrome.py::test_layout_picker_omits_free_grid_entry_and_keeps_template_thumbs
+#   (hero thumb minimumHeight=20; contract requires >=104)
+# - tests/ui_kit/test_qss_palette_ratchet.py::test_distinct_hex_literals_may_only_shrink
+#   (261 six-digit literals; ceiling 244)
+#
+# Focused re-run of exactly those three tests: 3 failed in 2.32s, so they are
+# not order pollution. They are not a D0–D6 seam-hardening change and must be
+# repaired or explicitly baselined by their owning work before this plan moves
+# past Task 0.
+#
+# Acquisition suite (separate process):
+# 359 passed, 4 warnings in 10.63s
+# Command: TMPDIR=/tmp MPLCONFIGDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=.
+#          .venv/bin/python -m pytest -p no:cacheprovider tests/acquisition_ui -q

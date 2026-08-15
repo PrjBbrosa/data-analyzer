@@ -1,6 +1,10 @@
 # UltraView 接缝加固（结构护栏 + 五处接缝）· 实施 plan
 
 - 日期：2026-08-15 · 状态：**PROPOSED（待授权）** · 进度 0/9 Task
+- 执行记录（2026-08-16）：Task 0 完成清查与三路基线后发现 3 条可独立复现的
+  非 D0–D6 失配（视觉 harness/card-context、LayoutPicker 尺寸、QSS palette
+  ratchet）。依「失配即停」暂停；详情见
+  `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/baseline.txt`。
 - spec：`docs/analyzer/specs/2026-08-15-ultraview-seam-hardening-spec.md`（决策编号 D0–D8 以它为准）
 - 基线：`c2502de1`；**Task 0 必须等当前在途的 View 库几何/材质批（分支
   `claude/ultraview-library-geometry-material` 工作区里那 26 个改动文件）提交后再开工**，

@@ -1,6 +1,9 @@
 # UltraView 接缝加固（结构护栏 + 五处接缝）· spec
 
 - 日期：2026-08-15 · 状态：**PROPOSED（待授权）**
+- Task 0 重锚（2026-08-16，`f85f2323`）：本文此前的行号取自在途库几何/材质
+  工作区；已按本提交重新核对。下文保留的旧行号一律只作历史定位，实施以函数名和
+  `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/inventory.md` 的锚点表为准。
 - 配套 plan：`docs/analyzer/plans/2026-08-15-ultraview-seam-hardening-plan.md`
 - 基线：`claude/ultraview-library-geometry-material` @ `c2502de1` + 写本文时（08-15 23:30
   前后）工作区里那批**未提交**的 View 库几何/材质改动。**本文行号取自该工作区快照，不是
