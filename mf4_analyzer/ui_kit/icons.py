@@ -228,13 +228,13 @@ class Icons:
         return QIcon(pix)
 
     @classmethod
-    def export(cls):
+    def export(cls, color=None):
         def draw(p):
             p.drawLine(QPointF(10, 3), QPointF(10, 12))
             p.drawLine(QPointF(6, 8), QPointF(10, 12))
             p.drawLine(QPointF(14, 8), QPointF(10, 12))
             p.drawRoundedRect(QRectF(4, 14, 12, 4), 1.5, 1.5)
-        return _line_icon(draw, GRAY)
+        return _line_icon(draw, color or GRAY)
 
     @classmethod
     def expand_focus(cls, color=None):
@@ -669,11 +669,11 @@ class Icons:
         return QIcon(pix)
 
     @classmethod
-    def menu(cls):
+    def menu(cls, color=None):
         def draw(p):
             for y in (6, 10, 14):
                 p.drawPoint(QPointF(10, y))
-        icon = _line_icon(draw, GRAY)
+        icon = _line_icon(draw, color or GRAY)
         return icon
 
     @classmethod

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
+from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
@@ -153,15 +153,37 @@ def test_layout_picker_omits_free_grid_entry_and_keeps_template_thumbs(qtbot):
     picker = LayoutPicker(LAYOUT_LABELS_ZH)
     qtbot.addWidget(picker)
     picker.show()
+    QTest.qWait(1)
     assert picker.findChild(QToolButton, "ultraViewLayoutPopoverFreeGrid") is None
+    assert picker.findChild(QPushButton, "ultraViewLayoutPopoverOrganize") is None
+    assert picker.findChild(QPushButton, "ultraViewLayoutPopoverUndo") is None
+    assert picker.findChild(QPushButton, "ultraViewLayoutPopoverRedo") is None
+    assert list(picker._buttons) == list(LAYOUT_LABELS_ZH)
     thumb = picker.thumb_button("hero_left_4")
     assert thumb is not None
     assert thumb.minimumHeight() >= 104
-    assert "左主图" in thumb.text()
-    picker.set_current("grid_2x2", free_grid=False)
-    assert not picker.organize_button().isVisible()
+    assert thumb.iconSize() == QSize(88, 54)
+    assert "左主图 + 3 辅图" in thumb.text()
+    left = picker.thumb_button("split_horizontal")
+    right = picker.thumb_button("split_vertical")
+    below = picker.thumb_button("grid_2x2")
+    assert left is not None and right is not None and below is not None
+    assert right.x() > left.x()
+    assert abs(right.y() - left.y()) <= 8
+    assert below.y() > left.y()
+    picker.set_current("grid_2x2", free_grid=False, view_count=3)
+    assert picker.thumb_button("grid_2x2").isChecked()
+    assert "当前" in picker.thumb_button("grid_2x2").text()
+    assert not picker.thumb_button("hero_left_4").isChecked()
+    assert "选择模板" in picker.intro_label().text()
+    assert "3 个 View" in picker.intro_label().text()
     picker.set_current("grid_2x2", free_grid=True)
-    assert picker.organize_button().isVisible()
+    assert not any(button.isChecked() for button in picker._buttons.values())
+    assert "自由网格" in picker.intro_label().text()
+    chosen: list[str] = []
+    picker.layout_id_chosen.connect(chosen.append)
+    picker.thumb_button("hero_left_4").click()
+    assert chosen == ["hero_left_4"]
 
 
 def test_canvas_host_overlay_does_not_resize_canvas_and_closes_to_trigger(qtbot):
@@ -475,7 +497,7 @@ def test_overflow_menu_is_deleted_after_closing_instead_of_leaking_per_open(qtbo
     assert sip.isdeleted(third)
 
 
-_EXIT_FILL = QColor("#1769e0")
+_EXIT_FILL = QColor("#3e709c")
 _QSS_PATH = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
 
 
@@ -599,3 +621,94 @@ def test_presentation_click_cycle_restores_idle_role(qtbot):
     assert button.property("role") == "icon"
     assert button.property("active") == "false"
     assert not button.isDown()
+
+
+def _icon_mean_color(button: QToolButton) -> QColor:
+    image = button.icon().pixmap(18, 18).toImage()
+    total = [0, 0, 0]
+    count = 0
+    for x in range(image.width()):
+        for y in range(image.height()):
+            pixel = QColor(image.pixel(x, y))
+            if pixel.alpha() < 40:
+                continue
+            total[0] += pixel.red()
+            total[1] += pixel.green()
+            total[2] += pixel.blue()
+            count += 1
+    if count == 0:
+        return QColor(0, 0, 0)
+    return QColor(total[0] // count, total[1] // count, total[2] // count)
+
+
+def _color_distance(left: QColor, right: QColor) -> float:
+    return (
+        (left.red() - right.red()) ** 2
+        + (left.green() - right.green()) ** 2
+        + (left.blue() - right.blue()) ** 2
+    ) ** 0.5
+
+
+def test_canvas_host_paints_moonstone_field(qtbot):
+    host = CanvasHost()
+    qtbot.addWidget(host)
+    host.resize(240, 160)
+    host.show()
+    qtbot.waitExposed(host)
+    image = host.grab().toImage()
+    expected = QColor("#EDF2F5")
+    for x, y in ((12, 12), (60, 40), (180, 20), (30, 140)):
+        pixel = QColor(image.pixel(x, y))
+        assert abs(pixel.red() - expected.red()) < 28
+        assert abs(pixel.green() - expected.green()) < 28
+        assert abs(pixel.blue() - expected.blue()) < 28
+    assert host._dot_tile is not None
+    assert host._dot_tile_key == (expected.name(), QColor(77, 109, 132, 38).rgba())
+    tile = host._dot_tile.toImage()
+    alphas = [
+        tile.pixelColor(x, y).alpha()
+        for x in range(tile.width())
+        for y in range(tile.height())
+        if tile.pixelColor(x, y).alpha() > 0
+    ]
+    assert alphas, "dot tile must contain a visible mark"
+    assert max(alphas) in (36, 37, 38, 39, 40)
+
+
+def test_tool_rail_icon_color_tracks_mode_and_panel_open(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+    layout = rail.panel_button(PANEL_LAYOUT)
+    library = rail.panel_button(PANEL_LIBRARY)
+    free = rail.free_grid_button()
+    assert layout is not None and library is not None
+    rail.set_free_grid_enabled(False)
+    layout_mode = _icon_mean_color(layout)
+    library_rest = _icon_mean_color(library)
+    free_rest = _icon_mean_color(free)
+    assert _color_distance(layout_mode, library_rest) > 12
+    assert layout_mode.blue() >= layout_mode.red()
+    rail.set_free_grid_enabled(True)
+    layout_rest = _icon_mean_color(layout)
+    free_mode = _icon_mean_color(free)
+    assert _color_distance(layout_mode, layout_rest) > 12
+    assert _color_distance(free_rest, free_mode) > 12
+    rail.set_active_panel(PANEL_LIBRARY)
+    library_open = _icon_mean_color(library)
+    assert _color_distance(library_rest, library_open) > 12
+    rail.set_active_panel(None)
+    assert library.property("panelOpen") != "true"
+    assert layout.property("modeActive") != "true"
+    assert free.property("modeActive") == "true"
+    island = GlobalIsland()
+    qtbot.addWidget(island)
+    rest_presentation = _icon_mean_color(island.presentation_button())
+    island.set_presentation_checked(True)
+    presented = _icon_mean_color(island.presentation_button())
+    assert island.presentation_button().property("role") == "presentationExit"
+    assert _color_distance(presented, rest_presentation) > 12
+    island.set_presentation_checked(False)
+    idle = _icon_mean_color(island.presentation_button())
+    assert island.presentation_button().property("role") == "icon"
+    assert _color_distance(idle, rest_presentation) < 12

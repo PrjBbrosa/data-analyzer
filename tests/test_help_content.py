@@ -263,7 +263,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "打开原 View", "PNG", "缺", "孤儿", ".tlproj",
         "五个分析工作区", "不是第六种算法", "2×2", "3×2",
         "Esc", "演示", "UltraView（总览）", "View 栏最右侧 UltraView",
-        "Board", "自由网格", "12 列", "24 张", "Option+Shift", "整理布局",
+        "Board", "自由网格", "12 列", "24 张", "Option+Shift", "Ctrl+Shift+Z",
         "minimap", "直接拖卡片", "框选", "替换环",
         "Ctrl+滚轮", "适应", "25%", "双击",
         "标题卡", "类型标签", "完整 ghost",

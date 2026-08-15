@@ -122,7 +122,8 @@ def test_main_window_ultraview_opens_independent_panel_without_stealing_mode(
     assert primary.height() > 0
     lib_count = page.library_panel().findChild(QWidget, "ultraViewLibraryCount")
     assert lib_count is not None
-    assert int(lib_count.text()) >= 1
+    digits = "".join(ch for ch in lib_count.text() if ch.isdigit())
+    assert int(digits or "0") >= 1
 
     win._switch_view_for_active_section(1)
     assert win.view_manager.active != active_before

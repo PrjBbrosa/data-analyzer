@@ -1,0 +1,1221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>UltraView · View 库与浮层重设计</title>
+<style>
+  :root {
+    --font: "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    --mono: "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; margin: 0; }
+  body {
+    --page: #e9eef3;
+    --page-ink: #203347;
+    --page-muted: #6b7d8e;
+    --canvas: #edf2f5;
+    --canvas-dot: rgba(77, 109, 132, .15);
+    --surface: rgba(252, 253, 254, .96);
+    --surface-solid: #fcfdfe;
+    --soft: #eaf2f8;
+    --ink: #203347;
+    --muted: #6b7d8e;
+    --quiet: #8a9aaa;
+    --line: #c7d4df;
+    --line-strong: rgba(67, 92, 111, .20);
+    --brand: #3e709c;
+    --brand-deep: #315e85;
+    --brand-soft: #eaf2f8;
+    --brand-violet: #3e709c;
+    --selection: #eaf2f8;
+    --shadow: 0 18px 44px rgba(38, 60, 76, .13), 0 3px 9px rgba(38, 60, 76, .06);
+    --card-shadow: 0 9px 23px rgba(46, 59, 86, .08), 0 1px 2px rgba(46, 59, 86, .08);
+    min-width: 1160px;
+    color: var(--page-ink);
+    background:
+      radial-gradient(980px 500px at 8% -15%, rgba(255,255,255,.93), transparent 69%),
+      radial-gradient(720px 420px at 96% 0%, rgba(114,98,197,.10), transparent 70%),
+      var(--page);
+    font: 13px/1.45 var(--font);
+    transition: background .24s ease, color .24s ease;
+  }
+
+  body[data-theme="slate"] {
+    --page: #e9eef3;
+    --page-ink: #203347;
+    --page-muted: #6b7d8e;
+    --canvas: #edf2f5;
+    --canvas-dot: rgba(77, 109, 132, .15);
+    --surface: rgba(252, 253, 254, .96);
+    --surface-solid: #fcfdfe;
+    --soft: #eaf2f8;
+    --ink: #203347;
+    --muted: #6b7d8e;
+    --line: #c7d4df;
+    --line-strong: rgba(67, 92, 111, .20);
+    --brand: #3e709c;
+    --brand-deep: #315e85;
+    --brand-soft: #eaf2f8;
+    --brand-violet: #3e709c;
+    --selection: #eaf2f8;
+    --shadow: 0 18px 44px rgba(38, 60, 76, .13), 0 3px 9px rgba(38, 60, 76, .06);
+  }
+
+  body[data-theme="graphite"] {
+    --page: #e8ebf0;
+    --page-ink: #252b3b;
+    --page-muted: #737988;
+    --canvas: #eef0f4;
+    --canvas-dot: rgba(76, 75, 99, .13);
+    --surface: rgba(255,255,255,.97);
+    --soft: #f7f6fa;
+    --ink: #242a39;
+    --muted: #747b8a;
+    --line: #dddde7;
+    --line-strong: #cacbd8;
+    --brand: #6956a8;
+    --brand-deep: #57448f;
+    --brand-soft: #f0ecfa;
+    --brand-violet: #a272b7;
+    --selection: #f0ecfa;
+    --shadow: 0 18px 44px rgba(50, 45, 70, .13), 0 3px 9px rgba(50, 45, 70, .06);
+  }
+
+  button, input { font: inherit; }
+  button { color: inherit; }
+  button, input { -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  svg { display: block; }
+  [hidden] { display: none !important; }
+
+  .review {
+    width: min(1740px, calc(100vw - 36px));
+    margin: 0 auto;
+    padding: 22px 0 34px;
+  }
+  .review-head {
+    display: grid;
+    grid-template-columns: minmax(390px, .78fr) minmax(720px, 1.22fr);
+    gap: 28px;
+    align-items: end;
+    margin: 0 5px 16px;
+  }
+  .eyebrow {
+    color: #748097;
+    font: 700 10px/1.2 var(--mono);
+    letter-spacing: .13em;
+    text-transform: uppercase;
+  }
+  h1 {
+    margin: 5px 0 0;
+    color: var(--page-ink);
+    font-size: 25px;
+    line-height: 1.16;
+    letter-spacing: -.035em;
+  }
+  .lead {
+    max-width: 620px;
+    margin: 7px 0 0;
+    color: var(--page-muted);
+    font-size: 12px;
+  }
+  .option-groups { display: grid; grid-template-columns: 1.08fr .92fr; gap: 10px; }
+  .option-group {
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid rgba(92, 104, 134, .18);
+    border-radius: 12px;
+    background: rgba(255,255,255,.57);
+  }
+  .option-label {
+    display: block;
+    margin: 1px 4px 6px;
+    color: #7c8698;
+    font: 700 9px/1 var(--mono);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+  .choice {
+    min-width: 0;
+    min-height: 44px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: #647087;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    transition: transform .14s ease, border-color .14s ease, color .14s ease, background .14s ease;
+  }
+  .choice:hover { transform: translateY(-1px); background: rgba(255,255,255,.82); }
+  .choice.active {
+    border-color: color-mix(in srgb, var(--brand) 40%, white);
+    color: var(--brand-deep);
+    background: #fff;
+    box-shadow: 0 4px 12px rgba(57, 62, 96, .08), inset 0 -2px 0 var(--brand);
+  }
+  .choice b, .choice span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .choice b { font-size: 10px; font-weight: 760; }
+  .choice span { margin-top: 1px; color: #8c95a5; font-size: 8px; }
+  .choice em {
+    display: inline-block;
+    margin: 1px 0 0;
+    color: var(--brand-deep);
+    font: 700 8px/1 var(--mono);
+    font-style: normal;
+  }
+
+  .app {
+    position: relative;
+    height: min(960px, calc(100vh - 178px));
+    min-height: 720px;
+    overflow: hidden;
+    border: 1px solid rgba(83, 91, 113, .25);
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 30px 78px rgba(29, 39, 62, .18), inset 0 1px 0 rgba(255,255,255,.9);
+    isolation: isolate;
+  }
+  .titlebar {
+    position: relative;
+    z-index: 80;
+    display: grid;
+    grid-template-columns: 310px 1fr 310px;
+    align-items: center;
+    height: 44px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(252,252,254,.95);
+    backdrop-filter: blur(18px);
+  }
+  .window-left, .window-right { display: flex; align-items: center; }
+  .window-left { gap: 12px; }
+  .window-right { justify-content: flex-end; gap: 7px; color: var(--muted); font-size: 10px; }
+  .traffic { display: flex; gap: 7px; }
+  .traffic i { width: 10px; height: 10px; border-radius: 50%; background: #ff5f63; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+  .traffic i:nth-child(2) { background: #ffbd2e; }
+  .traffic i:nth-child(3) { background: #29c941; }
+  .brand-lockup { display: flex; align-items: center; gap: 8px; }
+  .brand-mark { width: 25px; height: 25px; }
+  .brand-word { color: #43516a; font-size: 15px; font-weight: 790; letter-spacing: -.035em; }
+  .board-caption { justify-self: center; color: #546078; font-size: 11px; font-weight: 720; }
+  .board-caption small { margin-left: 7px; color: #9ba2b1; font: 8px/1 var(--mono); letter-spacing: .1em; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #5d9d86; box-shadow: 0 0 0 3px rgba(93,157,134,.12); }
+
+  .stage {
+    position: absolute;
+    inset: 44px 0 0;
+    overflow: hidden;
+    background-color: var(--canvas);
+    background-image:
+      radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.1px),
+      radial-gradient(820px 460px at 47% 7%, rgba(255,255,255,.48), transparent 72%);
+    background-size: 22px 22px, 100% 100%;
+  }
+  .stage::after {
+    content: "READ-ONLY BOARD · 12-COLUMN WORKSPACE";
+    position: absolute;
+    right: 21px;
+    bottom: 13px;
+    color: color-mix(in srgb, var(--muted) 60%, transparent);
+    font: 8px/1 var(--mono);
+    letter-spacing: .1em;
+  }
+  .island {
+    position: absolute;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    border: 1px solid color-mix(in srgb, var(--line-strong) 72%, white);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 10px 26px rgba(47, 55, 81, .10), 0 1px 3px rgba(47, 55, 81, .05);
+    backdrop-filter: blur(14px) saturate(1.02);
+  }
+  .board-island { top: 17px; left: 19px; height: 42px; padding: 4px; }
+  .board-button {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 32px;
+    min-width: 166px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    color: var(--brand-deep);
+    background: var(--brand-soft);
+    font-size: 11px;
+    font-weight: 760;
+    cursor: pointer;
+  }
+  .board-button .arrow { margin-left: auto; color: #8992ac; font-size: 14px; line-height: 1; }
+  .tile-glyph { display: grid; grid-template-columns: repeat(2, 4px); gap: 2px; width: 10px; }
+  .tile-glyph i { width: 4px; height: 4px; border-radius: 1px; background: linear-gradient(135deg, var(--brand), var(--brand-violet)); }
+  .quick-island { top: 17px; right: 19px; gap: 2px; height: 42px; padding: 4px; }
+  .icon-tool {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: #65728a;
+    background: transparent;
+    cursor: pointer;
+    transition: color .14s ease, background .14s ease, border-color .14s ease, transform .14s ease;
+  }
+  .icon-tool:hover { color: var(--ink); border-color: var(--line); background: var(--soft); }
+  .icon-tool:active { transform: translateY(1px); }
+  .icon-tool.active { color: var(--brand-deep); background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand) 42%, white); }
+  .icon-tool svg, .rail-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .top-rule { width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
+
+  .tool-rail {
+    position: absolute;
+    z-index: 55;
+    top: 50%;
+    left: 19px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    width: 43px;
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--line-strong) 72%, white);
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    transform: translateY(-50%);
+  }
+  .rail-button {
+    position: relative;
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: #6b7d8e;
+    background: transparent;
+    cursor: pointer;
+    transition: color .14s ease, border-color .14s ease, background .14s ease;
+  }
+  .rail-button:hover { color: var(--ink); border-color: var(--line); background: var(--soft); }
+  .rail-button.mode-active { color: var(--brand-deep); border-color: color-mix(in srgb, var(--brand) 42%, white); background: var(--brand-soft); }
+  .rail-button.active { color: var(--brand); border-color: var(--brand); background: var(--surface-solid); }
+  .rail-button.mode-active.active { color: var(--brand-deep); border-color: var(--brand); background: var(--brand-soft); }
+  .rail-divider { width: 21px; height: 1px; margin: 3px auto; background: var(--line-strong); }
+  .rail-badge {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #c9863e;
+    box-shadow: 0 0 0 2px var(--surface-solid);
+  }
+  .rail-tip {
+    position: absolute;
+    left: 50px;
+    padding: 5px 7px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: #637087;
+    background: rgba(255,255,255,.96);
+    box-shadow: 0 5px 14px rgba(42, 51, 74, .09);
+    font-size: 9px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-3px);
+    transition: opacity .12s ease, transform .12s ease;
+  }
+  .rail-button:hover .rail-tip { opacity: 1; transform: translateX(0); }
+
+  .card-grid {
+    position: absolute;
+    z-index: 2;
+    inset: 86px 106px 72px 92px;
+    display: grid;
+    grid-template-columns: minmax(360px, 1.42fr) minmax(270px, .92fr);
+    grid-template-rows: minmax(180px, .85fr) minmax(180px, .92fr);
+    gap: 16px;
+  }
+  .plot-card {
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+    border: 1px solid rgba(92, 103, 129, .19);
+    border-radius: 13px;
+    background: rgba(255,255,255,.95);
+    box-shadow: var(--card-shadow);
+  }
+  .plot-card.hero { grid-row: span 2; }
+  .plot-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 4px;
+    background: var(--type-color);
+  }
+  .plot-card.selected { border-color: color-mix(in srgb, var(--brand) 54%, white); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 13%, transparent), var(--card-shadow); }
+  .card-head {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 13px 0 17px;
+    border-bottom: 1px solid rgba(89, 101, 128, .11);
+  }
+  .type-swatch { width: 8px; height: 8px; border-radius: 50%; background: var(--type-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--type-color) 15%, white); }
+  .card-head b { min-width: 0; overflow: hidden; color: #2c374c; font-size: 11px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+  .card-head span { margin-left: auto; color: #919bab; font: 700 8px/1 var(--mono); letter-spacing: .08em; }
+  .chart { position: absolute; inset: 39px 10px 29px 12px; }
+  .chart svg { width: 100%; height: 100%; }
+  .gridline { fill: none; stroke: #e7eaf1; stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .signal { fill: none; stroke: var(--type-color); stroke-width: 2.1; vector-effect: non-scaling-stroke; }
+  .signal-soft { fill: none; stroke: color-mix(in srgb, var(--type-color) 36%, white); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .spectrum-fill { fill: color-mix(in srgb, var(--type-color) 12%, transparent); }
+  .axis-text { fill: #9aa3b1; font: 8px var(--font); }
+  .card-foot {
+    position: absolute;
+    right: 12px;
+    bottom: 8px;
+    left: 17px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    overflow: hidden;
+    color: #929cab;
+    font: 8px/1 var(--mono);
+  }
+  .card-foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .status-island { bottom: 16px; left: 19px; height: 38px; padding: 0 11px; gap: 7px; color: #758095; font-size: 10px; }
+  .status-island .question { display: grid; width: 16px; height: 16px; place-items: center; border: 1px solid currentColor; border-radius: 50%; font: 700 10px/1 var(--mono); }
+  .status-island b { color: #68748b; font-weight: 700; }
+  .nav-island { right: 19px; bottom: 16px; height: 38px; padding: 3px; gap: 1px; }
+  .zoom-number { min-width: 50px; color: #59677d; font: 700 11px/1 var(--mono); text-align: center; }
+
+  .popover {
+    position: absolute;
+    z-index: 70;
+    left: 80px;
+    width: 470px;
+    max-height: calc(100% - 28px);
+    overflow: auto;
+    border: 1px solid color-mix(in srgb, var(--line-strong) 88%, white);
+    border-radius: 15px;
+    background: var(--surface-solid);
+    box-shadow: 0 22px 56px rgba(39, 47, 72, .17), 0 3px 10px rgba(39, 47, 72, .07);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%) translateX(-8px);
+    transition: opacity .16s ease, transform .18s ease;
+  }
+  .popover.open { opacity: 1; pointer-events: auto; transform: translateY(-50%) translateX(0); }
+  .popover::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    top: 50%;
+    left: -14px;
+    width: 15px;
+    height: 1px;
+    background: var(--line-strong);
+  }
+  .popover::after {
+    content: "";
+    position: absolute;
+    top: calc(50% - 6px);
+    left: -7px;
+    width: 12px;
+    height: 12px;
+    border-bottom: 1px solid var(--line-strong);
+    border-left: 1px solid var(--line-strong);
+    background: var(--surface-solid);
+    transform: rotate(45deg);
+  }
+  .popover-head {
+    position: sticky;
+    z-index: 3;
+    top: 0;
+    display: flex;
+    align-items: center;
+    min-height: 52px;
+    padding: 12px 14px 10px 16px;
+    border-bottom: 1px solid rgba(92, 102, 128, .12);
+    background: rgba(255,255,255,.97);
+    backdrop-filter: blur(16px);
+  }
+  .popover-head h2 { margin: 0; color: #263147; font-size: 16px; letter-spacing: -.025em; }
+  .popover-head .head-meta { margin-left: 8px; color: #8994a6; font: 700 9px/1 var(--mono); letter-spacing: .06em; }
+  .popover-head .close {
+    display: grid;
+    width: 26px;
+    height: 26px;
+    place-items: center;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: #818da0;
+    background: transparent;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .popover-head .close:hover { border-color: var(--line); color: var(--ink); background: var(--soft); }
+  .anchor-proof {
+    display: none;
+  }
+  .library-body { padding: 12px; }
+  .search-row { position: relative; margin-bottom: 10px; }
+  .search-row svg { position: absolute; top: 50%; left: 11px; width: 15px; height: 15px; color: #7c899d; fill: none; stroke: currentColor; stroke-width: 2; transform: translateY(-50%); }
+  .search-row input {
+    width: 100%;
+    height: 35px;
+    padding: 0 11px 0 34px;
+    border: 1px solid var(--line-strong);
+    border-radius: 9px;
+    color: var(--ink);
+    background: #fbfcfe;
+    font-size: 11px;
+  }
+  .search-row input::placeholder { color: #a0a8b6; }
+  .architecture-tabs { display: flex; gap: 4px; margin: 0 0 9px; }
+  .architecture-tabs button {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 6px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: #798599;
+    background: transparent;
+    font-size: 10px;
+    cursor: pointer;
+  }
+  .architecture-tabs button:hover { background: var(--soft); }
+  .architecture-tabs button.active { color: var(--brand-deep); background: var(--brand-soft); font-weight: 740; }
+  .library-mode { display: none; }
+  .library-panel[data-mode="groups"] .mode-groups,
+  .library-panel[data-mode="compact"] .mode-compact { display: block; }
+  .library-zone {
+    margin-top: 9px;
+    border: 1px solid rgba(99, 111, 141, .14);
+    border-radius: 11px;
+    background: #fff;
+    overflow: hidden;
+  }
+  .zone-head {
+    display: flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 10px;
+    border-bottom: 1px solid rgba(93, 104, 132, .10);
+    background: #fbfcfe;
+  }
+  .zone-head b { color: #43526a; font-size: 10px; font-weight: 780; }
+  .zone-head span { margin-left: 7px; color: #8e99a8; font: 700 8px/1 var(--mono); }
+  .zone-head small { margin-left: auto; color: #8a95a7; font-size: 9px; }
+  .view-row {
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr) auto auto;
+    align-items: center;
+    column-gap: 8px;
+    min-height: 38px;
+    padding: 0 8px 0 12px;
+    border-top: 1px solid rgba(93, 104, 132, .08);
+    color: #344056;
+    cursor: pointer;
+  }
+  .view-row:first-of-type { border-top: 0; }
+  .view-row:hover { background: #fafbfe; }
+  .view-row.selected { background: var(--selection); }
+  .view-row .row-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--row-color, var(--brand)); }
+  .view-row b { min-width: 0; overflow: hidden; font-size: 10px; font-weight: 690; text-overflow: ellipsis; white-space: nowrap; }
+  .view-row small { color: #9ba4b2; font: 8px/1 var(--mono); white-space: nowrap; }
+  .row-action, .row-more {
+    display: grid;
+    width: 23px;
+    height: 23px;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .row-action { color: #4c936f; border-color: color-mix(in srgb, #4c936f 45%, white); background: #eef8f2; font-size: 16px; line-height: 1; }
+  .row-action:hover { color: #24734b; background: #e2f4e9; }
+  .row-more { color: #8994a5; font-size: 16px; line-height: 1; }
+  .row-more:hover { color: #526077; background: var(--soft); }
+  .group-intro {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 1px 2px 8px;
+    color: #788599;
+    font-size: 9px;
+  }
+  .group-intro b { color: #536177; font-weight: 720; }
+  .group-intro button {
+    height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: #66748a;
+    background: #fff;
+    font-size: 8px;
+    cursor: pointer;
+  }
+  .group-intro button:hover { color: var(--brand-deep); border-color: color-mix(in srgb, var(--brand) 38%, white); background: var(--brand-soft); }
+  .view-groups { display: grid; gap: 7px; }
+  .view-group {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-solid);
+  }
+  .view-group-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 2px 8px 2px 10px;
+    background: transparent;
+  }
+  .group-toggle {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    min-height: 33px;
+    padding: 0;
+    border: 0;
+    color: #3d4a60;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+  .group-toggle b { display: block; overflow: hidden; font-size: 10px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+  .group-chevron {
+    width: 17px;
+    color: #6b7d8e;
+    font-size: 15px;
+    text-align: center;
+    transition: transform .16s ease;
+  }
+  .view-group:not(.expanded) .group-chevron { transform: rotate(-90deg); }
+  .view-group-content { display: none; border-top: 1px solid var(--line); }
+  .view-group.expanded .view-group-content { display: block; }
+  .view-group-content .view-row { padding-left: 15px; }
+  .analysis-boundary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 11px 2px 8px;
+    color: #637088;
+  }
+  .analysis-boundary::before, .analysis-boundary::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+  .analysis-boundary b { color: #4a5870; font-size: 10px; white-space: nowrap; }
+  .analysis-boundary small { color: #929cac; font-size: 8px; white-space: nowrap; }
+  .analysis-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+  .analysis-tile {
+    position: relative;
+    min-height: 53px;
+    padding: 9px 31px 8px 11px;
+    border: 1px solid color-mix(in srgb, var(--domain) 26%, var(--line));
+    border-radius: 9px;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--domain) 8%, white), #fff 58%);
+    cursor: pointer;
+    transition: border-color .14s ease, transform .14s ease, box-shadow .14s ease;
+  }
+  .analysis-tile:hover { border-color: color-mix(in srgb, var(--domain) 58%, white); box-shadow: 0 5px 14px color-mix(in srgb, var(--domain) 13%, transparent); transform: translateY(-1px); }
+  .analysis-tile::before { content: ""; position: absolute; top: 10px; bottom: 10px; left: 0; width: 3px; border-radius: 0 2px 2px 0; background: var(--domain); }
+  .analysis-tile b { display: block; color: #354056; font-size: 10px; font-weight: 760; }
+  .analysis-tile span { display: block; margin-top: 2px; color: #8b96a8; font: 8px/1 var(--mono); }
+  .analysis-tile button {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    display: grid;
+    width: 22px;
+    height: 22px;
+    place-items: center;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--domain) 45%, white);
+    border-radius: 6px;
+    color: color-mix(in srgb, var(--domain) 85%, #233047);
+    background: rgba(255,255,255,.68);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transform: translateY(-50%);
+  }
+  .analysis-tile button:hover { background: #fff; }
+  .split-note {
+    margin: 10px 2px 1px;
+    color: #8590a0;
+    font-size: 9px;
+  }
+  .split-note b { color: var(--brand-deep); font-weight: 720; }
+
+  .catalog-stack { display: grid; gap: 8px; }
+  .catalog-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 0 8px 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-solid);
+  }
+  .catalog-card b { display: block; color: #344057; font-size: 11px; font-weight: 760; }
+  .catalog-actions { display: flex; gap: 4px; }
+  .catalog-actions button { height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: #315e85; background: #f7fafc; font-size: 9px; cursor: pointer; }
+  .catalog-actions button:hover { background: #fff; }
+
+  .tree-caption { margin: 1px 2px 8px; color: #8390a1; font-size: 9px; }
+  .tree-section { margin-top: 7px; border-left: 3px solid var(--tree-color); }
+  .tree-section > header { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 8px; color: #435168; background: color-mix(in srgb, var(--tree-color) 7%, white); }
+  .tree-section > header b { font-size: 10px; }
+  .tree-section > header span { margin-left: auto; color: #8b96a6; font: 700 8px/1 var(--mono); }
+  .tree-leaf { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 32px; padding: 0 9px 0 12px; border-bottom: 1px solid rgba(93, 104, 132, .07); }
+  .tree-leaf:last-child { border-bottom: 0; }
+  .tree-leaf i { width: 6px; height: 6px; border-radius: 2px; background: var(--leaf-color, var(--tree-color)); }
+  .tree-leaf b { min-width: 0; overflow: hidden; color: #445067; font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .tree-leaf button { display: grid; width: 22px; height: 22px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 5px; color: #599078; background: transparent; font-size: 15px; cursor: pointer; }
+  .tree-leaf button:hover { border-color: color-mix(in srgb, #599078 38%, white); background: #f0f9f4; }
+
+  .layout-panel { width: 428px; }
+  .layout-body { padding: 12px 13px 14px; }
+  .layout-intro { margin: 0 2px 11px; color: #6b7d8e; font-size: 10px; }
+  .layout-intro b { color: #203347; }
+  .layout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .layout-choice {
+    min-height: 118px;
+    padding: 9px 8px 8px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: #6b7d8e;
+    background: var(--surface-solid);
+    text-align: center;
+    cursor: pointer;
+  }
+  .layout-choice:hover { border-color: color-mix(in srgb, var(--brand) 48%, white); background: #f7fafc; }
+  .layout-choice.active { border-color: var(--brand); color: var(--brand-deep); background: var(--brand-soft); }
+  .mini-card {
+    display: block;
+    width: 96px;
+    margin: 0 auto 7px;
+    padding: 5px;
+    border: 1px solid #c7d4df;
+    border-radius: 8px;
+    background: #fcfdfe;
+  }
+  .mini-layout {
+    display: grid;
+    gap: 3px;
+    width: 100%;
+    height: 44px;
+    padding: 3px;
+    border-radius: 4px;
+    background: #edf2f5;
+  }
+  .mini-layout i {
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid rgba(62, 112, 156, .18);
+    border-radius: 2px;
+    background: #e4ecf1;
+  }
+  .mini-layout i.hero { background: #c9d9e6; border-color: rgba(62, 112, 156, .28); }
+  .mini-layout.two-h { grid-template-columns: 1fr 1fr; }
+  .mini-layout.two-v { grid-template-rows: 1fr 1fr; }
+  .mini-layout.quad { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .mini-layout.hero-side { grid-template-columns: 1.65fr 1fr; grid-template-rows: repeat(3, 1fr); }
+  .mini-layout.hero-side i:first-child { grid-row: span 3; }
+  .mini-layout.hero-bottom { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1.65fr 1fr; }
+  .mini-layout.hero-bottom i:first-child { grid-column: span 3; }
+  .mini-layout.grid-six { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); }
+  .mini-layout.grid-nine { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
+  .mini-layout.grid-twelve { grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); }
+  .layout-choice b { display: block; color: inherit; font-size: 11px; }
+  .layout-choice small { display: block; margin-top: 2px; color: #6b7d8e; font-size: 9px; }
+  .layout-choice.active small { color: var(--brand-deep); }
+
+  .filter-panel { width: 366px; }
+  .filter-body { padding: 13px; }
+  .filter-group + .filter-group { margin-top: 12px; }
+  .filter-group > b { display: block; margin: 0 1px 7px; color: #56637a; font-size: 10px; }
+  .filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .filter-chip { height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: #737f92; background: #fff; font-size: 9px; cursor: pointer; }
+  .filter-chip.active { border-color: color-mix(in srgb, var(--chip) 48%, white); color: color-mix(in srgb, var(--chip) 90%, #29344b); background: color-mix(in srgb, var(--chip) 11%, white); font-weight: 700; }
+  .filter-summary { display: flex; align-items: center; gap: 7px; margin-top: 14px; padding: 9px; border-radius: 8px; color: #778396; background: var(--soft); font-size: 9px; }
+  .filter-summary i { width: 7px; height: 7px; border-radius: 50%; background: #68a17f; }
+  .filter-summary b { margin-left: auto; color: #4d5b72; font: 700 9px/1 var(--mono); }
+
+  .toast {
+    position: absolute;
+    z-index: 100;
+    bottom: 64px;
+    left: 50%;
+    max-width: 470px;
+    padding: 9px 12px;
+    border: 1px solid color-mix(in srgb, var(--brand) 23%, white);
+    border-radius: 9px;
+    color: #435168;
+    background: rgba(255,255,255,.95);
+    box-shadow: 0 12px 28px rgba(41, 49, 75, .14);
+    font-size: 10px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 7px);
+    transition: opacity .16s ease, transform .16s ease;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast b { color: var(--brand-deep); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  }
+</style>
+</head>
+<body data-theme="slate">
+<main class="review">
+  <header class="review-head">
+    <div>
+      <div class="eyebrow">UltraView · visual & information architecture study</div>
+      <h1>让图标的色彩成为“方向”，而不是整块 UI 的底色。</h1>
+      <p class="lead">对象是需要快速编排、比对多个工程分析视图的人。这个原型把品牌色压缩到选中态与细微渐变，把时域、频谱、时频、频响、阶次改成可一眼识别的低饱和类型标记；所有左侧弹层都以<strong>触发按钮的垂直中心</strong>为锚点。</p>
+    </div>
+    <div class="option-groups">
+      <section class="option-group" aria-label="配色方案">
+        <span class="option-label">Color direction</span>
+        <div class="choices" id="themeChoices">
+          <button class="choice active" type="button" data-theme-choice="slate"><b>月白石蓝</b><span>当前方案，克制清晰</span><em>已选</em></button>
+          <button class="choice" type="button" data-theme-choice="violet"><b>雾紫蓝</b><span>更贴近图标色源</span></button>
+          <button class="choice" type="button" data-theme-choice="graphite"><b>石墨紫</b><span>更稳重、较有边界</span></button>
+        </div>
+      </section>
+      <section class="option-group" aria-label="View 库信息架构">
+        <span class="option-label">View library structure</span>
+        <div class="choices" id="architectureChoices">
+          <button class="choice active" type="button" data-architecture="groups"><b>展开分组</b><span>按类型直接看 View</span><em>建议</em></button>
+          <button class="choice" type="button" data-architecture="compact"><b>类型概览</b><span>先扫读，再展开</span></button>
+        </div>
+      </section>
+    </div>
+  </header>
+
+  <section class="app" aria-label="UltraView 交互原型">
+    <header class="titlebar">
+      <div class="window-left">
+        <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div class="brand-lockup">
+          <svg class="brand-mark" viewBox="0 0 26 26" aria-label="UltraView">
+            <defs><linearGradient id="brand-gradient" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#347cf4"/><stop offset=".54" stop-color="#7257e4"/><stop offset="1" stop-color="#bc62c8"/></linearGradient></defs>
+            <rect x="1" y="1" width="24" height="24" rx="7" fill="#f4f1ff" stroke="#d7cefb"/>
+            <rect x="6" y="6" width="6" height="6" rx="1.5" fill="url(#brand-gradient)"/>
+            <rect x="14" y="6" width="6" height="6" rx="1.5" fill="#8d5ce0"/>
+            <rect x="6" y="14" width="6" height="6" rx="1.5" fill="#4b79ed"/>
+            <rect x="14" y="14" width="6" height="6" rx="1.5" fill="#bf62c7"/>
+          </svg>
+          <span class="brand-word">UltraView</span>
+        </div>
+      </div>
+      <div class="board-caption">全局对比 <small>READ-ONLY</small></div>
+      <div class="window-right"><i class="live-dot"></i><span>已同步 · 6 个 View</span></div>
+    </header>
+
+    <div class="stage" id="stage">
+      <div class="island board-island">
+        <button class="board-button" type="button" data-message="Board 菜单：切换、重命名、复制或新建 Board。">
+          <span class="tile-glyph" aria-hidden="true"><i></i><i></i><i></i><i></i></span>全局对比 <span class="arrow">⌄</span>
+        </button>
+      </div>
+      <div class="island quick-island">
+        <button class="icon-tool" type="button" aria-label="显示设置" data-message="显示设置：影响当前 Board 的呈现，不新增计算。"><svg viewBox="0 0 24 24"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z"/><circle cx="12" cy="12" r="2.3"/></svg></button>
+        <button class="icon-tool" type="button" aria-label="导出" data-message="导出：复制整板图或导出 PNG。"><svg viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 16v3h14v-3"/></svg></button>
+        <span class="top-rule"></span>
+        <button class="icon-tool" type="button" aria-label="演示模式" data-message="演示模式：收起编辑控件，只保留浏览与缩放。"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="12" rx="2"/><path d="M9 20h6m-3-4v4"/></svg></button>
+      </div>
+
+      <nav class="tool-rail" aria-label="UltraView 工具">
+        <button class="rail-button active" id="libraryButton" type="button" aria-controls="libraryPanel" aria-label="View 库">
+          <svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span class="rail-tip">View 库</span>
+        </button>
+        <button class="rail-button" id="freeGridButton" type="button" aria-label="自由网格">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg><span class="rail-tip">自由网格</span>
+        </button>
+        <button class="rail-button mode-active" id="layoutButton" type="button" aria-controls="layoutPanel" aria-label="布局">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="6" height="7" rx="1.5"/><rect x="14" y="13" width="6" height="7" rx="1.5"/></svg><span class="rail-tip">布局</span>
+        </button>
+        <button class="rail-button" id="filterButton" type="button" aria-controls="filterPanel" aria-label="筛选">
+          <svg viewBox="0 0 24 24"><path d="M4 5h16l-6.3 7.2v5.2l-3.4 1.7v-6.9L4 5Z"/></svg><span class="rail-tip">筛选</span>
+        </button>
+        <span class="rail-divider"></span>
+        <button class="rail-button" type="button" aria-label="未放置 View" data-message="未放置 View：2 个，点击可定位或放回画布。"><i class="rail-badge"></i>
+          <svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="11" rx="2"/><path d="M9 20h6m-3-5v5"/></svg><span class="rail-tip">未放置 · 2</span>
+        </button>
+      </nav>
+
+      <section class="card-grid" aria-label="当前 Board">
+        <article class="plot-card hero selected" style="--type-color:#5f86c5" tabindex="0">
+          <header class="card-head"><i class="type-swatch"></i><b>转向角 · 时域对比</b><span>TIME</span></header>
+          <div class="chart">
+            <svg viewBox="0 0 700 420" preserveAspectRatio="none" aria-label="时域波形">
+              <path class="gridline" d="M18 32H686M18 106H686M18 180H686M18 254H686M18 328H686M18 402H686M18 32V402M151 32V402M284 32V402M417 32V402M550 32V402M686 32V402"/>
+              <path class="signal-soft" d="M18 236 C52 177 77 304 111 249S172 176 207 238 277 298 311 207 382 138 418 228 479 329 516 203 589 148 625 230 665 282 686 252"/>
+              <path class="signal" d="M18 248 C51 199 74 285 110 248S172 194 205 250 274 289 310 222 381 153 417 238 480 312 516 219 588 167 624 240 664 266 686 243"/>
+              <text class="axis-text" x="19" y="417">0 s</text><text class="axis-text" x="662" y="417">12 s</text>
+            </svg>
+          </div>
+          <footer class="card-foot"><span>时域 · 0–12.0 s</span><span>Chassis_03.mf4</span></footer>
+        </article>
+        <article class="plot-card" style="--type-color:#9b72ad" tabindex="0">
+          <header class="card-head"><i class="type-swatch"></i><b>118 Hz 峰值</b><span>FFT</span></header>
+          <div class="chart">
+            <svg viewBox="0 0 420 220" preserveAspectRatio="none" aria-label="频谱">
+              <path class="gridline" d="M14 20H408M14 64H408M14 108H408M14 152H408M14 196H408M14 20V196M112 20V196M210 20V196M308 20V196M408 20V196"/>
+              <path class="spectrum-fill" d="M14 191 30 187 46 189 62 179 78 184 94 171 110 180 126 164 142 175 158 145 174 171 190 48 206 170 222 130 238 172 254 156 270 178 286 169 302 181 318 174 334 185 350 179 366 188 382 181 408 190V196H14Z"/>
+              <path class="signal" d="M14 191 30 187 46 189 62 179 78 184 94 171 110 180 126 164 142 175 158 145 174 171 190 48 206 170 222 130 238 172 254 156 270 178 286 169 302 181 318 174 334 185 350 179 366 188 382 181 408 190"/>
+              <path d="M190 20V196" fill="none" stroke="#cbb7d4" stroke-width="1" stroke-dasharray="3 3"/>
+              <text class="axis-text" x="177" y="15">118 Hz</text>
+            </svg>
+          </div>
+          <footer class="card-foot"><span>频谱 · 0–500 Hz</span><span>8.43 m/s²</span></footer>
+        </article>
+        <article class="plot-card" style="--type-color:#57958d" tabindex="0">
+          <header class="card-head"><i class="type-swatch"></i><b>路噪 · 时频</b><span>STFT</span></header>
+          <div class="chart">
+            <svg viewBox="0 0 420 220" preserveAspectRatio="none" aria-label="时频图">
+              <defs><linearGradient id="heat" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#eaf5f2"/><stop offset=".4" stop-color="#84bbb2"/><stop offset=".72" stop-color="#638bb0"/><stop offset="1" stop-color="#725f9c"/></linearGradient></defs>
+              <rect x="14" y="20" width="394" height="176" rx="2" fill="url(#heat)" opacity=".7"/>
+              <path class="gridline" d="M14 20H408M14 64H408M14 108H408M14 152H408M14 196H408M14 20V196M112 20V196M210 20V196M308 20V196M408 20V196"/>
+              <path d="M20 156C72 140 98 166 145 119S243 138 284 78 351 101 402 43" fill="none" stroke="#f7fbfc" stroke-width="2" opacity=".9"/>
+            </svg>
+          </div>
+          <footer class="card-foot"><span>时频 · 0–12.0 s</span><span>0–2 kHz</span></footer>
+        </article>
+      </section>
+
+      <div class="island status-island"><span class="question">?</span><b>只读预览</b><span>· 不计算</span></div>
+      <div class="island nav-island">
+        <button class="icon-tool" type="button" aria-label="总览" data-message="总览：查看卡片布局与当前视口。"><svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg></button>
+        <button class="icon-tool" type="button" aria-label="缩小" data-zoom="-5"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="5.5"/><path d="M14 14l5 5M7 10h6"/></svg></button>
+        <span class="zoom-number" id="zoomNumber">55%</span>
+        <button class="icon-tool" type="button" aria-label="放大" data-zoom="5"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="5.5"/><path d="M14 14l5 5M7 10h6M10 7v6"/></svg></button>
+        <button class="icon-tool" type="button" aria-label="适应画布" data-message="已适应当前 Board 到画布。"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+      </div>
+
+      <aside class="popover library-panel open" id="libraryPanel" data-mode="groups" aria-labelledby="libraryTitle">
+        <span class="anchor-proof">⇠ 与 View 中心对齐</span>
+        <header class="popover-head"><h2 id="libraryTitle">View 库</h2><span class="head-meta">6 AVAILABLE</span><button class="close" type="button" aria-label="关闭 View 库">×</button></header>
+        <div class="library-body">
+          <label class="search-row">
+            <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4.5 4.5"/></svg>
+            <input id="librarySearch" type="search" placeholder="搜索 View、信号或分析类型…" autocomplete="off">
+          </label>
+          <div class="architecture-tabs" aria-label="当前原型选择">
+            <button class="active" type="button" data-mode-switch="groups">展开</button>
+            <button type="button" data-mode-switch="compact">概览</button>
+          </div>
+
+          <div class="library-mode mode-groups">
+            <div class="view-groups">
+              <section class="view-group expanded" data-group="time" data-searchable="时域 转向角 纵向加速度 time">
+                <header class="view-group-head">
+                  <button class="group-toggle" type="button" data-toggle-group aria-expanded="true" aria-controls="timeViews"><span><b>时域</b></span><span class="group-chevron">⌃</span></button>
+                </header>
+                <div class="view-group-content" id="timeViews">
+                  <div class="view-row selected" data-searchable="转向角 时域 0 至 12 秒"><i class="row-dot" style="--row-color:#5f86c5"></i><b>转向角 · 时域对比</b><small>0–12 s</small><button class="row-action" type="button" data-add="转向角 · 时域对比" aria-label="添加到 Board">+</button></div>
+                  <div class="view-row" data-searchable="纵向加速度 时域 0 至 12 秒"><i class="row-dot" style="--row-color:#5f86c5"></i><b>纵向加速度 · 时域</b><small>0–12 s</small><button class="row-action" type="button" data-add="纵向加速度 · 时域" aria-label="添加到 Board">+</button></div>
+                </div>
+              </section>
+              <section class="view-group expanded" data-group="spectrum" data-searchable="频谱 118 Hz fft">
+                <header class="view-group-head">
+                  <button class="group-toggle" type="button" data-toggle-group aria-expanded="true" aria-controls="spectrumViews"><span><b>频谱</b></span><span class="group-chevron">⌃</span></button>
+                </header>
+                <div class="view-group-content" id="spectrumViews"><div class="view-row" data-searchable="118 Hz 峰值 频谱 fft"><i class="row-dot" style="--row-color:#9b72ad"></i><b>118 Hz 峰值</b><small>0–500 Hz</small><button class="row-action" type="button" data-add="118 Hz 峰值" aria-label="添加到 Board">+</button></div></div>
+              </section>
+              <section class="view-group expanded" data-group="timeFrequency" data-searchable="时频 路噪 stft spectrogram">
+                <header class="view-group-head">
+                  <button class="group-toggle" type="button" data-toggle-group aria-expanded="true" aria-controls="timeFrequencyViews"><span><b>时频</b></span><span class="group-chevron">⌃</span></button>
+                </header>
+                <div class="view-group-content" id="timeFrequencyViews"><div class="view-row" data-searchable="路噪 时频 stft"><i class="row-dot" style="--row-color:#57958d"></i><b>路噪 · 时频</b><small>0–2 kHz</small><button class="row-action" type="button" data-add="路噪 · 时频" aria-label="添加到 Board">+</button></div></div>
+              </section>
+              <section class="view-group expanded" data-group="frf" data-searchable="频响 方向盘 frf">
+                <header class="view-group-head">
+                  <button class="group-toggle" type="button" data-toggle-group aria-expanded="true" aria-controls="frfViews"><span><b>频响</b></span><span class="group-chevron">⌃</span></button>
+                </header>
+                <div class="view-group-content" id="frfViews"><div class="view-row" data-searchable="方向盘 frf 频响"><i class="row-dot" style="--row-color:#b88772"></i><b>方向盘 · FRF</b><small>0–160 Hz</small><button class="row-action" type="button" data-add="方向盘 · FRF" aria-label="添加到 Board">+</button></div></div>
+              </section>
+              <section class="view-group expanded" data-group="order" data-searchable="阶次 二阶发动机 order">
+                <header class="view-group-head">
+                  <button class="group-toggle" type="button" data-toggle-group aria-expanded="true" aria-controls="orderViews"><span><b>阶次</b></span><span class="group-chevron">⌃</span></button>
+                </header>
+                <div class="view-group-content" id="orderViews"><div class="view-row" data-searchable="二阶发动机 阶次 order"><i class="row-dot" style="--row-color:#97864e"></i><b>二阶发动机阶次</b><small>800–4,000 rpm</small><button class="row-action" type="button" data-add="二阶发动机阶次" aria-label="添加到 Board">+</button></div></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="library-mode mode-compact">
+            <div class="catalog-stack">
+              <article class="catalog-card" data-searchable="时域 转向角 time"><b>时域</b><div class="catalog-actions"><button type="button" data-open-group="time">展开</button></div></article>
+              <article class="catalog-card" data-searchable="频谱 118 Hz fft"><b>频谱</b><div class="catalog-actions"><button type="button" data-open-group="spectrum">展开</button></div></article>
+              <article class="catalog-card" data-searchable="时频 路噪 stft"><b>时频</b><div class="catalog-actions"><button type="button" data-open-group="timeFrequency">展开</button></div></article>
+              <article class="catalog-card" data-searchable="频响 frf"><b>频响</b><div class="catalog-actions"><button type="button" data-open-group="frf">展开</button></div></article>
+              <article class="catalog-card" data-searchable="阶次 order"><b>阶次</b><div class="catalog-actions"><button type="button" data-open-group="order">展开</button></div></article>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <aside class="popover layout-panel" id="layoutPanel" aria-labelledby="layoutTitle">
+        <span class="anchor-proof">⇠ 与布局中心对齐</span>
+        <header class="popover-head"><h2 id="layoutTitle">布局</h2><span class="head-meta">TEMPLATE</span><button class="close" type="button" aria-label="关闭布局">×</button></header>
+        <div class="layout-body">
+          <p class="layout-intro" id="layoutIntro"><b>选择模板</b> · 当前 3 个 View；自由网格可由左侧独立开关进入</p>
+          <div class="layout-grid">
+            <button class="layout-choice" type="button" data-layout="左右双图" data-capacity="2 格"><span class="mini-card"><span class="mini-layout two-h"><i></i><i></i></span></span><b>左右双图</b><small>2 格</small></button>
+            <button class="layout-choice" type="button" data-layout="上下双图" data-capacity="2 格"><span class="mini-card"><span class="mini-layout two-v"><i></i><i></i></span></span><b>上下双图</b><small>2 格</small></button>
+            <button class="layout-choice" type="button" data-layout="2 × 2" data-capacity="4 格"><span class="mini-card"><span class="mini-layout quad"><i></i><i></i><i></i><i></i></span></span><b>2 × 2</b><small>4 格</small></button>
+            <button class="layout-choice active" type="button" data-layout="左主图 + 3 辅图" data-capacity="4 格"><span class="mini-card"><span class="mini-layout hero-side"><i class="hero"></i><i></i><i></i><i></i></span></span><b>左主图 + 3 辅图</b><small>当前</small></button>
+            <button class="layout-choice" type="button" data-layout="上主图 + 3 辅图" data-capacity="4 格"><span class="mini-card"><span class="mini-layout hero-bottom"><i class="hero"></i><i></i><i></i><i></i></span></span><b>上主图 + 3 辅图</b><small>4 格</small></button>
+            <button class="layout-choice" type="button" data-layout="3 × 2" data-capacity="6 格"><span class="mini-card"><span class="mini-layout grid-six"><i></i><i></i><i></i><i></i><i></i><i></i></span></span><b>3 × 2</b><small>6 格</small></button>
+            <button class="layout-choice" type="button" data-layout="3 × 3" data-capacity="9 格"><span class="mini-card"><span class="mini-layout grid-nine"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span><b>3 × 3</b><small>9 格</small></button>
+            <button class="layout-choice" type="button" data-layout="4 × 3" data-capacity="12 格"><span class="mini-card"><span class="mini-layout grid-twelve"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span><b>4 × 3</b><small>12 格</small></button>
+          </div>
+        </div>
+      </aside>
+
+      <aside class="popover filter-panel" id="filterPanel" aria-labelledby="filterTitle">
+        <span class="anchor-proof">⇠ 与筛选中心对齐</span>
+        <header class="popover-head"><h2 id="filterTitle">筛选</h2><span class="head-meta">BOARD</span><button class="close" type="button" aria-label="关闭筛选">×</button></header>
+        <div class="filter-body">
+          <section class="filter-group"><b>分析类型</b><div class="filter-chips"><button class="filter-chip active" style="--chip:#5f86c5" type="button">时域</button><button class="filter-chip active" style="--chip:#9b72ad" type="button">频谱</button><button class="filter-chip active" style="--chip:#57958d" type="button">时频</button><button class="filter-chip" style="--chip:#b88772" type="button">频响</button><button class="filter-chip" style="--chip:#97864e" type="button">阶次</button></div></section>
+          <section class="filter-group"><b>状态</b><div class="filter-chips"><button class="filter-chip active" style="--chip:#5d9d86" type="button">已同步</button><button class="filter-chip" style="--chip:#c9863e" type="button">需关注</button><button class="filter-chip" style="--chip:#7d8796" type="button">未放置</button></div></section>
+          <div class="filter-summary"><i></i><span>筛选只改变 Board 可见性，不删 View。</span><b id="filterCount">3 / 6</b></div>
+        </div>
+      </aside>
+
+      <div class="toast" id="toast" aria-live="polite"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+  (function () {
+    var stage = document.getElementById('stage');
+    var toast = document.getElementById('toast');
+    var libraryPanel = document.getElementById('libraryPanel');
+    var layoutPanel = document.getElementById('layoutPanel');
+    var filterPanel = document.getElementById('filterPanel');
+    var panels = [libraryPanel, layoutPanel, filterPanel];
+    var activeRail = null;
+    var toastTimer = null;
+    var zoom = 55;
+
+    function showToast(message) {
+      toast.innerHTML = message;
+      toast.classList.add('show');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(function () { toast.classList.remove('show'); }, 2600);
+    }
+
+    function alignPanelToButton(panel, button, label) {
+      var stageBox = stage.getBoundingClientRect();
+      var buttonBox = button.getBoundingClientRect();
+      var center = buttonBox.top - stageBox.top + buttonBox.height / 2;
+      panel.style.top = center + 'px';
+      var proof = panel.querySelector('.anchor-proof');
+      if (proof) proof.textContent = '⇠ 与 ' + label + ' 中心对齐';
+    }
+
+    function openPanel(panel, button, label) {
+      panels.forEach(function (item) { item.classList.remove('open'); });
+      document.querySelectorAll('.rail-button').forEach(function (item) {
+        item.classList.remove('active');
+      });
+      alignPanelToButton(panel, button, label);
+      panel.classList.add('open');
+      button.classList.add('active');
+      activeRail = { panel: panel, button: button, label: label };
+    }
+
+    document.getElementById('libraryButton').addEventListener('click', function () { openPanel(libraryPanel, this, 'View'); });
+    document.getElementById('layoutButton').addEventListener('click', function () { openPanel(layoutPanel, this, '布局'); });
+    document.getElementById('filterButton').addEventListener('click', function () { openPanel(filterPanel, this, '筛选'); });
+
+    document.querySelectorAll('.close').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var panel = button.closest('.popover');
+        panel.classList.remove('open');
+        if (activeRail && activeRail.panel === panel) activeRail = null;
+        showToast('<b>已收起</b> 面板仍保留在原按钮的中心锚点上。');
+      });
+    });
+
+    document.getElementById('themeChoices').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-theme-choice]');
+      if (!button) return;
+      document.body.dataset.theme = button.dataset.themeChoice;
+      document.querySelectorAll('[data-theme-choice]').forEach(function (item) { item.classList.toggle('active', item === button); });
+      var copy = {
+        violet: '<b>雾紫蓝</b>：保留 UltraView 图标的紫蓝方向，画布保持轻。',
+        slate: '<b>月白石蓝</b>：最中性，适合数据密度高的日常工作。',
+        graphite: '<b>石墨紫</b>：边界更稳，适合较深色的工程桌面环境。'
+      };
+      showToast(copy[button.dataset.themeChoice]);
+    });
+
+    function setArchitecture(mode) {
+      libraryPanel.dataset.mode = mode;
+      document.querySelectorAll('[data-architecture]').forEach(function (item) { item.classList.toggle('active', item.dataset.architecture === mode); });
+      document.querySelectorAll('[data-mode-switch]').forEach(function (item) { item.classList.toggle('active', item.dataset.modeSwitch === mode); });
+      var copy = {
+        groups: '<b>展开分组</b>：时域、频谱等就是一级分类，打开后直接看到 View。',
+        compact: '<b>类型概览</b>：先扫读每类内容，需要时一键进入完整列表。'
+      };
+      showToast(copy[mode]);
+    }
+
+    document.getElementById('architectureChoices').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-architecture]');
+      if (button) setArchitecture(button.dataset.architecture);
+    });
+    document.querySelectorAll('[data-mode-switch]').forEach(function (button) {
+      button.addEventListener('click', function () { setArchitecture(button.dataset.modeSwitch); });
+    });
+
+    function setGroupExpanded(group, expanded) {
+      group.classList.toggle('expanded', expanded);
+      var toggle = group.querySelector('[data-toggle-group]');
+      if (toggle) toggle.setAttribute('aria-expanded', String(expanded));
+    }
+
+    document.querySelectorAll('[data-toggle-group]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var group = button.closest('.view-group');
+        var expanded = !group.classList.contains('expanded');
+        setGroupExpanded(group, expanded);
+        showToast(expanded ? '<b>' + group.querySelector('.group-toggle b').textContent + '</b> 已展开，可直接查看其中的 View。' : '已收起该分析类型。');
+      });
+    });
+
+    document.querySelectorAll('[data-open-group]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var target = document.querySelector('.view-group[data-group="' + button.dataset.openGroup + '"]');
+        setArchitecture('groups');
+        if (target) {
+          setGroupExpanded(target, true);
+          target.scrollIntoView({ block: 'nearest' });
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-add]').forEach(function (button) {
+      button.addEventListener('click', function (event) {
+        event.stopPropagation();
+        showToast('<b>' + button.dataset.add + '</b> 已加入当前 Board 的下一个空位。');
+      });
+    });
+    document.querySelectorAll('[data-message]').forEach(function (button) {
+      button.addEventListener('click', function () { showToast(button.dataset.message); });
+    });
+
+    function applyLayoutSelection(button) {
+      document.querySelectorAll('[data-layout]').forEach(function (item) {
+        var on = item === button;
+        item.classList.toggle('active', on);
+        var caption = item.querySelector('small');
+        if (caption) caption.textContent = on ? '当前' : item.dataset.capacity;
+      });
+    }
+
+    function setTemplateIntro() {
+      document.getElementById('layoutIntro').innerHTML = '<b>选择模板</b> · 当前 3 个 View；自由网格可由左侧独立开关进入';
+    }
+
+    document.querySelectorAll('[data-layout]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        document.getElementById('freeGridButton').classList.remove('mode-active');
+        document.getElementById('layoutButton').classList.add('mode-active');
+        applyLayoutSelection(button);
+        setTemplateIntro();
+        showToast('<b>' + button.dataset.layout + '</b> 已选中；当前 Board 的 View 不会被重算。');
+      });
+    });
+
+    document.getElementById('freeGridButton').addEventListener('click', function () {
+      var on = !this.classList.contains('mode-active');
+      this.classList.toggle('mode-active', on);
+      document.getElementById('layoutButton').classList.toggle('mode-active', !on);
+      if (on) {
+        document.querySelectorAll('[data-layout]').forEach(function (item) {
+          item.classList.remove('active');
+          var caption = item.querySelector('small');
+          if (caption) caption.textContent = item.dataset.capacity;
+        });
+        document.getElementById('layoutIntro').textContent = '当前为自由网格；选择任一模板即可切回';
+        showToast('<b>自由网格</b>：直接移动或调整后可用 Ctrl+Z / Ctrl+Shift+Z 撤销或重做。');
+      } else {
+        applyLayoutSelection(document.querySelector('[data-layout="左主图 + 3 辅图"]'));
+        setTemplateIntro();
+      }
+    });
+
+    document.querySelectorAll('.filter-chip').forEach(function (button) {
+      button.addEventListener('click', function () {
+        button.classList.toggle('active');
+        var selected = document.querySelectorAll('.filter-chip.active').length;
+        document.getElementById('filterCount').textContent = Math.max(1, selected) + ' / 6';
+        showToast('已更新筛选；只改变 Board 可见性。');
+      });
+    });
+
+    document.querySelectorAll('[data-zoom]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        zoom = Math.max(25, Math.min(150, zoom + Number(button.dataset.zoom)));
+        document.getElementById('zoomNumber').textContent = zoom + '%';
+      });
+    });
+
+    document.getElementById('librarySearch').addEventListener('input', function () {
+      var query = this.value.trim().toLowerCase();
+      document.querySelectorAll('[data-searchable]').forEach(function (item) {
+        item.hidden = Boolean(query) && item.dataset.searchable.toLowerCase().indexOf(query) === -1;
+      });
+    });
+
+    window.addEventListener('resize', function () {
+      if (activeRail && activeRail.panel.classList.contains('open')) {
+        alignPanelToButton(activeRail.panel, activeRail.button, activeRail.label);
+      }
+    });
+
+    alignPanelToButton(libraryPanel, document.getElementById('libraryButton'), 'View');
+  }());
+</script>
+</body>
+</html>

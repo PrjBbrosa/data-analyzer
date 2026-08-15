@@ -25,7 +25,7 @@ _SEARCH_CALL_SITES = {
         ("self._search", "搜索信号…"),
     ),
     "mf4_analyzer/ui/chart_stack/ultraview/widgets.py": (
-        ("self._search", "搜索 View…"),
+        ("self._search", "搜索 View、信号或分析类型…"),
     ),
     "mf4_analyzer/ui/widgets/channel_config_manager.py": (
         ("self.config_search", "搜索配置…"),

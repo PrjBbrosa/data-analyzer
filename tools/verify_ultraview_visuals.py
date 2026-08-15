@@ -210,6 +210,139 @@ def _reset_board(page, layout_id: str = "hero_left_4"):
     return board
 
 
+def _mean_icon_color(button) -> dict[str, int] | None:
+    icon = button.icon()
+    if icon is None or icon.isNull():
+        return None
+    image = icon.pixmap(18, 18).toImage()
+    total = [0, 0, 0]
+    count = 0
+    for x in range(image.width()):
+        for y in range(image.height()):
+            pixel = QColor(image.pixel(x, y))
+            if pixel.alpha() < 40:
+                continue
+            total[0] += pixel.red()
+            total[1] += pixel.green()
+            total[2] += pixel.blue()
+            count += 1
+    if count == 0:
+        return None
+    return {
+        "r": total[0] // count,
+        "g": total[1] // count,
+        "b": total[2] // count,
+        "samples": count,
+    }
+
+
+def _moonstone_facts(page) -> dict[str, Any]:
+    """Sample canvas fill/dot and island material without relying on screenshots."""
+    host = page.canvas_host()
+    image = host.grab().toImage()
+    width, height = image.width(), image.height()
+    expected = QColor("#EDF2F5")
+    candidates = (
+        (2, 2),
+        (min(width - 3, 92), min(height - 3, height // 2)),
+        (min(width - 3, width // 2), min(height - 3, height - 6)),
+        (min(width - 3, 70), 8),
+    )
+    best = None
+    best_dist = 10**9
+    sample_x = sample_y = 0
+    for x, y in candidates:
+        px = max(0, min(width - 1, int(x)))
+        py = max(0, min(height - 1, int(y)))
+        pixel = QColor(image.pixel(px, py))
+        dist = (
+            (pixel.red() - expected.red()) ** 2
+            + (pixel.green() - expected.green()) ** 2
+            + (pixel.blue() - expected.blue()) ** 2
+        )
+        if dist < best_dist:
+            best_dist = dist
+            best = pixel
+            sample_x, sample_y = px, py
+    fill = best or expected
+    tile = getattr(host, "_dot_tile", None)
+    dot_alpha = None
+    if tile is not None and not tile.isNull():
+        tile_image = tile.toImage()
+        for x in range(tile_image.width()):
+            for y in range(tile_image.height()):
+                pixel = tile_image.pixelColor(x, y)
+                if pixel.alpha() > 0:
+                    if dot_alpha is None or pixel.alpha() > int(dot_alpha):
+                        dot_alpha = pixel.alpha()
+    layout_btn = page.tool_rail().panel_button("layout")
+    free_btn = page.tool_rail().free_grid_button()
+    return {
+        "canvas_sample": {
+            "x": sample_x,
+            "y": sample_y,
+            "hex": fill.name(),
+            "r": fill.red(),
+            "g": fill.green(),
+            "b": fill.blue(),
+        },
+        "canvas_expected": expected.name(),
+        "dot_alpha": dot_alpha,
+        "dot_tile_key": list(host._dot_tile_key) if getattr(host, "_dot_tile_key", None) else None,
+        "layout_icon": _mean_icon_color(layout_btn) if layout_btn is not None else None,
+        "free_grid_icon": _mean_icon_color(free_btn),
+        "layout_mode_active": layout_btn.property("modeActive") if layout_btn is not None else None,
+        "free_grid_mode_active": free_btn.property("modeActive"),
+    }
+
+
+def _layout_picker_facts(page) -> dict[str, Any]:
+    from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import ISLAND_GAP
+
+    host = page.canvas_host()
+    overlay = host.overlay("layout")
+    picker = page._layout_popover
+    trigger = page.tool_rail().panel_button("layout")
+    thumbs = {}
+    for layout_id, button in picker._buttons.items():
+        thumbs[layout_id] = {
+            **_rect(button),
+            "checked": bool(button.isChecked()),
+            "text": button.text().replace("\n", " / "),
+        }
+    trigger_center = None
+    overlay_center = None
+    center_error_y = None
+    if overlay is not None and trigger is not None:
+        mapped = trigger.mapTo(host, trigger.rect().center())
+        trigger_center = {"x": int(mapped.x()), "y": int(mapped.y())}
+        geo = overlay.geometry()
+        overlay_center = {"x": int(geo.center().x()), "y": int(geo.center().y())}
+        center_error_y = abs(overlay_center["y"] - trigger_center["y"])
+    history = [
+        name
+        for name in (
+            "ultraViewLayoutPopoverOrganize",
+            "ultraViewLayoutPopoverUndo",
+            "ultraViewLayoutPopoverRedo",
+        )
+        if picker.findChild(QWidget, name) is not None
+    ]
+    return {
+        "overlay": _rect(overlay) if overlay is not None else None,
+        "trigger": _rect(trigger) if trigger is not None else None,
+        "trigger_center": trigger_center,
+        "overlay_center": overlay_center,
+        "center_error_y": center_error_y,
+        "anchor_budget_px": 32 + ISLAND_GAP,
+        "thumbs": thumbs,
+        "checked": [layout_id for layout_id, button in picker._buttons.items() if button.isChecked()],
+        "history_buttons": history,
+        "intro": picker.intro_label().text(),
+        "thumb_count": len(picker._buttons),
+    }
+
+
 def _page_snapshot(page, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = {
         "size": {"w": int(page.width()), "h": int(page.height())},
@@ -232,6 +365,7 @@ def _page_snapshot(page, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "status_island": _rect(page.status_island()),
         "card_context": _rect(page.card_context_island()),
         "edge_rhythm": _edge_rhythm(page),
+        "moonstone": _moonstone_facts(page),
     }
     if extra:
         payload.update(extra)
@@ -372,7 +506,7 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         snap("library_1280", page, _page_snapshot(page))
         page.tool_rail().panel_button("layout").click()
         _pump(app, page)
-        snap("layout_1280", page, _page_snapshot(page))
+        snap("layout_1280", page, _page_snapshot(page, {"layout_picker": _layout_picker_facts(page)}))
         page.tool_rail().panel_button("filter").click()
         _pump(app, page)
         snap("filter_1280", page, _page_snapshot(page))
@@ -568,6 +702,38 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         errors.append("presentation flag off")
     if presentation.get("library_visible") is True:
         errors.append("presentation still shows library")
+
+    moon = (narrow_1280.get("moonstone") or {})
+    sample = moon.get("canvas_sample") or {}
+    if abs(int(sample.get("r") or 0) - 0xED) > 28 or abs(int(sample.get("b") or 0) - 0xF5) > 28:
+        errors.append(f"narrow_1280 canvas sample drifted from moonstone: {sample}")
+    if int(moon.get("dot_alpha") or 0) not in range(30, 45):
+        errors.append(f"narrow_1280 dot alpha expected ~38, got {moon.get('dot_alpha')}")
+
+    layout_facts = (geometry.get("layout_1280") or {}).get("layout_picker") or {}
+    if int(layout_facts.get("thumb_count") or 0) != 8:
+        errors.append(f"layout_1280 expected 8 thumbs, got {layout_facts.get('thumb_count')}")
+    if layout_facts.get("history_buttons"):
+        errors.append(f"layout_1280 still has history buttons: {layout_facts.get('history_buttons')}")
+    thumbs = layout_facts.get("thumbs") or {}
+    left = thumbs.get("split_horizontal") or {}
+    right = thumbs.get("split_vertical") or {}
+    below = thumbs.get("grid_2x2") or {}
+    if int(right.get("x") or 0) <= int(left.get("x") or 0):
+        errors.append("layout_1280 thumbs are not two columns")
+    if int(below.get("y") or 0) <= int(left.get("y") or 0):
+        errors.append("layout_1280 thumbs are not four rows")
+    error_y = layout_facts.get("center_error_y")
+    budget = int(layout_facts.get("anchor_budget_px") or 44)
+    if error_y is None or int(error_y) > budget:
+        errors.append(f"layout_1280 overlay not anchored to trigger: error={error_y} budget={budget}")
+    overlay = layout_facts.get("overlay") or {}
+    nav = (geometry.get("layout_1280") or {}).get("navigation_island") or {}
+    if overlay.get("visible") and nav.get("visible"):
+        overlay_rect = QRect(int(overlay.get("x") or 0), int(overlay.get("y") or 0), int(overlay.get("w") or 0), int(overlay.get("h") or 0))
+        nav_rect = QRect(int(nav.get("x") or 0), int(nav.get("y") or 0), int(nav.get("w") or 0), int(nav.get("h") or 0))
+        if overlay_rect.intersects(nav_rect):
+            errors.append("layout_1280 overlay covers the navigation island")
 
     if errors:
         raise GeometryError("; ".join(errors))

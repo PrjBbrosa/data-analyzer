@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 
-from PyQt5.QtCore import QEvent, QRect, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -23,16 +23,16 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
+    QScrollArea,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from mf4_analyzer.ui_kit.icons import Icons
+from mf4_analyzer.ui_kit.icons import Icons, icon_device_pixel_ratio
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
-from mf4_analyzer.ui.ultraview_state import ULTRAVIEW_REF_MIME, parse_ref_payload
+from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, parse_ref_payload
 
 
 PANEL_LIBRARY = "library"
@@ -40,6 +40,22 @@ PANEL_LAYOUT = "layout"
 PANEL_FILTER = "filter"
 PANEL_UNPLACED = "unplaced"
 RAIL_MIN_HEIGHT = 196
+
+# UltraView-local moonstone tokens.  Do not fold these into CONTROL_COLORS.
+ULTRAVIEW_MOON = QColor("#EDF2F5")
+ULTRAVIEW_DOT = QColor(77, 109, 132, 38)
+ULTRAVIEW_PAPER = QColor("#FCFDFE")
+ULTRAVIEW_STONE = QColor("#3E709C")
+ULTRAVIEW_STONE_DEEP = QColor("#315E85")
+ULTRAVIEW_WASH = QColor("#EAF2F8")
+ULTRAVIEW_LINE = QColor("#C7D4DF")
+ULTRAVIEW_INK = QColor("#203347")
+ULTRAVIEW_MUTED = QColor("#6B7D8E")
+ULTRAVIEW_PRESENTATION_ICON = QColor("#ffffff")
+_LAYOUT_THUMB_SIZE = QSize(88, 54)
+_LAYOUT_THUMB_CELL = QSize(168, 118)
+_HERO_LAYOUT_IDS = frozenset({"hero_left_4", "hero_top_4"})
+_DOT_PITCH_PX = 22
 _LAYOUT_THUMB_SCHEMES: dict[str, tuple[tuple[float, float, float, float], ...]] = {
     "split_horizontal": ((0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
     "split_vertical": ((0.0, 0.0, 1.0, 0.5), (0.0, 0.5, 1.0, 0.5)),
@@ -76,26 +92,41 @@ _LAYOUT_THUMB_SCHEMES: dict[str, tuple[tuple[float, float, float, float], ...]] 
 }
 
 
+def _ultraview_icon_color(*, active: bool) -> QColor:
+    """Rest icons stay muted; mode/panel-open icons pick up stone blue."""
+    return QColor(ULTRAVIEW_STONE if active else ULTRAVIEW_MUTED)
+
+
 def layout_thumbnail_icon(layout_id: str) -> QIcon:
-    """Paint a compact geometric preview for one template or the free grid."""
-    pixmap = QPixmap(72, 44)
+    """Paint a paper-card preview: inset canvas, gutters, weighted hero slot."""
+    logical_w, logical_h = _LAYOUT_THUMB_SIZE.width(), _LAYOUT_THUMB_SIZE.height()
+    dpr = icon_device_pixel_ratio()
+    pixmap = QPixmap(max(1, int(round(logical_w * dpr))), max(1, int(round(logical_h * dpr))))
+    pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setPen(QColor(74, 96, 121, 90))
-    painter.setBrush(QColor(246, 249, 252))
-    painter.drawRoundedRect(1, 1, 70, 42, 6, 6)
+    painter.setPen(ULTRAVIEW_LINE)
+    painter.setBrush(ULTRAVIEW_PAPER)
+    painter.drawRoundedRect(QRectF(0.5, 0.5, logical_w - 1.0, logical_h - 1.0), 7, 7)
+    inset = QRectF(5.0, 5.0, logical_w - 10.0, logical_h - 10.0)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(ULTRAVIEW_MOON)
+    painter.drawRoundedRect(inset, 4, 4)
     cells = _LAYOUT_THUMB_SCHEMES.get(str(layout_id), _LAYOUT_THUMB_SCHEMES["grid_2x2"])
-    painter.setBrush(QColor(23, 105, 224, 70))
-    painter.setPen(QColor(23, 105, 224, 150))
-    gutter = 2.0
-    box = (6.0, 6.0, 60.0, 32.0)
-    for left, top, width, height in cells:
-        x = box[0] + left * box[2] + gutter
-        y = box[1] + top * box[3] + gutter
-        w = max(2.0, width * box[2] - gutter * 2.0)
-        h = max(2.0, height * box[3] - gutter * 2.0)
-        painter.drawRoundedRect(int(x), int(y), int(w), int(h), 2, 2)
+    gutter = 2.4
+    hero = str(layout_id) in _HERO_LAYOUT_IDS
+    slot_line = QColor(62, 112, 156, 55)
+    aux_fill = QColor("#E4ECF1")
+    hero_fill = QColor("#C9D9E6")
+    for index, (left, top, width, height) in enumerate(cells):
+        x = inset.x() + left * inset.width() + gutter
+        y = inset.y() + top * inset.height() + gutter
+        w = max(2.0, width * inset.width() - gutter * 2.0)
+        h = max(2.0, height * inset.height() - gutter * 2.0)
+        painter.setBrush(hero_fill if hero and index == 0 else aux_fill)
+        painter.setPen(slot_line)
+        painter.drawRoundedRect(QRectF(x, y, w, h), 2.2, 2.2)
     painter.end()
     return QIcon(pixmap)
 
@@ -200,6 +231,7 @@ class CanvasHost(QFrame):
         self._overlay_close_on_canvas: dict[str, bool] = {}
         self._active_overlay: str | None = None
         self._dot_tile: QPixmap | None = None
+        self._dot_tile_key: tuple[str, int] | None = None
 
     def canvas_widget(self) -> QWidget | None:
         return self._canvas
@@ -330,17 +362,18 @@ class CanvasHost(QFrame):
     def paintEvent(self, event) -> None:  # noqa: N802
         """Paint the one memorable Miro cue once beneath all Qt children."""
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#e9eff3"))
-        if self._dot_tile is None:
-            tile = QPixmap(22, 22)
+        painter.fillRect(self.rect(), ULTRAVIEW_MOON)
+        key = (ULTRAVIEW_MOON.name(), ULTRAVIEW_DOT.rgba())
+        if self._dot_tile is None or self._dot_tile_key != key:
+            tile = QPixmap(_DOT_PITCH_PX, _DOT_PITCH_PX)
             tile.fill(Qt.transparent)
             dots = QPainter(tile)
-            dots.setRenderHint(QPainter.Antialiasing, True)
             dots.setPen(Qt.NoPen)
-            dots.setBrush(QColor(60, 82, 104, 42))
-            dots.drawEllipse(10, 10, 2, 2)
+            dots.setBrush(ULTRAVIEW_DOT)
+            dots.drawRect(10, 10, 2, 2)
             dots.end()
             self._dot_tile = tile
+            self._dot_tile_key = key
         painter.drawTiledPixmap(self.rect(), self._dot_tile)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
@@ -385,7 +418,7 @@ class ToolRail(QFrame):
     free_grid_toggled = pyqtSignal(bool)
     ref_dropped = pyqtSignal(str, str)
 
-    _PANEL_SPECS: tuple[tuple[str, str, str, Callable[[], QIcon]], ...] = (
+    _PANEL_SPECS: tuple[tuple[str, str, str, Callable[..., QIcon]], ...] = (
         (PANEL_LIBRARY, "Library", "打开 View 库", Icons.ultraview_library),
         (PANEL_LAYOUT, "Layout", "选择 Board 布局", Icons.ultraview_layout),
         (PANEL_FILTER, "Filter", "筛选可对比的 View", Icons.ultraview_filter),
@@ -400,6 +433,7 @@ class ToolRail(QFrame):
         self.setProperty("surface", "island")
         self.setFixedWidth(48)
         self._buttons: dict[str, QToolButton] = {}
+        self._icon_factories: dict[str, Callable[..., QIcon]] = {}
         self._badges: dict[str, QLabel] = {}
         self._active_panel: str | None = None
         self._filter_active = False
@@ -413,7 +447,7 @@ class ToolRail(QFrame):
                 self._free_grid = _icon_button(
                     self,
                     object_name="ultraViewRailFreeGridButton",
-                    icon=Icons.ultraview_free_grid(),
+                    icon=Icons.ultraview_free_grid(ULTRAVIEW_MUTED),
                     tooltip="切换 12 列受控自由网格",
                     accessible_name="切换 12 列受控自由网格",
                 )
@@ -429,7 +463,7 @@ class ToolRail(QFrame):
             button = _icon_button(
                 self,
                 object_name=f"ultraViewRail{short_name}Button",
-                icon=icon_factory(),
+                icon=icon_factory(ULTRAVIEW_MUTED),
                 tooltip=tooltip,
                 accessible_name=tooltip,
             )
@@ -437,6 +471,7 @@ class ToolRail(QFrame):
             button.setCheckable(True)
             button.clicked.connect(self._on_panel_clicked)
             self._buttons[panel_id] = button
+            self._icon_factories[panel_id] = icon_factory
             root.addWidget(button, 0, Qt.AlignHCenter)
             badge = QLabel(self)
             badge.setObjectName(f"ultraViewRail{short_name}Badge")
@@ -504,12 +539,18 @@ class ToolRail(QFrame):
             _set_flag(button, "panelOpen", panel_open)
             _set_flag(button, "active", False)
             button.setChecked(panel_open)
+            factory = self._icon_factories.get(candidate)
+            if factory is not None:
+                button.setIcon(factory(_ultraview_icon_color(active=mode_active or panel_open)))
         blocked = self._free_grid.blockSignals(True)
         self._free_grid.setChecked(self._free_grid_enabled)
         self._free_grid.blockSignals(blocked)
         _set_flag(self._free_grid, "modeActive", self._free_grid_enabled)
         _set_flag(self._free_grid, "panelOpen", False)
         _set_flag(self._free_grid, "active", False)
+        self._free_grid.setIcon(
+            Icons.ultraview_free_grid(_ultraview_icon_color(active=self._free_grid_enabled))
+        )
 
     def set_badge(self, panel_id: str, count: int | None) -> None:
         """Set an exact count badge; zero/None intentionally shows no badge."""
@@ -637,7 +678,7 @@ class BoardIsland(QFrame):
         self._menu = _icon_button(
             self,
             object_name="ultraViewBoardMenuButton",
-            icon=Icons.chevron_down(),
+            icon=Icons.chevron_down(ULTRAVIEW_MUTED),
             tooltip="切换或管理 Board",
             accessible_name="切换或管理当前 Board",
         )
@@ -646,7 +687,7 @@ class BoardIsland(QFrame):
         self._add = _icon_button(
             self,
             object_name="ultraViewBoardAddButton",
-            icon=Icons.ultraview_add(),
+            icon=Icons.ultraview_add(ULTRAVIEW_MUTED),
             tooltip="新建 Board",
             accessible_name="新建 Board",
         )
@@ -718,7 +759,7 @@ class GlobalIsland(QFrame):
         self._display = _icon_button(
             self,
             object_name="ultraViewGlobalDisplayButton",
-            icon=Icons.ultraview_display(),
+            icon=Icons.ultraview_display(ULTRAVIEW_MUTED),
             tooltip="显示标题和来源",
             accessible_name="显示标题和来源",
         )
@@ -728,7 +769,7 @@ class GlobalIsland(QFrame):
         self._export = _icon_button(
             self,
             object_name="ultraViewGlobalExportButton",
-            icon=Icons.export(),
+            icon=Icons.export(ULTRAVIEW_MUTED),
             tooltip="复制或导出 Board",
             accessible_name="复制或导出 Board",
         )
@@ -738,7 +779,7 @@ class GlobalIsland(QFrame):
         self._presentation = _icon_button(
             self,
             object_name="ultraViewGlobalPresentationButton",
-            icon=Icons.ultraview_presentation(),
+            icon=Icons.ultraview_presentation(ULTRAVIEW_MUTED),
             tooltip="进入演示",
             accessible_name="进入演示",
         )
@@ -776,6 +817,10 @@ class GlobalIsland(QFrame):
             _set_flag(button, "panelOpen", is_open)
             _set_flag(button, "modeActive", False)
             _set_flag(button, "active", False)
+        self._display.setIcon(
+            Icons.ultraview_display(_ultraview_icon_color(active=key == "display"))
+        )
+        self._export.setIcon(Icons.export(_ultraview_icon_color(active=key == "export")))
 
     def sizeHint(self) -> QSize:  # noqa: N802
         visible = [
@@ -801,7 +846,9 @@ class GlobalIsland(QFrame):
             self._presentation.setProperty("role", role)
             _repolish(self._presentation)
         self._presentation.setIcon(
-            Icons.ultraview_presentation(QColor("#ffffff") if checked else None)
+            Icons.ultraview_presentation(
+                ULTRAVIEW_PRESENTATION_ICON if checked else ULTRAVIEW_MUTED
+            )
         )
         if not checked:
             self._presentation.setDown(False)
@@ -830,7 +877,7 @@ class NavigationIsland(QFrame):
         self._overview = _icon_button(
             self,
             object_name="ultraViewNavOverviewButton",
-            icon=Icons.ultraview_overview(),
+            icon=Icons.ultraview_overview(ULTRAVIEW_MUTED),
             tooltip="查看整板概览",
             accessible_name="查看整板概览",
         )
@@ -839,7 +886,7 @@ class NavigationIsland(QFrame):
         self._zoom_out = _icon_button(
             self,
             object_name="ultraViewNavZoomOutButton",
-            icon=Icons.ultraview_zoom_out(),
+            icon=Icons.ultraview_zoom_out(ULTRAVIEW_MUTED),
             tooltip="缩小画布",
             accessible_name="缩小画布",
         )
@@ -858,7 +905,7 @@ class NavigationIsland(QFrame):
         self._zoom_in = _icon_button(
             self,
             object_name="ultraViewNavZoomInButton",
-            icon=Icons.ultraview_zoom_in(),
+            icon=Icons.ultraview_zoom_in(ULTRAVIEW_MUTED),
             tooltip="放大画布",
             accessible_name="放大画布",
         )
@@ -867,7 +914,7 @@ class NavigationIsland(QFrame):
         self._fit = _icon_button(
             self,
             object_name="ultraViewNavFitButton",
-            icon=Icons.ultraview_fit(),
+            icon=Icons.ultraview_fit(ULTRAVIEW_MUTED),
             tooltip="画布适应视口",
             accessible_name="画布适应视口",
         )
@@ -876,7 +923,7 @@ class NavigationIsland(QFrame):
         self._reset = _icon_button(
             self,
             object_name="ultraViewNavResetButton",
-            icon=Icons.ultraview_reset_zoom(),
+            icon=Icons.ultraview_reset_zoom(ULTRAVIEW_MUTED),
             tooltip="恢复 100% 缩放",
             accessible_name="恢复 100% 缩放",
         )
@@ -925,7 +972,7 @@ class StatusIsland(QFrame):
         self._quickref = _icon_button(
             self,
             object_name="ultraViewStatusHelpButton",
-            icon=Icons.ultraview_help(),
+            icon=Icons.ultraview_help(ULTRAVIEW_MUTED),
             tooltip="操作速查",
             accessible_name="打开 UltraView 操作速查",
         )
@@ -989,10 +1036,10 @@ class CardContextIsland(QFrame):
         self._orphaned = False
         self._stale = False
         for action, object_name, icon, tooltip in (
-            ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(), "打开原 View"),
-            ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(), "同步到最新预览"),
-            ("focus", "ultraViewContextFocusButton", Icons.expand_focus(), "临时放大预览"),
-            ("more", "ultraViewContextMoreButton", Icons.menu(), "更多卡片操作"),
+            ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(ULTRAVIEW_MUTED), "打开原 View"),
+            ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(ULTRAVIEW_MUTED), "同步到最新预览"),
+            ("focus", "ultraViewContextFocusButton", Icons.expand_focus(ULTRAVIEW_MUTED), "临时放大预览"),
+            ("more", "ultraViewContextMoreButton", Icons.menu(ULTRAVIEW_MUTED), "更多卡片操作"),
         ):
             button = _icon_button(
                 self,
@@ -1116,12 +1163,9 @@ class CardContextIsland(QFrame):
 
 
 class LayoutPicker(QFrame):
-    """Eight template previews plus free-grid organize actions; Page owns confirmation."""
+    """Eight template previews; Page owns confirmation and free-grid history."""
 
     layout_id_chosen = pyqtSignal(str)
-    organize_requested = pyqtSignal()
-    undo_requested = pyqtSignal()
-    redo_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -1131,7 +1175,9 @@ class LayoutPicker(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewLayoutPopover")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self._labels = dict(labels)
         self._buttons: dict[str, QToolButton] = {}
+        self._view_count = 0
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 12)
         root.setSpacing(8)
@@ -1139,74 +1185,89 @@ class LayoutPicker(QFrame):
         heading.setObjectName("ultraViewLayoutPopoverTitle")
         heading.setProperty("role", "popoverTitle")
         root.addWidget(heading, 0)
-        grid = QGridLayout()
+        self._intro = QLabel(self)
+        self._intro.setObjectName("ultraViewLayoutPopoverIntro")
+        self._intro.setWordWrap(True)
+        self._intro.setText("选择模板 · 当前 0 个 View；自由网格可由左侧独立开关进入")
+        root.addWidget(self._intro, 0)
+        grid_host = QWidget(self)
+        grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
-        for index, (layout_id, label) in enumerate(labels.items()):
+        for index, (layout_id, label) in enumerate(self._labels.items()):
             button = QToolButton(self)
             button.setObjectName(f"ultraViewLayoutThumb_{layout_id}")
             button.setCheckable(True)
             button.setAutoRaise(True)
             button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
             button.setIcon(layout_thumbnail_icon(layout_id))
-            button.setIconSize(QSize(72, 44))
-            button.setText(str(label))
+            button.setIconSize(_LAYOUT_THUMB_SIZE)
             button.setToolTip(str(label))
             button.setAccessibleName(str(label))
             button.setProperty("layoutId", layout_id)
             button.setProperty("role", "layoutThumb")
-            button.setMinimumSize(QSize(140, 104))
+            button.setMinimumSize(_LAYOUT_THUMB_CELL)
             button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             button.clicked.connect(self._on_thumb_clicked)
+            self._apply_thumb_caption(button, layout_id, current=False)
             self._group.addButton(button)
             self._buttons[layout_id] = button
             grid.addWidget(button, index // 2, index % 2)
-        root.addLayout(grid)
-        self._organize = QPushButton("整理自由网格", self)
-        self._organize.setObjectName("ultraViewLayoutPopoverOrganize")
-        self._organize.setToolTip("移除自由网格中的空行")
-        self._organize.clicked.connect(self.organize_requested)
-        root.addWidget(self._organize, 0)
-        history = QHBoxLayout()
-        history.setContentsMargins(0, 0, 0, 0)
-        history.setSpacing(6)
-        self._undo = QPushButton("撤销", self)
-        self._undo.setObjectName("ultraViewLayoutPopoverUndo")
-        self._undo.clicked.connect(self.undo_requested)
-        self._redo = QPushButton("重做", self)
-        self._redo.setObjectName("ultraViewLayoutPopoverRedo")
-        self._redo.clicked.connect(self.redo_requested)
-        history.addWidget(self._undo, 1)
-        history.addWidget(self._redo, 1)
-        root.addLayout(history)
-        self._organize.hide()
-        self._undo.hide()
-        self._redo.hide()
-
-    def organize_button(self) -> QPushButton:
-        return self._organize
-
-    def undo_button(self) -> QPushButton:
-        return self._undo
-
-    def redo_button(self) -> QPushButton:
-        return self._redo
+        scroll = QScrollArea(self)
+        scroll.setObjectName("ultraViewLayoutPopoverScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        scroll.setWidget(grid_host)
+        root.addWidget(scroll, 1)
 
     def thumb_button(self, layout_id: str) -> QToolButton | None:
         return self._buttons.get(str(layout_id))
 
-    def set_current(self, layout_id: str, *, free_grid: bool) -> None:
+    def intro_label(self) -> QLabel:
+        return self._intro
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        cell_w, cell_h = _LAYOUT_THUMB_CELL.width(), _LAYOUT_THUMB_CELL.height()
+        return QSize(12 + cell_w * 2 + 8 + 12, 10 + 22 + 8 + 36 + 8 + cell_h * 4 + 8 * 3 + 12)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        cell_w = _LAYOUT_THUMB_CELL.width()
+        return QSize(12 + cell_w * 2 + 8 + 12, 160)
+
+    def set_current(self, layout_id: str, *, free_grid: bool, view_count: int | None = None) -> None:
+        if view_count is not None:
+            try:
+                self._view_count = max(0, int(view_count))
+            except (TypeError, ValueError):
+                self._view_count = 0
         is_free_grid = bool(free_grid)
-        self._organize.setVisible(is_free_grid)
-        self._undo.setVisible(is_free_grid)
-        self._redo.setVisible(is_free_grid)
+        self._group.setExclusive(not is_free_grid)
+        if is_free_grid:
+            self._intro.setText("当前为自由网格；选择任一模板即可切回")
+        else:
+            self._intro.setText(
+                f"选择模板 · 当前 {self._view_count} 个 View；自由网格可由左侧独立开关进入"
+            )
         for candidate, button in self._buttons.items():
+            checked = not is_free_grid and candidate == layout_id
             blocked = button.blockSignals(True)
-            button.setChecked(not is_free_grid and candidate == layout_id)
+            button.setChecked(checked)
             button.blockSignals(blocked)
+            self._apply_thumb_caption(button, candidate, current=checked)
+
+    def _capacity_label(self, layout_id: str) -> str:
+        slots = LAYOUT_SLOTS.get(str(layout_id), ())
+        return f"{len(slots)} 格" if slots else ""
+
+    def _apply_thumb_caption(self, button: QToolButton, layout_id: str, *, current: bool) -> None:
+        label = str(self._labels.get(layout_id, layout_id))
+        suffix = "当前" if current else self._capacity_label(layout_id)
+        button.setText(f"{label}\n{suffix}" if suffix else label)
 
     def _on_thumb_clicked(self) -> None:
         button = self.sender()
