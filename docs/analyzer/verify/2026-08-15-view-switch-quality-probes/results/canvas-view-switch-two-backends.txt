@@ -1,0 +1,41 @@
+platform=cocoa dpr=2.0 exposed=True
+
+== 向量AA 路径：smoothA <-> smoothB ==
+[0] -> smoothA             rebuild=   53.4 restore=   3.9 frame=   4.5 | raster_flush=    9.3(3) rframe=   9.4 | aa_on=False aa_enable=   0.2 AA1=    9.0 AAn=   9.0 | 首帧=   61.8 稳定=   89.7 ms [dense-raster]
+[0] -> smoothB             rebuild=   11.1 restore=   3.4 frame=   4.7 | raster_flush=    4.9(2) rframe=   8.6 | aa_on=False aa_enable=   0.1 AA1=    8.6 AAn=   8.8 | 首帧=   19.3 稳定=   41.5 ms [dense-raster]
+[1] -> smoothA             rebuild=   27.5 restore=   2.8 frame=   4.4 | raster_flush=    5.7(3) rframe=   8.8 | aa_on=False aa_enable=   0.2 AA1=    9.0 AAn=   9.6 | 首帧=   34.7 稳定=   58.4 ms [dense-raster]
+[1] -> smoothB             rebuild=    9.5 restore=   2.0 frame=   3.5 | raster_flush=    4.2(2) rframe=   8.1 | aa_on=False aa_enable=   0.1 AA1=    7.7 AAn=   8.3 | 首帧=   15.1 稳定=   35.2 ms [dense-raster]
+[2] -> smoothA             rebuild=   12.7 restore=   2.4 frame=   4.4 | raster_flush=    4.8(3) rframe=   8.5 | aa_on=False aa_enable=   0.2 AA1=    8.0 AAn=   9.5 | 首帧=   19.5 稳定=   41.0 ms [dense-raster]
+[2] -> smoothB             rebuild=    9.1 restore=   1.5 frame=   4.0 | raster_flush=    4.0(2) rframe=   8.8 | aa_on=False aa_enable=   0.1 AA1=    8.7 AAn=   8.8 | 首帧=   14.6 稳定=   36.1 ms [dense-raster]
+-- 向量AA 稳定段中位数（丢首轮 2 次） --
+   rebuild_ms                   11.1 ms
+   restore_xlim_ms               2.2 ms
+   first_frame_ms                4.2 ms
+   raster_flush_ms               4.5 ms
+   raster_frame_ms               8.6 ms
+   ink_measure_ms                0.0 ms
+   aa_enable_call_ms             0.1 ms
+   first_aa_frame_ms             8.3 ms
+   steady_aa_frame_ms            9.1 ms
+   to_first_frame_ms            17.3 ms
+   to_settled_ms                38.6 ms
+
+== 光栅 路径：denseA <-> denseB ==
+[0] -> denseA              rebuild=   17.8 restore=  45.2 frame=   5.0 | raster_flush=   34.3(3) rframe=   9.7 | aa_on=False aa_enable=   0.2 AA1=    9.7 AAn=  10.5 | 首帧=   68.0 稳定=  121.8 ms [dense-raster]
+[0] -> denseB              rebuild=   14.8 restore=  31.1 frame=   3.9 | raster_flush=   29.6(2) rframe=   9.0 | aa_on=False aa_enable=   0.1 AA1=    8.7 AAn=   9.3 | 首帧=   49.8 稳定=   97.2 ms [dense-raster]
+[1] -> denseA              rebuild=   15.0 restore=  40.2 frame=   4.8 | raster_flush=   33.8(3) rframe=   9.8 | aa_on=False aa_enable=   0.2 AA1=    8.9 AAn=   9.3 | 首帧=   60.0 稳定=  112.7 ms [dense-raster]
+[1] -> denseB              rebuild=    9.9 restore=  28.6 frame=   4.0 | raster_flush=   24.7(2) rframe=   9.4 | aa_on=False aa_enable=   0.1 AA1=    9.5 AAn=   9.0 | 首帧=   42.6 稳定=   86.2 ms [dense-raster]
+[2] -> denseA              rebuild=   14.6 restore=  33.8 frame=   4.1 | raster_flush=   29.4(3) rframe=   8.5 | aa_on=False aa_enable=   0.1 AA1=    8.5 AAn=   9.0 | 首帧=   52.4 稳定=   99.1 ms [dense-raster]
+[2] -> denseB              rebuild=   10.7 restore=  31.2 frame=   3.7 | raster_flush=   28.2(2) rframe=   9.0 | aa_on=False aa_enable=   0.1 AA1=    8.9 AAn=   9.4 | 首帧=   45.7 稳定=   92.0 ms [dense-raster]
+-- 光栅 稳定段中位数（丢首轮 2 次） --
+   rebuild_ms                   12.6 ms
+   restore_xlim_ms              32.5 ms
+   first_frame_ms                4.1 ms
+   raster_flush_ms              28.8 ms
+   raster_frame_ms               9.2 ms
+   ink_measure_ms                0.0 ms
+   aa_enable_call_ms             0.1 ms
+   first_aa_frame_ms             8.9 ms
+   steady_aa_frame_ms            9.2 ms
+   to_first_frame_ms            49.0 ms
+   to_settled_ms                95.5 ms

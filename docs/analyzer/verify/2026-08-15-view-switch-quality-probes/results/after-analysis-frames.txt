@@ -1,0 +1,15 @@
+platform=cocoa
+== PgLineCanvas 谱行：同 4095 绘点，只改竖直墨迹 (band ON=200k OFF=300k) ==
+  纯噪声底                   曲线=3 绘点= 4095 产品判定=red/high-ink AA=False yspan=    4.45 ink=   617.4k 时域带=BLOCK 显式AA帧中位=  1556.9 ms
+  峰/底=10                 曲线=3 绘点= 4095 产品判定=red/high-ink AA=False yspan=   13.22 ink=   212.3k 时域带=band  显式AA帧中位=   322.3 ms
+  峰/底=40                 曲线=3 绘点= 4095 产品判定=green/None AA=True  yspan=   45.54 ink=    66.8k 时域带=ALLOW 显式AA帧中位=   133.8 ms
+  峰/底=200                曲线=3 绘点= 4095 产品判定=green/None AA=True  yspan=  217.91 ink=    19.8k 时域带=ALLOW 显式AA帧中位=    68.6 ms
+  峰/底=200 · 1 条          曲线=1 绘点= 1365 产品判定=green/None AA=True  yspan=  217.34 ink=     6.2k 时域带=ALLOW 显式AA帧中位=    25.4 ms
+  纯噪声底 · 1 条             曲线=1 绘点= 1365 产品判定=red/high-ink AA=False yspan=    3.47 ink=   239.5k 时域带=band  显式AA帧中位=   664.0 ms
+  纯噪声底 · 6 条             曲线=6 绘点= 8364 产品判定=red/high-ink AA=False yspan=    5.71 ink=  1126.9k 时域带=BLOCK 显式AA帧中位=  2676.2 ms
+  AA 关 · 纯噪声底 (对照)       帧中位=    14.6 ms
+== PgFrfCanvas：AA 帧 vs 非 AA 帧 ==
+  2k bins 干净           set_result=   4.6 ms 产品判定=green/None AA=True  显式AA帧中位=    17.6 ms   非AA帧=    6.8 ms
+  2k bins 噪声相位/相干      set_result=   1.7 ms 产品判定=red/high-ink AA=False 显式AA帧中位=   509.1 ms   非AA帧=   51.8 ms
+  8k bins 噪声           set_result=   3.3 ms 产品判定=red/high-ink AA=False 显式AA帧中位=  2458.6 ms   非AA帧=  427.3 ms
+  32k bins 噪声          set_result=   8.5 ms 产品判定=red/high-ink AA=False 显式AA帧中位= 10909.2 ms   非AA帧= 3888.8 ms

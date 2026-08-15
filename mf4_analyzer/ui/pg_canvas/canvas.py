@@ -2067,7 +2067,7 @@ class TimeDomainCanvasPG(QWidget):
             return None
         return (float(lo), float(hi))
 
-    def _restore_primary_xlim(self, xlim):
+    def _restore_primary_xlim(self, xlim, *, flush=True):
         ax = self._primary_xaxis_ax
         if ax is None:
             return
@@ -2078,6 +2078,14 @@ class TimeDomainCanvasPG(QWidget):
             return
         self._sync_x_axis_item_range(ax, new_lo, new_hi)
         self._propagate_xlim_to_siblings(source=ax)
+        if not flush:
+            # View-restore transaction (2026-08-15 view-switch settlement spec
+            # §3.1): X is only half of the final geometry — Y lands next — and
+            # every consumer of a refresh (ink, envelope bucket cap, AA gate,
+            # raster admission) reads the Y span. Bank the debt here and let
+            # settle_view_restore() pay it once, on the final geometry.
+            self._refresh_pending = True
+            return
         # Order per pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before:
         # mutate, then flush. set_xlim above fired sigXRangeChanged and
         # scheduled the 40 ms debounced QTimer; drain it synchronously
@@ -2111,10 +2119,40 @@ class TimeDomainCanvasPG(QWidget):
         """
         self._set_xrange_to_data_union()
 
-    def restore_visible_xlim(self, xlim):
-        """Restore visible X through the existing synchronized restore path."""
+    def restore_visible_xlim(self, xlim, *, flush=True):
+        """Restore visible X through the existing synchronized restore path.
+
+        ``flush=False`` opens a View-restore transaction: X is applied and
+        synchronized as usual, but the refresh is only marked pending. The
+        caller then owes a :meth:`settle_view_restore` once the rest of the
+        geometry (Y, tick density) has landed. The default keeps the
+        synchronous behaviour every other caller relies on.
+        """
         if xlim is not None:
-            self._restore_primary_xlim(xlim)
+            self._restore_primary_xlim(xlim, flush=flush)
+
+    def settle_view_restore(self):
+        """Close a View-restore transaction on the FINAL geometry.
+
+        One restore, one settlement: refresh once, schedule the raster once,
+        decide quality once. See the 2026-08-15 view-switch quality settlement
+        spec §3.1 — restoring X and Y as two independently self-finishing steps
+        used to measure ink against the ``[0, 1]`` placeholder Y that
+        ``plot_channels(defer_first_frame=True)`` leaves behind, inflating it
+        ~70x and then never re-deciding.
+
+        Order is load-bearing: ``_refresh_visible_data`` re-arms the 150 ms
+        idle-quality timer on its way out, so the quality decision has to come
+        after the flush or it would be overwritten.
+        """
+        if self._refresh_pending:
+            # No pending work means this was a first visit (no stored xlim,
+            # non-deferred build): the bind envelope already IS the first
+            # frame, so recomputing it here would be pure duplicate work.
+            self._flush_pending_refresh()
+        if self._dense_raster.has_dense_candidates():
+            self._dense_raster.schedule_rebuild("view-restored", delay_ms=0)
+        self._quality.settle_after_discrete_render()
 
     def get_visible_ylims(self):
         """Return per-channel visible Y ranges keyed for ViewState storage."""
@@ -4279,6 +4317,19 @@ class TimeDomainCanvasPG(QWidget):
 
     def try_enable_idle_quality(self):
         return self._quality.try_enable_idle_quality()
+
+    def _note_aa_frame(self, frame_ms):
+        """Owner hook for the resident paint timer (spec 2026-08-15 §3.3).
+
+        The timer measures the frame and hands it to ``owner._note_aa_frame``,
+        so every canvas that installs it can route the reading to whatever
+        holds its ``AaFrameLatch``. Here that is the quality manager. A bound
+        method, not a lambda: the lambda ratchet in
+        tests/ui/test_no_lambda_signal_connections.py exists because closures
+        over ``self`` on long-lived Qt objects are how this codebase used to
+        leak wrappers.
+        """
+        return self._quality._note_aa_frame(frame_ms)
 
     def quality_status(self):
         return self._quality.quality_status()

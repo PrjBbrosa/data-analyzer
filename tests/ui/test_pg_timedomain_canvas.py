@@ -10368,3 +10368,651 @@ def test_time_card_diagnostics_pill_hides_after_full_success(qapp, qtbot):
     assert not card.findChild(
         QToolButton, "timePlotDiagnosticsButton"
     ).isVisibleTo(card)
+
+
+def _renderer_cls():
+    from mf4_analyzer.ui.pg_canvas.renderer import Renderer
+
+    return Renderer
+
+
+class TestViewRestoreSettlement:
+    """A View restore is ONE transaction, settled once on the final geometry.
+
+    Spec: ``docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md``
+    §3.1 (defect A). The product order used to be::
+
+        plot_channels(defer_first_frame=True)   # Y is still the [0, 1] placeholder
+        restore_visible_xlim(state.xlim)        # flushed HERE, so ink was measured
+                                                #   against y_span == 1
+        restore_visible_ylims(state.ylims)      # the real Y only lands now
+
+    Ink is ``墨迹 / y_span × row_height``, so a placeholder ``y_span`` inflated it
+    by ~70x and the frame never self-healed (only a fresh user gesture changed the
+    range key). Three consequences rode on that one number: the envelope bucket
+    count was cut by the ink budget (a visibly coarser curve), vector AA was
+    refused, and lines were wrongly admitted to the raster path.
+
+    These are geometry-ordering assertions, not paint-cost measurements, so
+    offscreen reproduces them exactly (probe reading, offscreen, dpr 1.0:
+    ink 18 330 -> 1 331 113, drawn points 3124 -> 2812, AA True -> False).
+    """
+
+    XLIM = (10.0, 25.0)
+
+    def _rows(self, n_curves=2, n_points=1_000_000, fs=20_000.0):
+        """Spec §1.2 overlay shape: 2ch x 1M points, ~0.5 Hz full-scale sine."""
+        t = np.arange(n_points, dtype=np.float64) / fs
+        return [
+            (
+                f"CH{i}",
+                True,
+                t,
+                100.0 * np.sin(2 * np.pi * (0.5 + 0.1 * i) * t),
+                "#1769e0",
+                "Nm",
+                "fileA",
+            )
+            for i in range(n_curves)
+        ]
+
+    def _canvas(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1600, 950)
+        canvas.show()
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _snapshot(self, canvas):
+        lines = {}
+        for ck, _name, (_axis, line) in canvas._channel_lines.composite_items():
+            xd, _ = line.plot_data_item.getData()
+            lines[ck] = {
+                "points": 0 if xd is None else int(len(xd)),
+                "ink": canvas._line_ink_state.get(ck),
+            }
+        return {
+            "lines": lines,
+            "aa_ok": canvas._quality._idle_aa_density_ok(),
+            "raster_admitted": set(canvas._ink_raster_admitted),
+        }
+
+    def _first_visit(self, canvas, rows):
+        """Build a View from scratch and window it — the reference geometry."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("first-visit", "A"),
+        )
+        canvas.restore_visible_xlim(self.XLIM)
+        QCoreApplication.processEvents()
+        return canvas.get_visible_ylims()
+
+    def test_settle_measures_ink_at_final_geometry(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        rows = self._rows()
+        canvas = self._canvas(qapp)
+        ylims = self._first_visit(canvas, rows)
+        first = self._snapshot(canvas)
+
+        # Premise: at the REAL geometry this shape is comfortably affordable.
+        # If the restore below regresses to measuring against the placeholder
+        # Y, every one of the four assertions flips.
+        assert first["aa_ok"] is True
+        assert first["lines"], "premise: the first visit drew something"
+        for ck, rec in first["lines"].items():
+            assert rec["ink"] is not None, f"{ck}: first visit recorded no ink"
+            assert rec["ink"][1] is False, f"{ck}: first visit already over budget"
+
+        # Switch away and back: a full rebuild (a different render context key
+        # is one of the several product reasons for one) followed by the
+        # restore transaction.
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=True,
+            render_context_key=("switch-back", "A"),
+        )
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        canvas.restore_visible_ylims(ylims)
+        canvas.settle_view_restore()
+        QCoreApplication.processEvents()
+        back = self._snapshot(canvas)
+
+        assert set(back["lines"]) == set(first["lines"])
+        for ck, rec in back["lines"].items():
+            ref = first["lines"][ck]
+            assert rec["ink"] is not None, f"{ck}: restore recorded no ink"
+            assert rec["ink"][0] == pytest.approx(ref["ink"][0], rel=0.05), (
+                f"{ck}: ink after restore {rec['ink'][0]} is not within 5% of "
+                f"the first-visit reading {ref['ink'][0]} — the settlement is "
+                f"reading a geometry that is not the final one"
+            )
+            assert rec["ink"][1] == ref["ink"][1]
+            assert rec["points"] == ref["points"], (
+                f"{ck}: restore drew {rec['points']} points vs "
+                f"{ref['points']} on first visit — the ink budget cut buckets"
+            )
+        assert back["aa_ok"] == first["aa_ok"]
+        assert back["raster_admitted"] == first["raster_admitted"]
+
+    def test_settle_refreshes_exactly_once(self, qapp, monkeypatch):
+        rows = self._rows()
+        canvas = self._canvas(qapp)
+        ylims = self._first_visit(canvas, rows)
+
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=True,
+            render_context_key=("switch-back", "A"),
+        )
+        # Count on Renderer, not on the canvas instance: _refresh_visible_data
+        # is a declared backref delegate, so a canvas-instance attribute is
+        # honoured by the renderer too and a wrapper that calls back through
+        # the canvas would recurse forever (_backref.__getattribute__).
+        calls = []
+        original = _renderer_cls()._refresh_visible_data
+
+        def counted(renderer_self, **kwargs):
+            calls.append(1)
+            return original(renderer_self, **kwargs)
+
+        monkeypatch.setattr(_renderer_cls(), "_refresh_visible_data", counted)
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        canvas.restore_visible_ylims(ylims)
+        canvas.settle_view_restore()
+        assert len(calls) == 1, (
+            f"the restore transaction ran _refresh_visible_data {len(calls)} "
+            f"times; it settles once, on the final geometry"
+        )
+
+    def test_first_visit_restore_does_not_refresh(self, qapp, monkeypatch):
+        """No stored xlim means bind-envelope already IS the first frame."""
+        rows = self._rows(n_curves=2, n_points=100_000)
+        canvas = self._canvas(qapp)
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("first-visit", "A"),
+        )
+        calls = []
+        monkeypatch.setattr(
+            _renderer_cls(),
+            "_refresh_visible_data",
+            lambda *a, **k: calls.append(1),
+        )
+        canvas.restore_visible_xlim(None, flush=False)
+        canvas.restore_visible_ylims({})
+        canvas.settle_view_restore()
+        assert calls == [], "a first visit must not recompute the envelope"
+
+    def test_restore_xlim_flush_false_marks_pending_and_default_flushes(
+        self, qapp, monkeypatch,
+    ):
+        rows = self._rows(n_curves=1, n_points=10_000)
+        canvas = self._canvas(qapp)
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("k", "A"),
+        )
+        flushes = []
+        monkeypatch.setattr(
+            canvas, "_flush_pending_refresh", lambda: flushes.append(1),
+        )
+
+        canvas._refresh_pending = False
+        canvas.restore_visible_xlim((1.0, 2.0), flush=False)
+        assert flushes == []
+        assert canvas._refresh_pending is True
+        assert canvas.get_visible_xlim() == pytest.approx((1.0, 2.0))
+
+        # The default keeps today's synchronous behaviour for every other
+        # caller (project restore, UltraView, view_bridge.restore_axes).
+        canvas.restore_visible_xlim((1.5, 2.5))
+        assert len(flushes) == 1
+        assert canvas.get_visible_xlim() == pytest.approx((1.5, 2.5))
+
+    def test_settle_without_pending_is_noop(self, qapp, monkeypatch):
+        rows = self._rows(n_curves=1, n_points=1_000)
+        canvas = self._canvas(qapp)
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("k", "A"),
+        )
+        canvas._flush_pending_refresh()
+        assert canvas._refresh_pending is False
+        assert canvas._dense_raster.has_dense_candidates() is False
+
+        flushes = []
+        rebuilds = []
+        monkeypatch.setattr(
+            canvas, "_flush_pending_refresh", lambda: flushes.append(1),
+        )
+        monkeypatch.setattr(
+            canvas._dense_raster,
+            "schedule_rebuild",
+            lambda *a, **k: rebuilds.append(a),
+        )
+        canvas.settle_view_restore()
+        assert flushes == []
+        assert rebuilds == []
+
+
+class TestDiscreteSettle:
+    """A View restore is a DISCRETE event, so it settles quality at once.
+
+    Spec: ``docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md``
+    §3.2 (defect B). The 150 ms quiet window exists to merge the frames of a
+    CONTINUOUS interaction (drag, wheel). A View switch has no follow-up input,
+    so those 150 ms are pure latency plus one visible 锯齿→平滑 flicker.
+
+    Four branches, and which one runs is the whole contract:
+
+    * the user is mid-drag  -> hand back to the normal 150 ms path;
+    * this geometry is blacklisted -> arm nothing, do not pay the frame again;
+    * this geometry's first AA frame was MEASURED cheap -> enable AA now, so
+      the first frame the user sees is already antialiased;
+    * unknown or known-expensive -> decide on the next event-loop turn.
+
+    The gates themselves (``_idle_aa_density_ok``, the backstop) are untouched:
+    a memo hit only moves WHEN the decision is made, never WHAT it decides.
+    """
+
+    def _plot(self, qapp, *, mode="subplot"):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode=mode)
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _hands_off(self, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+
+    def _settle(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        QCoreApplication.processEvents()
+        QCoreApplication.processEvents()
+
+    # -- constants -------------------------------------------------------
+
+    def test_sync_aa_ceiling_stays_a_calibration(self):
+        """``_SYNC_AA_MAX_MS`` is a measured ceiling, not a preference.
+
+        50 ms of extra latency on a click is below the ~100 ms "instant"
+        threshold, and the 2026-08-15 probe run put typical View first frames
+        at 8-13 ms (they hit) and the smooth control at 474 ms (it does not) —
+        exactly the split this is meant to make. It must stay well under the
+        steady backstop ceiling: a frame the backstop would eventually call
+        unaffordable must never be the one we volunteer to pay synchronously.
+        """
+        from mf4_analyzer.ui.pg_canvas.quality import (
+            _AA_MEMO_MAX,
+            _BACKSTOP_BLACKLIST_MAX,
+            _BACKSTOP_STEADY_AA_MS,
+            _SYNC_AA_MAX_MS,
+        )
+
+        assert _SYNC_AA_MAX_MS == 50.0
+        assert _SYNC_AA_MAX_MS < _BACKSTOP_STEADY_AA_MS
+        assert _AA_MEMO_MAX == _BACKSTOP_BLACKLIST_MAX
+
+    # -- the four branches -----------------------------------------------
+
+    def test_memo_hit_enables_aa_synchronously(self, qapp, monkeypatch):
+        """A geometry measured cheap gets AA on the FIRST frame, no timers."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+        key = quality._aa_memo_key()
+        assert key is not None
+        quality.latch.memo[key] = 12.0
+
+        quality.settle_after_discrete_render()
+
+        assert quality.aa_on is True
+        assert quality.timer.isActive() is False
+        assert quality.discrete_timer.isActive() is False
+
+    def test_expensive_memo_does_not_jump_the_queue(self, qapp, monkeypatch):
+        """Known-but-expensive is NOT a hit: it falls to the deferred branch.
+
+        The memo answers "how much did it cost", not "was it allowed". A
+        474 ms first frame is legal (the backstop clears it) yet far too
+        expensive to hold up the click, so it takes the 0 ms timer like an
+        unknown geometry does.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+        quality.latch.memo[quality._aa_memo_key()] = 474.0
+
+        quality.settle_after_discrete_render()
+
+        assert quality.aa_on is False
+        assert quality.discrete_timer.isActive() is True
+        assert quality.timer.isActive() is False
+
+    def test_blacklisted_signature_arms_nothing(self, qapp, monkeypatch):
+        """A latched geometry must not re-arm ANY path to that bad frame."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+        signature = quality._view_signature()
+        assert signature is not None
+        quality.latch.blacklist[signature] = "first-aa-frame"
+        seen = []
+        canvas.quality_status_changed.connect(seen.append)
+
+        quality.settle_after_discrete_render()
+
+        assert quality.aa_on is False
+        assert quality.timer.isActive() is False
+        assert quality.discrete_timer.isActive() is False
+        # The dot must not be left claiming "waiting for idle" forever.
+        assert seen, "the refusal was never published to the quality dot"
+        assert seen[-1]["state"] == "red"
+        self._settle(qapp)
+        assert quality.aa_on is False
+
+    def test_unknown_signature_arms_zero_delay_timer_and_keeps_interval(
+        self, qapp, monkeypatch,
+    ):
+        """Unknown geometry decides next turn — and the 150 ms window survives.
+
+        This is the Qt trap guard. ``QTimer.start(int)`` PERMANENTLY rewrites
+        the timer's interval, so implementing this branch as
+        ``self.timer.start(0)`` would silently turn every later, argument-less
+        ``schedule_idle_quality()`` into a zero-delay one and delete the
+        interaction quiet window with no test noticing. Hence a SEPARATE
+        timer, and hence this assertion.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+        assert quality.latch.memo_lookup(quality._aa_memo_key()) is None
+
+        quality.settle_after_discrete_render()
+
+        assert quality.discrete_timer.isActive() is True
+        assert quality.discrete_timer.interval() == 0
+        assert quality.discrete_timer.isSingleShot() is True
+        assert quality.timer.isActive() is False
+        assert quality.timer.interval() == 150
+
+        QCoreApplication.processEvents()
+        assert quality.aa_on is True, (
+            "this five-channel view is comfortably affordable; the deferred "
+            "branch must still arrive at the same verdict the gates give"
+        )
+        assert quality.timer.interval() == 150
+
+    def test_locally_busy_falls_back_to_quiet_window(self, qapp, monkeypatch):
+        """Mid-drag (Alt+N while panning) is an interaction, memo or not."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+        quality.latch.memo[quality._aa_memo_key()] = 12.0
+        canvas._interaction_depth = 1
+        quality.timer.stop()
+
+        quality.settle_after_discrete_render()
+
+        assert quality.timer.isActive() is True
+        assert quality.timer.interval() == 150
+        assert quality.discrete_timer.isActive() is False
+        assert quality.aa_on is False
+
+    # -- memo lifecycle ---------------------------------------------------
+
+    def test_memo_written_on_first_aa_frame_and_removed_on_trip(
+        self, qapp, monkeypatch,
+    ):
+        """The memo is written by MEASUREMENT and revoked by measurement.
+
+        Nothing predicts into it: the paint timer's reading of the session's
+        first frame is the only writer, and a trip on a later session moves
+        that key from the positive memory to the negative one.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        key = quality._aa_memo_key()
+        assert key is not None
+
+        quality._note_aa_frame(20.0)
+        assert quality.latch.memo_lookup(key) == pytest.approx(20.0)
+        assert quality.aa_backstop_blacklist == {}
+
+        # A later session on the SAME geometry measures catastrophically
+        # (a stale memo — the pen got wider, the display changed). The memo
+        # must not survive being proven wrong.
+        quality.disable_interactive_quality()
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        assert quality._aa_memo_key() == key
+
+        quality._note_aa_frame(1_500.0)
+        self._settle(qapp)
+
+        assert quality.latch.memo_lookup(key) is None
+        assert key[0] in quality.aa_backstop_blacklist
+        assert quality.aa_on is False
+
+    def test_memo_key_includes_dpr(self, qapp, monkeypatch):
+        """Same four-input signature, different screen, different question.
+
+        ``_view_signature`` is the 2026-08-08 §4.4 identity and stays exactly
+        as it is; the dpr rides on the MEMO key only. Dragging the window from
+        a Retina panel to an external one quadruples the rasterized area
+        without moving any signature input, so a dpr-blind memo would hand a
+        "cheap, enable AA now" verdict to the expensive display.
+        """
+        canvas = self._plot(qapp)
+        quality = canvas._quality
+        signature = quality._view_signature()
+        key = quality._aa_memo_key()
+
+        assert key[0] == signature
+        assert key[1] == pytest.approx(
+            round(float(canvas._glw.devicePixelRatioF()), 2)
+        )
+
+        monkeypatch.setattr(canvas._glw, "devicePixelRatioF", lambda: 2.0)
+        other = quality._aa_memo_key()
+        assert other == (signature, 2.0)
+        assert other != key
+
+        quality.latch.memo[key] = 12.0
+        assert quality.latch.memo_lookup(other) is None
+
+        # A canvas that cannot answer still gets a memo, under the 1.0 key
+        # every unscaled display uses. Degrading to None would silently
+        # disable the positive memory instead of making it coarser.
+        def _boom():
+            raise RuntimeError("no paint device")
+
+        monkeypatch.setattr(canvas._glw, "devicePixelRatioF", _boom)
+        assert quality._aa_memo_key() == (signature, 1.0)
+
+    def test_memo_key_is_none_when_the_view_has_no_opinion(self, qapp):
+        """No signature, no memo key — ``None`` never latches and never hits."""
+        canvas = _pg_canvas(qapp)
+        assert canvas._quality._view_signature() is None
+        assert canvas._quality._aa_memo_key() is None
+        assert canvas._quality.latch.memo_lookup(None) is None
+
+    def test_memo_survives_reset_for_rebuild(self, qapp):
+        """A rebuild does not change what that geometry's first frame costs.
+
+        Same reasoning as the blacklist: a View switch FUNNELS through a
+        rebuild, so clearing the memo here would keep it permanently empty
+        and the "first frame is already AA" branch permanently dead.
+        """
+        canvas = self._plot(qapp)
+        quality = canvas._quality
+        key = quality._aa_memo_key()
+        quality.latch.memo[key] = 9.0
+
+        quality.reset_for_rebuild()
+
+        assert quality.latch.memo_lookup(key) == pytest.approx(9.0)
+        assert quality.aa_epoch_frames == 0
+
+    def test_memo_bounded_lru(self, qapp):
+        """Per-view state on a long-lived UI object has to be bounded."""
+        from mf4_analyzer.ui.pg_canvas.quality import _AA_MEMO_MAX
+
+        canvas = self._plot(qapp)
+        latch = canvas._quality.latch
+        assert latch.max_entries == _AA_MEMO_MAX
+
+        for i in range(_AA_MEMO_MAX + 5):
+            latch.open(f"sig-{i}", memo_key=(f"sig-{i}", 2.0))
+            latch.note_frame(5.0)
+            latch.close()
+
+        assert len(latch.memo) == _AA_MEMO_MAX
+        assert latch.memo_lookup(("sig-0", 2.0)) is None
+        assert latch.memo_lookup(
+            (f"sig-{_AA_MEMO_MAX + 4}", 2.0)
+        ) == pytest.approx(5.0)
+
+    def test_reset_and_disable_stop_the_discrete_timer(self, qapp, monkeypatch):
+        """Both teardown paths must cancel a pending discrete settlement.
+
+        A settlement armed for the geometry that just went away would fire
+        ``try_enable_idle_quality`` on the NEW one without any of the restore
+        transaction having run.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        quality.discrete_timer.start()
+        assert quality.discrete_timer.isActive() is True
+        quality.reset_for_rebuild()
+        assert quality.discrete_timer.isActive() is False
+
+        quality.discrete_timer.start()
+        assert quality.discrete_timer.isActive() is True
+        quality.disable_interactive_quality()
+        assert quality.discrete_timer.isActive() is False
+
+    # -- end to end through the restore transaction -----------------------
+
+    XLIM = (10.0, 25.0)
+
+    def _overlay_rows(self, n_curves=2, n_points=250_000, fs=5_000.0):
+        t = np.arange(n_points, dtype=np.float64) / fs
+        return [
+            (
+                f"CH{i}",
+                True,
+                t,
+                100.0 * np.sin(2 * np.pi * (0.5 + 0.1 * i) * t),
+                "#1769e0",
+                "Nm",
+                "fileA",
+            )
+            for i in range(n_curves)
+        ]
+
+    def _switch_away_and_back(self, qapp, canvas, rows):
+        """Reproduce the product restore transaction, stopping before settle."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("first-visit", "A"),
+        )
+        canvas.restore_visible_xlim(self.XLIM)
+        QCoreApplication.processEvents()
+        ylims = canvas.get_visible_ylims()
+        assert canvas._quality._idle_aa_density_ok() is True, (
+            "premise: this shape is affordable at the real geometry"
+        )
+
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=True,
+            render_context_key=("switch-back", "A"),
+        )
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        canvas.restore_visible_ylims(ylims)
+
+    def test_view_restore_with_cheap_memo_lands_aa_on_the_first_frame(
+        self, qapp, monkeypatch,
+    ):
+        """G3: returning to a View measured cheap shows no 锯齿→平滑 flicker.
+
+        ``settle_view_restore`` returns with AA already on, so the first frame
+        Qt paints after the switch is the antialiased one — as opposed to
+        today's non-AA frame, 150 ms, then a visible swap.
+        """
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1600, 950)
+        self._hands_off(monkeypatch)
+        rows = self._overlay_rows()
+        self._switch_away_and_back(qapp, canvas, rows)
+
+        quality = canvas._quality
+        key = quality._aa_memo_key()
+        assert key is not None
+        quality.latch.memo[key] = 12.0
+
+        canvas.settle_view_restore()
+
+        assert quality.aa_on is True
+        assert quality.timer.isActive() is False
+        assert quality.discrete_timer.isActive() is False
+
+    def test_view_restore_without_memo_settles_on_the_next_turn(
+        self, qapp, monkeypatch,
+    ):
+        """No memo yet (first return): decide next turn, not in 150 ms."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1600, 950)
+        self._hands_off(monkeypatch)
+        rows = self._overlay_rows()
+        self._switch_away_and_back(qapp, canvas, rows)
+
+        quality = canvas._quality
+        assert quality.latch.memo_lookup(quality._aa_memo_key()) is None
+
+        canvas.settle_view_restore()
+
+        assert quality.discrete_timer.isActive() is True
+        assert quality.timer.isActive() is False
+        assert quality.timer.interval() == 150
+
+        QCoreApplication.processEvents()
+        assert quality.aa_on is True

@@ -1,0 +1,2 @@
+platform=cocoa
+1ch smooth (control)       ylim=(-110.0, 110.0)    pts/row=3086  aa_gate=allow aa_on=True  aa_off_frame=     4.4ms  first_aa_frame=    240.1ms  cached_aa_frame=   236.8ms

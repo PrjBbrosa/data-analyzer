@@ -24,6 +24,10 @@ from mf4_analyzer.ui._axis_handle import (
     PgAxisHandle,
 )
 from mf4_analyzer.signal.envelope import build_envelope, build_peak_trace
+# The ink metric itself is UI-neutral (spec 2026-08-08 §2): it is the same pure
+# function the time-domain renderer bills its frames with, so the analysis rows
+# cannot drift into a second definition of "how much does this cost to paint".
+from mf4_analyzer.render_profile import envelope_ink_dev_px
 
 # Overlay AA point-density budget, shared with TimeDomainCanvasPG (canvas.py:
 # 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so
@@ -34,6 +38,25 @@ from .canvas import (
     _AA_OVERLAY_SEGMENT_ON,
     _OVERLAY_GRID_ALPHA,
 )
+# The time preview's ink band is the TIME-DOMAIN band, imported rather than
+# re-declared: the preview draws build_envelope output of the very same
+# signals TimeDomainCanvasPG overlays, and the 2026-08-15 calibration measured
+# its slope at 0.93 ms/k dev-px against the time-domain band's implied 0.83
+# (1.12×, well inside the 2× "split the band" threshold — spec §5).
+from .renderer import _INK_AA_OFF, _INK_AA_ON, _quantize_y_span_key
+# Backstop ceilings are USER PATIENCE limits, not canvas physics, so line /
+# frf / time-domain share one calibration (spec §5). AaFrameLatch is likewise
+# shared: three hand-written copies of a calibrated state machine is exactly
+# what CLAUDE.md forbids.
+from .quality import (
+    _BACKSTOP_BLACKLIST_MAX,
+    _BACKSTOP_EPOCH_PROPERTY,
+    _BACKSTOP_FIRST_AA_MS,
+    _BACKSTOP_STEADY_AA_MS,
+    _BACKSTOP_STEADY_EMA_ALPHA,
+    install_frame_paint_timer,
+)
+from .quality_backstop import AaFrameLatch
 
 from .analysis_axes import (
     _AUTO_CEILING_PCT,
@@ -154,6 +177,32 @@ _SPECTRUM_MIN_REALIZED_PIXEL_WIDTH = 200
 # uses the shared TimeDomainCanvasPG ON=5000/OFF=7000 policy imported above.
 _SPECTRUM_AA_SEGMENT_ON = 5000
 _SPECTRUM_AA_SEGMENT_OFF = 8000
+
+# Spectrum-row AA INK budget (spec 2026-08-15 §3.4 / §5, defect C).
+#
+# The point budget above is NOT a cost gate on its own. Peak-hold pins every
+# spectrum to ~1 drawn point per pixel, so a 3-curve overlay is ~4095 points
+# whether it is a clean peak or a full-height noise floor — yet the measured AA
+# frame goes from 71 ms to 1652 ms between those two. What actually varies is
+# the VERTICAL INK, the same quantity the time-domain canvas has billed frames
+# with since 2026-08-08. The two legs are AND'd, not swapped: "too many points"
+# stays a real, orthogonal constraint (spec §5 explicitly warns that the FRF
+# "clean" shape holds ink flat while the frame time triples with bin count).
+#
+# Calibrated 2026-08-15 on the real machine (macOS Cocoa, dpr 2.0, canvas
+# 1400×900, spectrum row 669 px tall): 7-point sweep at a fixed 4095 drawn
+# points, varying only peak/floor ratio — 55k→119 ms, 120k→216 ms, 212k→320 ms,
+# 336k→599 ms. Fitting the NEAR-TARGET段 only (≤600 ms, n=4; the curve turns
+# steeper past ~350k and a global fit would push the intercept to −138 ms)
+# gives 1.68 ms per k dev-px, intercept 9.0 ms, crossing the 250 ms steady-AA
+# ceiling at 143k → OFF 145k, ON = OFF×2/3 = 95k for the hysteresis dead band.
+#
+# These are STANDARDS-CALIBRATED VALUES, not tuning knobs. To change one:
+# edit spec §5 first, then re-measure on real hardware with
+# ``scripts/probe_view_switch_quality.py analysis-calibrate`` (offscreen cannot
+# measure paint cost at all), then change the number here.
+_SPECTRUM_INK_AA_ON = 95_000
+_SPECTRUM_INK_AA_OFF = 145_000
 
 # Minimum vertical room per Y tick label on the short time-preview strip.
 # Inspector Y-density still *requests* up to 20 divisions, but labelling every
@@ -390,6 +439,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # hysteresis state so selection changes do not make quality flicker.
         self._spectrum_aa_density_allowed = False
         self._spectrum_aa_density_seeded = False
+        # Ink legs, one per row, AND'd with the point legs above. Same
+        # double-threshold hysteresis shape (seed against OFF, then ON→allow /
+        # >OFF→refuse, dead band holds), re-seeded wherever the point leg is.
+        self._spectrum_aa_ink_allowed = False
+        self._spectrum_aa_ink_seeded = False
+        self._time_aa_ink_allowed = False
+        self._time_aa_ink_seeded = False
         self._last_quality_status = None
         self._idle_activity = _IdleQualityActivity()
         self._mouse_buttons_provider = QApplication.mouseButtons
@@ -397,7 +453,45 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._aa_idle_timer.setSingleShot(True)
         self._aa_idle_timer.setInterval(150)
         self._aa_idle_timer.timeout.connect(self._enable_idle_quality)
+        # Discrete-render settlement (spec §3.2/§3.4, defect B). A View switch
+        # / a fresh compute is a ONE-SHOT event with no follow-up input, so the
+        # 150 ms quiet window above — which exists to merge the frames of a
+        # CONTINUOUS drag — is pure latency plus one visible 锯齿→平滑 swap.
+        # This is a SEPARATE QTimer on purpose: ``QTimer.start(int)``
+        # permanently rewrites the interval, so re-using _aa_idle_timer with
+        # start(0) would silently delete the interactive path's quiet window.
+        self._discrete_aa_timer = QTimer(self)
+        self._discrete_aa_timer.setSingleShot(True)
+        self._discrete_aa_timer.setInterval(0)
+        self._discrete_aa_timer.timeout.connect(self._enable_idle_quality)
+        # Measured backstop (spec §3.3/§3.4). Everything above is a
+        # PREDICTION; this is the layer that measures what the frame actually
+        # cost, so a prediction that was wrong costs at most ONE bad frame per
+        # view signature instead of repeating on every settle.
+        self._aa_latch = AaFrameLatch(
+            _BACKSTOP_FIRST_AA_MS,
+            _BACKSTOP_STEADY_AA_MS,
+            _BACKSTOP_STEADY_EMA_ALPHA,
+            _BACKSTOP_BLACKLIST_MAX,
+        )
+        # Pairing token read on EVERY paint, so it stays a bare attribute.
+        self._aa_backstop_armed = False
+        self._last_frame_paint_ms = None
+        self._backstop_timer = QTimer(self)
+        self._backstop_timer.setSingleShot(True)
+        self._backstop_timer.setInterval(0)
+        self._backstop_timer.timeout.connect(self._on_aa_backstop_timeout)
+        if not install_frame_paint_timer(self):
+            # Without the paint timer the ink gate has no measured fallback:
+            # a mis-prediction would repeat every settle instead of latching
+            # after one frame. Never silent — the operator has to be able to
+            # tell "backstop disabled" from "backstop never trips".
+            logger.warning(
+                "frame paint timer not installed on PgLineCanvas; "
+                "measured AA backstop is inactive on this canvas",
+            )
         self.destroyed.connect(self._stop_aa_idle_timer)
+        self.destroyed.connect(self._stop_discrete_aa_timer)
         for _p in (self._plot_amp, self._plot_time):
             # Pan / box-zoom / plain wheel emit sigRangeChangedManually (a
             # programmatic setRange, e.g. plot_spectra, does NOT — so a fresh
@@ -490,6 +584,144 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             except Exception:
                 pass
 
+    # ------------------------------------------------------------------
+    # Ink (vertical draw量) — the cost axis the point budgets cannot see
+    # ------------------------------------------------------------------
+
+    def _device_pixel_ratio(self) -> float:
+        try:
+            return float(self._glw.devicePixelRatioF())
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return 1.0
+
+    @staticmethod
+    def _curve_y_data(curve):
+        """Return a curve's rendered Y samples, or ``None`` if unreadable."""
+        try:
+            _x_data, y_data = curve.getData()
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        return y_data
+
+    @staticmethod
+    def _row_ink_geometry(view_box):
+        """``(y_span, row_height_px)`` for one row, or ``None`` if unknown.
+
+        ``updateAutoRange()`` FIRST: pyqtgraph applies ``enableAutoRange``
+        lazily, and the discrete 0 ms settle can run BEFORE the first paint of
+        a freshly plotted row — without the flush this would bill the new
+        curves against the PREVIOUS render's Y window (spec §3.4).
+        """
+        try:
+            view_box.updateAutoRange()
+            y_range = view_box.viewRange()[1]
+            y_span = abs(float(y_range[1]) - float(y_range[0]))
+            row_height_px = float(view_box.sceneBoundingRect().height())
+        except (AttributeError, IndexError, RuntimeError, TypeError,
+                ValueError):
+            return None
+        return (y_span, row_height_px)
+
+    def _view_box_for_curve(self, curve):
+        """The ViewBox a preview curve actually lives in.
+
+        Asked of the item rather than derived from its index: an entry with
+        empty data is skipped while building, so ``_time_curves[i]`` does not
+        line up with ``_time_overlay_vbs[i-1]`` in general.
+        """
+        try:
+            view_box = curve.getViewBox()
+        except (AttributeError, RuntimeError, TypeError):
+            view_box = None
+        if view_box is not None:
+            return view_box
+        return self._plot_time.vb
+
+    def _spectrum_ink_total(self):
+        """Total device-pixel ink the amplitude row will paint, or ``None``.
+
+        ``None`` means UNKNOWN, and unknown is not zero: the caller refuses
+        the frame and leaves the hysteresis state untouched rather than
+        recording a 0 that would read as "free" forever after.
+        """
+        curves = list(self._amp_curves)
+        if not curves:
+            return 0.0
+        geometry = self._row_ink_geometry(self._plot_amp.vb)
+        if geometry is None:
+            return None
+        y_span, row_height_px = geometry
+        dpr = self._device_pixel_ratio()
+        total = 0.0
+        for curve in curves:
+            y_data = self._curve_y_data(curve)
+            if y_data is None:
+                return None
+            total += envelope_ink_dev_px(
+                y_data, y_span=y_span, row_height_px=row_height_px, dpr=dpr)
+        return total
+
+    def _time_preview_ink_total(self):
+        """Total device-pixel ink the preview row will paint, or ``None``.
+
+        Summed PER CURVE against the ViewBox that curve is drawn in: every
+        extra overlay source gets its own auto-scaled aux ViewBox, so they do
+        not share a Y span and a single row-wide span would misprice all but
+        the first trace.
+        """
+        curves = list(self._time_curves)
+        if not curves:
+            return 0.0
+        dpr = self._device_pixel_ratio()
+        geometries = {}
+        total = 0.0
+        for curve in curves:
+            y_data = self._curve_y_data(curve)
+            if y_data is None:
+                return None
+            view_box = self._view_box_for_curve(curve)
+            key = id(view_box)
+            geometry = geometries.get(key)
+            if geometry is None:
+                geometry = self._row_ink_geometry(view_box)
+                if geometry is None:
+                    return None
+                geometries[key] = geometry
+            y_span, row_height_px = geometry
+            total += envelope_ink_dev_px(
+                y_data, y_span=y_span, row_height_px=row_height_px, dpr=dpr)
+        return total
+
+    def _spectrum_ink_allowed(self) -> bool:
+        """Hysteresis ink leg for the amplitude row (ON 95k / OFF 145k)."""
+        total = self._spectrum_ink_total()
+        if total is None:
+            # Unknown ≠ 0. Refuse this frame WITHOUT writing the latch, so a
+            # transient read failure cannot pin the row into a decision.
+            return False
+        if not self._spectrum_aa_ink_seeded:
+            self._spectrum_aa_ink_allowed = total <= _SPECTRUM_INK_AA_OFF
+            self._spectrum_aa_ink_seeded = True
+        elif total <= _SPECTRUM_INK_AA_ON:
+            self._spectrum_aa_ink_allowed = True
+        elif total > _SPECTRUM_INK_AA_OFF:
+            self._spectrum_aa_ink_allowed = False
+        return bool(self._spectrum_aa_ink_allowed)
+
+    def _time_preview_ink_allowed(self) -> bool:
+        """Hysteresis ink leg for the preview row (time-domain band)."""
+        total = self._time_preview_ink_total()
+        if total is None:
+            return False
+        if not self._time_aa_ink_seeded:
+            self._time_aa_ink_allowed = total <= _INK_AA_OFF
+            self._time_aa_ink_seeded = True
+        elif total <= _INK_AA_ON:
+            self._time_aa_ink_allowed = True
+        elif total > _INK_AA_OFF:
+            self._time_aa_ink_allowed = False
+        return bool(self._time_aa_ink_allowed)
+
     def _time_preview_aa_allowed(self) -> bool:
         """Hysteresis AA gate for the time preview, keyed to drawn-point SUM.
 
@@ -500,7 +732,16 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         hysteresis: an empty/single curve set is always AA-on; otherwise seed
         against OFF, then metric<=ON→on, metric>OFF→off, dead band holds. The
         result is cached on ``_time_aa_density_allowed`` and reused as the
-        conservative fallback if ``getData()`` is unavailable / raises."""
+        conservative fallback if ``getData()`` is unavailable / raises.
+
+        AND'd with an ink leg, evaluated FIRST — same decision order as
+        ``QualityManager._idle_aa_density_ok`` (spec §3.4). A single
+        full-height trace is one curve and a handful of points and would sail
+        through the point budget below while costing hundreds of milliseconds
+        to rasterize; only ink sees that.
+        """
+        if not self._time_preview_ink_allowed():
+            return False
         curves = list(self._time_curves)
         if len(curves) <= 1:
             # A single trace (or none) is one cheap region — always crisp.
@@ -547,7 +788,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         ``<= 5000``; while allowed it turns back off only above ``> 8000``.
         Peak-hold keeps a screenshot-scale 4-curve overlay under that OFF
         ceiling so the settled spectrum stays crisp.
+
+        AND'd with an ink leg, evaluated FIRST so the reported reason matches
+        the decision order (same shape as
+        ``QualityManager._idle_aa_density_ok``). Peak-hold pins the point
+        count near one per pixel, so on this row the point budget alone cannot
+        tell a 71 ms peak from a 1652 ms noise floor — ink can.
         """
+        if not self._spectrum_ink_allowed():
+            return False
         total = self._spectrum_drawn_point_total()
         if total is None:
             # Defensive: preserve the last settled decision rather than
@@ -564,25 +813,68 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         return bool(self._spectrum_aa_density_allowed)
 
     def _reset_spectrum_aa_density_gate(self) -> None:
-        """Seed a replacement FFT curve collection from its own density."""
+        """Seed a replacement FFT curve collection from its own density.
+
+        Both legs, not just the point one: a replacement collection has a new
+        ink total too, and leaving the ink latch behind would judge the new
+        spectrum by the old one's dead-band decision.
+        """
         self._spectrum_aa_density_allowed = False
         self._spectrum_aa_density_seeded = False
+        self._spectrum_aa_ink_allowed = False
+        self._spectrum_aa_ink_seeded = False
 
-    def _apply_idle_curve_aa(self):
-        """Restore each curve's settled-state AA from its row-local budget."""
+    def _apply_idle_curve_aa(self) -> bool:
+        """Restore each curve's settled-state AA from its row-local budget.
+
+        Returns whether ANY curve actually came back antialiased — the caller
+        uses it to decide whether there is an AA session worth measuring.
+        """
         spectrum_idle_aa = self._spectrum_aa_allowed()
         time_idle_aa = self._time_preview_aa_allowed()
         for c in self._amp_curves:
             self._set_curve_aa(c, spectrum_idle_aa)
         for c in self._time_curves:
             self._set_curve_aa(c, time_idle_aa)
+        return bool(
+            (spectrum_idle_aa and self._amp_curves)
+            or (time_idle_aa and self._time_curves)
+        )
+
+    def _arm_discrete_aa(self) -> None:
+        """Settle AA for a DISCRETE render on the next event-loop turn.
+
+        A fresh compute / a View switch is a one-shot event with no follow-up
+        input, so the 150 ms interactive quiet window is pure latency here.
+        Curves were built AA-off provisionally (their real point and ink
+        totals are only knowable once the whole collection is in place), so
+        the switch call itself returns without ever painting an AA frame —
+        that was the 245 ms ``plot_spectra`` measured in spec §1.4.
+        """
+        self._aa_on = False
+        timer = self._timer_alive(self._discrete_aa_timer)
+        if timer is None:
+            return
+        timer.start()
 
     def disable_interactive_quality(self):
         """Drop curve AA for the interactive (pan/zoom) path and cancel any
         pending idle upgrade. Also invoked by the ViewBox drag hook
         (``_ModifierWheelViewBox.mouseDragEvent``)."""
+        # Cancelling a pending upgrade moves the reader-facing dot from yellow
+        # to red, so that transition has to be emitted even on the hot path
+        # below where AA was already off and nothing else changes.
+        settle_was_pending = self._aa_settle_pending()
         self._stop_aa_idle_timer()
+        self._stop_discrete_aa_timer()
+        if self._aa_backstop_armed:
+            # End the measurement session so a trip still queued against it
+            # cannot tear AA off whatever session comes next.
+            self._aa_backstop_armed = False
+            self._aa_latch.close()
         if not self._aa_on:
+            if settle_was_pending:
+                self._emit_quality_status()
             return
         for c in self._interactive_curves():
             self._set_curve_aa(c, False)
@@ -598,8 +890,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._start_aa_idle_timer()
         self._emit_quality_status()
 
-    def _aa_idle_timer_alive(self):
-        timer = getattr(self, "_aa_idle_timer", None)
+    def _timer_alive(self, timer):
+        """Return ``timer`` if both it and this canvas still exist in C++."""
         if timer is None:
             return None
         try:
@@ -609,6 +901,31 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             # sip wrapper already gone; nothing left to start/stop.
             return None
         return timer
+
+    def _aa_idle_timer_alive(self):
+        return self._timer_alive(getattr(self, "_aa_idle_timer", None))
+
+    def _discrete_aa_timer_alive(self):
+        return self._timer_alive(getattr(self, "_discrete_aa_timer", None))
+
+    def _aa_settle_pending(self) -> bool:
+        """Whether an AA upgrade is armed on EITHER fuse.
+
+        The discrete settle is the same upgrade as the 150 ms idle one, just
+        on a shorter fuse, so anything that asks "is quality still coming?"
+        has to look at both or it will report red on a canvas that is one
+        event-loop turn away from green.
+        """
+        for timer in (self._aa_idle_timer_alive(),
+                      self._discrete_aa_timer_alive()):
+            if timer is None:
+                continue
+            try:
+                if timer.isActive():
+                    return True
+            except RuntimeError:
+                continue
+        return False
 
     def _start_aa_idle_timer(self) -> None:
         timer = self._aa_idle_timer_alive()
@@ -624,6 +941,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             timer.stop()
         except RuntimeError:
             # QTimer C++ object already deleted with the canvas.
+            return
+
+    def _stop_discrete_aa_timer(self, *_args) -> None:
+        timer = self._discrete_aa_timer_alive()
+        if timer is None:
+            return
+        try:
+            timer.stop()
+        except RuntimeError:
             return
 
     def _query_idle_mouse_buttons(self):
@@ -645,12 +971,97 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             )
             return None
 
+    # ------------------------------------------------------------------
+    # Measured AA backstop (spec §3.3/§3.4) — the layer that bills reality
+    # ------------------------------------------------------------------
+
+    def _spectrum_view_signature(self):
+        """Identity of the amplitude row's AA cost, or ``None`` if unknown.
+
+        The four inputs that move the frame cost: WHICH curves (labels), how
+        tall the data is relative to the window (quantized Y span — the log
+        bucket keeps float jitter on a static window inside one key while a
+        real Y zoom always crosses a boundary), and the row's pixel box.
+        """
+        try:
+            labels = tuple(
+                str(getattr(c, "_channel_name", "") or c.name() or "")
+                for c in self._amp_curves
+            )
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        view_box = self._plot_amp.vb
+        try:
+            y_range = view_box.viewRange()[1]
+            y_span = abs(float(y_range[1]) - float(y_range[0]))
+            rect = view_box.sceneBoundingRect()
+            return (
+                labels,
+                _quantize_y_span_key(y_span),
+                int(rect.height()),
+                int(rect.width()),
+            )
+        except (AttributeError, IndexError, RuntimeError, TypeError,
+                ValueError):
+            return None
+
+    def _note_aa_frame(self, frame_ms) -> None:
+        """Feed one measured AA frame to the latch. Called FROM ``paintEvent``.
+
+        Stays on the hot path, so it does exactly two things beyond the
+        delegation: read the armed token (False on every non-AA frame, so an
+        interleaved interaction frame can never be miscounted as "the first AA
+        frame") and hand a trip to the Qt-side half. Mutating QGraphicsItems
+        mid-paint is not safe, so the actual AA drop is deferred.
+        """
+        if not self._aa_backstop_armed:
+            return
+        trip = self._aa_latch.note_frame(frame_ms)
+        if trip is not None:
+            self._trip_aa_backstop(trip[0], trip[1])
+
+    def _trip_aa_backstop(self, reason, measured_ms) -> None:
+        """Qt half of a trip: disarm and queue the epoch-tagged AA disable."""
+        # Disarm FIRST: further frames of this session must not re-trip while
+        # the deferred disable is still in flight.
+        self._aa_backstop_armed = False
+        self._aa_latch.reason = (str(reason), float(measured_ms))
+        timer = self._timer_alive(getattr(self, "_backstop_timer", None))
+        if timer is None:
+            return
+        try:
+            timer.setProperty(
+                _BACKSTOP_EPOCH_PROPERTY, int(self._aa_latch.epoch))
+            timer.start(0)
+        except RuntimeError:
+            return
+
+    def _on_aa_backstop_timeout(self):
+        """Deferred half of a trip: drop AA, but only for the epoch measured.
+
+        The epoch travels on the timer as a Qt dynamic property and is checked
+        against the live one before anything is mutated, so a trip raised for
+        a session that a rebuild has already superseded is a no-op instead of
+        tearing AA off the CURRENT session.
+        """
+        timer = self._timer_alive(getattr(self, "_backstop_timer", None))
+        if timer is None:
+            return
+        try:
+            epoch = int(timer.property(_BACKSTOP_EPOCH_PROPERTY))
+        except (TypeError, ValueError):
+            return
+        if epoch != int(self._aa_latch.epoch):
+            return
+        self.disable_interactive_quality()
+
     def _enable_idle_quality(self):
         """Idle-timer slot: restore crisp AA once THIS canvas is hands-off."""
         if sip.isdeleted(self):
             return
         if self._aa_on:
             self._stop_aa_idle_timer()
+            self._stop_discrete_aa_timer()
             return
         # Consult the provider so injected failures stay observable, but do
         # not use global mouseButtons as the idle gate.
@@ -659,14 +1070,25 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self.schedule_idle_quality()
             return
         self._stop_aa_idle_timer()
+        self._stop_discrete_aa_timer()
         if self._time_y_needs_repin:
             self._time_y_needs_repin = False
             try:
                 self._snap_time_axes_to_grid()
             except Exception:
                 pass
-        self._apply_idle_curve_aa()
+        signature = self._spectrum_view_signature()
+        if self._aa_latch.blocked(signature):
+            # This geometry already paid its one bad AA frame. The prediction
+            # said it was affordable and reality disagreed; re-asking costs
+            # another second of frozen UI for a foregone conclusion.
+            self._emit_quality_status()
+            return
+        armed = self._apply_idle_curve_aa()
         self._aa_on = True
+        if armed:
+            self._aa_latch.open(signature)
+            self._aa_backstop_armed = True
         try:
             self._glw.update()
         except Exception:
@@ -715,13 +1137,43 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         actual_on = all(_aa(c) for c in judged)
         if self._aa_on and actual_on:
             return {"state": "green", "tooltip": "抗锯齿已完成"}
-        timer = self._aa_idle_timer_alive()
-        try:
-            timer_active = bool(timer is not None and timer.isActive())
-        except RuntimeError:
-            timer_active = False
-        if timer_active:
+        if self._aa_settle_pending():
             return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
+        # Measured backstop first: it OVERRIDES both predictions. When it has
+        # fired, "why is AA off" is no longer a budget question — this
+        # geometry was timed and it did not fit. Guarded on a non-empty
+        # blacklist so the common case never pays for the signature read.
+        if self._aa_latch.blacklist and self._aa_latch.blocked(
+                self._spectrum_view_signature()):
+            return {
+                "state": "red",
+                "block_reason": "aa-backstop",
+                "tooltip": "抗锯齿未激活：实测帧超时",
+            }
+        # Then ink, then point count — reported in the SAME order the decision
+        # is made in _spectrum_aa_allowed / _time_preview_aa_allowed, so the
+        # tooltip always names the leg that actually refused the frame. Reads
+        # the LATCHED state rather than recomputing, so the dead band is
+        # honored and this reporting path stays non-mutating.
+        if (self._aa_on and self._amp_curves
+                and self._spectrum_aa_ink_seeded
+                and not self._spectrum_aa_ink_allowed):
+            return {
+                "state": "red",
+                "block_reason": "high-ink",
+                "tooltip": "抗锯齿未激活：谱线填满绘图区，绘制量超预算",
+            }
+        if (self._aa_on and not self._amp_curves and self._time_curves
+                and self._time_aa_ink_seeded
+                and not self._time_aa_ink_allowed):
+            # Preview-only state (sources selected, 计算 not pressed yet):
+            # the preview curves ARE the judged set here, so their ink is the
+            # reader-facing reason.
+            return {
+                "state": "red",
+                "block_reason": "high-ink",
+                "tooltip": "抗锯齿未激活：波形填满绘图区，绘制量超预算",
+            }
         if (self._aa_on and self._amp_curves
                 and not self._spectrum_aa_density_allowed):
             total = self._spectrum_drawn_point_total()
@@ -1160,9 +1612,6 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             curve.setOpacity(1.0)
             self._amp_curves.append(curve)
 
-        if self._aa_on:
-            self._apply_idle_curve_aa()
-
         self._raw_amp_title = title or ''
         self._apply_title_texts()
         self._plot_amp.setLabel('left', amp_label)
@@ -1188,8 +1637,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._entries, selected_idx=0 if self._entries else None,
             title="时域预览",
         )
+        # Both rows are in place and both Y windows are set, so the budgets
+        # can finally be evaluated on the FINAL geometry — on the next
+        # event-loop turn, not inside this call (spec §3.4, defect C).
+        self._arm_discrete_aa()
         # Surface the settled spectrum-density decision on the quality dot
-        # immediately (green when AA is allowed; an explained red otherwise).
+        # immediately (yellow while the settle is pending; an explained red
+        # once it lands and refuses).
         self._emit_quality_status()
         # Re-bind history capture + re-apply mouse mode on the rebuilt view
         # (Task C: lets the toolbar's back/forward seed a baseline).
@@ -1354,6 +1808,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def full_reset(self) -> None:
         self._stop_aa_idle_timer()
+        self._stop_discrete_aa_timer()
+        if self._aa_backstop_armed:
+            self._aa_backstop_armed = False
+            self._aa_latch.close()
         self._idle_activity.clear()
         self.clear_empty_hint()
         self._clear_frequency_cursor_readout()
@@ -1974,9 +2432,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             except Exception:
                 pass
         self._time_curves.clear()
-        # New curve set → re-seed the AA density hysteresis against the OFF
-        # budget so a fresh overlay is judged on its own drawn-point sum.
+        # New curve set → re-seed BOTH AA hysteresis legs against their OFF
+        # budgets so a fresh overlay is judged on its own drawn-point sum and
+        # its own ink, not on the previous selection's dead-band decision.
         self._time_aa_density_seeded = False
+        self._time_aa_ink_seeded = False
+        self._time_aa_ink_allowed = False
         self._clear_time_overlay_axes()
         entries = list(entries or [])
         if not entries:
@@ -2064,12 +2525,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # stay at the origin and their tick text paints over the left gutter.
         self._realize_time_overlay_axis_columns()
         self.layout_geometry_changed.emit()
-        # Curves were built AA-off provisionally; now that every curve is in
-        # _time_curves their real drawn-point sum is known, so land the budgeted
-        # AA. Only in the settled (_aa_on) state — a rebuild mid pan/zoom keeps
-        # AA off, and the idle timer's _apply_idle_curve_aa lands it on restore.
-        if self._aa_on:
-            self._apply_idle_curve_aa()
+        # Curves were built AA-off provisionally; their real drawn-point sum
+        # and ink total are only knowable now that every curve is in
+        # _time_curves AND every Y window has been framed. Settle on the next
+        # event-loop turn instead of painting an AA frame inside this call —
+        # a rebuild mid pan/zoom is caught by _enable_idle_quality's busy
+        # check, which hands it back to the 150 ms interactive path.
+        self._arm_discrete_aa()
         self._apply_time_preview_emphasis()
         # Time-preview-only updates (source selection before 计算) rebuild the
         # curve set, so refresh the AA dot here too — otherwise it keeps the

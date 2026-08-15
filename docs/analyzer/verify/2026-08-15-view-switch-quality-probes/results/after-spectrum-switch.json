@@ -1,0 +1,175 @@
+{
+  "command": "spectrum-switch",
+  "environment": {
+    "platform_plugin": "cocoa",
+    "dpr": 2.0,
+    "loadavg": [
+      4.16,
+      3.38,
+      3.21
+    ],
+    "exposed": true
+  },
+  "modes": {
+    "进入时 _aa_on=True（改前=切换里同步开 AA）": {
+      "aa_in_switch": true,
+      "runs": [
+        {
+          "plot_ms": 51.21104199861293,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 264.93604099960066,
+          "frame2_ms": 264.8982499995327,
+          "total_ms": 316.1470829982136,
+          "aa_on": false,
+          "product_state": "red",
+          "product_block_reason": "aa-backstop",
+          "product_tooltip": "抗锯齿未激活：实测帧超时"
+        },
+        {
+          "plot_ms": 14.378916999703506,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 200.12366599985398,
+          "frame2_ms": 198.4942079980101,
+          "total_ms": 214.5025829995575,
+          "aa_on": true,
+          "product_state": "green",
+          "product_block_reason": null,
+          "product_tooltip": "抗锯齿已完成"
+        },
+        {
+          "plot_ms": 21.30895799928112,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 8.454458999040071,
+          "frame2_ms": 8.45741700322833,
+          "total_ms": 29.76341699832119,
+          "aa_on": false,
+          "product_state": "red",
+          "product_block_reason": "aa-backstop",
+          "product_tooltip": "抗锯齿未激活：实测帧超时"
+        },
+        {
+          "plot_ms": 16.94024999960675,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 198.67462500042166,
+          "frame2_ms": 198.9319170024828,
+          "total_ms": 215.6148750000284,
+          "aa_on": true,
+          "product_state": "green",
+          "product_block_reason": null,
+          "product_tooltip": "抗锯齿已完成"
+        },
+        {
+          "plot_ms": 21.349333997932263,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 8.73541599867167,
+          "frame2_ms": 8.626707996882033,
+          "total_ms": 30.084749996603932,
+          "aa_on": false,
+          "product_state": "red",
+          "product_block_reason": "aa-backstop",
+          "product_tooltip": "抗锯齿未激活：实测帧超时"
+        },
+        {
+          "plot_ms": 35.31970900075976,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 205.10845800163224,
+          "frame2_ms": 198.8394590007374,
+          "total_ms": 240.428167002392,
+          "aa_on": true,
+          "product_state": "green",
+          "product_block_reason": null,
+          "product_tooltip": "抗锯齿已完成"
+        }
+      ],
+      "median_plot_ms": 21.32914599860669,
+      "median_frame1_ms": 103.70502049954666,
+      "median_total_ms": 122.84981249831617
+    },
+    "对照：进入时 _aa_on=False": {
+      "aa_in_switch": false,
+      "runs": [
+        {
+          "plot_ms": 20.93304200025159,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 8.783165998465847,
+          "frame2_ms": 8.391833001951454,
+          "total_ms": 29.716207998717437,
+          "aa_on": false,
+          "product_state": "red",
+          "product_block_reason": "aa-backstop",
+          "product_tooltip": "抗锯齿未激活：实测帧超时"
+        },
+        {
+          "plot_ms": 34.42075000202749,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 203.75137500013807,
+          "frame2_ms": 198.06108299962943,
+          "total_ms": 238.17212500216556,
+          "aa_on": true,
+          "product_state": "green",
+          "product_block_reason": null,
+          "product_tooltip": "抗锯齿已完成"
+        },
+        {
+          "plot_ms": 21.07287499893573,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 8.40720900305314,
+          "frame2_ms": 8.221083000535145,
+          "total_ms": 29.48008400198887,
+          "aa_on": false,
+          "product_state": "red",
+          "product_block_reason": "aa-backstop",
+          "product_tooltip": "抗锯齿未激活：实测帧超时"
+        },
+        {
+          "plot_ms": 35.83758300010231,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 203.84308400025475,
+          "frame2_ms": 198.82454199978383,
+          "total_ms": 239.68066700035706,
+          "aa_on": true,
+          "product_state": "green",
+          "product_block_reason": null,
+          "product_tooltip": "抗锯齿已完成"
+        },
+        {
+          "plot_ms": 21.49354100038181,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 8.896082999854116,
+          "frame2_ms": 8.355834001122275,
+          "total_ms": 30.389624000235926,
+          "aa_on": false,
+          "product_state": "red",
+          "product_block_reason": "aa-backstop",
+          "product_tooltip": "抗锯齿未激活：实测帧超时"
+        },
+        {
+          "plot_ms": 35.566875001677545,
+          "aa_apply_ms": 0.0,
+          "aa_apply_n": 0,
+          "frame1_ms": 203.2822910005052,
+          "frame2_ms": 197.92208400031086,
+          "total_ms": 238.84916600218276,
+          "aa_on": true,
+          "product_state": "green",
+          "product_block_reason": null,
+          "product_tooltip": "抗锯齿已完成"
+        }
+      ],
+      "median_plot_ms": 28.530208001029678,
+      "median_frame1_ms": 106.08918700017966,
+      "median_total_ms": 134.61939500120934
+    }
+  }
+}

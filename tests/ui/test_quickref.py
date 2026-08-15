@@ -197,6 +197,18 @@ def test_quickref_covers_db_reference_badge_and_manage_button():
     assert all(not r.soon for r in group.rows)
 
 
+def test_quickref_explains_the_chart_quality_dot():
+    """Every chart card (time / FFT / FRF since the view-switch settlement
+    batch) shows a quality dot; the quickref must say what its three colors
+    mean and that a settled render sharpens AFTER the first frame, so a
+    yellow-then-green flash right after a View switch is not read as a bug."""
+    group = next(g for g in quickref.QUICKREF if g.title == "图表手势")
+    row = next(r for r in group.rows if "质量小圆点" in r.desc)
+    sub = row.sub or ""
+    for token in ("绿", "黄", "红", "悬停", "先出图再平滑"):
+        assert token in sub, sub
+
+
 def test_quickref_fft_preview_row_matches_overlay_contract():
     group = next(g for g in quickref.QUICKREF if g.title == "图表手势")
     row = next(r for r in group.rows if r.desc == "FFT 时域预览")

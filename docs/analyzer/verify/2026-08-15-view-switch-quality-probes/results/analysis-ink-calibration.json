@@ -1,0 +1,1566 @@
+{
+  "command": "analysis-calibrate",
+  "environment": {
+    "platform_plugin": "cocoa",
+    "os_platform": "macOS-27.0-arm64-arm-64bit",
+    "loadavg": [
+      2.01,
+      1.98,
+      1.94
+    ]
+  },
+  "spectrum": {
+    "exposed": true,
+    "dpr": 2.0,
+    "n_curves": 3,
+    "cases": [
+      {
+        "label": "纯噪声底 (无峰)",
+        "ink": 617383.2634220611,
+        "aa_frame_ms": 1539.3080835001456,
+        "off_frame_ms": 12.674229499680223,
+        "aa_spread": 0.0020336520247004673,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          1.98,
+          1.96,
+          1.93
+        ],
+        "passes": [
+          {
+            "ink": 617383.2634220611,
+            "aa_frame_ms": 1537.7428749998217,
+            "off_frame_ms": 12.678125000093132,
+            "drawn_points": 4095,
+            "y_span": 4.44760433934224,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 617383.2634220611,
+            "aa_frame_ms": 1540.8732920004695,
+            "off_frame_ms": 12.670333999267314,
+            "drawn_points": 4095,
+            "y_span": 4.44760433934224,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "peak_to_floor": null,
+        "gain": 0.0,
+        "n_curves": 3
+      },
+      {
+        "label": "峰/底=50",
+        "ink": 55416.21509628442,
+        "aa_frame_ms": 119.1672289996859,
+        "off_frame_ms": 6.519395999930566,
+        "aa_spread": 0.01611216453711299,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          1.98,
+          1.96,
+          1.93
+        ],
+        "passes": [
+          {
+            "ink": 55416.21509628442,
+            "aa_frame_ms": 120.12725000022328,
+            "off_frame_ms": 6.5392500000598375,
+            "drawn_points": 4095,
+            "y_span": 56.31601882014768,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 55416.21509628442,
+            "aa_frame_ms": 118.20720799914852,
+            "off_frame_ms": 6.499541999801295,
+            "drawn_points": 4095,
+            "y_span": 56.31601882014768,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "peak_to_floor": 50.0,
+        "gain": 0.25,
+        "n_curves": 3
+      },
+      {
+        "label": "峰/底=20",
+        "ink": 120234.27234276687,
+        "aa_frame_ms": 215.5008749996341,
+        "off_frame_ms": 7.3741044998314464,
+        "aa_spread": 0.0005572320833378679,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          1.98,
+          1.96,
+          1.93
+        ],
+        "passes": [
+          {
+            "ink": 120234.27234276687,
+            "aa_frame_ms": 215.44083299886552,
+            "off_frame_ms": 7.386416998997447,
+            "drawn_points": 4095,
+            "y_span": 23.99633640753635,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 120234.27234276687,
+            "aa_frame_ms": 215.5609170004027,
+            "off_frame_ms": 7.361792000665446,
+            "drawn_points": 4095,
+            "y_span": 23.99633640753635,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "peak_to_floor": 20.0,
+        "gain": 0.1,
+        "n_curves": 3
+      },
+      {
+        "label": "峰/底=10",
+        "ink": 212343.0602444425,
+        "aa_frame_ms": 319.4902920004097,
+        "off_frame_ms": 8.546875001229637,
+        "aa_spread": 3.938773165094777e-05,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          1.98,
+          1.96,
+          1.93
+        ],
+        "passes": [
+          {
+            "ink": 212343.0602444425,
+            "aa_frame_ms": 319.4965839993529,
+            "off_frame_ms": 8.59429100091802,
+            "drawn_points": 4095,
+            "y_span": 13.223108936665911,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 212343.0602444425,
+            "aa_frame_ms": 319.4840000014665,
+            "off_frame_ms": 8.499459001541254,
+            "drawn_points": 4095,
+            "y_span": 13.223108936665911,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "peak_to_floor": 10.0,
+        "gain": 0.05,
+        "n_curves": 3
+      },
+      {
+        "label": "峰/底=5",
+        "ink": 335925.5543704722,
+        "aa_frame_ms": 598.5844585002269,
+        "off_frame_ms": 10.020167000220681,
+        "aa_spread": 0.00014381095448318446,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          1.91,
+          1.94,
+          1.92
+        ],
+        "passes": [
+          {
+            "ink": 335925.5543704722,
+            "aa_frame_ms": 598.6275000013848,
+            "off_frame_ms": 9.989916999984416,
+            "drawn_points": 4095,
+            "y_span": 8.250725599327454,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 335925.5543704722,
+            "aa_frame_ms": 598.541416999069,
+            "off_frame_ms": 10.050417000456946,
+            "drawn_points": 4095,
+            "y_span": 8.250725599327454,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "peak_to_floor": 5.0,
+        "gain": 0.025,
+        "n_curves": 3
+      },
+      {
+        "label": "峰/底=2",
+        "ink": 519955.540599067,
+        "aa_frame_ms": 1164.8446665003576,
+        "off_frame_ms": 11.721916499482177,
+        "aa_spread": 0.0005004246636423324,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          1.95,
+          1.94,
+          1.92
+        ],
+        "passes": [
+          {
+            "ink": 519955.540599067,
+            "aa_frame_ms": 1164.553208000143,
+            "off_frame_ms": 11.681500000122469,
+            "drawn_points": 4095,
+            "y_span": 5.2923965119404,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 519955.540599067,
+            "aa_frame_ms": 1165.136125000572,
+            "off_frame_ms": 11.762332998841885,
+            "drawn_points": 4095,
+            "y_span": 5.2923965119404,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "peak_to_floor": 2.0,
+        "gain": 0.01,
+        "n_curves": 3
+      },
+      {
+        "label": "峰/底=1",
+        "ink": 617852.5624124401,
+        "aa_frame_ms": 1538.8785415007078,
+        "off_frame_ms": 12.567604000651045,
+        "aa_spread": 0.00029296204224585223,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.18,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 617852.5624124401,
+            "aa_frame_ms": 1539.103958000851,
+            "off_frame_ms": 12.645791999602807,
+            "drawn_points": 4095,
+            "y_span": 4.44760433934224,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 617852.5624124401,
+            "aa_frame_ms": 1538.6531250005646,
+            "off_frame_ms": 12.489416001699283,
+            "drawn_points": 4095,
+            "y_span": 4.44760433934224,
+            "row_height_px": 668.6999999999999,
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "peak_to_floor": 1.0,
+        "gain": 0.005,
+        "n_curves": 3
+      }
+    ],
+    "fits": [
+      {
+        "label": "全部点",
+        "n_points": 7,
+        "max_ms_filter": null,
+        "min_ms_filter": null,
+        "ink_range": [
+          55416.21509628442,
+          617852.5624124401
+        ],
+        "slope_ms_per_k_dev_px": 2.6060264175294283,
+        "intercept_ms": -137.836175264443,
+        "r2": 0.976246019193043,
+        "ink_at_target_ms": 148822.81033517706,
+        "unstable_points": 0
+      },
+      {
+        "label": "≤600ms 近目标段",
+        "n_points": 4,
+        "max_ms_filter": 600.0,
+        "min_ms_filter": null,
+        "ink_range": [
+          55416.21509628442,
+          335925.5543704722
+        ],
+        "slope_ms_per_k_dev_px": 1.680941894070958,
+        "intercept_ms": 8.969226984803822,
+        "r2": 0.976011843846219,
+        "ink_at_target_ms": 143390.30627136093,
+        "unstable_points": 0
+      }
+    ],
+    "diagnostic_fits": [
+      {
+        "label": ">600ms 高墨段",
+        "n_points": 3,
+        "max_ms_filter": null,
+        "min_ms_filter": 600.0,
+        "ink_range": [
+          519955.540599067,
+          617852.5624124401
+        ],
+        "slope_ms_per_k_dev_px": 3.8319836783586547,
+        "intercept_ms": -827.6111256894159,
+        "r2": 0.9999734212460881,
+        "ink_at_target_ms": 281214.9570926635,
+        "unstable_points": 0
+      }
+    ],
+    "band": {
+      "chosen_fit": "≤600ms 近目标段",
+      "ink_at_target_ms_raw": 143390.30627136093,
+      "off": 145000,
+      "on": 95000,
+      "target_ms": 250.0
+    }
+  },
+  "time_preview": {
+    "exposed": true,
+    "dpr": 2.0,
+    "cases": [
+      {
+        "label": "2 条 · Y默认",
+        "ink": 30692.512228264954,
+        "aa_frame_ms": 25.770874999579974,
+        "off_frame_ms": 3.1380419995912234,
+        "aa_spread": 0.21621307006219326,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.17,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 30692.512228264954,
+            "aa_frame_ms": 28.55687500050408,
+            "off_frame_ms": 3.2684999987395713,
+            "drawn_points": 5516,
+            "per_curve": [
+              {
+                "ink": 11949.703256030974,
+                "y_span": 105.0,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 18742.80897223398,
+                "y_span": 70.0,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 30692.512228264954,
+            "aa_frame_ms": 22.98487499865587,
+            "off_frame_ms": 3.0075840004428755,
+            "drawn_points": 5332,
+            "per_curve": [
+              {
+                "ink": 11949.703256030974,
+                "y_span": 105.0,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 18742.80897223398,
+                "y_span": 70.0,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "n_curves": 2,
+        "y_mode": "default"
+      },
+      {
+        "label": "2 条 · Y拉窄填满",
+        "ink": 44130.44022499723,
+        "aa_frame_ms": 31.927020500916115,
+        "off_frame_ms": 3.0976040006862604,
+        "aa_spread": 0.003728534532896323,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.17,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 44130.44022499723,
+            "aa_frame_ms": 31.867500001681037,
+            "off_frame_ms": 3.1095410013222136,
+            "drawn_points": 5332,
+            "per_curve": [
+              {
+                "ink": 16509.458560406467,
+                "y_span": 75.99999947256664,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 27620.981664590763,
+                "y_span": 47.49999996337268,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": true,
+            "suspect": false
+          },
+          {
+            "ink": 44130.44022499723,
+            "aa_frame_ms": 31.986541000151192,
+            "off_frame_ms": 3.0856670000503073,
+            "drawn_points": 5332,
+            "per_curve": [
+              {
+                "ink": 16509.458560406467,
+                "y_span": 75.99999947256664,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 27620.981664590763,
+                "y_span": 47.49999996337268,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": true,
+            "suspect": false
+          }
+        ],
+        "n_curves": 2,
+        "y_mode": "filled"
+      },
+      {
+        "label": "3 条 · Y默认",
+        "ink": 62180.3536043847,
+        "aa_frame_ms": 54.404250000516186,
+        "off_frame_ms": 4.118791500332009,
+        "aa_spread": 0.07982832224460669,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.17,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 62180.35360438469,
+            "aa_frame_ms": 52.23275000025751,
+            "off_frame_ms": 4.155374999754713,
+            "drawn_points": 7998,
+            "per_curve": [
+              {
+                "ink": 11949.703256030974,
+                "y_span": 105.0,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 18742.80897223398,
+                "y_span": 70.0,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 31487.841376119737,
+                "y_span": 140.0,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          },
+          {
+            "ink": 62180.3536043847,
+            "aa_frame_ms": 56.57575000077486,
+            "off_frame_ms": 4.082208000909304,
+            "drawn_points": 7740,
+            "per_curve": [
+              {
+                "ink": 11949.703256030974,
+                "y_span": 105.0,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 18742.80897223398,
+                "y_span": 70.0,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 31487.84137611974,
+                "y_span": 140.0,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          }
+        ],
+        "n_curves": 3,
+        "y_mode": "default"
+      },
+      {
+        "label": "3 条 · Y拉窄填满",
+        "ink": 82799.71913776924,
+        "aa_frame_ms": 68.70870850070787,
+        "off_frame_ms": 4.153750000114087,
+        "aa_spread": 0.008978730855040447,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.17,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 82799.71913776924,
+            "aa_frame_ms": 69.01716700122051,
+            "off_frame_ms": 4.065375000209315,
+            "drawn_points": 7740,
+            "per_curve": [
+              {
+                "ink": 16509.458560406467,
+                "y_span": 75.99999947256664,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 27620.981664590763,
+                "y_span": 47.49999996337268,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 38669.278912772,
+                "y_span": 113.99999991209444,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          },
+          {
+            "ink": 82799.71913776924,
+            "aa_frame_ms": 68.40025000019523,
+            "off_frame_ms": 4.242125000018859,
+            "drawn_points": 7740,
+            "per_curve": [
+              {
+                "ink": 16509.458560406467,
+                "y_span": 75.99999947256664,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 27620.981664590763,
+                "y_span": 47.49999996337268,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 38669.278912772,
+                "y_span": 113.99999991209444,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          }
+        ],
+        "n_curves": 3,
+        "y_mode": "filled"
+      },
+      {
+        "label": "4 条 · Y默认",
+        "ink": 111660.88090955737,
+        "aa_frame_ms": 96.56156199980614,
+        "off_frame_ms": 5.250604500361078,
+        "aa_spread": 0.00498948018101498,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.17,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 111660.88090955737,
+            "aa_frame_ms": 96.80245799972909,
+            "off_frame_ms": 5.295834000207833,
+            "drawn_points": 10320,
+            "per_curve": [
+              {
+                "ink": 11949.703256030974,
+                "y_span": 105.0,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 18742.80897223398,
+                "y_span": 70.0,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 31487.84137611974,
+                "y_span": 140.0,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 49480.527305172676,
+                "y_span": 35.0,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          },
+          {
+            "ink": 111660.88090955737,
+            "aa_frame_ms": 96.3206659998832,
+            "off_frame_ms": 5.205375000514323,
+            "drawn_points": 10000,
+            "per_curve": [
+              {
+                "ink": 11949.703256030974,
+                "y_span": 105.0,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 18742.80897223398,
+                "y_span": 70.0,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 31487.841376119737,
+                "y_span": 140.0,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 49480.527305172676,
+                "y_span": 35.0,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          }
+        ],
+        "n_curves": 4,
+        "y_mode": "default"
+      },
+      {
+        "label": "4 条 · Y拉窄填满",
+        "ink": 143565.2790330833,
+        "aa_frame_ms": 129.9412710004617,
+        "off_frame_ms": 5.197958499593369,
+        "aa_spread": 0.038137429024109624,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.15,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 143565.2790330833,
+            "aa_frame_ms": 132.41908400050306,
+            "off_frame_ms": 5.2601669995056,
+            "drawn_points": 10000,
+            "per_curve": [
+              {
+                "ink": 16509.458560406467,
+                "y_span": 75.99999947256664,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 27620.981664590763,
+                "y_span": 47.49999996337268,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 38669.278912771995,
+                "y_span": 113.99999991209444,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 60765.55989531408,
+                "y_span": 28.49999997802361,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          },
+          {
+            "ink": 143565.2790330833,
+            "aa_frame_ms": 127.46345800042036,
+            "off_frame_ms": 5.135749999681138,
+            "drawn_points": 10000,
+            "per_curve": [
+              {
+                "ink": 16509.458560406467,
+                "y_span": 75.99999947256664,
+                "row_height_px": 130.7
+              },
+              {
+                "ink": 27620.981664590763,
+                "y_span": 47.49999996337268,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 38669.278912771995,
+                "y_span": 113.99999991209444,
+                "row_height_px": 131.2
+              },
+              {
+                "ink": 60765.55989531408,
+                "y_span": 28.49999997802361,
+                "row_height_px": 131.2
+              }
+            ],
+            "point_gate_allows_aa": false,
+            "suspect": false
+          }
+        ],
+        "n_curves": 4,
+        "y_mode": "filled"
+      }
+    ],
+    "fits": [
+      {
+        "label": "全部点",
+        "n_points": 6,
+        "max_ms_filter": null,
+        "min_ms_filter": null,
+        "ink_range": [
+          30692.512228264954,
+          143565.2790330833
+        ],
+        "slope_ms_per_k_dev_px": 0.9316620088949968,
+        "intercept_ms": -5.875492984581223,
+        "r2": 0.9950610483467632,
+        "ink_at_target_ms": 274644.1204445632,
+        "unstable_points": 0
+      },
+      {
+        "label": "≤600ms 近目标段",
+        "n_points": 6,
+        "max_ms_filter": 600.0,
+        "min_ms_filter": null,
+        "ink_range": [
+          30692.512228264954,
+          143565.2790330833
+        ],
+        "slope_ms_per_k_dev_px": 0.9316620088949968,
+        "intercept_ms": -5.875492984581223,
+        "r2": 0.9950610483467632,
+        "ink_at_target_ms": 274644.1204445632,
+        "unstable_points": 0
+      }
+    ],
+    "diagnostic_fits": [
+      {
+        "label": "仅 Y默认",
+        "n_points": 3,
+        "max_ms_filter": null,
+        "min_ms_filter": null,
+        "ink_range": [
+          30692.512228264954,
+          111660.88090955737
+        ],
+        "slope_ms_per_k_dev_px": 0.8723141017189306,
+        "intercept_ms": -0.5603281869111202,
+        "r2": 0.9996850658789168,
+        "ink_at_target_ms": 287236.3609543532,
+        "unstable_points": 0
+      },
+      {
+        "label": "仅 Y拉窄填满",
+        "n_points": 3,
+        "max_ms_filter": null,
+        "min_ms_filter": null,
+        "ink_range": [
+          44130.44022499723,
+          143565.2790330833
+        ],
+        "slope_ms_per_k_dev_px": 0.9876703539813325,
+        "intercept_ms": -12.194441796226352,
+        "r2": 0.9997615457908083,
+        "ink_at_target_ms": 265467.56287592486,
+        "unstable_points": 0
+      }
+    ],
+    "band": {
+      "chosen_fit": "全部点",
+      "ink_at_target_ms_raw": 274644.1204445632,
+      "off": 275000,
+      "on": 185000,
+      "target_ms": 250.0
+    },
+    "verdict": {
+      "timedomain_implied_slope_ms_per_k_dev_px": 0.8333333333333334,
+      "preview_slope_ms_per_k_dev_px": 0.9316620088949968,
+      "slope_ratio": 1.117994410673996,
+      "reuse_timedomain_band": true,
+      "timedomain_band": {
+        "on": 200000,
+        "off": 300000
+      }
+    }
+  },
+  "frf": {
+    "exposed": true,
+    "dpr": 2.0,
+    "cases": [
+      {
+        "label": "1025 bins · 干净",
+        "ink": 2546.9339068689887,
+        "aa_frame_ms": 8.160791500813502,
+        "off_frame_ms": 3.7960830004521995,
+        "aa_spread": 0.07139834417853827,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.15,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 2546.9339068689887,
+            "aa_frame_ms": 8.452125000985689,
+            "off_frame_ms": 3.7887079997744877,
+            "per_row": {
+              "magnitude": {
+                "ink": 1486.1924025019212,
+                "y_span": 70.55246208832708,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 1050.5512343801738,
+                "y_span": 202.11040582467695,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 2546.9339068689887,
+            "aa_frame_ms": 7.869458000641316,
+            "off_frame_ms": 3.8034580011299113,
+            "per_row": {
+              "magnitude": {
+                "ink": 1486.1924025019212,
+                "y_span": 70.55246208832708,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 1050.5512343801738,
+                "y_span": 202.11040582467695,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 1025,
+        "mode": "clean"
+      },
+      {
+        "label": "1025 bins · 噪声相位",
+        "ink": 79578.73408629753,
+        "aa_frame_ms": 64.74156199965364,
+        "off_frame_ms": 15.637416498975654,
+        "aa_spread": 0.037220418012572025,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.15,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 79578.73408629753,
+            "aa_frame_ms": 65.94641599986062,
+            "off_frame_ms": 15.58587499857822,
+            "per_row": {
+              "magnitude": {
+                "ink": 58347.31376635431,
+                "y_span": 143.9578077566498,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 21221.23004995632,
+                "y_span": 4902.4169151351925,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 79578.73408629753,
+            "aa_frame_ms": 63.53670799944666,
+            "off_frame_ms": 15.688957999373088,
+            "per_row": {
+              "magnitude": {
+                "ink": 58347.31376635431,
+                "y_span": 143.9578077566498,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 21221.23004995632,
+                "y_span": 4902.4169151351925,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 1025,
+        "mode": "noisy_phase"
+      },
+      {
+        "label": "1025 bins · 噪声相干",
+        "ink": 177376.2626888346,
+        "aa_frame_ms": 460.51564599929407,
+        "off_frame_ms": 6.124958499640343,
+        "aa_spread": 0.0011498892692146912,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.06,
+          1.98,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 177376.2626888346,
+            "aa_frame_ms": 460.7804169991141,
+            "off_frame_ms": 6.2636669990752125,
+            "per_row": {
+              "magnitude": {
+                "ink": 774.8838222982183,
+                "y_span": 70.88311213138553,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 571.7563924080265,
+                "y_span": 205.85526258506053,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 176029.62247412835,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 177376.2626888346,
+            "aa_frame_ms": 460.25087499947404,
+            "off_frame_ms": 5.986250000205473,
+            "per_row": {
+              "magnitude": {
+                "ink": 774.8838222982183,
+                "y_span": 70.88311213138553,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 571.7563924080265,
+                "y_span": 205.85526258506053,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 176029.62247412835,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 1025,
+        "mode": "noisy_coh"
+      },
+      {
+        "label": "2049 bins · 干净",
+        "ink": 2546.9339068689887,
+        "aa_frame_ms": 14.32808350000414,
+        "off_frame_ms": 5.319062999660673,
+        "aa_spread": 0.0025416519212862173,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.06,
+          1.98,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 2546.9339068689887,
+            "aa_frame_ms": 14.309874999526073,
+            "off_frame_ms": 5.362208999940776,
+            "per_row": {
+              "magnitude": {
+                "ink": 1486.1924025019212,
+                "y_span": 70.55246208832708,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 1050.5512343801738,
+                "y_span": 202.11040582467695,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 2546.9339068689887,
+            "aa_frame_ms": 14.346292000482208,
+            "off_frame_ms": 5.27591699938057,
+            "per_row": {
+              "magnitude": {
+                "ink": 1486.1924025019212,
+                "y_span": 70.55246208832708,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 1050.5512343801738,
+                "y_span": 202.11040582467695,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 2049,
+        "mode": "clean"
+      },
+      {
+        "label": "2049 bins · 噪声相位",
+        "ink": 143136.34503977708,
+        "aa_frame_ms": 154.1628339991803,
+        "off_frame_ms": 41.9437079999625,
+        "aa_spread": 0.022145415416539062,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.06,
+          1.98,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 143136.34503977708,
+            "aa_frame_ms": 152.4558339988289,
+            "off_frame_ms": 41.799665999860736,
+            "per_row": {
+              "magnitude": {
+                "ink": 117373.09086388924,
+                "y_span": 154.5655785138225,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 25753.063905900937,
+                "y_span": 7817.008717698438,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 143136.34503977708,
+            "aa_frame_ms": 155.8698339995317,
+            "off_frame_ms": 42.08775000006426,
+            "per_row": {
+              "magnitude": {
+                "ink": 117373.09086388924,
+                "y_span": 154.5655785138225,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 25753.063905900937,
+                "y_span": 7817.008717698438,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 2049,
+        "mode": "noisy_phase"
+      },
+      {
+        "label": "2049 bins · 噪声相干",
+        "ink": 341711.81657687604,
+        "aa_frame_ms": 1095.1939795004364,
+        "off_frame_ms": 9.358624998640153,
+        "aa_spread": 0.0006554774894934348,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.21,
+          2.01,
+          1.95
+        ],
+        "passes": [
+          {
+            "ink": 341711.81657687604,
+            "aa_frame_ms": 1094.8350420003408,
+            "off_frame_ms": 9.419999998499407,
+            "per_row": {
+              "magnitude": {
+                "ink": 757.4406149047994,
+                "y_span": 71.17355517078113,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 541.5029014471412,
+                "y_span": 205.80915353485364,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 340412.8730605241,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 341711.81657687604,
+            "aa_frame_ms": 1095.552917000532,
+            "off_frame_ms": 9.297249998780899,
+            "per_row": {
+              "magnitude": {
+                "ink": 757.4406149047994,
+                "y_span": 71.17355517078113,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 541.5029014471412,
+                "y_span": 205.80915353485364,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 340412.8730605241,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 2049,
+        "mode": "noisy_coh"
+      },
+      {
+        "label": "4097 bins · 干净",
+        "ink": 2547.0957384076614,
+        "aa_frame_ms": 20.729354499962938,
+        "off_frame_ms": 9.261332999813021,
+        "aa_spread": 0.005220085374377917,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.21,
+          2.01,
+          1.95
+        ],
+        "passes": [
+          {
+            "ink": 2547.0957384076614,
+            "aa_frame_ms": 20.67524999984016,
+            "off_frame_ms": 9.35600000047998,
+            "per_row": {
+              "magnitude": {
+                "ink": 1486.3542340405936,
+                "y_span": 70.57103491676642,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 1050.5512343801738,
+                "y_span": 202.11040582467695,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 2547.0957384076614,
+            "aa_frame_ms": 20.783459000085713,
+            "off_frame_ms": 9.166665999146062,
+            "per_row": {
+              "magnitude": {
+                "ink": 1486.3542340405936,
+                "y_span": 70.57103491676642,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 1050.5512343801738,
+                "y_span": 202.11040582467695,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 4097,
+        "mode": "clean"
+      },
+      {
+        "label": "4097 bins · 噪声相位",
+        "ink": 320739.0680990492,
+        "aa_frame_ms": 410.39754200119205,
+        "off_frame_ms": 146.82120850011415,
+        "aa_spread": 0.0007957747478499221,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.11,
+          1.99,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 320739.0680990492,
+            "aa_frame_ms": 410.56083400144416,
+            "off_frame_ms": 147.3702500006766,
+            "per_row": {
+              "magnitude": {
+                "ink": 276535.2617524158,
+                "y_span": 125.48854461185051,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 44193.616076646525,
+                "y_span": 9062.78028801561,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 320739.0680990492,
+            "aa_frame_ms": 410.23425000093994,
+            "off_frame_ms": 146.2721669995517,
+            "per_row": {
+              "magnitude": {
+                "ink": 276535.2617524158,
+                "y_span": 125.48854461185051,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 44193.616076646525,
+                "y_span": 9062.78028801561,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 10.190269986893847,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 4097,
+        "mode": "noisy_phase"
+      },
+      {
+        "label": "4097 bins · 噪声相干",
+        "ink": 694932.3217316077,
+        "aa_frame_ms": 2309.35110450082,
+        "off_frame_ms": 14.75025000036112,
+        "aa_spread": 0.00018282581561657646,
+        "unstable": false,
+        "n_passes": 2,
+        "suspect_frame": false,
+        "loadavg": [
+          2.01,
+          1.98,
+          1.94
+        ],
+        "passes": [
+          {
+            "ink": 694932.3217316077,
+            "aa_frame_ms": 2309.140000001207,
+            "off_frame_ms": 14.785375000428758,
+            "per_row": {
+              "magnitude": {
+                "ink": 758.661829251919,
+                "y_span": 71.1922915010307,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 521.221786353719,
+                "y_span": 205.86122451057742,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 693652.438116002,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          },
+          {
+            "ink": 694932.3217316077,
+            "aa_frame_ms": 2309.5622090004326,
+            "off_frame_ms": 14.715125000293483,
+            "per_row": {
+              "magnitude": {
+                "ink": 758.661829251919,
+                "y_span": 71.1922915010307,
+                "row_height_px": 295.47162516382707
+              },
+              "phase": {
+                "ink": 521.221786353719,
+                "y_span": 205.86122451057742,
+                "row_height_px": 295.47162516382707
+              },
+              "coherence": {
+                "ink": 693652.438116002,
+                "y_span": 1.0,
+                "row_height_px": 254.75674967234596
+              }
+            },
+            "suspect": false
+          }
+        ],
+        "n_bins": 4097,
+        "mode": "noisy_coh"
+      }
+    ],
+    "fits": [
+      {
+        "label": "全部点",
+        "n_points": 9,
+        "max_ms_filter": null,
+        "min_ms_filter": null,
+        "ink_range": [
+          2546.9339068689887,
+          694932.3217316077
+        ],
+        "slope_ms_per_k_dev_px": 3.2067093291021487,
+        "intercept_ms": -124.73683122768075,
+        "r2": 0.9162658161341801,
+        "ink_at_target_ms": 116860.24293714325,
+        "unstable_points": 0
+      },
+      {
+        "label": "≤600ms 近目标段",
+        "n_points": 7,
+        "max_ms_filter": 600.0,
+        "min_ms_filter": null,
+        "ink_range": [
+          2546.9339068689887,
+          320739.0680990492
+        ],
+        "slope_ms_per_k_dev_px": 1.4377081457547467,
+        "intercept_ms": 12.243797988390662,
+        "r2": 0.7815763537998539,
+        "ink_at_target_ms": 165371.6734607465,
+        "unstable_points": 0
+      }
+    ],
+    "diagnostic_fits": [
+      {
+        "label": "仅 噪声相位",
+        "n_points": 3,
+        "max_ms_filter": null,
+        "min_ms_filter": null,
+        "ink_range": [
+          79578.73408629753,
+          320739.0680990492
+        ],
+        "slope_ms_per_k_dev_px": 1.4353427476007428,
+        "intercept_ms": -50.24701029103412,
+        "r2": 0.9999729264625684,
+        "ink_at_target_ms": 209181.4033915691,
+        "unstable_points": 0
+      },
+      {
+        "label": "仅 噪声相干",
+        "n_points": 3,
+        "max_ms_filter": null,
+        "min_ms_filter": null,
+        "ink_range": [
+          177376.2626888346,
+          694932.3217316077
+        ],
+        "slope_ms_per_k_dev_px": 3.550801971117193,
+        "intercept_ms": -148.56176761240334,
+        "r2": 0.9991794971510554,
+        "ink_at_target_ms": 112245.56335565043,
+        "unstable_points": 0
+      }
+    ],
+    "clean_family_note": {
+      "ink_range": [
+        2546.9339068689887,
+        2547.0957384076614
+      ],
+      "frames_ms": {
+        "1025": 8.160791500813502,
+        "2049": 14.32808350000414,
+        "4097": 20.729354499962938
+      }
+    },
+    "band": {
+      "chosen_fit": "全部点",
+      "ink_at_target_ms_raw": 116860.24293714325,
+      "off": 115000,
+      "on": 75000,
+      "target_ms": 250.0
+    }
+  },
+  "recommended": {
+    "spectrum_row": {
+      "chosen_fit": "≤600ms 近目标段",
+      "ink_at_target_ms_raw": 143390.30627136093,
+      "off": 145000,
+      "on": 95000,
+      "target_ms": 250.0
+    },
+    "time_preview_row": {
+      "band": {
+        "chosen_fit": "全部点",
+        "ink_at_target_ms_raw": 274644.1204445632,
+        "off": 275000,
+        "on": 185000,
+        "target_ms": 250.0
+      },
+      "verdict": {
+        "timedomain_implied_slope_ms_per_k_dev_px": 0.8333333333333334,
+        "preview_slope_ms_per_k_dev_px": 0.9316620088949968,
+        "slope_ratio": 1.117994410673996,
+        "reuse_timedomain_band": true,
+        "timedomain_band": {
+          "on": 200000,
+          "off": 300000
+        }
+      }
+    },
+    "frf_rows": {
+      "chosen_fit": "全部点",
+      "ink_at_target_ms_raw": 116860.24293714325,
+      "off": 115000,
+      "on": 75000,
+      "target_ms": 250.0
+    },
+    "target_ms": 250.0,
+    "on_over_off_ratio": 0.6666666666666666
+  }
+}

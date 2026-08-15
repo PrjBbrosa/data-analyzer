@@ -1,0 +1,269 @@
+{
+  "command": "stale-ink",
+  "environment": {
+    "platform_plugin": "cocoa",
+    "dpr": 2.0,
+    "exposed": true
+  },
+  "lane": "both",
+  "lanes": {
+    "legacy": [
+      {
+        "tag": "旧顺序｜首次进 View（bind envelope）",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 3124,
+            "ink": 36659,
+            "over_budget": false,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 3124,
+            "ink": 44400,
+            "over_budget": false,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": true,
+        "state": "yellow"
+      },
+      {
+        "tag": "旧顺序｜回切后",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 1404,
+            "ink": 2662227,
+            "over_budget": true,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 1376,
+            "ink": 2715569,
+            "over_budget": true,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": false,
+        "state": "red"
+      },
+      {
+        "tag": "旧顺序｜回切后再空转 500 ms",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 1404,
+            "ink": 2662227,
+            "over_budget": true,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 1376,
+            "ink": 2715569,
+            "over_budget": true,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": false,
+        "state": "red"
+      },
+      {
+        "tag": "旧顺序｜强制按真实 Y 重刷（=用户动一下）",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 3030,
+            "ink": 35994,
+            "over_budget": false,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 3030,
+            "ink": 43594,
+            "over_budget": false,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": true,
+        "state": "yellow"
+      }
+    ],
+    "transaction": [
+      {
+        "tag": "事务顺序｜首次进 View（bind envelope）",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 3124,
+            "ink": 36659,
+            "over_budget": false,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 3124,
+            "ink": 44400,
+            "over_budget": false,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": true,
+        "state": "yellow"
+      },
+      {
+        "tag": "事务顺序｜回切后",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 3124,
+            "ink": 36659,
+            "over_budget": false,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 3124,
+            "ink": 44400,
+            "over_budget": false,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": true,
+        "state": "green"
+      },
+      {
+        "tag": "事务顺序｜回切后再空转 500 ms",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 3124,
+            "ink": 36659,
+            "over_budget": false,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 3124,
+            "ink": 44400,
+            "over_budget": false,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": true,
+        "state": "green"
+      },
+      {
+        "tag": "事务顺序｜强制按真实 Y 重刷（=用户动一下）",
+        "channels": [
+          {
+            "name": "CH0",
+            "points": 3030,
+            "ink": 35994,
+            "over_budget": false,
+            "raster_admitted": false
+          },
+          {
+            "name": "CH1",
+            "points": 3030,
+            "ink": 43594,
+            "over_budget": false,
+            "raster_admitted": false
+          }
+        ],
+        "aa_allowed": true,
+        "state": "yellow"
+      }
+    ]
+  },
+  "snapshots": [
+    {
+      "tag": "旧顺序｜首次进 View（bind envelope）",
+      "channels": [
+        {
+          "name": "CH0",
+          "points": 3124,
+          "ink": 36659,
+          "over_budget": false,
+          "raster_admitted": false
+        },
+        {
+          "name": "CH1",
+          "points": 3124,
+          "ink": 44400,
+          "over_budget": false,
+          "raster_admitted": false
+        }
+      ],
+      "aa_allowed": true,
+      "state": "yellow"
+    },
+    {
+      "tag": "旧顺序｜回切后",
+      "channels": [
+        {
+          "name": "CH0",
+          "points": 1404,
+          "ink": 2662227,
+          "over_budget": true,
+          "raster_admitted": false
+        },
+        {
+          "name": "CH1",
+          "points": 1376,
+          "ink": 2715569,
+          "over_budget": true,
+          "raster_admitted": false
+        }
+      ],
+      "aa_allowed": false,
+      "state": "red"
+    },
+    {
+      "tag": "旧顺序｜回切后再空转 500 ms",
+      "channels": [
+        {
+          "name": "CH0",
+          "points": 1404,
+          "ink": 2662227,
+          "over_budget": true,
+          "raster_admitted": false
+        },
+        {
+          "name": "CH1",
+          "points": 1376,
+          "ink": 2715569,
+          "over_budget": true,
+          "raster_admitted": false
+        }
+      ],
+      "aa_allowed": false,
+      "state": "red"
+    },
+    {
+      "tag": "旧顺序｜强制按真实 Y 重刷（=用户动一下）",
+      "channels": [
+        {
+          "name": "CH0",
+          "points": 3030,
+          "ink": 35994,
+          "over_budget": false,
+          "raster_admitted": false
+        },
+        {
+          "name": "CH1",
+          "points": 3030,
+          "ink": 43594,
+          "over_budget": false,
+          "raster_admitted": false
+        }
+      ],
+      "aa_allowed": true,
+      "state": "yellow"
+    }
+  ]
+}

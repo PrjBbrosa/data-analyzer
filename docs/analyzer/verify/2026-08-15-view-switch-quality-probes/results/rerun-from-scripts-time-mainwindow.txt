@@ -1,0 +1,63 @@
+platform=cocoa exposed=True
+
+==== 场景：subplot ↔ subplot（全显） ====
+UltraView capture skipped (time-render/no-result) section=time view_id=257f18f2-17d5-4c94-baa5-56b7b8874b9e canvas=TimeDomainCanvasPG
+  [0] -> View 1: 切换调用    58.0 ms | build_data=  1.6 delta= 26.3 plot_channels=   0.0 restore_x=  3.1 restore_y=  1.9 apply_controls=  1.2 project_controls=  0.6 capture=  0.0
+        路径: subplot-object-reuse | ink(可见)=[2725, 3108, 2977] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [0] -> View 2: 切换调用    30.5 ms | build_data=  1.4 delta=  1.7 plot_channels=   0.0 restore_x=  0.9 restore_y=  2.7 apply_controls=  1.1 project_controls=  0.6 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2493, 2558] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [1] -> View 1: 切换调用    25.0 ms | build_data=  1.6 delta=  2.0 plot_channels=   0.0 restore_x=  1.3 restore_y=  0.2 apply_controls=  1.1 project_controls=  0.6 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2809, 3204, 3100] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [1] -> View 2: 切换调用    11.1 ms | build_data=  1.0 delta=  1.7 plot_channels=   0.0 restore_x=  0.5 restore_y=  0.2 apply_controls=  1.0 project_controls=  0.5 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2493, 2558] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [2] -> View 1: 切换调用    12.1 ms | build_data=  1.1 delta=  1.9 plot_channels=   0.0 restore_x=  0.6 restore_y=  0.3 apply_controls=  1.1 project_controls=  0.6 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2809, 3204, 3100] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [2] -> View 2: 切换调用    11.3 ms | build_data=  1.0 delta=  1.7 plot_channels=   0.0 restore_x=  0.5 restore_y=  0.2 apply_controls=  1.0 project_controls=  0.5 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2493, 2558] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+
+==== 场景：subplot ↔ subplot（View1 有隐藏通道） ====
+UltraView capture skipped (time-render/no-result) section=time view_id=e8a8b45b-8716-4b11-9204-a24ce9c76094 canvas=TimeDomainCanvasPG
+  [0] -> View 1: 切换调用    43.5 ms | build_data=  1.5 delta= 17.3 plot_channels=   0.0 restore_x=  1.1 restore_y=  0.3 apply_controls=  1.1 project_controls=  0.6 capture=  0.0
+        路径: subplot-object-reuse | ink(可见)=[736, 863] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [0] -> View 2: 切换调用    15.7 ms | build_data=  1.2 delta=  2.6 plot_channels=   0.0 restore_x=  0.9 restore_y=  1.8 apply_controls=  1.2 project_controls=  0.6 capture=  0.2
+        路径: subplot-object-reuse | ink(可见)=[2499, 2565] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [1] -> View 1: 切换调用    25.0 ms | build_data=  1.6 delta=  1.6 plot_channels=   0.0 restore_x=  0.8 restore_y=  0.2 apply_controls=  1.1 project_controls=  0.6 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[779, 874] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [1] -> View 2: 切换调用    11.3 ms | build_data=  1.0 delta=  1.6 plot_channels=   0.0 restore_x=  0.5 restore_y=  0.2 apply_controls=  1.0 project_controls=  0.5 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2499, 2565] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [2] -> View 1: 切换调用    11.5 ms | build_data=  1.0 delta=  1.6 plot_channels=   0.0 restore_x=  0.6 restore_y=  0.2 apply_controls=  1.1 project_controls=  0.6 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[779, 874] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [2] -> View 2: 切换调用    11.2 ms | build_data=  1.0 delta=  1.6 plot_channels=   0.0 restore_x=  0.6 restore_y=  0.2 apply_controls=  1.1 project_controls=  0.5 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2499, 2565] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+
+==== 场景：overlay ↔ overlay ====
+UltraView capture skipped (time-render/no-result) section=time view_id=6c7c6496-92b0-4c73-abbc-1c0d4da451e3 canvas=TimeDomainCanvasPG
+UltraView capture skipped (time-render/no-result) section=time view_id=6c7c6496-92b0-4c73-abbc-1c0d4da451e3 canvas=TimeDomainCanvasPG
+  [0] -> View 1: 切换调用    47.0 ms | build_data=  1.9 delta=  0.1 plot_channels=  17.1 restore_x=  1.9 restore_y=  0.1 apply_controls=  1.2 project_controls=  0.6 capture=  0.0
+        路径: new-channel | ink(可见)=[94110, 23649, 120334] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [0] -> View 2: 切换调用    24.0 ms | build_data=  1.0 delta=  0.0 plot_channels=  12.5 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.1 project_controls=  0.6 capture=  0.1
+        路径: new-channel | ink(可见)=[904560, 1010681] | 稳定后 aa_on=False ink_allowed=False raster=0 收编=0 | 点: red / 抗锯齿未激活：波形填满绘图区，绘制量超预算
+  [1] -> View 1: 切换调用    26.4 ms | build_data=  1.1 delta=  0.0 plot_channels=  14.9 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.1 project_controls=  0.6 capture=  0.1
+        路径: new-channel | ink(可见)=[94110, 23649, 120334] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [1] -> View 2: 切换调用    22.9 ms | build_data=  1.0 delta=  0.0 plot_channels=  11.9 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.1 project_controls=  0.5 capture=  0.1
+        路径: new-channel | ink(可见)=[904560, 1010681] | 稳定后 aa_on=False ink_allowed=False raster=0 收编=0 | 点: red / 抗锯齿未激活：波形填满绘图区，绘制量超预算
+  [2] -> View 1: 切换调用    26.7 ms | build_data=  1.2 delta=  0.0 plot_channels=  14.9 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.2 project_controls=  0.6 capture=  0.1
+        路径: new-channel | ink(可见)=[94110, 23649, 120334] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [2] -> View 2: 切换调用    27.1 ms | build_data=  1.1 delta=  0.0 plot_channels=  14.9 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.2 project_controls=  0.6 capture=  0.1
+        路径: new-channel | ink(可见)=[904560, 1010681] | 稳定后 aa_on=False ink_allowed=False raster=0 收编=0 | 点: red / 抗锯齿未激活：波形填满绘图区，绘制量超预算
+
+==== 场景：subplot ↔ overlay（两 View 布局不同） ====
+UltraView capture skipped (time-render/no-result) section=time view_id=340c681e-9b85-4efc-9424-6ab597fda877 canvas=TimeDomainCanvasPG
+UltraView capture skipped (time-render/no-result) section=time view_id=340c681e-9b85-4efc-9424-6ab597fda877 canvas=TimeDomainCanvasPG
+  [0] -> View 1: 切换调用    44.3 ms | build_data=  1.6 delta=  0.0 plot_channels=  19.3 restore_x=  0.8 restore_y=  0.4 apply_controls=  1.3 project_controls=  0.6 capture=  0.0
+        路径: plot-mode-changed | ink(可见)=[7796, 389, 8727] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [0] -> View 2: 切换调用    24.0 ms | build_data=  1.0 delta=  0.0 plot_channels=  12.4 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.2 project_controls=  0.6 capture=  0.1
+        路径: plot-mode-changed | ink(可见)=[904560, 1010681] | 稳定后 aa_on=False ink_allowed=False raster=0 收编=0 | 点: red / 抗锯齿未激活：波形填满绘图区，绘制量超预算
+  [1] -> View 1: 切换调用    27.2 ms | build_data=  1.1 delta=  0.0 plot_channels=  17.4 restore_x=  0.8 restore_y=  0.4 apply_controls=  1.3 project_controls=  0.6 capture=  0.1
+        路径: plot-mode-changed | ink(可见)=[7796, 389, 8727] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [1] -> View 2: 切换调用    23.9 ms | build_data=  1.0 delta=  0.0 plot_channels=  12.0 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.2 project_controls=  0.6 capture=  0.1
+        路径: plot-mode-changed | ink(可见)=[904560, 1010681] | 稳定后 aa_on=False ink_allowed=False raster=0 收编=0 | 点: red / 抗锯齿未激活：波形填满绘图区，绘制量超预算
+  [2] -> View 1: 切换调用    26.9 ms | build_data=  1.1 delta=  0.0 plot_channels=  17.2 restore_x=  0.7 restore_y=  0.4 apply_controls=  1.3 project_controls=  0.6 capture=  0.1
+        路径: plot-mode-changed | ink(可见)=[7796, 389, 8727] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+  [2] -> View 2: 切换调用    26.0 ms | build_data=  1.0 delta=  0.0 plot_channels=  14.5 restore_x=  0.7 restore_y=  0.1 apply_controls=  1.2 project_controls=  0.6 capture=  0.1
+        路径: plot-mode-changed | ink(可见)=[904560, 1010681] | 稳定后 aa_on=False ink_allowed=False raster=0 收编=0 | 点: red / 抗锯齿未激活：波形填满绘图区，绘制量超预算
