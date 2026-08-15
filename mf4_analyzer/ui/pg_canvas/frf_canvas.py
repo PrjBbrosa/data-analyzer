@@ -11,11 +11,13 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from mf4_analyzer.render_profile import (
+    envelope_ink_dev_px,
     log_frequency_minor_tick_levels,
     log_frequency_tick_levels,
 )
@@ -31,6 +33,15 @@ from .empty_hint import EmptyHintOverlay
 from .analysis_axes import _apply_axis_tick_density, _tick_counts_to_density, _visual_padded_bounds
 from .context_menu import redesign_pg_context_menu
 from .frf_plot_host import FrfStackedPlotHost
+from .quality import (
+    _BACKSTOP_BLACKLIST_MAX,
+    _BACKSTOP_EPOCH_PROPERTY,
+    _BACKSTOP_FIRST_AA_MS,
+    _BACKSTOP_STEADY_AA_MS,
+    _BACKSTOP_STEADY_EMA_ALPHA,
+    install_frame_paint_timer,
+)
+from .quality_backstop import AaFrameLatch
 from .remarks import (
     RemarkArtist,
     RemarkInteraction,
@@ -38,9 +49,51 @@ from .remarks import (
     remark_at_viewport_pos,
     viewport_pos_to_scene,
 )
+from .renderer import _quantize_y_span_key
 
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# FRF AA BUDGET (spec
+# docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md
+# §3.4 / §5, calibrated 2026-08-15 on macOS Cocoa @ dpr 2.0, canvas 1400x900;
+# magnitude/phase rows 296 px, coherence row 255 px).
+#
+# TWO legs, ANDed. Neither is sufficient on its own, and the spec's §5 warning
+# is precisely about that:
+#
+#   * The INK leg is the cost metric (CLAUDE.md "时域渲染成本判据: ink"): a
+#     9-point sweep (bins 1k/2k/4k x clean / noisy phase / noisy coherence),
+#     summing the ink of all three rows, fits 3.21 ms per 1k dev-px and crosses
+#     _BACKSTOP_STEADY_AA_MS (250 ms) at 117k, hence OFF = 115k and
+#     ON = OFF x 2/3 = 75k (the same 2:3 hysteresis ratio as the time-domain
+#     200k/300k band). The fit is the CONSERVATIVE one: noisy phase measured
+#     1.44 ms/k while noisy coherence measured 3.55 ms/k, because the coherence
+#     row's Y span is pinned to [0, 1] so a full-row stroke costs more than the
+#     same ink spread over short strokes.
+#
+#   * The POINT leg exists because the ink leg is BLIND to bin count. A
+#     "clean" FRF (smooth magnitude, flat phase, flat coherence) has ink ~2.5k
+#     no matter how many bins it has, yet its AA frame still grows with the
+#     grid: 8.2 ms at 1k bins to 20.7 ms at 4k. Points are summed over the
+#     visible curves of all three rows, so ~2k bins is ~6-10k points (which
+#     must pass; measured 21 ms) and ~8k bins is ~25-41k points (which must
+#     not). ON/OFF = 12k / 18k sits between them, at the same order of
+#     magnitude as line_canvas._SPECTRUM_AA_SEGMENT_ON/OFF (5000/8000) scaled
+#     for three rows.
+#
+# All four are CALIBRATIONS, not knobs: change spec §5 first, then re-measure
+# on real hardware with `scripts/probe_view_switch_quality.py analysis-frames`
+# (an offscreen suite cannot measure paint cost — CLAUDE.md Gotchas). The point
+# band in particular is DERIVED from the §5 frame table rather than swept
+# directly, and is pending a Windows re-calibration alongside the ink band
+# (plan Task 8 risk note).
+# ---------------------------------------------------------------------------
+_FRF_INK_AA_ON = 75_000
+_FRF_INK_AA_OFF = 115_000
+_FRF_POINT_AA_ON = 12_000
+_FRF_POINT_AA_OFF = 18_000
 
 _DEFAULT_DISPLAY = {
     "magnitude_scale": "db",
@@ -111,6 +164,10 @@ class PgFrfCanvas(QWidget):
     layout_geometry_changed = pyqtSignal()
     manual_zoom_changed = pyqtSignal(bool)
     markup_revision_changed = pyqtSignal()
+    # Emitting this (plus quality_status() below) is what makes
+    # chart_stack.cards attach the reader-facing quality dot to an FRF card,
+    # exactly as it already does for the time-domain and FFT canvases.
+    quality_status_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -135,17 +192,22 @@ class PgFrfCanvas(QWidget):
         normal_pen = pg.mkPen("#1769e0", width=1.6)
         faded_pen = pg.mkPen((23, 105, 224, 70), width=1.4)
         coherence_pen = pg.mkPen("#0f9f83", width=1.5)
+        # AA-OFF at construction (spec 2026-08-15 §3.4): a freshly built FRF
+        # used to paint its first frame antialiased from inside the call that
+        # created it, which is how a 2k-bin noisy result charged 527 ms to a
+        # View switch. AA now lands on the discrete timer below, after the
+        # gate has seen the real geometry.
         self._magnitude_curve = self._plot_magnitude.plot(
-            [], [], pen=normal_pen, connect="finite", antialias=True
+            [], [], pen=normal_pen, connect="finite", antialias=False
         )
         self._magnitude_low_curve = self._plot_magnitude.plot(
-            [], [], pen=faded_pen, connect="finite", antialias=True,
+            [], [], pen=faded_pen, connect="finite", antialias=False,
         )
         self._phase_curve = self._plot_phase.plot(
-            [], [], pen=normal_pen, connect="finite", antialias=True
+            [], [], pen=normal_pen, connect="finite", antialias=False
         )
         self._phase_low_curve = self._plot_phase.plot(
-            [], [], pen=faded_pen, connect="finite", antialias=True,
+            [], [], pen=faded_pen, connect="finite", antialias=False,
         )
         self._magnitude_low_points = self._plot_magnitude.plot(
             [], [], pen=None, symbol="o", symbolSize=4.5, symbolPen=None,
@@ -168,17 +230,60 @@ class PgFrfCanvas(QWidget):
             symbolBrush=pg.mkBrush(15, 159, 131, 255),
         )
         self._coherence_curve = self._plot_coherence.plot(
-            [], [], pen=coherence_pen, connect="finite", antialias=True
+            [], [], pen=coherence_pen, connect="finite", antialias=False
         )
         # Keep the settled FRF curves crisp, but do not rasterize five
         # full-length AA curves on every interactive zoom frame.  This mirrors
         # the FFT canvas policy: AA drops immediately, then comes back after a
         # short hands-off interval.
-        self._aa_on = True
+        self._aa_on = False
         self._aa_idle_timer = QTimer(self)
         self._aa_idle_timer.setSingleShot(True)
         self._aa_idle_timer.setInterval(150)
         self._aa_idle_timer.timeout.connect(self._enable_idle_quality)
+        # A SEPARATE zero-delay timer, never `_aa_idle_timer.start(0)`:
+        # QTimer.start(int) rewrites the interval PERMANENTLY, so reusing the
+        # idle timer would silently collapse the 150 ms quiet window that the
+        # continuous pan/zoom path depends on (spec §3.2, the Qt trap).
+        # Rendering a new result is a DISCRETE event — nothing follows it —
+        # so there is nothing to merge and nothing to wait for.
+        self._discrete_aa_timer = QTimer(self)
+        self._discrete_aa_timer.setSingleShot(True)
+        self._discrete_aa_timer.setInterval(0)
+        self._discrete_aa_timer.timeout.connect(self._enable_idle_quality)
+        self.destroyed.connect(self._stop_aa_timers)
+        # Hysteresis state for the two AA legs (ink + drawn points). Both are
+        # re-seeded whenever a new result lands, because a replacement result
+        # changes the very geometry the previous verdict was about.
+        self._frf_ink_allowed = False
+        self._frf_ink_seeded = False
+        self._frf_point_allowed = False
+        self._frf_point_seeded = False
+        self._frf_last_point_total = 0
+        self._aa_block_reason = None
+        self._last_quality_status = None
+        # --- measured-frame backstop (spec §3.3 / §3.4) -------------------
+        # Everything above is a PREDICTION. The latch is what measures the
+        # frame that actually happened, so a wrong prediction costs at most one
+        # bad frame per view signature. Same calibrated ceilings as the
+        # time-domain canvas: those are the user's patience, not a property of
+        # a particular canvas family.
+        self._aa_latch = AaFrameLatch(
+            _BACKSTOP_FIRST_AA_MS,
+            _BACKSTOP_STEADY_AA_MS,
+            _BACKSTOP_STEADY_EMA_ALPHA,
+            _BACKSTOP_BLACKLIST_MAX,
+        )
+        self._aa_backstop_armed = False
+        self._last_frame_paint_ms = None
+        self._backstop_timer = QTimer(self)
+        self._backstop_timer.setSingleShot(True)
+        self._backstop_timer.timeout.connect(self._on_aa_backstop_timeout)
+        if not install_frame_paint_timer(self):
+            logger.warning(
+                "FRF canvas frame-paint timer not installed; the measured-AA-"
+                "frame backstop is inactive for this canvas",
+            )
         self._threshold_line = pg.InfiniteLine(
             pos=_DEFAULT_DISPLAY["coherence_threshold"],
             angle=0,
@@ -297,30 +402,419 @@ class PgFrfCanvas(QWidget):
             except (AttributeError, RuntimeError, TypeError):
                 pass
 
+    def _ink_rows(self):
+        """The three (ViewBox owner, curves that paint into it) pairs.
+
+        The faded low-coherence curves carry the FULL magnitude/phase arrays
+        (see ``_apply_curve_data``), so when fading is on they are a second
+        full-length stroke per row and must be counted — their ink is real
+        ink. The scatter overlays are not: they mark isolated bins only.
+        """
+        return (
+            (self._plot_magnitude,
+             (self._magnitude_curve, self._magnitude_low_curve)),
+            (self._plot_phase,
+             (self._phase_curve, self._phase_low_curve)),
+            (self._plot_coherence, (self._coherence_curve,)),
+        )
+
+    def _frf_draw_totals(self):
+        """Return ``(ink_dev_px, drawn_points)`` over the three rows, or None.
+
+        One walk for both legs: each visible curve's Y array is read once and
+        charged to its own row's Y span and row height, because the three rows
+        have independent Y geometry (the coherence row's span is pinned to
+        [0, 1], which is why a full-height coherence stroke is the most
+        expensive ink this canvas can paint).
+
+        ``None`` means "could not measure", which is NOT the same as zero —
+        CLAUDE.md's ink rule is explicit that an unmeasured curve must never be
+        treated as costing nothing.
+        """
+        try:
+            dpr = float(self.devicePixelRatioF())
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        total_ink = 0.0
+        total_points = 0
+        for plot, curves in self._ink_rows():
+            try:
+                view_box = plot.vb
+                # enableAutoRange is applied LAZILY, and the discrete 0 ms
+                # timer can run before the first paint has flushed it. Without
+                # this the Y span read below would be the PREVIOUS result's.
+                view_box.updateAutoRange()
+                lo, hi = view_box.viewRange()[1]
+                y_span = float(hi) - float(lo)
+                row_height = float(view_box.sceneBoundingRect().height())
+            except (AttributeError, IndexError, RuntimeError, TypeError,
+                    ValueError):
+                return None
+            for curve in curves:
+                try:
+                    if not curve.isVisible():
+                        continue
+                    values = curve.getData()[1]
+                except (AttributeError, IndexError, RuntimeError, TypeError):
+                    return None
+                if values is None:
+                    continue
+                total_ink += envelope_ink_dev_px(
+                    values,
+                    y_span=y_span,
+                    row_height_px=row_height,
+                    dpr=dpr,
+                )
+                total_points += int(np.asarray(values).size)
+        return total_ink, total_points
+
+    def _frf_ink_total(self):
+        """Summed three-row ink in device pixels, or ``None`` if unmeasurable."""
+        totals = self._frf_draw_totals()
+        return None if totals is None else totals[0]
+
+    def _frf_point_total(self):
+        """Summed drawn points across the three rows' visible curves."""
+        totals = self._frf_draw_totals()
+        return None if totals is None else totals[1]
+
+    def _frf_aa_allowed(self) -> bool:
+        """AND of the ink leg and the drawn-point leg, both with hysteresis.
+
+        The two legs are orthogonal, and the spec §5 calibration is explicit
+        that neither substitutes for the other: a clean FRF keeps ink flat
+        while its frame cost grows with bin count, and a 2k-bin noisy FRF
+        keeps its point count low while its ink explodes. Rejecting on either
+        is correct; requiring both to fail would let each pathology through.
+        """
+        totals = self._frf_draw_totals()
+        if totals is None:
+            # Unknown is not cheap. Refuse this frame WITHOUT touching the
+            # hysteresis state, so one unreadable curve cannot re-seed the
+            # gate on a fiction.
+            self._aa_block_reason = "unknown-ink"
+            return False
+        ink, points = totals
+        self._frf_last_point_total = points
+        if not self._frf_ink_seeded:
+            # A replacement result is seeded against the OFF threshold, so it
+            # starts allowed only if it is comfortably affordable.
+            self._frf_ink_allowed = ink <= _FRF_INK_AA_OFF
+            self._frf_ink_seeded = True
+        elif ink <= _FRF_INK_AA_ON:
+            self._frf_ink_allowed = True
+        elif ink > _FRF_INK_AA_OFF:
+            self._frf_ink_allowed = False
+        if not self._frf_point_seeded:
+            self._frf_point_allowed = points <= _FRF_POINT_AA_OFF
+            self._frf_point_seeded = True
+        elif points <= _FRF_POINT_AA_ON:
+            self._frf_point_allowed = True
+        elif points > _FRF_POINT_AA_OFF:
+            self._frf_point_allowed = False
+        if not self._frf_ink_allowed:
+            self._aa_block_reason = "high-ink"
+            return False
+        if not self._frf_point_allowed:
+            self._aa_block_reason = "high-density"
+            return False
+        self._aa_block_reason = None
+        return True
+
+    def _reset_aa_gates(self) -> None:
+        """Re-seed both AA legs for a replacement result."""
+        self._frf_ink_allowed = False
+        self._frf_ink_seeded = False
+        self._frf_point_allowed = False
+        self._frf_point_seeded = False
+
+    def _frf_view_signature(self):
+        """Identity of the geometry an AA verdict was measured for.
+
+        Everything that changes what gets painted, and nothing that does not:
+        the bin count, each row's quantized Y span and integer row height, the
+        pixel width, and the display parameters that reshape the curves
+        (frequency/magnitude scale, phase wrapping, fading and its threshold).
+        Used as the backstop blacklist key, so it must be hashable and stable
+        across a rebuild of the same view. It flushes the lazy auto-range for
+        the same reason ``_frf_draw_totals`` does, and so that the key a
+        verdict is FILED under is read from the same geometry the verdict was
+        MEASURED on — otherwise a blacklist entry could never be matched back.
+        """
+        try:
+            spans = []
+            heights = []
+            for plot in self.plots:
+                view_box = plot.vb
+                view_box.updateAutoRange()
+                lo, hi = view_box.viewRange()[1]
+                spans.append(_quantize_y_span_key(float(hi) - float(lo)))
+                heights.append(
+                    int(round(view_box.sceneBoundingRect().height()))
+                )
+            width = int(
+                round(self._plot_magnitude.vb.sceneBoundingRect().width())
+            )
+        except (AttributeError, IndexError, RuntimeError, TypeError,
+                ValueError):
+            return None
+        params = self._display_params
+        return (
+            int(self._draw_frequencies.size),
+            tuple(spans),
+            tuple(heights),
+            width,
+            str(params.get("frequency_scale")),
+            str(params.get("magnitude_scale")),
+            str(params.get("phase_mode")),
+            bool(params.get("fade_low_coherence")),
+            float(params.get("coherence_threshold", 0.0)),
+        )
+
+    def _aa_timer_alive(self, timer):
+        if timer is None:
+            return None
+        try:
+            if sip.isdeleted(self) or sip.isdeleted(timer):
+                return None
+        except RuntimeError:
+            # sip wrapper already gone; nothing left to start/stop.
+            return None
+        return timer
+
+    def _stop_aa_timers(self, *_args) -> None:
+        for name in ("_aa_idle_timer", "_discrete_aa_timer"):
+            timer = self._aa_timer_alive(getattr(self, name, None))
+            if timer is None:
+                continue
+            try:
+                timer.stop()
+            except RuntimeError:
+                # QTimer C++ object already deleted with the canvas.
+                continue
+
+    def _aa_timers_active(self) -> bool:
+        for name in ("_aa_idle_timer", "_discrete_aa_timer"):
+            timer = self._aa_timer_alive(getattr(self, name, None))
+            if timer is None:
+                continue
+            try:
+                if timer.isActive():
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def arm_discrete_aa(self) -> None:
+        """Render a result AA-off now and settle AA on the next event turn.
+
+        Spec §3.4 step 1. The caller (a recompute, a display-parameter change,
+        a View switch) gets a cheap non-AA frame and returns; the antialiased
+        frame — if the gate allows one at all — arrives one event-loop turn
+        later instead of inside the call.
+        """
+        for curve in self._interactive_curves():
+            self._set_curve_aa(curve, False)
+        self._aa_on = False
+        self._close_aa_backstop_session()
+        self._reset_aa_gates()
+        self._aa_block_reason = None
+        self._stop_aa_timers()
+        timer = self._aa_timer_alive(getattr(self, "_discrete_aa_timer", None))
+        if timer is not None:
+            timer.start()
+        self._emit_quality_status()
+
     def disable_interactive_quality(self) -> None:
         """Use AA-off curves while an FRF pan or zoom is in progress."""
-        self._aa_idle_timer.stop()
+        timers_were_active = self._aa_timers_active()
+        self._stop_aa_timers()
+        self._close_aa_backstop_session()
         if not self._aa_on:
+            # Hot path: after the first pan/zoom tick AA is already off. Only
+            # rebuild the reader-facing status when cancelling a pending
+            # upgrade actually changed it (yellow -> red).
+            if timers_were_active:
+                self._emit_quality_status()
             return
         for curve in self._interactive_curves():
             self._set_curve_aa(curve, False)
         self._aa_on = False
         self._glw.update()
+        self._emit_quality_status()
 
     def schedule_idle_quality(self) -> None:
         """Restore anti-aliasing only after the interactive gesture settles."""
-        self._aa_idle_timer.start()
+        timer = self._aa_timer_alive(getattr(self, "_aa_idle_timer", None))
+        if timer is not None:
+            timer.start()
+        self._emit_quality_status()
 
     def _enable_idle_quality(self) -> None:
+        if sip.isdeleted(self):
+            return
         if self._aa_on:
+            self._stop_aa_timers()
             return
         if QApplication.mouseButtons() != Qt.NoButton:
-            self._aa_idle_timer.start()
+            # Still hands-on: fall back to the continuous path's quiet window
+            # rather than re-deciding on every event turn.
+            self.schedule_idle_quality()
+            return
+        self._stop_aa_timers()
+        signature = self._frf_view_signature()
+        if self._aa_latch.blocked(signature):
+            # This geometry already paid its one bad AA frame.
+            self._aa_block_reason = "aa-backstop"
+            self._emit_quality_status()
+            return
+        if not self._frf_aa_allowed():
+            self._emit_quality_status()
             return
         for curve in self._interactive_curves():
             self._set_curve_aa(curve, True)
         self._aa_on = True
+        self._open_aa_backstop_session(signature)
         self._glw.update()
+        self._emit_quality_status()
+
+    # ------------------------------------------------------------------
+    # Measured-frame backstop (spec §3.3): the Qt half. The arithmetic and
+    # the bookkeeping live in AaFrameLatch, which is safe to run inside a
+    # paint; turning AA back off is a scene mutation and is not, so it is
+    # deferred onto a zero-delay, epoch-tagged timer.
+    # ------------------------------------------------------------------
+
+    def _open_aa_backstop_session(self, signature) -> None:
+        self._aa_latch.open(signature)
+        self._aa_backstop_armed = True
+
+    def _close_aa_backstop_session(self) -> None:
+        if not self._aa_backstop_armed:
+            return
+        self._aa_backstop_armed = False
+        self._aa_latch.close()
+
+    def _note_aa_frame(self, frame_ms) -> None:
+        """Feed one measured AA frame to the latch. Called FROM ``paintEvent``.
+
+        The armed flag is the pairing token: it is raised only when AA is
+        actually switched on and dropped on every path that switches it off,
+        so a non-AA frame can never be miscounted as "the first AA frame".
+        """
+        if not self._aa_backstop_armed:
+            return
+        trip = self._aa_latch.note_frame(frame_ms)
+        if trip is not None:
+            self._trip_aa_backstop(trip[0], trip[1])
+
+    def _trip_aa_backstop(self, reason: str, measured_ms: float) -> None:
+        # Disarm FIRST: further frames of this session must not re-trip while
+        # the deferred disable is still in flight.
+        self._aa_backstop_armed = False
+        self._aa_latch.reason = (str(reason), float(measured_ms))
+        timer = self._aa_timer_alive(getattr(self, "_backstop_timer", None))
+        if timer is None:
+            logger.warning(
+                "FRF AA backstop tripped (%s, %.1f ms) but its timer is gone; "
+                "antialiasing stays on for this session",
+                reason, float(measured_ms),
+            )
+            return
+        try:
+            timer.setProperty(
+                _BACKSTOP_EPOCH_PROPERTY, int(self._aa_latch.epoch)
+            )
+            timer.start(0)
+        except RuntimeError:
+            logger.warning(
+                "FRF AA backstop trip could not be queued", exc_info=True,
+            )
+
+    def _on_aa_backstop_timeout(self) -> None:
+        """Deferred half of a trip: drop AA, but only for the epoch measured."""
+        try:
+            epoch = int(
+                self._backstop_timer.property(_BACKSTOP_EPOCH_PROPERTY)
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return
+        if epoch != int(self._aa_latch.epoch):
+            # A rebuild or a newer session already superseded what was
+            # measured; tearing AA off the CURRENT session would be wrong.
+            return
+        self.disable_interactive_quality()
+        self._aa_block_reason = "aa-backstop"
+        self._emit_quality_status()
+
+    # ------------------------------------------------------------------
+    # AA status (reader-facing traffic light). Shape mirrors
+    # PgLineCanvas.quality_status so chart_stack.cards can consume both
+    # without knowing which canvas it holds.
+    # ------------------------------------------------------------------
+
+    def quality_status(self):
+        """Return the ``{state, tooltip}`` dict consumed by the quality dot."""
+        if self._result is None or not self._draw_frequencies.size:
+            return {
+                "state": "red",
+                "tooltip": "抗锯齿未激活：无曲线",
+                "block_reason": "no-curves",
+            }
+        judged = []
+        for curve in self._interactive_curves():
+            try:
+                if curve.isVisible():
+                    judged.append(bool(curve.opts.get("antialias", False)))
+            except (AttributeError, RuntimeError, TypeError):
+                judged.append(False)
+        if self._aa_on and judged and all(judged):
+            return {"state": "green", "tooltip": "抗锯齿已完成"}
+        if self._aa_timers_active():
+            return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
+        reason = self._aa_block_reason
+        if reason == "high-ink":
+            return {
+                "state": "red",
+                "tooltip": (
+                    "抗锯齿未激活：相位翻转/相干填满绘图区，绘制量超预算"
+                ),
+                "block_reason": "high-ink",
+            }
+        if reason == "high-density":
+            return {
+                "state": "red",
+                "tooltip": (
+                    f"抗锯齿未激活：曲线密度 {self._frf_last_point_total} "
+                    f"> {_FRF_POINT_AA_OFF}"
+                ),
+                "block_reason": "high-density",
+            }
+        if reason == "aa-backstop":
+            return {
+                "state": "red",
+                "tooltip": "抗锯齿未激活：实测帧超时",
+                "block_reason": "aa-backstop",
+            }
+        if reason == "unknown-ink":
+            return {
+                "state": "red",
+                "tooltip": "抗锯齿未激活：绘制量无法测量",
+                "block_reason": "unknown-ink",
+            }
+        return {"state": "red", "tooltip": "抗锯齿未激活", "block_reason": None}
+
+    def _emit_quality_status(self) -> None:
+        """Emit ``quality_status_changed`` only when the status changes."""
+        try:
+            status = self.quality_status()
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            logger.warning("FRF quality status unavailable", exc_info=True)
+            return
+        if status == self._last_quality_status:
+            return
+        self._last_quality_status = status
+        self.quality_status_changed.emit(status)
 
     def _on_interactive_range_changed(self, *_args) -> None:
         """Treat native ViewBox wheel/pan updates like modifier-wheel zoom."""
@@ -379,6 +873,9 @@ class PgFrfCanvas(QWidget):
         self._clear_frequency_cursor_readout()
         self.clear_empty_hint()
         self._render_result()
+        # Spec §3.4 step 1: the caller returns after a cheap non-AA frame; the
+        # gate and (if it allows one) the AA frame land on the next event turn.
+        self.arm_discrete_aa()
         self._plot_host.schedule_alignment()
         self._run_replot_callbacks()
         self.layout_geometry_changed.emit()
@@ -395,6 +892,9 @@ class PgFrfCanvas(QWidget):
             self._render_result()
             if old_xlim is not None:
                 self.set_xlim(*old_xlim)
+            # Magnitude scale / phase wrapping / fading all reshape the drawn
+            # curves, so the previous AA verdict was about a different picture.
+            self.arm_discrete_aa()
             self.layout_geometry_changed.emit()
             self._plot_host.schedule_alignment()
 
@@ -1130,10 +1630,17 @@ class PgFrfCanvas(QWidget):
             self._coherence_singleton_points,
         ):
             curve.setData([], [])
+        # No curves left to upgrade: cancel any pending AA settlement and end
+        # the measurement session rather than letting it time out on nothing.
+        self._stop_aa_timers()
+        self._close_aa_backstop_session()
+        self._reset_aa_gates()
+        self._aa_block_reason = None
         self._clear_frequency_cursor_readout()
         self.set_state("empty")
         self._run_replot_callbacks()
         self.layout_geometry_changed.emit()
+        self._emit_quality_status()
 
     def full_reset(self) -> None:
         self.clear()
@@ -1154,7 +1661,7 @@ class PgFrfCanvas(QWidget):
         )
 
     def closeEvent(self, event):
-        self._aa_idle_timer.stop()
+        self._stop_aa_timers()
         try:
             self._glw.scene().sigMouseMoved.disconnect(self._scene_mouse_slot)
         except (TypeError, RuntimeError):
