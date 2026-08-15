@@ -103,6 +103,7 @@ def test_ultraview_visual_harness_geometry_and_contact_sheet(qapp, tmp_path):
 
 def test_required_shots_cover_the_single_grouped_library_path():
     assert "library_groups_1280" in REQUIRED_SHOTS
+    assert "boards_1280" in REQUIRED_SHOTS
     assert "library_overview_1280" not in REQUIRED_SHOTS
     assert "library_overview_stale_1280" not in REQUIRED_SHOTS
 

@@ -214,6 +214,28 @@ def test_canvas_host_overlay_does_not_resize_canvas_and_closes_to_trigger(qtbot)
     assert host.active_overlay() is None
     assert not overlay.isVisible()
     assert canvas.geometry() == canvas_rect_before_close
+    assert trigger.hasFocus() is False
+
+
+def test_canvas_host_escape_restores_trigger_focus(qtbot):
+    host = CanvasHost()
+    qtbot.addWidget(host)
+    host.resize(640, 420)
+    canvas = QFrame()
+    trigger = QToolButton(host)
+    trigger.setFocusPolicy(Qt.TabFocus)
+    trigger.setGeometry(8, 8, 32, 32)
+    overlay = QFrame()
+    overlay.setMinimumSize(180, 120)
+    host.set_canvas_widget(canvas)
+    host.register_overlay("library", overlay, trigger=trigger)
+    host.show()
+    trigger.show()
+    QTest.qWait(1)
+    assert host.open_overlay("library", QRect(40, 40, 200, 160))
+    host.setFocus(Qt.OtherFocusReason)
+    QTest.keyClick(host, Qt.Key_Escape)
+    assert host.active_overlay() is None
     assert trigger.hasFocus()
 
 

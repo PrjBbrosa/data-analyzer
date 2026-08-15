@@ -35,6 +35,7 @@ REQUIRED_SHOTS = (
     "unplaced_1280",
     "display_1280",
     "export_1280",
+    "boards_1280",
     "card_context_1280",
     "presentation_1280",
 )
@@ -588,6 +589,19 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
             "checked": bool(library_btn.isChecked()) if library_btn is not None else None,
         }
 
+        page.board_island().menu_button().click()
+        _pump(app, page)
+        snap(
+            "boards_1280",
+            page,
+            _page_snapshot(
+                page,
+                {
+                    "board_popover": _rect(page.board_popover()),
+                    "board_menu_button": _rect(page.board_island().menu_button()),
+                },
+            ),
+        )
         page.tool_rail().panel_button("layout").click()
         _pump(app, page)
         snap("layout_1280", page, _page_snapshot(page, {"layout_picker": _layout_picker_facts(page)}))
@@ -872,6 +886,28 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
             errors.append("layout_1280 overlay covers the navigation island")
 
     errors.extend(_library_errors(manifest))
+    rest = (geometry.get("library_groups_1280") or {}).get("trigger_rest")
+    if not rest:
+        errors.append("library_groups_1280 missing trigger_rest after canvas click")
+    else:
+        if rest.get("panelOpen") in ("true", True):
+            errors.append("library trigger still panelOpen after canvas click")
+        if rest.get("hasFocus"):
+            errors.append("library trigger retained focus after canvas click")
+        if rest.get("checked"):
+            errors.append("library trigger still checked after canvas click")
+
+    boards = geometry.get("boards_1280") or {}
+    if boards.get("active_panel") != "boards":
+        errors.append(f"boards_1280 active_panel={boards.get('active_panel')!r}, expected 'boards'")
+    popover = boards.get("board_popover") or {}
+    island = boards.get("board_island") or {}
+    if not popover.get("visible"):
+        errors.append("boards_1280 popover is not visible")
+    if popover.get("visible") and island.get("visible"):
+        island_bottom = int(island.get("y") or 0) + int(island.get("h") or 0)
+        if int(popover.get("y") or 0) < island_bottom:
+            errors.append("boards_1280 popover is not anchored below BoardIsland")
 
     if errors:
         raise GeometryError("; ".join(errors))

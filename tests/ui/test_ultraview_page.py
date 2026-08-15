@@ -37,7 +37,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     legal_grid_rect,
     rect_to_pixels,
 )
-from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED
+from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED, PANEL_BOARDS
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
@@ -55,6 +55,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
 from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
     MAX_GRID_ROWS,
+    MAX_UI_BOARDS,
     LAYOUT_SLOTS,
     SOURCE_SECTIONS,
     STATUS_MISSING,
@@ -68,7 +69,9 @@ from mf4_analyzer.ui.ultraview_state import (
     _legal_grid_rect,
     add_ref,
     board_to_payload,
+    create_board,
     default_board,
+    default_workspace,
     first_empty_slot,
     free_grid_to_template,
     make_ref,
@@ -77,6 +80,7 @@ from mf4_analyzer.ui.ultraview_state import (
     place_from_unplaced,
     rebind_ref,
     remove_ref,
+    reorder_board,
     replace_slot,
     set_layout,
     slot_occupant,
@@ -3533,3 +3537,196 @@ def test_lod_matrix_keeps_type_chip_across_window_widths(qtbot):
             else:
                 assert not card._image.isVisible() or card._image.height() == 0
             assert card._footer.isVisible() is expect_footer
+
+
+def _panel_trigger(page, panel_id):
+    if panel_id == PANEL_LIBRARY:
+        return page.tool_rail().panel_button(PANEL_LIBRARY)
+    if panel_id == "display":
+        return page.global_island().display_button()
+    if panel_id == "export":
+        return page.global_island().export_button()
+    raise AssertionError(panel_id)
+
+
+@pytest.mark.parametrize("panel_id", [PANEL_LIBRARY, "display", "export"])
+def test_blank_canvas_click_closes_panel_without_leaving_trigger_focus(qtbot, qapp, panel_id):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    trigger = _panel_trigger(page, panel_id)
+    assert page._open_panel(panel_id)
+    qapp.processEvents()
+    assert page.active_panel() == panel_id
+    QTest.mouseClick(page.canvas_host().canvas_widget(), Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert trigger.hasFocus() is False
+    assert trigger.property("panelOpen") != "true"
+    if trigger.isCheckable():
+        assert trigger.isChecked() is False
+
+
+@pytest.mark.parametrize("panel_id", [PANEL_LIBRARY, "display", "export"])
+def test_toggle_close_does_not_leave_trigger_focus(qtbot, qapp, panel_id):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    trigger = _panel_trigger(page, panel_id)
+    QTest.mouseClick(trigger, Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() == panel_id
+    QTest.mouseClick(trigger, Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert trigger.hasFocus() is False
+
+
+@pytest.mark.parametrize("panel_id", [PANEL_LIBRARY, "display", "export"])
+def test_escape_returns_focus_to_the_panel_trigger(qtbot, qapp, panel_id):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    trigger = _panel_trigger(page, panel_id)
+    assert page._open_panel(panel_id)
+    qapp.processEvents()
+    page.handle_escape()
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert trigger.hasFocus() is True
+
+
+def _workspace_with_boards(*names: str):
+    workspace = default_workspace()
+    workspace.boards[0].name = names[0]
+    for name in names[1:]:
+        created = create_board(workspace, name=name)
+        assert created is not None
+    return workspace
+
+
+def test_board_popover_click_switches_and_more_menu_has_three_actions(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("全局对比", "台架 vs 路试", "NVH 复查")
+    selected: list[str] = []
+    page.select_board_requested.connect(selected.append)
+    page.set_workspace(workspace)
+    page.board_island().menu_button().click()
+    qapp.processEvents()
+    popover = page.board_popover()
+    assert page.active_panel() == PANEL_BOARDS
+    assert popover.isVisible()
+    assert popover.current_board_id() == workspace.active_board_id
+    assert "切换到此 Board" not in popover.list_widget().item(0).text()
+    target = workspace.boards[1].board_id
+    item = next(
+        popover.list_widget().item(index)
+        for index in range(popover.list_widget().count())
+        if popover.list_widget().item(index).data(Qt.UserRole) == target
+    )
+    popover.list_widget().itemClicked.emit(item)
+    qapp.processEvents()
+    assert selected == [target]
+    assert page.active_panel() is None
+
+    menu = page._make_board_item_menu(target)
+    labels = [action.text() for action in menu.actions()]
+    assert labels == ["复制", "重命名", "删除"]
+    assert "切换到此 Board" not in labels
+    assert "上移" not in labels
+    assert "下移" not in labels
+    assert "移到顶部" not in labels
+    assert "移到底部" not in labels
+
+
+def test_board_popover_drag_reorder_emits_and_survives_workspace_roundtrip(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("A", "B", "C")
+    moved: list[tuple[str, int]] = []
+
+    def _apply(board_id: str, new_index: int) -> None:
+        moved.append((board_id, new_index))
+        reorder_board(workspace, board_id, new_index)
+        page.set_workspace(workspace)
+
+    page.reorder_board_requested.connect(_apply)
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    first_id = workspace.boards[0].board_id
+    page.board_popover().apply_internal_move(first_id, 2)
+    qapp.processEvents()
+    assert moved == [(first_id, 2)]
+    assert [board.board_id for board in workspace.boards][-1] == first_id
+    assert page.board_popover().board_ids()[-1] == first_id
+    assert page.board_popover().isVisible()
+
+
+def test_board_popover_create_disables_at_cap_and_delete_cancel_keeps_board(qtbot, qapp, monkeypatch):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = default_workspace()
+    while len(workspace.boards) < MAX_UI_BOARDS:
+        assert create_board(workspace, name=f"Board {len(workspace.boards) + 1}") is not None
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    assert page.board_popover().create_button().isEnabled() is False
+    assert "20" in page.board_popover().create_button().toolTip()
+
+    deleted: list[str] = []
+    page.delete_board_requested.connect(deleted.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.Cancel),
+    )
+    page._confirm_delete_board(workspace.boards[0].board_id)
+    assert deleted == []
+    assert len(workspace.boards) == MAX_UI_BOARDS
+
+
+def test_board_popover_blank_click_closes_without_chevron_residue(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    chevron = page.board_island().menu_button()
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    assert chevron.property("panelOpen") == "true"
+    QTest.mouseClick(page.canvas_host().canvas_widget(), Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert page.board_popover().isVisible() is False
+    assert chevron.hasFocus() is False
+    assert chevron.property("panelOpen") != "true"
+
+
+def test_board_popover_delete_key_does_not_remove_a_board(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("A", "B", "C")
+    deleted: list[str] = []
+    page.delete_board_requested.connect(deleted.append)
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    QTest.keyClick(page.board_popover().list_widget(), Qt.Key_Delete)
+    qapp.processEvents()
+    assert deleted == []
+    assert page.board_popover().board_ids() == tuple(board.board_id for board in workspace.boards)
+    assert page.active_panel() == PANEL_BOARDS

@@ -14,17 +14,22 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 
-from PyQt5.QtCore import QEvent, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QScrollArea,
     QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -39,7 +44,12 @@ PANEL_LIBRARY = "library"
 PANEL_LAYOUT = "layout"
 PANEL_FILTER = "filter"
 PANEL_UNPLACED = "unplaced"
+PANEL_BOARDS = "boards"
 RAIL_MIN_HEIGHT = 196
+BOARD_POPOVER_WIDTH = 260
+BOARD_ROW_HEIGHT = 32
+_BOARD_CURRENT_ROLE = Qt.UserRole + 1
+_BOARD_MORE_WIDTH = 28
 
 # UltraView-local moonstone tokens.  Do not fold these into CONTROL_COLORS.
 ULTRAVIEW_MOON = QColor("#EDF2F5")
@@ -399,7 +409,10 @@ class CanvasHost(QFrame):
     def _close_from_canvas_click(self) -> None:
         key = self._active_overlay
         if key is not None and self._overlay_close_on_canvas.get(key, True):
-            self.close_active_overlay()
+            # Mouse close leaves focus on the canvas, not the trigger. Esc
+            # still uses restore_focus=True so keyboard users return to the
+            # button that opened the panel.
+            self.close_active_overlay(restore_focus=False)
 
     @staticmethod
     def _focus_first_control(widget: QWidget) -> None:
@@ -725,6 +738,12 @@ class BoardIsland(QFrame):
         self._add.setEnabled(bool(enabled))
         self._add.setToolTip(str(reason or "新建 Board"))
 
+    def set_menu_open(self, opened: bool) -> None:
+        """Project overlay-open chrome without making the chevron checkable."""
+        active = bool(opened)
+        _set_flag(self._menu, "panelOpen", active)
+        self._menu.setIcon(Icons.chevron_down(_ultraview_icon_color(active=active)))
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key_F2:
             self.rename_requested.emit()
@@ -738,6 +757,331 @@ class BoardIsland(QFrame):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+
+class _BoardListDelegate(QStyledItemDelegate):
+    """Draw check + name + hover/focus ⋯ without stealing InternalMove."""
+
+    menu_requested = pyqtSignal(str, QPoint)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._hovered_row = -1
+
+    def set_hovered_row(self, row: int) -> None:
+        self._hovered_row = int(row)
+
+    def hovered_row(self) -> int:
+        return self._hovered_row
+
+    def paint(self, painter, option, index) -> None:  # noqa: N802
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = option.rect.adjusted(4, 1, -4, -1)
+        selected = bool(option.state & QStyle.State_Selected)
+        hovered = index.row() == self._hovered_row
+        current = bool(index.data(_BOARD_CURRENT_ROLE))
+        if selected:
+            painter.setPen(ULTRAVIEW_STONE)
+            painter.setBrush(ULTRAVIEW_WASH)
+            painter.drawRoundedRect(QRectF(rect), 6, 6)
+        elif hovered:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#F7FAFC"))
+            painter.drawRoundedRect(QRectF(rect), 6, 6)
+        check_rect = QRect(rect.left() + 4, rect.top(), 16, rect.height())
+        painter.setPen(ULTRAVIEW_STONE if current else Qt.transparent)
+        painter.drawText(check_rect, Qt.AlignCenter, "✓" if current else "")
+        more_visible = hovered or selected or bool(option.state & QStyle.State_HasFocus)
+        more_rect = self.more_rect(option.rect)
+        text_right = more_rect.left() - 4 if more_visible else rect.right() - 4
+        name_rect = QRect(check_rect.right() + 4, rect.top(), max(0, text_right - check_rect.right() - 4), rect.height())
+        metrics = option.fontMetrics
+        name = metrics.elidedText(str(index.data(Qt.DisplayRole) or ""), Qt.ElideRight, name_rect.width())
+        painter.setPen(ULTRAVIEW_INK)
+        painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
+        if more_visible:
+            painter.setPen(ULTRAVIEW_MUTED)
+            painter.drawText(more_rect, Qt.AlignCenter, "⋯")
+        painter.restore()
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802
+        del option, index
+        return QSize(BOARD_POPOVER_WIDTH - 16, BOARD_ROW_HEIGHT)
+
+    def editorEvent(self, event, model, option, index) -> bool:  # noqa: N802
+        if (
+            event.type() == QEvent.MouseButtonRelease
+            and event.button() == Qt.LeftButton
+            and self.more_rect(option.rect).contains(event.pos())
+        ):
+            board_id = str(index.data(Qt.UserRole) or "")
+            if board_id:
+                self.menu_requested.emit(board_id, event.globalPos())
+            return True
+        return False
+
+    @staticmethod
+    def more_rect(item_rect: QRect) -> QRect:
+        return QRect(
+            item_rect.right() - _BOARD_MORE_WIDTH - 4,
+            item_rect.top(),
+            _BOARD_MORE_WIDTH,
+            item_rect.height(),
+        )
+
+
+class _BoardList(QListWidget):
+    """QListWidget whose Delete key never removes a Board row."""
+
+    reordered = pyqtSignal(str, int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._drag_id = ""
+        self.setObjectName("ultraViewBoardList")
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setDropIndicatorShown(True)
+        self.setSpacing(1)
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802
+        item = self.currentItem()
+        self._drag_id = str(item.data(Qt.UserRole) or "") if item is not None else ""
+        super().startDrag(supported_actions)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        super().dropEvent(event)
+        board_id = self._drag_id
+        self._drag_id = ""
+        if not board_id:
+            return
+        for index in range(self.count()):
+            item = self.item(index)
+            if item is not None and str(item.data(Qt.UserRole) or "") == board_id:
+                self.reordered.emit(board_id, index)
+                return
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class BoardPopover(QFrame):
+    """Single-layer Board list: click to switch, drag to reorder, ⋯ to manage.
+
+    Page owns workspace mutation, confirmation, and the 20-Board cap.  This
+    widget only projects the current list and emits typed intents.
+    """
+
+    board_selected = pyqtSignal(str)
+    board_menu_requested = pyqtSignal(str, QPoint)
+    boards_reordered = pyqtSignal(str, int)
+    create_requested = pyqtSignal()
+    rename_requested = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewBoardPopover")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self._reordering = False
+        self._pending_boards: tuple[tuple[object, ...], str | None] | None = None
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.timeout.connect(self._end_reordering)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
+        self._list = _BoardList(self)
+        self._delegate = _BoardListDelegate(self._list)
+        self._list.setItemDelegate(self._delegate)
+        self._delegate.menu_requested.connect(self.board_menu_requested)
+        self._list.itemClicked.connect(self._on_item_clicked)
+        self._list.reordered.connect(self._on_reordered)
+        self._list.installEventFilter(self)
+        self._list.viewport().installEventFilter(self)
+        root.addWidget(self._list, 1)
+        self._create = QToolButton(self)
+        self._create.setObjectName("ultraViewBoardPopoverCreate")
+        self._create.setText("＋ 新建 Board")
+        self._create.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._create.setCursor(Qt.PointingHandCursor)
+        self._create.setFocusPolicy(Qt.TabFocus)
+        self._create.setToolTip("新建 Board")
+        self._create.setAccessibleName("新建 Board")
+        self._create.clicked.connect(self.create_requested)
+        root.addWidget(self._create, 0)
+
+    def list_widget(self) -> QListWidget:
+        return self._list
+
+    def create_button(self) -> QToolButton:
+        return self._create
+
+    def board_ids(self) -> tuple[str, ...]:
+        ids: list[str] = []
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is None:
+                continue
+            board_id = str(item.data(Qt.UserRole) or "")
+            if board_id:
+                ids.append(board_id)
+        return tuple(ids)
+
+    def current_board_id(self) -> str:
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is not None and bool(item.data(_BOARD_CURRENT_ROLE)):
+                return str(item.data(Qt.UserRole) or "")
+        return ""
+
+    def more_rect_for(self, board_id: str) -> QRect:
+        """Viewport-local ⋯ hit rect for tests and keyboard users."""
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is None or str(item.data(Qt.UserRole) or "") != board_id:
+                continue
+            rect = self._list.visualItemRect(item)
+            return _BoardListDelegate.more_rect(rect)
+        return QRect()
+
+    def apply_internal_move(self, board_id: str, new_index: int) -> None:
+        """Reorder as InternalMove would, then emit the same intent."""
+        ids = list(self.board_ids())
+        if board_id not in ids:
+            return
+        old = ids.index(board_id)
+        target = max(0, min(int(new_index), len(ids) - 1))
+        if old == target:
+            return
+        item = self._list.takeItem(old)
+        if item is None:
+            return
+        self._list.insertItem(target, item)
+        self._list.setCurrentItem(item)
+        self._on_reordered(board_id, target)
+
+    def set_boards(self, boards, active_board_id: str | None) -> None:
+        if self._reordering:
+            self._pending_boards = (tuple(boards), active_board_id)
+            if not self._flush_timer.isActive():
+                self._flush_timer.start(0)
+            return
+        self._apply_boards(boards, active_board_id)
+
+    def set_create_enabled(self, enabled: bool, reason: str = "") -> None:
+        self._create.setEnabled(bool(enabled))
+        self._create.setToolTip(str(reason or "新建 Board"))
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        rows = max(1, self._list.count())
+        return QSize(
+            BOARD_POPOVER_WIDTH,
+            8 + rows * (BOARD_ROW_HEIGHT + 1) + 6 + 32 + 8,
+        )
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(BOARD_POPOVER_WIDTH, 96)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self._list and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_F2:
+                board_id = self._selected_board_id()
+                if board_id:
+                    self.rename_requested.emit(board_id)
+                return True
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                board_id = self._selected_board_id()
+                if board_id:
+                    self.board_selected.emit(board_id)
+                return True
+        if watched is self._list.viewport():
+            if event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
+                if event.button() == Qt.LeftButton:
+                    item = self._list.itemAt(event.pos())
+                    if item is not None:
+                        more = _BoardListDelegate.more_rect(self._list.visualItemRect(item))
+                        if more.contains(event.pos()):
+                            if event.type() == QEvent.MouseButtonRelease:
+                                board_id = str(item.data(Qt.UserRole) or "")
+                                if board_id:
+                                    self.board_menu_requested.emit(board_id, event.globalPos())
+                            return True
+            if event.type() == QEvent.MouseMove:
+                row = self._list.indexAt(event.pos()).row()
+                if row != self._delegate.hovered_row():
+                    self._delegate.set_hovered_row(row)
+                    self._list.viewport().update()
+            if event.type() == QEvent.Leave:
+                if self._delegate.hovered_row() != -1:
+                    self._delegate.set_hovered_row(-1)
+                    self._list.viewport().update()
+        return super().eventFilter(watched, event)
+
+    def _selected_board_id(self) -> str:
+        item = self._list.currentItem()
+        if item is None:
+            return ""
+        return str(item.data(Qt.UserRole) or "")
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        board_id = str(item.data(Qt.UserRole) or "")
+        if board_id:
+            self.board_selected.emit(board_id)
+
+    def _on_reordered(self, board_id: str, new_index: int) -> None:
+        self._reordering = True
+        self.boards_reordered.emit(str(board_id), int(new_index))
+        if not self._flush_timer.isActive():
+            self._flush_timer.start(0)
+
+    def _end_reordering(self) -> None:
+        self._reordering = False
+        pending = self._pending_boards
+        self._pending_boards = None
+        if pending is not None:
+            boards, active_id = pending
+            self._apply_boards(boards, active_id)
+
+    def _apply_boards(self, boards, active_board_id: str | None) -> None:
+        parsed: list[tuple[str, str]] = []
+        for index, board in enumerate(boards or ()):
+            board_id = str(getattr(board, "board_id", "") or "")
+            if not board_id:
+                continue
+            name = str(getattr(board, "name", "") or f"Board {index + 1}")
+            parsed.append((board_id, name))
+        blocked = self._list.blockSignals(True)
+        self._list.clear()
+        active = str(active_board_id or "")
+        current_item: QListWidgetItem | None = None
+        for board_id, name in parsed:
+            item = QListWidgetItem(name)
+            item.setData(Qt.UserRole, board_id)
+            item.setData(_BOARD_CURRENT_ROLE, board_id == active)
+            item.setFlags(
+                Qt.ItemIsEnabled
+                | Qt.ItemIsSelectable
+                | Qt.ItemIsDragEnabled
+                | Qt.ItemIsDropEnabled
+            )
+            item.setToolTip(name)
+            self._list.addItem(item)
+            if board_id == active:
+                current_item = item
+        if current_item is not None:
+            self._list.setCurrentItem(current_item)
+        self._list.blockSignals(blocked)
+        self.updateGeometry()
 
 
 class GlobalIsland(QFrame):

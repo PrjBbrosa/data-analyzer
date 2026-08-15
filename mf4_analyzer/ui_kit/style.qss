@@ -4347,11 +4347,11 @@ QFrame#ultraViewToolRail {
  * per-card effect or platform-default popup frame. */
 QFrame#ultraViewLibrary,
 QFrame#ultraViewLayoutPopover,
+QFrame#ultraViewBoardPopover,
 QFrame#ultraViewCompareRail,
 QFrame#ultraViewUnplacedTray,
 QFrame#ultraViewDisplayPopover,
 QFrame#ultraViewExportPopover,
-QMenu#ultraViewBoardPopover,
 QMenu#ultraViewBoardItemMenu {
     background-color: #fcfdfe;
     border: 1px solid rgba(67, 92, 111, 0.20);
@@ -4375,6 +4375,37 @@ QFrame#ultraViewLayoutPopover QLabel#ultraViewLayoutPopoverTitle {
 QLabel#ultraViewLayoutPopoverIntro {
     color: #6b7d8e;
     font-size: 11px;
+}
+QListWidget#ultraViewBoardList {
+    border: none;
+    background-color: transparent;
+    outline: none;
+}
+QListWidget#ultraViewBoardList::item {
+    border: none;
+    padding: 0;
+    min-height: 32px;
+}
+QToolButton#ultraViewBoardPopoverCreate {
+    min-height: 28px;
+    padding: 0px 8px 0px 8px;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #c7d4df;
+    border-radius: 7px;
+    background-color: #fcfdfe;
+    color: #315e85;
+    font-size: 12px;
+}
+QToolButton#ultraViewBoardPopoverCreate:hover {
+    border-color: #3e709c;
+    background-color: #eaf2f8;
+    color: #315e85;
+}
+QToolButton#ultraViewBoardPopoverCreate:disabled {
+    border-color: #d4e0ea;
+    color: #8a9aaa;
+    background-color: #fcfdfe;
 }
 QScrollArea#ultraViewLayoutPopoverScroll {
     border: none;
@@ -4510,19 +4541,22 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeAc
     color: #315e85;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
-QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
     border-color: #3e709c;
     background-color: #fcfdfe;
     color: #3e709c;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
-QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
     border-color: #315e85;
     background-color: #eaf2f8;
     color: #315e85;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed,
-QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed {
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed {
     border-color: #315e85;
     background-color: #dce8f0;
     color: #315e85;

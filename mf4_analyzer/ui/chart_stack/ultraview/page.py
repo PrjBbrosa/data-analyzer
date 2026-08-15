@@ -48,6 +48,7 @@ from mf4_analyzer.ui.ultraview_state import (
     placement_for,
     slot_occupant,
 )
+from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 from .viewport import (
     QUALITY_FAST,
@@ -86,11 +87,14 @@ from .widgets import (
     preview_image,
 )
 from .chrome import (
+    BOARD_POPOVER_WIDTH,
+    PANEL_BOARDS,
     PANEL_FILTER,
     PANEL_LAYOUT,
     PANEL_LIBRARY,
     PANEL_UNPLACED,
     BoardIsland,
+    BoardPopover,
     CanvasHost,
     CardContextIsland,
     GlobalIsland,
@@ -103,6 +107,7 @@ from .floating_layout import (
     DEFAULT_MINIMAP_SIZE,
     OVERLAY_ANCHOR_GLOBAL,
     OVERLAY_ANCHOR_RAIL,
+    OVERLAY_GAP,
     RAIL_CONTENT_HEIGHT,
     Rect as FloatingRect,
     calculate_floating_layout,
@@ -311,6 +316,7 @@ class UltraViewPage(QWidget):
         self._card_context = CardContextIsland(self._canvas_host)
         self._layout_popover = LayoutPicker(LAYOUT_LABELS_ZH, self._canvas_host)
         self._layout_popover.layout_id_chosen.connect(self._on_layout_id_chosen)
+        self._board_popover = BoardPopover(self._canvas_host)
         self._display_popover = self._build_display_popover(self._canvas_host)
         self._export_popover = self._build_export_popover(self._canvas_host)
 
@@ -344,6 +350,11 @@ class UltraViewPage(QWidget):
             self._export_popover,
             trigger=self._global_island.export_button(),
         )
+        self._canvas_host.register_overlay(
+            PANEL_BOARDS,
+            self._board_popover,
+            trigger=self._board_island.menu_button(),
+        )
 
         self._focus = FocusLayer(self)
         self._focus.hide()
@@ -357,6 +368,11 @@ class UltraViewPage(QWidget):
         self._board_island.board_menu_requested.connect(self._show_board_menu)
         self._board_island.create_requested.connect(self.create_board_requested)
         self._board_island.rename_requested.connect(self._rename_current_board)
+        self._board_popover.board_selected.connect(self._on_board_selected)
+        self._board_popover.board_menu_requested.connect(self._on_board_item_menu)
+        self._board_popover.boards_reordered.connect(self._on_boards_reordered)
+        self._board_popover.create_requested.connect(self.create_board_requested)
+        self._board_popover.rename_requested.connect(self._rename_board)
         self._global_island.display_requested.connect(self._on_display_panel_requested)
         self._global_island.export_requested.connect(self._on_export_panel_requested)
         self._global_island.presentation_toggled.connect(self._on_presentation_button)
@@ -530,6 +546,9 @@ class UltraViewPage(QWidget):
     def board_island(self) -> BoardIsland:
         return self._board_island
 
+    def board_popover(self) -> BoardPopover:
+        return self._board_popover
+
     def global_island(self) -> GlobalIsland:
         return self._global_island
 
@@ -654,6 +673,7 @@ class UltraViewPage(QWidget):
             PANEL_LAYOUT: (360, 240),
             PANEL_FILTER: (160, 160),
             PANEL_UNPLACED: (360, 160),
+            PANEL_BOARDS: (BOARD_POPOVER_WIDTH, 96),
             "display": (200, 80),
             "export": (200, 80),
         }
@@ -666,6 +686,9 @@ class UltraViewPage(QWidget):
         width = max(min_width, hint.width(), min_hint.width())
         height = max(min_height, hint.height(), min_hint.height())
         host_h = int(self._canvas_host.height())
+        if panel_id == PANEL_BOARDS:
+            cap_h = max(min_height, int(host_h * 0.6)) if host_h > 0 else 320
+            return (BOARD_POPOVER_WIDTH, min(height, cap_h))
         cap_h = max(min_height, host_h - 96) if host_h > 0 else 640
         return (min(width, 520), min(height, cap_h))
 
@@ -730,15 +753,19 @@ class UltraViewPage(QWidget):
         return FloatingRect(point.x(), point.y(), button.width(), button.height())
 
     def _floating_layout(self, *, overlay_open: bool | None = None):
-        active = self._active_panel if overlay_open is None else ("overlay" if overlay_open else None)
+        panel = self._active_panel
+        if overlay_open is None:
+            layout_open = panel not in (None, PANEL_BOARDS)
+        else:
+            layout_open = bool(overlay_open)
         sizes = self._chrome_sizes()
         return calculate_floating_layout(
             (self._canvas_host.width(), self._canvas_host.height()),
-            overlay_open=bool(active),
-            overlay_size=self._overlay_size(self._active_panel or PANEL_LIBRARY),
+            overlay_open=layout_open,
+            overlay_size=self._overlay_size(panel or PANEL_LIBRARY),
             overlay_anchor=(
                 OVERLAY_ANCHOR_GLOBAL
-                if self._active_panel in _GLOBAL_PANELS
+                if panel in _GLOBAL_PANELS
                 else OVERLAY_ANCHOR_RAIL
             ),
             minimap_size=DEFAULT_MINIMAP_SIZE if self._minimap_should_show() else None,
@@ -769,7 +796,12 @@ class UltraViewPage(QWidget):
             self._navigation_island,
         ):
             island.raise_()
-        if self._active_panel is not None and layout.overlay is not None:
+        if self._active_panel == PANEL_BOARDS:
+            self._canvas_host.set_overlay_geometry(PANEL_BOARDS, self._board_popover_rect())
+            overlay = self._canvas_host.overlay(PANEL_BOARDS)
+            if overlay is not None:
+                overlay.raise_()
+        elif self._active_panel is not None and layout.overlay is not None:
             self._canvas_host.set_overlay_geometry(self._active_panel, _qrect(layout.overlay))
             overlay = self._canvas_host.overlay(self._active_panel)
             if overlay is not None:
@@ -785,7 +817,7 @@ class UltraViewPage(QWidget):
 
     def _toggle_panel(self, panel_id: str) -> None:
         if self._active_panel == panel_id:
-            self._close_active_panel()
+            self._close_active_panel(restore_focus=False)
             self._sync_panel_triggers()
             return
         if not self._open_panel(panel_id):
@@ -794,6 +826,17 @@ class UltraViewPage(QWidget):
     def _sync_panel_triggers(self) -> None:
         self._tool_rail.set_active_panel(self._active_panel if self._active_panel in _RAIL_PANELS else None)
         self._global_island.set_active_panel(self._active_panel if self._active_panel in _GLOBAL_PANELS else None)
+        self._board_island.set_menu_open(self._active_panel == PANEL_BOARDS)
+
+    def _board_popover_rect(self) -> QRect:
+        island = self._board_island.geometry()
+        width, height = self._overlay_size(PANEL_BOARDS)
+        host = self._canvas_host.contentsRect()
+        x = island.x()
+        y = island.y() + island.height() + OVERLAY_GAP
+        if y + height > host.bottom():
+            y = max(host.y(), island.y() - OVERLAY_GAP - height)
+        return QRect(x, y, width, height)
 
     def _open_panel(self, panel_id: str) -> bool:
         if self._presentation or self._canvas_host.overlay(panel_id) is None:
@@ -802,6 +845,17 @@ class UltraViewPage(QWidget):
             self._deferred_panel_close = self._active_panel
             return False
         self._active_panel = panel_id
+        if panel_id == PANEL_BOARDS:
+            self._refresh_board_popover()
+            rect = self._board_popover_rect()
+            opened = self._canvas_host.open_overlay(panel_id, rect, focus=True)
+            if not opened:
+                self._active_panel = None
+                return False
+            self._sync_panel_triggers()
+            self._apply_floating_layout()
+            self._board_popover.list_widget().setFocus(Qt.OtherFocusReason)
+            return True
         layout = self._floating_layout(overlay_open=True)
         if layout.overlay is None:
             self._active_panel = None
@@ -825,12 +879,12 @@ class UltraViewPage(QWidget):
             self._tray.focus_first_item()
         return True
 
-    def _close_active_panel(self) -> bool:
+    def _close_active_panel(self, *, restore_focus: bool = True) -> bool:
         panel_id = self._active_panel
         if panel_id is not None and self._drag_kind is not None:
             self._deferred_panel_close = panel_id
             return False
-        closed = self._canvas_host.close_active_overlay()
+        closed = self._canvas_host.close_active_overlay(restore_focus=restore_focus)
         if panel_id == PANEL_UNPLACED:
             self._tray.set_overlay_mode(False)
         return closed
@@ -849,61 +903,45 @@ class UltraViewPage(QWidget):
         self._canvas_host.set_overlay_close_on_canvas(PANEL_LIBRARY, close=not pinned)
 
     def _show_board_menu(self) -> None:
-        menu = QMenu(self._board_island)
-        menu.setObjectName("ultraViewBoardPopover")
-        from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
-        apply_rounded_menu_chrome(menu)
+        self._toggle_panel(PANEL_BOARDS)
+
+    def _refresh_board_popover(self) -> None:
         boards = tuple(getattr(self._workspace, "boards", ()) or ()) if self._workspace is not None else (self._board,)
-        ids = [str(getattr(item, "board_id", "") or "") for item in boards]
-        for index, board in enumerate(boards):
-            board_id = str(getattr(board, "board_id", "") or "")
-            if not board_id:
-                continue
-            name = str(getattr(board, "name", "") or "Board")
-            action = menu.addAction(name)
-            action.setCheckable(True)
-            action.setChecked(board_id == self._board.board_id)
-            action.setData(("select", board_id))
-            submenu = QMenu(f"管理“{name}”", menu)
-            submenu.setObjectName("ultraViewBoardItemMenu")
-            apply_rounded_menu_chrome(submenu)
-            switch = submenu.addAction("切换到此 Board")
-            switch.setData(("select", board_id))
-            submenu.addSeparator()
-            for label, intent, payload in (
-                ("复制", "duplicate", board_id),
-                ("重命名", "rename", board_id),
-                ("删除", "delete", board_id),
-                ("上移", "move_to", max(0, index - 1)),
-                ("下移", "move_to", min(len(ids) - 1, index + 1)),
-                ("移到顶部", "move_to", 0),
-                ("移到底部", "move_to", max(0, len(ids) - 1)),
-            ):
-                item = submenu.addAction(label)
-                item.setData((intent, payload if intent != "move_to" else (board_id, payload)))
-            action.setMenu(submenu)
-        menu.addSeparator()
-        chosen = menu.exec_(self._board_island.menu_button().mapToGlobal(QPoint(0, 32)))
-        data = chosen.data() if chosen is not None else None
-        if not isinstance(data, tuple) or len(data) != 2:
+        active_id = str(
+            getattr(self._workspace, "active_board_id", "") or getattr(self._board, "board_id", "") or ""
+        )
+        self._board_popover.set_boards(boards, active_id)
+        at_cap = len(boards) >= MAX_UI_BOARDS
+        self._board_popover.set_create_enabled(
+            not at_cap,
+            "最多创建 20 个 Board" if at_cap else "",
+        )
+
+    def _on_board_item_menu(self, board_id: str, global_pos: QPoint) -> None:
+        menu = self._make_board_item_menu(board_id)
+        chosen = menu.exec_(global_pos)
+        if chosen is None:
             return
-        intent, value = data
-        if intent == "select":
-            self._on_board_selected(str(value))
-        elif intent == "duplicate":
-            self.duplicate_board_requested.emit(str(value))
+        intent = chosen.data()
+        if intent == "duplicate":
+            self.duplicate_board_requested.emit(board_id)
         elif intent == "rename":
-            self._rename_board(str(value))
+            self._rename_board(board_id)
         elif intent == "delete":
-            self._confirm_delete_board(str(value))
-        elif intent == "move_to":
-            board_id, new_index = value
-            ids = [str(getattr(item, "board_id", "") or "") for item in boards]
-            if board_id in ids:
-                old = ids.index(board_id)
-                new = max(0, min(len(ids) - 1, int(new_index)))
-                if old != new:
-                    self.reorder_board_requested.emit(board_id, new)
+            self._confirm_delete_board(board_id)
+
+    def _make_board_item_menu(self, board_id: str) -> QMenu:
+        del board_id
+        menu = QMenu(self)
+        menu.setObjectName("ultraViewBoardItemMenu")
+        apply_rounded_menu_chrome(menu)
+        for label, intent in (("复制", "duplicate"), ("重命名", "rename"), ("删除", "delete")):
+            action = menu.addAction(label)
+            action.setData(intent)
+        return menu
+
+    def _on_boards_reordered(self, board_id: str, new_index: int) -> None:
+        self.reorder_board_requested.emit(str(board_id), int(new_index))
 
     def _rename_board(self, board_id: str) -> None:
         boards = tuple(getattr(self._workspace, "boards", ()) or ()) if self._workspace is not None else (self._board,)
@@ -1340,6 +1378,7 @@ class UltraViewPage(QWidget):
             len(boards) < MAX_UI_BOARDS,
             "最多创建 20 个 Board" if len(boards) >= MAX_UI_BOARDS else "",
         )
+        self._refresh_board_popover()
         active = next((board for board in boards if getattr(board, "board_id", None) == active_id), None)
         if active is None and boards:
             active = boards[0]
@@ -1729,7 +1768,7 @@ class UltraViewPage(QWidget):
             widget.setFocus(Qt.OtherFocusReason)
 
     def _on_board_selected(self, board_id: str) -> None:
-        self._close_active_panel()
+        self._close_active_panel(restore_focus=False)
         self._card_context.clear_ref()
         self.reset_sheet_session(emit_presentation=False)
         self.select_board_requested.emit(board_id)
@@ -1855,7 +1894,7 @@ class UltraViewPage(QWidget):
             and event.type() == QEvent.MouseButtonPress
             and self._active_panel is not None
         ):
-            self._close_active_panel()
+            self._close_active_panel(restore_focus=False)
         elif (
             getattr(self, "_board_host", None) is not None
             and watched is self._board_host
