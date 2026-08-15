@@ -555,6 +555,11 @@ def test_frf_canvas_wheel_zoom_temporarily_disables_curve_antialiasing(
         canvas._phase_low_curve,
         canvas._coherence_curve,
     )
+    # Spec 2026-08-15 §3.4/§7: AA no longer lands inside set_result. This tiny
+    # clean result is well under both gate legs, so it settles to AA on the
+    # discrete 0 ms timer — one event-loop turn later, not inline.
+    QCoreApplication.processEvents()
+    qtbot.wait(10)
     assert all(curve.opts["antialias"] for curve in curves)
 
     assert canvas._handle_wheel_dispatch(
@@ -740,3 +745,217 @@ def test_frf_canvas_state_hints_and_full_reset(qtbot):
     assert not canvas.has_result()
     assert canvas.get_xlim() is None
     assert canvas.state() == "empty"
+
+
+# ---------------------------------------------------------------------------
+# Discrete AA arming + three-row ink/point gate + measured-frame backstop
+# (spec docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md
+# §3.4 / §5, plan Task 6).
+#
+# The construction below is the spec §1.4 one: a "clean" FRF whose ink stays
+# ~0 regardless of bin count (so only the POINT leg can stop it) and a "noise"
+# FRF whose random phase and half-filled coherence row are what made a 2k-bin
+# AA frame cost 527 ms on Cocoa. Offscreen at dpr 1.0 / 1400x900 the two land
+# at ink ~0.5k and ~141k against the calibrated 75k / 115k band, so the
+# assertions below do not depend on the platform's paint cost — only on the
+# geometry, which offscreen reproduces faithfully.
+# ---------------------------------------------------------------------------
+
+
+def _frf_noise_result(bins, kind="noise", seed=7):
+    rng = np.random.default_rng(seed)
+    frequencies = np.linspace(1.0, 2000.0, bins)
+    transfer = (1.0 / (1.0 + (frequencies / 200.0) ** 2)).astype(np.complex128)
+    if kind == "noise":
+        transfer = (
+            transfer
+            * (1 + 0.6 * rng.standard_normal(bins))
+            * np.exp(1j * rng.standard_normal(bins) * 1.5)
+        )
+        coherence = np.clip(0.9 - 0.5 * rng.random(bins), 0.0, 1.0)
+    else:
+        coherence = np.full(bins, 0.99)
+    return SimpleNamespace(
+        frequencies=frequencies,
+        transfer=transfer,
+        coherence=coherence,
+        effective=SimpleNamespace(fs=4000.0, df=1.0, segments=8),
+        warnings=(),
+    )
+
+
+def _settled_frf_canvas(qtbot, bins, kind, seed=7):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(1400, 900)
+    canvas.show()
+    qtbot.wait(20)
+    canvas.set_result(
+        _frf_noise_result(bins, kind, seed), {"frequency_scale": "log"}, {}
+    )
+    return canvas
+
+
+def _frf_row_heights(canvas):
+    return [float(plot.vb.sceneBoundingRect().height()) for plot in canvas.plots]
+
+
+def test_frf_set_result_arms_discrete_aa_instead_of_painting_an_aa_frame(qtbot):
+    """A new FRF result must not make the caller pay an AA frame inline."""
+    canvas = _settled_frf_canvas(qtbot, 257, "clean")
+
+    assert canvas._aa_on is False
+    assert all(
+        curve.opts["antialias"] is False
+        for curve in canvas._interactive_curves()
+    )
+    assert canvas._discrete_aa_timer.isActive()
+    # The 150 ms quiet window belongs to the CONTINUOUS interactive path and
+    # must survive the discrete timer being a separate object (QTimer.start(int)
+    # would have rewritten it permanently).
+    assert canvas._aa_idle_timer.interval() == 150
+    assert canvas._discrete_aa_timer.interval() == 0
+    assert canvas.quality_status()["state"] == "yellow"
+
+
+def test_frf_clean_result_settles_to_antialiased_green(qtbot, monkeypatch):
+    from mf4_analyzer.ui.pg_canvas import frf_canvas
+
+    monkeypatch.setattr(
+        frf_canvas, "QApplication",
+        SimpleNamespace(mouseButtons=lambda: Qt.NoButton),
+    )
+    canvas = _settled_frf_canvas(qtbot, 2049, "clean")
+    qtbot.wait(30)
+    QCoreApplication.processEvents()
+
+    assert all(height > 0 for height in _frf_row_heights(canvas))
+    assert canvas._aa_on is True
+    assert all(
+        curve.opts["antialias"] is True
+        for curve in canvas._interactive_curves()
+    )
+    assert canvas.quality_status()["state"] == "green"
+
+
+def test_frf_noise_phase_and_coherence_are_rejected_by_the_ink_gate(
+    qtbot, monkeypatch
+):
+    from mf4_analyzer.ui.pg_canvas import frf_canvas
+
+    monkeypatch.setattr(
+        frf_canvas, "QApplication",
+        SimpleNamespace(mouseButtons=lambda: Qt.NoButton),
+    )
+    canvas = _settled_frf_canvas(qtbot, 2049, "noise")
+    qtbot.wait(30)
+    QCoreApplication.processEvents()
+
+    assert all(height > 0 for height in _frf_row_heights(canvas))
+    assert canvas._frf_ink_total() > frf_canvas._FRF_INK_AA_OFF
+    # The point leg on its own would have allowed it — this is the ink leg's
+    # call, which is the whole reason the ink leg exists.
+    assert canvas._frf_point_total() <= frf_canvas._FRF_POINT_AA_ON
+    assert canvas._aa_on is False
+    status = canvas.quality_status()
+    assert status["state"] == "red"
+    assert status["block_reason"] == "high-ink"
+    assert "绘制量超预算" in status["tooltip"]
+
+
+def test_frf_point_leg_rejects_a_clean_but_dense_grid(qtbot, monkeypatch):
+    """The ink leg alone cannot see bin count: a clean 8k-bin FRF has ~0 ink."""
+    from mf4_analyzer.ui.pg_canvas import frf_canvas
+
+    monkeypatch.setattr(
+        frf_canvas, "QApplication",
+        SimpleNamespace(mouseButtons=lambda: Qt.NoButton),
+    )
+    canvas = _settled_frf_canvas(qtbot, 8193, "clean")
+    qtbot.wait(30)
+    QCoreApplication.processEvents()
+
+    assert canvas._frf_ink_total() < frf_canvas._FRF_INK_AA_ON
+    assert canvas._frf_point_total() > frf_canvas._FRF_POINT_AA_OFF
+    assert canvas._aa_on is False
+    status = canvas.quality_status()
+    assert status["state"] == "red"
+    assert status["block_reason"] == "high-density"
+    assert "曲线密度" in status["tooltip"]
+
+
+def test_frf_backstop_trips_and_blacklists_the_view_signature(
+    qtbot, monkeypatch
+):
+    from mf4_analyzer.ui.pg_canvas import frf_canvas
+
+    monkeypatch.setattr(
+        frf_canvas, "QApplication",
+        SimpleNamespace(mouseButtons=lambda: Qt.NoButton),
+    )
+    canvas = _settled_frf_canvas(qtbot, 2049, "clean")
+    qtbot.wait(30)
+    QCoreApplication.processEvents()
+    assert canvas._aa_on is True
+    assert canvas._aa_backstop_armed is True
+
+    signature = canvas._frf_view_signature()
+    canvas._note_aa_frame(1500.0)
+    QCoreApplication.processEvents()
+    qtbot.wait(10)
+
+    assert canvas._aa_on is False
+    assert canvas._aa_backstop_armed is False
+    assert canvas._aa_latch.blocked(signature) is True
+    status = canvas.quality_status()
+    assert status["state"] == "red"
+    assert status["block_reason"] == "aa-backstop"
+
+    # A second attempt on the same geometry must not pay that frame again.
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is False
+
+
+def test_frf_interactive_path_keeps_the_150ms_quiet_window(qtbot, monkeypatch):
+    from mf4_analyzer.ui.pg_canvas import frf_canvas
+
+    monkeypatch.setattr(
+        frf_canvas, "QApplication",
+        SimpleNamespace(mouseButtons=lambda: Qt.NoButton),
+    )
+    canvas = _settled_frf_canvas(qtbot, 257, "clean")
+    qtbot.wait(30)
+    QCoreApplication.processEvents()
+
+    view_box = canvas._plot_magnitude.vb
+    view_box.sigRangeChangedManually.emit(view_box.state["mouseEnabled"])
+
+    assert canvas._aa_on is False
+    assert canvas._aa_idle_timer.isActive()
+    assert canvas._aa_idle_timer.interval() == 150
+    assert canvas._discrete_aa_timer.isActive() is False
+
+
+def test_frf_quality_status_changed_emits_once_per_transition(
+    qtbot, monkeypatch
+):
+    from mf4_analyzer.ui.pg_canvas import frf_canvas
+
+    monkeypatch.setattr(
+        frf_canvas, "QApplication",
+        SimpleNamespace(mouseButtons=lambda: Qt.NoButton),
+    )
+    canvas = _settled_frf_canvas(qtbot, 257, "clean")
+    seen = []
+    canvas.quality_status_changed.connect(seen.append)
+    qtbot.wait(30)
+    QCoreApplication.processEvents()
+
+    assert seen, "settling to AA must announce the new quality state"
+    assert seen[-1]["state"] == "green"
+    before = len(seen)
+    canvas._emit_quality_status()
+    canvas._emit_quality_status()
+    assert len(seen) == before, "unchanged status must not re-emit"
