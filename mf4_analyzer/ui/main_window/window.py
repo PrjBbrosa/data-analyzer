@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QStatusBar,
     QWidget,
 )
-from PyQt5.QtCore import QEvent, QTimer, Qt
+from PyQt5.QtCore import QEvent, QEventLoop, QTimer, Qt
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
 from ...signal import (
@@ -56,6 +56,7 @@ from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._state_holders import (
     CustomXAxisState,
     ProjectRestoreHealth,
+    TimeRenderGate,
     ViewFocusState,
 )
 from ._analysis_mixin import AnalysisMixin
@@ -196,6 +197,9 @@ class MainWindow(
         # shims below always have a target.
         self._custom_xaxis = CustomXAxisState()
         self._view_focus = ViewFocusState()
+        # Serializes the time render pipeline against re-entrant View
+        # switches (see TimeRenderGate + ViewMixin._time_render_scope).
+        self._time_render = TimeRenderGate()
         # Stage 1 degraded-save guard: missing project sources / dropped pane
         # refs. Mutations go through the holder (not multi-file rebinds).
         self._project_restore_health = ProjectRestoreHealth()
@@ -638,7 +642,13 @@ class MainWindow(
         self._active_compute_progress_token = active_token
         self._compute_progress.begin(label, total)
         if process_events and restore is None:
-            QApplication.processEvents()
+            # ExcludeUserInputEvents, never a bare processEvents(): this pump
+            # exists only so the bar reaches the screen before a long
+            # synchronous render. Delivering the queued clicks/keys here runs
+            # the next View switch INSIDE the render that is still building
+            # the previous one (see TimeRenderGate). Input stays queued and is
+            # handled in order once the render returns.
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
         return active_token
 
     def _update_compute_progress(
@@ -671,7 +681,6 @@ class MainWindow(
             # + stolen navigator capture). Paint only.
             return
         if flush_events:
-            from PyQt5.QtCore import QEventLoop
             QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
     def _finish_compute_progress(
@@ -3282,11 +3291,15 @@ class MainWindow(
         # canvas IS the primary, so the stats strip / status bar / cache
         # bookkeeping only fire for the primary pane.
         focused = self.chart_stack.focused_canvas()
-        return self._plot_time_on_canvas(
-            focused,
-            update_primary_ui=(focused is self.canvas_time),
-            user_initiated=user_initiated,
-        )
+        # The scope makes this render non-reentrant: the progress pump inside
+        # _plot_time_on_canvas can deliver a queued 0 ms timer, and a View
+        # switch running there would rebuild THIS canvas underneath us.
+        with self._time_render_scope():
+            return self._plot_time_on_canvas(
+                focused,
+                update_primary_ui=(focused is self.canvas_time),
+                user_initiated=user_initiated,
+            )
 
     @staticmethod
     def _time_plot_issue_text(issue):
@@ -4846,6 +4859,10 @@ class MainWindow(
         abort = getattr(self, "_abort_analysis_restore", None)
         if callable(abort):
             abort()
+        # A View switch parked by the render gate is moot once the window is
+        # closing; replaying it would drive a full render through a widget tree
+        # that is being torn down.
+        self._time_render.clear_pending_switch()
         self._analysis_jobs.shutdown()
         super().closeEvent(event)
 

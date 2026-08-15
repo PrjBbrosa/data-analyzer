@@ -1,7 +1,10 @@
 """ViewMixin: time-domain split-view switch / capture / render pipeline."""
 
+from contextlib import contextmanager
 from dataclasses import replace
 
+from PyQt5 import sip
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
@@ -29,6 +32,102 @@ class ViewMixin:
     switch (``_on_analysis_switch``) remain on other classes and resolve
     through the MRO via ``self.``.
     """
+
+    # -- render re-entrancy gate ------------------------------------------
+    #
+    # A time render is NOT atomic: `_begin_compute_progress` pumps the Qt
+    # event loop so the status-bar bar reaches the screen, and any 0 ms timer
+    # already posted (UltraView `navigate_to_view`) is delivered inside that
+    # pump.  A View switch executing there re-enters this pipeline on the same
+    # canvas -- the outer render then finishes on top of the inner one and the
+    # tab highlight, the navigator projection and the painted curves describe
+    # three different Views.  The gate below turns that into a serial replay.
+
+    def _time_render_gate(self):
+        """The window's :class:`TimeRenderGate`, or ``None`` on a bare host.
+
+        Test doubles bind these methods onto plain namespaces that never ran
+        ``MainWindow.__init__``; they get the historical unguarded behaviour.
+        """
+        return getattr(self, "_time_render", None)
+
+    @contextmanager
+    def _time_render_scope(self):
+        """Mark a render in flight; replay a deferred switch once it unwinds."""
+        gate = self._time_render_gate()
+        if gate is None:
+            yield
+            return
+        gate.enter()
+        try:
+            yield
+        finally:
+            gate.leave()
+            if not gate.busy:
+                self._schedule_pending_view_switch()
+
+    def _time_render_busy(self) -> bool:
+        gate = self._time_render_gate()
+        return gate is not None and gate.busy
+
+    def _schedule_pending_view_switch(self) -> None:
+        """Replay the parked switch on the next event-loop turn, not inline.
+
+        Inline would land in the middle of whatever called us:
+        ``_apply_active_view`` renders two panes back to back, and
+        ``plot_time``'s callers keep working on the canvas after it returns.  A
+        queued turn is also exactly when the real click would have been handled
+        had the pump not been open.
+        """
+        gate = self._time_render_gate()
+        if gate is None or gate.pending_view_id is None or gate.drain_scheduled:
+            return
+        gate.drain_scheduled = True
+        QTimer.singleShot(0, self._drain_pending_view_switch)
+
+    def _drain_pending_view_switch(self) -> None:
+        gate = self._time_render_gate()
+        if gate is None:
+            # No gate => nothing was ever parked (bare test host).  Checked
+            # before the sip probe below, which only accepts a real wrapper.
+            return
+        # Clear the scheduling flag FIRST: every early return below must leave
+        # the gate able to schedule again, or a later parked switch would never
+        # be replayed.
+        gate.drain_scheduled = False
+        # A queued drain can outlive the window it belongs to (close during a
+        # render). Replaying there drives a full render through a widget tree
+        # that is gone -- ``closeEvent`` drops the intent for an orderly close,
+        # this covers a window already destroyed when the timer fires.
+        if sip.isdeleted(self):
+            gate.clear_pending_switch()
+            return
+        if gate.busy:
+            # Another render started meanwhile; its scope exit re-schedules us.
+            return
+        view_id = gate.take_pending_switch()
+        if view_id is None:
+            return
+        idx = next(
+            (
+                i
+                for i, state in enumerate(self.view_manager.views)
+                if str(getattr(state, "view_id", "")) == view_id
+            ),
+            None,
+        )
+        if idx is None:
+            return
+        if idx == self.view_manager.active:
+            # Nothing to switch, but the tab bar moved its current index on the
+            # click that got deferred; put the highlight back on the View that
+            # is actually shown.
+            tabbar = getattr(self, "view_tabbar", None)
+            refresh = getattr(tabbar, "refresh", None)
+            if callable(refresh):
+                refresh()
+            return
+        self._switch_view(idx)
 
     def _connect_canvas_range_signals(self, canvas):
         visible_range_changed = getattr(canvas, 'visible_range_changed', None)
@@ -133,6 +232,15 @@ class ViewMixin:
         # capture guard that already keys off current_mode.
         if self.chart_stack.current_mode() != 'time':
             return
+        # Mid-render the screen is a MIXTURE: the navigator already holds the
+        # incoming View's channels while the canvas still shows the outgoing
+        # frame (or a half-built one). Capturing that writes another View's
+        # channels/xlim into whichever View currently owns the focus — the
+        # "View 2 变成 View 3 的内容" / blank-chart corruption. Same reasoning as
+        # the `_applying_view` guard on `_capture_canvas_ranges_for_bound_view`;
+        # every caller here is a user intent that re-runs on its own later.
+        if self._time_render_busy() or getattr(self, '_applying_view', False):
+            return
         idx = self._focused_view_idx
         if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return
@@ -228,9 +336,19 @@ class ViewMixin:
             self._switch_view(idx)
 
     def _switch_view(self, idx):
-        if idx == self.view_manager.active:
-            return
         if not (0 <= idx < len(self.view_manager.views)):
+            return
+        gate = self._time_render_gate()
+        if gate is not None and gate.busy:
+            # A render owns the canvas. Park the intent (by view id, so a
+            # concurrent delete/reorder cannot redirect it) and replay it once
+            # the pipeline unwinds; the newest click wins.
+            gate.defer_switch(getattr(self.view_manager.get(idx), "view_id", None))
+            return
+        if gate is not None:
+            # An executed switch supersedes anything parked earlier.
+            gate.clear_pending_switch()
+        if idx == self.view_manager.active:
             return
         self._capture_focused_view()
         self.view_manager.set_active(idx)
@@ -322,7 +440,55 @@ class ViewMixin:
         if callable(empty):
             empty(section_label='时域', view_name=state.name)
 
+    def _restore_view_xlim(self, canvas, xlim):
+        """Restore a View's saved X window unless it no longer frames the data.
+
+        A saved window is always a window INTO the data it was captured on, so
+        restoring it verbatim is right whenever the View still draws that data.
+        When it does not — the View's files/channels changed, or a re-entrant
+        capture wrote another View's zoom into this one — the window can sit
+        entirely outside the plotted extent and the chart renders blank with no
+        way back: 绘图 rebinds the same curves without touching X, so only
+        右键·全图 recovers it. Reuse the reframe predicate the plot-mode toggle
+        already uses (``_preserved_xlim_fits_data``) and fall back to the data
+        union, then drain the debounced refresh so the corrected window paints
+        now rather than after the settle timer.
+
+        Hosts without the predicate (test doubles) keep the verbatim restore.
+        """
+        if xlim is None:
+            return
+        fits = getattr(self, '_preserved_xlim_fits_data', None)
+        frame = getattr(canvas, 'frame_x_to_data', None)
+        keep = True
+        if callable(fits) and callable(frame):
+            try:
+                lo, hi = (float(value) for value in xlim)
+            except (TypeError, ValueError):
+                lo = hi = None
+            if lo is not None:
+                keep = bool(fits(canvas, lo, hi))
+        if keep:
+            canvas.restore_visible_xlim(xlim)
+            return
+        frame()
+        flush = getattr(canvas, '_flush_pending_refresh', None)
+        if callable(flush):
+            flush()
+
     def _render_view_to_canvas(self, idx, canvas, *, update_primary_ui):
+        """Project View ``idx`` onto ``canvas``, serialized against re-entry.
+
+        The scope is the whole projection, not just the plot: apply-controls,
+        plot, X/Y restore and the navigator re-projection in the tail must all
+        describe ONE View, and the plot in the middle pumps the event loop.
+        """
+        with self._time_render_scope():
+            return self._render_view_onto_canvas(
+                idx, canvas, update_primary_ui=update_primary_ui,
+            )
+
+    def _render_view_onto_canvas(self, idx, canvas, *, update_primary_ui):
         if canvas is None:
             return
         if not (0 <= idx < len(self.view_manager.views)):
@@ -357,7 +523,7 @@ class ViewMixin:
                 update_primary_ui=update_primary_ui,
                 defer_first_frame=(state.xlim is not None),
             )
-            canvas.restore_visible_xlim(state.xlim)
+            self._restore_view_xlim(canvas, state.xlim)
             canvas.restore_visible_ylims(state.ylims)
             tick_opts = (state.axis_opts or {}).get('tick_density') or {}
             default_x, default_y = DEFAULT_CHART_TICK_DENSITY

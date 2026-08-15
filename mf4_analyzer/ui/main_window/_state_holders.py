@@ -96,6 +96,58 @@ class ViewFocusState:
 
 
 @dataclass
+class TimeRenderGate:
+    """Re-entrancy gate for the time-domain render pipeline.
+
+    ``depth`` > 0 means a time plot / View projection is running on the GUI
+    thread.  That window is *not* atomic: ``_begin_compute_progress`` pumps the
+    Qt event loop so the status-bar bar reaches the screen, and any 0 ms
+    ``QTimer`` already posted (UltraView's ``navigate_to_view``) is delivered
+    inside that pump.  A View switch that executes there re-enters
+    ``_render_view_to_canvas`` on the same canvas: the outer render then
+    finishes on top of the inner one, so the tab highlight, the navigator
+    projection and the painted curves end up describing three different Views,
+    and the next capture writes that mixture back into ViewState.
+
+    The gate makes the pipeline serial instead: a switch intent that arrives
+    while ``busy`` is parked in ``pending_view_id`` (by *view id*, so a
+    concurrent delete/reorder cannot redirect it at a stale index) and replayed
+    once the outermost render has unwound.  Only the LAST intent survives --
+    rapid tab clicking means "take me to the one I stopped on".
+
+    Owned by ``MainWindow`` (assigned once in ``window.py``); mixins mutate it
+    through these methods so the state-ownership ratchet sees no new
+    multi-file bare attribute.
+    """
+
+    depth: int = 0
+    pending_view_id: str | None = None
+    drain_scheduled: bool = False
+
+    @property
+    def busy(self) -> bool:
+        return self.depth > 0
+
+    def enter(self) -> None:
+        self.depth += 1
+
+    def leave(self) -> None:
+        self.depth = max(0, self.depth - 1)
+
+    def defer_switch(self, view_id) -> None:
+        """Park a switch intent; a later intent supersedes an earlier one."""
+        self.pending_view_id = None if view_id is None else str(view_id)
+
+    def clear_pending_switch(self) -> None:
+        self.pending_view_id = None
+
+    def take_pending_switch(self) -> str | None:
+        view_id = self.pending_view_id
+        self.pending_view_id = None
+        return view_id
+
+
+@dataclass
 class AnalysisPinBook:
     """Per-pane set of real analysis-cache keys currently bound to a View.
 

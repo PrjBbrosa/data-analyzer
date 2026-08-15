@@ -190,6 +190,7 @@ lesson by default.
 | [FFT Spectra Must Peak-Hold, Not Min/Max-Fill](codex-fft-spectrum-peak-hold.md) | Changing `PgLineCanvas` spectrum plotting, `_spectrum_plot_arrays`, | See lesson |
 | [Dialog QToolButton Chrome Must Spare SearchField Icons](codex-dialog-toolbutton-chrome-spares-search-field.md) | Adding dialog-wide `QToolButton` / `QPushButton` QSS, embedding | See lesson |
 | [`is_pandas_dataframe` Reads `sys.modules`, Never `import`s](codex-pandas-lazy-import-avoids-collect-all.md) | Touching `channel_frame.py`'s `is_pandas_dataframe`/`is_tabular_frame`, or adding a new lazy/optional dependency check in `mf4_analyzer/io`. | `tests/test_channel_frame.py` |
+| [A Progress Pump Makes The Render Re-Entrant](pyqt-ui/2026-08-15-progress-pump-makes-the-render-reentrant.md) | Adding/touching any `processEvents` on a render path, the time-domain View switch pipeline, or a `singleShot(0)` that navigates to a View. | `tests/ui/test_view_switch_reentrancy.py`; `rg -n "processEvents\(\)" mf4_analyzer/ui` |
 
 ## Selection Rules
 
