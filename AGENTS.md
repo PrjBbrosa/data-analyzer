@@ -168,6 +168,27 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
 
 ## Verification Gates
 
+- Treat verification scope as part of plan design. Every task or wave must name
+  its focused owner tests and any applicable boundary gates; a docs-only task
+  must say why no runtime test is needed. Do not add a generic pre-change
+  full-suite baseline to routine Task 0 sections, and do not run all of
+  `tests/ui` merely because a UI file changed.
+- A pre-change baseline means the affected focused tests by default. A
+  pre-change full suite is justified only for release or merge acceptance, a
+  broad cross-boundary refactor, investigation of order/teardown pollution, or
+  an explicit user request. Reuse a completed authoritative full result for the
+  same `HEAD` and worktree fingerprint instead of rediscovering the same known
+  failures.
+- Run the full suite at most once per stable integration milestone unless the
+  user explicitly requests another run. In multi-agent or multi-session plans,
+  designate one parent/coordinator as the full-gate owner; parallel workers run
+  only their focused and boundary tests. Before starting a full gate, inspect
+  running pytest processes and their working directories. Never overlap two
+  full gates in the same checkout: wait for or reuse the authoritative run.
+- A full-suite result is valid only for a stable source snapshot. Record `HEAD`
+  and dirty-worktree scope before and after the run; if relevant files changed
+  while pytest was running, report the result as `UNVERIFIED` rather than as a
+  baseline or acceptance result.
 - Run focused tests for the changed owner first. Then run the relevant boundary
   gates, including as applicable:
   `tests/ui/test_pg_canvas_backref_invariants.py`,
@@ -189,11 +210,13 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   `TMPDIR=/tmp MPLCONFIGDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest ...`.
   An abnormal exit, crash, timeout, or interrupted full suite is `UNVERIFIED`,
   never a pass inferred from the tests that completed first.
-- The current full-suite gate is two fresh processes because combining
+- When a full-suite gate is justified, use two fresh, sequential processes
+  because combining
   `tests/acquisition_ui` with the main suite can trigger an order-sensitive Qt
-  teardown segfault. Record the pre-change baseline, then run the main suite
-  with `--ignore=tests/acquisition_ui` and run `tests/acquisition_ui` separately;
-  do not hard-code historical pass counts into this file.
+  teardown segfault. Run the main suite to completion with
+  `--ignore=tests/acquisition_ui`, then run `tests/acquisition_ui` separately;
+  never launch the two processes concurrently, and do not hard-code historical
+  pass counts into this file.
 - The repo-root `conftest.py` exists solely to repair a pytest collection
   regression: when the argument list leaves and re-enters a directory
   (`pytest tests/ui/a.py tests/x.py tests/ui/b.py`), pytest rebuilds that
