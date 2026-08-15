@@ -1,0 +1,165 @@
+{
+  "command": "analysis-frames",
+  "environment": {
+    "platform_plugin": "cocoa",
+    "loadavg": [
+      2.75,
+      3.03,
+      3.09
+    ]
+  },
+  "spectrum": {
+    "ink_aa_on": 200000.0,
+    "ink_aa_off": 300000.0,
+    "cases": [
+      {
+        "label": "纯噪声底",
+        "n_curves": 3,
+        "pts": 4095,
+        "product_state": "red",
+        "product_block_reason": "high-ink",
+        "product_tooltip": "抗锯齿未激活：谱线填满绘图区，绘制量超预算",
+        "product_aa_on_curves": false,
+        "yspan": 4.44760433934224,
+        "ink": 617383.2634220611,
+        "band_verdict": "BLOCK",
+        "frame_ms": 1556.923000000097
+      },
+      {
+        "label": "峰/底=10",
+        "n_curves": 3,
+        "pts": 4095,
+        "product_state": "red",
+        "product_block_reason": "high-ink",
+        "product_tooltip": "抗锯齿未激活：谱线填满绘图区，绘制量超预算",
+        "product_aa_on_curves": false,
+        "yspan": 13.223108936665911,
+        "ink": 212343.0602444425,
+        "band_verdict": "band",
+        "frame_ms": 322.2587919990474
+      },
+      {
+        "label": "峰/底=40",
+        "n_curves": 3,
+        "pts": 4095,
+        "product_state": "green",
+        "product_block_reason": null,
+        "product_tooltip": "抗锯齿已完成",
+        "product_aa_on_curves": true,
+        "yspan": 45.542791349277245,
+        "ink": 66785.38316015036,
+        "band_verdict": "ALLOW",
+        "frame_ms": 133.80379199952586
+      },
+      {
+        "label": "峰/底=200",
+        "n_curves": 3,
+        "pts": 4095,
+        "product_state": "green",
+        "product_block_reason": null,
+        "product_tooltip": "抗锯齿已完成",
+        "product_aa_on_curves": true,
+        "yspan": 217.91443088320432,
+        "ink": 19785.250965797713,
+        "band_verdict": "ALLOW",
+        "frame_ms": 68.62187499791617
+      },
+      {
+        "label": "峰/底=200 · 1 条",
+        "n_curves": 1,
+        "pts": 1365,
+        "product_state": "green",
+        "product_block_reason": null,
+        "product_tooltip": "抗锯齿已完成",
+        "product_aa_on_curves": true,
+        "yspan": 217.3380368364742,
+        "ink": 6234.236104661214,
+        "band_verdict": "ALLOW",
+        "frame_ms": 25.423499999305932
+      },
+      {
+        "label": "纯噪声底 · 1 条",
+        "n_curves": 1,
+        "pts": 1365,
+        "product_state": "red",
+        "product_block_reason": "high-ink",
+        "product_tooltip": "抗锯齿未激活：谱线填满绘图区，绘制量超预算",
+        "product_aa_on_curves": false,
+        "yspan": 3.4744116347615277,
+        "ink": 239489.11923028546,
+        "band_verdict": "band",
+        "frame_ms": 663.9887919991452
+      },
+      {
+        "label": "纯噪声底 · 6 条",
+        "n_curves": 6,
+        "pts": 8364,
+        "product_state": "red",
+        "product_block_reason": "high-ink",
+        "product_tooltip": "抗锯齿未激活：谱线填满绘图区，绘制量超预算",
+        "product_aa_on_curves": false,
+        "yspan": 5.707197205137509,
+        "ink": 1126943.5784359402,
+        "band_verdict": "BLOCK",
+        "frame_ms": 2676.2055840008543
+      },
+      {
+        "label": "AA 关 · 纯噪声底 (对照)",
+        "frame_ms": 14.572041000064928,
+        "aa_off_control": true
+      }
+    ]
+  },
+  "frf": {
+    "cases": [
+      {
+        "label": "2k bins 干净",
+        "n_bins": 2049,
+        "noisy": false,
+        "set_result_ms": 4.563709000649396,
+        "product_state": "green",
+        "product_block_reason": null,
+        "product_tooltip": "抗锯齿已完成",
+        "product_aa_on": true,
+        "aa_frame_ms": 17.587207999895327,
+        "non_aa_frame_ms": 6.767999999283347
+      },
+      {
+        "label": "2k bins 噪声相位/相干",
+        "n_bins": 2049,
+        "noisy": true,
+        "set_result_ms": 1.7152090003946796,
+        "product_state": "red",
+        "product_block_reason": "high-ink",
+        "product_tooltip": "抗锯齿未激活：相位翻转/相干填满绘图区，绘制量超预算",
+        "product_aa_on": false,
+        "aa_frame_ms": 509.13316699734423,
+        "non_aa_frame_ms": 51.83966600088752
+      },
+      {
+        "label": "8k bins 噪声",
+        "n_bins": 8193,
+        "noisy": true,
+        "set_result_ms": 3.2650419998390134,
+        "product_state": "red",
+        "product_block_reason": "high-ink",
+        "product_tooltip": "抗锯齿未激活：相位翻转/相干填满绘图区，绘制量超预算",
+        "product_aa_on": false,
+        "aa_frame_ms": 2458.625082999788,
+        "non_aa_frame_ms": 427.2707910022291
+      },
+      {
+        "label": "32k bins 噪声",
+        "n_bins": 32769,
+        "noisy": true,
+        "set_result_ms": 8.494709003571188,
+        "product_state": "red",
+        "product_block_reason": "high-ink",
+        "product_tooltip": "抗锯齿未激活：相位翻转/相干填满绘图区，绘制量超预算",
+        "product_aa_on": false,
+        "aa_frame_ms": 10909.236999999848,
+        "non_aa_frame_ms": 3888.8330419977137
+      }
+    ]
+  }
+}

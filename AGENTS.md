@@ -225,6 +225,22 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   measured, never treated as zero ink. Changing ink thresholds requires the
   governing spec, focused `TestInkBudget` coverage, a real Cocoa probe, and the
   interaction benchmark rather than an offscreen timing claim.
+- Restoring a View is one transaction that settles once. `_render_view_to_canvas`
+  must call `restore_visible_xlim(flush=False)`, then `restore_visible_ylims`,
+  then `settle_view_restore()`, so ink, the envelope bucket cap, the AA gate and
+  raster admission are all decided on the FINAL geometry exactly once
+  (`TestViewRestoreSettlement` in `tests/ui/test_pg_timedomain_canvas.py`).
+  The discrete settle must not disturb the interactive quiet window: the 150 ms
+  idle timer stays at `interval() == 150` and the discrete path uses its own
+  single-shot 0 ms timer, because `QTimer.start(int)` permanently rewrites the
+  interval (`TestDiscreteSettle`). The analysis canvases follow the same rule —
+  `plot_spectra` / `set_result` return with curve AA off, AA is gated on ink
+  AND drawn points, and a measured paint backstop overrides both
+  (`tests/ui/test_pg_line_canvas.py`, `tests/ui/test_frf_canvas.py`). The
+  analysis ink bands (`_SPECTRUM_INK_AA_ON/OFF`, `_FRF_INK_AA_ON/OFF`, and the
+  preview row's reuse of `_INK_AA_ON/OFF`) are calibrated values, not knobs:
+  change the governing spec section first, then re-measure on a real Cocoa
+  machine with `scripts/probe_view_switch_quality.py analysis-calibrate`.
 
 <!-- BEGIN CODEX LESSONS SYSTEM -->
 

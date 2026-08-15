@@ -1,0 +1,45 @@
+platform=cocoa dpr=2.0 exposed=True
+
+== 向量AA 路径：smoothA <-> smoothB (事务顺序) ==
+[0] -> smoothA             rebuild=   48.9 restore=   0.2 settle=   4.1 aa@首帧=False frame=   4.9 | raster_flush=   13.4(3) rframe=   8.3 | aa_on=False aa_enable=   0.1 AA1=    8.4 AAn=   8.4 | 首帧=   58.1 稳定=   88.3 ms [dense-raster]
+[0] -> smoothB             rebuild=   22.8 restore=   0.1 settle=   3.9 aa@首帧=False frame=   3.7 | raster_flush=    5.3(2) rframe=   7.5 | aa_on=False aa_enable=   0.1 AA1=    7.1 AAn=   8.2 | 首帧=   30.5 稳定=   50.7 ms [dense-raster]
+[1] -> smoothA             rebuild=   12.4 restore=   0.3 settle=   0.7 aa@首帧=False frame=   5.5 | raster_flush=    5.0(0) rframe=  26.3 | aa_on=True  aa_enable=   0.1 AA1=   25.8 AAn=  26.9 | 首帧=   18.9 稳定=   76.1 ms [green]
+[1] -> smoothB             rebuild=    8.6 restore=   0.2 settle=   0.5 aa@首帧=False frame=   4.4 | raster_flush=    4.4(0) rframe=   9.2 | aa_on=True  aa_enable=   0.1 AA1=    8.9 AAn=   9.2 | 首帧=   13.7 稳定=   36.2 ms [green]
+[2] -> smoothA             rebuild=   12.2 restore=   0.3 settle=   0.7 aa@首帧=True  frame=  28.4 | raster_flush=   27.3(0) rframe=  26.1 | aa_on=True  aa_enable=   0.1 AA1=   25.8 AAn=  26.5 | 首帧=   41.6 稳定=  120.9 ms [green]
+[2] -> smoothB             rebuild=    8.3 restore=   0.2 settle=   0.5 aa@首帧=True  frame=  14.7 | raster_flush=    9.1(0) rframe=   7.5 | aa_on=True  aa_enable=   0.1 AA1=    7.5 AAn=   8.4 | 首帧=   23.7 稳定=   47.9 ms [green]
+-- 向量AA 稳定段中位数（丢首轮 2 次） --
+   rebuild_ms                   10.4 ms
+   restore_xlim_ms               0.3 ms
+   settle_ms                     0.6 ms
+   first_frame_ms               10.1 ms
+   raster_flush_ms               7.1 ms
+   raster_frame_ms              17.6 ms
+   ink_measure_ms                0.0 ms
+   aa_enable_call_ms             0.1 ms
+   first_aa_frame_ms            17.3 ms
+   steady_aa_frame_ms           17.9 ms
+   to_first_frame_ms            21.3 ms
+   to_settled_ms                62.0 ms
+   首帧即 AA（稳定段）              2/4
+
+== 光栅 路径：denseA <-> denseB (事务顺序) ==
+[0] -> denseA              rebuild=   17.2 restore=   0.2 settle=  35.1 aa@首帧=False frame=   4.1 | raster_flush=   29.4(3) rframe=   8.4 | aa_on=False aa_enable=   0.1 AA1=    8.4 AAn=   8.7 | 首帧=   56.6 稳定=  103.0 ms [dense-raster]
+[0] -> denseB              rebuild=   10.3 restore=   0.1 settle=  28.0 aa@首帧=False frame=   3.4 | raster_flush=   23.6(2) rframe=   8.4 | aa_on=False aa_enable=   0.1 AA1=    8.2 AAn=   8.2 | 首帧=   41.9 稳定=   82.3 ms [dense-raster]
+[1] -> denseA              rebuild=   13.6 restore=   0.3 settle=  27.7 aa@首帧=False frame=  10.4 | raster_flush=   34.9(3) rframe=   8.5 | aa_on=False aa_enable=   0.1 AA1=    8.4 AAn=   8.7 | 首帧=   52.0 稳定=  103.9 ms [dense-raster]
+[1] -> denseB              rebuild=    9.3 restore=   0.2 settle=  26.8 aa@首帧=False frame=  10.0 | raster_flush=   34.3(2) rframe=   8.4 | aa_on=False aa_enable=   0.1 AA1=    8.3 AAn=   9.3 | 首帧=   46.3 稳定=   97.4 ms [dense-raster]
+[2] -> denseA              rebuild=   13.5 restore=   0.3 settle=  27.2 aa@首帧=False frame=  10.3 | raster_flush=   36.8(3) rframe=   8.6 | aa_on=False aa_enable=   0.1 AA1=    8.4 AAn=   8.7 | 首帧=   51.3 稳定=  105.2 ms [dense-raster]
+[2] -> denseB              rebuild=    9.6 restore=   0.2 settle=  25.9 aa@首帧=False frame=  10.5 | raster_flush=   33.3(2) rframe=   8.4 | aa_on=False aa_enable=   0.1 AA1=    8.2 AAn=   8.6 | 首帧=   46.2 稳定=   96.2 ms [dense-raster]
+-- 光栅 稳定段中位数（丢首轮 2 次） --
+   rebuild_ms                   11.6 ms
+   restore_xlim_ms               0.3 ms
+   settle_ms                    27.0 ms
+   first_frame_ms               10.3 ms
+   raster_flush_ms              34.6 ms
+   raster_frame_ms               8.4 ms
+   ink_measure_ms                0.0 ms
+   aa_enable_call_ms             0.1 ms
+   first_aa_frame_ms             8.3 ms
+   steady_aa_frame_ms            8.7 ms
+   to_first_frame_ms            48.8 ms
+   to_settled_ms               100.6 ms
+   首帧即 AA（稳定段）              0/4

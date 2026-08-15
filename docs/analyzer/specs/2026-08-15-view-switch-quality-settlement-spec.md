@@ -1,6 +1,7 @@
 # View 切换的渲染质量结算（view-switch quality settlement）设计
 
-> 状态：**设计定稿，未实施**。实施计划见
+> 状态：**已实施**（2026-08-15，`feat/view-switch-quality-settlement`，验收
+> `agent/vsqs-task78`）。逐项验收结果见本文末尾「实施注记」。实施计划见
 > `docs/analyzer/plans/2026-08-15-view-switch-quality-settlement-plan.md`。
 > 探针脚本与**改前**真机基线（`main@380e5ac2`，macOS Cocoa，dpr 2.0，
 > 1600×950）见 `docs/analyzer/verify/2026-08-15-view-switch-quality-probes/`
@@ -385,4 +386,60 @@ AaFrameLatch`（构造参数：首帧上限、稳态上限、EMA α、LRU 上限
   首帧即 AA」不进它的 Cocoa 门禁表（那张表是 TD-HDF-6 场景），以 verify 目录
   的探针 + 本文 §6 作为验收基线；等稳定两个版本再考虑升格。
 - CLAUDE.md「机械护栏」：落地后补一条「View 恢复事务只结算一次 +
-  `timer.interval()==150` 钉住」。
+  `timer.interval()==150` 钉住」。**已补**（Task 8），AGENTS.md 的
+  Architecture Contracts / Verification Gates 同步一句。
+
+## 9. 实施注记（2026-08-15 真机验收，plan Task 7）
+
+真机 macOS 27.0 / arm64 / Cocoa / dpr 2.0，仓库 `.venv`。原始输出、同机对照 lane
+与逐项解释见 `docs/analyzer/verify/2026-08-15-view-switch-quality-probes/`
+（`results/after-*`，README 末节「改后读数」）。
+
+**方法学一条**：验收机 loadavg 2.2–4.2，改前基线是空闲机，`plot_channels`（本批
+未改一行）同一函数 1.7×——所以 wall-clock **不跨文件减**，两条同机同刻对照 lane
+才是判据：`time-canvas --legacy-order`（改前调用顺序）与「只把 `_view_mixin.py`
+单文件回退到 `380e5ac2`」跑同一条 MainWindow 探针。
+
+| §6 验收项 | 改前 | 改后 | 判定 |
+|---|---|---|---|
+| overlay 2ch 回切记录到的 ink | 904 560 / 1 010 681 | 4 824 / 5 454（首访 4 719 / 5 335，+2.2% ≤5%） | ✅ |
+| overlay 2ch 回切绘点 | 1404（`stale-ink` 口径，被砍 55%） | 3124 = 首访（`stale-ink` 事务 lane） | ✅ |
+| overlay 2ch 回切质量点 | red「波形填满绘图区」 | green「抗锯齿已完成」 | ✅ |
+| 3ch 平滑 1M 回切路径 | `[dense-raster]` 6/6 轮误收编 | `[green]`，`raster_entries=0`、`_ink_raster_admitted` 空 | ✅ |
+| 回切到已知便宜 View：首帧即 AA | 首帧非 AA → 150 ms → AA | **对象复用路径**（subplot 全显 / 含隐藏 / plot-mode-changed 的 subplot 侧）第 2 次起 `aa@切换返回=True`、paint 级证据 `[True, True]` | ✅ |
+| 同上，**全量重建路径**（overlay `new-channel`） | AA 根本不开（红点，`[False, False]`） | AA 落在同一轮事件循环的第 3 个 paint（`[False, False, True]`，≈6 ms），非首帧 | ⚠️ 见下 |
+| 切换调用 ≤40 ms | overlay 43.6–45.8 ms（**同机对照 lane**，非空闲机的 26 ms） | 49.5–50.2 ms，真实增量 **+4~7 ms**；`settle_view_restore()` 自身 0.7–0.9 ms | ⚠️ 见下 |
+| 一次恢复的 `_refresh_visible_data` 次数 | 1（错几何）+ 用户动一下再 1 | 1（`TestViewRestoreSettlement` 常驻看守） | ✅ |
+| `plot_spectra` 切换调用（3 曲线噪声底） | 245 ms（首帧 227 在调用里） | **21.3 ms** 中位，`_apply_idle_curve_aa` 调用 0 次；红点有理由（`high-ink` / 本 fixture 上是 `aa-backstop`） | ✅ |
+| 谱行 峰/底=200 | 71 ms 同步 | 切换 21.3 ms + AA 帧 **68.6 ms**（≤100） | ✅ |
+| FRF 2k 噪声相位 | 527 ms 同步在 `set_result` 里 | `set_result` **1.7 ms**，产品判定 red / `high-ink`——那一帧根本不付 | ✅ |
+| `benchmark_timedomain_interaction --assert-standards` | 通过 | 通过，七项全部大幅低于上限（最紧的 warm_checkbox_paint_p95 18.6 / 220） | ✅ |
+| 交互静默窗 | 150 ms | 150 ms（`TestDiscreteSettle` 钉 `timer.interval()==150`） | ✅ |
+| 平滑对照零回归（`probe_aa_ink_budget aa-frame --cases smooth`） | AA 开，稳态 240 ms | `aa_gate=allow aa_on=True`，首帧 239.1 / 稳态 236.8 ms | ✅ |
+| §5 三条 ink 带复标定 | 95k/145k · 复用 · 75k/115k | 全扫复跑推荐值**逐字一致**，单档帧差 1–2% | ✅ |
+
+### ⚠️ 两条未达标项的定性
+
+**1. 全量重建路径拿不到「首帧即 AA」——结构性，不是接线漏了。**
+memo 键 = `(_view_signature(), dpr)`，签名含像素宽（§4.4 四输入之一）。
+`_current_pixel_width()` 读 `vb.sceneBoundingRect().width()`，而 pyqtgraph 左轴的
+宽度由**刻度标签渲染**决定，只有画过一帧才定得下来：全量重建后
+`settle_view_restore()` 读到的是布局前的 979 px，而那次 AA 帧被计时时宽度已是
+877/931 px——**写入键与查询键必然不同，memo 在这条路径上永远不命中**。
+实验记录：`ci.layout.activate()` 强制同步布局无效（仍 979），因为这不是「布局没跑」
+而是「轴宽度还没被渲染决定」。§7 第一条已把「0 ms 计时器与首次 paint 的先后不保证」
+列为两种都正确，且改后仍比改前好一个数量级（6 ms 落地 vs 改前 150 ms 且压根不开）。
+要真拿到，得让 memo 键不含像素宽，或把结算做成两段式（首帧后补判）——另开一批，
+不在本批放宽任何闸门去凑。
+
+同一机制还解释一个**改前就存在、本批未引入**的小偏差：MainWindow overlay 回切绘点
+1968 vs 首访 1864（+5.6%），因为结算用了 979 px 而不是 931 px 的分桶数
+（979/931 = 1.052 ≈ 1968/1864 = 1.056）。同机对照 lane 里改前也是 1968。
+后果只是多约 5% 的分桶——更细，不丢特征、不改判定，故不修。
+
+**2. 切换调用 +4~7 ms，overlay 全量重建在本机负载下没进 40 ms。**
+这 +5 ms 正是 §1.2 预测的「真正把 AA 画出来的钱」：改前那次切换**根本没画 AA**
+（红点、`aa_on=False`），改后画了。画布级同机 A/B 给出同一个数（向量 AA
+to_first_frame 16.0 → 21.3 ms，光栅 47.6 → 48.8 ms 持平）。40 ms 这条线是在空闲机
+（overlay 26 ms）上定的，验收机 loadavg 2.2–4.2 时改前对照本身就已 44 ms——
+**门禁没放宽，也不建议按这次读数改门禁**；等机器空闲再复跑一次即可对齐。

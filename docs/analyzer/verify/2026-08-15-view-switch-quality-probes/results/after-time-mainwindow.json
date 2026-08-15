@@ -1,0 +1,2061 @@
+{
+  "command": "time-mainwindow",
+  "environment": {
+    "platform_plugin": "cocoa",
+    "loadavg": [
+      2.24,
+      2.93,
+      3.05
+    ],
+    "exposed": true
+  },
+  "scenarios": {
+    "subplot ↔ subplot（全显）": {
+      "first_visit": {
+        "View 1": {
+          "rebuild_reason": "no-render-model",
+          "delta": {},
+          "visible_inks": [
+            2740,
+            3125,
+            2997
+          ],
+          "visible_points": [
+            1734,
+            1734,
+            1734
+          ],
+          "frame_ink": 8861,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        },
+        "View 2": {
+          "rebuild_reason": "no-render-model",
+          "delta": {},
+          "visible_inks": [
+            2496,
+            2550
+          ],
+          "visible_points": [
+            1936,
+            1936
+          ],
+          "frame_ink": 5045,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        }
+      },
+      "runs": [
+        {
+          "target": 0,
+          "switch_ms": 94.81408300052863,
+          "timers": {
+            "_capture_focused_view": 0.1187919988296926,
+            "apply_controls_from_state": 2.0275839997339062,
+            "_build_time_plot_data": 2.2674169995298143,
+            "try_apply_selection_delta": 34.59929099699366,
+            "restore_visible_xlim": 0.27512499946169555,
+            "restore_visible_ylims": 2.494374999514548,
+            "settle_view_restore": 1.7245420021936297,
+            "_project_view_controls": 0.7617080009367783
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 3,
+              "removed": 2
+            },
+            "visible_inks": [
+              2726,
+              3109,
+              2979
+            ],
+            "visible_points": [
+              1040,
+              1040,
+              1040
+            ],
+            "frame_ink": 8813,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              true,
+              true,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 7.230290997540578,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 3,
+              "removed": 2
+            },
+            "visible_inks": [
+              2726,
+              3109,
+              2979
+            ],
+            "visible_points": [
+              1040,
+              1040,
+              1040
+            ],
+            "frame_ink": 8813,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 58.070249997399515,
+          "timers": {
+            "_capture_focused_view": 0.3718329971889034,
+            "apply_controls_from_state": 1.6896659981284756,
+            "_build_time_plot_data": 2.058292000583606,
+            "try_apply_selection_delta": 2.415416998701403,
+            "restore_visible_xlim": 0.3595420021156315,
+            "restore_visible_ylims": 3.655583001091145,
+            "settle_view_restore": 1.028208000207087,
+            "_project_view_controls": 0.7246669993037358
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 3
+            },
+            "visible_inks": [
+              2476,
+              2528
+            ],
+            "visible_points": [
+              1040,
+              1040
+            ],
+            "frame_ink": 5005,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              true,
+              true,
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 4.245916999934707,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 3
+            },
+            "visible_inks": [
+              2476,
+              2528
+            ],
+            "visible_points": [
+              1040,
+              1040
+            ],
+            "frame_ink": 5005,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 46.59662500125705,
+          "timers": {
+            "_capture_focused_view": 0.28612499954761006,
+            "apply_controls_from_state": 1.7951670015463606,
+            "_build_time_plot_data": 2.2780420003982726,
+            "try_apply_selection_delta": 2.6924579979095142,
+            "restore_visible_xlim": 0.3396659994905349,
+            "restore_visible_ylims": 0.3142079985991586,
+            "settle_view_restore": 0.6692080023640301,
+            "_project_view_controls": 0.9406669996678829
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2726,
+              3109,
+              2979
+            ],
+            "visible_points": [
+              1040,
+              1040,
+              1040
+            ],
+            "frame_ink": 8813,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              true,
+              true,
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 7.1703749999869615,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2726,
+              3109,
+              2979
+            ],
+            "visible_points": [
+              1040,
+              1040,
+              1040
+            ],
+            "frame_ink": 8813,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 32.015500000852626,
+          "timers": {
+            "_capture_focused_view": 0.6781250012863893,
+            "apply_controls_from_state": 3.0875419979565777,
+            "_build_time_plot_data": 5.140542001754511,
+            "try_apply_selection_delta": 3.087291999690933,
+            "restore_visible_xlim": 0.3984159993706271,
+            "restore_visible_ylims": 0.40712500049266964,
+            "settle_view_restore": 0.7501250001951121,
+            "_project_view_controls": 1.0727090011641849
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 3
+            },
+            "visible_inks": [
+              2476,
+              2528
+            ],
+            "visible_points": [
+              1040,
+              1040
+            ],
+            "frame_ink": 5005,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 6.311416000244208,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 3
+            },
+            "visible_inks": [
+              2476,
+              2528
+            ],
+            "visible_points": [
+              1040,
+              1040
+            ],
+            "frame_ink": 5005,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 34.05029099667445,
+          "timers": {
+            "_capture_focused_view": 0.7657919995835982,
+            "apply_controls_from_state": 3.381917002116097,
+            "_build_time_plot_data": 2.849707998393569,
+            "try_apply_selection_delta": 4.180833999271272,
+            "restore_visible_xlim": 0.49125000077765435,
+            "restore_visible_ylims": 0.4232079991197679,
+            "settle_view_restore": 0.8838329995342065,
+            "_project_view_controls": 1.261790999706136
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2726,
+              3109,
+              2979
+            ],
+            "visible_points": [
+              1040,
+              1040,
+              1040
+            ],
+            "frame_ink": 8813,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 7.827834000636358,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2726,
+              3109,
+              2979
+            ],
+            "visible_points": [
+              1040,
+              1040,
+              1040
+            ],
+            "frame_ink": 8813,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 23.079082999174716,
+          "timers": {
+            "_capture_focused_view": 0.25437499789404683,
+            "apply_controls_from_state": 2.1942509993095882,
+            "_build_time_plot_data": 2.2448330018960405,
+            "try_apply_selection_delta": 3.174041001329897,
+            "restore_visible_xlim": 0.5430419987533242,
+            "restore_visible_ylims": 0.4639590006263461,
+            "settle_view_restore": 0.7617089977429714,
+            "_project_view_controls": 0.937916000111727
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 3
+            },
+            "visible_inks": [
+              2476,
+              2528
+            ],
+            "visible_points": [
+              1040,
+              1040
+            ],
+            "frame_ink": 5005,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 4.770416999235749,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 3
+            },
+            "visible_inks": [
+              2476,
+              2528
+            ],
+            "visible_points": [
+              1040,
+              1040
+            ],
+            "frame_ink": 5005,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        }
+      ]
+    },
+    "subplot ↔ subplot（View1 有隐藏通道）": {
+      "first_visit": {
+        "View 1": {
+          "rebuild_reason": "no-render-model",
+          "delta": {
+            "applied": true,
+            "reason": "subplot-object-reuse",
+            "added": 0,
+            "removed": 1
+          },
+          "visible_inks": [
+            717,
+            837
+          ],
+          "visible_points": [
+            1042,
+            1042
+          ],
+          "frame_ink": 1554,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        },
+        "View 2": {
+          "rebuild_reason": "no-render-model",
+          "delta": {},
+          "visible_inks": [
+            2496,
+            2550
+          ],
+          "visible_points": [
+            1936,
+            1936
+          ],
+          "frame_ink": 5045,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        }
+      },
+      "runs": [
+        {
+          "target": 0,
+          "switch_ms": 87.9960000020219,
+          "timers": {
+            "_capture_focused_view": 0.22920800256542861,
+            "apply_controls_from_state": 1.643707997573074,
+            "_build_time_plot_data": 2.93374999819207,
+            "try_apply_selection_delta": 25.89066700238618,
+            "restore_visible_xlim": 0.26654199973563664,
+            "restore_visible_ylims": 0.36508300036075525,
+            "settle_view_restore": 1.5108330007933546,
+            "_project_view_controls": 0.7182920016930439
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 2,
+              "removed": 2
+            },
+            "visible_inks": [
+              719,
+              840
+            ],
+            "visible_points": [
+              1304,
+              1304
+            ],
+            "frame_ink": 1558,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              true,
+              true,
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 3.9683750001131557,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 2,
+              "removed": 2
+            },
+            "visible_inks": [
+              719,
+              840
+            ],
+            "visible_points": [
+              1304,
+              1304
+            ],
+            "frame_ink": 1558,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 23.568417000205955,
+          "timers": {
+            "_capture_focused_view": 0.48845800120034255,
+            "apply_controls_from_state": 1.604125998710515,
+            "_build_time_plot_data": 1.5440829993167426,
+            "try_apply_selection_delta": 3.5053749998041894,
+            "restore_visible_xlim": 0.36750000072061084,
+            "restore_visible_ylims": 2.5737089999893215,
+            "settle_view_restore": 1.0464999977557454,
+            "_project_view_controls": 0.7947919984871987
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2483,
+              2535
+            ],
+            "visible_points": [
+              1302,
+              1302
+            ],
+            "frame_ink": 5018,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 5.784583001513965,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2483,
+              2535
+            ],
+            "visible_points": [
+              1302,
+              1302
+            ],
+            "frame_ink": 5018,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 54.272207999019884,
+          "timers": {
+            "_capture_focused_view": 0.48091699864016846,
+            "apply_controls_from_state": 1.9362919993000105,
+            "_build_time_plot_data": 2.421583998511778,
+            "try_apply_selection_delta": 2.725334001297597,
+            "restore_visible_xlim": 0.35687499985215254,
+            "restore_visible_ylims": 0.30466600219369866,
+            "settle_view_restore": 0.6557499982591253,
+            "_project_view_controls": 0.8962909996625967
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              719,
+              840
+            ],
+            "visible_points": [
+              1304,
+              1304
+            ],
+            "frame_ink": 1558,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              true,
+              true,
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 4.86066700250376,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              719,
+              840
+            ],
+            "visible_points": [
+              1304,
+              1304
+            ],
+            "frame_ink": 1558,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 32.19366600023932,
+          "timers": {
+            "_capture_focused_view": 0.6317500010482036,
+            "apply_controls_from_state": 3.5462080013530795,
+            "_build_time_plot_data": 2.935000000434229,
+            "try_apply_selection_delta": 3.607124999689404,
+            "restore_visible_xlim": 0.42100000064237975,
+            "restore_visible_ylims": 0.35025000033783726,
+            "settle_view_restore": 0.9139590001723263,
+            "_project_view_controls": 1.2365829970804043
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2483,
+              2535
+            ],
+            "visible_points": [
+              1302,
+              1302
+            ],
+            "frame_ink": 5018,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 6.8657500014523976,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2483,
+              2535
+            ],
+            "visible_points": [
+              1302,
+              1302
+            ],
+            "frame_ink": 5018,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 27.512666998518398,
+          "timers": {
+            "_capture_focused_view": 0.34554100056993775,
+            "apply_controls_from_state": 2.898167000239482,
+            "_build_time_plot_data": 2.944457999547012,
+            "try_apply_selection_delta": 3.217208002752159,
+            "restore_visible_xlim": 0.43966700104647316,
+            "restore_visible_ylims": 0.4005840019090101,
+            "settle_view_restore": 0.8869999983289745,
+            "_project_view_controls": 1.1615000003075693
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              719,
+              840
+            ],
+            "visible_points": [
+              1304,
+              1304
+            ],
+            "frame_ink": 1558,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 4.821708000235958,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              719,
+              840
+            ],
+            "visible_points": [
+              1304,
+              1304
+            ],
+            "frame_ink": 1558,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 32.29191599893966,
+          "timers": {
+            "_capture_focused_view": 0.398915999539895,
+            "apply_controls_from_state": 3.6765830009244382,
+            "_build_time_plot_data": 2.521833997889189,
+            "try_apply_selection_delta": 3.510540998831857,
+            "restore_visible_xlim": 0.4045410023536533,
+            "restore_visible_ylims": 0.37208299909252673,
+            "settle_view_restore": 0.8577920016250573,
+            "_project_view_controls": 1.111790999857476
+          },
+          "now": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2483,
+              2535
+            ],
+            "visible_points": [
+              1302,
+              1302
+            ],
+            "frame_ink": 5018,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 6.818582998675993,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "no-render-model",
+            "delta": {
+              "applied": true,
+              "reason": "subplot-object-reuse",
+              "added": 0,
+              "removed": 2
+            },
+            "visible_inks": [
+              2483,
+              2535
+            ],
+            "visible_points": [
+              1302,
+              1302
+            ],
+            "frame_ink": 5018,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        }
+      ]
+    },
+    "overlay ↔ overlay": {
+      "first_visit": {
+        "View 1": {
+          "rebuild_reason": "plot-mode-changed",
+          "delta": {
+            "applied": true,
+            "reason": "visibility-only"
+          },
+          "visible_inks": [
+            368,
+            93,
+            471
+          ],
+          "visible_points": [
+            1846,
+            1846,
+            1846
+          ],
+          "frame_ink": 932,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        },
+        "View 2": {
+          "rebuild_reason": "no-render-model",
+          "delta": {},
+          "visible_inks": [
+            4719,
+            5335
+          ],
+          "visible_points": [
+            1864,
+            1864
+          ],
+          "frame_ink": 10053,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        }
+      },
+      "runs": [
+        {
+          "target": 0,
+          "switch_ms": 78.61262499864097,
+          "timers": {
+            "_capture_focused_view": 0.26041699675261043,
+            "apply_controls_from_state": 2.025500001764158,
+            "_build_time_plot_data": 2.7824160024465527,
+            "try_apply_selection_delta": 0.07066700345603749,
+            "plot_channels": 22.8045830008341,
+            "restore_visible_xlim": 0.2445840000291355,
+            "restore_visible_ylims": 0.14379200001712888,
+            "settle_view_restore": 0.820249999378575,
+            "_project_view_controls": 0.8066250011324883
+          },
+          "now": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              376,
+              95,
+              481
+            ],
+            "visible_points": [
+              2000,
+              2000,
+              2000
+            ],
+            "frame_ink": 952,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              true,
+              true,
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 5.935291999776382,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              376,
+              95,
+              481
+            ],
+            "visible_points": [
+              2000,
+              2000,
+              2000
+            ],
+            "frame_ink": 952,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 40.88587499791174,
+          "timers": {
+            "_capture_focused_view": 0.31237499933922663,
+            "apply_controls_from_state": 2.947958004369866,
+            "_build_time_plot_data": 2.74912500026403,
+            "try_apply_selection_delta": 0.09570800102665089,
+            "plot_channels": 17.978209001739742,
+            "restore_visible_xlim": 0.19008399976883084,
+            "restore_visible_ylims": 0.07708300108788535,
+            "settle_view_restore": 0.6637090009462554,
+            "_project_view_controls": 0.6254999971133657
+          },
+          "now": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 5.586541999946348,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 53.54545799855259,
+          "timers": {
+            "_capture_focused_view": 0.3857910014630761,
+            "apply_controls_from_state": 2.851250996172894,
+            "_build_time_plot_data": 3.288042000349378,
+            "try_apply_selection_delta": 0.11658400035230443,
+            "plot_channels": 27.43904199815006,
+            "restore_visible_xlim": 0.2790420003293548,
+            "restore_visible_ylims": 0.12729100126307458,
+            "settle_view_restore": 0.8091249983408488,
+            "_project_view_controls": 0.8928340030252002
+          },
+          "now": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              376,
+              95,
+              481
+            ],
+            "visible_points": [
+              2000,
+              2000,
+              2000
+            ],
+            "frame_ink": 952,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 6.437166000978323,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              376,
+              95,
+              481
+            ],
+            "visible_points": [
+              2000,
+              2000,
+              2000
+            ],
+            "frame_ink": 952,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 50.2068749992759,
+          "timers": {
+            "_capture_focused_view": 0.34770799902617,
+            "apply_controls_from_state": 2.6324999998905696,
+            "_build_time_plot_data": 3.4204170005978085,
+            "try_apply_selection_delta": 0.10362499961047433,
+            "plot_channels": 22.8815830014355,
+            "restore_visible_xlim": 0.23129200053517707,
+            "restore_visible_ylims": 0.10024999937741086,
+            "settle_view_restore": 0.8100829982140567,
+            "_project_view_controls": 0.8095420016616117
+          },
+          "now": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 6.436084000597475,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 56.720707998465514,
+          "timers": {
+            "_capture_focused_view": 0.4687079999712296,
+            "apply_controls_from_state": 2.7080010004283395,
+            "_build_time_plot_data": 2.45179199919221,
+            "try_apply_selection_delta": 0.09579199831932783,
+            "plot_channels": 26.860624999244465,
+            "restore_visible_xlim": 0.24591699911979958,
+            "restore_visible_ylims": 0.12237500050105155,
+            "settle_view_restore": 0.7809169983374886,
+            "_project_view_controls": 0.7955000000947621
+          },
+          "now": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              376,
+              95,
+              481
+            ],
+            "visible_points": [
+              2000,
+              2000,
+              2000
+            ],
+            "frame_ink": 952,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 5.747166997025488,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              376,
+              95,
+              481
+            ],
+            "visible_points": [
+              2000,
+              2000,
+              2000
+            ],
+            "frame_ink": 952,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 49.50745799942524,
+          "timers": {
+            "_capture_focused_view": 0.37104200237081386,
+            "apply_controls_from_state": 2.6436660009494517,
+            "_build_time_plot_data": 2.9972090014780406,
+            "try_apply_selection_delta": 0.054874999477760866,
+            "plot_channels": 21.55379200121388,
+            "restore_visible_xlim": 0.2336249999643769,
+            "restore_visible_ylims": 0.09741699977894314,
+            "settle_view_restore": 0.8793339984549675,
+            "_project_view_controls": 0.7424579998769332
+          },
+          "now": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 6.286749998253072,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "new-channel",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        }
+      ]
+    },
+    "subplot ↔ overlay（两 View 布局不同）": {
+      "first_visit": {
+        "View 1": {
+          "rebuild_reason": "plot-mode-changed",
+          "delta": {
+            "applied": true,
+            "reason": "subplot-object-reuse",
+            "added": 0,
+            "removed": 0
+          },
+          "visible_inks": [
+            26,
+            1,
+            29
+          ],
+          "visible_points": [
+            2400,
+            2400,
+            2400
+          ],
+          "frame_ink": 56,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        },
+        "View 2": {
+          "rebuild_reason": "no-render-model",
+          "delta": {},
+          "visible_inks": [
+            4719,
+            5335
+          ],
+          "visible_points": [
+            1864,
+            1864
+          ],
+          "frame_ink": 10053,
+          "ink_allowed": true,
+          "ink_seeded": true,
+          "aa_on": true,
+          "raster_entries": 0,
+          "ink_raster_admitted": 0,
+          "dot": "green / 抗锯齿已完成",
+          "path": null
+        }
+      },
+      "runs": [
+        {
+          "target": 0,
+          "switch_ms": 63.407707999431295,
+          "timers": {
+            "_capture_focused_view": 0.09537499863654375,
+            "apply_controls_from_state": 1.81524900108343,
+            "_build_time_plot_data": 2.296750000823522,
+            "try_apply_selection_delta": 0.0019999970390927047,
+            "plot_channels": 25.050790998648154,
+            "restore_visible_xlim": 0.24562500038882717,
+            "restore_visible_ylims": 0.1308329992752988,
+            "settle_view_restore": 0.7972079984028824,
+            "_project_view_controls": 0.7049170017126016
+          },
+          "now": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              26,
+              1,
+              29
+            ],
+            "visible_points": [
+              2400,
+              2400,
+              2400
+            ],
+            "frame_ink": 56,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              true,
+              true,
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 5.35216699790908,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              26,
+              1,
+              29
+            ],
+            "visible_points": [
+              2400,
+              2400,
+              2400
+            ],
+            "frame_ink": 56,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 49.39274999924237,
+          "timers": {
+            "_capture_focused_view": 0.33812499896157533,
+            "apply_controls_from_state": 3.24933400406735,
+            "_build_time_plot_data": 2.8202499997860286,
+            "try_apply_selection_delta": 0.0034580007195472717,
+            "plot_channels": 21.749667001131456,
+            "restore_visible_xlim": 0.2895420002460014,
+            "restore_visible_ylims": 0.10837499939952977,
+            "settle_view_restore": 0.8991249997052364,
+            "_project_view_controls": 0.8432089998677839
+          },
+          "now": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 6.043124998541316,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 53.933208000671584,
+          "timers": {
+            "_capture_focused_view": 0.3132919991912786,
+            "apply_controls_from_state": 3.4833329991670325,
+            "_build_time_plot_data": 2.558708998549264,
+            "try_apply_selection_delta": 0.0034580007195472717,
+            "plot_channels": 27.860875001351815,
+            "restore_visible_xlim": 0.2759159979177639,
+            "restore_visible_ylims": 0.15712499953224324,
+            "settle_view_restore": 0.9279580008296762,
+            "_project_view_controls": 0.7751249977445696
+          },
+          "now": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              26,
+              1,
+              29
+            ],
+            "visible_points": [
+              2400,
+              2400,
+              2400
+            ],
+            "frame_ink": 56,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 5.81025000064983,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              26,
+              1,
+              29
+            ],
+            "visible_points": [
+              2400,
+              2400,
+              2400
+            ],
+            "frame_ink": 56,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 54.6257499991043,
+          "timers": {
+            "_capture_focused_view": 0.6589590011572,
+            "apply_controls_from_state": 3.215833996364381,
+            "_build_time_plot_data": 2.657041000929894,
+            "try_apply_selection_delta": 0.0038750004023313522,
+            "plot_channels": 25.9257500001695,
+            "restore_visible_xlim": 0.272166002105223,
+            "restore_visible_ylims": 0.1102090027416125,
+            "settle_view_restore": 0.8474579990433995,
+            "_project_view_controls": 0.8044589994824491
+          },
+          "now": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 6.720666999171954,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 0,
+          "switch_ms": 57.35745799756842,
+          "timers": {
+            "_capture_focused_view": 0.3631250001490116,
+            "apply_controls_from_state": 2.9519999989133794,
+            "_build_time_plot_data": 3.803750001679873,
+            "try_apply_selection_delta": 0.004041001375298947,
+            "plot_channels": 33.59104199989815,
+            "restore_visible_xlim": 0.258250001934357,
+            "restore_visible_ylims": 0.14691700198454782,
+            "settle_view_restore": 0.9062919998541474,
+            "_project_view_controls": 0.7948750026116613
+          },
+          "now": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              26,
+              1,
+              29
+            ],
+            "visible_points": [
+              2400,
+              2400,
+              2400
+            ],
+            "frame_ink": 56,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": true,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              true,
+              true
+            ],
+            "first_paint_aa": true,
+            "first_paint_ms": 5.876292001630645,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              26,
+              1,
+              29
+            ],
+            "visible_points": [
+              2400,
+              2400,
+              2400
+            ],
+            "frame_ink": 56,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        },
+        {
+          "target": 1,
+          "switch_ms": 47.49545799859334,
+          "timers": {
+            "_capture_focused_view": 0.4128340005991049,
+            "apply_controls_from_state": 2.8117500005464535,
+            "_build_time_plot_data": 3.6799590016016737,
+            "try_apply_selection_delta": 0.0032080024539027363,
+            "plot_channels": 18.897792000643676,
+            "restore_visible_xlim": 0.207958000828512,
+            "restore_visible_ylims": 0.08549999984097667,
+            "settle_view_restore": 0.8340000022144523,
+            "_project_view_controls": 0.8260419999714941
+          },
+          "now": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": false,
+            "ink_seeded": false,
+            "aa_on": false,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "red / 抗锯齿未激活",
+            "path": null
+          },
+          "first_turn": {
+            "aa_at_switch_return": false,
+            "paints_during_switch": [
+              false,
+              false
+            ],
+            "paints_first_turn": [
+              false,
+              false,
+              true
+            ],
+            "first_paint_aa": false,
+            "first_paint_ms": 6.435541999962879,
+            "aa_after_first_turn": true
+          },
+          "settled": {
+            "rebuild_reason": "plot-mode-changed",
+            "delta": {},
+            "visible_inks": [
+              4824,
+              5454
+            ],
+            "visible_points": [
+              1968,
+              1968
+            ],
+            "frame_ink": 10278,
+            "ink_allowed": true,
+            "ink_seeded": true,
+            "aa_on": true,
+            "raster_entries": 0,
+            "ink_raster_admitted": 0,
+            "dot": "green / 抗锯齿已完成",
+            "path": null
+          }
+        }
+      ]
+    }
+  },
+  "section_round_trip": {
+    "steps": [
+      {
+        "mode": "fft",
+        "ms": 308.32579100024304,
+        "current_mode": "fft",
+        "time_dot": "green",
+        "fft_dot": "red"
+      },
+      {
+        "mode": "time",
+        "ms": 308.9869590003218,
+        "current_mode": "time",
+        "time_dot": "yellow",
+        "fft_dot": "red"
+      },
+      {
+        "mode": "fft",
+        "ms": 307.08091700216755,
+        "current_mode": "fft",
+        "time_dot": "green",
+        "fft_dot": "red"
+      },
+      {
+        "mode": "time",
+        "ms": 305.56437500126776,
+        "current_mode": "time",
+        "time_dot": "yellow",
+        "fft_dot": "red"
+      }
+    ],
+    "error": null
+  }
+}

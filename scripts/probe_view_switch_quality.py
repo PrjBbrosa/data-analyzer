@@ -132,6 +132,11 @@ def _environment(app, canvas=None, **extra):
             info["dpr"] = float(canvas._glw.devicePixelRatioF())
         except Exception:
             pass
+    # Ambient load belongs in every result file: the MainWindow scenarios in
+    # particular contend with WindowServer, and comparing a wall-clock median
+    # taken at loadavg 4 against one taken at loadavg 1 is how a busy machine
+    # gets mistaken for a regression.
+    info["loadavg"] = _calib_loadavg()
     info.update(extra)
     return info
 
@@ -176,9 +181,40 @@ class _Timers:
         self.acc = {}
 
 
+def _install_paint_recorder(canvas, aa_probe):
+    """Record ``aa_on`` at every real paint of ``canvas``, in paint order.
+
+    "首帧即 AA" (spec §6) is a claim about the state the FIRST paint after a
+    switch is drawn with, so reading ``aa_on`` from the outside after the fact
+    cannot prove it — the 0 ms discrete timer may have flipped it either side
+    of that paint. This layers UNDER the product's own frame-paint timer by
+    subclassing whatever class ``_glw`` currently has, so
+    ``install_frame_paint_timer``'s ``__class__`` swap (and its owner
+    attributes, which live on the instance) survive untouched.
+    """
+    glw = getattr(canvas, "_glw", None)
+    if glw is None:
+        return None
+    log = []
+    base = type(glw)
+
+    class _PaintRecorder(base):
+        def paintEvent(self, ev):
+            try:
+                log.append(bool(aa_probe()))
+            except Exception:
+                log.append(None)
+            return base.paintEvent(self, ev)
+
+    _PaintRecorder.__name__ = f"_PaintRecorded{base.__name__}"
+    glw.__class__ = _PaintRecorder
+    return log
+
+
 def _time_mainwindow_snapshot(canvas):
     q = canvas._quality
     inks = []
+    points = []
     for ck, _n, (_ax, line) in canvas._channel_lines.composite_items():
         pdi = getattr(line, "plot_data_item", None)
         try:
@@ -188,11 +224,17 @@ def _time_mainwindow_snapshot(canvas):
             continue
         st = canvas._line_ink_state.get(ck)
         inks.append(round(st[0]) if st else None)
+        try:
+            xd, _yd = pdi.getData()
+            points.append(0 if xd is None else int(len(xd)))
+        except Exception:
+            points.append(None)
     status = q.quality_status()
     return {
         "rebuild_reason": getattr(canvas, "_last_full_rebuild_reason", None),
         "delta": dict(canvas._last_selection_delta or {}),
         "visible_inks": inks,
+        "visible_points": points,
         "frame_ink": round(q._frame_native_ink_total()),
         "ink_allowed": q.ink_allowed, "ink_seeded": q.ink_seeded,
         "aa_on": q.aa_on,
@@ -204,7 +246,7 @@ def _time_mainwindow_snapshot(canvas):
 
 
 def _time_mainwindow_run_scenario(app, w, fid, names, *, plot_mode_a, plot_mode_b,
-                                   hidden_in_a, label, timers):
+                                   hidden_in_a, label, timers, paint_log=None):
     canvas = w.canvas_time
     print(f"\n==== 场景：{label} ====", flush=True)
 
@@ -220,6 +262,9 @@ def _time_mainwindow_run_scenario(app, w, fid, names, *, plot_mode_a, plot_mode_
     span = xl[1] - xl[0]
     canvas.restore_visible_xlim((xl[0] + span * 0.4, xl[0] + span * 0.6))
     _settle(app, 400)
+    # 首访基线：spec §6 的「回切绘点 = 首访」「回切 ink 与首访 ±5%」是拿这一行
+    # 当参照的，所以在同一次运行里就地记下来，不靠跨文件对读。
+    first_visit = {"View 1": _time_mainwindow_snapshot(canvas)}
     w._capture_current_view()
 
     # --- View 2: 通道 3-4
@@ -232,23 +277,46 @@ def _time_mainwindow_run_scenario(app, w, fid, names, *, plot_mode_a, plot_mode_
     span = xl[1] - xl[0]
     canvas.restore_visible_xlim((xl[0], xl[0] + span * 0.1))
     _settle(app, 400)
+    first_visit["View 2"] = _time_mainwindow_snapshot(canvas)
     w._capture_current_view()
+    for name, snap in first_visit.items():
+        print(f"  首访 {name}: ink={snap['visible_inks']} "
+              f"绘点={snap['visible_points']} 点: {snap['dot']}", flush=True)
 
     runs = []
     for i in range(3):
         for target in (0, 1):
             timers.reset()
+            if paint_log is not None:
+                paint_log.clear()
             t0 = time.perf_counter()
             w._switch_view(target)
             switch_ms = (time.perf_counter() - t0) * 1000.0
             # 切完立刻的状态（idle timer 还没到）
+            aa_at_return = bool(canvas._quality.aa_on)
+            paints_in_switch = list(paint_log or ())
             snap_now = _time_mainwindow_snapshot(canvas)
+            # 一轮事件循环：0 ms 离散计时器与首个 paint 都在这里落地。
+            # paint_log 记的是每个 paint 当时的 aa_on，所以「首帧即 AA」
+            # 是被 paint 本身证明的，不是事后从外面读到的。
+            canvas._last_frame_paint_ms = None
+            app.processEvents()
+            paints_after = list(paint_log or ())[len(paints_in_switch):]
+            first_turn = {
+                "aa_at_switch_return": aa_at_return,
+                "paints_during_switch": paints_in_switch,
+                "paints_first_turn": paints_after,
+                "first_paint_aa": (paints_after[0] if paints_after else None),
+                "first_paint_ms": canvas._last_frame_paint_ms,
+                "aa_after_first_turn": bool(canvas._quality.aa_on),
+            }
             _settle(app, 350)  # 让 150ms idle timer 与 raster 定时器都落地
             snap_settled = _time_mainwindow_snapshot(canvas)
             r = {
                 "target": target, "switch_ms": switch_ms,
                 "timers": dict(timers.acc),
-                "now": snap_now, "settled": snap_settled,
+                "now": snap_now, "first_turn": first_turn,
+                "settled": snap_settled,
             }
             runs.append(r)
             tm = timers.acc
@@ -259,23 +327,34 @@ def _time_mainwindow_run_scenario(app, w, fid, names, *, plot_mode_a, plot_mode_
                 f"plot_channels={tm.get('plot_channels', 0):6.1f} "
                 f"restore_x={tm.get('restore_visible_xlim', 0):5.1f} "
                 f"restore_y={tm.get('restore_visible_ylims', 0):5.1f} "
+                f"settle={tm.get('settle_view_restore', 0):5.1f} "
                 f"apply_controls={tm.get('apply_controls_from_state', 0):5.1f} "
                 f"project_controls={tm.get('_project_view_controls', 0):5.1f} "
                 f"capture={tm.get('_capture_focused_view', 0):5.1f}",
                 flush=True,
             )
+            fp_ms = first_turn["first_paint_ms"]
             print(
                 f"        路径: {snap_now['rebuild_reason'] if not snap_now['delta'].get('applied') else snap_now['delta'].get('reason')} | "
-                f"ink(可见)={snap_now['visible_inks']} | 稳定后 aa_on={snap_settled['aa_on']} "
+                f"ink(可见)={snap_now['visible_inks']} 绘点={snap_now['visible_points']} | "
+                f"稳定后 aa_on={snap_settled['aa_on']} "
                 f"ink_allowed={snap_settled['ink_allowed']} raster={snap_settled['raster_entries']} "
                 f"收编={snap_settled['ink_raster_admitted']} | 点: {snap_settled['dot']}",
+                flush=True,
+            )
+            print(
+                f"        首帧: aa@切换返回={aa_at_return!s:<5} "
+                f"首帧aa={first_turn['first_paint_aa']!s:<5} "
+                f"首轮paints={first_turn['paints_first_turn']} "
+                f"首帧={('n/a' if fp_ms is None else f'{fp_ms:.1f} ms')} "
+                f"一轮后aa={first_turn['aa_after_first_turn']}",
                 flush=True,
             )
     # 收尾：删掉 View 2，回到 View 1，让下一场景干净开始
     w._switch_view(0); _settle(app, 200)
     w.view_manager.delete_view(1); _settle(app, 200)
     w.navigator.set_hidden_channels([])
-    return runs
+    return {"first_visit": first_visit, "runs": runs}
 
 
 def cmd_time_mainwindow(_args):
@@ -301,6 +380,7 @@ def cmd_time_mainwindow(_args):
     timers.wrap(w.canvas_time, "plot_channels")
     timers.wrap(w.canvas_time, "restore_visible_xlim")
     timers.wrap(w.canvas_time, "restore_visible_ylims")
+    timers.wrap(w.canvas_time, "settle_view_restore")
     timers.wrap(w, "_project_view_controls")
     timers.wrap(w, "_capture_focused_view")
     timers.wrap(w._view_bridge, "apply_controls_from_state")
@@ -315,17 +395,62 @@ def cmd_time_mainwindow(_args):
         dict(label="subplot ↔ overlay（两 View 布局不同）", plot_mode_a="subplot",
              plot_mode_b="overlay", hidden_in_a=False),
     ]
+    paint_log = _install_paint_recorder(
+        w.canvas_time, lambda: w.canvas_time._quality.aa_on)
+
     scenarios_out = {}
     for sc in scenarios:
         scenarios_out[sc["label"]] = _time_mainwindow_run_scenario(
-            app, w, fid, names, timers=timers, **sc)
+            app, w, fid, names, timers=timers, paint_log=paint_log, **sc)
+
+    section_trip = _time_mainwindow_section_round_trip(app, w)
 
     w.close(); app.processEvents()
     return {
         "command": "time-mainwindow",
         "environment": _environment(app, exposed=exposed),
         "scenarios": scenarios_out,
+        "section_round_trip": section_trip,
     }
+
+
+def _time_mainwindow_section_round_trip(app, w):
+    """时域 → FFT → 时域 的整分区来回切，只验「不抛异常 + 状态可读」。
+
+    分析分区的 AA 现在是离散武装的（spec §3.4），换分区会把时域画布的
+    结算和谱行的结算在同一轮事件循环里排到一起；这一段就是把那条路径真的
+    走一遍。它不是性能读数——手感复核仍然要人来做。
+    """
+    print("\n==== 分区来回切（时域 → FFT → 时域）====", flush=True)
+    out = {"steps": [], "error": None}
+    try:
+        for mode in ("fft", "time", "fft", "time"):
+            t0 = time.perf_counter()
+            w.chart_stack.set_mode(mode)
+            _settle(app, 300)
+            step = {
+                "mode": mode,
+                "ms": (time.perf_counter() - t0) * 1000.0,
+                "current_mode": w.chart_stack.current_mode(),
+                "time_dot": w.canvas_time._quality.quality_status().get("state"),
+            }
+            fft_canvas = getattr(w, "canvas_fft", None)
+            if fft_canvas is not None:
+                try:
+                    step["fft_dot"] = fft_canvas.quality_status().get("state")
+                except (AttributeError, RuntimeError, TypeError) as exc:
+                    step["fft_dot"] = f"n/a ({type(exc).__name__})"
+            out["steps"].append(step)
+            print(f"  -> {mode:<5} {step['ms']:7.1f} ms  "
+                  f"current={step['current_mode']} "
+                  f"时域点={step['time_dot']} FFT点={step.get('fft_dot')}",
+                  flush=True)
+    except Exception as exc:  # noqa: BLE001 - probe records, does not mask
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        print(f"  !! 抛异常：{out['error']}", flush=True)
+    else:
+        print("  OK：分区来回切未抛异常", flush=True)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -348,7 +473,8 @@ def _time_canvas_make_rows(names, *, n_points, fs, kind, tag):
     return rows
 
 
-def _time_canvas_run_switch(app, canvas, viewport, rows, xlim, label, ctx_key):
+def _time_canvas_run_switch(app, canvas, viewport, rows, xlim, label, ctx_key,
+                            ylims=None, legacy_order=False):
     q = canvas._quality
 
     # --- 1: 全量重建（产品路径开头 disable_interactive_quality + clear）
@@ -360,12 +486,25 @@ def _time_canvas_run_switch(app, canvas, viewport, rows, xlim, label, ctx_key):
     )
     rebuild_ms = (time.perf_counter() - t0) * 1000.0
 
-    # --- 2: 恢复 xlim（内部同步 flush 一次高精度刷新）
+    # --- 2: 恢复几何。改前每一步各自收尾（X 的同步 flush 跑在 Y 还是占位区间
+    #     时）；改后是一个事务：X 不刷 -> Y -> settle 一次结算（spec §3.1）。
+    #     legacy_order 保留改前顺序，用来在同一台机器上并排 diff。
     t0 = time.perf_counter()
-    canvas.restore_visible_xlim(xlim)
-    restore_ms = (time.perf_counter() - t0) * 1000.0
+    if legacy_order:
+        canvas.restore_visible_xlim(xlim)
+        restore_ms = (time.perf_counter() - t0) * 1000.0
+        settle_ms = 0.0
+    else:
+        canvas.restore_visible_xlim(xlim, flush=False)
+        if ylims:
+            canvas.restore_visible_ylims(ylims)
+        restore_ms = (time.perf_counter() - t0) * 1000.0
+        t0 = time.perf_counter()
+        canvas.settle_view_restore()
+        settle_ms = (time.perf_counter() - t0) * 1000.0
 
     # --- 3: 切换后用户看到的第一帧
+    aa_before_first_frame = bool(q.aa_on)
     first_frame_ms, s1 = _timed_repaint(canvas, viewport)
 
     # --- 4: dense-raster 重建（clear() 已把 entries 清空）。
@@ -403,8 +542,11 @@ def _time_canvas_run_switch(app, canvas, viewport, rows, xlim, label, ctx_key):
     status = q.quality_status()
     result = {
         "label": label,
+        "legacy_order": bool(legacy_order),
         "rebuild_ms": rebuild_ms,
         "restore_xlim_ms": restore_ms,
+        "settle_ms": settle_ms,
+        "aa_before_first_frame": aa_before_first_frame,
         "first_frame_ms": first_frame_ms,
         "raster_flush_ms": raster_ms,
         "raster_entries": raster_entries,
@@ -422,13 +564,19 @@ def _time_canvas_run_switch(app, canvas, viewport, rows, xlim, label, ctx_key):
         "suspect": {"first": s1, "raster_frame": s4,
                     "first_aa": s2, "steady": s3},
     }
-    result["to_first_frame_ms"] = rebuild_ms + restore_ms + first_frame_ms
+    result["to_first_frame_ms"] = (rebuild_ms + restore_ms + settle_ms
+                                   + first_frame_ms)
     result["to_settled_ms"] = (
         result["to_first_frame_ms"] + raster_ms + raster_frame_ms
         + enable_ms + first_aa_ms
     )
+    try:
+        result["ylims"] = canvas.get_visible_ylims()
+    except Exception:
+        result["ylims"] = None
     print(
         f"{label:<26} rebuild={rebuild_ms:7.1f} restore={restore_ms:6.1f} "
+        f"settle={settle_ms:6.1f} aa@首帧={str(aa_before_first_frame):<5} "
         f"frame={first_frame_ms:6.1f} | raster_flush={raster_ms:7.1f}"
         f"({raster_entries}) rframe={raster_frame_ms:6.1f} | "
         f"aa_on={str(aa_engaged):<5} aa_enable={enable_ms:6.1f} "
@@ -487,20 +635,29 @@ def cmd_time_canvas(_args):
         ("光栅",   "denseA",  "denseB",  0.40, 0.60, 0.0, 0.10),
     ]
 
+    legacy_order = bool(getattr(_args, "legacy_order", False))
     all_runs = {}
+    # 每个 fixture 第一次画完后捕获 ylim，之后的每一轮都当成「回到已访问过的
+    # View」来恢复——这正是产品 _render_view_to_canvas 拿 state.ylims 做的事，
+    # 也是缺陷 A 的触发前提。
+    stored_ylims = {}
     for tag, ka, kb, alo, ahi, blo, bhi in plans:
-        print(f"\n== {tag} 路径：{ka} <-> {kb} ==", flush=True)
+        print(f"\n== {tag} 路径：{ka} <-> {kb} "
+              f"({'改前顺序' if legacy_order else '事务顺序'}) ==", flush=True)
         runs = []
         for i in range(3):
-            runs.append(_time_canvas_run_switch(
-                app, canvas, viewport, fixtures[ka],
-                xwin(fixtures[ka], alo, ahi), f"[{i}] -> {ka}", ("probe", ka)))
-            runs.append(_time_canvas_run_switch(
-                app, canvas, viewport, fixtures[kb],
-                xwin(fixtures[kb], blo, bhi), f"[{i}] -> {kb}", ("probe", kb)))
+            for key, lo, hi in ((ka, alo, ahi), (kb, blo, bhi)):
+                r = _time_canvas_run_switch(
+                    app, canvas, viewport, fixtures[key],
+                    xwin(fixtures[key], lo, hi), f"[{i}] -> {key}",
+                    ("probe", key), ylims=stored_ylims.get(key),
+                    legacy_order=legacy_order)
+                if r.get("ylims"):
+                    stored_ylims[key] = r["ylims"]
+                runs.append(r)
         all_runs[tag] = runs
         warm = runs[2:]
-        keys = ("rebuild_ms", "restore_xlim_ms", "first_frame_ms",
+        keys = ("rebuild_ms", "restore_xlim_ms", "settle_ms", "first_frame_ms",
                 "raster_flush_ms", "raster_frame_ms", "ink_measure_ms",
                 "aa_enable_call_ms", "first_aa_frame_ms", "steady_aa_frame_ms",
                 "to_first_frame_ms", "to_settled_ms")
@@ -508,6 +665,9 @@ def cmd_time_canvas(_args):
         for k in keys:
             print(f"   {k:<24} {float(np.median([r[k] for r in warm])):8.1f} ms",
                   flush=True)
+        aa_first = [bool(r["aa_before_first_frame"]) for r in warm]
+        print(f"   {'首帧即 AA（稳定段）':<24} "
+              f"{sum(aa_first)}/{len(aa_first)}", flush=True)
 
     canvas.close()
     app.processEvents()
@@ -515,6 +675,7 @@ def cmd_time_canvas(_args):
     return {
         "command": "time-canvas",
         "environment": _environment(app, canvas, exposed=exposed),
+        "legacy_order": legacy_order,
         "runs": all_runs,
     }
 
@@ -694,12 +855,50 @@ def _stale_ink_dump(canvas, tag):
     q = canvas._quality
     aa_allowed = q._idle_aa_density_ok()
     state = q.quality_status()["state"]
-    print(f"{tag:<26} " + " | ".join(parts)
+    print(f"{tag:<40} " + " | ".join(parts)
           + f" | AA判定={aa_allowed} 点={state}")
     return {"tag": tag, "channels": detail, "aa_allowed": aa_allowed, "state": state}
 
 
-def cmd_stale_ink(_args):
+def _stale_ink_lane(app, c, rows, *, transaction, tag):
+    """One lane: first visit, then a full-rebuild round trip, then idle, then
+    a forced refresh on the real Y.
+
+    ``transaction=False`` is the pre-2026-08-15 call order kept verbatim (X
+    restored with its own synchronous flush while Y is still the ``[0, 1]``
+    stub, then Y, and nothing re-decides). ``transaction=True`` is the shipped
+    order from spec §3.1 — the same three calls plus ``flush=False`` and a
+    closing ``settle_view_restore()``. Running both in one process is the
+    whole point: the defect and its fix are the SAME canvas, same data, same
+    window, differing only in the call order.
+    """
+    key = "T" if transaction else "L"
+    c.plot_channels(rows, mode="overlay", defer_first_frame=False,
+                    render_context_key=("cap", key))
+    c.restore_visible_xlim((10.0, 25.0)); c._flush_pending_refresh(); app.processEvents()
+    ylims = c.get_visible_ylims()
+    snaps = [_stale_ink_dump(c, f"{tag}｜首次进 View（bind envelope）")]
+
+    c.plot_channels(rows, mode="overlay", defer_first_frame=True,
+                    render_context_key=("p", key))
+    if transaction:
+        c.restore_visible_xlim((10.0, 25.0), flush=False)
+        c.restore_visible_ylims(ylims)
+        c.settle_view_restore()
+    else:
+        c.restore_visible_xlim((10.0, 25.0))
+        c.restore_visible_ylims(ylims)
+    app.processEvents()
+    snaps.append(_stale_ink_dump(c, f"{tag}｜回切后"))
+    for _ in range(10):
+        app.processEvents(); time.sleep(0.05)
+    snaps.append(_stale_ink_dump(c, f"{tag}｜回切后再空转 500 ms"))
+    c._last_range_key.clear(); c._flush_pending_refresh(); app.processEvents()
+    snaps.append(_stale_ink_dump(c, f"{tag}｜强制按真实 Y 重刷（=用户动一下）"))
+    return snaps
+
+
+def cmd_stale_ink(args):
     import numpy as np
 
     from mf4_analyzer.ui.pg_canvas.canvas import TimeDomainCanvasPG
@@ -713,29 +912,24 @@ def cmd_stale_ink(_args):
 
     print(f"platform={app.platformName()} dpr={c._glw.devicePixelRatioF()} "
           f"exposed={exposed}")
-    c.plot_channels(rows, mode="overlay", defer_first_frame=False,
-                    render_context_key=("cap", "A"))
-    c.restore_visible_xlim((10.0, 25.0)); c._flush_pending_refresh(); app.processEvents()
-    ylims = c.get_visible_ylims()
-    snapshots = [_stale_ink_dump(c, "首次进 View（bind envelope）")]
-
-    c.plot_channels(rows, mode="overlay", defer_first_frame=True,
-                    render_context_key=("p", "A"))
-    c.restore_visible_xlim((10.0, 25.0))
-    c.restore_visible_ylims(ylims)
-    app.processEvents()
-    snapshots.append(_stale_ink_dump(c, "回切后（当前顺序）"))
-    for _ in range(10):
-        app.processEvents(); time.sleep(0.05)
-    snapshots.append(_stale_ink_dump(c, "回切后再空转 500 ms"))
-    c._last_range_key.clear(); c._flush_pending_refresh(); app.processEvents()
-    snapshots.append(_stale_ink_dump(c, "强制按真实 Y 重刷（=用户动一下）"))
+    lane = getattr(args, "lane", "both")
+    lanes = {}
+    if lane in ("both", "legacy"):
+        lanes["legacy"] = _stale_ink_lane(app, c, rows, transaction=False,
+                                          tag="旧顺序")
+    if lane in ("both", "transaction"):
+        lanes["transaction"] = _stale_ink_lane(app, c, rows, transaction=True,
+                                               tag="事务顺序")
     c.close(); app.processEvents()
 
     return {
         "command": "stale-ink",
         "environment": _environment(app, c, exposed=exposed),
-        "snapshots": snapshots,
+        "lane": lane,
+        "lanes": lanes,
+        # Back-compat with the pre-2026-08-15 shape (a flat snapshot list):
+        # the legacy lane IS what the old command emitted.
+        "snapshots": lanes.get("legacy") or lanes.get("transaction"),
     }
 
 
@@ -752,13 +946,17 @@ def _analysis_frames_warm(app, widget):
 
 
 def _analysis_frames_frame_ms(canvas, n=3):
+    """Median of ``n`` forced repaints, via the shared suspect-aware helper.
+
+    Uses ``_timed_repaint`` rather than an open-coded repaint loop so a
+    coalesced/missed repaint retries instead of landing in the table as a
+    free frame (the 32k-bin FRF case is where that shows up: after several
+    ten-second frames Qt will happily skip one).
+    """
     import numpy as np
 
-    ms = []
-    for _ in range(n):
-        t0 = time.perf_counter()
-        canvas._glw.scene().update(); canvas._glw.viewport().repaint()
-        ms.append((time.perf_counter() - t0) * 1000.0)
+    viewport = canvas._glw.viewport()
+    ms = [_timed_repaint(canvas, viewport)[0] for _ in range(n)]
     return float(np.median(ms))
 
 
@@ -789,22 +987,39 @@ def _analysis_frames_spectrum_cases(app):
         c._aa_on = True
         c.plot_spectra(entries, xlim=(0, 2000), amp_label="A", title="t")
         app.processEvents()
+        # --- 产品判定：让 0 ms 离散计时器落地，读产品自己的结论。
+        # 这才是 spec §6 里「AA 拒（红点有理由）」的验收列；下面那段显式开 AA
+        # 量的是「如果开 AA 这一帧多少钱」，两件事不能混。
+        _settle(app, 200)
+        prod = c.quality_status()
+        prod_aa = all(bool(cv.opts.get("antialias")) for cv in c._amp_curves)
         ylo, yhi = c._plot_amp.vb.viewRange()[1]; yspan = abs(yhi - ylo)
         h = c._plot_amp.vb.sceneBoundingRect().height()
         ink = sum(envelope_ink_dev_px(cv.getData()[1], y_span=yspan,
                                       row_height_px=h, dpr=dpr)
                   for cv in c._amp_curves)
         pts = sum(len(cv.getData()[0]) for cv in c._amp_curves)
-        aa = all(bool(cv.opts.get("antialias")) for cv in c._amp_curves)
+        # --- 显式 AA 帧：先解除 backstop 武装并停掉两个计时器，否则 >1000 ms
+        # 的帧会跳闸、异步把 AA 关掉，把大 ink 档的读数污染成「AA 关」的帧。
+        c.disable_interactive_quality()
+        for cv in c._amp_curves:
+            c._set_curve_aa(cv, True)
+        app.processEvents()
         ms = _analysis_frames_frame_ms(c)
         verdict = ("ALLOW" if ink <= _INK_AA_ON else
                    ("BLOCK" if ink > _INK_AA_OFF else "band"))
-        print(f"  {msg:<22} 曲线={ncurves} 绘点={pts:5d} 点数闸门放行AA={aa!s:<5} "
+        print(f"  {msg:<22} 曲线={ncurves} 绘点={pts:5d} "
+              f"产品判定={prod.get('state')}/{prod.get('block_reason')} "
+              f"AA={prod_aa!s:<5} "
               f"yspan={yspan:8.2f} ink={ink/1000:8.1f}k 时域带={verdict:<5} "
-              f"帧中位={ms:8.1f} ms")
+              f"显式AA帧中位={ms:8.1f} ms")
         cases_out.append({
             "label": msg, "n_curves": ncurves, "pts": pts,
-            "point_gate_allows_aa": aa, "yspan": float(yspan), "ink": float(ink),
+            "product_state": prod.get("state"),
+            "product_block_reason": prod.get("block_reason"),
+            "product_tooltip": prod.get("tooltip"),
+            "product_aa_on_curves": bool(prod_aa),
+            "yspan": float(yspan), "ink": float(ink),
             "band_verdict": verdict, "frame_ms": ms,
         })
 
@@ -819,6 +1034,9 @@ def _analysis_frames_spectrum_cases(app):
     entries = [{"label": "x", "color": "#1769e0", "freq": freq, "amp": noise,
                 "time": t, "signal": np.sin(t)} for _ in range(3)]
     c.plot_spectra(entries, xlim=(0, 2000), amp_label="A", title="t")
+    # Hold the control AA-off explicitly: the discrete 0 ms fuse would
+    # otherwise land during processEvents and turn this into an AA frame.
+    c.disable_interactive_quality()
     app.processEvents()
     control_ms = _analysis_frames_frame_ms(c)
     print(f"  {'AA 关 · 纯噪声底 (对照)':<22} 帧中位={control_ms:8.1f} ms")
@@ -858,15 +1076,37 @@ def _analysis_frames_frf_cases(app):
                                 (2049, 1, "2k bins 噪声相位/相干"),
                                 (8193, 1, "8k bins 噪声"),
                                 (32769, 1, "32k bins 噪声")):
+        # 切换调用本身：spec §6「FRF 2k 噪声相位 527 ms 同步 → 切换 ≤30 ms」
+        # 比的就是这一段——改前 set_result 里 antialias=True 直接建曲线，
+        # 那一帧的钱是在调用里付的。
+        t0 = time.perf_counter()
         c.set_result(res(nbins, noisy), {"frequency_scale": "linear"}, {})
+        set_result_ms = (time.perf_counter() - t0) * 1000.0
+        app.processEvents()
+        # 产品判定（见谱行同一段注释）：0 ms 离散计时器落地后的结论。
+        _settle(app, 200)
+        prod = c.quality_status()
+        prod_aa = bool(c._aa_on)
+        # 显式 AA 帧：先解除武装再手动开 AA，backstop 不得干预测量。
+        c.disable_interactive_quality(); app.processEvents()
+        for curve in c._interactive_curves():
+            c._set_curve_aa(curve, True)
         app.processEvents()
         aa_ms = _analysis_frames_frame_ms(c)
-        c.disable_interactive_quality(); app.processEvents()
+        for curve in c._interactive_curves():
+            c._set_curve_aa(curve, False)
+        app.processEvents()
         off_ms = _analysis_frames_frame_ms(c)
-        c._enable_idle_quality()
-        print(f"  {label:<20} AA帧中位={aa_ms:8.1f} ms   非AA帧={off_ms:7.1f} ms")
+        print(f"  {label:<20} set_result={set_result_ms:6.1f} ms "
+              f"产品判定={prod.get('state')}/{prod.get('block_reason')} "
+              f"AA={prod_aa!s:<5} 显式AA帧中位={aa_ms:8.1f} ms   非AA帧={off_ms:7.1f} ms")
         cases_out.append({
             "label": label, "n_bins": nbins, "noisy": bool(noisy),
+            "set_result_ms": set_result_ms,
+            "product_state": prod.get("state"),
+            "product_block_reason": prod.get("block_reason"),
+            "product_tooltip": prod.get("tooltip"),
+            "product_aa_on": prod_aa,
             "aa_frame_ms": aa_ms, "non_aa_frame_ms": off_ms,
         })
     c.close(); app.processEvents()
@@ -920,6 +1160,11 @@ _CALIB_NEAR_TARGET_MS = 600.0
 
 
 def _calib_loadavg():
+    """1/5/15-minute load average, or None where the platform has none.
+
+    Also used by ``_environment`` so every result file carries the ambient
+    load its numbers were taken under.
+    """
     import os
 
     try:
@@ -1165,6 +1410,12 @@ def _calib_spectrum(app):
             pts = sum(len(cv.getData()[0]) for cv in canvas._amp_curves)
             point_gate = all(bool(cv.opts.get("antialias"))
                              for cv in canvas._amp_curves)
+            # Disarm before forcing AA: this measures "what would an AA frame
+            # cost here", so the product's own backstop must not trip midway
+            # and tear AA off (it would turn a >1000 ms calibration point into
+            # a non-AA reading). Also stops both fuses so no timer re-decides
+            # under the measurement.
+            canvas.disable_interactive_quality()
             # The preview row below is held AA-off throughout (its own point
             # gate blocks it at 3 x 40k sources anyway), so it contributes a
             # constant, non-AA cost that the fit's intercept absorbs.
@@ -1289,6 +1540,8 @@ def _calib_preview(app):
             pts = sum(0 if c.getData()[0] is None else len(c.getData()[0])
                       for c in curves)
             point_gate = canvas._time_preview_aa_allowed()
+            # Disarm before forcing AA (see the same note in _calib_spectrum).
+            canvas.disable_interactive_quality()
             for curve in curves:
                 canvas._set_curve_aa(curve, True)
             app.processEvents()
@@ -1419,6 +1672,10 @@ def _calib_frf(app):
                 ink += row_ink
                 per_row[name] = {"ink": float(row_ink), "y_span": float(y_span),
                                  "row_height_px": float(row_h)}
+            # Disarm before forcing AA (see the same note in _calib_spectrum):
+            # a >1000 ms frame here is exactly the case the backstop exists
+            # for, and letting it trip would corrupt the calibration point.
+            canvas.disable_interactive_quality()
             for _n, _p, curves in rows():
                 for curve in curves:
                     canvas._set_curve_aa(curve, True)
@@ -1586,18 +1843,27 @@ def cmd_spectrum_switch(_args):
         app.processEvents()
         frame1, _s1 = _timed_repaint(canvas, viewport, retries=0, floor_ms=0.0)
         frame2, _s2 = _timed_repaint(canvas, viewport, retries=0, floor_ms=0.0)
+        # 产品判定，量完帧之后再读，免得 settle 把上面的计时搅了。
+        _settle(app, 200)
+        prod = canvas.quality_status()
         return {
             "plot_ms": plot_ms, "aa_apply_ms": aa_calls["ms"],
             "aa_apply_n": aa_calls["n"],
             "frame1_ms": frame1, "frame2_ms": frame2,
             "total_ms": plot_ms + frame1,
             "aa_on": bool(canvas._aa_on),
+            "product_state": prod.get("state"),
+            "product_block_reason": prod.get("block_reason"),
+            "product_tooltip": prod.get("tooltip"),
         }
 
     modes_out = {}
     for aa_in_switch in (True, False):
-        tag = ("切换里同步开 AA（当前行为）" if aa_in_switch
-               else "对照：切换里不开 AA")
+        # 改前，进入时 _aa_on=True 就意味着 plot_spectra 尾部同步开 AA、
+        # 切换调用要等那一帧画完（245 ms）。改后（spec §3.4）plot_spectra
+        # 一律以 AA-off 建曲线并把结算挪到 0 ms 之后，所以两档应当收敛。
+        tag = ("进入时 _aa_on=True（改前=切换里同步开 AA）" if aa_in_switch
+               else "对照：进入时 _aa_on=False")
         runs = []
         for i in range(3):
             for key in ("A", "B"):
@@ -1606,7 +1872,8 @@ def cmd_spectrum_switch(_args):
                 print(f"  {tag[:6]} -> View {key}: plot_spectra={r['plot_ms']:7.1f} "
                       f"(其中 AA 重开 {r['aa_apply_ms']:6.1f} × {r['aa_apply_n']}) "
                       f"首帧={r['frame1_ms']:6.1f} 次帧={r['frame2_ms']:6.1f} "
-                      f"合计={r['total_ms']:7.1f} ms", flush=True)
+                      f"合计={r['total_ms']:7.1f} ms | 产品判定="
+                      f"{r['product_state']}/{r['product_block_reason']}", flush=True)
         warm = runs[2:]
         median_plot = float(np.median([r["plot_ms"] for r in warm]))
         median_frame1 = float(np.median([r["frame1_ms"] for r in warm]))
@@ -1669,6 +1936,12 @@ def _arguments():
              "across the vector-AA (smooth) and dense-raster backends "
              "(spec Sec 1.1/1.2). Real machine only.",
     )
+    p.add_argument("--legacy-order", action="store_true",
+                   help="Restore X with its own synchronous flush and never "
+                        "restore Y -- the pre-2026-08-15 sequence. Default is "
+                        "the shipped transaction: restore_visible_xlim("
+                        "flush=False) -> restore_visible_ylims(stored) -> "
+                        "settle_view_restore() (spec Sec 3.1).")
     p.add_argument("--json-out", type=Path)
 
     p = sub.add_parser(
@@ -1691,8 +1964,17 @@ def _arguments():
              "none of it self-heals after 500 ms idle (spec Sec 1.2). This is "
              "the one subcommand that also reproduces under "
              "QT_QPA_PLATFORM=offscreen -- it is a logic defect, not a paint-"
-             "cost measurement.",
+             "cost measurement. Runs two lanes side by side: the pre-fix call "
+             "order and the shipped transaction order (spec Sec 3.1).",
     )
+    p.add_argument("--lane", choices=("both", "legacy", "transaction"),
+                   default="both",
+                   help="'legacy' calls restore_visible_xlim() with its own "
+                        "synchronous flush then restore_visible_ylims() (the "
+                        "pre-2026-08-15 order, which is what reproduces the "
+                        "defect); 'transaction' calls restore_visible_xlim("
+                        "flush=False) -> restore_visible_ylims() -> "
+                        "settle_view_restore() (spec Sec 3.1). Default both.")
     p.add_argument("--json-out", type=Path)
 
     p = sub.add_parser(

@@ -1,0 +1,103 @@
+platform=cocoa exposed=True
+
+==== 场景：subplot ↔ subplot（全显） ====
+UltraView capture skipped (time-render/no-result) section=time view_id=d8b542fb-2fa9-4744-ba11-c4bfe819020f canvas=TimeDomainCanvasPG
+  首访 View 1: ink=[2740, 3125, 2997] 绘点=[1734, 1734, 1734] 点: green / 抗锯齿已完成
+  首访 View 2: ink=[2496, 2550] 绘点=[1936, 1936] 点: green / 抗锯齿已完成
+  [0] -> View 1: 切换调用    94.8 ms | build_data=  2.3 delta= 34.6 plot_channels=   0.0 restore_x=  0.3 restore_y=  2.5 settle=  1.7 apply_controls=  2.0 project_controls=  0.8 capture=  0.1
+        路径: subplot-object-reuse | ink(可见)=[2726, 3109, 2979] 绘点=[1040, 1040, 1040] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, True] 首帧=7.2 ms 一轮后aa=True
+  [0] -> View 2: 切换调用    58.1 ms | build_data=  2.1 delta=  2.4 plot_channels=   0.0 restore_x=  0.4 restore_y=  3.7 settle=  1.0 apply_controls=  1.7 project_controls=  0.7 capture=  0.4
+        路径: subplot-object-reuse | ink(可见)=[2476, 2528] 绘点=[1040, 1040] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=4.2 ms 一轮后aa=True
+  [1] -> View 1: 切换调用    46.6 ms | build_data=  2.3 delta=  2.7 plot_channels=   0.0 restore_x=  0.3 restore_y=  0.3 settle=  0.7 apply_controls=  1.8 project_controls=  0.9 capture=  0.3
+        路径: subplot-object-reuse | ink(可见)=[2726, 3109, 2979] 绘点=[1040, 1040, 1040] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=7.2 ms 一轮后aa=True
+  [1] -> View 2: 切换调用    32.0 ms | build_data=  5.1 delta=  3.1 plot_channels=   0.0 restore_x=  0.4 restore_y=  0.4 settle=  0.8 apply_controls=  3.1 project_controls=  1.1 capture=  0.7
+        路径: subplot-object-reuse | ink(可见)=[2476, 2528] 绘点=[1040, 1040] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=6.3 ms 一轮后aa=True
+  [2] -> View 1: 切换调用    34.1 ms | build_data=  2.8 delta=  4.2 plot_channels=   0.0 restore_x=  0.5 restore_y=  0.4 settle=  0.9 apply_controls=  3.4 project_controls=  1.3 capture=  0.8
+        路径: subplot-object-reuse | ink(可见)=[2726, 3109, 2979] 绘点=[1040, 1040, 1040] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=7.8 ms 一轮后aa=True
+  [2] -> View 2: 切换调用    23.1 ms | build_data=  2.2 delta=  3.2 plot_channels=   0.0 restore_x=  0.5 restore_y=  0.5 settle=  0.8 apply_controls=  2.2 project_controls=  0.9 capture=  0.3
+        路径: subplot-object-reuse | ink(可见)=[2476, 2528] 绘点=[1040, 1040] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=4.8 ms 一轮后aa=True
+
+==== 场景：subplot ↔ subplot（View1 有隐藏通道） ====
+UltraView capture skipped (time-render/no-result) section=time view_id=99989da4-da44-4793-a860-e674f79bb112 canvas=TimeDomainCanvasPG
+  首访 View 1: ink=[717, 837] 绘点=[1042, 1042] 点: green / 抗锯齿已完成
+  首访 View 2: ink=[2496, 2550] 绘点=[1936, 1936] 点: green / 抗锯齿已完成
+  [0] -> View 1: 切换调用    88.0 ms | build_data=  2.9 delta= 25.9 plot_channels=   0.0 restore_x=  0.3 restore_y=  0.4 settle=  1.5 apply_controls=  1.6 project_controls=  0.7 capture=  0.2
+        路径: subplot-object-reuse | ink(可见)=[719, 840] 绘点=[1304, 1304] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=4.0 ms 一轮后aa=True
+  [0] -> View 2: 切换调用    23.6 ms | build_data=  1.5 delta=  3.5 plot_channels=   0.0 restore_x=  0.4 restore_y=  2.6 settle=  1.0 apply_controls=  1.6 project_controls=  0.8 capture=  0.5
+        路径: subplot-object-reuse | ink(可见)=[2483, 2535] 绘点=[1302, 1302] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=5.8 ms 一轮后aa=True
+  [1] -> View 1: 切换调用    54.3 ms | build_data=  2.4 delta=  2.7 plot_channels=   0.0 restore_x=  0.4 restore_y=  0.3 settle=  0.7 apply_controls=  1.9 project_controls=  0.9 capture=  0.5
+        路径: subplot-object-reuse | ink(可见)=[719, 840] 绘点=[1304, 1304] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=4.9 ms 一轮后aa=True
+  [1] -> View 2: 切换调用    32.2 ms | build_data=  2.9 delta=  3.6 plot_channels=   0.0 restore_x=  0.4 restore_y=  0.4 settle=  0.9 apply_controls=  3.5 project_controls=  1.2 capture=  0.6
+        路径: subplot-object-reuse | ink(可见)=[2483, 2535] 绘点=[1302, 1302] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=6.9 ms 一轮后aa=True
+  [2] -> View 1: 切换调用    27.5 ms | build_data=  2.9 delta=  3.2 plot_channels=   0.0 restore_x=  0.4 restore_y=  0.4 settle=  0.9 apply_controls=  2.9 project_controls=  1.2 capture=  0.3
+        路径: subplot-object-reuse | ink(可见)=[719, 840] 绘点=[1304, 1304] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=4.8 ms 一轮后aa=True
+  [2] -> View 2: 切换调用    32.3 ms | build_data=  2.5 delta=  3.5 plot_channels=   0.0 restore_x=  0.4 restore_y=  0.4 settle=  0.9 apply_controls=  3.7 project_controls=  1.1 capture=  0.4
+        路径: subplot-object-reuse | ink(可见)=[2483, 2535] 绘点=[1302, 1302] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=6.8 ms 一轮后aa=True
+
+==== 场景：overlay ↔ overlay ====
+UltraView capture skipped (time-render/digest-changed) section=time view_id=e800efab-d47f-4fd5-9441-ff8ed47bdcd3 canvas=TimeDomainCanvasPG
+UltraView capture skipped (time-render/no-result) section=time view_id=95026611-66e1-4b16-a839-5f3c64083cf9 canvas=TimeDomainCanvasPG
+UltraView capture skipped (time-render/no-result) section=time view_id=95026611-66e1-4b16-a839-5f3c64083cf9 canvas=TimeDomainCanvasPG
+  首访 View 1: ink=[368, 93, 471] 绘点=[1846, 1846, 1846] 点: green / 抗锯齿已完成
+  首访 View 2: ink=[4719, 5335] 绘点=[1864, 1864] 点: green / 抗锯齿已完成
+  [0] -> View 1: 切换调用    78.6 ms | build_data=  2.8 delta=  0.1 plot_channels=  22.8 restore_x=  0.2 restore_y=  0.1 settle=  0.8 apply_controls=  2.0 project_controls=  0.8 capture=  0.3
+        路径: new-channel | ink(可见)=[376, 95, 481] 绘点=[2000, 2000, 2000] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=5.9 ms 一轮后aa=True
+  [0] -> View 2: 切换调用    40.9 ms | build_data=  2.7 delta=  0.1 plot_channels=  18.0 restore_x=  0.2 restore_y=  0.1 settle=  0.7 apply_controls=  2.9 project_controls=  0.6 capture=  0.3
+        路径: new-channel | ink(可见)=[4824, 5454] 绘点=[1968, 1968] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=5.6 ms 一轮后aa=True
+  [1] -> View 1: 切换调用    53.5 ms | build_data=  3.3 delta=  0.1 plot_channels=  27.4 restore_x=  0.3 restore_y=  0.1 settle=  0.8 apply_controls=  2.9 project_controls=  0.9 capture=  0.4
+        路径: new-channel | ink(可见)=[376, 95, 481] 绘点=[2000, 2000, 2000] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=6.4 ms 一轮后aa=True
+  [1] -> View 2: 切换调用    50.2 ms | build_data=  3.4 delta=  0.1 plot_channels=  22.9 restore_x=  0.2 restore_y=  0.1 settle=  0.8 apply_controls=  2.6 project_controls=  0.8 capture=  0.3
+        路径: new-channel | ink(可见)=[4824, 5454] 绘点=[1968, 1968] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=6.4 ms 一轮后aa=True
+  [2] -> View 1: 切换调用    56.7 ms | build_data=  2.5 delta=  0.1 plot_channels=  26.9 restore_x=  0.2 restore_y=  0.1 settle=  0.8 apply_controls=  2.7 project_controls=  0.8 capture=  0.5
+        路径: new-channel | ink(可见)=[376, 95, 481] 绘点=[2000, 2000, 2000] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=5.7 ms 一轮后aa=True
+  [2] -> View 2: 切换调用    49.5 ms | build_data=  3.0 delta=  0.1 plot_channels=  21.6 restore_x=  0.2 restore_y=  0.1 settle=  0.9 apply_controls=  2.6 project_controls=  0.7 capture=  0.4
+        路径: new-channel | ink(可见)=[4824, 5454] 绘点=[1968, 1968] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=6.3 ms 一轮后aa=True
+
+==== 场景：subplot ↔ overlay（两 View 布局不同） ====
+UltraView capture skipped (time-render/no-result) section=time view_id=ad94cab5-576c-45d6-af27-f8315008b2f1 canvas=TimeDomainCanvasPG
+UltraView capture skipped (time-render/no-result) section=time view_id=ad94cab5-576c-45d6-af27-f8315008b2f1 canvas=TimeDomainCanvasPG
+  首访 View 1: ink=[26, 1, 29] 绘点=[2400, 2400, 2400] 点: green / 抗锯齿已完成
+  首访 View 2: ink=[4719, 5335] 绘点=[1864, 1864] 点: green / 抗锯齿已完成
+  [0] -> View 1: 切换调用    63.4 ms | build_data=  2.3 delta=  0.0 plot_channels=  25.1 restore_x=  0.2 restore_y=  0.1 settle=  0.8 apply_controls=  1.8 project_controls=  0.7 capture=  0.1
+        路径: plot-mode-changed | ink(可见)=[26, 1, 29] 绘点=[2400, 2400, 2400] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=5.4 ms 一轮后aa=True
+  [0] -> View 2: 切换调用    49.4 ms | build_data=  2.8 delta=  0.0 plot_channels=  21.7 restore_x=  0.3 restore_y=  0.1 settle=  0.9 apply_controls=  3.2 project_controls=  0.8 capture=  0.3
+        路径: plot-mode-changed | ink(可见)=[4824, 5454] 绘点=[1968, 1968] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=6.0 ms 一轮后aa=True
+  [1] -> View 1: 切换调用    53.9 ms | build_data=  2.6 delta=  0.0 plot_channels=  27.9 restore_x=  0.3 restore_y=  0.2 settle=  0.9 apply_controls=  3.5 project_controls=  0.8 capture=  0.3
+        路径: plot-mode-changed | ink(可见)=[26, 1, 29] 绘点=[2400, 2400, 2400] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=5.8 ms 一轮后aa=True
+  [1] -> View 2: 切换调用    54.6 ms | build_data=  2.7 delta=  0.0 plot_channels=  25.9 restore_x=  0.3 restore_y=  0.1 settle=  0.8 apply_controls=  3.2 project_controls=  0.8 capture=  0.7
+        路径: plot-mode-changed | ink(可见)=[4824, 5454] 绘点=[1968, 1968] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=6.7 ms 一轮后aa=True
+  [2] -> View 1: 切换调用    57.4 ms | build_data=  3.8 delta=  0.0 plot_channels=  33.6 restore_x=  0.3 restore_y=  0.1 settle=  0.9 apply_controls=  3.0 project_controls=  0.8 capture=  0.4
+        路径: plot-mode-changed | ink(可见)=[26, 1, 29] 绘点=[2400, 2400, 2400] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=True  首帧aa=True  首轮paints=[True, True] 首帧=5.9 ms 一轮后aa=True
+  [2] -> View 2: 切换调用    47.5 ms | build_data=  3.7 delta=  0.0 plot_channels=  18.9 restore_x=  0.2 restore_y=  0.1 settle=  0.8 apply_controls=  2.8 project_controls=  0.8 capture=  0.4
+        路径: plot-mode-changed | ink(可见)=[4824, 5454] 绘点=[1968, 1968] | 稳定后 aa_on=True ink_allowed=True raster=0 收编=0 | 点: green / 抗锯齿已完成
+        首帧: aa@切换返回=False 首帧aa=False 首轮paints=[False, False, True] 首帧=6.4 ms 一轮后aa=True
+
+==== 分区来回切（时域 → FFT → 时域）====
+  -> fft     308.3 ms  current=fft 时域点=green FFT点=red
+  -> time    309.0 ms  current=time 时域点=yellow FFT点=red
+  -> fft     307.1 ms  current=fft 时域点=green FFT点=red
+  -> time    305.6 ms  current=time 时域点=yellow FFT点=red
+  OK：分区来回切未抛异常

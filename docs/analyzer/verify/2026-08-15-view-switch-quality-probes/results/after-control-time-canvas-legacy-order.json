@@ -1,0 +1,519 @@
+{
+  "command": "time-canvas",
+  "environment": {
+    "platform_plugin": "cocoa",
+    "dpr": 2.0,
+    "exposed": true
+  },
+  "legacy_order": true,
+  "runs": {
+    "向量AA": [
+      {
+        "label": "[0] -> smoothA",
+        "legacy_order": true,
+        "rebuild_ms": 49.85241599933943,
+        "restore_xlim_ms": 3.9536250005767215,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 5.120499998156447,
+        "raster_flush_ms": 12.511165998148499,
+        "raster_entries": 3,
+        "raster_frame_ms": 9.340958000393584,
+        "ink_measure_ms": 0.038624999433523044,
+        "frame_ink_dev_px": 0.0,
+        "aa_enable_call_ms": 0.15504199836868793,
+        "first_aa_frame_ms": 8.269958998425864,
+        "steady_aa_frame_ms": 8.729749999474734,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 58.926540998072596,
+        "to_settled_ms": 89.20366599340923,
+        "ylims": {
+          "[\"fileA\",\"方向盘扭矩\"]": [
+            -111.34095954247485,
+            111.34095954247485
+          ],
+          "[\"fileA\",\"电机转速\"]": [
+            -111.34095954247485,
+            111.34095954247485
+          ],
+          "[\"fileA\",\"电机扭矩\"]": [
+            -89.64484511848983,
+            134.46726767773472
+          ]
+        }
+      },
+      {
+        "label": "[0] -> smoothB",
+        "legacy_order": true,
+        "rebuild_ms": 23.228665999340592,
+        "restore_xlim_ms": 3.307082999526756,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 3.443500001594657,
+        "raster_flush_ms": 5.198208000365412,
+        "raster_entries": 2,
+        "raster_frame_ms": 8.327750001626555,
+        "ink_measure_ms": 0.029584000003524125,
+        "frame_ink_dev_px": 0.0,
+        "aa_enable_call_ms": 0.11691599866026081,
+        "first_aa_frame_ms": 8.422374998190207,
+        "steady_aa_frame_ms": 8.506582998961676,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 29.979249000462005,
+        "to_settled_ms": 52.04449799930444,
+        "ylims": {
+          "[\"fileB\",\"Rack Force\"]": [
+            -109.23514193079221,
+            109.23514193079221
+          ],
+          "[\"fileB\",\"Rack Travel\"]": [
+            -65.76549995090156,
+            153.45283453471757
+          ]
+        }
+      },
+      {
+        "label": "[1] -> smoothA",
+        "legacy_order": true,
+        "rebuild_ms": 11.852250001538778,
+        "restore_xlim_ms": 2.4964999975054525,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 3.9491249990533106,
+        "raster_flush_ms": 4.840083998715272,
+        "raster_entries": 3,
+        "raster_frame_ms": 8.505249999871012,
+        "ink_measure_ms": 0.020415998733369634,
+        "frame_ink_dev_px": 1681612.6631952939,
+        "aa_enable_call_ms": 0.08437499855062924,
+        "first_aa_frame_ms": 7.63458299843478,
+        "steady_aa_frame_ms": 7.8769579995423555,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 18.29787499809754,
+        "to_settled_ms": 39.362166993669234,
+        "ylims": {
+          "[\"fileA\",\"方向盘扭矩\"]": [
+            -111.34095954247485,
+            111.34095954247485
+          ],
+          "[\"fileA\",\"电机转速\"]": [
+            -111.34095954247485,
+            111.34095954247485
+          ],
+          "[\"fileA\",\"电机扭矩\"]": [
+            -22.411211279622492,
+            201.70090151660207
+          ]
+        }
+      },
+      {
+        "label": "[1] -> smoothB",
+        "legacy_order": true,
+        "rebuild_ms": 8.673000000271713,
+        "restore_xlim_ms": 1.9461660012893844,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 3.7360420028562658,
+        "raster_flush_ms": 4.396874999656575,
+        "raster_entries": 2,
+        "raster_frame_ms": 7.334125002671499,
+        "ink_measure_ms": 0.02779200076474808,
+        "frame_ink_dev_px": 0.0,
+        "aa_enable_call_ms": 0.12008300109300762,
+        "first_aa_frame_ms": 7.517207999626407,
+        "steady_aa_frame_ms": 7.696959000895731,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 14.355208004417364,
+        "to_settled_ms": 33.72349900746485,
+        "ylims": {
+          "[\"fileB\",\"Rack Force\"]": [
+            -109.23514193079221,
+            109.23514193079221
+          ],
+          "[\"fileB\",\"Rack Travel\"]": [
+            -43.84366650233964,
+            175.3746679832795
+          ]
+        }
+      },
+      {
+        "label": "[2] -> smoothA",
+        "legacy_order": true,
+        "rebuild_ms": 11.400583000067854,
+        "restore_xlim_ms": 2.2470410003734287,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 4.032042001199443,
+        "raster_flush_ms": 4.6808750012132805,
+        "raster_entries": 3,
+        "raster_frame_ms": 8.195832997444086,
+        "ink_measure_ms": 0.0340410006174352,
+        "frame_ink_dev_px": 0.0,
+        "aa_enable_call_ms": 0.15141599942580797,
+        "first_aa_frame_ms": 7.7669579986832105,
+        "steady_aa_frame_ms": 8.839166999678127,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 17.679666001640726,
+        "to_settled_ms": 38.47474799840711,
+        "ylims": {
+          "[\"fileA\",\"方向盘扭矩\"]": [
+            -111.34095954247485,
+            111.34095954247485
+          ],
+          "[\"fileA\",\"电机转速\"]": [
+            -111.34095954247485,
+            111.34095954247485
+          ],
+          "[\"fileA\",\"电机扭矩\"]": [
+            -44.82242255924494,
+            179.2896902369796
+          ]
+        }
+      },
+      {
+        "label": "[2] -> smoothB",
+        "legacy_order": true,
+        "rebuild_ms": 9.421042002941249,
+        "restore_xlim_ms": 1.491750001150649,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 3.3297919981123414,
+        "raster_flush_ms": 3.8386250016628765,
+        "raster_entries": 2,
+        "raster_frame_ms": 8.195833997888258,
+        "ink_measure_ms": 0.03208399721188471,
+        "frame_ink_dev_px": 0.0,
+        "aa_enable_call_ms": 0.11362499935785308,
+        "first_aa_frame_ms": 8.18016700213775,
+        "steady_aa_frame_ms": 8.594834001996787,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 14.24258400220424,
+        "to_settled_ms": 34.57083500325098,
+        "ylims": {
+          "[\"fileB\",\"Rack Force\"]": [
+            -109.23514193079221,
+            109.23514193079221
+          ],
+          "[\"fileB\",\"Rack Travel\"]": [
+            -43.84366650233964,
+            175.3746679832795
+          ]
+        }
+      }
+    ],
+    "光栅": [
+      {
+        "label": "[0] -> denseA",
+        "legacy_order": true,
+        "rebuild_ms": 19.04308400116861,
+        "restore_xlim_ms": 35.16337499968358,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 4.419125001732027,
+        "raster_flush_ms": 31.50358399943798,
+        "raster_entries": 3,
+        "raster_frame_ms": 8.64141700003529,
+        "ink_measure_ms": 0.014624998584622517,
+        "frame_ink_dev_px": 3073660.71991229,
+        "aa_enable_call_ms": 0.08133399751386605,
+        "first_aa_frame_ms": 8.35979200201109,
+        "steady_aa_frame_ms": 8.348416999069741,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 58.62558400258422,
+        "to_settled_ms": 107.21171100158244,
+        "ylims": {
+          "[\"fileC\",\"电机相电流 U\"]": [
+            -120.24822531696287,
+            120.24822531696287
+          ],
+          "[\"fileC\",\"电机相电流 V\"]": [
+            -120.24757433450183,
+            120.24757433450038
+          ],
+          "[\"fileC\",\"电机相电流 W\"]": [
+            -24.20387939424549,
+            217.83491454822274
+          ]
+        }
+      },
+      {
+        "label": "[0] -> denseB",
+        "legacy_order": true,
+        "rebuild_ms": 10.28424999822164,
+        "restore_xlim_ms": 28.84424999865587,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 3.777750000153901,
+        "raster_flush_ms": 24.643832999572624,
+        "raster_entries": 2,
+        "raster_frame_ms": 8.639874999062158,
+        "ink_measure_ms": 0.012125001376261935,
+        "frame_ink_dev_px": 3934163.678580933,
+        "aa_enable_call_ms": 0.055290998716373,
+        "first_aa_frame_ms": 8.017000000108965,
+        "steady_aa_frame_ms": 8.282499999040738,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 42.90624999703141,
+        "to_settled_ms": 84.26224899449153,
+        "ylims": {
+          "[\"fileD\",\"转矩传感器原始\"]": [
+            -117.97385990162816,
+            117.97393885830103
+          ],
+          "[\"fileD\",\"扭矩纹波\"]": [
+            -23.67544988289096,
+            213.07904894602154
+          ]
+        }
+      },
+      {
+        "label": "[1] -> denseA",
+        "legacy_order": true,
+        "rebuild_ms": 13.818084000376984,
+        "restore_xlim_ms": 34.074499999405816,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 5.314500001986744,
+        "raster_flush_ms": 34.23254100198392,
+        "raster_entries": 3,
+        "raster_frame_ms": 9.026833999087103,
+        "ink_measure_ms": 0.01925000105984509,
+        "frame_ink_dev_px": 3073660.71991229,
+        "aa_enable_call_ms": 0.07579199882457033,
+        "first_aa_frame_ms": 8.712291000847472,
+        "steady_aa_frame_ms": 8.553083000151673,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 53.207084001769545,
+        "to_settled_ms": 105.25454200251261,
+        "ylims": {
+          "[\"fileC\",\"电机相电流 U\"]": [
+            -120.24822531696287,
+            120.24822531696287
+          ],
+          "[\"fileC\",\"电机相电流 V\"]": [
+            -120.24757433450183,
+            120.24757433450038
+          ],
+          "[\"fileC\",\"电机相电流 W\"]": [
+            -24.20387939424549,
+            217.83491454822274
+          ]
+        }
+      },
+      {
+        "label": "[1] -> denseB",
+        "legacy_order": true,
+        "rebuild_ms": 10.35220799894887,
+        "restore_xlim_ms": 29.571832998044556,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 3.5152909986209124,
+        "raster_flush_ms": 23.7343749977299,
+        "raster_entries": 2,
+        "raster_frame_ms": 8.853499999531778,
+        "ink_measure_ms": 0.011832999007310718,
+        "frame_ink_dev_px": 3934163.678580933,
+        "aa_enable_call_ms": 0.0546669980394654,
+        "first_aa_frame_ms": 8.335833001183346,
+        "steady_aa_frame_ms": 8.282499999040738,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 43.43933199561434,
+        "to_settled_ms": 84.41770699209883,
+        "ylims": {
+          "[\"fileD\",\"转矩传感器原始\"]": [
+            -117.97385990162816,
+            117.97393885830103
+          ],
+          "[\"fileD\",\"扭矩纹波\"]": [
+            -23.67544988289096,
+            213.07904894602154
+          ]
+        }
+      },
+      {
+        "label": "[2] -> denseA",
+        "legacy_order": true,
+        "rebuild_ms": 13.862957999663195,
+        "restore_xlim_ms": 33.53599999900325,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 4.318499999499181,
+        "raster_flush_ms": 28.890666999359382,
+        "raster_entries": 3,
+        "raster_frame_ms": 8.535124998161336,
+        "ink_measure_ms": 0.03274999835412018,
+        "frame_ink_dev_px": 0.0,
+        "aa_enable_call_ms": 0.15629100016667508,
+        "first_aa_frame_ms": 9.264207998057827,
+        "steady_aa_frame_ms": 8.784416000708006,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "yellow",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 51.71745799816563,
+        "to_settled_ms": 98.56374899391085,
+        "ylims": {
+          "[\"fileC\",\"电机相电流 U\"]": [
+            -120.24822531696287,
+            120.24822531696287
+          ],
+          "[\"fileC\",\"电机相电流 V\"]": [
+            -120.24757433450183,
+            120.24757433450038
+          ],
+          "[\"fileC\",\"电机相电流 W\"]": [
+            -72.61163818273913,
+            169.4271557597291
+          ]
+        }
+      },
+      {
+        "label": "[2] -> denseB",
+        "legacy_order": true,
+        "rebuild_ms": 9.95412500196835,
+        "restore_xlim_ms": 26.39791699766647,
+        "settle_ms": 0.0,
+        "aa_before_first_frame": false,
+        "first_frame_ms": 4.523499999777414,
+        "raster_flush_ms": 23.945290999108693,
+        "raster_entries": 2,
+        "raster_frame_ms": 8.337082999787526,
+        "ink_measure_ms": 0.024917000700952485,
+        "frame_ink_dev_px": 0.0,
+        "aa_enable_call_ms": 0.11920899851247668,
+        "first_aa_frame_ms": 8.325124999828404,
+        "steady_aa_frame_ms": 8.228999999118969,
+        "aa_engaged": false,
+        "render_path": "dense-raster",
+        "quality_state": "green",
+        "backstop": null,
+        "steady_reforced": false,
+        "suspect": {
+          "first": false,
+          "raster_frame": false,
+          "first_aa": false,
+          "steady": false
+        },
+        "to_first_frame_ms": 40.875541999412235,
+        "to_settled_ms": 81.60224999664933,
+        "ylims": {
+          "[\"fileD\",\"转矩传感器原始\"]": [
+            -117.97385990162816,
+            117.97393885830103
+          ],
+          "[\"fileD\",\"扭矩纹波\"]": [
+            -94.70179953156472,
+            142.05269929734777
+          ]
+        }
+      }
+    ]
+  }
+}
