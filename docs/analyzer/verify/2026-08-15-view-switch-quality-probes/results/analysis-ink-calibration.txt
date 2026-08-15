@@ -1,0 +1,59 @@
+platform=cocoa os=macOS-27.0-arm64-arm-64bit loadavg=[2.1, 1.97, 1.94]
+== 组 1 谱行：3 曲线 / 绘点固定，只改峰底比 (dpr=2.0) ==
+  纯噪声底 (无峰)                    ink=   617.4k  AA帧=  1539.3 ms  非AA=   12.7 ms  passes=2 spread=   0%
+  峰/底=50                       ink=    55.4k  AA帧=   119.2 ms  非AA=    6.5 ms  passes=2 spread=   2%
+  峰/底=20                       ink=   120.2k  AA帧=   215.5 ms  非AA=    7.4 ms  passes=2 spread=   0%
+  峰/底=10                       ink=   212.3k  AA帧=   319.5 ms  非AA=    8.5 ms  passes=2 spread=   0%
+  峰/底=5                        ink=   335.9k  AA帧=   598.6 ms  非AA=   10.0 ms  passes=2 spread=   0%
+  峰/底=2                        ink=   520.0k  AA帧=  1164.8 ms  非AA=   11.7 ms  passes=2 spread=   0%
+  峰/底=1                        ink=   617.9k  AA帧=  1538.9 ms  非AA=   12.6 ms  passes=2 spread=   0%
+-- 组 1 谱行 拟合（定带用）--
+   全部点                        n=7  斜率=  2.606 ms/k·dev-px  截距=  -137.8 ms  R²=0.9762  250ms@ink=   148.8k
+   ≤600ms 近目标段                n=4  斜率=  1.681 ms/k·dev-px  截距=     9.0 ms  R²=0.9760  250ms@ink=   143.4k
+   => 推荐 OFF=145k  ON=95k (取自 ≤600ms 近目标段，规则=候选中最保守/最小 OFF)
+-- 组 1 谱行 分段诊断（不参与定带，用于判断单线是否成立）--
+   >600ms 高墨段                 n=3  斜率=  3.832 ms/k·dev-px  截距=  -827.6 ms  R²=1.0000  250ms@ink=   281.2k
+
+== 组 2 时域预览行：2/3/4 条包络 × Y(默认 / 拉窄到填满) (时域带 ON=200k OFF=300k) ==
+  2 条 · Y默认                    ink=    30.7k  AA帧=    25.8 ms  非AA=    3.1 ms  passes=2 spread=  22%
+  2 条 · Y拉窄填满                  ink=    44.1k  AA帧=    31.9 ms  非AA=    3.1 ms  passes=2 spread=   0%
+  3 条 · Y默认                    ink=    62.2k  AA帧=    54.4 ms  非AA=    4.1 ms  passes=2 spread=   8%
+  3 条 · Y拉窄填满                  ink=    82.8k  AA帧=    68.7 ms  非AA=    4.2 ms  passes=2 spread=   1%
+  4 条 · Y默认                    ink=   111.7k  AA帧=    96.6 ms  非AA=    5.3 ms  passes=2 spread=   0%
+  4 条 · Y拉窄填满                  ink=   143.6k  AA帧=   129.9 ms  非AA=    5.2 ms  passes=2 spread=   4%
+-- 组 2 时域预览行 拟合（定带用）--
+   全部点                        n=6  斜率=  0.932 ms/k·dev-px  截距=    -5.9 ms  R²=0.9951  250ms@ink=   274.6k
+   ≤600ms 近目标段                n=6  斜率=  0.932 ms/k·dev-px  截距=    -5.9 ms  R²=0.9951  250ms@ink=   274.6k
+   => 推荐 OFF=275k  ON=185k (取自 全部点，规则=候选中最保守/最小 OFF)
+-- 组 2 时域预览行 分段诊断（不参与定带，用于判断单线是否成立）--
+   仅 Y默认                      n=3  斜率=  0.872 ms/k·dev-px  截距=    -0.6 ms  R²=0.9997  250ms@ink=   287.2k
+   仅 Y拉窄填满                    n=3  斜率=  0.988 ms/k·dev-px  截距=   -12.2 ms  R²=0.9998  250ms@ink=   265.5k
+   分段斜率跨度 0.872 → 0.988 (1.13×)
+
+   预览行斜率 0.932 vs 时域隐含 0.833 ms/k·dev-px → 比值 1.12× → 复用 _INK_AA_ON/OFF
+
+== 组 3 FRF：bins × 构形，ink 对幅值/相位/相干三行求和 ==
+  1025 bins · 干净               ink=     2.5k  AA帧=     8.2 ms  非AA=    3.8 ms  passes=2 spread=   7%
+  1025 bins · 噪声相位             ink=    79.6k  AA帧=    64.7 ms  非AA=   15.6 ms  passes=2 spread=   4%
+  1025 bins · 噪声相干             ink=   177.4k  AA帧=   460.5 ms  非AA=    6.1 ms  passes=2 spread=   0%
+  2049 bins · 干净               ink=     2.5k  AA帧=    14.3 ms  非AA=    5.3 ms  passes=2 spread=   0%
+  2049 bins · 噪声相位             ink=   143.1k  AA帧=   154.2 ms  非AA=   41.9 ms  passes=2 spread=   2%
+  2049 bins · 噪声相干             ink=   341.7k  AA帧=  1095.2 ms  非AA=    9.4 ms  passes=2 spread=   0%
+  4097 bins · 干净               ink=     2.5k  AA帧=    20.7 ms  非AA=    9.3 ms  passes=2 spread=   1%
+  4097 bins · 噪声相位             ink=   320.7k  AA帧=   410.4 ms  非AA=  146.8 ms  passes=2 spread=   0%
+  4097 bins · 噪声相干             ink=   694.9k  AA帧=  2309.4 ms  非AA=   14.8 ms  passes=2 spread=   0%
+-- 组 3 FRF 三行 拟合（定带用）--
+   全部点                        n=9  斜率=  3.207 ms/k·dev-px  截距=  -124.7 ms  R²=0.9163  250ms@ink=   116.9k
+   ≤600ms 近目标段                n=7  斜率=  1.438 ms/k·dev-px  截距=    12.2 ms  R²=0.7816  250ms@ink=   165.4k
+   => 推荐 OFF=115k  ON=75k (取自 全部点，规则=候选中最保守/最小 OFF)
+-- 组 3 FRF 三行 分段诊断（不参与定带，用于判断单线是否成立）--
+   仅 噪声相位                     n=3  斜率=  1.435 ms/k·dev-px  截距=   -50.2 ms  R²=1.0000  250ms@ink=   209.2k
+   仅 噪声相干                     n=3  斜率=  3.551 ms/k·dev-px  截距=  -148.6 ms  R²=0.9992  250ms@ink=   112.2k
+   分段斜率跨度 1.435 → 3.551 (2.47×)  ← 单条直线不成立
+
+   干净构形：ink 恒为 ~2.5k 而帧随 bins 涨（1025→8.2ms/2049→14.3ms/4097→20.7ms）→ ink 腿必须与点数腿 AND，不能单独定 AA
+
+== 推荐常量（spec §5 回填用）==
+  _SPECTRUM_INK_AA_ON/OFF = 95k / 145k
+  预览行 = 复用 _INK_AA_ON/OFF (200k/300k)；实测斜率比 1.12× ≤ 2×
+  FRF 三行 ink 带 = 75k / 115k

@@ -327,10 +327,19 @@ AaFrameLatch`（构造参数：首帧上限、稳态上限、EMA α、LRU 上限
 |---|---|---|---|
 | `_SYNC_AA_MAX_MS` | 50 ms | 首帧多付 ≤50 ms 在「点击→首帧」上不可感知（<100 ms 即时感），且远低于既有 `warm_checkbox_paint_p95=220`；本次实测典型 View 首帧 8–13 ms 命中、平滑对照 474 ms 落到两步路径——正是想要的分流 | `probe_view_switch_aa.py` |
 | `_AA_MEMO_MAX` | 32（= 黑名单上限） | 同一理由：远超一次会话访问的签名数，LRU 淘汰 | — |
-| 谱行 `_SPECTRUM_INK_AA_ON/OFF` | **暂定 100k / 150k**，Task 4 真机标定后定稿 | 本次 7 点：67k→136 ms、212k→336 ms，线性内插 250 ms（稳态上限）≈150k | `probe_analysis_aa_frames.py` |
-| FRF 三行 ink 带 | **待标定**（先按谱行值起步） | 同画布族、同笔宽；相位翻转是最大 ink 源 | 同上 |
-| 预览行 ink 带 | 先复用 `_INK_AA_ON/OFF` | 同 TimeDomain overlay 物理 | 同上，报斜率 |
+| 谱行 `_SPECTRUM_INK_AA_ON/OFF` | **95k / 145k**（2026-08-15 真机标定） | 7 点扫描（3 曲线、绘点恒 4095，只改峰底比）：55k→119 ms、120k→216 ms、212k→320 ms、336k→599 ms、520k→1165 ms、617k→1539 ms。近目标段（≤600 ms，n=4）拟合斜率 **1.68 ms/k·dev-px**、截距 9.0 ms，过 250 ms（`_BACKSTOP_STEADY_AA_MS`）于 143k → OFF 145k、ON=OFF×2/3=95k | `probe_view_switch_quality.py analysis-calibrate` |
+| FRF 三行 ink 带 | **75k / 115k**（2026-08-15 真机标定） | 9 点扫描（bins 1k/2k/4k × 干净/噪声相位/噪声相干），三行 ink 求和。**不是一条直线**：噪声相位 1.44 ms/k、噪声相干 3.55 ms/k（2.47×，相干行 y 跨度恒钉 [0,1]，满行高笔画比同样 ink 的短笔画贵），故按最保守的全局拟合（3.21 ms/k、截距 −125 ms）取 250 ms 处 117k → OFF 115k、ON 75k | 同上 |
+| 预览行 ink 带 | **复用 `_INK_AA_ON/OFF`（200k / 300k）**（2026-08-15 真机实测确认） | 6 点扫描（2/3/4 条包络 × Y 默认/拉窄填满）：31k→26 ms 到 144k→130 ms，拟合斜率 **0.93 ms/k·dev-px**、R²=0.995，对时域带隐含斜率（250 ms ÷ 300k = 0.83）只差 **1.12×** ≤ 2×，独立解出 OFF 275k 也落在 300k 同量级 → 不分家 | 同上 |
 | line/frf backstop 上限 | 复用 1000 / 250 ms | 这是用户忍耐上限，不是画布物理 | — |
+
+三行 ink 带的标定机器：macOS 27.0 (Darwin) / arm64 / Cocoa / dpr **2.0** / 画布
+1400×900（谱行行高 669 px、预览行每条 131 px、FRF 幅值与相位行 296 px、相干行
+255 px）；每档 ≥2 遍、每遍 3 帧取中位，AA 显式开/关而不依赖现有点数闸门；原始散点
+与拟合见 `verify/2026-08-15-view-switch-quality-probes/` 的
+`results/analysis-ink-calibration.{json,txt}`。两条**留给实施的告诫**：谱行在 ~350k ink
+以上转陡（高墨段斜率 3.83 ms/k，全局拟合会把截距压成 −138 ms），所以带只在近目标
+段标定、不要拿全局拟合外推；FRF「干净」构形 ink 恒为 2.5k 而帧随 bins 从 8.2 涨到
+20.7 ms——**ink 腿必须与点数腿 AND**，单独一条 ink 腿管不住点数。
 
 改任何一项：先改本节，再跑对应探针，再改代码。
 
