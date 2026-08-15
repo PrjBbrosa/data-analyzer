@@ -43,6 +43,10 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   9 failed**——9 条全部是完整顺序下的既有顺序污染(单跑/子集跑全绿,清单见
   `docs/analyzer/reviews/2026-08-15-post-v8-batch-review.md` §6,待专项治理),
   `tests/acquisition_ui` **359 passed**。
+  2026-08-15 `feat/view-switch-quality-settlement`(基于 `380e5ac2`)实测:主体
+  **7046 passed / 24 skipped / 11 failed**——9 条同上顺序污染 + 2 条 `380e5ac2`
+  干净树上就红的 `test_qss_palette_ratchet` / `test_qss_selector_liveness`(那次
+  ultraview 提交引入,非本分支);`tests/acquisition_ui` **359 passed**。
   主体一条命令在 `f85b5d4e`..`56c42f4d` 期间还有**另一处**交错 segfault
   （channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层 widget），已由
   `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放
@@ -147,6 +151,26 @@ spec 再改测试，并在提交里写清为什么。
   `test_frame_paint_backstop_is_installed_on_real_canvas`：真画布必须装上
   `install_frame_paint_timer` 回退，armed AA 帧才能进 `_note_aa_frame`。失败分支要
   `logger.warning`，不要静默。
+- **View 恢复是一个事务，只结算一次** `tests/ui/test_pg_timedomain_canvas.py` 的
+  `TestViewRestoreSettlement`（几何一致性 + `_refresh_visible_data` 恰好 1 次）与
+  `TestDiscreteSettle`（离散结算三分支 + memo 生命周期）：`_render_view_to_canvas`
+  必须走 `restore_visible_xlim(flush=False)` → `restore_visible_ylims` →
+  `settle_view_restore()`，在**最终几何**上刷一遍、判一次。**离散结算不许改交互
+  静默窗**——`timer.interval() == 150` 被钉住（`QTimer.start(int)` 会永久改
+  interval，所以离散路径用独立的 0 ms `discrete_timer`，别合并成一个计时器）。
+  分析画布同理：`plot_spectra` / `set_result` 返回时曲线 AA 必须全 off，AA 按
+  ink **AND** 点数两条腿判、并有实测 backstop 兜底
+  （`tests/ui/test_pg_line_canvas.py` 的 `test_plot_spectra_returns_with_aa_off_and_discrete_timer_armed`
+  / `test_spectrum_ink_gate_blocks_noise_floor_and_allows_peaks` /
+  `test_point_budget_leg_still_ands_with_ink`，`tests/ui/test_frf_canvas.py` 的
+  `test_frf_set_result_arms_discrete_aa_instead_of_painting_an_aa_frame` /
+  `test_frf_noise_phase_and_coherence_are_rejected_by_the_ink_gate` /
+  `test_frf_backstop_trips_and_blacklists_the_view_signature`）。
+  新常量（`_SYNC_AA_MAX_MS` · 谱行 `_SPECTRUM_INK_AA_ON/OFF` 95k/145k ·
+  `_FRF_INK_AA_ON/OFF` 75k/115k；预览行复用 `_INK_AA_ON/OFF`）和下面那几个一样是
+  **标定值不是旋钮**：要改先改
+  `docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md` §5，再用
+  `scripts/probe_view_switch_quality.py analysis-calibrate` 在真机重测。
 
 ## 时域渲染成本判据：ink（墨水量）
 2026-08-08 起，时域渲染**成本**的统一判据是 ink（`ink_dev_px = Σ min(|Δy|, y_span)
