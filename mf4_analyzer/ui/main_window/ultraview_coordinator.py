@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from time import monotonic
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from typing import Any
 
 from PyQt5 import sip
@@ -130,6 +130,11 @@ _PIXEL_AFFECTING_SIGNALS = frozenset(
 )
 _HTML_TAG = re.compile(r"<[^>]+>")
 _HOVER_CURSOR_LISTS = ("_cursor_line_items", "_cursor_lines")
+# Skip details that describe an expected state rather than a fault. A View the
+# user simply has not computed is not a defect, and the card already shows it
+# via ``_push_preview(usable=False)`` — the log does not need to shout too.
+# Every other detail (digest-unavailable, grab-invalid, …) stays a warning.
+_CAPTURE_SKIP_LEVELS = {"no-result": logging.DEBUG}
 _SECTION_X_UNIT = {
     "time": "s",
     "fft": "Hz",
@@ -610,8 +615,11 @@ class UltraViewCoordinator(QObject):
             return None
         try:
             return presentation_digest(payload)
-        except (TypeError, ValueError):
-            self._warn_digest(ref)
+        except (TypeError, ValueError) as exc:
+            # The exception names the offending leaf; a bare "digest failed"
+            # does not, and that is the whole diagnosis when a section stops
+            # producing previews.
+            self._warn_digest(ref, exc)
             return None
 
     def set_pinned_from_board(self, board) -> None:
@@ -2181,10 +2189,20 @@ class UltraViewCoordinator(QObject):
         }
 
     def _pane_cache_keys(self, window, section, view_id, pane_idx) -> list:
+        """Pinned cache keys for one pane, in a run-to-run stable order.
+
+        ``AnalysisPinBook`` stores each slot as a ``set``, so a multi-source
+        pane (an FFT overlay is the common case) hands back a different
+        ordering in every process — string hashing is salted per run. The
+        digest is persisted alongside the preview and compared after restart,
+        so an unordered list would make those cards read STALE forever on a
+        View nobody touched. ``repr`` orders tuple and dataclass keys alike;
+        the value only has to be deterministic, not meaningful.
+        """
         pins = getattr(window, "_analysis_pins", None)
         slot = (section, str(view_id), int(pane_idx))
         if pins is not None and slot in pins:
-            return list(pins[slot])
+            return sorted(pins[slot], key=repr)
         return []
 
     def _cursor_payload(self, window, ref: UltraViewRef, state) -> dict:
@@ -2818,7 +2836,7 @@ class UltraViewCoordinator(QObject):
         throttled(
             logger,
             f"ultraview-capture:{ref.section}:{ref.view_id}:{detail}",
-            logging.WARNING,
+            _CAPTURE_SKIP_LEVELS.get(detail, logging.WARNING),
             "UltraView capture skipped (%s/%s) section=%s view_id=%s canvas=%s",
             reason,
             detail,
@@ -2827,14 +2845,15 @@ class UltraViewCoordinator(QObject):
             canvas_type,
         )
 
-    def _warn_digest(self, ref) -> None:
+    def _warn_digest(self, ref, exc) -> None:
         throttled(
             logger,
             f"ultraview-digest:{ref.section}:{ref.view_id}",
             logging.WARNING,
-            "UltraView presentation digest failed section=%s view_id=%s",
+            "UltraView presentation digest failed section=%s view_id=%s: %s",
             ref.section,
             ref.view_id,
+            exc,
         )
 
     def _start_timer(self, key, callback) -> None:
@@ -3027,4 +3046,22 @@ def _digest_leaf(value):
         return [_digest_leaf(item) for item in value]
     if isinstance(value, list):
         return [_digest_leaf(item) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        # Analysis cache keys are not all tuples: FRF keys are frozen
+        # dataclasses (``FrfCacheKey``). Passing one through unchanged used to
+        # reach ``presentation_digest`` as an unserializable leaf, so every FRF
+        # View holding a pinned result had no digest at all — and a ref with no
+        # digest never captures. The class name is part of the encoding so a
+        # dataclass can never collide with a plain mapping of the same shape.
+        return {
+            "__dataclass__": type(value).__name__,
+            "fields": {
+                field.name: _digest_leaf(getattr(value, field.name))
+                for field in fields(value)
+            },
+        }
+    # Anything still unknown falls through to ``_canonical_json_value``, which
+    # is the single authority on what is digest-stable. Do not coerce with
+    # ``str()`` here: a default ``repr`` carries the object address, which
+    # would make the digest differ every run and pin every card to stale.
     return value

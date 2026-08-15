@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import ast
 import gc
+import logging
+from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +15,8 @@ from PyQt5.QtGui import QColor, QImage, QPixmap
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QWidget
 
+from mf4_analyzer import diagnostics
+from mf4_analyzer.ui.analysis_cache import FrfCacheKey
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
 from mf4_analyzer.ui.chart_stack.ultraview.preview_store import (
     MAX_PREVIEW_RAW_EDGE,
@@ -45,6 +49,7 @@ _COORDINATOR_PATH = (
     / "main_window"
     / "ultraview_coordinator.py"
 )
+_COORDINATOR_LOGGER = "mf4_analyzer.ui.main_window.ultraview_coordinator"
 _FORBIDDEN_SOURCE_NAMES = (
     "do_fft",
     "do_fft_time",
@@ -2218,3 +2223,203 @@ def test_hidden_sheet_bumps_revision_without_idle_grab(qapp):
     coord.clear()
     coord.deleteLater()
 
+
+
+def test_frf_dataclass_cache_key_still_yields_a_digest(qapp, monkeypatch, caplog):
+    """FRF pins are frozen dataclasses, not tuples — the digest must survive.
+
+    ``FrfCacheKey`` used to fall through ``_digest_leaf`` unchanged and reach
+    ``presentation_digest`` as an unserializable leaf, so every FRF View that
+    had actually computed a result reported no digest at all — and a ref with
+    no digest never captures. Cover the shape, not just the exception.
+    """
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    window, coord = _make_coord()
+    manager = ViewManager(state_factory=AnalysisViewState)
+    window.analysis_managers["frf"] = manager
+    state = manager.get(0)
+    state.view_id = "frf-a"
+    state.params = {"estimator": "H1", "window": "hann", "nfft": 4096}
+    state.panes = [
+        PaneState(
+            input_source=("f1", "torque"),
+            output_source=("f1", "motor_speed"),
+            effective_time_range=(0.0, 10.0),
+            xlim=(0.0, 500.0),
+        )
+    ]
+    window.pages["frf"] = FakePage([FakeCanvas()])
+    ref = _ref("frf-a", "frf")
+
+    key = FrfCacheKey(
+        input_fid="f1",
+        input_channel="torque",
+        output_fid="f1",
+        output_channel="motor_speed",
+        effective_time_range=(0.0, 10.0),
+        compute_params_blob='{"nfft": 4096}',
+    )
+    window._analysis_pins.add("frf", "frf-a", 0, key)
+
+    with caplog.at_level(logging.WARNING, logger=_COORDINATOR_LOGGER):
+        pinned = coord.current_digest_for(ref)
+    assert pinned is not None
+    assert "digest failed" not in caplog.text
+
+    # A different compute key is a different presentation.
+    window._analysis_pins.replace(
+        "frf",
+        "frf-a",
+        0,
+        (
+            FrfCacheKey(
+                input_fid="f1",
+                input_channel="torque",
+                output_fid="f1",
+                output_channel="motor_speed",
+                effective_time_range=(0.0, 10.0),
+                compute_params_blob='{"nfft": 8192}',
+            ),
+        ),
+    )
+    assert coord.current_digest_for(ref) != pinned
+
+    # ...and the same key is the same digest, across independent encodings.
+    window._analysis_pins.replace("frf", "frf-a", 0, (key,))
+    assert coord.current_digest_for(ref) == pinned
+    window.pages["frf"].deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_dataclass_leaf_does_not_collide_with_a_plain_mapping(qapp):
+    """The class name is part of the encoding, so shapes cannot alias."""
+    key = FrfCacheKey(
+        input_fid="f1",
+        input_channel="in",
+        output_fid="f1",
+        output_channel="out",
+        effective_time_range=(0.0, 1.0),
+        compute_params_blob="{}",
+    )
+    plain = {
+        "input_fid": "f1",
+        "input_channel": "in",
+        "output_fid": "f1",
+        "output_channel": "out",
+        "effective_time_range": (0.0, 1.0),
+        "compute_params_blob": "{}",
+    }
+    encoded = UltraViewCoordinator._digest_key(key)
+    assert encoded["__dataclass__"] == "FrfCacheKey"
+    assert presentation_digest({"k": encoded}) != presentation_digest(
+        {"k": UltraViewCoordinator._digest_key(plain)}
+    )
+
+
+def test_digest_failure_names_the_offending_value(qapp, monkeypatch, caplog):
+    """Swallowing the exception text left 'digest failed' undiagnosable."""
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    ref = _ref("view-a")
+
+    class _Unserializable:
+        pass
+
+    monkeypatch.setattr(
+        coord,
+        "presentation_payload_for",
+        lambda _ref: {"leaf": _Unserializable()},
+    )
+    with caplog.at_level(logging.WARNING, logger=_COORDINATOR_LOGGER):
+        assert coord.current_digest_for(ref) is None
+    assert "digest failed" in caplog.text
+    assert "_Unserializable" in caplog.text
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_no_result_skip_is_not_logged_as_a_warning(qapp, monkeypatch, caplog):
+    """An uncomputed View is an expected state; the card already shows it.
+
+    Faults keep their warning level — only the expected-state details are
+    demoted, so a real capture failure still stands out in the log.
+    """
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    canvas._has_result = False
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+
+    with caplog.at_level(logging.DEBUG, logger=_COORDINATOR_LOGGER):
+        coord.request_capture(ref, canvas, "probe-empty")
+    records = [r for r in caplog.records if "capture skipped" in r.getMessage()]
+    assert records, "the skip must still be observable at DEBUG"
+    assert [r.levelno for r in records] == [logging.DEBUG]
+    assert canvas.grab_calls == 0
+
+    caplog.clear()
+    canvas._has_result = True
+    monkeypatch.setattr(coord, "current_digest_for", lambda _ref: None)
+    with caplog.at_level(logging.DEBUG, logger=_COORDINATOR_LOGGER):
+        coord.request_capture(ref, canvas, "probe-fault")
+    faults = [r for r in caplog.records if "digest-unavailable" in r.getMessage()]
+    assert [r.levelno for r in faults] == [logging.WARNING]
+
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_multi_source_pane_digest_is_stable_against_pin_set_order(qapp):
+    """Pin slots are sets; the digest must not inherit their hash order.
+
+    Preview digests are persisted and compared after a restart, so a pane
+    whose ``cache_keys`` ordering follows per-process string hashing would
+    make every multi-channel FFT card read STALE on relaunch.
+    """
+    window, coord = _make_coord()
+    manager = ViewManager(state_factory=AnalysisViewState)
+    window.analysis_managers["fft"] = manager
+    state = manager.get(0)
+    state.view_id = "fft-a"
+    state.params = {"nfft": 1024}
+    state.panes = [
+        PaneState(sources=[("f1", "torque"), ("f1", "motor_speed")], xlim=(0.0, 500.0))
+    ]
+    window.pages["fft"] = FakePage([FakeCanvas()])
+    ref = _ref("fft-a", "fft")
+    keys = [("f1", "torque", "{}"), ("f1", "motor_speed", "{}")]
+
+    # A real ``AnalysisPinBook`` hands back a set, whose iteration order is
+    # decided by per-run string hashing — it cannot be steered from a test.
+    # This double replays the two orders that a set can legitimately produce,
+    # so the guard holds under any PYTHONHASHSEED instead of the one in play.
+    class _ScrambledPins:
+        def __init__(self, slot, order):
+            self._slot = slot
+            self._order = list(order)
+
+        def __contains__(self, slot):
+            return slot == self._slot
+
+        def __getitem__(self, slot):
+            if slot != self._slot:
+                raise KeyError(slot)
+            return list(self._order)
+
+    slot = ("fft", "fft-a", 0)
+    window._analysis_pins = _ScrambledPins(slot, keys)
+    forward = coord.current_digest_for(ref)
+    assert forward is not None
+    assert coord._pane_cache_keys(window, *slot) == sorted(keys, key=repr)
+
+    window._analysis_pins = _ScrambledPins(slot, list(reversed(keys)))
+    assert coord._pane_cache_keys(window, *slot) == sorted(keys, key=repr)
+    assert coord.current_digest_for(ref) == forward
+    window.pages["fft"].deleteLater()
+    coord.clear()
+    coord.deleteLater()
