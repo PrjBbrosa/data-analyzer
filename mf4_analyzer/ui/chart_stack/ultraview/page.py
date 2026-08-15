@@ -222,7 +222,7 @@ class UltraViewPage(QWidget):
     organize_free_grid_requested = pyqtSignal()
     free_grid_undo_requested = pyqtSignal()
     free_grid_redo_requested = pyqtSignal()
-    viewport_changed = pyqtSignal()
+    viewport_changed = pyqtSignal(str, dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1067,11 +1067,12 @@ class UltraViewPage(QWidget):
             return
         center = self._current_center()
         self._viewport.set_center(center)
-        self._board.viewport = {
+        payload = {
             "zoom": float(self._viewport.zoom()),
             "center_x": float(center[0]),
             "center_y": float(center[1]),
         }
+        self.viewport_changed.emit(str(self._board.board_id), payload)
 
     def _restore_viewport_from_board(self, board, payload: Mapping[str, Any] | None = None) -> None:
         source = payload if payload is not None else getattr(board, "viewport", None)
@@ -1109,12 +1110,9 @@ class UltraViewPage(QWidget):
         finally:
             self._restoring_viewport = False
         self._persist_viewport_to_board()
-        self.viewport_changed.emit()
 
     def _on_board_scrolled(self, _value: int = 0) -> None:
         self._persist_viewport_to_board()
-        if not self._restoring_viewport:
-            self.viewport_changed.emit()
 
     def set_board_zoom(self, zoom: float, cursor_in_viewport=None) -> None:
         viewport = self._board_scroll.viewport()
@@ -1171,7 +1169,6 @@ class UltraViewPage(QWidget):
         self._apply_lod_chrome()
         self._restart_smooth_timer()
         self._persist_viewport_to_board()
-        self.viewport_changed.emit()
 
     def _set_zoom_percent(self, percent: int) -> None:
         """Keep the legacy façade and the visible navigation island aligned."""
@@ -1269,7 +1266,6 @@ class UltraViewPage(QWidget):
         self._apply_lod_chrome()
         self._restart_smooth_timer()
         self._persist_viewport_to_board()
-        self.viewport_changed.emit()
 
     def _apply_lod_chrome(self) -> None:
         level = self._viewport.lod()
@@ -1332,7 +1328,6 @@ class UltraViewPage(QWidget):
             self._board_scroll.viewport().unsetCursor()
         self._persist_viewport_to_board()
         self._restart_smooth_timer()
-        self.viewport_changed.emit()
 
     def cancel_board_gestures(self) -> None:
         self._grid.cancel_gesture()
@@ -1379,7 +1374,6 @@ class UltraViewPage(QWidget):
         self._apply_lod_chrome()
         self._restart_smooth_timer()
         self._persist_viewport_to_board()
-        self.viewport_changed.emit()
 
     def _cursor_in_scroll_viewport(self, event, widget) -> tuple[float, float]:
         """Pick a viewport-local zoom anchor; never trust a degenerate (0, 0).
@@ -2240,6 +2234,10 @@ class UltraViewPage(QWidget):
         self._refresh_projection()
         self._refresh_card_context()
         self.selection_changed.emit(ref.section, ref.view_id)
+
+    def select_ref(self, ref: UltraViewRef) -> None:
+        """Select a Board reference for coordinator-driven locate actions."""
+        self._select_ref(ref)
 
     def _status_for(self, ref: UltraViewRef) -> str:
         if ref in self._statuses:

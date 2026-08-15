@@ -730,6 +730,39 @@ def test_viewport_illegal_values_clamp_with_warning():
     assert any(item.startswith("viewport_center_y_clamped") for item in warnings)
 
 
+def test_set_board_viewport_legalizes_without_marking_workspace_dirty():
+    workspace = uvs.default_workspace()
+    workspace.opaque_payload = {"schema": 99, "workspace": {"future": True}}
+    board = uvs.active_board(workspace)
+    board.passthrough = {"future_camera": {"keep": True}}
+
+    warnings = uvs.set_board_viewport(
+        board,
+        {"zoom": 9, "center_x": "nope", "center_y": float("inf")},
+    )
+
+    assert board.viewport == {"zoom": ZOOM_MAX, "center_x": 0.0, "center_y": 0.0}
+    assert any(item.startswith("viewport_zoom_clamped") for item in warnings)
+    assert any(item.startswith("viewport_center_x_clamped") for item in warnings)
+    assert any(item.startswith("viewport_center_y_clamped") for item in warnings)
+    assert workspace.opaque_payload == {"schema": 99, "workspace": {"future": True}}
+    assert board.passthrough == {"future_camera": {"keep": True}}
+
+
+def test_set_presentation_flags_changes_only_explicit_values():
+    board = uvs.default_board()
+
+    assert uvs.set_presentation_flags(board, show_titles=False) == []
+    assert board.show_titles is False
+    assert board.show_sources is True
+    assert uvs.set_presentation_flags(board, show_sources=False) == []
+    assert board.show_titles is False
+    assert board.show_sources is False
+    assert uvs.set_presentation_flags(board) == []
+    assert board.show_titles is False
+    assert board.show_sources is False
+
+
 def test_unknown_board_fields_passthrough_with_viewport():
     payload = uvs.board_to_payload(uvs.default_board())
     payload["board"]["viewport"] = {"zoom": 0.5, "center_x": 1.0, "center_y": 2.0}

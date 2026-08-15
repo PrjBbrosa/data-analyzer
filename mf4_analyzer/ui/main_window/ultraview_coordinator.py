@@ -65,8 +65,10 @@ from ..ultraview_state import (
     replace_slot,
     set_layout,
     set_active_board,
+    set_board_viewport,
     set_free_grid_rect,
     set_free_grid_rects,
+    set_presentation_flags,
     set_workspace_preview_sidecar,
     swap_slots,
     template_to_free_grid,
@@ -724,9 +726,22 @@ class UltraViewCoordinator(QObject):
         next_h = native_h * scale
         return image.width() + 1 < next_w or image.height() + 1 < next_h
 
-    def _on_viewport_changed(self) -> None:
+    def _on_viewport_payload(self, board_id: str, payload: dict) -> None:
         if self._inactive():
             return
+        board = next(
+            (
+                item
+                for item in self._workspace.boards
+                if item.board_id == str(board_id)
+            ),
+            None,
+        )
+        if board is None:
+            logger.warning("UltraView viewport: unknown board %s", board_id)
+            return
+        for warning in set_board_viewport(board, payload):
+            logger.warning("UltraView viewport %s: %s", board_id, warning)
         self._focus_timer.start()
 
     def _on_focus_residency_timeout(self) -> None:
@@ -943,7 +958,7 @@ class UltraViewCoordinator(QObject):
             (page.show_titles_toggled, self._on_show_titles),
             (page.show_sources_toggled, self._on_show_sources),
             (page.feedback_requested, self._on_page_feedback),
-            (page.viewport_changed, self._on_viewport_changed),
+            (page.viewport_changed, self._on_viewport_payload),
         )
         for signal, slot in pairs:
             signal.connect(slot)
@@ -1363,7 +1378,7 @@ class UltraViewCoordinator(QObject):
         board = active_board(self._workspace)
         if ref in membership_set(board):
             if page is not None:
-                page._select_ref(ref)
+                page.select_ref(ref)
             return
         warnings = add_ref(board, ref)
         if warnings and warnings[0] == "membership_limit":
@@ -1708,7 +1723,11 @@ class UltraViewCoordinator(QObject):
         board = active_board(self._workspace)
         if board.name == cleaned:
             return
-        board.name = cleaned
+        warnings = rename_board(self._workspace, board.board_id, cleaned)
+        if warnings:
+            for warning in warnings:
+                logger.warning("UltraView board rename: %s", warning)
+            return
         self._after_board_mutation()
 
     def _on_create_board(self) -> None:
@@ -1884,11 +1903,11 @@ class UltraViewCoordinator(QObject):
             page.set_compare_filter(wanted)
 
     def _on_show_titles(self, checked: bool) -> None:
-        active_board(self._workspace).show_titles = bool(checked)
+        set_presentation_flags(active_board(self._workspace), show_titles=checked)
         self._after_board_mutation()
 
     def _on_show_sources(self, checked: bool) -> None:
-        active_board(self._workspace).show_sources = bool(checked)
+        set_presentation_flags(active_board(self._workspace), show_sources=checked)
         self._after_board_mutation()
 
     def _on_shift_slot(self, section: str, view_id: str, delta: int) -> None:

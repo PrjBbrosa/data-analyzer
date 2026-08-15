@@ -42,9 +42,11 @@ FROZEN_STATE_MUTATORS = frozenset(
         "replace_free_grid_ref",
         "replace_slot",
         "set_active_board",
+        "set_board_viewport",
         "set_free_grid_rect",
         "set_free_grid_rects",
         "set_layout",
+        "set_presentation_flags",
         "set_ratio",
         "set_workspace_preview_sidecar",
         "swap_slots",
@@ -52,14 +54,7 @@ FROZEN_STATE_MUTATORS = frozenset(
     }
 )
 
-FROZEN_MODEL_FIELD_WRITES = frozenset(
-    {
-        ("page.py", "self._board.viewport"),
-        ("ultraview_coordinator.py", "board.name"),
-        ("ultraview_coordinator.py", "active_board(self._workspace).show_sources"),
-        ("ultraview_coordinator.py", "active_board(self._workspace).show_titles"),
-    }
-)
+FROZEN_MODEL_FIELD_WRITES = frozenset()
 
 FROZEN_PAGE_OF_SURFACE = frozenset(
     {
@@ -81,11 +76,14 @@ FROZEN_MUTATION_FUNNEL_EXCEPTIONS = frozenset(
     {
         "_after_board_mutation",  # the funnel itself marks then refreshes
         "_on_organize_free_grid",  # _record_grid_transition closes indirectly
+        # D3: viewport is digest-external presentational state, so its
+        # coordinator receiver must not mark or rebuild the workspace.
+        "_on_viewport_payload",
         "save_preview_sidecar",  # persistence metadata is intentionally not a projection
     }
 )
 
-FROZEN_PAGE_PRIVATE_SURFACE = frozenset({"_select_ref"})
+FROZEN_PAGE_PRIVATE_SURFACE = frozenset()
 
 FROZEN_FLOATING_GEOMETRY_LITERALS = Counter(
     {

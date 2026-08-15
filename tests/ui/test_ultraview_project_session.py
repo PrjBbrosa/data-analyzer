@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+import pytest
 from PyQt5.QtGui import QColor, QImage
 
 from PyQt5.QtCore import QCoreApplication
@@ -14,6 +15,7 @@ from mf4_analyzer.ui.ultraview_state import (
     UltraViewRef,
     add_ref,
     membership_set,
+    normalize_workspace_payload,
 )
 from tests.ui.ultraview_fakes import ComputeProbe
 
@@ -364,3 +366,38 @@ def test_viewport_survives_save_and_reopen(qapp, qtbot, tmp_path):
     restored.open_ultraview()
     QCoreApplication.processEvents()
     assert restored.chart_stack.page_ultraview.board_zoom() == 1.5
+
+
+def test_switching_boards_persists_viewport_to_departing_board(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "switch-viewport.csv"
+    _write_csv(csv_a)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    coordinator = win._ultraview
+    page = win.chart_stack.page_ultraview
+    first = coordinator.board
+
+    page.set_board_zoom(1.5)
+    expected = dict(first.viewport)
+    coordinator._on_create_board()
+    second = coordinator.board
+
+    assert second.board_id != first.board_id
+    assert first.viewport == expected
+    assert second.viewport != expected
+
+    coordinator._on_select_board(first.board_id)
+    QCoreApplication.processEvents()
+    assert page.board_zoom() == pytest.approx(expected["zoom"])
+
+    restored_workspace, warnings = normalize_workspace_payload(
+        coordinator.to_project_payload()
+    )
+    assert warnings == []
+    restored_first = next(
+        board for board in restored_workspace.boards if board.board_id == first.board_id
+    )
+    assert restored_first.viewport == expected

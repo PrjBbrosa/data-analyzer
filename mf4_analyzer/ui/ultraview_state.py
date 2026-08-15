@@ -1024,6 +1024,35 @@ def _legalize_viewport(raw: Any) -> tuple[dict[str, float], list[str]]:
     )
 
 
+def set_board_viewport(
+    board: UltraViewBoardState, payload: Mapping[str, Any] | None
+) -> list[str]:
+    """Persist legal Board view-state without dirtying the workspace.
+
+    Viewport position is a high-frequency presentation detail outside the
+    identity digest.  It must therefore remain independent of
+    ``mark_workspace_mutated`` while still taking the same legalisation path
+    as restored project payloads.
+    """
+    legal, warnings = _legalize_viewport(payload)
+    board.viewport = legal
+    return warnings
+
+
+def set_presentation_flags(
+    board: UltraViewBoardState,
+    *,
+    show_titles: bool | None = None,
+    show_sources: bool | None = None,
+) -> list[str]:
+    """Apply only explicitly supplied Board presentation flags."""
+    if show_titles is not None:
+        board.show_titles = bool(show_titles)
+    if show_sources is not None:
+        board.show_sources = bool(show_sources)
+    return []
+
+
 def _try_viewport_float(value: Any) -> float | None:
     try:
         number = float(value)
