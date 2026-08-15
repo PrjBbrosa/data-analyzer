@@ -822,6 +822,18 @@ class Icons:
         return _line_icon(draw, color or CHEVRON)
 
     @classmethod
+    def chevron_right(cls, color=None):
+        """:meth:`chevron_down` rotated -90° — 'this section is collapsed'.
+
+        Same stroke and same bounding box as its sibling so a disclosure
+        control can swap between the two without the glyph shifting weight.
+        """
+        def draw(p):
+            p.drawLine(QPointF(8, 5), QPointF(13, 10))
+            p.drawLine(QPointF(13, 10), QPointF(8, 15))
+        return _line_icon(draw, color or CHEVRON)
+
+    @classmethod
     def chevron_up(cls, color=None):
         """Mirror of :meth:`chevron_down` — 'collapse this popup'."""
 

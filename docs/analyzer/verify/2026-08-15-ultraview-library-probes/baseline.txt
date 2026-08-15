@@ -1,0 +1,44 @@
+§1.1 面板 rect 随内容变化（每步后显式 _apply_floating_layout）
+    打开（展开态）                rect=(68,64,470,656)  sizeHint.h=656
+    切概览                    rect=(68,147,470,356)  sizeHint.h=356
+    切回展开                   rect=(68,64,470,656)  sizeHint.h=656
+    折叠时域                   rect=(68,81,470,488)  sizeHint.h=488
+    展开时域                   rect=(68,64,470,656)  sizeHint.h=656
+    搜索 View 1              rect=(68,64,470,530)  sizeHint.h=530
+    清空搜索                   rect=(68,64,470,656)  sizeHint.h=656
+
+§1.2 分组卡实渲高 vs 自身 minimumSizeHint
+    time      h= 164  minHint= 215  CLIPPED (-51)
+    fft       h=  83  minHint=  83  OK
+    fft_time  h=  83  minHint=  83  OK
+    frf       h=  83  minHint=  83  OK
+    order     h=  83  minHint=  83  OK
+
+§2/R3 手写公式 vs 布局自算
+    _measured_body_height()         = 528
+    _body_layout.totalMinimumSize() = 579
+    _body.sizeHint()                = 587
+
+§1.3 概览卡实渲高 vs sizeHint
+    实渲 = [81, 80, 81, 80, 81]
+    hint = 43
+
+§1.4 内部度量
+    行外框            = 42          (HTML 单行 38 / 本 plan 目标 46)
+    圆点左内缩        = 7           (HTML 15)
+    ＋/− 按钮         = 20x20        (HTML 23x23)
+    分组头外框        = 32          (HTML 32)
+    搜索框外框        = 32          (HTML 35)
+    展开/概览 tab      = 53 @x123 / 53 @x292   (HTML flex:1 → 各占半宽)
+    竖滚动条宽        = 8           (现落在分组卡右边框上)
+
+§5 修法验证（离屏）
+    Task 2 布局自算最小高 → 分组卡不再被裁: True
+    Task 3 尾部 stretch  → 概览卡 [81, 80, 81, 80, 81] → [43, 43, 43, 43, 43]
+    Task 4 Expanding    → tab 宽 (53, 53) → (222, 222)
+
+§3.2 sizeHint 换成常量 560 后的 rect（跨窗口尺寸）
+    页面 1280x800: (68, 64, 470, 560)  恒定
+    页面 1280x720: (68, 64, 470, 560)  恒定
+    页面 1600x1000: (68, 145, 470, 560)  恒定
+    页面 1000x620: (68, 64, 470, 496)  恒定

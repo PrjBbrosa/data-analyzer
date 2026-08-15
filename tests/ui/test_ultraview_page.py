@@ -180,6 +180,75 @@ def _sample_pixel(widget: QWidget, x: int, y: int) -> QColor:
     return QColor(image.pixel(max(0, min(x, image.width() - 1)), max(0, min(y, image.height() - 1))))
 
 
+def _centre_pixel(widget: QWidget) -> QColor:
+    return _sample_pixel(widget, widget.width() // 2, widget.height() // 2)
+
+
+def _chroma(color: QColor) -> float:
+    """How loud a colour reads, as Qt-HSV ``S * V`` == ``(max - min) / 255`` of RGB.
+
+    Saturation alone cannot express "calm": a dark forest green and a Tailwind alert
+    green both sit near S 0.5-0.8, and the alert one is loud only because it is *also*
+    bright. ``S * V`` separates them, and it is linear in RGB so antialiased blends
+    between two calm colours stay calm (no overshoot).
+    """
+    return color.saturationF() * color.valueF()
+
+
+def _loudest_pixel(widget: QWidget) -> QColor:
+    """The most colourful pixel anywhere in ``widget`` — fill, border and ink alike."""
+    image = widget.grab().toImage()
+    worst = QColor(image.pixel(0, 0))
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = QColor(image.pixel(x, y))
+            if _chroma(pixel) > _chroma(worst):
+                worst = pixel
+    return worst
+
+
+def _hue_gap(left: QColor, right: QColor) -> float:
+    """Shortest distance between two hues on the colour wheel, in degrees."""
+    assert left.hue() >= 0, f"{left.name()} is achromatic, it has no hue to compare"
+    assert right.hue() >= 0, f"{right.name()} is achromatic, it has no hue to compare"
+    delta = abs(left.hue() - right.hue()) % 360
+    return min(delta, 360 - delta)
+
+
+def _dense_rows() -> list[LibraryRow]:
+    """The shape from the plan's §1 probe: 4 time Views plus one of each other kind.
+
+    Concentrating rows in one section is what exposed the clipping — a section card
+    tall enough to be the one QVBoxLayout squeezes when the body minimum is too small.
+    """
+    meta = "Rte_TAS_mTorsionBarTorque_xds16, Rte_TLC_mSumLimMotorTorque_xds16"
+    rows = [
+        LibraryRow(
+            section="time",
+            view_id=f"t{index}",
+            name=f"View {index + 1}",
+            tab_color="#3B82F6",
+            status=STATUS_MISSING,
+            on_board=False,
+            source_summary=meta,
+        )
+        for index in range(4)
+    ]
+    rows += [
+        LibraryRow(
+            section=section,
+            view_id=f"{section}-only",
+            name="View 1",
+            tab_color="#3B82F6",
+            status=STATUS_MISSING,
+            on_board=False,
+            source_summary="EPS_1_CRC",
+        )
+        for section in ("fft", "fft_time", "frf", "order")
+    ]
+    return rows
+
+
 class _Harness:
     def __init__(self, qtbot):
         self.board = default_board()
@@ -483,8 +552,10 @@ def test_library_on_board_button_removes_instead_of_locating(qtbot, qapp):
     assert button.text() == "−"
     assert button.property("action") == "remove"
     assert "移除" in button.toolTip()
-    assert button.width() <= 20
-    assert button.height() <= 20
+    # Was `<= 20`, which pinned the size the code and the QSS used to disagree about
+    # (setFixedSize(18) vs min-width 18px + 1px border). Plan §4 makes it a contract.
+    assert button.width() == uv_widgets.LIBRARY_ROW_ACTION_SIZE
+    assert button.height() == uv_widgets.LIBRARY_ROW_ACTION_SIZE
     assert button.height() < row.height()
     button.click()
     assert harness.removed == [("frf", "frf-1")]
@@ -519,10 +590,12 @@ def test_library_add_remove_and_selection_colors_are_distinct(qtbot, qapp):
 
     plus = _sample_pixel(add_btn, 2, 2)
     minus = _sample_pixel(remove_btn, 2, 2)
-    assert plus.green() > plus.red() + 20
-    assert minus.red() > minus.green() + 20
-    assert plus.green() > minus.green() + 20
-    assert minus.red() > plus.red() + 8
+    # The old fixed channel deltas (+20/+8) were sized for the Tailwind palette that
+    # plan §3.3 deliberately desaturates, so they measured loudness, not distinctness.
+    # Direction plus hue separation says the same thing without pinning a hex string.
+    assert plus.green() > plus.red()
+    assert minus.red() > minus.green()
+    assert _hue_gap(plus, minus) > 40
 
     header_fill = _sample_pixel(header, max(12, header.width() // 2), header.height() // 2)
     selected_fill = _sample_pixel(
@@ -2843,8 +2916,10 @@ def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     assert len(headers) == 5
     header_y = []
     for header in headers:
-        assert header.height() >= 22
-        assert header.height() <= 40
+        # Pinned, not bracketed: the old 22..40 window was wide enough to sit still
+        # while the time card was being clipped by 51px. Section heads are a fixed
+        # outer-box height now (plan §4).
+        assert header.height() == uv_widgets.LIBRARY_SECTION_HEAD_HEIGHT
         title = header.findChild(QLabel, "ultraViewLibrarySectionTitle")
         assert title is not None
         assert "个 View" not in title.text()
@@ -2856,7 +2931,301 @@ def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     rows = [widget for widget in library.row_widgets() if widget.isVisible()]
     assert len(rows) >= 6
     for row in rows:
-        assert row.height() >= 36
+        assert row.height() == uv_widgets.LIBRARY_ROW_HEIGHT
+
+
+def test_library_overlay_height_is_constant_across_content_changes(qtbot, qapp):
+    """The panel's outer rect must not follow its own content (plan §1.1, R1 + R2).
+
+    Recorded before the fix in
+    ``docs/analyzer/verify/2026-08-15-ultraview-library-probes/baseline.txt``: the
+    height walked 656 -> 356 -> 488 -> 530 as the content changed, and because the
+    anchor centres the panel on the trigger button, that shrinkage came back out as
+    an 83px slide of the *top edge*. Both mechanisms have to die for the jumping to
+    stop, so this asserts the rect field-by-field rather than just the height.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)  # the plan's §3.2 reference size
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_rows(_dense_rows())
+    qapp.processEvents()
+    button = page.tool_rail().panel_button(PANEL_LIBRARY)
+    assert button is not None
+    QTest.mouseClick(button, Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() == PANEL_LIBRARY
+    library = page.library_panel()
+    assert library.isVisible()
+
+    def rect_now() -> tuple[int, int, int, int]:
+        # The product only re-places the overlay on resize / reopen / set_board, so
+        # the jump lands later than the operation that caused it. Forcing a re-place
+        # after every step is what makes that delayed jump observable here.
+        page._apply_floating_layout()
+        qapp.processEvents()
+        geometry = library.geometry()
+        return (geometry.x(), geometry.y(), geometry.width(), geometry.height())
+
+    opened = rect_now()
+    # §3.2: at this window size nothing clamps, so the panel shows its design height.
+    assert opened[3] == uv_widgets.LIBRARY_OVERLAY_HEIGHT
+
+    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
+    qapp.processEvents()
+    assert library.browse_mode() == "compact"
+    assert rect_now() == opened, "切概览"
+
+    library.findChild(QToolButton, "ultraViewLibraryModeGroups").click()
+    qapp.processEvents()
+    assert library.browse_mode() == "groups"
+    assert rect_now() == opened, "切回展开"
+
+    library.section_headers()["time"].click()
+    qapp.processEvents()
+    assert library.is_section_expanded("time") is False
+    assert rect_now() == opened, "折叠时域"
+
+    library.section_headers()["time"].click()
+    qapp.processEvents()
+    assert library.is_section_expanded("time") is True
+    assert rect_now() == opened, "展开时域"
+
+    library.search_field().setText("View 1")
+    qapp.processEvents()
+    assert rect_now() == opened, "搜索 View 1"
+
+    library.search_field().setText("")
+    qapp.processEvents()
+    assert rect_now() == opened, "清空搜索"
+
+
+def test_library_section_frames_are_never_shorter_than_their_minimum(qtbot, qapp):
+    """No section card may be squeezed below the height its own children need.
+
+    Plan §1.2: the time card rendered at 164 against a minimumSizeHint of 215, so the
+    fourth View row was sliced by the card's bottom border. The cause is a hand-written
+    body-height formula that undercounts what Qt already knows (528 vs 579).
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_rows(_dense_rows())
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    assert library.browse_mode() == "groups"
+
+    frames = library.section_widgets()
+    assert tuple(frames) == SOURCE_SECTIONS
+    clipped = {
+        section: (frame.height(), frame.minimumSizeHint().height())
+        for section, frame in frames.items()
+        if frame.height() < frame.minimumSizeHint().height()
+    }
+    assert not clipped, f"section cards clipped below their own minimum: {clipped}"
+
+
+def test_library_catalog_cards_keep_height_when_panel_is_stale_tall(qtbot, qapp):
+    """Overview cards keep their row height while the panel is still the *old* height.
+
+    This is the shape in the user's screenshot, and it only exists because switching
+    mode does not re-place the overlay (plan §1.1: the jump and the operation that
+    causes it are separated in time). Measured on the pre-fix baseline at 1280x800:
+
+        打开(展开态)                    面板 h=656   概览卡 [40,40,40,40,40]
+        点「概览」后(未重排)            面板 h=656   概览卡 [100,100,99,100,100]
+        再强制 _apply_floating_layout   面板 h=356   概览卡 [40,40,40,40,40]
+
+    So the panel sits at 656 while the compact body only needs 228, and with no trailing
+    stretch the spare 300px is shared out over the five cards — +60 each.
+
+    **Deliberately no ``_apply_floating_layout()`` here.** Forcing a re-place shrinks the
+    panel to fit its content, the spare height goes to zero, and the ballooning vanishes
+    — a re-laid-out test cannot see this defect at all.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_rows(_dense_rows())
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    tall = library.height()
+
+    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
+    qapp.processEvents()
+    assert library.browse_mode() == "compact"
+    # The panel must still be the height it was opened at — that is the whole premise.
+    assert library.height() == tall
+
+    cards = library.catalog_cards()
+    assert tuple(cards) == SOURCE_SECTIONS
+    heights = {section: card.height() for section, card in cards.items()}
+    assert set(heights.values()) == {uv_widgets.LIBRARY_CATALOG_HEIGHT}, heights
+
+
+def test_library_catalog_cards_keep_their_row_height(qtbot, qapp):
+    """Overview cards keep their row height once the panel has settled.
+
+    Plan §1.3 / R4: with no trailing stretch behind the hosts, ``setWidgetResizable(True)``
+    hands the leftover viewport height to the QVBoxLayout, which shares it out over the
+    five summary cards instead of leaving them at their 43px sizeHint.
+
+    Companion to ``..._when_panel_is_stale_tall``. This one *does* re-place the overlay
+    after switching mode, so it guards the settled target state rather than the defect
+    shape: on the pre-fix baseline the re-place shrinks the panel to its content and the
+    cards fall back to 40, so this path alone would not have caught the ballooning. Both
+    paths are kept because a fixed-height panel has to hold in both.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_rows(_dense_rows())
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
+    qapp.processEvents()
+    assert library.browse_mode() == "compact"
+    page._apply_floating_layout()
+    qapp.processEvents()
+
+    cards = library.catalog_cards()
+    assert tuple(cards) == SOURCE_SECTIONS
+    heights = {section: card.height() for section, card in cards.items()}
+    assert set(heights.values()) == {uv_widgets.LIBRARY_CATALOG_HEIGHT}, heights
+
+
+def test_library_catalog_height_survives_rebuild(qtbot, qapp):
+    """The trailing stretch has to be re-added by every rebuild, not just __init__.
+
+    ``_rebuild()`` empties the body layout with ``while count(): takeAt(0)``, which
+    takes the spacer with it. A stretch added once at construction is therefore gone
+    after the first ``set_rows()`` and the overview cards balloon again.
+
+    Like ``..._when_panel_is_stale_tall`` this never re-places the overlay, so the panel
+    keeps the height it was opened at and the spare space is there to be mis-shared.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
+    qapp.processEvents()
+    assert library.browse_mode() == "compact"
+
+    for attempt in range(3):
+        library.set_rows(_dense_rows())
+        qapp.processEvents()
+        assert library.browse_mode() == "compact"
+        cards = library.catalog_cards()
+        assert tuple(cards) == SOURCE_SECTIONS
+        heights = {section: card.height() for section, card in cards.items()}
+        assert set(heights.values()) == {uv_widgets.LIBRARY_CATALOG_HEIGHT}, (
+            f"rebuild #{attempt + 1}: {heights}"
+        )
+
+
+def test_library_mode_tabs_split_the_panel_width(qtbot, qapp):
+    """展开 / 概览 are a segmented control, not two buttons floating in half a row.
+
+    Plan §1.4: both rendered 53px wide and sat centred in their half, which is the most
+    visible "not lined up" defect in the panel. HTML gives them ``flex: 1``; Qt's
+    equivalent is an Expanding size policy, measured at 222 each.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+
+    groups = library.findChild(QToolButton, "ultraViewLibraryModeGroups")
+    compact = library.findChild(QToolButton, "ultraViewLibraryModeCompact")
+    assert groups is not None and compact is not None
+    # The search field shares the same margin column, so its width is the content width.
+    content_width = library.search_field().width()
+    assert content_width > 0
+
+    # "Equal" with one pixel of slack: an odd leftover cannot be split evenly.
+    assert abs(groups.width() - compact.width()) <= 1, (groups.width(), compact.width())
+    for tab in (groups, compact):
+        assert tab.width() >= 0.45 * content_width, (tab.objectName(), tab.width(), content_width)
+
+
+def test_library_row_action_button_is_calm_and_square(qtbot, qapp):
+    """The ＋/− affordance is square at the contract size and stays a quiet colour.
+
+    Two defects in one place (plan §1.4 / §3.3): ``setFixedSize(18, 18)`` fought the
+    QSS ``min-width: 18px`` plus a 1px border and settled at 20x20; and the palette was
+    Tailwind alert green / red, the loudest thing in a 月白石蓝 panel.
+
+    The colour assertion deliberately checks *tone and separability* rather than any
+    hex string, so retuning the palette does not mean editing this test. Note it has to
+    measure ``S * V``, not saturation alone — the plan's own target ink ``#3B7C5C`` is
+    S 0.52, and it is calm because it is dark, not because it is grey.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("frf", "frf-1"))
+    harness.page.set_board(harness.board)
+    harness.page.resize(1280, 800)
+    harness.page.show()
+    qtbot.waitExposed(harness.page)
+    harness.page.set_library_visible(True)
+    qapp.processEvents()
+    library = harness.page.library_panel()
+
+    add_row = next(widget for widget in library.row_widgets() if widget.row().view_id == "fft-1")
+    remove_row = next(widget for widget in library.row_widgets() if widget.row().view_id == "frf-1")
+    add_button = add_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    remove_button = remove_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    assert add_button.property("action") == "add"
+    assert remove_button.property("action") == "remove"
+
+    size = uv_widgets.LIBRARY_ROW_ACTION_SIZE
+    for button in (add_button, remove_button):
+        assert (button.width(), button.height()) == (size, size), (
+            button.property("action"), button.width(), button.height()
+        )
+
+    # Tone: nothing anywhere inside the button — fill, border or glyph — may shout.
+    for button in (add_button, remove_button):
+        loudest = _loudest_pixel(button)
+        assert _chroma(loudest) < 0.35, (
+            f"{button.property('action')} button has a loud pixel {loudest.name()} "
+            f"(S*V={_chroma(loudest):.3f})"
+        )
+
+    # Separability: quiet must not mean indistinguishable.
+    assert _hue_gap(_centre_pixel(add_button), _centre_pixel(remove_button)) > 40
 
 
 def test_library_pin_keeps_overlay_open_on_canvas_click(qtbot, qapp):

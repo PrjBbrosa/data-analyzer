@@ -66,6 +66,7 @@ from .viewport import (
 )
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
+    LIBRARY_OVERLAY_MIN_HEIGHT,
     LAYOUT_LABELS_ZH,
     BoardOverview,
     BoardScrollArea,
@@ -649,7 +650,7 @@ class UltraViewPage(QWidget):
 
     def _overlay_size(self, panel_id: str) -> tuple[int, int]:
         minima = {
-            PANEL_LIBRARY: (LIBRARY_DEFAULT_WIDTH, 320),
+            PANEL_LIBRARY: (LIBRARY_DEFAULT_WIDTH, LIBRARY_OVERLAY_MIN_HEIGHT),
             PANEL_LAYOUT: (360, 240),
             PANEL_FILTER: (160, 160),
             PANEL_UNPLACED: (360, 160),

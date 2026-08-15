@@ -161,9 +161,12 @@ def test_dynamic_construction_sites_match_this_head():
     assert 'dot.setObjectName(f"{role}Dot")' in frf[478]
     assert '"frfInput"' in frf[194]
     assert '"frfOutput"' in frf[197]
-    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[430]
-    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[441]
-    assert '"Unplaced"' in chrome[391]
+    # Re-pinned after 380e5ac2 moved these 34 lines down (it rewrote 149 lines of
+    # chrome.py without updating this anchor, leaving the guard permanently red —
+    # and a guard that always fails can no longer catch a real drift).
+    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[464]
+    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[476]
+    assert '"Unplaced"' in chrome[424]
 
 
 def test_extract_does_not_swallow_prefixes():
