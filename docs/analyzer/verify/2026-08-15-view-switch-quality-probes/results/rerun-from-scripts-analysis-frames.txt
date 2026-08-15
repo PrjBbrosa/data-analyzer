@@ -1,0 +1,15 @@
+platform=cocoa
+== PgLineCanvas 谱行：同 4095 绘点，只改竖直墨迹 (band ON=200k OFF=300k) ==
+  纯噪声底                   曲线=3 绘点= 4095 点数闸门放行AA=True  yspan=    4.45 ink=   617.4k 时域带=BLOCK 帧中位=  1614.0 ms
+  峰/底=10                 曲线=3 绘点= 4095 点数闸门放行AA=True  yspan=   13.22 ink=   212.3k 时域带=band  帧中位=   341.0 ms
+  峰/底=40                 曲线=3 绘点= 4095 点数闸门放行AA=True  yspan=   45.54 ink=    66.8k 时域带=ALLOW 帧中位=   136.3 ms
+  峰/底=200                曲线=3 绘点= 4095 点数闸门放行AA=True  yspan=  217.91 ink=    19.8k 时域带=ALLOW 帧中位=    69.2 ms
+  峰/底=200 · 1 条          曲线=1 绘点= 1365 点数闸门放行AA=True  yspan=  217.34 ink=     6.2k 时域带=ALLOW 帧中位=    42.4 ms
+  纯噪声底 · 1 条             曲线=1 绘点= 1365 点数闸门放行AA=True  yspan=    3.47 ink=   239.5k 时域带=band  帧中位=   716.7 ms
+  纯噪声底 · 6 条             曲线=6 绘点= 8364 点数闸门放行AA=False yspan=    5.71 ink=  1126.9k 时域带=BLOCK 帧中位=    25.1 ms
+  AA 关 · 纯噪声底 (对照)       帧中位=    14.3 ms
+== PgFrfCanvas：AA 帧 vs 非 AA 帧 ==
+  2k bins 干净           AA帧中位=    13.9 ms   非AA帧=    6.0 ms
+  2k bins 噪声相位/相干      AA帧中位=   529.8 ms   非AA帧=   54.7 ms
+  8k bins 噪声           AA帧中位=  2507.6 ms   非AA帧=  441.5 ms
+  32k bins 噪声          AA帧中位= 11392.3 ms   非AA帧= 4035.2 ms

@@ -1,0 +1,17 @@
+platform=cocoa dpr=2.0 exposed=True
+  切换里同步开 -> View A: plot_spectra=   53.8 (其中 AA 重开    0.0 × 2) 首帧= 288.8 次帧= 277.3 合计=  342.6 ms
+  切换里同步开 -> View B: plot_spectra=   14.6 (其中 AA 重开    0.0 × 2) 首帧= 200.8 次帧= 199.4 合计=  215.4 ms
+  切换里同步开 -> View A: plot_spectra=   21.5 (其中 AA 重开    0.0 × 2) 首帧= 266.1 次帧= 271.4 合计=  287.6 ms
+  切换里同步开 -> View B: plot_spectra=   14.5 (其中 AA 重开    0.0 × 2) 首帧= 199.4 次帧= 199.4 合计=  213.9 ms
+  切换里同步开 -> View A: plot_spectra=   21.7 (其中 AA 重开    0.0 × 2) 首帧= 270.0 次帧= 287.8 合计=  291.7 ms
+  切换里同步开 -> View B: plot_spectra=   16.4 (其中 AA 重开    0.0 × 2) 首帧= 211.1 次帧= 212.5 合计=  227.5 ms
+== 切换里同步开 AA（当前行为）：中位 plot_spectra 19.0 ms, 中位首帧 238.6 ms, 中位合计 257.6 ms
+
+  对照：切换里 -> View A: plot_spectra=   22.8 (其中 AA 重开    0.0 × 0) 首帧=   9.8 次帧=   9.6 合计=   32.6 ms
+  对照：切换里 -> View B: plot_spectra=   15.1 (其中 AA 重开    0.0 × 0) 首帧=   7.8 次帧=   7.8 合计=   22.9 ms
+  对照：切换里 -> View A: plot_spectra=   23.3 (其中 AA 重开    0.0 × 0) 首帧=  10.0 次帧=   9.8 合计=   33.3 ms
+  对照：切换里 -> View B: plot_spectra=   16.0 (其中 AA 重开    0.0 × 0) 首帧=   7.9 次帧=   7.5 合计=   23.8 ms
+  对照：切换里 -> View A: plot_spectra=   24.8 (其中 AA 重开    0.0 × 0) 首帧=  10.2 次帧=   9.9 合计=   35.0 ms
+  对照：切换里 -> View B: plot_spectra=   16.5 (其中 AA 重开    0.0 × 0) 首帧=   8.0 次帧=   7.6 合计=   24.4 ms
+== 对照：切换里不开 AA：中位 plot_spectra 19.9 ms, 中位首帧 9.0 ms, 中位合计 28.9 ms
+

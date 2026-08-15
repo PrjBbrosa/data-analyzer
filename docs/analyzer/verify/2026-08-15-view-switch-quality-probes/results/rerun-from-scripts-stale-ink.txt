@@ -1,0 +1,5 @@
+platform=cocoa dpr=2.0 exposed=True
+首次进 View（bind envelope）    CH0: 绘点=3124 ink=36659 超预算=False 光栅收编=False | CH1: 绘点=3124 ink=44400 超预算=False 光栅收编=False | AA判定=True 点=yellow
+回切后（当前顺序）                  CH0: 绘点=1404 ink=2662227 超预算=True 光栅收编=False | CH1: 绘点=1376 ink=2715569 超预算=True 光栅收编=False | AA判定=False 点=red
+回切后再空转 500 ms              CH0: 绘点=1404 ink=2662227 超预算=True 光栅收编=False | CH1: 绘点=1376 ink=2715569 超预算=True 光栅收编=False | AA判定=False 点=red
+强制按真实 Y 重刷（=用户动一下）         CH0: 绘点=3030 ink=35994 超预算=False 光栅收编=False | CH1: 绘点=3030 ink=43594 超预算=False 光栅收编=False | AA判定=True 点=yellow
