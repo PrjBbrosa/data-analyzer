@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
+from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
@@ -37,6 +37,15 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     clamp_rect,
     legal_grid_rect,
     rect_to_pixels,
+)
+from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
+    BOARD_ISLAND_MAX_WIDTH,
+    DEFAULT_NAVIGATION_ISLAND_SIZE,
+    GLOBAL_ISLAND_WIDTH,
+    ISLAND_HEIGHT,
+    RAIL_CONTENT_HEIGHT,
+    RAIL_WIDTH,
+    STATUS_ISLAND_WIDTH,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED, PANEL_BOARDS
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
@@ -416,6 +425,49 @@ class _Harness:
         for index in range(count):
             add_ref(self.board, make_ref("time", f"fill-{index}"))
         self.page.set_board(self.board)
+
+
+def test_chrome_size_fallbacks_track_floating_layout_constants(qtbot, monkeypatch):
+    harness = _Harness(qtbot)
+    page = harness.page
+    assert page._chrome_sizes() == {
+        "board_island": (
+            page._board_island.sizeHint().width(),
+            page._board_island.sizeHint().height(),
+        ),
+        "global_island": (
+            page._global_island.sizeHint().width(),
+            page._global_island.sizeHint().height(),
+        ),
+        "status_island": (
+            page._status_island.sizeHint().width(),
+            page._status_island.sizeHint().height(),
+        ),
+        "navigation_island": (
+            page._navigation_island.sizeHint().width(),
+            page._navigation_island.sizeHint().height(),
+        ),
+        "rail": (
+            page._tool_rail.sizeHint().width(),
+            page._tool_rail.sizeHint().height(),
+        ),
+    }
+    for widget in (
+        page._board_island,
+        page._global_island,
+        page._status_island,
+        page._navigation_island,
+        page._tool_rail,
+    ):
+        monkeypatch.setattr(type(widget), "sizeHint", lambda _self: QSize(0, 0))
+
+    assert page._chrome_sizes() == {
+        "board_island": (BOARD_ISLAND_MAX_WIDTH, ISLAND_HEIGHT),
+        "global_island": (GLOBAL_ISLAND_WIDTH, ISLAND_HEIGHT),
+        "status_island": (STATUS_ISLAND_WIDTH, ISLAND_HEIGHT),
+        "navigation_island": DEFAULT_NAVIGATION_ISLAND_SIZE,
+        "rail": (RAIL_WIDTH, RAIL_CONTENT_HEIGHT),
+    }
 
 
 def _imported_names(path: Path) -> set[str]:

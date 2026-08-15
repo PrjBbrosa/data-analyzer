@@ -85,16 +85,7 @@ FROZEN_MUTATION_FUNNEL_EXCEPTIONS = frozenset(
 
 FROZEN_PAGE_PRIVATE_SURFACE = frozenset()
 
-FROZEN_FLOATING_GEOMETRY_LITERALS = Counter(
-    {
-        ("chrome.py", "setFixedHeight", (40,)): 5,
-        ("chrome.py", "QSize", (40,)): 6,
-        ("page.py", "_hint", (40, 116)): 1,
-        ("page.py", "_hint", (40, 200)): 1,
-        ("page.py", "_hint", (40, 232)): 1,
-        ("page.py", "_hint", (40, 240)): 1,
-    }
-)
+FROZEN_FLOATING_GEOMETRY_LITERALS = Counter()
 
 
 def _parse(path: Path) -> ast.Module:

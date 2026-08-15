@@ -111,12 +111,17 @@ from .chrome import (
     board_popover_height,
 )
 from .floating_layout import (
+    BOARD_ISLAND_MAX_WIDTH,
     DEFAULT_MINIMAP_SIZE,
+    DEFAULT_NAVIGATION_ISLAND_SIZE,
+    GLOBAL_ISLAND_WIDTH,
+    ISLAND_HEIGHT,
     OVERLAY_ANCHOR_GLOBAL,
     OVERLAY_ANCHOR_RAIL,
     OVERLAY_GAP,
     RAIL_CONTENT_HEIGHT,
     RAIL_WIDTH,
+    STATUS_ISLAND_WIDTH,
     Rect as FloatingRect,
     calculate_floating_layout,
     place_card_context,
@@ -760,10 +765,18 @@ class UltraViewPage(QWidget):
             return (width, height)
 
         return {
-            "board_island": _hint(self._board_island, (240, 40)),
-            "global_island": _hint(self._global_island, (116, 40)),
-            "status_island": _hint(self._status_island, (200, 40)),
-            "navigation_island": _hint(self._navigation_island, (232, 40)),
+            "board_island": _hint(
+                self._board_island, (BOARD_ISLAND_MAX_WIDTH, ISLAND_HEIGHT)
+            ),
+            "global_island": _hint(
+                self._global_island, (GLOBAL_ISLAND_WIDTH, ISLAND_HEIGHT)
+            ),
+            "status_island": _hint(
+                self._status_island, (STATUS_ISLAND_WIDTH, ISLAND_HEIGHT)
+            ),
+            "navigation_island": _hint(
+                self._navigation_island, DEFAULT_NAVIGATION_ISLAND_SIZE
+            ),
             "rail": _hint(self._tool_rail, (RAIL_WIDTH, RAIL_CONTENT_HEIGHT)),
         }
 

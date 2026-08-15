@@ -39,7 +39,15 @@ from mf4_analyzer.ui_kit.icons import Icons, icon_device_pixel_ratio
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, parse_ref_payload
 
-from .floating_layout import RAIL_CONTENT_HEIGHT, RAIL_WIDTH
+from .floating_layout import (
+    BOARD_ISLAND_MAX_WIDTH,
+    GLOBAL_ISLAND_WIDTH,
+    ISLAND_HEIGHT,
+    NAVIGATION_ISLAND_WIDTH,
+    RAIL_CONTENT_HEIGHT,
+    RAIL_WIDTH,
+    STATUS_ISLAND_WIDTH,
+)
 
 
 PANEL_LIBRARY = "library"
@@ -47,7 +55,6 @@ PANEL_LAYOUT = "layout"
 PANEL_FILTER = "filter"
 PANEL_UNPLACED = "unplaced"
 PANEL_BOARDS = "boards"
-RAIL_MIN_HEIGHT = RAIL_CONTENT_HEIGHT
 RAIL_BUTTON_SIZE = 36
 RAIL_ICON_SIZE = 20
 BOARD_POPOVER_WIDTH = 260
@@ -725,7 +732,7 @@ class ToolRail(QFrame):
         self._position_badges()
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(RAIL_WIDTH, max(RAIL_MIN_HEIGHT, super().sizeHint().height()))
+        return QSize(RAIL_WIDTH, max(RAIL_CONTENT_HEIGHT, super().sizeHint().height()))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -811,8 +818,8 @@ class BoardIsland(QFrame):
         self.setObjectName("ultraViewBoardIsland")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFocusPolicy(Qt.StrongFocus)
-        self.setFixedHeight(40)
-        self.setMaximumWidth(240)
+        self.setFixedHeight(ISLAND_HEIGHT)
+        self.setMaximumWidth(BOARD_ISLAND_MAX_WIDTH)
         self.setProperty("surface", "island")
         self._board_id = ""
         layout = QHBoxLayout(self)
@@ -863,10 +870,13 @@ class BoardIsland(QFrame):
     def sizeHint(self) -> QSize:  # noqa: N802
         metrics = self._name.fontMetrics()
         name_width = min(max(48, metrics.horizontalAdvance(self._name.full_text() or "Board") + 8), 148)
-        return QSize(8 + name_width + 2 + 32 + 2 + 32 + 4, 40)
+        return QSize(
+            min(BOARD_ISLAND_MAX_WIDTH, 8 + name_width + 2 + 32 + 2 + 32 + 4),
+            ISLAND_HEIGHT,
+        )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(120, 40)
+        return QSize(120, ISLAND_HEIGHT)
 
     def set_create_enabled(self, enabled: bool, reason: str = "") -> None:
         self._add.setEnabled(bool(enabled))
@@ -1332,7 +1342,7 @@ class GlobalIsland(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewGlobalIsland")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(40)
+        self.setFixedHeight(ISLAND_HEIGHT)
         self.setProperty("surface", "island")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -1410,7 +1420,10 @@ class GlobalIsland(QFrame):
             if not button.isHidden()
         ]
         count = max(1, len(visible))
-        return QSize(8 + count * 32 + max(0, count - 1) * 2, 40)
+        return QSize(
+            min(GLOBAL_ISLAND_WIDTH, 8 + count * 32 + max(0, count - 1) * 2),
+            ISLAND_HEIGHT,
+        )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -1450,7 +1463,7 @@ class NavigationIsland(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewNavigationIsland")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(40)
+        self.setFixedHeight(ISLAND_HEIGHT)
         self.setProperty("surface", "island")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -1512,7 +1525,10 @@ class NavigationIsland(QFrame):
         layout.addWidget(self._reset, 0)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(4 + 32 * 5 + 42 + 2 * 6 + 4, 40)
+        return QSize(
+            min(NAVIGATION_ISLAND_WIDTH, 4 + 32 * 5 + 42 + 2 * 6 + 4),
+            ISLAND_HEIGHT,
+        )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -1545,7 +1561,7 @@ class StatusIsland(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewStatusIsland")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(40)
+        self.setFixedHeight(ISLAND_HEIGHT)
         self.setProperty("surface", "island")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 8, 4)
@@ -1568,10 +1584,13 @@ class StatusIsland(QFrame):
     def sizeHint(self) -> QSize:  # noqa: N802
         metrics = self._message.fontMetrics()
         text_width = min(280, max(96, metrics.horizontalAdvance(self._message.full_text()) + 12))
-        return QSize(4 + 32 + 4 + text_width + 8, 40)
+        return QSize(
+            min(STATUS_ISLAND_WIDTH, 4 + 32 + 4 + text_width + 8),
+            ISLAND_HEIGHT,
+        )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(140, 40)
+        return QSize(140, ISLAND_HEIGHT)
 
     def help_button(self) -> QToolButton:
         return self._quickref
@@ -1609,7 +1628,7 @@ class CardContextIsland(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewCardContextIsland")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(40)
+        self.setFixedHeight(ISLAND_HEIGHT)
         self.setProperty("surface", "island")
         self.setProperty("orphaned", "false")
         self._section = ""
@@ -1875,4 +1894,3 @@ class LayoutPicker(QFrame):
         layout_id = str(button.property("layoutId") or "")
         if layout_id:
             self.layout_id_chosen.emit(layout_id)
-

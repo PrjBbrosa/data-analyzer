@@ -10,6 +10,7 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
+    BOARD_POPOVER_WIDTH,
     PANEL_FILTER,
     PANEL_LAYOUT,
     PANEL_LIBRARY,
@@ -19,6 +20,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     RAIL_ICON_SIZE,
     RAIL_WIDTH,
     BoardIsland,
+    BoardPopover,
     CanvasHost,
     CardContextIsland,
     GlobalIsland,
@@ -27,7 +29,44 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     StatusIsland,
     ToolRail,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
+    BOARD_ISLAND_MAX_WIDTH,
+    GLOBAL_ISLAND_WIDTH,
+    ISLAND_HEIGHT,
+    NAVIGATION_ISLAND_WIDTH,
+    RAIL_CONTENT_HEIGHT as FLOATING_RAIL_CONTENT_HEIGHT,
+    RAIL_WIDTH as FLOATING_RAIL_WIDTH,
+    STATUS_ISLAND_WIDTH,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import LAYOUT_LABELS_ZH, CompareRail, make_ref_mime
+
+
+def test_floating_chrome_dimension_contracts(qtbot):
+    rail = ToolRail()
+    board = BoardIsland()
+    global_island = GlobalIsland()
+    status = StatusIsland()
+    navigation = NavigationIsland()
+    popover = BoardPopover()
+    for widget in (rail, board, global_island, status, navigation, popover):
+        qtbot.addWidget(widget)
+        widget.show()
+
+    assert RAIL_WIDTH == FLOATING_RAIL_WIDTH
+    assert RAIL_CONTENT_HEIGHT == FLOATING_RAIL_CONTENT_HEIGHT
+    assert rail.sizeHint() == QSize(FLOATING_RAIL_WIDTH, FLOATING_RAIL_CONTENT_HEIGHT)
+    assert rail.minimumSizeHint() == rail.sizeHint()
+    assert board.maximumHeight() == ISLAND_HEIGHT
+    assert board.maximumWidth() == BOARD_ISLAND_MAX_WIDTH
+    for island, max_width in (
+        (global_island, GLOBAL_ISLAND_WIDTH),
+        (status, STATUS_ISLAND_WIDTH),
+        (navigation, NAVIGATION_ISLAND_WIDTH),
+    ):
+        assert island.sizeHint().height() == ISLAND_HEIGHT
+        assert island.minimumSizeHint().height() == ISLAND_HEIGHT
+        assert island.sizeHint().width() <= max_width
+    assert popover.sizeHint().width() == BOARD_POPOVER_WIDTH
 
 
 def test_tool_rail_emits_requested_panel_and_projects_active_badge(qtbot):

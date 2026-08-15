@@ -28,6 +28,10 @@ RAIL_CONTENT_HEIGHT = 268
 DEFAULT_OVERLAY_SIZE: Size = (280, 384)
 DEFAULT_MINIMAP_SIZE: Size = (172, 112)
 DEFAULT_CARD_CONTEXT_SIZE: Size = (232, ISLAND_HEIGHT)
+# The live navigation island keeps its intrinsic control width.  This fallback
+# is only used before Qt can report a size hint, so it must mirror that real
+# widget rather than the wider layout ceiling above.
+DEFAULT_NAVIGATION_ISLAND_SIZE: Size = (222, ISLAND_HEIGHT)
 OVERLAY_ANCHOR_RAIL = "rail"
 OVERLAY_ANCHOR_GLOBAL = "global"
 
@@ -472,6 +476,7 @@ def _place_minimap(
 __all__ = [
     "BOARD_ISLAND_MAX_WIDTH",
     "DEFAULT_CARD_CONTEXT_SIZE",
+    "DEFAULT_NAVIGATION_ISLAND_SIZE",
     "DEFAULT_MINIMAP_SIZE",
     "DEFAULT_OVERLAY_SIZE",
     "GLOBAL_ISLAND_WIDTH",
