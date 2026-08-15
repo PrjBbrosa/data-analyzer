@@ -127,8 +127,9 @@ Task 5 / 6 依赖 2 + 4，Task 4 只依赖 Task 0。
 
 - [ ] 红测 `test_pg_quality_backstop.py`（纯逻辑，无 Qt）：`open(sig)` 后
   `note_frame(1200)` 首帧 → 返回 `("first-aa-frame", 1200)` 且 `blocked(sig)`；
-  首帧 100 后 `note_frame(300)` → EMA 200 不跳、再 `note_frame(600)` → 400 跳
-  `steady-aa-ema`；`close()` 后 `note_frame` 返回 None；黑名单 LRU 上限与
+  首帧 5、首个稳态样本 100（直接播种 EMA）后 `note_frame(300)` → EMA 200 不跳、
+  再 `note_frame(600)` → 400 跳 `steady-aa-ema`（首帧只比 first_ms、不播种 EMA，
+  与 `TestAaBackstopLatch::test_single_mild_outlier_does_not_latch` 一致）；`close()` 后 `note_frame` 返回 None；黑名单 LRU 上限与
   `move_to_end`；首帧 memo：`note_frame` 首帧写 `memo[key]`、跳闸删 memo、
   LRU 上限；`open` 时的 epoch 递增可读。
 - [ ] 实现 `AaFrameLatch(first_ms, steady_ms, ema_alpha, max_entries)`：状态
