@@ -300,16 +300,17 @@ def test_coordinator_uses_page_public_api_only():
 def test_zoom_broadcast_single_site():
     page = _parse(ULTRAVIEW_ROOT / "page.py")
     calls = Counter(
-        _callee_name(node)
+        node.func.value.attr
         for node in ast.walk(page)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "set_zoom"
         and isinstance(node.func.value, ast.Attribute)
         and isinstance(node.func.value.value, ast.Name)
         and node.func.value.value.id == "self"
         and node.func.value.attr in {"_grid", "_free_grid"}
     )
-    assert calls["set_zoom"] == 8
+    assert calls == Counter({"_grid": 1, "_free_grid": 1})
 
 
 def test_floating_geometry_literals_live_only_in_floating_layout():

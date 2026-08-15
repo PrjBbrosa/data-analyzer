@@ -1087,8 +1087,9 @@ class UltraViewPage(QWidget):
         try:
             self._viewport.restore_payload(source)
             zoom = self._viewport.zoom()
-            self._grid.set_zoom(zoom)
-            self._free_grid.set_zoom(zoom)
+            # ``restore_payload`` already applied the viewport zoom.  Keep
+            # that behavior while broadcasting it to both render surfaces.
+            self._broadcast_zoom(zoom, viewport=False)
             origin = self._fit_origin()
             self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
             viewport = self._board_scroll.viewport()
@@ -1160,9 +1161,7 @@ class UltraViewPage(QWidget):
         self._filled_card = None
         self._apply_preview_quality(QUALITY_FAST)
         after = clamp_zoom(zoom)
-        self._viewport.set_zoom(after)
-        self._grid.set_zoom(after)
-        self._free_grid.set_zoom(after)
+        self._broadcast_zoom(after)
         origin = self._fit_origin()
         self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
         applied = self._place_canvas_for_scroll(self._active_canvas(), (0.0, 0.0))
@@ -1178,6 +1177,13 @@ class UltraViewPage(QWidget):
         """Keep the legacy façade and the visible navigation island aligned."""
         self._toolbar.set_zoom_percent(percent)
         self._navigation_island.set_zoom_percent(percent)
+
+    def _broadcast_zoom(self, zoom: float, *, viewport: bool = True) -> None:
+        """Keep the viewport model and both Board render surfaces in sync."""
+        if viewport:
+            self._viewport.set_zoom(zoom)
+        self._grid.set_zoom(zoom)
+        self._free_grid.set_zoom(zoom)
 
     def zoom_to_card(self, section: str, view_id: str, *, animate: bool = True) -> None:
         rect_1x = self._card_rect_1x(section, view_id)
@@ -1236,10 +1242,8 @@ class UltraViewPage(QWidget):
         self.cancel_board_gestures()
         self._apply_preview_quality(QUALITY_FAST)
         after = clamp_zoom(zoom)
-        self._viewport.set_zoom(after)
+        self._broadcast_zoom(after)
         self._viewport.set_center(center)
-        self._grid.set_zoom(after)
-        self._free_grid.set_zoom(after)
         origin = self._fit_origin()
         self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
         if viewport_size is None:
@@ -1367,9 +1371,7 @@ class UltraViewPage(QWidget):
         )
         origin = self._board_content_origin()
         new_scroll = zoom_at(before, after, cursor, scroll, origin)
-        self._viewport.set_zoom(after)
-        self._grid.set_zoom(after)
-        self._free_grid.set_zoom(after)
+        self._broadcast_zoom(after)
         applied = self._place_canvas_for_scroll(self._active_canvas(), new_scroll)
         self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
         self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
