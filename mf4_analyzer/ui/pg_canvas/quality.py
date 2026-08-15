@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from contextlib import contextmanager
 import logging
 from time import perf_counter
@@ -15,6 +14,7 @@ from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
+from .quality_backstop import AaFrameLatch
 from .render_profile import envelope_ink_dev_px
 from .renderer import (
     _INK_AA_OFF,
@@ -72,6 +72,12 @@ logger = logging.getLogger(__name__)
 # with scripts/probe_aa_ink_budget.py on real hardware (an offscreen suite
 # cannot measure paint cost). tests/ui/test_pg_timedomain_canvas.py::
 # TestAaBackstopLatch fences the bands.
+#
+# The state machine those four parameterize lives in quality_backstop.py
+# (AaFrameLatch, spec 2026-08-15 §3.3) so the analysis canvases can reuse ONE
+# calibrated implementation. This manager keeps the Qt half — the armed flag
+# the paint timer reads, and the deferred, epoch-checked AA disable — because
+# mutating QGraphicsItems mid-paint is not safe and none of that is arithmetic.
 # ---------------------------------------------------------------------------
 _BACKSTOP_FIRST_AA_MS = 1000.0
 _BACKSTOP_STEADY_AA_MS = 250.0
@@ -107,6 +113,14 @@ def _frame_timed_view_class(base):
         logging, no allocation, no container growth — this is the resident
         production twin of the diagnostic ``_perf_probe.install_paint_probe``,
         not the probe itself.
+
+        Owner protocol (spec 2026-08-15 §3.3): the owning canvas must expose
+        ``_aa_backstop_armed`` (the pairing token, read on EVERY frame, so it
+        stays a bare attribute) and SHOULD expose ``_note_aa_frame(ms)``. The
+        ``_quality._note_aa_frame`` fallback keeps a canvas that predates the
+        protocol working; the direct hook is what lets the analysis canvases
+        (line / frf), whose latch does not hang off a ``_quality`` manager,
+        install this very same timer.
         """
 
         def paintEvent(self, ev):
@@ -120,7 +134,11 @@ def _frame_timed_view_class(base):
                         frame_ms = (perf_counter() - t0) * 1000.0
                         owner._last_frame_paint_ms = frame_ms
                         if owner._aa_backstop_armed:
-                            owner._quality._note_aa_frame(frame_ms)
+                            note = getattr(owner, "_note_aa_frame", None)
+                            if callable(note):
+                                note(frame_ms)
+                            else:
+                                owner._quality._note_aa_frame(frame_ms)
                 except Exception:
                     # A measurement must never propagate an exception into
                     # Qt's paint dispatch. Zero cost on the happy path.
@@ -169,6 +187,12 @@ class QualityManager(_CanvasBackref):
     the canvas so existing tuning/tests can keep reading and overriding them.
     """
 
+    # The six aa_backstop_* / aa_*_frame* names below are PROPERTIES onto
+    # ``latch`` (see the block after __init__), not instance attributes. They
+    # have to stay declared here anyway: _CanvasBackref.__setattr__ only lets
+    # object.__setattr__ — the call that runs a data descriptor — happen for
+    # declared names, so dropping them would silently route every write past
+    # the property and onto the canvas.
     _owned_names = frozenset({
         "aa_backstop_blacklist",
         "aa_backstop_epoch",
@@ -178,6 +202,7 @@ class QualityManager(_CanvasBackref):
         "aa_frame_ema",
         "aa_on",
         "backstop_timer",
+        "latch",
         "density_allowed",
         "density_seeded",
         "ink_allowed",
@@ -222,17 +247,19 @@ class QualityManager(_CanvasBackref):
         self.ink_seeded = False
         self.last_emitted_status = None
         # --- measured-frame backstop (spec §4.4) -------------------------
-        # aa_backstop_epoch identifies ONE AA session. It is bumped when a
-        # session opens and when it closes, which is what lets a queued trip
-        # tell "the session I measured" from "some later session".
-        self.aa_backstop_epoch = 0
-        self.aa_epoch_frames = 0
-        self.aa_frame_ema = None
-        self.aa_backstop_signature = None
-        self.aa_backstop_reason = None
-        # View signatures whose AA frames were measured unaffordable. LRU:
-        # newest at the right, evicted from the left once the cap is reached.
-        self.aa_backstop_blacklist = OrderedDict()
+        # The epoch / first-frame / steady-EMA / bounded-memory state machine
+        # lives in AaFrameLatch (spec 2026-08-15 §3.3). Its epoch identifies
+        # ONE AA session and is bumped when a session opens and when it closes,
+        # which is what lets a queued trip tell "the session I measured" from
+        # "some later session". Its blacklist holds the view signatures whose
+        # AA frames measured unaffordable (LRU, newest at the right); its memo
+        # holds what a cheap view's first AA frame actually cost.
+        self.latch = AaFrameLatch(
+            _BACKSTOP_FIRST_AA_MS,
+            _BACKSTOP_STEADY_AA_MS,
+            _BACKSTOP_STEADY_EMA_ALPHA,
+            _BACKSTOP_BLACKLIST_MAX,
+        )
         self.backstop_timer = QTimer(canvas)
         self.backstop_timer.setSingleShot(True)
         self.backstop_timer.timeout.connect(self._on_aa_backstop_timeout)
@@ -242,6 +269,64 @@ class QualityManager(_CanvasBackref):
         # ever probed for observability, never used to gate — see
         # _idle_quality_allowed.
         self._mouse_buttons_provider = QApplication.mouseButtons
+
+    # ------------------------------------------------------------------
+    # Latch state, kept readable (and writable) under its historical names.
+    #
+    # The state moved into AaFrameLatch, the NAMES did not: diagnostics and
+    # the backstop tests reach for canvas._quality.aa_backstop_* directly, and
+    # renaming a reader-facing surface is not what an extraction is for. These
+    # are plain forwards — no coercion, no lazy init — so the latch stays the
+    # single source of truth and there is nothing to keep in sync.
+    # ------------------------------------------------------------------
+
+    @property
+    def aa_backstop_epoch(self):
+        return self.latch.epoch
+
+    @aa_backstop_epoch.setter
+    def aa_backstop_epoch(self, value):
+        self.latch.epoch = value
+
+    @property
+    def aa_epoch_frames(self):
+        return self.latch.frames
+
+    @aa_epoch_frames.setter
+    def aa_epoch_frames(self, value):
+        self.latch.frames = value
+
+    @property
+    def aa_frame_ema(self):
+        return self.latch.ema
+
+    @aa_frame_ema.setter
+    def aa_frame_ema(self, value):
+        self.latch.ema = value
+
+    @property
+    def aa_backstop_signature(self):
+        return self.latch.signature
+
+    @aa_backstop_signature.setter
+    def aa_backstop_signature(self, value):
+        self.latch.signature = value
+
+    @property
+    def aa_backstop_reason(self):
+        return self.latch.reason
+
+    @aa_backstop_reason.setter
+    def aa_backstop_reason(self, value):
+        self.latch.reason = value
+
+    @property
+    def aa_backstop_blacklist(self):
+        return self.latch.blacklist
+
+    @aa_backstop_blacklist.setter
+    def aa_backstop_blacklist(self, value):
+        self.latch.blacklist = value
 
     def reset_for_rebuild(self):
         """Reset idle-AA runtime state after the curve set is rebuilt."""
@@ -527,32 +612,22 @@ class QualityManager(_CanvasBackref):
 
     def _aa_backstop_blocked(self) -> bool:
         """Whether the CURRENT view already paid its one bad AA frame."""
-        blacklist = self.aa_backstop_blacklist
-        if not blacklist:
+        latch = self.latch
+        if not latch.blacklist:
             # Overwhelmingly the common case: nothing has ever tripped, so the
             # gate costs one empty-dict test and the signature is never built.
             return False
-        signature = self._view_signature()
-        if signature is None or signature not in blacklist:
-            return False
-        blacklist.move_to_end(signature)
-        return True
+        return latch.blocked(self._view_signature())
 
     def _open_aa_backstop_epoch(self):
         """Arm measurement for the AA session that just started."""
-        self.aa_backstop_epoch = int(self.aa_backstop_epoch) + 1
-        self.aa_epoch_frames = 0
-        self.aa_frame_ema = None
-        self.aa_backstop_signature = self._view_signature()
+        self.latch.open(self._view_signature())
         self._aa_backstop_armed = True
 
     def _close_aa_backstop_epoch(self):
         """End the AA session and void any trip still queued against it."""
         self._aa_backstop_armed = False
-        self.aa_backstop_epoch = int(self.aa_backstop_epoch) + 1
-        self.aa_epoch_frames = 0
-        self.aa_frame_ema = None
-        self.aa_backstop_signature = None
+        self.latch.close()
 
     def _note_aa_frame(self, frame_ms) -> None:
         """Feed one measured AA frame to the latch. Called FROM ``paintEvent``.
@@ -564,53 +639,34 @@ class QualityManager(_CanvasBackref):
         miscounted as "the first AA frame". Within a session the frames are
         counted, so the FIRST one is judged against the one-off ceiling and
         every later one feeds the steady EMA; the epoch counter keeps a late
-        trip from a previous session from being attributed to this one.
+        trip from a previous session from being attributed to this one. All of
+        that arithmetic is AaFrameLatch's — safe to run inside a paint.
 
-        Everything here is pure Python arithmetic — safe to run inside a paint.
-        The only scene mutation (turning AA back off) is deferred to a
-        zero-delay timer, because mutating QGraphicsItems mid-paint is not.
+        This wrapper stays on the hot path, so it does exactly two things
+        beyond the delegation: read the armed token, and hand a trip to the
+        Qt-side half. The only scene mutation (turning AA back off) is deferred
+        to a zero-delay timer, because mutating QGraphicsItems mid-paint is not
+        safe.
         """
         if not self._aa_backstop_armed:
             return
-        try:
-            measured_ms = float(frame_ms)
-        except (TypeError, ValueError):
-            return
-        self.aa_epoch_frames = int(self.aa_epoch_frames) + 1
-        if self.aa_epoch_frames == 1:
-            # First frame of the session: allowed to carry the one-off
-            # device-coordinate cache build (measured 474 ms on the smooth
-            # control), judged against the higher ceiling.
-            if measured_ms > _BACKSTOP_FIRST_AA_MS:
-                self._trip_aa_backstop("first-aa-frame", measured_ms)
-            return
-        previous = self.aa_frame_ema
-        if previous is None:
-            ema = measured_ms
-        else:
-            ema = (
-                _BACKSTOP_STEADY_EMA_ALPHA * measured_ms
-                + (1.0 - _BACKSTOP_STEADY_EMA_ALPHA) * float(previous)
-            )
-        self.aa_frame_ema = ema
-        if ema > _BACKSTOP_STEADY_AA_MS:
-            self._trip_aa_backstop("steady-aa-ema", ema)
+        trip = self.latch.note_frame(frame_ms)
+        if trip is not None:
+            self._trip_aa_backstop(trip[0], trip[1])
 
     def _trip_aa_backstop(self, reason: str, measured_ms: float) -> None:
-        """Latch this view out of vector AA and queue the disable."""
+        """Qt half of a trip: disarm and queue the epoch-tagged AA disable.
+
+        The bookkeeping half (blacklist entry, memo eviction) already happened
+        inside ``AaFrameLatch.note_frame`` — it is pure Python and therefore
+        safe in a paint. Only what touches Qt lives here. The verdict is still
+        re-recorded from the arguments so this method reads (and behaves) as
+        the whole trip when called directly.
+        """
         # Disarm FIRST: further frames of this session must not re-trip while
         # the deferred disable is still in flight.
         self._aa_backstop_armed = False
-        self.aa_backstop_reason = (str(reason), float(measured_ms))
-        signature = self.aa_backstop_signature
-        if signature is not None:
-            blacklist = self.aa_backstop_blacklist
-            if signature in blacklist:
-                blacklist.move_to_end(signature)
-            else:
-                blacklist[signature] = str(reason)
-                while len(blacklist) > _BACKSTOP_BLACKLIST_MAX:
-                    blacklist.popitem(last=False)
+        self.latch.reason = (str(reason), float(measured_ms))
         try:
             self.backstop_timer.setProperty(
                 _BACKSTOP_EPOCH_PROPERTY, int(self.aa_backstop_epoch),

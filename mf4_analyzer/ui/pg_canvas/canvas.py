@@ -4280,6 +4280,19 @@ class TimeDomainCanvasPG(QWidget):
     def try_enable_idle_quality(self):
         return self._quality.try_enable_idle_quality()
 
+    def _note_aa_frame(self, frame_ms):
+        """Owner hook for the resident paint timer (spec 2026-08-15 §3.3).
+
+        The timer measures the frame and hands it to ``owner._note_aa_frame``,
+        so every canvas that installs it can route the reading to whatever
+        holds its ``AaFrameLatch``. Here that is the quality manager. A bound
+        method, not a lambda: the lambda ratchet in
+        tests/ui/test_no_lambda_signal_connections.py exists because closures
+        over ``self`` on long-lived Qt objects are how this codebase used to
+        leak wrappers.
+        """
+        return self._quality._note_aa_frame(frame_ms)
+
     def quality_status(self):
         return self._quality.quality_status()
 
