@@ -60,6 +60,7 @@ class PreviewRecord:
     source_summary: str
     tab_color: str
     last_access: int
+    captured_revision: int = 0
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,7 @@ class PreviewStore(QObject):
         digest: str | None,
         meta: PreviewMeta,
         captured_at: float | None = None,
+        revision: int = 0,
     ) -> bool:
         """Insert or replace the record for *ref*. Invalid images are rejected.
 
@@ -172,6 +174,7 @@ class PreviewStore(QObject):
             source_summary=meta.source_summary,
             tab_color=meta.tab_color,
             last_access=self._next_access(),
+            captured_revision=int(revision or 0),
         )
         self._records[ref] = record
         self._enforce_budget()

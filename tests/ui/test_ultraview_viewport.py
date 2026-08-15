@@ -925,3 +925,63 @@ def test_update_board_pan_restarts_smooth_preview_timer(qtbot):
     assert not harness.page.smooth_preview_timer().isActive()
     _send_mouse_move(free, QPoint(40, 40), buttons=Qt.LeftButton)
     assert harness.page.smooth_preview_timer().isActive()
+
+
+@pytest.mark.parametrize(
+    "fx,fy",
+    [(0.12, 0.12), (0.88, 0.12), (0.12, 0.88), (0.88, 0.88), (0.5, 0.5)],
+)
+@pytest.mark.parametrize("delta", [120, -120])
+def test_zoom_at_keeps_board_point_under_cursor_in_every_corner(qtbot, fx, fy, delta):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    card = cards[0]
+    local = QPoint(
+        max(8, min(card.width() - 8, int(card.width() * fx))),
+        max(8, min(card.height() - 8, int(card.height() * fy))),
+    )
+    cursor = _viewport_cursor(harness.page, card, local)
+    logical_before = _viewport_logical(harness.page, cursor)
+    _wheel(card, delta, pos=local)
+    logical_after = _viewport_logical(harness.page, cursor)
+    assert logical_after == pytest.approx(logical_before, abs=1.0)
+
+
+def test_zoom_at_from_fit_does_not_collapse_onto_fit_origin(qtbot):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a")
+    harness.page.zoom_fit()
+    qtbot.wait(10)
+    card = cards[0]
+    local = QPoint(max(8, card.width() * 3 // 4), max(8, card.height() * 3 // 4))
+    cursor = _viewport_cursor(harness.page, card, local)
+    logical_before = _viewport_logical(harness.page, cursor)
+    _wheel(card, 120, pos=local)
+    logical_after = _viewport_logical(harness.page, cursor)
+    assert harness.page.board_zoom() > 0.25
+    assert logical_after == pytest.approx(logical_before, abs=1.0)
+
+
+def test_zoom_at_clamp_does_not_jump_scroll(qtbot):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    card = cards[0]
+    local = QPoint(max(24, card.width() * 2 // 3), max(24, card.height() * 2 // 3))
+    harness.page.set_board_zoom(ZOOM_MAX, _viewport_cursor(harness.page, card, local))
+    scroll = harness.page.board_scroll_area()
+    before = (scroll.horizontalScrollBar().value(), scroll.verticalScrollBar().value())
+    _wheel(card, 120, pos=local)
+    after = (scroll.horizontalScrollBar().value(), scroll.verticalScrollBar().value())
+    assert harness.page.board_zoom() == ZOOM_MAX
+    assert after == before
+
+
+def test_toolbar_zoom_anchors_viewport_center(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    viewport = harness.page.board_scroll_area().viewport()
+    cursor = (viewport.width() / 2.0, viewport.height() / 2.0)
+    logical_before = _viewport_logical(harness.page, cursor)
+    harness.page.zoom_in()
+    logical_after = _viewport_logical(harness.page, cursor)
+    assert logical_after == pytest.approx(logical_before, abs=1.0)

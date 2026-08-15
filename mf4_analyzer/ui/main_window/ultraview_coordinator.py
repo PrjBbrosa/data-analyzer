@@ -112,6 +112,14 @@ _IDLE_CAPTURE_MS = 120
 _SIDECAR_LOAD_BATCH = 2
 _DIGEST_RETRY_LIMIT = 3
 _HEATMAP_SECTIONS = frozenset({"fft_time", "order"})
+_PIXEL_AFFECTING_SIGNALS = frozenset(
+    {
+        "visible_range_changed",
+        "markup_revision_changed",
+        "dual_cursor_info",
+        "manual_zoom_changed",
+    }
+)
 _HTML_TAG = re.compile(r"<[^>]+>")
 _HOVER_CURSOR_LISTS = ("_cursor_line_items", "_cursor_lines")
 _SECTION_X_UNIT = {
@@ -427,6 +435,7 @@ class UltraViewCoordinator(QObject):
         self._result_refs: dict[tuple, _ResultIdentityRef] = {}
         self._result_generation: dict[tuple, int] = {}
         self._runtime = PresentationRuntimeLedger()
+        self._presentation_revision: dict[UltraViewRef, int] = {}
         self.last_source_mode = "time"
         self._workspace = default_workspace()
         self._grid_histories: dict[str, _GridHistory] = {}
@@ -747,6 +756,7 @@ class UltraViewCoordinator(QObject):
         self._result_generation.clear()
         self._digest_retries.clear()
         self._runtime.clear()
+        self._presentation_revision.clear()
         workspace, warnings = normalize_workspace_payload(payload)
         self._workspace = workspace
         self._grid_histories.clear()
@@ -1231,6 +1241,36 @@ class UltraViewCoordinator(QObject):
             page.set_ref_status(ref, status, exists)
         if image_valid and any(ref in placed_ref_set(board) for board in self._workspace.boards):
             self._store.touch(ref)
+        self._refresh_open_focus(ref)
+
+    def _refresh_open_focus(self, ref: UltraViewRef) -> None:
+        page = self.page()
+        if page is None:
+            return
+        layer = page.focus_layer()
+        if not layer.isVisible():
+            return
+        current = layer.current_ref()
+        if current != (ref.section, ref.view_id):
+            return
+        page.show_focus(ref.section, ref.view_id)
+        digest = self.current_digest_for(ref)
+        page.set_focus_syncing(
+            digest is None or not self._has_current_preview(ref, digest)
+        )
+
+    def presentation_revision_for(self, ref: UltraViewRef) -> int:
+        return int(self._presentation_revision.get(ref, 0) or 0)
+
+    def bump_presentation_revision(self, ref: UltraViewRef) -> int:
+        """Session-only counter for digest-external pixel-affecting source state.
+
+        Not persisted, not added to presentation_digest.  Temporary inspect
+        freshness is digest + this revision.
+        """
+        next_value = int(self._presentation_revision.get(ref, 0) or 0) + 1
+        self._presentation_revision[ref] = next_value
+        return next_value
 
     def _on_store_images_dropped(self, refs) -> None:
         if self._inactive():
@@ -1516,8 +1556,30 @@ class UltraViewCoordinator(QObject):
         if self._inactive():
             return
         ref = parse_ref_payload({"section": section, "view_id": view_id})
-        if ref is not None:
-            self._store.touch(ref)
+        if ref is None:
+            return
+        self._store.touch(ref)
+        page = self.page()
+        digest = self.current_digest_for(ref)
+        stale = digest is None or not self._has_current_preview(ref, digest)
+        self.set_pinned_from_board(active_board(self._workspace))
+        if self._needs_focus_recapture(ref):
+            stale = True
+        if page is not None:
+            page.set_focus_syncing(stale)
+        if not stale:
+            return
+        widget = self._widget_for_ref(ref)
+        if widget is None:
+            candidate = self._visible_widget_for(ref.section)
+            if candidate is not None and self._active_ref(ref.section) == ref:
+                widget = candidate
+        if widget is None:
+            if page is not None:
+                page.set_focus_syncing(False)
+            return
+        self.bind_canvas(widget, ref)
+        self.request_capture(ref, widget, "focus-inspect")
 
     def _on_page_feedback(self, message: str) -> None:
         if self._inactive():
@@ -1802,6 +1864,7 @@ class UltraViewCoordinator(QObject):
         self._result_generation.clear()
         self._digest_retries.clear()
         self._runtime.clear()
+        self._presentation_revision.clear()
         self._workspace = default_workspace()
         self._grid_histories.clear()
 
@@ -1827,6 +1890,7 @@ class UltraViewCoordinator(QObject):
         self._result_generation.clear()
         self._digest_retries.clear()
         self._runtime.clear()
+        self._presentation_revision.clear()
         self._workspace = default_workspace()
         self._grid_histories.clear()
         self.refresh_page()
@@ -2090,9 +2154,11 @@ class UltraViewCoordinator(QObject):
 
     def _has_current_preview(self, ref, digest: str) -> bool:
         record = self._store.get(ref)
+        captured_revision = int(getattr(record, "captured_revision", 0) or 0)
         return (
             record is not None
             and record.captured_digest == digest
+            and captured_revision == int(self._presentation_revision.get(ref, 0) or 0)
             and PreviewStore.image_valid(getattr(record, "image", None))
         )
 
@@ -2188,8 +2254,13 @@ class UltraViewCoordinator(QObject):
         if image is None:
             self._warn_capture(ref, widget, reason, "grab-invalid")
             return False
+        revision = int(self._presentation_revision.get(ref, 0) or 0)
         meta = self._preview_meta(ref, digest)
-        published = bool(self._store.publish(ref, image, digest=digest, meta=meta))
+        published = bool(
+            self._store.publish(
+                ref, image, digest=digest, meta=meta, revision=revision
+            )
+        )
         if published:
             self._digest_retries.pop(ref, None)
             self._runtime.commit(ref, self._facts_from_widget(widget))
@@ -2402,8 +2473,13 @@ class UltraViewCoordinator(QObject):
                 signal = getattr(host, name, None)
                 if signal is None:
                     continue
-                signal.connect(self._on_idle_source_signal)
-                self._hooks.append((host, signal, self._on_idle_source_signal))
+                slot = (
+                    self._on_idle_presentation_signal
+                    if name in _PIXEL_AFFECTING_SIGNALS
+                    else self._on_idle_source_signal
+                )
+                signal.connect(slot)
+                self._hooks.append((host, signal, slot))
             self._hooked_ids.add(ident)
 
     def _watch_canvas_destroyed(self, canvas) -> None:
@@ -2735,6 +2811,23 @@ class UltraViewCoordinator(QObject):
         )
         if not self._idle_timer.isActive():
             self._idle_timer.start()
+
+    def _on_idle_presentation_signal(self, *_args) -> None:
+        """Bump the session presentation revision even when the Board is hidden.
+
+        Idle recapture itself stays gated on sheet visibility so a hidden
+        UltraView does not grab.  The revision still advances so the next
+        temporary-inspect open can see that zoom/cursor/markup changed.
+        """
+        if self._inactive():
+            return
+        ref, widget = self._binding_for_idle_sender(self.sender())
+        if ref is None:
+            return
+        self.bump_presentation_revision(ref)
+        if not self._sheet_visible():
+            return
+        self.schedule_idle_capture(ref, widget)
 
     def _on_idle_source_signal(self, *_args) -> None:
         if self._inactive() or not self._sheet_visible():

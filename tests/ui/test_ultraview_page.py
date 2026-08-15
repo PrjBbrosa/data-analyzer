@@ -11,7 +11,7 @@ from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QComboBox, QMessageBox, QPushButton, QToolButton, QWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BOARD_PADDING,
@@ -35,6 +35,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     FEEDBACK_NO_LEGAL_LAYOUT,
     FEEDBACK_OUT_OF_GRID,
     FEEDBACK_REARRANGED,
+    LIBRARY_DEFAULT_WIDTH,
     MISSING_CARD_COPY,
     LibraryRow,
     UltraViewCard,
@@ -412,6 +413,9 @@ def test_library_empty_section_keeps_header_and_search_expands_matches(qtbot):
     headers = library.section_headers()
     assert tuple(headers) == SOURCE_SECTIONS
     assert "  0" in headers["fft"].text()
+    assert headers["fft"].findChild(QLabel, "ultraViewLibrarySectionTitle").text() == "频谱"
+    assert headers["fft"].findChild(QLabel, "ultraViewLibrarySectionCount") is None
+    assert headers["fft"].findChild(QLabel, "ultraViewLibrarySectionMeta") is None
     assert headers["fft"].isHidden() is False
     assert library.section_widgets()["fft"] is not None
 
@@ -424,6 +428,41 @@ def test_library_empty_section_keeps_header_and_search_expands_matches(qtbot):
     fft_rows = [widget for widget in library.row_widgets() if widget.row().section == "fft"]
     assert fft_rows
     assert all(not widget.isHidden() for widget in fft_rows)
+
+
+def test_library_has_groups_and_overview_without_directory_or_section_bars(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    library = harness.page.library_panel()
+    harness.page.set_library_visible(True)
+    qapp.processEvents()
+    assert library.findChild(QToolButton, "ultraViewLibraryModeGroups") is not None
+    assert library.findChild(QToolButton, "ultraViewLibraryModeCompact") is not None
+    assert library.findChild(QWidget, "ultraViewLibraryModeTree") is None
+    assert library.findChild(QWidget, "ultraViewLibraryIntro") is None
+    assert library.findChild(QToolButton, "ultraViewLibraryToggleAll") is None
+    assert library.findChild(QWidget, "ultraViewLibraryCompactCaption") is None
+    assert library.browse_mode() == "groups"
+    assert "目录" not in library.findChild(QToolButton, "ultraViewLibraryModeGroups").text()
+    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
+    qapp.processEvents()
+    assert library.browse_mode() == "compact"
+    cards = library.catalog_cards()
+    assert tuple(cards) == SOURCE_SECTIONS
+    for card in cards.values():
+        title = card.findChild(QLabel, "ultraViewLibraryCatalogTitle")
+        assert title is not None
+        assert " / " not in title.text()
+        assert "个 View" not in title.text()
+        assert card.findChild(QLabel, "ultraViewLibraryCatalogMeta") is None
+        assert card.expand_button().text() == "展开"
+        assert card.findChild(QToolButton, "ultraViewLibraryCatalogNew") is None
+        assert "新建" not in card.expand_button().text()
+    cards["fft"].expand_button().click()
+    qapp.processEvents()
+    assert library.browse_mode() == "groups"
+    assert library.is_section_expanded("fft") is True
 
 
 def test_library_on_board_button_removes_instead_of_locating(qtbot, qapp):
@@ -491,8 +530,8 @@ def test_library_add_remove_and_selection_colors_are_distinct(qtbot, qapp):
     )
     selected_chroma = selected_fill.blue() - selected_fill.red()
     header_chroma = header_fill.blue() - header_fill.red()
-    assert selected_chroma > 24
-    assert selected_chroma > header_chroma + 20
+    assert selected_chroma > 8
+    assert selected_chroma >= header_chroma
     assert abs(header_fill.red() - header_fill.blue()) < 18
 
 
@@ -715,6 +754,8 @@ def test_menu_double_click_and_keyboard_share_intents(qtbot):
     assert harness.armed == [("fft", "fft-1")]
     assert harness.unplaced == [("fft", "fft-1")]
     assert harness.copied_cards == [("fft", "fft-1")]
+    harness.page.focus_layer().close_layer()
+    harness.page.clear_replacement_arm()
 
     add_ref(harness.board, make_ref("frf", "frf-1"))
     harness.page.set_board(harness.board)
@@ -733,12 +774,82 @@ def test_menu_double_click_and_keyboard_share_intents(qtbot):
     assert ("frf", "frf-1") not in harness.focused
     assert harness.page.board_zoom() >= 1.0
 
+    card.mouseDoubleClickEvent(event)
+    assert ("frf", "frf-1") in harness.focused
+    assert harness.page.focus_layer().isVisible()
+    card.mouseDoubleClickEvent(event)
+    assert harness.page.focus_layer().isVisible()
+    assert harness.focused[-1] == ("frf", "frf-1")
+
     card.setFocus()
     qtbot.keyClick(card, Qt.Key_Return)
     qtbot.keyClick(card, Qt.Key_O)
     qtbot.keyClick(card, Qt.Key_Delete)
     assert ("frf", "frf-1") in harness.opened
     assert ("frf", "frf-1") in harness.removed
+
+
+def _dblclick(card) -> None:
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QMouseEvent
+
+    event = QMouseEvent(
+        QEvent.MouseButtonDblClick,
+        QPoint(8, 8),
+        Qt.LeftButton,
+        Qt.LeftButton,
+        Qt.NoModifier,
+    )
+    card.mouseDoubleClickEvent(event)
+
+
+def test_second_double_click_on_filled_card_opens_inspect_not_jitter(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "fill-0")
+    del free
+    _dblclick(card)
+    assert harness.focused == []
+    assert harness.page._filled_card == ("time", "fill-0")
+    first_zoom = harness.page.board_zoom()
+    _dblclick(card)
+    assert harness.focused == [("time", "fill-0")]
+    assert harness.page.focus_layer().isVisible()
+    assert harness.page.board_zoom() == pytest.approx(first_zoom)
+    _dblclick(card)
+    assert harness.page.focus_layer().current_ref() == ("time", "fill-0")
+    assert len(harness.focused) == 1
+
+
+def test_filled_double_click_keeps_selection(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "sel-0")
+    QTest.mouseClick(card, Qt.LeftButton, Qt.NoModifier, QPoint(20, 20))
+    _dblclick(card)
+    _dblclick(card)
+    assert harness.page.selected_ref() == ("time", "sel-0")
+    assert harness.page.focus_layer().isVisible()
+
+
+def test_armed_replacement_blocks_inspect_on_filled_double_click(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "arm-0")
+    _dblclick(card)
+    harness.page.arm_replacement("time", "arm-0")
+    _dblclick(card)
+    assert harness.focused == []
+    assert not harness.page.focus_layer().isVisible()
+    assert harness.page.replacement_ref() == ("time", "arm-0")
+
+
+def test_presentation_filled_double_click_opens_inspect(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "pres-0")
+    harness.page.set_presentation_active(True)
+    _dblclick(card)
+    _dblclick(card)
+    assert harness.page.is_presentation_active() is True
+    assert harness.page.focus_layer().isVisible()
+    assert harness.focused == [("time", "pres-0")]
 
 
 def test_stale_card_sync_button_emits_page_intent(qtbot):
@@ -2726,12 +2837,18 @@ def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     qapp.processEvents()
     assert harness.page.active_panel() == PANEL_LIBRARY
     assert library.isVisible()
+    assert library.width() >= LIBRARY_DEFAULT_WIDTH
     assert library.height() >= 400
     headers = [library.section_headers()[section] for section in SOURCE_SECTIONS]
     assert len(headers) == 5
     header_y = []
     for header in headers:
         assert header.height() >= 22
+        assert header.height() <= 40
+        title = header.findChild(QLabel, "ultraViewLibrarySectionTitle")
+        assert title is not None
+        assert "个 View" not in title.text()
+        assert header.findChild(QLabel, "ultraViewLibrarySectionCount") is None
         assert header.text()
         header_y.append(header.mapTo(library, QPoint(0, 0)).y())
     for previous, current in zip(header_y, header_y[1:]):

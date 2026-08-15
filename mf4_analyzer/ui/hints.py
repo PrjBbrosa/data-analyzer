@@ -651,7 +651,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.undo",
-        text="一次重排一个撤销，可恢复全部卡片",
+        text="直接移动或调整后可用 Ctrl+Z / Ctrl+Shift+Z 撤销或重做",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=86,
@@ -659,13 +659,6 @@ _HINTS = (
     Hint(
         id="ultraview.preset",
         text="卡片右键可选尺寸预设",
-        surface="context",
-        modes=frozenset({"ultraview"}),
-        priority=85,
-    ),
-    Hint(
-        id="ultraview.organize",
-        text="布局浮层的整理会压缩自由网格空行",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=84,
@@ -683,6 +676,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,
+    ),
+    Hint(
+        id="ultraview.inspect",
+        text="双击铺满，再双击打开临时查看",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=88,
     ),
     Hint(
         id="ultraview.lod",
@@ -763,7 +763,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.library_fold",
-        text="左侧窄轨打开的 View 库浮层中，分组可折叠",
+        text="View 库分组可折叠，也可先概览",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=33,

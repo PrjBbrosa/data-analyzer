@@ -121,22 +121,26 @@ def scale_grid_metrics(metrics: GridMetrics, zoom: float) -> GridMetrics:
     )
 
 
-def zoom_at_cursor(
+def zoom_at(
     zoom_before: float,
     zoom_after: float,
-    cursor_in_viewport: ViewportPoint,
+    anchor_vp: ViewportPoint,
     scroll_offset: ViewportPoint,
     origin: ViewportPoint = (0.0, 0.0),
 ) -> ViewportPoint:
-    """Return the scroll offset that keeps the logical point under the cursor.
+    """Return the scroll offset that keeps the logical point under ``anchor_vp``.
 
-    ``origin`` is the chrome-safe parking offset of the board inside the
-    full-bleed scroll host.  Fit keeps scroll at 0 so content sits at
-    ``origin``; zoom then lets that content travel under the floating chrome.
+    ``origin`` is the board canvas origin inside the full-bleed scroll host
+    (fit parking, plus any zoom pad).  Callers must apply the returned scroll
+    *after* the zoomed canvas is laid out, and must not re-center afterwards:
+    a later fit-align pass would throw the anchor away.
+
+    When ``zoom_after`` clamps to ``zoom_before``, this is an identity so a
+    limit hit cannot introduce a scroll jump.
     """
     before = clamp_zoom(zoom_before)
     after = clamp_zoom(zoom_after)
-    cursor_x, cursor_y = float(cursor_in_viewport[0]), float(cursor_in_viewport[1])
+    cursor_x, cursor_y = float(anchor_vp[0]), float(anchor_vp[1])
     scroll_x, scroll_y = float(scroll_offset[0]), float(scroll_offset[1])
     origin_x, origin_y = float(origin[0]), float(origin[1])
     logical_x = (scroll_x + cursor_x - origin_x) / before
@@ -145,6 +149,9 @@ def zoom_at_cursor(
         logical_x * after + origin_x - cursor_x,
         logical_y * after + origin_y - cursor_y,
     )
+
+
+zoom_at_cursor = zoom_at
 
 
 def fit_zoom(

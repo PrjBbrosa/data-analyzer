@@ -68,7 +68,7 @@ from mf4_analyzer.ui.ultraview_state import (
     parse_ref_payload,
     section_search_haystack,
 )
-from mf4_analyzer.ui_kit.icons import BLUE, Icons
+from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.widgets import SearchField
 
@@ -331,7 +331,12 @@ DIMMED_OPACITY = 0.28
 # Transient dim worn by the cards a drag is currently previewing; the model-level
 # ``DIMMED_OPACITY`` above is the persistent one ``restore_dim()`` falls back to.
 DRAG_DIM_OPACITY = 0.4
-LIBRARY_DEFAULT_WIDTH = 288
+LIBRARY_DEFAULT_WIDTH = 470
+LIBRARY_MAX_WIDTH = 520
+LIBRARY_MODE_GROUPS = "groups"
+LIBRARY_MODE_COMPACT = "compact"
+_LIBRARY_PIN_REST = QColor("#6B7D8E")
+_LIBRARY_PIN_ACTIVE = QColor("#3E709C")
 TYPE_CHIP_ICON_ONLY_WIDTH = 168
 _SECTION_TYPE_ICONS = {
     "time": Icons.mode_time,
@@ -341,9 +346,10 @@ _SECTION_TYPE_ICONS = {
     "order": Icons.mode_order,
 }
 LIBRARY_OVERLAY_MIN_HEIGHT = 320
-LIBRARY_SECTION_MIN_HEIGHT = 24
+LIBRARY_SECTION_MIN_HEIGHT = 32
 LIBRARY_ROW_MIN_HEIGHT = 40
 LIBRARY_SECTION_ROW_GAP = 2
+LIBRARY_CATALOG_MIN_HEIGHT = 40
 TRAY_BODY_MAX_HEIGHT = 220
 TRAY_ITEM_MIN_HEIGHT = 40
 UNPLACED_OVERLAY_VISIBLE_ROWS = 3
@@ -1152,8 +1158,8 @@ class LibraryRowWidget(QFrame):
         super().mouseReleaseEvent(event)
 
 
-class _LibrarySectionHeader(QToolButton):
-    """Chevron + label that toggles one View-library SOURCE_SECTIONS group."""
+class _LibrarySectionHeader(QFrame):
+    """Paper-card header for one SOURCE_SECTIONS group; no domain color bar."""
 
     toggled_section = pyqtSignal(str, bool)
 
@@ -1167,29 +1173,95 @@ class _LibrarySectionHeader(QToolButton):
         super().__init__(parent)
         self.setObjectName("ultraViewLibrarySectionHead")
         self.setProperty("section", section)
-        self._section = section
-        self.setCheckable(True)
-        self.setAutoRaise(True)
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFixedHeight(LIBRARY_SECTION_MIN_HEIGHT)
-        self.setText(f"{SECTION_LABELS_ZH.get(section, section)}  {count}")
-        blocked = self.blockSignals(True)
-        self.setChecked(expanded)
-        self.blockSignals(blocked)
+        self.setMinimumHeight(LIBRARY_SECTION_MIN_HEIGHT)
+        self._section = section
+        self._count_value = max(0, int(count))
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 4, 6, 4)
+        layout.setSpacing(4)
+        self._title = QLabel(SECTION_LABELS_ZH.get(section, section), self)
+        self._title.setObjectName("ultraViewLibrarySectionTitle")
+        layout.addWidget(self._title, 1)
+        self.setToolTip(f"{self._count_value} 个 View")
+        self._toggle = QToolButton(self)
+        self._toggle.setObjectName("ultraViewLibrarySectionToggle")
+        self._toggle.setCheckable(True)
+        self._toggle.setAutoRaise(True)
+        self._toggle.setFocusPolicy(Qt.TabFocus)
+        self._toggle.setFixedSize(22, 22)
+        blocked = self._toggle.blockSignals(True)
+        self._toggle.setChecked(expanded)
+        self._toggle.blockSignals(blocked)
         self._sync_arrow(expanded)
-        self.toggled.connect(self._on_toggled)
+        self._toggle.toggled.connect(self._on_toggled)
+        layout.addWidget(self._toggle, 0, Qt.AlignVCenter)
 
     def section(self) -> str:
         return self._section
+
+    def click(self) -> None:
+        self._toggle.click()
+
+    def text(self) -> str:
+        return f"{SECTION_LABELS_ZH.get(self._section, self._section)}  {self._count_value}"
+
+    def arrowType(self):  # noqa: N802
+        return self._toggle.arrowType()
 
     def _on_toggled(self, checked: bool) -> None:
         self._sync_arrow(checked)
         self.toggled_section.emit(self._section, checked)
 
     def _sync_arrow(self, expanded: bool) -> None:
-        self.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self._toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self.childAt(event.pos()) is not self._toggle:
+            self._toggle.click()
+        super().mouseReleaseEvent(event)
+
+
+class _LibraryCatalogCard(QFrame):
+    """Overview-mode summary for one analysis type; expand returns to groups."""
+
+    expand_requested = pyqtSignal(str)
+
+    def __init__(
+        self,
+        section: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewLibraryCatalogCard")
+        self.setProperty("section", section)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setMinimumHeight(LIBRARY_CATALOG_MIN_HEIGHT)
+        self._section = section
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 8, 6)
+        layout.setSpacing(8)
+        title = QLabel(SECTION_LABELS_ZH.get(section, section), self)
+        title.setObjectName("ultraViewLibraryCatalogTitle")
+        layout.addWidget(title, 1)
+        self._expand = QToolButton(self)
+        self._expand.setObjectName("ultraViewLibraryCatalogExpand")
+        self._expand.setText("展开")
+        self._expand.setAutoRaise(False)
+        self._expand.setCursor(Qt.PointingHandCursor)
+        self._expand.setToolTip(f"展开{SECTION_LABELS_ZH.get(section, section)}分组")
+        self._expand.clicked.connect(self._on_expand)
+        layout.addWidget(self._expand, 0, Qt.AlignVCenter)
+
+    def section(self) -> str:
+        return self._section
+
+    def expand_button(self) -> QToolButton:
+        return self._expand
+
+    def _on_expand(self) -> None:
+        self.expand_requested.emit(self._section)
 
 
 class ViewLibraryPanel(QFrame):
@@ -1204,24 +1276,28 @@ class ViewLibraryPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewLibrary")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setMinimumWidth(160)
-        self.setMaximumWidth(320)
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(LIBRARY_MAX_WIDTH)
         self._rows: list[LibraryRow] = []
         self._selected: tuple[str, str] | None = None
         self._row_widgets: list[LibraryRowWidget] = []
         self._section_frames: dict[str, QFrame] = {}
         self._section_headers: dict[str, _LibrarySectionHeader] = {}
+        self._catalog_cards: dict[str, _LibraryCatalogCard] = {}
         self._expanded: dict[str, bool] = {section: True for section in SOURCE_SECTIONS}
+        self._browse_mode = LIBRARY_MODE_GROUPS
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        # Inset past the QSS stroke: Qt does not keep children out of
+        # border-radius, so 0-margin layouts erase the top corner arcs.
+        root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(0)
         head = QHBoxLayout()
-        head.setContentsMargins(10, 8, 8, 6)
+        head.setContentsMargins(0, 0, 0, 6)
         head.setSpacing(6)
         title = QLabel("View 库", self)
         title.setObjectName("ultraViewLibraryTitle")
-        self._count = QLabel("0", self)
+        self._count = QLabel("0 个", self)
         self._count.setObjectName("ultraViewLibraryCount")
         # Naming note: this `_pin` is the library overlay's own "keep open"
         # toggle (pinned = don't auto-close on canvas click), unrelated to
@@ -1245,13 +1321,37 @@ class ViewLibraryPanel(QFrame):
         self._sync_pin(False)
         root.addLayout(head)
 
-        self._search = SearchField("搜索 View…", self)
+        self._search = SearchField("搜索 View、信号或分析类型…", self)
         self._search.setObjectName("ultraViewLibrarySearch")
         self._search.textChanged.connect(self._rebuild)
         search_wrap = QHBoxLayout()
-        search_wrap.setContentsMargins(8, 0, 8, 6)
+        search_wrap.setContentsMargins(0, 0, 0, 6)
         search_wrap.addWidget(self._search)
         root.addLayout(search_wrap)
+
+        mode_wrap = QHBoxLayout()
+        mode_wrap.setContentsMargins(0, 0, 0, 6)
+        mode_wrap.setSpacing(4)
+        self._mode_groups = QToolButton(self)
+        self._mode_groups.setObjectName("ultraViewLibraryModeGroups")
+        self._mode_groups.setText("展开")
+        self._mode_groups.setCheckable(True)
+        self._mode_groups.setChecked(True)
+        self._mode_groups.setToolTip("按分析类型展开，直接操作其中的 View")
+        self._mode_compact = QToolButton(self)
+        self._mode_compact.setObjectName("ultraViewLibraryModeCompact")
+        self._mode_compact.setText("概览")
+        self._mode_compact.setCheckable(True)
+        self._mode_compact.setToolTip("先扫读每类已有内容，再展开完整列表")
+        self._mode_buttons = QButtonGroup(self)
+        self._mode_buttons.setExclusive(True)
+        self._mode_buttons.addButton(self._mode_groups)
+        self._mode_buttons.addButton(self._mode_compact)
+        self._mode_groups.clicked.connect(self._on_groups_mode_clicked)
+        self._mode_compact.clicked.connect(self._on_compact_mode_clicked)
+        mode_wrap.addWidget(self._mode_groups, 1)
+        mode_wrap.addWidget(self._mode_compact, 1)
+        root.addLayout(mode_wrap)
 
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
@@ -1261,7 +1361,7 @@ class ViewLibraryPanel(QFrame):
         self._body.setObjectName("ultraViewLibraryBody")
         self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(6, 0, 6, 8)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
         self._body_layout.setSpacing(8)
         self._scroll.setWidget(self._body)
         self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -1287,8 +1387,14 @@ class ViewLibraryPanel(QFrame):
     def section_widgets(self) -> dict[str, QFrame]:
         return dict(self._section_frames)
 
-    def section_headers(self) -> dict[str, QToolButton]:
+    def section_headers(self) -> dict[str, QWidget]:
         return dict(self._section_headers)
+
+    def catalog_cards(self) -> dict[str, _LibraryCatalogCard]:
+        return dict(self._catalog_cards)
+
+    def browse_mode(self) -> str:
+        return self._browse_mode
 
     def is_section_expanded(self, section: str) -> bool:
         return bool(self._expanded.get(section, True))
@@ -1298,7 +1404,7 @@ class ViewLibraryPanel(QFrame):
 
     def set_rows(self, rows: Sequence[LibraryRow | Mapping[str, Any]]) -> None:
         self._rows = [coerce_library_row(row) for row in rows]
-        self._count.setText(str(len(self._rows)))
+        self._count.setText(f"{len(self._rows)} 个")
         self._rebuild()
 
     def set_on_board(self, membership: set[UltraViewRef]) -> None:
@@ -1352,7 +1458,7 @@ class ViewLibraryPanel(QFrame):
         self.pin_toggled.emit(bool(checked))
 
     def _sync_pin(self, pinned: bool) -> None:
-        self._pin.setIcon(Icons.ultraview_pin(BLUE if pinned else None))
+        self._pin.setIcon(Icons.ultraview_pin(_LIBRARY_PIN_ACTIVE if pinned else _LIBRARY_PIN_REST))
         value = "true" if pinned else "false"
         if self._pin.property("active") != value:
             self._pin.setProperty("active", value)
@@ -1375,6 +1481,7 @@ class ViewLibraryPanel(QFrame):
         self._row_widgets = []
         self._section_frames = {}
         self._section_headers = {}
+        self._catalog_cards = {}
         visible = self.visible_rows()
         by_section: dict[str, list[LibraryRow]] = {section: [] for section in SOURCE_SECTIONS}
         for row in visible:
@@ -1382,15 +1489,23 @@ class ViewLibraryPanel(QFrame):
                 by_section[row.section].append(row)
         query = self._search.text().strip()
         if query:
+            self._browse_mode = LIBRARY_MODE_GROUPS
+            self._sync_mode_buttons()
             for section, rows in by_section.items():
                 if rows:
                     self._expanded[section] = True
+        self._groups_host = QWidget(self._body)
+        self._groups_host.setObjectName("ultraViewLibraryGroupsHost")
+        groups_layout = QVBoxLayout(self._groups_host)
+        groups_layout.setContentsMargins(0, 0, 0, 0)
+        groups_layout.setSpacing(8)
         for section in SOURCE_SECTIONS:
-            frame = QFrame(self._body)
+            frame = QFrame(self._groups_host)
             frame.setObjectName("ultraViewLibrarySection")
             frame.setProperty("section", section)
+            frame.setAttribute(Qt.WA_StyledBackground, True)
             section_layout = QVBoxLayout(frame)
-            section_layout.setContentsMargins(0, 0, 0, 0)
+            section_layout.setContentsMargins(1, 1, 1, 4)
             section_layout.setSpacing(LIBRARY_SECTION_ROW_GAP)
             expanded = self._expanded.get(section, True)
             header = _LibrarySectionHeader(section, len(by_section[section]), expanded, frame)
@@ -1411,8 +1526,53 @@ class ViewLibraryPanel(QFrame):
                 section_layout.addWidget(row_widget)
                 self._row_widgets.append(row_widget)
             self._section_frames[section] = frame
-            self._body_layout.addWidget(frame)
+            groups_layout.addWidget(frame)
+        self._compact_host = QWidget(self._body)
+        self._compact_host.setObjectName("ultraViewLibraryCompactHost")
+        compact_layout = QVBoxLayout(self._compact_host)
+        compact_layout.setContentsMargins(0, 0, 0, 0)
+        compact_layout.setSpacing(7)
+        for section in SOURCE_SECTIONS:
+            card = _LibraryCatalogCard(section, self._compact_host)
+            card.expand_requested.connect(self._on_catalog_expand)
+            compact_layout.addWidget(card)
+            self._catalog_cards[section] = card
+        self._body_layout.addWidget(self._groups_host)
+        self._body_layout.addWidget(self._compact_host)
+        self._sync_mode_visibility()
         self._sync_body_min_height()
+
+    def _on_groups_mode_clicked(self) -> None:
+        self._browse_mode = LIBRARY_MODE_GROUPS
+        self._sync_mode_visibility()
+        self._sync_body_min_height()
+
+    def _on_compact_mode_clicked(self) -> None:
+        self._browse_mode = LIBRARY_MODE_COMPACT
+        self._sync_mode_visibility()
+        self._sync_body_min_height()
+
+    def _sync_mode_buttons(self) -> None:
+        groups = self._browse_mode == LIBRARY_MODE_GROUPS
+        blocked = self._mode_groups.blockSignals(True)
+        self._mode_groups.setChecked(groups)
+        self._mode_groups.blockSignals(blocked)
+        blocked = self._mode_compact.blockSignals(True)
+        self._mode_compact.setChecked(not groups)
+        self._mode_compact.blockSignals(blocked)
+
+    def _sync_mode_visibility(self) -> None:
+        self._sync_mode_buttons()
+        groups = self._browse_mode == LIBRARY_MODE_GROUPS
+        if hasattr(self, "_groups_host"):
+            self._groups_host.setVisible(groups)
+        if hasattr(self, "_compact_host"):
+            self._compact_host.setVisible(not groups)
+
+    def _on_catalog_expand(self, section: str) -> None:
+        self._expanded[str(section)] = True
+        self._browse_mode = LIBRARY_MODE_GROUPS
+        self._rebuild()
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(
@@ -1421,7 +1581,7 @@ class ViewLibraryPanel(QFrame):
         )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(160, LIBRARY_OVERLAY_MIN_HEIGHT)
+        return QSize(280, LIBRARY_OVERLAY_MIN_HEIGHT)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -1429,12 +1589,18 @@ class ViewLibraryPanel(QFrame):
 
     def _content_height(self) -> int:
         """Chrome + current list height, ignoring QScrollArea's tiny default hint."""
-        return 36 + 40 + self._measured_body_height()
+        return 20 + 36 + 40 + 32 + self._measured_body_height()
 
     def _measured_body_height(self) -> int:
         """Explicit list height so hidden/unpolished widgets cannot collapse sizeHint."""
         margins = self._body_layout.contentsMargins()
         height = margins.top() + margins.bottom()
+        if self._browse_mode == LIBRARY_MODE_COMPACT:
+            for index, _section in enumerate(SOURCE_SECTIONS):
+                if index:
+                    height += 7
+                height += LIBRARY_CATALOG_MIN_HEIGHT
+            return height
         for index, section in enumerate(SOURCE_SECTIONS):
             if index:
                 height += self._body_layout.spacing()
@@ -1992,7 +2158,7 @@ class UltraViewCard(QFrame):
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         page = _page_of(self)
         if page is not None:
-            page.zoom_to_card(self._model.section, self._model.view_id)
+            page.handle_card_double_click(self._model.section, self._model.view_id)
             event.accept()
             return
         self.focus_requested.emit(self._model.section, self._model.view_id)
@@ -4187,11 +4353,16 @@ class FocusLayer(QFrame):
         head.setContentsMargins(12, 8, 8, 8)
         self._title = QLabel("", panel)
         self._title.setObjectName("ultraViewFocusTitle")
+        self._sync_badge = QLabel("同步中", panel)
+        self._sync_badge.setObjectName("ultraViewFocusSyncing")
+        self._sync_badge.setAttribute(Qt.WA_StyledBackground, True)
+        self._sync_badge.hide()
         close_btn = QToolButton(panel)
         close_btn.setText("×")
         close_btn.setObjectName("ultraViewFocusClose")
         close_btn.clicked.connect(self.close_layer)
         head.addWidget(self._title, 1)
+        head.addWidget(self._sync_badge, 0)
         head.addWidget(close_btn, 0)
         panel_layout.addLayout(head)
         self._image_host = QLabel(panel)
@@ -4213,6 +4384,20 @@ class FocusLayer(QFrame):
 
     def open_source_button(self) -> QPushButton:
         return self._open
+
+    def current_ref(self) -> tuple[str, str] | None:
+        if not self._section or not self._view_id:
+            return None
+        return (self._section, self._view_id)
+
+    def image_host_size(self) -> tuple[int, int]:
+        size = self._image_host.size()
+        return (max(1, int(size.width())), max(1, int(size.height())))
+
+    def set_syncing(self, syncing: bool) -> None:
+        self._sync_badge.setVisible(bool(syncing))
+        if syncing:
+            self._sync_badge.raise_()
 
     def displayed_pixmap_size(self) -> QSize:
         pixmap = self._image_host.pixmap()
@@ -4244,6 +4429,9 @@ class FocusLayer(QFrame):
     def close_layer(self) -> None:
         self.hide()
         self._image = None
+        self._section = ""
+        self._view_id = ""
+        self._sync_badge.hide()
         self._image_host.setPixmap(QPixmap())
         self.closed.emit()
 

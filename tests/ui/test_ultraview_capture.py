@@ -142,7 +142,11 @@ class FakeCanvas(QWidget):
         self.armed_visible_at_grab = self._armed_item.isVisible()
         self.remark_visible_at_grab = self._remark_item.isVisible()
         self.scale_box_visible_at_grab = self._scale_box.isVisible()
-        pix = QPixmap(max(self.width(), 16), max(self.height(), 16))
+        factor = max(1.0, float(scale or 1.0))
+        pix = QPixmap(
+            max(int(round(self.width() * factor)), 16),
+            max(int(round(self.height() * factor)), 16),
+        )
         pix.fill(self._fill)
         return pix
 
@@ -2069,6 +2073,80 @@ def test_board_viewport_does_not_enter_presentation_digest(qapp):
     coord.board.viewport["zoom"] = 2.0
     coord.board.viewport["center_x"] = 99.0
     assert coord.current_digest_for(ref) == digest
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_focus_inspect_recaptures_when_presentation_revision_bumps(qapp, qtbot):
+    window, coord = _make_coord()
+    page = UltraViewPage()
+    qtbot.addWidget(page)
+    page.resize(320, 240)
+    page.show()
+    sheet = _visible_sheet(window)
+    window.chart_stack = _page_stack(page)
+    coord.attach()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas("#112233")
+    canvas.resize(400, 300)
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    coord.refresh_page()
+    page._on_focus("time", "view-a")
+    _flush()
+    assert page.focus_layer().isVisible()
+    qtbot.waitUntil(lambda: not page.focus_layer()._sync_badge.isVisible(), timeout=1500)
+    first_grabs = canvas.grab_calls
+    page.focus_layer().close_layer()
+
+    canvas._fill = QColor("#abcdef")
+    coord.bump_presentation_revision(ref)
+    page._on_focus("time", "view-a")
+    assert page.focus_layer()._sync_badge.isVisible()
+    qtbot.waitUntil(lambda: canvas.grab_calls > first_grabs, timeout=1500)
+    qtbot.waitUntil(lambda: not page.focus_layer()._sync_badge.isVisible(), timeout=1500)
+    record = coord.store.get(ref)
+    assert record is not None
+    assert record.captured_revision == coord.presentation_revision_for(ref)
+
+    grabs = canvas.grab_calls
+    page.focus_layer().close_layer()
+    page._on_focus("time", "view-a")
+    _flush()
+    QTest.qWait(80)
+    _flush()
+    assert canvas.grab_calls == grabs
+    assert page.focus_layer()._sync_badge.isVisible() is False
+
+    revision = coord.presentation_revision_for(ref)
+    page.focus_layer().close_layer()
+    assert coord.presentation_revision_for(ref) == revision
+    sheet.deleteLater()
+    canvas.deleteLater()
+    page.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_hidden_sheet_bumps_revision_without_idle_grab(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    grabs = canvas.grab_calls
+    before = coord.presentation_revision_for(ref)
+    digest = coord.current_digest_for(ref)
+    canvas.visible_range_changed.emit()
+    assert coord.presentation_revision_for(ref) == before + 1
+    assert canvas.grab_calls == grabs
+    assert coord.current_digest_for(ref) == digest
+    canvas.deleteLater()
     coord.clear()
     coord.deleteLater()
 

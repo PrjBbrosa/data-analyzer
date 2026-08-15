@@ -361,7 +361,7 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "ghost" in haystack
     assert "标题卡" in haystack
     assert "minimap" in haystack
-    assert "压缩空行" in haystack
+    assert "Ctrl+Shift+Z" in haystack
     assert "Alt+拖" not in haystack
     assert "Option 拖动" not in haystack
     assert "碰撞时提示" not in haystack
