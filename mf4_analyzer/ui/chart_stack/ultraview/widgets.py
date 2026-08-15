@@ -21,10 +21,8 @@ from PyQt5.QtGui import (
     QImage,
     QKeyEvent,
     QMouseEvent,
-    QNativeGestureEvent,
     QPainter,
     QPixmap,
-    QWheelEvent,
 )
 from PyQt5.QtWidgets import (
     QAbstractScrollArea,
@@ -199,52 +197,6 @@ def _clear_page_card_selection(widget: QWidget) -> None:
     page = _page_of(widget)
     if page is not None:
         page.clear_card_selection()
-
-
-def _forward_native_zoom(widget: QWidget, event) -> bool:
-    if not isinstance(event, QNativeGestureEvent):
-        return False
-    if event.gestureType() != Qt.ZoomNativeGesture:
-        return False
-    page = _page_of(widget)
-    if page is None:
-        return False
-    return bool(page.handle_pinch(event, widget))
-
-
-def _forward_zoom_wheel(widget: QWidget, event: QWheelEvent) -> bool:
-    if not (event.modifiers() & Qt.ControlModifier):
-        return False
-    page = _page_of(widget)
-    if page is None:
-        return False
-    return bool(page.handle_zoom_wheel(event, widget))
-
-
-def _handle_space_key(widget: QWidget, event: QKeyEvent) -> bool:
-    if event.key() != Qt.Key_Space or event.isAutoRepeat():
-        return False
-    if isinstance(QApplication.focusWidget(), QLineEdit):
-        return False
-    page = _page_of(widget)
-    if page is None:
-        return False
-    page.note_space(event.type() == QEvent.KeyPress)
-    return True
-
-
-def _handle_pan_press(widget: QWidget, event: QMouseEvent) -> bool:
-    page = _page_of(widget)
-    if page is None:
-        return False
-    return bool(page.begin_board_pan(event))
-
-
-def _handle_pan_release(widget: QWidget, event: QMouseEvent) -> bool:
-    page = _page_of(widget)
-    if page is None:
-        return False
-    return bool(page.end_board_pan_for_event(event))
 
 
 def _drop_on_unplaced_tray(widget: QWidget, global_pos: QPoint) -> bool:
@@ -2249,21 +2201,7 @@ class UltraViewCard(QFrame):
         menu = self.make_context_menu()
         menu.popup(self.mapToGlobal(pos))
 
-    def event(self, event):  # noqa: N802
-        if _forward_native_zoom(self, event):
-            return True
-        return super().event(event)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        if _forward_zoom_wheel(self, event):
-            event.accept()
-            return
-        super().wheelEvent(event)
-
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_press(self, event):
-            event.accept()
-            return
         if event.button() == Qt.LeftButton:
             self._press_pos = QPoint(event.pos())
             self.selected.emit(self._model.section, self._model.view_id)
@@ -2284,11 +2222,6 @@ class UltraViewCard(QFrame):
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.update_board_pan(event)
-            event.accept()
-            return
         parent = self.parentWidget()
         handler = getattr(parent, "handle_card_mouse_move", None)
         armed = getattr(parent, "is_slot_drag_armed", None)
@@ -2311,10 +2244,6 @@ class UltraViewCard(QFrame):
         )
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_release(self, event):
-            self._press_pos = None
-            event.accept()
-            return
         handler = getattr(self.parentWidget(), "handle_card_mouse_release", None)
         if callable(handler):
             handler(self, event)
@@ -2325,9 +2254,6 @@ class UltraViewCard(QFrame):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
         key = event.key()
         if key in (Qt.Key_Return, Qt.Key_Enter):
             self._emit_focus()
@@ -2354,12 +2280,6 @@ class UltraViewCard(QFrame):
             event.accept()
             return
         super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
@@ -2697,21 +2617,7 @@ class BoardGrid(QWidget):
         for card in self.card_widgets():
             card.set_preview_quality(quality)
 
-    def event(self, event):  # noqa: N802
-        if _forward_native_zoom(self, event):
-            return True
-        return super().event(event)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        if _forward_zoom_wheel(self, event):
-            event.accept()
-            return
-        super().wheelEvent(event)
-
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_press(self, event):
-            event.accept()
-            return
         if event.button() == Qt.LeftButton:
             page = _page_of(self)
             if page is not None:
@@ -2720,11 +2626,6 @@ class BoardGrid(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.update_board_pan(event)
-            event.accept()
-            return
         if self._slot_source is not None and (
             event.buttons() & Qt.LeftButton or QWidget.mouseGrabber() is self
         ):
@@ -2733,25 +2634,10 @@ class BoardGrid(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_release(self, event):
-            event.accept()
-            return
         if self._slot_source is not None and event.button() == Qt.LeftButton:
             self._finish_slot_drag(event.pos(), event.globalPos())
             return
         super().mouseReleaseEvent(event)
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
 
     def handle_card_mouse_press(self, card: UltraViewCard, event: QMouseEvent) -> None:
         if event.button() != Qt.LeftButton:
@@ -2892,9 +2778,6 @@ class FreeGridCard(UltraViewCard):
         self.autofit_requested.emit(self._model.section, self._model.view_id)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_press(self, event):
-            event.accept()
-            return
         if event.button() == Qt.LeftButton:
             already_selected = bool(self._model.selected)
             shift = bool(event.modifiers() & Qt.ShiftModifier)
@@ -2908,11 +2791,6 @@ class FreeGridCard(UltraViewCard):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.update_board_pan(event)
-            event.accept()
-            return
         parent = self.parentWidget()
         handler = getattr(parent, "handle_card_mouse_move", None)
         gesture = getattr(parent, "gesture", None)
@@ -2926,10 +2804,6 @@ class FreeGridCard(UltraViewCard):
         QWidget.mouseMoveEvent(self, event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_release(self, event):
-            self._press_pos = None
-            event.accept()
-            return
         handler = getattr(self.parentWidget(), "handle_card_mouse_release", None)
         if callable(handler):
             handler(self, event)
@@ -2937,9 +2811,6 @@ class FreeGridCard(UltraViewCard):
         QWidget.mouseReleaseEvent(self, event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
         if event.modifiers() & Qt.AltModifier:
             delta = {
                 Qt.Key_Left: (-1, 0),
@@ -3337,9 +3208,6 @@ class FreeGridBoard(QWidget):
         return True
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_press(self, event):
-            event.accept()
-            return
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
             return
@@ -3362,11 +3230,6 @@ class FreeGridBoard(QWidget):
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.update_board_pan(event)
-            event.accept()
-            return
         grabbed = QWidget.mouseGrabber() is self
         if self._gesture.marquee() is not None and (
             event.buttons() & Qt.LeftButton or grabbed
@@ -3385,9 +3248,6 @@ class FreeGridBoard(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_release(self, event):
-            event.accept()
-            return
         if event.button() == Qt.LeftButton and self._gesture.marquee() is not None:
             session = self._gesture.take_marquee()
             self._release_mouse_if_grabbed()
@@ -3408,30 +3268,10 @@ class FreeGridBoard(QWidget):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
         if self.handle_selection_key(event):
             event.accept()
             return
         super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
-
-    def event(self, event):  # noqa: N802
-        if _forward_native_zoom(self, event):
-            return True
-        return super().event(event)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        if _forward_zoom_wheel(self, event):
-            event.accept()
-            return
-        super().wheelEvent(event)
 
     def handle_selection_key(self, event: QKeyEvent) -> bool:
         key = event.key()
@@ -3877,41 +3717,7 @@ class BoardScrollArea(QScrollArea):
         super().resizeEvent(event)
         self.viewport_resized.emit(self.viewport().size())
 
-    def event(self, event):  # noqa: N802
-        if _forward_native_zoom(self, event):
-            return True
-        return super().event(event)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        if _forward_zoom_wheel(self, event):
-            event.accept()
-            return
-        super().wheelEvent(event)
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_press(self, event):
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.update_board_pan(event)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if _handle_pan_release(self, event):
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
         vertical = self.verticalScrollBar()
         horizontal = self.horizontalScrollBar()
         if event.key() == Qt.Key_Home:
@@ -3933,13 +3739,6 @@ class BoardScrollArea(QScrollArea):
             event.accept()
             return
         super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if _handle_space_key(self, event):
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
-
 
 class BoardOverview(QFrame):
     """Read-only full-board projection used for P1 global scanning.

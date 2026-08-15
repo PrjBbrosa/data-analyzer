@@ -58,17 +58,10 @@ FROZEN_MODEL_FIELD_WRITES = frozenset()
 
 FROZEN_PAGE_OF_SURFACE = frozenset(
     {
-        "begin_board_pan",
         "clear_card_selection",
-        "end_board_pan_for_event",
         "handle_card_double_click",
-        "handle_pinch",
-        "handle_zoom_wheel",
-        "is_board_panning",
-        "note_space",
         "notify_canvas_click",
         "unplaced_tray",
-        "update_board_pan",
     }
 )
 

@@ -71,6 +71,7 @@ from .viewport import (
     zoom_to_rect,
     FIT_CONTENT_MARGIN,
 )
+from .viewport_router import ViewportGestureRouter
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
     LIBRARY_OVERLAY_MIN_HEIGHT,
@@ -288,6 +289,18 @@ class UltraViewPage(QWidget):
         # which could steal a row/column from the Board.
         self._canvas_host = CanvasHost(self)
         self._canvas_host.installEventFilter(self)
+        self._viewport_router = ViewportGestureRouter(
+            canvas_host=self._canvas_host,
+            viewport=self._viewport,
+            begin_pan=self.begin_board_pan,
+            update_pan=self.update_board_pan,
+            end_pan=self.end_board_pan_for_event,
+            zoom_wheel=self.handle_zoom_wheel,
+            pinch=self.handle_pinch,
+            note_space=self.note_space,
+            text_field_has_focus=self._text_field_has_focus,
+            parent=self,
+        )
         self._canvas_stage = QFrame(self._canvas_host)
         self._canvas_stage.setObjectName("ultraViewCanvasStage")
         self._canvas_stage.setAttribute(Qt.WA_StyledBackground, True)
@@ -2072,11 +2085,19 @@ class UltraViewPage(QWidget):
 
     def changeEvent(self, event) -> None:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
+            self._viewport_router.uninstall()
             self.note_space(False)
             self._cancel_board_gestures()
+        elif event.type() == QEvent.WindowActivate:
+            self._viewport_router.install()
         super().changeEvent(event)
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._viewport_router.install()
+
     def hideEvent(self, event) -> None:  # noqa: N802
+        self._viewport_router.uninstall()
         self.note_space(False)
         self._cancel_board_gestures()
         super().hideEvent(event)
