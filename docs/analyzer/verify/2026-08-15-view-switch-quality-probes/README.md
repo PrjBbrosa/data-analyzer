@@ -2,8 +2,10 @@
 
 服务于 [`specs/2026-08-15-view-switch-quality-settlement-spec.md`](../../specs/2026-08-15-view-switch-quality-settlement-spec.md)
 与 [`plans/2026-08-15-view-switch-quality-settlement-plan.md`](../../plans/2026-08-15-view-switch-quality-settlement-plan.md)。
-所有 `results/` 均为 **改前** 读数：`main@380e5ac2`，macOS Cocoa，dpr 2.0，
-画布 1600×950（MainWindow 探针为整窗 1600×950），仓库 `.venv`。
+`results/` 除 `analysis-ink-calibration.*` 外均为 **改前** 读数：`main@380e5ac2`，
+macOS Cocoa，dpr 2.0，画布 1600×950（MainWindow 探针为整窗 1600×950），仓库 `.venv`。
+`analysis-ink-calibration.*` 是 plan Task 4 的**标定**读数（不是改前基线），
+量在 `feat/view-switch-quality-settlement@49302046`、画布 1400×900，详见下表末行。
 
 > **正式入口已迁到 `scripts/probe_view_switch_quality.py`**（plan Task 0）。
 > 本目录 `probes/` 下六个脚本是 2026-08-15 当时的调查快照，**不再维护**——
@@ -27,6 +29,8 @@ TMPDIR=/tmp PYTHONPATH=. .venv/bin/python scripts/probe_view_switch_quality.py y
 TMPDIR=/tmp PYTHONPATH=. .venv/bin/python scripts/probe_view_switch_quality.py stale-ink --json-out out.json
 TMPDIR=/tmp PYTHONPATH=. .venv/bin/python scripts/probe_view_switch_quality.py analysis-frames --json-out out.json
 TMPDIR=/tmp PYTHONPATH=. .venv/bin/python scripts/probe_view_switch_quality.py spectrum-switch --json-out out.json
+# plan Task 4 的标定扫描（约 9 分钟，会连开三个窗口）：
+TMPDIR=/tmp PYTHONPATH=. .venv/bin/python scripts/probe_view_switch_quality.py analysis-calibrate --json-out out.json
 ```
 
 历史命令（`probes/` 下六个脚本，仍能跑，但不再随代码改动更新）：
@@ -49,6 +53,7 @@ TMPDIR=/tmp PYTHONPATH=. .venv/bin/python $V/probes/probe_fft_view_switch.py
 | `probe_stale_ink_effects.py` → `stale-ink` | 回切后 stale ink 的三个后果：envelope 分桶被砍、AA 拒、光栅误收编，且空转 500 ms 不自愈 | `stale-ink-effects.txt` | `rerun-from-scripts-stale-ink.txt` |
 | `probe_analysis_aa_frames.py` → `analysis-frames` | 分析画布：`PgLineCanvas` 谱行同 4095 绘点只改竖直墨迹的 AA 帧 vs `envelope_ink_dev_px`；`PgFrfCanvas` 各 bins 数 AA/非 AA 帧 | `analysis-aa-frames.txt` | `rerun-from-scripts-analysis-frames.txt` |
 | `probe_fft_view_switch.py` → `spectrum-switch` | `PgLineCanvas.plot_spectra` 切换调用耗时（AA 同步开 vs 不开） | （见 spec §1.4 表，未单独存文件） | `rerun-from-scripts-spectrum-switch.txt` |
+| （无历史脚本）`analysis-calibrate` | **spec §5 三行 ink 带的真机标定**（plan Task 4，不是改前基线）：谱行 7 档峰底比 / 预览行 2·3·4 条 × Y 默认与拉窄填满 / FRF 3 档 bins × 干净·噪声相位·噪声相干，每档 ≥2 遍取中位、AA 显式开关，输出 ink→ms 散点 + 最小二乘拟合 + 推荐常量 | `analysis-ink-calibration.txt` / `.json` | 同左（本身即定稿读数） |
 
 ## 改前读数摘要（详见各结果文件）
 
@@ -89,5 +94,29 @@ AA 判定调用本身 0.1 ms，ink 现场测量 0.0 ms（表内已有记录）�
 | FRF 32k bins 噪声 | — | 无闸门 | — | 11 403 ms（非 AA 4 111） |
 
 `plot_spectra` 切换调用：AA 同步开 → 合计 245 ms（其中首帧 227）；不开 → 25 ms。
+
+## 分析画布 ink 带标定摘要（plan Task 4，`analysis-ink-calibration.*`）
+
+真机 macOS 27.0 / arm64 / Cocoa / dpr 2.0 / 画布 1400×900，每档 ≥2 遍 × 每遍 3 帧
+取中位（同机另有两个 offscreen pytest 进程，loadavg ≈2.0；除预览行 2 条 Y 默认档
+22% 外全部 ≤4%）。三遍独立跑出的推荐常量完全一致。
+
+| 组 | 点数 | 定带拟合斜率 | 截距 | R² | 250 ms @ ink | 推荐 ON / OFF |
+|---|---|---|---|---|---|---|
+| 谱行（3 曲线，只改峰底比） | 7（定带取 ≤600 ms 的 4 点） | 1.68 ms/k·dev-px | 9.0 ms | 0.976 | 143 k | **95 k / 145 k** |
+| 时域预览行（2/3/4 条 × Y 默认·拉窄填满） | 6 | 0.93 ms/k·dev-px | −5.9 ms | 0.995 | 275 k | **复用 `_INK_AA_ON/OFF` 200 k / 300 k** |
+| FRF 三行（bins × 干净·噪声相位·噪声相干） | 9 | 3.21 ms/k·dev-px | −125 ms | 0.916 | 117 k | **75 k / 115 k** |
+
+三条给实施的告诫（都在原始输出里有对应行）：
+
+- **谱行不是一条直线**：≤600 ms 段 1.68 ms/k，>600 ms 段 3.83 ms/k。带只能在近目标
+  段标定，全局拟合会把截距压到 −138 ms，外推无意义。
+- **FRF 也不是一条直线**：噪声相位 1.44 ms/k vs 噪声相干 3.55 ms/k（2.47×）。原因在
+  per-row ink 拆分里：相干行 y 跨度被 `setYRange(0,1)` 恒钉成 1.0，随机相干每个 bin
+  都是满行高笔画，同样 ink 下比幅值行的短笔画贵得多（2049 bins：噪声相干 342 k ink
+  里 340 k 来自相干行，1095 ms；噪声相位 143 k ink 主要在幅值行，154 ms）。因此按最
+  保守的全局拟合定带。
+- **ink 腿必须与点数腿 AND**：FRF「干净」构形 ink 恒为 2.5 k（平滑曲线几乎不产生墨迹）
+  而 AA 帧随 bins 从 8.2 涨到 20.7 ms——单独一条 ink 腿看不见点数成本。
 
 改动落地后再跑一遍，预期变化写在 plan §「真机验收」。

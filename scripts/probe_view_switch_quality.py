@@ -26,7 +26,13 @@ Usage:
     .venv/bin/python scripts/probe_view_switch_quality.py ylim-order --json-out out.json
     .venv/bin/python scripts/probe_view_switch_quality.py stale-ink --json-out out.json
     .venv/bin/python scripts/probe_view_switch_quality.py analysis-frames --json-out out.json
+    .venv/bin/python scripts/probe_view_switch_quality.py analysis-calibrate --json-out out.json
     .venv/bin/python scripts/probe_view_switch_quality.py spectrum-switch --json-out out.json
+
+``analysis-calibrate`` is the one subcommand that is not a spec §1 baseline
+reproduction: it is the calibration sweep behind spec §5's three analysis-canvas
+ink-band rows (plan Task 4). ``analysis-frames`` stays as the untouched §1.4
+baseline.
 """
 
 from __future__ import annotations
@@ -881,6 +887,643 @@ def cmd_analysis_frames(_args):
 
 
 # --------------------------------------------------------------------------
+# analysis-calibrate : real-machine calibration of the analysis-canvas ink
+# bands (spec §5 rows "谱行 _SPECTRUM_INK_AA_ON/OFF", "FRF 三行 ink 带",
+# "预览行 ink 带"; plan Task 4).
+#
+# ``analysis-frames`` above is the *baseline* reproduction of spec §1.4 and is
+# deliberately left untouched. This subcommand is the calibration sweep: three
+# groups (spectrum row / time-preview row / FRF three rows), each swept across
+# configurations that vary vertical ink while everything else stays fixed,
+# each configuration measured over >=2 passes, and each group reduced to a
+# least-squares ink -> AA-frame-ms line. The band then falls out of the fit:
+#
+#     OFF = ink where the fit crosses _BACKSTOP_STEADY_AA_MS (250 ms)
+#     ON  = OFF * 2/3      (same ratio as the time-domain 200k/300k band)
+#
+# both rounded to 5k dev-px. AA is forced on/off explicitly per measurement
+# rather than left to the product's point-count gate, so the numbers describe
+# canvas physics, not today's gate.
+#
+# Real machine only -- these are Cocoa paint timings.
+# --------------------------------------------------------------------------
+
+_CALIB_TARGET_MS = 250.0          # = quality._BACKSTOP_STEADY_AA_MS
+_CALIB_ON_RATIO = 2.0 / 3.0       # = _INK_AA_ON / _INK_AA_OFF (200k / 300k)
+_CALIB_UNSTABLE_SPREAD = 0.30     # (max-min)/median across passes
+_CALIB_MIN_PASSES = 2
+_CALIB_MAX_PASSES = 4
+# Points slower than this are outside the region the band has to get right;
+# a second fit restricted to them exposes a two-regime curve (spec §1.4's
+# 7 baseline points already hint at one: ~1.4 ms/k below 212k, ~3.3 above).
+_CALIB_NEAR_TARGET_MS = 600.0
+
+
+def _calib_loadavg():
+    import os
+
+    try:
+        return [round(float(v), 2) for v in os.getloadavg()]
+    except (OSError, AttributeError):
+        return None
+
+
+def _calib_frames(canvas, viewport, n=3):
+    """Median of ``n`` forced, non-coalesced repaints; True if any looked missed."""
+    import numpy as np
+
+    values, suspect = [], False
+    for _ in range(n):
+        ms, miss = _timed_repaint(canvas, viewport, retries=1, floor_ms=0.5)
+        values.append(ms)
+        suspect = suspect or miss
+    return float(np.median(values)), suspect
+
+
+def _calib_spread(values):
+    import numpy as np
+
+    arr = [float(v) for v in values]
+    med = float(np.median(arr))
+    if med <= 0.0:
+        return med, 0.0
+    return med, (max(arr) - min(arr)) / med
+
+
+def _calib_case(label, run_pass, **meta):
+    """Run ``run_pass`` >=2 times, re-running while AA-frame spread is wide.
+
+    Another agent may be running an offscreen pytest suite on this machine, so
+    a single pass is not trustworthy: passes are repeated up to
+    ``_CALIB_MAX_PASSES`` while the AA-frame spread stays above 30%, and the
+    case is flagged ``unstable`` if it never settles.
+    """
+    import numpy as np
+
+    passes = []
+    while True:
+        passes.append(run_pass())
+        if len(passes) < _CALIB_MIN_PASSES:
+            continue
+        _med, spread = _calib_spread([p["aa_frame_ms"] for p in passes])
+        if spread <= _CALIB_UNSTABLE_SPREAD or len(passes) >= _CALIB_MAX_PASSES:
+            break
+    aa_ms, spread = _calib_spread([p["aa_frame_ms"] for p in passes])
+    off_ms = float(np.median([p["off_frame_ms"] for p in passes]))
+    ink = float(np.median([p["ink"] for p in passes]))
+    out = {
+        "label": label,
+        "ink": ink,
+        "aa_frame_ms": aa_ms,
+        "off_frame_ms": off_ms,
+        "aa_spread": spread,
+        "unstable": spread > _CALIB_UNSTABLE_SPREAD,
+        "n_passes": len(passes),
+        "suspect_frame": any(p.get("suspect") for p in passes),
+        "loadavg": _calib_loadavg(),
+        "passes": passes,
+    }
+    out.update(meta)
+    flag = " UNSTABLE" if out["unstable"] else ""
+    print(f"  {label:<28} ink={ink/1000:8.1f}k  AA帧={aa_ms:8.1f} ms  "
+          f"非AA={off_ms:7.1f} ms  passes={len(passes)} "
+          f"spread={spread*100:4.0f}%{flag}", flush=True)
+    return out
+
+
+def _calib_fit(cases, label, *, max_ms=None, min_ms=None, where=None):
+    """Least-squares ms = slope*ink + intercept over the given cases.
+
+    ``max_ms`` / ``min_ms`` / ``where`` restrict the sample: the band is read
+    off the whole set and off the near-target segment, while per-shape and
+    per-regime subsets are fitted separately as *diagnostics*. A single line
+    is only honest if those subsets agree — they do not for the spectrum row
+    (superlinear above ~350k ink) nor for FRF (the low-coherence split costs
+    far more per unit ink than a noisy phase), which is why the band is taken
+    from the most conservative candidate rather than from one global fit.
+    """
+    import numpy as np
+
+    pts = [c for c in cases
+           if (max_ms is None or c["aa_frame_ms"] <= max_ms)
+           and (min_ms is None or c["aa_frame_ms"] > min_ms)
+           and (where is None or where(c))]
+    if len(pts) < 2:
+        return None
+    xs = np.array([c["ink"] for c in pts], dtype=float)
+    ys = np.array([c["aa_frame_ms"] for c in pts], dtype=float)
+    if float(xs.max() - xs.min()) < 0.05 * float(xs.max()):
+        # Degenerate: this subset carries essentially no ink information, so
+        # any slope through it is an artefact of float noise. This is exactly
+        # the FRF "clean" family — same 2.5k ink at 1k/2k/4k bins while the
+        # frame still doubles, i.e. cost driven by point count, not ink. That
+        # is a genuine finding (it is why the product gate keeps a point-count
+        # leg AND'ed with the ink leg), but it is not a line.
+        return None
+    design = np.vstack([xs, np.ones_like(xs)]).T
+    (slope, intercept), *_ = np.linalg.lstsq(design, ys, rcond=None)
+    pred = slope * xs + intercept
+    ss_res = float(np.sum((ys - pred) ** 2))
+    ss_tot = float(np.sum((ys - ys.mean()) ** 2))
+    r2 = (1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+    ink_at_target = ((_CALIB_TARGET_MS - intercept) / slope) if slope > 0 else None
+    return {
+        "label": label,
+        "n_points": len(pts),
+        "max_ms_filter": max_ms,
+        "min_ms_filter": min_ms,
+        "ink_range": [float(xs.min()), float(xs.max())],
+        "slope_ms_per_k_dev_px": float(slope) * 1000.0,
+        "intercept_ms": float(intercept),
+        "r2": float(r2),
+        "ink_at_target_ms": (float(ink_at_target)
+                             if ink_at_target is not None else None),
+        "unstable_points": sum(1 for c in pts if c["unstable"]),
+    }
+
+
+def _calib_round5k(value):
+    return int(round(float(value) / 5000.0) * 5000)
+
+
+def _calib_band(fits):
+    """Pick the conservative (smallest) OFF across the supplied fits."""
+    usable = [f for f in fits
+              if f and f.get("ink_at_target_ms") and f["ink_at_target_ms"] > 0]
+    if not usable:
+        return None
+    chosen = min(usable, key=lambda f: f["ink_at_target_ms"])
+    off = _calib_round5k(chosen["ink_at_target_ms"])
+    on = _calib_round5k(off * _CALIB_ON_RATIO)
+    return {
+        "chosen_fit": chosen["label"],
+        "ink_at_target_ms_raw": chosen["ink_at_target_ms"],
+        "off": off,
+        "on": on,
+        "target_ms": _CALIB_TARGET_MS,
+    }
+
+
+def _calib_report_fits(title, fits, band, diagnostics=()):
+    def line(fit):
+        print(f"   {fit['label']:<26} n={fit['n_points']:<2} "
+              f"斜率={fit['slope_ms_per_k_dev_px']:7.3f} ms/k·dev-px  "
+              f"截距={fit['intercept_ms']:8.1f} ms  R²={fit['r2']:.4f}  "
+              f"250ms@ink={((fit['ink_at_target_ms'] or 0) / 1000):8.1f}k",
+              flush=True)
+
+    print(f"-- {title} 拟合（定带用）--")
+    for fit in fits:
+        if fit is not None:
+            line(fit)
+    if band:
+        print(f"   => 推荐 OFF={band['off']/1000:.0f}k  ON={band['on']/1000:.0f}k "
+              f"(取自 {band['chosen_fit']}，规则=候选中最保守/最小 OFF)",
+              flush=True)
+    usable_diag = [d for d in diagnostics if d is not None]
+    if usable_diag:
+        print(f"-- {title} 分段诊断（不参与定带，用于判断单线是否成立）--")
+        for fit in usable_diag:
+            line(fit)
+        slopes = [d["slope_ms_per_k_dev_px"] for d in usable_diag
+                  if d["slope_ms_per_k_dev_px"] > 0]
+        if len(slopes) >= 2:
+            print(f"   分段斜率跨度 {min(slopes):.3f} → {max(slopes):.3f} "
+                  f"({max(slopes)/min(slopes):.2f}×)"
+                  f"{'  ← 单条直线不成立' if max(slopes)/min(slopes) > 1.5 else ''}",
+                  flush=True)
+    print(flush=True)
+
+
+def _calib_open(canvas_cls, app, *, width=1400, height=900):
+    canvas = canvas_cls()
+    canvas.resize(width, height)
+    canvas.show(); canvas.raise_(); canvas.activateWindow()
+    exposed = _wait_window_exposed(app, canvas)
+    _settle(app, 400)
+    return canvas, canvas._glw.viewport(), exposed
+
+
+def _calib_row_geometry(view_box, app):
+    """``(y_span, row_height_px)`` for one plot row, after an autorange flush.
+
+    ``enableAutoRange`` is lazy (spec §3.4): reading ``viewRange()`` right
+    after a rebuild can still hand back the *previous* picture's Y window, so
+    the ink would be computed against the wrong span. Flush it first.
+    """
+    try:
+        view_box.updateAutoRange()
+    except (AttributeError, RuntimeError, TypeError):
+        pass
+    app.processEvents()
+    lo, hi = view_box.viewRange()[1]
+    return abs(float(hi) - float(lo)), float(view_box.sceneBoundingRect().height())
+
+
+# --- group 1: spectrum row -------------------------------------------------
+# Fixed 3 curves / ~1365 drawn points each (peak-hold output), only the
+# peak-to-floor ratio varies -> only the vertical ink varies. Same synthetic
+# construction as _analysis_frames_spectrum_cases so the points line up with
+# the spec §1.4 baseline table.
+_CALIB_SPECTRUM_RATIOS = (None, 50.0, 20.0, 10.0, 5.0, 2.0, 1.0)
+_CALIB_SPECTRUM_PEAK = 200.0
+
+
+def _calib_spectrum(app):
+    import numpy as np
+
+    from mf4_analyzer.render_profile import envelope_ink_dev_px
+    from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+
+    canvas, viewport, exposed = _calib_open(PgLineCanvas, app)
+    dpr = float(canvas._glw.devicePixelRatioF())
+    rng = np.random.default_rng(7)
+    freq = np.linspace(0.0, 2000.0, 65536)
+    t = np.linspace(0.0, 10.0, 40000)
+    noise = np.abs(rng.standard_normal(65536))
+    peak = _CALIB_SPECTRUM_PEAK * np.exp(-((freq - 300.0) ** 2) / 40.0)
+    n_curves = 3
+
+    print(f"== 组 1 谱行：3 曲线 / 绘点固定，只改峰底比 (dpr={dpr}) ==", flush=True)
+
+    def make_pass(gain):
+        def run():
+            entries = [{
+                "label": f"电机转速 {i}", "color": COLORS[i % len(COLORS)],
+                "freq": freq, "amp": noise * (1 + 0.1 * i) + peak * gain,
+                "time": t, "signal": 40.0 * np.sin(2 * np.pi * (3 + i) * t),
+            } for i in range(n_curves)]
+            canvas._aa_on = True
+            canvas.plot_spectra(entries, xlim=(0.0, 2000.0),
+                                amp_label="Amplitude", title="标定")
+            app.processEvents()
+            _settle(app, 80)
+            y_span, row_h = _calib_row_geometry(canvas._plot_amp.vb, app)
+            ink = sum(envelope_ink_dev_px(cv.getData()[1], y_span=y_span,
+                                          row_height_px=row_h, dpr=dpr)
+                      for cv in canvas._amp_curves)
+            pts = sum(len(cv.getData()[0]) for cv in canvas._amp_curves)
+            point_gate = all(bool(cv.opts.get("antialias"))
+                             for cv in canvas._amp_curves)
+            # The preview row below is held AA-off throughout (its own point
+            # gate blocks it at 3 x 40k sources anyway), so it contributes a
+            # constant, non-AA cost that the fit's intercept absorbs.
+            for cv in canvas._time_curves:
+                canvas._set_curve_aa(cv, False)
+            for cv in canvas._amp_curves:
+                canvas._set_curve_aa(cv, True)
+            app.processEvents()
+            aa_ms, aa_miss = _calib_frames(canvas, viewport)
+            for cv in canvas._amp_curves:
+                canvas._set_curve_aa(cv, False)
+            app.processEvents()
+            off_ms, off_miss = _calib_frames(canvas, viewport)
+            return {"ink": float(ink), "aa_frame_ms": aa_ms,
+                    "off_frame_ms": off_ms, "drawn_points": int(pts),
+                    "y_span": float(y_span), "row_height_px": float(row_h),
+                    "point_gate_allows_aa": bool(point_gate),
+                    "suspect": bool(aa_miss or off_miss)}
+        return run
+
+    cases = []
+    for ratio in _CALIB_SPECTRUM_RATIOS:
+        if ratio is None:
+            gain, label = 0.0, "纯噪声底 (无峰)"
+        else:
+            gain, label = ratio / _CALIB_SPECTRUM_PEAK, f"峰/底={ratio:g}"
+        cases.append(_calib_case(label, make_pass(gain),
+                                 peak_to_floor=ratio, gain=gain,
+                                 n_curves=n_curves))
+
+    canvas.close(); app.processEvents()
+    fits = [_calib_fit(cases, "全部点"),
+            _calib_fit(cases, f"≤{_CALIB_NEAR_TARGET_MS:.0f}ms 近目标段",
+                       max_ms=_CALIB_NEAR_TARGET_MS)]
+    diagnostics = [_calib_fit(cases, f">{_CALIB_NEAR_TARGET_MS:.0f}ms 高墨段",
+                              min_ms=_CALIB_NEAR_TARGET_MS)]
+    band = _calib_band(fits)
+    _calib_report_fits("组 1 谱行", fits, band, diagnostics)
+    return {"exposed": exposed, "dpr": dpr, "n_curves": n_curves,
+            "cases": cases, "fits": [f for f in fits if f],
+            "diagnostic_fits": [f for f in diagnostics if f], "band": band}
+
+
+# --- group 2: time-preview row --------------------------------------------
+# The preview row is what plot_spectra's entries' time/signal build; measured
+# here through plot_time_preview(clear_spectrum=True) so the spectrum row
+# above is empty and the frame cost is the preview row's alone.
+_CALIB_PREVIEW_FREQS = (3.0, 5.0, 7.0, 11.0)
+_CALIB_PREVIEW_AMPS = (40.0, 25.0, 60.0, 15.0)
+_CALIB_PREVIEW_POINTS = 40_000
+
+
+def _calib_preview(app):
+    import numpy as np
+
+    from mf4_analyzer.render_profile import envelope_ink_dev_px
+    from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+    from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
+
+    canvas, viewport, exposed = _calib_open(PgLineCanvas, app)
+    dpr = float(canvas._glw.devicePixelRatioF())
+    t = np.linspace(0.0, 10.0, _CALIB_PREVIEW_POINTS)
+
+    print(f"== 组 2 时域预览行：2/3/4 条包络 × Y(默认 / 拉窄到填满) "
+          f"(时域带 ON={_INK_AA_ON/1000:.0f}k OFF={_INK_AA_OFF/1000:.0f}k) ==",
+          flush=True)
+
+    def make_pass(n_curves, y_mode):
+        def run():
+            entries = [{
+                "label": f"电机转速 {i}", "color": COLORS[i % len(COLORS)],
+                "time": t,
+                "signal": _CALIB_PREVIEW_AMPS[i] * np.sin(
+                    2 * np.pi * _CALIB_PREVIEW_FREQS[i] * t),
+            } for i in range(n_curves)]
+            canvas._aa_on = True
+            canvas.plot_time_preview(entries, title="时域预览",
+                                     clear_spectrum=True)
+            app.processEvents()
+            _settle(app, 80)
+            pairs = canvas._time_axis_pairs()
+            curves = list(canvas._time_curves)
+            if y_mode == "filled":
+                # Narrow each row's own Y window onto its trace (5% inside the
+                # data extents) so the envelope fills the row edge to edge.
+                for idx, curve in enumerate(curves):
+                    if idx >= len(pairs):
+                        break
+                    vb = pairs[idx][0]
+                    _xd, yd = curve.getData()
+                    arr = np.asarray(yd, dtype=float)
+                    arr = arr[np.isfinite(arr)]
+                    if arr.size < 2:
+                        continue
+                    lo, hi = float(arr.min()), float(arr.max())
+                    mid, half = (lo + hi) / 2.0, (hi - lo) / 2.0 * 0.95
+                    if half <= 0:
+                        continue
+                    try:
+                        vb.enableAutoRange(axis="y", enable=False)
+                        vb.setYRange(mid - half, mid + half, padding=0)
+                    except (AttributeError, RuntimeError, TypeError):
+                        continue
+                app.processEvents()
+            ink = 0.0
+            per_curve = []
+            for idx, curve in enumerate(curves):
+                if idx >= len(pairs):
+                    break
+                vb = pairs[idx][0]
+                if y_mode == "filled":
+                    lo, hi = vb.viewRange()[1]
+                    y_span = abs(float(hi) - float(lo))
+                    row_h = float(vb.sceneBoundingRect().height())
+                else:
+                    y_span, row_h = _calib_row_geometry(vb, app)
+                value = envelope_ink_dev_px(curve.getData()[1], y_span=y_span,
+                                            row_height_px=row_h, dpr=dpr)
+                ink += value
+                per_curve.append({"ink": float(value), "y_span": float(y_span),
+                                  "row_height_px": float(row_h)})
+            pts = sum(0 if c.getData()[0] is None else len(c.getData()[0])
+                      for c in curves)
+            point_gate = canvas._time_preview_aa_allowed()
+            for curve in curves:
+                canvas._set_curve_aa(curve, True)
+            app.processEvents()
+            aa_ms, aa_miss = _calib_frames(canvas, viewport)
+            for curve in curves:
+                canvas._set_curve_aa(curve, False)
+            app.processEvents()
+            off_ms, off_miss = _calib_frames(canvas, viewport)
+            return {"ink": float(ink), "aa_frame_ms": aa_ms,
+                    "off_frame_ms": off_ms, "drawn_points": int(pts),
+                    "per_curve": per_curve,
+                    "point_gate_allows_aa": bool(point_gate),
+                    "suspect": bool(aa_miss or off_miss)}
+        return run
+
+    cases = []
+    for n_curves in (2, 3, 4):
+        for y_mode, y_label in (("default", "Y默认"), ("filled", "Y拉窄填满")):
+            cases.append(_calib_case(
+                f"{n_curves} 条 · {y_label}", make_pass(n_curves, y_mode),
+                n_curves=n_curves, y_mode=y_mode))
+
+    canvas.close(); app.processEvents()
+    fits = [_calib_fit(cases, "全部点"),
+            _calib_fit(cases, f"≤{_CALIB_NEAR_TARGET_MS:.0f}ms 近目标段",
+                       max_ms=_CALIB_NEAR_TARGET_MS)]
+    diagnostics = [
+        _calib_fit(cases, "仅 Y默认",
+                   where=lambda c: c["y_mode"] == "default"),
+        _calib_fit(cases, "仅 Y拉窄填满",
+                   where=lambda c: c["y_mode"] == "filled"),
+    ]
+    band = _calib_band(fits)
+    _calib_report_fits("组 2 时域预览行", fits, band, diagnostics)
+
+    # Verdict vs the time-domain band: _INK_AA_OFF=300k is what 250 ms costs
+    # there, i.e. an implied 250/300 = 0.833 ms per 1000 dev-px.
+    implied = _CALIB_TARGET_MS / (_INK_AA_OFF / 1000.0)
+    ref_fit = next((f for f in fits if f), None)
+    verdict = None
+    if ref_fit and ref_fit["slope_ms_per_k_dev_px"] > 0:
+        ratio = ref_fit["slope_ms_per_k_dev_px"] / implied
+        reuse = 0.5 <= ratio <= 2.0
+        verdict = {
+            "timedomain_implied_slope_ms_per_k_dev_px": implied,
+            "preview_slope_ms_per_k_dev_px": ref_fit["slope_ms_per_k_dev_px"],
+            "slope_ratio": ratio,
+            "reuse_timedomain_band": bool(reuse),
+            "timedomain_band": {"on": int(_INK_AA_ON), "off": int(_INK_AA_OFF)},
+        }
+        print(f"   预览行斜率 {ref_fit['slope_ms_per_k_dev_px']:.3f} vs 时域隐含 "
+              f"{implied:.3f} ms/k·dev-px → 比值 {ratio:.2f}× "
+              f"→ {'复用 _INK_AA_ON/OFF' if reuse else '需单列一对常量'}\n",
+              flush=True)
+    return {"exposed": exposed, "dpr": dpr, "cases": cases,
+            "fits": [f for f in fits if f],
+            "diagnostic_fits": [f for f in diagnostics if f],
+            "band": band, "verdict": verdict}
+
+
+# --- group 3: FRF three rows ----------------------------------------------
+_CALIB_FRF_BINS = (1025, 2049, 4097)
+_CALIB_FRF_MODES = (("clean", "干净"), ("noisy_phase", "噪声相位"),
+                    ("noisy_coh", "噪声相干"))
+
+
+def _calib_frf_result(nbins, mode, rng):
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    f = np.linspace(0.0, 1000.0, nbins)
+    transfer = 1.0 / (1 - (f / 120.0) ** 2 + 1j * 0.05 * (f / 120.0))
+    coherence = 0.92 - 0.02 * (f / 1000.0)
+    if mode == "noisy_phase":
+        # Amplitude jitter +-60% and a randomly rotated phase: the phase row
+        # flips +-180 deg between neighbouring bins, which is the largest ink
+        # source this canvas family can produce.
+        transfer = (transfer * (1 + 0.6 * rng.standard_normal(nbins))
+                    * np.exp(1j * rng.standard_normal(nbins) * 1.5))
+    elif mode == "noisy_coh":
+        coherence = np.clip(rng.random(nbins), 0.0, 1.0)
+    return SimpleNamespace(
+        frequencies=f, transfer=transfer.astype(complex),
+        coherence=np.clip(coherence, 0.0, 1.0),
+        effective=SimpleNamespace(fs=2000.0, df=float(f[1] - f[0]), segments=8),
+        warnings=(),
+    )
+
+
+def _calib_frf(app):
+    import numpy as np
+
+    from mf4_analyzer.render_profile import envelope_ink_dev_px
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas, viewport, exposed = _calib_open(PgFrfCanvas, app)
+    dpr = float(canvas._glw.devicePixelRatioF())
+    print("== 组 3 FRF：bins × 构形，ink 对幅值/相位/相干三行求和 ==", flush=True)
+
+    def rows():
+        return (
+            ("magnitude", canvas._plot_magnitude,
+             (canvas._magnitude_curve, canvas._magnitude_low_curve)),
+            ("phase", canvas._plot_phase,
+             (canvas._phase_curve, canvas._phase_low_curve)),
+            ("coherence", canvas._plot_coherence, (canvas._coherence_curve,)),
+        )
+
+    def make_pass(nbins, mode):
+        def run():
+            rng = np.random.default_rng(3 + nbins)
+            canvas.set_result(_calib_frf_result(nbins, mode, rng),
+                              {"frequency_scale": "linear"}, {})
+            app.processEvents()
+            _settle(app, 80)
+            ink = 0.0
+            per_row = {}
+            for name, plot, curves in rows():
+                y_span, row_h = _calib_row_geometry(plot.vb, app)
+                row_ink = 0.0
+                for curve in curves:
+                    _xd, yd = curve.getData()
+                    if yd is None:
+                        continue
+                    row_ink += envelope_ink_dev_px(yd, y_span=y_span,
+                                                   row_height_px=row_h, dpr=dpr)
+                ink += row_ink
+                per_row[name] = {"ink": float(row_ink), "y_span": float(y_span),
+                                 "row_height_px": float(row_h)}
+            for _n, _p, curves in rows():
+                for curve in curves:
+                    canvas._set_curve_aa(curve, True)
+            app.processEvents()
+            aa_ms, aa_miss = _calib_frames(canvas, viewport)
+            for _n, _p, curves in rows():
+                for curve in curves:
+                    canvas._set_curve_aa(curve, False)
+            app.processEvents()
+            off_ms, off_miss = _calib_frames(canvas, viewport)
+            return {"ink": float(ink), "aa_frame_ms": aa_ms,
+                    "off_frame_ms": off_ms, "per_row": per_row,
+                    "suspect": bool(aa_miss or off_miss)}
+        return run
+
+    cases = []
+    for nbins in _CALIB_FRF_BINS:
+        for mode, mode_label in _CALIB_FRF_MODES:
+            cases.append(_calib_case(
+                f"{nbins} bins · {mode_label}", make_pass(nbins, mode),
+                n_bins=nbins, mode=mode))
+
+    canvas.close(); app.processEvents()
+    fits = [_calib_fit(cases, "全部点"),
+            _calib_fit(cases, f"≤{_CALIB_NEAR_TARGET_MS:.0f}ms 近目标段",
+                       max_ms=_CALIB_NEAR_TARGET_MS)]
+    # Per-shape diagnostics: the low-coherence split (NaN-broken sub-paths on
+    # the magnitude/phase rows plus a full-range coherence trace) and the
+    # noisy-phase shape do NOT share a slope, so the band must be driven by
+    # the more expensive one per unit ink.
+    diagnostics = [_calib_fit(cases, f"仅 {label}",
+                              where=lambda c, m=mode: c["mode"] == m)
+                   for mode, label in _CALIB_FRF_MODES]
+    band = _calib_band(fits)
+    _calib_report_fits("组 3 FRF 三行", fits, band, diagnostics)
+    # The clean family is dropped from the fits (near-constant ink) but is the
+    # clearest evidence that ink alone cannot carry this gate.
+    clean = [c for c in cases if c["mode"] == "clean"]
+    clean_note = None
+    if len(clean) >= 2:
+        clean_note = {
+            "ink_range": [min(c["ink"] for c in clean),
+                          max(c["ink"] for c in clean)],
+            "frames_ms": {c["n_bins"]: c["aa_frame_ms"] for c in clean},
+        }
+        spans = "/".join(f"{c['n_bins']}→{c['aa_frame_ms']:.1f}ms" for c in clean)
+        print(f"   干净构形：ink 恒为 ~{clean[0]['ink']/1000:.1f}k 而帧随 bins 涨"
+              f"（{spans}）→ ink 腿必须与点数腿 AND，不能单独定 AA\n", flush=True)
+    return {"exposed": exposed, "dpr": dpr, "cases": cases,
+            "fits": [f for f in fits if f],
+            "diagnostic_fits": [f for f in diagnostics if f],
+            "clean_family_note": clean_note, "band": band}
+
+
+def cmd_analysis_calibrate(_args):
+    import platform
+
+    app = _qapp()
+    print(f"platform={app.platformName()} os={platform.platform()} "
+          f"loadavg={_calib_loadavg()}", flush=True)
+    if app.platformName() == "offscreen":
+        print("!! offscreen 平台测不出 paint 成本，本次读数不得当作标定依据 "
+              "(CLAUDE.md Gotchas 验真机渲染)", flush=True)
+    spectrum = _calib_spectrum(app)
+    preview = _calib_preview(app)
+    frf = _calib_frf(app)
+
+    recommended = {
+        "spectrum_row": spectrum["band"],
+        "time_preview_row": {"band": preview["band"],
+                             "verdict": preview.get("verdict")},
+        "frf_rows": frf["band"],
+        "target_ms": _CALIB_TARGET_MS,
+        "on_over_off_ratio": _CALIB_ON_RATIO,
+    }
+    print("== 推荐常量（spec §5 回填用）==", flush=True)
+    if spectrum["band"]:
+        print(f"  _SPECTRUM_INK_AA_ON/OFF = "
+              f"{spectrum['band']['on']/1000:.0f}k / "
+              f"{spectrum['band']['off']/1000:.0f}k", flush=True)
+    verdict = preview.get("verdict") or {}
+    if verdict.get("reuse_timedomain_band"):
+        print(f"  预览行 = 复用 _INK_AA_ON/OFF (200k/300k)；实测斜率比 "
+              f"{verdict['slope_ratio']:.2f}× ≤ 2×", flush=True)
+    elif preview["band"]:
+        print(f"  预览行 = {preview['band']['on']/1000:.0f}k / "
+              f"{preview['band']['off']/1000:.0f}k（斜率比 "
+              f"{verdict.get('slope_ratio', float('nan')):.2f}× > 2×，单列）",
+              flush=True)
+    if frf["band"]:
+        print(f"  FRF 三行 ink 带 = {frf['band']['on']/1000:.0f}k / "
+              f"{frf['band']['off']/1000:.0f}k", flush=True)
+
+    return {
+        "command": "analysis-calibrate",
+        "environment": _environment(app, os_platform=platform.platform(),
+                                    loadavg=_calib_loadavg()),
+        "spectrum": spectrum,
+        "time_preview": preview,
+        "frf": frf,
+        "recommended": recommended,
+    }
+
+
+# --------------------------------------------------------------------------
 # spectrum-switch : PgLineCanvas.plot_spectra view-switch call cost, AA
 # synchronous-in-switch vs deferred (spec §1.4; was probes/probe_fft_view_switch.py)
 # --------------------------------------------------------------------------
@@ -998,6 +1641,7 @@ _HANDLERS = {
     "ylim-order": cmd_ylim_order,
     "stale-ink": cmd_stale_ink,
     "analysis-frames": cmd_analysis_frames,
+    "analysis-calibrate": cmd_analysis_calibrate,
     "spectrum-switch": cmd_spectrum_switch,
 }
 
@@ -1058,6 +1702,20 @@ def _arguments():
              "plus PgFrfCanvas AA/non-AA frame cost across bin counts (spec "
              "Sec 1.4). Real machine only; the 32k-bin noisy-phase FRF case "
              "takes several seconds for its single frame, not a hang.",
+    )
+    p.add_argument("--json-out", type=Path)
+
+    p = sub.add_parser(
+        "analysis-calibrate",
+        help="Calibration sweep for the analysis-canvas ink bands (spec Sec 5 "
+             "rows: spectrum row _SPECTRUM_INK_AA_ON/OFF, FRF three-row band, "
+             "time-preview band). Three groups -- spectrum row (3 curves, "
+             "peak/floor swept), time-preview row (2/3/4 envelopes x default "
+             "vs filled Y), FRF (1k/2k/4k bins x clean/noisy-phase/noisy-"
+             "coherence) -- each configuration measured over >=2 passes with "
+             "AA forced on and off, reduced to a least-squares ink->ms line, "
+             "and turned into OFF = ink at 250 ms (_BACKSTOP_STEADY_AA_MS), "
+             "ON = OFF * 2/3. Real machine only.",
     )
     p.add_argument("--json-out", type=Path)
 
