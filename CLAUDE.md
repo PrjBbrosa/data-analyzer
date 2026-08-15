@@ -17,51 +17,50 @@ Baseline · `mf4_analyzer/help/` 下使用说明（`meta.version`/`versionLabel`
 ```bash
 pip install -r requirements.txt   # 依赖；Windows 采集另见 requirements-windows-acquisition.txt
 python "MF4 Data Analyzer V1.py"  # 启动 GUI（薄启动器 → mf4_analyzer.app.main）
-TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest
+# 默认只跑聚焦用例；全量是例外，见下方「测试门禁」
+TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_x.py -q
 pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -m "not slow"）
 ```
 - 本机验证走仓库 venv（`.venv/bin/python`）；裸 `python` / `pytest` 未必存在。
 - Qt 用例需要 offscreen 平台；`TMPDIR=/tmp` 用来绕开下面 Gotchas 里的 TCC 问题。
-- 默认套件约 6400 条，主体约 7 分钟 + `tests/acquisition_ui` 约 15 秒（2026-08-11 本机实测；
-  早先记的「近 20 分钟」已不成立）。仍建议改动局部时先跑对应子目录，收尾再跑全量。
-- **全量要分两条命令跑**：裸 `pytest -q` 会在 `tests/acquisition_ui` 段被 pyqtgraph
-  `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成 **segfault**，
-  约 4% 处中断、无汇总。交错相关——单独跑该目录不崩。要拿全量数字：
-  `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
-- **动手前先记下当前失败数**，别把既有失败算到自己的改动头上。
-  当前基线（2026-08-12 实测，HEAD `56c42f4d`）：主体 **6048 passed / 11 skipped /
-  0 failed / 0 errors**，`tests/acquisition_ui` 单独 **355 passed**。
-  **不要把 6048/0 抄到 `cf530b92`**：`56c42f4d..cf530b92` 已有 8 条红（parity Y-tick
-  分叉、selection_signature QSS token、drawers 几何、hints 三条）；其中
-  characterization 一条被 `eab5600d` 重钉转绿。guideline-hardening 16-Task 批在
-  `eab5600d` 套件层面零新增失败。F1–F8 follow-up 收口（`guideline/followup-f1-f8`）：
-  主体 **6230 passed / 12 skipped / 0 failed**（跟踪树；未跟踪 UltraView 会让
-  `test_search_field` 扫到裸 `QLineEdit` 搜索框，不计入本批），
-  `tests/acquisition_ui` **359 passed**。详见
+
+## 测试门禁：默认聚焦，全量是例外
+与 `AGENTS.md` 的 Verification Gates 是**同一套规则**，只是换了表述——那边动了这套规则，
+这里要跟着动。
+- **验证范围是计划的一部分。** 每个 Task 要写清自己的 owner 用例 + 适用的边界护栏；
+  纯文档 Task 要说明为什么不需要跑运行时测试。**别在 Task 0 写「先跑全量拿基线」**，
+  也别因为动了一个 UI 文件就跑整个 `tests/ui`。
+- **改前基线 = 受影响的聚焦用例**，不是全量。先跑 owner 用例，再跑改动那层的机械护栏
+  （见下方「机械护栏」，每条都写了看守它的测试文件）。
+- **全量只在四种情况下跑**：发版/合并验收、跨边界大重构、专门排查顺序污染或 teardown
+  崩溃、**用户明确要求**。同一个稳定里程碑最多跑一次；已有同 `HEAD` 同工作区的权威结果
+  就复用，别重新发现同一批既有红。开跑前先 `pgrep -fl pytest` 看有没有别人在跑，
+  **同一个 checkout 里绝不并行两个全量**；多 agent / 多会话时由一个协调者独占全量门禁，
+  并行的执行者只跑自己的聚焦用例和边界护栏。
+- **全量结果只对稳定快照有效。** 跑前跑后各记一次 `HEAD` 与脏文件范围；期间相关文件被改过
+  （本仓库常有 Codex 会话并行动工作区，见 Gotchas），结论记 `UNVERIFIED`，不能当基线或验收。
+  中断、超时、崩溃的全量同样是 `UNVERIFIED`——**不能拿已跑完的部分推断「通过」**。
+- 真要跑全量：**两条命令、串行、前台**。裸 `pytest -q` 会在 `tests/acquisition_ui` 段被
+  pyqtgraph `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成
+  **segfault**，约 4% 处中断、无汇总；交错相关，单独跑该目录不崩。所以先
+  `--ignore=tests/acquisition_ui` 跑完主体，再单独跑该目录。别把两条并起来，
+  也别丢后台边跑边改文件。
+- **别把 pass 数抄进本文。** 主体已过 7000 条，2026-08-16 本机一次主体跑**超过 17 分钟
+  仍未结束**（早先记的「约 7 分钟」已不成立），跑起来会拖垮开发机——这就是它必须是例外的
+  原因。历史读数与既有红清单去这两处翻，别重新发明：
+  `docs/analyzer/reviews/2026-08-15-post-v8-batch-review.md` §6（完整顺序下的顺序污染清单，
+  单跑/子集跑全绿，待专项治理）与
   `docs/analyzer/plans/2026-08-13-guideline-hardening-followup-plan.md` §5。
-  2026-08-15 post-v8-review-fixes 合入后实测:主体 **6978 passed / 13 skipped /
-  9 failed**——9 条全部是完整顺序下的既有顺序污染(单跑/子集跑全绿,清单见
-  `docs/analyzer/reviews/2026-08-15-post-v8-batch-review.md` §6,待专项治理),
-  `tests/acquisition_ui` **359 passed**。
-  2026-08-15 `feat/view-switch-quality-settlement`(基于 `380e5ac2`)实测:主体
-  **7046 passed / 24 skipped / 11 failed**——9 条同上顺序污染 + 2 条 `380e5ac2`
-  干净树上就红的 `test_qss_palette_ratchet` / `test_qss_selector_liveness`(那次
-  ultraview 提交引入,非本分支);`tests/acquisition_ui` **359 passed**。
-  主体一条命令在 `f85b5d4e`..`56c42f4d` 期间还有**另一处**交错 segfault
-  （channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层 widget），已由
-  `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放
-  + collect」修复——**别删那段 pin 逻辑**，机制、实验与引入提交见
-  `docs/analyzer/reviews/2026-08-11-channel-tree-paint-segfault-triage.md` §6。
-  期间曾出现过的 Batch 2 failed + 8 errors（几何契约漏同步 + `BatchSheet`
-  lambda/属性回调导致的僵尸 wrapper teardown 簇）已随上述修复清零，定性与引入点
-  见同一文档 §4.2/§4.3——别从旧版验收文档把「单独进程运行通过」的说法抄回来，
-  teardown 簇里 4-5 条单跑也确定性复现。
-  唯一环境性风险是 `tests/test_gen_help_screenshots.py`：它依赖未入库的本机 `testdoc/`
-  样本目录，本机有样本所以通过，新克隆会红，那不是代码问题。
-  本文先前记录的三条「历史既有红」已全部转绿并从本文删除（别从旧版抄回；其中
-  `test_hint_nudges` 那条连用例名都改了）。渲染 parity 那次的定性过程留在
-  `tools/verify_batch_qt_render_parity.py` 的注释与该文件的守卫用例里。
-  跑 `tools/verify_batch_qt_render_parity.py` **必须带 `--output-dir` 指向临时目录**，
+  **见红先确认是不是这批既有红，别算到自己头上。**
+- `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放 + collect」
+  修的是另一处交错 segfault（channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层
+  widget）——**别删那段 pin 逻辑**，机制与实验见
+  `docs/analyzer/reviews/2026-08-11-channel-tree-paint-segfault-triage.md` §6；同文档
+  §4.2/§4.3 记着 `BatchSheet` 僵尸 wrapper teardown 簇的定性——别从旧验收文档把
+  「单独进程运行通过」抄回来，那批 4-5 条单跑也确定性复现。
+- `tests/test_gen_help_screenshots.py` 依赖未入库的本机 `testdoc/` 样本目录：本机有样本所以
+  过，新克隆会红，那不是代码问题。
+- 跑 `tools/verify_batch_qt_render_parity.py` **必须带 `--output-dir` 指向临时目录**，
   否则会写脏 `docs/superpowers/verify/batch-qt-render/` 的已跟踪证据。
 
 ## Architecture
