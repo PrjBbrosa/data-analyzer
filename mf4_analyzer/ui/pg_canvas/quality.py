@@ -84,6 +84,54 @@ _BACKSTOP_STEADY_AA_MS = 250.0
 _BACKSTOP_STEADY_EMA_ALPHA = 0.5
 _BACKSTOP_BLACKLIST_MAX = 32
 
+# ---------------------------------------------------------------------------
+# DISCRETE-RENDER SETTLEMENT (spec
+# docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md
+# §3.2 / §5).
+#
+# The backstop above turns the latch's blacklist into NEGATIVE memory: a
+# geometry whose AA frame measured unaffordable never pays it twice. These two
+# constants are the POSITIVE half. A View switch is a discrete event — one
+# rebuild, no follow-up input — so the 150 ms quiet window that exists to merge
+# the frames of a continuous drag is, here, pure latency followed by a visible
+# 锯齿→平滑 swap. When the latch has actually MEASURED this geometry's first AA
+# frame and it was cheap, there is nothing to wait for: enable AA during the
+# settlement so the first frame the user sees after the switch is already the
+# antialiased one.
+#
+#   * _SYNC_AA_MAX_MS is the measured first-frame cost we are willing to pay
+#     synchronously inside the switch. 50 ms of added latency sits below the
+#     ~100 ms "instant" threshold and far below the accepted
+#     warm_checkbox_paint_p95 = 220 ms. The 2026-08-15 Cocoa probe run is what
+#     sets it: typical Views measured 8-13 ms first frames (they hit and go
+#     synchronous) while the smooth 1M control measured 474 ms (it misses and
+#     takes the deferred path) — that is exactly the split intended.
+#
+#     Note it is compared against the FIRST frame, not the steady EMA. A View
+#     switch rebuilds the curve items and disable_interactive_quality() has
+#     just cleared the DeviceCoordinateCache, so the frame right after a
+#     switch ALWAYS pays cache construction; the 2026-08-08 measurement of the
+#     smooth control (first 474 ms vs steady 240 ms) is how big that gap gets.
+#     Comparing against the steady number would systematically under-predict
+#     the only frame this decision is about.
+#
+#   * _AA_MEMO_MAX bounds the memo the same way _BACKSTOP_BLACKLIST_MAX bounds
+#     the blacklist — and is defined AS it, because they bound two answers
+#     about the same population of view signatures. One number, not two to
+#     keep in sync. AaFrameLatch applies this single cap to both containers.
+#
+# Both are CALIBRATIONS, not knobs: change spec §5 first, then re-measure on
+# real hardware with `scripts/probe_view_switch_quality.py time-canvas` (an
+# offscreen suite cannot measure paint cost — CLAUDE.md Gotchas).
+# ---------------------------------------------------------------------------
+_SYNC_AA_MAX_MS = 50.0
+_AA_MEMO_MAX = _BACKSTOP_BLACKLIST_MAX
+
+# "argument not supplied" for _aa_memo_key. Distinct from None, which is a
+# REAL signature value meaning "this canvas has no opinion" and must key to no
+# memo rather than trigger a recompute.
+_MEMO_KEY_UNSET = object()
+
 # Qt dynamic property carrying the AA epoch a queued trip was raised for.
 # Mirrors dense_raster's timer_generation_property discipline.
 _BACKSTOP_EPOCH_PROPERTY = "tracelabAaBackstopEpoch"
@@ -202,6 +250,7 @@ class QualityManager(_CanvasBackref):
         "aa_frame_ema",
         "aa_on",
         "backstop_timer",
+        "discrete_timer",
         "latch",
         "density_allowed",
         "density_seeded",
@@ -238,6 +287,17 @@ class QualityManager(_CanvasBackref):
         self.timer.setSingleShot(True)
         self.timer.setInterval(150)
         self.timer.timeout.connect(self.try_enable_idle_quality)
+        # A SEPARATE zero-delay timer for discrete renders (spec §3.2), not
+        # ``self.timer.start(0)``: QTimer.start(int) permanently rewrites the
+        # interval, so reusing the idle timer would turn every later,
+        # argument-less schedule_idle_quality() into a zero-delay one and
+        # delete the 150 ms interaction quiet window — silently, with nothing
+        # in the interactive path to notice. tests/ui/
+        # test_pg_timedomain_canvas.py::TestDiscreteSettle pins interval()==150.
+        self.discrete_timer = QTimer(canvas)
+        self.discrete_timer.setSingleShot(True)
+        self.discrete_timer.setInterval(0)
+        self.discrete_timer.timeout.connect(self.try_enable_idle_quality)
         self.density_allowed = False
         self.density_seeded = False
         # Ink-sum hysteresis state (spec §4.2), mirrors density_allowed /
@@ -253,7 +313,9 @@ class QualityManager(_CanvasBackref):
         # which is what lets a queued trip tell "the session I measured" from
         # "some later session". Its blacklist holds the view signatures whose
         # AA frames measured unaffordable (LRU, newest at the right); its memo
-        # holds what a cheap view's first AA frame actually cost.
+        # holds what a cheap view's first AA frame actually cost. The single
+        # LRU cap bounds BOTH containers — _AA_MEMO_MAX is defined as
+        # _BACKSTOP_BLACKLIST_MAX precisely so there is one number here.
         self.latch = AaFrameLatch(
             _BACKSTOP_FIRST_AA_MS,
             _BACKSTOP_STEADY_AA_MS,
@@ -331,7 +393,11 @@ class QualityManager(_CanvasBackref):
     def reset_for_rebuild(self):
         """Reset idle-AA runtime state after the curve set is rebuilt."""
         try:
+            # Both idle-AA arming paths: a discrete settlement armed for the
+            # geometry that just went away must not fire onto the new one
+            # without the restore transaction having run.
             self.timer.stop()
+            self.discrete_timer.stop()
         except Exception:
             pass
         try:
@@ -619,9 +685,53 @@ class QualityManager(_CanvasBackref):
             return False
         return latch.blocked(self._view_signature())
 
+    def _aa_memo_key(self, signature=_MEMO_KEY_UNSET):
+        """Key the measured FIRST-frame cost under view identity PLUS dpr.
+
+        ``_view_signature()`` is the 2026-08-08 §4.4 four-input identity and is
+        deliberately left alone — it answers "can this view afford AA", a
+        question about the drawing. The memo answers the narrower "how many ms
+        did that frame actually take HERE", and the device pixel ratio is a
+        first-order factor in that answer: dragging the window from a Retina
+        panel to an external one quadruples the rasterized area without moving
+        a single signature input. A dpr-blind memo would hand the expensive
+        display a "cheap, enable AA synchronously" verdict measured on the
+        other one (spec §1.5 / §3.2).
+
+        Rounded to two decimals so a scale-factor query returning
+        2.0000000001 is not a different View. ``None`` propagates from a canvas
+        with no opinion (no primary axis, nothing visible) and is inert
+        everywhere: it never hits and never records.
+
+        ``signature`` may be passed by a caller that already built one, so the
+        two identities are provably the same walk rather than two walks that
+        merely ought to agree.
+        """
+        if signature is _MEMO_KEY_UNSET:
+            signature = self._view_signature()
+        if signature is None:
+            return None
+        try:
+            dpr = round(float(self._glw.devicePixelRatioF()), 2)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            # A canvas that cannot report its scale still gets a memo, under
+            # the 1.0 key every unscaled display uses. Returning None here
+            # would silently switch the positive memory OFF instead of making
+            # it one notch coarser, and the backstop still covers being wrong.
+            logger.warning(
+                "device pixel ratio unavailable for AA memo key; assuming 1.0",
+                exc_info=True,
+            )
+            dpr = 1.0
+        return (signature, dpr)
+
     def _open_aa_backstop_epoch(self):
         """Arm measurement for the AA session that just started."""
-        self.latch.open(self._view_signature())
+        # The memo key travels with the session so the latch can record the
+        # first frame's cost at the geometry it was measured on — the write
+        # itself happens inside note_frame, on the paint path, allocation-free.
+        signature = self._view_signature()
+        self.latch.open(signature, memo_key=self._aa_memo_key(signature))
         self._aa_backstop_armed = True
 
     def _close_aa_backstop_epoch(self):
@@ -705,8 +815,13 @@ class QualityManager(_CanvasBackref):
             self._close_aa_backstop_epoch()
         timer_was_active = False
         try:
-            timer_was_active = self.timer.isActive()
+            # Either armed path counts as "an idle upgrade was pending": the
+            # discrete settlement is the same upgrade on a shorter fuse.
+            timer_was_active = (
+                self.timer.isActive() or self.discrete_timer.isActive()
+            )
             self.timer.stop()
+            self.discrete_timer.stop()
         except Exception:
             pass
         if not self.aa_on:
@@ -735,6 +850,54 @@ class QualityManager(_CanvasBackref):
             self.timer.start()
         except Exception:
             pass
+        self._emit_quality_status_changed()
+
+    def settle_after_discrete_render(self):
+        """Settle quality for a DISCRETE render, without the 150 ms window.
+
+        Called at the end of a View-restore transaction
+        (``canvas.settle_view_restore``), after the final geometry has landed
+        and been flushed. Spec 2026-08-15 §3.2, defect B.
+
+        ``schedule_idle_quality``'s 150 ms window is there to merge the frames
+        of a CONTINUOUS interaction — a drag, a wheel burst — where more input
+        is likely within the window. A View switch has no follow-up input, so
+        the same 150 ms are pure latency plus one visible 锯齿→平滑 swap. The
+        four branches below say what to do instead; note that none of them
+        touch a GATE. Whether AA is allowed is still ``_idle_quality_allowed``
+        alone. All this decides is WHEN that question gets asked.
+        """
+        if self._idle_quality_locally_busy():
+            # Switching Views mid-drag (Alt+N while panning) is not a discrete
+            # event after all — hand it back to the interactive path, which
+            # keeps re-polling until the drag ends.
+            self.schedule_idle_quality()
+            return
+        if self._aa_backstop_blocked():
+            # This geometry already paid its one bad frame. Arming either
+            # timer would only spend a decision on a foregone conclusion; the
+            # status emit keeps the quality dot from claiming "waiting".
+            self.timer.stop()
+            self.discrete_timer.stop()
+            self._emit_quality_status_changed()
+            return
+        memo_ms = self.latch.memo_lookup(self._aa_memo_key())
+        if memo_ms is not None and memo_ms <= _SYNC_AA_MAX_MS:
+            # MEASURED cheap here before: enable AA now so the first frame
+            # painted after the switch is already antialiased. The gates still
+            # run inside try_enable_idle_quality, and the paint timer still
+            # measures the frame this schedules, so a memo gone stale costs one
+            # frame and then trips exactly like a first visit would.
+            self.timer.stop()
+            self.discrete_timer.stop()
+            self.try_enable_idle_quality()
+            return
+        # Unknown, or known and too expensive to hold up the switch: decide on
+        # the next event-loop turn rather than in 150 ms. Whether that turn
+        # beats the first paint is not guaranteed and does not need to be —
+        # losing the race is today's behaviour, only sooner (spec §7).
+        self.timer.stop()
+        self.discrete_timer.start()
         self._emit_quality_status_changed()
 
     def reconcile_backend_quality(self):

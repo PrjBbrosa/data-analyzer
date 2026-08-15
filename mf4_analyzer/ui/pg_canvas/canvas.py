@@ -2152,12 +2152,7 @@ class TimeDomainCanvasPG(QWidget):
             self._flush_pending_refresh()
         if self._dense_raster.has_dense_candidates():
             self._dense_raster.schedule_rebuild("view-restored", delay_ms=0)
-        # Placeholder: Task 3 of the view-switch settlement plan replaces this
-        # with self._quality.settle_after_discrete_render(), which drops the
-        # 150 ms interaction quiet window for this discrete event. Until then
-        # a View restore keeps today's timing, just decided on the right
-        # geometry.
-        self._quality.schedule_idle_quality()
+        self._quality.settle_after_discrete_render()
 
     def get_visible_ylims(self):
         """Return per-channel visible Y ranges keyed for ViewState storage."""
