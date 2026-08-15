@@ -6,11 +6,16 @@ from PyQt5.QtGui import QWheelEvent
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
+from mf4_analyzer.ui.pg_canvas import quality
+from mf4_analyzer.ui.pg_canvas.canvas import _AA_OVERLAY_SEGMENT_ON
 from mf4_analyzer.ui.pg_canvas.line_canvas import (
     PgLineCanvas,
     _SPECTRUM_AA_SEGMENT_OFF,
     _SPECTRUM_AA_SEGMENT_ON,
+    _SPECTRUM_INK_AA_OFF,
+    _SPECTRUM_INK_AA_ON,
 )
+from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
 from mf4_analyzer.ui.pg_canvas.ticks_math import _adjacent_nice_step
 
 
@@ -155,6 +160,18 @@ def canvas(qapp):
     c.resize(640, 480)
     yield c
     c.deleteLater()
+
+
+def _settle_discrete_aa(canvas, qapp):
+    """Turn the event loop until the discrete AA settlement has landed.
+
+    Spec 2026-08-15 §3.4: a plot call no longer paints an AA frame inside
+    itself — it arms a 0 ms single-shot and the budgets are evaluated on the
+    next event-loop turn. Tests that used to read AA state straight off the
+    return therefore have to give that turn back.
+    """
+    qapp.processEvents()
+    assert canvas._discrete_aa_timer.isActive() is False
 
 
 def _entry(label='f1 · vib', color='#2563eb'):
@@ -706,7 +723,7 @@ def test_grab_pixmap_not_null(canvas):
     assert pm.width() > 0 and pm.height() > 0
 
 
-def test_fft_amp_curves_stay_antialiased_when_light(canvas):
+def test_fft_amp_curves_stay_antialiased_when_light(canvas, qapp):
     # The FFT amplitude overlay has its own combined drawn-point density
     # budget (ON=5000/OFF=8000).  A small two-curve overlay stays crisp.  The
     # time-preview (bottom) row remains governed separately by its shared
@@ -720,6 +737,9 @@ def test_fft_amp_curves_stay_antialiased_when_light(canvas):
         y_min=0.0,
         y_max=0.0,
     )
+    # AA now lands on the discrete settle, not inside the plot call (spec
+    # 2026-08-15 §3.4). The assertion is unchanged; only WHEN it holds is.
+    _settle_discrete_aa(canvas, qapp)
     assert canvas._amp_curves
     assert all(c.opts.get('antialias') is True for c in canvas._amp_curves)
     # Each _entry() time trace is ~1000 pts, so this two-source preview sums to
@@ -764,12 +784,13 @@ def test_fft_dense_spectrum_uses_peak_hold_not_minmax_ribbon(canvas):
     assert float(np.min(finite)) >= 0.99
 
 
-def test_fft_screenshot_scale_spectrum_stays_antialiased(canvas):
+def test_fft_screenshot_scale_spectrum_stays_antialiased(canvas, qapp):
     """Peak-hold keeps a screenshot-width dual FFT overlay AA-on."""
     canvas.plot_spectra(
         _dense_spectrum_entries(), xlim=(0.0, 12_000.0),
         amp_label='Amplitude', title='FFT',
     )
+    _settle_discrete_aa(canvas, qapp)
 
     total = canvas._spectrum_drawn_point_total()
     assert total is not None
@@ -798,6 +819,7 @@ def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
         xlim=(0.0, 500.0), amp_label='Amplitude', title='FFT',
         y_auto=True, y_min=0.0, y_max=0.0,
     )
+    _settle_discrete_aa(canvas, qapp)
     assert len(canvas._amp_curves) == 2
     # A fresh plot leaves the spectrum crisp (programmatic range, not a drag).
     assert all(c.opts.get('antialias') is True for c in canvas._amp_curves)
@@ -858,6 +880,10 @@ def test_fft_quality_status_traffic_light_tracks_aa_state(canvas, qapp):
         xlim=(0.0, 500.0), amp_label='Amplitude', title='FFT',
         y_auto=True, y_min=0.0, y_max=0.0,
     )
+    # The plot call itself only ARMS the settle, so the dot is yellow
+    # ("waiting") until the event loop turns — spec 2026-08-15 §3.4.
+    assert canvas.quality_status()["state"] == "yellow"
+    _settle_discrete_aa(canvas, qapp)
     # Fresh crisp spectrum → green, and the render emitted the change.
     assert canvas.quality_status()["state"] == "green"
     assert emissions and emissions[-1]["state"] == "green"
@@ -880,7 +906,7 @@ def test_fft_quality_status_traffic_light_tracks_aa_state(canvas, qapp):
     assert emissions[-1]["state"] == "green"
 
 
-def test_fft_ctrl_wheel_zoom_drops_curve_aa(canvas):
+def test_fft_ctrl_wheel_zoom_drops_curve_aa(canvas, qapp):
     """The custom ctrl/shift wheel zoom sets the range programmatically (no
     sigRangeChangedManually), so it must drop AA explicitly via the wheel
     dispatch hook the same way a drag does."""
@@ -889,6 +915,7 @@ def test_fft_ctrl_wheel_zoom_drops_curve_aa(canvas):
         xlim=(0.0, 500.0), amp_label='Amplitude', title='FFT',
         y_auto=True, y_min=0.0, y_max=0.0,
     )
+    _settle_discrete_aa(canvas, qapp)
     assert all(c.opts.get('antialias') is True for c in canvas._amp_curves)
     consumed = canvas._handle_wheel_dispatch(
         delta=120, modifiers=Qt.ControlModifier, x_pos=250.0, y_pos=0.5,
@@ -2294,7 +2321,7 @@ def test_time_preview_empty_arrays_render_no_curve(canvas):
     assert len(canvas._time_curves) == 0
 
 
-def test_time_preview_aa_follows_density_budget(canvas):
+def test_time_preview_aa_follows_density_budget(canvas, qapp):
     # AA is no longer a len>1 one-cut kill: it follows the overlay drawn-point
     # density budget (ON=5000/OFF=7000), mirroring TimeDomainCanvasPG. A single
     # channel is always crisp; a LIGHT multi-source overlay stays AA-ON; a HEAVY
@@ -2302,16 +2329,19 @@ def test_time_preview_aa_follows_density_budget(canvas):
     # (n <= 2*fallback_pixel_width=4000) so its point count is deterministic.
     e1 = _entry('a', '#2563eb')
     canvas.plot_time_preview([e1], title='时域预览')
+    _settle_discrete_aa(canvas, qapp)
     assert canvas._time_curves[0].opts.get('antialias') is True
 
     # Light overlay: 2 traces × ~1000 pts ≈ 2000 < ON → stays AA-ON.
     e2 = _entry('b', '#dc2626')
     canvas.plot_time_preview([e1, e2], title='时域预览')
+    _settle_discrete_aa(canvas, qapp)
     assert all(c.opts.get('antialias') is True for c in canvas._time_curves)
 
     # Heavy overlay: 2 traces × 4000 pts = 8000 > OFF → drops AA.
     heavy = _time_only_entries(4000, 2)
     canvas.plot_time_preview(heavy, title='时域预览')
+    _settle_discrete_aa(canvas, qapp)
     total = sum(len(c.getData()[0]) for c in canvas._time_curves)
     assert total > 7000, f"heavy setup must exceed OFF budget, got {total}"
     assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
@@ -3240,18 +3270,20 @@ def _aa_flags(canvas):
     return [bool(c.opts.get("antialias", False)) for c in canvas._time_curves]
 
 
-def test_time_preview_low_density_multi_overlay_keeps_aa_on(canvas):
+def test_time_preview_low_density_multi_overlay_keeps_aa_on(canvas, qapp):
     # 3 light traces, total points 3000 < ON(5000): the new budget keeps AA
     # ON even though >1 source is overlaid. Old `len(entries)<=1` set False.
     canvas.plot_time_preview(_time_only_entries(1000, 3))
+    _settle_discrete_aa(canvas, qapp)
     assert len(canvas._time_curves) == 3
     flags = _aa_flags(canvas)
     assert all(flags), f"expected AA on for all light overlaid curves, got {flags}"
 
 
-def test_time_preview_high_density_multi_overlay_drops_aa(canvas):
+def test_time_preview_high_density_multi_overlay_drops_aa(canvas, qapp):
     # 3 heavy traces, total points 12000 > OFF(7000): budget gates AA OFF.
     canvas.plot_time_preview(_time_only_entries(4000, 3))
+    _settle_discrete_aa(canvas, qapp)
     assert len(canvas._time_curves) == 3
     # Sanity: each curve really carries ~4000 points (envelope passed through).
     total = sum(len(c.getData()[0]) for c in canvas._time_curves)
@@ -3260,9 +3292,10 @@ def test_time_preview_high_density_multi_overlay_drops_aa(canvas):
     assert not any(flags), f"expected AA off for dense overlay, got {flags}"
 
 
-def test_time_preview_single_entry_keeps_aa_on(canvas):
+def test_time_preview_single_entry_keeps_aa_on(canvas, qapp):
     # Single source must stay AA-on (no regression vs the old single-cut).
     canvas.plot_time_preview(_time_only_entries(4000, 1))
+    _settle_discrete_aa(canvas, qapp)
     assert len(canvas._time_curves) == 1
     assert _aa_flags(canvas) == [True]
 
@@ -3334,6 +3367,299 @@ def test_spectrum_density_quality_tooltip_uses_off_budget(canvas):
     assert status['state'] == 'red'
     total = canvas._spectrum_drawn_point_total()
     assert f'频谱叠加密度 {total} > {_SPECTRUM_AA_SEGMENT_OFF}' in status['tooltip']
+
+
+# ----------------------------------------------------------------------
+# Discrete AA settlement + ink gate + measured backstop
+# (spec docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md
+#  §3.4, defect C; plan Task 5).
+#
+# Three separate claims, one per group below:
+#   1. A plot call no longer PAINTS an AA frame. It arms a 0 ms settle and
+#      returns; the interactive path's 150 ms quiet window is untouched.
+#   2. The point budget alone cannot price this canvas. Peak-hold pins the
+#      spectrum near one drawn point per pixel, so the same 4000 points are a
+#      71 ms peak or a 1652 ms noise floor depending only on VERTICAL INK.
+#   3. Both budgets are predictions; the paint timer is the measurement that
+#      caps a wrong prediction at one bad frame per view signature.
+# ----------------------------------------------------------------------
+
+
+def _realized_canvas(qapp, width=1400, height=900):
+    """A shown, laid-out canvas — ink is meaningless without real geometry.
+
+    Offscreen still lays widgets out, so ViewBox height/width and the Y range
+    are real; what offscreen cannot do is MEASURE paint cost, which is why the
+    ink CONSTANTS are calibrated on hardware (spec §5) and these tests only
+    fence behaviour around them.
+    """
+    c = PgLineCanvas()
+    c.resize(width, height)
+    c.show()
+    qapp.processEvents()
+    return c
+
+
+def _noise_floor_entries(n_curves=3, n_bins=65_536, peak=False):
+    """Spectra with a FIXED drawn-point count and a controllable ink.
+
+    Deliberately identical in every respect the point budget can see: same bin
+    count, same xlim, same peak-hold decimation. Only the peak/floor ratio
+    changes, which is exactly the variable the 2026-08-15 calibration swept.
+    """
+    rng = np.random.default_rng(7)
+    freq = np.linspace(0.0, 2000.0, n_bins)
+    entries = []
+    for i in range(n_curves):
+        amp = np.abs(rng.standard_normal(n_bins))
+        if peak:
+            amp = amp + 200.0 * np.exp(-((freq - 300.0) ** 2) / 40.0)
+        entries.append({
+            'label': f'spec-{i}', 'color': '#2563eb',
+            'freq': freq, 'amp': amp,
+            'time': np.linspace(0.0, 1.0, 500),
+            'signal': np.sin(np.linspace(0.0, 10.0, 500)),
+        })
+    return entries
+
+
+def _full_scale_preview_entries(n_curves=2, n_points=2000, fill=True):
+    """Preview traces with a FIXED point count and a controllable ink.
+
+    ``n_points`` stays under build_envelope's pass-through shortcut so the
+    drawn-point sum is deterministic (and, at 2×2000, under the overlay point
+    budget's ON threshold) — whichever way ``fill`` goes, the POINT leg says
+    yes, so only the ink leg can explain a refusal.
+    """
+    t = np.linspace(0.0, 1.0, n_points)
+    if fill:
+        # Alternating ±1: every segment is a full-height vertical stroke.
+        signal = np.where(np.arange(n_points) % 2 == 0, -1.0, 1.0)
+    else:
+        signal = np.sin(2 * np.pi * 3.0 * t)
+    return [
+        {'label': f'prev-{i}', 'color': '#2563eb',
+         'freq': np.linspace(0.0, 50.0, 8), 'amp': np.ones(8),
+         'time': t, 'signal': signal}
+        for i in range(n_curves)
+    ]
+
+
+def test_plot_spectra_returns_with_aa_off_and_discrete_timer_armed(qapp):
+    """The switch call must not contain an AA frame (spec §1.4: 245 → ~25 ms).
+
+    Measured before this change: ``plot_spectra`` turned AA on synchronously,
+    so the caller waited out a 227 ms first AA frame for a spectrum the user
+    had not looked at yet.
+    """
+    c = _realized_canvas(qapp)
+    try:
+        c.plot_spectra(
+            _noise_floor_entries(n_curves=2, n_bins=4096, peak=True),
+            xlim=(0.0, 2000.0), amp_label='Amplitude', title='FFT')
+
+        assert c._amp_curves and c._time_curves
+        assert c._aa_on is False
+        assert all(not x.opts.get('antialias') for x in c._amp_curves)
+        assert all(not x.opts.get('antialias') for x in c._time_curves)
+        assert c._discrete_aa_timer.isActive() is True
+        # The Qt trap this design exists to avoid: QTimer.start(int) rewrites
+        # the interval permanently, so re-using the idle timer with start(0)
+        # would silently delete the interactive quiet window.
+        assert c._aa_idle_timer.interval() == 150
+        assert c._discrete_aa_timer.interval() == 0
+        assert c._discrete_aa_timer.isSingleShot() is True
+
+        # ...and the settle lands on the very next event-loop turn, not 150 ms
+        # later, so nothing is lost by moving it out of the call.
+        qapp.processEvents()
+        assert c._aa_on is True
+        assert all(x.opts.get('antialias') for x in c._amp_curves)
+    finally:
+        c.deleteLater()
+
+
+def test_spectrum_ink_gate_blocks_noise_floor_and_allows_peaks(qapp):
+    """Same drawn-point count, opposite verdicts — only ink can tell them apart."""
+    noisy = _realized_canvas(qapp)
+    try:
+        noisy.plot_spectra(_noise_floor_entries(), xlim=(0.0, 2000.0),
+                           amp_label='Amplitude', title='FFT')
+        qapp.processEvents()
+        vb = noisy._plot_amp.vb
+        vb.updateAutoRange()
+        # Guard the guard: with an unrealized row (height 0) ink collapses to
+        # 0 and this test would pass by measuring nothing at all.
+        assert vb.sceneBoundingRect().height() > 0
+        noise_points = noisy._spectrum_drawn_point_total()
+        noise_ink = noisy._spectrum_ink_total()
+        assert noise_ink > _SPECTRUM_INK_AA_OFF, noise_ink
+
+        assert noisy._aa_on is True
+        assert all(not x.opts.get('antialias') for x in noisy._amp_curves)
+        status = noisy.quality_status()
+        assert status['state'] == 'red'
+        assert status['block_reason'] == 'high-ink'
+        assert '谱线填满' in status['tooltip']
+    finally:
+        noisy.deleteLater()
+
+    peaky = _realized_canvas(qapp)
+    try:
+        peaky.plot_spectra(_noise_floor_entries(peak=True), xlim=(0.0, 2000.0),
+                           amp_label='Amplitude', title='FFT')
+        qapp.processEvents()
+        # Identical point budget, ink an order of magnitude lower.
+        assert peaky._spectrum_drawn_point_total() == noise_points
+        assert peaky._spectrum_ink_total() < _SPECTRUM_INK_AA_ON
+        assert all(x.opts.get('antialias') for x in peaky._amp_curves)
+        assert peaky.quality_status()['state'] == 'green'
+    finally:
+        peaky.deleteLater()
+
+
+def test_point_budget_leg_still_ands_with_ink(qapp):
+    """Ink does not REPLACE the point budget — the two legs are AND'd.
+
+    Six peak-dominated spectra: ink is ~7 k (nowhere near the 145 k ceiling)
+    while the drawn-point sum is 9000 > OFF 8000. Spec §5 warns explicitly
+    that a shape can hold ink flat while the frame cost still climbs, so the
+    point leg must keep its own veto — and, since ink is evaluated first and
+    passes here, the reported reason has to be the point budget.
+    """
+    c = _realized_canvas(qapp)
+    try:
+        freq = np.linspace(0.0, 2000.0, 1500)
+        amp = 200.0 * np.exp(-((freq - 300.0) ** 2) / 40.0) + 0.01
+        entries = [
+            {'label': f'peak-{i}', 'color': '#2563eb', 'freq': freq, 'amp': amp,
+             'time': np.linspace(0.0, 1.0, 200),
+             'signal': np.sin(np.linspace(0.0, 10.0, 200))}
+            for i in range(6)
+        ]
+        c.plot_spectra(entries, xlim=(0.0, 2000.0), amp_label='Amplitude',
+                       title='FFT')
+        qapp.processEvents()
+
+        total = c._spectrum_drawn_point_total()
+        assert total > _SPECTRUM_AA_SEGMENT_OFF, total
+        assert c._spectrum_ink_total() < _SPECTRUM_INK_AA_ON
+        assert all(not x.opts.get('antialias') for x in c._amp_curves)
+        status = c.quality_status()
+        assert status['state'] == 'red'
+        assert 'block_reason' not in status
+        assert f'频谱叠加密度 {total} > {_SPECTRUM_AA_SEGMENT_OFF}' in status['tooltip']
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_ink_gate(qapp):
+    """The preview row gates on the TIME-DOMAIN ink band (spec §5: no split)."""
+    filled = _realized_canvas(qapp)
+    try:
+        filled.plot_time_preview(_full_scale_preview_entries(fill=True))
+        qapp.processEvents()
+        assert filled._plot_time.vb.sceneBoundingRect().height() > 0
+        points = sum(len(x.getData()[0]) for x in filled._time_curves)
+        # The point leg says YES at this count, so only ink can refuse.
+        assert points <= _AA_OVERLAY_SEGMENT_ON, points
+        assert filled._time_preview_ink_total() > _INK_AA_OFF
+
+        assert all(not x.opts.get('antialias') for x in filled._time_curves)
+        status = filled.quality_status()
+        assert status['state'] == 'red'
+        assert status['block_reason'] == 'high-ink'
+        assert '波形填满' in status['tooltip']
+    finally:
+        filled.deleteLater()
+
+    smooth = _realized_canvas(qapp)
+    try:
+        smooth.plot_time_preview(_full_scale_preview_entries(fill=False))
+        qapp.processEvents()
+        assert sum(len(x.getData()[0]) for x in smooth._time_curves) == points
+        assert smooth._time_preview_ink_total() < _INK_AA_ON
+        assert all(x.opts.get('antialias') for x in smooth._time_curves)
+    finally:
+        smooth.deleteLater()
+
+
+def test_backstop_trips_and_blacklists_spectrum_signature(qapp):
+    """A wrong prediction costs ONE frame, not one per settle.
+
+    The ink band is calibrated, not clairvoyant (different pen width, a
+    different display's dpr, a shape the sweep never covered). This is the
+    layer that bills reality: a first AA frame over 1000 ms latches the view
+    signature out of AA instead of re-paying it on every idle tick.
+    """
+    c = _realized_canvas(qapp)
+    try:
+        # Sentinel (same contract as the time-domain canvas'): without the
+        # class-level paintEvent swap on _glw nothing ever reaches
+        # _note_aa_frame and the backstop is silently dead code.
+        assert getattr(c._glw, quality._FRAME_TIMER_INSTALLED_ATTR, False) is True
+        assert getattr(c._glw, quality._FRAME_TIMER_OWNER_ATTR, None) is c
+
+        c.plot_spectra(_noise_floor_entries(n_curves=2, n_bins=4096, peak=True),
+                       xlim=(0.0, 2000.0), amp_label='Amplitude', title='FFT')
+        qapp.processEvents()
+        assert c._aa_on is True
+
+        # Re-open a session deterministically so the injected frame is the
+        # FIRST of its epoch (judged against the one-off 1000 ms ceiling).
+        c.disable_interactive_quality()
+        c._enable_idle_quality()
+        assert c._aa_backstop_armed is True
+        signature = c._spectrum_view_signature()
+        assert signature is not None
+
+        c._note_aa_frame(1500.0)
+        # Disarmed immediately; the scene mutation is deferred out of paint.
+        assert c._aa_backstop_armed is False
+        assert c._aa_latch.reason[0] == 'first-aa-frame'
+        assert c._backstop_timer.isActive() is True
+
+        qapp.processEvents()
+        assert c._aa_on is False
+        assert all(not x.opts.get('antialias') for x in c._amp_curves)
+        assert c._aa_latch.blocked(signature) is True
+
+        # Re-arming must now be refused outright — not "tried and refused
+        # after another 1.5 s frame".
+        c._enable_idle_quality()
+        assert c._aa_on is False
+        assert c._aa_backstop_armed is False
+        assert all(not x.opts.get('antialias') for x in c._amp_curves)
+        status = c.quality_status()
+        assert status['state'] == 'red'
+        assert status['block_reason'] == 'aa-backstop'
+        assert status['tooltip'] == '抗锯齿未激活：实测帧超时'
+    finally:
+        c.deleteLater()
+
+
+def test_interactive_path_keeps_the_150ms_quiet_window(qapp):
+    """A drag is CONTINUOUS input; its frames still merge behind 150 ms.
+
+    Only the discrete paths moved. If this ever reads 0, the Qt interval trap
+    has struck and every pan/zoom is re-deciding quality per frame.
+    """
+    c = _realized_canvas(qapp)
+    try:
+        c.plot_spectra(_noise_floor_entries(n_curves=2, n_bins=4096, peak=True),
+                       xlim=(0.0, 2000.0), amp_label='Amplitude', title='FFT')
+        qapp.processEvents()
+        assert c._aa_on is True
+
+        c._on_interactive_range_changed(c._plot_amp)
+
+        assert c._aa_on is False
+        assert c._aa_idle_timer.isActive() is True
+        assert c._aa_idle_timer.interval() == 150
+        assert c._discrete_aa_timer.isActive() is False
+        assert c.quality_status()['state'] == 'yellow'
+    finally:
+        c.deleteLater()
 
 
 def test_fft_line_context_menu_has_custom_action_slot(canvas, monkeypatch):
