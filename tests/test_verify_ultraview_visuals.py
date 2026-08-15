@@ -23,22 +23,20 @@ TOOL = REPO_ROOT / "tools" / "verify_ultraview_visuals.py"
 
 def _library_manifest(
     *,
-    overview_panel: dict | None = None,
     section: dict | None = None,
-    catalog_height: int | None = None,
-    stale_catalog_height: int | None = None,
+    width: int | None = None,
+    mode_controls_visible: bool = False,
+    compact_host_visible: bool = False,
 ) -> dict:
-    """Synthetic manifest slice exercising the library contract in isolation.
-
-    Built from the live constants so the fixture cannot drift away from the
-    product; the callers below vary one fact at a time.
-    """
+    """Synthetic slice for the one-path, grouped library contract."""
     constants = _library_constants()
-    panel = {"x": 68, "y": 64, "w": 470, "h": 560, "visible": True}
-    card = catalog_height
-    if card is None:
-        card = constants["LIBRARY_CATALOG_HEIGHT"]
-    stale_card = card if stale_catalog_height is None else stale_catalog_height
+    panel = {
+        "x": 68,
+        "y": 64,
+        "w": constants["LIBRARY_DEFAULT_WIDTH"] if width is None else width,
+        "h": 560,
+        "visible": True,
+    }
     return {
         "library_constants": constants,
         "geometry": {
@@ -50,23 +48,8 @@ def _library_manifest(
                         "time": section
                         or {"height": 215, "min_hint": 215, "visible": True}
                     },
-                    "catalog_cards": {"time": card},
-                }
-            },
-            "library_overview_stale_1280": {
-                "library": {
-                    "panel": dict(panel),
-                    "browse_mode": constants["LIBRARY_MODE_COMPACT"],
-                    "sections": {},
-                    "catalog_cards": {"time": stale_card},
-                }
-            },
-            "library_overview_1280": {
-                "library": {
-                    "panel": dict(overview_panel or panel),
-                    "browse_mode": constants["LIBRARY_MODE_COMPACT"],
-                    "sections": {},
-                    "catalog_cards": {"time": card},
+                    "mode_controls_visible": mode_controls_visible,
+                    "compact_host_visible": compact_host_visible,
                 }
             },
         },
@@ -118,82 +101,52 @@ def test_ultraview_visual_harness_geometry_and_contact_sheet(qapp, tmp_path):
     assert manifest["geometry"]["presentation_1280"]["library_visible"] is False
 
 
-def test_required_shots_cover_both_library_browse_modes():
+def test_required_shots_cover_the_single_grouped_library_path():
     assert "library_groups_1280" in REQUIRED_SHOTS
-    assert "library_overview_1280" in REQUIRED_SHOTS
-    # The stale frame is a separate required shot, not a nicety: it is the only
-    # state that still has spare height for the catalog cards to balloon into.
-    assert "library_overview_stale_1280" in REQUIRED_SHOTS
+    assert "library_overview_1280" not in REQUIRED_SHOTS
+    assert "library_overview_stale_1280" not in REQUIRED_SHOTS
 
 
-def test_library_contract_accepts_a_panel_that_does_not_move():
+def test_library_contract_accepts_the_single_grouped_path():
     errors = _library_errors(_library_manifest())
-    assert _matching(errors, "panel rect changed") == []
     assert _matching(errors, "is clipped") == []
-    assert _matching(errors, "catalog card") == []
+    assert _matching(errors, "browse-mode control") == []
+    assert _matching(errors, "compact catalog") == []
 
 
-def test_library_contract_catches_a_panel_rect_that_jumps():
-    """The load-bearing assertion: only panel *content* changed between shots."""
-    manifest = _library_manifest(
-        overview_panel={"x": 68, "y": 147, "w": 470, "h": 356, "visible": True}
-    )
-    assert _matching(_library_errors(manifest), "panel rect changed")
-
-
-def test_library_contract_catches_a_clipped_section_and_a_ballooned_card():
+def test_library_contract_catches_wrong_width_clipped_section_and_removed_controls():
+    assert _matching(_library_errors(_library_manifest(width=470)), "library width=470")
     clipped = _library_manifest(
         section={"height": 164, "min_hint": 215, "visible": True}
     )
     assert _matching(_library_errors(clipped), "'time' is clipped")
-    ballooned = _library_manifest(catalog_height=80)
-    assert _matching(_library_errors(ballooned), "catalog card 'time' height=80")
+    assert _matching(
+        _library_errors(_library_manifest(mode_controls_visible=True)),
+        "browse-mode control",
+    )
+    assert _matching(
+        _library_errors(_library_manifest(compact_host_visible=True)),
+        "compact catalog host",
+    )
 
 
-def test_library_contract_catches_a_balloon_only_the_stale_frame_shows():
-    """A build can render 40px cards after a reflow and 100px before it.
-
-    Checking only the re-laid-out shot is what let this harness call such a
-    build healthy, so the stale shot carries its own assertion.
-    """
-    manifest = _library_manifest(stale_catalog_height=100)
-    errors = _library_errors(manifest)
-    assert _matching(errors, "library_overview_stale_1280 catalog card 'time' height=100")
-    assert _matching(errors, "library_overview_1280 catalog card") == []
-
-
-def test_library_shots_record_the_anti_jump_facts(qapp, tmp_path):
-    """Facts layer: the manifest carries the library geometry either way.
-
-    ``generate`` writes manifest.json before it runs ``assert_geometry``, so the
-    facts are read off disk rather than off the return value — enforcing the
-    contract stays the job of the geometry test above, and this one keeps
-    working while the product is still red.
-    """
+def test_library_shot_records_the_single_grouped_path(qapp, tmp_path):
     with contextlib.suppress(GeometryError):
         generate(tmp_path)
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    for name in (
-        "library_groups_1280",
-        "library_overview_stale_1280",
-        "library_overview_1280",
-    ):
-        assert (tmp_path / manifest["shots"][name]["path"]).is_file(), name
-        facts = manifest["geometry"][name]["library"]
-        assert facts["panel"]["visible"] is True, name
-        assert facts["panel"]["w"] > 0 and facts["panel"]["h"] > 0, name
-        assert set(facts["sections"]) == {"time", "fft", "fft_time", "frf", "order"}
-        for section_facts in facts["sections"].values():
-            assert section_facts["min_hint"] > 0
-        assert facts["catalog_cards"]
-        assert facts["row_heights"]
-        assert facts["mode_tab_widths"] == [
-            facts["mode_tabs"]["groups"]["w"],
-            facts["mode_tabs"]["compact"]["w"],
-        ]
-    groups = manifest["geometry"]["library_groups_1280"]["library"]
-    overview = manifest["geometry"]["library_overview_1280"]["library"]
-    assert groups["browse_mode"] != overview["browse_mode"]
+    name = "library_groups_1280"
+    assert (tmp_path / manifest["shots"][name]["path"]).is_file(), name
+    facts = manifest["geometry"][name]["library"]
+    assert facts["panel"]["visible"] is True
+    assert facts["panel"]["w"] == _library_constants()["LIBRARY_DEFAULT_WIDTH"]
+    assert facts["panel"]["h"] > 0
+    assert facts["browse_mode"] == "groups"
+    assert set(facts["sections"]) == {"time", "fft", "fft_time", "frf", "order"}
+    assert facts["section_order"] == ["time", "fft", "fft_time", "frf", "order"]
+    assert all(section_facts["min_hint"] > 0 for section_facts in facts["sections"].values())
+    assert facts["row_heights"]
+    assert facts["mode_controls_visible"] is False
+    assert facts["compact_host_visible"] is False
 
 
 def test_lod_zoom_matrix_exposes_type_and_hides_title_only_preview(qapp, qtbot):

@@ -30,8 +30,6 @@ REQUIRED_SHOTS = (
     "narrow_1440",
     "library_1280",
     "library_groups_1280",
-    "library_overview_stale_1280",
-    "library_overview_1280",
     "layout_1280",
     "filter_1280",
     "unplaced_1280",
@@ -351,15 +349,16 @@ def _layout_picker_facts(page) -> dict[str, Any]:
 #: a name that is absent is recorded as ``None`` and turned into an explicit
 #: ``assert_geometry`` failure, never silently substituted with a number.
 _LIBRARY_CONSTANT_NAMES = (
+    "LIBRARY_DEFAULT_WIDTH",
+    "LIBRARY_MAX_WIDTH",
     "LIBRARY_OVERLAY_HEIGHT",
     "LIBRARY_OVERLAY_MIN_HEIGHT",
     "LIBRARY_HEAD_HEIGHT",
     "LIBRARY_SECTION_HEAD_HEIGHT",
     "LIBRARY_ROW_HEIGHT",
-    "LIBRARY_CATALOG_HEIGHT",
+    "LIBRARY_SELECTED_ROW_GUTTER",
     "LIBRARY_ROW_ACTION_SIZE",
     "LIBRARY_MODE_GROUPS",
-    "LIBRARY_MODE_COMPACT",
 )
 
 
@@ -377,34 +376,10 @@ def _library_constants() -> dict[str, int | str | None]:
     }
 
 
-def _library_mode_tabs(page) -> tuple[QWidget | None, QWidget | None]:
-    """The 展开 / 概览 segmented control, looked up by objectName.
-
-    objectName is the stable handle here: QSS targets it and the selector
-    liveness test keeps it wired, whereas the panel exposes no public accessor
-    for these two buttons.
-    """
-    from PyQt5.QtWidgets import QToolButton
-
-    panel = page.library_panel()
-    return (
-        panel.findChild(QToolButton, "ultraViewLibraryModeGroups"),
-        panel.findChild(QToolButton, "ultraViewLibraryModeCompact"),
-    )
-
-
 def _library_facts(page) -> dict[str, Any]:
-    """Record the View-library geometry the anti-jump contract is made of.
+    """Record the single-layer View-library geometry and visible controls."""
+    from PyQt5.QtWidgets import QToolButton, QWidget
 
-    Three failure shapes live in these numbers: the panel rect changing when
-    only panel *content* changed (the jump), a section frame rendered shorter
-    than its own minimum hint (the clipped group card), and catalog cards
-    stretched past their row height by a body layout with no trailing stretch
-    (the ballooned overview — visible only while the frame is still stale, see
-    the shot recipe in ``generate``). All three are facts about widget
-    geometry, so they are read off the widgets rather than sampled from
-    screenshot pixels.
-    """
     panel = page.library_panel()
     sections = {
         section: {
@@ -414,15 +389,7 @@ def _library_facts(page) -> dict[str, Any]:
         }
         for section, frame in panel.section_widgets().items()
     }
-    catalog = {
-        section: int(card.height()) for section, card in panel.catalog_cards().items()
-    }
     row_heights = [int(widget.height()) for widget in panel.row_widgets()]
-    groups_tab, compact_tab = _library_mode_tabs(page)
-    tabs = {
-        "groups": _rect(groups_tab) if groups_tab is not None else None,
-        "compact": _rect(compact_tab) if compact_tab is not None else None,
-    }
     return {
         "panel": _rect(panel),
         "browse_mode": panel.browse_mode(),
@@ -431,13 +398,12 @@ def _library_facts(page) -> dict[str, Any]:
         "sections": sections,
         "section_heights": sorted({fact["height"] for fact in sections.values()}),
         "row_heights": sorted(set(row_heights)),
-        "catalog_cards": catalog,
-        "catalog_heights": sorted(set(catalog.values())),
-        "mode_tabs": tabs,
-        "mode_tab_widths": [
-            None if tabs[key] is None else int(tabs[key]["w"])
-            for key in ("groups", "compact")
-        ],
+        "section_order": list(panel.section_widgets()),
+        "mode_controls_visible": bool(
+            panel.findChild(QToolButton, "ultraViewLibraryModeGroups")
+            or panel.findChild(QToolButton, "ultraViewLibraryModeCompact")
+        ),
+        "compact_host_visible": bool(panel.findChild(QWidget, "ultraViewLibraryCompactHost")),
     }
 
 
@@ -605,43 +571,22 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         _pump(app, page)
         snap("library_1280", page, _page_snapshot(page))
 
-        # Three library shots covering the two halves of the same defect. In the
-        # product a mode switch does NOT call ``_apply_floating_layout``: the
-        # frame keeps the height it had, and the content-driven size hint only
-        # lands later, at the next resize / reopen / set_board. The click and
-        # the jump are therefore separated in time, which is why the two states
-        # need different shots and MUST NOT share a shooting recipe:
-        #
-        #   *_stale*  — mode switched, layout deliberately NOT re-applied. The
-        #               frame is still the taller groups-mode one while the
-        #               content already shrank, so a body layout with no
-        #               trailing stretch hands the spare height to the catalog
-        #               cards and they balloon. This is the user-visible frame.
-        #   *_groups* / *_overview* — layout forced after the switch so the two
-        #               rects sit in a directly comparable state; that is the
-        #               only way to compare frames, but note it also zeroes the
-        #               spare height and thereby hides the ballooning above.
-        #
-        # Do not "tidy" this by re-applying the layout before the stale shot:
-        # that is exactly the mistake that made this harness report a healthy
-        # 40px card on a build that rendered 100px ones.
-        groups_tab, compact_tab = _library_mode_tabs(page)
-        if groups_tab is not None:
-            groups_tab.click()
+        # The library has one direct, grouped browse path.  Re-placing it must
+        # preserve the fixed frame while no hidden compact/catalog surface is
+        # introduced by the visual harness itself.
         page._apply_floating_layout()
         _pump(app, page)
         snap("library_groups_1280", page, _page_snapshot(page))
-        if compact_tab is not None:
-            compact_tab.click()
+        library_btn = page.tool_rail().panel_button("library")
+        from PyQt5.QtTest import QTest
+
+        QTest.mouseClick(page.canvas_host().canvas_widget(), Qt.LeftButton)
         _pump(app, page)
-        snap("library_overview_stale_1280", page, _page_snapshot(page))
-        page._apply_floating_layout()
-        _pump(app, page)
-        snap("library_overview_1280", page, _page_snapshot(page))
-        if groups_tab is not None:
-            groups_tab.click()
-        page._apply_floating_layout()
-        _pump(app, page)
+        manifest["geometry"]["library_groups_1280"]["trigger_rest"] = {
+            "panelOpen": library_btn.property("panelOpen") if library_btn is not None else None,
+            "hasFocus": bool(library_btn.hasFocus()) if library_btn is not None else None,
+            "checked": bool(library_btn.isChecked()) if library_btn is not None else None,
+        }
 
         page.tool_rail().panel_button("layout").click()
         _pump(app, page)
@@ -746,15 +691,7 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
 
 
 def _library_errors(manifest: dict[str, Any]) -> list[str]:
-    """View-library geometry contract (plan §6.3).
-
-    The load-bearing one is the first: the panel rect must be byte-identical
-    across the two browse modes. Panel height used to be a function of panel
-    content, and the trigger-centred anchor put that height in the numerator of
-    the top edge, so every fold / mode switch / keystroke moved the frame. A
-    rect that survives a mode switch is the machine-checkable form of "it does
-    not jump"; a height cap would only narrow the jump.
-    """
+    """View-library contract: one grouped path, stable frame, usable sections."""
     errors: list[str] = []
     geometry = manifest.get("geometry") or {}
     constants = manifest.get("library_constants") or {}
@@ -765,34 +702,25 @@ def _library_errors(manifest: dict[str, Any]) -> list[str]:
             + ", ".join(missing)
         )
 
-    facts = {}
-    for name, wanted_mode_key in (
-        ("library_groups_1280", "LIBRARY_MODE_GROUPS"),
-        ("library_overview_stale_1280", "LIBRARY_MODE_COMPACT"),
-        ("library_overview_1280", "LIBRARY_MODE_COMPACT"),
-    ):
-        fact = (geometry.get(name) or {}).get("library") or {}
-        facts[name] = fact
-        if not fact:
-            errors.append(f"{name} recorded no library facts")
-            continue
-        if not (fact.get("panel") or {}).get("visible"):
-            errors.append(f"{name} did not leave the library panel visible")
-        wanted_mode = constants.get(wanted_mode_key)
-        if wanted_mode is not None and fact.get("browse_mode") != wanted_mode:
-            errors.append(
-                f"{name} browse mode is {fact.get('browse_mode')!r}, expected {wanted_mode!r}"
-            )
-
-    groups = facts.get("library_groups_1280") or {}
-    overview = facts.get("library_overview_1280") or {}
-    groups_panel = groups.get("panel")
-    overview_panel = overview.get("panel")
-    if groups_panel and overview_panel and groups_panel != overview_panel:
+    groups = (geometry.get("library_groups_1280") or {}).get("library") or {}
+    if not groups:
+        return errors + ["library_groups_1280 recorded no library facts"]
+    if not (groups.get("panel") or {}).get("visible"):
+        errors.append("library_groups_1280 did not leave the library panel visible")
+    wanted_mode = constants.get("LIBRARY_MODE_GROUPS")
+    if wanted_mode is not None and groups.get("browse_mode") != wanted_mode:
         errors.append(
-            "library panel rect changed with panel content: "
-            f"groups={groups_panel} overview={overview_panel}"
+            f"library browse mode is {groups.get('browse_mode')!r}, expected {wanted_mode!r}"
         )
+    panel = groups.get("panel") or {}
+    if int(panel.get("w") or 0) != int(constants.get("LIBRARY_DEFAULT_WIDTH") or 0):
+        errors.append(
+            f"library width={panel.get('w')}, expected {constants.get('LIBRARY_DEFAULT_WIDTH')}"
+        )
+    if groups.get("mode_controls_visible"):
+        errors.append("library still exposes a browse-mode control")
+    if groups.get("compact_host_visible"):
+        errors.append("library still exposes a compact catalog host")
 
     for section, fact in sorted((groups.get("sections") or {}).items()):
         if not fact.get("visible"):
@@ -804,23 +732,6 @@ def _library_errors(manifest: dict[str, Any]) -> list[str]:
                 f"library section {section!r} is clipped: height={height} < minHint={min_hint}"
             )
 
-    # Catalog cards are checked on BOTH overview shots, and the stale one is the
-    # load-bearing half: it is the only state where the frame still carries the
-    # taller mode's height, so it is the only state where a missing trailing
-    # stretch has spare pixels to hand out. Checking just the re-laid-out shot
-    # passes on a build whose cards render at 100px.
-    catalog_height = constants.get("LIBRARY_CATALOG_HEIGHT")
-    if catalog_height is not None:
-        for name in ("library_overview_stale_1280", "library_overview_1280"):
-            cards = (facts.get(name) or {}).get("catalog_cards") or {}
-            if not cards:
-                errors.append(f"{name} recorded no catalog cards")
-            for section, height in sorted(cards.items()):
-                if int(height) != int(catalog_height):
-                    errors.append(
-                        f"{name} catalog card {section!r} height={height}, "
-                        f"expected {catalog_height}"
-                    )
     return errors
 
 
@@ -873,8 +784,6 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
     for name in (
         "library_1280",
         "library_groups_1280",
-        "library_overview_stale_1280",
-        "library_overview_1280",
         "layout_1280",
         "filter_1280",
         "display_1280",

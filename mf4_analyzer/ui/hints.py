@@ -763,7 +763,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.library_fold",
-        text="View 库分组可折叠，也可先概览",
+        text="View 库按类型分组，标题可折叠",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=33,

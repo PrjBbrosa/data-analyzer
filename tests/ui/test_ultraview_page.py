@@ -11,7 +11,16 @@ from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox, QPushButton, QToolButton, QWidget
+from PyQt5.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QGraphicsDropShadowEffect,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QToolButton,
+    QWidget,
+)
 
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BOARD_PADDING,
@@ -499,39 +508,23 @@ def test_library_empty_section_keeps_header_and_search_expands_matches(qtbot):
     assert all(not widget.isHidden() for widget in fft_rows)
 
 
-def test_library_has_groups_and_overview_without_directory_or_section_bars(qtbot, qapp):
+def test_library_has_one_grouped_browse_path_without_mode_or_catalog_controls(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)
     library = harness.page.library_panel()
     harness.page.set_library_visible(True)
     qapp.processEvents()
-    assert library.findChild(QToolButton, "ultraViewLibraryModeGroups") is not None
-    assert library.findChild(QToolButton, "ultraViewLibraryModeCompact") is not None
+    assert library.findChild(QToolButton, "ultraViewLibraryModeGroups") is None
+    assert library.findChild(QToolButton, "ultraViewLibraryModeCompact") is None
     assert library.findChild(QWidget, "ultraViewLibraryModeTree") is None
     assert library.findChild(QWidget, "ultraViewLibraryIntro") is None
     assert library.findChild(QToolButton, "ultraViewLibraryToggleAll") is None
     assert library.findChild(QWidget, "ultraViewLibraryCompactCaption") is None
+    assert library.findChild(QWidget, "ultraViewLibraryCompactHost") is None
     assert library.browse_mode() == "groups"
-    assert "目录" not in library.findChild(QToolButton, "ultraViewLibraryModeGroups").text()
-    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
-    qapp.processEvents()
-    assert library.browse_mode() == "compact"
-    cards = library.catalog_cards()
-    assert tuple(cards) == SOURCE_SECTIONS
-    for card in cards.values():
-        title = card.findChild(QLabel, "ultraViewLibraryCatalogTitle")
-        assert title is not None
-        assert " / " not in title.text()
-        assert "个 View" not in title.text()
-        assert card.findChild(QLabel, "ultraViewLibraryCatalogMeta") is None
-        assert card.expand_button().text() == "展开"
-        assert card.findChild(QToolButton, "ultraViewLibraryCatalogNew") is None
-        assert "新建" not in card.expand_button().text()
-    cards["fft"].expand_button().click()
-    qapp.processEvents()
-    assert library.browse_mode() == "groups"
-    assert library.is_section_expanded("fft") is True
+    assert tuple(library.section_widgets()) == SOURCE_SECTIONS
+    assert all(frame.isVisible() for frame in library.section_widgets().values())
 
 
 def test_library_on_board_button_removes_instead_of_locating(qtbot, qapp):
@@ -597,15 +590,47 @@ def test_library_add_remove_and_selection_colors_are_distinct(qtbot, qapp):
     assert minus.red() > minus.green()
     assert _hue_gap(plus, minus) > 40
 
-    header_fill = _sample_pixel(header, max(12, header.width() // 2), header.height() // 2)
-    selected_fill = _sample_pixel(
-        remove_row, max(12, remove_row.width() // 2), remove_row.height() // 2
-    )
-    selected_chroma = selected_fill.blue() - selected_fill.red()
-    header_chroma = header_fill.blue() - header_fill.red()
-    assert selected_chroma > 8
-    assert selected_chroma >= header_chroma
-    assert abs(header_fill.red() - header_fill.blue()) < 18
+    selected_fill = _sample_pixel(remove_row, 8, remove_row.height() // 2)
+    assert selected_fill.lightness() >= 247
+    assert isinstance(remove_row.graphicsEffect(), QGraphicsDropShadowEffect)
+    assert add_row.graphicsEffect() is None
+
+
+def test_library_selection_is_single_elevated_projection_and_survives_rebuild(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+
+    library.set_selected("time", "time-1")
+    first = next(row for row in library.row_widgets() if row.row().view_id == "time-1")
+    assert library.selected_ref() == ("time", "time-1")
+    assert isinstance(first.graphicsEffect(), QGraphicsDropShadowEffect)
+    assert [row.row().view_id for row in library.row_widgets() if row.property("selected") == "true"] == [
+        "time-1"
+    ]
+
+    library.set_selected("time", "time-2")
+    second = next(row for row in library.row_widgets() if row.row().view_id == "time-2")
+    assert first.property("selected") == "false"
+    assert first.graphicsEffect() is None
+    assert second.property("selected") == "true"
+    assert isinstance(second.graphicsEffect(), QGraphicsDropShadowEffect)
+
+    library.set_rows(_rows())
+    qapp.processEvents()
+    rebuilt = next(row for row in library.row_widgets() if row.row().view_id == "time-2")
+    assert rebuilt is not second
+    assert library.selected_ref() == ("time", "time-2")
+    assert rebuilt.property("selected") == "true"
+    assert isinstance(rebuilt.graphicsEffect(), QGraphicsDropShadowEffect)
+    assert sum(row.graphicsEffect() is not None for row in library.row_widgets()) == 1
 
 
 def test_add_paths_share_one_intent(qtbot):
@@ -2974,16 +2999,6 @@ def test_library_overlay_height_is_constant_across_content_changes(qtbot, qapp):
     # §3.2: at this window size nothing clamps, so the panel shows its design height.
     assert opened[3] == uv_widgets.LIBRARY_OVERLAY_HEIGHT
 
-    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
-    qapp.processEvents()
-    assert library.browse_mode() == "compact"
-    assert rect_now() == opened, "切概览"
-
-    library.findChild(QToolButton, "ultraViewLibraryModeGroups").click()
-    qapp.processEvents()
-    assert library.browse_mode() == "groups"
-    assert rect_now() == opened, "切回展开"
-
     library.section_headers()["time"].click()
     qapp.processEvents()
     assert library.is_section_expanded("time") is False
@@ -3033,23 +3048,13 @@ def test_library_section_frames_are_never_shorter_than_their_minimum(qtbot, qapp
     assert not clipped, f"section cards clipped below their own minimum: {clipped}"
 
 
-def test_library_catalog_cards_keep_height_when_panel_is_stale_tall(qtbot, qapp):
-    """Overview cards keep their row height while the panel is still the *old* height.
+def test_library_add_refresh_keeps_all_sections_scrollable_without_reopen(qtbot, qapp):
+    """Adding a View must not squeeze five fresh section frames into one viewport.
 
-    This is the shape in the user's screenshot, and it only exists because switching
-    mode does not re-place the overlay (plan §1.1: the jump and the operation that
-    causes it are separated in time). Measured on the pre-fix baseline at 1280x800:
-
-        打开(展开态)                    面板 h=656   概览卡 [40,40,40,40,40]
-        点「概览」后(未重排)            面板 h=656   概览卡 [100,100,99,100,100]
-        再强制 _apply_floating_layout   面板 h=356   概览卡 [40,40,40,40,40]
-
-    So the panel sits at 656 while the compact body only needs 228, and with no trailing
-    stretch the spare 300px is shared out over the five cards — +60 each.
-
-    **Deliberately no ``_apply_floating_layout()`` here.** Forcing a re-place shrinks the
-    panel to fit its content, the spare height goes to zero, and the ballooning vanishes
-    — a re-laid-out test cannot see this defect at all.
+    The add signal triggers the same membership refresh as the coordinator.  A
+    rebuild cannot read a newly-created layout's temporary 22px minimum and
+    overwrite the scroll body's last valid minimum before Qt has polished the
+    new section widgets.  Reopening the Library used to repair that by chance.
     """
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
@@ -3058,103 +3063,41 @@ def test_library_catalog_cards_keep_height_when_panel_is_stale_tall(qtbot, qapp)
     page.resize(1280, 800)
     page.show()
     qtbot.waitExposed(page)
-    page.set_library_rows(_dense_rows())
-    page.set_library_visible(True)
-    qapp.processEvents()
-    library = page.library_panel()
-    tall = library.height()
-
-    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
-    qapp.processEvents()
-    assert library.browse_mode() == "compact"
-    # The panel must still be the height it was opened at — that is the whole premise.
-    assert library.height() == tall
-
-    cards = library.catalog_cards()
-    assert tuple(cards) == SOURCE_SECTIONS
-    heights = {section: card.height() for section, card in cards.items()}
-    assert set(heights.values()) == {uv_widgets.LIBRARY_CATALOG_HEIGHT}, heights
-
-
-def test_library_catalog_cards_keep_their_row_height(qtbot, qapp):
-    """Overview cards keep their row height once the panel has settled.
-
-    Plan §1.3 / R4: with no trailing stretch behind the hosts, ``setWidgetResizable(True)``
-    hands the leftover viewport height to the QVBoxLayout, which shares it out over the
-    five summary cards instead of leaving them at their 43px sizeHint.
-
-    Companion to ``..._when_panel_is_stale_tall``. This one *does* re-place the overlay
-    after switching mode, so it guards the settled target state rather than the defect
-    shape: on the pre-fix baseline the re-place shrinks the panel to its content and the
-    cards fall back to 40, so this path alone would not have caught the ballooning. Both
-    paths are kept because a fixed-height panel has to hold in both.
-    """
-    qapp.setStyle("Fusion")
-    load_stylesheet(qapp)
-    harness = _Harness(qtbot)
-    page = harness.page
-    page.resize(1280, 800)
-    page.show()
-    qtbot.waitExposed(page)
-    page.set_library_rows(_dense_rows())
-    page.set_library_visible(True)
-    qapp.processEvents()
-    library = page.library_panel()
-    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
-    qapp.processEvents()
-    assert library.browse_mode() == "compact"
-    page._apply_floating_layout()
-    qapp.processEvents()
-
-    cards = library.catalog_cards()
-    assert tuple(cards) == SOURCE_SECTIONS
-    heights = {section: card.height() for section, card in cards.items()}
-    assert set(heights.values()) == {uv_widgets.LIBRARY_CATALOG_HEIGHT}, heights
-
-
-def test_library_catalog_height_survives_rebuild(qtbot, qapp):
-    """The trailing stretch has to be re-added by every rebuild, not just __init__.
-
-    ``_rebuild()`` empties the body layout with ``while count(): takeAt(0)``, which
-    takes the spacer with it. A stretch added once at construction is therefore gone
-    after the first ``set_rows()`` and the overview cards balloon again.
-
-    Like ``..._when_panel_is_stale_tall`` this never re-places the overlay, so the panel
-    keeps the height it was opened at and the spare space is there to be mis-shared.
-    """
-    qapp.setStyle("Fusion")
-    load_stylesheet(qapp)
-    harness = _Harness(qtbot)
-    page = harness.page
-    page.resize(1280, 800)
-    page.show()
-    qtbot.waitExposed(page)
-    page.set_library_visible(True)
-    qapp.processEvents()
-    library = page.library_panel()
-    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
-    qapp.processEvents()
-    assert library.browse_mode() == "compact"
-
-    for attempt in range(3):
-        library.set_rows(_dense_rows())
-        qapp.processEvents()
-        assert library.browse_mode() == "compact"
-        cards = library.catalog_cards()
-        assert tuple(cards) == SOURCE_SECTIONS
-        heights = {section: card.height() for section, card in cards.items()}
-        assert set(heights.values()) == {uv_widgets.LIBRARY_CATALOG_HEIGHT}, (
-            f"rebuild #{attempt + 1}: {heights}"
+    rows = [
+        LibraryRow(
+            section=section,
+            view_id=f"{section}-1",
+            name="View 1",
+            tab_color="#3B82F6",
+            source_summary="Rte_TAS_mTorsionBarTorque_xds16",
         )
+        for section in SOURCE_SECTIONS
+    ]
+    page.set_library_rows(rows)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    time_row = next(row for row in library.row_widgets() if row.row().section == "time")
+    add_button = time_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    assert add_button is not None
+    QTest.mouseClick(add_button, Qt.LeftButton)
+    assert harness.added == [("time", "time-1")]
+
+    add_ref(harness.board, make_ref("time", "time-1"))
+    page.set_board(harness.board)
+    qtbot.wait(20)
+
+    assert library._body.minimumHeight() > library._scroll.viewport().height()
+    assert library._scroll.verticalScrollBar().maximum() > 0
+    clipped = {
+        section: (frame.height(), frame.minimumSizeHint().height())
+        for section, frame in library.section_widgets().items()
+        if frame.height() < frame.minimumSizeHint().height()
+    }
+    assert not clipped, f"add refresh squeezed library sections: {clipped}"
 
 
-def test_library_mode_tabs_split_the_panel_width(qtbot, qapp):
-    """展开 / 概览 are a segmented control, not two buttons floating in half a row.
-
-    Plan §1.4: both rendered 53px wide and sat centred in their half, which is the most
-    visible "not lined up" defect in the panel. HTML gives them ``flex: 1``; Qt's
-    equivalent is an Expanding size policy, measured at 222 each.
-    """
+def test_library_width_contract_and_selected_row_gutter_have_no_crossing_rule(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)
@@ -3166,17 +3109,57 @@ def test_library_mode_tabs_split_the_panel_width(qtbot, qapp):
     qapp.processEvents()
     library = page.library_panel()
 
-    groups = library.findChild(QToolButton, "ultraViewLibraryModeGroups")
-    compact = library.findChild(QToolButton, "ultraViewLibraryModeCompact")
-    assert groups is not None and compact is not None
-    # The search field shares the same margin column, so its width is the content width.
-    content_width = library.search_field().width()
-    assert content_width > 0
+    assert library.width() == uv_widgets.LIBRARY_DEFAULT_WIDTH == 360
+    assert library.maximumWidth() == uv_widgets.LIBRARY_MAX_WIDTH == 400
+    library.set_selected("time", "time-1")
+    qapp.processEvents()
+    section = library.section_widgets()["time"]
+    rows = [row for row in library.row_widgets() if row.row().section == "time"]
+    first, second = rows[:2]
+    gutter = second.geometry().top() - first.geometry().bottom() - 1
+    assert gutter >= uv_widgets.LIBRARY_SELECTED_ROW_GUTTER
+    rule = section.findChild(QWidget, "ultraViewLibrarySectionRule")
+    assert rule is not None
+    assert rule.geometry().bottom() < first.geometry().top()
 
-    # "Equal" with one pixel of slack: an odd leftover cannot be split evenly.
-    assert abs(groups.width() - compact.width()) <= 1, (groups.width(), compact.width())
-    for tab in (groups, compact):
-        assert tab.width() >= 0.45 * content_width, (tab.objectName(), tab.width(), content_width)
+    # The only valid rule is between the section header and body.  The selected
+    # row's lower gutter has no sibling separator to cut across its roundness.
+    image = section.grab().toImage()
+    y = first.geometry().bottom() + max(1, gutter // 2)
+    pixels = [
+        QColor(image.pixel(x, y))
+        for x in range(16, max(17, section.width() - 16), max(1, section.width() // 9))
+    ]
+    spread = max(
+        max(pixel.red() for pixel in pixels) - min(pixel.red() for pixel in pixels),
+        max(pixel.green() for pixel in pixels) - min(pixel.green() for pixel in pixels),
+        max(pixel.blue() for pixel in pixels) - min(pixel.blue() for pixel in pixels),
+    )
+    assert spread < 18, [pixel.name() for pixel in pixels]
+
+
+def test_library_sections_use_distinct_low_saturation_moonstone_materials(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    fills = []
+    for section in SOURCE_SECTIONS:
+        frame = library.section_widgets()[section]
+        header = library.section_headers()[section]
+        image = frame.grab().toImage()
+        point = header.mapTo(frame, QPoint(header.width() - 34, header.height() // 2))
+        fills.append(QColor(image.pixel(point)))
+    assert len({fill.name() for fill in fills}) == len(SOURCE_SECTIONS)
+    assert all(fill.saturationF() < 0.13 for fill in fills)
+    hues = [fill.hue() for fill in fills if fill.hue() >= 0]
+    assert max(hues) - min(hues) <= 38
 
 
 def test_library_row_action_button_is_calm_and_square(qtbot, qapp):
@@ -3266,7 +3249,41 @@ def test_library_section_headers_are_not_heavy_gray_slabs(qtbot, qapp):
     pixel = QColor(image.pixel(min(pos.x(), image.width() - 1), min(pos.y(), image.height() - 1)))
     heavy = QColor("#eef1f5")
     assert abs(pixel.red() - heavy.red()) > 8 or abs(pixel.green() - heavy.green()) > 8
-    assert pixel.lightness() >= 240
+    assert pixel.lightness() >= 235
+
+
+def test_library_outer_corner_pixels_stay_with_the_overlay_shell(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    image = page.grab().toImage()
+    origin = library.mapTo(page, QPoint(0, 0))
+    probes = (
+        (origin.x(), origin.y(), origin.x() - 2, origin.y() - 2),
+        (origin.x() + library.width() - 1, origin.y(), origin.x() + library.width() + 1, origin.y() - 2),
+        (origin.x(), origin.y() + library.height() - 1, origin.x() - 2, origin.y() + library.height() + 1),
+        (
+            origin.x() + library.width() - 1,
+            origin.y() + library.height() - 1,
+            origin.x() + library.width() + 1,
+            origin.y() + library.height() + 1,
+        ),
+    )
+    for corner_x, corner_y, outside_x, outside_y in probes:
+        corner = QColor(image.pixel(corner_x, corner_y))
+        outside = QColor(image.pixel(outside_x, outside_y))
+        assert max(
+            abs(corner.red() - outside.red()),
+            abs(corner.green() - outside.green()),
+            abs(corner.blue() - outside.blue()),
+        ) <= 18, (corner.name(), outside.name())
 
 
 def test_unplaced_overlay_stacks_items_vertically(qtbot, qapp):

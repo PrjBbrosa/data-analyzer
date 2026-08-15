@@ -468,7 +468,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         rows=(
             QuickRow(
                 "View 库",
-                sub="左侧窄轨打开；钉住后点画布不收起，Esc 仍关闭。可按类型展开或先概览再展开；分组可折叠，＋加入或移出 Board",
+                sub="左侧窄轨打开；钉住后点画布不收起，Esc 仍关闭。按分析类型直接浏览，标题可折叠，＋加入或移出 Board",
                 gesture="库标题图钉",
             ),
             QuickRow(

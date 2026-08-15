@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QInputDialog,
@@ -333,10 +334,12 @@ DIMMED_OPACITY = 0.28
 # Transient dim worn by the cards a drag is currently previewing; the model-level
 # ``DIMMED_OPACITY`` above is the persistent one ``restore_dim()`` falls back to.
 DRAG_DIM_OPACITY = 0.4
-LIBRARY_DEFAULT_WIDTH = 470
-LIBRARY_MAX_WIDTH = 520
+# The library stays a narrow on-canvas overlay.  ``UltraViewPage`` imports the
+# default instead of carrying a second geometry literal, so this is the one
+# source of truth for the rail overlay's normal width.
+LIBRARY_DEFAULT_WIDTH = 360
+LIBRARY_MAX_WIDTH = 400
 LIBRARY_MODE_GROUPS = "groups"
-LIBRARY_MODE_COMPACT = "compact"
 _LIBRARY_PIN_REST = QColor("#6B7D8E")
 _LIBRARY_PIN_ACTIVE = QColor("#3E709C")
 TYPE_CHIP_ICON_ONLY_WIDTH = 168
@@ -357,7 +360,6 @@ LIBRARY_OVERLAY_HEIGHT = 560
 LIBRARY_OVERLAY_MIN_HEIGHT = 360
 LIBRARY_HEAD_HEIGHT = 52
 LIBRARY_SEARCH_HEIGHT = 34
-LIBRARY_MODE_TAB_HEIGHT = 28
 LIBRARY_SECTION_GAP = 8
 LIBRARY_SECTION_HEAD_HEIGHT = 32
 # Two lines (name + checked-channel summary). A deliberate departure from the
@@ -365,9 +367,11 @@ LIBRARY_SECTION_HEAD_HEIGHT = 32
 # tells default "View 1..N" names apart, so evenness comes from pinning the
 # height, not from dropping the information.
 LIBRARY_ROW_HEIGHT = 46
-LIBRARY_SECTION_ROW_GAP = 4
-LIBRARY_CATALOG_HEIGHT = 40
-LIBRARY_CATALOG_GAP = 8
+# A selected row owns a small shadow.  Rows therefore need an actual air gap
+# instead of a sibling border that can show through the selected card's lower
+# corner (the recurrent View 1/View 2 line regression).
+LIBRARY_SELECTED_ROW_GUTTER = 8
+LIBRARY_SECTION_ROW_GAP = LIBRARY_SELECTED_ROW_GUTTER
 LIBRARY_ROW_ACTION_SIZE = 23
 LIBRARY_ROW_DOT_INSET = 14
 TRAY_BODY_MAX_HEIGHT = 220
@@ -1168,7 +1172,23 @@ class LibraryRowWidget(QFrame):
         )
 
     def set_selected(self, on: bool) -> None:
-        _set_flag(self, "selected", on)
+        selected = bool(on)
+        if (self.property("selected") == "true") != selected:
+            _set_flag(self, "selected", selected)
+        effect = self.graphicsEffect()
+        if selected:
+            if effect is None:
+                shadow = QGraphicsDropShadowEffect(self)
+                shadow.setBlurRadius(10)
+                shadow.setOffset(0, 2)
+                shadow.setColor(QColor(62, 112, 145, 52))
+                self.setGraphicsEffect(shadow)
+            return
+        if effect is not None:
+            # QWidget owns its graphics effect.  Clearing it before a rebuild
+            # keeps the outgoing row from retaining a shadow wrapper while its
+            # section host is queued for deletion.
+            self.setGraphicsEffect(None)
 
     def _on_add(self) -> None:
         row = self._row
@@ -1285,47 +1305,6 @@ class _LibrarySectionHeader(QFrame):
         super().mouseReleaseEvent(event)
 
 
-class _LibraryCatalogCard(QFrame):
-    """Overview-mode summary for one analysis type; expand returns to groups."""
-
-    expand_requested = pyqtSignal(str)
-
-    def __init__(
-        self,
-        section: str,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setObjectName("ultraViewLibraryCatalogCard")
-        self.setProperty("section", section)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(LIBRARY_CATALOG_HEIGHT)
-        self._section = section
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 6, 8, 6)
-        layout.setSpacing(8)
-        title = QLabel(SECTION_LABELS_ZH.get(section, section), self)
-        title.setObjectName("ultraViewLibraryCatalogTitle")
-        layout.addWidget(title, 1)
-        self._expand = QToolButton(self)
-        self._expand.setObjectName("ultraViewLibraryCatalogExpand")
-        self._expand.setText("展开")
-        self._expand.setAutoRaise(False)
-        self._expand.setCursor(Qt.PointingHandCursor)
-        self._expand.setToolTip(f"展开{SECTION_LABELS_ZH.get(section, section)}分组")
-        self._expand.clicked.connect(self._on_expand)
-        layout.addWidget(self._expand, 0, Qt.AlignVCenter)
-
-    def section(self) -> str:
-        return self._section
-
-    def expand_button(self) -> QToolButton:
-        return self._expand
-
-    def _on_expand(self) -> None:
-        self.expand_requested.emit(self._section)
-
-
 class ViewLibraryPanel(QFrame):
     add_requested = pyqtSignal(str, str)
     remove_requested = pyqtSignal(str, str)
@@ -1345,10 +1324,8 @@ class ViewLibraryPanel(QFrame):
         self._row_widgets: list[LibraryRowWidget] = []
         self._section_frames: dict[str, QFrame] = {}
         self._section_headers: dict[str, _LibrarySectionHeader] = {}
-        self._catalog_cards: dict[str, _LibraryCatalogCard] = {}
         self._section_rules: dict[str, QFrame] = {}
         self._expanded: dict[str, bool] = {section: True for section in SOURCE_SECTIONS}
-        self._browse_mode = LIBRARY_MODE_GROUPS
 
         root = QVBoxLayout(self)
         # Root carries no inset: the head band needs to run edge to edge so its
@@ -1359,6 +1336,7 @@ class ViewLibraryPanel(QFrame):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         head_host = QWidget(self)
+        head_host.setObjectName("ultraViewLibraryHead")
         head_host.setFixedHeight(LIBRARY_HEAD_HEIGHT)
         head = QHBoxLayout(head_host)
         head.setContentsMargins(14, 12, 10, 10)
@@ -1392,12 +1370,12 @@ class ViewLibraryPanel(QFrame):
         # Full width, and that is already 1px short of each edge: Qt's
         # stylesheet insets a styled widget's contents past its own border, so
         # the panel's stroke stays uncovered without an extra margin (measured:
-        # contentsRect() == (1, 1, 468, 558) inside a 470-wide panel).
+        # contentsRect() is inset by the panel's 1px border on every edge).
         self._head_rule = _hairline(self, "ultraViewLibraryHeadRule")
         root.addWidget(self._head_rule)
 
         controls = QVBoxLayout()
-        controls.setContentsMargins(12, 10, 12, 0)
+        controls.setContentsMargins(12, 10, 12, 10)
         controls.setSpacing(8)
         self._search = SearchField("搜索 View、信号或分析类型…", self)
         self._search.setObjectName("ultraViewLibrarySearch")
@@ -1408,38 +1386,10 @@ class ViewLibraryPanel(QFrame):
         search_wrap.addWidget(self._search)
         controls.addLayout(search_wrap)
 
-        mode_wrap = QHBoxLayout()
-        mode_wrap.setContentsMargins(0, 0, 0, 0)
-        mode_wrap.setSpacing(4)
-        self._mode_groups = QToolButton(self)
-        self._mode_groups.setObjectName("ultraViewLibraryModeGroups")
-        self._mode_groups.setText("展开")
-        self._mode_groups.setCheckable(True)
-        self._mode_groups.setChecked(True)
-        self._mode_groups.setToolTip("按分析类型展开，直接操作其中的 View")
-        self._mode_compact = QToolButton(self)
-        self._mode_compact.setObjectName("ultraViewLibraryModeCompact")
-        self._mode_compact.setText("概览")
-        self._mode_compact.setCheckable(True)
-        self._mode_compact.setToolTip("先扫读每类已有内容，再展开完整列表")
-        self._mode_buttons = QButtonGroup(self)
-        self._mode_buttons.setExclusive(True)
-        self._mode_buttons.addButton(self._mode_groups)
-        self._mode_buttons.addButton(self._mode_compact)
-        self._mode_groups.clicked.connect(self._on_groups_mode_clicked)
-        self._mode_compact.clicked.connect(self._on_compact_mode_clicked)
-        # A real segmented control: each half takes the full content width, so
-        # the checked state reads as a half-width block instead of a small chip
-        # floating in the middle of its cell.
-        for button in (self._mode_groups, self._mode_compact):
-            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            button.setFixedHeight(LIBRARY_MODE_TAB_HEIGHT)
-        mode_wrap.addWidget(self._mode_groups, 1)
-        mode_wrap.addWidget(self._mode_compact, 1)
-        controls.addLayout(mode_wrap)
         root.addLayout(controls)
 
         self._scroll = QScrollArea(self)
+        self._scroll.setObjectName("ultraViewLibraryScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1455,6 +1405,14 @@ class ViewLibraryPanel(QFrame):
         self._scroll.setWidget(self._body)
         self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         root.addWidget(self._scroll, 1)
+        # A rebuild creates fresh section frames.  Before Qt's next layout turn
+        # their aggregate minimum can momentarily read as the outer margins
+        # (22px), which would make QScrollArea squeeze every section instead of
+        # turning its scrollbar on.  One owned, coalesced timer measures after
+        # that layout turn; reopening the panel must not be the repair path.
+        self._body_min_height_timer = QTimer(self)
+        self._body_min_height_timer.setSingleShot(True)
+        self._body_min_height_timer.timeout.connect(self._sync_body_min_height)
         self._rebuild()
 
     def search_field(self) -> QLineEdit:
@@ -1479,11 +1437,9 @@ class ViewLibraryPanel(QFrame):
     def section_headers(self) -> dict[str, QWidget]:
         return dict(self._section_headers)
 
-    def catalog_cards(self) -> dict[str, _LibraryCatalogCard]:
-        return dict(self._catalog_cards)
-
     def browse_mode(self) -> str:
-        return self._browse_mode
+        """Return the only remaining browse path for legacy read-only callers."""
+        return LIBRARY_MODE_GROUPS
 
     def is_section_expanded(self, section: str) -> bool:
         return bool(self._expanded.get(section, True))
@@ -1561,6 +1517,11 @@ class ViewLibraryPanel(QFrame):
         self._pin.setAccessibleName(label)
 
     def _rebuild(self) -> None:
+        # Effects are owned by their row widgets.  Clear them before detaching
+        # a group host so selection remains an _selected projection, never a
+        # lingering QObject/effect owned by a soon-to-die row.
+        for row_widget in self._row_widgets:
+            row_widget.set_selected(False)
         while self._body_layout.count():
             item = self._body_layout.takeAt(0)
             widget = item.widget()
@@ -1571,7 +1532,6 @@ class ViewLibraryPanel(QFrame):
         self._section_frames = {}
         self._section_headers = {}
         self._section_rules = {}
-        self._catalog_cards = {}
         visible = self.visible_rows()
         by_section: dict[str, list[LibraryRow]] = {section: [] for section in SOURCE_SECTIONS}
         for row in visible:
@@ -1579,8 +1539,6 @@ class ViewLibraryPanel(QFrame):
                 by_section[row.section].append(row)
         query = self._search.text().strip()
         if query:
-            self._browse_mode = LIBRARY_MODE_GROUPS
-            self._sync_mode_buttons()
             for section, rows in by_section.items():
                 if rows:
                     self._expanded[section] = True
@@ -1621,65 +1579,18 @@ class ViewLibraryPanel(QFrame):
                 self._row_widgets.append(row_widget)
             self._section_frames[section] = frame
             groups_layout.addWidget(frame)
-        self._compact_host = QWidget(self._body)
-        self._compact_host.setObjectName("ultraViewLibraryCompactHost")
-        compact_layout = QVBoxLayout(self._compact_host)
-        compact_layout.setContentsMargins(0, 0, 0, 0)
-        compact_layout.setSpacing(LIBRARY_CATALOG_GAP)
-        for section in SOURCE_SECTIONS:
-            card = _LibraryCatalogCard(section, self._compact_host)
-            card.expand_requested.connect(self._on_catalog_expand)
-            compact_layout.addWidget(card)
-            self._catalog_cards[section] = card
         self._body_layout.addWidget(self._groups_host)
-        self._body_layout.addWidget(self._compact_host)
-        # Tail stretch, re-added on every rebuild. `setWidgetResizable(True)`
-        # grows `_body` to the viewport, and without something to absorb the
-        # slack QVBoxLayout hands it to the cards — that is how a 40px overview
-        # card ballooned to 80. The clearing loop above takes spacers too
-        # (`item.widget()` is None for them, so the guard already skips them),
-        # so adding this once in __init__ would lose it at the first rebuild.
+        # The scroll body may be taller than its groups.  Keep spare height in
+        # an explicit tail stretch rather than letting Qt distribute it into
+        # section cards or rows after a rebuild.
         self._body_layout.addStretch(1)
-        self._sync_mode_visibility()
-        self._sync_body_min_height()
-
-    def _on_groups_mode_clicked(self) -> None:
-        self._browse_mode = LIBRARY_MODE_GROUPS
-        self._sync_mode_visibility()
-        self._sync_body_min_height()
-
-    def _on_compact_mode_clicked(self) -> None:
-        self._browse_mode = LIBRARY_MODE_COMPACT
-        self._sync_mode_visibility()
-        self._sync_body_min_height()
-
-    def _sync_mode_buttons(self) -> None:
-        groups = self._browse_mode == LIBRARY_MODE_GROUPS
-        blocked = self._mode_groups.blockSignals(True)
-        self._mode_groups.setChecked(groups)
-        self._mode_groups.blockSignals(blocked)
-        blocked = self._mode_compact.blockSignals(True)
-        self._mode_compact.setChecked(not groups)
-        self._mode_compact.blockSignals(blocked)
-
-    def _sync_mode_visibility(self) -> None:
-        self._sync_mode_buttons()
-        groups = self._browse_mode == LIBRARY_MODE_GROUPS
-        if hasattr(self, "_groups_host"):
-            self._groups_host.setVisible(groups)
-        if hasattr(self, "_compact_host"):
-            self._compact_host.setVisible(not groups)
-
-    def _on_catalog_expand(self, section: str) -> None:
-        self._expanded[str(section)] = True
-        self._browse_mode = LIBRARY_MODE_GROUPS
-        self._rebuild()
+        self._queue_body_min_height_sync()
 
     def sizeHint(self) -> QSize:  # noqa: N802
         """Fixed size, independent of the list inside.
 
         Deriving the hint from content made every in-panel action (collapse a
-        group, switch to overview, type a character) resize the overlay, and
+        group or type a character) resize the overlay, and
         ``floating_layout`` centers the panel on its trigger, so the height
         swing became a top-edge jump too. Content scrolls; the frame does not
         move. Capping a content-driven hint would only narrow the jump range.
@@ -1692,6 +1603,7 @@ class ViewLibraryPanel(QFrame):
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self._sync_body_min_height()
+        self._queue_body_min_height_sync()
 
     def _measured_body_height(self) -> int:
         """Ask the layout instead of re-deriving what it already knows.
@@ -1707,6 +1619,10 @@ class ViewLibraryPanel(QFrame):
     def _sync_body_min_height(self) -> None:
         self._body.setMinimumHeight(self._measured_body_height())
 
+    def _queue_body_min_height_sync(self) -> None:
+        """Measure rebuilt section geometry after Qt has laid out their children."""
+        self._body_min_height_timer.start(0)
+
     def _on_section_toggled(self, section: str, expanded: bool) -> None:
         self._expanded[section] = bool(expanded)
         rows = 0
@@ -1717,7 +1633,7 @@ class ViewLibraryPanel(QFrame):
         rule = self._section_rules.get(section)
         if rule is not None:
             rule.setVisible(bool(expanded) and rows > 0)
-        self._sync_body_min_height()
+        self._queue_body_min_height_sync()
 
     def _on_row_selected(self, section: str, view_id: str) -> None:
         self.set_selected(section, view_id)

@@ -3897,55 +3897,44 @@ QFrame#ultraViewLibrarySectionRule {
     border: none;
     background-color: #c7d4df;
 }
-QLabel#ultraViewLibrarySectionTitle,
-QLabel#ultraViewLibraryCatalogTitle {
+QLabel#ultraViewLibrarySectionTitle {
     color: #203347;
     font-size: 12px;
     font-weight: 700;
 }
-QToolButton#ultraViewLibraryModeGroups,
-QToolButton#ultraViewLibraryModeCompact {
-    min-height: 26px;
-    padding: 0px 8px 0px 8px;
-    border-width: 1px;
-    border-style: solid;
-    border-color: transparent;
-    border-radius: 7px;
-    background-color: transparent;
-    color: #6b7d8e;
-}
-QToolButton#ultraViewLibraryModeGroups:hover,
-QToolButton#ultraViewLibraryModeCompact:hover {
-    background-color: #eaf2f8;
-    color: #315e85;
-}
-QToolButton#ultraViewLibraryModeGroups:checked,
-QToolButton#ultraViewLibraryModeCompact:checked {
-    background-color: #eaf2f8;
-    color: #315e85;
-    font-weight: 700;
-}
-QToolButton#ultraViewLibraryCatalogExpand {
-    min-height: 24px;
-    padding: 0px 8px 0px 8px;
-    border-width: 1px;
-    border-style: solid;
-    border-color: #c7d4df;
-    border-radius: 6px;
-    background-color: #eaf2f8;
-    color: #315e85;
-    font-size: 11px;
-}
-QToolButton#ultraViewLibraryCatalogExpand:hover {
-    border-color: #3e709c;
-    background-color: #dceaf3;
-}
-QFrame#ultraViewLibrarySection,
-QFrame#ultraViewLibraryCatalogCard {
+QFrame#ultraViewLibrarySection {
     border: 1px solid #c7d4df;
     border-radius: 10px;
     background-color: #fcfdfe;
 }
+/* UltraView section material: five neighbouring moonstone blue-grey values.
+ * They deliberately stay low-saturation; coloured View dots remain the only
+ * per-View identity ink, while these frames aid scanning by analysis type. */
+QFrame#ultraViewLibrarySection[section="time"] {
+    border-color: #b3cbdd;
+    background-color: #e2f0f9;
+}
+QFrame#ultraViewLibrarySection[section="fft"] {
+    border-color: #bccbd8;
+    background-color: #e8f0f7;
+}
+QFrame#ultraViewLibrarySection[section="fft_time"] {
+    border-color: #bfd3d1;
+    background-color: #e7f2f1;
+}
+QFrame#ultraViewLibrarySection[section="frf"] {
+    border-color: #c5cfd8;
+    background-color: #edf1f5;
+}
+QFrame#ultraViewLibrarySection[section="order"] {
+    border-color: #cdd5da;
+    background-color: #f2f5f7;
+}
+QFrame#ultraViewLibrarySectionHead[section="time"] QLabel#ultraViewLibrarySectionTitle { color: #2c5d7e; }
+QFrame#ultraViewLibrarySectionHead[section="fft"] QLabel#ultraViewLibrarySectionTitle { color: #3d6079; }
+QFrame#ultraViewLibrarySectionHead[section="fft_time"] QLabel#ultraViewLibrarySectionTitle { color: #356a6c; }
+QFrame#ultraViewLibrarySectionHead[section="frf"] QLabel#ultraViewLibrarySectionTitle { color: #485f73; }
+QFrame#ultraViewLibrarySectionHead[section="order"] QLabel#ultraViewLibrarySectionTitle { color: #566977; }
 QFrame#ultraViewLibrarySectionHead {
     /* Outer frame is LIBRARY_SECTION_HEAD_HEIGHT (32), pinned in code by
      * setFixedHeight. Qt's min-height is content-box, but this rule turns all
@@ -4049,8 +4038,8 @@ QFrame#ultraViewLibraryRow[onBoard="true"] {
     background-color: transparent;
 }
 QFrame#ultraViewLibraryRow[selected="true"] {
-    border-color: #3e709c;
-    background-color: #eaf2f8;
+    border-color: #5b89aa;
+    background-color: #ffffff;
 }
 QToolButton#ultraViewLibraryAdd {
     /* LIBRARY_ROW_ACTION_SIZE (23) is the outer box; 21 + 1px border x2.
@@ -4368,6 +4357,16 @@ QMenu#ultraViewBoardItemMenu {
     border: 1px solid rgba(67, 92, 111, 0.20);
     border-radius: 12px;
     color: #203347;
+}
+/* The outer library frame owns all four rounded edge pixels.  Its head, body
+ * and scroll viewport must remain transparent; otherwise a rectangular child
+ * can overwrite an arc even though the parent still has the right radius. */
+QWidget#ultraViewLibraryHead,
+QScrollArea#ultraViewLibraryScroll,
+QScrollArea#ultraViewLibraryScroll QWidget#qt_scrollarea_viewport,
+QWidget#ultraViewLibraryBody {
+    border: none;
+    background-color: transparent;
 }
 QFrame#ultraViewLayoutPopover QLabel#ultraViewLayoutPopoverTitle {
     color: #203347;
