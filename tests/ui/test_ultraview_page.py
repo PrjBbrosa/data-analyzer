@@ -3608,14 +3608,23 @@ def _workspace_with_boards(*names: str):
     return workspace
 
 
-def test_board_popover_click_switches_and_more_menu_has_three_actions(qtbot, qapp):
+def test_board_popover_click_switches_and_row_actions_copy_delete(qtbot, qapp, monkeypatch):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)
     page = harness.page
     workspace = _workspace_with_boards("全局对比", "台架 vs 路试", "NVH 复查")
     selected: list[str] = []
+    duplicated: list[str] = []
+    deleted: list[str] = []
     page.select_board_requested.connect(selected.append)
+    page.duplicate_board_requested.connect(duplicated.append)
+    page.delete_board_requested.connect(deleted.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.Yes),
+    )
     page.set_workspace(workspace)
     page.board_island().menu_button().click()
     qapp.processEvents()
@@ -3623,7 +3632,6 @@ def test_board_popover_click_switches_and_more_menu_has_three_actions(qtbot, qap
     assert page.active_panel() == PANEL_BOARDS
     assert popover.isVisible()
     assert popover.current_board_id() == workspace.active_board_id
-    assert "切换到此 Board" not in popover.list_widget().item(0).text()
     target = workspace.boards[1].board_id
     item = next(
         popover.list_widget().item(index)
@@ -3635,14 +3643,16 @@ def test_board_popover_click_switches_and_more_menu_has_three_actions(qtbot, qap
     assert selected == [target]
     assert page.active_panel() is None
 
-    menu = page._make_board_item_menu(target)
-    labels = [action.text() for action in menu.actions()]
-    assert labels == ["复制", "重命名", "删除"]
-    assert "切换到此 Board" not in labels
-    assert "上移" not in labels
-    assert "下移" not in labels
-    assert "移到顶部" not in labels
-    assert "移到底部" not in labels
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    popover.duplicate_requested.emit(target)
+    qapp.processEvents()
+    assert duplicated == [target]
+    assert page.active_panel() == PANEL_BOARDS
+    popover.delete_requested.emit(target)
+    qapp.processEvents()
+    assert deleted == [target]
+    assert not hasattr(page, "_make_board_item_menu")
 
 
 def test_board_popover_drag_reorder_emits_and_survives_workspace_roundtrip(qtbot, qapp):
@@ -3730,3 +3740,37 @@ def test_board_popover_delete_key_does_not_remove_a_board(qtbot, qapp):
     assert deleted == []
     assert page.board_popover().board_ids() == tuple(board.board_id for board in workspace.boards)
     assert page.active_panel() == PANEL_BOARDS
+
+
+def test_board_popover_grows_with_new_board_and_keeps_first_row_visible(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("全局对比")
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    popover = page.board_popover()
+    first_id = workspace.boards[0].board_id
+    height_before = popover.height()
+    created = create_board(workspace, name="全局对比 2")
+    assert created is not None
+    page.set_workspace(workspace)
+    qapp.processEvents()
+    assert popover.isVisible()
+    assert popover.height() > height_before
+    assert abs(popover.height() - popover.sizeHint().height()) <= 2
+    list_bottom = popover.list_widget().geometry().bottom()
+    create_top = popover.create_button().geometry().top()
+    assert 0 <= create_top - list_bottom <= 8
+    first = popover.list_widget().item(0)
+    assert first is not None and first.data(Qt.UserRole) == first_id
+    rect = popover.list_widget().visualItemRect(first)
+    assert rect.top() >= 0
+    assert rect.bottom() <= popover.list_widget().viewport().height()
+    last = popover.list_widget().item(popover.list_widget().count() - 1)
+    assert last is not None
+    last_rect = popover.list_widget().visualItemRect(last)
+    assert last_rect.top() >= 0
+    assert last_rect.bottom() <= popover.list_widget().viewport().height()

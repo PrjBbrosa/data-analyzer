@@ -693,7 +693,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.boards",
-        text="Board 弹层点行切换，拖拽或三点管理",
+        text="Board 弹层点行切换，拖拽复制或删除",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=82,

@@ -47,9 +47,20 @@ PANEL_UNPLACED = "unplaced"
 PANEL_BOARDS = "boards"
 RAIL_MIN_HEIGHT = 196
 BOARD_POPOVER_WIDTH = 260
-BOARD_ROW_HEIGHT = 32
+BOARD_ROW_HEIGHT = 36
 _BOARD_CURRENT_ROLE = Qt.UserRole + 1
-_BOARD_MORE_WIDTH = 28
+_BOARD_ACTION_WIDTH = 24
+_BOARD_POPOVER_MARGIN = 8
+_BOARD_POPOVER_GAP = 6
+_BOARD_CREATE_HEIGHT = 28
+_BOARD_LIST_BOTTOM_PAD = 6
+
+
+def board_popover_height(rows: int) -> int:
+    """Exact popover height for ``rows`` Board lines plus the create row."""
+    count = max(1, int(rows))
+    list_h = count * BOARD_ROW_HEIGHT + max(0, count - 1) + _BOARD_LIST_BOTTOM_PAD
+    return _BOARD_POPOVER_MARGIN * 2 + list_h + _BOARD_POPOVER_GAP + _BOARD_CREATE_HEIGHT
 
 # UltraView-local moonstone tokens.  Do not fold these into CONTROL_COLORS.
 ULTRAVIEW_MOON = QColor("#EDF2F5")
@@ -760,13 +771,16 @@ class BoardIsland(QFrame):
 
 
 class _BoardListDelegate(QStyledItemDelegate):
-    """Draw check + name + hover/focus ⋯ without stealing InternalMove."""
+    """Draw check + name + copy/delete without stealing InternalMove."""
 
-    menu_requested = pyqtSignal(str, QPoint)
+    duplicate_requested = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._hovered_row = -1
+        self._copy_icon = Icons.copy_image()
+        self._delete_icon = Icons.close_file()
 
     def set_hovered_row(self, row: int) -> None:
         self._hovered_row = int(row)
@@ -777,7 +791,7 @@ class _BoardListDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index) -> None:  # noqa: N802
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        rect = option.rect.adjusted(4, 1, -4, -1)
+        rect = option.rect.adjusted(4, 2, -4, -2)
         selected = bool(option.state & QStyle.State_Selected)
         hovered = index.row() == self._hovered_row
         current = bool(index.data(_BOARD_CURRENT_ROLE))
@@ -792,43 +806,62 @@ class _BoardListDelegate(QStyledItemDelegate):
         check_rect = QRect(rect.left() + 4, rect.top(), 16, rect.height())
         painter.setPen(ULTRAVIEW_STONE if current else Qt.transparent)
         painter.drawText(check_rect, Qt.AlignCenter, "✓" if current else "")
-        more_visible = hovered or selected or bool(option.state & QStyle.State_HasFocus)
-        more_rect = self.more_rect(option.rect)
-        text_right = more_rect.left() - 4 if more_visible else rect.right() - 4
-        name_rect = QRect(check_rect.right() + 4, rect.top(), max(0, text_right - check_rect.right() - 4), rect.height())
+        copy_rect, delete_rect = self.action_rects(option.rect)
+        name_rect = QRect(
+            check_rect.right() + 4,
+            rect.top(),
+            max(0, copy_rect.left() - 4 - check_rect.right() - 4),
+            rect.height(),
+        )
         metrics = option.fontMetrics
         name = metrics.elidedText(str(index.data(Qt.DisplayRole) or ""), Qt.ElideRight, name_rect.width())
         painter.setPen(ULTRAVIEW_INK)
         painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
-        if more_visible:
-            painter.setPen(ULTRAVIEW_MUTED)
-            painter.drawText(more_rect, Qt.AlignCenter, "⋯")
+        self._paint_icon(painter, self._copy_icon, copy_rect)
+        self._paint_icon(painter, self._delete_icon, delete_rect)
         painter.restore()
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
         del option, index
         return QSize(BOARD_POPOVER_WIDTH - 16, BOARD_ROW_HEIGHT)
 
+    @staticmethod
+    def _paint_icon(painter, icon: QIcon, slot: QRect) -> None:
+        box = QRect(0, 0, 18, 18)
+        box.moveCenter(slot.center())
+        icon.paint(painter, box, Qt.AlignCenter)
+
     def editorEvent(self, event, model, option, index) -> bool:  # noqa: N802
-        if (
-            event.type() == QEvent.MouseButtonRelease
-            and event.button() == Qt.LeftButton
-            and self.more_rect(option.rect).contains(event.pos())
-        ):
-            board_id = str(index.data(Qt.UserRole) or "")
-            if board_id:
-                self.menu_requested.emit(board_id, event.globalPos())
+        del model
+        if event.type() != QEvent.MouseButtonRelease or event.button() != Qt.LeftButton:
+            return False
+        board_id = str(index.data(Qt.UserRole) or "")
+        if not board_id:
+            return False
+        copy_rect, delete_rect = self.action_rects(option.rect)
+        if copy_rect.contains(event.pos()):
+            self.duplicate_requested.emit(board_id)
+            return True
+        if delete_rect.contains(event.pos()):
+            self.delete_requested.emit(board_id)
             return True
         return False
 
     @staticmethod
-    def more_rect(item_rect: QRect) -> QRect:
-        return QRect(
-            item_rect.right() - _BOARD_MORE_WIDTH - 4,
+    def action_rects(item_rect: QRect) -> tuple[QRect, QRect]:
+        delete_rect = QRect(
+            item_rect.right() - _BOARD_ACTION_WIDTH - 4,
             item_rect.top(),
-            _BOARD_MORE_WIDTH,
+            _BOARD_ACTION_WIDTH,
             item_rect.height(),
         )
+        copy_rect = QRect(
+            delete_rect.left() - _BOARD_ACTION_WIDTH,
+            item_rect.top(),
+            _BOARD_ACTION_WIDTH,
+            item_rect.height(),
+        )
+        return copy_rect, delete_rect
 
 
 class _BoardList(QListWidget):
@@ -840,15 +873,33 @@ class _BoardList(QListWidget):
         super().__init__(parent)
         self._drag_id = ""
         self.setObjectName("ultraViewBoardList")
+        self.setFrameShape(QFrame.NoFrame)
         self.setDragDropMode(QAbstractItemView.InternalMove)
         self.setDefaultDropAction(Qt.MoveAction)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setSizeAdjustPolicy(QAbstractItemView.AdjustToContents)
+        self.setUniformItemSizes(True)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setDropIndicatorShown(True)
         self.setSpacing(1)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Maximum)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(BOARD_POPOVER_WIDTH - 12, self._content_height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(BOARD_POPOVER_WIDTH - 12, BOARD_ROW_HEIGHT)
+
+    def content_height(self) -> int:
+        return self._content_height()
+
+    def _content_height(self) -> int:
+        rows = max(1, self.count())
+        return rows * BOARD_ROW_HEIGHT + max(0, rows - 1) * self.spacing() + _BOARD_LIST_BOTTOM_PAD
 
     def startDrag(self, supported_actions) -> None:  # noqa: N802
         item = self.currentItem()
@@ -875,14 +926,15 @@ class _BoardList(QListWidget):
 
 
 class BoardPopover(QFrame):
-    """Single-layer Board list: click to switch, drag to reorder, ⋯ to manage.
+    """Single-layer Board list: click to switch, drag to reorder, copy/delete on the row.
 
     Page owns workspace mutation, confirmation, and the 20-Board cap.  This
     widget only projects the current list and emits typed intents.
     """
 
     board_selected = pyqtSignal(str)
-    board_menu_requested = pyqtSignal(str, QPoint)
+    duplicate_requested = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
     boards_reordered = pyqtSignal(str, int)
     create_requested = pyqtSignal()
     rename_requested = pyqtSignal(str)
@@ -898,23 +950,30 @@ class BoardPopover(QFrame):
         self._flush_timer.setSingleShot(True)
         self._flush_timer.timeout.connect(self._end_reordering)
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(
+            _BOARD_POPOVER_MARGIN,
+            _BOARD_POPOVER_MARGIN,
+            _BOARD_POPOVER_MARGIN,
+            _BOARD_POPOVER_MARGIN,
+        )
+        root.setSpacing(_BOARD_POPOVER_GAP)
         self._list = _BoardList(self)
         self._delegate = _BoardListDelegate(self._list)
         self._list.setItemDelegate(self._delegate)
-        self._delegate.menu_requested.connect(self.board_menu_requested)
+        self._delegate.duplicate_requested.connect(self.duplicate_requested)
+        self._delegate.delete_requested.connect(self.delete_requested)
         self._list.itemClicked.connect(self._on_item_clicked)
         self._list.reordered.connect(self._on_reordered)
         self._list.installEventFilter(self)
         self._list.viewport().installEventFilter(self)
-        root.addWidget(self._list, 1)
+        root.addWidget(self._list, 0)
         self._create = QToolButton(self)
         self._create.setObjectName("ultraViewBoardPopoverCreate")
         self._create.setText("＋ 新建 Board")
         self._create.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._create.setCursor(Qt.PointingHandCursor)
         self._create.setFocusPolicy(Qt.TabFocus)
+        self._create.setFixedHeight(_BOARD_CREATE_HEIGHT)
         self._create.setToolTip("新建 Board")
         self._create.setAccessibleName("新建 Board")
         self._create.clicked.connect(self.create_requested)
@@ -944,15 +1003,15 @@ class BoardPopover(QFrame):
                 return str(item.data(Qt.UserRole) or "")
         return ""
 
-    def more_rect_for(self, board_id: str) -> QRect:
-        """Viewport-local ⋯ hit rect for tests and keyboard users."""
+    def action_rects_for(self, board_id: str) -> tuple[QRect, QRect]:
+        """Viewport-local copy/delete hit rects for tests."""
         for index in range(self._list.count()):
             item = self._list.item(index)
             if item is None or str(item.data(Qt.UserRole) or "") != board_id:
                 continue
             rect = self._list.visualItemRect(item)
-            return _BoardListDelegate.more_rect(rect)
-        return QRect()
+            return _BoardListDelegate.action_rects(rect)
+        return QRect(), QRect()
 
     def apply_internal_move(self, board_id: str, new_index: int) -> None:
         """Reorder as InternalMove would, then emit the same intent."""
@@ -983,14 +1042,18 @@ class BoardPopover(QFrame):
         self._create.setToolTip(str(reason or "新建 Board"))
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        rows = max(1, self._list.count())
-        return QSize(
-            BOARD_POPOVER_WIDTH,
-            8 + rows * (BOARD_ROW_HEIGHT + 1) + 6 + 32 + 8,
-        )
+        return QSize(BOARD_POPOVER_WIDTH, board_popover_height(self._list.count()))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(BOARD_POPOVER_WIDTH, 96)
+        return QSize(BOARD_POPOVER_WIDTH, board_popover_height(1))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_list_to_contents()
+
+    def relayout(self) -> None:
+        """Recompute list height after the overlay geometry changes."""
+        self._fit_list_to_contents()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if watched is self._list and event.type() == QEvent.KeyPress:
@@ -1009,23 +1072,68 @@ class BoardPopover(QFrame):
                 if event.button() == Qt.LeftButton:
                     item = self._list.itemAt(event.pos())
                     if item is not None:
-                        more = _BoardListDelegate.more_rect(self._list.visualItemRect(item))
-                        if more.contains(event.pos()):
+                        copy_rect, delete_rect = _BoardListDelegate.action_rects(
+                            self._list.visualItemRect(item)
+                        )
+                        if copy_rect.contains(event.pos()) or delete_rect.contains(event.pos()):
                             if event.type() == QEvent.MouseButtonRelease:
                                 board_id = str(item.data(Qt.UserRole) or "")
-                                if board_id:
-                                    self.board_menu_requested.emit(board_id, event.globalPos())
+                                if board_id and copy_rect.contains(event.pos()):
+                                    self.duplicate_requested.emit(board_id)
+                                elif board_id:
+                                    self.delete_requested.emit(board_id)
                             return True
             if event.type() == QEvent.MouseMove:
                 row = self._list.indexAt(event.pos()).row()
                 if row != self._delegate.hovered_row():
                     self._delegate.set_hovered_row(row)
                     self._list.viewport().update()
+                item = self._list.itemAt(event.pos())
+                if item is not None:
+                    copy_rect, delete_rect = _BoardListDelegate.action_rects(
+                        self._list.visualItemRect(item)
+                    )
+                    if copy_rect.contains(event.pos()):
+                        self._list.setToolTip("复制 Board")
+                    elif delete_rect.contains(event.pos()):
+                        self._list.setToolTip("删除 Board")
+                    else:
+                        self._list.setToolTip(item.toolTip())
             if event.type() == QEvent.Leave:
                 if self._delegate.hovered_row() != -1:
                     self._delegate.set_hovered_row(-1)
                     self._list.viewport().update()
         return super().eventFilter(watched, event)
+
+    def _list_content_height(self) -> int:
+        return self._list.content_height()
+
+    def _fit_list_to_contents(self) -> None:
+        content = self._list_content_height()
+        layout = self.layout()
+        if layout is None:
+            return
+        margins = layout.contentsMargins()
+        available = (
+            self.height()
+            - margins.top()
+            - margins.bottom()
+            - layout.spacing()
+            - self._create.height()
+        )
+        if available <= 0:
+            target = content
+        else:
+            target = max(BOARD_ROW_HEIGHT, min(content, available))
+        if self._list.height() != target:
+            self._list.setFixedHeight(target)
+        if content <= target + 4:
+            self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._list.verticalScrollBar().setValue(0)
+            if self._list.height() != content and available >= content:
+                self._list.setFixedHeight(content)
+        else:
+            self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
     def _selected_board_id(self) -> str:
         item = self._list.currentItem()
@@ -1081,7 +1189,13 @@ class BoardPopover(QFrame):
         if current_item is not None:
             self._list.setCurrentItem(current_item)
         self._list.blockSignals(blocked)
+        intended = self._list_content_height()
+        self._list.setFixedHeight(intended)
+        self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.verticalScrollBar().setValue(0)
+        self.setMaximumHeight(board_popover_height(max(1, len(parsed))))
         self.updateGeometry()
+        self._fit_list_to_contents()
 
 
 class GlobalIsland(QFrame):

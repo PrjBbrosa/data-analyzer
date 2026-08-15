@@ -364,6 +364,8 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "Ctrl+Shift+Z" in haystack
     assert "点行切换" in haystack
     assert "拖拽排序" in haystack
+    assert "行尾复制" in haystack
+    assert "⋯" not in haystack
     assert "Alt+拖" not in haystack
     assert "Option 拖动" not in haystack
     assert "碰撞时提示" not in haystack

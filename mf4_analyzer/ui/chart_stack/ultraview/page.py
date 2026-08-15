@@ -48,7 +48,6 @@ from mf4_analyzer.ui.ultraview_state import (
     placement_for,
     slot_occupant,
 )
-from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 from .viewport import (
     QUALITY_FAST,
@@ -102,6 +101,7 @@ from .chrome import (
     NavigationIsland,
     StatusIsland,
     ToolRail,
+    board_popover_height,
 )
 from .floating_layout import (
     DEFAULT_MINIMAP_SIZE,
@@ -369,7 +369,8 @@ class UltraViewPage(QWidget):
         self._board_island.create_requested.connect(self.create_board_requested)
         self._board_island.rename_requested.connect(self._rename_current_board)
         self._board_popover.board_selected.connect(self._on_board_selected)
-        self._board_popover.board_menu_requested.connect(self._on_board_item_menu)
+        self._board_popover.duplicate_requested.connect(self.duplicate_board_requested)
+        self._board_popover.delete_requested.connect(self._confirm_delete_board)
         self._board_popover.boards_reordered.connect(self._on_boards_reordered)
         self._board_popover.create_requested.connect(self.create_board_requested)
         self._board_popover.rename_requested.connect(self._rename_board)
@@ -673,7 +674,7 @@ class UltraViewPage(QWidget):
             PANEL_LAYOUT: (360, 240),
             PANEL_FILTER: (160, 160),
             PANEL_UNPLACED: (360, 160),
-            PANEL_BOARDS: (BOARD_POPOVER_WIDTH, 96),
+            PANEL_BOARDS: (BOARD_POPOVER_WIDTH, board_popover_height(1)),
             "display": (200, 80),
             "export": (200, 80),
         }
@@ -801,6 +802,7 @@ class UltraViewPage(QWidget):
             overlay = self._canvas_host.overlay(PANEL_BOARDS)
             if overlay is not None:
                 overlay.raise_()
+            self._board_popover.relayout()
         elif self._active_panel is not None and layout.overlay is not None:
             self._canvas_host.set_overlay_geometry(self._active_panel, _qrect(layout.overlay))
             overlay = self._canvas_host.overlay(self._active_panel)
@@ -916,29 +918,8 @@ class UltraViewPage(QWidget):
             not at_cap,
             "最多创建 20 个 Board" if at_cap else "",
         )
-
-    def _on_board_item_menu(self, board_id: str, global_pos: QPoint) -> None:
-        menu = self._make_board_item_menu(board_id)
-        chosen = menu.exec_(global_pos)
-        if chosen is None:
-            return
-        intent = chosen.data()
-        if intent == "duplicate":
-            self.duplicate_board_requested.emit(board_id)
-        elif intent == "rename":
-            self._rename_board(board_id)
-        elif intent == "delete":
-            self._confirm_delete_board(board_id)
-
-    def _make_board_item_menu(self, board_id: str) -> QMenu:
-        del board_id
-        menu = QMenu(self)
-        menu.setObjectName("ultraViewBoardItemMenu")
-        apply_rounded_menu_chrome(menu)
-        for label, intent in (("复制", "duplicate"), ("重命名", "rename"), ("删除", "delete")):
-            action = menu.addAction(label)
-            action.setData(intent)
-        return menu
+        if self._active_panel == PANEL_BOARDS:
+            self._apply_floating_layout()
 
     def _on_boards_reordered(self, board_id: str, new_index: int) -> None:
         self.reorder_board_requested.emit(str(board_id), int(new_index))

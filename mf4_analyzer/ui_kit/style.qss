@@ -4351,8 +4351,7 @@ QFrame#ultraViewBoardPopover,
 QFrame#ultraViewCompareRail,
 QFrame#ultraViewUnplacedTray,
 QFrame#ultraViewDisplayPopover,
-QFrame#ultraViewExportPopover,
-QMenu#ultraViewBoardItemMenu {
+QFrame#ultraViewExportPopover {
     background-color: #fcfdfe;
     border: 1px solid rgba(67, 92, 111, 0.20);
     border-radius: 12px;
@@ -4384,7 +4383,7 @@ QListWidget#ultraViewBoardList {
 QListWidget#ultraViewBoardList::item {
     border: none;
     padding: 0;
-    min-height: 32px;
+    min-height: 36px;
 }
 QToolButton#ultraViewBoardPopoverCreate {
     min-height: 28px;

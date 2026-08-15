@@ -473,7 +473,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "多个 Board",
-                sub="左上名称旁打开弹层：点行切换、拖拽排序、行尾 ⋯ 复制/重命名/删除；＋ 新建，最多 20 个",
+                sub="左上名称旁打开弹层：点行切换、拖拽排序、行尾复制/删除；双击名称或 F2 重命名；＋ 新建，最多 20 个",
                 gesture="Board 名称 ▾",
             ),
             QuickRow(
