@@ -357,7 +357,14 @@ class ViewMixin:
                 update_primary_ui=update_primary_ui,
                 defer_first_frame=(state.xlim is not None),
             )
-            canvas.restore_visible_xlim(state.xlim)
+            # Restoring a View is ONE transaction (2026-08-15 view-switch
+            # quality settlement spec §3.1): X, then Y, then ticks, and only
+            # then a single settlement. Flushing inside the X restore — as
+            # this used to — measured ink, the envelope bucket cap, the AA
+            # gate and raster admission against the [0, 1] placeholder Y that
+            # a deferred rebuild leaves behind, and nothing re-decided them
+            # afterwards.
+            canvas.restore_visible_xlim(state.xlim, flush=False)
             canvas.restore_visible_ylims(state.ylims)
             tick_opts = (state.axis_opts or {}).get('tick_density') or {}
             default_x, default_y = DEFAULT_CHART_TICK_DENSITY
@@ -365,6 +372,7 @@ class ViewMixin:
                 int(tick_opts.get('x', default_x)),
                 int(tick_opts.get('y', default_y)),
             )
+            canvas.settle_view_restore()
         finally:
             self._applying_view = old_applying_view
             # F8: secondary-pane restore must not project time controls while

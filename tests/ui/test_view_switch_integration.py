@@ -449,3 +449,144 @@ def test_delete_view_confirm_copy_defaults_to_cancel(qtbot, qapp, loaded_csv):
     assert box.defaultButton().text() == "取消"
     labels = {b.text() for b in box.buttons()}
     assert {"删除", "取消"} <= labels
+
+
+def _register_dense_source(w, qapp, n_ch=2, n_points=1_000_000, fs=20_000.0):
+    """Register a synthetic EPS source through the product load path.
+
+    Mirrors ``docs/analyzer/verify/2026-08-15-view-switch-quality-probes/
+    probes/probe_mainwindow_view_switch.py`` so this test sits on the same
+    geometry the real-machine baseline was measured on.
+    """
+    import numpy as np
+    import pandas as pd
+
+    t = np.arange(n_points, dtype=np.float64) / fs
+    names = ["方向盘扭矩", "电机转速", "电机扭矩", "Rack Force"][:n_ch]
+    cols = {"Time": t}
+    for i, name in enumerate(names):
+        cols[name] = 100.0 * np.sin(2.0 * np.pi * (0.5 + 0.1 * i) * t)
+    w._register_file_data(
+        "probe.mf4", pd.DataFrame(cols), ["Time", *names],
+        {n: "Nm" for n in names},
+    )
+    fid = next(iter(w.files))
+    w._on_source_load_finished([fid])
+    qapp.processEvents()
+    return fid, names
+
+
+def _visible_line_state(canvas):
+    """Per visible line: drawn envelope points + the recorded ink reading."""
+    out = {}
+    for ck, _name, (_axis, line) in canvas._channel_lines.composite_items():
+        pdi = getattr(line, "plot_data_item", None)
+        if pdi is None or not pdi.isVisible():
+            continue
+        xd, _ = pdi.getData()
+        out[ck] = {
+            "points": 0 if xd is None else int(len(xd)),
+            "ink": canvas._line_ink_state.get(ck),
+        }
+    return out
+
+
+def test_overlay_round_trip_keeps_ink_and_buckets(qtbot, qapp):
+    """Product path for spec §1.2 defect A (view-switch quality settlement).
+
+    An overlay View that is affordable on first visit must stay affordable
+    after switching away and back. Before the restore transaction the round
+    trip measured ink against the placeholder Y that
+    ``plot_channels(defer_first_frame=True)`` leaves behind, which refused AA
+    with ``high-ink``, cut the envelope bucket count, and admitted lines to
+    the raster path — none of it self-healing.
+    """
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1400, 820)
+    w.show()
+    qtbot.waitExposed(w)
+    fid, names = _register_dense_source(w, qapp)
+    canvas = w.canvas_time
+
+    # View 1: one channel, windowed to the middle 20% of the recording.
+    w.chart_stack.set_plot_mode("overlay")
+    w.navigator.set_checked_channels([(fid, names[0])])
+    w.plot_time()
+    qapp.processEvents()
+    xl = canvas.get_visible_xlim()
+    span = xl[1] - xl[0]
+    canvas.restore_visible_xlim((xl[0] + span * 0.4, xl[0] + span * 0.6))
+    # Let the 40 ms settle debounce land so the baseline is measured on the
+    # same settled layout the restore transaction settles on (axis label width
+    # feeds the bucket count).
+    qtbot.wait(150)
+    w._capture_current_view()
+    first = _visible_line_state(canvas)
+    first_status = canvas.quality_status()
+    assert first
+    assert first_status.get("block_reason") != "high-ink", (
+        "premise: this overlay is affordable on first visit"
+    )
+    assert not canvas._ink_raster_admitted, (
+        "premise: no line is raster-admitted on first visit"
+    )
+    for ck, rec in first.items():
+        assert rec["ink"] is not None and rec["ink"][1] is False, (
+            f"premise: {ck} is under the ink budget on first visit"
+        )
+
+    # View 2: a different channel set, so switching back is a full rebuild.
+    w._on_view_new()
+    qapp.processEvents()
+    w._attach_files_to_focused_view([fid])
+    w.chart_stack.set_plot_mode("overlay")
+    w.navigator.set_checked_channels([(fid, names[1])])
+    w.plot_time()
+    qapp.processEvents()
+    xl = canvas.get_visible_xlim()
+    span = xl[1] - xl[0]
+    canvas.restore_visible_xlim((xl[0], xl[0] + span * 0.1))
+    qapp.processEvents()
+    w._capture_current_view()
+
+    for round_idx in range(2):
+        w._switch_view(0)
+        qapp.processEvents()
+        status = canvas.quality_status()
+        assert status.get("block_reason") != "high-ink", (
+            f"round {round_idx}: switching back reported "
+            f"{status.get('block_reason')!r} for a shape that was affordable "
+            f"on first visit"
+        )
+        back = _visible_line_state(canvas)
+        assert set(back) == set(first)
+        for ck, rec in back.items():
+            ref = first[ck]
+            assert rec["ink"] is not None
+            # Ink is the number all four consequences hang off; against the
+            # placeholder Y this read ~460 000 instead of ~8 400.
+            assert rec["ink"][0] == pytest.approx(ref["ink"][0], rel=0.05), (
+                f"round {round_idx}, {ck}: ink {rec['ink'][0]} is not within "
+                f"5% of the first-visit reading {ref['ink'][0]}"
+            )
+            assert rec["ink"][1] is False, (
+                f"round {round_idx}, {ck}: the restored View was judged over "
+                f"the ink budget"
+            )
+            # The ink cap can only ever REDUCE the bucket count, so a cut
+            # shows up as a large drop. Exact equality is asserted at canvas
+            # level (TestViewRestoreSettlement); here a settled MainWindow
+            # layout can legitimately differ by a couple of percent because a
+            # debounced post-rebuild refresh lands on a transient axis width —
+            # behaviour that predates this transaction and is unrelated to it.
+            assert rec["points"] == pytest.approx(ref["points"], rel=0.05), (
+                f"round {round_idx}, {ck}: the restored View drew "
+                f"{rec['points']} envelope points vs {ref['points']} on first "
+                f"visit — the ink budget cut buckets"
+            )
+        assert not canvas._ink_raster_admitted, (
+            f"round {round_idx}: a line was admitted to the raster path"
+        )
+        w._switch_view(1)
+        qapp.processEvents()
