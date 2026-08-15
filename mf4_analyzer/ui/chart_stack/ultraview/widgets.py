@@ -62,6 +62,7 @@ from mf4_analyzer.ui.ultraview_state import (
     STATUS_MISSING,
     STATUS_ORPHANED,
     STATUS_STALE,
+    ULTRAVIEW_PAGE_OBJECT_NAME,
     ULTRAVIEW_REF_MIME,
     FreeGridPlacement,
     GridRect,
@@ -144,7 +145,7 @@ _PLANNER_LOG_INTERVAL_S = 0.5
 def _page_of(widget: QWidget):
     current = widget
     while current is not None:
-        if current.objectName() == "ultraViewPage":
+        if current.objectName() == ULTRAVIEW_PAGE_OBJECT_NAME:
             return current
         current = current.parentWidget()
     return None

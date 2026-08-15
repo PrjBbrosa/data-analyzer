@@ -105,6 +105,7 @@ STATUS_MISSING = "missing"
 STATUS_ORPHANED = "orphaned"
 
 ULTRAVIEW_REF_MIME = "application/x-tracelab-ultraview-ref+json"
+ULTRAVIEW_PAGE_OBJECT_NAME = "ultraViewPage"
 
 RANGE_ABS_TOL = 1e-9
 RANGE_REL_TOL = 1e-6

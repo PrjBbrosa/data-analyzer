@@ -31,6 +31,7 @@ from mf4_analyzer.ui.ultraview_state import (
     COMPARE_FILTER_ALL,
     STATUS_ORPHANED,
     STATUS_STALE,
+    ULTRAVIEW_PAGE_OBJECT_NAME,
     UltraViewBoardState,
     UltraViewRef,
     axis_consistency_facts,
@@ -225,7 +226,7 @@ class UltraViewPage(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("ultraViewPage")
+        self.setObjectName(ULTRAVIEW_PAGE_OBJECT_NAME)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFocusPolicy(Qt.StrongFocus)
         self._board = default_board()
