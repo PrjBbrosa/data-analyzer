@@ -228,7 +228,7 @@ def _iter_hover_cursor_items(owner):
             yield from items
 
 
-def _iter_transient_overlay_items(widget):
+def _iter_transient_overlay_items(widget, *, section: str = "unknown"):
     seen = set()
     for host in _iter_overlay_hosts(widget):
         # Hover follow lines are always transient. Single mode has no armed
@@ -242,7 +242,18 @@ def _iter_transient_overlay_items(widget):
                     continue
                 seen.add(ident)
                 yield item
-        for vb in _iter_viewboxes(host):
+        viewboxes = tuple(_iter_viewboxes(host))
+        if not viewboxes:
+            host_type = type(host).__name__
+            throttled(
+                logger,
+                f"ultraview:no-viewbox:{section}:{host_type}",
+                logging.WARNING,
+                "ultraview: no viewbox found on %s (%s)",
+                section,
+                host_type,
+            )
+        for vb in viewboxes:
             box = getattr(vb, "rbScaleBox", None)
             if box is not None and id(box) not in seen:
                 seen.add(id(box))
@@ -295,7 +306,7 @@ def _plain_text(value) -> str:
 
 
 @contextmanager
-def hide_transient_overlays(widget):
+def hide_transient_overlays(widget, *, section: str = "unknown"):
     """Hide hover/rubber-band items; restore in ``finally``.
 
     Hover follow lines (single and dual) are transient. Dual armed A/B
@@ -304,7 +315,7 @@ def hide_transient_overlays(widget):
     """
     hidden = []
     try:
-        for item in _iter_transient_overlay_items(widget):
+        for item in _iter_transient_overlay_items(widget, section=section):
             if not _alive(item):
                 continue
             try:
@@ -2390,7 +2401,7 @@ class UltraViewCoordinator(QObject):
             self._warn_capture(ref, widget, reason, "no-result")
             self._push_preview(ref, usable=False)
             return False
-        with hide_transient_overlays(widget):
+        with hide_transient_overlays(widget, section=ref.section):
             image = self._grab_image(widget, ref)
         if image is None:
             self._warn_capture(ref, widget, reason, "grab-invalid")

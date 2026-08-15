@@ -643,6 +643,32 @@ def test_transient_overlays_hidden_but_markup_revision_is_captured(qapp):
     coord.deleteLater()
 
 
+def test_missing_viewbox_logs_warning_without_disabling_capture(qapp, caplog):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+
+    coord.request_capture(ref, canvas, "normal-viewbox")
+    _flush()
+    assert not [record for record in caplog.records if "no viewbox found" in record.message]
+
+    canvas._plotx = canvas._plot
+    del canvas._plot
+    caplog.clear()
+    canvas.markup_revision += 1
+    coord.request_capture(ref, canvas, "missing-viewbox")
+    _flush()
+
+    warnings = [record.message for record in caplog.records if "no viewbox found" in record.message]
+    assert warnings == ["ultraview: no viewbox found on time (FakeCanvas)"]
+    assert coord.store.get(ref) is not None
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 class _FakeReadoutPill:
     def __init__(self) -> None:
         self._visible = True
