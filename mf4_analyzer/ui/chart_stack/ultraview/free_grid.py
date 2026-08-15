@@ -21,14 +21,22 @@ from mf4_analyzer.ui.ultraview_state import (
     UltraViewRef,
 )
 
-from .layouts import BASE_BOARD_SIZE, BOARD_PADDING, SLOT_GUTTER
+from .layouts import (
+    BASE_BOARD_SIZE,
+    BOARD_PADDING,
+    MIN_CARD_CHROME_HEIGHT,
+    SLOT_GUTTER,
+)
 
 # These are deliberately smaller than P1's reading-card floor.  A 2-column
 # free-grid card is an allowed thumbnail role; the Board scrolls rather than
 # reducing a column below this fixed chrome-readable width.
 GRID_MIN_COLUMN_WIDTH = 96
 GRID_ROW_HEIGHT = 88
-GRID_MIN_VISIBLE_ROWS = 6
+GRID_MIN_VISIBLE_ROWS = 10
+# Extra empty rows past the last occupied card so a 1× / fit canvas still
+# has a drop target below the current layout. Export does not add these.
+GRID_SPARE_ROWS = 2
 
 Rect = tuple[int, int, int, int]
 
@@ -150,8 +158,10 @@ def grid_metrics(
     # canvas, but its height only grows from actual, persistent row identity.
     occupied_rows = max(
         (item.rect.row + item.rect.row_span for item in placements),
-        default=floor_rows,
+        default=0,
     )
+    if min_visible_rows is None:
+        occupied_rows += GRID_SPARE_ROWS
     occupied_rows = min(MAX_GRID_ROWS, max(floor_rows, occupied_rows))
     minimum_height = (
         2 * BOARD_PADDING
@@ -172,6 +182,52 @@ def export_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
     return grid_metrics(
         (BASE_BOARD_SIZE[0], 0), placements, min_visible_rows=1
     )
+
+
+def screen_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
+    """Canonical free-grid screen metrics: same 1600-wide columns as export.
+
+    Window size must not change column width or card aspect. Zoom scales this
+    1× result uniformly via ``scale_grid_metrics``. Empty trailing rows stay
+    so the user can drop beside or below existing cards.
+    """
+    return grid_metrics((BASE_BOARD_SIZE[0], 0), placements)
+
+
+def fit_rect_for_aspect(
+    origin: GridRect,
+    image_size: tuple[int, int],
+    metrics: GridMetrics,
+    *,
+    chrome_height: int = MIN_CARD_CHROME_HEIGHT,
+) -> GridRect:
+    """Pick a legal span whose plot-area aspect is closest to ``image_size``.
+
+    Origin column/row stay put. Ties break toward the origin's cell area.
+    """
+    image_w = max(1, int(image_size[0]))
+    image_h = max(1, int(image_size[1]))
+    target = image_w / float(image_h)
+    chrome = max(0, int(chrome_height))
+    origin_area = int(origin.column_span) * int(origin.row_span)
+    best: tuple[tuple[float, int, int], GridRect] | None = None
+    for col_span in range(GRID_MIN_COLUMN_SPAN, GRID_MAX_COLUMN_SPAN + 1):
+        if int(origin.column) + col_span > GRID_COLUMNS:
+            continue
+        for row_span in range(GRID_MIN_ROW_SPAN, GRID_MAX_ROW_SPAN + 1):
+            if int(origin.row) + row_span > MAX_GRID_ROWS:
+                continue
+            candidate = GridRect(
+                int(origin.column), int(origin.row), col_span, row_span
+            )
+            _x, _y, width, height = rect_to_pixels(candidate, metrics)
+            plot_h = max(1, int(height) - chrome)
+            ratio = max(1, int(width)) / float(plot_h)
+            area = col_span * row_span
+            key = (abs(ratio - target), abs(area - origin_area), area)
+            if best is None or key < best[0]:
+                best = (key, candidate)
+    return best[1] if best is not None else origin
 
 
 def rect_to_pixels(rect: GridRect, metrics: GridMetrics) -> Rect:

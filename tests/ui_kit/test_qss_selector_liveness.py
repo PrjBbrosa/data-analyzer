@@ -62,9 +62,9 @@ DYNAMIC_OBJECT_NAMES: frozenset[str] = frozenset(
         # (call sites :195 / :198). Spec inventory cited :479; unchanged here.
         "frfInputDot",
         "frfOutputDot",
-        # ultraview/chrome.py:431 ``f"ultraViewRail{short_name}Button"``
-        # and :442 ``f"ultraViewRail{short_name}Badge"``, short_name ``Unplaced``
-        # from ``_PANEL_SPECS`` (:392).
+        # ultraview/chrome.py:489 ``f"ultraViewRail{short_name}Button"``
+        # and :501 ``f"ultraViewRail{short_name}Badge"``, short_name ``Unplaced``
+        # from ``_PANEL_SPECS`` (:449).
         "ultraViewRailUnplacedButton",
         "ultraViewRailUnplacedBadge",
     }
@@ -161,12 +161,10 @@ def test_dynamic_construction_sites_match_this_head():
     assert 'dot.setObjectName(f"{role}Dot")' in frf[478]
     assert '"frfInput"' in frf[194]
     assert '"frfOutput"' in frf[197]
-    # Re-pinned after 380e5ac2 moved these 34 lines down (it rewrote 149 lines of
-    # chrome.py without updating this anchor, leaving the guard permanently red —
-    # and a guard that always fails can no longer catch a real drift).
-    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[464]
-    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[476]
-    assert '"Unplaced"' in chrome[424]
+    # Re-pinned after CardContextIsland gained a fit button (shifted ToolRail).
+    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[488]
+    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[500]
+    assert '"Unplaced"' in chrome[448]
 
 
 def test_extract_does_not_swallow_prefixes():

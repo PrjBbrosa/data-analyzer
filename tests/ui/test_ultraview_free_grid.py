@@ -5,6 +5,9 @@ import pytest
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_COLUMN_WIDTH,
+    GRID_MIN_VISIBLE_ROWS,
+    GRID_ROW_HEIGHT,
+    GRID_SPARE_ROWS,
     HANDLE_HIT_PX,
     LAYOUT_MOVE,
     LAYOUT_RESIZE,
@@ -16,6 +19,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     candidate_resize_handle,
     clamp_rect,
     export_grid_metrics,
+    fit_rect_for_aspect,
     grid_metrics,
     group_translate_rects,
     hit_handle,
@@ -28,10 +32,15 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     rect_is_available,
     rect_to_pixels,
     rects_overlap,
+    screen_grid_metrics,
     snapped_move_rect,
     snapped_resize_rect,
     translated_move_rect,
     union_grid_rect,
+)
+from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
+    BASE_BOARD_SIZE,
+    MIN_CARD_CHROME_HEIGHT,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.ultraview_state import (
@@ -52,7 +61,12 @@ def test_grid_metrics_keeps_twelve_columns_chrome_readable_and_scrollable():
     metrics = grid_metrics((1280, 800), [])
     assert metrics.column_width >= GRID_MIN_COLUMN_WIDTH
     assert metrics.board_width > 1280
-    assert metrics.board_height == 800
+    floor_h = (
+        32
+        + GRID_MIN_VISIBLE_ROWS * GRID_ROW_HEIGHT
+        + (GRID_MIN_VISIBLE_ROWS - 1) * metrics.gutter
+    )
+    assert metrics.board_height == max(800, floor_h)
     assert metrics.content_width >= 12 * GRID_MIN_COLUMN_WIDTH + 11 * metrics.gutter
 
 
@@ -104,11 +118,43 @@ def test_clamp_rect_keeps_origin_plus_span_inside_board():
 
 def test_export_grid_metrics_crop_short_boards_and_keep_screen_floor():
     short = [_placement("a", GridRect(0, 0, 4, 2))]
-    screen = grid_metrics((1600, 900), short)
+    screen = screen_grid_metrics(short)
     export = export_grid_metrics(short)
-    assert screen.board_height == 900
-    assert export.board_height < 900
+    assert screen.column_width == export.column_width
+    assert screen.board_width == 1600
     assert export.board_width == 1600
+    assert screen.board_height > export.board_height
+    assert screen.board_height > 900
+
+
+def test_screen_grid_metrics_are_independent_of_window_size():
+    placements = [_placement("a", GridRect(0, 0, 4, 3))]
+    left = screen_grid_metrics(placements)
+    right = screen_grid_metrics(placements)
+    export = export_grid_metrics(placements)
+    assert left.column_width == right.column_width == export.column_width
+    assert left.board_width == BASE_BOARD_SIZE[0]
+    assert left.row_height == GRID_ROW_HEIGHT
+    occupied = 3 + GRID_SPARE_ROWS
+    rows = max(GRID_MIN_VISIBLE_ROWS, occupied)
+    assert left.board_height > export.board_height
+    assert rows >= GRID_MIN_VISIBLE_ROWS
+
+
+def test_fit_rect_for_aspect_prefers_matching_span():
+    metrics = screen_grid_metrics([])
+    origin = GridRect(0, 0, 4, 3)
+    wide = fit_rect_for_aspect(origin, (1600, 400), metrics)
+    tall = fit_rect_for_aspect(origin, (400, 1600), metrics)
+    square = fit_rect_for_aspect(origin, (800, 800), metrics)
+    assert wide.column_span > wide.row_span
+    assert tall.row_span >= tall.column_span
+    assert abs(square.column_span - square.row_span) <= 2
+    assert wide.column == origin.column and wide.row == origin.row
+    chrome = MIN_CARD_CHROME_HEIGHT
+    _, _, ww, wh = rect_to_pixels(wide, metrics)
+    _, _, tw, th = rect_to_pixels(tall, metrics)
+    assert ww / max(1, wh - chrome) > tw / max(1, th - chrome)
 
 
 def test_snapped_move_rect_matches_candidate_move_and_stays_clamped():

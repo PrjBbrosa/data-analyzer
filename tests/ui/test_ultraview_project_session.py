@@ -334,7 +334,7 @@ def test_free_grid_project_roundtrip_keeps_layout_id_and_placements(qapp, qtbot,
     assert board.layout_mode == LAYOUT_MODE_FREE_GRID
     assert len(board.free_grid) == 2
     restored._ultraview._on_free_grid_toggled(False)
-    assert restored._ultraview.board.layout_id == "grid_3x3"
+    assert restored._ultraview.board.layout_id == "split_horizontal"
     assert len(restored._ultraview.board.placements) == 2
 
 

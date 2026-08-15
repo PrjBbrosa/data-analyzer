@@ -530,6 +530,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.preset",
         "ultraview.minimap",
         "ultraview.zoom",
+        "ultraview.autofit",
         "ultraview.inspect",
         "ultraview.lod",
         "ultraview.boards",

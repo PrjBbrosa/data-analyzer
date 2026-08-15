@@ -623,7 +623,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.free_grid",
-        text="左侧窄轨可切换自由网格",
+        text="默认自由网格，窄轨可切回模板",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=88,
@@ -658,10 +658,17 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.preset",
-        text="卡片右键可选尺寸预设",
+        text="卡片右键可选尺寸预设或按原图比例",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=84,
+    ),
+    Hint(
+        id="ultraview.autofit",
+        text="选中卡片可按原图比例调整尺寸",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=83,
     ),
     Hint(
         id="ultraview.minimap",
@@ -672,7 +679,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.zoom",
-        text="适应避开浮层，缩放可入工具栏下",
+        text="新板默认适应视口，缩放不改卡片长宽比",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,

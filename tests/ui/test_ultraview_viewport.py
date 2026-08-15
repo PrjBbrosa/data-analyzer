@@ -201,12 +201,15 @@ def test_toolbar_exposes_zoom_cluster(qtbot):
     assert toolbar.findChild(QToolButton, "ultraViewZoomInButton") is not None
     assert toolbar.findChild(QToolButton, "ultraViewZoomFitButton") is not None
     assert toolbar.findChild(QToolButton, "ultraViewZoomResetButton") is not None
+    harness.page.zoom_reset()
     assert toolbar.zoom_label().text() == "100%"
 
 
 def test_page_zoom_clamps_and_scales_free_grid(qtbot):
     harness = _Harness(qtbot)
     free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    harness.page.zoom_reset()
+    qtbot.wait(10)
     base = free.metrics()
     width_1x = cards[0].width()
     harness.page.set_board_zoom(2.0)
@@ -259,9 +262,10 @@ def test_ctrl_wheel_anchors_when_global_position_is_zero(qtbot):
     local = QPoint(max(24, card.width() * 2 // 3), max(24, card.height() * 2 // 3))
     cursor = _viewport_cursor(harness.page, card, local)
     logical_before = _viewport_logical(harness.page, cursor)
+    before = harness.page.board_zoom()
     _wheel(card, 120, pos=local, global_pos=QPoint(0, 0))
     logical_after = _viewport_logical(harness.page, cursor)
-    assert harness.page.board_zoom() > 1.0
+    assert harness.page.board_zoom() > before
     assert logical_after == pytest.approx(logical_before, abs=4.0)
     scroll = harness.page.board_scroll_area()
     assert (
@@ -279,9 +283,10 @@ def test_ctrl_wheel_anchors_when_local_and_global_are_zero(qtbot):
     QCursor.setPos(card.mapToGlobal(local))
     cursor = _viewport_cursor(harness.page, card, local)
     logical_before = _viewport_logical(harness.page, cursor)
+    before = harness.page.board_zoom()
     _wheel(card, 120, pos=QPoint(0, 0), global_pos=QPoint(0, 0))
     logical_after = _viewport_logical(harness.page, cursor)
-    assert harness.page.board_zoom() > 1.0
+    assert harness.page.board_zoom() > before
     assert logical_after == pytest.approx(logical_before, abs=4.0)
     scroll = harness.page.board_scroll_area()
     assert (
@@ -298,6 +303,7 @@ def test_pinch_anchors_when_native_gesture_positions_are_zero(qtbot):
     QCursor.setPos(card.mapToGlobal(local))
     cursor = _viewport_cursor(harness.page, card, local)
     logical_before = _viewport_logical(harness.page, cursor)
+    before = harness.page.board_zoom()
     event = QNativeGestureEvent(
         Qt.ZoomNativeGesture,
         QPointF(0, 0),
@@ -309,7 +315,7 @@ def test_pinch_anchors_when_native_gesture_positions_are_zero(qtbot):
     )
     QApplication.sendEvent(card, event)
     logical_after = _viewport_logical(harness.page, cursor)
-    assert harness.page.board_zoom() > 1.0
+    assert harness.page.board_zoom() > before
     assert logical_after == pytest.approx(logical_before, abs=4.0)
     scroll = harness.page.board_scroll_area()
     assert (
@@ -332,9 +338,10 @@ def test_ctrl_wheel_prefers_global_when_local_is_from_a_child(qtbot):
     mapped = harness.page.board_scroll_area().viewport().mapFromGlobal(img_global)
     cursor = (float(mapped.x()), float(mapped.y()))
     logical_before = _viewport_logical(harness.page, cursor)
+    before = harness.page.board_zoom()
     _wheel(card, 120, pos=img_local, global_pos=img_global)
     logical_after = _viewport_logical(harness.page, cursor)
-    assert harness.page.board_zoom() > 1.0
+    assert harness.page.board_zoom() > before
     assert logical_after == pytest.approx(logical_before, abs=4.0)
 
 
@@ -857,7 +864,13 @@ def test_zoom_persists_on_board_and_restores_when_switching(qtbot):
     second = default_board()
     second.name = "另一块板"
     harness.page.set_board(second)
-    assert harness.page.board_zoom() == pytest.approx(1.0)
+    size = harness.page._active_canvas().unzoomed_size()
+    fit = harness.page._content_fit_rect()
+    expected = fit_zoom(
+        (size.width(), size.height()),
+        (float(fit.width), float(fit.height)),
+    )
+    assert harness.page.board_zoom() == pytest.approx(expected)
     harness.page.set_board(first)
     assert harness.page.board_zoom() == pytest.approx(1.5)
 

@@ -202,3 +202,24 @@ def test_screen_min_card_content_size_scales_with_zoom_and_leaves_export_floor()
     full = logical_board_size("grid_3x3", (1280, 800))
     assert zoomed[0] < full[0]
     assert logical_board_size("grid_3x3", BASE_BOARD_SIZE)[0] >= MIN_CARD_CONTENT_SIZE[0]
+
+
+def test_screen_template_canvas_matches_export_and_keeps_slot_aspect():
+    from mf4_analyzer.ui.chart_stack.ultraview.compositor import output_size
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport import zoomed_viewport_size
+
+    for layout_id in ("split_horizontal", "grid_2x2", "hero_left_4", "grid_3x3"):
+        logical = logical_board_size(layout_id, BASE_BOARD_SIZE)
+        assert logical == output_size(1, layout_id)
+        assert zoomed_viewport_size(logical, 2.0) == (
+            logical[0] * 2,
+            logical[1] * 2,
+        )
+        content = content_rect(logical)
+        rects = slot_rects(layout_id, content, 0.67)
+        for _slot_id, (_x, _y, width, height) in rects.items():
+            width_2x = int(round(width * 2))
+            height_2x = int(round(height * 2))
+            assert abs(width * 2 - width_2x) <= 1
+            assert abs(height * 2 - height_2x) <= 1
+            assert abs(width / height - width_2x / height_2x) < 0.01

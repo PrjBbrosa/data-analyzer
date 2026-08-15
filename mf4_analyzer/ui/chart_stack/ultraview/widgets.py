@@ -83,7 +83,6 @@ from .layouts import (
     MIN_CARD_CHROME_HEIGHT,
     content_rect,
     logical_board_size,
-    screen_min_card_content_size,
     slot_rects,
 )
 from .free_grid import (
@@ -95,11 +94,11 @@ from .free_grid import (
     avoidance_preferred_delta,
     candidate_resize,
     export_grid_metrics,
-    grid_metrics,
     hit_handle,
     legal_grid_rect,
     plan_layout,
     rect_to_pixels,
+    screen_grid_metrics,
 )
 from .gesture import FreeGridGesture
 from .ghost_overlay import GhostOverlay
@@ -2376,11 +2375,11 @@ class BoardGrid(QWidget):
         self._raise_overlay()
 
     def set_viewport_size(self, size: QSize) -> None:
-        """Apply the scroll viewport size without deriving it from this widget.
+        """Record the scroll viewport. Logical canvas is ``BASE_BOARD_SIZE``.
 
-        Once the Board is wider/taller than the viewport, ``self.size()`` is
-        the logical canvas, not the visible window.  Keeping the two inputs
-        separate is what makes scrolling and hit testing deterministic.
+        Window size used to drive slot aspect; that made every card follow the
+        chrome-safe fit rect. Keep the setter so callers and tests still have
+        a viewport to query, but geometry comes from the export-sized board.
         """
         if size == self._viewport_size:
             return
@@ -2400,15 +2399,10 @@ class BoardGrid(QWidget):
         return QSize(self.size())
 
     def unzoomed_size(self) -> QSize:
-        viewport = self._viewport_size
-        if viewport.width() <= 0 or viewport.height() <= 0:
-            viewport = self.parentWidget().size() if self.parentWidget() is not None else self.size()
         try:
-            width, height = logical_board_size(
-                self._layout_id, (viewport.width(), viewport.height())
-            )
+            width, height = logical_board_size(self._layout_id, BASE_BOARD_SIZE)
         except ValueError:
-            return QSize(self.size())
+            return QSize(*BASE_BOARD_SIZE)
         return QSize(width, height)
 
     def unzoomed_slot_rect(self, slot_id: str) -> tuple[float, float, float, float] | None:
@@ -2453,23 +2447,41 @@ class BoardGrid(QWidget):
         return True
 
     def _sync_logical_size(self) -> None:
-        viewport = self._viewport_size
-        if viewport.width() <= 0 or viewport.height() <= 0:
-            viewport = self.parentWidget().size() if self.parentWidget() is not None else self.size()
-        zoomed = zoomed_viewport_size((viewport.width(), viewport.height()), self._zoom)
-        try:
-            width, height = logical_board_size(
-                self._layout_id,
-                zoomed,
-                min_card_content_size=screen_min_card_content_size(self._zoom),
-            )
-        except ValueError:
-            return
+        unzoomed = self.unzoomed_size()
+        width, height = zoomed_viewport_size(
+            (unzoomed.width(), unzoomed.height()), self._zoom
+        )
         target = QSize(width, height)
         if self.minimumSize() != target:
             self.setMinimumSize(target)
         if self.size() != target:
             self.resize(target)
+
+    def _scaled_slot_rects(self) -> dict[str, tuple[int, int, int, int]]:
+        """1× template slots, then uniform zoom. Padding must not be re-laid out."""
+        size = self.unzoomed_size()
+        content = (
+            BOARD_PADDING,
+            BOARD_PADDING,
+            max(0, size.width() - 2 * BOARD_PADDING),
+            max(0, size.height() - 2 * BOARD_PADDING),
+        )
+        try:
+            rects = slot_rects(self._layout_id, content, self._ratio)
+        except ValueError:
+            return {}
+        z = float(self._zoom)
+        if abs(z - 1.0) < 1e-12:
+            return rects
+        return {
+            slot_id: (
+                int(round(x * z)),
+                int(round(y * z)),
+                max(0, int(round(width * z))),
+                max(0, int(round(height * z))),
+            )
+            for slot_id, (x, y, width, height) in rects.items()
+        }
 
     def _discard(self, slot_id: str) -> None:
         widget = self._widgets.pop(slot_id, None)
@@ -2520,29 +2532,14 @@ class BoardGrid(QWidget):
         self._overlay.raise_()
 
     def _relayout(self) -> None:
-        content = (
-            BOARD_PADDING,
-            BOARD_PADDING,
-            max(0, self.width() - 2 * BOARD_PADDING),
-            max(0, self.height() - 2 * BOARD_PADDING),
-        )
-        try:
-            rects = slot_rects(self._layout_id, content, self._ratio)
-        except ValueError:
-            return
+        rects = self._scaled_slot_rects()
         for slot_id, (x, y, width, height) in rects.items():
             widget = self._widgets.get(slot_id)
             if widget is not None:
                 widget.setGeometry(x, y, max(0, width), max(0, height))
 
     def slot_id_at(self, pos: QPoint) -> str | None:
-        content = (
-            BOARD_PADDING,
-            BOARD_PADDING,
-            max(0, self.width() - 2 * BOARD_PADDING),
-            max(0, self.height() - 2 * BOARD_PADDING),
-        )
-        rects = slot_rects(self._layout_id, content, self._ratio)
+        rects = self._scaled_slot_rects()
         px, py = pos.x(), pos.y()
         for slot_id, (x, y, width, height) in rects.items():
             if x <= px <= x + width and y <= py <= y + height:
@@ -2737,6 +2734,7 @@ class FreeGridCard(UltraViewCard):
 
     layout_key_requested = pyqtSignal(str, str, int, int, bool)
     preset_requested = pyqtSignal(str, str, str)
+    autofit_requested = pyqtSignal(str, str)
 
     def __init__(self, model: CardViewModel, parent: QWidget | None = None) -> None:
         super().__init__(model, parent)
@@ -2756,10 +2754,15 @@ class FreeGridCard(UltraViewCard):
         ):
             action = size_menu.addAction(label)
             action.triggered.connect(partial(self._emit_preset, preset))
+        fit_action = size_menu.addAction("按原图比例")
+        fit_action.triggered.connect(self._emit_autofit)
         return menu
 
     def _emit_preset(self, preset: str, _checked: bool = False) -> None:
         self.preset_requested.emit(self._model.section, self._model.view_id, preset)
+
+    def _emit_autofit(self, _checked: bool = False) -> None:
+        self.autofit_requested.emit(self._model.section, self._model.view_id)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if _handle_pan_press(self, event):
@@ -2841,6 +2844,7 @@ class FreeGridBoard(QWidget):
     geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
     group_geometry_requested = pyqtSignal(object)
     preset_requested = pyqtSignal(str, str, str)
+    autofit_requested = pyqtSignal(str, str)
     open_source_requested = pyqtSignal(str, str)
     sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
@@ -2867,7 +2871,7 @@ class FreeGridBoard(QWidget):
         self._widgets: dict[UltraViewRef, FreeGridCard] = {}
         self._viewport_size = QSize(0, 0)
         self._zoom = ZOOM_DEFAULT
-        self._metrics = grid_metrics((240, 160), [])
+        self._metrics = screen_grid_metrics([])
         self._base_metrics = self._metrics
         self._gesture = FreeGridGesture()
         self._overlay = GhostOverlay(self)
@@ -2883,6 +2887,11 @@ class FreeGridBoard(QWidget):
         self._dimmed_refs: set[UltraViewRef] = set()
 
     def set_viewport_size(self, size: QSize) -> None:
+        """Record the scroll viewport. Metrics use ``screen_grid_metrics``.
+
+        Column width is the 1600-wide export column, not the window width, so
+        card aspect stays put when the user resizes or toggles chrome.
+        """
         if size == self._viewport_size:
             return
         if self._gesture.is_active():
@@ -3000,20 +3009,14 @@ class FreeGridBoard(QWidget):
         card.drag_finished.connect(self.drag_finished)
         card.layout_key_requested.connect(self._on_layout_key)
         card.preset_requested.connect(self.preset_requested)
+        card.autofit_requested.connect(self.autofit_requested)
 
     def _raise_overlay(self) -> None:
         self._overlay.setGeometry(self.rect())
         self._overlay.raise_()
 
     def _sync_metrics(self) -> None:
-        viewport = self._viewport_size
-        if viewport.width() <= 0 or viewport.height() <= 0:
-            source = self.parentWidget()
-            viewport = source.size() if source is not None else self.size()
-        self._metrics = grid_metrics(
-            (viewport.width(), viewport.height()), list(self._placements.values())
-        )
-        self._base_metrics = self._metrics
+        self._base_metrics = screen_grid_metrics(list(self._placements.values()))
         self._metrics = scale_grid_metrics(self._base_metrics, self._zoom)
         target = QSize(self._metrics.board_width, self._metrics.board_height)
         if self.minimumSize() != target:
@@ -3863,7 +3866,7 @@ class BoardOverview(QFrame):
         placements: Sequence[FreeGridPlacement],
         models: Mapping[UltraViewRef, CardViewModel],
     ) -> None:
-        self._free_metrics = grid_metrics(BASE_BOARD_SIZE, placements)
+        self._free_metrics = screen_grid_metrics(placements)
         self._free_rects = {
             f"grid:{item.ref.section}:{item.ref.view_id}": rect_to_pixels(
                 item.rect, self._free_metrics

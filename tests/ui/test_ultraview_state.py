@@ -76,6 +76,8 @@ def test_default_board_identity():
     board = uvs.default_board()
     assert board.name == "全局对比"
     assert board.layout_id == "hero_left_4"
+    assert board.layout_mode == uvs.LAYOUT_MODE_FREE_GRID
+    assert board.viewport == {}
     assert board.primary_ratio == pytest.approx(0.67)
     assert board.placements == []
     assert board.unplaced == []
@@ -138,6 +140,39 @@ def test_ui_board_limit_blocks_create_but_loader_keeps_all_boards():
     loaded, warnings = uvs.normalize_workspace_payload(payload)
     assert len(loaded.boards) == 21
     assert any(item.startswith("ui_board_limit") for item in warnings)
+    assert all(board.layout_mode == uvs.LAYOUT_MODE_TEMPLATE for board in loaded.boards)
+
+
+def test_best_template_for_picks_smallest_equal_grid_that_fits():
+    assert uvs.best_template_for(0) == "split_horizontal"
+    assert uvs.best_template_for(1) == "split_horizontal"
+    assert uvs.best_template_for(2) == "split_horizontal"
+    assert uvs.best_template_for(3) == "grid_2x2"
+    assert uvs.best_template_for(4) == "grid_2x2"
+    assert uvs.best_template_for(5) == "grid_3x2"
+    assert uvs.best_template_for(6) == "grid_3x2"
+    assert uvs.best_template_for(7) == "grid_3x3"
+    assert uvs.best_template_for(9) == "grid_3x3"
+    assert uvs.best_template_for(10) == "grid_4x3"
+    assert uvs.best_template_for(12) == "grid_4x3"
+    assert uvs.best_template_for(24) == "grid_4x3"
+
+
+def test_missing_layout_mode_restores_as_template_not_current_default():
+    payload = {
+        "schema": 3,
+        "board": {
+            "layout_id": "grid_2x2",
+            "placements": [
+                {"slot_id": "tl", "section": "time", "view_id": "a"},
+            ],
+        },
+    }
+    board, warnings = uvs.normalize_board_payload(payload)
+    assert warnings == []
+    assert board.layout_mode == uvs.LAYOUT_MODE_TEMPLATE
+    assert board.layout_id == "grid_2x2"
+    assert [item.ref.view_id for item in board.placements] == ["a"]
 
 
 def test_hostile_tray_payload_truncates_membership_with_warning():
@@ -399,6 +434,7 @@ def placement_missing(board, ref) -> bool:
 
 def test_orphan_rebind_uses_replace_flow():
     board = uvs.default_board()
+    uvs.set_layout(board, "hero_left_4")
     orphan = _ref("time", "gone")
     uvs.add_ref(board, orphan)
     replacement = _ref("fft", "alive")
@@ -661,13 +697,12 @@ def test_organize_free_grid_is_idempotent():
 def test_viewport_round_trip_is_outside_identity_digest():
     board = uvs.default_board()
     payload = uvs.board_to_payload(board)
-    assert "viewport" in payload["board"]
+    assert "viewport" not in payload["board"]
     missing = dict(payload)
     missing["board"] = dict(payload["board"])
-    missing["board"].pop("viewport")
     restored, warnings = uvs.normalize_board_payload(missing)
     assert warnings == []
-    assert restored.viewport["zoom"] == pytest.approx(1.0)
+    assert restored.viewport == {}
     identity = uvs.presentation_digest(uvs.board_identity_payload(board))
     board.viewport = {"zoom": 1.6, "center_x": 120.0, "center_y": 40.0}
     again, warnings = uvs.normalize_board_payload(uvs.board_to_payload(board))

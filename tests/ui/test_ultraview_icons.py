@@ -18,6 +18,7 @@ from mf4_analyzer.ui_kit.icons import Icons
         "ultraview_presentation",
         "ultraview_overview",
         "ultraview_fit",
+        "ultraview_fit_to_image",
         "ultraview_reset_zoom",
         "ultraview_zoom_out",
         "ultraview_zoom_in",

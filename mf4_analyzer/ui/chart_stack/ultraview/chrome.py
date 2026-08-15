@@ -1477,6 +1477,10 @@ class CardContextIsland(QFrame):
     more_requested = pyqtSignal(str, str)
     rebind_requested = pyqtSignal(str, str)
     remove_requested = pyqtSignal(str, str)
+    fit_requested = pyqtSignal(str, str)
+
+    _FIT_TOOLTIP = "按原图比例调整卡片"
+    _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1493,10 +1497,12 @@ class CardContextIsland(QFrame):
         self._buttons: dict[str, QToolButton] = {}
         self._orphaned = False
         self._stale = False
+        self._fit_enabled = False
         for action, object_name, icon, tooltip in (
             ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(ULTRAVIEW_MUTED), "打开原 View"),
             ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(ULTRAVIEW_MUTED), "同步到最新预览"),
             ("focus", "ultraViewContextFocusButton", Icons.expand_focus(ULTRAVIEW_MUTED), "临时放大预览"),
+            ("fit", "ultraViewContextFitButton", Icons.ultraview_fit_to_image(ULTRAVIEW_MUTED), self._FIT_TOOLTIP),
             ("more", "ultraViewContextMoreButton", Icons.menu(ULTRAVIEW_MUTED), "更多卡片操作"),
         ):
             button = _icon_button(
@@ -1512,6 +1518,7 @@ class CardContextIsland(QFrame):
                 button.hide()
             self._buttons[action] = button
             layout.addWidget(button, 0)
+        self.set_fit_enabled(False)
         self.hide()
 
     def ref(self) -> tuple[str, str] | None:
@@ -1560,6 +1567,16 @@ class CardContextIsland(QFrame):
     def set_stale(self, stale: bool) -> None:
         self._stale = bool(stale)
         self._buttons["sync"].setVisible(self._stale and not self._orphaned)
+
+    def set_fit_enabled(self, enabled: bool) -> None:
+        self._fit_enabled = bool(enabled)
+        button = self._buttons.get("fit")
+        if button is None:
+            return
+        button.setEnabled(self._fit_enabled)
+        tip = self._FIT_TOOLTIP if self._fit_enabled else self._FIT_DISABLED_TOOLTIP
+        button.setToolTip(tip)
+        button.setAccessibleName(tip)
 
     def make_overflow_menu(self, parent: QWidget | None = None) -> QMenu:
         menu = QMenu(parent or self)
@@ -1613,6 +1630,7 @@ class CardContextIsland(QFrame):
             "open": self.open_source_requested,
             "sync": self.sync_requested,
             "focus": self.focus_requested,
+            "fit": self.fit_requested,
             "more": self.more_requested,
         }
         signal = emitters.get(action)

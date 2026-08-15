@@ -458,7 +458,7 @@ def test_card_context_residents_are_open_sync_focus_and_more(qtbot):
         for action, button in context._buttons.items()
         if button.isVisible()
     ]
-    assert visible == ["open", "focus", "more"]
+    assert visible == ["open", "focus", "fit", "more"]
     assert context.button("sync") is not None and not context.button("sync").isVisible()
     for action in ("copy", "unplaced", "rebind", "remove"):
         button = context.button(action)
@@ -482,6 +482,7 @@ def test_card_context_residents_are_open_sync_focus_and_more(qtbot):
         "open",
         "sync",
         "focus",
+        "fit",
         "more",
     ]
     for button in context.findChildren(QToolButton):

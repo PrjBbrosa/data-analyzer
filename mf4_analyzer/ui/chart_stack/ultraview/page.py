@@ -34,14 +34,18 @@ from mf4_analyzer.ui.ultraview_state import (
     UltraViewBoardState,
     UltraViewRef,
     axis_consistency_facts,
+    all_refs,
+    best_template_for,
     board_to_payload,
     card_matches_compare_filter,
     default_board,
     derive_preview_status,
     first_empty_slot,
     free_grid_placement_for,
+    layout_capacity,
     layout_slots,
     LAYOUT_MODE_FREE_GRID,
+    LAYOUT_SLOTS,
     MAX_UI_BOARDS,
     membership_set,
     parse_ref_payload,
@@ -210,6 +214,7 @@ class UltraViewPage(QWidget):
     free_grid_geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
     free_grid_group_geometry_requested = pyqtSignal(object)
     free_grid_preset_requested = pyqtSignal(str, str, str)
+    free_grid_autofit_requested = pyqtSignal(str, str)
     organize_free_grid_requested = pyqtSignal()
     free_grid_undo_requested = pyqtSignal()
     free_grid_redo_requested = pyqtSignal()
@@ -245,6 +250,7 @@ class UltraViewPage(QWidget):
         self._viewport = BoardViewport()
         self._restoring_viewport = False
         self._pending_viewport_restore: dict[str, float] | None = None
+        self._pending_fit = True
         self._smooth_timer = QTimer(self)
         self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
         self._smooth_timer.setSingleShot(True)
@@ -390,6 +396,7 @@ class UltraViewPage(QWidget):
         self._card_context.more_requested.connect(self._show_card_more_menu)
         self._card_context.rebind_requested.connect(self._on_rebind_arm)
         self._card_context.remove_requested.connect(self.remove_ref_requested)
+        self._card_context.fit_requested.connect(self.free_grid_autofit_requested)
 
         self._library.add_requested.connect(self.request_add)
         self._library.remove_requested.connect(self.remove_ref_requested)
@@ -455,6 +462,7 @@ class UltraViewPage(QWidget):
             self.free_grid_group_geometry_requested
         )
         self._free_grid.preset_requested.connect(self.free_grid_preset_requested)
+        self._free_grid.autofit_requested.connect(self.free_grid_autofit_requested)
         self._free_grid.open_source_requested.connect(self.open_source_requested)
         self._free_grid.sync_requested.connect(self.sync_requested)
         self._free_grid.focus_requested.connect(self._on_focus)
@@ -584,17 +592,26 @@ class UltraViewPage(QWidget):
         if not wanted:
             return
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
-            if not self._confirm_leave_free_grid():
+            if not self._confirm_leave_free_grid(wanted):
                 self._sync_layout_popover()
                 return
         if wanted != self._board.layout_id or self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             self.layout_changed.emit(wanted)
 
-    def _confirm_leave_free_grid(self) -> bool:
+    def _confirm_leave_free_grid(self, layout_id: str) -> bool:
+        count = len(self._board.free_grid)
+        wanted = str(layout_id or "")
+        if wanted not in LAYOUT_SLOTS:
+            wanted = best_template_for(count)
+        capacity = layout_capacity(wanted)
+        if count <= capacity:
+            return True
+        label = LAYOUT_LABELS_ZH.get(wanted, wanted)
+        overflow = count - capacity
         answer = QMessageBox.question(
             self,
             "切回模板布局",
-            "模板会按当前位置顺序重新排列卡片；超出模板容量的卡片会移入未放置区。继续吗？",
+            f"将切换到「{label}」（{capacity} 槽）。超出容量的 {overflow} 张卡片会移入未放置区。继续吗？",
             QMessageBox.Cancel | QMessageBox.Yes,
             QMessageBox.Cancel,
         )
@@ -602,7 +619,8 @@ class UltraViewPage(QWidget):
 
     def _on_free_grid_toggled(self, enabled: bool) -> None:
         if not enabled and self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
-            if not self._confirm_leave_free_grid():
+            layout_id = best_template_for(len(self._board.free_grid))
+            if not self._confirm_leave_free_grid(layout_id):
                 self._tool_rail.set_free_grid_enabled(True)
                 return
         self.free_grid_toggled.emit(bool(enabled))
@@ -613,7 +631,7 @@ class UltraViewPage(QWidget):
             self._layout_popover.set_current(
                 self._board.layout_id,
                 free_grid=is_free_grid,
-                view_count=len(self._board.placements) + len(self._board.unplaced),
+                view_count=len(all_refs(self._board)),
             )
         if hasattr(self, "_tool_rail"):
             self._tool_rail.set_free_grid_enabled(is_free_grid)
@@ -952,6 +970,7 @@ class UltraViewPage(QWidget):
         menu = self._card_context.make_overflow_menu(self._card_context)
         replace = menu.addAction("替换为…")
         presets: dict[object, str] = {}
+        fit_action = None
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             size_menu = menu.addMenu("自由网格尺寸")
             for preset, label in (
@@ -963,9 +982,12 @@ class UltraViewPage(QWidget):
                 ("banner", "横幅"),
             ):
                 presets[size_menu.addAction(label)] = preset
+            fit_action = size_menu.addAction("按原图比例")
         chosen = menu.exec_(self._card_context.mapToGlobal(QPoint(0, self._card_context.height())))
         if chosen is replace:
             self.arm_replacement(section, view_id)
+        elif chosen is fit_action:
+            self.free_grid_autofit_requested.emit(section, view_id)
         elif chosen in presets:
             self.free_grid_preset_requested.emit(section, view_id, presets[chosen])
 
@@ -1006,11 +1028,18 @@ class UltraViewPage(QWidget):
         }
 
     def _restore_viewport_from_board(self, board, payload: Mapping[str, Any] | None = None) -> None:
+        source = payload if payload is not None else getattr(board, "viewport", None)
+        if not isinstance(source, Mapping) or "zoom" not in source:
+            self._pending_fit = True
+            viewport = self._board_scroll.viewport()
+            if viewport.width() > 1 and viewport.height() > 1:
+                self._pending_fit = False
+                self.zoom_fit()
+            return
+        self._pending_fit = False
         self._restoring_viewport = True
         try:
-            self._viewport.restore_payload(
-                payload if payload is not None else getattr(board, "viewport", None)
-            )
+            self._viewport.restore_payload(source)
             zoom = self._viewport.zoom()
             self._grid.set_zoom(zoom)
             self._free_grid.set_zoom(zoom)
@@ -1328,6 +1357,9 @@ class UltraViewPage(QWidget):
         # canvas's new logical size back to the stack so first paint shows the
         # cards instead of an empty dotted stage.
         self._sync_board_stack_geometry(self._active_canvas())
+        if self._pending_fit and self._board_scroll.viewport().width() > 1:
+            self._pending_fit = False
+            self.zoom_fit()
         self._refresh_card_context()
 
     def _on_smooth_preview_timeout(self) -> None:
@@ -2292,6 +2324,9 @@ class UltraViewPage(QWidget):
             ref.view_id,
             orphaned=status == STATUS_ORPHANED,
             stale=status == STATUS_STALE,
+        )
+        self._card_context.set_fit_enabled(
+            self._board.layout_mode == LAYOUT_MODE_FREE_GRID
         )
         QTimer.singleShot(0, self._position_card_context)
 

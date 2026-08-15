@@ -36,6 +36,7 @@ from ..ultraview_state import (
     add_ref,
     apply_free_grid_preset,
     all_refs,
+    best_template_for,
     create_board,
     delete_board,
     default_board,
@@ -70,6 +71,7 @@ from ..ultraview_state import (
     swap_slots,
     template_to_free_grid,
     free_grid_to_template,
+    free_grid_placement_for,
     organize_free_grid,
     GridRect,
     workspace_to_payload,
@@ -84,6 +86,12 @@ from ..chart_stack.ultraview.preview_store import (
     RESIDENCY_TIER_ACTIVE_PLACED,
     RESIDENCY_TIER_INACTIVE_PLACED,
     RESIDENCY_TIER_TRAY,
+)
+from ..chart_stack.ultraview.free_grid import (
+    LAYOUT_RESIZE,
+    fit_rect_for_aspect,
+    plan_layout,
+    screen_grid_metrics,
 )
 from ..chart_stack.ultraview.viewport import (
     SMOOTH_DELAY_MS,
@@ -916,6 +924,7 @@ class UltraViewCoordinator(QObject):
             (page.free_grid_geometry_requested, self._on_free_grid_geometry),
             (page.free_grid_group_geometry_requested, self._on_free_grid_group_geometry),
             (page.free_grid_preset_requested, self._on_free_grid_preset),
+            (page.free_grid_autofit_requested, self._on_free_grid_autofit),
             (page.organize_free_grid_requested, self._on_organize_free_grid),
             (page.free_grid_undo_requested, self._on_free_grid_undo),
             (page.free_grid_redo_requested, self._on_free_grid_redo),
@@ -1395,7 +1404,7 @@ class UltraViewCoordinator(QObject):
             template_to_free_grid(board)
             self._after_board_mutation()
         elif not enabled and board.layout_mode == LAYOUT_MODE_FREE_GRID:
-            free_grid_to_template(board, board.layout_id)
+            free_grid_to_template(board, best_template_for(len(board.free_grid)))
             self._after_board_mutation()
 
     def _on_free_grid_geometry(
@@ -1453,6 +1462,43 @@ class UltraViewCoordinator(QObject):
         if not any(item_ref == ref for item_ref, _rect in before):
             return
         warnings = apply_free_grid_preset(board, ref, preset)
+        self._commit_grid_change(board, before, warnings)
+
+    def _on_free_grid_autofit(self, section: str, view_id: str) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        board = active_board(self._workspace)
+        if board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            return
+        item = free_grid_placement_for(board, ref)
+        if item is None:
+            return
+        record = self._store.get(ref)
+        image = getattr(record, "image", None) if record is not None else None
+        if not PreviewStore.image_valid(image):
+            self._toast("没有可用预览，无法按原图比例调整", "warning")
+            return
+        before = self._grid_snapshot(board)
+        metrics = screen_grid_metrics(board.free_grid)
+        wanted = fit_rect_for_aspect(
+            item.rect, (int(image.width()), int(image.height())), metrics
+        )
+        if wanted == item.rect:
+            return
+        plan = plan_layout(
+            board.free_grid,
+            ref,
+            wanted,
+            LAYOUT_RESIZE,
+        )
+        if not plan.accepted:
+            self._toast("目标位置与其他卡片重叠", "warning")
+            return
+        updates = plan.committed_updates()
+        if not updates:
+            return
+        warnings = set_free_grid_rects(board, updates)
         self._commit_grid_change(board, before, warnings)
 
     def _on_organize_free_grid(self) -> None:

@@ -65,6 +65,7 @@ from mf4_analyzer.ui.ultraview_state import (
     FreeGridPlacement,
     GridRect,
     LAYOUT_MODE_FREE_GRID,
+    LAYOUT_MODE_TEMPLATE,
     UltraViewRef,
     _legal_grid_rect,
     add_ref,
@@ -639,6 +640,8 @@ def test_library_selection_is_single_elevated_projection_and_survives_rebuild(qt
 
 def test_add_paths_share_one_intent(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
+    harness.page.set_board(harness.board)
     page = harness.page
     library = page.library_panel()
     library.set_selected("fft", "fft-1")
@@ -689,6 +692,7 @@ def test_unplaced_badge_and_overlay_preserve_tray_actions(qtbot):
     rail = harness.page.tool_rail()
     assert rail.badge_text(PANEL_UNPLACED) == "0"
     assert not tray.isVisible()
+    set_layout(harness.board, "hero_left_4")
     harness.fill_board(4)
     add_ref(harness.board, make_ref("fft", "overflow-1"))
     harness.page.set_board(harness.board)
@@ -767,6 +771,8 @@ def test_clear_runtime_caches_drops_preview_shadows(qtbot):
 
 def test_drop_event_copies_strings_before_mime_is_destroyed(qapp, qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
+    harness.page.set_board(harness.board)
     mime = _mime("time", "time-2")
     empty = harness.page.slot_widget("primary")
     event = _drop(mime)
@@ -874,7 +880,7 @@ def test_menu_double_click_and_keyboard_share_intents(qtbot):
     )
     card.mouseDoubleClickEvent(event)
     assert ("frf", "frf-1") not in harness.focused
-    assert harness.page.board_zoom() >= 1.0
+    assert harness.page.board_zoom() > 0.25
 
     card.mouseDoubleClickEvent(event)
     assert ("frf", "frf-1") in harness.focused
@@ -1012,6 +1018,7 @@ def test_focus_layer_caps_at_raw_100_percent_and_has_open_button(qtbot, qapp):
 
 def test_escape_clears_replacement_after_focus(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     ref = make_ref("time", "time-1")
     add_ref(harness.board, ref)
     harness.page.set_board(harness.board)
@@ -1033,6 +1040,7 @@ def test_escape_clears_replacement_after_focus(qtbot):
 
 def test_escape_exits_presentation_after_focus_and_replacement(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     ref = make_ref("time", "time-1")
     add_ref(harness.board, ref)
     harness.page.set_board(harness.board)
@@ -1133,6 +1141,7 @@ def test_hint_bar_exists_for_later_chart_stack_take(qtbot):
 
 def test_replacement_armed_next_add_rebinds(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     harness.page.arm_replacement("time", "time-1")
@@ -1348,6 +1357,7 @@ def test_empty_slot_click_places_into_clicked_slot(qtbot, layout_id):
 def test_empty_slot_click_while_tray_armed_uses_clicked_slot(qtbot):
     """UVL-A01: tray-armed replacement has no slot; the clicked empty slot is the target."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     move_to_unplaced(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
@@ -1366,6 +1376,7 @@ def test_empty_slot_click_while_tray_armed_uses_clicked_slot(qtbot):
 def test_empty_slot_click_while_board_armed_keeps_armed_slot(qtbot):
     """UVL-A01: a board-armed slot is not retargeted by clicking a different empty slot."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     harness.page.arm_replacement("time", "time-1")
@@ -1406,6 +1417,8 @@ def test_drop_on_board_padding_or_gutter_is_noop(qtbot, qapp):
 
 def test_empty_slot_and_card_drop_active_until_leave_or_drop(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
+    harness.page.set_board(harness.board)
     empty = harness.page.slot_widget("aux_0")
     mime = _mime("fft", "fft-1")
     empty.dragEnterEvent(_enter(mime))
@@ -1468,6 +1481,7 @@ def test_card_focus_button_fits_inside_rounded_chrome(qtbot, qapp):
 def test_card_swap_clears_replacement_arm_then_add_is_pure(qtbot):
     """UVL-A03: card-drag swap is not an armed completion; later add is a pure add."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     add_ref(harness.board, make_ref("fft", "fft-1"))
     harness.page.set_board(harness.board)
@@ -1486,6 +1500,7 @@ def test_card_swap_clears_replacement_arm_then_add_is_pure(qtbot):
 def test_tray_place_drop_clears_replacement_arm_then_add_is_pure(qtbot):
     """UVL-A03: tray drop onto an empty slot clears arm; later add is a pure add."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     move_to_unplaced(harness.board, make_ref("time", "time-1"))
     add_ref(harness.board, make_ref("fft", "fft-1"))
@@ -1508,6 +1523,7 @@ def test_board_full_tray_place_emits_feedback(qtbot):
     harness = _Harness(qtbot)
     messages = []
     harness.page.feedback_requested.connect(messages.append)
+    set_layout(harness.board, "hero_left_4")
     harness.fill_board(4)
     add_ref(harness.board, make_ref("fft", "overflow-1"))
     harness.page.set_board(harness.board)
@@ -2413,6 +2429,7 @@ def test_library_drop_on_occupied_card_requires_replace_ring(qtbot, monkeypatch)
         "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
     )
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     card = harness.page.card_widget("time", "time-1")
@@ -2476,6 +2493,7 @@ def test_free_grid_library_drop_on_ring_replaces(qtbot, monkeypatch):
 
 def test_template_card_drag_to_empty_moves_and_to_occupied_swaps(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     source = harness.page.card_widget("time", "time-1")
@@ -2799,6 +2817,7 @@ def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):
 
 def test_inactive_canvas_drops_stale_cards_when_mode_switches(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "stale-0"))
     harness.page.set_board(harness.board)
     assert harness.page.board_grid().card_widgets()
@@ -3343,7 +3362,7 @@ def test_free_grid_rail_toggle_does_not_open_an_overlay(qtbot):
     harness = _Harness(qtbot)
     qtbot.wait(20)
     QTest.mouseClick(harness.page.tool_rail().free_grid_button(), Qt.LeftButton)
-    assert harness.free_grid == [True]
+    assert harness.free_grid == [False]
     assert harness.page.active_panel() is None
     assert not harness.page.compare_rail().isVisible()
     assert not harness.page._layout_popover.isVisible()
@@ -3395,19 +3414,50 @@ def test_closing_layout_panel_does_not_change_layout_mode(qtbot):
     rail = harness.page.tool_rail()
     layout = rail.panel_button(PANEL_LAYOUT)
     assert layout is not None
-    assert rail.free_grid_button().property("modeActive") != "true"
-    assert layout.property("modeActive") == "true"
+    assert rail.free_grid_button().property("modeActive") == "true"
+    assert layout.property("modeActive") != "true"
     QTest.mouseClick(layout, Qt.LeftButton)
     qtbot.wait(10)
     assert harness.page.active_panel() == PANEL_LAYOUT
     assert layout.property("panelOpen") == "true"
-    assert layout.property("modeActive") == "true"
+    assert layout.property("modeActive") != "true"
     QTest.mouseClick(layout, Qt.LeftButton)
     qtbot.wait(10)
     assert harness.page.active_panel() is None
     assert layout.property("panelOpen") != "true"
-    assert layout.property("modeActive") == "true"
-    assert harness.page.board().layout_mode != LAYOUT_MODE_FREE_GRID
+    assert layout.property("modeActive") != "true"
+    assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
+
+
+def test_new_board_first_show_uses_fit_zoom(qtbot):
+    harness = _Harness(qtbot)
+    canvas = harness.page._active_canvas()
+    size = canvas.unzoomed_size()
+    fit = harness.page._content_fit_rect()
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport import fit_zoom
+
+    expected = fit_zoom(
+        (size.width(), size.height()),
+        (float(fit.width), float(fit.height)),
+    )
+    assert harness.page.board_zoom() == pytest.approx(expected)
+    assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
+
+
+def test_autofit_button_disabled_in_template_mode(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref("time", "a"))
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "a")
+    assert card is not None
+    _select_card(card)
+    qtbot.wait(10)
+    button = harness.page.card_context_island().button("fit")
+    assert button is not None
+    assert not button.isEnabled()
+    assert "自由网格" in button.toolTip()
+    assert harness.page.board().layout_mode == LAYOUT_MODE_TEMPLATE
 
 
 def test_card_context_residents_do_not_overlap_at_800px(qtbot):
@@ -3456,6 +3506,7 @@ def test_card_context_residents_do_not_overlap_at_800px(qtbot):
 
 def test_template_title_only_lod_hides_preview_backing_and_keeps_type(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("order", "View 1"))
     ref = make_ref("order", "View 1")
     harness.page.set_library_rows(
