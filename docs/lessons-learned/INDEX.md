@@ -193,6 +193,7 @@ lesson by default.
 | [`is_pandas_dataframe` Reads `sys.modules`, Never `import`s](codex-pandas-lazy-import-avoids-collect-all.md) | Touching `channel_frame.py`'s `is_pandas_dataframe`/`is_tabular_frame`, or adding a new lazy/optional dependency check in `mf4_analyzer/io`. | `tests/test_channel_frame.py` |
 | [A Progress Pump Makes The Render Re-Entrant](pyqt-ui/2026-08-15-progress-pump-makes-the-render-reentrant.md) | Adding/touching any `processEvents` on a render path, the time-domain View switch pipeline, or a `singleShot(0)` that navigates to a View. | `tests/ui/test_view_switch_reentrancy.py`; `rg -n "processEvents\(\)" mf4_analyzer/ui` |
 | [Heatmap Slice Follows Live View](pyqt-ui/2026-08-15-heatmap-slice-follows-live-view.md) | Changing FFT-vs-Time / Order heatmap slice refresh, `sigRangeChangedManually`, `_handle_wheel_dispatch`, Home/`reset_view_to_data_extents`, or `_slice_axis_range`. | See lesson |
+| [UltraView Viewport Gestures Route At CanvasHost Scope](pyqt-ui/2026-08-16-ultraview-viewport-gesture-router.md) | Changing UltraView pan/zoom/pinch/space handling, adding an interactive | See lesson |
 
 ## Selection Rules
 

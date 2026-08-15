@@ -19,7 +19,7 @@
 # - tests/ui/test_ultraview_entry.py::test_rail_fitter_shrinks_to_compact_and_restores_full
 #
 # Task 0 mismatch: these three deterministic failures are outside that known
-# set and therefore block this plan before Task 1:
+# set and initially blocked this plan before Task 1:
 #
 # - tests/test_verify_ultraview_visuals.py::test_ultraview_visual_harness_geometry_and_contact_sheet
 #   (harness still requires visible selected-card floating actions)
@@ -29,9 +29,14 @@
 #   (261 six-digit literals; ceiling 244)
 #
 # Focused re-run of exactly those three tests: 3 failed in 2.32s, so they are
-# not order pollution. They are not a D0–D6 seam-hardening change and must be
-# repaired or explicitly baselined by their owning work before this plan moves
-# past Task 0.
+# not order pollution. They are not a D0–D6 seam-hardening change.
+
+# Baseline disposition (2026-08-16): the user explicitly accepted these three
+# failures as the new baseline and authorized this seam-hardening plan to
+# continue. They remain owned by the visual harness/card-context, LayoutPicker
+# geometry, and QSS palette work respectively; this plan does not change them.
+# Per the current AGENTS.md focused-gate policy and the user's direction, no
+# fresh whole-suite rerun is required for the remaining seam tasks.
 #
 # Acquisition suite (separate process):
 # 359 passed, 4 warnings in 10.63s

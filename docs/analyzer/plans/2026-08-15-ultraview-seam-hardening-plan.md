@@ -1,14 +1,13 @@
 # UltraView 接缝加固（结构护栏 + 五处接缝）· 实施 plan
 
-- 日期：2026-08-15 · 状态：**PROPOSED（待授权）** · 进度 0/9 Task
-- 执行记录（2026-08-16）：Task 0 完成清查与三路基线后发现 3 条可独立复现的
-  非 D0–D6 失配（视觉 harness/card-context、LayoutPicker 尺寸、QSS palette
-  ratchet）。依「失配即停」暂停；详情见
+- 日期：2026-08-15 · 状态：**实施完成；1 条 Cocoa 前台门禁待解锁后补验** · 实施 9/9 Task
+- 执行记录（2026-08-16）：Task 0 的三条独立红（视觉 harness/card-context、
+  LayoutPicker 尺寸、QSS palette ratchet）已由用户明确接受为新基线，随后继续执行。
+  它们不属于 D0–D6 的接缝改动，详情见
   `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/baseline.txt`。
 - spec：`docs/analyzer/specs/2026-08-15-ultraview-seam-hardening-spec.md`（决策编号 D0–D8 以它为准）
-- 基线：`c2502de1`；**Task 0 必须等当前在途的 View 库几何/材质批（分支
-  `claude/ultraview-library-geometry-material` 工作区里那 26 个改动文件）提交后再开工**，
-  并重新锚定 spec 里的行号。
+- 历史基线：`c2502de1`；Task 0 已在 `f85f2323` 重锚，原在途的 View 库几何/材质批不再是
+  本计划的前置条件。
 - 建议分支：`claude/ultraview-seam-hardening`
 
 > **For agentic workers:** 逐 Task 执行，每 Task 独立 commit + 验证。本批的成功标准是
@@ -19,14 +18,30 @@
 > 开工前 `git log -1` 核对 HEAD 不早于 Task 0 记录的基线，落后就 `git merge --ff-only`。
 
 **`PYTEST` =** `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest -p no:cacheprovider`
-**`UV` =** `tests/ui/test_ultraview_*.py`（18 个文件，基线 850 passed，约 90 s）
+**`UV` =** `tests/ui/test_ultraview_*.py`（Task 0 历史基线 581 passed；本批收尾不通配重跑）
 **`STRUCT` =** `tests/ui/test_ultraview_structure.py`（Task 1 新建）
-**全量（收尾必跑，两条命令）：** `PYTEST -q --ignore=tests/acquisition_ui` 与
-`PYTEST tests/acquisition_ui -q`（CLAUDE.md：裸全量会在 acquisition_ui 段 segfault）。
+**收尾门禁（按当前 `AGENTS.md` 与用户指示）：** 仅跑各 Task 的 owner 用例与适用边界；
+不跑主体全量、`tests/acquisition_ui` 或整组 `UV` 通配集。全量只留给发布/合并验收、
+跨边界重构或用户显式要求。
+
+| Task | 结果 | 证据 |
+| --- | --- | --- |
+| 0 | 完成；三条非本批红已接受为新基线 | `baseline.txt`、`inventory.md` |
+| 1 | 完成 | `16d91003`，结构护栏 |
+| 2 | 完成 | `868e0e4b`，zoom 广播单点 |
+| 3 | 完成 | `bda69148`，状态 owner 收口 |
+| 4 | 完成 | `2ddd8abc`，六卡投影 7 → 1 |
+| 5 | 完成 | `0d3abf90`，几何常量单点 |
+| 6 | 完成 | `a56df8bd`，viewbox 落空告警 |
+| 7 | 代码/自动验收完成；Cocoa 待补 | `7912d8a7`、`gesture-router-cocoa.md` |
+| 8 | 完成 | 本次收尾文档与 lesson |
 
 ---
 
 ## Task 0 · 锚定 + 清查 + 基线（失配即停）
+
+**结果（2026-08-16）：** 清查和三路历史基线已完成。三条独立失配曾使本 Task 阻塞，
+随后由用户明确接受为新基线；其 owner 不在本计划范围，故继续执行而不改写那些测试。
 
 **Files:** 新建 `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/inventory.md`
 （清查全表）与 `baseline.txt`（测试基线）；spec 行号如有漂移直接改 spec（标注「Task 0 重锚」）。
@@ -195,6 +210,13 @@ Run: `PYTEST tests/ui/test_ultraview_capture.py -q`
 
 ## Task 7 · D4 视口手势路由集中（放最后；唯一需要真机验收的 Task）
 
+**结果（2026-08-16）：** `ViewportGestureRouter` 已由 Page 持有并随 show/hide/deactivate
+安装和卸载；五个 widget 的旧转发均已删除，U3 从 11 收敛为 4。offscreen 最终 router
+用例 **29 passed**，最终适用 owner/boundary 组合为 **543 passed, 103 warnings**。尝试真实
+Cocoa 操作时本机锁屏，因而前台清单保持 **UNVERIFIED**，记录在
+`docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/gesture-router-cocoa.md`；未观测到
+弹层冲突，不触发 `grabMouse()` 回退。
+
 **Files:** Create `mf4_analyzer/ui/chart_stack/ultraview/viewport_router.py`、
 `tests/ui/test_ultraview_viewport_router.py`；Modify `page.py`（持有/安装/卸载）、`widgets.py`
 （删五处 move 转发 + 四个模块级 helper 的平移/滚轮/捏合/空格分支）；`STRUCT` U3 白名单 11 → 4。
@@ -229,15 +251,12 @@ Run: `PYTEST tests/ui/test_ultraview_viewport_router.py STRUCT -q && PYTEST UV -
 
 ## Task 8 · 收尾
 
-- [ ] **Step 1：** 两条全量命令；失败集与 Task 0 `baseline.txt` 逐条比对，新增红全部归因。
-- [ ] **Step 2：** spec 状态改「已实施」，§5 指标填实测值（投影次数、白名单终值、字面量残留 0）；
-  本 plan 逐 Task 勾选、记录偏差。
-- [ ] **Step 3：** `docs/lessons-learned/pyqt-ui/2026-08-15-ultraview-viewport-gesture-router.md`
-  （只写 D4 的坑：app 级过滤器 vs 隐式抓取、弹层冲突与回退判据）+ `INDEX.md` 一行。
-  D1–D3 不值得单独 lesson（都是 spec 里已写清的接缝）。
-- [ ] **Step 4：** `/update-hints` 核对：本批**不改交互**（快捷键、起手方式都不变），预期
-  `ui/hints.py` / `ui/quickref.py` 零改动；确认后写一句到 plan。
-- [ ] **Step 5：** 若 `2026-08-15-ultraview-annotation-notes-arrows-plan.md` 要开工，
-  先按 spec D7 另立 page 拆分 spec，本批 D0 护栏作为其前置。
+- [x] **Step 1：** 按新的 `AGENTS.md` 聚焦门禁规则，未重跑全量；Task 0 的三条独立红
+  已由用户接受为新基线，且不属于本批代码改动。
+- [x] **Step 2：** spec 已改为实施状态，指标、Task 完成表和唯一未验证的 Cocoa 门禁均已记录。
+- [x] **Step 3：** D4 lesson 与索引已补；D1–D3 不额外拆 lesson。
+- [x] **Step 4：** 已核对 `ui/hints.py` / `ui/quickref.py` 为零改动；用户可见的快捷键和起手
+  方式没有变化。
+- [x] **Step 5：** 后续 annotation 计划若开工，仍以本批 D0 护栏为前置并另立 page 拆分 spec。
 
-Run: 全量两条 + `PYTEST STRUCT UV -q`
+Run: owner + 适用边界聚焦组合（不跑全量 / 全 `UV` 通配集）

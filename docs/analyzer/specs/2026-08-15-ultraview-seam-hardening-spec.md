@@ -1,6 +1,6 @@
 # UltraView 接缝加固（结构护栏 + 五处接缝）· spec
 
-- 日期：2026-08-15 · 状态：**PROPOSED（待授权）**
+- 日期：2026-08-15 · 状态：**已实施；Cocoa 前台验收待解锁后补做**
 - Task 0 重锚（2026-08-16，`f85f2323`）：本文此前的行号取自在途库几何/材质
   工作区；已按本提交重新核对。下文保留的旧行号一律只作历史定位，实施以函数名和
   `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/inventory.md` 的锚点表为准。
@@ -28,12 +28,12 @@ coordinator 3030 行没有一个方法超 60 行。缺陷史里生命周期/崩�
    稳定的东西，而现在没有任何机械看守。
 2. **修五处已被缺陷史点名的接缝**（D1–D5）+ 一处静默退化补日志（D6）。
 
-衡量指标（都由常驻测试机械看守，详见 §5）：
-- 结构护栏文件存在且 6 条不变量全绿；各白名单**只许缩小**。
-- 切 Board 时全量投影次数 **N+1 → 1**（N = 进入 Board 的卡片数）。
+实施结果（详见 §5）：
+- 结构护栏文件存在且 6 条不变量全绿；各白名单只缩不扩。
+- 六张卡切 Board 的实际投影次数 **7 → 1**。
 - 视图层对模型对象的直接属性写 **1 → 0**；coordinator 对 page 私有方法调用 **1 → 0**。
-- `_page_of` 触达面 **11 → ≤4**（若 D4 落地）。
-- rail / 岛几何字面量在 `floating_layout.py` 之外的出现次数 **→ 0**。
+- `_page_of` 触达面 **11 → 4**。
+- rail / 岛几何字面量结构 lint 白名单归零。
 
 ## 1. 评估依据
 
@@ -264,14 +264,16 @@ coordinator 抓源画布靠六个硬编码私有属性名（`_iter_viewboxes` `:
 
 ## 5. 验收与护栏
 
-- `tests/ui/test_ultraview_structure.py` 六条（U1 含 U1b、U2–U6）+ D2 几何字面量 lint +
-  D5 单点 lint 全绿；白名单只许缩小，写进文件头注释。
-- D1 spy 用例：切板 1 次投影；D2 矮舞台参数化；D3 切板落库顺序用例；D4 QTest 事件序列
-  用例（五种起点 widget 的平移不断）+ 真机清单归档到 `docs/analyzer/verify/
-  2026-08-15-ultraview-seam-hardening/`（截图 + 读数，照 `2026-08-15-ultraview-fit-zoom-probes/`
-  的做法）；D6 特征化用例。
-- `tests/ui/test_ultraview_*.py` 全绿（基线 850 passed，Task 0 重测）；主体全量与
-  `tests/acquisition_ui` 分两条命令跑，失败集与 Task 0 基线一致（CLAUDE.md 的规矩）。
-- 既有护栏不动：`test_main_window_state_ownership.py`（coordinator 仍在扫描目录内）、
-  `test_no_lambda_signal_connections.py`、`test_ultraview_page.py::test_page_modules_do_not_import_main_window`、
-  `test_ultraview_state.py` 的 Qt-free 断言、`test_ultraview_floating_layout.py:48`。
+- 结构护栏（U1/U1b、U2–U6、D2 几何字面量、D5 单点）已全绿，白名单均只缩不扩；终值见
+  `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/inventory.md` §7。
+- D1 的 six-ref spy、D2 矮舞台参数化、D3 切板落库顺序、D6 落空告警均有 owner 测试；D4
+  新增 QTest 事件序列覆盖五个起点、中键、空格左键、Ctrl/Cmd/Meta 滚轮、pinch、输入框、
+  CanvasHost 边界与 hide/show 生命周期。`tests/ui/test_ultraview_viewport_router.py` 最终
+  **29 passed**。
+- 最新 `AGENTS.md` 将全量限定为发布、合并验收、跨边界重构或用户显式请求。本批按用户指示
+  仅运行变更 owner 和适用边界的聚焦门禁，不重跑旧的 UltraView 通配集、主体全量或
+  `tests/acquisition_ui`；Task 0 的三条独立红已由用户明确接受为新基线，记录在 `baseline.txt`。
+- 最终聚焦组合覆盖 14 个 owner/boundary 文件，结果为 **543 passed, 103 warnings**；警告均为
+  pyqtgraph 对 NumPy shape 设置的弃用提示。
+- 本批保持 `ui/hints.py` / `ui/quickref.py` 零改动：快捷键与起手方式未变。真实 Cocoa 验收是
+  唯一保留门禁；桌面锁屏导致未验证，详见 `gesture-router-cocoa.md`，不得以 offscreen 代替。

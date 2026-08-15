@@ -127,6 +127,25 @@ Task 5 需要以组件真实 `sizeHint()` 决定导航岛回退：当前组件�
 复现的失配项。`tests/acquisition_ui` 独立为 **359 passed**。完整命令、失败 test-id
 和独立复跑证据见同目录 `baseline.txt`。
 
-**Task 0 结论：BLOCKED。** plan 明定「失配即停」，因此未进入 Task 1；三条失配
-须由视觉 harness/card-context、LayoutPicker 尺寸与 QSS palette 的 owner 先恢复或
-由用户明确接受新的基线。
+**Task 0 初始结论：BLOCKED。** 三条失配须由视觉 harness/card-context、LayoutPicker
+尺寸与 QSS palette 的 owner 先恢复或由用户明确接受新的基线。
+
+## §7 · 执行闭环（2026-08-16）
+
+用户已明确接受 `baseline.txt` 中的三条独立红为新基线，故 Task 0 的阻塞结论已解除；
+它们不属于 D0–D6 的改动范围，也没有被本批重新归因为接缝回归。
+
+| 项 | Task 0 → 实施后 |
+| --- | --- |
+| U1 视图层模型字段写 | 1 → 0 |
+| U1b state 模块外的模型字段写 | 4 → 0 |
+| U3 `_page_of` 触达面 | 11 → 4（`clear_card_selection`、`handle_card_double_click`、`notify_canvas_click`、`unplaced_tray`） |
+| U5 / U6 | `"ultraViewPage"` 仅共享常量；coordinator 私有 page 调用 1 → 0 |
+| D2 浮层几何裸字面量 | 结构 lint 白名单 → 空 |
+| D5 两种 grid 的 `set_zoom` 调用 | 各 4 → 各 1 |
+| D1 六张卡切入 | 实际投影 7 → 1 |
+
+D4 已改为 Page 持有的应用级 `ViewportGestureRouter`；五个 widget 的平移/缩放/捏合/
+空格转发均已删除。offscreen 事件契约已覆盖五类起点、中键与空格左键连续平移、Ctrl 与
+Cmd/Meta 滚轮、原生 pinch、文本框、宿主范围及 hide/show 生命周期。真实 Cocoa 前台验收
+因本机锁屏未能操作，单列为未验证门禁，见 `gesture-router-cocoa.md`。
