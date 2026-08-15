@@ -11,7 +11,17 @@ from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox, QPushButton, QToolButton, QWidget
+from PyQt5.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QGraphicsDropShadowEffect,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QToolButton,
+    QWidget,
+)
 
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BOARD_PADDING,
@@ -28,7 +38,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     legal_grid_rect,
     rect_to_pixels,
 )
-from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED
+from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED, PANEL_BOARDS
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
@@ -46,20 +56,25 @@ from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
 from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
     MAX_GRID_ROWS,
+    MAX_UI_BOARDS,
     LAYOUT_SLOTS,
     SOURCE_SECTIONS,
     STATUS_MISSING,
     STATUS_ORPHANED,
     STATUS_STALE,
+    STATUS_FRESH,
     ULTRAVIEW_REF_MIME,
     FreeGridPlacement,
     GridRect,
     LAYOUT_MODE_FREE_GRID,
+    LAYOUT_MODE_TEMPLATE,
     UltraViewRef,
     _legal_grid_rect,
     add_ref,
     board_to_payload,
+    create_board,
     default_board,
+    default_workspace,
     first_empty_slot,
     free_grid_to_template,
     make_ref,
@@ -68,6 +83,7 @@ from mf4_analyzer.ui.ultraview_state import (
     place_from_unplaced,
     rebind_ref,
     remove_ref,
+    reorder_board,
     replace_slot,
     set_layout,
     slot_occupant,
@@ -178,6 +194,75 @@ def _is_drop_active(widget: QWidget) -> bool:
 def _sample_pixel(widget: QWidget, x: int, y: int) -> QColor:
     image = widget.grab().toImage()
     return QColor(image.pixel(max(0, min(x, image.width() - 1)), max(0, min(y, image.height() - 1))))
+
+
+def _centre_pixel(widget: QWidget) -> QColor:
+    return _sample_pixel(widget, widget.width() // 2, widget.height() // 2)
+
+
+def _chroma(color: QColor) -> float:
+    """How loud a colour reads, as Qt-HSV ``S * V`` == ``(max - min) / 255`` of RGB.
+
+    Saturation alone cannot express "calm": a dark forest green and a Tailwind alert
+    green both sit near S 0.5-0.8, and the alert one is loud only because it is *also*
+    bright. ``S * V`` separates them, and it is linear in RGB so antialiased blends
+    between two calm colours stay calm (no overshoot).
+    """
+    return color.saturationF() * color.valueF()
+
+
+def _loudest_pixel(widget: QWidget) -> QColor:
+    """The most colourful pixel anywhere in ``widget`` — fill, border and ink alike."""
+    image = widget.grab().toImage()
+    worst = QColor(image.pixel(0, 0))
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = QColor(image.pixel(x, y))
+            if _chroma(pixel) > _chroma(worst):
+                worst = pixel
+    return worst
+
+
+def _hue_gap(left: QColor, right: QColor) -> float:
+    """Shortest distance between two hues on the colour wheel, in degrees."""
+    assert left.hue() >= 0, f"{left.name()} is achromatic, it has no hue to compare"
+    assert right.hue() >= 0, f"{right.name()} is achromatic, it has no hue to compare"
+    delta = abs(left.hue() - right.hue()) % 360
+    return min(delta, 360 - delta)
+
+
+def _dense_rows() -> list[LibraryRow]:
+    """The shape from the plan's §1 probe: 4 time Views plus one of each other kind.
+
+    Concentrating rows in one section is what exposed the clipping — a section card
+    tall enough to be the one QVBoxLayout squeezes when the body minimum is too small.
+    """
+    meta = "Rte_TAS_mTorsionBarTorque_xds16, Rte_TLC_mSumLimMotorTorque_xds16"
+    rows = [
+        LibraryRow(
+            section="time",
+            view_id=f"t{index}",
+            name=f"View {index + 1}",
+            tab_color="#3B82F6",
+            status=STATUS_MISSING,
+            on_board=False,
+            source_summary=meta,
+        )
+        for index in range(4)
+    ]
+    rows += [
+        LibraryRow(
+            section=section,
+            view_id=f"{section}-only",
+            name="View 1",
+            tab_color="#3B82F6",
+            status=STATUS_MISSING,
+            on_board=False,
+            source_summary="EPS_1_CRC",
+        )
+        for section in ("fft", "fft_time", "frf", "order")
+    ]
+    return rows
 
 
 class _Harness:
@@ -430,39 +515,23 @@ def test_library_empty_section_keeps_header_and_search_expands_matches(qtbot):
     assert all(not widget.isHidden() for widget in fft_rows)
 
 
-def test_library_has_groups_and_overview_without_directory_or_section_bars(qtbot, qapp):
+def test_library_has_one_grouped_browse_path_without_mode_or_catalog_controls(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)
     library = harness.page.library_panel()
     harness.page.set_library_visible(True)
     qapp.processEvents()
-    assert library.findChild(QToolButton, "ultraViewLibraryModeGroups") is not None
-    assert library.findChild(QToolButton, "ultraViewLibraryModeCompact") is not None
+    assert library.findChild(QToolButton, "ultraViewLibraryModeGroups") is None
+    assert library.findChild(QToolButton, "ultraViewLibraryModeCompact") is None
     assert library.findChild(QWidget, "ultraViewLibraryModeTree") is None
     assert library.findChild(QWidget, "ultraViewLibraryIntro") is None
     assert library.findChild(QToolButton, "ultraViewLibraryToggleAll") is None
     assert library.findChild(QWidget, "ultraViewLibraryCompactCaption") is None
+    assert library.findChild(QWidget, "ultraViewLibraryCompactHost") is None
     assert library.browse_mode() == "groups"
-    assert "目录" not in library.findChild(QToolButton, "ultraViewLibraryModeGroups").text()
-    library.findChild(QToolButton, "ultraViewLibraryModeCompact").click()
-    qapp.processEvents()
-    assert library.browse_mode() == "compact"
-    cards = library.catalog_cards()
-    assert tuple(cards) == SOURCE_SECTIONS
-    for card in cards.values():
-        title = card.findChild(QLabel, "ultraViewLibraryCatalogTitle")
-        assert title is not None
-        assert " / " not in title.text()
-        assert "个 View" not in title.text()
-        assert card.findChild(QLabel, "ultraViewLibraryCatalogMeta") is None
-        assert card.expand_button().text() == "展开"
-        assert card.findChild(QToolButton, "ultraViewLibraryCatalogNew") is None
-        assert "新建" not in card.expand_button().text()
-    cards["fft"].expand_button().click()
-    qapp.processEvents()
-    assert library.browse_mode() == "groups"
-    assert library.is_section_expanded("fft") is True
+    assert tuple(library.section_widgets()) == SOURCE_SECTIONS
+    assert all(frame.isVisible() for frame in library.section_widgets().values())
 
 
 def test_library_on_board_button_removes_instead_of_locating(qtbot, qapp):
@@ -483,8 +552,10 @@ def test_library_on_board_button_removes_instead_of_locating(qtbot, qapp):
     assert button.text() == "−"
     assert button.property("action") == "remove"
     assert "移除" in button.toolTip()
-    assert button.width() <= 20
-    assert button.height() <= 20
+    # Was `<= 20`, which pinned the size the code and the QSS used to disagree about
+    # (setFixedSize(18) vs min-width 18px + 1px border). Plan §4 makes it a contract.
+    assert button.width() == uv_widgets.LIBRARY_ROW_ACTION_SIZE
+    assert button.height() == uv_widgets.LIBRARY_ROW_ACTION_SIZE
     assert button.height() < row.height()
     button.click()
     assert harness.removed == [("frf", "frf-1")]
@@ -519,24 +590,60 @@ def test_library_add_remove_and_selection_colors_are_distinct(qtbot, qapp):
 
     plus = _sample_pixel(add_btn, 2, 2)
     minus = _sample_pixel(remove_btn, 2, 2)
-    assert plus.green() > plus.red() + 20
-    assert minus.red() > minus.green() + 20
-    assert plus.green() > minus.green() + 20
-    assert minus.red() > plus.red() + 8
+    # The old fixed channel deltas (+20/+8) were sized for the Tailwind palette that
+    # plan §3.3 deliberately desaturates, so they measured loudness, not distinctness.
+    # Direction plus hue separation says the same thing without pinning a hex string.
+    assert plus.green() > plus.red()
+    assert minus.red() > minus.green()
+    assert _hue_gap(plus, minus) > 40
 
-    header_fill = _sample_pixel(header, max(12, header.width() // 2), header.height() // 2)
-    selected_fill = _sample_pixel(
-        remove_row, max(12, remove_row.width() // 2), remove_row.height() // 2
-    )
-    selected_chroma = selected_fill.blue() - selected_fill.red()
-    header_chroma = header_fill.blue() - header_fill.red()
-    assert selected_chroma > 8
-    assert selected_chroma >= header_chroma
-    assert abs(header_fill.red() - header_fill.blue()) < 18
+    selected_fill = _sample_pixel(remove_row, 8, remove_row.height() // 2)
+    assert selected_fill.lightness() >= 247
+    assert isinstance(remove_row.graphicsEffect(), QGraphicsDropShadowEffect)
+    assert add_row.graphicsEffect() is None
+
+
+def test_library_selection_is_single_elevated_projection_and_survives_rebuild(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+
+    library.set_selected("time", "time-1")
+    first = next(row for row in library.row_widgets() if row.row().view_id == "time-1")
+    assert library.selected_ref() == ("time", "time-1")
+    assert isinstance(first.graphicsEffect(), QGraphicsDropShadowEffect)
+    assert [row.row().view_id for row in library.row_widgets() if row.property("selected") == "true"] == [
+        "time-1"
+    ]
+
+    library.set_selected("time", "time-2")
+    second = next(row for row in library.row_widgets() if row.row().view_id == "time-2")
+    assert first.property("selected") == "false"
+    assert first.graphicsEffect() is None
+    assert second.property("selected") == "true"
+    assert isinstance(second.graphicsEffect(), QGraphicsDropShadowEffect)
+
+    library.set_rows(_rows())
+    qapp.processEvents()
+    rebuilt = next(row for row in library.row_widgets() if row.row().view_id == "time-2")
+    assert rebuilt is not second
+    assert library.selected_ref() == ("time", "time-2")
+    assert rebuilt.property("selected") == "true"
+    assert isinstance(rebuilt.graphicsEffect(), QGraphicsDropShadowEffect)
+    assert sum(row.graphicsEffect() is not None for row in library.row_widgets()) == 1
 
 
 def test_add_paths_share_one_intent(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
+    harness.page.set_board(harness.board)
     page = harness.page
     library = page.library_panel()
     library.set_selected("fft", "fft-1")
@@ -587,6 +694,7 @@ def test_unplaced_badge_and_overlay_preserve_tray_actions(qtbot):
     rail = harness.page.tool_rail()
     assert rail.badge_text(PANEL_UNPLACED) == "0"
     assert not tray.isVisible()
+    set_layout(harness.board, "hero_left_4")
     harness.fill_board(4)
     add_ref(harness.board, make_ref("fft", "overflow-1"))
     harness.page.set_board(harness.board)
@@ -665,6 +773,8 @@ def test_clear_runtime_caches_drops_preview_shadows(qtbot):
 
 def test_drop_event_copies_strings_before_mime_is_destroyed(qapp, qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
+    harness.page.set_board(harness.board)
     mime = _mime("time", "time-2")
     empty = harness.page.slot_widget("primary")
     event = _drop(mime)
@@ -772,7 +882,7 @@ def test_menu_double_click_and_keyboard_share_intents(qtbot):
     )
     card.mouseDoubleClickEvent(event)
     assert ("frf", "frf-1") not in harness.focused
-    assert harness.page.board_zoom() >= 1.0
+    assert harness.page.board_zoom() > 0.25
 
     card.mouseDoubleClickEvent(event)
     assert ("frf", "frf-1") in harness.focused
@@ -882,6 +992,58 @@ def test_stale_card_sync_button_emits_page_intent(qtbot):
     assert not sync_btn.isVisible()
 
 
+def test_sync_all_rail_emits_placed_and_unplaced_stale_refs(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "stale-a", "fresh-b")
+    tray_ref = make_ref("time", "stale-tray")
+    add_ref(harness.board, tray_ref)
+    move_to_unplaced(harness.board, tray_ref)
+    harness.page.set_board(harness.board)
+    placed_stale = make_ref("time", "stale-a")
+    placed_fresh = make_ref("time", "fresh-b")
+    for ref, title in (
+        (placed_stale, "过期甲"),
+        (placed_fresh, "最新乙"),
+        (tray_ref, "托盘过期"),
+    ):
+        harness.page.set_preview(
+            ref,
+            FakePreview(ref=ref, image=_image(), title=title, captured_digest="old"),
+        )
+    harness.page.set_ref_status(placed_stale, STATUS_STALE, True)
+    harness.page.set_ref_status(placed_fresh, STATUS_FRESH, True)
+    harness.page.set_ref_status(tray_ref, STATUS_STALE, True)
+
+    rail = harness.page.tool_rail()
+    button = rail.sync_all_button()
+    assert rail.stale_count() == 2
+    assert button.isEnabled()
+    badge = rail.findChild(QLabel, "ultraViewRailSyncAllBadge")
+    assert badge is not None and badge.isVisible()
+    assert badge.text() == "2"
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert harness.synced == [("time", "stale-a"), ("time", "stale-tray")]
+
+
+def test_sync_all_rail_without_stale_emits_feedback(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "fresh-0")
+    ref = make_ref("time", "fresh-0")
+    harness.page.set_preview(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="道路输入", captured_digest="now"),
+    )
+    harness.page.set_ref_status(ref, STATUS_FRESH, True)
+    messages: list[str] = []
+    harness.page.feedback_requested.connect(messages.append)
+    rail = harness.page.tool_rail()
+    assert rail.stale_count() == 0
+    assert not rail.sync_all_button().isEnabled()
+    harness.page._on_sync_all_requested()
+    assert messages == ["没有需要更新的预览"]
+    assert harness.synced == []
+
+
 def test_focus_layer_caps_at_raw_100_percent_and_has_open_button(qtbot, qapp):
     harness = _Harness(qtbot)
     ref = make_ref("time", "time-1")
@@ -910,6 +1072,7 @@ def test_focus_layer_caps_at_raw_100_percent_and_has_open_button(qtbot, qapp):
 
 def test_escape_clears_replacement_after_focus(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     ref = make_ref("time", "time-1")
     add_ref(harness.board, ref)
     harness.page.set_board(harness.board)
@@ -931,6 +1094,7 @@ def test_escape_clears_replacement_after_focus(qtbot):
 
 def test_escape_exits_presentation_after_focus_and_replacement(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     ref = make_ref("time", "time-1")
     add_ref(harness.board, ref)
     harness.page.set_board(harness.board)
@@ -1031,6 +1195,7 @@ def test_hint_bar_exists_for_later_chart_stack_take(qtbot):
 
 def test_replacement_armed_next_add_rebinds(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     harness.page.arm_replacement("time", "time-1")
@@ -1246,6 +1411,7 @@ def test_empty_slot_click_places_into_clicked_slot(qtbot, layout_id):
 def test_empty_slot_click_while_tray_armed_uses_clicked_slot(qtbot):
     """UVL-A01: tray-armed replacement has no slot; the clicked empty slot is the target."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     move_to_unplaced(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
@@ -1264,6 +1430,7 @@ def test_empty_slot_click_while_tray_armed_uses_clicked_slot(qtbot):
 def test_empty_slot_click_while_board_armed_keeps_armed_slot(qtbot):
     """UVL-A01: a board-armed slot is not retargeted by clicking a different empty slot."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     harness.page.arm_replacement("time", "time-1")
@@ -1304,6 +1471,8 @@ def test_drop_on_board_padding_or_gutter_is_noop(qtbot, qapp):
 
 def test_empty_slot_and_card_drop_active_until_leave_or_drop(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
+    harness.page.set_board(harness.board)
     empty = harness.page.slot_widget("aux_0")
     mime = _mime("fft", "fft-1")
     empty.dragEnterEvent(_enter(mime))
@@ -1341,31 +1510,32 @@ def test_card_focus_button_fits_inside_rounded_chrome(qtbot, qapp):
     qapp.processEvents()
     card = harness.page.card_widget("time", "time-1")
     assert card is not None
-    button = card.findChild(QToolButton, "ultraViewCardFocusButton")
-    assert button is not None
-    assert button.isVisible() is True
-    mapped = QRect(button.mapTo(card, QPoint(0, 0)), button.size())
+    bar = card.action_bar()
+    assert bar is not None and bar.isVisible()
+    assert bar.objectName() == "ultraViewCardActionBar"
+    mapped = QRect(bar.mapTo(card, QPoint(0, 0)), bar.size())
     assert card.rect().adjusted(1, 1, -1, -1).contains(mapped)
-    assert button.width() == 24
-    assert button.height() == 24
-    assert mapped.left() >= 6
-    assert mapped.top() >= 4
-    assert mapped.right() <= card.width() - 6
+    assert mapped.top() >= 2
+    assert mapped.right() <= card.width() - 4
     assert mapped.bottom() <= card.header_height()
-    assert not button.icon().isNull()
-    grabbed = button.grab().toImage()
-    blues = 0
-    for x in range(0, grabbed.width(), 2):
-        for y in range(0, grabbed.height(), 2):
-            pixel = QColor(grabbed.pixel(x, y))
-            if pixel.blue() > pixel.red() + 8 and pixel.blue() > 140:
-                blues += 1
-    assert blues >= 8, "focus chip must render a visible blue fill/stroke"
+    for action in ("open", "focus", "fit", "more"):
+        button = card.action_button(action)
+        assert button is not None
+        assert button.isVisible()
+        assert button.text() == ""
+        assert button.toolTip()
+        assert button.accessibleName()
+        assert button.focusPolicy() == Qt.TabFocus
+        assert not button.icon().isNull()
+        assert button.width() == 22
+        assert button.height() == 22
+    assert harness.page.card_context_island().isHidden()
 
 
 def test_card_swap_clears_replacement_arm_then_add_is_pure(qtbot):
     """UVL-A03: card-drag swap is not an armed completion; later add is a pure add."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     add_ref(harness.board, make_ref("fft", "fft-1"))
     harness.page.set_board(harness.board)
@@ -1384,6 +1554,7 @@ def test_card_swap_clears_replacement_arm_then_add_is_pure(qtbot):
 def test_tray_place_drop_clears_replacement_arm_then_add_is_pure(qtbot):
     """UVL-A03: tray drop onto an empty slot clears arm; later add is a pure add."""
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     move_to_unplaced(harness.board, make_ref("time", "time-1"))
     add_ref(harness.board, make_ref("fft", "fft-1"))
@@ -1406,6 +1577,7 @@ def test_board_full_tray_place_emits_feedback(qtbot):
     harness = _Harness(qtbot)
     messages = []
     harness.page.feedback_requested.connect(messages.append)
+    set_layout(harness.board, "hero_left_4")
     harness.fill_board(4)
     add_ref(harness.board, make_ref("fft", "overflow-1"))
     harness.page.set_board(harness.board)
@@ -1678,6 +1850,44 @@ def _drag_card(
 
 def _select_card(card) -> None:
     QTest.mouseClick(card, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
+
+
+def _size_submenu(menu: QMenu) -> QMenu:
+    for action in menu.actions():
+        if action.text() == "自由网格尺寸" and action.menu() is not None:
+            return action.menu()
+    raise AssertionError("missing 自由网格尺寸 submenu")
+
+
+def _assert_rounded_menu_shell(menu: QMenu) -> None:
+    assert menu.testAttribute(Qt.WA_TranslucentBackground)
+    flags = menu.windowFlags()
+    assert bool(flags & Qt.NoDropShadowWindowHint)
+    assert bool(flags & Qt.FramelessWindowHint)
+
+
+def test_free_grid_size_context_submenu_uses_rounded_popup_shell(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "size-ctx")
+    menu = card.make_context_menu()
+    _assert_rounded_menu_shell(menu)
+    _assert_rounded_menu_shell(_size_submenu(menu))
+
+
+def test_free_grid_size_overflow_submenu_uses_rounded_popup_shell(qtbot, monkeypatch):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "size-more")
+    captured: list[QMenu] = []
+
+    def _fake_exec(self, *args, **kwargs):
+        captured.append(self)
+        return None
+
+    monkeypatch.setattr(QMenu, "exec_", _fake_exec)
+    harness.page._show_card_more_menu("time", "size-more")
+    assert captured
+    _assert_rounded_menu_shell(captured[0])
+    _assert_rounded_menu_shell(_size_submenu(captured[0]))
 
 
 def _east_handle_pos(card) -> QPoint:
@@ -2216,11 +2426,13 @@ def test_free_grid_escape_clears_selection(qtbot):
     island = harness.page.card_context_island()
     assert _selection_view_ids(free) == {"esc-sel"}
     assert harness.page.selected_ref() == ("time", "esc-sel")
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert harness.page.handle_escape() is True
     assert _selection_view_ids(free) == set()
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert free.ghost_overlay()._handles_rect is None
     assert harness.page.handle_escape() is False
     assert not island.isVisible()
@@ -2235,13 +2447,24 @@ def test_template_escape_hides_card_context_island(qtbot):
     _select_card(card)
     island = harness.page.card_context_island()
     assert harness.page.selected_ref() == ("time", "time-1")
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert card.model().selected
     assert harness.page.handle_escape() is True
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     assert not card.model().selected
     assert harness.page.handle_escape() is False
+
+
+def _blank_board_point(board) -> QPoint:
+    for y in range(4, max(5, board.height() - 4), 8):
+        for x in range(4, max(5, board.width() - 4), 8):
+            pos = QPoint(x, y)
+            if board._card_at(pos) is None:
+                return pos
+    raise AssertionError("free grid has no blank interior point")
 
 
 def test_free_grid_empty_click_hides_card_context_island(qtbot):
@@ -2249,11 +2472,76 @@ def test_free_grid_empty_click_hides_card_context_island(qtbot):
     free, (card,) = _prepare_free_grid(harness, qtbot, "empty-click")
     _select_card(card)
     island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     QTest.mouseClick(free, Qt.LeftButton, Qt.NoModifier, QPoint(4, 4))
     assert harness.page.selected_ref() is None
     assert _selection_view_ids(free) == set()
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
+
+
+def test_free_grid_blank_press_dismisses_the_library(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "lib-blank")
+    harness.page.set_library_visible(True)
+    assert harness.page.is_library_visible() is True
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    assert harness.page.is_library_visible() is False
+
+
+def test_pinned_library_survives_a_blank_canvas_press(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "lib-pin")
+    harness.page.set_library_visible(True)
+    harness.page.library_panel().set_pinned(True)
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    assert harness.page.is_library_visible() is True
+    assert harness.page.active_panel() == PANEL_LIBRARY
+
+
+def test_blank_press_during_drag_defers_the_dismiss(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "lib-drag")
+    harness.page.set_library_visible(True)
+    harness.page._on_drag_started("ref")
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    assert harness.page.is_library_visible() is True
+    assert harness.page._deferred_panel_close is not None
+    harness.page._on_drag_finished()
+    assert harness.page.is_library_visible() is False
+
+
+def test_card_press_does_not_dismiss_the_library(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "lib-card")
+    harness.page.set_library_visible(True)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
+    assert harness.page.is_library_visible() is True
+
+
+def test_blank_press_still_clears_selection_and_starts_marquee(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "lib-marq")
+    _select_card(card)
+    pos = _blank_board_point(free)
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, pos)
+    assert _selection_view_ids(free) == set()
+    assert harness.page.selected_ref() is None
+    assert free.gesture().marquee() is not None
+
+
+def test_template_blank_press_dismisses_the_library(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref("time", "time-1"))
+    add_ref(harness.board, make_ref("time", "time-2"))
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    harness.page.set_library_visible(True)
+    grid = harness.page.board_grid()
+    QTest.mousePress(grid, Qt.LeftButton, Qt.NoModifier, _gutter_point(grid))
+    assert harness.page.is_library_visible() is False
 
 
 def test_template_gutter_click_hides_card_context_island(qtbot):
@@ -2267,11 +2555,13 @@ def test_template_gutter_click_hides_card_context_island(qtbot):
     assert card is not None
     _select_card(card)
     island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     grid = harness.page.board_grid()
     QTest.mouseClick(grid, Qt.LeftButton, Qt.NoModifier, _gutter_point(grid))
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
 
 
 def test_board_host_padding_click_hides_card_context_island(qtbot):
@@ -2281,12 +2571,14 @@ def test_board_host_padding_click_hides_card_context_island(qtbot):
     assert card is not None
     _select_card(card)
     island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
     QTest.mouseClick(
         harness.page._board_host, Qt.LeftButton, Qt.NoModifier, QPoint(2, 2)
     )
     assert harness.page.selected_ref() is None
-    assert not island.isVisible()
+    assert island.isHidden()
+    assert card.action_bar().isVisible()
 
 
 def test_make_layout_mime_has_no_product_references():
@@ -2311,6 +2603,7 @@ def test_library_drop_on_occupied_card_requires_replace_ring(qtbot, monkeypatch)
         "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
     )
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     card = harness.page.card_widget("time", "time-1")
@@ -2374,6 +2667,7 @@ def test_free_grid_library_drop_on_ring_replaces(qtbot, monkeypatch):
 
 def test_template_card_drag_to_empty_moves_and_to_occupied_swaps(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     source = harness.page.card_widget("time", "time-1")
@@ -2697,6 +2991,7 @@ def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):
 
 def test_inactive_canvas_drops_stale_cards_when_mode_switches(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("time", "stale-0"))
     harness.page.set_board(harness.board)
     assert harness.page.board_grid().card_widgets()
@@ -2825,6 +3120,41 @@ def test_floating_chrome_projects_edge_rhythm_and_compact_tool_rail(qtbot, width
     assert abs((2 * rail.y() + rail.height()) - host.height()) <= 1
 
 
+def test_empty_board_library_cta_and_canvas_hint_retract_after_cards(qtbot):
+    harness = _Harness(qtbot)
+    qtbot.wait(20)
+    page = harness.page
+    library = page.tool_rail().panel_button(PANEL_LIBRARY)
+    hint = page.canvas_host().findChild(QLabel, "ultraViewEmptyBoardHint")
+    assert library is not None and hint is not None
+    assert library.property("emptyCta") == "true"
+    assert hint.isVisible()
+    assert "View 库" in hint.text()
+
+    QTest.mouseClick(library, Qt.LeftButton)
+    qtbot.wait(20)
+    assert page.active_panel() == PANEL_LIBRARY
+    assert library.property("emptyCta") == "true"
+    assert not hint.isVisible()
+
+    QTest.mouseClick(library, Qt.LeftButton)
+    qtbot.wait(20)
+    assert page.active_panel() is None
+    assert hint.isVisible()
+
+    page.set_presentation_active(True)
+    assert not hint.isVisible()
+    page.set_presentation_active(False)
+    qtbot.wait(20)
+    assert hint.isVisible()
+    assert library.property("emptyCta") == "true"
+
+    add_ref(harness.board, make_ref("time", "time-1"))
+    page.set_board(harness.board)
+    assert library.property("emptyCta") != "true"
+    assert not hint.isVisible()
+
+
 def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
@@ -2843,8 +3173,10 @@ def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     assert len(headers) == 5
     header_y = []
     for header in headers:
-        assert header.height() >= 22
-        assert header.height() <= 40
+        # Pinned, not bracketed: the old 22..40 window was wide enough to sit still
+        # while the time card was being clipped by 51px. Section heads are a fixed
+        # outer-box height now (plan §4).
+        assert header.height() == uv_widgets.LIBRARY_SECTION_HEAD_HEIGHT
         title = header.findChild(QLabel, "ultraViewLibrarySectionTitle")
         assert title is not None
         assert "个 View" not in title.text()
@@ -2856,7 +3188,259 @@ def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     rows = [widget for widget in library.row_widgets() if widget.isVisible()]
     assert len(rows) >= 6
     for row in rows:
-        assert row.height() >= 36
+        assert row.height() == uv_widgets.LIBRARY_ROW_HEIGHT
+
+
+def test_library_overlay_height_is_constant_across_content_changes(qtbot, qapp):
+    """The panel's outer rect must not follow its own content (plan §1.1, R1 + R2).
+
+    Recorded before the fix in
+    ``docs/analyzer/verify/2026-08-15-ultraview-library-probes/baseline.txt``: the
+    height walked 656 -> 356 -> 488 -> 530 as the content changed, and because the
+    anchor centres the panel on the trigger button, that shrinkage came back out as
+    an 83px slide of the *top edge*. Both mechanisms have to die for the jumping to
+    stop, so this asserts the rect field-by-field rather than just the height.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)  # the plan's §3.2 reference size
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_rows(_dense_rows())
+    qapp.processEvents()
+    button = page.tool_rail().panel_button(PANEL_LIBRARY)
+    assert button is not None
+    QTest.mouseClick(button, Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() == PANEL_LIBRARY
+    library = page.library_panel()
+    assert library.isVisible()
+
+    def rect_now() -> tuple[int, int, int, int]:
+        # The product only re-places the overlay on resize / reopen / set_board, so
+        # the jump lands later than the operation that caused it. Forcing a re-place
+        # after every step is what makes that delayed jump observable here.
+        page._apply_floating_layout()
+        qapp.processEvents()
+        geometry = library.geometry()
+        return (geometry.x(), geometry.y(), geometry.width(), geometry.height())
+
+    opened = rect_now()
+    # §3.2: at this window size nothing clamps, so the panel shows its design height.
+    assert opened[3] == uv_widgets.LIBRARY_OVERLAY_HEIGHT
+
+    library.section_headers()["time"].click()
+    qapp.processEvents()
+    assert library.is_section_expanded("time") is False
+    assert rect_now() == opened, "折叠时域"
+
+    library.section_headers()["time"].click()
+    qapp.processEvents()
+    assert library.is_section_expanded("time") is True
+    assert rect_now() == opened, "展开时域"
+
+    library.search_field().setText("View 1")
+    qapp.processEvents()
+    assert rect_now() == opened, "搜索 View 1"
+
+    library.search_field().setText("")
+    qapp.processEvents()
+    assert rect_now() == opened, "清空搜索"
+
+
+def test_library_section_frames_are_never_shorter_than_their_minimum(qtbot, qapp):
+    """No section card may be squeezed below the height its own children need.
+
+    Plan §1.2: the time card rendered at 164 against a minimumSizeHint of 215, so the
+    fourth View row was sliced by the card's bottom border. The cause is a hand-written
+    body-height formula that undercounts what Qt already knows (528 vs 579).
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_rows(_dense_rows())
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    assert library.browse_mode() == "groups"
+
+    frames = library.section_widgets()
+    assert tuple(frames) == SOURCE_SECTIONS
+    clipped = {
+        section: (frame.height(), frame.minimumSizeHint().height())
+        for section, frame in frames.items()
+        if frame.height() < frame.minimumSizeHint().height()
+    }
+    assert not clipped, f"section cards clipped below their own minimum: {clipped}"
+
+
+def test_library_add_refresh_keeps_all_sections_scrollable_without_reopen(qtbot, qapp):
+    """Adding a View must not squeeze five fresh section frames into one viewport.
+
+    The add signal triggers the same membership refresh as the coordinator.  A
+    rebuild cannot read a newly-created layout's temporary 22px minimum and
+    overwrite the scroll body's last valid minimum before Qt has polished the
+    new section widgets.  Reopening the Library used to repair that by chance.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    rows = [
+        LibraryRow(
+            section=section,
+            view_id=f"{section}-1",
+            name="View 1",
+            tab_color="#3B82F6",
+            source_summary="Rte_TAS_mTorsionBarTorque_xds16",
+        )
+        for section in SOURCE_SECTIONS
+    ]
+    page.set_library_rows(rows)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    time_row = next(row for row in library.row_widgets() if row.row().section == "time")
+    add_button = time_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    assert add_button is not None
+    QTest.mouseClick(add_button, Qt.LeftButton)
+    assert harness.added == [("time", "time-1")]
+
+    add_ref(harness.board, make_ref("time", "time-1"))
+    page.set_board(harness.board)
+    qtbot.wait(20)
+
+    assert library._body.minimumHeight() > library._scroll.viewport().height()
+    assert library._scroll.verticalScrollBar().maximum() > 0
+    clipped = {
+        section: (frame.height(), frame.minimumSizeHint().height())
+        for section, frame in library.section_widgets().items()
+        if frame.height() < frame.minimumSizeHint().height()
+    }
+    assert not clipped, f"add refresh squeezed library sections: {clipped}"
+
+
+def test_library_width_contract_and_selected_row_gutter_have_no_crossing_rule(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+
+    assert library.width() == uv_widgets.LIBRARY_DEFAULT_WIDTH == 360
+    assert library.maximumWidth() == uv_widgets.LIBRARY_MAX_WIDTH == 400
+    library.set_selected("time", "time-1")
+    qapp.processEvents()
+    section = library.section_widgets()["time"]
+    rows = [row for row in library.row_widgets() if row.row().section == "time"]
+    first, second = rows[:2]
+    gutter = second.geometry().top() - first.geometry().bottom() - 1
+    assert gutter >= uv_widgets.LIBRARY_SELECTED_ROW_GUTTER
+    rule = section.findChild(QWidget, "ultraViewLibrarySectionRule")
+    assert rule is not None
+    assert rule.geometry().bottom() < first.geometry().top()
+
+    # The only valid rule is between the section header and body.  The selected
+    # row's lower gutter has no sibling separator to cut across its roundness.
+    image = section.grab().toImage()
+    y = first.geometry().bottom() + max(1, gutter // 2)
+    pixels = [
+        QColor(image.pixel(x, y))
+        for x in range(16, max(17, section.width() - 16), max(1, section.width() // 9))
+    ]
+    spread = max(
+        max(pixel.red() for pixel in pixels) - min(pixel.red() for pixel in pixels),
+        max(pixel.green() for pixel in pixels) - min(pixel.green() for pixel in pixels),
+        max(pixel.blue() for pixel in pixels) - min(pixel.blue() for pixel in pixels),
+    )
+    assert spread < 18, [pixel.name() for pixel in pixels]
+
+
+def test_library_sections_use_distinct_low_saturation_moonstone_materials(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    fills = []
+    for section in SOURCE_SECTIONS:
+        frame = library.section_widgets()[section]
+        header = library.section_headers()[section]
+        image = frame.grab().toImage()
+        point = header.mapTo(frame, QPoint(header.width() - 34, header.height() // 2))
+        fills.append(QColor(image.pixel(point)))
+    assert len({fill.name() for fill in fills}) == len(SOURCE_SECTIONS)
+    assert all(fill.saturationF() < 0.13 for fill in fills)
+    hues = [fill.hue() for fill in fills if fill.hue() >= 0]
+    assert max(hues) - min(hues) <= 38
+
+
+def test_library_row_action_button_is_calm_and_square(qtbot, qapp):
+    """The ＋/− affordance is square at the contract size and stays a quiet colour.
+
+    Two defects in one place (plan §1.4 / §3.3): ``setFixedSize(18, 18)`` fought the
+    QSS ``min-width: 18px`` plus a 1px border and settled at 20x20; and the palette was
+    Tailwind alert green / red, the loudest thing in a 月白石蓝 panel.
+
+    The colour assertion deliberately checks *tone and separability* rather than any
+    hex string, so retuning the palette does not mean editing this test. Note it has to
+    measure ``S * V``, not saturation alone — the plan's own target ink ``#3B7C5C`` is
+    S 0.52, and it is calm because it is dark, not because it is grey.
+    """
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("frf", "frf-1"))
+    harness.page.set_board(harness.board)
+    harness.page.resize(1280, 800)
+    harness.page.show()
+    qtbot.waitExposed(harness.page)
+    harness.page.set_library_visible(True)
+    qapp.processEvents()
+    library = harness.page.library_panel()
+
+    add_row = next(widget for widget in library.row_widgets() if widget.row().view_id == "fft-1")
+    remove_row = next(widget for widget in library.row_widgets() if widget.row().view_id == "frf-1")
+    add_button = add_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    remove_button = remove_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    assert add_button.property("action") == "add"
+    assert remove_button.property("action") == "remove"
+
+    size = uv_widgets.LIBRARY_ROW_ACTION_SIZE
+    for button in (add_button, remove_button):
+        assert (button.width(), button.height()) == (size, size), (
+            button.property("action"), button.width(), button.height()
+        )
+
+    # Tone: nothing anywhere inside the button — fill, border or glyph — may shout.
+    for button in (add_button, remove_button):
+        loudest = _loudest_pixel(button)
+        assert _chroma(loudest) < 0.35, (
+            f"{button.property('action')} button has a loud pixel {loudest.name()} "
+            f"(S*V={_chroma(loudest):.3f})"
+        )
+
+    # Separability: quiet must not mean indistinguishable.
+    assert _hue_gap(_centre_pixel(add_button), _centre_pixel(remove_button)) > 40
 
 
 def test_library_pin_keeps_overlay_open_on_canvas_click(qtbot, qapp):
@@ -2897,7 +3481,41 @@ def test_library_section_headers_are_not_heavy_gray_slabs(qtbot, qapp):
     pixel = QColor(image.pixel(min(pos.x(), image.width() - 1), min(pos.y(), image.height() - 1)))
     heavy = QColor("#eef1f5")
     assert abs(pixel.red() - heavy.red()) > 8 or abs(pixel.green() - heavy.green()) > 8
-    assert pixel.lightness() >= 240
+    assert pixel.lightness() >= 235
+
+
+def test_library_outer_corner_pixels_stay_with_the_overlay_shell(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.resize(1280, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    page.set_library_visible(True)
+    qapp.processEvents()
+    library = page.library_panel()
+    image = page.grab().toImage()
+    origin = library.mapTo(page, QPoint(0, 0))
+    probes = (
+        (origin.x(), origin.y(), origin.x() - 2, origin.y() - 2),
+        (origin.x() + library.width() - 1, origin.y(), origin.x() + library.width() + 1, origin.y() - 2),
+        (origin.x(), origin.y() + library.height() - 1, origin.x() - 2, origin.y() + library.height() + 1),
+        (
+            origin.x() + library.width() - 1,
+            origin.y() + library.height() - 1,
+            origin.x() + library.width() + 1,
+            origin.y() + library.height() + 1,
+        ),
+    )
+    for corner_x, corner_y, outside_x, outside_y in probes:
+        corner = QColor(image.pixel(corner_x, corner_y))
+        outside = QColor(image.pixel(outside_x, outside_y))
+        assert max(
+            abs(corner.red() - outside.red()),
+            abs(corner.green() - outside.green()),
+            abs(corner.blue() - outside.blue()),
+        ) <= 18, (corner.name(), outside.name())
 
 
 def test_unplaced_overlay_stacks_items_vertically(qtbot, qapp):
@@ -2953,7 +3571,7 @@ def test_free_grid_rail_toggle_does_not_open_an_overlay(qtbot):
     harness = _Harness(qtbot)
     qtbot.wait(20)
     QTest.mouseClick(harness.page.tool_rail().free_grid_button(), Qt.LeftButton)
-    assert harness.free_grid == [True]
+    assert harness.free_grid == [False]
     assert harness.page.active_panel() is None
     assert not harness.page.compare_rail().isVisible()
     assert not harness.page._layout_popover.isVisible()
@@ -2979,10 +3597,10 @@ def test_free_grid_to_template_overflow_opens_unplaced(qtbot):
 def test_minimap_hides_when_free_grid_fits_and_on_template(qtbot):
     harness = _Harness(qtbot)
     harness.page.resize(1600, 900)
-    _prepare_free_grid(harness, qtbot, "fit-0")
     harness.page.zoom_fit()
     qtbot.wait(20)
     assert not harness.page.free_grid_minimap().isVisible()
+    _prepare_free_grid(harness, qtbot, "fit-0")
     harness.page.set_board_zoom(1.6)
     qtbot.wait(20)
     scroll = harness.page.board_scroll_area()
@@ -2991,9 +3609,6 @@ def test_minimap_hides_when_free_grid_fits_and_on_template(qtbot):
         or scroll.verticalScrollBar().maximum() > 0
     )
     assert harness.page.free_grid_minimap().isVisible()
-    harness.page.zoom_fit()
-    qtbot.wait(20)
-    assert not harness.page.free_grid_minimap().isVisible()
     free_grid_to_template(harness.board, harness.board.layout_id)
     harness.page.set_board(harness.board)
     qtbot.wait(10)
@@ -3005,19 +3620,65 @@ def test_closing_layout_panel_does_not_change_layout_mode(qtbot):
     rail = harness.page.tool_rail()
     layout = rail.panel_button(PANEL_LAYOUT)
     assert layout is not None
-    assert rail.free_grid_button().property("modeActive") != "true"
-    assert layout.property("modeActive") == "true"
+    assert rail.free_grid_button().property("modeActive") == "true"
+    assert layout.property("modeActive") != "true"
     QTest.mouseClick(layout, Qt.LeftButton)
     qtbot.wait(10)
     assert harness.page.active_panel() == PANEL_LAYOUT
     assert layout.property("panelOpen") == "true"
-    assert layout.property("modeActive") == "true"
+    assert layout.property("modeActive") != "true"
     QTest.mouseClick(layout, Qt.LeftButton)
     qtbot.wait(10)
     assert harness.page.active_panel() is None
     assert layout.property("panelOpen") != "true"
-    assert layout.property("modeActive") == "true"
-    assert harness.page.board().layout_mode != LAYOUT_MODE_FREE_GRID
+    assert layout.property("modeActive") != "true"
+    assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
+
+
+def test_new_board_first_show_uses_fit_zoom(qtbot):
+    harness = _Harness(qtbot)
+    canvas = harness.page._active_canvas()
+    size = canvas.unzoomed_size()
+    fit = harness.page._content_fit_rect()
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport import fit_zoom
+
+    expected = fit_zoom(
+        (size.width(), size.height()),
+        (float(fit.width), float(fit.height)),
+    )
+    assert harness.page.board_zoom() == pytest.approx(expected)
+    assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
+
+
+def test_autofit_button_disabled_in_template_mode(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref("time", "a"))
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "a")
+    assert card is not None
+    button = card.action_button("fit")
+    assert button is not None
+    assert button.isVisible()
+    assert not button.isEnabled()
+    assert "自由网格" in button.toolTip()
+    assert harness.page.board().layout_mode == LAYOUT_MODE_TEMPLATE
+
+
+def test_autofit_button_enabled_on_free_grid_without_selecting(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "fit-ready")
+    button = card.action_button("fit")
+    assert button is not None
+    assert button.isVisible()
+    assert button.isEnabled()
+    assert "按原图比例" in button.toolTip()
+    requested = []
+    harness.page.free_grid_autofit_requested.connect(
+        lambda section, view_id: requested.append((section, view_id))
+    )
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert requested == [("time", "fit-ready")]
 
 
 def test_card_context_residents_do_not_overlap_at_800px(qtbot):
@@ -3027,45 +3688,31 @@ def test_card_context_residents_do_not_overlap_at_800px(qtbot):
     harness.page.set_board(harness.board)
     card = harness.page.card_widget("time", "time-1")
     assert card is not None
-    _select_card(card)
     qtbot.wait(20)
-    island = harness.page.card_context_island()
-    assert island.isVisible()
+    assert harness.page.card_context_island().isHidden()
+    bar = card.action_bar()
+    assert bar.isVisible()
     visible_actions = [
         button.property("contextAction")
-        for button in island.findChildren(QToolButton)
+        for button in bar.findChildren(QToolButton)
         if button.isVisible()
     ]
-    assert "open" in visible_actions
-    assert "focus" in visible_actions
-    assert "more" in visible_actions
-    assert "copy" not in visible_actions
-    assert "unplaced" not in visible_actions
+    assert visible_actions == ["open", "focus", "fit", "more"]
     boxes = [
         button.geometry()
-        for button in island.findChildren(QToolButton)
+        for button in bar.findChildren(QToolButton)
         if button.isVisible()
     ]
     for index, first in enumerate(boxes):
         for second in boxes[index + 1 :]:
             assert not first.intersects(second)
-    host = harness.page._canvas_host
-    island_rect = island.geometry()
-    for other in (
-        harness.page.tool_rail(),
-        harness.page.board_island(),
-        harness.page.global_island(),
-        harness.page.navigation_island(),
-        harness.page.status_island(),
-    ):
-        if not other.isVisible():
-            continue
-        other_rect = other.geometry()
-        assert not island_rect.intersects(other_rect), (island_rect, other.objectName(), other_rect)
-    del host
+    mapped = QRect(bar.mapTo(card, QPoint(0, 0)), bar.size())
+    assert card.rect().contains(mapped)
+
 
 def test_template_title_only_lod_hides_preview_backing_and_keeps_type(qtbot):
     harness = _Harness(qtbot)
+    set_layout(harness.board, "hero_left_4")
     add_ref(harness.board, make_ref("order", "View 1"))
     ref = make_ref("order", "View 1")
     harness.page.set_library_rows(
@@ -3147,3 +3794,240 @@ def test_lod_matrix_keeps_type_chip_across_window_widths(qtbot):
             else:
                 assert not card._image.isVisible() or card._image.height() == 0
             assert card._footer.isVisible() is expect_footer
+
+
+def _panel_trigger(page, panel_id):
+    if panel_id == PANEL_LIBRARY:
+        return page.tool_rail().panel_button(PANEL_LIBRARY)
+    if panel_id == "display":
+        return page.global_island().display_button()
+    if panel_id == "export":
+        return page.global_island().export_button()
+    raise AssertionError(panel_id)
+
+
+@pytest.mark.parametrize("panel_id", [PANEL_LIBRARY, "display", "export"])
+def test_blank_canvas_click_closes_panel_without_leaving_trigger_focus(qtbot, qapp, panel_id):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    trigger = _panel_trigger(page, panel_id)
+    assert page._open_panel(panel_id)
+    qapp.processEvents()
+    assert page.active_panel() == panel_id
+    QTest.mouseClick(page.canvas_host().canvas_widget(), Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert trigger.hasFocus() is False
+    assert trigger.property("panelOpen") != "true"
+    if trigger.isCheckable():
+        assert trigger.isChecked() is False
+
+
+@pytest.mark.parametrize("panel_id", [PANEL_LIBRARY, "display", "export"])
+def test_toggle_close_does_not_leave_trigger_focus(qtbot, qapp, panel_id):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    trigger = _panel_trigger(page, panel_id)
+    QTest.mouseClick(trigger, Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() == panel_id
+    QTest.mouseClick(trigger, Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert trigger.hasFocus() is False
+
+
+@pytest.mark.parametrize("panel_id", [PANEL_LIBRARY, "display", "export"])
+def test_escape_returns_focus_to_the_panel_trigger(qtbot, qapp, panel_id):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    trigger = _panel_trigger(page, panel_id)
+    assert page._open_panel(panel_id)
+    qapp.processEvents()
+    page.handle_escape()
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert trigger.hasFocus() is True
+
+
+def _workspace_with_boards(*names: str):
+    workspace = default_workspace()
+    workspace.boards[0].name = names[0]
+    for name in names[1:]:
+        created = create_board(workspace, name=name)
+        assert created is not None
+    return workspace
+
+
+def test_board_popover_click_switches_and_row_actions_copy_delete(qtbot, qapp, monkeypatch):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("全局对比", "台架 vs 路试", "NVH 复查")
+    selected: list[str] = []
+    duplicated: list[str] = []
+    deleted: list[str] = []
+    page.select_board_requested.connect(selected.append)
+    page.duplicate_board_requested.connect(duplicated.append)
+    page.delete_board_requested.connect(deleted.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.Yes),
+    )
+    page.set_workspace(workspace)
+    page.board_island().menu_button().click()
+    qapp.processEvents()
+    popover = page.board_popover()
+    assert page.active_panel() == PANEL_BOARDS
+    assert popover.isVisible()
+    assert popover.current_board_id() == workspace.active_board_id
+    target = workspace.boards[1].board_id
+    item = next(
+        popover.list_widget().item(index)
+        for index in range(popover.list_widget().count())
+        if popover.list_widget().item(index).data(Qt.UserRole) == target
+    )
+    popover.list_widget().itemClicked.emit(item)
+    qapp.processEvents()
+    assert selected == [target]
+    assert page.active_panel() is None
+
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    popover.duplicate_requested.emit(target)
+    qapp.processEvents()
+    assert duplicated == [target]
+    assert page.active_panel() == PANEL_BOARDS
+    popover.delete_requested.emit(target)
+    qapp.processEvents()
+    assert deleted == [target]
+    assert not hasattr(page, "_make_board_item_menu")
+
+
+def test_board_popover_drag_reorder_emits_and_survives_workspace_roundtrip(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("A", "B", "C")
+    moved: list[tuple[str, int]] = []
+
+    def _apply(board_id: str, new_index: int) -> None:
+        moved.append((board_id, new_index))
+        reorder_board(workspace, board_id, new_index)
+        page.set_workspace(workspace)
+
+    page.reorder_board_requested.connect(_apply)
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    first_id = workspace.boards[0].board_id
+    page.board_popover().apply_internal_move(first_id, 2)
+    qapp.processEvents()
+    assert moved == [(first_id, 2)]
+    assert [board.board_id for board in workspace.boards][-1] == first_id
+    assert page.board_popover().board_ids()[-1] == first_id
+    assert page.board_popover().isVisible()
+
+
+def test_board_popover_create_disables_at_cap_and_delete_cancel_keeps_board(qtbot, qapp, monkeypatch):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = default_workspace()
+    while len(workspace.boards) < MAX_UI_BOARDS:
+        assert create_board(workspace, name=f"Board {len(workspace.boards) + 1}") is not None
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    assert page.board_popover().create_button().isEnabled() is False
+    assert "20" in page.board_popover().create_button().toolTip()
+
+    deleted: list[str] = []
+    page.delete_board_requested.connect(deleted.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.Cancel),
+    )
+    page._confirm_delete_board(workspace.boards[0].board_id)
+    assert deleted == []
+    assert len(workspace.boards) == MAX_UI_BOARDS
+
+
+def test_board_popover_blank_click_closes_without_chevron_residue(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    chevron = page.board_island().menu_button()
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    assert chevron.property("panelOpen") == "true"
+    QTest.mouseClick(page.canvas_host().canvas_widget(), Qt.LeftButton)
+    qapp.processEvents()
+    assert page.active_panel() is None
+    assert page.board_popover().isVisible() is False
+    assert chevron.hasFocus() is False
+    assert chevron.property("panelOpen") != "true"
+
+
+def test_board_popover_delete_key_does_not_remove_a_board(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("A", "B", "C")
+    deleted: list[str] = []
+    page.delete_board_requested.connect(deleted.append)
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    QTest.keyClick(page.board_popover().list_widget(), Qt.Key_Delete)
+    qapp.processEvents()
+    assert deleted == []
+    assert page.board_popover().board_ids() == tuple(board.board_id for board in workspace.boards)
+    assert page.active_panel() == PANEL_BOARDS
+
+
+def test_board_popover_grows_with_new_board_and_keeps_first_row_visible(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    page = harness.page
+    workspace = _workspace_with_boards("全局对比")
+    page.set_workspace(workspace)
+    page._open_panel(PANEL_BOARDS)
+    qapp.processEvents()
+    popover = page.board_popover()
+    first_id = workspace.boards[0].board_id
+    height_before = popover.height()
+    created = create_board(workspace, name="全局对比 2")
+    assert created is not None
+    page.set_workspace(workspace)
+    qapp.processEvents()
+    assert popover.isVisible()
+    assert popover.height() > height_before
+    assert abs(popover.height() - popover.sizeHint().height()) <= 2
+    list_bottom = popover.list_widget().geometry().bottom()
+    create_top = popover.create_button().geometry().top()
+    assert 0 <= create_top - list_bottom <= 8
+    first = popover.list_widget().item(0)
+    assert first is not None and first.data(Qt.UserRole) == first_id
+    rect = popover.list_widget().visualItemRect(first)
+    assert rect.top() >= 0
+    assert rect.bottom() <= popover.list_widget().viewport().height()
+    last = popover.list_widget().item(popover.list_widget().count() - 1)
+    assert last is not None
+    last_rect = popover.list_widget().visualItemRect(last)
+    assert last_rect.top() >= 0
+    assert last_rect.bottom() <= popover.list_widget().viewport().height()

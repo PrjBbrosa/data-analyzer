@@ -608,6 +608,13 @@ _HINTS = (
         priority=55,
     ),
     Hint(
+        id="ultraview.empty_board",
+        text="空板时左侧实心按钮打开 View 库添加对比",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=92,
+    ),
+    Hint(
         id="ultraview.direct_manip",
         text="直接拖卡片即可移动，不必再按 Option",
         surface="context",
@@ -623,7 +630,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.free_grid",
-        text="左侧窄轨可切换自由网格",
+        text="默认自由网格，窄轨可切回模板",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=88,
@@ -658,10 +665,17 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.preset",
-        text="卡片右键可选尺寸预设",
+        text="卡片右键可选尺寸预设或按原图比例",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=84,
+    ),
+    Hint(
+        id="ultraview.autofit",
+        text="按原图比例只缩小，不放大",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=83,
     ),
     Hint(
         id="ultraview.minimap",
@@ -672,7 +686,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.zoom",
-        text="适应避开浮层，缩放可入工具栏下",
+        text="适应已放置内容并居中",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,
@@ -693,7 +707,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.boards",
-        text="左上 Board 菜单可管理最多20个 Board",
+        text="Board 弹层点行切换，拖拽复制或删除",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=82,
@@ -707,7 +721,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.card_menu",
-        text="常驻打开聚焦，过期才同步，更多里复制",
+        text="右上角打开聚焦，更多里复制",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
@@ -718,6 +732,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=79,
+    ),
+    Hint(
+        id="ultraview.sync_all",
+        text="左栏可一键更新已变化源",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=78,
     ),
     Hint(
         id="ultraview.escape",
@@ -763,7 +784,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.library_fold",
-        text="View 库分组可折叠，也可先概览",
+        text="View 库按类型分组，标题可折叠",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=33,

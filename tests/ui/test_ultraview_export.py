@@ -64,7 +64,7 @@ def test_compositor_does_not_import_main_window_or_grab_widgets():
 def test_compose_board_fixed_sizes_and_show_flags(qapp):
     board = default_board()
     board.name = "合成验收"
-    board.layout_id = "grid_2x2"
+    set_layout(board, "grid_2x2")
     live = make_ref("time", "live")
     ghost = make_ref("fft", "ghost")
     add_ref(board, live)
@@ -94,7 +94,7 @@ def test_compose_board_fixed_sizes_and_show_flags(qapp):
 
 def test_missing_placeholder_and_stale_keep_old_image(qapp):
     board = default_board()
-    board.layout_id = "split_horizontal"
+    set_layout(board, "split_horizontal")
     missing = make_ref("time", "missing")
     stale = make_ref("fft", "stale")
     add_ref(board, missing)
@@ -108,7 +108,7 @@ def test_missing_placeholder_and_stale_keep_old_image(qapp):
     # 2× contain-fit must not upscale a 16×16 raw preview past 100%.
     tiny_ref = make_ref("frf", "tiny")
     board2 = default_board()
-    board2.layout_id = "split_horizontal"
+    set_layout(board2, "split_horizontal")
     add_ref(board2, tiny_ref)
     tiny = _image(16, 16, color="#ff00aa")
     store.publish(tiny_ref, tiny, digest="t", meta=_meta(tiny_ref))
@@ -150,7 +150,7 @@ def test_output_size_is_template_aware_and_keeps_small_layout_baseline(qapp):
         2 * value for value in logical_board_size("grid_3x3", BASE_BOARD_SIZE)
     )
     board = default_board()
-    board.layout_id = "grid_4x3"
+    set_layout(board, "grid_4x3")
     image = compose_board(board, {}, {}, scale=1)
     assert (image.width(), image.height()) == output_size(1, "grid_4x3")
 

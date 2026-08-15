@@ -17,6 +17,7 @@ from PyQt5.QtGui import (
     QColor,
     QContextMenuEvent,
     QDrag,
+    QFont,
     QImage,
     QKeyEvent,
     QMouseEvent,
@@ -31,6 +32,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QInputDialog,
@@ -69,9 +71,10 @@ from mf4_analyzer.ui.ultraview_state import (
     section_search_haystack,
 )
 from mf4_analyzer.ui_kit.icons import Icons
-from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.menus import add_rounded_submenu, apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.widgets import SearchField
 
+from .chrome import ULTRAVIEW_MUTED
 from .layouts import (
     BASE_BOARD_SIZE,
     BOARD_PADDING,
@@ -80,7 +83,6 @@ from .layouts import (
     MIN_CARD_CHROME_HEIGHT,
     content_rect,
     logical_board_size,
-    screen_min_card_content_size,
     slot_rects,
 )
 from .free_grid import (
@@ -92,11 +94,11 @@ from .free_grid import (
     avoidance_preferred_delta,
     candidate_resize,
     export_grid_metrics,
-    grid_metrics,
     hit_handle,
     legal_grid_rect,
     plan_layout,
     rect_to_pixels,
+    screen_grid_metrics,
 )
 from .gesture import FreeGridGesture
 from .ghost_overlay import GhostOverlay
@@ -146,6 +148,17 @@ def _page_of(widget: QWidget):
             return current
         current = current.parentWidget()
     return None
+
+
+def _union_pixel_rect(rects) -> tuple[float, float, float, float] | None:
+    boxes = [tuple(rect) for rect in rects if rect is not None]
+    if not boxes:
+        return None
+    x0 = min(float(rect[0]) for rect in boxes)
+    y0 = min(float(rect[1]) for rect in boxes)
+    x1 = max(float(rect[0]) + float(rect[2]) for rect in boxes)
+    y1 = max(float(rect[1]) + float(rect[3]) for rect in boxes)
+    return (x0, y0, x1 - x0, y1 - y0)
 
 
 def _log_plan_result(plan: LayoutPlan) -> None:
@@ -331,10 +344,12 @@ DIMMED_OPACITY = 0.28
 # Transient dim worn by the cards a drag is currently previewing; the model-level
 # ``DIMMED_OPACITY`` above is the persistent one ``restore_dim()`` falls back to.
 DRAG_DIM_OPACITY = 0.4
-LIBRARY_DEFAULT_WIDTH = 470
-LIBRARY_MAX_WIDTH = 520
+# The library stays a narrow on-canvas overlay.  ``UltraViewPage`` imports the
+# default instead of carrying a second geometry literal, so this is the one
+# source of truth for the rail overlay's normal width.
+LIBRARY_DEFAULT_WIDTH = 360
+LIBRARY_MAX_WIDTH = 400
 LIBRARY_MODE_GROUPS = "groups"
-LIBRARY_MODE_COMPACT = "compact"
 _LIBRARY_PIN_REST = QColor("#6B7D8E")
 _LIBRARY_PIN_ACTIVE = QColor("#3E709C")
 TYPE_CHIP_ICON_ONLY_WIDTH = 168
@@ -345,11 +360,30 @@ _SECTION_TYPE_ICONS = {
     "frf": Icons.mode_frf,
     "order": Icons.mode_order,
 }
-LIBRARY_OVERLAY_MIN_HEIGHT = 320
-LIBRARY_SECTION_MIN_HEIGHT = 32
-LIBRARY_ROW_MIN_HEIGHT = 40
-LIBRARY_SECTION_ROW_GAP = 2
-LIBRARY_CATALOG_MIN_HEIGHT = 40
+# View-library geometry. Every value below is an **outer-frame** height, QSS
+# stroke included. Qt's `min-height` is content-box, so the matching rule in
+# `style.qss` writes `value - border - padding`: 44 for the 46px row (1px
+# stroke each side), but 32 for the 32px section head, whose rule turns every
+# border off. Mixing the two conventions is what let the hand-written height
+# formula drift 51px away from the layout and clip the "time" group.
+LIBRARY_OVERLAY_HEIGHT = 560
+LIBRARY_OVERLAY_MIN_HEIGHT = 360
+LIBRARY_HEAD_HEIGHT = 52
+LIBRARY_SEARCH_HEIGHT = 34
+LIBRARY_SECTION_GAP = 8
+LIBRARY_SECTION_HEAD_HEIGHT = 32
+# Two lines (name + checked-channel summary). A deliberate departure from the
+# HTML prototype's single 38px row: the second line is the only thing that
+# tells default "View 1..N" names apart, so evenness comes from pinning the
+# height, not from dropping the information.
+LIBRARY_ROW_HEIGHT = 46
+# A selected row owns a small shadow.  Rows therefore need an actual air gap
+# instead of a sibling border that can show through the selected card's lower
+# corner (the recurrent View 1/View 2 line regression).
+LIBRARY_SELECTED_ROW_GUTTER = 8
+LIBRARY_SECTION_ROW_GAP = LIBRARY_SELECTED_ROW_GUTTER
+LIBRARY_ROW_ACTION_SIZE = 23
+LIBRARY_ROW_DOT_INSET = 14
 TRAY_BODY_MAX_HEIGHT = 220
 TRAY_ITEM_MIN_HEIGHT = 40
 UNPLACED_OVERLAY_VISIBLE_ROWS = 3
@@ -485,6 +519,23 @@ def _repolish(widget: QWidget) -> None:
 def _set_flag(widget: QWidget, name: str, on: bool) -> None:
     widget.setProperty(name, "true" if on else "false")
     _repolish(widget)
+
+
+def _hairline(parent: QWidget, object_name: str) -> QFrame:
+    """1px separator whose color comes from QSS, not from the native frame.
+
+    ``QFrame.HLine`` alone paints a two-tone sunken groove that reads as a
+    bevel next to this panel's flat material, so the shape only carries the
+    semantics and the styled background carries the ink.
+    """
+    rule = QFrame(parent)
+    rule.setObjectName(object_name)
+    rule.setFrameShape(QFrame.HLine)
+    rule.setFrameShadow(QFrame.Plain)
+    rule.setAttribute(Qt.WA_StyledBackground, True)
+    rule.setFixedHeight(1)
+    rule.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    return rule
 
 
 def _elide(label: QLabel, text: str) -> None:
@@ -1074,12 +1125,12 @@ class LibraryRowWidget(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(False)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(LIBRARY_ROW_MIN_HEIGHT)
+        self.setFixedHeight(LIBRARY_ROW_HEIGHT)
         self._row = row
         self._press_pos: QPoint | None = None
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 4, 4, 4)
-        layout.setSpacing(6)
+        layout.setContentsMargins(LIBRARY_ROW_DOT_INSET, 5, 8, 5)
+        layout.setSpacing(8)
         self._dot = _ColorDot(self)
         self._dot.set_color(row.tab_color)
         layout.addWidget(self._dot, 0, Qt.AlignVCenter)
@@ -1091,13 +1142,20 @@ class LibraryRowWidget(QFrame):
         self._meta = _ElideLabel(row.source_summary, self)
         self._meta.set_full_text(row.source_summary)
         self._meta.setObjectName("ultraViewLibraryMeta")
+        # Channel names read as a list, not as prose: fixed pitch keeps the
+        # second line from wobbling row to row. Same recipe as the navigation
+        # island's zoom readout, which already ships on Windows.
+        meta_font = QFont(self._meta.font())
+        meta_font.setStyleHint(QFont.Monospace)
+        meta_font.setFixedPitch(True)
+        self._meta.setFont(meta_font)
         copy.addWidget(self._name)
         copy.addWidget(self._meta)
         layout.addLayout(copy, 1)
         self._add = QToolButton(self)
         self._add.setObjectName("ultraViewLibraryAdd")
         self._add.setAutoRaise(False)
-        self._add.setFixedSize(18, 18)
+        self._add.setFixedSize(LIBRARY_ROW_ACTION_SIZE, LIBRARY_ROW_ACTION_SIZE)
         self._add.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._add.clicked.connect(self._on_add)
         layout.addWidget(self._add, 0, Qt.AlignVCenter)
@@ -1124,7 +1182,23 @@ class LibraryRowWidget(QFrame):
         )
 
     def set_selected(self, on: bool) -> None:
-        _set_flag(self, "selected", on)
+        selected = bool(on)
+        if (self.property("selected") == "true") != selected:
+            _set_flag(self, "selected", selected)
+        effect = self.graphicsEffect()
+        if selected:
+            if effect is None:
+                shadow = QGraphicsDropShadowEffect(self)
+                shadow.setBlurRadius(10)
+                shadow.setOffset(0, 2)
+                shadow.setColor(QColor(62, 112, 145, 52))
+                self.setGraphicsEffect(shadow)
+            return
+        if effect is not None:
+            # QWidget owns its graphics effect.  Clearing it before a rebuild
+            # keeps the outgoing row from retaining a shadow wrapper while its
+            # section host is queued for deletion.
+            self.setGraphicsEffect(None)
 
     def _on_add(self) -> None:
         row = self._row
@@ -1175,9 +1249,10 @@ class _LibrarySectionHeader(QFrame):
         self.setProperty("section", section)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(LIBRARY_SECTION_MIN_HEIGHT)
+        self.setFixedHeight(LIBRARY_SECTION_HEAD_HEIGHT)
         self._section = section
         self._count_value = max(0, int(count))
+        self._expanded = bool(expanded)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 6, 4)
         layout.setSpacing(4)
@@ -1191,6 +1266,11 @@ class _LibrarySectionHeader(QFrame):
         self._toggle.setAutoRaise(True)
         self._toggle.setFocusPolicy(Qt.TabFocus)
         self._toggle.setFixedSize(22, 22)
+        self._toggle.setIconSize(QSize(14, 14))
+        # The native triangle is heavier than everything else on this panel;
+        # the chevron pair matches the BoardIsland glyph. NoArrow keeps Qt from
+        # painting its triangle underneath the icon.
+        self._toggle.setArrowType(Qt.NoArrow)
         blocked = self._toggle.blockSignals(True)
         self._toggle.setChecked(expanded)
         self._toggle.blockSignals(blocked)
@@ -1208,60 +1288,31 @@ class _LibrarySectionHeader(QFrame):
         return f"{SECTION_LABELS_ZH.get(self._section, self._section)}  {self._count_value}"
 
     def arrowType(self):  # noqa: N802
-        return self._toggle.arrowType()
+        """Collapse direction, still projected as a ``Qt.ArrowType``.
+
+        The visual is a chevron icon now, so ``QToolButton.arrowType()`` is
+        pinned to ``NoArrow``. This header keeps owning the direction and
+        answers with the same vocabulary callers (and the header contract in
+        ``tests/ui/test_ultraview_page.py``) already read.
+        """
+        return Qt.DownArrow if self._expanded else Qt.RightArrow
 
     def _on_toggled(self, checked: bool) -> None:
         self._sync_arrow(checked)
         self.toggled_section.emit(self._section, checked)
 
     def _sync_arrow(self, expanded: bool) -> None:
-        self._toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self._expanded = bool(expanded)
+        self._toggle.setIcon(
+            Icons.chevron_down(ULTRAVIEW_MUTED)
+            if self._expanded
+            else Icons.chevron_right(ULTRAVIEW_MUTED)
+        )
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton and self.childAt(event.pos()) is not self._toggle:
             self._toggle.click()
         super().mouseReleaseEvent(event)
-
-
-class _LibraryCatalogCard(QFrame):
-    """Overview-mode summary for one analysis type; expand returns to groups."""
-
-    expand_requested = pyqtSignal(str)
-
-    def __init__(
-        self,
-        section: str,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setObjectName("ultraViewLibraryCatalogCard")
-        self.setProperty("section", section)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setMinimumHeight(LIBRARY_CATALOG_MIN_HEIGHT)
-        self._section = section
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 6, 8, 6)
-        layout.setSpacing(8)
-        title = QLabel(SECTION_LABELS_ZH.get(section, section), self)
-        title.setObjectName("ultraViewLibraryCatalogTitle")
-        layout.addWidget(title, 1)
-        self._expand = QToolButton(self)
-        self._expand.setObjectName("ultraViewLibraryCatalogExpand")
-        self._expand.setText("展开")
-        self._expand.setAutoRaise(False)
-        self._expand.setCursor(Qt.PointingHandCursor)
-        self._expand.setToolTip(f"展开{SECTION_LABELS_ZH.get(section, section)}分组")
-        self._expand.clicked.connect(self._on_expand)
-        layout.addWidget(self._expand, 0, Qt.AlignVCenter)
-
-    def section(self) -> str:
-        return self._section
-
-    def expand_button(self) -> QToolButton:
-        return self._expand
-
-    def _on_expand(self) -> None:
-        self.expand_requested.emit(self._section)
 
 
 class ViewLibraryPanel(QFrame):
@@ -1283,17 +1334,22 @@ class ViewLibraryPanel(QFrame):
         self._row_widgets: list[LibraryRowWidget] = []
         self._section_frames: dict[str, QFrame] = {}
         self._section_headers: dict[str, _LibrarySectionHeader] = {}
-        self._catalog_cards: dict[str, _LibraryCatalogCard] = {}
+        self._section_rules: dict[str, QFrame] = {}
         self._expanded: dict[str, bool] = {section: True for section in SOURCE_SECTIONS}
-        self._browse_mode = LIBRARY_MODE_GROUPS
 
         root = QVBoxLayout(self)
-        # Inset past the QSS stroke: Qt does not keep children out of
-        # border-radius, so 0-margin layouts erase the top corner arcs.
-        root.setContentsMargins(10, 10, 10, 10)
+        # Root carries no inset: the head band needs to run edge to edge so its
+        # rule reads as a real separator. Qt does not clip children to
+        # `border-radius`, so each band owns its own padding instead — and the
+        # only child that reaches the corner arcs is the head band, which paints
+        # nothing.
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        head = QHBoxLayout()
-        head.setContentsMargins(0, 0, 0, 6)
+        head_host = QWidget(self)
+        head_host.setObjectName("ultraViewLibraryHead")
+        head_host.setFixedHeight(LIBRARY_HEAD_HEIGHT)
+        head = QHBoxLayout(head_host)
+        head.setContentsMargins(14, 12, 10, 10)
         head.setSpacing(6)
         title = QLabel("View 库", self)
         title.setObjectName("ultraViewLibraryTitle")
@@ -1319,41 +1375,31 @@ class ViewLibraryPanel(QFrame):
         head.addWidget(self._count, 0, Qt.AlignVCenter)
         head.addWidget(self._pin, 0, Qt.AlignVCenter)
         self._sync_pin(False)
-        root.addLayout(head)
+        root.addWidget(head_host)
 
+        # Full width, and that is already 1px short of each edge: Qt's
+        # stylesheet insets a styled widget's contents past its own border, so
+        # the panel's stroke stays uncovered without an extra margin (measured:
+        # contentsRect() is inset by the panel's 1px border on every edge).
+        self._head_rule = _hairline(self, "ultraViewLibraryHeadRule")
+        root.addWidget(self._head_rule)
+
+        controls = QVBoxLayout()
+        controls.setContentsMargins(12, 10, 12, 10)
+        controls.setSpacing(8)
         self._search = SearchField("搜索 View、信号或分析类型…", self)
         self._search.setObjectName("ultraViewLibrarySearch")
+        self._search.setFixedHeight(LIBRARY_SEARCH_HEIGHT)
         self._search.textChanged.connect(self._rebuild)
         search_wrap = QHBoxLayout()
-        search_wrap.setContentsMargins(0, 0, 0, 6)
+        search_wrap.setContentsMargins(0, 0, 0, 0)
         search_wrap.addWidget(self._search)
-        root.addLayout(search_wrap)
+        controls.addLayout(search_wrap)
 
-        mode_wrap = QHBoxLayout()
-        mode_wrap.setContentsMargins(0, 0, 0, 6)
-        mode_wrap.setSpacing(4)
-        self._mode_groups = QToolButton(self)
-        self._mode_groups.setObjectName("ultraViewLibraryModeGroups")
-        self._mode_groups.setText("展开")
-        self._mode_groups.setCheckable(True)
-        self._mode_groups.setChecked(True)
-        self._mode_groups.setToolTip("按分析类型展开，直接操作其中的 View")
-        self._mode_compact = QToolButton(self)
-        self._mode_compact.setObjectName("ultraViewLibraryModeCompact")
-        self._mode_compact.setText("概览")
-        self._mode_compact.setCheckable(True)
-        self._mode_compact.setToolTip("先扫读每类已有内容，再展开完整列表")
-        self._mode_buttons = QButtonGroup(self)
-        self._mode_buttons.setExclusive(True)
-        self._mode_buttons.addButton(self._mode_groups)
-        self._mode_buttons.addButton(self._mode_compact)
-        self._mode_groups.clicked.connect(self._on_groups_mode_clicked)
-        self._mode_compact.clicked.connect(self._on_compact_mode_clicked)
-        mode_wrap.addWidget(self._mode_groups, 1)
-        mode_wrap.addWidget(self._mode_compact, 1)
-        root.addLayout(mode_wrap)
+        root.addLayout(controls)
 
         self._scroll = QScrollArea(self)
+        self._scroll.setObjectName("ultraViewLibraryScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1361,11 +1407,22 @@ class ViewLibraryPanel(QFrame):
         self._body.setObjectName("ultraViewLibraryBody")
         self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(0, 0, 0, 0)
-        self._body_layout.setSpacing(8)
+        # The scroll area itself runs full width; the body carries the padding,
+        # which puts the vertical scrollbar inside the 12px gutter instead of
+        # on top of the group cards' right border.
+        self._body_layout.setContentsMargins(12, 10, 12, 12)
+        self._body_layout.setSpacing(LIBRARY_SECTION_GAP)
         self._scroll.setWidget(self._body)
         self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         root.addWidget(self._scroll, 1)
+        # A rebuild creates fresh section frames.  Before Qt's next layout turn
+        # their aggregate minimum can momentarily read as the outer margins
+        # (22px), which would make QScrollArea squeeze every section instead of
+        # turning its scrollbar on.  One owned, coalesced timer measures after
+        # that layout turn; reopening the panel must not be the repair path.
+        self._body_min_height_timer = QTimer(self)
+        self._body_min_height_timer.setSingleShot(True)
+        self._body_min_height_timer.timeout.connect(self._sync_body_min_height)
         self._rebuild()
 
     def search_field(self) -> QLineEdit:
@@ -1390,11 +1447,9 @@ class ViewLibraryPanel(QFrame):
     def section_headers(self) -> dict[str, QWidget]:
         return dict(self._section_headers)
 
-    def catalog_cards(self) -> dict[str, _LibraryCatalogCard]:
-        return dict(self._catalog_cards)
-
     def browse_mode(self) -> str:
-        return self._browse_mode
+        """Return the only remaining browse path for legacy read-only callers."""
+        return LIBRARY_MODE_GROUPS
 
     def is_section_expanded(self, section: str) -> bool:
         return bool(self._expanded.get(section, True))
@@ -1472,6 +1527,11 @@ class ViewLibraryPanel(QFrame):
         self._pin.setAccessibleName(label)
 
     def _rebuild(self) -> None:
+        # Effects are owned by their row widgets.  Clear them before detaching
+        # a group host so selection remains an _selected projection, never a
+        # lingering QObject/effect owned by a soon-to-die row.
+        for row_widget in self._row_widgets:
+            row_widget.set_selected(False)
         while self._body_layout.count():
             item = self._body_layout.takeAt(0)
             widget = item.widget()
@@ -1481,7 +1541,7 @@ class ViewLibraryPanel(QFrame):
         self._row_widgets = []
         self._section_frames = {}
         self._section_headers = {}
-        self._catalog_cards = {}
+        self._section_rules = {}
         visible = self.visible_rows()
         by_section: dict[str, list[LibraryRow]] = {section: [] for section in SOURCE_SECTIONS}
         for row in visible:
@@ -1489,8 +1549,6 @@ class ViewLibraryPanel(QFrame):
                 by_section[row.section].append(row)
         query = self._search.text().strip()
         if query:
-            self._browse_mode = LIBRARY_MODE_GROUPS
-            self._sync_mode_buttons()
             for section, rows in by_section.items():
                 if rows:
                     self._expanded[section] = True
@@ -1498,7 +1556,7 @@ class ViewLibraryPanel(QFrame):
         self._groups_host.setObjectName("ultraViewLibraryGroupsHost")
         groups_layout = QVBoxLayout(self._groups_host)
         groups_layout.setContentsMargins(0, 0, 0, 0)
-        groups_layout.setSpacing(8)
+        groups_layout.setSpacing(LIBRARY_SECTION_GAP)
         for section in SOURCE_SECTIONS:
             frame = QFrame(self._groups_host)
             frame.setObjectName("ultraViewLibrarySection")
@@ -1512,6 +1570,10 @@ class ViewLibraryPanel(QFrame):
             header.toggled_section.connect(self._on_section_toggled)
             section_layout.addWidget(header)
             self._section_headers[section] = header
+            rule = _hairline(frame, "ultraViewLibrarySectionRule")
+            rule.setVisible(expanded and bool(by_section[section]))
+            section_layout.addWidget(rule)
+            self._section_rules[section] = rule
             for row in by_section[section]:
                 row_widget = LibraryRowWidget(row, frame)
                 row_widget.add_requested.connect(self.add_requested)
@@ -1527,58 +1589,23 @@ class ViewLibraryPanel(QFrame):
                 self._row_widgets.append(row_widget)
             self._section_frames[section] = frame
             groups_layout.addWidget(frame)
-        self._compact_host = QWidget(self._body)
-        self._compact_host.setObjectName("ultraViewLibraryCompactHost")
-        compact_layout = QVBoxLayout(self._compact_host)
-        compact_layout.setContentsMargins(0, 0, 0, 0)
-        compact_layout.setSpacing(7)
-        for section in SOURCE_SECTIONS:
-            card = _LibraryCatalogCard(section, self._compact_host)
-            card.expand_requested.connect(self._on_catalog_expand)
-            compact_layout.addWidget(card)
-            self._catalog_cards[section] = card
         self._body_layout.addWidget(self._groups_host)
-        self._body_layout.addWidget(self._compact_host)
-        self._sync_mode_visibility()
-        self._sync_body_min_height()
-
-    def _on_groups_mode_clicked(self) -> None:
-        self._browse_mode = LIBRARY_MODE_GROUPS
-        self._sync_mode_visibility()
-        self._sync_body_min_height()
-
-    def _on_compact_mode_clicked(self) -> None:
-        self._browse_mode = LIBRARY_MODE_COMPACT
-        self._sync_mode_visibility()
-        self._sync_body_min_height()
-
-    def _sync_mode_buttons(self) -> None:
-        groups = self._browse_mode == LIBRARY_MODE_GROUPS
-        blocked = self._mode_groups.blockSignals(True)
-        self._mode_groups.setChecked(groups)
-        self._mode_groups.blockSignals(blocked)
-        blocked = self._mode_compact.blockSignals(True)
-        self._mode_compact.setChecked(not groups)
-        self._mode_compact.blockSignals(blocked)
-
-    def _sync_mode_visibility(self) -> None:
-        self._sync_mode_buttons()
-        groups = self._browse_mode == LIBRARY_MODE_GROUPS
-        if hasattr(self, "_groups_host"):
-            self._groups_host.setVisible(groups)
-        if hasattr(self, "_compact_host"):
-            self._compact_host.setVisible(not groups)
-
-    def _on_catalog_expand(self, section: str) -> None:
-        self._expanded[str(section)] = True
-        self._browse_mode = LIBRARY_MODE_GROUPS
-        self._rebuild()
+        # The scroll body may be taller than its groups.  Keep spare height in
+        # an explicit tail stretch rather than letting Qt distribute it into
+        # section cards or rows after a rebuild.
+        self._body_layout.addStretch(1)
+        self._queue_body_min_height_sync()
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(
-            LIBRARY_DEFAULT_WIDTH,
-            max(LIBRARY_OVERLAY_MIN_HEIGHT, self._content_height()),
-        )
+        """Fixed size, independent of the list inside.
+
+        Deriving the hint from content made every in-panel action (collapse a
+        group or type a character) resize the overlay, and
+        ``floating_layout`` centers the panel on its trigger, so the height
+        swing became a top-edge jump too. Content scrolls; the frame does not
+        move. Capping a content-driven hint would only narrow the jump range.
+        """
+        return QSize(LIBRARY_DEFAULT_WIDTH, LIBRARY_OVERLAY_HEIGHT)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return QSize(280, LIBRARY_OVERLAY_MIN_HEIGHT)
@@ -1586,41 +1613,37 @@ class ViewLibraryPanel(QFrame):
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self._sync_body_min_height()
-
-    def _content_height(self) -> int:
-        """Chrome + current list height, ignoring QScrollArea's tiny default hint."""
-        return 20 + 36 + 40 + 32 + self._measured_body_height()
+        self._queue_body_min_height_sync()
 
     def _measured_body_height(self) -> int:
-        """Explicit list height so hidden/unpolished widgets cannot collapse sizeHint."""
-        margins = self._body_layout.contentsMargins()
-        height = margins.top() + margins.bottom()
-        if self._browse_mode == LIBRARY_MODE_COMPACT:
-            for index, _section in enumerate(SOURCE_SECTIONS):
-                if index:
-                    height += 7
-                height += LIBRARY_CATALOG_MIN_HEIGHT
-            return height
-        for index, section in enumerate(SOURCE_SECTIONS):
-            if index:
-                height += self._body_layout.spacing()
-            height += LIBRARY_SECTION_MIN_HEIGHT
-            if not self._expanded.get(section, True):
-                continue
-            rows = sum(1 for widget in self._row_widgets if widget.row().section == section)
-            if rows:
-                height += rows * (LIBRARY_SECTION_ROW_GAP + LIBRARY_ROW_MIN_HEIGHT)
-        return height
+        """Ask the layout instead of re-deriving what it already knows.
+
+        The hand-written formula this replaces counted content-box constants
+        against border-box widgets and forgot the group cards' own margins; it
+        answered 528 where the layout needed 579, and QVBoxLayout paid the
+        51px difference by squeezing the tallest group until its bottom border
+        cut through the last row.
+        """
+        return self._body_layout.totalMinimumSize().height()
 
     def _sync_body_min_height(self) -> None:
         self._body.setMinimumHeight(self._measured_body_height())
 
+    def _queue_body_min_height_sync(self) -> None:
+        """Measure rebuilt section geometry after Qt has laid out their children."""
+        self._body_min_height_timer.start(0)
+
     def _on_section_toggled(self, section: str, expanded: bool) -> None:
         self._expanded[section] = bool(expanded)
+        rows = 0
         for widget in self._row_widgets:
             if widget.row().section == section:
                 widget.setVisible(bool(expanded))
-        self._sync_body_min_height()
+                rows += 1
+        rule = self._section_rules.get(section)
+        if rule is not None:
+            rule.setVisible(bool(expanded) and rows > 0)
+        self._queue_body_min_height_sync()
 
     def _on_row_selected(self, section: str, view_id: str) -> None:
         self.set_selected(section, view_id)
@@ -1691,10 +1714,84 @@ class EmptySlotWidget(QFrame):
         self.ref_dropped.emit(self._slot_id, section, view_id)
 
 
+class _CardActionBar(QFrame):
+    """Always-visible top-right capsule: open, focus, fit, more."""
+
+    _FIT_TOOLTIP = "按原图比例调整卡片"
+    _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewCardActionBar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(3, 2, 3, 2)
+        layout.setSpacing(1)
+        self._buttons: dict[str, QToolButton] = {}
+        for action, object_name, icon, tooltip in (
+            (
+                "open",
+                "ultraViewCardOpenButton",
+                Icons.ultraview_open_source(ULTRAVIEW_MUTED),
+                "打开原 View",
+            ),
+            (
+                "focus",
+                "ultraViewCardFocusButton",
+                Icons.expand_focus(ULTRAVIEW_MUTED),
+                "临时放大预览",
+            ),
+            (
+                "fit",
+                "ultraViewCardFitButton",
+                Icons.ultraview_fit_to_image(ULTRAVIEW_MUTED),
+                self._FIT_TOOLTIP,
+            ),
+            (
+                "more",
+                "ultraViewCardMoreButton",
+                Icons.menu(ULTRAVIEW_MUTED),
+                "更多卡片操作",
+            ),
+        ):
+            button = QToolButton(self)
+            button.setObjectName(object_name)
+            button.setIcon(icon)
+            button.setIconSize(QSize(14, 14))
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setAutoRaise(True)
+            button.setAutoFillBackground(False)
+            button.setAttribute(Qt.WA_StyledBackground, True)
+            button.setFixedSize(22, 22)
+            button.setFocusPolicy(Qt.TabFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(tooltip)
+            button.setAccessibleName(tooltip)
+            button.setProperty("role", "cardAction")
+            button.setProperty("chrome", "ultraview")
+            button.setProperty("contextAction", action)
+            self._buttons[action] = button
+            layout.addWidget(button, 0)
+
+    def button(self, action: str) -> QToolButton | None:
+        return self._buttons.get(str(action))
+
+    def set_fit_enabled(self, enabled: bool) -> None:
+        button = self._buttons.get("fit")
+        if button is None:
+            return
+        button.setEnabled(bool(enabled))
+        tip = self._FIT_TOOLTIP if enabled else self._FIT_DISABLED_TOOLTIP
+        button.setToolTip(tip)
+        button.setAccessibleName(tip)
+
+
 class UltraViewCard(QFrame):
     open_source_requested = pyqtSignal(str, str)
     sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
+    autofit_requested = pyqtSignal(str, str)
     rebind_arm_requested = pyqtSignal(str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
     remove_ref_requested = pyqtSignal(str, str)
@@ -1770,19 +1867,12 @@ class UltraViewCard(QFrame):
         self._sync_btn.clicked.connect(self._emit_sync)
         self._sync_btn.hide()
         header.addWidget(self._sync_btn, 0, Qt.AlignVCenter)
-        self._focus_btn = QToolButton(self._header)
-        self._focus_btn.setObjectName("ultraViewCardFocusButton")
-        self._focus_btn.setIcon(Icons.expand_focus())
-        self._focus_btn.setIconSize(QSize(16, 16))
-        self._focus_btn.setToolTip("临时放大")
-        self._focus_btn.setAccessibleName("临时放大")
-        self._focus_btn.setFocusPolicy(Qt.TabFocus)
-        self._focus_btn.setCursor(Qt.PointingHandCursor)
-        self._focus_btn.setAutoRaise(False)
-        self._focus_btn.setFixedSize(24, 24)
-        self._focus_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        self._focus_btn.clicked.connect(self._emit_focus)
-        header.addWidget(self._focus_btn, 0, Qt.AlignVCenter)
+        self._action_bar = _CardActionBar(self._header)
+        self._action_bar.button("open").clicked.connect(self._emit_open_source)
+        self._action_bar.button("focus").clicked.connect(self._emit_focus)
+        self._action_bar.button("fit").clicked.connect(self._emit_autofit)
+        self._action_bar.button("more").clicked.connect(self._emit_more)
+        header.addWidget(self._action_bar, 0, Qt.AlignVCenter)
         root.addWidget(self._header, 0)
 
         self._image = QLabel(self)
@@ -1829,6 +1919,34 @@ class UltraViewCard(QFrame):
 
     def slot_id(self) -> str:
         return self._model.slot_id
+
+    def action_bar(self) -> QFrame:
+        return self._action_bar
+
+    def action_button(self, action: str) -> QToolButton | None:
+        return self._action_bar.button(action)
+
+    def _fit_is_enabled(self) -> bool:
+        return False
+
+    def _sync_action_bar(self) -> None:
+        vis = lod_visibility(self._lod_level)
+        show = bool(vis.body_actions) and not self._lod_presentation
+        self._action_bar.setVisible(show)
+        self._action_bar.set_fit_enabled(show and self._fit_is_enabled())
+
+    def _emit_autofit(self, _checked: bool = False) -> None:
+        if not self._fit_is_enabled():
+            return
+        self.autofit_requested.emit(self._model.section, self._model.view_id)
+
+    def _emit_more(self, _checked: bool = False) -> None:
+        menu = self.make_context_menu()
+        button = self._action_bar.button("more")
+        if button is None:
+            menu.popup(self.mapToGlobal(QPoint(self.width(), 0)))
+            return
+        menu.popup(button.mapToGlobal(QPoint(0, button.height())))
 
     def header_height(self) -> int:
         return self._header.height()
@@ -1946,7 +2064,7 @@ class UltraViewCard(QFrame):
         has_status = bool(self._status.text())
         self._status.setVisible(bool(vis.trust and has_status))
         self._sync_btn.setVisible(bool(vis.trust and self._model.status == STATUS_STALE))
-        self._focus_btn.setVisible(bool(vis.body_actions))
+        self._sync_action_bar()
         footer = bool(vis.footer and self._lod_show_source)
         self._footer.setVisible(footer)
         self._footer.setFixedHeight(CARD_FOOTER_HEIGHT if footer else 0)
@@ -2363,11 +2481,11 @@ class BoardGrid(QWidget):
         self._raise_overlay()
 
     def set_viewport_size(self, size: QSize) -> None:
-        """Apply the scroll viewport size without deriving it from this widget.
+        """Record the scroll viewport. Logical canvas is ``BASE_BOARD_SIZE``.
 
-        Once the Board is wider/taller than the viewport, ``self.size()`` is
-        the logical canvas, not the visible window.  Keeping the two inputs
-        separate is what makes scrolling and hit testing deterministic.
+        Window size used to drive slot aspect; that made every card follow the
+        chrome-safe fit rect. Keep the setter so callers and tests still have
+        a viewport to query, but geometry comes from the export-sized board.
         """
         if size == self._viewport_size:
             return
@@ -2387,16 +2505,26 @@ class BoardGrid(QWidget):
         return QSize(self.size())
 
     def unzoomed_size(self) -> QSize:
-        viewport = self._viewport_size
-        if viewport.width() <= 0 or viewport.height() <= 0:
-            viewport = self.parentWidget().size() if self.parentWidget() is not None else self.size()
         try:
-            width, height = logical_board_size(
-                self._layout_id, (viewport.width(), viewport.height())
-            )
+            width, height = logical_board_size(self._layout_id, BASE_BOARD_SIZE)
         except ValueError:
-            return QSize(self.size())
+            return QSize(*BASE_BOARD_SIZE)
         return QSize(width, height)
+
+    def content_rect_1x(self) -> tuple[float, float, float, float] | None:
+        """Union of occupied template slots at 1×. Empty board returns None."""
+        return _union_pixel_rect(
+            self.unzoomed_slot_rect(slot_id)
+            for slot_id, widget in self._widgets.items()
+            if isinstance(widget, UltraViewCard)
+        )
+
+    def content_rect(self) -> tuple[float, float, float, float] | None:
+        """Union of occupied template cards at the current zoom."""
+        return _union_pixel_rect(
+            (float(card.x()), float(card.y()), float(card.width()), float(card.height()))
+            for card in self.card_widgets()
+        )
 
     def unzoomed_slot_rect(self, slot_id: str) -> tuple[float, float, float, float] | None:
         size = self.unzoomed_size()
@@ -2440,23 +2568,41 @@ class BoardGrid(QWidget):
         return True
 
     def _sync_logical_size(self) -> None:
-        viewport = self._viewport_size
-        if viewport.width() <= 0 or viewport.height() <= 0:
-            viewport = self.parentWidget().size() if self.parentWidget() is not None else self.size()
-        zoomed = zoomed_viewport_size((viewport.width(), viewport.height()), self._zoom)
-        try:
-            width, height = logical_board_size(
-                self._layout_id,
-                zoomed,
-                min_card_content_size=screen_min_card_content_size(self._zoom),
-            )
-        except ValueError:
-            return
+        unzoomed = self.unzoomed_size()
+        width, height = zoomed_viewport_size(
+            (unzoomed.width(), unzoomed.height()), self._zoom
+        )
         target = QSize(width, height)
         if self.minimumSize() != target:
             self.setMinimumSize(target)
         if self.size() != target:
             self.resize(target)
+
+    def _scaled_slot_rects(self) -> dict[str, tuple[int, int, int, int]]:
+        """1× template slots, then uniform zoom. Padding must not be re-laid out."""
+        size = self.unzoomed_size()
+        content = (
+            BOARD_PADDING,
+            BOARD_PADDING,
+            max(0, size.width() - 2 * BOARD_PADDING),
+            max(0, size.height() - 2 * BOARD_PADDING),
+        )
+        try:
+            rects = slot_rects(self._layout_id, content, self._ratio)
+        except ValueError:
+            return {}
+        z = float(self._zoom)
+        if abs(z - 1.0) < 1e-12:
+            return rects
+        return {
+            slot_id: (
+                int(round(x * z)),
+                int(round(y * z)),
+                max(0, int(round(width * z))),
+                max(0, int(round(height * z))),
+            )
+            for slot_id, (x, y, width, height) in rects.items()
+        }
 
     def _discard(self, slot_id: str) -> None:
         widget = self._widgets.pop(slot_id, None)
@@ -2507,29 +2653,14 @@ class BoardGrid(QWidget):
         self._overlay.raise_()
 
     def _relayout(self) -> None:
-        content = (
-            BOARD_PADDING,
-            BOARD_PADDING,
-            max(0, self.width() - 2 * BOARD_PADDING),
-            max(0, self.height() - 2 * BOARD_PADDING),
-        )
-        try:
-            rects = slot_rects(self._layout_id, content, self._ratio)
-        except ValueError:
-            return
+        rects = self._scaled_slot_rects()
         for slot_id, (x, y, width, height) in rects.items():
             widget = self._widgets.get(slot_id)
             if widget is not None:
                 widget.setGeometry(x, y, max(0, width), max(0, height))
 
     def slot_id_at(self, pos: QPoint) -> str | None:
-        content = (
-            BOARD_PADDING,
-            BOARD_PADDING,
-            max(0, self.width() - 2 * BOARD_PADDING),
-            max(0, self.height() - 2 * BOARD_PADDING),
-        )
-        rects = slot_rects(self._layout_id, content, self._ratio)
+        rects = self._scaled_slot_rects()
         px, py = pos.x(), pos.y()
         for slot_id, (x, y, width, height) in rects.items():
             if x <= px <= x + width and y <= py <= y + height:
@@ -2581,6 +2712,9 @@ class BoardGrid(QWidget):
             event.accept()
             return
         if event.button() == Qt.LeftButton:
+            page = _page_of(self)
+            if page is not None:
+                page.notify_canvas_click()
             _clear_page_card_selection(self)
         super().mousePressEvent(event)
 
@@ -2730,9 +2864,12 @@ class FreeGridCard(UltraViewCard):
         self.setMouseTracking(True)
         self.setAcceptDrops(False)
 
+    def _fit_is_enabled(self) -> bool:
+        return True
+
     def make_context_menu(self) -> QMenu:
         menu = super().make_context_menu()
-        size_menu = menu.addMenu("自由网格尺寸")
+        size_menu = add_rounded_submenu(menu, "自由网格尺寸")
         for preset, label in (
             ("small", "小 3 × 2"),
             ("standard", "标准 4 × 3"),
@@ -2743,10 +2880,15 @@ class FreeGridCard(UltraViewCard):
         ):
             action = size_menu.addAction(label)
             action.triggered.connect(partial(self._emit_preset, preset))
+        fit_action = size_menu.addAction("按原图比例")
+        fit_action.triggered.connect(self._emit_autofit)
         return menu
 
     def _emit_preset(self, preset: str, _checked: bool = False) -> None:
         self.preset_requested.emit(self._model.section, self._model.view_id, preset)
+
+    def _emit_autofit(self, _checked: bool = False) -> None:
+        self.autofit_requested.emit(self._model.section, self._model.view_id)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if _handle_pan_press(self, event):
@@ -2828,6 +2970,7 @@ class FreeGridBoard(QWidget):
     geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
     group_geometry_requested = pyqtSignal(object)
     preset_requested = pyqtSignal(str, str, str)
+    autofit_requested = pyqtSignal(str, str)
     open_source_requested = pyqtSignal(str, str)
     sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
@@ -2854,7 +2997,7 @@ class FreeGridBoard(QWidget):
         self._widgets: dict[UltraViewRef, FreeGridCard] = {}
         self._viewport_size = QSize(0, 0)
         self._zoom = ZOOM_DEFAULT
-        self._metrics = grid_metrics((240, 160), [])
+        self._metrics = screen_grid_metrics([])
         self._base_metrics = self._metrics
         self._gesture = FreeGridGesture()
         self._overlay = GhostOverlay(self)
@@ -2870,6 +3013,11 @@ class FreeGridBoard(QWidget):
         self._dimmed_refs: set[UltraViewRef] = set()
 
     def set_viewport_size(self, size: QSize) -> None:
+        """Record the scroll viewport. Metrics use ``screen_grid_metrics``.
+
+        Column width is the 1600-wide export column, not the window width, so
+        card aspect stays put when the user resizes or toggles chrome.
+        """
         if size == self._viewport_size:
             return
         if self._gesture.is_active():
@@ -2886,6 +3034,20 @@ class FreeGridBoard(QWidget):
 
     def unzoomed_size(self) -> QSize:
         return QSize(self._base_metrics.board_width, self._base_metrics.board_height)
+
+    def content_rect_1x(self) -> tuple[float, float, float, float] | None:
+        """Union of placed free-grid cards at 1×. Empty board returns None."""
+        return _union_pixel_rect(
+            rect_to_pixels(item.rect, self._base_metrics)
+            for item in self._placements.values()
+        )
+
+    def content_rect(self) -> tuple[float, float, float, float] | None:
+        """Union of placed free-grid cards at the current zoom."""
+        return _union_pixel_rect(
+            rect_to_pixels(item.rect, self._metrics)
+            for item in self._placements.values()
+        )
 
     def set_preview_quality(self, quality: str) -> None:
         for card in self._widgets.values():
@@ -2987,20 +3149,14 @@ class FreeGridBoard(QWidget):
         card.drag_finished.connect(self.drag_finished)
         card.layout_key_requested.connect(self._on_layout_key)
         card.preset_requested.connect(self.preset_requested)
+        card.autofit_requested.connect(self.autofit_requested)
 
     def _raise_overlay(self) -> None:
         self._overlay.setGeometry(self.rect())
         self._overlay.raise_()
 
     def _sync_metrics(self) -> None:
-        viewport = self._viewport_size
-        if viewport.width() <= 0 or viewport.height() <= 0:
-            source = self.parentWidget()
-            viewport = source.size() if source is not None else self.size()
-        self._metrics = grid_metrics(
-            (viewport.width(), viewport.height()), list(self._placements.values())
-        )
-        self._base_metrics = self._metrics
+        self._base_metrics = screen_grid_metrics(list(self._placements.values()))
         self._metrics = scale_grid_metrics(self._base_metrics, self._zoom)
         target = QSize(self._metrics.board_width, self._metrics.board_height)
         if self.minimumSize() != target:
@@ -3189,6 +3345,9 @@ class FreeGridBoard(QWidget):
         if self._card_at(event.pos()) is not None:
             super().mousePressEvent(event)
             return
+        page = _page_of(self)
+        if page is not None:
+            page.notify_canvas_click()
         additive = bool(event.modifiers() & Qt.ShiftModifier)
         if not additive:
             page = _page_of(self)
@@ -3850,7 +4009,7 @@ class BoardOverview(QFrame):
         placements: Sequence[FreeGridPlacement],
         models: Mapping[UltraViewRef, CardViewModel],
     ) -> None:
-        self._free_metrics = grid_metrics(BASE_BOARD_SIZE, placements)
+        self._free_metrics = screen_grid_metrics(placements)
         self._free_rects = {
             f"grid:{item.ref.section}:{item.ref.view_id}": rect_to_pixels(
                 item.rect, self._free_metrics

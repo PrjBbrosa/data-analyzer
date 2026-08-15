@@ -165,15 +165,6 @@ ALLOWED_DUPLICATE_SELECTORS: dict[str, str] = {
     "QToolButton#ultraViewZoomResetButton:hover": (
         "UltraView legacy 迁移期保留"
     ),
-    "QToolButton#ultraViewCardFocusButton": (
-        "UltraView legacy 迁移期保留"
-    ),
-    "QToolButton#ultraViewCardFocusButton:hover": (
-        "UltraView legacy 迁移期保留"
-    ),
-    "QToolButton#ultraViewCardFocusButton:pressed": (
-        "UltraView legacy 迁移期保留"
-    ),
 }
 
 

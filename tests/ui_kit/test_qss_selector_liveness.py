@@ -62,9 +62,10 @@ DYNAMIC_OBJECT_NAMES: frozenset[str] = frozenset(
         # (call sites :195 / :198). Spec inventory cited :479; unchanged here.
         "frfInputDot",
         "frfOutputDot",
-        # ultraview/chrome.py:431 ``f"ultraViewRail{short_name}Button"``
-        # and :442 ``f"ultraViewRail{short_name}Badge"``, short_name ``Unplaced``
-        # from ``_PANEL_SPECS`` (:392).
+        # ultraview/chrome.py:494 ``f"ultraViewRail{short_name}Button"``
+        # and :506 ``f"ultraViewRail{short_name}Badge"``, short_name ``Unplaced``
+        # from ``_PANEL_SPECS`` (:452). SyncAll is a literal objectName, not
+        # this f-string path.
         "ultraViewRailUnplacedButton",
         "ultraViewRailUnplacedBadge",
     }
@@ -161,9 +162,10 @@ def test_dynamic_construction_sites_match_this_head():
     assert 'dot.setObjectName(f"{role}Dot")' in frf[478]
     assert '"frfInput"' in frf[194]
     assert '"frfOutput"' in frf[197]
-    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[430]
-    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[441]
-    assert '"Unplaced"' in chrome[391]
+    # Re-pinned after ToolRail empty-board CTA + larger rail chrome.
+    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[524]
+    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[536]
+    assert '"Unplaced"' in chrome[481]
 
 
 def test_extract_does_not_swallow_prefixes():

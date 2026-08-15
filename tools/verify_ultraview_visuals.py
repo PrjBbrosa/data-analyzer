@@ -29,11 +29,13 @@ REQUIRED_SHOTS = (
     "narrow_1280",
     "narrow_1440",
     "library_1280",
+    "library_groups_1280",
     "layout_1280",
     "filter_1280",
     "unplaced_1280",
     "display_1280",
     "export_1280",
+    "boards_1280",
     "card_context_1280",
     "presentation_1280",
 )
@@ -343,6 +345,69 @@ def _layout_picker_facts(page) -> dict[str, Any]:
     }
 
 
+#: Target geometry constants from the View-library plan §4. They are read by
+#: name instead of by literal so a retune stays a one-line edit in ``widgets``;
+#: a name that is absent is recorded as ``None`` and turned into an explicit
+#: ``assert_geometry`` failure, never silently substituted with a number.
+_LIBRARY_CONSTANT_NAMES = (
+    "LIBRARY_DEFAULT_WIDTH",
+    "LIBRARY_MAX_WIDTH",
+    "LIBRARY_OVERLAY_HEIGHT",
+    "LIBRARY_OVERLAY_MIN_HEIGHT",
+    "LIBRARY_HEAD_HEIGHT",
+    "LIBRARY_SECTION_HEAD_HEIGHT",
+    "LIBRARY_ROW_HEIGHT",
+    "LIBRARY_SELECTED_ROW_GUTTER",
+    "LIBRARY_ROW_ACTION_SIZE",
+    "LIBRARY_MODE_GROUPS",
+)
+
+
+def _library_constants() -> dict[str, int | str | None]:
+    """Snapshot the plan §4 constants into the manifest.
+
+    Carrying them in the manifest keeps ``assert_geometry`` free of product
+    imports and makes an archived manifest self-describing: a later reader can
+    tell whether a stored number matched the constant of its day.
+    """
+    from mf4_analyzer.ui.chart_stack.ultraview import widgets as library_widgets
+
+    return {
+        name: getattr(library_widgets, name, None) for name in _LIBRARY_CONSTANT_NAMES
+    }
+
+
+def _library_facts(page) -> dict[str, Any]:
+    """Record the single-layer View-library geometry and visible controls."""
+    from PyQt5.QtWidgets import QToolButton, QWidget
+
+    panel = page.library_panel()
+    sections = {
+        section: {
+            "height": int(frame.height()),
+            "min_hint": int(frame.minimumSizeHint().height()),
+            "visible": bool(frame.isVisible()),
+        }
+        for section, frame in panel.section_widgets().items()
+    }
+    row_heights = [int(widget.height()) for widget in panel.row_widgets()]
+    return {
+        "panel": _rect(panel),
+        "browse_mode": panel.browse_mode(),
+        "size_hint_h": int(panel.sizeHint().height()),
+        "min_size_hint_h": int(panel.minimumSizeHint().height()),
+        "sections": sections,
+        "section_heights": sorted({fact["height"] for fact in sections.values()}),
+        "row_heights": sorted(set(row_heights)),
+        "section_order": list(panel.section_widgets()),
+        "mode_controls_visible": bool(
+            panel.findChild(QToolButton, "ultraViewLibraryModeGroups")
+            or panel.findChild(QToolButton, "ultraViewLibraryModeCompact")
+        ),
+        "compact_host_visible": bool(panel.findChild(QWidget, "ultraViewLibraryCompactHost")),
+    }
+
+
 def _page_snapshot(page, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = {
         "size": {"w": int(page.width()), "h": int(page.height())},
@@ -366,6 +431,7 @@ def _page_snapshot(page, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "card_context": _rect(page.card_context_island()),
         "edge_rhythm": _edge_rhythm(page),
         "moonstone": _moonstone_facts(page),
+        "library": _library_facts(page),
     }
     if extra:
         payload.update(extra)
@@ -466,6 +532,7 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         "shots": {},
         "geometry": {},
         "min_card_chrome_height": MIN_CARD_CHROME_HEIGHT,
+        "library_constants": _library_constants(),
     }
     saved: list[tuple[str, Path]] = []
 
@@ -504,6 +571,37 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         page.tool_rail().panel_button("library").click()
         _pump(app, page)
         snap("library_1280", page, _page_snapshot(page))
+
+        # The library has one direct, grouped browse path.  Re-placing it must
+        # preserve the fixed frame while no hidden compact/catalog surface is
+        # introduced by the visual harness itself.
+        page._apply_floating_layout()
+        _pump(app, page)
+        snap("library_groups_1280", page, _page_snapshot(page))
+        library_btn = page.tool_rail().panel_button("library")
+        from PyQt5.QtTest import QTest
+
+        QTest.mouseClick(page.canvas_host().canvas_widget(), Qt.LeftButton)
+        _pump(app, page)
+        manifest["geometry"]["library_groups_1280"]["trigger_rest"] = {
+            "panelOpen": library_btn.property("panelOpen") if library_btn is not None else None,
+            "hasFocus": bool(library_btn.hasFocus()) if library_btn is not None else None,
+            "checked": bool(library_btn.isChecked()) if library_btn is not None else None,
+        }
+
+        page.board_island().menu_button().click()
+        _pump(app, page)
+        snap(
+            "boards_1280",
+            page,
+            _page_snapshot(
+                page,
+                {
+                    "board_popover": _rect(page.board_popover()),
+                    "board_menu_button": _rect(page.board_island().menu_button()),
+                },
+            ),
+        )
         page.tool_rail().panel_button("layout").click()
         _pump(app, page)
         snap("layout_1280", page, _page_snapshot(page, {"layout_picker": _layout_picker_facts(page)}))
@@ -606,6 +704,51 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         app.processEvents()
 
 
+def _library_errors(manifest: dict[str, Any]) -> list[str]:
+    """View-library contract: one grouped path, stable frame, usable sections."""
+    errors: list[str] = []
+    geometry = manifest.get("geometry") or {}
+    constants = manifest.get("library_constants") or {}
+    missing = sorted(name for name, value in constants.items() if value is None)
+    if missing:
+        errors.append(
+            "library geometry constants absent from ultraview.widgets: "
+            + ", ".join(missing)
+        )
+
+    groups = (geometry.get("library_groups_1280") or {}).get("library") or {}
+    if not groups:
+        return errors + ["library_groups_1280 recorded no library facts"]
+    if not (groups.get("panel") or {}).get("visible"):
+        errors.append("library_groups_1280 did not leave the library panel visible")
+    wanted_mode = constants.get("LIBRARY_MODE_GROUPS")
+    if wanted_mode is not None and groups.get("browse_mode") != wanted_mode:
+        errors.append(
+            f"library browse mode is {groups.get('browse_mode')!r}, expected {wanted_mode!r}"
+        )
+    panel = groups.get("panel") or {}
+    if int(panel.get("w") or 0) != int(constants.get("LIBRARY_DEFAULT_WIDTH") or 0):
+        errors.append(
+            f"library width={panel.get('w')}, expected {constants.get('LIBRARY_DEFAULT_WIDTH')}"
+        )
+    if groups.get("mode_controls_visible"):
+        errors.append("library still exposes a browse-mode control")
+    if groups.get("compact_host_visible"):
+        errors.append("library still exposes a compact catalog host")
+
+    for section, fact in sorted((groups.get("sections") or {}).items()):
+        if not fact.get("visible"):
+            continue
+        height = int(fact.get("height") or 0)
+        min_hint = int(fact.get("min_hint") or 0)
+        if height < min_hint:
+            errors.append(
+                f"library section {section!r} is clipped: height={height} < minHint={min_hint}"
+            )
+
+    return errors
+
+
 def assert_geometry(manifest: dict[str, Any]) -> None:
     """Raise GeometryError if the harness contract is broken."""
     errors: list[str] = []
@@ -652,7 +795,14 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
             errors.append(f"{name} rail is stretched instead of content-height: {rail}")
 
     base_board = (narrow_1280.get("board_scroll") or {})
-    for name in ("library_1280", "layout_1280", "filter_1280", "display_1280", "export_1280"):
+    for name in (
+        "library_1280",
+        "library_groups_1280",
+        "layout_1280",
+        "filter_1280",
+        "display_1280",
+        "export_1280",
+    ):
         fact = geometry.get(name) or {}
         if fact.get("board_scroll") != base_board:
             errors.append(f"{name} changed BoardScrollArea geometry")
@@ -734,6 +884,30 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         nav_rect = QRect(int(nav.get("x") or 0), int(nav.get("y") or 0), int(nav.get("w") or 0), int(nav.get("h") or 0))
         if overlay_rect.intersects(nav_rect):
             errors.append("layout_1280 overlay covers the navigation island")
+
+    errors.extend(_library_errors(manifest))
+    rest = (geometry.get("library_groups_1280") or {}).get("trigger_rest")
+    if not rest:
+        errors.append("library_groups_1280 missing trigger_rest after canvas click")
+    else:
+        if rest.get("panelOpen") in ("true", True):
+            errors.append("library trigger still panelOpen after canvas click")
+        if rest.get("hasFocus"):
+            errors.append("library trigger retained focus after canvas click")
+        if rest.get("checked"):
+            errors.append("library trigger still checked after canvas click")
+
+    boards = geometry.get("boards_1280") or {}
+    if boards.get("active_panel") != "boards":
+        errors.append(f"boards_1280 active_panel={boards.get('active_panel')!r}, expected 'boards'")
+    popover = boards.get("board_popover") or {}
+    island = boards.get("board_island") or {}
+    if not popover.get("visible"):
+        errors.append("boards_1280 popover is not visible")
+    if popover.get("visible") and island.get("visible"):
+        island_bottom = int(island.get("y") or 0) + int(island.get("h") or 0)
+        if int(popover.get("y") or 0) < island_bottom:
+            errors.append("boards_1280 popover is not anchored below BoardIsland")
 
     if errors:
         raise GeometryError("; ".join(errors))

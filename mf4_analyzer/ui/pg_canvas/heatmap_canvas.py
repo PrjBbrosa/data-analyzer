@@ -360,6 +360,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._plot.vb.sigRangeChangedManually.connect(
             self._on_interactive_range_changed)
         self._plot.vb.sigRangeChangedManually.connect(self._on_main_manual_zoom)
+        # Wheel / Home / inspector setRange are programmatic and do not emit
+        # sigRangeChangedManually. The slice still has to follow the live map
+        # when the inspector axis is auto.
+        self._plot.vb.sigRangeChanged.connect(self._sync_slice_to_heatmap_view)
 
         # Slice row (with_slice=True). Every consumer guards on
         # ``self._slice_curve is not None``.
@@ -461,6 +465,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._panel_time_range: tuple[float, float] | None = None
         self._panel_freq_range: tuple[float, float] | None = None
         self._panel_amp_range: tuple[float, float] | None = None
+        self._heatmap_range_updating = False
+        self._slice_view_syncing = False
         if self._with_slice:
             # Second GraphicsLayout row: 1D frequency slice at the
             # selected frame (parity with SpectrogramCanvas._ax_slice,
@@ -639,6 +645,22 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def _on_main_manual_zoom(self, *_args) -> None:
         self.manual_zoom_changed.emit(True)
 
+    def _sync_slice_to_heatmap_view(self, *_args) -> None:
+        """Re-clip the 1D slice to the heatmap's current view.
+
+        Inspector-manual panel ranges still win inside ``_slice_axis_range``.
+        Skips chrome/layout so pan, wheel and Home can call this every tick.
+        """
+        if self._heatmap_range_updating or self._slice_view_syncing:
+            return
+        if self._slice_curve is None or self._matrix_disp is None:
+            return
+        self._slice_view_syncing = True
+        try:
+            self._slice._apply_slice(refresh_chrome=False)
+        finally:
+            self._slice_view_syncing = False
+
     def _apply_empty_state_range(self) -> None:
         """Pin the empty-map view to fixed non-negative defaults.
 
@@ -802,14 +824,18 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._raw_title = title or ''
         self._apply_title_text()
 
-        if x_auto:
-            self._plot.setXRange(x0, x1, padding=0)
-        elif x_max > x_min:
-            self._plot.setXRange(float(x_min), float(x_max), padding=0)
-        if y_auto:
-            self._plot.setYRange(y0, y1, padding=0)
-        elif y_max > y_min:
-            self._plot.setYRange(float(y_min), float(y_max), padding=0)
+        self._heatmap_range_updating = True
+        try:
+            if x_auto:
+                self._plot.setXRange(x0, x1, padding=0)
+            elif x_max > x_min:
+                self._plot.setXRange(float(x_min), float(x_max), padding=0)
+            if y_auto:
+                self._plot.setYRange(y0, y1, padding=0)
+            elif y_max > y_min:
+                self._plot.setYRange(float(y_min), float(y_max), padding=0)
+        finally:
+            self._heatmap_range_updating = False
 
         # Remark labels embed the z value, so letting them survive a
         # replot would display stale data against the new matrix (the
@@ -1109,8 +1135,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self.manual_zoom_changed.emit(False)
             return
         x0, x1, y0, y1 = self._extents
-        self._plot.setXRange(x0, x1, padding=0)
-        self._plot.setYRange(y0, y1, padding=0)
+        self._heatmap_range_updating = True
+        try:
+            self._plot.setXRange(x0, x1, padding=0)
+            self._plot.setYRange(y0, y1, padding=0)
+        finally:
+            self._heatmap_range_updating = False
+        self._sync_slice_to_heatmap_view()
         self.manual_zoom_changed.emit(False)
 
     # ------------------------------------------------------------------

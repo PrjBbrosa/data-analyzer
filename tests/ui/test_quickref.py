@@ -369,11 +369,22 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "替换环" in haystack
     assert "画布缩放" in haystack
     assert "适应" in haystack
+    assert "25%–300%" in haystack
+    assert "只缩不放" in haystack
+    assert "居中" in haystack
+    assert "按原图比例" in haystack
     assert "Option+Shift" in haystack
     assert "ghost" in haystack
     assert "标题卡" in haystack
     assert "minimap" in haystack
     assert "Ctrl+Shift+Z" in haystack
+    assert "点行切换" in haystack
+    assert "拖拽排序" in haystack
+    assert "行尾复制" in haystack
+    assert "一键更新源" in haystack
+    assert "实心按钮" in haystack
+    assert "从左侧 View 库添加对比" in haystack
+    assert "⋯" not in haystack
     assert "Alt+拖" not in haystack
     assert "Option 拖动" not in haystack
     assert "碰撞时提示" not in haystack

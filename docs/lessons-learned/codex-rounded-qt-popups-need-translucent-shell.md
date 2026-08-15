@@ -12,7 +12,7 @@ checks:
   - rg -n "QMenu\\(|border-radius|WA_TranslucentBackground|NoDropShadowWindowHint|FramelessWindowHint" mf4_analyzer tests
 tests:
   - PYTHONPATH=. QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ui/test_markup_editor.py -q
-  - PYTHONPATH=. QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ui/test_combo_popup_shell.py -q
+  - PYTHONPATH=. QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ui/test_combo_popup_shell.py tests/ui/test_qmenu_density.py -q
 ---
 
 # Rounded Qt Popups Need Translucent Shell
@@ -28,7 +28,10 @@ Rule: Pair any rounded popup shell with `Qt.WA_TranslucentBackground` on the
 outer widget/window, then put the rounded background on the visible inner
 surface. For native top-level `QMenu` / `Qt.Popup` surfaces on macOS, also set
 `Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint` before showing the popup
-when the native rectangular shadow can leak past the radius. Attribute-only
+when the native rectangular shadow can leak past the radius. `QMenu.addMenu()`
+creates a *separate* top-level window; the parent's shell does not inherit.
+Route nested menus through `add_rounded_submenu()` / `apply_rounded_menu_chrome`
+(the helper walks children and re-applies on `aboutToShow`). Attribute-only
 tests are not enough for this class of bug: add a feature-level regression test
 for the shell flags and use a screenshot, pixel harness, or live check when the
 visual risk is platform-sensitive.

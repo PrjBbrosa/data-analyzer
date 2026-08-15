@@ -1210,6 +1210,68 @@ def test_user_sync_navigates_hidden_source_then_captures(qapp):
     coord.deleteLater()
 
 
+def test_user_sync_serializes_hidden_sources_instead_of_last_wins(qapp):
+    window, coord = _make_coord()
+    manager = window.view_manager
+    state_a = manager.get(0)
+    state_a.view_id = "view-a"
+    state_a.xlim = (0.0, 1.0)
+    idx_b = manager.new_view()
+    state_b = manager.get(idx_b)
+    state_b.view_id = "view-b"
+    state_b.xlim = (0.0, 2.0)
+    canvas_a = FakeCanvas("#111111")
+    canvas_b = FakeCanvas("#222222")
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    add_ref(coord.board, ref_a)
+    add_ref(coord.board, ref_b)
+    coord.bind_canvas(canvas_a, ref_a)
+    coord.bind_canvas(canvas_b, ref_b)
+    coord.request_capture(ref_a, canvas_a, "seed")
+    coord.request_capture(ref_b, canvas_b, "seed")
+    _flush()
+    state_a.xlim = (0.0, 3.0)
+    state_b.xlim = (0.0, 4.0)
+    canvas_a.hide()
+    canvas_b.hide()
+    navigated: list[tuple[str, str]] = []
+    canvases = {"view-a": canvas_a, "view-b": canvas_b}
+
+    def navigate(section, view_id):
+        navigated.append((section, view_id))
+        for key, canvas in canvases.items():
+            if key == view_id:
+                canvas.show()
+            else:
+                canvas.hide()
+        manager.set_active(0 if view_id == "view-a" else idx_b)
+        return True
+
+    window.navigate_to_view = navigate
+    raised: list[tuple[tuple[str, str], ...]] = []
+    window._ultraview_sheet = SimpleNamespace(
+        isVisible=lambda: True,
+        raise_=lambda: raised.append(tuple(navigated)),
+        activateWindow=lambda: None,
+    )
+    grabs_a = canvas_a.grab_calls
+    grabs_b = canvas_b.grab_calls
+    coord.sync_preview("time", "view-a")
+    coord.sync_preview("time", "view-b")
+    assert navigated == [("time", "view-a")]
+    assert canvas_b.grab_calls == grabs_b
+    _flush(12)
+    assert navigated == [("time", "view-a"), ("time", "view-b")]
+    assert canvas_a.grab_calls > grabs_a
+    assert canvas_b.grab_calls > grabs_b
+    assert raised == [(("time", "view-a"), ("time", "view-b"))]
+    canvas_a.deleteLater()
+    canvas_b.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 def _analysis_capture_setup(window, section, panes, view_id="view-a"):
     manager = ViewManager(state_factory=AnalysisViewState)
     window.analysis_managers[section] = manager

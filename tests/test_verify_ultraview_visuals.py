@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import json
 from pathlib import Path
 
 from tools.verify_ultraview_visuals import (
     DEFAULT_OUTPUT,
     REQUIRED_SHOTS,
+    GeometryError,
+    _library_constants,
+    _library_errors,
     _Preview,
     generate,
 )
@@ -14,6 +19,45 @@ from tools.verify_ultraview_visuals import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOL = REPO_ROOT / "tools" / "verify_ultraview_visuals.py"
+
+
+def _library_manifest(
+    *,
+    section: dict | None = None,
+    width: int | None = None,
+    mode_controls_visible: bool = False,
+    compact_host_visible: bool = False,
+) -> dict:
+    """Synthetic slice for the one-path, grouped library contract."""
+    constants = _library_constants()
+    panel = {
+        "x": 68,
+        "y": 64,
+        "w": constants["LIBRARY_DEFAULT_WIDTH"] if width is None else width,
+        "h": 560,
+        "visible": True,
+    }
+    return {
+        "library_constants": constants,
+        "geometry": {
+            "library_groups_1280": {
+                "library": {
+                    "panel": dict(panel),
+                    "browse_mode": constants["LIBRARY_MODE_GROUPS"],
+                    "sections": {
+                        "time": section
+                        or {"height": 215, "min_hint": 215, "visible": True}
+                    },
+                    "mode_controls_visible": mode_controls_visible,
+                    "compact_host_visible": compact_host_visible,
+                }
+            },
+        },
+    }
+
+
+def _matching(errors: list[str], needle: str) -> list[str]:
+    return [error for error in errors if needle in error]
 
 
 def test_default_output_is_gitignored_state_dir():
@@ -55,6 +99,55 @@ def test_ultraview_visual_harness_geometry_and_contact_sheet(qapp, tmp_path):
     assert manifest["geometry"]["toolbar_1100"]["overlap_pairs"] == []
     assert manifest["geometry"]["show_flags_1440"]["show_titles"] is False
     assert manifest["geometry"]["presentation_1280"]["library_visible"] is False
+
+
+def test_required_shots_cover_the_single_grouped_library_path():
+    assert "library_groups_1280" in REQUIRED_SHOTS
+    assert "boards_1280" in REQUIRED_SHOTS
+    assert "library_overview_1280" not in REQUIRED_SHOTS
+    assert "library_overview_stale_1280" not in REQUIRED_SHOTS
+
+
+def test_library_contract_accepts_the_single_grouped_path():
+    errors = _library_errors(_library_manifest())
+    assert _matching(errors, "is clipped") == []
+    assert _matching(errors, "browse-mode control") == []
+    assert _matching(errors, "compact catalog") == []
+
+
+def test_library_contract_catches_wrong_width_clipped_section_and_removed_controls():
+    assert _matching(_library_errors(_library_manifest(width=470)), "library width=470")
+    clipped = _library_manifest(
+        section={"height": 164, "min_hint": 215, "visible": True}
+    )
+    assert _matching(_library_errors(clipped), "'time' is clipped")
+    assert _matching(
+        _library_errors(_library_manifest(mode_controls_visible=True)),
+        "browse-mode control",
+    )
+    assert _matching(
+        _library_errors(_library_manifest(compact_host_visible=True)),
+        "compact catalog host",
+    )
+
+
+def test_library_shot_records_the_single_grouped_path(qapp, tmp_path):
+    with contextlib.suppress(GeometryError):
+        generate(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    name = "library_groups_1280"
+    assert (tmp_path / manifest["shots"][name]["path"]).is_file(), name
+    facts = manifest["geometry"][name]["library"]
+    assert facts["panel"]["visible"] is True
+    assert facts["panel"]["w"] == _library_constants()["LIBRARY_DEFAULT_WIDTH"]
+    assert facts["panel"]["h"] > 0
+    assert facts["browse_mode"] == "groups"
+    assert set(facts["sections"]) == {"time", "fft", "fft_time", "frf", "order"}
+    assert facts["section_order"] == ["time", "fft", "fft_time", "frf", "order"]
+    assert all(section_facts["min_hint"] > 0 for section_facts in facts["sections"].values())
+    assert facts["row_heights"]
+    assert facts["mode_controls_visible"] is False
+    assert facts["compact_host_visible"] is False
 
 
 def test_lod_zoom_matrix_exposes_type_and_hides_title_only_preview(qapp, qtbot):

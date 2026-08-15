@@ -186,13 +186,12 @@ class UltraViewBoardState:
     unplaced: list[UltraViewRef] = field(default_factory=list)
     show_titles: bool = True
     show_sources: bool = True
-    layout_mode: str = LAYOUT_MODE_TEMPLATE
+    layout_mode: str = LAYOUT_MODE_FREE_GRID
     free_grid: list[FreeGridPlacement] = field(default_factory=list)
     free_grid_default_size: str = "standard"
     # View-state, not identity: persisted outside presentation digest.
-    viewport: dict[str, float] = field(
-        default_factory=lambda: {"zoom": 1.0, "center_x": 0.0, "center_y": 0.0}
-    )
+    # Empty dict means "never parked" — the page fits the board on first show.
+    viewport: dict[str, float] = field(default_factory=dict)
     passthrough: dict[str, Any] = field(default_factory=dict)
 
 
@@ -243,6 +242,33 @@ def is_hero_layout(layout_id: str) -> bool:
     return layout_id in HERO_LAYOUTS
 
 
+_TEMPLATE_BY_CAPACITY: tuple[tuple[int, str], ...] = (
+    (2, "split_horizontal"),
+    (4, "grid_2x2"),
+    (6, "grid_3x2"),
+    (9, "grid_3x3"),
+    (12, "grid_4x3"),
+)
+
+
+def best_template_for(count: int) -> str:
+    """Smallest equal-grid template that can hold ``count`` cards.
+
+    Used when leaving free-grid via the rail toggle. Explicit LayoutPicker
+    choices are not routed through this helper. Counts above 12 still return
+    ``grid_4x3``; overflow goes to the unplaced tray.
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        n = 0
+    n = max(0, n)
+    for capacity, layout_id in _TEMPLATE_BY_CAPACITY:
+        if n <= capacity:
+            return layout_id
+    return "grid_4x3"
+
+
 def default_board() -> UltraViewBoardState:
     return UltraViewBoardState(
         board_id=str(uuid.uuid4()),
@@ -253,6 +279,7 @@ def default_board() -> UltraViewBoardState:
         unplaced=[],
         show_titles=True,
         show_sources=True,
+        layout_mode=LAYOUT_MODE_FREE_GRID,
     )
 
 
@@ -967,21 +994,25 @@ def _template_grid_rects(layout_id: str) -> list[GridRect]:
 
 
 def _legalize_viewport(raw: Any) -> tuple[dict[str, float], list[str]]:
-    """Persist-side clamp. Keep bounds in sync with ``viewport.ZOOM_*``."""
+    """Persist-side clamp. Keep bounds in sync with ``viewport.ZOOM_*``.
+
+    ``None`` or ``{}`` means the viewport was never parked — the page fits
+    on first show. A mapping with ``zoom`` is an explicit user (or restore)
+    choice and is clamped into range.
+    """
     warnings: list[str] = []
-    default = {"zoom": 1.0, "center_x": 0.0, "center_y": 0.0}
-    if raw is None:
-        return dict(default), warnings
+    if raw is None or (isinstance(raw, Mapping) and not raw):
+        return {}, warnings
     if not isinstance(raw, Mapping):
         warnings.append(_warn("illegal_viewport"))
-        return dict(default), warnings
+        return {}, warnings
     zoom = 1.0
     if "zoom" in raw:
         parsed = _try_viewport_float(raw.get("zoom"))
         if parsed is None:
             warnings.append(_warn("viewport_zoom_clamped", repr(raw.get("zoom"))))
         else:
-            zoom = min(2.0, max(0.25, parsed))
+            zoom = min(3.0, max(0.25, parsed))  # viewport.ZOOM_MAX / ZOOM_MIN
             if zoom != parsed:
                 warnings.append(_warn("viewport_zoom_clamped", str(parsed)))
     center_x = _viewport_finite_or_warn(raw, "center_x", 0.0, warnings)
@@ -1038,8 +1069,10 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
         # grid (and a later project reopen) can restore the same slots.
         "layout_id": board.layout_id,
         "primary_ratio": board.primary_ratio,
-        "viewport": _viewport_payload(board),
     }
+    viewport = _viewport_payload(board)
+    if viewport:
+        payload["viewport"] = viewport
     for key, value in board.passthrough.items():
         if key not in payload:
             payload[key] = value
@@ -1092,6 +1125,8 @@ def normalize_board_payload(
     if isinstance(name, str) and name.strip():
         board.name = name.strip()
 
+    # Missing layout_mode is an old template project. Do not inherit the
+    # current in-memory default (free-grid); that would rewrite saved boards.
     mode = board_raw.get("layout_mode", LAYOUT_MODE_TEMPLATE)
     if mode not in {LAYOUT_MODE_TEMPLATE, LAYOUT_MODE_FREE_GRID}:
         warnings.append(_warn("unknown_layout_mode", repr(mode)))

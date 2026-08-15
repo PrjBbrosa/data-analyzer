@@ -16,10 +16,15 @@ import math
 from .free_grid import GridMetrics
 
 ZOOM_MIN = 0.25
-ZOOM_MAX = 2.0
+ZOOM_MAX = 3.0
 ZOOM_DEFAULT = 1.0
 ZOOM_BUTTON_STEP = 0.10
 ZOOM_WHEEL_BASE = 1.1
+# zoom_to_card fills the raw viewport; keep a generous frame so a single
+# card does not kiss the window edge. zoom_fit already targets the
+# chrome-safe rect, so the same 8% would double-pad and leave a halo.
+ZOOM_TO_RECT_MARGIN = 0.08
+FIT_CONTENT_MARGIN = 0.02
 SMOOTH_DELAY_MS = 300
 QUALITY_FAST = "fast"
 QUALITY_SMOOTH = "smooth"
@@ -169,7 +174,7 @@ def zoom_to_rect(
     rect: tuple[float, float, float, float],
     viewport_size: tuple[float, float],
     *,
-    margin: float = 0.08,
+    margin: float = ZOOM_TO_RECT_MARGIN,
 ) -> tuple[float, ViewportPoint]:
     """Return ``(zoom, center)`` so ``rect`` fills the viewport with a margin."""
     _x, _y, width, height = (float(part) for part in rect)

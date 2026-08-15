@@ -518,6 +518,19 @@ class Icons:
         return _line_icon(draw, c)
 
     @classmethod
+    def ultraview_fit_to_image(cls, color=None):
+        """Card frame collapsing onto an inner preview rectangle."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRect(QRectF(3.0, 3.5, 14.0, 13.0))
+            p.drawRect(QRectF(5.5, 6.5, 9.0, 7.0))
+            p.drawLine(QPointF(7.5, 10.0), QPointF(12.5, 10.0))
+            p.drawLine(QPointF(10.0, 7.5), QPointF(10.0, 12.5))
+
+        return _line_icon(draw, c)
+
+    @classmethod
     def ultraview_reset_zoom(cls, color=None):
         """Return-to-baseline target, used for UltraView's 100% control."""
         c = color or GRAY
@@ -819,6 +832,18 @@ class Icons:
         def draw(p):
             p.drawLine(QPointF(5, 8), QPointF(10, 13))
             p.drawLine(QPointF(10, 13), QPointF(15, 8))
+        return _line_icon(draw, color or CHEVRON)
+
+    @classmethod
+    def chevron_right(cls, color=None):
+        """:meth:`chevron_down` rotated -90° — 'this section is collapsed'.
+
+        Same stroke and same bounding box as its sibling so a disclosure
+        control can swap between the two without the glyph shifting weight.
+        """
+        def draw(p):
+            p.drawLine(QPointF(8, 5), QPointF(13, 10))
+            p.drawLine(QPointF(13, 10), QPointF(8, 15))
         return _line_icon(draw, color or CHEVRON)
 
     @classmethod

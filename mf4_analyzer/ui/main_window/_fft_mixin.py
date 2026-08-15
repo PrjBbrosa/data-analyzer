@@ -4,6 +4,7 @@ import inspect
 
 import numpy as np
 
+from PyQt5.QtCore import QEventLoop
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from ... import db_reference
@@ -410,7 +411,10 @@ class FFTMixin:
         error = None
         try:
             self.statusBar.showMessage('计算FFT...');
-            QApplication.processEvents()
+            # Paint the status message only. A bare pump would run a queued
+            # View/section click inside this compute (see lesson
+            # pyqt-ui/2026-08-15-progress-pump-makes-the-render-reentrant).
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
             freq, amp, _psd = self._fft_compute_arrays(sig, fs, fft_params)
 

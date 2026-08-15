@@ -115,11 +115,11 @@ def test_main_window_ultraview_opens_independent_panel_without_stealing_mode(
     page.tool_rail().panel_button("library").click()
     qapp.processEvents()
     assert page.library_panel().isVisible()
-    primary = page.board_grid().slot_widget("primary")
-    assert primary is not None
-    assert primary.isVisible()
-    assert primary.width() > 0
-    assert primary.height() > 0
+    assert page.board().layout_mode == "free_grid"
+    assert page.tool_rail().free_grid_button().property("modeActive") == "true"
+    assert page._free_grid.isVisible()
+    assert page._free_grid.width() > 0
+    assert page._free_grid.height() > 0
     lib_count = page.library_panel().findChild(QWidget, "ultraViewLibraryCount")
     assert lib_count is not None
     digits = "".join(ch for ch in lib_count.text() if ch.isdigit())

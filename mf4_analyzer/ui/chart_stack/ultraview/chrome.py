@@ -14,17 +14,22 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 
-from PyQt5.QtCore import QEvent, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QScrollArea,
     QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -34,12 +39,32 @@ from mf4_analyzer.ui_kit.icons import Icons, icon_device_pixel_ratio
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, parse_ref_payload
 
+from .floating_layout import RAIL_CONTENT_HEIGHT, RAIL_WIDTH
+
 
 PANEL_LIBRARY = "library"
 PANEL_LAYOUT = "layout"
 PANEL_FILTER = "filter"
 PANEL_UNPLACED = "unplaced"
-RAIL_MIN_HEIGHT = 196
+PANEL_BOARDS = "boards"
+RAIL_MIN_HEIGHT = RAIL_CONTENT_HEIGHT
+RAIL_BUTTON_SIZE = 36
+RAIL_ICON_SIZE = 20
+BOARD_POPOVER_WIDTH = 260
+BOARD_ROW_HEIGHT = 36
+_BOARD_CURRENT_ROLE = Qt.UserRole + 1
+_BOARD_ACTION_WIDTH = 24
+_BOARD_POPOVER_MARGIN = 8
+_BOARD_POPOVER_GAP = 6
+_BOARD_CREATE_HEIGHT = 28
+_BOARD_LIST_BOTTOM_PAD = 6
+
+
+def board_popover_height(rows: int) -> int:
+    """Exact popover height for ``rows`` Board lines plus the create row."""
+    count = max(1, int(rows))
+    list_h = count * BOARD_ROW_HEIGHT + max(0, count - 1) + _BOARD_LIST_BOTTOM_PAD
+    return _BOARD_POPOVER_MARGIN * 2 + list_h + _BOARD_POPOVER_GAP + _BOARD_CREATE_HEIGHT
 
 # UltraView-local moonstone tokens.  Do not fold these into CONTROL_COLORS.
 ULTRAVIEW_MOON = QColor("#EDF2F5")
@@ -156,17 +181,19 @@ def _icon_button(
     icon: QIcon,
     tooltip: str,
     accessible_name: str,
+    size: int = 32,
+    icon_size: int = 18,
 ) -> QToolButton:
     """Create one consistent, keyboard-accessible icon-only control."""
     button = QToolButton(parent)
     button.setObjectName(object_name)
     button.setIcon(icon)
-    button.setIconSize(QSize(18, 18))
+    button.setIconSize(QSize(icon_size, icon_size))
     button.setToolButtonStyle(Qt.ToolButtonIconOnly)
     button.setAutoRaise(True)
     button.setAutoFillBackground(False)
     button.setAttribute(Qt.WA_StyledBackground, True)
-    button.setFixedSize(32, 32)
+    button.setFixedSize(size, size)
     button.setFocusPolicy(Qt.TabFocus)
     button.setToolTip(tooltip)
     button.setAccessibleName(accessible_name)
@@ -176,6 +203,25 @@ def _icon_button(
     button.setProperty("modeActive", "false")
     button.setProperty("panelOpen", "false")
     return button
+
+
+def _rail_button(
+    parent: QWidget,
+    *,
+    object_name: str,
+    icon: QIcon,
+    tooltip: str,
+    accessible_name: str,
+) -> QToolButton:
+    return _icon_button(
+        parent,
+        object_name=object_name,
+        icon=icon,
+        tooltip=tooltip,
+        accessible_name=accessible_name,
+        size=RAIL_BUTTON_SIZE,
+        icon_size=RAIL_ICON_SIZE,
+    )
 
 
 class _ElidedLabel(QLabel):
@@ -384,7 +430,7 @@ class CanvasHost(QFrame):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self._close_from_canvas_click()
+            self.close_from_canvas_click()
         super().mousePressEvent(event)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
@@ -393,13 +439,18 @@ class CanvasHost(QFrame):
             and event.type() == QEvent.MouseButtonPress
             and event.button() == Qt.LeftButton
         ):
-            self._close_from_canvas_click()
+            self.close_from_canvas_click()
         return super().eventFilter(watched, event)
 
-    def _close_from_canvas_click(self) -> None:
+    def close_from_canvas_click(self) -> None:
         key = self._active_overlay
         if key is not None and self._overlay_close_on_canvas.get(key, True):
-            self.close_active_overlay()
+            # Mouse close leaves focus on the canvas, not the trigger. Esc
+            # still uses restore_focus=True so keyboard users return to the
+            # button that opened the panel.
+            self.close_active_overlay(restore_focus=False)
+
+    _close_from_canvas_click = close_from_canvas_click
 
     @staticmethod
     def _focus_first_control(widget: QWidget) -> None:
@@ -412,11 +463,17 @@ class CanvasHost(QFrame):
 
 
 class ToolRail(QFrame):
-    """The fixed 48 px left rail; Page owns which requested panel opens."""
+    """The fixed left rail; Page owns which requested panel opens.
+
+    Empty-board CTA state is a local visual flag (``set_empty_board``).  The
+    rail never reads ``UltraViewBoardState``; Page decides when the canvas
+    has no placed cards.
+    """
 
     panel_requested = pyqtSignal(str)
     free_grid_toggled = pyqtSignal(bool)
     ref_dropped = pyqtSignal(str, str)
+    sync_all_requested = pyqtSignal()
 
     _PANEL_SPECS: tuple[tuple[str, str, str, Callable[..., QIcon]], ...] = (
         (PANEL_LIBRARY, "Library", "打开 View 库", Icons.ultraview_library),
@@ -431,20 +488,23 @@ class ToolRail(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(True)
         self.setProperty("surface", "island")
-        self.setFixedWidth(48)
+        self.setFixedWidth(RAIL_WIDTH)
         self._buttons: dict[str, QToolButton] = {}
         self._icon_factories: dict[str, Callable[..., QIcon]] = {}
         self._badges: dict[str, QLabel] = {}
         self._active_panel: str | None = None
         self._filter_active = False
         self._free_grid_enabled = False
+        self._empty_board = False
+        self._stale_count = 0
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(4)
-        # Visual order: Library, FreeGrid, Layout, Filter, divider, Unplaced.
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(5)
+        # Visual order: Library, FreeGrid, Layout, Filter, divider, Unplaced,
+        # SyncAll.
         for index, (panel_id, short_name, tooltip, icon_factory) in enumerate(self._PANEL_SPECS):
             if index == 1:
-                self._free_grid = _icon_button(
+                self._free_grid = _rail_button(
                     self,
                     object_name="ultraViewRailFreeGridButton",
                     icon=Icons.ultraview_free_grid(ULTRAVIEW_MUTED),
@@ -460,7 +520,7 @@ class ToolRail(QFrame):
                 divider.setFrameShape(QFrame.HLine)
                 divider.setFixedHeight(1)
                 root.addWidget(divider, 0)
-            button = _icon_button(
+            button = _rail_button(
                 self,
                 object_name=f"ultraViewRail{short_name}Button",
                 icon=icon_factory(ULTRAVIEW_MUTED),
@@ -489,6 +549,23 @@ class ToolRail(QFrame):
         self._filter_dot.setToolTip("轴量纲或范围不一致")
         self._filter_dot.setAccessibleName("轴一致性警告")
         self._filter_dot.hide()
+        self._sync_all = _rail_button(
+            self,
+            object_name="ultraViewRailSyncAllButton",
+            icon=Icons.ultraview_sync(ULTRAVIEW_MUTED),
+            tooltip="一键更新源",
+            accessible_name="一键更新全部已变化的预览",
+        )
+        self._sync_all.clicked.connect(self._on_sync_all_clicked)
+        root.addWidget(self._sync_all, 0, Qt.AlignHCenter)
+        self._sync_all_badge = QLabel(self)
+        self._sync_all_badge.setObjectName("ultraViewRailSyncAllBadge")
+        self._sync_all_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._sync_all_badge.setAlignment(Qt.AlignCenter)
+        self._sync_all_badge.setMinimumSize(14, 14)
+        self._sync_all_badge.setProperty("role", "badge")
+        self._sync_all_badge.hide()
+        self.set_stale_count(0)
         self.set_active_panel(None)
 
     def panel_button(self, panel_id: str) -> QToolButton | None:
@@ -496,6 +573,43 @@ class ToolRail(QFrame):
 
     def free_grid_button(self) -> QToolButton:
         return self._free_grid
+
+    def sync_all_button(self) -> QToolButton:
+        return self._sync_all
+
+    def set_stale_count(self, count: int) -> None:
+        """Show how many Board previews are stale; zero disables the action."""
+        try:
+            value = max(0, int(count or 0))
+        except (TypeError, ValueError):
+            value = 0
+        self._stale_count = value
+        self._sync_all.setEnabled(value > 0)
+        _set_flag(self._sync_all, "attention", value > 0)
+        badge = self._sync_all_badge
+        badge.setText(str(value) if value else "")
+        badge.setToolTip(f"{value} 个预览源已变化" if value else "")
+        badge.setAccessibleName(f"已变化预览：{value}" if value else "")
+        if value > 0:
+            badge.adjustSize()
+            hint = badge.sizeHint()
+            badge.resize(max(14, hint.width()), max(14, hint.height()))
+            badge.show()
+        else:
+            badge.hide()
+        self._sync_all.setToolTip(
+            "一键更新源" if value else "没有需要更新的预览"
+        )
+        self._sync_all.setAccessibleName(
+            "一键更新全部已变化的预览" if value else "一键更新源（当前没有已变化预览）"
+        )
+        self._sync_all.setIcon(
+            Icons.ultraview_sync(_ultraview_icon_color(active=value > 0))
+        )
+        self._position_badges()
+
+    def stale_count(self) -> int:
+        return self._stale_count
 
     def active_panel(self) -> str | None:
         return self._active_panel
@@ -527,6 +641,14 @@ class ToolRail(QFrame):
         self._free_grid_enabled = bool(enabled)
         self._sync_button_states()
 
+    def set_empty_board(self, empty: bool) -> None:
+        """Paint View 库 as the empty-canvas primary CTA; retracts once cards exist."""
+        wanted = bool(empty)
+        if self._empty_board == wanted:
+            return
+        self._empty_board = wanted
+        self._sync_button_states()
+
     def _sync_button_states(self) -> None:
         for candidate, button in self._buttons.items():
             mode_active = (
@@ -535,13 +657,20 @@ class ToolRail(QFrame):
                 candidate == PANEL_LAYOUT and not self._free_grid_enabled
             )
             panel_open = candidate == self._active_panel
+            empty_cta = candidate == PANEL_LIBRARY and self._empty_board
             _set_flag(button, "modeActive", mode_active)
             _set_flag(button, "panelOpen", panel_open)
+            _set_flag(button, "emptyCta", empty_cta)
             _set_flag(button, "active", False)
             button.setChecked(panel_open)
             factory = self._icon_factories.get(candidate)
             if factory is not None:
-                button.setIcon(factory(_ultraview_icon_color(active=mode_active or panel_open)))
+                if empty_cta:
+                    button.setIcon(factory(ULTRAVIEW_PRESENTATION_ICON))
+                else:
+                    button.setIcon(
+                        factory(_ultraview_icon_color(active=mode_active or panel_open))
+                    )
         blocked = self._free_grid.blockSignals(True)
         self._free_grid.setChecked(self._free_grid_enabled)
         self._free_grid.blockSignals(blocked)
@@ -551,6 +680,13 @@ class ToolRail(QFrame):
         self._free_grid.setIcon(
             Icons.ultraview_free_grid(_ultraview_icon_color(active=self._free_grid_enabled))
         )
+        sync_all = getattr(self, "_sync_all", None)
+        if sync_all is not None:
+            sync_all.setIcon(
+                Icons.ultraview_sync(
+                    _ultraview_icon_color(active=self._stale_count > 0)
+                )
+            )
 
     def set_badge(self, panel_id: str, count: int | None) -> None:
         """Set an exact count badge; zero/None intentionally shows no badge."""
@@ -589,7 +725,7 @@ class ToolRail(QFrame):
         self._position_badges()
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(48, max(RAIL_MIN_HEIGHT, super().sizeHint().height()))
+        return QSize(RAIL_WIDTH, max(RAIL_MIN_HEIGHT, super().sizeHint().height()))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -610,6 +746,14 @@ class ToolRail(QFrame):
             y = max(0, button.y() + 2)
             self._filter_dot.move(x, y)
             self._filter_dot.raise_()
+        badge = getattr(self, "_sync_all_badge", None)
+        button = getattr(self, "_sync_all", None)
+        if badge is not None and button is not None and not badge.isHidden():
+            x = button.x() + button.width() - max(8, badge.width() // 2)
+            y = max(0, button.y() - 2)
+            x = min(max(0, x), max(0, self.width() - badge.width()))
+            badge.move(x, y)
+            badge.raise_()
 
     def _on_panel_clicked(self) -> None:
         button = self.sender()
@@ -621,6 +765,9 @@ class ToolRail(QFrame):
 
     def _on_free_grid_clicked(self) -> None:
         self.free_grid_toggled.emit(self._free_grid.isChecked())
+
+    def _on_sync_all_clicked(self) -> None:
+        self.sync_all_requested.emit()
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasFormat(ULTRAVIEW_REF_MIME):
@@ -725,6 +872,12 @@ class BoardIsland(QFrame):
         self._add.setEnabled(bool(enabled))
         self._add.setToolTip(str(reason or "新建 Board"))
 
+    def set_menu_open(self, opened: bool) -> None:
+        """Project overlay-open chrome without making the chevron checkable."""
+        active = bool(opened)
+        _set_flag(self._menu, "panelOpen", active)
+        self._menu.setIcon(Icons.chevron_down(_ultraview_icon_color(active=active)))
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key_F2:
             self.rename_requested.emit()
@@ -738,6 +891,434 @@ class BoardIsland(QFrame):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+
+class _BoardListDelegate(QStyledItemDelegate):
+    """Draw check + name + copy/delete without stealing InternalMove."""
+
+    duplicate_requested = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._hovered_row = -1
+        self._copy_icon = Icons.copy_image()
+        self._delete_icon = Icons.close_file()
+
+    def set_hovered_row(self, row: int) -> None:
+        self._hovered_row = int(row)
+
+    def hovered_row(self) -> int:
+        return self._hovered_row
+
+    def paint(self, painter, option, index) -> None:  # noqa: N802
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = option.rect.adjusted(4, 2, -4, -2)
+        selected = bool(option.state & QStyle.State_Selected)
+        hovered = index.row() == self._hovered_row
+        current = bool(index.data(_BOARD_CURRENT_ROLE))
+        if selected:
+            painter.setPen(ULTRAVIEW_STONE)
+            painter.setBrush(ULTRAVIEW_WASH)
+            painter.drawRoundedRect(QRectF(rect), 6, 6)
+        elif hovered:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#F7FAFC"))
+            painter.drawRoundedRect(QRectF(rect), 6, 6)
+        check_rect = QRect(rect.left() + 4, rect.top(), 16, rect.height())
+        painter.setPen(ULTRAVIEW_STONE if current else Qt.transparent)
+        painter.drawText(check_rect, Qt.AlignCenter, "✓" if current else "")
+        copy_rect, delete_rect = self.action_rects(option.rect)
+        name_rect = QRect(
+            check_rect.right() + 4,
+            rect.top(),
+            max(0, copy_rect.left() - 4 - check_rect.right() - 4),
+            rect.height(),
+        )
+        metrics = option.fontMetrics
+        name = metrics.elidedText(str(index.data(Qt.DisplayRole) or ""), Qt.ElideRight, name_rect.width())
+        painter.setPen(ULTRAVIEW_INK)
+        painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
+        self._paint_icon(painter, self._copy_icon, copy_rect)
+        self._paint_icon(painter, self._delete_icon, delete_rect)
+        painter.restore()
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802
+        del option, index
+        return QSize(BOARD_POPOVER_WIDTH - 16, BOARD_ROW_HEIGHT)
+
+    @staticmethod
+    def _paint_icon(painter, icon: QIcon, slot: QRect) -> None:
+        box = QRect(0, 0, 18, 18)
+        box.moveCenter(slot.center())
+        icon.paint(painter, box, Qt.AlignCenter)
+
+    def editorEvent(self, event, model, option, index) -> bool:  # noqa: N802
+        del model
+        if event.type() != QEvent.MouseButtonRelease or event.button() != Qt.LeftButton:
+            return False
+        board_id = str(index.data(Qt.UserRole) or "")
+        if not board_id:
+            return False
+        copy_rect, delete_rect = self.action_rects(option.rect)
+        if copy_rect.contains(event.pos()):
+            self.duplicate_requested.emit(board_id)
+            return True
+        if delete_rect.contains(event.pos()):
+            self.delete_requested.emit(board_id)
+            return True
+        return False
+
+    @staticmethod
+    def action_rects(item_rect: QRect) -> tuple[QRect, QRect]:
+        delete_rect = QRect(
+            item_rect.right() - _BOARD_ACTION_WIDTH - 4,
+            item_rect.top(),
+            _BOARD_ACTION_WIDTH,
+            item_rect.height(),
+        )
+        copy_rect = QRect(
+            delete_rect.left() - _BOARD_ACTION_WIDTH,
+            item_rect.top(),
+            _BOARD_ACTION_WIDTH,
+            item_rect.height(),
+        )
+        return copy_rect, delete_rect
+
+
+class _BoardList(QListWidget):
+    """QListWidget whose Delete key never removes a Board row."""
+
+    reordered = pyqtSignal(str, int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._drag_id = ""
+        self.setObjectName("ultraViewBoardList")
+        self.setFrameShape(QFrame.NoFrame)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setSizeAdjustPolicy(QAbstractItemView.AdjustToContents)
+        self.setUniformItemSizes(True)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setDropIndicatorShown(True)
+        self.setSpacing(1)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Maximum)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(BOARD_POPOVER_WIDTH - 12, self._content_height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(BOARD_POPOVER_WIDTH - 12, BOARD_ROW_HEIGHT)
+
+    def content_height(self) -> int:
+        return self._content_height()
+
+    def _content_height(self) -> int:
+        rows = max(1, self.count())
+        return rows * BOARD_ROW_HEIGHT + max(0, rows - 1) * self.spacing() + _BOARD_LIST_BOTTOM_PAD
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802
+        item = self.currentItem()
+        self._drag_id = str(item.data(Qt.UserRole) or "") if item is not None else ""
+        super().startDrag(supported_actions)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        super().dropEvent(event)
+        board_id = self._drag_id
+        self._drag_id = ""
+        if not board_id:
+            return
+        for index in range(self.count()):
+            item = self.item(index)
+            if item is not None and str(item.data(Qt.UserRole) or "") == board_id:
+                self.reordered.emit(board_id, index)
+                return
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class BoardPopover(QFrame):
+    """Single-layer Board list: click to switch, drag to reorder, copy/delete on the row.
+
+    Page owns workspace mutation, confirmation, and the 20-Board cap.  This
+    widget only projects the current list and emits typed intents.
+    """
+
+    board_selected = pyqtSignal(str)
+    duplicate_requested = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
+    boards_reordered = pyqtSignal(str, int)
+    create_requested = pyqtSignal()
+    rename_requested = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewBoardPopover")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self._reordering = False
+        self._pending_boards: tuple[tuple[object, ...], str | None] | None = None
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.timeout.connect(self._end_reordering)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(
+            _BOARD_POPOVER_MARGIN,
+            _BOARD_POPOVER_MARGIN,
+            _BOARD_POPOVER_MARGIN,
+            _BOARD_POPOVER_MARGIN,
+        )
+        root.setSpacing(_BOARD_POPOVER_GAP)
+        self._list = _BoardList(self)
+        self._delegate = _BoardListDelegate(self._list)
+        self._list.setItemDelegate(self._delegate)
+        self._delegate.duplicate_requested.connect(self.duplicate_requested)
+        self._delegate.delete_requested.connect(self.delete_requested)
+        self._list.itemClicked.connect(self._on_item_clicked)
+        self._list.reordered.connect(self._on_reordered)
+        self._list.installEventFilter(self)
+        self._list.viewport().installEventFilter(self)
+        root.addWidget(self._list, 0)
+        self._create = QToolButton(self)
+        self._create.setObjectName("ultraViewBoardPopoverCreate")
+        self._create.setText("＋ 新建 Board")
+        self._create.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._create.setCursor(Qt.PointingHandCursor)
+        self._create.setFocusPolicy(Qt.TabFocus)
+        self._create.setFixedHeight(_BOARD_CREATE_HEIGHT)
+        self._create.setToolTip("新建 Board")
+        self._create.setAccessibleName("新建 Board")
+        self._create.clicked.connect(self.create_requested)
+        root.addWidget(self._create, 0)
+
+    def list_widget(self) -> QListWidget:
+        return self._list
+
+    def create_button(self) -> QToolButton:
+        return self._create
+
+    def board_ids(self) -> tuple[str, ...]:
+        ids: list[str] = []
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is None:
+                continue
+            board_id = str(item.data(Qt.UserRole) or "")
+            if board_id:
+                ids.append(board_id)
+        return tuple(ids)
+
+    def current_board_id(self) -> str:
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is not None and bool(item.data(_BOARD_CURRENT_ROLE)):
+                return str(item.data(Qt.UserRole) or "")
+        return ""
+
+    def action_rects_for(self, board_id: str) -> tuple[QRect, QRect]:
+        """Viewport-local copy/delete hit rects for tests."""
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is None or str(item.data(Qt.UserRole) or "") != board_id:
+                continue
+            rect = self._list.visualItemRect(item)
+            return _BoardListDelegate.action_rects(rect)
+        return QRect(), QRect()
+
+    def apply_internal_move(self, board_id: str, new_index: int) -> None:
+        """Reorder as InternalMove would, then emit the same intent."""
+        ids = list(self.board_ids())
+        if board_id not in ids:
+            return
+        old = ids.index(board_id)
+        target = max(0, min(int(new_index), len(ids) - 1))
+        if old == target:
+            return
+        item = self._list.takeItem(old)
+        if item is None:
+            return
+        self._list.insertItem(target, item)
+        self._list.setCurrentItem(item)
+        self._on_reordered(board_id, target)
+
+    def set_boards(self, boards, active_board_id: str | None) -> None:
+        if self._reordering:
+            self._pending_boards = (tuple(boards), active_board_id)
+            if not self._flush_timer.isActive():
+                self._flush_timer.start(0)
+            return
+        self._apply_boards(boards, active_board_id)
+
+    def set_create_enabled(self, enabled: bool, reason: str = "") -> None:
+        self._create.setEnabled(bool(enabled))
+        self._create.setToolTip(str(reason or "新建 Board"))
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(BOARD_POPOVER_WIDTH, board_popover_height(self._list.count()))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(BOARD_POPOVER_WIDTH, board_popover_height(1))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_list_to_contents()
+
+    def relayout(self) -> None:
+        """Recompute list height after the overlay geometry changes."""
+        self._fit_list_to_contents()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self._list and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_F2:
+                board_id = self._selected_board_id()
+                if board_id:
+                    self.rename_requested.emit(board_id)
+                return True
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                board_id = self._selected_board_id()
+                if board_id:
+                    self.board_selected.emit(board_id)
+                return True
+        if watched is self._list.viewport():
+            if event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
+                if event.button() == Qt.LeftButton:
+                    item = self._list.itemAt(event.pos())
+                    if item is not None:
+                        copy_rect, delete_rect = _BoardListDelegate.action_rects(
+                            self._list.visualItemRect(item)
+                        )
+                        if copy_rect.contains(event.pos()) or delete_rect.contains(event.pos()):
+                            if event.type() == QEvent.MouseButtonRelease:
+                                board_id = str(item.data(Qt.UserRole) or "")
+                                if board_id and copy_rect.contains(event.pos()):
+                                    self.duplicate_requested.emit(board_id)
+                                elif board_id:
+                                    self.delete_requested.emit(board_id)
+                            return True
+            if event.type() == QEvent.MouseMove:
+                row = self._list.indexAt(event.pos()).row()
+                if row != self._delegate.hovered_row():
+                    self._delegate.set_hovered_row(row)
+                    self._list.viewport().update()
+                item = self._list.itemAt(event.pos())
+                if item is not None:
+                    copy_rect, delete_rect = _BoardListDelegate.action_rects(
+                        self._list.visualItemRect(item)
+                    )
+                    if copy_rect.contains(event.pos()):
+                        self._list.setToolTip("复制 Board")
+                    elif delete_rect.contains(event.pos()):
+                        self._list.setToolTip("删除 Board")
+                    else:
+                        self._list.setToolTip(item.toolTip())
+            if event.type() == QEvent.Leave:
+                if self._delegate.hovered_row() != -1:
+                    self._delegate.set_hovered_row(-1)
+                    self._list.viewport().update()
+        return super().eventFilter(watched, event)
+
+    def _list_content_height(self) -> int:
+        return self._list.content_height()
+
+    def _fit_list_to_contents(self) -> None:
+        content = self._list_content_height()
+        layout = self.layout()
+        if layout is None:
+            return
+        margins = layout.contentsMargins()
+        available = (
+            self.height()
+            - margins.top()
+            - margins.bottom()
+            - layout.spacing()
+            - self._create.height()
+        )
+        if available <= 0:
+            target = content
+        else:
+            target = max(BOARD_ROW_HEIGHT, min(content, available))
+        if self._list.height() != target:
+            self._list.setFixedHeight(target)
+        if content <= target + 4:
+            self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._list.verticalScrollBar().setValue(0)
+            if self._list.height() != content and available >= content:
+                self._list.setFixedHeight(content)
+        else:
+            self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+    def _selected_board_id(self) -> str:
+        item = self._list.currentItem()
+        if item is None:
+            return ""
+        return str(item.data(Qt.UserRole) or "")
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        board_id = str(item.data(Qt.UserRole) or "")
+        if board_id:
+            self.board_selected.emit(board_id)
+
+    def _on_reordered(self, board_id: str, new_index: int) -> None:
+        self._reordering = True
+        self.boards_reordered.emit(str(board_id), int(new_index))
+        if not self._flush_timer.isActive():
+            self._flush_timer.start(0)
+
+    def _end_reordering(self) -> None:
+        self._reordering = False
+        pending = self._pending_boards
+        self._pending_boards = None
+        if pending is not None:
+            boards, active_id = pending
+            self._apply_boards(boards, active_id)
+
+    def _apply_boards(self, boards, active_board_id: str | None) -> None:
+        parsed: list[tuple[str, str]] = []
+        for index, board in enumerate(boards or ()):
+            board_id = str(getattr(board, "board_id", "") or "")
+            if not board_id:
+                continue
+            name = str(getattr(board, "name", "") or f"Board {index + 1}")
+            parsed.append((board_id, name))
+        blocked = self._list.blockSignals(True)
+        self._list.clear()
+        active = str(active_board_id or "")
+        current_item: QListWidgetItem | None = None
+        for board_id, name in parsed:
+            item = QListWidgetItem(name)
+            item.setData(Qt.UserRole, board_id)
+            item.setData(_BOARD_CURRENT_ROLE, board_id == active)
+            item.setFlags(
+                Qt.ItemIsEnabled
+                | Qt.ItemIsSelectable
+                | Qt.ItemIsDragEnabled
+                | Qt.ItemIsDropEnabled
+            )
+            item.setToolTip(name)
+            self._list.addItem(item)
+            if board_id == active:
+                current_item = item
+        if current_item is not None:
+            self._list.setCurrentItem(current_item)
+        self._list.blockSignals(blocked)
+        intended = self._list_content_height()
+        self._list.setFixedHeight(intended)
+        self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.verticalScrollBar().setValue(0)
+        self.setMaximumHeight(board_popover_height(max(1, len(parsed))))
+        self.updateGeometry()
+        self._fit_list_to_contents()
 
 
 class GlobalIsland(QFrame):
@@ -1019,6 +1600,10 @@ class CardContextIsland(QFrame):
     more_requested = pyqtSignal(str, str)
     rebind_requested = pyqtSignal(str, str)
     remove_requested = pyqtSignal(str, str)
+    fit_requested = pyqtSignal(str, str)
+
+    _FIT_TOOLTIP = "按原图比例调整卡片"
+    _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1035,10 +1620,12 @@ class CardContextIsland(QFrame):
         self._buttons: dict[str, QToolButton] = {}
         self._orphaned = False
         self._stale = False
+        self._fit_enabled = False
         for action, object_name, icon, tooltip in (
             ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(ULTRAVIEW_MUTED), "打开原 View"),
             ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(ULTRAVIEW_MUTED), "同步到最新预览"),
             ("focus", "ultraViewContextFocusButton", Icons.expand_focus(ULTRAVIEW_MUTED), "临时放大预览"),
+            ("fit", "ultraViewContextFitButton", Icons.ultraview_fit_to_image(ULTRAVIEW_MUTED), self._FIT_TOOLTIP),
             ("more", "ultraViewContextMoreButton", Icons.menu(ULTRAVIEW_MUTED), "更多卡片操作"),
         ):
             button = _icon_button(
@@ -1054,6 +1641,7 @@ class CardContextIsland(QFrame):
                 button.hide()
             self._buttons[action] = button
             layout.addWidget(button, 0)
+        self.set_fit_enabled(False)
         self.hide()
 
     def ref(self) -> tuple[str, str] | None:
@@ -1102,6 +1690,16 @@ class CardContextIsland(QFrame):
     def set_stale(self, stale: bool) -> None:
         self._stale = bool(stale)
         self._buttons["sync"].setVisible(self._stale and not self._orphaned)
+
+    def set_fit_enabled(self, enabled: bool) -> None:
+        self._fit_enabled = bool(enabled)
+        button = self._buttons.get("fit")
+        if button is None:
+            return
+        button.setEnabled(self._fit_enabled)
+        tip = self._FIT_TOOLTIP if self._fit_enabled else self._FIT_DISABLED_TOOLTIP
+        button.setToolTip(tip)
+        button.setAccessibleName(tip)
 
     def make_overflow_menu(self, parent: QWidget | None = None) -> QMenu:
         menu = QMenu(parent or self)
@@ -1155,6 +1753,7 @@ class CardContextIsland(QFrame):
             "open": self.open_source_requested,
             "sync": self.sync_requested,
             "focus": self.focus_requested,
+            "fit": self.fit_requested,
             "more": self.more_requested,
         }
         signal = emitters.get(action)

@@ -180,7 +180,7 @@ lesson by default.
 | [UltraView Overlap Previews Then Translates Without A Modal](pyqt-ui/2026-08-14-ultraview-overlap-asks-auto-avoid.md) | Changing UltraView free-grid drag/resize commit, overlap toasts, `plan_layout`, or `plan_overlap_avoidance`. | See lesson |
 | [UltraView Island SizeHint Uses isHidden](pyqt-ui/2026-08-14-ultraview-island-sizehint-uses-ishidden.md) | Changing UltraView floating-island `sizeHint`, `GlobalIsland.set_edit_visible`, or `_chrome_sizes` / `_apply_floating_layout` geometry. | See lesson |
 | [UltraView QSS ID Ignores Ancestor Qualifier](pyqt-ui/2026-08-14-ultraview-qss-id-ignores-ancestor.md) | Styling an UltraView control with a page-level QSS descendant plus a child `#objectName`, especially `ultraViewGlobalPresentationButton`. | See lesson |
-| [UltraView Stale Means Digest Mismatch; Sync Recaptures](pyqt-ui/2026-08-14-ultraview-stale-means-digest-sync-recaptures.md) | Changing UltraView card status, `derive_preview_status`, presentation digest, idle recapture, or adding a Board sync/refresh control. | See lesson |
+| [UltraView Stale Means Digest Mismatch; Sync Recaptures](pyqt-ui/2026-08-14-ultraview-stale-means-digest-sync-recaptures.md) | Changing UltraView card status, `derive_preview_status`, presentation digest, idle recapture, Board sync/refresh, or the ToolRail 「一键更新源」 batch path. | See lesson |
 | [Heatmap Slice Y-Fit Uses Visible X](pyqt-ui/2026-08-14-heatmap-slice-yfit-uses-visible-x.md) | Changing FFT-vs-Time / Order slice context menus, `y_autofit_handler`, or slice amplitude ranging. | See lesson |
 | [UltraView Zoom Zero Local Is Not Cursor](pyqt-ui/2026-08-14-ultraview-zoom-zero-local-is-not-cursor.md) | UltraView board zoom, Ctrl+wheel, trackpad pinch, `_cursor_in_scroll_viewport`, or any fix that maps `event.position()` as the zoom anchor. | See lesson |
 | [Compute Progress Elides From QSS Chrome Not Long Copy](pyqt-ui/2026-08-14-compute-progress-elides-from-qss-chrome.md) | Changing `ComputeProgressWidget`, status-bar load/compute labels, or QSS for `#computeProgressLabel` / `#computeProgressBar`. | See lesson |
@@ -190,6 +190,8 @@ lesson by default.
 | [FFT Spectra Must Peak-Hold, Not Min/Max-Fill](codex-fft-spectrum-peak-hold.md) | Changing `PgLineCanvas` spectrum plotting, `_spectrum_plot_arrays`, | See lesson |
 | [Dialog QToolButton Chrome Must Spare SearchField Icons](codex-dialog-toolbutton-chrome-spares-search-field.md) | Adding dialog-wide `QToolButton` / `QPushButton` QSS, embedding | See lesson |
 | [`is_pandas_dataframe` Reads `sys.modules`, Never `import`s](codex-pandas-lazy-import-avoids-collect-all.md) | Touching `channel_frame.py`'s `is_pandas_dataframe`/`is_tabular_frame`, or adding a new lazy/optional dependency check in `mf4_analyzer/io`. | `tests/test_channel_frame.py` |
+| [A Progress Pump Makes The Render Re-Entrant](pyqt-ui/2026-08-15-progress-pump-makes-the-render-reentrant.md) | Adding/touching any `processEvents` on a render path, the time-domain View switch pipeline, or a `singleShot(0)` that navigates to a View. | `tests/ui/test_view_switch_reentrancy.py`; `rg -n "processEvents\(\)" mf4_analyzer/ui` |
+| [Heatmap Slice Follows Live View](pyqt-ui/2026-08-15-heatmap-slice-follows-live-view.md) | Changing FFT-vs-Time / Order heatmap slice refresh, `sigRangeChangedManually`, `_handle_wheel_dispatch`, Home/`reset_view_to_data_extents`, or `_slice_axis_range`. | See lesson |
 
 ## Selection Rules
 

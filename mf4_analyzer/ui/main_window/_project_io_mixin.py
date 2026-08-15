@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from time import monotonic
 
-from PyQt5.QtCore import QSettings
+from PyQt5.QtCore import QEventLoop, QSettings
 from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ...blf_dbc_candidates import (
@@ -631,7 +631,9 @@ class ProjectIOMixin:
 
         try:
             self.statusBar.showMessage(f"加载: {fp}");
-            QApplication.processEvents()
+            # Paint the status message only; queued input must not re-enter
+            # the importer or switch Views mid-load (same lesson as above).
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
             p = Path(fp);
             ext = p.suffix.lower()
             report(0.0, "准备")

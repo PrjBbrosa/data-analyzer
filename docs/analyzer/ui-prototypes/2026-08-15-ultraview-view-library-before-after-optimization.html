@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>UltraView · View 库优化前后对比</title>
+  <style>
+    :root {
+      --page: #edf2f7;
+      --surface: #ffffff;
+      --ink: #172033;
+      --muted: #6e7d91;
+      --line: #c7d4e0;
+      --line-soft: #e4ebf2;
+      --blue: #147fe8;
+      --blue-soft: #e8f3fc;
+      --danger: #bd5b50;
+      --danger-soft: #fff3f1;
+      --font: "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--page); }
+    body {
+      min-width: 320px;
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 2%, rgba(116, 158, 204, .13), transparent 28rem),
+        radial-gradient(circle at 91% 13%, rgba(147, 182, 215, .12), transparent 25rem),
+        var(--page);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      width: min(1400px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 40px 0 56px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 0 10px;
+      color: #57728d;
+      font: 760 11px/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .eyebrow i { width: 20px; height: 1px; background: currentColor; }
+    h1 { margin: 0; font-size: clamp(25px, 3vw, 38px); line-height: 1.15; letter-spacing: -.045em; }
+    .intro {
+      max-width: 780px;
+      margin: 13px 0 0;
+      color: #5d6e82;
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 24px 0 32px;
+    }
+    .principle {
+      min-height: 70px;
+      padding: 13px 15px;
+      border: 1px solid rgba(138, 157, 176, .24);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, .64);
+      box-shadow: inset 0 1px rgba(255, 255, 255, .82);
+    }
+    .principle b { display: block; margin-bottom: 5px; color: #2a4f73; font-size: 13px; }
+    .principle span { color: #697b8f; font-size: 12px; line-height: 1.45; }
+
+    .comparison { display: grid; grid-template-columns: 640px 488px; align-items: start; gap: 48px; }
+    .column { min-width: 0; }
+    .compare-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 29px; margin: 0 4px 13px; }
+    .compare-heading h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
+    .compare-heading span { color: #758498; font: 700 10px/1 var(--mono); letter-spacing: .06em; }
+    .compare-heading.after h2 { color: #195e94; }
+
+    .library-window {
+      position: relative;
+      overflow: hidden;
+      min-height: 785px;
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: 0 20px 48px rgba(39, 58, 79, .16), 0 2px 7px rgba(35, 56, 78, .05);
+    }
+
+    /* Before: the outer shell is visually broken at the two top corners. */
+    .before-window {
+      border: 1px solid #d1dce7;
+      border-top-color: transparent;
+      border-radius: 17px;
+    }
+    .before-window::before,
+    .before-window::after {
+      position: absolute;
+      z-index: 5;
+      top: 0;
+      width: 28px;
+      height: 20px;
+      border-top: 1px solid #d1dce7;
+      content: "";
+    }
+    .before-window::before { left: 18px; }
+    .before-window::after { right: 18px; }
+
+    /* After: one independently painted shell owns the four-corner stroke. */
+    .after-window {
+      border: 1px solid #b9cad9;
+      border-radius: 18px;
+      box-shadow: 0 22px 50px rgba(32, 74, 108, .16), 0 0 0 1px rgba(255, 255, 255, .76) inset;
+    }
+    .after-window::before {
+      position: absolute;
+      z-index: 4;
+      inset: 0;
+      pointer-events: none;
+      border: 1px solid rgba(255, 255, 255, .72);
+      border-radius: inherit;
+      content: "";
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      min-height: 74px;
+      padding: 0 22px 0 25px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .96);
+    }
+    .panel-title { margin: 0; color: #142033; font-size: 24px; letter-spacing: -.045em; }
+    .count { margin-left: auto; color: #6f8498; font-size: 14px; }
+    .pin {
+      display: grid;
+      width: 48px;
+      height: 48px;
+      margin-left: 18px;
+      place-items: center;
+      border: 1px solid #b8d0e2;
+      border-radius: 14px;
+      color: #3875a2;
+      background: #edf6fc;
+      font-size: 21px;
+    }
+
+    .panel-body { padding: 20px 23px 25px; }
+    .search {
+      display: flex;
+      align-items: center;
+      height: 68px;
+      padding: 0 16px;
+      border: 1px solid #bdd0e0;
+      border-radius: 17px;
+      color: #7c8a9c;
+      background: #fff;
+      font-size: 18px;
+    }
+    .search .magnifier { margin-right: 13px; color: #617c99; font-size: 25px; line-height: 1; }
+
+    .legacy-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      margin: 17px 0 21px;
+      padding: 0;
+      border: 0;
+    }
+    .legacy-switch button {
+      height: 54px;
+      border: 0;
+      border-radius: 13px;
+      color: #657c93;
+      background: transparent;
+      font: 760 18px var(--font);
+    }
+    .legacy-switch button.active { color: #176492; background: #e5f1fb; }
+
+    .callout {
+      position: absolute;
+      z-index: 7;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border: 1px solid #e0aaa5;
+      border-radius: 8px;
+      color: #a74c44;
+      background: rgba(255, 247, 245, .95);
+      box-shadow: 0 4px 10px rgba(103, 50, 47, .10);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .callout::after { position: absolute; top: 100%; left: 20px; width: 1px; height: 22px; background: #d88d87; content: ""; }
+    .callout.left { top: 9px; left: 19px; }
+    .callout.right { top: 9px; right: 19px; }
+
+    .old-group {
+      margin-top: 16px;
+      overflow: hidden;
+      border: 1px solid #bfcede;
+      border-radius: 17px;
+      background: #fff;
+    }
+    .old-group header {
+      display: flex;
+      align-items: center;
+      height: 74px;
+      padding: 0 22px;
+      border-bottom: 1px solid #bfcede;
+      color: #264b69;
+      font-size: 19px;
+      font-weight: 780;
+    }
+    .old-group header span { margin-left: auto; color: #6d8499; font-size: 22px; }
+    .old-row {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr) 44px;
+      align-items: center;
+      gap: 15px;
+      min-height: 94px;
+      padding: 9px 20px 9px 30px;
+    }
+    .old-row.selected { margin: 9px 0; border: 2px solid #2479b6; border-radius: 15px; background: #e4f1fb; }
+    .dot { width: 15px; height: 15px; border-radius: 50%; background: var(--dot, #1681ee); }
+    .view-name { min-width: 0; }
+    .view-name b, .view-name span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .view-name b { color: #172134; font-size: 18px; font-weight: 520; }
+    .view-name span { margin-top: 5px; color: #7890aa; font-size: 15px; }
+    .remove, .add {
+      display: grid;
+      width: 44px;
+      height: 46px;
+      place-items: center;
+      border: 1px solid #e2aaa5;
+      border-radius: 12px;
+      color: #b25a51;
+      background: var(--danger-soft);
+      font-size: 27px;
+      font-weight: 300;
+    }
+    .old-group.slim { margin-top: 17px; }
+    .old-group.slim .old-row { min-height: 78px; }
+
+    .after-window .panel-head { min-height: 69px; padding: 0 19px 0 22px; }
+    .after-window .panel-title { font-size: 22px; }
+    .after-window .panel-body { padding: 17px 17px 21px; }
+    .after-window .search { height: 57px; padding: 0 14px; border-radius: 14px; font-size: 15px; }
+    .after-window .search .magnifier { margin-right: 10px; font-size: 21px; }
+    .after-window .count { font-size: 13px; }
+    .after-window .pin { width: 42px; height: 42px; margin-left: 14px; border-radius: 12px; font-size: 18px; }
+
+    .single-level-note {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 15px 3px 10px;
+      color: #6c7f91;
+      font-size: 12px;
+    }
+    .single-level-note b { color: #466480; font-weight: 700; }
+    .single-level-note span { color: #7d91a4; font: 700 9px/1 var(--mono); letter-spacing: .06em; }
+
+    .analysis-stack { display: grid; gap: 8px; }
+    .analysis-section {
+      --section-line: #bcd7ef;
+      --section-ink: #23669b;
+      --section-bg: #edf7ff;
+      --section-dot: #1681ee;
+      overflow: hidden;
+      border: 1px solid var(--section-line);
+      border-radius: 14px;
+      background: var(--section-bg);
+    }
+    .analysis-section summary {
+      display: grid;
+      grid-template-columns: 9px minmax(0, 1fr) auto 16px;
+      align-items: center;
+      gap: 9px;
+      min-height: 46px;
+      padding: 0 13px;
+      cursor: pointer;
+      list-style: none;
+      color: var(--section-ink);
+    }
+    .analysis-section summary::-webkit-details-marker { display: none; }
+    .section-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--section-dot); box-shadow: 0 0 0 3px rgba(255, 255, 255, .52); }
+    .section-label { font-size: 16px; font-weight: 770; letter-spacing: -.02em; }
+    .section-count { color: color-mix(in srgb, var(--section-ink) 70%, white); font: 700 10px/1 var(--mono); letter-spacing: .05em; }
+    .chevron { color: color-mix(in srgb, var(--section-ink) 70%, white); font-size: 17px; transition: transform .16s ease; }
+    .analysis-section[open] .chevron { transform: rotate(180deg); }
+    .view-list { display: grid; gap: 5px; padding: 0 7px 7px; }
+    .view-row {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr) 34px;
+      align-items: center;
+      gap: 10px;
+      min-height: 49px;
+      padding: 6px 8px 6px 11px;
+      border-radius: 10px;
+    }
+    /* A selected View is a raised card. There is deliberately no sibling
+       border: an across-the-list hairline would run through this card's lower
+       rounded corners (the issue called out in the review screenshot). */
+    .view-row.selected {
+      position: relative;
+      z-index: 2;
+      margin: 1px 0 2px;
+      border: 1px solid #9bc1dc;
+      background: #ffffff;
+      box-shadow: 0 5px 13px rgba(45, 91, 124, .18), 0 1px 3px rgba(45, 91, 124, .09), inset 0 0 0 1px rgba(255, 255, 255, .9);
+      transform: translateY(-1px);
+    }
+    .view-row .dot { width: 8px; height: 8px; }
+    .view-row .view-name b { font-size: 14px; }
+    .view-row .view-name span { margin-top: 2px; color: #74899d; font-size: 11px; }
+    .view-row .remove, .view-row .add { width: 33px; height: 33px; border-radius: 9px; font-size: 21px; }
+    .view-row .add { border-color: color-mix(in srgb, var(--section-dot) 34%, white); color: var(--section-ink); background: rgba(255, 255, 255, .55); }
+    /* UltraView's moonstone system: one blue-grey material, five deliberately
+       adjacent steps. Type separation comes from labels, order and value —
+       not five unrelated hues. */
+    .time { --section-line: #bcd8eb; --section-ink: #286b99; --section-bg: #edf7fd; --section-dot: #3d7eaa; }
+    .fft { --section-line: #c5dbe9; --section-ink: #39718f; --section-bg: #f1f7fb; --section-dot: #4b82a5; }
+    .fft-time { --section-line: #c8dce4; --section-ink: #446f80; --section-bg: #f2f8fa; --section-dot: #558197; }
+    .frf { --section-line: #d1dfe8; --section-ink: #506f84; --section-bg: #f5f8fa; --section-dot: #6b8aa0; }
+    .order { --section-line: #d9e3e9; --section-ink: #5e7283; --section-bg: #f7f9fa; --section-dot: #7c929f; }
+
+    .after-footnote {
+      margin: 14px 3px 0;
+      padding-top: 13px;
+      border-top: 1px solid #e6edf3;
+      color: #708296;
+      font-size: 11px;
+      line-height: 1.55;
+    }
+    .after-footnote b { color: #3a698c; }
+
+    .implementation-note {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 10px;
+      margin: 32px 0 0;
+      padding: 15px 18px;
+      border: 1px solid #c9dbe9;
+      border-radius: 13px;
+      background: rgba(241, 248, 253, .76);
+      color: #52708b;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .implementation-note i { color: #3376a9; font-style: normal; font-size: 18px; }
+    .implementation-note b { color: #2e5f87; }
+
+    @media (max-width: 1280px) {
+      .comparison { grid-template-columns: minmax(0, 1fr) minmax(0, .87fr); gap: 24px; }
+    }
+    @media (max-width: 900px) {
+      .page { width: min(640px, calc(100% - 28px)); padding-top: 24px; }
+      .principles, .comparison { grid-template-columns: 1fr; }
+      .comparison { gap: 34px; }
+      .library-window { min-height: auto; }
+    }
+    @media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <p class="eyebrow"><i></i> UltraView / View library</p>
+    <h1>不是多一层筛选，而是让五类分析在同一种月白石蓝里一眼可读</h1>
+    <p class="intro">以下是对截图中 View 库的理解性重绘：保留搜索、分组、增删 View 与选中 View 的浮起反馈；移除“展开 / 概览”这层重复的架构切换，并将面板收至 360 px。五个正式分析区只使用月白石蓝的明度、冷暖阶梯，不再使用五种各自独立的彩色卡片。</p>
+
+    <section class="principles" aria-label="优化目标">
+      <div class="principle"><b>① 四角持续可见</b><span>最外层由单一圆角壳体负责 1 px 灰线，内容层不再覆盖边缘。</span></div>
+      <div class="principle"><b>② 少一层，不少能力</b><span>分组标题就是概览；点标题展开内容，不再在“概览 / 展开”之间重复切换。</span></div>
+      <div class="principle"><b>③ 同源色阶，不是彩虹分类</b><span>五类仅以月白石蓝的明度与冷暖层级区分；选中态始终使用同一蓝色浮起。</span></div>
+    </section>
+
+    <section class="comparison" aria-label="View 库优化前后对比">
+      <article class="column" aria-labelledby="before-title">
+        <div class="compare-heading"><h2 id="before-title">优化前</h2><span>双层信息架构</span></div>
+        <div class="library-window before-window">
+          <span class="callout left">圆角灰线断开</span><span class="callout right">圆角灰线断开</span>
+          <header class="panel-head"><h3 class="panel-title">View 库</h3><span class="count">10 个</span><span class="pin">♧</span></header>
+          <div class="panel-body">
+            <div class="search"><span class="magnifier">⌕</span>搜索 View、信号或分析类型…</div>
+            <div class="legacy-switch" aria-label="当前双分区"><button class="active" type="button">展开</button><button type="button">概览</button></div>
+
+            <section class="old-group"><header>时域 <span>⌄</span></header>
+              <div class="old-row selected"><i class="dot"></i><span class="view-name"><b>View 1</b><span>Rte_TAS_mTorsionBarTorque_xds16, Rte_TLC…</span></span><span class="remove">−</span></div>
+              <div class="old-row"><i class="dot" style="--dot:#fa5b0b"></i><span class="view-name"><b>View 2</b><span>L, R</span></span><span class="remove">−</span></div>
+              <div class="old-row"><i class="dot" style="--dot:#06a44e"></i><span class="view-name"><b>View 3</b><span>EPS_1_CRC, EPS_1_RollgCntr</span></span><span class="remove">−</span></div>
+            </section>
+            <section class="old-group slim"><header>频谱 <span>⌄</span></header>
+              <div class="old-row"><i class="dot"></i><span class="view-name"><b>View 1</b></span><span class="remove">−</span></div>
+              <div class="old-row"><i class="dot" style="--dot:#fa5b0b"></i><span class="view-name"><b>View 2</b></span><span class="add">+</span></div>
+            </section>
+          </div>
+        </div>
+      </article>
+
+      <article class="column" aria-labelledby="after-title">
+        <div class="compare-heading after"><h2 id="after-title">优化后</h2><span>360 PX · 单层分组</span></div>
+        <div class="library-window after-window">
+          <header class="panel-head"><h3 class="panel-title">View 库</h3><span class="count">10 个</span><span class="pin">♧</span></header>
+          <div class="panel-body">
+            <div class="search"><span class="magnifier">⌕</span>搜索 View、信号或分析类型…</div>
+            <div class="single-level-note"><b>按分析类型</b><span>点击标题查看 View</span></div>
+            <div class="analysis-stack">
+              <details class="analysis-section time" open>
+                <summary><i class="section-dot"></i><span class="section-label">时域</span><span class="section-count">4 VIEW</span><span class="chevron">⌄</span></summary>
+                <div class="view-list">
+                  <div class="view-row selected"><i class="dot"></i><span class="view-name"><b>View 1</b><span>转向力矩、限扭信号 · 0–12 s</span></span><span class="remove">−</span></div>
+                  <div class="view-row"><i class="dot" style="--dot:#fa5b0b"></i><span class="view-name"><b>View 2</b><span>L、R · 0–12 s</span></span><span class="remove">−</span></div>
+                </div>
+              </details>
+              <details class="analysis-section fft" open>
+                <summary><i class="section-dot"></i><span class="section-label">频谱</span><span class="section-count">2 VIEW</span><span class="chevron">⌄</span></summary>
+                <div class="view-list"><div class="view-row"><i class="dot" style="--dot:#4b82a5"></i><span class="view-name"><b>View 1</b><span>118 Hz 峰值 · 0–500 Hz</span></span><span class="remove">−</span></div></div>
+              </details>
+              <details class="analysis-section fft-time">
+                <summary><i class="section-dot"></i><span class="section-label">时频</span><span class="section-count">1 VIEW</span><span class="chevron">⌄</span></summary>
+                <div class="view-list"><div class="view-row"><i class="dot" style="--dot:#558197"></i><span class="view-name"><b>路噪 · 时频</b><span>0–2 kHz</span></span><span class="add">+</span></div></div>
+              </details>
+              <details class="analysis-section frf">
+                <summary><i class="section-dot"></i><span class="section-label">频响</span><span class="section-count">1 VIEW</span><span class="chevron">⌄</span></summary>
+                <div class="view-list"><div class="view-row"><i class="dot" style="--dot:#6b8aa0"></i><span class="view-name"><b>方向盘 · FRF</b><span>0–160 Hz</span></span><span class="add">+</span></div></div>
+              </details>
+              <details class="analysis-section order">
+                <summary><i class="section-dot"></i><span class="section-label">阶次</span><span class="section-count">2 VIEW</span><span class="chevron">⌄</span></summary>
+                <div class="view-list"><div class="view-row"><i class="dot" style="--dot:#7c929f"></i><span class="view-name"><b>二阶发动机阶次</b><span>800–4,000 rpm</span></span><span class="add">+</span></div></div>
+              </details>
+            </div>
+            <p class="after-footnote"><b>默认状态：</b>当前有内容的前两类展开；其他类别保留同源色阶、数量和展开入口。<b>内容超高：</b>只在内部滚动，绝不压扁分区。<b>选中 View：</b>白色卡片微微浮起；卡片之间只留空气，不画会切过圆角的横线。</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <aside class="implementation-note"><i>◎</i><span><b>后续落地约束（非本次代码修改）：</b>外层 popup / dialog 壳必须透明并承载圆角描边，内层内容区再放白色背景并裁剪；不能只依靠 QSS 的 <code>border-radius</code>。这正对应项目中已有的 macOS Qt 圆角回归经验。</span></aside>
+  </main>
+</body>
+</html>
