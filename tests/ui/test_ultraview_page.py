@@ -761,6 +761,70 @@ def test_set_preview_and_status_noop_skips_projection(qtbot):
     assert calls == []
 
 
+def test_apply_preview_and_status_projects_once_when_changed(qtbot):
+    harness = _Harness(qtbot)
+    ref = make_ref("time", "time-1")
+    add_ref(harness.board, ref)
+    harness.page.set_board(harness.board)
+    calls = []
+    original = harness.page._refresh_free_grid_projection
+
+    def counted():
+        calls.append(1)
+        original()
+
+    harness.page._refresh_free_grid_projection = counted
+    harness.page.apply_preview_and_status(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="道路输入"),
+        STATUS_STALE,
+        True,
+    )
+    assert calls == [1]
+
+
+def test_projection_batch_collapses_multiple_preview_updates(qtbot):
+    harness = _Harness(qtbot)
+    refs = [make_ref("time", f"time-{index}") for index in range(6)]
+    for ref in refs:
+        add_ref(harness.board, ref)
+    harness.page.set_board(harness.board)
+    calls = []
+    original = harness.page._refresh_free_grid_projection
+
+    def counted():
+        calls.append(1)
+        original()
+
+    harness.page._refresh_free_grid_projection = counted
+    with harness.page.projection_batch():
+        with harness.page.projection_batch():
+            for ref in refs:
+                harness.page.apply_preview_and_status(
+                    ref,
+                    FakePreview(ref=ref, image=_image(), title=ref.view_id),
+                    STATUS_STALE,
+                    True,
+                )
+    assert calls == [1]
+
+
+def test_projection_batch_delays_library_rows_until_exit(qtbot):
+    harness = _Harness(qtbot)
+    calls = []
+    original = harness.page.library_panel().set_rows
+
+    def counted(rows):
+        calls.append(tuple(row.view_id for row in rows))
+        original(rows)
+
+    harness.page.library_panel().set_rows = counted
+    with harness.page.projection_batch():
+        harness.page.set_library_rows(_rows())
+        assert calls == []
+    assert calls == [tuple(row.view_id for row in _rows())]
+
+
 def test_clear_runtime_caches_drops_preview_shadows(qtbot):
     harness = _Harness(qtbot)
     ref = make_ref("time", "time-1")

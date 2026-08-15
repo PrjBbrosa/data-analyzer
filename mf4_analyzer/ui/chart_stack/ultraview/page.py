@@ -6,6 +6,7 @@ MainWindow or analysis compute entry points.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, Mapping, Sequence
 import math
 
@@ -241,6 +242,8 @@ class UltraViewPage(QWidget):
         self._drag_kind: str | None = None
         self._pending_library_rows: list[LibraryRow] | None = None
         self._board_widgets_dirty = False
+        self._projection_batch_depth = 0
+        self._projection_dirty = False
         self._presentation = False
         # Floating chrome is transient view state: it is deliberately not
         # serialised with a Board or a project.  A fresh UltraView opens on a
@@ -554,6 +557,17 @@ class UltraViewPage(QWidget):
 
     def is_board_panning(self) -> bool:
         return self._viewport.is_panning()
+
+    @contextmanager
+    def projection_batch(self):
+        """Coalesce card projection and library rows across coordinator pushes."""
+        self._projection_batch_depth += 1
+        try:
+            yield
+        finally:
+            self._projection_batch_depth -= 1
+            if self._projection_batch_depth == 0:
+                self._flush_projection_batch()
 
     def canvas_host(self) -> CanvasHost:
         """Expose the floating host for focused geometry/interaction probes."""
@@ -1672,7 +1686,7 @@ class UltraViewPage(QWidget):
 
     def set_library_rows(self, rows: Sequence[LibraryRow | Mapping[str, Any]]) -> None:
         coerced = [coerce_library_row(row) for row in rows]
-        if self._drag_kind is not None:
+        if self._drag_kind is not None or self._projection_batch_depth:
             self._pending_library_rows = coerced
             return
         self._apply_library_rows(coerced)
@@ -1680,6 +1694,36 @@ class UltraViewPage(QWidget):
     def _apply_library_rows(self, rows: Sequence[LibraryRow]) -> None:
         self._library.set_rows(rows)
         self._library.set_on_board(membership_set(self._board))
+
+    def _flush_projection_batch(self) -> None:
+        """Apply one deferred projection, unless a drag owns widget lifetime."""
+        if self._projection_batch_depth:
+            return
+        if self._drag_kind is not None:
+            if self._projection_dirty:
+                self._board_widgets_dirty = True
+            return
+        pending_rows = self._pending_library_rows
+        self._pending_library_rows = None
+        if pending_rows is not None:
+            self._apply_library_rows(pending_rows)
+        dirty = self._projection_dirty
+        self._projection_dirty = False
+        pending_viewport = self._pending_viewport_restore
+        self._pending_viewport_restore = None
+        if dirty:
+            if pending_viewport is not None:
+                self._restoring_viewport = True
+                try:
+                    self._refresh_projection()
+                finally:
+                    self._restoring_viewport = False
+            else:
+                self._refresh_projection()
+        if pending_viewport is not None:
+            self._restore_viewport_from_board(
+                self._board, payload=pending_viewport
+            )
 
     def set_preview(self, ref: UltraViewRef | Mapping[str, Any], record_like: Any) -> None:
         parsed = ref if isinstance(ref, UltraViewRef) else parse_ref_payload(ref)
@@ -1818,7 +1862,10 @@ class UltraViewPage(QWidget):
             self._sync_empty_board_cue()
             return
         self._library.set_on_board(membership_set(board))
-        if switching:
+        if switching and self._projection_batch_depth:
+            self._pending_viewport_restore = incoming_viewport
+            self._refresh_projection()
+        elif switching:
             self._restoring_viewport = True
             try:
                 self._refresh_projection()
@@ -2037,8 +2084,9 @@ class UltraViewPage(QWidget):
     def _flush_deferred_drag_refresh(self) -> None:
         pending_rows = self._pending_library_rows
         self._pending_library_rows = None
-        dirty = self._board_widgets_dirty
+        dirty = self._board_widgets_dirty or self._projection_dirty
         self._board_widgets_dirty = False
+        self._projection_dirty = False
         pending_viewport = self._pending_viewport_restore
         self._pending_viewport_restore = None
         if pending_rows is not None:
@@ -2232,7 +2280,6 @@ class UltraViewPage(QWidget):
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             self._free_grid.select_only(ref.section, ref.view_id)
         self._refresh_projection()
-        self._refresh_card_context()
         self.selection_changed.emit(ref.section, ref.view_id)
 
     def select_ref(self, ref: UltraViewRef) -> None:
@@ -2303,6 +2350,9 @@ class UltraViewPage(QWidget):
         self._overview.set_projection(self._board, records, statuses)
 
     def _refresh_projection(self) -> None:
+        if self._projection_batch_depth:
+            self._projection_dirty = True
+            return
         if self._drag_kind is not None:
             self._board_widgets_dirty = True
             return
@@ -2466,7 +2516,6 @@ class UltraViewPage(QWidget):
         self._rail.set_axis_warning(" · ".join(warnings))
         self._sync_transient_chrome(warnings)
         self._sync_overview()
-        self._refresh_minimap()
         self._focus.setGeometry(self.rect())
 
     def _place_canvas_for_scroll(

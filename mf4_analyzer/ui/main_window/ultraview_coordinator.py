@@ -10,7 +10,7 @@ import logging
 import math
 import re
 import weakref
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from pathlib import Path
 from time import monotonic
@@ -1227,14 +1227,16 @@ class UltraViewCoordinator(QObject):
         page = self.page()
         if page is None:
             return
-        # Library chrome (name/color) must be current before set_board
-        # projects cards. Preview-record no-op must not freeze tab color.
-        self._refresh_library(page)
         board = active_board(self._workspace)
-        page.set_workspace(self._workspace)
-        self.set_pinned_from_board(board)
-        for ref in {ref for candidate in self._workspace.boards for ref in all_refs(candidate)}:
-            self._push_preview(ref)
+        batch = getattr(page, "projection_batch", None)
+        with batch() if callable(batch) else nullcontext():
+            # Library chrome (name/color) must be current before set_board
+            # projects cards. Preview-record no-op must not freeze tab color.
+            self._refresh_library(page)
+            page.set_workspace(self._workspace)
+            self.set_pinned_from_board(board)
+            for ref in membership_set(board):
+                self._push_preview(ref)
 
     def _sync_entry_content_marker(self) -> None:
         """Keep each source-rail entry honest about configured Board cards."""

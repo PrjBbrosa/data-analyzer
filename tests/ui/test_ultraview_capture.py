@@ -38,7 +38,9 @@ from mf4_analyzer.ui.ultraview_state import (
     PreviewMeta,
     UltraViewRef,
     add_ref,
+    create_board,
     presentation_digest,
+    set_active_board,
 )
 from mf4_analyzer.ui.view_state import ViewManager, ViewState
 
@@ -818,6 +820,75 @@ def test_refresh_page_updates_card_chrome_when_preview_record_unchanged(qapp):
     assert card.model().tab_color == "#ff3366"
     page.deleteLater()
     canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_refresh_page_batches_active_board_projection(qapp):
+    window, coord = _make_coord()
+    page = UltraViewPage()
+    page.resize(320, 240)
+    page.show()
+    window.chart_stack = SimpleNamespace(
+        page_ultraview=page,
+        current_mode=lambda: "time",
+        cursor_pill_snapshot=lambda: None,
+        restore_cursor_pill_snapshot=lambda *_a, **_k: None,
+        clear_cursor_pill=lambda: None,
+        split_active=lambda: False,
+        secondary_canvas=lambda: None,
+        focused_canvas=lambda: None,
+    )
+    window.view_manager.get(0).view_id = "view-0"
+    for index in range(6):
+        add_ref(coord.board, _ref(f"view-{index}"))
+
+    calls = []
+    original = page._refresh_free_grid_projection
+
+    def counted():
+        calls.append(1)
+        original()
+
+    page._refresh_free_grid_projection = counted
+    coord.refresh_page()
+
+    assert calls == [1]
+    page.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_refresh_page_pushes_previews_only_for_active_board(qapp):
+    window, coord = _make_coord()
+    page = UltraViewPage()
+    page.resize(320, 240)
+    page.show()
+    window.chart_stack = SimpleNamespace(
+        page_ultraview=page,
+        current_mode=lambda: "time",
+        cursor_pill_snapshot=lambda: None,
+        restore_cursor_pill_snapshot=lambda *_a, **_k: None,
+        clear_cursor_pill=lambda: None,
+        split_active=lambda: False,
+        secondary_canvas=lambda: None,
+        focused_canvas=lambda: None,
+    )
+    active = coord.board
+    active_ref = _ref("active")
+    other_ref = _ref("inactive")
+    add_ref(active, active_ref)
+    other = create_board(coord.workspace, name="另一块板")
+    assert other is not None
+    add_ref(other, other_ref)
+    assert set_active_board(coord.workspace, active.board_id) == []
+
+    pushed = []
+    coord._push_preview = pushed.append
+    coord.refresh_page()
+
+    assert pushed == [active_ref]
+    page.deleteLater()
     coord.clear()
     coord.deleteLater()
 
