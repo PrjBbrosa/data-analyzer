@@ -101,6 +101,7 @@ class FakeCanvas(QWidget):
         self._quality_state = "green"
         self.markup_revision = 0
         self.grab_calls = 0
+        self.settle_calls = 0
         self._fill = QColor(color)
         self._cursor_item = _VisItem(True, value=0.25)
         self._armed_item = _VisItem(True, value=1.0)
@@ -150,7 +151,7 @@ class FakeCanvas(QWidget):
         pix.fill(self._fill)
         return pix
 
-    def restore_visible_xlim(self, xlim) -> None:
+    def restore_visible_xlim(self, xlim, *, flush=True) -> None:
         return None
 
     def restore_visible_ylims(self, ylims) -> None:
@@ -158,6 +159,11 @@ class FakeCanvas(QWidget):
 
     def set_tick_density(self, x, y) -> None:
         return None
+
+    def settle_view_restore(self) -> None:
+        # Closes the View-restore transaction on the real canvas; the double
+        # only has to accept it (see canvas.settle_view_restore).
+        self.settle_calls += 1
 
 
 class FakePage(QWidget):

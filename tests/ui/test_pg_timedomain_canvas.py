@@ -10368,3 +10368,243 @@ def test_time_card_diagnostics_pill_hides_after_full_success(qapp, qtbot):
     assert not card.findChild(
         QToolButton, "timePlotDiagnosticsButton"
     ).isVisibleTo(card)
+
+
+def _renderer_cls():
+    from mf4_analyzer.ui.pg_canvas.renderer import Renderer
+
+    return Renderer
+
+
+class TestViewRestoreSettlement:
+    """A View restore is ONE transaction, settled once on the final geometry.
+
+    Spec: ``docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md``
+    §3.1 (defect A). The product order used to be::
+
+        plot_channels(defer_first_frame=True)   # Y is still the [0, 1] placeholder
+        restore_visible_xlim(state.xlim)        # flushed HERE, so ink was measured
+                                                #   against y_span == 1
+        restore_visible_ylims(state.ylims)      # the real Y only lands now
+
+    Ink is ``墨迹 / y_span × row_height``, so a placeholder ``y_span`` inflated it
+    by ~70x and the frame never self-healed (only a fresh user gesture changed the
+    range key). Three consequences rode on that one number: the envelope bucket
+    count was cut by the ink budget (a visibly coarser curve), vector AA was
+    refused, and lines were wrongly admitted to the raster path.
+
+    These are geometry-ordering assertions, not paint-cost measurements, so
+    offscreen reproduces them exactly (probe reading, offscreen, dpr 1.0:
+    ink 18 330 -> 1 331 113, drawn points 3124 -> 2812, AA True -> False).
+    """
+
+    XLIM = (10.0, 25.0)
+
+    def _rows(self, n_curves=2, n_points=1_000_000, fs=20_000.0):
+        """Spec §1.2 overlay shape: 2ch x 1M points, ~0.5 Hz full-scale sine."""
+        t = np.arange(n_points, dtype=np.float64) / fs
+        return [
+            (
+                f"CH{i}",
+                True,
+                t,
+                100.0 * np.sin(2 * np.pi * (0.5 + 0.1 * i) * t),
+                "#1769e0",
+                "Nm",
+                "fileA",
+            )
+            for i in range(n_curves)
+        ]
+
+    def _canvas(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1600, 950)
+        canvas.show()
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _snapshot(self, canvas):
+        lines = {}
+        for ck, _name, (_axis, line) in canvas._channel_lines.composite_items():
+            xd, _ = line.plot_data_item.getData()
+            lines[ck] = {
+                "points": 0 if xd is None else int(len(xd)),
+                "ink": canvas._line_ink_state.get(ck),
+            }
+        return {
+            "lines": lines,
+            "aa_ok": canvas._quality._idle_aa_density_ok(),
+            "raster_admitted": set(canvas._ink_raster_admitted),
+        }
+
+    def _first_visit(self, canvas, rows):
+        """Build a View from scratch and window it — the reference geometry."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("first-visit", "A"),
+        )
+        canvas.restore_visible_xlim(self.XLIM)
+        QCoreApplication.processEvents()
+        return canvas.get_visible_ylims()
+
+    def test_settle_measures_ink_at_final_geometry(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        rows = self._rows()
+        canvas = self._canvas(qapp)
+        ylims = self._first_visit(canvas, rows)
+        first = self._snapshot(canvas)
+
+        # Premise: at the REAL geometry this shape is comfortably affordable.
+        # If the restore below regresses to measuring against the placeholder
+        # Y, every one of the four assertions flips.
+        assert first["aa_ok"] is True
+        assert first["lines"], "premise: the first visit drew something"
+        for ck, rec in first["lines"].items():
+            assert rec["ink"] is not None, f"{ck}: first visit recorded no ink"
+            assert rec["ink"][1] is False, f"{ck}: first visit already over budget"
+
+        # Switch away and back: a full rebuild (a different render context key
+        # is one of the several product reasons for one) followed by the
+        # restore transaction.
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=True,
+            render_context_key=("switch-back", "A"),
+        )
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        canvas.restore_visible_ylims(ylims)
+        canvas.settle_view_restore()
+        QCoreApplication.processEvents()
+        back = self._snapshot(canvas)
+
+        assert set(back["lines"]) == set(first["lines"])
+        for ck, rec in back["lines"].items():
+            ref = first["lines"][ck]
+            assert rec["ink"] is not None, f"{ck}: restore recorded no ink"
+            assert rec["ink"][0] == pytest.approx(ref["ink"][0], rel=0.05), (
+                f"{ck}: ink after restore {rec['ink'][0]} is not within 5% of "
+                f"the first-visit reading {ref['ink'][0]} — the settlement is "
+                f"reading a geometry that is not the final one"
+            )
+            assert rec["ink"][1] == ref["ink"][1]
+            assert rec["points"] == ref["points"], (
+                f"{ck}: restore drew {rec['points']} points vs "
+                f"{ref['points']} on first visit — the ink budget cut buckets"
+            )
+        assert back["aa_ok"] == first["aa_ok"]
+        assert back["raster_admitted"] == first["raster_admitted"]
+
+    def test_settle_refreshes_exactly_once(self, qapp, monkeypatch):
+        rows = self._rows()
+        canvas = self._canvas(qapp)
+        ylims = self._first_visit(canvas, rows)
+
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=True,
+            render_context_key=("switch-back", "A"),
+        )
+        # Count on Renderer, not on the canvas instance: _refresh_visible_data
+        # is a declared backref delegate, so a canvas-instance attribute is
+        # honoured by the renderer too and a wrapper that calls back through
+        # the canvas would recurse forever (_backref.__getattribute__).
+        calls = []
+        original = _renderer_cls()._refresh_visible_data
+
+        def counted(renderer_self, **kwargs):
+            calls.append(1)
+            return original(renderer_self, **kwargs)
+
+        monkeypatch.setattr(_renderer_cls(), "_refresh_visible_data", counted)
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        canvas.restore_visible_ylims(ylims)
+        canvas.settle_view_restore()
+        assert len(calls) == 1, (
+            f"the restore transaction ran _refresh_visible_data {len(calls)} "
+            f"times; it settles once, on the final geometry"
+        )
+
+    def test_first_visit_restore_does_not_refresh(self, qapp, monkeypatch):
+        """No stored xlim means bind-envelope already IS the first frame."""
+        rows = self._rows(n_curves=2, n_points=100_000)
+        canvas = self._canvas(qapp)
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("first-visit", "A"),
+        )
+        calls = []
+        monkeypatch.setattr(
+            _renderer_cls(),
+            "_refresh_visible_data",
+            lambda *a, **k: calls.append(1),
+        )
+        canvas.restore_visible_xlim(None, flush=False)
+        canvas.restore_visible_ylims({})
+        canvas.settle_view_restore()
+        assert calls == [], "a first visit must not recompute the envelope"
+
+    def test_restore_xlim_flush_false_marks_pending_and_default_flushes(
+        self, qapp, monkeypatch,
+    ):
+        rows = self._rows(n_curves=1, n_points=10_000)
+        canvas = self._canvas(qapp)
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("k", "A"),
+        )
+        flushes = []
+        monkeypatch.setattr(
+            canvas, "_flush_pending_refresh", lambda: flushes.append(1),
+        )
+
+        canvas._refresh_pending = False
+        canvas.restore_visible_xlim((1.0, 2.0), flush=False)
+        assert flushes == []
+        assert canvas._refresh_pending is True
+        assert canvas.get_visible_xlim() == pytest.approx((1.0, 2.0))
+
+        # The default keeps today's synchronous behaviour for every other
+        # caller (project restore, UltraView, view_bridge.restore_axes).
+        canvas.restore_visible_xlim((1.5, 2.5))
+        assert len(flushes) == 1
+        assert canvas.get_visible_xlim() == pytest.approx((1.5, 2.5))
+
+    def test_settle_without_pending_is_noop(self, qapp, monkeypatch):
+        rows = self._rows(n_curves=1, n_points=1_000)
+        canvas = self._canvas(qapp)
+        canvas.plot_channels(
+            rows,
+            mode="overlay",
+            defer_first_frame=False,
+            render_context_key=("k", "A"),
+        )
+        canvas._flush_pending_refresh()
+        assert canvas._refresh_pending is False
+        assert canvas._dense_raster.has_dense_candidates() is False
+
+        flushes = []
+        rebuilds = []
+        monkeypatch.setattr(
+            canvas, "_flush_pending_refresh", lambda: flushes.append(1),
+        )
+        monkeypatch.setattr(
+            canvas._dense_raster,
+            "schedule_rebuild",
+            lambda *a, **k: rebuilds.append(a),
+        )
+        canvas.settle_view_restore()
+        assert flushes == []
+        assert rebuilds == []
