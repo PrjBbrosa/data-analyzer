@@ -201,20 +201,24 @@ def fit_rect_for_aspect(
     *,
     chrome_height: int = MIN_CARD_CHROME_HEIGHT,
 ) -> GridRect:
-    """Pick a legal span whose plot-area aspect is closest to ``image_size``.
+    """Contain the image aspect in the current card: shrink only, never grow.
 
-    Origin column/row stay put. Ties break toward the origin's cell area.
+    Candidates stay at the origin and may only reduce column/row span. The
+    plot-area ratio (card height minus chrome) is matched first; ties keep
+    the larger area so a discrete grid does not collapse to the minimum
+    similar span. See spec §1 of the 2026-08-15 fit-zoom-and-dismiss design.
     """
     image_w = max(1, int(image_size[0]))
     image_h = max(1, int(image_size[1]))
     target = image_w / float(image_h)
     chrome = max(0, int(chrome_height))
-    origin_area = int(origin.column_span) * int(origin.row_span)
-    best: tuple[tuple[float, int, int], GridRect] | None = None
-    for col_span in range(GRID_MIN_COLUMN_SPAN, GRID_MAX_COLUMN_SPAN + 1):
+    max_col = min(int(origin.column_span), GRID_MAX_COLUMN_SPAN)
+    max_row = min(int(origin.row_span), GRID_MAX_ROW_SPAN)
+    best: tuple[tuple[float, int], GridRect] | None = None
+    for col_span in range(GRID_MIN_COLUMN_SPAN, max_col + 1):
         if int(origin.column) + col_span > GRID_COLUMNS:
             continue
-        for row_span in range(GRID_MIN_ROW_SPAN, GRID_MAX_ROW_SPAN + 1):
+        for row_span in range(GRID_MIN_ROW_SPAN, max_row + 1):
             if int(origin.row) + row_span > MAX_GRID_ROWS:
                 continue
             candidate = GridRect(
@@ -224,7 +228,7 @@ def fit_rect_for_aspect(
             plot_h = max(1, int(height) - chrome)
             ratio = max(1, int(width)) / float(plot_h)
             area = col_span * row_span
-            key = (abs(ratio - target), abs(area - origin_area), area)
+            key = (abs(ratio - target), -area)
             if best is None or key < best[0]:
                 best = (key, candidate)
     return best[1] if best is not None else origin

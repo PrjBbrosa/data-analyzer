@@ -1012,7 +1012,7 @@ def _legalize_viewport(raw: Any) -> tuple[dict[str, float], list[str]]:
         if parsed is None:
             warnings.append(_warn("viewport_zoom_clamped", repr(raw.get("zoom"))))
         else:
-            zoom = min(2.0, max(0.25, parsed))
+            zoom = min(3.0, max(0.25, parsed))  # viewport.ZOOM_MAX / ZOOM_MIN
             if zoom != parsed:
                 warnings.append(_warn("viewport_zoom_clamped", str(parsed)))
     center_x = _viewport_finite_or_warn(raw, "center_x", 0.0, warnings)

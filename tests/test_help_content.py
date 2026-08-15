@@ -265,7 +265,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "Esc", "演示", "UltraView（总览）", "View 栏最右侧 UltraView",
         "Board", "自由网格", "12 列", "24 张", "Option+Shift", "Ctrl+Shift+Z",
         "minimap", "直接拖卡片", "框选", "替换环",
-        "Ctrl+滚轮", "适应", "25%", "双击",
+        "Ctrl+滚轮", "适应", "25%", "300%", "只缩不放", "双击",
         "标题卡", "类型标签", "完整 ghost",
         "点行切换", "拖拽排序", "行尾复制",
     ):

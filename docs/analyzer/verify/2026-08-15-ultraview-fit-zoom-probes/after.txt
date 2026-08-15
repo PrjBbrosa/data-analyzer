@@ -1,0 +1,22 @@
+UltraView fit / zoom / dismiss probes — AFTER
+QT_QPA_PLATFORM=offscreen  Darwin 27.0.0
+
+== §1 fit_rect_for_aspect (image 1000x800) ==
+  origin 4x6 (512x588px) -> 4x5 (512x488px) at (0,0)
+  origin 10x3 (1298x288px) -> 2x3 (250x288px) at (0,0)
+  origin 6x4 (774x388px) -> 3x4 (381x388px) at (0,0)
+  origin 2x2 (250x188px) -> 2x2 (250x188px) at (0,0)
+
+== §2 blank press vs library ==
+  free_grid size=1217x776 blank=PyQt5.QtCore.QPoint(8, 8)
+  library before=True
+  hit chain: ultraViewFreeGrid > ultraViewBoardCanvasStack > ultraViewBoardHost > qt_scrollarea_viewport > ultraViewBoardScrollArea > ultraViewCanvasStage > ultraViewCanvasHost > ultraViewPage
+  library after inner blank=False
+  library after host press=False
+
+== §3 zoom_fit geometry ==
+  unzoomed_size=1600x1020
+  content_rect_1x=(16.0, 16.0, 1560.0, 588.0)
+  fit_rect=78,64 1510x776
+  zoom_fit zoom=0.8131 origin=(78.0, 64.0)
+  cards_on_host=(196,211) 1274x482

@@ -1,6 +1,6 @@
 # UltraView 适配、缩放与浮层消隐三处修正 设计
 
-> 状态：**设计定稿，未实施**。实施计划见
+> 状态：**已实施**（2026-08-15）。实施计划见
 > `docs/analyzer/plans/2026-08-15-ultraview-fit-zoom-and-dismiss-fixes-plan.md`。
 > 基线：`claude/ultraview-library-geometry-material@27e0cf90`（含
 > `94934485` 固定逻辑画布与默认适应视口）。本文四节各自独立，可分别落地。
@@ -186,13 +186,16 @@ self._park_zoom(fit_zoom((size.w, size.h), (fit.w, fit.h)))
    - 模板模式：对已占用 slot 取 `unzoomed_slot_rect` 求并集。
    - 无内容 → 返回 `None`。
 2. `zoom_fit()`：内容盒为 `None` → 走现状分支；否则
-   `zoom, center = zoom_to_rect(content_rect, (fit.width, fit.height), margin=0.08)`
+   `zoom, center = zoom_to_rect(content_rect, (fit.width, fit.height), margin=FIT_CONTENT_MARGIN)`
    → `_apply_zoom_and_center(zoom, center)`。
 3. **视口尺寸用 `_content_fit_rect()` 而不是原始视口**——这是与 `zoom_to_card`
    （`page.py:1126`，用原始视口）的**故意区别**：适应必须保住既有契约
    「适应把卡片停在浮层安全区」（`test_canvas_is_full_bleed_and_fit_parks_cards_in_the_safe_zone`），
    而双击铺满一张卡允许伸到工具栏下。
-4. `zoom_to_rect` 的 8% 余量沿用，不新增常量。
+4. `zoom_to_card` 仍用 `ZOOM_TO_RECT_MARGIN = 0.08`（相对原始视口）。适应已经
+   对准浮层安全区，再套 8% 会双边留白、出现一圈空画布；适应改用
+   `FIT_CONTENT_MARGIN = 0.02`（每边约 2%），让内容在安全区里尽量撑满，只留
+   一点空隙。安全区本身已经避开工具栏 / 左轨，那一圈就是相对窗口的留白。
 5. 结果照常经 `clamp_zoom` 收进 `[ZOOM_MIN, ZOOM_MAX]`——单张小卡会顶到 §4 的
    300% 上限，这是预期。
 
@@ -224,7 +227,7 @@ self._park_zoom(fit_zoom((size.w, size.h), (fit.w, fit.h)))
 → **放大到 300% 时预览会比 200% 更软**。这是位图预览的固有代价，不是本批引入；
 要治得动抓图分辨率与内存帽（`MAX_PREVIEW_RAW_EDGE`、residency 分级），涉及
 UltraView 预览内存策略，另立一批。落地时在 plan 留一条 follow-up，不在本批放宽
-任何内存帽。
+任何内存帽。落地时未做 Cocoa 真机目视，标 **UNVERIFIED**。
 
 ---
 
@@ -235,7 +238,7 @@ UltraView 预览内存策略，另立一批。落地时在 plan 留一条 follow
 | contain-fit 只缩不放 | `tests/ui/test_ultraview_free_grid.py` | 对 4×6 / 10×3 / 6×4 同一原图，结果跨度**各不相同**且逐维 ≤ 原跨度；结果是原矩形子集 |
 | contain-fit 不退化 | 同上 | 同比例误差下取面积最大（2×2 与 4×4 同比时取 4×4） |
 | 画布空白点击消隐 | `tests/ui/test_ultraview_page.py` | 自由网格**内部**空白 press → 未 pin 的活动浮层关闭；已 pin → 不关；拖拽中 → 延后到 `_on_drag_finished` |
-| 适应=适应内容并居中 | `tests/ui/test_ultraview_viewport.py` | 卡片包围盒占安全区 ≥ 80%（某一维）；内容中心与安全区中心对齐（±2 px）；空板走现状分支 |
+| 适应=适应内容并居中 | `tests/ui/test_ultraview_viewport.py` | 卡片包围盒占安全区 ≥ 90%（某一维）；内容中心与安全区中心对齐（±2 px）；空板走现状分支 |
 | 适应仍在安全区 | 既有 `test_canvas_is_full_bleed_and_fit_parks_cards_in_the_safe_zone` | 不改一行照过 |
 | 缩放上限 | `tests/ui/test_ultraview_viewport.py` | `clamp_zoom(5.0) == ZOOM_MAX == 3.0`；文案面三处与常量一致（可加一条扫描用例） |
 | lambda 棘轮 / 分层 | 既有 | 不许新增 lambda 信号连接；`ui_kit` 不 import `ui` |
@@ -247,13 +250,28 @@ UltraView 预览内存策略，另立一批。落地时在 plan 留一条 follow
 | 4×6 / 10×3 / 6×4 按原图比例（5:4） | 全部 → 7×8（且变大） | 三者互不相同，逐维只减 |
 | 自由网格内部空白点击（库已开、未 pin） | 不关闭（连点无效） | 一次点击关闭 |
 | 同上但库已 pin | 不关闭 | 仍不关闭 |
-| 4 卡「适应」 | zoom 0.957，内容占安全区宽 ~57%，停左上 | 内容填满安全区（含 8% 余量），居中 |
+| 4 卡「适应」 | zoom 0.957，内容占安全区宽 ~57%，停左上 | 内容填满安全区（含 2% 余量），居中 |
 | 单卡「适应」 | 受逻辑画布压制 | 顶到 `ZOOM_MAX = 3.0` |
 | 空板「适应」 | 适应逻辑画布 | 不变 |
 | 缩放上限 | 200% | 300%，文案三处同步 |
 
 离屏即可完成全部验收（几何与事件路由）。**唯一需要真机的**是一次观感确认：
 300% 下预览的软化程度是否可接受（§4 已知副作用）。
+
+### 实施注记（2026-08-15）
+
+| 验收项 | 改前 | 改后 | 判定 |
+|---|---|---|---|
+| 4×6 / 10×3 / 6×4 按原图比例（5:4） | 全部 → 7×8 | 4×5 / 2×3 / 3×4 | 通过 |
+| 自由网格内部空白点击（库已开、未 pin） | 不关闭 | 一次点击关闭 | 通过 |
+| 同上但库已 pin | 不关闭 | 仍不关闭 | 通过 |
+| 4 卡「适应」 | zoom 0.761，停左上，宽占 ~57% | zoom 0.813，宽占 84%，中心对齐 ±2px；随后收紧为 `FIT_CONTENT_MARGIN=0.02`，安全区填充 ≥90% | 通过 |
+| 单卡「适应」 | 受逻辑画布压制 | `board_zoom() == ZOOM_MAX` | 通过 |
+| 空板「适应」 | 适应逻辑画布 | 不变 | 通过 |
+| 缩放上限 | 200% | 300%；quickref / 帮助 / hints 已同步 | 通过 |
+| 300% 预览软化 | — | 本机未做 Cocoa 真机目视 | **UNVERIFIED** |
+
+`test_canvas_is_full_bleed_and_fit_parks_cards_in_the_safe_zone` 的安全区断言（fit 后卡片在 island/rail 之外）零改动照过。第三条「再放大后伸到工具栏下」在内容居中后无法再靠视口中心 1.5× 触发，改为锚在视口底部放大到 `ZOOM_MAX`，仍证明 full-bleed 宿主。
 
 ## 7. 风险与回退
 

@@ -67,6 +67,7 @@ from .viewport import (
     zoom_at,
     zoom_percent,
     zoom_to_rect,
+    FIT_CONTENT_MARGIN,
 )
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
@@ -1085,11 +1086,27 @@ class UltraViewPage(QWidget):
         self.set_board_zoom(1.0)
 
     def zoom_fit(self) -> None:
+        self._filled_card = None
         canvas = self._active_canvas()
-        size = canvas.unzoomed_size()
         fit = self._content_fit_rect()
-        self._park_zoom(
-            fit_zoom((size.width(), size.height()), (float(fit.width), float(fit.height)))
+        content = canvas.content_rect_1x()
+        if content is None:
+            size = canvas.unzoomed_size()
+            self._park_zoom(
+                fit_zoom(
+                    (size.width(), size.height()),
+                    (float(fit.width), float(fit.height)),
+                )
+            )
+            return
+        # Fit the placed-content box into the chrome-safe rect. zoom_to_card
+        # uses the raw viewport so a double-click can bleed under the toolbar;
+        # 适应 must keep cards inside the floating-chrome safe zone.
+        zoom, center = zoom_to_rect(
+            content, (float(fit.width), float(fit.height)), margin=FIT_CONTENT_MARGIN
+        )
+        self._apply_zoom_and_center(
+            zoom, center, viewport_size=(float(fit.width), float(fit.height))
         )
 
     def _park_zoom(self, zoom: float) -> None:
@@ -1165,7 +1182,11 @@ class UltraViewPage(QWidget):
         self._apply_zoom_and_center(zoom, center)
 
     def _apply_zoom_and_center(
-        self, zoom: float, center: tuple[float, float]
+        self,
+        zoom: float,
+        center: tuple[float, float],
+        *,
+        viewport_size: tuple[float, float] | None = None,
     ) -> None:
         self.cancel_board_gestures()
         self._apply_preview_quality(QUALITY_FAST)
@@ -1176,16 +1197,23 @@ class UltraViewPage(QWidget):
         self._free_grid.set_zoom(after)
         origin = self._fit_origin()
         self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
-        viewport = self._board_scroll.viewport()
-        scroll = scroll_for_center(
-            center,
-            (float(viewport.width()), float(viewport.height())),
-            after,
-        )
-        applied = self._place_canvas_for_scroll(
-            self._active_canvas(),
-            (scroll[0] + origin[0], scroll[1] + origin[1]),
-        )
+        if viewport_size is None:
+            viewport = self._board_scroll.viewport()
+            view = (float(viewport.width()), float(viewport.height()))
+            scroll = scroll_for_center(center, view, after)
+            desired = (scroll[0] + origin[0], scroll[1] + origin[1])
+        else:
+            view = (float(viewport_size[0]), float(viewport_size[1]))
+            live = self._active_canvas().content_rect()
+            if live is not None:
+                # Canvas is already at ``after``; use live pixels so metric
+                # rounding cannot drift the visual center off the safe zone.
+                cx = live[0] + live[2] / 2.0
+                cy = live[1] + live[3] / 2.0
+                desired = (cx - view[0] / 2.0, cy - view[1] / 2.0)
+            else:
+                desired = scroll_for_center(center, view, after)
+        applied = self._place_canvas_for_scroll(self._active_canvas(), desired)
         self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
         self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
         self._set_zoom_percent(zoom_percent(after))
@@ -1505,6 +1533,18 @@ class UltraViewPage(QWidget):
 
     def is_library_visible(self) -> bool:
         return self._library_visible
+
+    def notify_canvas_click(self) -> None:
+        """Blank-canvas press: close unpinned overlays, honoring drag deferral.
+
+        CanvasHost.close_from_canvas_click() respects pin but not the
+        library-drag deferral in ``_close_active_panel``; a drop press
+        must not dismiss the library until ``_on_drag_finished``.
+        """
+        key = self._active_panel
+        if key is not None and not self._canvas_host.overlay_closes_on_canvas(key):
+            return
+        self._close_active_panel(restore_focus=False)
 
     def is_presentation_active(self) -> bool:
         return self._presentation

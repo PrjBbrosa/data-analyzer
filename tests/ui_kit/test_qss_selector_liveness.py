@@ -161,10 +161,10 @@ def test_dynamic_construction_sites_match_this_head():
     assert 'dot.setObjectName(f"{role}Dot")' in frf[478]
     assert '"frfInput"' in frf[194]
     assert '"frfOutput"' in frf[197]
-    # Re-pinned after CardContextIsland gained a fit button (shifted ToolRail).
-    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[488]
-    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[500]
-    assert '"Unplaced"' in chrome[448]
+    # Re-pinned after close_from_canvas_click gained a public alias (+2).
+    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[490]
+    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[502]
+    assert '"Unplaced"' in chrome[450]
 
 
 def test_extract_does_not_swallow_prefixes():

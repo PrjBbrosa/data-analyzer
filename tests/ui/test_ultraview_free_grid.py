@@ -1,6 +1,8 @@
 """Pure P2-A free-grid geometry and command contracts."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
@@ -45,6 +47,8 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
+    GRID_MIN_COLUMN_SPAN,
+    GRID_MIN_ROW_SPAN,
     MAX_GRID_ROWS,
     FreeGridPlacement,
     GridRect,
@@ -155,6 +159,65 @@ def test_fit_rect_for_aspect_prefers_matching_span():
     _, _, ww, wh = rect_to_pixels(wide, metrics)
     _, _, tw, th = rect_to_pixels(tall, metrics)
     assert ww / max(1, wh - chrome) > tw / max(1, th - chrome)
+
+
+def test_fit_rect_for_aspect_never_grows():
+    metrics = screen_grid_metrics([])
+    image = (1000, 800)
+    origins = (
+        GridRect(0, 0, 4, 6),
+        GridRect(0, 0, 10, 3),
+        GridRect(0, 0, 6, 4),
+    )
+    results = [fit_rect_for_aspect(origin, image, metrics) for origin in origins]
+    spans = [(item.column_span, item.row_span) for item in results]
+    assert len(set(spans)) == 3
+    for origin, fitted in zip(origins, results):
+        assert fitted.column == origin.column and fitted.row == origin.row
+        assert fitted.column_span <= origin.column_span
+        assert fitted.row_span <= origin.row_span
+        assert fitted.column_span >= GRID_MIN_COLUMN_SPAN
+        assert fitted.row_span >= GRID_MIN_ROW_SPAN
+
+
+def test_fit_rect_for_aspect_matches_user_contract():
+    """Wide bottleneck keeps columns; tall bottleneck keeps rows (pixel + chrome)."""
+    metrics = screen_grid_metrics([])
+    chrome = MIN_CARD_CHROME_HEIGHT
+    target = GridRect(0, 0, 6, 4)
+    _x, _y, width, height = rect_to_pixels(target, metrics)
+    image = (width, max(1, height - chrome))
+    extra_rows = GridRect(0, 0, target.column_span, target.row_span * 2)
+    extra_cols = GridRect(
+        0, 0, min(GRID_COLUMNS, target.column_span * 2), target.row_span
+    )
+    keep_cols = fit_rect_for_aspect(extra_rows, image, metrics)
+    keep_rows = fit_rect_for_aspect(extra_cols, image, metrics)
+    assert keep_cols.column_span == target.column_span
+    assert keep_cols.row_span == target.row_span
+    assert keep_rows.row_span == target.row_span
+    assert keep_rows.column_span == target.column_span
+
+
+def test_fit_rect_for_aspect_prefers_the_largest_span_on_a_tie():
+    metrics = screen_grid_metrics([])
+    square = replace(metrics, column_width=metrics.row_height, gutter=0)
+    origin = GridRect(0, 0, 4, 4)
+    fitted = fit_rect_for_aspect(origin, (100, 100), square, chrome_height=0)
+    assert fitted == origin
+    assert (fitted.column_span, fitted.row_span) != (2, 2)
+
+
+def test_fit_rect_for_aspect_result_is_a_subset():
+    metrics = screen_grid_metrics([])
+    origin = GridRect(2, 3, 6, 5)
+    fitted = fit_rect_for_aspect(origin, (1000, 800), metrics)
+    assert fitted.column == origin.column
+    assert fitted.row == origin.row
+    assert fitted.column_span <= origin.column_span
+    assert fitted.row_span <= origin.row_span
+    assert fitted.column + fitted.column_span <= origin.column + origin.column_span
+    assert fitted.row + fitted.row_span <= origin.row + origin.row_span
 
 
 def test_snapped_move_rect_matches_candidate_move_and_stays_clamped():

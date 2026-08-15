@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from mf4_analyzer.ui import ultraview_state as uvs
+from mf4_analyzer.ui.chart_stack.ultraview.viewport import ZOOM_MAX
 
 
 STATE_PATH = (
@@ -721,7 +722,7 @@ def test_viewport_illegal_values_clamp_with_warning():
         "center_y": float("inf"),
     }
     board, warnings = uvs.normalize_board_payload(payload)
-    assert board.viewport["zoom"] == pytest.approx(2.0)
+    assert board.viewport["zoom"] == pytest.approx(ZOOM_MAX)
     assert board.viewport["center_x"] == pytest.approx(0.0)
     assert board.viewport["center_y"] == pytest.approx(0.0)
     assert any(item.startswith("viewport_zoom_clamped") for item in warnings)

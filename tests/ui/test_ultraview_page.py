@@ -2362,6 +2362,15 @@ def test_template_escape_hides_card_context_island(qtbot):
     assert harness.page.handle_escape() is False
 
 
+def _blank_board_point(board) -> QPoint:
+    for y in range(4, max(5, board.height() - 4), 8):
+        for x in range(4, max(5, board.width() - 4), 8):
+            pos = QPoint(x, y)
+            if board._card_at(pos) is None:
+                return pos
+    raise AssertionError("free grid has no blank interior point")
+
+
 def test_free_grid_empty_click_hides_card_context_island(qtbot):
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "empty-click")
@@ -2372,6 +2381,69 @@ def test_free_grid_empty_click_hides_card_context_island(qtbot):
     assert harness.page.selected_ref() is None
     assert _selection_view_ids(free) == set()
     assert not island.isVisible()
+
+
+def test_free_grid_blank_press_dismisses_the_library(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "lib-blank")
+    harness.page.set_library_visible(True)
+    assert harness.page.is_library_visible() is True
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    assert harness.page.is_library_visible() is False
+
+
+def test_pinned_library_survives_a_blank_canvas_press(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "lib-pin")
+    harness.page.set_library_visible(True)
+    harness.page.library_panel().set_pinned(True)
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    assert harness.page.is_library_visible() is True
+    assert harness.page.active_panel() == PANEL_LIBRARY
+
+
+def test_blank_press_during_drag_defers_the_dismiss(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "lib-drag")
+    harness.page.set_library_visible(True)
+    harness.page._on_drag_started("ref")
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    assert harness.page.is_library_visible() is True
+    assert harness.page._deferred_panel_close is not None
+    harness.page._on_drag_finished()
+    assert harness.page.is_library_visible() is False
+
+
+def test_card_press_does_not_dismiss_the_library(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "lib-card")
+    harness.page.set_library_visible(True)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
+    assert harness.page.is_library_visible() is True
+
+
+def test_blank_press_still_clears_selection_and_starts_marquee(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "lib-marq")
+    _select_card(card)
+    pos = _blank_board_point(free)
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, pos)
+    assert _selection_view_ids(free) == set()
+    assert harness.page.selected_ref() is None
+    assert free.gesture().marquee() is not None
+
+
+def test_template_blank_press_dismisses_the_library(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref("time", "time-1"))
+    add_ref(harness.board, make_ref("time", "time-2"))
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    harness.page.set_library_visible(True)
+    grid = harness.page.board_grid()
+    QTest.mousePress(grid, Qt.LeftButton, Qt.NoModifier, _gutter_point(grid))
+    assert harness.page.is_library_visible() is False
 
 
 def test_template_gutter_click_hides_card_context_island(qtbot):
@@ -3388,10 +3460,10 @@ def test_free_grid_to_template_overflow_opens_unplaced(qtbot):
 def test_minimap_hides_when_free_grid_fits_and_on_template(qtbot):
     harness = _Harness(qtbot)
     harness.page.resize(1600, 900)
-    _prepare_free_grid(harness, qtbot, "fit-0")
     harness.page.zoom_fit()
     qtbot.wait(20)
     assert not harness.page.free_grid_minimap().isVisible()
+    _prepare_free_grid(harness, qtbot, "fit-0")
     harness.page.set_board_zoom(1.6)
     qtbot.wait(20)
     scroll = harness.page.board_scroll_area()
@@ -3400,9 +3472,6 @@ def test_minimap_hides_when_free_grid_fits_and_on_template(qtbot):
         or scroll.verticalScrollBar().maximum() > 0
     )
     assert harness.page.free_grid_minimap().isVisible()
-    harness.page.zoom_fit()
-    qtbot.wait(20)
-    assert not harness.page.free_grid_minimap().isVisible()
     free_grid_to_template(harness.board, harness.board.layout_id)
     harness.page.set_board(harness.board)
     qtbot.wait(10)

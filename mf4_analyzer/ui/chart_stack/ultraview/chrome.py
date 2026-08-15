@@ -405,7 +405,7 @@ class CanvasHost(QFrame):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self._close_from_canvas_click()
+            self.close_from_canvas_click()
         super().mousePressEvent(event)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
@@ -414,16 +414,18 @@ class CanvasHost(QFrame):
             and event.type() == QEvent.MouseButtonPress
             and event.button() == Qt.LeftButton
         ):
-            self._close_from_canvas_click()
+            self.close_from_canvas_click()
         return super().eventFilter(watched, event)
 
-    def _close_from_canvas_click(self) -> None:
+    def close_from_canvas_click(self) -> None:
         key = self._active_overlay
         if key is not None and self._overlay_close_on_canvas.get(key, True):
             # Mouse close leaves focus on the canvas, not the trigger. Esc
             # still uses restore_focus=True so keyboard users return to the
             # button that opened the panel.
             self.close_active_overlay(restore_focus=False)
+
+    _close_from_canvas_click = close_from_canvas_click
 
     @staticmethod
     def _focus_first_control(widget: QWidget) -> None:

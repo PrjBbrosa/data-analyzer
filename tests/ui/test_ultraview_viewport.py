@@ -32,6 +32,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     zoom_to_rect,
     zoomed_viewport_size,
     FOCUS_PREVIEW_RATIO,
+    FIT_CONTENT_MARGIN,
     LOD_FOOTER_HIDE,
     LOD_FULL,
     LOD_HYSTERESIS,
@@ -43,7 +44,9 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
 from mf4_analyzer.ui.ultraview_state import (
     FreeGridPlacement,
     GridRect,
+    LAYOUT_MODE_FREE_GRID,
     STATUS_STALE,
+    add_ref,
     board_to_payload,
     default_board,
     make_ref,
@@ -76,6 +79,12 @@ def test_clamp_zoom_and_percent_cover_the_product_range():
     assert zoom_percent(1.0) == 100
     assert zoom_percent(0.25) == 25
     assert zoom_percent(2.0) == 200
+
+
+def test_zoom_clamps_at_three_hundred_percent():
+    assert ZOOM_MAX == 3.0
+    assert clamp_zoom(5.0) == ZOOM_MAX
+    assert zoom_percent(ZOOM_MAX) == 300
 
 
 def test_zoom_at_cursor_keeps_the_logical_point_fixed():
@@ -132,7 +141,7 @@ def test_board_viewport_owns_zoom_quality_and_pan_delta():
     viewport = BoardViewport()
     assert viewport.zoom() == 1.0
     assert viewport.quality() == QUALITY_SMOOTH
-    assert viewport.set_zoom(3.0) == ZOOM_MAX
+    assert viewport.set_zoom(5.0) == ZOOM_MAX
     viewport.set_quality(QUALITY_FAST)
     assert viewport.quality() == QUALITY_FAST
     viewport.begin_pan((10.0, 20.0))
@@ -212,11 +221,11 @@ def test_page_zoom_clamps_and_scales_free_grid(qtbot):
     qtbot.wait(10)
     base = free.metrics()
     width_1x = cards[0].width()
-    harness.page.set_board_zoom(2.0)
+    harness.page.set_board_zoom(5.0)
     assert harness.page.board_zoom() == ZOOM_MAX
-    assert free.metrics().column_width == base.column_width * 2
-    assert free.metrics().row_height == base.row_height * 2
-    assert cards[0].width() == pytest.approx(width_1x * 2, rel=0.08)
+    assert free.metrics().column_width == max(1, round(base.column_width * ZOOM_MAX))
+    assert free.metrics().row_height == max(1, round(base.row_height * ZOOM_MAX))
+    assert cards[0].width() == pytest.approx(width_1x * ZOOM_MAX, rel=0.08)
     harness.page.set_board_zoom(0.1)
     assert harness.page.board_zoom() == ZOOM_MIN
     assert harness.page.board_toolbar().zoom_label().text() == "25%"
@@ -649,11 +658,12 @@ def test_fit_and_zoom_to_card_end_state(qtbot):
     free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
     harness.page.zoom_fit()
     viewport = harness.page.board_scroll_area().viewport()
-    size = free.unzoomed_size()
+    content = free.content_rect_1x()
     fit = harness.page._content_fit_rect()
-    assert harness.page.board_zoom() == pytest.approx(
-        fit_zoom((size.width(), size.height()), (float(fit.width), float(fit.height)))
+    expected_zoom, _center = zoom_to_rect(
+        content, (float(fit.width), float(fit.height)), margin=FIT_CONTENT_MARGIN
     )
+    assert harness.page.board_zoom() == pytest.approx(expected_zoom)
     card = cards[0]
     harness.page.zoom_to_card("time", "a", animate=False)
     zoomed = card.geometry()
@@ -688,10 +698,96 @@ def test_canvas_is_full_bleed_and_fit_parks_cards_in_the_safe_zone(qtbot):
     assert top_left.y() >= island_bottom
     assert top_left.x() >= rail_right
 
-    harness.page.set_board_zoom(1.5)
+    # Content-fit parks the card in the safe-zone center, so zooming at the
+    # viewport center cannot push it under the island. Anchor at the bottom
+    # of the full-bleed host: the card recedes upward under the chrome.
+    viewport = scroll.viewport()
+    harness.page.set_board_zoom(
+        ZOOM_MAX, (viewport.width() / 2.0, max(8.0, viewport.height() - 8.0))
+    )
     qtbot.wait(10)
     zoomed_top = card.mapTo(host, QPoint(0, 0)).y()
     assert zoomed_top < island_bottom
+
+
+def _union_cards_in_host(page, cards):
+    host = page._canvas_host
+    left = []
+    top = []
+    right = []
+    bottom = []
+    for card in cards:
+        origin = card.mapTo(host, QPoint(0, 0))
+        left.append(origin.x())
+        top.append(origin.y())
+        right.append(origin.x() + card.width())
+        bottom.append(origin.y() + card.height())
+    return (min(left), min(top), max(right) - min(left), max(bottom) - min(top))
+
+
+def test_zoom_fit_fills_the_safe_zone_with_content(qtbot):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b", "c", "d")
+    harness.page.zoom_fit()
+    qtbot.wait(10)
+    fit = harness.page._content_fit_rect()
+    _x, _y, width, height = _union_cards_in_host(harness.page, cards)
+    assert max(width / max(1.0, float(fit.width)), height / max(1.0, float(fit.height))) >= 0.90
+
+
+def test_zoom_fit_centers_content_in_the_safe_zone(qtbot):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b", "c", "d")
+    harness.page.zoom_fit()
+    qtbot.wait(10)
+    fit = harness.page._content_fit_rect()
+    x, y, width, height = _union_cards_in_host(harness.page, cards)
+    assert x + width / 2.0 == pytest.approx(float(fit.x) + float(fit.width) / 2.0, abs=2)
+    assert y + height / 2.0 == pytest.approx(float(fit.y) + float(fit.height) / 2.0, abs=2)
+
+
+def test_zoom_fit_on_an_empty_board_keeps_the_logical_canvas_fit(qtbot):
+    harness = _Harness(qtbot)
+    canvas = harness.page._free_grid
+    assert canvas.content_rect_1x() is None
+    size = canvas.unzoomed_size()
+    fit = harness.page._content_fit_rect()
+    harness.page.zoom_fit()
+    assert harness.page.board_zoom() == pytest.approx(
+        fit_zoom((size.width(), size.height()), (float(fit.width), float(fit.height)))
+    )
+
+
+def test_zoom_fit_single_card_hits_the_zoom_ceiling(qtbot):
+    harness = _Harness(qtbot)
+    harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
+    harness.board.placements.clear()
+    harness.board.unplaced.clear()
+    harness.board.free_grid = [
+        FreeGridPlacement(make_ref("time", "tiny"), GridRect(0, 0, 2, 2))
+    ]
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    harness.page.zoom_fit()
+    assert harness.page.board_zoom() == ZOOM_MAX
+
+
+def test_zoom_fit_fills_and_centers_template_content(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    for view_id in ("a", "b", "c", "d"):
+        add_ref(harness.board, make_ref("time", view_id))
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    cards = [harness.page.card_widget("time", view_id) for view_id in ("a", "b", "c", "d")]
+    assert all(card is not None for card in cards)
+    harness.page.zoom_fit()
+    qtbot.wait(10)
+    fit = harness.page._content_fit_rect()
+    x, y, width, height = _union_cards_in_host(harness.page, cards)
+    assert max(width / max(1.0, float(fit.width)), height / max(1.0, float(fit.height))) >= 0.90
+    assert x + width / 2.0 == pytest.approx(float(fit.x) + float(fit.width) / 2.0, abs=2)
+    assert y + height / 2.0 == pytest.approx(float(fit.y) + float(fit.height) / 2.0, abs=2)
 
 
 def test_lod_hides_footer_below_sixty_percent(qtbot):

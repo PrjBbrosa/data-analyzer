@@ -150,6 +150,17 @@ def _page_of(widget: QWidget):
     return None
 
 
+def _union_pixel_rect(rects) -> tuple[float, float, float, float] | None:
+    boxes = [tuple(rect) for rect in rects if rect is not None]
+    if not boxes:
+        return None
+    x0 = min(float(rect[0]) for rect in boxes)
+    y0 = min(float(rect[1]) for rect in boxes)
+    x1 = max(float(rect[0]) + float(rect[2]) for rect in boxes)
+    y1 = max(float(rect[1]) + float(rect[3]) for rect in boxes)
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
 def _log_plan_result(plan: LayoutPlan) -> None:
     """Release-path diagnostics only; never called from mouse-move."""
     global _PLANNER_LOG_MONO
@@ -2405,6 +2416,21 @@ class BoardGrid(QWidget):
             return QSize(*BASE_BOARD_SIZE)
         return QSize(width, height)
 
+    def content_rect_1x(self) -> tuple[float, float, float, float] | None:
+        """Union of occupied template slots at 1×. Empty board returns None."""
+        return _union_pixel_rect(
+            self.unzoomed_slot_rect(slot_id)
+            for slot_id, widget in self._widgets.items()
+            if isinstance(widget, UltraViewCard)
+        )
+
+    def content_rect(self) -> tuple[float, float, float, float] | None:
+        """Union of occupied template cards at the current zoom."""
+        return _union_pixel_rect(
+            (float(card.x()), float(card.y()), float(card.width()), float(card.height()))
+            for card in self.card_widgets()
+        )
+
     def unzoomed_slot_rect(self, slot_id: str) -> tuple[float, float, float, float] | None:
         size = self.unzoomed_size()
         content = (
@@ -2591,6 +2617,9 @@ class BoardGrid(QWidget):
             event.accept()
             return
         if event.button() == Qt.LeftButton:
+            page = _page_of(self)
+            if page is not None:
+                page.notify_canvas_click()
             _clear_page_card_selection(self)
         super().mousePressEvent(event)
 
@@ -2909,6 +2938,20 @@ class FreeGridBoard(QWidget):
     def unzoomed_size(self) -> QSize:
         return QSize(self._base_metrics.board_width, self._base_metrics.board_height)
 
+    def content_rect_1x(self) -> tuple[float, float, float, float] | None:
+        """Union of placed free-grid cards at 1×. Empty board returns None."""
+        return _union_pixel_rect(
+            rect_to_pixels(item.rect, self._base_metrics)
+            for item in self._placements.values()
+        )
+
+    def content_rect(self) -> tuple[float, float, float, float] | None:
+        """Union of placed free-grid cards at the current zoom."""
+        return _union_pixel_rect(
+            rect_to_pixels(item.rect, self._metrics)
+            for item in self._placements.values()
+        )
+
     def set_preview_quality(self, quality: str) -> None:
         for card in self._widgets.values():
             card.set_preview_quality(quality)
@@ -3205,6 +3248,9 @@ class FreeGridBoard(QWidget):
         if self._card_at(event.pos()) is not None:
             super().mousePressEvent(event)
             return
+        page = _page_of(self)
+        if page is not None:
+            page.notify_canvas_click()
         additive = bool(event.modifiers() & Qt.ShiftModifier)
         if not additive:
             page = _page_of(self)

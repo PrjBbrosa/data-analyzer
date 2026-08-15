@@ -665,7 +665,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.autofit",
-        text="选中卡片可按原图比例调整尺寸",
+        text="按原图比例只缩小，不放大",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=83,
@@ -679,7 +679,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.zoom",
-        text="新板默认适应视口，缩放不改卡片长宽比",
+        text="适应已放置内容并居中",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,
