@@ -1,0 +1,19 @@
+platform=cocoa dpr=2.0 exposed=True n_ch=8
+
+== 当前产品顺序 ==
+   restore=   41.9 frame=   6.7 raster=    5.3(0) rframe=   3.9 aa_on=False aa_frame=   3.7 合计=   61.7 | 光栅收编=0 ink[0..2]=[75412, 76032, 76550] [native-non-aa]
+   restore=   23.1 frame=   5.0 raster=    4.1(0) rframe=   2.9 aa_on=False aa_frame=   2.8 合计=   38.0 | 光栅收编=0 ink[0..2]=[111060, 119245, 135161] [native-non-aa]
+   restore=   42.7 frame=   6.9 raster=    5.1(0) rframe=   3.7 aa_on=False aa_frame=   3.6 合计=   62.2 | 光栅收编=0 ink[0..2]=[75412, 76032, 76550] [native-non-aa]
+   restore=   23.9 frame=   5.0 raster=    4.5(0) rframe=   2.9 aa_on=False aa_frame=   2.9 合计=   39.2 | 光栅收编=0 ink[0..2]=[111060, 119245, 135161] [native-non-aa]
+   restore=   42.6 frame=   6.7 raster=    5.0(0) rframe=   3.7 aa_on=False aa_frame=   3.5 合计=   61.7 | 光栅收编=0 ink[0..2]=[75412, 76032, 76550] [native-non-aa]
+   restore=   24.0 frame=   5.1 raster=    4.1(0) rframe=   2.9 aa_on=False aa_frame=   2.8 合计=   39.0 | 光栅收编=0 ink[0..2]=[111060, 119245, 135161] [native-non-aa]
+   中位合计    50.5 ms   光栅重建中位    4.7 ms   光栅收编 0/8
+
+== 先 Y 后 flush（对照/修复） ==
+   restore=   41.5 frame=   7.3 raster=    5.1(0) rframe=   3.8 aa_on=True  aa_frame=  13.9 合计=   72.0 | 光栅收编=0 ink[0..2]=[1131, 1290, 1449] [green]
+   restore=   23.9 frame=   5.0 raster=    4.4(0) rframe=   3.0 aa_on=True  aa_frame=   9.0 合计=   45.6 | 光栅收编=0 ink[0..2]=[479, 517, 613] [green]
+   restore=   42.4 frame=   7.2 raster=    5.3(0) rframe=   3.5 aa_on=True  aa_frame=  13.5 合计=   72.1 | 光栅收编=0 ink[0..2]=[1131, 1290, 1449] [green]
+   restore=   23.7 frame=   5.3 raster=    4.4(0) rframe=   2.9 aa_on=True  aa_frame=   8.3 合计=   44.8 | 光栅收编=0 ink[0..2]=[479, 517, 613] [green]
+   restore=   41.8 frame=   7.1 raster=    4.9(0) rframe=   3.4 aa_on=True  aa_frame=  14.6 合计=   72.2 | 光栅收编=0 ink[0..2]=[1131, 1290, 1449] [green]
+   restore=   23.9 frame=   6.8 raster=    5.0(0) rframe=   3.0 aa_on=True  aa_frame=   8.1 合计=   47.0 | 光栅收编=0 ink[0..2]=[479, 517, 613] [green]
+   中位合计    59.6 ms   光栅重建中位    4.9 ms   光栅收编 0/8
