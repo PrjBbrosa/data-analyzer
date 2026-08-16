@@ -671,6 +671,22 @@ def test_missing_viewbox_logs_warning_without_disabling_capture(qapp, caplog):
     coord.deleteLater()
 
 
+def test_empty_canvas_without_plot_surface_does_not_warn_about_viewbox(qapp, caplog):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    del canvas._plot
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    caplog.clear()
+    coord.request_capture(ref, canvas, "empty-canvas")
+    _flush()
+    assert not [record for record in caplog.records if "no viewbox found" in record.message]
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 class _FakeReadoutPill:
     def __init__(self) -> None:
         self._visible = True

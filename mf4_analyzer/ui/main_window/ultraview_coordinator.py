@@ -211,14 +211,23 @@ def _iter_overlay_hosts(widget):
     yield widget
 
 
+_PLOT_ATTR_NAMES = (
+    "_plot",
+    "_plot_amp",
+    "_plot_time",
+    "_plot_magnitude",
+    "_plot_phase",
+    "_plot_coherence",
+)
+
+
 def _iter_viewboxes(widget):
     axes = getattr(widget, "axes_list", None) or ()
     for handle in axes:
         vb = getattr(handle, "view_box", None)
         if vb is not None:
             yield vb
-    for name in ("_plot", "_plot_amp", "_plot_time", "_plot_magnitude",
-                 "_plot_phase", "_plot_coherence"):
+    for name in _PLOT_ATTR_NAMES:
         plot = getattr(widget, name, None)
         vb = getattr(plot, "vb", None) if plot is not None else None
         if vb is not None:
@@ -228,6 +237,23 @@ def _iter_viewboxes(widget):
         vb = getattr(plot, "vb", None)
         if vb is not None:
             yield vb
+
+
+def _host_expects_viewbox(host) -> bool:
+    """True when the host looks like a plot surface that should have a ViewBox.
+
+    An empty View (no axes, no ``_plot*`` attrs) is a legal capture target and
+    must not warn. A renamed fake such as ``_plotx`` still counts as a plot
+    surface, so a missing ViewBox stays a warning.
+    """
+    if getattr(host, "axes_list", None):
+        return True
+    if getattr(host, "plots", None):
+        return True
+    return any(
+        name.startswith("_plot") and getattr(host, name, None) is not None
+        for name in dir(host)
+    )
 
 
 def _host_is_dual_cursor(host) -> bool:
@@ -267,7 +293,7 @@ def _iter_transient_overlay_items(widget, *, section: str = "unknown"):
                 seen.add(ident)
                 yield item
         viewboxes = tuple(_iter_viewboxes(host))
-        if not viewboxes:
+        if not viewboxes and _host_expects_viewbox(host):
             host_type = type(host).__name__
             throttled(
                 logger,
