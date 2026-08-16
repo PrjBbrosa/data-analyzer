@@ -51,12 +51,33 @@ _PALETTE = (
 
 _STROKE_WIDTHS = (2, 4, 6, 8)
 
+# Toolbar chips are standard rectangles; #markupEditorToolbar QSS sets the
+# content box so application min-height cannot shrink setFixedSize.
+TOOL_BUTTON_SIZE = QSize(36, 36)
+TOOL_ICON_SIZE = QSize(18, 18)
+STYLE_BUTTON_SIZE = QSize(52, 36)
+STYLE_ICON_SIZE = QSize(32, 14)
+_GLYPH = "#334155"
+_CLOSE_GLYPH = "#475569"
+
+
+def _toolbar_chip(
+    button: QToolButton,
+    *,
+    size: QSize = TOOL_BUTTON_SIZE,
+    icon_size: QSize = TOOL_ICON_SIZE,
+) -> None:
+    button.setAutoRaise(True)
+    button.setIconSize(icon_size)
+    button.setFixedSize(size)
+
 
 # ---------------------------------------------------------------------------
 # Stylesheets
 # ---------------------------------------------------------------------------
 
 def compact_tool_button_qss() -> str:
+    # Style-popup width chips only. Toolbar tools use style.qss.
     return (
         "QToolButton {"
         "padding: 0px;"
@@ -64,7 +85,7 @@ def compact_tool_button_qss() -> str:
         "background: #ffffff;"
         "}"
         "QToolButton:hover { background: #eef4ff; border-color: #1769e0; }"
-        # Selected tool: solid accent fill behind the white (contrast) glyph.
+        # Selected width: solid accent fill behind the white (contrast) glyph.
         "QToolButton:checked { background: #1769e0; border-color: #1769e0; }"
     )
 
@@ -114,7 +135,7 @@ def build_toolbar(editor) -> QWidget:
         group.setObjectName(name)
         group_layout = QHBoxLayout(group)
         group_layout.setContentsMargins(0, 0, 0, 0)
-        group_layout.setSpacing(6)
+        group_layout.setSpacing(4)
         return group, group_layout
 
     left_group, left_layout = make_group("markupToolbarLeftGroup")
@@ -124,32 +145,21 @@ def build_toolbar(editor) -> QWidget:
     close_btn = QToolButton(left_group)
     close_btn.setObjectName("markupCloseButton")
     close_btn.setText("")
-    close_btn.setIcon(qta.icon("ph.x", color="#dc2626"))
-    close_btn.setIconSize(QSize(24, 24))
+    close_btn.setIcon(qta.icon("ph.x", color=_CLOSE_GLYPH))
     close_btn.setToolTip("关闭 (Esc)")
-    close_btn.setAutoRaise(True)
-    close_btn.setFixedSize(QSize(44, 44))
-    close_btn.setStyleSheet(
-        "QToolButton#markupCloseButton {"
-        "padding: 0px;"
-        "border: 1px solid #f2b8b8; border-radius: 6px;"
-        "background: #fffafa;"
-        "}"
-        "QToolButton#markupCloseButton:hover {"
-        "background: #fee2e2; border-color: #dc2626;"
-        "}"
-    )
+    _toolbar_chip(close_btn)
     close_btn.clicked.connect(editor.close)
     left_layout.addWidget(close_btn)
 
     editor._style_button = QToolButton(center_group)
     editor._style_button.setObjectName("markupStyleButton")
     editor._style_button.setToolTip("样式（颜色 / 线宽） · [ ] 调线宽")
-    editor._style_button.setAutoRaise(True)
-    editor._style_button.setIconSize(QSize(54, 24))
-    editor._style_button.setFixedSize(QSize(76, 44))
     editor._style_button.setPopupMode(QToolButton.InstantPopup)
-    editor._style_button.setStyleSheet(compact_tool_button_qss())
+    _toolbar_chip(
+        editor._style_button,
+        size=STYLE_BUTTON_SIZE,
+        icon_size=STYLE_ICON_SIZE,
+    )
     style_menu = QMenu(editor._style_button)
     style_menu.setObjectName("markupStyleMenu")
     # Match the rounded-popup shell contract: QSS radius needs a transparent
@@ -182,13 +192,10 @@ def build_toolbar(editor) -> QWidget:
         button = QToolButton(center_group)
         button.setText("")
         button.setIcon(editor._tool_icon(tool, active))
-        button.setIconSize(QSize(24, 24))
         button.setToolTip(f"{_TOOL_LABELS[tool]} ({tool[0].upper()})")
         button.setObjectName(f"markupTool_{tool}")
         button.setCheckable(True)
-        button.setAutoRaise(True)
-        button.setFixedSize(QSize(44, 44))
-        button.setStyleSheet(compact_tool_button_qss())
+        _toolbar_chip(button)
         button.clicked.connect(
             lambda checked=False, name=tool: editor.set_tool(name)
         )
@@ -201,24 +208,18 @@ def build_toolbar(editor) -> QWidget:
     undo_btn = QToolButton(center_group)
     undo_btn.setObjectName("markupUndoButton")
     undo_btn.setText("")
-    undo_btn.setIcon(qta.icon("ph.arrow-counter-clockwise", color="#374151"))
-    undo_btn.setIconSize(QSize(24, 24))
+    undo_btn.setIcon(qta.icon("ph.arrow-counter-clockwise", color=_GLYPH))
     undo_btn.setToolTip("撤销 (Ctrl+Z)")
-    undo_btn.setAutoRaise(True)
-    undo_btn.setFixedSize(QSize(44, 44))
-    undo_btn.setStyleSheet(compact_tool_button_qss())
+    _toolbar_chip(undo_btn)
     undo_btn.clicked.connect(editor._undo_stack.undo)
     center_layout.addWidget(undo_btn)
 
     redo_btn = QToolButton(center_group)
     redo_btn.setObjectName("markupRedoButton")
     redo_btn.setText("")
-    redo_btn.setIcon(qta.icon("ph.arrow-clockwise", color="#374151"))
-    redo_btn.setIconSize(QSize(24, 24))
+    redo_btn.setIcon(qta.icon("ph.arrow-clockwise", color=_GLYPH))
     redo_btn.setToolTip("重做 (Ctrl+Y)")
-    redo_btn.setAutoRaise(True)
-    redo_btn.setFixedSize(QSize(44, 44))
-    redo_btn.setStyleSheet(compact_tool_button_qss())
+    _toolbar_chip(redo_btn)
     redo_btn.clicked.connect(editor._undo_stack.redo)
     center_layout.addWidget(redo_btn)
 

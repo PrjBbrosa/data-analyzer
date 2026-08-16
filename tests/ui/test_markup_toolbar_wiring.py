@@ -11,7 +11,7 @@ would not show up in any existing test.
 So this file pins the inventory and every connection before the move, and must
 stay green afterwards without edits. Captured on ``main`` @ ``ab19622f``.
 
-Geometry is asserted only where it is a deliberate hit-target choice (the 44px
+Geometry is asserted only where it is a deliberate hit-target choice (the 36px
 tool buttons); appearance beyond that is left to real-render checks.
 """
 import pytest
@@ -175,12 +175,30 @@ def test_tool_buttons_are_mutually_exclusive(toolbar, editor):
     assert [b.objectName() for b in checked] == ["markupTool_rect"]
 
 
-def test_tool_buttons_share_the_forty_four_pixel_hit_target(toolbar):
+def test_tool_buttons_share_the_thirty_six_pixel_hit_target(toolbar):
     for b in toolbar.findChildren(QToolButton):
         if b.objectName().startswith("markupTool_") or b.objectName() in {
             "markupCloseButton", "markupUndoButton", "markupRedoButton"
         }:
-            assert (b.width(), b.height()) == (44, 44), b.objectName()
+            assert (b.width(), b.height()) == (36, 36), b.objectName()
+
+
+def test_toolbar_chips_keep_size_under_app_stylesheet(qapp, qtbot):
+    from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+
+    load_stylesheet(qapp)
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    toolbar = editor.findChild(QWidget, "markupEditorToolbar")
+    editor.show()
+    qtbot.waitExposed(editor)
+    for b in toolbar.findChildren(QToolButton):
+        if b.objectName().startswith("markupTool_") or b.objectName() in {
+            "markupCloseButton", "markupUndoButton", "markupRedoButton"
+        }:
+            assert (b.width(), b.height()) == (36, 36), b.objectName()
+    style_btn = toolbar.findChild(QToolButton, "markupStyleButton")
+    assert (style_btn.width(), style_btn.height()) == (52, 36)
 
 
 def test_editor_exposes_the_button_registries_the_sync_helpers_use(editor):
@@ -289,7 +307,9 @@ def test_style_panel_reflects_the_active_colour_and_width(editor):
 def test_style_button_shows_a_swatch_icon(editor):
     assert not editor._style_button.icon().isNull()
     assert (editor._style_button.iconSize().width(),
-            editor._style_button.iconSize().height()) == (54, 24)
+            editor._style_button.iconSize().height()) == (32, 14)
+    assert (editor._style_button.width(),
+            editor._style_button.height()) == (52, 36)
 
 
 def test_style_menu_is_a_transparent_shell_around_the_rounded_panel(editor, style_panel):

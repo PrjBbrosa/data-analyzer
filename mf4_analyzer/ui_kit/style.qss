@@ -2525,6 +2525,50 @@ QWidget#chartToolbar QToolButton:disabled {
     background-color: #f8fafc;
 }
 
+/* Markup editor toolbar: standard 36px rectangles, Precision Light wash
+ * on hover/checked. Width/colour chips live in the style popup, not here. */
+QWidget#markupEditorToolbar {
+    background-color: #ffffff;
+}
+QWidget#markupEditorToolbar QToolButton {
+    /* 36px outer: 34 content + 1px border × 2. Explicit min/max so the
+     * global QToolButton min-height cannot shrink these chips. */
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #dfe5ee;
+    border-radius: 7px;
+    background-color: #ffffff;
+    color: #334155;
+}
+QWidget#markupEditorToolbar QToolButton#markupStyleButton {
+    min-width: 50px;
+    max-width: 50px;
+    min-height: 34px;
+    max-height: 34px;
+}
+QWidget#markupEditorToolbar QToolButton:hover {
+    background-color: #e8f1ff;
+    border-color: {{CONTROL_ACCENT}};
+}
+QWidget#markupEditorToolbar QToolButton:pressed {
+    background-color: #eaf2ff;
+    border-color: {{CONTROL_ACCENT}};
+}
+QWidget#markupEditorToolbar QToolButton:checked {
+    background-color: #eaf2ff;
+    border-color: {{CONTROL_ACCENT}};
+}
+QWidget#markupEditorToolbar QToolButton#markupCloseButton:hover,
+QWidget#markupEditorToolbar QToolButton#markupCloseButton:pressed {
+    background-color: #fee2e2;
+    border-color: #dc2626;
+}
+
 QFrame#cursorPill {
     border: none;
     background: transparent;

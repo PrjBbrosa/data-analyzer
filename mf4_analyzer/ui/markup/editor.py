@@ -53,6 +53,7 @@ from .handles import (
 )
 from .serialization import deserialize_item, item_pen, serialize_item
 from .toolbar import (
+    STYLE_ICON_SIZE,
     build_style_panel,
     build_toolbar,
     color_button_qss,
@@ -84,10 +85,10 @@ class MarkupEditor(QWidget):
         "rect": "ph.rectangle",
         "pen": "ph.pencil-simple",
         "text": "ph.text-t",
-        "number": "ph.number-circle-one",
+        "number": "ph.number-square-one",
     }
-    _TOOL_ICON_COLOR = "#1769e0"          # blue tool glyphs
-    _TOOL_ICON_COLOR_ACTIVE = "#ffffff"   # contrast glyph on the selected chip
+    _TOOL_ICON_COLOR = "#334155"          # idle glyph on the white chip
+    _TOOL_ICON_COLOR_ACTIVE = "#1769e0"   # selected glyph on the wash chip
     _HANDLE_CURSORS = {
         "tl": Qt.SizeFDiagCursor,
         "br": Qt.SizeFDiagCursor,
@@ -547,7 +548,7 @@ class MarkupEditor(QWidget):
         button = getattr(self, "_style_button", None)
         if button is not None:
             button.setIcon(self._style_button_icon(self._color, self._stroke_width))
-            button.setIconSize(QSize(54, 24))
+            button.setIconSize(STYLE_ICON_SIZE)
 
     def _build_style_panel(self, menu):
         return build_style_panel(self, menu)

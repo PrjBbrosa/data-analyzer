@@ -7,14 +7,17 @@ import time
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
-    QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+import qtawesome as qta
 
 
 class CopyThumbnail(QWidget):
@@ -44,12 +47,33 @@ class CopyThumbnail(QWidget):
         self._preview.setFixedSize(self._PREVIEW_SIZE)
         self._preview.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
-        self._close = QPushButton("×", self)
+        self._close = QToolButton(self)
         self._close.setObjectName("copyThumbnailClose")
-        self._close.setFixedSize(22, 22)
+        self._close.setText("")
+        self._close.setIcon(qta.icon("ph.x", color="#475569"))
+        self._close.setIconSize(QSize(14, 14))
+        self._close.setFixedSize(28, 28)
+        self._close.setAutoRaise(True)
         self._close.setCursor(Qt.ArrowCursor)
         self._close.setFocusPolicy(Qt.NoFocus)
+        self._close.setToolTip("关闭")
         self._close.clicked.connect(self.dismiss)
+
+        close_wrap = QWidget(self)
+        close_wrap.setObjectName("copyThumbnailCloseWrap")
+        close_wrap.setAttribute(Qt.WA_StyledBackground, True)
+        wrap_layout = QHBoxLayout(close_wrap)
+        wrap_layout.setContentsMargins(0, 6, 6, 0)
+        wrap_layout.setSpacing(0)
+        wrap_layout.addWidget(self._close)
+
+        preview_stack = QWidget(self)
+        preview_stack.setObjectName("copyThumbnailPreviewStack")
+        stack = QGridLayout(preview_stack)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(0)
+        stack.addWidget(self._preview, 0, 0)
+        stack.addWidget(close_wrap, 0, 0, Qt.AlignTop | Qt.AlignRight)
 
         self._progress = QProgressBar(self)
         self._progress.setObjectName("copyThumbnailCountdown")
@@ -57,17 +81,12 @@ class CopyThumbnail(QWidget):
         self._progress.setTextVisible(False)
         self._progress.setFixedHeight(3)
 
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.addStretch(1)
-        header.addWidget(self._close)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 10)
         layout.setSpacing(6)
-        layout.addLayout(header)
-        layout.addWidget(self._preview)
+        layout.addWidget(preview_stack)
         layout.addWidget(self._progress)
+        self._close.raise_()
 
         self.setStyleSheet(
             """
@@ -81,18 +100,22 @@ class CopyThumbnail(QWidget):
                 border: 1px solid #dfe5ee;
                 border-radius: 8px;
             }
-            QPushButton#copyThumbnailClose {
+            QWidget#copyThumbnailCloseWrap {
                 background: transparent;
                 border: none;
-                border-radius: 8px;
-                color: #667085;
-                font-size: 15px;
-                font-weight: 600;
-                padding: 0;
             }
-            QPushButton#copyThumbnailClose:hover {
-                background: #eef4ff;
-                color: #1769e0;
+            QToolButton#copyThumbnailClose {
+                padding: 0;
+                background-color: #ffffff;
+                border-width: 1px;
+                border-style: solid;
+                border-color: #dfe5ee;
+                border-radius: 6px;
+            }
+            QToolButton#copyThumbnailClose:hover,
+            QToolButton#copyThumbnailClose:pressed {
+                background-color: #fee2e2;
+                border-color: #dc2626;
             }
             QProgressBar#copyThumbnailCountdown {
                 background: #edf2f7;
@@ -132,6 +155,7 @@ class CopyThumbnail(QWidget):
         self._reposition()
         self.show()
         self.raise_()
+        self._close.raise_()
         self._start_countdown(self._AUTO_HIDE_MS)
 
     def dismiss(self):

@@ -1107,8 +1107,8 @@ def test_toolbar_icon_buttons_are_large_enough_to_read(qtbot):
     ]
 
     assert icon_buttons
-    assert all(button.iconSize().width() >= 24 for button in icon_buttons)
-    assert all(button.width() >= 44 for button in icon_buttons)
+    assert all(button.iconSize().width() >= 18 for button in icon_buttons)
+    assert all(button.width() >= 36 for button in icon_buttons)
 
 
 def test_toolbar_uses_icons_and_primary_done_button(qtbot):

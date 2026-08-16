@@ -1,6 +1,6 @@
 from PyQt5.QtCore import QPoint, Qt, QEvent
 from PyQt5.QtGui import QColor, QEnterEvent, QPixmap
-from PyQt5.QtWidgets import QPushButton, QWidget
+from PyQt5.QtWidgets import QToolButton, QWidget
 
 from mf4_analyzer.ui.markup import CopyThumbnail
 
@@ -51,8 +51,11 @@ def test_close_button_and_dismiss_hide_thumbnail(qtbot):
     qtbot.addWidget(thumb)
     thumb.present(_pixmap())
 
-    close = thumb.findChild(QPushButton, "copyThumbnailClose")
+    close = thumb.findChild(QToolButton, "copyThumbnailClose")
     assert close is not None
+    assert close.text() == ""
+    assert not close.icon().isNull()
+    assert (close.width(), close.height()) == (28, 28)
     qtbot.mouseClick(close, Qt.LeftButton)
     assert not thumb.isVisible()
 
@@ -61,6 +64,16 @@ def test_close_button_and_dismiss_hide_thumbnail(qtbot):
     thumb.dismiss()
     assert not thumb.isVisible()
     assert not thumb._hide_timer.isActive()
+
+
+def test_close_button_does_not_open_the_editor(qtbot):
+    thumb = CopyThumbnail()
+    qtbot.addWidget(thumb)
+    thumb.present(_pixmap())
+
+    with qtbot.assertNotEmitted(thumb.clicked):
+        qtbot.mouseClick(thumb._close, Qt.LeftButton)
+    assert not thumb.isVisible()
 
 
 def test_enter_pauses_and_leave_resumes_auto_dismiss_timer(qtbot):
