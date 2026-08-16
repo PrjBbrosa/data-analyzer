@@ -15,6 +15,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.feedback import (
     MEMBERSHIP_CAP,
     NO_LEGAL_LAYOUT,
     PLACED_CAP_TO_TRAY,
+    PLACED_CAP_STILL_UNPLACED,
     REARRANGED,
     REMOVE_ACTION,
     REMOVED_FROM_BOARD,
@@ -62,6 +63,9 @@ def test_stable_copy_strings():
     )
     assert COPY[PLACED_CAP_TO_TRAY] == (
         "画布已放置 24 张，已移到未放置区 · 打开"
+    )
+    assert COPY[PLACED_CAP_STILL_UNPLACED] == (
+        "画布已放置 24 张，仍在未放置区 · 打开"
     )
     assert COPY[MEMBERSHIP_CAP] == (
         "本 Board 已达 200 个 View · 新建 Board 或先移除"

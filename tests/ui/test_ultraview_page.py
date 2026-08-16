@@ -2053,6 +2053,32 @@ def _prepare_free_grid(harness, qtbot, *view_ids):
     return free, cards
 
 
+def _zoom_out_so_columns_stay_visible(harness, free, last_column: int) -> None:
+    """Fit-on-open can zoom in so a 6-column push lands off-screen.
+
+    Quiet-rearrange tests need the post-move rect inside the viewport, so
+    park at ``ZOOM_MIN`` from the origin after the contract Fit.
+    """
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport import ZOOM_MIN
+
+    harness.page.set_board_zoom(ZOOM_MIN)
+    harness.page._board_scroll.horizontalScrollBar().setValue(0)
+    harness.page._board_scroll.verticalScrollBar().setValue(0)
+    QApplication.processEvents()
+    target = QRect(
+        *rect_to_pixels(
+            GridRect(0, 0, last_column, 3),
+            free.metrics(),
+            free._workspace_origin_offset(),
+        )
+    )
+    visible = free._visible_board_rect()
+    assert visible.contains(target), (
+        f"post-Fit zoom-out still misses columns 0–{last_column}: "
+        f"visible={visible} target={target}"
+    )
+
+
 def _send_mouse_move(
     widget, pos: QPoint, buttons=Qt.LeftButton, modifiers=Qt.NoModifier
 ) -> None:
@@ -2197,6 +2223,7 @@ def test_free_grid_drag_past_threshold_shows_ghost_and_commits_legal_move(qtbot)
 def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
     harness = _Harness(qtbot)
     free, (card, other) = _prepare_free_grid(harness, qtbot, "block-0", "block-1")
+    _zoom_out_so_columns_stay_visible(harness, free, 18)
     boxes = []
     monkeypatch.setattr(
         QMessageBox, "question", lambda *a, **k: boxes.append(a) or QMessageBox.Yes
@@ -2390,6 +2417,7 @@ def test_displacing_a_card_out_of_the_viewport_hints_and_logs(qtbot, caplog):
 def test_displacement_inside_the_viewport_stays_quiet(qtbot):
     harness = _Harness(qtbot)
     free, (card, _other) = _prepare_free_grid(harness, qtbot, "near-0", "near-1")
+    _zoom_out_so_columns_stay_visible(harness, free, 18)
     toasts = []
     harness.page.feedback_requested.connect(toasts.append)
     assert (

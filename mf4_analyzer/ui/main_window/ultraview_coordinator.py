@@ -97,6 +97,7 @@ from ..chart_stack.ultraview.preview_store import (
 )
 from ..chart_stack.ultraview.feedback import (
     MEMBERSHIP_CAP,
+    PLACED_CAP_STILL_UNPLACED,
     PLACED_CAP_TO_TRAY,
     REMOVED_FROM_BOARD,
     text_for_key,
@@ -1787,7 +1788,7 @@ class UltraViewCoordinator(QObject):
             self._toast("目标位置与其他卡片重叠", "warning")
             return
         if "grid_full" in codes:
-            self._toast(text_for_key(PLACED_CAP_TO_TRAY), "info")
+            self._toast(text_for_key(PLACED_CAP_STILL_UNPLACED), "info")
             return
         if "membership_limit" in codes:
             self._toast(text_for_key(MEMBERSHIP_CAP), "warning")

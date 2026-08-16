@@ -18,6 +18,7 @@ SAFETY_BOUNDS = "safety_bounds"
 REARRANGED = "rearranged"
 NO_LEGAL_LAYOUT = "no_legal_layout"
 PLACED_CAP_TO_TRAY = "placed_cap_to_tray"
+PLACED_CAP_STILL_UNPLACED = "placed_cap_still_unplaced"
 MEMBERSHIP_CAP = "membership_cap"
 REMOVED_FROM_BOARD = "removed_from_board"
 EXPORT_TOO_LARGE = "export_too_large"
@@ -31,6 +32,7 @@ COPY: dict[str, str] = {
     REARRANGED: "已重排 {n} 张 · Ctrl/Cmd+Z 撤销",
     NO_LEGAL_LAYOUT: "附近没有可用空间 · 继续向空白处拖动或整理 Board",
     PLACED_CAP_TO_TRAY: "画布已放置 24 张，已移到未放置区 · 打开",
+    PLACED_CAP_STILL_UNPLACED: "画布已放置 24 张，仍在未放置区 · 打开",
     MEMBERSHIP_CAP: "本 Board 已达 200 个 View · 新建 Board 或先移除",
     REMOVED_FROM_BOARD: "已从当前 Board 移除 · 源 View 保留 · Ctrl/Cmd+Z 撤销",
     EXPORT_TOO_LARGE: "{width}×{height} 超出导出上限 · 改用 1× 或整理卡片",
@@ -46,6 +48,7 @@ ACCESSIBLE: dict[str, str] = {
     REARRANGED: COPY[REARRANGED],
     NO_LEGAL_LAYOUT: COPY[NO_LEGAL_LAYOUT],
     PLACED_CAP_TO_TRAY: COPY[PLACED_CAP_TO_TRAY],
+    PLACED_CAP_STILL_UNPLACED: COPY[PLACED_CAP_STILL_UNPLACED],
     MEMBERSHIP_CAP: COPY[MEMBERSHIP_CAP],
     REMOVED_FROM_BOARD: COPY[REMOVED_FROM_BOARD],
     EXPORT_TOO_LARGE: COPY[EXPORT_TOO_LARGE],
@@ -73,7 +76,7 @@ HARD_REJECT_KEYS = frozenset(
     }
 )
 SUCCESS_KEYS = frozenset(
-    {REARRANGED, REMOVED_FROM_BOARD, PLACED_CAP_TO_TRAY}
+    {REARRANGED, REMOVED_FROM_BOARD, PLACED_CAP_TO_TRAY, PLACED_CAP_STILL_UNPLACED}
 )
 
 HARD_REJECT_THROTTLE_S = 1.0

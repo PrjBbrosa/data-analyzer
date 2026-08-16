@@ -2269,7 +2269,12 @@ def test_place_free_grid_from_unplaced_toasts_when_grid_is_full(qapp):
     board.unplaced.append(extra)
     coord._on_place_free_grid_from_unplaced("time", "extra")
     assert extra in board.unplaced
-    assert toasts == [("Board 已满：换布局或先移除", "warning")]
+    from mf4_analyzer.ui.chart_stack.ultraview.feedback import (
+        PLACED_CAP_STILL_UNPLACED,
+        text_for_key,
+    )
+
+    assert toasts == [(text_for_key(PLACED_CAP_STILL_UNPLACED), "info")]
     coord.clear()
     coord.deleteLater()
 
