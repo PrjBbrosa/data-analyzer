@@ -1,7 +1,8 @@
 # 时域 View 标注与双游标工程持久化
 
 - 日期：2026-08-16
-- 状态：**已落地，待 Wave 3 真机手验**
+- 状态：**已落地；D3 / D4 / D5 / D11 于 2026-08-16 按当日评审修订**（见
+  [daily-review-followup-spec](2026-08-16-daily-review-followup-spec.md) §A）
 - 基线：`25e8f8b7`（TraceLab 8.0.0）。工作区当时另有一组 UltraView 未提交改动，本批次**禁止**碰 `ui/chart_stack/ultraview/**`。
 - 实施计划：[2026-08-16-view-markup-and-cursor-persistence-plan.md](../plans/2026-08-16-view-markup-and-cursor-persistence-plan.md)
 
@@ -81,28 +82,34 @@
 { "ax": 1.0, "bx": 2.5 }
 ```
 
-仅当 `cursor_mode == "dual"` 且 `ax` 为有限数字时写入；否则 `cursor_placement` 为 `null`。`bx` 可为 `null`（只放了 A）。不写 `placing`、不写单游标 x、不写 pill HTML。
+仅当 `ax` 为有限数字时写入；否则 `cursor_placement` 为 `null`。**不再按
+`cursor_mode == "dual"` 门禁**（2026-08-16 修订：见 daily-review-followup-spec §A3）。
+`bx` 可为 `null`（只放了 A）。不写 `placing`、不写单游标 x、不写 pill HTML。
+`normalize_cursor_placement` 保留 `cursor_mode` 形参以兼容调用方，但不再用它过滤。
 
-恢复：先 `set_cursor_mode_for_canvas(..., "dual")`，再 `restore_placement`；`off` 仍必须清主 pill（既有 split 契约，见 `codex-cursor-pill-view-apply`）。
+恢复：先按 View 的 `cursor_mode` 设显示，再 `restore_placement`；`off` 仍必须清主 pill（既有 split 契约，见 `codex-cursor-pill-view-apply`）。空 / 非法 payload 必须清 `_ax/_bx`（见 D11）。
 
-**D4 · 画布是投影，ViewState 是真相。**
+**D4 · 画布持有意图列表，Qt 物品只是投影。**
 
-- `AnnotationManager.snapshot_remarks() -> list[dict]`：只从**活着的** Qt 物品抽出 D2 形状；每条物品必须带复合键（见 D6）。
-- `restore_remarks(payload)`：先 `clear_remarks()`，再按当前 `_channel_lines` 复合键重绑。通道不在图上 → 跳过这条（数据仍留在 ViewState）。
-- `CursorController.snapshot_placement() / restore_placement(payload)` 同理。
-- `canvas.clear()` 在 `_glw.clear()` **之前**调用 `clear_remarks()`，禁止悬挂已删物品。`clear()` 仍不重置 `_ax/_bx`（现注释契约）；View 切换靠 ViewState 覆盖落点。
+（2026-08-16 修订：见 daily-review-followup-spec §A2。原「ViewState 是真相、
+画布只投影」只覆盖了 View 事务；非事务重绘会 `clear_remarks()` 把意图一起清掉。）
 
-**D5 · Capture 合并（避免隐藏通道丢标注）。**
+- `AnnotationManager` 持有 Qt-free `_intent`（D2 形状）。`snapshot_remarks()` 返回意图列表，对仍有活投影的条目回读 `label_dx/dy` 与 `x/y`。
+- `restore_remarks(payload)`：规范化后整体替换意图并立即投影。通道不在图上 → 意图保留不画。
+- `clear_remarks()` 仍是全清（意图 + 物品）。`canvas.clear()` 改调 `_drop_remark_projection()`，只拆 Qt 物品。
+- `plot_channels` 收口（紧邻 `_restore_dual_cursor_items`）调用 `_project_remarks()`，非 View 事务的重绘自动回来。
+- `CursorController.snapshot_placement()` 不看 `_dual`。`restore_placement(None/非法)` 清空落点（见 D11）。
+- `clear()` 仍不重置 `_ax/_bx`（现注释契约）；View 切换靠 `restore_placement` 覆盖或清空。
 
-`view_bridge.capture_controls_into`：
+**D5 · Capture 不再合并推断（2026-08-16 修订：见 daily-review-followup-spec §A2）。**
 
-1. 从画布 snapshot 活标注。
-2. 保留 `state.remarks` 里那些 `source` 仍属于本 View（`attached_file_ids` 或 `checked`/`hidden_channels`），且未出现在本次 snapshot 的项——覆盖「通道隐藏、轴还在/不在」时 live 列表为空的情况。
-3. 用户删掉的点：活列表里没有、且该通道当前可见 → 视为已删，不从旧 state 加回。
+意图列表已经是 View 作用域且含隐藏通道条目，D5 原先「live 没有 = 用户删了 /
+隐藏通道从 previous 加回」的推断没有存在理由。
 
-判定「当前可见」：`source in checked` 且 `source not in hidden_channels`。
+`view_bridge.capture_controls_into`：`state.remarks = normalize_remarks(snapshot)`。
+`merge_remarks_for_capture` 标 deprecated，语义改为直通 `normalize_remarks(live)`。
 
-双游标：`cursor_mode=="dual"` 时 snapshot 覆盖 `cursor_placement`；切到 `off`/`single` 时写成 `None`。
+双游标：`snapshot_placement()` 只要 `ax` 有限就写，不看 `cursor_mode`（与 D3 修订一致）。
 
 **D6 · 复合键必须写进 live remark 字典。**
 
@@ -112,11 +119,12 @@
 - `_nearest_data_point` 返回值带上 `ck`，不再只返回显示名。
 - 恢复时 `_channel_lines.get(ck)`；禁止用显示名当身份。
 
-**D7 · 恢复时机：画布 settle 之后。**
+**D7 · 恢复时机：标注意图在 plot 之前写入，投影由 plot 收口统一做。**
 
-`_render_view_onto_canvas` 在现有事务末尾（`settle_view_restore()` 之后、离开 `_applying_view` 之前）调用 `restore_remarks` + `restore_placement`。不要在 `plot_channels` 内部偷偷读 ViewState（画布不该 import View）。
-
-全量重建和 subplot 对象复用都走这条：复用路径若不 `clear()`，也必须先按**即将生效的** View 语义列表重绑，禁止 View A 的点留在 View B。
+`_render_view_onto_canvas` 把 `restore_remarks(state.remarks)` 放在
+`_plot_time_on_canvas` **之前**（只写意图；`clear()` 不丢意图，plot 收口
+`_project_remarks()` 一次投影）。`restore_placement` 仍在 `settle_view_restore()`
+之后、离开 `_applying_view` 之前。不要在 `plot_channels` 内部偷偷读 ViewState（画布不该 import View）。
 
 **D8 · remap 走 project_io 现入口。**
 
@@ -138,11 +146,18 @@
 
 **D11 · 落点的生命周期只有一个真相。**
 
-`set_cursor_mode('off')` 走 `reset_cursor_state()` 清掉 `_ax/_bx`，但
-`ViewState.cursor_placement` 不动。于是 off→dual 之后画布是空的，切走再切回来
-落点又冒出来——同一份数据两个真相。D4 已经定了「`clear()` 不重置 `_ax/_bx`」，
-`off` 应遵循同一语义：**关闭只是不显示，不销毁用户放置的意图**。切到 `off` 仍
-必须清主 pill（既有 split 契约不变）。
+（2026-08-16 修订：见 daily-review-followup-spec §A3。原 D11 只让画布在 off 时
+保留 `_ax/_bx`，但 `snapshot_placement` / `to_dict` / capture 仍按 dual 门禁
+写成 None，一次保存就丢意图；`restore_placement(None)` 又是 no-op，View A
+落点会漏进新建的 View B。）
+
+- `set_dual_cursor_mode(False)` 只隐藏 A/B，不销毁 `_ax/_bx`。
+- `snapshot_placement()` / `normalize_cursor_placement` / `to_dict` 不看模式。
+- `restore_placement(None/非法)` **清空** `_ax/_bx`、隐藏 A/B 与极值标记、
+  `_placing="A"`；dual 时 emit 一次让 pill 回到「Click A」。这是 View 事务里
+  唯一能防止跨 View 泄漏的地方。
+- `reset_cursor_state()` 仍是显式抹除。
+- 切到 `off` 仍必须清主 pill（既有 split 契约不变）。
 
 **D9 · 本批次明确不做。**
 

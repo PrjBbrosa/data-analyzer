@@ -1,6 +1,8 @@
 # 时域标注与双游标工程持久化 · 实施计划
 
-> 状态：**Wave 1–3 已落地**（2026-08-16）。还差真机手验「重绘后读数跟着变」和「off→dual 落点还在」。
+> 状态：**Wave 1–3 已落地**（2026-08-16）。D3 / D4 / D5 / D11 于 2026-08-16
+> 按 [daily-review-followup-spec](../specs/2026-08-16-daily-review-followup-spec.md) §A 修订；
+> 真机手验并入 followup plan Task 16。
 > 设计以 spec 为准。身份修正：标注 `source` 存原始通道名，不是 `[short] channel`。
 >
 > 2026-08-16 复测：持久化与 View 切换主链通过。随后 Wave 3 补上 D10（重绘收口
