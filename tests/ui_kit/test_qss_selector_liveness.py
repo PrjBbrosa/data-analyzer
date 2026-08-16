@@ -143,14 +143,22 @@ def test_retired_frf_segment_choice_is_gone_from_qss_and_production():
     assert 'role="frf-segment"' not in qss
 
 
-def test_dynamic_construction_sites_match_this_head():
+def test_dynamic_construction_sites_are_still_present():
+    """f-string objectNames are invisible to the literal scan — pin the sites.
+
+    Pin the *construction site*, not its line number. An earlier version
+    asserted ``... in chrome[524]``, which made every edit above that line a
+    red test and had already been hand-re-pinned once; a site moving down a
+    file is not a defect, a site disappearing is. Searching the whole file
+    keeps the guarantee and drops the churn.
+    """
     frf = (
         REPO_ROOT
         / "mf4_analyzer"
         / "ui"
         / "inspector_sections"
         / "contextual_frf.py"
-    ).read_text(encoding="utf-8").splitlines()
+    ).read_text(encoding="utf-8")
     chrome = (
         REPO_ROOT
         / "mf4_analyzer"
@@ -158,14 +166,19 @@ def test_dynamic_construction_sites_match_this_head():
         / "chart_stack"
         / "ultraview"
         / "chrome.py"
-    ).read_text(encoding="utf-8").splitlines()
-    assert 'dot.setObjectName(f"{role}Dot")' in frf[478]
-    assert '"frfInput"' in frf[194]
-    assert '"frfOutput"' in frf[197]
-    # Re-pinned after ToolRail empty-board CTA + larger rail chrome.
-    assert 'object_name=f"ultraViewRail{short_name}Button"' in chrome[524]
-    assert 'badge.setObjectName(f"ultraViewRail{short_name}Badge")' in chrome[536]
-    assert '"Unplaced"' in chrome[481]
+    ).read_text(encoding="utf-8")
+    for needle in (
+        'dot.setObjectName(f"{role}Dot")',
+        '"frfInput"',
+        '"frfOutput"',
+    ):
+        assert needle in frf, f"retired FRF construction site: {needle}"
+    for needle in (
+        'object_name=f"ultraViewRail{short_name}Button"',
+        'badge.setObjectName(f"ultraViewRail{short_name}Badge")',
+        '"Unplaced"',
+    ):
+        assert needle in chrome, f"retired UltraView chrome site: {needle}"
 
 
 def test_extract_does_not_swallow_prefixes():

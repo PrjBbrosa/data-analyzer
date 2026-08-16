@@ -417,13 +417,13 @@ QPushButton#BatchFileAddDisk {
 QPushButton#BatchFileAddLoaded {
     color: #0f56bd;
     border-color: #bdd2f0;
-    background-color: #f4f8fe;
+    background-color: #f5f8ff;
 }
 QPushButton#BatchFileRowRemove {
     border: none;
     border-radius: 6px;
     color: #64748b;
-    background-color: #f2f5f9;
+    background-color: #f5f7fb;
     padding: 0;
 }
 QPushButton#BatchFileRowRemove { background-color: transparent; }
@@ -1156,8 +1156,8 @@ Toolbar QFrame#toolbarModeZone {
 }
 Toolbar QFrame#modeZoneDivider {
     background-color: #fbfcff;
-    border-left: 1px solid #e4eaf2;
-    border-right: 1px solid #e4eaf2;
+    border-left: 1px solid #e2e8f0;
+    border-right: 1px solid #e2e8f0;
     border-radius: 3px;
 }
 Toolbar QFrame#modeZoneDividerTick {
@@ -1208,8 +1208,8 @@ QWidget#BatchMethodGroup QPushButton[batchMethod]:checked {
 }
 QFrame#BatchMethodZoneDivider {
     background-color: #fbfcff;
-    border-left: 1px solid #e4eaf2;
-    border-right: 1px solid #e4eaf2;
+    border-left: 1px solid #e2e8f0;
+    border-right: 1px solid #e2e8f0;
     border-radius: 3px;
 }
 QFrame#BatchMethodZoneDividerTick {
@@ -1310,7 +1310,7 @@ QLabel#cockpitTransportStatusChip[transportState="unconfigured"] {
     color: #92400e;
 }
 QLabel#cockpitTransportStatusChip[transportState="configured"] {
-    background-color: #ecfdf5;
+    background-color: #e9fbf3;
     border-color: #a7f3d0;
     color: #065f46;
 }
@@ -1664,7 +1664,7 @@ QPushButton#liveFocusCollapseButton {
 
 QFrame#liveFocusShell {
     border-bottom: 1px solid #dbeafe;
-    background-color: #f5f9ff;
+    background-color: #f5f8ff;
 }
 QLabel#liveFocusBar {
     color: #1f3f77;
@@ -2099,7 +2099,7 @@ Inspector QLabel#frfFlowBlock {
     padding: 2px 6px;
     border: 1px solid #9cbbe9;
     border-radius: 6px;
-    background: #f2f7ff;
+    background: #f5f8ff;
     color: #245aa5;
     font-size: 11px;
     font-weight: 700;
@@ -2231,7 +2231,7 @@ QDialog#DbReferenceDefaultsDialog QToolButton#dbReferenceDialogClose {
     background-color: transparent;
 }
 QDialog#DbReferenceDefaultsDialog QToolButton#dbReferenceDialogClose:hover {
-    background-color: #e8edf3;
+    background-color: #e7ecf2;
 }
 QDialog#DbReferenceDefaultsDialog QWidget#dbReferenceDialogToggleRow {
     border: 1px solid #dfe5ee;
@@ -2314,14 +2314,14 @@ QPushButton[role="preset-load"][applied="true"] {
     font-weight: 700;
 }
 QPushButton[role="preset-load"][applied="true"]:hover {
-    background-color: #dcecff;
+    background-color: #dbeafe;
     border-color: #0a66d4;
 }
 QPushButton[role="preset-load"]:disabled {
     color: #a3aebd;
     background-color: transparent;
     border-style: dashed;
-    border-color: #cdd5e0;
+    border-color: #cbd5e1;
 }
 /* Unit recommendation is a corner badge only; the button body is reserved
    for the actually applied preset state. */
@@ -2439,7 +2439,7 @@ QWidget#chartCard[focused="true"] {
  * the current fixed value / meaning. */
 QWidget#slicePanel {
     background-color: #fbfcff;
-    border: 1px solid #e1e7f0;
+    border: 1px solid #dfe5ee;
     border-radius: 7px;
 }
 QWidget#sliceDirToggle {
@@ -2510,7 +2510,7 @@ QWidget#chartToolbar QToolButton#chartTickDensityButton {
 QWidget#chartToolbar QToolButton#chartTickDensityButton:hover {
     color: #0b7af3;
     border-color: #0b7af3;
-    background-color: #e7f1ff;
+    background-color: #e8f1ff;
 }
 QWidget#chartToolbar QToolButton#chartTickDensityButton:pressed,
 QWidget#chartToolbar QToolButton#chartTickDensityButton:focus,
@@ -2651,7 +2651,7 @@ QFrame#TickDensitySurface QLabel#tickDensityAxisLabel {
 QFrame#TickDensitySurface QSlider::groove:horizontal {
     height: 5px;
     border-radius: 2px;
-    background-color: #d9e5f5;
+    background-color: #d8e4f5;
 }
 QFrame#TickDensitySurface QSlider::handle:horizontal {
     width: 14px;
@@ -2663,7 +2663,7 @@ QFrame#TickDensitySurface QSlider::handle:horizontal {
 }
 QFrame#TickDensitySurface QSpinBox#tickDensitySpin {
     min-height: 24px;
-    border: 1px solid #dbe5f1;
+    border: 1px solid #dde5f0;
     border-radius: 6px;
     background-color: #ffffff;
     color: #1e293b;
@@ -2671,7 +2671,7 @@ QFrame#TickDensitySurface QSpinBox#tickDensitySpin {
 }
 QFrame#TickDensitySurface QPushButton#tickDensityResetButton {
     min-height: 28px;
-    border: 1px solid #dbe5f1;
+    border: 1px solid #dde5f0;
     border-radius: 6px;
     background-color: #ffffff;
     color: #475569;
@@ -2736,7 +2736,7 @@ QDialog#ChartOptionsDialog QTabBar::tab:selected {
 }
 
 QDialog#ChartOptionsDialog QFrame#chartOptionsGroup {
-    border: 1px solid #d8e3f0;
+    border: 1px solid #d7e2f0;
     border-radius: 8px;
     background-color: #ffffff;
 }
@@ -2751,7 +2751,7 @@ QDialog#ChartOptionsDialog QLabel#chartOptionsGroupTitle {
  * Scoped to #ChannelEditorDialog so the create/danger button accents and
  * the three-band (file bar / scroll body / footer) chrome never leak into
  * the global QPushButton cascade. Tokens mirror the prototype:
- * create  = CONTROL_ACCENT_INK text / #cdddf6 border / #f3f8ff fill
+ * create  = CONTROL_ACCENT_INK text / #cdddf6 border / #f5f8ff fill
  * danger  = #b42318 text / #f1c9c4 border / #fdf4f3 fill
  * primary 确定 reuses the global [role="primary"] blue (CONTROL_ACCENT). */
 QDialog#ChannelEditorDialog,
@@ -2843,7 +2843,7 @@ QDialog#DrawerSurface #ChannelEditorDialog {
 #ChannelEditorDialog QPushButton[role="create"] {
     color: {{CONTROL_ACCENT_INK}};
     border-color: #cdddf6;
-    background-color: #f3f8ff;
+    background-color: #f5f8ff;
 }
 #ChannelEditorDialog QPushButton[role="create"]:hover {
     border-color: #93b4ef;
@@ -2965,7 +2965,7 @@ QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="warning"] {
 
 QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="danger"] {
     color: #b42318;
-    background-color: #fff1f0;
+    background-color: #fef2f2;
     border-width: 1px;
     border-style: solid;
     border-color: #f3a7a0;
@@ -3313,7 +3313,7 @@ QWidget#viewTabBar QPushButton#viewSplitClear {
     padding: 0 10px;
     border: 1px solid #fb7185;
     border-radius: 5px;
-    background-color: #fff1f2;
+    background-color: #fef2f2;
     color: #be123c;
     font-weight: 600;
 }
@@ -3541,7 +3541,7 @@ QFrame#channelConfigHtmlConfigRow:hover { background-color: #f2f6fb; }
 QFrame#channelConfigHtmlConfigRow[active="true"] {
     border-color: #bfd7f7;
     border-left: 3px solid #0a6de7;
-    background-color: #eaf3ff;
+    background-color: #e9f1fc;
 }
 QLabel#channelConfigHtmlConfigName { color: #172033; font-size: 12px; font-weight: 700; }
 QLabel#channelConfigHtmlConfigMeta { color: #697991; font-size: 10px; }
@@ -3663,8 +3663,8 @@ QDialog#channelConfigManagerHtml QToolButton:hover {
 }
 QDialog#channelConfigManagerHtml QPushButton:disabled,
 QDialog#channelConfigManagerHtml QToolButton:disabled {
-    border-color: #e5eaf1;
-    background-color: #f6f8fb;
+    border-color: #e2e8f0;
+    background-color: #f8fafc;
     color: #a8b3c2;
 }
 /* Dialog-wide QToolButton chrome is (1,0,2) and otherwise wins over
@@ -3916,7 +3916,7 @@ QFrame#ultraViewLibrarySection[section="time"] {
 }
 QFrame#ultraViewLibrarySection[section="fft"] {
     border-color: #bccbd8;
-    background-color: #e8f0f7;
+    background-color: #eaf2f8;
 }
 QFrame#ultraViewLibrarySection[section="fft_time"] {
     border-color: #bfd3d1;
@@ -3924,7 +3924,7 @@ QFrame#ultraViewLibrarySection[section="fft_time"] {
 }
 QFrame#ultraViewLibrarySection[section="frf"] {
     border-color: #c5cfd8;
-    background-color: #edf1f5;
+    background-color: #eef2f7;
 }
 QFrame#ultraViewLibrarySection[section="order"] {
     border-color: #cdd5da;
@@ -3999,8 +3999,8 @@ QToolButton#ultraViewLibraryPin {
     background-color: transparent;
 }
 QToolButton#ultraViewLibraryPin:hover {
-    background-color: #f2f6fa;
-    border-color: #d4e0ea;
+    background-color: #f5f7fb;
+    border-color: #d6e0eb;
 }
 QToolButton#ultraViewLibraryPin:checked,
 QToolButton#ultraViewLibraryPin[active="true"] {
@@ -4107,7 +4107,7 @@ QWidget#ultraViewCard[selected="true"] {
 }
 QWidget#ultraViewCard[replacementArmed="true"] {
     border-color: {{CONTROL_ACCENT_HI}};
-    background-color: #f3f8ff;
+    background-color: #f5f8ff;
 }
 QWidget#ultraViewCard[orphaned="true"] {
     border-color: #e2b15a;
@@ -4127,7 +4127,7 @@ QToolButton#ultraViewCardSyncButton {
     padding: 0 6px 0 4px;
     border: 1px solid #e0c07a;
     border-radius: 6px;
-    background-color: #fff8e8;
+    background-color: #fff7e7;
     color: #8a5609;
     font-size: 11px;
 }
@@ -4150,7 +4150,7 @@ QToolButton#ultraViewCardTypeChip {
     padding: 0 6px;
     border: 1px solid #d6e0eb;
     border-radius: 4px;
-    background-color: #f4f7fb;
+    background-color: #f5f7fb;
     color: #334155;
     font-size: 10px;
     font-weight: 600;
@@ -4348,7 +4348,7 @@ QFrame#ultraViewCardContextIsland {
 }
 QFrame#ultraViewToolRail {
     border-radius: 14px;
-    background-color: #e8eef4;
+    background-color: #e7ecf2;
     border-color: rgba(62, 112, 156, 0.42);
 }
 
@@ -4412,7 +4412,7 @@ QToolButton#ultraViewBoardPopoverCreate:hover {
     color: #315e85;
 }
 QToolButton#ultraViewBoardPopoverCreate:disabled {
-    border-color: #d4e0ea;
+    border-color: #d6e0eb;
     color: #8a9aaa;
     background-color: #fcfdfe;
 }

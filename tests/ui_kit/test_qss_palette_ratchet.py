@@ -21,10 +21,19 @@ import re
 
 from tests.ui_kit._qss_parse import load_style_qss, strip_qss_comments
 
-# Measured after merging QSS consolidation onto main's UltraView polish
-# (``58fee980``), which introduced wash literals ``#c9dcf4`` / ``#eaf2fb`` /
-# ``#f4f7fb`` and dropped ``#e4e9ef`` / ``#eef1f5``. Net distinct = 244.
-MAX_DISTINCT_HEX_LITERALS = 244
+# The UltraView polish batch pushed this to 261 by hand-picking a slightly
+# different grey per site — eleven pale blue-greys and eight mid blue-greys
+# nobody can tell apart. 27 of them were collapsed into the most-used spelling
+# of their cluster (CIE76 dE <= 1.0, below the just-noticeable difference).
+# Three vetoes kept the merge honest, and they are why the number is 234 and
+# not lower: literals also spelled in live code or tests (``control_style.py``,
+# ``batch_render_qt/_theme.py``, ``analysis_section_page.py``, …) are NOT
+# renameable here — rewriting only the stylesheet desynchronizes the two sides,
+# so those 19 need a real shared token, not a find-and-replace. Merges onto
+# ``#ffffff`` are out because white carries contrast duty sheet-wide, as is any
+# pair co-occurring inside one rule block, where the tiny delta is the design
+# (fill vs. edge) rather than drift. Net distinct = 234.
+MAX_DISTINCT_HEX_LITERALS = 234
 
 # Not preceded/followed by another hex digit, so #11223344 is not #112233.
 _HEX6_RE = re.compile(r"(?<![0-9a-fA-F])#([0-9a-fA-F]{6})(?![0-9a-fA-F])")
