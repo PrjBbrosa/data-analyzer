@@ -292,7 +292,6 @@ class UltraViewPage(QWidget):
         # signed grid coordinates; the working halo, high-water mark and edge
         # timer must never become a project mutation or a viewport payload.
         self._workspace_extent = None
-        self._zoom_in_flight = 0
         self._edge_pan_timer = QTimer(self)
         self._edge_pan_timer.setObjectName("ultraViewWorkspaceEdgePanTimer")
         self._edge_pan_timer.setInterval(16)
@@ -1248,7 +1247,6 @@ class UltraViewPage(QWidget):
         *,
         reset: bool = False,
         preserve_visible: bool = True,
-        follow_view: bool = True,
     ) -> bool:
         """Grow the free-grid session extent and project it into the canvas.
 
@@ -1257,11 +1255,10 @@ class UltraViewPage(QWidget):
         A board switch/reset intentionally starts fresh from that board's
         content + viewport halo.
 
-        ``follow_view`` unions the current scroll window so pan-into-halo can
-        grow the world. Interactive zoom must not call this helper at all:
-        even ``follow_view=False`` rebases the signed origin while scroll is
-        in flight and makes every card tremble. Halo growth waits for the
-        idle smooth timer.
+        Always unions the current scroll window so pan-into-halo can grow the
+        world. Interactive zoom must not call this helper at all: rebasing the
+        signed origin while a scroll transaction is pending costs an extra
+        reflow per wheel tick. Halo growth waits for the idle smooth timer.
         """
         if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
             self._workspace_extent = None
@@ -1269,9 +1266,9 @@ class UltraViewPage(QWidget):
         viewport = self._board_scroll.viewport()
         if viewport.width() <= 0 or viewport.height() <= 0:
             return False
-        content = content_bounds(self._board.free_grid)
-        if follow_view:
-            content = content.union(self._visible_workspace_bounds())
+        content = content_bounds(self._board.free_grid).union(
+            self._visible_workspace_bounds()
+        )
         wanted = desired_extent(
             content,
             (float(viewport.width()), float(viewport.height())),
@@ -1548,21 +1545,20 @@ class UltraViewPage(QWidget):
 
     def _park_zoom(self, zoom: float) -> None:
         """Zoom and leave the board in the chrome-safe fit rect."""
-        with self._zoom_transaction():
-            self.cancel_board_gestures()
-            self._filled_card = None
-            self._apply_preview_quality(QUALITY_FAST)
-            after = clamp_zoom(zoom)
-            self._broadcast_zoom(after)
-            origin = self._fit_origin()
-            self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
-            applied = self._place_canvas_for_scroll(self._active_canvas(), (0.0, 0.0))
-            self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
-            self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
-            self._set_zoom_percent(zoom_percent(after))
-            self._apply_lod_chrome()
-            self._restart_smooth_timer()
-            self._persist_viewport_to_board()
+        self.cancel_board_gestures()
+        self._filled_card = None
+        self._apply_preview_quality(QUALITY_FAST)
+        after = clamp_zoom(zoom)
+        self._broadcast_zoom(after)
+        origin = self._fit_origin()
+        self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
+        applied = self._place_canvas_for_scroll(self._active_canvas(), (0.0, 0.0))
+        self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
+        self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
+        self._set_zoom_percent(zoom_percent(after))
+        self._apply_lod_chrome()
+        self._restart_smooth_timer()
+        self._persist_viewport_to_board()
 
     def _set_zoom_percent(self, percent: int) -> None:
         """Keep the legacy façade and the visible navigation island aligned."""
@@ -1581,25 +1577,9 @@ class UltraViewPage(QWidget):
         self._grid.set_zoom(zoom)
         self._free_grid.set_zoom(zoom)
 
-    @contextmanager
-    def _zoom_transaction(self):
-        """Keep elastic extent still while scroll is in flight.
-
-        Refreshing the workspace (even with follow_view=False) rebases the
-        signed origin on every wheel/pinch tick and makes cards tremble.
-        Halo growth waits for the idle smooth timer.
-        """
-        self._zoom_in_flight += 1
-        try:
-            yield
-        finally:
-            self._zoom_in_flight = max(0, self._zoom_in_flight - 1)
-
     def _settle_workspace_after_zoom(self) -> None:
         """Grow halo after the gesture has stopped, keeping the view still."""
-        if self._zoom_in_flight:
-            return
-        self._refresh_workspace_extent(preserve_visible=True, follow_view=True)
+        self._refresh_workspace_extent(preserve_visible=True)
 
     def zoom_to_card(self, section: str, view_id: str, *, animate: bool = True) -> None:
         rect_1x = self._card_rect_1x(section, view_id)
@@ -1655,37 +1635,36 @@ class UltraViewPage(QWidget):
         *,
         viewport_size: tuple[float, float] | None = None,
     ) -> None:
-        with self._zoom_transaction():
-            self.cancel_board_gestures()
-            self._apply_preview_quality(QUALITY_FAST)
-            after = clamp_zoom(zoom)
-            self._broadcast_zoom(after)
-            self._viewport.set_center(center)
-            origin = self._fit_origin()
-            self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
-            if viewport_size is None:
-                viewport = self._board_scroll.viewport()
-                view = (float(viewport.width()), float(viewport.height()))
-                scroll = scroll_for_center(center, view, after)
-                desired = (scroll[0] + origin[0], scroll[1] + origin[1])
+        self.cancel_board_gestures()
+        self._apply_preview_quality(QUALITY_FAST)
+        after = clamp_zoom(zoom)
+        self._broadcast_zoom(after)
+        self._viewport.set_center(center)
+        origin = self._fit_origin()
+        self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
+        if viewport_size is None:
+            viewport = self._board_scroll.viewport()
+            view = (float(viewport.width()), float(viewport.height()))
+            scroll = scroll_for_center(center, view, after)
+            desired = (scroll[0] + origin[0], scroll[1] + origin[1])
+        else:
+            view = (float(viewport_size[0]), float(viewport_size[1]))
+            live = self._active_canvas().content_rect()
+            if live is not None:
+                # Canvas is already at ``after``; use live pixels so metric
+                # rounding cannot drift the visual center off the safe zone.
+                cx = live[0] + live[2] / 2.0
+                cy = live[1] + live[3] / 2.0
+                desired = (cx - view[0] / 2.0, cy - view[1] / 2.0)
             else:
-                view = (float(viewport_size[0]), float(viewport_size[1]))
-                live = self._active_canvas().content_rect()
-                if live is not None:
-                    # Canvas is already at ``after``; use live pixels so metric
-                    # rounding cannot drift the visual center off the safe zone.
-                    cx = live[0] + live[2] / 2.0
-                    cy = live[1] + live[3] / 2.0
-                    desired = (cx - view[0] / 2.0, cy - view[1] / 2.0)
-                else:
-                    desired = scroll_for_center(center, view, after)
-            applied = self._place_canvas_for_scroll(self._active_canvas(), desired)
-            self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
-            self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
-            self._set_zoom_percent(zoom_percent(after))
-            self._apply_lod_chrome()
-            self._restart_smooth_timer()
-            self._persist_viewport_to_board()
+                desired = scroll_for_center(center, view, after)
+        applied = self._place_canvas_for_scroll(self._active_canvas(), desired)
+        self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
+        self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
+        self._set_zoom_percent(zoom_percent(after))
+        self._apply_lod_chrome()
+        self._restart_smooth_timer()
+        self._persist_viewport_to_board()
 
     def _apply_lod_chrome(self) -> None:
         level = self._viewport.lod()
@@ -1776,36 +1755,35 @@ class UltraViewPage(QWidget):
         return self._grid
 
     def _zoom_at(self, zoom: float, cursor_in_viewport) -> None:
-        with self._zoom_transaction():
-            self.cancel_board_gestures()
-            self._filled_card = None
-            self._apply_preview_quality(QUALITY_FAST)
-            after = clamp_zoom(zoom)
-            cursor = (float(cursor_in_viewport[0]), float(cursor_in_viewport[1]))
-            scroll = (
-                float(self._board_scroll.horizontalScrollBar().value()),
-                float(self._board_scroll.verticalScrollBar().value()),
-            )
-            origin = self._board_content_origin()
-            canvas = self._active_canvas()
-            # Anchor through the canvas's own coordinate system instead of
-            # extrapolating ``logical * zoom``.  The free-grid pixel map rounds
-            # every metric before multiplying by a cell index, so a linear
-            # prediction carries an error proportional to that index -- and the
-            # signed elastic origin drives the index past 40, which is what made
-            # each wheel notch shove the board tens of pixels sideways.
-            anchor = canvas.zoom_anchor_at(canvas_point_under(cursor, scroll, origin))
-            self._broadcast_zoom(after)
-            new_scroll = scroll_for_anchor(
-                canvas.point_for_zoom_anchor(anchor), cursor, origin
-            )
-            applied = self._place_canvas_for_scroll(canvas, new_scroll)
-            self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
-            self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
-            self._set_zoom_percent(zoom_percent(after))
-            self._apply_lod_chrome()
-            self._restart_smooth_timer()
-            self._persist_viewport_to_board()
+        self.cancel_board_gestures()
+        self._filled_card = None
+        self._apply_preview_quality(QUALITY_FAST)
+        after = clamp_zoom(zoom)
+        cursor = (float(cursor_in_viewport[0]), float(cursor_in_viewport[1]))
+        scroll = (
+            float(self._board_scroll.horizontalScrollBar().value()),
+            float(self._board_scroll.verticalScrollBar().value()),
+        )
+        origin = self._board_content_origin()
+        canvas = self._active_canvas()
+        # Anchor through the canvas's own coordinate system instead of
+        # extrapolating ``logical * zoom``.  The free-grid pixel map rounds
+        # every metric before multiplying by a cell index, so a linear
+        # prediction carries an error proportional to that index -- and the
+        # signed elastic origin drives the index past 40, which is what made
+        # each wheel notch shove the board tens of pixels sideways.
+        anchor = canvas.zoom_anchor_at(canvas_point_under(cursor, scroll, origin))
+        self._broadcast_zoom(after)
+        new_scroll = scroll_for_anchor(
+            canvas.point_for_zoom_anchor(anchor), cursor, origin
+        )
+        applied = self._place_canvas_for_scroll(canvas, new_scroll)
+        self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
+        self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
+        self._set_zoom_percent(zoom_percent(after))
+        self._apply_lod_chrome()
+        self._restart_smooth_timer()
+        self._persist_viewport_to_board()
 
     def _cursor_in_scroll_viewport(self, event, widget) -> tuple[float, float]:
         """Pick a viewport-local zoom anchor; never trust a degenerate (0, 0).
@@ -1853,13 +1831,12 @@ class UltraViewPage(QWidget):
         layout_size = self._board_layout_viewport_size(size)
         self._grid.set_viewport_size(layout_size)
         self._free_grid.set_viewport_size(layout_size)
-        if not self._zoom_in_flight:
-            self._refresh_workspace_extent()
-            # QStackedWidget keeps the prior canvas size hint.  Once the floating
-            # host gives the scroll area its final rect, propagate the active
-            # canvas's new logical size back to the stack so first paint shows the
-            # cards instead of an empty dotted stage.
-            self._sync_board_stack_geometry(self._active_canvas())
+        self._refresh_workspace_extent()
+        # QStackedWidget keeps the prior canvas size hint.  Once the floating
+        # host gives the scroll area its final rect, propagate the active
+        # canvas's new logical size back to the stack so first paint shows the
+        # cards instead of an empty dotted stage.
+        self._sync_board_stack_geometry(self._active_canvas())
         if self._pending_fit and self._board_scroll.viewport().width() > 1:
             self._pending_fit = False
             self._apply_initial_viewport()

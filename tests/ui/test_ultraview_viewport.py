@@ -462,21 +462,29 @@ def test_zoomed_pixel_map_error_does_not_grow_with_the_cell_index():
         assert error <= 1.0, f"cell index {index} drifts {error:.2f}px from the exact map"
 
 
-def test_wheel_zoom_does_not_chase_viewport_while_scroll_is_in_flight(qtbot):
+def test_wheel_zoom_does_not_chase_the_live_viewport(qtbot):
+    """The wheel path must not fold the scroll window into the extent.
+
+    Unioning the live viewport rebases the signed origin under a scroll
+    transaction that was already computed against the old one. The zoom path
+    therefore does not touch the extent at all; growth waits for the idle
+    settle (``test_wheel_zoom_does_not_refresh_extent_until_idle``).
+    """
     harness = _Harness(qtbot)
     _free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
     page = harness.page
+    calls: list[object] = []
     orig = page._visible_workspace_bounds
 
-    def guarded():
-        if page._zoom_in_flight > 0:
-            raise AssertionError("zoom must not union the live viewport")
+    def spy():
+        calls.append(1)
         return orig()
 
-    page._visible_workspace_bounds = guarded
+    page._visible_workspace_bounds = spy
     card = cards[0]
     local = QPoint(max(24, card.width() * 2 // 3), max(24, card.height() * 2 // 3))
     _wheel(card, 120, pos=local)
+    assert calls == []
     assert page.board_zoom() > 0.25
 
 
