@@ -686,7 +686,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.zoom",
-        text="新板≤66%，适应≤100%，100%不挪中心",
+        text="打开即适应内容≤300%，100%不挪中心",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,

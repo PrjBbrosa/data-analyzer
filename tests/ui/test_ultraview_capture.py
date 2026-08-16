@@ -1313,6 +1313,43 @@ def test_user_sync_navigates_hidden_source_then_captures(qapp):
     coord.deleteLater()
 
 
+def test_user_sync_navigates_without_raising_the_analyzer(qapp):
+    window, coord = _make_coord()
+    state = window.view_manager.get(0)
+    state.view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "seed")
+    _flush()
+    state.xlim = (0.0, 3.0)
+    canvas.hide()
+    navigated: list[bool] = []
+    window_raises: list[str] = []
+
+    def navigate(section, view_id, *, raise_window=True):
+        navigated.append(raise_window)
+        canvas.show()
+        return True
+
+    window.navigate_to_view = navigate
+    window.raise_ = lambda: window_raises.append("raise")
+    window.activateWindow = lambda: window_raises.append("activate")
+    window._ultraview_sheet = SimpleNamespace(
+        isVisible=lambda: True,
+        raise_=lambda: None,
+        activateWindow=lambda: None,
+    )
+    coord.sync_preview("time", "view-a")
+    assert navigated == [False]
+    _flush()
+    assert window_raises == []
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 def test_user_sync_serializes_hidden_sources_instead_of_last_wins(qapp):
     window, coord = _make_coord()
     manager = window.view_manager

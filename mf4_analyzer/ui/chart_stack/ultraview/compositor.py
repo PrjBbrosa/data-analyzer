@@ -1,8 +1,9 @@
 """Off-screen UltraView board compositor.
 
-Draws a fixed 1600×900 (1×) or 3200×1800 (2×) board from immutable Board
-state plus PreviewStore records. Does not import MainWindow, grab widgets, or
-call analysis compute.
+Template boards stay on the 1600×900 (1×) / 3200×1800 (2×) baseline.
+Free-grid export uses content bounds ∪ the canonical 1600-wide base frame,
+never screen halo or the live viewport. Does not import MainWindow, grab
+widgets, or call analysis compute.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen
 
 from mf4_analyzer.ui.ultraview_state import (
+    GRID_COLUMNS,
     LAYOUT_MODE_FREE_GRID,
     SECTION_LABELS_ZH,
     STATUS_MISSING,
@@ -26,6 +28,9 @@ from mf4_analyzer.ui.ultraview_state import (
     slot_occupant,
 )
 
+from .elastic_workspace import content_bounds
+from .feedback import format_export_too_large
+from .free_grid import GridMetrics, export_grid_metrics, rect_to_pixels
 from .layouts import (
     BASE_BOARD_SIZE,
     BOARD_PADDING,
@@ -35,7 +40,6 @@ from .layouts import (
     logical_board_size,
     slot_rects,
 )
-from .free_grid import export_grid_metrics, rect_to_pixels
 from .preview_store import PreviewStore
 
 TITLE_BAND = 36
@@ -80,14 +84,49 @@ def output_size(scale: int, layout_id: str | None = None) -> tuple[int, int]:
     return width * factor, height * factor
 
 
+def _free_grid_export_layout(
+    board: UltraViewBoardState,
+) -> tuple[GridMetrics, tuple[int, int], int, int]:
+    """Return 1× ``(metrics, origin_offset, width, height)`` without the title band.
+
+    ``origin_offset`` is the content origin so the leftmost/topmost occupied
+    cell maps to padding when it sits left/above the base frame. Positive
+    cards keep the base-frame origin ``(0, 0)``; GridRect values are not
+    rewritten. Canvas size is content bounds plus canonical padding, floored
+    at the 1600-wide base frame and the existing occupied-row height.
+    """
+    placements = tuple(board.free_grid)
+    metrics = export_grid_metrics(placements)
+    content = content_bounds(placements)
+    if content.empty():
+        col0, row0 = 0, 0
+        column_end = GRID_COLUMNS
+        row_end = 1
+    else:
+        col0 = min(0, content.column)
+        row0 = min(0, content.row)
+        column_end = max(GRID_COLUMNS, content.column_end)
+        row_end = max(1, content.row_end)
+    extra_cols = (0 - col0) + (column_end - GRID_COLUMNS)
+    pitch_x = metrics.column_width + metrics.gutter
+    width = metrics.board_width + extra_cols * pitch_x
+    n_rows = row_end - row0
+    height = (
+        2 * metrics.padding
+        + n_rows * metrics.row_height
+        + max(0, n_rows - 1) * metrics.gutter
+    )
+    return metrics, (col0, row0), width, height
+
+
 def free_grid_output_size(
     board: UltraViewBoardState, scale: int, *, title: bool = True
 ) -> tuple[int, int]:
-    """Return a bounded full logical free-grid export canvas (not viewport)."""
-    metrics = export_grid_metrics(board.free_grid)
+    """Return the free-grid export canvas: content ∪ base-frame floor, no halo."""
+    _metrics, _origin, width, height = _free_grid_export_layout(board)
     factor = 1 if int(scale) <= 1 else 2
     extra = TITLE_BAND if title else 0
-    return metrics.board_width * factor, (metrics.board_height + extra) * factor
+    return width * factor, (height + extra) * factor
 
 
 def composed_slot_rects(
@@ -97,7 +136,7 @@ def composed_slot_rects(
     factor = 1 if int(scale) <= 1 else 2
     title_h = TITLE_BAND if title else 0
     if board.layout_mode == LAYOUT_MODE_FREE_GRID:
-        metrics = export_grid_metrics(board.free_grid)
+        metrics, origin, _width, _height = _free_grid_export_layout(board)
         return {
             f"grid:{item.ref.section}:{item.ref.view_id}": (
                 x * factor,
@@ -106,7 +145,9 @@ def composed_slot_rects(
                 height * factor,
             )
             for item in board.free_grid
-            for x, y, width, height in (rect_to_pixels(item.rect, metrics),)
+            for x, y, width, height in (
+                rect_to_pixels(item.rect, metrics, origin_offset=origin),
+            )
         }
     width, height = output_size(1, board.layout_id)
     inner_h = height - title_h if title else height
@@ -133,7 +174,7 @@ def _guard_export_size(width: int, height: int) -> None:
     ):
         raise ComposeError(
             "export_too_large",
-            f"{width}×{height} 超出导出上限 {MAX_EXPORT_EDGE}px / {MAX_EXPORT_PIXELS} 像素",
+            format_export_too_large(width, height),
         )
 
 

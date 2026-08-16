@@ -388,7 +388,7 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "基准网格" in haystack
     assert "导出标尺" in haystack
     assert "四向" in haystack
-    assert "66%" in haystack
+    assert "自动适应" in haystack
     assert "适应内容" in haystack
     assert "100%" in haystack
     assert "临时聚焦" in haystack

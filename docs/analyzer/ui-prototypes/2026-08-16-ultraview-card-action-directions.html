@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UltraView · 卡片动作图标方向</title>
+  <!-- The shipped desktop mapping is qtawesome's Font Awesome 5 family. -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+  <style>
+    :root {
+      --canvas: #eef4f5;
+      --paper: #fffefd;
+      --ink: #183a46;
+      --muted: #647d88;
+      --line: #c8dbe1;
+      --titanium: #3c8495;
+      --titanium-deep: #2f7181;
+      --amber: #f0a44c;
+      --blue-wash: #eaf4f7;
+      --danger: #c94f4a;
+      --danger-wash: #fff2f0;
+      --success: #159a71;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-width: 1060px; margin: 0; color: var(--ink);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at 17% 0%, rgba(240,164,76,.14), transparent 24rem),
+        linear-gradient(115deg, rgba(60,132,149,.08), transparent 37%),
+        var(--canvas);
+    }
+    .page { max-width: 1320px; margin: 0 auto; padding: 42px 44px 62px; }
+    .eyebrow { color: var(--titanium); font: 700 11px/1 "SF Mono", Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 740px; margin: 10px 0 10px; font-size: 32px; line-height: 1.12; letter-spacing: -.04em; }
+    .lede { max-width: 750px; margin: 0; color: var(--muted); font-size: 15px; }
+    .finding { display: flex; gap: 12px; margin: 28px 0 30px; padding: 14px 16px; border: 1px solid #b8d4dd; border-left: 4px solid var(--titanium); border-radius: 12px; background: rgba(255,254,253,.76); }
+    .finding i { padding-top: 2px; color: var(--titanium); }
+    .finding strong { display: block; margin-bottom: 2px; }
+    .direction-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .direction { position: relative; min-height: 600px; overflow: hidden; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(255,254,253,.9); box-shadow: 0 14px 38px rgba(33,68,80,.07); }
+    .direction.recommended { border-color: var(--titanium); box-shadow: 0 16px 42px rgba(47,113,129,.16); }
+    .tag { display: inline-flex; align-items: center; gap: 6px; min-height: 23px; padding: 0 8px; border-radius: 999px; background: var(--blue-wash); color: var(--titanium-deep); font-size: 11px; font-weight: 760; }
+    .recommended .tag { color: #fff; background: linear-gradient(135deg, var(--titanium), var(--amber)); }
+    h2 { margin: 12px 0 6px; font-size: 19px; letter-spacing: -.02em; }
+    .summary { min-height: 62px; margin: 0; color: var(--muted); font-size: 13px; }
+    .mock-board { position: relative; height: 202px; margin: 20px -4px 17px; overflow: hidden; border: 1px solid #bdd2d9; border-radius: 13px; background-color: #f5f9f9; background-image: radial-gradient(#bfd4da 1.15px, transparent 1.15px); background-size: 18px 18px; }
+    .sample-card { position: absolute; z-index: 2; inset: 50px 18px 18px; overflow: visible; border: 1px solid #b9d1d9; border-radius: 11px; background: #fff; box-shadow: 0 7px 20px rgba(32,68,81,.10); }
+    .sample-title { display: flex; align-items: center; height: 31px; padding: 0 8px; border-bottom: 1px solid #e2edf0; font-size: 11px; font-weight: 720; }
+    .dot { width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #2585f0; }
+    .wave { height: 97px; margin: 10px 9px; opacity: .77; background: repeating-linear-gradient(100deg, transparent 0 8px, #52a4ba 9px 10px, transparent 11px 18px), linear-gradient(178deg, transparent 40%, #d7edf2 41% 43%, transparent 44%); clip-path: polygon(0 44%,5% 36%,10% 55%,15% 18%,21% 48%,26% 30%,31% 65%,37% 26%,43% 53%,49% 20%,55% 61%,61% 31%,67% 49%,73% 17%,79% 55%,85% 28%,91% 50%,96% 23%,100% 44%,100% 100%,0 100%); }
+    .action-island { position: absolute; z-index: 3; display: flex; align-items: center; gap: 2px; min-height: 40px; padding: 4px; border: 1px solid #a9c8d1; border-radius: 12px; background: rgba(255,254,253,.97); box-shadow: 0 8px 24px rgba(31,65,78,.15); }
+    /* In this compact mock the floating strip is a Board sibling, so it is
+       positioned 21px above the card's 50px top rather than above itself. */
+    .above { top: 29px; right: 10px; }
+    .header-actions { position: absolute; top: 3px; right: 4px; display: flex; align-items: center; gap: 1px; padding: 2px; border-radius: 9px; background: rgba(255,254,253,.92); }
+    button.icon-btn { display: inline-grid; width: 30px; height: 30px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; font-size: 15px; transition: .15s ease; }
+    button.icon-btn:hover, button.icon-btn.is-active { color: var(--titanium-deep); border-color: #b7d1da; background: var(--blue-wash); }
+    button.icon-btn.danger { color: var(--danger); border-color: #e8b7b0; background: var(--danger-wash); }
+    button.icon-btn.danger:hover { color: #fff; border-color: var(--danger); background: var(--danger); }
+    .compact button.icon-btn { width: 28px; height: 28px; font-size: 14px; }
+    .divider { width: 1px; height: 18px; margin: 0 3px; background: #d6e3e7; }
+    .menu { position: absolute; z-index: 5; top: 35px; right: 3px; display: none; width: 172px; padding: 5px; border: 1px solid #b8d1d9; border-radius: 10px; background: #fffefd; box-shadow: 0 14px 28px rgba(28,61,73,.18); }
+    .menu.open { display: block; }
+    .menu button { display: flex; width: 100%; align-items: center; gap: 9px; padding: 8px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+    .menu button:hover { background: var(--blue-wash); color: var(--titanium-deep); }
+    .menu .menu-danger { margin-top: 3px; color: var(--danger); border-top: 1px solid #f3d5d0; }
+    .menu .menu-danger:hover { background: var(--danger-wash); }
+    .do-not { display: flex; align-items: center; gap: 6px; margin: 10px 0 14px; padding: 7px 8px; border-radius: 8px; background: #fbf4ed; color: #936139; font-size: 11px; }
+    .rules { margin: 0; padding: 0; list-style: none; }
+    .rules li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; margin: 9px 0; color: #526c75; font-size: 12px; }
+    .rules i { color: var(--titanium); padding-top: 2px; }
+    .rules strong { color: var(--ink); }
+    .bottom { display: grid; grid-template-columns: 1.35fr .9fr; gap: 18px; margin-top: 22px; }
+    .panel { padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(255,254,253,.88); }
+    .panel h2 { margin-top: 0; }
+    .icon-map { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 13px; }
+    .icon-map div { min-height: 74px; padding: 10px; border: 1px solid #d9e6e9; border-radius: 10px; background: #fff; }
+    .icon-map i { display: block; margin-bottom: 6px; color: var(--titanium); font-size: 17px; }
+    .icon-map b { display: block; font-size: 12px; }
+    .icon-map small { display: block; margin-top: 2px; color: var(--muted); font: 10px/1.25 "SF Mono", Menlo, monospace; }
+    .board-row { display: flex; align-items: center; gap: 10px; margin-top: 13px; padding: 9px 10px; border: 1px solid #b7d1da; border-radius: 10px; background: #eff8fa; }
+    .board-row .name { flex: 1; font-weight: 740; }
+    .board-row .clone { color: var(--titanium); }
+    .board-row .board-delete { color: var(--danger); }
+    .decision { margin: 0; color: var(--muted); font-size: 13px; }
+    .decision b { color: var(--ink); }
+    .legend { margin-top: 12px; color: var(--muted); font-size: 11px; }
+    code { padding: 1px 4px; border-radius: 4px; background: #edf3f4; color: #356474; font-family: "SF Mono", Menlo, monospace; font-size: .9em; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="eyebrow">UltraView / Icon & action hierarchy study</div>
+    <h1>不要让“更多”再承担已经可见的动作。</h1>
+    <p class="lede">目标用户是在大画布上对比多个 View 的工程师。图标应像精密仪器的刻度：统一、锐利、动作含义单一；危险动作不用藏起来，也不该在两个入口重复出现。</p>
+
+    <aside class="finding">
+      <i class="fas fa-compass"></i>
+      <div><strong>已确认的根因</strong>当前卡片同时有 40px 选中浮岛与 24px 卡头工具条，两套都含“打开 / 放大 / 适应 / 更多”；卡头 22px 按钮配 14px 图标，而浮岛是 30px 按钮。删除一边是“方框减号”、另一边藏在 <code>…</code>，Board 复制则误用了图片复制符号。</div>
+    </aside>
+
+    <section class="direction-grid" aria-label="三种卡片操作方向">
+      <article class="direction recommended">
+        <span class="tag"><i class="fas fa-check"></i> 推荐 · 单一选中浮岛</span>
+        <h2>方案 A：精确四键</h2>
+        <p class="summary">只保留“选中卡片”上方的一个 40px 浮岛。高频动作直达，删除有独立危险样式；<code>…</code> 仅保留不常用且不重复的动作。</p>
+        <div class="mock-board">
+          <div class="sample-card"><div class="sample-title"><i class="dot"></i>View 2 · 扭矩对比</div><div class="wave"></div></div>
+          <div class="action-island above" data-direction="a">
+            <button class="icon-btn" title="打开原 View"><i class="fas fa-external-link-alt"></i></button>
+            <button class="icon-btn" title="临时放大预览"><i class="fas fa-expand"></i></button>
+            <button class="icon-btn" title="按原图比例调整卡片"><i class="fas fa-vector-square"></i></button>
+            <span class="divider"></span>
+            <button class="icon-btn danger" title="从当前 Board 移除（不删除源 View）"><i class="far fa-trash-alt"></i></button>
+            <button class="icon-btn more" title="其他卡片操作" aria-expanded="false"><i class="fas fa-ellipsis-v"></i></button>
+            <div class="menu">
+              <button><i class="far fa-image"></i>复制本卡图像</button>
+              <button><i class="fas fa-box-open"></i>移到未放置</button>
+              <button><i class="fas fa-exchange-alt"></i>替换为…</button>
+            </div>
+          </div>
+        </div>
+        <p class="do-not"><i class="fas fa-ban"></i><b>关键：</b><code>…</code> 内不再出现“删除 / 打开 / 放大”。</p>
+        <ul class="rules">
+          <li><i class="fas fa-ruler-combined"></i><span><strong>40px 高、30px 命中区、16px glyph。</strong>所有可见工具都同一节拍。</span></li>
+          <li><i class="fas fa-trash-alt"></i><span><strong>删除直接可见且独占红色。</strong>点击前提示“仅从当前 Board 移除”。</span></li>
+          <li><i class="fas fa-mouse-pointer"></i><span>未选中卡不露工具；选中后浮岛靠近卡片，符合 Miro 的上下文操作感。</span></li>
+        </ul>
+      </article>
+
+      <article class="direction">
+        <span class="tag">紧凑保守</span>
+        <h2>方案 B：卡头四键</h2>
+        <p class="summary">保留每张卡头的即时操作，不使用额外浮岛。适合用户总在小卡上连续切换，但视觉密度较高。</p>
+        <div class="mock-board">
+          <div class="sample-card">
+            <div class="sample-title"><i class="dot"></i>View 2 · 扭矩对比</div><div class="wave"></div>
+            <div class="header-actions compact" data-direction="b">
+              <button class="icon-btn" title="打开原 View"><i class="fas fa-external-link-alt"></i></button>
+              <button class="icon-btn" title="临时放大预览"><i class="fas fa-expand"></i></button>
+              <button class="icon-btn more" title="其他卡片操作" aria-expanded="false"><i class="fas fa-ellipsis-v"></i></button>
+              <span class="divider"></span>
+              <button class="icon-btn danger" title="从当前 Board 移除"><i class="far fa-trash-alt"></i></button>
+              <div class="menu">
+                <button><i class="fas fa-vector-square"></i>按原图比例调整</button>
+                <button><i class="far fa-image"></i>复制本卡图像</button>
+                <button><i class="fas fa-box-open"></i>移到未放置</button>
+                <button><i class="fas fa-exchange-alt"></i>替换为…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="do-not"><i class="fas fa-exclamation-triangle"></i><b>代价：</b>即使没有选中卡片，卡头仍有一排高对比控件。</p>
+        <ul class="rules">
+          <li><i class="fas fa-ruler-combined"></i><span><strong>固定 28px 命中区、14px glyph。</strong>不再混用 22/30px。</span></li>
+          <li><i class="fas fa-ellipsis-v"></i><span><strong>适应尺寸进入更多菜单。</strong>腾出空间给标题，模板布局下也避免一个禁用图标。</span></li>
+          <li><i class="fas fa-trash-alt"></i><span>删除始终最右且红色；更多菜单绝不重复删除。</span></li>
+        </ul>
+      </article>
+
+      <article class="direction">
+        <span class="tag">极简画布</span>
+        <h2>方案 C：悬停显现</h2>
+        <p class="summary">默认只看图，悬停或键盘聚焦后从卡头滑入操作条。视觉最安静，但首次发现成本最高。</p>
+        <div class="mock-board">
+          <div class="sample-card">
+            <div class="sample-title"><i class="dot"></i>View 2 · 扭矩对比</div><div class="wave"></div>
+            <div class="header-actions compact" data-direction="c">
+              <button class="icon-btn" title="打开原 View"><i class="fas fa-external-link-alt"></i></button>
+              <button class="icon-btn" title="临时放大预览"><i class="fas fa-expand"></i></button>
+              <button class="icon-btn" title="按原图比例调整"><i class="fas fa-vector-square"></i></button>
+              <span class="divider"></span>
+              <button class="icon-btn danger" title="从当前 Board 移除"><i class="far fa-trash-alt"></i></button>
+            </div>
+          </div>
+        </div>
+        <p class="do-not"><i class="fas fa-eye-slash"></i><b>风险：</b>需要有首用提示，且不可把“删除”也完全藏在右键菜单。</p>
+        <ul class="rules">
+          <li><i class="fas fa-eye"></i><span><strong>默认隐藏，hover/focus 才显现。</strong>不再使用 <code>…</code>，右键仍给完整菜单。</span></li>
+          <li><i class="fas fa-keyboard"></i><span>必须保留键盘焦点、tooltip 与快捷键；不可把悬停当作唯一入口。</span></li>
+          <li><i class="fas fa-chart-line"></i><span>适合“看图优先”的演示模式，不适合高频编辑布局。</span></li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="bottom">
+      <article class="panel">
+        <h2>图标语义合同：不用“图片”代表“复制 Board”</h2>
+        <p class="decision">建议全部使用项目已经安装的 <b>qtawesome / Font Awesome 5</b>，以矢量 <code>QIcon</code> 在当前 DPR 重绘；不再用每个动作各自的 QPainter 小图形。</p>
+        <div class="icon-map">
+          <div><i class="fas fa-external-link-alt"></i><b>打开原 View</b><small>fa5s.external-link-alt</small></div>
+          <div><i class="fas fa-expand"></i><b>临时放大</b><small>fa5s.expand</small></div>
+          <div><i class="fas fa-vector-square"></i><b>按比例适应</b><small>fa5s.vector-square</small></div>
+          <div><i style="color:var(--danger)" class="far fa-trash-alt"></i><b>从 Board 移除</b><small>fa5s.trash-alt</small></div>
+          <div><i class="fas fa-clone"></i><b>复制 Board</b><small>fa5s.clone</small></div>
+          <div><i class="far fa-image"></i><b>复制卡片图像</b><small>fa5s.image</small></div>
+          <div><i class="fas fa-ellipsis-v"></i><b>其他操作</b><small>fa5s.ellipsis-v</small></div>
+          <div><i class="fas fa-exchange-alt"></i><b>替换 / 重新绑定</b><small>fa5s.exchange-alt</small></div>
+        </div>
+      </article>
+      <aside class="panel">
+        <h2>Board 行的修正</h2>
+        <p class="decision">“复制 Board”复制的是布局与 View 引用，不是输出图片；应使用 <b>clone</b>。图片图标只保留给“复制本卡图像”。</p>
+        <div class="board-row"><i class="fas fa-check" style="color:var(--titanium)"></i><span class="name">全局对比</span><i class="fas fa-clone clone" title="复制 Board"></i><i class="far fa-trash-alt board-delete" title="删除 Board"></i></div>
+        <p class="legend">删除 Board 仍需确认；卡片移除不删源 View，提示文案必须明确这层边界。</p>
+      </aside>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll('.more').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const menu = button.parentElement.querySelector('.menu');
+        const willOpen = !menu.classList.contains('open');
+        document.querySelectorAll('.menu.open').forEach((node) => node.classList.remove('open'));
+        menu.classList.toggle('open', willOpen);
+        button.setAttribute('aria-expanded', String(willOpen));
+      });
+    });
+    document.addEventListener('click', () => {
+      document.querySelectorAll('.menu.open').forEach((node) => node.classList.remove('open'));
+      document.querySelectorAll('.more').forEach((node) => node.setAttribute('aria-expanded', 'false'));
+    });
+  </script>
+</body>
+</html>

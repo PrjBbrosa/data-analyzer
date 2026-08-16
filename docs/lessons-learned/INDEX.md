@@ -194,6 +194,8 @@ lesson by default.
 | [A Progress Pump Makes The Render Re-Entrant](pyqt-ui/2026-08-15-progress-pump-makes-the-render-reentrant.md) | Adding/touching any `processEvents` on a render path, the time-domain View switch pipeline, or a `singleShot(0)` that navigates to a View. | `tests/ui/test_view_switch_reentrancy.py`; `rg -n "processEvents\(\)" mf4_analyzer/ui` |
 | [Heatmap Slice Follows Live View](pyqt-ui/2026-08-15-heatmap-slice-follows-live-view.md) | Changing FFT-vs-Time / Order heatmap slice refresh, `sigRangeChangedManually`, `_handle_wheel_dispatch`, Home/`reset_view_to_data_extents`, or `_slice_axis_range`. | See lesson |
 | [UltraView Viewport Gestures Route At CanvasHost Scope](pyqt-ui/2026-08-16-ultraview-viewport-gesture-router.md) | Changing UltraView pan/zoom/pinch/space handling, adding an interactive | See lesson |
+| [UltraView Zoom Settles After Scroll; Fit Fills To 300%](pyqt-ui/2026-08-16-ultraview-zoom-settle-and-fit-fill.md) | Changing UltraView board zoom, `zoom_fit` / 适应, elastic `workspace_extent`, `_broadcast_zoom`, or ToolRail 「一键更新源」 / `sync_preview` navigation. | See lesson |
+| [UltraView Open Parks On Fit, Not Leftover Viewport](pyqt-ui/2026-08-16-ultraview-open-fits-content.md) | Changing UltraView window open/present, `fit_on_open`, `_apply_initial_viewport`, `_restore_viewport_from_board`, or persisted `board.viewport` restore. | See lesson |
 
 ## Selection Rules
 

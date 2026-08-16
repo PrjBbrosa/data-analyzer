@@ -12,8 +12,10 @@ from PyQt5.QtWidgets import QMessageBox
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.ultraview_state import (
     LAYOUT_MODE_FREE_GRID,
+    PreviewMeta,
     UltraViewRef,
     add_ref,
+    free_grid_placement_for,
     membership_set,
     normalize_workspace_payload,
 )
@@ -365,7 +367,10 @@ def test_viewport_survives_save_and_reopen(qapp, qtbot, tmp_path):
     assert restored._ultraview.board.viewport["zoom"] == 1.5
     restored.open_ultraview()
     QCoreApplication.processEvents()
-    assert restored.chart_stack.page_ultraview.board_zoom() == 1.5
+    page = restored.chart_stack.page_ultraview
+    opened = page.board_zoom()
+    page.zoom_fit()
+    assert opened == pytest.approx(page.board_zoom())
 
 
 def test_switching_boards_persists_viewport_to_departing_board(qapp, qtbot, tmp_path):
@@ -401,3 +406,34 @@ def test_switching_boards_persists_viewport_to_departing_board(qapp, qtbot, tmp_
         board for board in restored_workspace.boards if board.board_id == first.board_id
     )
     assert restored_first.viewport == expected
+
+
+def test_reopened_placed_card_does_not_auto_aspect(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "aspect.csv"
+    _write_csv(csv_a)
+    proj = tmp_path / "aspect.tlproj"
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    uv._apply_add_ref(ref)
+    original = free_grid_placement_for(uv.board, ref).rect
+    assert original.column_span == 4
+    assert original.row_span == 3
+    assert win.save_project(proj) is True
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    QCoreApplication.processEvents()
+    ruv = restored._ultraview
+    assert ruv._pending_auto_aspect == {}
+    image = QImage(800, 200, QImage.Format_ARGB32)
+    image.fill(QColor("#336699"))
+    ruv.store.publish(
+        ref, image, digest="hydrate", meta=PreviewMeta(ref=ref, title="time")
+    )
+    ruv._push_preview(ref)
+    assert free_grid_placement_for(ruv.board, ref).rect == original
+    assert ruv._pending_auto_aspect == {}

@@ -4374,13 +4374,17 @@ class MainWindow(
             dlg, "_batch_sheet", self._on_batch_sheet_destroyed,
         )
 
-    def navigate_to_view(self, section: str, view_id: str) -> bool:
-        """Switch Analyzer to a source View and bring this window forward.
+    def navigate_to_view(
+        self, section: str, view_id: str, *, raise_window: bool = True
+    ) -> bool:
+        """Switch Analyzer to a source View.
 
-        UltraView's Board is an independent tool window, so a successful
-        switch must ``raise_`` / ``activateWindow`` or the user never sees it.
-        The Board itself is left open. Returns False when the View id is
-        missing so the caller can arm replacement.
+        ``open_source`` keeps ``raise_window=True`` so the Analyzer comes
+        forward while the Board stays open. UltraView sync/capture must pass
+        ``raise_window=False``: the hidden source still becomes current so
+        ``grab()`` can see it, but raising this window would flash the user
+        out of the Board and back. Returns False when the View id is missing
+        so the caller can arm replacement.
         """
         target = str(view_id)
         if section == "time":
@@ -4406,8 +4410,9 @@ class MainWindow(
                 self._switch_view(idx)
             else:
                 self._on_analysis_switch(section, idx)
-            self.raise_()
-            self.activateWindow()
+            if raise_window:
+                self.raise_()
+                self.activateWindow()
 
         QTimer.singleShot(0, _finish_navigation)
         return True
@@ -4420,6 +4425,7 @@ class MainWindow(
         if existing is not None:
             self._prepare_ultraview_popup()
             self._raise_tool_dialog(existing)
+            self._fit_ultraview_on_open()
             return
         page = getattr(self.chart_stack, "page_ultraview", None)
         stack = getattr(self.chart_stack, "stack", None)
@@ -4428,6 +4434,15 @@ class MainWindow(
         self._present_tool_dialog(
             dlg, "_ultraview_sheet", self._on_ultraview_sheet_destroyed,
         )
+        self._fit_ultraview_on_open()
+
+    def _fit_ultraview_on_open(self) -> None:
+        """Every UltraView open parks on 适应, not leftover pan/zoom."""
+        stack = getattr(self, "chart_stack", None)
+        page = getattr(stack, "page_ultraview", None) if stack is not None else None
+        fitter = getattr(page, "fit_on_open", None)
+        if callable(fitter):
+            fitter()
 
     def _prepare_ultraview_popup(self) -> None:
         uv = getattr(self, "_ultraview", None)

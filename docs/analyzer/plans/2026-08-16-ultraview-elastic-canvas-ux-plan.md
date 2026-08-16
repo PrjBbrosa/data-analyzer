@@ -1,8 +1,9 @@
 # UltraView 弹性画布与非阻断操作体验优化计划
 
-**状态：** Proposed / 未实施
-**日期：** 2026-08-16
-**执行基线：** `963f236e feat(ultraview): anchor inserts and sharpen previews`
+**状态：** Source complete / offscreen owner tests green；macOS 5K 前台与 Windows frozen **UNVERIFIED**  
+**日期：** 2026-08-16  
+**执行基线：** `963f236e feat(ultraview): anchor inserts and sharpen previews`  
+**当前 HEAD：** `42827bea feat(ultraview): add elastic canvas and titanium amber chrome`（Wave 1 已入库；Wave 2 仍在工作区未提交）
 **范围：** UltraView 自由网格的画布边界、平移/缩放、新卡初始尺寸、卡片动作区、删除与反馈，以及已选定的“钛蓝琥珀”视觉系统；不改变只读预览、零分析计算和 View 身份合同，也不把配色扩散到 TraceLab 其他工作区。
 
 ## 0. 决策摘要

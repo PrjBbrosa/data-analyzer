@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 
+import qtawesome as qta
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
@@ -97,6 +98,7 @@ UV_PAPER = QColor(titanium_color("surface_solid"))
 UV_BRAND = QColor(titanium_color("brand"))
 UV_BRAND_DEEP = QColor(titanium_color("brand_deep"))
 UV_AMBER = QColor(titanium_color("amber"))
+UV_DANGER = QColor(titanium_color("danger"))
 UV_WASH = QColor(titanium_color("surface_tint"))
 UV_LINE = QColor(50, 86, 97, 59)
 UV_INK = QColor(titanium_color("ink"))
@@ -597,8 +599,8 @@ class ToolRail(QFrame):
                     self,
                     object_name="ultraViewRailFreeGridButton",
                     icon=Icons.ultraview_free_grid(UV_MUTED),
-                    tooltip="切换 12 列受控自由网格",
-                    accessible_name="切换 12 列受控自由网格",
+                    tooltip="切换自由网格（12 列基准网格）",
+                    accessible_name="切换自由网格（12 列基准网格）",
                 )
                 self._free_grid.setCheckable(True)
                 self._free_grid.clicked.connect(self._on_free_grid_clicked)
@@ -999,8 +1001,11 @@ class _BoardListDelegate(QStyledItemDelegate):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._hovered_row = -1
-        self._copy_icon = Icons.copy_image()
-        self._delete_icon = Icons.close_file()
+        # Duplicating a Board preserves its layout/reference collection; it is
+        # not an image-copy operation.  Use one normalised Font Awesome family
+        # for both compact row actions so their optical boxes match.
+        self._copy_icon = qta.icon("fa5s.clone", color=UV_MUTED)
+        self._delete_icon = qta.icon("fa5s.trash-alt", color=UV_DANGER)
 
     def set_hovered_row(self, row: int) -> None:
         self._hovered_row = int(row)
@@ -1600,8 +1605,8 @@ class NavigationIsland(QFrame):
             self,
             object_name="ultraViewNavFitButton",
             icon=Icons.ultraview_fit(UV_MUTED),
-            tooltip="画布适应视口",
-            accessible_name="画布适应视口",
+            tooltip="适应内容：图面填满画布，最高 300%",
+            accessible_name="适应内容：图面填满画布，最高 300%",
         )
         self._fit.clicked.connect(self.zoom_fit_requested)
         layout.addWidget(self._fit, 0)
@@ -1732,11 +1737,11 @@ class CardContextIsland(QFrame):
         self._stale = False
         self._fit_enabled = False
         for action, object_name, icon, tooltip in (
-            ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(UV_MUTED), "打开原 View"),
-            ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(UV_MUTED), "同步到最新预览"),
-            ("focus", "ultraViewContextFocusButton", Icons.expand_focus(UV_MUTED), "临时放大预览"),
-            ("fit", "ultraViewContextFitButton", Icons.ultraview_fit_to_image(UV_MUTED), self._FIT_TOOLTIP),
-            ("more", "ultraViewContextMoreButton", Icons.menu(UV_MUTED), "更多卡片操作"),
+            ("open", "ultraViewContextOpenButton", qta.icon("fa5s.external-link-alt", color=UV_MUTED), "打开原 View"),
+            ("sync", "ultraViewContextSyncButton", qta.icon("fa5s.sync-alt", color=UV_MUTED), "同步到最新预览"),
+            ("focus", "ultraViewContextFocusButton", qta.icon("fa5s.expand", color=UV_MUTED), "临时放大预览"),
+            ("fit", "ultraViewContextFitButton", qta.icon("fa5s.vector-square", color=UV_MUTED), self._FIT_TOOLTIP),
+            ("more", "ultraViewContextMoreButton", qta.icon("fa5s.ellipsis-v", color=UV_MUTED), "更多卡片操作"),
         ):
             button = _icon_button(
                 self,

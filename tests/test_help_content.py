@@ -269,7 +269,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "标题卡", "类型标签", "完整 ghost",
         "点行切换", "拖拽排序", "行尾复制",
         "一键更新源",
-        "基准网格", "导出标尺", "四向平移", "66%", "适应内容",
+        "基准网格", "导出标尺", "四向平移", "自动适应", "适应内容",
         "临时聚焦", "不删除源 View", "200", "Ctrl/Cmd+Z",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"

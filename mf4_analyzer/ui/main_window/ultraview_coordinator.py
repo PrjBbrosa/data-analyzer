@@ -14,7 +14,7 @@ from contextlib import contextmanager, nullcontext
 from functools import partial
 from pathlib import Path
 from time import monotonic
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any
 
 from PyQt5 import sip
@@ -35,9 +35,11 @@ from ..ultraview_state import (
     GridAnchor,
     active_board,
     add_ref,
+    apply_board_placement,
     apply_free_grid_preset,
     all_refs,
     best_template_for,
+    capture_board_placement,
     create_board,
     delete_board,
     default_board,
@@ -73,9 +75,11 @@ from ..ultraview_state import (
     set_workspace_preview_sidecar,
     swap_slots,
     template_to_free_grid,
+    free_grid_default_span,
     free_grid_to_template,
     free_grid_placement_for,
     organize_free_grid,
+    BoardPlacementSnapshot,
     GridRect,
     workspace_to_payload,
     DEFAULT_BOARD_NAME,
@@ -89,6 +93,12 @@ from ..chart_stack.ultraview.preview_store import (
     RESIDENCY_TIER_ACTIVE_PLACED,
     RESIDENCY_TIER_INACTIVE_PLACED,
     RESIDENCY_TIER_TRAY,
+)
+from ..chart_stack.ultraview.feedback import (
+    MEMBERSHIP_CAP,
+    PLACED_CAP_TO_TRAY,
+    REMOVED_FROM_BOARD,
+    text_for_key,
 )
 from ..chart_stack.ultraview.free_grid import (
     LAYOUT_RESIZE,
@@ -147,16 +157,28 @@ _SECTION_X_UNIT = {
 }
 
 
+_PLACEMENT_HISTORY_CAP = 100
+
+
 @dataclass(frozen=True)
 class _GridHistoryEntry:
-    before: tuple[tuple[UltraViewRef, GridRect], ...]
-    after: tuple[tuple[UltraViewRef, GridRect], ...]
+    before: BoardPlacementSnapshot
+    after: BoardPlacementSnapshot
 
 
 @dataclass
 class _GridHistory:
     undo: list[_GridHistoryEntry]
     redo: list[_GridHistoryEntry]
+
+
+@dataclass(frozen=True)
+class _PendingAutoAspect:
+    board_id: str
+    ref: UltraViewRef
+    inserted_rect: GridRect
+    layout_revision: int
+    merge_add: bool = True
 
 
 def notify_ultraview_plot(window, section: str, reason: str = "plot") -> None:
@@ -466,6 +488,8 @@ class UltraViewCoordinator(QObject):
         self.last_source_mode = "time"
         self._workspace = default_workspace()
         self._grid_histories: dict[str, _GridHistory] = {}
+        self._pending_auto_aspect: dict[tuple[str, UltraViewRef], _PendingAutoAspect] = {}
+        self._layout_revision: dict[str, int] = {}
         self._page_hooks: list[tuple[Any, Any, Any]] = []
         self._stack_hooks: list[tuple[Any, Any, Any]] = []
         self._manager_hooks: list[tuple[Any, Any, Any]] = []
@@ -806,7 +830,7 @@ class UltraViewCoordinator(QObject):
         self._presentation_revision.clear()
         workspace, warnings = normalize_workspace_payload(payload)
         self._workspace = workspace
-        self._grid_histories.clear()
+        self._clear_placement_runtime()
         if project_path is not None and workspace.preview_sidecar is not None:
             opened = open_preview_sidecar(
                 project_path,
@@ -1083,14 +1107,23 @@ class UltraViewCoordinator(QObject):
         secondary = getattr(stack, "secondary_canvas", None)
         return secondary() if callable(secondary) else None
 
+    def _navigate_to_view(
+        self, section: str, view_id: str, *, raise_window: bool = True
+    ) -> bool:
+        """Call ``MainWindow.navigate_to_view``; tolerate 2-arg test fakes."""
+        window = self._window
+        navigate = getattr(window, "navigate_to_view", None) if window is not None else None
+        if not callable(navigate):
+            return False
+        try:
+            return bool(navigate(section, view_id, raise_window=raise_window))
+        except TypeError:
+            return bool(navigate(section, view_id))
+
     def open_source(self, section: str, view_id: str) -> None:
         if self._inactive():
             return
-        window = self._window
-        if window is None:
-            return
-        navigate = getattr(window, "navigate_to_view", None)
-        if callable(navigate) and navigate(section, view_id):
+        if self._navigate_to_view(section, view_id, raise_window=True):
             return
         page = self.page()
         if page is not None:
@@ -1101,7 +1134,9 @@ class UltraViewCoordinator(QObject):
 
         Hidden sources navigate then grab. Multiple syncs in one turn are
         serialized so the last ``navigate_to_view`` cannot steal an earlier
-        canvas before its grab runs.
+        canvas before its grab runs. Sync navigation does not raise the
+        Analyzer; the Board stays in front and is raised only after the
+        queue drains.
         """
         if self._inactive():
             return
@@ -1133,9 +1168,7 @@ class UltraViewCoordinator(QObject):
             self._toast("找不到原 View，无法同步", "warning")
             self._finish_sync_item(ref, wait_capture=False)
             return
-        window = self._window
-        navigate = getattr(window, "navigate_to_view", None) if window is not None else None
-        if callable(navigate) and navigate(ref.section, ref.view_id):
+        if self._navigate_to_view(ref.section, ref.view_id, raise_window=False):
             self._sync_nav_needs_raise = True
             QTimer.singleShot(0, partial(self._sync_preview_after_navigate, ref))
             return
@@ -1347,6 +1380,8 @@ class UltraViewCoordinator(QObject):
         if image_valid and any(ref in placed_ref_set(board) for board in self._workspace.boards):
             self._store.touch(ref)
         self._refresh_open_focus(ref)
+        if image_valid and usable:
+            self._maybe_apply_pending_auto_aspect(ref)
 
     def _refresh_open_focus(self, ref: UltraViewRef) -> None:
         page = self.page()
@@ -1401,11 +1436,30 @@ class UltraViewCoordinator(QObject):
             if page is not None:
                 page.select_ref(ref)
             return
-        warnings = add_ref(board, ref, preferred_anchor=preferred_anchor)
+        image_size = self._preview_image_size(ref)
+        span = None
+        if board.layout_mode == LAYOUT_MODE_FREE_GRID and image_size is not None:
+            span = self._fitted_insert_span(board, image_size)
+        before = self._placement_snapshot(board)
+        warnings = add_ref(
+            board, ref, preferred_anchor=preferred_anchor, span=span
+        )
         if warnings and warnings[0] == "membership_limit":
-            self._toast("本 Board 卡片已达上限", "warning")
+            self._toast(text_for_key(MEMBERSHIP_CAP), "warning")
             return
-        self._after_board_mutation()
+        placed_in_tray = (
+            board.layout_mode == LAYOUT_MODE_FREE_GRID and ref in board.unplaced
+        )
+        if placed_in_tray:
+            self._toast(text_for_key(PLACED_CAP_TO_TRAY), "info")
+        self._commit_grid_change(board, before, [])
+        if (
+            board.layout_mode == LAYOUT_MODE_FREE_GRID
+            and image_size is None
+        ):
+            item = free_grid_placement_for(board, ref)
+            if item is not None:
+                self._register_pending_auto_aspect(board, ref, item.rect)
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
         if self._inactive():
@@ -1422,8 +1476,10 @@ class UltraViewCoordinator(QObject):
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        replace_slot(active_board(self._workspace), slot_id, ref)
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        replace_slot(board, slot_id, ref)
+        self._commit_grid_change(board, before, [])
 
     def _on_rebind_ref(
         self,
@@ -1436,19 +1492,26 @@ class UltraViewCoordinator(QObject):
         new_ref = parse_ref_payload({"section": new_section, "view_id": new_view_id})
         if old_ref is None or new_ref is None:
             return
-        rebind_ref(active_board(self._workspace), old_ref, new_ref)
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        rebind_ref(board, old_ref, new_ref)
+        self._cancel_pending_for_ref(board.board_id, old_ref)
+        self._commit_grid_change(board, before, [])
 
     def _on_swap_slots(self, slot_a: str, slot_b: str) -> None:
-        swap_slots(active_board(self._workspace), slot_a, slot_b)
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        swap_slots(board, slot_a, slot_b)
+        self._commit_grid_change(board, before, [])
 
     def _on_place_from_unplaced(self, slot_id: str, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        place_from_unplaced(active_board(self._workspace), slot_id, ref)
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        place_from_unplaced(board, slot_id, ref)
+        self._commit_grid_change(board, before, [])
 
     def _on_place_free_grid_from_unplaced(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -1458,13 +1521,12 @@ class UltraViewCoordinator(QObject):
         anchor = (
             page.current_free_grid_insert_anchor() if page is not None else None
         )
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
         warnings = place_free_grid_from_unplaced(
-            active_board(self._workspace), ref, preferred_anchor=anchor
+            board, ref, preferred_anchor=anchor
         )
-        if warnings:
-            self._toast_grid_warnings(warnings)
-            return
-        self._after_board_mutation()
+        self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_insert(
         self, section: str, view_id: str, anchor: GridAnchor
@@ -1481,18 +1543,13 @@ class UltraViewCoordinator(QObject):
                 page.select_ref(ref)
             return
         if ref in board.unplaced:
+            before = self._placement_snapshot(board)
             warnings = place_free_grid_from_unplaced(
                 board, ref, preferred_anchor=anchor
             )
-            if warnings:
-                self._toast_grid_warnings(warnings)
-                return
-        else:
-            warnings = add_ref(board, ref, preferred_anchor=anchor)
-            if warnings and warnings[0] == "membership_limit":
-                self._toast("本 Board 卡片已达上限", "warning")
-                return
-        self._after_board_mutation()
+            self._commit_grid_change(board, before, warnings)
+            return
+        self._apply_add_ref(ref, preferred_anchor=anchor)
 
     def _on_free_grid_replace(
         self,
@@ -1505,42 +1562,65 @@ class UltraViewCoordinator(QObject):
         new_ref = parse_ref_payload({"section": source_section, "view_id": source_view_id})
         if target is None or new_ref is None:
             return
-        warnings = replace_free_grid_ref(active_board(self._workspace), target, new_ref)
-        if warnings:
-            self._toast_grid_warnings(warnings)
-            return
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        warnings = replace_free_grid_ref(board, target, new_ref)
+        if not warnings:
+            self._cancel_pending_for_ref(board.board_id, target)
+        self._commit_grid_change(board, before, warnings)
 
     def _on_move_to_unplaced(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        move_to_unplaced(active_board(self._workspace), ref)
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        self._cancel_pending_for_ref(board.board_id, ref)
+        move_to_unplaced(board, ref)
+        self._commit_grid_change(board, before, [])
 
     def _on_remove_ref(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        remove_ref(active_board(self._workspace), ref)
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        if ref not in membership_set(board):
+            return
+        before = self._placement_snapshot(board)
+        self._cancel_pending_for_ref(board.board_id, ref)
+        warnings = remove_ref(board, ref)
+        self._commit_grid_change(board, before, warnings)
+        if not warnings:
+            self._toast(text_for_key(REMOVED_FROM_BOARD), "info")
 
     def _on_layout(self, layout_id: str) -> None:
-        warnings = set_layout(active_board(self._workspace), str(layout_id))
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        warnings = set_layout(board, str(layout_id))
+        self._cancel_pending_for_board(board.board_id)
+        self._bump_layout_revision(board.board_id)
         self._toast_layout_warnings(warnings)
-        self._after_board_mutation()
+        if not self._record_grid_transition(board, before):
+            self._after_board_mutation()
 
     def _on_ratio_nudge(self, steps: int) -> None:
-        nudge_ratio(active_board(self._workspace), int(steps))
-        self._after_board_mutation()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        nudge_ratio(board, int(steps))
+        self._commit_grid_change(board, before, [])
 
     def _on_free_grid_toggled(self, enabled: bool) -> None:
         board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
         if enabled and board.layout_mode != LAYOUT_MODE_FREE_GRID:
             template_to_free_grid(board)
-            self._after_board_mutation()
         elif not enabled and board.layout_mode == LAYOUT_MODE_FREE_GRID:
             free_grid_to_template(board, best_template_for(len(board.free_grid)))
+        else:
+            return
+        self._cancel_pending_for_board(board.board_id)
+        self._bump_layout_revision(board.board_id)
+        if not self._record_grid_transition(board, before):
             self._after_board_mutation()
 
     def _on_free_grid_geometry(
@@ -1557,19 +1637,23 @@ class UltraViewCoordinator(QObject):
         if ref is None:
             return
         board = active_board(self._workspace)
-        before = self._grid_snapshot(board)
-        if not any(item_ref == ref for item_ref, _rect in before):
+        before = self._placement_snapshot(board)
+        wanted = GridRect(int(column), int(row), int(column_span), int(row_span))
+        current = free_grid_placement_for(board, ref)
+        if current is None:
             return
-        warnings = set_free_grid_rect(
-            board,
-            ref,
-            GridRect(int(column), int(row), int(column_span), int(row_span)),
+        span_changed = (
+            current.rect.column_span != wanted.column_span
+            or current.rect.row_span != wanted.row_span
         )
+        warnings = set_free_grid_rect(board, ref, wanted)
+        if not warnings and span_changed:
+            self._cancel_pending_for_ref(board.board_id, ref)
         self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_group_geometry(self, updates) -> None:
         board = active_board(self._workspace)
-        before = self._grid_snapshot(board)
+        before = self._placement_snapshot(board)
         parsed: list[tuple[UltraViewRef, GridRect]] = []
         for item in tuple(updates or ()):
             if not isinstance(item, (tuple, list)) or len(item) != 6:
@@ -1586,7 +1670,20 @@ class UltraViewCoordinator(QObject):
             )
         if not parsed:
             return
+        current = {item.ref: item.rect for item in board.free_grid}
+        span_changed = [
+            ref
+            for ref, wanted in parsed
+            if current.get(ref) is not None
+            and (
+                current[ref].column_span != wanted.column_span
+                or current[ref].row_span != wanted.row_span
+            )
+        ]
         warnings = set_free_grid_rects(board, parsed)
+        if not warnings:
+            for ref in span_changed:
+                self._cancel_pending_for_ref(board.board_id, ref)
         self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_preset(self, section: str, view_id: str, preset: str) -> None:
@@ -1594,10 +1691,12 @@ class UltraViewCoordinator(QObject):
         if ref is None:
             return
         board = active_board(self._workspace)
-        before = self._grid_snapshot(board)
-        if not any(item_ref == ref for item_ref, _rect in before):
+        before = self._placement_snapshot(board)
+        if not any(item_ref == ref for item_ref, _rect in before.free_grid):
             return
         warnings = apply_free_grid_preset(board, ref, preset)
+        if not warnings:
+            self._cancel_pending_for_ref(board.board_id, ref)
         self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_autofit(self, section: str, view_id: str) -> None:
@@ -1615,7 +1714,8 @@ class UltraViewCoordinator(QObject):
         if not PreviewStore.image_valid(image):
             self._toast("没有可用预览，无法按原图比例调整", "warning")
             return
-        before = self._grid_snapshot(board)
+        before = self._placement_snapshot(board)
+        self._cancel_pending_for_ref(board.board_id, ref)
         metrics = screen_grid_metrics(board.free_grid)
         wanted = fit_rect_for_aspect(
             item.rect, (int(image.width()), int(image.height())), metrics
@@ -1639,7 +1739,7 @@ class UltraViewCoordinator(QObject):
 
     def _on_organize_free_grid(self) -> None:
         board = active_board(self._workspace)
-        before = self._grid_snapshot(board)
+        before = self._placement_snapshot(board)
         if not organize_free_grid(board):
             self._record_grid_transition(board, before)
 
@@ -1647,26 +1747,31 @@ class UltraViewCoordinator(QObject):
         return self._grid_histories.setdefault(board.board_id, _GridHistory([], []))
 
     @staticmethod
-    def _grid_snapshot(board: UltraViewBoardState) -> tuple[tuple[UltraViewRef, GridRect], ...]:
-        return tuple((item.ref, item.rect) for item in board.free_grid)
+    def _placement_snapshot(board: UltraViewBoardState) -> BoardPlacementSnapshot:
+        return capture_board_placement(board)
 
     def _record_grid_transition(
         self,
         board: UltraViewBoardState,
-        before: tuple[tuple[UltraViewRef, GridRect], ...],
-    ) -> None:
-        after = self._grid_snapshot(board)
+        before: BoardPlacementSnapshot,
+    ) -> bool:
+        after = self._placement_snapshot(board)
         if after == before:
-            return
+            return False
         history = self._grid_history(board)
         history.undo.append(_GridHistoryEntry(before, after))
+        overflow = len(history.undo) - _PLACEMENT_HISTORY_CAP
+        if overflow > 0:
+            del history.undo[:overflow]
         history.redo.clear()
+        self._clear_pending_merge_flags()
         self._after_board_mutation()
+        return True
 
     def _commit_grid_change(
         self,
         board: UltraViewBoardState,
-        before: tuple[tuple[UltraViewRef, GridRect], ...],
+        before: BoardPlacementSnapshot,
         warnings: list[str],
     ) -> None:
         if warnings:
@@ -1680,7 +1785,10 @@ class UltraViewCoordinator(QObject):
             self._toast("目标位置与其他卡片重叠", "warning")
             return
         if "grid_full" in codes:
-            self._toast("Board 已满：换布局或先移除", "warning")
+            self._toast(text_for_key(PLACED_CAP_TO_TRAY), "info")
+            return
+        if "membership_limit" in codes:
+            self._toast(text_for_key(MEMBERSHIP_CAP), "warning")
             return
         if warnings:
             self._toast(str(warnings[0]), "warning")
@@ -1696,19 +1804,13 @@ class UltraViewCoordinator(QObject):
     def _discard_stale_grid_history(self, history: _GridHistory) -> None:
         history.undo.clear()
         history.redo.clear()
-        self._toast("卡片已增删，撤销记录已清除", "info")
 
     @staticmethod
     def _apply_grid_snapshot(
         board: UltraViewBoardState,
-        snapshot: tuple[tuple[UltraViewRef, GridRect], ...],
+        snapshot: BoardPlacementSnapshot,
     ) -> bool:
-        wanted = dict(snapshot)
-        if len(wanted) != len(snapshot) or set(wanted) != {item.ref for item in board.free_grid}:
-            return False
-        for item in board.free_grid:
-            item.rect = wanted[item.ref]
-        return True
+        return apply_board_placement(board, snapshot)
 
     def _on_free_grid_undo(self) -> None:
         board = active_board(self._workspace)
@@ -1717,8 +1819,9 @@ class UltraViewCoordinator(QObject):
             return
         entry = history.undo.pop()
         if not self._apply_grid_snapshot(board, entry.before):
-            self._discard_stale_grid_history(history)
+            history.undo.append(entry)
             return
+        self._cancel_pending_for_board(board.board_id)
         history.redo.append(entry)
         self._after_board_mutation()
 
@@ -1729,9 +1832,135 @@ class UltraViewCoordinator(QObject):
             return
         entry = history.redo.pop()
         if not self._apply_grid_snapshot(board, entry.after):
-            self._discard_stale_grid_history(history)
+            history.redo.append(entry)
             return
+        self._cancel_pending_for_board(board.board_id)
         history.undo.append(entry)
+        self._after_board_mutation()
+
+    def _preview_image_size(self, ref: UltraViewRef) -> tuple[int, int] | None:
+        record = self._store.get(ref)
+        image = getattr(record, "image", None) if record is not None else None
+        if not PreviewStore.image_valid(image):
+            return None
+        return (int(image.width()), int(image.height()))
+
+    def _fitted_insert_span(
+        self, board: UltraViewBoardState, image_size: tuple[int, int]
+    ) -> tuple[int, int]:
+        column_span, row_span = free_grid_default_span(board)
+        max_rect = GridRect(0, 0, column_span, row_span)
+        fitted = fit_rect_for_aspect(
+            max_rect, image_size, screen_grid_metrics(board.free_grid)
+        )
+        return (fitted.column_span, fitted.row_span)
+
+    def _current_layout_revision(self, board_id: str) -> int:
+        return int(self._layout_revision.get(str(board_id), 0))
+
+    def _bump_layout_revision(self, board_id: str) -> None:
+        key = str(board_id)
+        self._layout_revision[key] = self._current_layout_revision(key) + 1
+
+    def _register_pending_auto_aspect(
+        self,
+        board: UltraViewBoardState,
+        ref: UltraViewRef,
+        inserted_rect: GridRect,
+    ) -> None:
+        self._pending_auto_aspect[(board.board_id, ref)] = _PendingAutoAspect(
+            board_id=board.board_id,
+            ref=ref,
+            inserted_rect=inserted_rect,
+            layout_revision=self._current_layout_revision(board.board_id),
+            merge_add=True,
+        )
+
+    def _cancel_pending_for_ref(self, board_id: str, ref: UltraViewRef) -> None:
+        self._pending_auto_aspect.pop((str(board_id), ref), None)
+
+    def _cancel_pending_for_board(self, board_id: str) -> None:
+        key = str(board_id)
+        self._pending_auto_aspect = {
+            token_key: token
+            for token_key, token in self._pending_auto_aspect.items()
+            if token.board_id != key
+        }
+
+    def _clear_pending_merge_flags(self) -> None:
+        self._pending_auto_aspect = {
+            token_key: replace(token, merge_add=False) if token.merge_add else token
+            for token_key, token in self._pending_auto_aspect.items()
+        }
+
+    def _clear_placement_runtime(self) -> None:
+        self._grid_histories.clear()
+        self._pending_auto_aspect.clear()
+        self._layout_revision.clear()
+
+    def _drop_board_placement_runtime(self, board_id: str) -> None:
+        key = str(board_id)
+        self._grid_histories.pop(key, None)
+        self._layout_revision.pop(key, None)
+        self._cancel_pending_for_board(key)
+
+    def _maybe_apply_pending_auto_aspect(self, ref: UltraViewRef) -> None:
+        if self._inactive():
+            return
+        matching = [
+            token
+            for token in tuple(self._pending_auto_aspect.values())
+            if token.ref == ref
+        ]
+        for token in matching:
+            self._apply_one_pending_auto_aspect(token)
+
+    def _apply_one_pending_auto_aspect(self, token: _PendingAutoAspect) -> None:
+        self._pending_auto_aspect.pop((token.board_id, token.ref), None)
+        board = next(
+            (
+                item
+                for item in self._workspace.boards
+                if item.board_id == token.board_id
+            ),
+            None,
+        )
+        if board is None or board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            return
+        if token.layout_revision != self._current_layout_revision(board.board_id):
+            return
+        item = free_grid_placement_for(board, token.ref)
+        if item is None:
+            return
+        if (
+            item.rect.column_span != token.inserted_rect.column_span
+            or item.rect.row_span != token.inserted_rect.row_span
+        ):
+            return
+        image_size = self._preview_image_size(token.ref)
+        if image_size is None:
+            return
+        cap = GridRect(
+            item.rect.column,
+            item.rect.row,
+            token.inserted_rect.column_span,
+            token.inserted_rect.row_span,
+        )
+        wanted = fit_rect_for_aspect(
+            cap, image_size, screen_grid_metrics(board.free_grid)
+        )
+        if wanted == item.rect:
+            return
+        warnings = set_free_grid_rect(board, token.ref, wanted)
+        if warnings:
+            return
+        after = self._placement_snapshot(board)
+        if token.merge_add:
+            history = self._grid_histories.get(board.board_id)
+            if history is not None and history.undo:
+                last = history.undo[-1]
+                history.undo[-1] = _GridHistoryEntry(last.before, after)
+                history.redo.clear()
         self._after_board_mutation()
 
     def _on_focus(self, section: str, view_id: str) -> None:
@@ -1811,7 +2040,7 @@ class UltraViewCoordinator(QObject):
         if warnings and warnings[0] == "last_board_retained":
             self._toast("至少保留一个 Board", "info")
             return
-        self._grid_histories.pop(str(board_id), None)
+        self._drop_board_placement_runtime(str(board_id))
         self._after_board_mutation()
 
     def _on_reorder_board(self, board_id: str, index: int) -> None:
@@ -1983,8 +2212,9 @@ class UltraViewCoordinator(QObject):
         except ValueError:
             return
         target = slots[(index + int(delta)) % len(slots)]
+        before = self._placement_snapshot(board)
         swap_slots(board, placement.slot_id, target)
-        self._after_board_mutation()
+        self._commit_grid_change(board, before, [])
 
     def _on_set_primary(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -1998,8 +2228,9 @@ class UltraViewCoordinator(QObject):
         primary = "primary" if "primary" in slots else slots[0]
         if placement.slot_id == primary:
             return
+        before = self._placement_snapshot(board)
         swap_slots(board, placement.slot_id, primary)
-        self._after_board_mutation()
+        self._commit_grid_change(board, before, [])
 
     def _on_presentation(self, active: bool) -> None:
         if self._inactive():
@@ -2053,7 +2284,7 @@ class UltraViewCoordinator(QObject):
         self._runtime.clear()
         self._presentation_revision.clear()
         self._workspace = default_workspace()
-        self._grid_histories.clear()
+        self._clear_placement_runtime()
 
     def reset_project_state(self) -> None:
         """Clear Board/Store/runtime for a new or replaced project.
@@ -2080,7 +2311,7 @@ class UltraViewCoordinator(QObject):
         self._runtime.clear()
         self._presentation_revision.clear()
         self._workspace = default_workspace()
-        self._grid_histories.clear()
+        self._clear_placement_runtime()
         self.refresh_page()
 
     def clear(self) -> None:

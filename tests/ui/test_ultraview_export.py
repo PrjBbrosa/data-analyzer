@@ -8,14 +8,22 @@ from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack.ultraview.compositor import (
+    BOARD_BG,
+    TITLE_BAND,
     ComposeError,
     MAX_EXPORT_EDGE,
     MAX_EXPORT_PIXELS,
     compose_board,
+    composed_slot_rects,
     free_grid_output_size,
     image_sha256,
     output_size,
     save_composed_png,
+)
+from mf4_analyzer.ui.chart_stack.ultraview.feedback import format_export_too_large
+from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+    export_grid_metrics,
+    rect_to_pixels,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.preview_store import PreviewStore
 from mf4_analyzer.ui.main_window import MainWindow
@@ -59,6 +67,12 @@ def test_compositor_does_not_import_main_window_or_grab_widgets():
     assert ".grab(" not in source
     assert "grab_pixmap" not in source
     assert "grab_combined" not in source
+    assert "desired_extent" not in source
+    assert "expand_extent" not in source
+    assert "HALO_MIN_CELLS" not in source
+    assert "EDGE_PAN_BAND_PX" not in source
+    assert "from .viewport" not in source
+    assert "from .page" not in source
 
 
 def test_compose_board_fixed_sizes_and_show_flags(qapp):
@@ -170,14 +184,90 @@ def test_pathological_free_grid_2x_export_is_rejected(qapp):
     add_ref(board, make_ref("time", "deep"))
     template_to_free_grid(board)
     assert set_free_grid_rect(board, make_ref("time", "deep"), GridRect(0, 40, 4, 8)) == []
+    width, height = free_grid_output_size(board, 2)
+    assert width > MAX_EXPORT_EDGE or height > MAX_EXPORT_EDGE or width * height > MAX_EXPORT_PIXELS
+    one = compose_board(board, {}, {}, scale=1)
+    assert one.width() == 1600
     try:
         compose_board(board, {}, {}, scale=2)
         raise AssertionError("2× 48-row export should be rejected")
     except ComposeError as exc:
         assert exc.code == "export_too_large"
-        assert str(MAX_EXPORT_EDGE) in exc.message
-        assert str(MAX_EXPORT_PIXELS) in exc.message
-        assert "×" in exc.message
+        assert exc.message == format_export_too_large(width, height)
+        assert "改用 1× 或整理卡片" in exc.message
+        assert str(MAX_EXPORT_EDGE) not in exc.message
+        assert str(MAX_EXPORT_PIXELS) not in exc.message
+
+
+def test_base_frame_export_pixel_positions_stay_on_1600_pitch(qapp):
+    board = default_board()
+    left = make_ref("time", "left")
+    right = make_ref("fft", "right")
+    add_ref(board, left)
+    add_ref(board, right)
+    template_to_free_grid(board)
+    assert set_free_grid_rect(board, left, GridRect(0, 0, 4, 3)) == []
+    assert set_free_grid_rect(board, right, GridRect(8, 0, 4, 3)) == []
+    metrics = export_grid_metrics(board.free_grid)
+    assert metrics.board_width == 1600
+    expected = {}
+    for ref, rect in ((left, GridRect(0, 0, 4, 3)), (right, GridRect(8, 0, 4, 3))):
+        x, y, width, height = rect_to_pixels(rect, metrics)
+        expected[f"grid:{ref.section}:{ref.view_id}"] = (
+            x,
+            y + TITLE_BAND,
+            width,
+            height,
+        )
+    assert composed_slot_rects(board, scale=1, title=True) == expected
+    image = compose_board(board, {}, {}, scale=1)
+    assert (image.width(), image.height()) == free_grid_output_size(board, 1)
+    assert image.width() == 1600
+    assert [item.rect for item in board.free_grid] == [
+        GridRect(0, 0, 4, 3),
+        GridRect(8, 0, 4, 3),
+    ]
+
+
+def test_negative_column_card_is_present_in_export(qapp):
+    board = default_board()
+    ref = make_ref("time", "signed")
+    add_ref(board, ref)
+    template_to_free_grid(board)
+    placed = GridRect(-4, 0, 4, 3)
+    assert set_free_grid_rect(board, ref, placed) == []
+    store = PreviewStore()
+    store.publish(ref, _image(48, 32, color="#cc1122"), digest="n", meta=_meta(ref))
+    image = compose_board(board, {ref: store.get(ref)}, {ref: "fresh"}, scale=1)
+    assert image.width() > 1600
+    metrics = export_grid_metrics(board.free_grid)
+    col0_x = rect_to_pixels(GridRect(0, 0, 1, 1), metrics, origin_offset=(-4, 0))[0]
+    slot = composed_slot_rects(board, scale=1, title=True)[f"grid:{ref.section}:{ref.view_id}"]
+    assert slot[0] + slot[2] <= col0_x
+    ink = 0
+    bg = BOARD_BG.rgb()
+    for y in range(slot[1], slot[1] + slot[3]):
+        for x in range(slot[0], min(col0_x, slot[0] + slot[2])):
+            if image.pixel(x, y) != bg:
+                ink += 1
+    assert ink > 0
+    assert board.free_grid[0].rect == placed
+
+
+def test_compositor_does_not_import_halo_or_session_extent():
+    source = _COMPOSITOR.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module)
+            for alias in node.names:
+                imported.append(alias.name)
+    assert "content_bounds" in imported
+    assert "desired_extent" not in imported
+    assert "expand_extent" not in imported
+    assert "HALO_MIN_CELLS" not in imported
+    assert "edge_pan_velocity" not in imported
 
 
 def test_save_png_atomic_replace_and_failure_leaves_no_empty_file(qapp, tmp_path, monkeypatch):
@@ -328,7 +418,7 @@ def test_free_grid_preset_collision_toasts_and_skips_history(qapp, qtbot, monkey
     assert history is None or history.undo == []
 
 
-def test_free_grid_undo_clears_history_when_membership_changes(qapp, qtbot, monkeypatch):
+def test_free_grid_undo_keeps_history_when_membership_changes(qapp, qtbot, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     uv = win._ultraview
@@ -338,15 +428,16 @@ def test_free_grid_undo_clears_history_when_membership_changes(qapp, qtbot, monk
     fft_ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
     add_ref(uv.board, time_ref)
     uv._on_free_grid_toggled(True)
+    before = uv.board.free_grid[0].rect
     uv._on_free_grid_geometry(time_ref.section, time_ref.view_id, 0, 6, 4, 3, "test")
     history = uv._grid_histories[uv.board.board_id]
     assert history.undo
     add_ref(uv.board, fft_ref)
     uv._after_board_mutation()
     uv._on_free_grid_undo()
-    assert history.undo == []
-    assert history.redo == []
-    assert any("撤销记录已清除" in msg for msg, _ in toasts)
+    assert uv.board.free_grid[0].rect == before
+    assert history.redo
+    assert not any("撤销记录已清除" in msg for msg, _ in toasts)
 
 
 def test_free_grid_group_geometry_is_one_undo_entry(qapp, qtbot):
@@ -423,7 +514,8 @@ def test_export_too_large_toasts_dimensions_and_limits(qapp, qtbot, monkeypatch)
     assert toasts
     message, level = toasts[-1]
     assert level == "warning"
-    assert "超出导出上限" in message
-    assert str(MAX_EXPORT_EDGE) in message
-    assert str(MAX_EXPORT_PIXELS) in message
-    assert "×" in message
+    width, height = free_grid_output_size(uv.board, 2)
+    assert format_export_too_large(width, height) in message
+    assert "改用 1× 或整理卡片" in message
+    assert str(MAX_EXPORT_EDGE) not in message
+    assert str(MAX_EXPORT_PIXELS) not in message

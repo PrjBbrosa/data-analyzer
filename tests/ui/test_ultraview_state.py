@@ -940,3 +940,49 @@ def test_unknown_board_fields_passthrough_with_viewport():
     out = uvs.board_to_payload(board)
     assert out["board"]["viewport"]["zoom"] == pytest.approx(0.5)
     assert out["board"]["future_camera"] == {"keep": True}
+
+
+def test_add_ref_honors_explicit_span_for_insert_resolver():
+    board = uvs.default_board()
+    ref = _ref("time", "wide")
+    assert uvs.add_ref(board, ref, span=(6, 2)) == []
+    item = uvs.free_grid_placement_for(board, ref)
+    assert item is not None
+    assert item.rect == uvs.GridRect(0, 0, 6, 2)
+
+
+def test_board_placement_snapshot_omits_name_viewport_and_restores_exact_geometry():
+    board = uvs.default_board()
+    board.name = "不要进入快照"
+    board.viewport = {"zoom": 1.5, "center_x": 9.0, "center_y": 8.0}
+    placed = _ref("time", "parked")
+    tray = _ref("fft", "tray")
+    board.free_grid = [
+        uvs.FreeGridPlacement(placed, uvs.GridRect(5, 7, 4, 3)),
+    ]
+    board.unplaced = [tray]
+    snapshot = uvs.capture_board_placement(board)
+    assert snapshot.layout_mode == uvs.LAYOUT_MODE_FREE_GRID
+    assert snapshot.layout_id == board.layout_id
+    assert snapshot.primary_ratio == board.primary_ratio
+    assert snapshot.free_grid == ((placed, uvs.GridRect(5, 7, 4, 3)),)
+    assert snapshot.unplaced == (tray,)
+    assert not hasattr(snapshot, "name")
+    assert not hasattr(snapshot, "viewport")
+
+    board.name = "已改名"
+    board.viewport = {"zoom": 0.5, "center_x": 0.0, "center_y": 0.0}
+    board.free_grid = [
+        uvs.FreeGridPlacement(placed, uvs.GridRect(0, 0, 4, 3)),
+    ]
+    board.unplaced = []
+    assert uvs.apply_board_placement(board, snapshot) is True
+    assert board.name == "已改名"
+    assert board.viewport["zoom"] == pytest.approx(0.5)
+    assert uvs.free_grid_placement_for(board, placed).rect == uvs.GridRect(5, 7, 4, 3)
+    assert board.unplaced == [tray]
+    assert uvs.add_ref(board, _ref("order", "other")) == []
+    other = uvs.free_grid_placement_for(board, _ref("order", "other"))
+    assert other is not None
+    assert other.rect.column == 0
+    assert other.rect.row == 0

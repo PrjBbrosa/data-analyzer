@@ -6,6 +6,7 @@ from PyQt5.QtCore import QPoint, QSize, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox, QToolButton, QWidget
 
+import mf4_analyzer.ui.chart_stack.ultraview.widgets as ultraview_widgets
 from mf4_analyzer.ui.chart_stack.ultraview.viewport import LOD_FULL, LOD_TITLE_ONLY
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     CardViewModel,
@@ -132,6 +133,34 @@ def test_remove_tooltip_and_accessible_name_are_exact(qtbot, qapp, free_grid):
     assert remove is not None
     assert remove.toolTip() == _REMOVE_TIP
     assert remove.accessibleName() == _REMOVE_TIP
+
+
+def test_card_action_bar_uses_font_awesome_and_marks_existing_remove_as_danger(
+    qtbot, qapp, monkeypatch
+):
+    """Only presentation changes: action order and typed signal contracts stay put."""
+    assert hasattr(ultraview_widgets, "qta")
+    calls: list[str] = []
+    real_icon = ultraview_widgets.qta.icon
+
+    def record_icon(name, *args, **kwargs):
+        calls.append(str(name))
+        return real_icon(name, *args, **kwargs)
+
+    monkeypatch.setattr(ultraview_widgets.qta, "icon", record_icon)
+    card = _make_card(qtbot, qapp)
+
+    assert set(calls) >= {
+        "fa5s.external-link-alt",
+        "fa5s.expand",
+        "fa5s.vector-square",
+        "fa5s.trash-alt",
+        "fa5s.ellipsis-v",
+    }
+    assert _visible_actions(card) == list(_FULL_ACTIONS)
+    remove = card.action_button("remove")
+    assert remove is not None
+    assert remove.property("danger") == "true"
 
 
 @pytest.mark.parametrize("free_grid", (False, True))

@@ -144,7 +144,8 @@ def test_scale_grid_metrics_is_identity_at_1x_and_uniform_at_2x():
 def test_zoomed_viewport_and_fit_zoom_clamp_to_product_range():
     assert zoomed_viewport_size((800, 400), 2.0) == (1600, 800)
     assert fit_zoom((2000, 1000), (500, 400)) == ZOOM_MIN
-    assert fit_zoom((400, 200), (800, 800)) == BOARD_FIT_ZOOM_MAX
+    assert fit_zoom((400, 200), (800, 800)) == pytest.approx(2.0)
+    assert fit_zoom((40, 20), (800, 800)) == BOARD_FIT_ZOOM_MAX
     assert wheel_zoom_factor(120) == pytest.approx(1.1)
     assert wheel_zoom_factor(-120) == pytest.approx(1.1 ** -1)
     assert wheel_event_delta_y(0, 120) == 120
@@ -172,14 +173,16 @@ def test_two_card_working_frame_uses_cell_pitch_not_full_canvas():
     assert frame == pytest.approx((expected_w, expected_h))
 
 
-def test_board_fit_zoom_never_exceeds_100_percent():
+def test_board_fit_zoom_fills_canvas_up_to_300_percent():
     tiny_card = (80.0, 60.0)
     huge_view = (2560.0, 1440.0)
     assert board_fit_zoom(tiny_card, huge_view) == pytest.approx(BOARD_FIT_ZOOM_MAX)
-    assert board_fit_zoom(tiny_card, huge_view) <= 1.0
+    assert board_fit_zoom(tiny_card, huge_view) == pytest.approx(ZOOM_MAX)
     metrics = screen_grid_metrics(())
     frame = two_card_working_frame(metrics)
-    assert board_fit_zoom(frame, huge_view) == pytest.approx(1.0)
+    filled = board_fit_zoom(frame, huge_view)
+    assert filled > 1.0
+    assert filled <= ZOOM_MAX
     cramped = board_fit_zoom((2000.0, 1200.0), (800.0, 500.0))
     assert ZOOM_MIN <= cramped < 1.0
 
@@ -203,11 +206,13 @@ def test_new_board_default_zoom_never_exceeds_66_percent():
     assert fitted < NEW_BOARD_ZOOM_MAX
 
 
-def test_empty_board_fit_caps_at_100_new_board_caps_at_66():
+def test_empty_board_fit_fills_working_frame_new_board_caps_at_66():
     metrics = screen_grid_metrics(())
     frame = two_card_working_frame(metrics)
     huge_view = (4000.0, 3000.0)
-    assert board_fit_zoom(frame, huge_view) == pytest.approx(1.0)
+    fitted = board_fit_zoom(frame, huge_view)
+    assert fitted > 1.0
+    assert fitted <= ZOOM_MAX
     assert default_board_zoom(huge_view, frame) == pytest.approx(NEW_BOARD_ZOOM_MAX)
 
 
@@ -342,6 +347,46 @@ def test_ctrl_wheel_keeps_the_logical_point_under_the_cursor(qtbot):
         scroll.horizontalScrollBar().value() != 0
         or scroll.verticalScrollBar().value() != 0
     )
+
+
+def test_wheel_zoom_does_not_chase_viewport_while_scroll_is_in_flight(qtbot):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    page = harness.page
+    orig = page._visible_workspace_bounds
+
+    def guarded():
+        if page._zoom_in_flight > 0:
+            raise AssertionError("zoom must not union the live viewport")
+        return orig()
+
+    page._visible_workspace_bounds = guarded
+    card = cards[0]
+    local = QPoint(max(24, card.width() * 2 // 3), max(24, card.height() * 2 // 3))
+    _wheel(card, 120, pos=local)
+    assert page.board_zoom() > 0.25
+
+
+def test_wheel_zoom_does_not_refresh_extent_until_idle(qtbot):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    page = harness.page
+    calls: list[object] = []
+    orig = page._refresh_workspace_extent
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return orig(**kwargs)
+
+    page._refresh_workspace_extent = spy
+    card = cards[0]
+    local = QPoint(max(24, card.width() * 2 // 3), max(24, card.height() * 2 // 3))
+    _wheel(card, 120, pos=local)
+    _wheel(card, 120, pos=local)
+    assert calls == []
+    page._smooth_timer.stop()
+    page._on_smooth_preview_timeout()
+    assert calls
 
 
 def test_ctrl_wheel_anchors_when_global_position_is_zero(qtbot):
@@ -765,10 +810,10 @@ def test_fit_and_zoom_to_card_end_state(qtbot):
     harness.page.zoom_fit()
     viewport = harness.page.board_scroll_area().viewport()
     content = free.content_rect_1x()
-    fit = harness.page._content_fit_rect()
+    fill = harness.page._content_fill_rect()
     expected_zoom = board_fit_zoom(
         (float(content[2]), float(content[3])),
-        (float(fit.width), float(fit.height)),
+        (float(fill.width), float(fill.height)),
     )
     assert harness.page.board_zoom() == pytest.approx(expected_zoom)
     card = cards[0]
@@ -832,14 +877,24 @@ def _union_cards_in_host(page, cards):
     return (min(left), min(top), max(right) - min(left), max(bottom) - min(top))
 
 
-def test_zoom_fit_fills_the_safe_zone_with_content(qtbot):
+def test_zoom_fit_fill_rect_is_taller_than_parking_fit(qtbot):
+    harness = _Harness(qtbot)
+    fit = harness.page._content_fit_rect()
+    fill = harness.page._content_fill_rect()
+    assert fill.x == fit.x
+    assert fill.y == fit.y
+    assert fill.width == fit.width
+    assert fill.height > fit.height
     harness = _Harness(qtbot)
     _free, cards = _prepare_free_grid(harness, qtbot, "a", "b", "c", "d")
     harness.page.zoom_fit()
     qtbot.wait(10)
-    fit = harness.page._content_fit_rect()
+    target = harness.page._content_fill_rect()
     _x, _y, width, height = _union_cards_in_host(harness.page, cards)
-    fill = max(width / max(1.0, float(fit.width)), height / max(1.0, float(fit.height)))
+    fill = max(
+        width / max(1.0, float(target.width)),
+        height / max(1.0, float(target.height)),
+    )
     assert fill >= 1.0 - 2.0 * FIT_CONTENT_MARGIN - 0.02
 
 
@@ -848,26 +903,25 @@ def test_zoom_fit_centers_content_in_the_safe_zone(qtbot):
     _free, cards = _prepare_free_grid(harness, qtbot, "a", "b", "c", "d")
     harness.page.zoom_fit()
     qtbot.wait(10)
-    fit = harness.page._content_fit_rect()
+    target = harness.page._content_fill_rect()
     x, y, width, height = _union_cards_in_host(harness.page, cards)
-    assert x + width / 2.0 == pytest.approx(float(fit.x) + float(fit.width) / 2.0, abs=2)
-    assert y + height / 2.0 == pytest.approx(float(fit.y) + float(fit.height) / 2.0, abs=2)
+    assert x + width / 2.0 == pytest.approx(float(target.x) + float(target.width) / 2.0, abs=2)
+    assert y + height / 2.0 == pytest.approx(float(target.y) + float(target.height) / 2.0, abs=2)
 
 
 def test_zoom_fit_on_an_empty_board_uses_two_card_working_frame(qtbot):
     harness = _Harness(qtbot)
     canvas = harness.page._free_grid
     assert canvas.content_rect_1x() is None
-    fit = harness.page._content_fit_rect()
+    fill = harness.page._content_fill_rect()
     frame = two_card_working_frame(screen_grid_metrics(()))
     harness.page.zoom_fit()
-    expected = board_fit_zoom(frame, (float(fit.width), float(fit.height)))
-    # page host extent: Task 2 remainder
+    expected = board_fit_zoom(frame, (float(fill.width), float(fill.height)))
     assert harness.page.board_zoom() == pytest.approx(expected)
     assert expected <= BOARD_FIT_ZOOM_MAX
 
 
-def test_zoom_fit_single_card_does_not_exceed_100_percent(qtbot):
+def test_zoom_fit_single_card_can_fill_up_to_300_percent(qtbot):
     harness = _Harness(qtbot)
     harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
     harness.board.placements.clear()
@@ -878,9 +932,8 @@ def test_zoom_fit_single_card_does_not_exceed_100_percent(qtbot):
     harness.page.set_board(harness.board)
     qtbot.wait(10)
     harness.page.zoom_fit()
-    # page host extent: Task 2 remainder
+    assert harness.page.board_zoom() > 1.0
     assert harness.page.board_zoom() <= BOARD_FIT_ZOOM_MAX
-    assert harness.page.board_zoom() != ZOOM_MAX
 
 
 def test_zoom_fit_fills_and_centers_template_content(qtbot):
@@ -894,12 +947,15 @@ def test_zoom_fit_fills_and_centers_template_content(qtbot):
     assert all(card is not None for card in cards)
     harness.page.zoom_fit()
     qtbot.wait(10)
-    fit = harness.page._content_fit_rect()
+    target = harness.page._content_fill_rect()
     x, y, width, height = _union_cards_in_host(harness.page, cards)
-    fill = max(width / max(1.0, float(fit.width)), height / max(1.0, float(fit.height)))
+    fill = max(
+        width / max(1.0, float(target.width)),
+        height / max(1.0, float(target.height)),
+    )
     assert fill >= 1.0 - 2.0 * FIT_CONTENT_MARGIN - 0.02
-    assert x + width / 2.0 == pytest.approx(float(fit.x) + float(fit.width) / 2.0, abs=2)
-    assert y + height / 2.0 == pytest.approx(float(fit.y) + float(fit.height) / 2.0, abs=2)
+    assert x + width / 2.0 == pytest.approx(float(target.x) + float(target.width) / 2.0, abs=2)
+    assert y + height / 2.0 == pytest.approx(float(target.y) + float(target.height) / 2.0, abs=2)
 
 
 def test_lod_hides_footer_below_sixty_percent(qtbot):
@@ -1072,17 +1128,42 @@ def test_zoom_persists_on_board_and_restores_when_switching(qtbot):
     second = default_board()
     second.name = "另一块板"
     harness.page.set_board(second)
-    fit = harness.page._content_fit_rect()
-    expected = default_board_zoom(
-        (float(fit.width), float(fit.height)),
+    fill = harness.page._content_fill_rect()
+    expected = board_fit_zoom(
         two_card_working_frame(screen_grid_metrics(())),
+        (float(fill.width), float(fill.height)),
     )
     actual = harness.page.board_zoom()
     harness.page.set_board(first)
     assert harness.page.board_zoom() == pytest.approx(1.5)
-    # page host extent: Task 2 remainder
     assert actual == pytest.approx(expected)
-    assert expected <= NEW_BOARD_ZOOM_MAX
+    assert expected <= BOARD_FIT_ZOOM_MAX
+
+
+def test_fit_on_open_ignores_leftover_pan_and_zoom(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    page = harness.page
+    page.zoom_fit()
+    qtbot.wait(10)
+    expected_zoom = page.board_zoom()
+    expected_center = page._current_center()
+    page.set_board_zoom(2.0)
+    scroll = page.board_scroll_area()
+    scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+    leftover_zoom = page.board_zoom()
+    leftover_center = page._current_center()
+    assert leftover_zoom == pytest.approx(2.0)
+    page.fit_on_open()
+    qtbot.wait(10)
+    fitted_center = page._current_center()
+    assert page.board_zoom() == pytest.approx(expected_zoom)
+    assert fitted_center == pytest.approx(expected_center, abs=2.0)
+    assert (
+        abs(fitted_center[0] - leftover_center[0]) > 2.0
+        or abs(fitted_center[1] - leftover_center[1]) > 2.0
+    )
 
 
 def test_zoom_reset_preserves_the_current_workspace_center(qtbot):
@@ -1142,6 +1223,18 @@ def test_page_edge_timer_is_owned_by_the_page_and_stops_on_gesture_end(qtbot):
     free.workspace_gesture_changed.emit(False, None)
     assert not page._edge_pan_timer.isActive()
     assert not page._edge_pan_active
+
+
+@pytest.mark.parametrize("view_ids", [(), ("a", "b")])
+def test_zoom_100_percent_keeps_four_way_pan_slack(qtbot, view_ids):
+    harness = _Harness(qtbot)
+    if view_ids:
+        _prepare_free_grid(harness, qtbot, *view_ids)
+    harness.page.zoom_reset()
+    qtbot.wait(10)
+    scroll = harness.page.board_scroll_area()
+    assert scroll.horizontalScrollBar().maximum() > 0
+    assert scroll.verticalScrollBar().maximum() > 0
 
 
 def test_switching_boards_does_not_copy_viewport_via_scroll_clamp(qtbot):

@@ -597,7 +597,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "标尺" in by_id["ultraview.limits"].text
     assert "24" in by_id["ultraview.limits"].text
     assert "200" in by_id["ultraview.limits"].text
-    assert "66%" in by_id["ultraview.zoom"].text
+    assert "适应" in by_id["ultraview.zoom"].text
+    assert "300%" in by_id["ultraview.zoom"].text
     assert "100%" in by_id["ultraview.zoom"].text
     assert "300%" in by_id["ultraview.inspect"].text
     assert "Esc" in by_id["ultraview.inspect"].text

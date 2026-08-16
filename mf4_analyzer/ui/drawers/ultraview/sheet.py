@@ -60,6 +60,7 @@ class UltraViewSheet(QDialog):
         self._adopt_page()
         self._silence_dialog_buttons()
         present_independent_tool_window(self)
+        self._fit_page_on_open()
 
     def toast(self, text: str, kind: str = "info") -> None:
         """Paint acknowledgement on this Board window, not the Analyzer."""
@@ -81,6 +82,17 @@ class UltraViewSheet(QDialog):
         super().showEvent(event)
         clear_tool_window_transient_parent(self)
         self._silence_dialog_buttons()
+        self._fit_page_on_open()
+
+    def _fit_page_on_open(self) -> None:
+        if not _alive(self):
+            return
+        page = self._page
+        if not _alive(page):
+            return
+        fitter = getattr(page, "fit_on_open", None)
+        if callable(fitter):
+            fitter()
 
     def keyPressEvent(self, event):  # noqa: N802 (Qt API)
         # QDialog treats Return as accept() when a default/autoDefault

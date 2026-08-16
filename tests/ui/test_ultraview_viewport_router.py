@@ -1,12 +1,16 @@
 """Event-sequence contracts for UltraView's canvas-wide viewport gestures."""
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent, QNativeGestureEvent, QWheelEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QPushButton
 
+from mf4_analyzer.ui.chart_stack.ultraview.viewport_router import ViewportGestureRouter
 from mf4_analyzer.ui.ultraview_state import add_ref, make_ref, set_layout
 from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
 
@@ -228,3 +232,41 @@ def test_space_is_not_consumed_while_text_input_has_focus(qtbot):
     QTest.keyPress(field, Qt.Key_Space)
     assert not page.board_viewport().space_down()
     QTest.keyRelease(field, Qt.Key_Space)
+
+
+def _is_application_install_event_filter(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if not isinstance(func, ast.Attribute) or func.attr != "installEventFilter":
+        return False
+    owner = func.value
+    if isinstance(owner, ast.Name) and owner.id in {"app", "qApp"}:
+        return True
+    if isinstance(owner, ast.Call) and isinstance(owner.func, ast.Attribute):
+        return owner.func.attr == "instance"
+    return False
+
+
+def test_only_viewport_router_installs_an_application_event_filter():
+    root = (
+        Path(__file__).resolve().parents[2]
+        / "mf4_analyzer"
+        / "ui"
+        / "chart_stack"
+        / "ultraview"
+    )
+    hits = []
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if _is_application_install_event_filter(node):
+                hits.append(path.name)
+    assert hits == ["viewport_router.py"]
+
+
+def test_page_keeps_exactly_one_installed_viewport_router(qtbot):
+    harness = _Harness(qtbot)
+    routers = harness.page.findChildren(ViewportGestureRouter)
+    assert len(routers) == 1
+    assert routers[0]._installed is True

@@ -296,6 +296,23 @@ class FreeGridPlacement:
     rect: GridRect
 
 
+@dataclass(frozen=True)
+class BoardPlacementSnapshot:
+    """Qt-free Board membership + geometry for placement undo.
+
+    Captures placed template slots, free-grid rects, tray order, and the
+    layout fields needed to restore them exactly. Name, viewport, preview
+    pixels, and Qt objects stay out.
+    """
+
+    layout_mode: str
+    layout_id: str
+    primary_ratio: float
+    placements: tuple[tuple[str, UltraViewRef], ...]
+    free_grid: tuple[tuple[UltraViewRef, GridRect], ...]
+    unplaced: tuple[UltraViewRef, ...]
+
+
 @dataclass
 class UltraViewBoardState:
     board_id: str
@@ -678,10 +695,13 @@ def add_ref(
     ref: UltraViewRef,
     *,
     preferred_anchor: GridAnchor | None = None,
+    span: tuple[int, int] | None = None,
 ) -> list[str]:
     """Add ``ref`` to the first empty slot, or the tray if the board is full.
 
     Duplicate membership is a no-op so the caller can locate the existing card.
+    ``span`` overrides the Board default size for a free-grid insert so ghost,
+    model, and card can share one shrink-only aspect.
     """
     warnings: list[str] = []
     if ref in membership_set(board):
@@ -692,7 +712,7 @@ def add_ref(
         if len(board.free_grid) >= MAX_PLACED_CARDS:
             _append_unplaced(board, ref)
             return warnings
-        span = free_grid_default_span(board)
+        span = _resolved_insert_span(board, span)
         rect = (
             resolve_free_grid_insert_rect(board.free_grid, span=span, anchor=preferred_anchor)
             if preferred_anchor is not None
@@ -988,6 +1008,63 @@ def free_grid_default_span(board: UltraViewBoardState) -> tuple[int, int]:
     return FREE_GRID_PRESETS.get(
         str(board.free_grid_default_size), FREE_GRID_PRESETS["standard"]
     )
+
+
+def _resolved_insert_span(
+    board: UltraViewBoardState, span: tuple[int, int] | None
+) -> tuple[int, int]:
+    if span is None:
+        return free_grid_default_span(board)
+    try:
+        column_span, row_span = int(span[0]), int(span[1])
+    except (TypeError, ValueError, IndexError):
+        return free_grid_default_span(board)
+    legal = _legal_grid_rect(
+        {
+            "column": 0,
+            "row": 0,
+            "column_span": column_span,
+            "row_span": row_span,
+        }
+    )
+    if legal is None:
+        return free_grid_default_span(board)
+    return (legal.column_span, legal.row_span)
+
+
+def capture_board_placement(board: UltraViewBoardState) -> BoardPlacementSnapshot:
+    """Immutable placement snapshot. Safe to keep on an undo stack."""
+    return BoardPlacementSnapshot(
+        layout_mode=str(board.layout_mode),
+        layout_id=str(board.layout_id),
+        primary_ratio=float(board.primary_ratio),
+        placements=tuple((item.slot_id, item.ref) for item in board.placements),
+        free_grid=tuple((item.ref, item.rect) for item in board.free_grid),
+        unplaced=tuple(board.unplaced),
+    )
+
+
+def apply_board_placement(
+    board: UltraViewBoardState, snapshot: BoardPlacementSnapshot
+) -> bool:
+    """Restore exact membership, tray order, slots, and GridRects.
+
+    Does not first-fit, re-anchor, or consult PreviewStore. Returns False
+    only when ``snapshot`` is not a placement snapshot.
+    """
+    if not isinstance(snapshot, BoardPlacementSnapshot):
+        return False
+    board.layout_mode = snapshot.layout_mode
+    board.layout_id = snapshot.layout_id
+    board.primary_ratio = snapshot.primary_ratio
+    board.placements = [
+        CardPlacement(slot_id, ref) for slot_id, ref in snapshot.placements
+    ]
+    board.free_grid = [
+        FreeGridPlacement(ref, rect) for ref, rect in snapshot.free_grid
+    ]
+    board.unplaced = list(snapshot.unplaced)
+    return True
 
 
 def _nearest_grid_index(value: float) -> int:

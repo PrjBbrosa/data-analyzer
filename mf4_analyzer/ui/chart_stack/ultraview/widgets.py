@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Mapping, Sequence
 
+import qtawesome as qta
 from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QEvent, QMimeData, QObject, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
@@ -68,6 +69,7 @@ from mf4_analyzer.ui.ultraview_state import (
     GridBounds,
     GridRect,
     UltraViewBoardState,
+    safety_grid_bounds,
     UltraViewRef,
     parse_ref_payload,
     resolve_free_grid_insert_rect,
@@ -75,6 +77,7 @@ from mf4_analyzer.ui.ultraview_state import (
 )
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.menus import add_rounded_submenu, apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.ultraview_style import titanium_color
 from mf4_analyzer.ui_kit.widgets import SearchField
 
 from .chrome import ULTRAVIEW_MUTED
@@ -142,6 +145,9 @@ HANDLE_CURSORS = {
 }
 
 REPLACE_HOVER_MS = 600
+
+_CARD_ICON = titanium_color("muted")
+_CARD_DANGER = titanium_color("danger")
 
 _PLANNER_LOG = logging.getLogger(__name__)
 _PLANNER_LOG_MONO = 0.0
@@ -843,7 +849,7 @@ class BoardToolbar(QFrame):
         self._free_grid.setObjectName("ultraViewFreeGridButton")
         self._free_grid.setText("自由网格")
         self._free_grid.setCheckable(True)
-        self._free_grid.setToolTip("切换 12 列受控自由网格")
+        self._free_grid.setToolTip("切换自由网格（12 列基准网格）")
         self._free_grid.toggled.connect(self._on_free_grid_toggled)
         layout.addWidget(self._free_grid, 0)
 
@@ -919,7 +925,7 @@ class BoardToolbar(QFrame):
         self._zoom_fit = QToolButton(self)
         self._zoom_fit.setObjectName("ultraViewZoomFitButton")
         self._zoom_fit.setText("适应")
-        self._zoom_fit.setToolTip("画布适应视口")
+        self._zoom_fit.setToolTip("适应内容：图面填满画布，最高 300%")
         self._zoom_fit.clicked.connect(self.zoom_fit_requested)
         layout.addWidget(self._zoom_fit, 0)
         self._zoom_reset = QToolButton(self)
@@ -1714,31 +1720,31 @@ class _CardActionBar(QFrame):
             (
                 "open",
                 "ultraViewCardOpenButton",
-                Icons.ultraview_open_source(ULTRAVIEW_MUTED),
+                qta.icon("fa5s.external-link-alt", color=_CARD_ICON),
                 "打开原 View",
             ),
             (
                 "focus",
                 "ultraViewCardFocusButton",
-                Icons.expand_focus(ULTRAVIEW_MUTED),
+                qta.icon("fa5s.expand", color=_CARD_ICON),
                 "临时放大预览",
             ),
             (
                 "fit",
                 "ultraViewCardFitButton",
-                Icons.ultraview_fit_to_image(ULTRAVIEW_MUTED),
+                qta.icon("fa5s.vector-square", color=_CARD_ICON),
                 self._FIT_TOOLTIP,
             ),
             (
                 "remove",
                 "ultraViewCardRemoveButton",
-                Icons.ultraview_remove_from_board(ULTRAVIEW_MUTED),
+                qta.icon("fa5s.trash-alt", color=_CARD_DANGER),
                 self._REMOVE_TOOLTIP,
             ),
             (
                 "more",
                 "ultraViewCardMoreButton",
-                Icons.menu(ULTRAVIEW_MUTED),
+                qta.icon("fa5s.ellipsis-v", color=_CARD_ICON),
                 "更多卡片操作",
             ),
         ):
@@ -1758,6 +1764,7 @@ class _CardActionBar(QFrame):
             button.setProperty("role", "cardAction")
             button.setProperty("chrome", "ultraview")
             button.setProperty("contextAction", action)
+            button.setProperty("danger", "true" if action == "remove" else "false")
             self._buttons[action] = button
             layout.addWidget(button, 0, Qt.AlignVCenter)
         self._sync_action_width()
@@ -3009,6 +3016,8 @@ class FreeGridBoard(QWidget):
         # Cards currently wearing the drag dim, owned by the board so the set
         # can shrink mid-gesture; the plan's preview set changes on every move.
         self._dimmed_refs: set[UltraViewRef] = set()
+        self._last_legal_ghosts: tuple[tuple[QImage | None, tuple[int, int, int, int]], ...] = ()
+        self._last_legal_highlights: tuple[tuple[int, int, int, int], ...] = ()
         self.destroyed.connect(self._on_workspace_destroyed)
 
     def set_viewport_size(self, size: QSize) -> None:
@@ -3041,8 +3050,10 @@ class FreeGridBoard(QWidget):
         wanted = bounds if bounds is not None and not bounds.empty() else None
         if wanted == self._workspace_extent:
             return
+        old_origin = self._workspace_origin_offset()
         self._workspace_extent = wanted
         self._sync_metrics()
+        self._nudge_live_gesture_for_origin_shift(old_origin)
 
     def workspace_extent(self) -> GridBounds | None:
         """Return the Page-owned runtime extent; never a persisted payload."""
@@ -3100,6 +3111,92 @@ class FreeGridBoard(QWidget):
     def ghost_overlay(self) -> GhostOverlay:
         return self._overlay
 
+    def workspace_safety_blocked(self) -> bool:
+        """True when the live candidate would leave ``safety_grid_bounds()``."""
+        session = self._gesture.session()
+        if session is None:
+            return False
+        if session.plan is not None:
+            return session.plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
+        return (not session.legal) and session.plan is None and session.is_group_move()
+
+    def set_workspace_edge_hint(
+        self,
+        *,
+        continue_sides: Sequence[str] = (),
+        copy: str = "",
+        viewport_rect: QRect | None = None,
+    ) -> None:
+        """Page-owned continuation fade. Safety wall is set from the resolver."""
+        if self.workspace_safety_blocked():
+            continue_sides = ()
+            copy = ""
+        self._overlay.set_continue_hint(continue_sides, copy, viewport_rect)
+
+    def clear_workspace_edge_hint(self) -> None:
+        self._overlay.set_continue_hint()
+        if not self.workspace_safety_blocked() and self.cursor().shape() == Qt.ForbiddenCursor:
+            self.unsetCursor()
+
+    def refresh_workspace_gesture(self, global_pos: QPoint | None) -> None:
+        """Re-resolve ghost/insert/marquee from the current pointer.
+
+        Edge-pan ticks move the board under a still pointer.  The commit path
+        and this refresh share ``_update_gesture_at`` / ``_show_insert_preview``.
+        """
+        if global_pos is None:
+            return
+        local = self.mapFromGlobal(QPoint(global_pos))
+        if self._gesture.is_armed():
+            keep_aspect = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+            self._update_gesture_at(
+                self._logical_board_pos((local.x(), local.y())),
+                keep_aspect=keep_aspect,
+                global_pos=QPoint(global_pos),
+            )
+            return
+        if self._gesture.marquee() is not None:
+            self._gesture.update_marquee((local.x(), local.y()))
+            self._overlay.set_marquee(self._gesture.marquee_rect())
+            self._emit_workspace_gesture(True, QPoint(global_pos))
+            return
+        if self._workspace_gesture_active:
+            card = self._card_at(local)
+            if card is None:
+                self._replace.hover(None)
+                self._show_insert_preview(local)
+            else:
+                key = f"{card.model().section}/{card.model().view_id}"
+                self._replace.hover(key)
+                if self._replace.is_armed(key):
+                    self._clear_insert_preview()
+                else:
+                    self._show_insert_preview(local)
+            self._emit_workspace_gesture(True, QPoint(global_pos))
+
+    def _nudge_live_gesture_for_origin_shift(
+        self, old_origin: tuple[int, int]
+    ) -> None:
+        """Keep in-flight widgets/marquee aligned when extent grows left/up."""
+        if not self._gesture.is_armed() and self._gesture.marquee() is None:
+            return
+        new_origin = self._workspace_origin_offset()
+        if new_origin == old_origin:
+            return
+        unit_x = self._metrics.column_width + self._metrics.gutter
+        unit_y = self._metrics.row_height + self._metrics.gutter
+        dx = (old_origin[0] - new_origin[0]) * unit_x
+        dy = (old_origin[1] - new_origin[1]) * unit_y
+        if dx == 0 and dy == 0:
+            return
+        for widget in self._widgets.values():
+            widget.move(widget.x() + dx, widget.y() + dy)
+        marquee = self._gesture.marquee()
+        if marquee is not None:
+            marquee.origin = (marquee.origin[0] + dx, marquee.origin[1] + dy)
+            marquee.current = (marquee.current[0] + dx, marquee.current[1] + dy)
+            self._overlay.set_marquee(self._gesture.marquee_rect())
+
     def _workspace_origin_offset(self) -> tuple[int, int]:
         bounds = self._workspace_extent
         if bounds is None:
@@ -3150,7 +3247,7 @@ class FreeGridBoard(QWidget):
     def _emit_workspace_gesture(
         self, active: bool, global_pos: QPoint | None = None
     ) -> None:
-        """Publish a gesture lifetime to the Page without handling it here."""
+        """Publish gesture lifetime to the Page; pointer samples stay on the timer."""
         wanted = bool(active)
         if not wanted:
             if not self._workspace_gesture_active:
@@ -3158,8 +3255,12 @@ class FreeGridBoard(QWidget):
             self._workspace_gesture_active = False
             self.workspace_gesture_changed.emit(False, None)
             return
+        started = not self._workspace_gesture_active
         self._workspace_gesture_active = True
-        self.workspace_gesture_changed.emit(True, QPoint(global_pos) if global_pos else None)
+        if started:
+            self.workspace_gesture_changed.emit(
+                True, QPoint(global_pos) if global_pos else None
+            )
 
     def _on_workspace_destroyed(self, _object=None) -> None:
         # QObject teardown can arrive after child deletion.  Emitting the
@@ -3193,6 +3294,9 @@ class FreeGridBoard(QWidget):
             cancelled = True
         if cancelled:
             self._relayout()
+        self._last_legal_ghosts = ()
+        self._last_legal_highlights = ()
+        self._overlay.clear_edge_hint()
         self._emit_workspace_gesture(False)
         return cancelled
 
@@ -3638,13 +3742,62 @@ class FreeGridBoard(QWidget):
             self._workspace_pixel_rect(rect)
             for rect in session.group_highlight_pixels(self._metrics)
         )
+        safety = self._session_hits_safety(session)
+        if session.legal:
+            self._last_legal_ghosts = tuple(ghosts)
+            self._last_legal_highlights = highlights
+        elif safety:
+            ghosts, highlights = self._last_legal_preview(ghosts, highlights)
         self._overlay.set_move_previews(
             ghosts,
             highlights,
             legal=session.legal,
             badge=session.badge(),
             handles=session.handle is not None,
+            safety_wall=safety,
         )
+        if safety:
+            self._overlay.set_safety_bounds(
+                self._safety_bounds_pixel_rect(),
+                self._safety_sides_for(session.candidate),
+            )
+            self.setCursor(Qt.ForbiddenCursor)
+        else:
+            if self.cursor().shape() == Qt.ForbiddenCursor:
+                self.unsetCursor()
+
+    def _session_hits_safety(self, session) -> bool:
+        if session.plan is not None:
+            return session.plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
+        return (not session.legal) and session.is_group_move()
+
+    def _last_legal_preview(self, ghosts, highlights):
+        if self._last_legal_highlights:
+            return self._last_legal_ghosts, self._last_legal_highlights
+        return ghosts, highlights
+
+    def _safety_bounds_pixel_rect(self) -> QRect:
+        bounds = safety_grid_bounds()
+        rect = GridRect(
+            bounds.column, bounds.row, bounds.column_span, bounds.row_span
+        )
+        x, y, width, height = rect_to_pixels(
+            rect, self._metrics, self._workspace_origin_offset()
+        )
+        return QRect(x, y, width, height)
+
+    def _safety_sides_for(self, rect: GridRect) -> tuple[str, ...]:
+        safety = safety_grid_bounds()
+        sides: list[str] = []
+        if rect.column < safety.column:
+            sides.append("left")
+        if rect.column + rect.column_span > safety.column_end:
+            sides.append("right")
+        if rect.row < safety.row:
+            sides.append("top")
+        if rect.row + rect.row_span > safety.row_end:
+            sides.append("bottom")
+        return tuple(sides) or ("left",)
 
     def _sync_gesture_dim(self, wanted: set[UltraViewRef]) -> None:
         """Dim exactly ``wanted`` and undim whatever left the plan.
@@ -3700,7 +3853,11 @@ class FreeGridBoard(QWidget):
                     card.restore_dim()
                     card.unsetCursor()
             self._overlay.clear()
+            if self.cursor().shape() == Qt.ForbiddenCursor:
+                self.unsetCursor()
             self._sync_selection_handles()
+            self._last_legal_ghosts = ()
+            self._last_legal_highlights = ()
             self._emit_workspace_gesture(False)
             if session.active:
                 self.drag_finished.emit()

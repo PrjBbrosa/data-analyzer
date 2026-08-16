@@ -25,9 +25,13 @@ ZOOM_WHEEL_BASE = 1.1
 # ``FIT_CONTENT_MARGIN`` on the chrome-safe rect instead, so these two
 # constants must stay distinct.
 ZOOM_TO_RECT_MARGIN = 0.08
-# Board Fit ("适应内容"): ~6% inset each side. Focus keeps ZOOM_TO_RECT_MARGIN.
-FIT_CONTENT_MARGIN = 0.06
-BOARD_FIT_ZOOM_MAX = 1.0
+# Board Fit ("适应内容"): a hairline inset so cards fill the dotted
+# canvas instead of floating in a 6%-per-side frame. Focus keeps
+# ZOOM_TO_RECT_MARGIN.
+FIT_CONTENT_MARGIN = 0.02
+# Board Fit fills the chrome-safe viewport; the ceiling is the same 300%
+# cap as wheel / focus. Opening UltraView uses Fit, not a leftover camera.
+BOARD_FIT_ZOOM_MAX = ZOOM_MAX
 NEW_BOARD_ZOOM_MAX = 0.66
 # Empty-board working frame: two standard 4×3 cards placed side by side.
 STANDARD_CARD_SPAN = (4, 3)
@@ -168,18 +172,17 @@ zoom_at_cursor = zoom_at
 def fit_zoom(
     board_size: tuple[float, float], viewport_size: tuple[float, float]
 ) -> float:
-    """Largest zoom that fits ``board_size`` in the viewport, never above 100%.
+    """Largest zoom that fits ``board_size`` in the viewport, up to 300%.
 
-    ``page.zoom_fit`` still calls this for the empty-canvas branch, so the
-    100% cap lands without waiting for page.py. Prefer ``board_fit_zoom``
-    for Board Fit (6% margin + 100% cap) and ``zoom_to_rect`` for focus,
-    which may still reach ``ZOOM_MAX``.
+    Prefer ``board_fit_zoom`` for Board Fit (margin + same ceiling) and
+    ``zoom_to_rect`` for focus. Window open / first show also use
+    ``board_fit_zoom`` via ``zoom_fit``.
     """
     board_w = max(1.0, float(board_size[0]))
     board_h = max(1.0, float(board_size[1]))
     view_w = max(1.0, float(viewport_size[0]))
     view_h = max(1.0, float(viewport_size[1]))
-    return min(BOARD_FIT_ZOOM_MAX, clamp_zoom(min(view_w / board_w, view_h / board_h)))
+    return clamp_zoom(min(view_w / board_w, view_h / board_h))
 
 
 def two_card_working_frame(metrics: GridMetrics) -> tuple[float, float]:
@@ -207,9 +210,9 @@ def board_fit_zoom(
 ) -> float:
     """Board Fit zoom for a placed-card union or empty working frame.
 
-    Shrinks to fit with ``margin`` inset on each side and never amplifies
-    above 100%. Focus / ``zoom_to_rect`` / ``zoom_to_card`` are uncapped
-    relative to this helper and may still reach ``ZOOM_MAX``.
+    Fills the chrome-clear viewport with ``margin`` inset on each side.
+    Amplifies a small card union up to ``ZOOM_MAX`` (300%). Window open
+    uses this path; ``default_board_zoom`` is only the conservative helper.
     """
     content_w = max(1.0, float(content_size[0]))
     content_h = max(1.0, float(content_size[1]))
@@ -219,17 +222,17 @@ def board_fit_zoom(
     usable_w = max(1.0, view_w * (1.0 - 2.0 * inset))
     usable_h = max(1.0, view_h * (1.0 - 2.0 * inset))
     computed = min(usable_w / content_w, usable_h / content_h)
-    return min(BOARD_FIT_ZOOM_MAX, clamp_zoom(computed))
+    return clamp_zoom(computed)
 
 
 def default_board_zoom(
     viewport_size: tuple[float, float],
     frame_size: tuple[float, float],
 ) -> float:
-    """New Board / missing-payload zoom: ``min(0.66, board-fit of frame)``.
+    """Conservative empty-board helper: ``min(0.66, board-fit of frame)``.
 
-    Never raises above 66% because the window is huge. Empty Fit still
-    uses ``board_fit_zoom`` (cap 100%) of the same frame.
+    The live open camera is ``zoom_fit`` / ``board_fit_zoom`` (may fill
+    up to 300%). Keep this helper for callers that still want the cap.
     """
     return min(NEW_BOARD_ZOOM_MAX, board_fit_zoom(frame_size, viewport_size))
 
@@ -238,13 +241,11 @@ def initial_viewport(
     safe_viewport_size: tuple[float, float],
     frame_size: tuple[float, float],
 ) -> dict[str, float]:
-    """Default viewport dict for a new Board or a missing payload.
+    """Conservative empty-board viewport dict (66% cap).
 
-    Legal persisted viewports must be restored as-is via
-    ``normalize_viewport_payload`` / ``BoardViewport.restore_payload``.
-    ``default_viewport_payload`` stays the persist-legalization fallback
-    (zoom 1.0) and must not encode the 66% policy, which needs a viewport.
-    Page.py should call this instead of ``zoom_fit`` on first show.
+    UltraView open / first show call ``zoom_fit`` instead of this payload.
+    Legal persisted viewports still restore as-is on in-session Board
+    switch via ``normalize_viewport_payload`` / ``restore_payload``.
     """
     zoom = default_board_zoom(safe_viewport_size, frame_size)
     return {
@@ -262,9 +263,8 @@ def zoom_to_rect(
 ) -> tuple[float, ViewportPoint]:
     """Return ``(zoom, center)`` so ``rect`` fills the viewport with a margin.
 
-    Focus / ``zoom_to_card`` may reach ``ZOOM_MAX`` (300%). Do not use this
-    for Board Fit; call ``board_fit_zoom`` so a single card is never
-    amplified past 100%.
+    Focus / ``zoom_to_card`` may reach ``ZOOM_MAX`` (300%). Board Fit uses
+    ``board_fit_zoom`` with the same ceiling so content fills the canvas.
     """
     _x, _y, width, height = (float(part) for part in rect)
     view_w = max(1.0, float(viewport_size[0]))
@@ -438,7 +438,7 @@ def normalize_viewport_payload(
 
 
 def default_viewport_payload() -> dict[str, float]:
-    """Persist-legalization fallback. New Boards use ``initial_viewport``."""
+    """Persist-legalization fallback. Open / first show use ``zoom_fit``."""
     return {"zoom": ZOOM_DEFAULT, "center_x": 0.0, "center_y": 0.0}
 
 

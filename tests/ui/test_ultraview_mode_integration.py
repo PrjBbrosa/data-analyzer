@@ -598,6 +598,31 @@ def test_closing_ultraview_exits_presentation_and_reopens_in_edit(qapp, qtbot):
     assert page.is_library_visible() is False
 
 
+def test_reopening_ultraview_fits_instead_of_restoring_zoom(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1200, 800)
+    win.show()
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    page = win.chart_stack.page_ultraview
+    page.set_board_zoom(2.0)
+    sheet = win._ultraview_sheet
+    sheet.close()
+    QCoreApplication.processEvents()
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    opened = page.board_zoom()
+    page.zoom_fit()
+    assert abs(opened - page.board_zoom()) < 1e-6
+    page.set_board_zoom(2.0)
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    raised = page.board_zoom()
+    page.zoom_fit()
+    assert abs(raised - page.board_zoom()) < 1e-6
+
+
 def test_ultraview_fast_close_reopen_keeps_single_sheet(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)

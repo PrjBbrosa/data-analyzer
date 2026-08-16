@@ -9,8 +9,10 @@ from __future__ import annotations
 from typing import Sequence
 
 from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtGui import QColor, QImage, QPainter, QPen
+from PyQt5.QtGui import QColor, QImage, QLinearGradient, QPainter, QPen
 from PyQt5.QtWidgets import QWidget
+
+from mf4_analyzer.ui_kit.ultraview_style import titanium_color
 
 from .free_grid import HANDLE_NAMES, handle_visual_rects, Rect
 
@@ -22,6 +24,10 @@ HANDLE_FILL = QColor("#ffffff")
 HANDLE_EDGE = QColor("#2d7ff9")
 MARQUEE_FILL = QColor(45, 127, 249, 24)
 GHOST_OPACITY = 0.45
+CONTINUE_BAND_PX = 72
+_BRAND = QColor(titanium_color("brand"))
+_COPPER = QColor(titanium_color("copper"))
+_INK = QColor(titanium_color("ink"))
 
 
 class GhostOverlay(QWidget):
@@ -37,6 +43,12 @@ class GhostOverlay(QWidget):
         "_marquee",
         "_selection_rects",
         "_reject_mark",
+        "_safety_wall",
+        "_continue_sides",
+        "_hint_copy",
+        "_viewport_rect",
+        "_safety_bounds_rect",
+        "_safety_sides",
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -54,6 +66,12 @@ class GhostOverlay(QWidget):
         self._marquee: QRect | None = None
         self._selection_rects: tuple[QRect, ...] = ()
         self._reject_mark = False
+        self._safety_wall = False
+        self._continue_sides: tuple[str, ...] = ()
+        self._hint_copy = ""
+        self._viewport_rect: QRect | None = None
+        self._safety_bounds_rect: QRect | None = None
+        self._safety_sides: tuple[str, ...] = ()
         self.hide()
 
     @property
@@ -79,7 +97,55 @@ class GhostOverlay(QWidget):
             or self._ring_rect is not None
             or self._marquee is not None
             or self._selection_rects
+            or self._continue_sides
+            or self._safety_sides
+            or self._hint_copy
         )
+
+    def edge_hint_mode(self) -> str | None:
+        """``safety`` wall, ``continue`` fade, or no edge hint."""
+        if self._safety_wall or self._safety_sides:
+            return "safety"
+        if self._continue_sides:
+            return "continue"
+        return None
+
+    def edge_hint_copy(self) -> str:
+        return self._hint_copy
+
+    def edge_hint_sides(self) -> tuple[str, ...]:
+        return self._continue_sides
+
+    def set_continue_hint(
+        self,
+        sides: Sequence[str] = (),
+        copy: str = "",
+        viewport: QRect | None = None,
+    ) -> None:
+        """Gesture-only titanium-blue fade band. Not a toast, not a wall."""
+        self._continue_sides = tuple(side for side in sides if side)
+        self._hint_copy = str(copy or "")
+        self._viewport_rect = QRect(viewport) if viewport is not None else None
+        self._present()
+
+    def set_safety_bounds(
+        self,
+        rect: QRect | None = None,
+        sides: Sequence[str] = (),
+    ) -> None:
+        """Copper-red dashed hard edge at the engineering safety bound."""
+        self._safety_bounds_rect = QRect(rect) if rect is not None else None
+        self._safety_sides = tuple(side for side in sides if side)
+        self._present()
+
+    def clear_edge_hint(self) -> None:
+        self._continue_sides = ()
+        self._hint_copy = ""
+        self._viewport_rect = None
+        self._safety_bounds_rect = None
+        self._safety_sides = ()
+        self._safety_wall = False
+        self._present()
 
     def set_replace_ring(self, card: Rect | None) -> None:
         self._ring_rect = QRect(*card) if card is not None else None
@@ -108,6 +174,7 @@ class GhostOverlay(QWidget):
         self._highlights = ()
         self._badge = ""
         self._reject_mark = False
+        self._safety_wall = False
         self._present()
 
     def set_move_preview(
@@ -136,14 +203,19 @@ class GhostOverlay(QWidget):
         legal: bool,
         badge: str = "",
         handles: bool = False,
+        safety_wall: bool = False,
     ) -> None:
         self._ghosts = tuple(
             (image, QRect(*ghost)) for image, ghost in ghosts if ghost is not None
         )
         self._highlights = tuple(QRect(*item) for item in highlights)
         self._legal = bool(legal)
+        self._safety_wall = bool(safety_wall)
         self._reject_mark = not self._legal
         self._badge = str(badge)
+        if not self._safety_wall:
+            self._safety_bounds_rect = None
+            self._safety_sides = ()
         self._handles_rect = (
             QRect(self._highlights[0]) if handles and self._highlights else None
         )
@@ -158,6 +230,12 @@ class GhostOverlay(QWidget):
         self._marquee = None
         self._selection_rects = ()
         self._reject_mark = False
+        self._safety_wall = False
+        self._continue_sides = ()
+        self._hint_copy = ""
+        self._viewport_rect = None
+        self._safety_bounds_rect = None
+        self._safety_sides = ()
         self.hide()
         self.update()
 
@@ -169,17 +247,73 @@ class GhostOverlay(QWidget):
         self.raise_()
         self.update()
 
+    def _paint_continue_hint(self, painter: QPainter) -> None:
+        if not self._continue_sides:
+            return
+        viewport = self._viewport_rect if self._viewport_rect is not None else self.rect()
+        band = CONTINUE_BAND_PX
+        for side in self._continue_sides:
+            rect, start, end = _band_geometry(viewport, side, band)
+            if rect.width() <= 0 or rect.height() <= 0:
+                continue
+            inner = QColor(_BRAND)
+            inner.setAlpha(0)
+            outer = QColor(_BRAND)
+            outer.setAlpha(48)
+            gradient = QLinearGradient(start[0], start[1], end[0], end[1])
+            gradient.setColorAt(0.0, outer)
+            gradient.setColorAt(1.0, inner)
+            painter.fillRect(rect, gradient)
+            line = QColor(_BRAND)
+            line.setAlpha(90)
+            painter.setPen(QPen(line, 1, Qt.DotLine))
+            painter.setBrush(Qt.NoBrush)
+            if side == "left":
+                painter.drawLine(rect.left() + 1, rect.top(), rect.left() + 1, rect.bottom())
+            elif side == "right":
+                painter.drawLine(rect.right() - 1, rect.top(), rect.right() - 1, rect.bottom())
+            elif side == "top":
+                painter.drawLine(rect.left(), rect.top() + 1, rect.right(), rect.top() + 1)
+            else:
+                painter.drawLine(rect.left(), rect.bottom() - 1, rect.right(), rect.bottom() - 1)
+        if self._hint_copy:
+            painter.setPen(_INK)
+            box = viewport.adjusted(12, 12, -12, -12)
+            painter.drawText(box, Qt.AlignTop | Qt.AlignHCenter, self._hint_copy)
+
+    def _paint_safety_wall(self, painter: QPainter) -> None:
+        if not self._safety_sides or self._safety_bounds_rect is None:
+            return
+        bounds = self._safety_bounds_rect
+        clip = self._viewport_rect if self._viewport_rect is not None else self.rect()
+        painter.setPen(QPen(_COPPER, 2, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        if "left" in self._safety_sides:
+            painter.drawLine(bounds.left(), clip.top(), bounds.left(), clip.bottom())
+        if "right" in self._safety_sides:
+            painter.drawLine(bounds.right(), clip.top(), bounds.right(), clip.bottom())
+        if "top" in self._safety_sides:
+            painter.drawLine(clip.left(), bounds.top(), clip.right(), bounds.top())
+        if "bottom" in self._safety_sides:
+            painter.drawLine(clip.left(), bounds.bottom(), clip.right(), bounds.bottom())
+
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.Antialiasing, True)
             painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
-            fill = LEGAL_FILL if self._legal else ILLEGAL_FILL
-            pen = LEGAL_PEN if self._legal else ILLEGAL_PEN
-            style = Qt.SolidLine if self._legal else Qt.DashLine
+            self._paint_continue_hint(painter)
+            self._paint_safety_wall(painter)
+            # A safety reject keeps the last legal ghost; the copper wall is
+            # the "cannot continue" signal, not a red fill on the card.
+            card_legal = self._legal or self._safety_wall
+            fill = LEGAL_FILL if card_legal else ILLEGAL_FILL
+            pen = LEGAL_PEN if card_legal else ILLEGAL_PEN
+            style = Qt.SolidLine if card_legal else Qt.DashLine
             for highlight in self._highlights:
-                painter.fillRect(highlight, fill)
-                painter.setPen(QPen(pen, 2 if self._legal else 3, style))
+                if not self._safety_wall:
+                    painter.fillRect(highlight, fill)
+                painter.setPen(QPen(pen, 2 if card_legal else 3, style))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(highlight.adjusted(1, 1, -1, -1))
             for image, ghost in self._ghosts:
@@ -200,7 +334,8 @@ class GhostOverlay(QWidget):
                 mark = self._highlights[0]
                 cx = mark.right() - 16
                 cy = mark.top() + 16
-                painter.setPen(QPen(ILLEGAL_PEN, 2))
+                mark_pen = QPen(_COPPER if self._safety_wall else ILLEGAL_PEN, 2)
+                painter.setPen(mark_pen)
                 painter.setBrush(Qt.NoBrush)
                 painter.drawEllipse(cx - 7, cy - 7, 14, 14)
                 painter.drawLine(cx - 4, cy - 4, cx + 4, cy + 4)
@@ -232,3 +367,37 @@ class GhostOverlay(QWidget):
                     painter.drawRect(hx, hy, hw, hh)
         finally:
             painter.end()
+
+
+def _band_geometry(
+    viewport: QRect, side: str, band: int
+) -> tuple[QRect, tuple[float, float], tuple[float, float]]:
+    """Viewport-local fade band: outer edge → inner face."""
+    depth = max(1, int(band))
+    if side == "left":
+        width = min(depth, max(1, viewport.width()))
+        rect = QRect(viewport.x(), viewport.y(), width, viewport.height())
+        return rect, (float(rect.left()), float(rect.center().y())), (
+            float(rect.right()),
+            float(rect.center().y()),
+        )
+    if side == "right":
+        width = min(depth, max(1, viewport.width()))
+        rect = QRect(viewport.right() - width + 1, viewport.y(), width, viewport.height())
+        return rect, (float(rect.right()), float(rect.center().y())), (
+            float(rect.left()),
+            float(rect.center().y()),
+        )
+    if side == "top":
+        height = min(depth, max(1, viewport.height()))
+        rect = QRect(viewport.x(), viewport.y(), viewport.width(), height)
+        return rect, (float(rect.center().x()), float(rect.top())), (
+            float(rect.center().x()),
+            float(rect.bottom()),
+        )
+    height = min(depth, max(1, viewport.height()))
+    rect = QRect(viewport.x(), viewport.bottom() - height + 1, viewport.width(), height)
+    return rect, (float(rect.center().x()), float(rect.bottom())), (
+        float(rect.center().x()),
+        float(rect.top()),
+    )

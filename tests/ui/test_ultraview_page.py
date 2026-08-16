@@ -48,7 +48,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     STATUS_ISLAND_WIDTH,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED, PANEL_BOARDS
-from mf4_analyzer.ui.chart_stack.ultraview.feedback import format_rearranged
+from mf4_analyzer.ui.chart_stack.ultraview.feedback import COPY, CONTINUE_EXPAND, format_rearranged
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
@@ -3094,11 +3094,116 @@ def test_free_grid_edge_drop_rejects_without_shrinking_neighbors(qtbot):
     assert overlay.is_showing()
     assert overlay._legal is False
     assert overlay._reject_mark is True
+    assert overlay.edge_hint_mode() == "safety"
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
     assert requested == []
     assert group == []
     assert toasts == [FEEDBACK_OUT_OF_GRID]
     assert card.geometry().topLeft() == origin.topLeft()
+
+
+def test_continuation_hint_copy_appears_once_per_workspace_gesture(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    free = page._free_grid
+    clock = {"now": 0.0}
+    page._monotonic = lambda: clock["now"]
+    viewport = page.board_scroll_area().viewport()
+    pointer = viewport.mapToGlobal(QPoint(1, max(1, viewport.height() // 2)))
+    toasts = []
+    page.feedback_requested.connect(toasts.append)
+
+    free.workspace_gesture_changed.emit(True, pointer)
+    overlay = free.ghost_overlay()
+    assert overlay.edge_hint_mode() == "continue"
+    assert overlay.edge_hint_copy() == ""
+    assert "left" in overlay.edge_hint_sides()
+
+    clock["now"] = 0.4
+    page._edge_pan_tick_for_global(pointer)
+    assert overlay.edge_hint_copy() == COPY[CONTINUE_EXPAND]
+    assert toasts == []
+
+    clock["now"] = 0.8
+    page._edge_pan_tick_for_global(pointer)
+    assert overlay.edge_hint_copy() == COPY[CONTINUE_EXPAND]
+    assert toasts == []
+
+    free.workspace_gesture_changed.emit(False, None)
+    assert overlay.edge_hint_copy() == ""
+    assert overlay.edge_hint_mode() is None
+
+
+def test_crossing_base_frame_is_not_a_safety_red_wall(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "base-12")
+    toasts = []
+    harness.page.feedback_requested.connect(toasts.append)
+    unit = free.metrics().column_width + free.metrics().gutter
+    start = QPoint(16, 16)
+    _drag_card(card, start, QPoint(start.x() + unit * 12, start.y()), release=False)
+    overlay = free.ghost_overlay()
+    assert overlay.is_showing()
+    assert overlay.edge_hint_mode() != "safety"
+    assert overlay._legal is True
+    assert overlay._reject_mark is False
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, QPoint(start.x() + unit * 12, start.y()))
+    assert toasts == []
+
+
+def test_safety_bounds_use_copper_wall_not_base_frame(qtbot):
+    harness = _Harness(qtbot)
+    harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
+    harness.board.placements.clear()
+    harness.board.unplaced.clear()
+    harness.board.free_grid = [
+        FreeGridPlacement(make_ref("time", "wall-0"), GridRect(SAFETY_COLUMN_MIN, 0, 4, 3))
+    ]
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    free = harness.page._free_grid
+    card = harness.page.card_widget("time", "wall-0")
+    assert card is not None
+    unit = free.metrics().column_width + free.metrics().gutter
+    start = QPoint(24, 24)
+    _drag_card(card, start, QPoint(24 - unit * 2, 24), release=False)
+    overlay = free.ghost_overlay()
+    assert overlay.is_showing()
+    assert overlay.edge_hint_mode() == "safety"
+    assert overlay._legal is False
+    assert overlay._reject_mark is True
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, QPoint(24 - unit * 2, 24))
+
+
+def test_card_drag_near_viewport_edge_starts_page_edge_timer(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "edge-timer")
+    page.set_board_zoom(1.0)
+    viewport = page.board_scroll_area().viewport()
+    start = QPoint(16, 16)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+    edge_global = viewport.mapToGlobal(QPoint(2, max(1, viewport.height() // 2)))
+    edge_local = card.mapFromGlobal(edge_global)
+    _send_mouse_move(card, edge_local)
+    assert page._edge_pan_timer.isActive()
+    assert page._edge_pan_active
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, edge_local)
+    assert not page._edge_pan_timer.isActive()
+    assert not page._edge_pan_active
+
+
+def test_library_drop_over_board_starts_edge_timer(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    free = page._free_grid
+    mime = _mime("time", "time-1")
+    viewport = page.board_scroll_area().viewport()
+    pos = free.mapFromGlobal(viewport.mapToGlobal(QPoint(2, max(1, viewport.height() // 2))))
+    free.dragEnterEvent(_enter(mime, pos))
+    assert page._edge_pan_timer.isActive()
+    free.dragLeaveEvent(_leave())
+    assert not page._edge_pan_timer.isActive()
 
 
 def test_free_grid_focus_loss_cancels_active_move_without_commit(qtbot):
@@ -3839,22 +3944,22 @@ def test_closing_layout_panel_does_not_change_layout_mode(qtbot):
     assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
 
 
-def test_new_board_first_show_uses_the_66_percent_working_frame(qtbot):
+def test_new_board_first_show_fits_the_working_frame(qtbot):
     harness = _Harness(qtbot)
-    fit = harness.page._content_fit_rect()
+    fill = harness.page._content_fill_rect()
     from mf4_analyzer.ui.chart_stack.ultraview.free_grid import screen_grid_metrics
     from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
-        NEW_BOARD_ZOOM_MAX,
-        default_board_zoom,
+        BOARD_FIT_ZOOM_MAX,
+        board_fit_zoom,
         two_card_working_frame,
     )
 
-    expected = default_board_zoom(
-        (float(fit.width), float(fit.height)),
+    expected = board_fit_zoom(
         two_card_working_frame(screen_grid_metrics(())),
+        (float(fill.width), float(fill.height)),
     )
     assert harness.page.board_zoom() == pytest.approx(expected)
-    assert harness.page.board_zoom() <= NEW_BOARD_ZOOM_MAX
+    assert expected <= BOARD_FIT_ZOOM_MAX
     assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
 
 
