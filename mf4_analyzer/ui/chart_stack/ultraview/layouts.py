@@ -27,6 +27,12 @@ MIN_CARD_CONTENT_SIZE = (300, 180)
 CARD_HEADER_HEIGHT = 34
 CARD_FOOTER_HEIGHT = 24
 MIN_CARD_CHROME_HEIGHT = CARD_HEADER_HEIGHT + CARD_FOOTER_HEIGHT
+# QLabel#ultraViewCardImage padding in style.qss. Fit chrome must include it
+# so the plot-area aspect matches the inner contentsRect, not the label box.
+CARD_IMAGE_PADDING = 8
+CARD_FIT_CHROME_HEIGHT = (
+    CARD_HEADER_HEIGHT + CARD_FOOTER_HEIGHT + 2 * CARD_IMAGE_PADDING
+)
 
 Rect = tuple[int, int, int, int]
 

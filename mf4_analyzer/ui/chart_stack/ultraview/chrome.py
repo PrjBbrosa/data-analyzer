@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -289,6 +290,53 @@ class _ElidedLabel(QLabel):
         self.setText(metrics.elidedText(self._full_text, Qt.ElideRight, available))
         self.setToolTip(self._full_text)
         self.setAccessibleName(self._full_text)
+
+
+class _InlineNameEditor(QLineEdit):
+    """Transient in-place name field. Enter/blur commit; Esc cancel."""
+
+    committed = pyqtSignal(str)
+    cancelled = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrame(False)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._settled = False
+        self._armed = False
+        self.returnPressed.connect(self._emit_committed)
+        QTimer.singleShot(0, self._arm)
+
+    def _arm(self) -> None:
+        self._armed = True
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key_Escape:
+            self._emit_cancelled()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        if self._armed:
+            self._emit_committed()
+
+    def _emit_committed(self) -> None:
+        if self._settled:
+            return
+        self._settled = True
+        self.committed.emit(self.text())
+
+    def _emit_cancelled(self) -> None:
+        if self._settled:
+            return
+        self._settled = True
+        self.cancelled.emit()
+
+    def discard(self) -> None:
+        """Suppress commit/cancel while the host tears the editor down."""
+        self._settled = True
 
 
 class CanvasHost(QFrame):
@@ -935,7 +983,7 @@ class BoardIsland(QFrame):
 
     board_menu_requested = pyqtSignal()
     create_requested = pyqtSignal()
-    rename_requested = pyqtSignal()
+    rename_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -946,12 +994,14 @@ class BoardIsland(QFrame):
         self.setMaximumWidth(BOARD_ISLAND_MAX_WIDTH)
         self.setProperty("surface", "island")
         self._board_id = ""
+        self._rename_editor: _InlineNameEditor | None = None
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 4, 4)
         layout.setSpacing(2)
         self._name = _ElidedLabel("", self)
         self._name.setObjectName("ultraViewBoardIslandName")
         self._name.setMinimumWidth(48)
+        self._name.installEventFilter(self)
         layout.addWidget(self._name, 1)
         self._menu = _icon_button(
             self,
@@ -985,9 +1035,13 @@ class BoardIsland(QFrame):
         return self._add
 
     def set_current_board(self, board_id: str, name: str) -> None:
-        self._board_id = str(board_id or "")
+        new_id = str(board_id or "")
+        if self._rename_editor is not None and new_id != self._board_id:
+            self._close_inline_rename()
+        self._board_id = new_id
         self.setProperty("boardId", self._board_id)
-        self._name.set_full_text(str(name or ""))
+        if self._rename_editor is None:
+            self._name.set_full_text(str(name or ""))
         self.setAccessibleName(f"当前 Board：{name or ''}")
         self.updateGeometry()
 
@@ -1012,19 +1066,61 @@ class BoardIsland(QFrame):
         _set_flag(self._menu, "panelOpen", active)
         self._menu.setIcon(Icons.chevron_down(_ultraview_icon_color(active=active)))
 
+    def begin_inline_rename(self) -> None:
+        """Overlay a line edit on the name; commit emits ``rename_requested``."""
+        if self._rename_editor is not None:
+            self._rename_editor.setFocus(Qt.OtherFocusReason)
+            self._rename_editor.selectAll()
+            return
+        editor = _InlineNameEditor(self)
+        editor.setObjectName("ultraViewBoardIslandRename")
+        editor.setFont(self._name.font())
+        editor.setText(self._name.full_text())
+        editor.setGeometry(self._name.geometry())
+        editor.committed.connect(self._on_inline_rename_committed)
+        editor.cancelled.connect(self._on_inline_rename_cancelled)
+        self._rename_editor = editor
+        editor.show()
+        editor.raise_()
+        editor.setFocus(Qt.OtherFocusReason)
+        editor.selectAll()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self._name and event.type() == QEvent.MouseButtonDblClick:
+            if event.button() == Qt.LeftButton:
+                self.begin_inline_rename()
+                return True
+        return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._rename_editor is not None:
+            self._rename_editor.setGeometry(self._name.geometry())
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key_F2:
-            self.rename_requested.emit()
+            self.begin_inline_rename()
             event.accept()
             return
         super().keyPressEvent(event)
 
-    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            self.rename_requested.emit()
-            event.accept()
+    def _on_inline_rename_committed(self, text: str) -> None:
+        self._close_inline_rename()
+        cleaned = str(text or "").strip()
+        if cleaned:
+            self.rename_requested.emit(cleaned)
+
+    def _on_inline_rename_cancelled(self) -> None:
+        self._close_inline_rename()
+
+    def _close_inline_rename(self) -> None:
+        editor = self._rename_editor
+        self._rename_editor = None
+        if editor is None:
             return
-        super().mouseDoubleClickEvent(event)
+        editor.discard()
+        editor.hide()
+        editor.deleteLater()
 
 
 class _BoardListDelegate(QStyledItemDelegate):
@@ -1067,12 +1163,7 @@ class _BoardListDelegate(QStyledItemDelegate):
         painter.setPen(UV_BRAND if current else Qt.transparent)
         painter.drawText(check_rect, Qt.AlignCenter, "✓" if current else "")
         copy_rect, delete_rect = self.action_rects(option.rect)
-        name_rect = QRect(
-            check_rect.right() + 4,
-            rect.top(),
-            max(0, copy_rect.left() - 4 - check_rect.right() - 4),
-            rect.height(),
-        )
+        name_rect = self.name_rect(option.rect)
         metrics = option.fontMetrics
         name = metrics.elidedText(str(index.data(Qt.DisplayRole) or ""), Qt.ElideRight, name_rect.width())
         painter.setPen(UV_INK)
@@ -1122,6 +1213,18 @@ class _BoardListDelegate(QStyledItemDelegate):
             item_rect.height(),
         )
         return copy_rect, delete_rect
+
+    @staticmethod
+    def name_rect(item_rect: QRect) -> QRect:
+        rect = item_rect.adjusted(4, 2, -4, -2)
+        check_right = rect.left() + 4 + 16
+        copy_rect, _delete_rect = _BoardListDelegate.action_rects(item_rect)
+        return QRect(
+            check_right + 4,
+            rect.top(),
+            max(0, copy_rect.left() - 4 - check_right - 4),
+            rect.height(),
+        )
 
 
 class _BoardList(QListWidget):
@@ -1197,7 +1300,7 @@ class BoardPopover(QFrame):
     delete_requested = pyqtSignal(str)
     boards_reordered = pyqtSignal(str, int)
     create_requested = pyqtSignal()
-    rename_requested = pyqtSignal(str)
+    rename_requested = pyqtSignal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1206,6 +1309,9 @@ class BoardPopover(QFrame):
         self.setFocusPolicy(Qt.NoFocus)
         self._reordering = False
         self._pending_boards: tuple[tuple[object, ...], str | None] | None = None
+        self._rename_editor: _InlineNameEditor | None = None
+        self._rename_board_id = ""
+        self._pending_rename_id = ""
         self._flush_timer = QTimer(self)
         self._flush_timer.setSingleShot(True)
         self._flush_timer.timeout.connect(self._end_reordering)
@@ -1226,6 +1332,7 @@ class BoardPopover(QFrame):
         self._list.reordered.connect(self._on_reordered)
         self._list.installEventFilter(self)
         self._list.viewport().installEventFilter(self)
+        self._list.verticalScrollBar().valueChanged.connect(self._sync_rename_editor_geometry)
         root.addWidget(self._list, 0)
         self._create = QToolButton(self)
         self._create.setObjectName("ultraViewBoardPopoverCreate")
@@ -1272,6 +1379,53 @@ class BoardPopover(QFrame):
             rect = self._list.visualItemRect(item)
             return _BoardListDelegate.action_rects(rect)
         return QRect(), QRect()
+
+    def name_rect_for(self, board_id: str) -> QRect:
+        """Viewport-local name hit rect for tests."""
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is None or str(item.data(Qt.UserRole) or "") != board_id:
+                continue
+            return _BoardListDelegate.name_rect(self._list.visualItemRect(item))
+        return QRect()
+
+    def begin_inline_rename(self, board_id: str = "") -> None:
+        """Overlay a line edit on the row name; commit emits ``rename_requested``."""
+        target = str(board_id or self._selected_board_id() or "")
+        if not target:
+            return
+        if self._rename_editor is not None:
+            if self._rename_board_id == target:
+                self._rename_editor.setFocus(Qt.OtherFocusReason)
+                self._rename_editor.selectAll()
+                return
+            self._close_inline_rename()
+        item = self._item_for(target)
+        if item is None:
+            return
+        self._list.setCurrentItem(item)
+        rect = _BoardListDelegate.name_rect(self._list.visualItemRect(item))
+        if not rect.isValid() or rect.width() < 8:
+            return
+        editor = _InlineNameEditor(self._list.viewport())
+        editor.setObjectName("ultraViewBoardRowRename")
+        editor.setFont(self._list.font())
+        editor.setText(item.text())
+        editor.setGeometry(rect)
+        editor.committed.connect(self._on_inline_rename_committed)
+        editor.cancelled.connect(self._on_inline_rename_cancelled)
+        self._rename_editor = editor
+        self._rename_board_id = target
+        editor.show()
+        editor.raise_()
+        editor.setFocus(Qt.OtherFocusReason)
+        editor.selectAll()
+
+    def _flush_pending_inline_rename(self) -> None:
+        board_id = self._pending_rename_id
+        self._pending_rename_id = ""
+        if board_id:
+            self.begin_inline_rename(board_id)
 
     def apply_internal_move(self, board_id: str, new_index: int) -> None:
         """Reorder as InternalMove would, then emit the same intent."""
@@ -1320,7 +1474,7 @@ class BoardPopover(QFrame):
             if event.key() == Qt.Key_F2:
                 board_id = self._selected_board_id()
                 if board_id:
-                    self.rename_requested.emit(board_id)
+                    self.begin_inline_rename(board_id)
                 return True
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 board_id = self._selected_board_id()
@@ -1328,6 +1482,19 @@ class BoardPopover(QFrame):
                     self.board_selected.emit(board_id)
                 return True
         if watched is self._list.viewport():
+            if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+                item = self._list.itemAt(event.pos())
+                if item is not None:
+                    item_rect = self._list.visualItemRect(item)
+                    copy_rect, delete_rect = _BoardListDelegate.action_rects(item_rect)
+                    if copy_rect.contains(event.pos()) or delete_rect.contains(event.pos()):
+                        return True
+                    if _BoardListDelegate.name_rect(item_rect).contains(event.pos()):
+                        board_id = str(item.data(Qt.UserRole) or "")
+                        if board_id:
+                            self._pending_rename_id = board_id
+                            QTimer.singleShot(0, self._flush_pending_inline_rename)
+                        return True
             if event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
                 if event.button() == Qt.LeftButton:
                     item = self._list.itemAt(event.pos())
@@ -1403,8 +1570,54 @@ class BoardPopover(QFrame):
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         board_id = str(item.data(Qt.UserRole) or "")
-        if board_id:
-            self.board_selected.emit(board_id)
+        if not board_id:
+            return
+        # Stay open on the already-current Board so a name double-click can
+        # enter inline rename. Canvas click / Esc still close the overlay.
+        if board_id == self.current_board_id():
+            return
+        self.board_selected.emit(board_id)
+
+    def _item_for(self, board_id: str) -> QListWidgetItem | None:
+        target = str(board_id or "")
+        if not target:
+            return None
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item is not None and str(item.data(Qt.UserRole) or "") == target:
+                return item
+        return None
+
+    def _on_inline_rename_committed(self, text: str) -> None:
+        board_id = self._rename_board_id
+        self._close_inline_rename()
+        cleaned = str(text or "").strip()
+        if cleaned and board_id:
+            self.rename_requested.emit(board_id, cleaned)
+
+    def _on_inline_rename_cancelled(self) -> None:
+        self._close_inline_rename()
+
+    def _close_inline_rename(self) -> None:
+        self._pending_rename_id = ""
+        editor = self._rename_editor
+        self._rename_editor = None
+        self._rename_board_id = ""
+        if editor is None:
+            return
+        editor.discard()
+        editor.hide()
+        editor.deleteLater()
+
+    def _sync_rename_editor_geometry(self, _value: int = 0) -> None:
+        editor = self._rename_editor
+        if editor is None:
+            return
+        item = self._item_for(self._rename_board_id)
+        if item is None:
+            self._close_inline_rename()
+            return
+        editor.setGeometry(_BoardListDelegate.name_rect(self._list.visualItemRect(item)))
 
     def _on_reordered(self, board_id: str, new_index: int) -> None:
         self._reordering = True
@@ -1421,6 +1634,7 @@ class BoardPopover(QFrame):
             self._apply_boards(boards, active_id)
 
     def _apply_boards(self, boards, active_board_id: str | None) -> None:
+        self._close_inline_rename()
         parsed: list[tuple[str, str]] = []
         for index, board in enumerate(boards or ()):
             board_id = str(getattr(board, "board_id", "") or "")

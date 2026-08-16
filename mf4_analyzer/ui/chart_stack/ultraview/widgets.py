@@ -10,7 +10,7 @@ import logging
 import math
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import qtawesome as qta
 from PyQt5 import sip
@@ -1931,7 +1931,7 @@ class UltraViewCard(QFrame):
 
         self._image = QLabel(self)
         self._image.setObjectName("ultraViewCardImage")
-        self._image.setAlignment(Qt.AlignCenter)
+        self._image.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self._image.setWordWrap(True)
         self._image.setMinimumHeight(max(8, MIN_CARD_CHROME_HEIGHT // 4))
         self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -2266,6 +2266,7 @@ class UltraViewCard(QFrame):
         self._source_pixmap = None
         self._scale_buffer = None
         self._scale_key = None
+        self._image.setAlignment(Qt.AlignCenter)
         self._image.setPixmap(QPixmap())
         if model.status == STATUS_MISSING:
             self._image.setText(MISSING_CARD_COPY)
@@ -2343,6 +2344,7 @@ class UltraViewCard(QFrame):
             int(self._raw_image.cacheKey()),
         )
         if self._scale_buffer is not None and self._scale_key == key:
+            self._image.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
             self._image.setPixmap(self._scale_buffer)
             return
         if self._source_pixmap is None:
@@ -2358,6 +2360,7 @@ class UltraViewCard(QFrame):
         scaled.setDevicePixelRatio(dpr)
         self._scale_buffer = scaled
         self._scale_key = key
+        self._image.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self._image.setPixmap(scaled)
 
     def restore_dim(self) -> None:
@@ -3104,6 +3107,8 @@ class FreeGridBoard(QWidget):
         self._gesture_dimmed = False
         self._default_insert_span = (4, 3)
         self._insert_preview_rect: GridRect | None = None
+        self._insert_span_resolver: Callable[[str, str], tuple[int, int] | None] | None = None
+        self._insert_drag_ref: tuple[str, str] | None = None
         # Cards currently wearing the drag dim, owned by the board so the set
         # can shrink mid-gesture; the plan's preview set changes on every move.
         self._dimmed_refs: set[UltraViewRef] = set()
@@ -3180,6 +3185,18 @@ class FreeGridBoard(QWidget):
         except (IndexError, TypeError, ValueError):
             column_span, row_span = 4, 3
         self._default_insert_span = (column_span, row_span)
+
+    def set_insert_span_resolver(
+        self,
+        resolver: Callable[[str, str], tuple[int, int] | None] | None,
+    ) -> None:
+        """Board-local callback: (section, view_id) → insert span, or None.
+
+        Used so the insert ghost, drop, and fitted card share one span when
+        PreviewStore already has pixels. Layout moves ignore this and keep
+        the card's current GridRect.
+        """
+        self._insert_span_resolver = resolver
 
     def zoom_anchor_at(self, point: tuple[float, float]) -> tuple[float, float]:
         """Canvas pixel → zoom-independent anchor, in signed workspace cells.
@@ -3546,10 +3563,34 @@ class FreeGridBoard(QWidget):
         )
         return legal.column, legal.row
 
+    def _span_for_insert(
+        self, section: str | None = None, view_id: str | None = None
+    ) -> tuple[int, int]:
+        """Fitted insert span when a resolver+ref is available, else default."""
+        if section is None or view_id is None:
+            if self._insert_drag_ref is not None:
+                section, view_id = self._insert_drag_ref
+        resolver = self._insert_span_resolver
+        if callable(resolver) and section and view_id:
+            resolved = resolver(str(section), str(view_id))
+            if resolved is not None:
+                try:
+                    column_span, row_span = int(resolved[0]), int(resolved[1])
+                except (IndexError, TypeError, ValueError):
+                    column_span, row_span = 0, 0
+                if column_span > 0 and row_span > 0:
+                    return (column_span, row_span)
+        return self._default_insert_span
+
+    def _remember_insert_drag_ref(self, mime: QMimeData | None) -> None:
+        extracted = extract_ref_strings(mime)
+        if extracted is not None:
+            self._insert_drag_ref = extracted
+
     def _insertion_rect_at(self, pos: QPoint) -> GridRect | None:
         return resolve_free_grid_insert_rect(
             tuple(self._placements.values()),
-            span=self._default_insert_span,
+            span=self._span_for_insert(),
             anchor=self.grid_anchor_at(pos),
         )
 
@@ -4163,12 +4204,14 @@ class FreeGridBoard(QWidget):
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
             event.acceptProposedAction()
+            self._remember_insert_drag_ref(event.mimeData())
             self._emit_workspace_gesture(True, self.mapToGlobal(event.pos()))
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
         if not _accept_ultraview_drag(event):
             return
         event.acceptProposedAction()
+        self._remember_insert_drag_ref(event.mimeData())
         self._emit_workspace_gesture(True, self.mapToGlobal(event.pos()))
         card = self._card_at(event.pos())
         if card is None:
@@ -4183,6 +4226,7 @@ class FreeGridBoard(QWidget):
         self._show_insert_preview(event.pos())
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self._insert_drag_ref = None
         self._clear_insert_preview()
         self._replace.clear()
         self._emit_workspace_gesture(False)
@@ -4192,6 +4236,7 @@ class FreeGridBoard(QWidget):
         ref = extract_ref_strings(event.mimeData())
         card = self._card_at(event.pos())
         event.acceptProposedAction()
+        self._insert_drag_ref = None
         self._emit_workspace_gesture(False)
         if card is not None:
             key = f"{card.model().section}/{card.model().view_id}"

@@ -16,7 +16,6 @@ from PyQt5.QtGui import QCursor, QKeySequence, QMouseEvent, QNativeGestureEvent,
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -557,6 +556,8 @@ class UltraViewPage(QWidget):
         if workspace_gesture is not None:
             workspace_gesture.connect(self._on_workspace_gesture_changed)
         self._free_grid.destroyed.connect(self._stop_edge_pan)
+        self.resolve_insert_span = None
+        self._free_grid.set_insert_span_resolver(self._resolve_insert_span_for_drag)
 
         self._tray.place_requested.connect(self._on_tray_place)
         self._tray.remove_requested.connect(self.remove_ref_requested)
@@ -1142,12 +1143,19 @@ class UltraViewPage(QWidget):
     def _on_boards_reordered(self, board_id: str, new_index: int) -> None:
         self.reorder_board_requested.emit(str(board_id), int(new_index))
 
-    def _rename_board(self, board_id: str) -> None:
-        boards = tuple(getattr(self._workspace, "boards", ()) or ()) if self._workspace is not None else (self._board,)
-        target = next((item for item in boards if str(getattr(item, "board_id", "")) == board_id), self._board)
-        text, accepted = QInputDialog.getText(self, "重命名 Board", "名称", text=str(getattr(target, "name", "") or ""))
-        if accepted and text.strip():
-            self.rename_board_requested.emit(board_id, text.strip())
+    def _rename_board(self, board_id: str, name: str = "") -> None:
+        cleaned = str(name or "").strip()
+        if cleaned:
+            self.rename_board_requested.emit(str(board_id), cleaned)
+            return
+        target_id = str(board_id or "")
+        if not target_id:
+            return
+        if self._board_popover.isVisible() and target_id in self._board_popover.board_ids():
+            self._board_popover.begin_inline_rename(target_id)
+            return
+        if target_id == str(getattr(self._board, "board_id", "") or ""):
+            self._board_island.begin_inline_rename()
 
     def _confirm_delete_board(self, board_id: str) -> None:
         boards = tuple(getattr(self._workspace, "boards", ()) or ()) if self._workspace is not None else (self._board,)
@@ -1163,8 +1171,8 @@ class UltraViewPage(QWidget):
         if answer == QMessageBox.Yes:
             self.delete_board_requested.emit(board_id)
 
-    def _rename_current_board(self) -> None:
-        self._rename_board(self._board.board_id)
+    def _rename_current_board(self, name: str = "") -> None:
+        self._rename_board(self._board.board_id, name)
 
     def _show_card_more_menu(self, section: str, view_id: str) -> None:
         card = self.card_widget(section, view_id)
@@ -2541,6 +2549,14 @@ class UltraViewPage(QWidget):
         self._drag_kind = kind
         if kind == "card":
             self._card_context.hide()
+
+    def _resolve_insert_span_for_drag(
+        self, section: str, view_id: str
+    ) -> tuple[int, int] | None:
+        resolver = getattr(self, "resolve_insert_span", None)
+        if not callable(resolver):
+            return None
+        return resolver(section, view_id)
 
     def _on_drag_finished(self) -> None:
         self._drag_kind = None

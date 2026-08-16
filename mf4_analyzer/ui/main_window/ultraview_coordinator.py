@@ -1015,6 +1015,7 @@ class UltraViewCoordinator(QObject):
         for signal, slot in pairs:
             signal.connect(slot)
             self._page_hooks.append((page, signal, slot))
+        page.resolve_insert_span = self._insert_span_for_drag
 
     def _connect_managers(self) -> None:
         if self._manager_hooks:
@@ -1453,8 +1454,8 @@ class UltraViewCoordinator(QObject):
             return
         image_size = self._preview_image_size(ref)
         span = None
-        if board.layout_mode == LAYOUT_MODE_FREE_GRID and image_size is not None:
-            span = self._fitted_insert_span(board, image_size)
+        if board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            span = self._insert_span_for_ref(board, ref)
         before = self._placement_snapshot(board)
         warnings = add_ref(
             board, ref, preferred_anchor=preferred_anchor, span=span
@@ -1537,11 +1538,9 @@ class UltraViewCoordinator(QObject):
             page.current_free_grid_insert_anchor() if page is not None else None
         )
         board = active_board(self._workspace)
-        before = self._placement_snapshot(board)
-        warnings = place_free_grid_from_unplaced(
+        self._place_unplaced_on_free_grid(
             board, ref, preferred_anchor=anchor
         )
-        self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_insert(
         self, section: str, view_id: str, anchor: GridAnchor
@@ -1558,11 +1557,9 @@ class UltraViewCoordinator(QObject):
                 page.select_ref(ref)
             return
         if ref in board.unplaced:
-            before = self._placement_snapshot(board)
-            warnings = place_free_grid_from_unplaced(
+            self._place_unplaced_on_free_grid(
                 board, ref, preferred_anchor=anchor
             )
-            self._commit_grid_change(board, before, warnings)
             return
         self._apply_add_ref(ref, preferred_anchor=anchor)
 
@@ -1859,6 +1856,44 @@ class UltraViewCoordinator(QObject):
         if not PreviewStore.image_valid(image):
             return None
         return (int(image.width()), int(image.height()))
+
+    def _insert_span_for_ref(
+        self, board: UltraViewBoardState, ref: UltraViewRef
+    ) -> tuple[int, int] | None:
+        image_size = self._preview_image_size(ref)
+        if image_size is None:
+            return None
+        return self._fitted_insert_span(board, image_size)
+
+    def _insert_span_for_drag(
+        self, section: str, view_id: str
+    ) -> tuple[int, int] | None:
+        if self._inactive():
+            return None
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return None
+        return self._insert_span_for_ref(active_board(self._workspace), ref)
+
+    def _place_unplaced_on_free_grid(
+        self,
+        board: UltraViewBoardState,
+        ref: UltraViewRef,
+        *,
+        preferred_anchor: GridAnchor | None,
+    ) -> None:
+        span = self._insert_span_for_ref(board, ref)
+        before = self._placement_snapshot(board)
+        warnings = place_free_grid_from_unplaced(
+            board, ref, preferred_anchor=preferred_anchor, span=span
+        )
+        self._commit_grid_change(board, before, warnings)
+        if warnings:
+            return
+        if span is None:
+            item = free_grid_placement_for(board, ref)
+            if item is not None:
+                self._register_pending_auto_aspect(board, ref, item.rect)
 
     def _fitted_insert_span(
         self, board: UltraViewBoardState, image_size: tuple[int, int]

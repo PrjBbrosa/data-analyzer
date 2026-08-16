@@ -249,3 +249,58 @@ def test_membership_cap_and_placed_cap_use_feedback_copy(qapp, qtbot, monkeypatc
     uv._apply_add_ref(blocked)
     assert blocked not in membership_set(board)
     assert (text_for_key(MEMBERSHIP_CAP), "warning") in toasts
+
+
+def test_tray_place_with_preview_uses_fitted_span(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    uv._apply_add_ref(ref)
+    uv._on_move_to_unplaced(ref.section, ref.view_id)
+    _publish(uv, ref, 800, 200)
+    uv._on_place_free_grid_from_unplaced(ref.section, ref.view_id)
+    item = free_grid_placement_for(uv.board, ref)
+    assert item is not None
+    expected = _fitted_span(uv.board, (800, 200))
+    assert (item.rect.column_span, item.rect.row_span) == expected
+    assert uv._pending_auto_aspect == {}
+
+
+def test_tray_place_without_preview_keeps_pending_auto_aspect(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    uv._apply_add_ref(ref)
+    uv._on_move_to_unplaced(ref.section, ref.view_id)
+    assert uv._pending_auto_aspect == {}
+    uv._on_place_free_grid_from_unplaced(ref.section, ref.view_id)
+    item = free_grid_placement_for(uv.board, ref)
+    assert item is not None
+    assert item.rect == GridRect(0, 0, 4, 3)
+    assert (uv.board.board_id, ref) in uv._pending_auto_aspect
+
+
+def test_insert_ghost_span_matches_fitted_drop_span(qapp, qtbot):
+    from PyQt5.QtCore import QPoint
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    ref = UltraViewRef("frf", str(win.analysis_managers["frf"].get(0).view_id))
+    _publish(uv, ref, 800, 1400)
+    page = uv.page()
+    expected = uv._fitted_insert_span(uv.board, (800, 1400))
+    assert expected != (4, 3)
+    resolved = page._resolve_insert_span_for_drag(ref.section, ref.view_id)
+    assert resolved == expected
+    free = page._free_grid
+    free._insert_drag_ref = (ref.section, ref.view_id)
+    ghost = free._insertion_rect_at(QPoint(80, 80))
+    assert ghost is not None
+    assert (ghost.column_span, ghost.row_span) == expected
+    uv._apply_add_ref(ref)
+    item = free_grid_placement_for(uv.board, ref)
+    assert item is not None
+    assert (item.rect.column_span, item.rect.row_span) == expected

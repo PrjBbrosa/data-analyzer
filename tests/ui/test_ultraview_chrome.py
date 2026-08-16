@@ -3,12 +3,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from types import SimpleNamespace
+
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
+from PyQt5.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QToolButton,
+    QWidget,
+)
 
 import mf4_analyzer.ui.chart_stack.ultraview.chrome as ultraview_chrome
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
@@ -453,14 +465,11 @@ def test_island_actions_are_icon_only_and_forward_existing_typed_intents(qtbot):
     assert navigation.zoom_label().text() == "125%"
 
     board.set_current_board("board-a", "全局对比 Board")
-    renamed = []
-
-    def record_rename() -> None:
-        renamed.append(True)
-
-    board.rename_requested.connect(record_rename)
     QTest.keyClick(board, Qt.Key_F2)
-    assert renamed == [True]
+    editor = _visible_rename_editor(board, "ultraViewBoardIslandRename")
+    assert editor is not None
+    assert editor.isVisible()
+    assert editor.text() == "全局对比 Board"
     assert board.board_name_label().accessibleName() == "全局对比 Board"
 
     help_requested = []
@@ -510,6 +519,126 @@ def test_island_actions_are_icon_only_and_forward_existing_typed_intents(qtbot):
     assert synced == [("time", "view-1")]
     context.show_for("time", "view-1", orphaned=True, stale=True)
     assert not context.button("sync").isVisible()
+
+
+def _visible_rename_editor(host: QWidget, object_name: str) -> QLineEdit | None:
+    for widget in host.findChildren(QLineEdit):
+        if widget.objectName() == object_name and widget.isVisible():
+            return widget
+    return None
+
+
+def _rename_board_dialogs() -> list[QInputDialog]:
+    return [
+        widget
+        for widget in QApplication.allWidgets()
+        if isinstance(widget, QInputDialog) and widget.windowTitle() == "重命名 Board"
+    ]
+
+
+def test_board_island_name_double_click_uses_inline_edit_not_dialog(qtbot, qapp):
+    board = BoardIsland()
+    qtbot.addWidget(board)
+    board.set_current_board("board-a", "全局对比 Board")
+    board.show()
+    board.resize(board.sizeHint())
+    qapp.processEvents()
+
+    QTest.mouseDClick(board.board_name_label(), Qt.LeftButton)
+    qapp.processEvents()
+
+    editor = _visible_rename_editor(board, "ultraViewBoardIslandRename")
+    assert editor is not None
+    assert editor.isVisible()
+    assert editor.text() == "全局对比 Board"
+    assert editor.selectedText() == "全局对比 Board"
+    assert _rename_board_dialogs() == []
+
+
+def test_board_island_inline_rename_commits_cancels_and_rejects_empty(qtbot, qapp):
+    board = BoardIsland()
+    qtbot.addWidget(board)
+    board.set_current_board("board-a", "全局对比 Board")
+    board.show()
+    board.resize(board.sizeHint())
+    qapp.processEvents()
+    renamed: list[str] = []
+    board.rename_requested.connect(renamed.append)
+
+    QTest.keyClick(board, Qt.Key_F2)
+    editor = _visible_rename_editor(board, "ultraViewBoardIslandRename")
+    assert editor is not None
+    editor.setText("NVH 复查")
+    QTest.keyClick(editor, Qt.Key_Return)
+    qapp.processEvents()
+    assert renamed == ["NVH 复查"]
+    assert _rename_board_dialogs() == []
+
+    QTest.keyClick(board, Qt.Key_F2)
+    editor = _visible_rename_editor(board, "ultraViewBoardIslandRename")
+    assert editor is not None
+    editor.setText("草稿")
+    QTest.keyClick(editor, Qt.Key_Escape)
+    qapp.processEvents()
+    assert renamed == ["NVH 复查"]
+    assert board.board_name_label().full_text() == "全局对比 Board"
+
+    QTest.keyClick(board, Qt.Key_F2)
+    editor = _visible_rename_editor(board, "ultraViewBoardIslandRename")
+    assert editor is not None
+    editor.setText("   ")
+    QTest.keyClick(editor, Qt.Key_Return)
+    qapp.processEvents()
+    assert renamed == ["NVH 复查"]
+    assert board.board_name_label().full_text() == "全局对比 Board"
+
+    QTest.mouseDClick(board.menu_button(), Qt.LeftButton)
+    qapp.processEvents()
+    leftover = _visible_rename_editor(board, "ultraViewBoardIslandRename")
+    assert leftover is None or not leftover.isVisible()
+
+
+def test_board_popover_f2_renames_inline_without_closing(qtbot, qapp):
+    popover = BoardPopover()
+    qtbot.addWidget(popover)
+    popover.set_boards(
+        (
+            SimpleNamespace(board_id="a", name="全局对比"),
+            SimpleNamespace(board_id="b", name="台架 vs 路试"),
+        ),
+        "a",
+    )
+    popover.show()
+    popover.resize(popover.sizeHint())
+    qapp.processEvents()
+    renamed: list[tuple[str, str]] = []
+    popover.rename_requested.connect(lambda board_id, name: renamed.append((board_id, name)))
+
+    QTest.keyClick(popover.list_widget(), Qt.Key_F2)
+    qapp.processEvents()
+    editor = _visible_rename_editor(popover, "ultraViewBoardRowRename")
+    assert editor is not None
+    assert editor.isVisible()
+    assert editor.text() == "全局对比"
+    assert popover.isVisible()
+    assert _rename_board_dialogs() == []
+
+    editor.setText("整车问题总览")
+    QTest.keyClick(editor, Qt.Key_Return)
+    qapp.processEvents()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert renamed == [("a", "整车问题总览")]
+    assert popover.isVisible()
+    assert _rename_board_dialogs() == []
+
+    name_rect = popover.name_rect_for("a")
+    assert name_rect.isValid()
+    QTest.mouseDClick(popover.list_widget().viewport(), Qt.LeftButton, pos=name_rect.center())
+    qapp.processEvents()
+    editor = _visible_rename_editor(popover, "ultraViewBoardRowRename")
+    assert editor is not None and editor.isVisible()
+    assert popover.isVisible()
+    assert _rename_board_dialogs() == []
 
 
 def test_tool_rail_mode_active_is_independent_of_panel_open(qtbot):

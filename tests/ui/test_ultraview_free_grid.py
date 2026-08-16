@@ -10,6 +10,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_VISIBLE_ROWS,
     GRID_ROW_HEIGHT,
     GRID_SPARE_ROWS,
+    FIT_SHORT_SIDE_GROW_MAX,
     HANDLE_HIT_PX,
     LAYOUT_MOVE,
     LAYOUT_RESIZE,
@@ -42,11 +43,17 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BASE_BOARD_SIZE,
+    CARD_FIT_CHROME_HEIGHT,
+    CARD_FOOTER_HEIGHT,
+    CARD_HEADER_HEIGHT,
+    CARD_IMAGE_PADDING,
     MIN_CARD_CHROME_HEIGHT,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
+    GRID_MAX_COLUMN_SPAN,
+    GRID_MAX_ROW_SPAN,
     GRID_MIN_COLUMN_SPAN,
     GRID_MIN_ROW_SPAN,
     SAFETY_COLUMN_MAX,
@@ -55,8 +62,10 @@ from mf4_analyzer.ui.ultraview_state import (
     SAFETY_ROW_MIN,
     FreeGridPlacement,
     GridRect,
+    default_board,
     make_ref,
     organized_placements,
+    place_free_grid_from_unplaced,
 )
 
 
@@ -167,13 +176,14 @@ def test_fit_rect_for_aspect_prefers_matching_span():
     assert tall.row_span >= tall.column_span
     assert abs(square.column_span - square.row_span) <= 2
     assert wide.column == origin.column and wide.row == origin.row
-    chrome = MIN_CARD_CHROME_HEIGHT
+    chrome = CARD_FIT_CHROME_HEIGHT
     _, _, ww, wh = rect_to_pixels(wide, metrics)
     _, _, tw, th = rect_to_pixels(tall, metrics)
     assert ww / max(1, wh - chrome) > tw / max(1, th - chrome)
 
 
-def test_fit_rect_for_aspect_never_grows():
+def test_fit_rect_for_aspect_grows_short_side_at_most_two_cells():
+    """Shrink first; only the short side may grow, and by at most two cells."""
     metrics = screen_grid_metrics([])
     image = (1000, 800)
     origins = (
@@ -186,16 +196,44 @@ def test_fit_rect_for_aspect_never_grows():
     assert len(set(spans)) == 3
     for origin, fitted in zip(origins, results):
         assert fitted.column == origin.column and fitted.row == origin.row
-        assert fitted.column_span <= origin.column_span
-        assert fitted.row_span <= origin.row_span
+        dc = fitted.column_span - origin.column_span
+        dr = fitted.row_span - origin.row_span
+        assert dc <= FIT_SHORT_SIDE_GROW_MAX
+        assert dr <= FIT_SHORT_SIDE_GROW_MAX
+        assert dc <= 0 or dr <= 0
+        assert fitted.column_span <= GRID_MAX_COLUMN_SPAN
+        assert fitted.row_span <= GRID_MAX_ROW_SPAN
         assert fitted.column_span >= GRID_MIN_COLUMN_SPAN
         assert fitted.row_span >= GRID_MIN_ROW_SPAN
+        assert (fitted.column_span, fitted.row_span) != (7, 8)
+
+
+def test_fit_rect_for_aspect_tall_frf_from_standard_adds_rows():
+    """A portrait FRF-style preview starting at 4×3 grows rows instead of letterboxing."""
+    metrics = screen_grid_metrics([])
+    origin = GridRect(0, 0, 4, 3)
+    image = (800, 1400)
+    fitted = fit_rect_for_aspect(origin, image, metrics)
+    assert fitted.column == origin.column and fitted.row == origin.row
+    assert fitted.row_span > origin.row_span
+    assert fitted.row_span - origin.row_span <= FIT_SHORT_SIDE_GROW_MAX
+    assert fitted.column_span <= origin.column_span
+    assert fitted.column_span <= GRID_MAX_COLUMN_SPAN
+    assert fitted.row_span <= GRID_MAX_ROW_SPAN
+
+
+def test_fit_chrome_includes_image_padding():
+    assert CARD_IMAGE_PADDING == 8
+    assert CARD_FIT_CHROME_HEIGHT == (
+        CARD_HEADER_HEIGHT + CARD_FOOTER_HEIGHT + 2 * CARD_IMAGE_PADDING
+    )
+    assert CARD_FIT_CHROME_HEIGHT == MIN_CARD_CHROME_HEIGHT + 16
 
 
 def test_fit_rect_for_aspect_matches_user_contract():
     """Wide bottleneck keeps columns; tall bottleneck keeps rows (pixel + chrome)."""
     metrics = screen_grid_metrics([])
-    chrome = MIN_CARD_CHROME_HEIGHT
+    chrome = CARD_FIT_CHROME_HEIGHT
     target = GridRect(0, 0, 6, 4)
     _x, _y, width, height = rect_to_pixels(target, metrics)
     image = (width, max(1, height - chrome))
@@ -230,6 +268,72 @@ def test_fit_rect_for_aspect_result_is_a_subset():
     assert fitted.row_span <= origin.row_span
     assert fitted.column + fitted.column_span <= origin.column + origin.column_span
     assert fitted.row + fitted.row_span <= origin.row + origin.row_span
+
+
+def test_place_free_grid_from_unplaced_honors_optional_span():
+    board = default_board()
+    ref = make_ref("time", "tray")
+    board.unplaced.append(ref)
+    assert place_free_grid_from_unplaced(board, ref, span=(2, 5)) == []
+    item = board.free_grid[0]
+    assert item.ref == ref
+    assert (item.rect.column_span, item.rect.row_span) == (2, 5)
+
+
+def test_place_free_grid_from_unplaced_defaults_to_standard_span():
+    board = default_board()
+    ref = make_ref("frf", "tray")
+    board.unplaced.append(ref)
+    assert place_free_grid_from_unplaced(board, ref) == []
+    item = board.free_grid[0]
+    assert (item.rect.column_span, item.rect.row_span) == (4, 3)
+
+
+def test_insert_preview_uses_resolver_span_not_default(qapp):
+    from PyQt5.QtCore import QPoint
+
+    from mf4_analyzer.ui.chart_stack.ultraview.widgets import FreeGridBoard
+
+    board = FreeGridBoard()
+    board.set_default_insert_span((4, 3))
+    board.set_insert_span_resolver(
+        lambda section, view_id: (2, 5) if section == "frf" else None
+    )
+    board._insert_drag_ref = ("frf", "bode")
+    fitted = board._insertion_rect_at(QPoint(80, 80))
+    assert fitted is not None
+    assert (fitted.column_span, fitted.row_span) == (2, 5)
+    board._insert_drag_ref = ("time", "missing-preview")
+    fallback = board._insertion_rect_at(QPoint(80, 80))
+    assert fallback is not None
+    assert (fallback.column_span, fallback.row_span) == (4, 3)
+
+
+def test_card_preview_pixmap_is_top_centered_not_stretched(qapp, qtbot):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QImage
+
+    from mf4_analyzer.ui.chart_stack.ultraview.widgets import CardViewModel, UltraViewCard
+
+    image = QImage(120, 80, QImage.Format_ARGB32)
+    image.fill(Qt.blue)
+    card = UltraViewCard(
+        CardViewModel(slot_id="tl", section="time", view_id="v1", image=image)
+    )
+    qtbot.addWidget(card)
+    card.resize(300, 240)
+    card.show()
+    qtbot.wait(10)
+    card._fit_card_image()
+    assert card._image.alignment() == (Qt.AlignHCenter | Qt.AlignTop)
+    pixmap = card.scale_buffer()
+    assert pixmap is not None
+    logical_w = pixmap.width() / pixmap.devicePixelRatioF()
+    logical_h = pixmap.height() / pixmap.devicePixelRatioF()
+    avail = card._preview_fit_size()
+    assert logical_w <= avail.width() + 1
+    assert logical_h <= avail.height() + 1
+    assert abs(logical_w / logical_h - 120 / 80) < 0.05
 
 
 def test_snapped_move_rect_matches_candidate_move_and_stays_clamped():

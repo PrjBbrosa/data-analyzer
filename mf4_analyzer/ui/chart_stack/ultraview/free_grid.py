@@ -29,7 +29,7 @@ from mf4_analyzer.ui.ultraview_state import (
 from .layouts import (
     BASE_BOARD_SIZE,
     BOARD_PADDING,
-    MIN_CARD_CHROME_HEIGHT,
+    CARD_FIT_CHROME_HEIGHT,
     SLOT_GUTTER,
 )
 
@@ -42,6 +42,10 @@ GRID_MIN_VISIBLE_ROWS = 10
 # Extra empty rows past the last occupied card so a 1× / fit canvas still
 # has a drop target below the current layout. Export does not add these.
 GRID_SPARE_ROWS = 2
+# After shrink-only fit, the short side may grow by at most this many cells
+# when plot-area letterbox still exceeds about one row. Never a full-board
+# exhaustive search (the old 7×8 unbounded grow).
+FIT_SHORT_SIDE_GROW_MAX = 2
 
 Rect = tuple[int, int, int, int]
 
@@ -233,19 +237,81 @@ def screen_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
     return grid_metrics((BASE_BOARD_SIZE[0], 0), placements)
 
 
+def _plot_size_px(
+    rect: GridRect, metrics: GridMetrics, chrome: int
+) -> tuple[int, int]:
+    _x, _y, width, height = rect_to_pixels(rect, metrics)
+    return max(1, int(width)), max(1, int(height) - chrome)
+
+
+def _aspect_error_key(
+    rect: GridRect,
+    target: float,
+    metrics: GridMetrics,
+    chrome: int,
+) -> tuple[float, int]:
+    width, plot_h = _plot_size_px(rect, metrics, chrome)
+    ratio = width / float(plot_h)
+    return (abs(ratio - target), -(rect.column_span * rect.row_span))
+
+
+def _contain_letterbox_px(
+    rect: GridRect,
+    image_size: tuple[int, int],
+    metrics: GridMetrics,
+    chrome: int,
+) -> tuple[float, float]:
+    """Unused plot-area width/height after KeepAspectRatio contain."""
+    width, plot_h = _plot_size_px(rect, metrics, chrome)
+    image_w = max(1, int(image_size[0]))
+    image_h = max(1, int(image_size[1]))
+    scale = min(width / float(image_w), plot_h / float(image_h))
+    return width - image_w * scale, plot_h - image_h * scale
+
+
+def _best_origin_span(
+    origin: GridRect,
+    col_min: int,
+    col_max: int,
+    row_min: int,
+    row_max: int,
+    target: float,
+    metrics: GridMetrics,
+    chrome: int,
+) -> GridRect | None:
+    best: tuple[tuple[float, int], GridRect] | None = None
+    for col_span in range(col_min, col_max + 1):
+        if int(origin.column) + col_span > SAFETY_COLUMN_MAX:
+            continue
+        for row_span in range(row_min, row_max + 1):
+            if int(origin.row) + row_span > SAFETY_ROW_MAX:
+                continue
+            candidate = GridRect(
+                int(origin.column), int(origin.row), col_span, row_span
+            )
+            key = _aspect_error_key(candidate, target, metrics, chrome)
+            if best is None or key < best[0]:
+                best = (key, candidate)
+    return None if best is None else best[1]
+
+
 def fit_rect_for_aspect(
     origin: GridRect,
     image_size: tuple[int, int],
     metrics: GridMetrics,
     *,
-    chrome_height: int = MIN_CARD_CHROME_HEIGHT,
+    chrome_height: int = CARD_FIT_CHROME_HEIGHT,
 ) -> GridRect:
-    """Contain the image aspect in the current card: shrink only, never grow.
+    """Contain the image aspect at the origin: shrink first, then a bounded grow.
 
-    Candidates stay at the origin and may only reduce column/row span. The
-    plot-area ratio (card height minus chrome) is matched first; ties keep
-    the larger area so a discrete grid does not collapse to the minimum
-    similar span. See spec §1 of the 2026-08-15 fit-zoom-and-dismiss design.
+    Phase 1 is the 2026-08-15 shrink-only search inside the current span.
+    Plot-area chrome is header + footer + 2× image padding so the ratio is
+    the inner ``contentsRect``, not the label box.
+
+    Phase 2: if the contain letterbox on the plot's leftover axis still
+    exceeds about one ``GRID_ROW_HEIGHT``, grow only the short side by at
+    most ``FIT_SHORT_SIDE_GROW_MAX`` cells. Origin stays pinned. Spans stay
+    inside ``GRID_MAX_*`` / safety. This is not the old unbounded 7×8 search.
     """
     image_w = max(1, int(image_size[0]))
     image_h = max(1, int(image_size[1]))
@@ -253,24 +319,43 @@ def fit_rect_for_aspect(
     chrome = max(0, int(chrome_height))
     max_col = min(int(origin.column_span), GRID_MAX_COLUMN_SPAN)
     max_row = min(int(origin.row_span), GRID_MAX_ROW_SPAN)
-    best: tuple[tuple[float, int], GridRect] | None = None
-    for col_span in range(GRID_MIN_COLUMN_SPAN, max_col + 1):
+    shrunk = _best_origin_span(
+        origin,
+        GRID_MIN_COLUMN_SPAN,
+        max_col,
+        GRID_MIN_ROW_SPAN,
+        max_row,
+        target,
+        metrics,
+        chrome,
+    )
+    if shrunk is None:
+        return origin
+    leftover_w, leftover_h = _contain_letterbox_px(
+        shrunk, (image_w, image_h), metrics, chrome
+    )
+    if max(leftover_w, leftover_h) <= GRID_ROW_HEIGHT:
+        return shrunk
+    best = shrunk
+    best_key = _aspect_error_key(shrunk, target, metrics, chrome)
+    grow_rows = leftover_w >= leftover_h
+    for extra in range(1, FIT_SHORT_SIDE_GROW_MAX + 1):
+        col_span = shrunk.column_span + (0 if grow_rows else extra)
+        row_span = shrunk.row_span + (extra if grow_rows else 0)
+        if col_span > GRID_MAX_COLUMN_SPAN or row_span > GRID_MAX_ROW_SPAN:
+            continue
         if int(origin.column) + col_span > SAFETY_COLUMN_MAX:
             continue
-        for row_span in range(GRID_MIN_ROW_SPAN, max_row + 1):
-            if int(origin.row) + row_span > SAFETY_ROW_MAX:
-                continue
-            candidate = GridRect(
-                int(origin.column), int(origin.row), col_span, row_span
-            )
-            _x, _y, width, height = rect_to_pixels(candidate, metrics)
-            plot_h = max(1, int(height) - chrome)
-            ratio = max(1, int(width)) / float(plot_h)
-            area = col_span * row_span
-            key = (abs(ratio - target), -area)
-            if best is None or key < best[0]:
-                best = (key, candidate)
-    return best[1] if best is not None else origin
+        if int(origin.row) + row_span > SAFETY_ROW_MAX:
+            continue
+        candidate = GridRect(
+            int(origin.column), int(origin.row), col_span, row_span
+        )
+        key = _aspect_error_key(candidate, target, metrics, chrome)
+        if key < best_key:
+            best_key = key
+            best = candidate
+    return best
 
 
 def rect_to_pixels(

@@ -809,15 +809,20 @@ def place_free_grid_from_unplaced(
     ref: UltraViewRef,
     *,
     preferred_anchor: GridAnchor | None = None,
+    span: tuple[int, int] | None = None,
 ) -> list[str]:
-    """Place a tray ref at the next legal free-grid rect without re-compute."""
+    """Place a tray ref at the next legal free-grid rect without re-compute.
+
+    ``span`` is the same optional override ``add_ref`` uses so a PreviewStore
+    fit, the insert ghost, and the committed card share one rectangle.
+    """
     if board.layout_mode != LAYOUT_MODE_FREE_GRID:
         return [_warn("not_free_grid")]
     if ref not in board.unplaced:
         return [_warn("not_unplaced", f"{ref.section}/{ref.view_id}")]
     if len(board.free_grid) >= MAX_PLACED_CARDS:
         return [_warn("grid_full")]
-    span = free_grid_default_span(board)
+    span = _resolved_insert_span(board, span)
     rect = (
         resolve_free_grid_insert_rect(board.free_grid, span=span, anchor=preferred_anchor)
         if preferred_anchor is not None
