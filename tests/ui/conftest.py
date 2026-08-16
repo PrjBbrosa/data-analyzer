@@ -177,6 +177,12 @@ def _isolate_app_style(qapp):
     Tests that legitimately need the real QSS keep doing so; this only
     guarantees they cannot leak it. Restoring per test is cheap — Qt only
     repolishes widgets that still exist.
+
+    This UI-layer snapshot is the second restore. ``tests/conftest.py``
+    already rolls the app back after every item under ``tests/`` (including
+    ``tests/test_verify_ultraview_visuals.py``, which this fixture never
+    sees). Both layers are idempotent; dropping this one would lose the
+    three historical leak bugs named above.
     """
     style_name = qapp.style().objectName()
     sheet = qapp.styleSheet()
