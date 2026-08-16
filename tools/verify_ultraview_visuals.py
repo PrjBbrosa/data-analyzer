@@ -145,6 +145,12 @@ def _card_facts(page) -> list[dict[str, Any]]:
             item["title_visible"] = bool(card._title.isVisible())
             action_bar = card.action_bar()
             item["actions_visible"] = bool(action_bar.isVisible())
+            item["show_card_actions"] = bool(
+                getattr(card.model(), "show_card_actions", False)
+                or getattr(page, "_show_card_actions", False)
+            )
+            item["hovered"] = bool(getattr(card, "_card_hovered", False))
+            item["has_focus"] = bool(card.hasFocus())
             item["visible_actions"] = [
                 action
                 for action in ("open", "focus", "fit", "remove", "more")
@@ -623,6 +629,20 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         snap("export_1280", page, _page_snapshot(page))
         page._close_active_panel()
         _pump(app, page)
+        # Card actions are hover / focus / preference — never selection alone
+        # (8d57ab0e). The harness records the persistent preference so the
+        # selected-card shot still has a visible action bar.
+        from mf4_analyzer.ui.ultraview_state import (
+            UltraViewWorkspaceState,
+            set_workspace_show_card_actions,
+        )
+
+        workspace = UltraViewWorkspaceState(
+            active_board_id=page.board().board_id,
+            boards=[page.board()],
+        )
+        set_workspace_show_card_actions(workspace, True)
+        page.set_workspace(workspace)
         first = page.board().placements[0].ref
         page._select_ref(first)
         _pump(app, page)
@@ -820,11 +840,18 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
     selected_actions = [
         card
         for card in context.get("cards") or []
-        if card.get("actions_visible")
-        and {"open", "focus", "remove", "more"} <= set(card.get("visible_actions") or [])
+        if {"open", "focus", "remove", "more"} <= set(card.get("visible_actions") or [])
+        and (
+            card.get("show_card_actions")
+            or card.get("hovered")
+            or card.get("has_focus")
+        )
     ]
     if not selected_actions:
-        errors.append("card_context_1280 missing selected-card actions")
+        errors.append(
+            "card_context_1280 missing card actions "
+            "(need hover, focus, or persistent show_card_actions)"
+        )
 
     grid = geometry.get("grid_6_1440") or {}
     filled6 = [c for c in grid.get("cards") or [] if not c.get("empty")]

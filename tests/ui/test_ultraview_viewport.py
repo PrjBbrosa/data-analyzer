@@ -1193,6 +1193,19 @@ def test_title_only_lod_hides_preview_body_and_empty_backing(qtbot):
     harness = _Harness(qtbot)
     card, ref = _prepare_generic_title_card(harness, qtbot)
     harness.page.set_ref_status(ref, STATUS_STALE, True)
+    from mf4_analyzer.ui.ultraview_state import (
+        UltraViewWorkspaceState,
+        set_workspace_show_card_actions,
+    )
+
+    workspace = UltraViewWorkspaceState(
+        active_board_id=harness.page.board().board_id,
+        boards=[harness.page.board()],
+    )
+    set_workspace_show_card_actions(workspace, True)
+    harness.page.set_workspace(workspace)
+    card = harness.page.card_widget(ref.section, ref.view_id)
+    assert card is not None
     before_placement = [
         (item.ref.view_id, item.rect.column, item.rect.row, item.rect.column_span, item.rect.row_span)
         for item in harness.page.board().free_grid
