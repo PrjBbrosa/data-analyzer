@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent
@@ -809,7 +810,11 @@ def test_canvas_host_paints_titanium_amber_field(qtbot):
         assert abs(pixel.green() - expected.green()) < 28
         assert abs(pixel.blue() - expected.blue()) < 28
     assert host._dot_tile is not None
-    assert host._dot_tile_key == (expected.name(), QColor(44, 82, 93, 43).rgba())
+    assert host._dot_tile_key == (
+        expected.name(),
+        QColor(44, 82, 93, 43).rgba(),
+        host._canvas_dpr(),
+    )
     tile = host._dot_tile.toImage()
     alphas = [
         tile.pixelColor(x, y).alpha()
@@ -819,6 +824,48 @@ def test_canvas_host_paints_titanium_amber_field(qtbot):
     ]
     assert alphas, "dot tile must contain a visible mark"
     assert max(alphas) in (41, 42, 43, 44)
+
+
+def test_canvas_host_background_is_rasterized_at_device_pixel_ratio(qtbot, monkeypatch):
+    host = CanvasHost()
+    qtbot.addWidget(host)
+    host.resize(120, 80)
+    host.show()
+    qtbot.waitExposed(host)
+    host.grab()
+
+    native_dpr = host._canvas_dpr()
+    background = host._background
+    assert background is not None
+    assert background.devicePixelRatioF() == pytest.approx(native_dpr)
+    assert background.width() == max(1, int(round(host.width() * native_dpr)))
+    assert background.height() == max(1, int(round(host.height() * native_dpr)))
+    assert host._background_dpr == native_dpr
+    assert host._dot_tile is not None
+    assert host._dot_tile.devicePixelRatioF() == pytest.approx(native_dpr)
+    assert host._dot_tile.width() == max(
+        1, int(round(ultraview_chrome._DOT_PITCH_PX * native_dpr))
+    )
+
+    target_dpr = 2.0 if native_dpr != 2.0 else 3.0
+    monkeypatch.setattr(host, "devicePixelRatioF", lambda: target_dpr)
+    host.grab()
+    rebuilt = host._background
+    assert rebuilt is not None
+    assert rebuilt is not background
+    assert rebuilt.devicePixelRatioF() == pytest.approx(target_dpr)
+    assert rebuilt.width() == max(1, int(round(host.width() * target_dpr)))
+    assert rebuilt.height() == max(1, int(round(host.height() * target_dpr)))
+    assert host._background_dpr == target_dpr
+    assert host._dot_tile.devicePixelRatioF() == pytest.approx(target_dpr)
+
+    screen_change = getattr(QEvent, "ScreenChangeInternal", None)
+    if screen_change is not None:
+        QApplication.sendEvent(host, QEvent(screen_change))
+        assert host._background is None
+        host.grab()
+        assert host._background is not None
+        assert host._background.devicePixelRatioF() == pytest.approx(target_dpr)
 
 
 def test_tool_rail_icon_color_tracks_mode_and_panel_open(qtbot):

@@ -111,6 +111,14 @@ _LAYOUT_THUMB_SIZE = QSize(88, 54)
 _LAYOUT_THUMB_CELL = QSize(168, 118)
 _HERO_LAYOUT_IDS = frozenset({"hero_left_4", "hero_top_4"})
 _DOT_PITCH_PX = 22
+_DPR_CHANGE_EVENT_TYPES = frozenset(
+    value
+    for value in (
+        getattr(QEvent, "ScreenChangeInternal", None),
+        getattr(QEvent, "DevicePixelRatioChange", None),
+    )
+    if value is not None
+)
 _LAYOUT_THUMB_SCHEMES: dict[str, tuple[tuple[float, float, float, float], ...]] = {
     "split_horizontal": ((0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
     "split_vertical": ((0.0, 0.0, 1.0, 0.5), (0.0, 0.5, 1.0, 0.5)),
@@ -307,9 +315,10 @@ class CanvasHost(QFrame):
         self._overlay_close_on_canvas: dict[str, bool] = {}
         self._active_overlay: str | None = None
         self._dot_tile: QPixmap | None = None
-        self._dot_tile_key: tuple[str, int] | None = None
+        self._dot_tile_key: tuple[str, int, float] | None = None
         self._background: QPixmap | None = None
         self._background_size = QSize()
+        self._background_dpr = 0.0
 
     def canvas_widget(self) -> QWidget | None:
         return self._canvas
@@ -327,6 +336,19 @@ class CanvasHost(QFrame):
         self._canvas = widget
         widget.setGeometry(self.contentsRect())
         widget.lower()
+
+    def _canvas_dpr(self) -> float:
+        return max(1.0, float(self.devicePixelRatioF()))
+
+    def _invalidate_canvas_background(self) -> None:
+        self._background = None
+        self._dot_tile = None
+        self.update()
+
+    def event(self, event) -> bool:  # noqa: N802
+        if event.type() in _DPR_CHANGE_EVENT_TYPES:
+            self._invalidate_canvas_background()
+        return super().event(event)
 
     def register_overlay(
         self,
@@ -441,15 +463,26 @@ class CanvasHost(QFrame):
         """Paint the cached Titanium Amber canvas beneath all Qt children."""
         painter = QPainter(self)
         size = self.size()
-        if self._background is None or self._background_size != size:
+        dpr = self._canvas_dpr()
+        if (
+            self._background is None
+            or self._background_size != size
+            or self._background_dpr != dpr
+        ):
             self._background = self._build_canvas_background(size)
             self._background_size = QSize(size)
+            self._background_dpr = dpr
         painter.drawPixmap(self.rect(), self._background)
 
     def _build_canvas_background(self, size: QSize) -> QPixmap:
         """Create a static multi-layer backdrop once per resize, never per pan."""
+        dpr = self._canvas_dpr()
         width, height = max(1, size.width()), max(1, size.height())
-        background = QPixmap(width, height)
+        background = QPixmap(
+            max(1, int(round(width * dpr))),
+            max(1, int(round(height * dpr))),
+        )
+        background.setDevicePixelRatio(dpr)
         background.fill(UV_CANVAS)
         painter = QPainter(background)
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -471,9 +504,11 @@ class CanvasHost(QFrame):
             glow.setColorAt(1.0, edge)
             painter.fillRect(rect, glow)
 
-        key = (UV_CANVAS.name(), UV_DOT.rgba())
+        key = (UV_CANVAS.name(), UV_DOT.rgba(), dpr)
         if self._dot_tile is None or self._dot_tile_key != key:
-            tile = QPixmap(_DOT_PITCH_PX, _DOT_PITCH_PX)
+            pitch = max(1, int(round(_DOT_PITCH_PX * dpr)))
+            tile = QPixmap(pitch, pitch)
+            tile.setDevicePixelRatio(dpr)
             tile.fill(Qt.transparent)
             dots = QPainter(tile)
             dots.setPen(Qt.NoPen)
