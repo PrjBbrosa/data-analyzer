@@ -399,7 +399,7 @@ def test_free_grid_project_roundtrip_keeps_layout_id_and_placements(qapp, qtbot,
     assert len(restored._ultraview.board.placements) == 2
 
 
-def test_viewport_survives_save_and_reopen(qapp, qtbot, tmp_path):
+def test_viewport_is_not_written_into_saved_project(qapp, qtbot, tmp_path):
     csv_a = tmp_path / "a.csv"
     _write_csv(csv_a)
     proj = tmp_path / "uv-zoom.tlproj"
@@ -412,8 +412,8 @@ def test_viewport_survives_save_and_reopen(qapp, qtbot, tmp_path):
     page.set_board_zoom(1.5)
     assert win.save_project(proj) is True
     raw = json.loads(proj.read_text(encoding="utf-8"))
-    saved = raw["ultraview"]["workspace"]["boards"][0]["viewport"]
-    assert saved["zoom"] == 1.5
+    saved = raw["ultraview"]["workspace"]["boards"][0]
+    assert "viewport" not in saved
     text = json.dumps(raw["ultraview"])
     assert "captured_digest" not in text
 
@@ -421,7 +421,6 @@ def test_viewport_survives_save_and_reopen(qapp, qtbot, tmp_path):
     qtbot.addWidget(restored)
     restored.open_project(proj)
     QCoreApplication.processEvents()
-    assert restored._ultraview.board.viewport["zoom"] == 1.5
     restored.open_ultraview()
     QCoreApplication.processEvents()
     page = restored.chart_stack.page_ultraview
@@ -430,7 +429,7 @@ def test_viewport_survives_save_and_reopen(qapp, qtbot, tmp_path):
     assert opened == pytest.approx(page.board_zoom())
 
 
-def test_switching_boards_persists_viewport_to_departing_board(qapp, qtbot, tmp_path):
+def test_switching_boards_fits_instead_of_restoring_saved_camera(qapp, qtbot, tmp_path):
     csv_a = tmp_path / "switch-viewport.csv"
     _write_csv(csv_a)
     win = MainWindow()
@@ -443,13 +442,12 @@ def test_switching_boards_persists_viewport_to_departing_board(qapp, qtbot, tmp_
     first = coordinator.board
 
     page.set_board_zoom(1.5)
-    expected = dict(first.viewport)
+    leftover = page.board_zoom()
     coordinator._on_create_board()
     second = coordinator.board
 
     assert second.board_id != first.board_id
-    assert first.viewport == expected
-    assert second.viewport != expected
+    assert leftover == pytest.approx(1.5)
 
     coordinator._on_select_board(first.board_id)
     QCoreApplication.processEvents()
@@ -464,7 +462,9 @@ def test_switching_boards_persists_viewport_to_departing_board(qapp, qtbot, tmp_
     restored_first = next(
         board for board in restored_workspace.boards if board.board_id == first.board_id
     )
-    assert restored_first.viewport["zoom"] == pytest.approx(opened)
+    assert not hasattr(restored_first, "viewport")
+    payload = coordinator.to_project_payload()
+    assert "viewport" not in json.dumps(payload)
 
 
 def test_reopened_placed_card_does_not_auto_aspect(qapp, qtbot, tmp_path):

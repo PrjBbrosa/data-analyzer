@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import gc
+import json
 import logging
 from collections import OrderedDict
 from pathlib import Path
@@ -2283,8 +2284,8 @@ def test_board_viewport_does_not_enter_presentation_digest(qapp):
     window, coord = _make_coord()
     ref = _ref(str(window.view_manager.get(0).view_id))
     digest = coord.current_digest_for(ref)
-    coord.board.viewport["zoom"] = 2.0
-    coord.board.viewport["center_x"] = 99.0
+    payload = coord.to_project_payload()
+    assert "viewport" not in json.dumps(payload)
     assert coord.current_digest_for(ref) == digest
     coord.clear()
     coord.deleteLater()

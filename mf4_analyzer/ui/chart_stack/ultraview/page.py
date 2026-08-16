@@ -253,7 +253,7 @@ class UltraViewPage(QWidget):
     organize_free_grid_requested = pyqtSignal()
     free_grid_undo_requested = pyqtSignal()
     free_grid_redo_requested = pyqtSignal()
-    viewport_changed = pyqtSignal(str, dict)
+    camera_settled = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1204,14 +1204,7 @@ class UltraViewPage(QWidget):
     def _persist_viewport_to_board(self) -> None:
         if self._restoring_viewport or self._board is None:
             return
-        center = self._current_center()
-        self._viewport.set_center(center)
-        payload = {
-            "zoom": float(self._viewport.zoom()),
-            "center_x": float(center[0]),
-            "center_y": float(center[1]),
-        }
-        self.viewport_changed.emit(str(self._board.board_id), payload)
+        self.camera_settled.emit()
 
     def _workspace_cell_pitch(self) -> tuple[float, float]:
         """Return the 1× free-grid pitch without asking a widget for state.
@@ -1491,9 +1484,9 @@ class UltraViewPage(QWidget):
             viewport_rect=self._viewport_rect_in_board(),
         )
 
-    def _restore_viewport_from_board(self, board, payload: Mapping[str, Any] | None = None) -> None:
-        """Board switch / deferred switch: park on 适应, ignore leftover camera."""
-        del board, payload
+    def _restore_viewport_from_board(self, board) -> None:
+        """Board switch / deferred switch: park on 适应 until session camera lands."""
+        del board
         self.fit_on_open()
 
     def _on_board_scrolled(self, _value: int = 0) -> None:
@@ -2132,9 +2125,7 @@ class UltraViewPage(QWidget):
             else:
                 self._refresh_projection()
         if pending_viewport is not None:
-            self._restore_viewport_from_board(
-                self._board, payload=pending_viewport
-            )
+            self._restore_viewport_from_board(self._board)
 
     def set_preview(self, ref: UltraViewRef | Mapping[str, Any], record_like: Any) -> None:
         parsed = ref if isinstance(ref, UltraViewRef) else parse_ref_payload(ref)
@@ -2223,7 +2214,6 @@ class UltraViewPage(QWidget):
             # The high-water mark belongs to the active board session, not a
             # project payload and not the next Board's initial view.
             self._workspace_extent = None
-        incoming_viewport = dict(getattr(board, "viewport", None) or {})
         if not keep_overview:
             self.hide_overview()
         if self._workspace is None and self._switcher.isVisible():
@@ -2279,12 +2269,12 @@ class UltraViewPage(QWidget):
             # mouseMoveEvent returns, which aborts via qFatal.
             self._board_widgets_dirty = True
             if switching:
-                self._pending_viewport_restore = incoming_viewport
+                self._pending_viewport_restore = {}
             self._sync_empty_board_cue()
             return
         self._library.set_on_board(membership_set(board))
         if switching and self._projection_batch_depth:
-            self._pending_viewport_restore = incoming_viewport
+            self._pending_viewport_restore = {}
             self._refresh_projection()
         elif switching:
             self._restoring_viewport = True
@@ -2292,7 +2282,7 @@ class UltraViewPage(QWidget):
                 self._refresh_projection()
             finally:
                 self._restoring_viewport = False
-            self._restore_viewport_from_board(board, payload=incoming_viewport)
+            self._restore_viewport_from_board(board)
         else:
             self._refresh_projection()
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
@@ -2550,7 +2540,7 @@ class UltraViewPage(QWidget):
             else:
                 self._refresh_projection()
         if pending_viewport is not None:
-            self._restore_viewport_from_board(self._board, payload=pending_viewport)
+            self._restore_viewport_from_board(self._board)
 
     def _emit_feedback(self, message: str) -> None:
         if message == text_for_key(SAFETY_BOUNDS):

@@ -55,13 +55,14 @@ _BOARD_PAYLOAD_KEYS = frozenset(
         "primary_ratio",
         "free_grid",
         "placements",
-        "viewport",
     }
 )
 # Schema 1–3 stored this workspace preference on every Board.  Consume the
 # retired key during parsing so an editable schema-4 re-save cannot recreate a
 # conflicting Board-level source of truth.
-_RETIRED_BOARD_PAYLOAD_KEYS = frozenset({"show_card_actions"})
+# ``viewport`` was a write-only camera dump through schema 4; ignore it on
+# read so old projects neither toast nor round-trip the unused field.
+_RETIRED_BOARD_PAYLOAD_KEYS = frozenset({"show_card_actions", "viewport"})
 
 LAYOUT_SLOTS: dict[str, tuple[str, ...]] = {
     "split_horizontal": ("left", "right"),
@@ -305,8 +306,8 @@ class BoardPlacementSnapshot:
     """Qt-free Board membership + geometry for placement undo.
 
     Captures placed template slots, free-grid rects, tray order, and the
-    layout fields needed to restore them exactly. Name, viewport, preview
-    pixels, and Qt objects stay out.
+    layout fields needed to restore them exactly. Name, preview pixels, and
+    Qt objects stay out.
     """
 
     layout_mode: str
@@ -330,9 +331,6 @@ class UltraViewBoardState:
     layout_mode: str = LAYOUT_MODE_FREE_GRID
     free_grid: list[FreeGridPlacement] = field(default_factory=list)
     free_grid_default_size: str = "standard"
-    # View-state, not identity: persisted outside presentation digest.
-    # Empty dict means "never parked" — the page fits the board on first show.
-    viewport: dict[str, float] = field(default_factory=dict)
     passthrough: dict[str, Any] = field(default_factory=dict)
 
 
@@ -540,7 +538,6 @@ def _copy_board(board: UltraViewBoardState) -> UltraViewBoardState:
         layout_mode=board.layout_mode,
         free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
         free_grid_default_size=board.free_grid_default_size,
-        viewport=dict(board.viewport),
         passthrough=dict(board.passthrough),
     )
     return clone
@@ -1329,51 +1326,6 @@ def _template_grid_rects(layout_id: str) -> list[GridRect]:
     return _template_grid_rects(DEFAULT_LAYOUT_ID)
 
 
-def _legalize_viewport(raw: Any) -> tuple[dict[str, float], list[str]]:
-    """Persist-side clamp. Keep bounds in sync with ``viewport.ZOOM_*``.
-
-    ``None`` or ``{}`` means the viewport was never parked — the page fits
-    on first show. A mapping with ``zoom`` is an explicit user (or restore)
-    choice and is clamped into range.
-    """
-    warnings: list[str] = []
-    if raw is None or (isinstance(raw, Mapping) and not raw):
-        return {}, warnings
-    if not isinstance(raw, Mapping):
-        warnings.append(_warn("illegal_viewport"))
-        return {}, warnings
-    zoom = 1.0
-    if "zoom" in raw:
-        parsed = _try_viewport_float(raw.get("zoom"))
-        if parsed is None:
-            warnings.append(_warn("viewport_zoom_clamped", repr(raw.get("zoom"))))
-        else:
-            zoom = min(3.0, max(0.25, parsed))  # viewport.ZOOM_MAX / ZOOM_MIN
-            if zoom != parsed:
-                warnings.append(_warn("viewport_zoom_clamped", str(parsed)))
-    center_x = _viewport_finite_or_warn(raw, "center_x", 0.0, warnings)
-    center_y = _viewport_finite_or_warn(raw, "center_y", 0.0, warnings)
-    return (
-        {"zoom": float(zoom), "center_x": float(center_x), "center_y": float(center_y)},
-        warnings,
-    )
-
-
-def set_board_viewport(
-    board: UltraViewBoardState, payload: Mapping[str, Any] | None
-) -> list[str]:
-    """Persist legal Board view-state without dirtying the workspace.
-
-    Viewport position is a high-frequency presentation detail outside the
-    identity digest.  It must therefore remain independent of
-    ``mark_workspace_mutated`` while still taking the same legalisation path
-    as restored project payloads.
-    """
-    legal, warnings = _legalize_viewport(payload)
-    board.viewport = legal
-    return warnings
-
-
 def set_presentation_flags(
     board: UltraViewBoardState,
     *,
@@ -1388,35 +1340,8 @@ def set_presentation_flags(
     return []
 
 
-def _try_viewport_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if number != number or number in (float("inf"), float("-inf")):
-        return None
-    return number
-
-
-def _viewport_finite_or_warn(
-    raw: Mapping[str, Any], key: str, fallback: float, warnings: list[str]
-) -> float:
-    if key not in raw:
-        return fallback
-    parsed = _try_viewport_float(raw.get(key))
-    if parsed is None:
-        warnings.append(_warn(f"viewport_{key}_clamped", repr(raw.get(key))))
-        return fallback
-    return parsed
-
-
-def _viewport_payload(board: UltraViewBoardState) -> dict[str, float]:
-    legal, _warnings = _legalize_viewport(getattr(board, "viewport", None))
-    return legal
-
-
 def board_identity_payload(board: UltraViewBoardState) -> dict[str, Any]:
-    """Board payload without view-state fields (digest / identity comparisons)."""
+    """Board payload without retired view-state fields (digest / identity)."""
     payload = _board_payload(board)
     payload.pop("viewport", None)
     return payload
@@ -1435,9 +1360,6 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
         "layout_id": board.layout_id,
         "primary_ratio": board.primary_ratio,
     }
-    viewport = _viewport_payload(board)
-    if viewport:
-        payload["viewport"] = viewport
     for key, value in board.passthrough.items():
         if key not in payload:
             payload[key] = value
@@ -1505,8 +1427,6 @@ def normalize_board_payload(
     warnings.extend(set_ratio(board, board_raw.get("primary_ratio", DEFAULT_PRIMARY_RATIO)))
     board.show_titles = bool(board_raw.get("show_titles", True))
     board.show_sources = bool(board_raw.get("show_sources", True))
-    board.viewport, vp_warnings = _legalize_viewport(board_raw.get("viewport"))
-    warnings.extend(vp_warnings)
     board.passthrough = {
         key: value
         for key, value in board_raw.items()

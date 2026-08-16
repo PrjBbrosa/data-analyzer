@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from mf4_analyzer.ui import ultraview_state as uvs
-from mf4_analyzer.ui.chart_stack.ultraview.viewport import ZOOM_MAX
 
 
 STATE_PATH = (
@@ -78,7 +77,6 @@ def test_default_board_identity():
     assert board.name == "全局对比"
     assert board.layout_id == "hero_left_4"
     assert board.layout_mode == uvs.LAYOUT_MODE_FREE_GRID
-    assert board.viewport == {}
     assert board.primary_ratio == pytest.approx(0.67)
     assert board.placements == []
     assert board.unplaced == []
@@ -954,58 +952,22 @@ def test_organize_free_grid_is_idempotent():
     assert [item.rect for item in board.free_grid] == once
 
 
-def test_viewport_round_trip_is_outside_identity_digest():
+def test_legacy_viewport_is_ignored_without_warning_or_round_trip():
     board = uvs.default_board()
     payload = uvs.board_to_payload(board)
     assert "viewport" not in payload["board"]
-    missing = dict(payload)
-    missing["board"] = dict(payload["board"])
-    restored, warnings = uvs.normalize_board_payload(missing)
-    assert warnings == []
-    assert restored.viewport == {}
-    identity = uvs.presentation_digest(uvs.board_identity_payload(board))
-    board.viewport = {"zoom": 1.6, "center_x": 120.0, "center_y": 40.0}
-    again, warnings = uvs.normalize_board_payload(uvs.board_to_payload(board))
-    assert warnings == []
-    assert again.viewport["zoom"] == pytest.approx(1.6)
-    assert again.viewport["center_x"] == pytest.approx(120.0)
-    assert uvs.presentation_digest(uvs.board_identity_payload(again)) == identity
-    assert "viewport" in uvs.board_to_payload(again)["board"]
-
-
-def test_viewport_illegal_values_clamp_with_warning():
-    payload = uvs.board_to_payload(uvs.default_board())
     payload["board"]["viewport"] = {
         "zoom": 9,
         "center_x": "nope",
         "center_y": float("inf"),
     }
-    board, warnings = uvs.normalize_board_payload(payload)
-    assert board.viewport["zoom"] == pytest.approx(ZOOM_MAX)
-    assert board.viewport["center_x"] == pytest.approx(0.0)
-    assert board.viewport["center_y"] == pytest.approx(0.0)
-    assert any(item.startswith("viewport_zoom_clamped") for item in warnings)
-    assert any(item.startswith("viewport_center_x_clamped") for item in warnings)
-    assert any(item.startswith("viewport_center_y_clamped") for item in warnings)
-
-
-def test_set_board_viewport_legalizes_without_marking_workspace_dirty():
-    workspace = uvs.default_workspace()
-    workspace.opaque_payload = {"schema": 99, "workspace": {"future": True}}
-    board = uvs.active_board(workspace)
-    board.passthrough = {"future_camera": {"keep": True}}
-
-    warnings = uvs.set_board_viewport(
-        board,
-        {"zoom": 9, "center_x": "nope", "center_y": float("inf")},
-    )
-
-    assert board.viewport == {"zoom": ZOOM_MAX, "center_x": 0.0, "center_y": 0.0}
-    assert any(item.startswith("viewport_zoom_clamped") for item in warnings)
-    assert any(item.startswith("viewport_center_x_clamped") for item in warnings)
-    assert any(item.startswith("viewport_center_y_clamped") for item in warnings)
-    assert workspace.opaque_payload == {"schema": 99, "workspace": {"future": True}}
-    assert board.passthrough == {"future_camera": {"keep": True}}
+    restored, warnings = uvs.normalize_board_payload(payload)
+    assert warnings == []
+    assert not hasattr(restored, "viewport")
+    assert "viewport" not in restored.passthrough
+    assert "viewport" not in uvs.board_to_payload(restored)["board"]
+    identity = uvs.presentation_digest(uvs.board_identity_payload(board))
+    assert uvs.presentation_digest(uvs.board_identity_payload(restored)) == identity
 
 
 def test_set_presentation_flags_changes_only_explicit_values():
@@ -1038,14 +1000,14 @@ def test_legacy_board_card_action_key_is_consumed_without_passthrough_or_rewrite
     assert "show_card_actions" not in uvs.board_to_payload(board)["board"]
 
 
-def test_unknown_board_fields_passthrough_with_viewport():
+def test_unknown_board_fields_passthrough_without_retired_viewport():
     payload = uvs.board_to_payload(uvs.default_board())
     payload["board"]["viewport"] = {"zoom": 0.5, "center_x": 1.0, "center_y": 2.0}
     payload["board"]["future_camera"] = {"keep": True}
     board, warnings = uvs.normalize_board_payload(payload)
     assert warnings == []
     out = uvs.board_to_payload(board)
-    assert out["board"]["viewport"]["zoom"] == pytest.approx(0.5)
+    assert "viewport" not in out["board"]
     assert out["board"]["future_camera"] == {"keep": True}
 
 
@@ -1058,10 +1020,9 @@ def test_add_ref_honors_explicit_span_for_insert_resolver():
     assert item.rect == uvs.GridRect(0, 0, 6, 2)
 
 
-def test_board_placement_snapshot_omits_name_viewport_and_restores_exact_geometry():
+def test_board_placement_snapshot_omits_name_and_restores_exact_geometry():
     board = uvs.default_board()
     board.name = "不要进入快照"
-    board.viewport = {"zoom": 1.5, "center_x": 9.0, "center_y": 8.0}
     placed = _ref("time", "parked")
     tray = _ref("fft", "tray")
     board.free_grid = [
@@ -1078,14 +1039,12 @@ def test_board_placement_snapshot_omits_name_viewport_and_restores_exact_geometr
     assert not hasattr(snapshot, "viewport")
 
     board.name = "已改名"
-    board.viewport = {"zoom": 0.5, "center_x": 0.0, "center_y": 0.0}
     board.free_grid = [
         uvs.FreeGridPlacement(placed, uvs.GridRect(0, 0, 4, 3)),
     ]
     board.unplaced = []
     assert uvs.apply_board_placement(board, snapshot) is True
     assert board.name == "已改名"
-    assert board.viewport["zoom"] == pytest.approx(0.5)
     assert uvs.free_grid_placement_for(board, placed).rect == uvs.GridRect(5, 7, 4, 3)
     assert board.unplaced == [tray]
     assert uvs.add_ref(board, _ref("order", "other")) == []

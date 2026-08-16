@@ -32,7 +32,6 @@ FIT_CONTENT_MARGIN = 0.02
 # Board Fit fills the chrome-safe viewport; the ceiling is the same 300%
 # cap as wheel / focus. Opening UltraView uses Fit, not a leftover camera.
 BOARD_FIT_ZOOM_MAX = ZOOM_MAX
-NEW_BOARD_ZOOM_MAX = 0.66
 # Empty-board working frame: two standard 4×3 cards placed side by side.
 STANDARD_CARD_SPAN = (4, 3)
 SMOOTH_DELAY_MS = 300
@@ -273,7 +272,7 @@ def board_fit_zoom(
 
     Fills the chrome-clear viewport with ``margin`` inset on each side.
     Amplifies a small card union up to ``ZOOM_MAX`` (300%). Window open
-    uses this path; ``default_board_zoom`` is only the conservative helper.
+    uses this path.
     """
     content_w = max(1.0, float(content_size[0]))
     content_h = max(1.0, float(content_size[1]))
@@ -284,35 +283,6 @@ def board_fit_zoom(
     usable_h = max(1.0, view_h * (1.0 - 2.0 * inset))
     computed = min(usable_w / content_w, usable_h / content_h)
     return clamp_zoom(computed)
-
-
-def default_board_zoom(
-    viewport_size: tuple[float, float],
-    frame_size: tuple[float, float],
-) -> float:
-    """Conservative empty-board helper: ``min(0.66, board-fit of frame)``.
-
-    The live open camera is ``zoom_fit`` / ``board_fit_zoom`` (may fill
-    up to 300%). Keep this helper for callers that still want the cap.
-    """
-    return min(NEW_BOARD_ZOOM_MAX, board_fit_zoom(frame_size, viewport_size))
-
-
-def initial_viewport(
-    safe_viewport_size: tuple[float, float],
-    frame_size: tuple[float, float],
-) -> dict[str, float]:
-    """Conservative empty-board viewport dict (66% cap).
-
-    UltraView open, first show, and Board switch call ``zoom_fit`` instead
-    of this payload. Persisted viewports remain a leave-board snapshot.
-    """
-    zoom = default_board_zoom(safe_viewport_size, frame_size)
-    return {
-        "zoom": float(zoom),
-        "center_x": max(0.0, float(frame_size[0]) / 2.0),
-        "center_y": max(0.0, float(frame_size[1]) / 2.0),
-    }
 
 
 def zoom_to_rect(

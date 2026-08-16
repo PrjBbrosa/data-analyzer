@@ -30,10 +30,8 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     BoardViewport,
     board_fit_zoom,
     clamp_zoom,
-    default_board_zoom,
     fit_zoom,
     focus_grab_scale,
-    initial_viewport,
     lod_level,
     lod_visibility,
     needs_focus_recapture,
@@ -47,7 +45,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     zoomed_viewport_size,
     FOCUS_PREVIEW_RATIO,
     FIT_CONTENT_MARGIN,
-    NEW_BOARD_ZOOM_MAX,
     BOARD_FIT_ZOOM_MAX,
     LOD_FOOTER_HIDE,
     LOD_FULL,
@@ -234,33 +231,13 @@ def test_board_fit_zoom_fills_canvas_up_to_300_percent():
     assert ZOOM_MIN <= cramped < 1.0
 
 
-def test_new_board_default_zoom_never_exceeds_66_percent():
-    metrics = screen_grid_metrics(())
-    frame = two_card_working_frame(metrics)
-    huge_view = (2560.0, 1440.0)
-    zoom = default_board_zoom(huge_view, frame)
-    unconstrained = board_fit_zoom(frame, huge_view)
-    assert unconstrained > NEW_BOARD_ZOOM_MAX
-    assert zoom == pytest.approx(NEW_BOARD_ZOOM_MAX)
-    assert zoom <= 0.66
-    payload = initial_viewport(huge_view, frame)
-    assert payload["zoom"] == pytest.approx(NEW_BOARD_ZOOM_MAX)
-    assert payload["center_x"] == pytest.approx(frame[0] / 2.0)
-    assert payload["center_y"] == pytest.approx(frame[1] / 2.0)
-    small_view = (200.0, 140.0)
-    fitted = default_board_zoom(small_view, frame)
-    assert fitted == pytest.approx(board_fit_zoom(frame, small_view))
-    assert fitted < NEW_BOARD_ZOOM_MAX
-
-
-def test_empty_board_fit_fills_working_frame_new_board_caps_at_66():
+def test_empty_board_fit_fills_working_frame():
     metrics = screen_grid_metrics(())
     frame = two_card_working_frame(metrics)
     huge_view = (4000.0, 3000.0)
     fitted = board_fit_zoom(frame, huge_view)
     assert fitted > 1.0
     assert fitted <= ZOOM_MAX
-    assert default_board_zoom(huge_view, frame) == pytest.approx(NEW_BOARD_ZOOM_MAX)
 
 
 def test_focus_zoom_to_rect_can_still_reach_300_percent():
@@ -1281,7 +1258,7 @@ def test_needs_focus_recapture_uses_preview_ratio():
     assert needs_focus_recapture((149, 80), (200, 160)) is False
 
 
-def test_state_and_viewport_legalizers_agree_on_clamp():
+def test_legacy_board_viewport_is_ignored_by_payload_legalizer():
     raw = {"zoom": 9, "center_x": "x", "center_y": float("nan")}
     legal, warnings = normalize_viewport_payload(raw)
     board, board_warnings = normalize_board_payload(
@@ -1293,8 +1270,11 @@ def test_state_and_viewport_legalizers_agree_on_clamp():
             },
         }
     )
-    assert legal == board.viewport
-    assert warnings == board_warnings
+    assert legal["zoom"] == ZOOM_MAX
+    assert warnings
+    assert board_warnings == []
+    assert not hasattr(board, "viewport")
+    assert "viewport" not in board_to_payload(board)["board"]
 
 
 def test_switching_boards_fits_content_instead_of_restoring_zoom(qtbot):
@@ -1302,7 +1282,7 @@ def test_switching_boards_fits_content_instead_of_restoring_zoom(qtbot):
     first = harness.board
     _prepare_free_grid(harness, qtbot, "a")
     harness.page.set_board_zoom(1.5)
-    assert first.viewport["zoom"] == pytest.approx(1.5)
+    leftover = harness.page.board_zoom()
     second = default_board()
     second.name = "另一块板"
     harness.page.set_board(second)
@@ -1312,7 +1292,7 @@ def test_switching_boards_fits_content_instead_of_restoring_zoom(qtbot):
         (float(fill.width), float(fill.height)),
     )
     actual = harness.page.board_zoom()
-    assert first.viewport["zoom"] == pytest.approx(1.5)
+    assert leftover == pytest.approx(1.5)
     harness.page.set_board(first)
     opened = harness.page.board_zoom()
     harness.page.zoom_fit()
@@ -1428,9 +1408,7 @@ def test_switching_boards_does_not_copy_viewport_via_scroll_clamp(qtbot):
     scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
     second = default_board()
     second.name = "另一块板"
-    second.viewport = {"zoom": 0.5, "center_x": 12.0, "center_y": 8.0}
     harness.page.set_board(second)
-    assert first.viewport["zoom"] == pytest.approx(1.5)
     opened = harness.page.board_zoom()
     harness.page.zoom_fit()
     assert opened == pytest.approx(harness.page.board_zoom())

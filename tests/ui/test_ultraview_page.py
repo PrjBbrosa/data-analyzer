@@ -98,7 +98,6 @@ from mf4_analyzer.ui.ultraview_state import (
     reorder_board,
     replace_slot,
     set_layout,
-    set_board_viewport,
     slot_occupant,
     swap_slots,
     template_to_free_grid,
@@ -307,7 +306,6 @@ class _Harness:
         self.free_grid: list[bool] = []
         self.ratio_steps: list[int] = []
         self.presentation: list[bool] = []
-        self.page.viewport_changed.connect(self._persist_viewport)
         self.page.add_ref_requested.connect(self._on_add)
         self.page.replace_slot_requested.connect(self._on_replace)
         self.page.swap_slots_requested.connect(self._on_swap)
@@ -332,10 +330,6 @@ class _Harness:
         self.page.presentation_toggled.connect(self._record_presentation)
         self.page.set_library_rows(_rows())
         self.page.set_board(self.board)
-
-    def _persist_viewport(self, board_id: str, payload: dict) -> None:
-        if str(board_id) == self.board.board_id:
-            set_board_viewport(self.board, payload)
 
     def _on_add(self, section: str, view_id: str) -> None:
         self.added.append((section, view_id))

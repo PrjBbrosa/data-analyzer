@@ -217,7 +217,7 @@ def test_restore_does_not_register_pending_or_auto_aspect(qapp, qtbot):
     assert uv._pending_auto_aspect == {}
 
 
-def test_viewport_change_does_not_create_placement_history(qapp, qtbot):
+def test_camera_settle_does_not_create_placement_history(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     uv = win._ultraview
@@ -225,11 +225,8 @@ def test_viewport_change_does_not_create_placement_history(qapp, qtbot):
     uv._apply_add_ref(ref)
     history = uv._grid_histories[uv.board.board_id]
     assert len(history.undo) == 1
-    uv._on_viewport_payload(
-        uv.board.board_id, {"zoom": 0.5, "center_x": 10.0, "center_y": 12.0}
-    )
+    uv._on_camera_settled()
     assert len(history.undo) == 1
-    assert uv.board.viewport["zoom"] == 0.5
 
 
 def test_membership_cap_and_placed_cap_use_feedback_copy(qapp, qtbot, monkeypatch):

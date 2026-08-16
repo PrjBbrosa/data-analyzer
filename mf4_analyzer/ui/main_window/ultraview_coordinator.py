@@ -68,7 +68,6 @@ from ..ultraview_state import (
     replace_slot,
     set_layout,
     set_active_board,
-    set_board_viewport,
     set_free_grid_rect,
     set_free_grid_rects,
     set_presentation_flags,
@@ -764,22 +763,9 @@ class UltraViewCoordinator(QObject):
         next_h = native_h * scale
         return image.width() + 1 < next_w or image.height() + 1 < next_h
 
-    def _on_viewport_payload(self, board_id: str, payload: dict) -> None:
+    def _on_camera_settled(self) -> None:
         if self._inactive():
             return
-        board = next(
-            (
-                item
-                for item in self._workspace.boards
-                if item.board_id == str(board_id)
-            ),
-            None,
-        )
-        if board is None:
-            logger.warning("UltraView viewport: unknown board %s", board_id)
-            return
-        for warning in set_board_viewport(board, payload):
-            logger.warning("UltraView viewport %s: %s", board_id, warning)
         self._focus_timer.start()
 
     def _on_focus_residency_timeout(self) -> None:
@@ -998,7 +984,7 @@ class UltraViewCoordinator(QObject):
             (page.show_sources_toggled, self._on_show_sources),
             (page.show_card_actions_toggled, self._on_show_card_actions),
             (page.feedback_requested, self._on_page_feedback),
-            (page.viewport_changed, self._on_viewport_payload),
+            (page.camera_settled, self._on_camera_settled),
         )
         for signal, slot in pairs:
             signal.connect(slot)
