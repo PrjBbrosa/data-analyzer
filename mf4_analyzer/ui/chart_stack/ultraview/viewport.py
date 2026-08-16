@@ -118,21 +118,83 @@ def zoomed_viewport_size(
 
 
 def scale_grid_metrics(metrics: GridMetrics, zoom: float) -> GridMetrics:
-    """Spike option B: scale every linear free-grid metric uniformly."""
+    """Spike option B: scale every linear free-grid metric uniformly.
+
+    The rounded integer fields stay, because chrome and card sizing read them.
+    The result also carries ``scale`` / ``base`` so ``free_grid``'s grid ↔
+    pixel mappings can work from the unrounded 1× geometry: rounding the pitch
+    before multiplying by a cell index is what made zoom non-linear and the
+    cursor anchor drift by tens of pixels once the elastic origin went signed.
+
+    ``metrics`` must be 1×.  A already-scaled input is re-derived from its own
+    base so scales never compound.
+    """
+    base = metrics.base if metrics.base is not None else metrics
     z = clamp_zoom(zoom)
     if abs(z - 1.0) < 1e-12:
-        return metrics
+        return base
 
     def _scale(value: int, *, min_value: int) -> int:
         return max(min_value, int(round(int(value) * z)))
 
     return GridMetrics(
-        board_width=_scale(metrics.board_width, min_value=1),
-        board_height=_scale(metrics.board_height, min_value=1),
-        column_width=_scale(metrics.column_width, min_value=1),
-        row_height=_scale(metrics.row_height, min_value=1),
-        gutter=_scale(metrics.gutter, min_value=0),
-        padding=_scale(metrics.padding, min_value=0),
+        board_width=_scale(base.board_width, min_value=1),
+        board_height=_scale(base.board_height, min_value=1),
+        column_width=_scale(base.column_width, min_value=1),
+        row_height=_scale(base.row_height, min_value=1),
+        gutter=_scale(base.gutter, min_value=0),
+        padding=_scale(base.padding, min_value=0),
+        scale=z,
+        base=base,
+    )
+
+
+def linear_zoom_anchor(canvas_point: ViewportPoint, zoom: float) -> ViewportPoint:
+    """Canvas pixel → zoom-independent anchor, for a *linearly* scaled canvas.
+
+    Template boards scale the whole canvas by one factor, so dividing by the
+    zoom is an exact inverse.  The free-grid canvas is not linear in zoom: its
+    pixel map rounds each metric before multiplying by a cell index (see
+    ``scale_grid_metrics`` / ``free_grid.rect_to_pixels``), so it supplies its
+    own anchor pair instead of reusing this one.
+    """
+    z = clamp_zoom(zoom)
+    return (float(canvas_point[0]) / z, float(canvas_point[1]) / z)
+
+
+def linear_zoom_point(anchor: ViewportPoint, zoom: float) -> ViewportPoint:
+    """Inverse of :func:`linear_zoom_anchor` at ``zoom``."""
+    z = clamp_zoom(zoom)
+    return (float(anchor[0]) * z, float(anchor[1]) * z)
+
+
+def scroll_for_anchor(
+    canvas_point: ViewportPoint,
+    anchor_vp: ViewportPoint,
+    origin: ViewportPoint = (0.0, 0.0),
+) -> ViewportPoint:
+    """Scroll offset that puts ``canvas_point`` under ``anchor_vp``.
+
+    ``origin`` is the board canvas origin inside the full-bleed scroll host
+    (fit parking, plus any zoom pad).  Callers must apply the result *after*
+    the zoomed canvas is laid out and must not re-center afterwards: a later
+    fit-align pass would throw the anchor away.
+    """
+    return (
+        float(canvas_point[0]) + float(origin[0]) - float(anchor_vp[0]),
+        float(canvas_point[1]) + float(origin[1]) - float(anchor_vp[1]),
+    )
+
+
+def canvas_point_under(
+    anchor_vp: ViewportPoint,
+    scroll_offset: ViewportPoint,
+    origin: ViewportPoint = (0.0, 0.0),
+) -> ViewportPoint:
+    """Canvas-local pixel currently sitting under ``anchor_vp``."""
+    return (
+        float(scroll_offset[0]) + float(anchor_vp[0]) - float(origin[0]),
+        float(scroll_offset[1]) + float(anchor_vp[1]) - float(origin[1]),
     )
 
 
@@ -145,24 +207,23 @@ def zoom_at(
 ) -> ViewportPoint:
     """Return the scroll offset that keeps the logical point under ``anchor_vp``.
 
-    ``origin`` is the board canvas origin inside the full-bleed scroll host
-    (fit parking, plus any zoom pad).  Callers must apply the returned scroll
-    *after* the zoomed canvas is laid out, and must not re-center afterwards:
-    a later fit-align pass would throw the anchor away.
+    This is the *linear* closed form.  ``page._zoom_at`` no longer calls it:
+    it asks the active canvas for ``zoom_anchor_at`` / ``point_for_zoom_anchor``
+    so a canvas whose pixel map is not linear in zoom anchors on the metrics it
+    actually laid out with.  Template canvases implement that pair with
+    :func:`linear_zoom_anchor`, which keeps this the single source of the
+    linear math.
 
     When ``zoom_after`` clamps to ``zoom_before``, this is an identity so a
     limit hit cannot introduce a scroll jump.
     """
     before = clamp_zoom(zoom_before)
     after = clamp_zoom(zoom_after)
-    cursor_x, cursor_y = float(anchor_vp[0]), float(anchor_vp[1])
-    scroll_x, scroll_y = float(scroll_offset[0]), float(scroll_offset[1])
-    origin_x, origin_y = float(origin[0]), float(origin[1])
-    logical_x = (scroll_x + cursor_x - origin_x) / before
-    logical_y = (scroll_y + cursor_y - origin_y) / before
-    return (
-        logical_x * after + origin_x - cursor_x,
-        logical_y * after + origin_y - cursor_y,
+    point = canvas_point_under(anchor_vp, scroll_offset, origin)
+    return scroll_for_anchor(
+        linear_zoom_point(linear_zoom_anchor(point, before), after),
+        anchor_vp,
+        origin,
     )
 
 

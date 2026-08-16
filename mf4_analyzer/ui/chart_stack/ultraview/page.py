@@ -66,12 +66,13 @@ from .viewport import (
     ZOOM_BUTTON_STEP,
     BoardViewport,
     board_fit_zoom,
+    canvas_point_under,
     center_from_scroll,
     clamp_zoom,
+    scroll_for_anchor,
     scroll_for_center,
     two_card_working_frame,
     wheel_zoom_factor,
-    zoom_at,
     zoom_percent,
     zoom_to_rect,
 )
@@ -1779,7 +1780,6 @@ class UltraViewPage(QWidget):
             self.cancel_board_gestures()
             self._filled_card = None
             self._apply_preview_quality(QUALITY_FAST)
-            before = self._viewport.zoom()
             after = clamp_zoom(zoom)
             cursor = (float(cursor_in_viewport[0]), float(cursor_in_viewport[1]))
             scroll = (
@@ -1787,9 +1787,19 @@ class UltraViewPage(QWidget):
                 float(self._board_scroll.verticalScrollBar().value()),
             )
             origin = self._board_content_origin()
-            new_scroll = zoom_at(before, after, cursor, scroll, origin)
+            canvas = self._active_canvas()
+            # Anchor through the canvas's own coordinate system instead of
+            # extrapolating ``logical * zoom``.  The free-grid pixel map rounds
+            # every metric before multiplying by a cell index, so a linear
+            # prediction carries an error proportional to that index -- and the
+            # signed elastic origin drives the index past 40, which is what made
+            # each wheel notch shove the board tens of pixels sideways.
+            anchor = canvas.zoom_anchor_at(canvas_point_under(cursor, scroll, origin))
             self._broadcast_zoom(after)
-            applied = self._place_canvas_for_scroll(self._active_canvas(), new_scroll)
+            new_scroll = scroll_for_anchor(
+                canvas.point_for_zoom_anchor(anchor), cursor, origin
+            )
+            applied = self._place_canvas_for_scroll(canvas, new_scroll)
             self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
             self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
             self._set_zoom_percent(zoom_percent(after))

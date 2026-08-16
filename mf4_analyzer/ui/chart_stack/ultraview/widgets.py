@@ -128,6 +128,8 @@ from .viewport import (
     LOD_TITLE_ONLY,
     lod_visibility,
     ZOOM_DEFAULT,
+    linear_zoom_anchor,
+    linear_zoom_point,
     scale_grid_metrics,
     zoomed_viewport_size,
 )
@@ -2620,6 +2622,14 @@ class BoardGrid(QWidget):
         self._zoom = value
         self._sync_logical_size()
 
+    def zoom_anchor_at(self, point: tuple[float, float]) -> tuple[float, float]:
+        """Canvas pixel → zoom-independent anchor. Template geometry is linear."""
+        return linear_zoom_anchor(point, self._zoom)
+
+    def point_for_zoom_anchor(self, anchor: tuple[float, float]) -> tuple[float, float]:
+        """Inverse of :meth:`zoom_anchor_at` at the zoom currently laid out."""
+        return linear_zoom_point(anchor, self._zoom)
+
     def logical_size(self) -> QSize:
         return QSize(self.size())
 
@@ -3171,16 +3181,50 @@ class FreeGridBoard(QWidget):
             column_span, row_span = 4, 3
         self._default_insert_span = (column_span, row_span)
 
+    def zoom_anchor_at(self, point: tuple[float, float]) -> tuple[float, float]:
+        """Canvas pixel → zoom-independent anchor, in signed workspace cells.
+
+        The free-grid pixel map is ``padding(z) + index * pitch(z)`` with every
+        term rounded independently, so it is a stair rather than ``pixel * z``.
+        Extrapolating a wheel anchor linearly leaves an error proportional to
+        the cell index, and the signed elastic origin pushes that index past
+        40.  Anchoring in cells and re-projecting through the metrics actually
+        laid out cancels the rounding on both sides.
+
+        Cells are absolute (origin offset folded in) so the anchor survives an
+        extent rebase between the two calls.
+        """
+        unit_x, unit_y = self._zoom_anchor_units()
+        padding = self._metrics.exact_padding()
+        origin_column, origin_row = self._workspace_origin_offset()
+        return (
+            origin_column + (float(point[0]) - padding) / unit_x,
+            origin_row + (float(point[1]) - padding) / unit_y,
+        )
+
+    def point_for_zoom_anchor(self, anchor: tuple[float, float]) -> tuple[float, float]:
+        """Inverse of :meth:`zoom_anchor_at` under the metrics now in effect."""
+        unit_x, unit_y = self._zoom_anchor_units()
+        padding = self._metrics.exact_padding()
+        origin_column, origin_row = self._workspace_origin_offset()
+        return (
+            padding + (float(anchor[0]) - origin_column) * unit_x,
+            padding + (float(anchor[1]) - origin_row) * unit_y,
+        )
+
+    def _zoom_anchor_units(self) -> tuple[float, float]:
+        pitch_x, pitch_y = self._metrics.exact_pitch()
+        return (max(1.0, pitch_x), max(1.0, pitch_y))
+
     def grid_anchor_at(self, pos: QPoint) -> GridAnchor:
         """Map a board-local pixel point to a desired card centre in cells."""
-        unit_x = max(1, self._metrics.column_width + self._metrics.gutter)
-        unit_y = max(1, self._metrics.row_height + self._metrics.gutter)
+        unit_x, unit_y = self._zoom_anchor_units()
+        padding = self._metrics.exact_padding()
+        cell_w, cell_h = self._metrics.exact_cell()
         origin_column, origin_row = self._workspace_origin_offset()
         return GridAnchor(
-            origin_column
-            + (pos.x() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_x,
-            origin_row
-            + (pos.y() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_y,
+            origin_column + (pos.x() - padding + (unit_x - cell_w) / 2.0) / unit_x,
+            origin_row + (pos.y() - padding + (unit_y - cell_h) / 2.0) / unit_y,
         )
 
     def metrics(self) -> GridMetrics:
@@ -3264,10 +3308,10 @@ class FreeGridBoard(QWidget):
         new_origin = self._workspace_origin_offset()
         if new_origin == old_origin:
             return
-        unit_x = self._metrics.column_width + self._metrics.gutter
-        unit_y = self._metrics.row_height + self._metrics.gutter
-        dx = (old_origin[0] - new_origin[0]) * unit_x
-        dy = (old_origin[1] - new_origin[1]) * unit_y
+        old_x, old_y = self._workspace_origin_pixels(old_origin)
+        new_x, new_y = self._workspace_origin_pixels(new_origin)
+        dx = old_x - new_x
+        dy = old_y - new_y
         if dx == 0 and dy == 0:
             return
         for widget in self._widgets.values():
@@ -3291,36 +3335,43 @@ class FreeGridBoard(QWidget):
             return QSize(metrics.board_width, metrics.board_height)
         columns = max(1, bounds.column_span)
         rows = max(1, bounds.row_span)
-        width = (
-            2 * metrics.padding
-            + columns * metrics.column_width
-            + max(0, columns - 1) * metrics.gutter
+        padding = metrics.exact_padding()
+        pitch_x, pitch_y = metrics.exact_pitch()
+        cell_w, cell_h = metrics.exact_cell()
+        width = 2 * padding + (columns - 1) * pitch_x + cell_w
+        height = 2 * padding + (rows - 1) * pitch_y + cell_h
+        return QSize(int(round(width)), int(round(height)))
+
+    def _workspace_origin_pixels(
+        self, origin: tuple[int, int] | None = None
+    ) -> tuple[int, int]:
+        """Pixel offset between the canonical grid plane and this widget's.
+
+        Rounded once, from the unrounded pitch, so the two translations below
+        stay exact inverses of each other. They may sit a pixel off a card that
+        ``rect_to_pixels`` placed directly, which only ever moves a translucent
+        ghost, never a committed card.
+        """
+        origin_column, origin_row = (
+            self._workspace_origin_offset() if origin is None else origin
         )
-        height = (
-            2 * metrics.padding
-            + rows * metrics.row_height
-            + max(0, rows - 1) * metrics.gutter
+        pitch_x, pitch_y = self._metrics.exact_pitch()
+        return (
+            int(round(origin_column * pitch_x)),
+            int(round(origin_row * pitch_y)),
         )
-        return QSize(width, height)
 
     def _logical_board_pos(self, local: tuple[int, int]) -> tuple[int, int]:
         """Translate workspace-local pixels back to the canonical grid plane."""
-        origin_column, origin_row = self._workspace_origin_offset()
-        unit_x = self._metrics.column_width + self._metrics.gutter
-        unit_y = self._metrics.row_height + self._metrics.gutter
-        return (
-            int(local[0]) + origin_column * unit_x,
-            int(local[1]) + origin_row * unit_y,
-        )
+        offset_x, offset_y = self._workspace_origin_pixels()
+        return (int(local[0]) + offset_x, int(local[1]) + offset_y)
 
     def _workspace_pixel_rect(self, logical_rect: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
         """Translate a canonical-grid pixel rect into this widget's local plane."""
-        origin_column, origin_row = self._workspace_origin_offset()
-        unit_x = self._metrics.column_width + self._metrics.gutter
-        unit_y = self._metrics.row_height + self._metrics.gutter
+        offset_x, offset_y = self._workspace_origin_pixels()
         return (
-            int(logical_rect[0]) - origin_column * unit_x,
-            int(logical_rect[1]) - origin_row * unit_y,
+            int(logical_rect[0]) - offset_x,
+            int(logical_rect[1]) - offset_y,
             int(logical_rect[2]),
             int(logical_rect[3]),
         )
@@ -4226,13 +4277,12 @@ class FreeGridMinimap(QFrame):
         bounds = self._workspace_extent
         columns = max(1, bounds.column_span)
         rows = max(1, bounds.row_span)
+        padding = metrics.exact_padding()
+        pitch_x, pitch_y = metrics.exact_pitch()
+        cell_w, cell_h = metrics.exact_cell()
         return (
-            2 * metrics.padding
-            + columns * metrics.column_width
-            + max(0, columns - 1) * metrics.gutter,
-            2 * metrics.padding
-            + rows * metrics.row_height
-            + max(0, rows - 1) * metrics.gutter,
+            int(round(2 * padding + (columns - 1) * pitch_x + cell_w)),
+            int(round(2 * padding + (rows - 1) * pitch_y + cell_h)),
         )
 
     def _scale(self) -> tuple[float, float]:

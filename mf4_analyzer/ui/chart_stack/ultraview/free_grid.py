@@ -5,6 +5,7 @@ metrics.  No helper here knows about widgets, preview pixels, or MainWindow.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
@@ -117,7 +118,16 @@ class LayoutPlan:
 
 @dataclass(frozen=True)
 class GridMetrics:
-    """Pixel mapping for the 12-column 1× pitch. Screen extent is separate."""
+    """Pixel mapping for the 12-column 1× pitch. Screen extent is separate.
+
+    ``scale`` / ``base`` carry the screen zoom and the 1× metrics it came
+    from, so the pixel map can multiply *before* rounding.  Rounding each
+    metric first and then multiplying by a cell index leaves an error that
+    grows with the index; the signed elastic origin drives that index past 40
+    and turned the error into tens of pixels of wheel-zoom jitter.  1×
+    metrics leave these at ``(1.0, None)``, where every mapping below reduces
+    to the original integer arithmetic — the export path is unchanged.
+    """
 
     board_width: int
     board_height: int
@@ -125,10 +135,35 @@ class GridMetrics:
     row_height: int
     gutter: int = SLOT_GUTTER
     padding: int = BOARD_PADDING
+    scale: float = 1.0
+    base: "GridMetrics | None" = None
 
     @property
     def content_width(self) -> int:
         return self.board_width - 2 * self.padding
+
+    def _exact_source(self) -> tuple["GridMetrics", float]:
+        """1× metrics and the factor to apply, for unrounded geometry."""
+        if self.base is None:
+            return self, 1.0
+        return self.base, float(self.scale)
+
+    def exact_padding(self) -> float:
+        base, scale = self._exact_source()
+        return base.padding * scale
+
+    def exact_pitch(self) -> tuple[float, float]:
+        """Unrounded cell pitch. Use this for every grid ↔ pixel mapping."""
+        base, scale = self._exact_source()
+        return (
+            (base.column_width + base.gutter) * scale,
+            (base.row_height + base.gutter) * scale,
+        )
+
+    def exact_cell(self) -> tuple[float, float]:
+        """Unrounded card cell size, i.e. pitch minus one gutter."""
+        base, scale = self._exact_source()
+        return (base.column_width * scale, base.row_height * scale)
 
 
 def grid_metrics(
@@ -250,19 +285,27 @@ def rect_to_pixels(
     the workspace or content origin; the rect itself is left unchanged.
     """
     col0, row0 = int(origin_offset[0]), int(origin_offset[1])
-    x = metrics.padding + (rect.column - col0) * (metrics.column_width + metrics.gutter)
-    y = metrics.padding + (rect.row - row0) * (metrics.row_height + metrics.gutter)
-    width = rect.column_span * metrics.column_width + (rect.column_span - 1) * metrics.gutter
-    height = rect.row_span * metrics.row_height + (rect.row_span - 1) * metrics.gutter
-    return x, y, width, height
+    padding = metrics.exact_padding()
+    pitch_x, pitch_y = metrics.exact_pitch()
+    cell_w, cell_h = metrics.exact_cell()
+    # Round the two edges, never the pitch: rounding the pitch first and then
+    # multiplying by the cell index is what made zoom non-linear.
+    left = padding + (rect.column - col0) * pitch_x
+    top = padding + (rect.row - row0) * pitch_y
+    right = left + (rect.column_span - 1) * pitch_x + cell_w
+    bottom = top + (rect.row_span - 1) * pitch_y + cell_h
+    x, y = int(round(left)), int(round(top))
+    return x, y, int(round(right)) - x, int(round(bottom)) - y
 
 
 def pixels_to_grid_delta(delta: tuple[int, int], metrics: GridMetrics) -> tuple[int, int]:
     """Round a drag delta to a deterministic whole-cell move."""
-    dx, dy = int(delta[0]), int(delta[1])
-    unit_x = max(1, metrics.column_width + metrics.gutter)
-    unit_y = max(1, metrics.row_height + metrics.gutter)
-    return _round_cell(dx, unit_x), _round_cell(dy, unit_y)
+    dx, dy = float(delta[0]), float(delta[1])
+    pitch_x, pitch_y = metrics.exact_pitch()
+    return (
+        _round_cell(dx, max(1.0, pitch_x)),
+        _round_cell(dy, max(1.0, pitch_y)),
+    )
 
 
 def translated_move_rect(
@@ -286,10 +329,10 @@ def snapped_move_rect(
 
 
 def pixel_to_origin(pos: tuple[int, int], metrics: GridMetrics) -> tuple[int, int]:
-    unit_x = max(1, metrics.column_width + metrics.gutter)
-    unit_y = max(1, metrics.row_height + metrics.gutter)
-    column = (int(pos[0]) - metrics.padding) // unit_x
-    row = (int(pos[1]) - metrics.padding) // unit_y
+    padding = metrics.exact_padding()
+    pitch_x, pitch_y = metrics.exact_pitch()
+    column = math.floor((float(pos[0]) - padding) / max(1.0, pitch_x))
+    row = math.floor((float(pos[1]) - padding) / max(1.0, pitch_y))
     return int(column), int(row)
 
 
@@ -307,10 +350,13 @@ def legal_grid_rect(
     return clamp_rect(GridRect(column, row, int(column_span), int(row_span)))
 
 
-def _round_cell(value: int, unit: int) -> int:
-    if value >= 0:
-        return (value + unit // 2) // unit
-    return -((-value + unit // 2) // unit)
+def _round_cell(value: float, unit: float) -> int:
+    """Half-away-from-zero cell rounding for a (possibly fractional) pitch."""
+    if unit <= 0.0:
+        return 0
+    if value >= 0.0:
+        return int(math.floor(value / unit + 0.5))
+    return -int(math.floor(-value / unit + 0.5))
 
 
 def rects_overlap(left: GridRect, right: GridRect) -> bool:

@@ -196,6 +196,7 @@ lesson by default.
 | [UltraView Viewport Gestures Route At CanvasHost Scope](pyqt-ui/2026-08-16-ultraview-viewport-gesture-router.md) | Changing UltraView pan/zoom/pinch/space handling, adding an interactive | See lesson |
 | [UltraView Zoom Settles After Scroll; Fit Fills To 300%](pyqt-ui/2026-08-16-ultraview-zoom-settle-and-fit-fill.md) | Changing UltraView board zoom, `zoom_fit` / 适应, elastic `workspace_extent`, `_broadcast_zoom`, or ToolRail 「一键更新源」 / `sync_preview` navigation. | See lesson |
 | [UltraView Open Parks On Fit, Not Leftover Viewport](pyqt-ui/2026-08-16-ultraview-open-fits-content.md) | Changing UltraView window open/present, Board switch, `fit_on_open`, `_apply_initial_viewport`, `_restore_viewport_from_board`, or persisted `board.viewport` restore. | See lesson |
+| [UltraView Zoom Anchors On Canvas Metrics, Not `logical * zoom`](pyqt-ui/2026-08-16-ultraview-zoom-anchor-is-not-linear.md) | Changing UltraView zoom anchoring, the free-grid grid↔pixel map (`rect_to_pixels` / `pixel_to_origin` / `pixels_to_grid_delta`), `scale_grid_metrics`, or anything that moves the signed elastic origin. | See lesson |
 
 ## Selection Rules
 

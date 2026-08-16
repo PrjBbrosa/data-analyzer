@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     grid_metrics,
+    rect_to_pixels,
     screen_grid_metrics,
 )
 from mf4_analyzer.ui.chart_stack.ultraview import widgets as uv_widgets
@@ -84,6 +85,52 @@ def _logical_under_cursor(zoom, cursor, scroll, origin=(0.0, 0.0)):
         (scroll[0] + cursor[0] - origin[0]) / zoom,
         (scroll[1] + cursor[1] - origin[1]) / zoom,
     )
+
+
+def _card_rect_in_viewport(page, card):
+    """Where the card actually sits on screen, in scroll-viewport pixels."""
+    viewport = page.board_scroll_area().viewport()
+    top_left = viewport.mapFromGlobal(card.mapToGlobal(QPoint(0, 0)))
+    return (
+        float(top_left.x()),
+        float(top_left.y()),
+        float(max(1, card.width())),
+        float(max(1, card.height())),
+    )
+
+
+def _cursor_fractions(rect, cursor):
+    x, y, width, height = rect
+    return ((cursor[0] - x) / width, (cursor[1] - y) / height)
+
+
+def _anchor_drift(page, card, cursor, fractions):
+    """Pixels the pre-zoom board point under ``cursor`` moved away from it.
+
+    Measured from real widget geometry on purpose. ``_logical_under_cursor``
+    is the *linear* model ``scroll / zoom``, which is exactly the assumption
+    that broke: the free-grid pixel map is a rounded stair, so a guardrail
+    written in those terms confirms the wrong number against the wrong number
+    and stays green while cards visibly jump.
+    """
+    x, y, width, height = _card_rect_in_viewport(page, card)
+    fx, fy = fractions
+    return ((x + fx * width) - cursor[0], (y + fy * height) - cursor[1])
+
+
+def _expand_elastic_origin(page, card, local, *, notches=6):
+    """Grow the signed session extent the way a few zoom-outs do.
+
+    Drives the real path -- wheel out, then settle -- so the scroll
+    compensation inside ``_refresh_workspace_extent`` runs too. Firing the
+    settle directly just skips the 300 ms idle wait; it is the same call the
+    timer makes.
+    """
+    for _ in range(notches):
+        _wheel(card, -120, pos=local)
+        page._smooth_timer.stop()
+        page._on_smooth_preview_timeout()
+    return page._workspace_extent
 
 
 def test_clamp_zoom_and_percent_cover_the_product_range():
@@ -274,6 +321,14 @@ def _viewport_cursor(page, widget, local_pos):
 
 
 def _viewport_logical(page, cursor):
+    """Scrollbar-level logical point. NOT a check that pixels stayed put.
+
+    This is ``scroll / zoom`` -- the linear model. It is fine for asserting a
+    gesture reached the scroll transaction at all (degenerate Cocoa positions,
+    clamp behaviour). Do not use it to assert a card visually held still: the
+    free-grid pixel map is a rounded stair, so this can stay constant while
+    cards jump tens of pixels. Use ``_anchor_drift`` for that.
+    """
     scroll = page.board_scroll_area()
     origin = page._board_content_origin()
     return _logical_under_cursor(
@@ -337,16 +392,74 @@ def test_ctrl_wheel_keeps_the_logical_point_under_the_cursor(qtbot):
     cursor = _viewport_cursor(harness.page, card, local)
     assert cursor[0] > 20 and cursor[1] > 20
     before_zoom = harness.page.board_zoom()
-    logical_before = _viewport_logical(harness.page, cursor)
+    fractions = _cursor_fractions(
+        _card_rect_in_viewport(harness.page, card), cursor
+    )
     _wheel(card, 120, pos=local)
     assert harness.page.board_zoom() > before_zoom
-    logical_after = _viewport_logical(harness.page, cursor)
-    assert logical_after == pytest.approx(logical_before, abs=4.0)
+    drift = _anchor_drift(harness.page, card, cursor, fractions)
+    assert max(abs(drift[0]), abs(drift[1])) <= 2.0
     scroll = harness.page.board_scroll_area()
     assert (
         scroll.horizontalScrollBar().value() != 0
         or scroll.verticalScrollBar().value() != 0
     )
+
+
+def test_wheel_zoom_anchor_holds_after_the_elastic_origin_expands(qtbot):
+    """The regression the elastic canvas shipped: jitter that grows with the origin.
+
+    ``rect_to_pixels`` maps a card to ``padding(z) + index * pitch(z)``. Round
+    the metrics first and the error scales with ``index``; the signed origin
+    drives ``index`` past 40, so every wheel notch shoved the board tens of
+    pixels and the direction flipped notch to notch. Measured 72.7 px worst /
+    25.3 px mean before the fix, ~1 px after.
+
+    Zoom in *and* out, several notches, because a single notch at the default
+    origin lands inside the old error and proves nothing.
+    """
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    page = harness.page
+    card = cards[0]
+    local = QPoint(max(24, card.width() * 2 // 3), max(24, card.height() * 2 // 3))
+    extent = _expand_elastic_origin(page, card, local)
+    # Guard the guardrail: without a signed origin this test cannot fail.
+    assert extent is not None and extent.column <= -8
+    worst = 0.0
+    for delta in (-120, -120, -120, 120, 120, 120, -120, 120):
+        cursor = _viewport_cursor(page, card, QPoint(local))
+        fractions = _cursor_fractions(_card_rect_in_viewport(page, card), cursor)
+        _wheel(card, delta, pos=local)
+        drift = _anchor_drift(page, card, cursor, fractions)
+        worst = max(worst, abs(drift[0]), abs(drift[1]))
+    assert worst <= 2.0, f"cursor anchor drifted {worst:.1f}px on a signed origin"
+
+
+def test_zoomed_pixel_map_error_does_not_grow_with_the_cell_index():
+    """Rounding must not be multiplied by the workspace origin.
+
+    ``scale_grid_metrics`` rounds each metric because chrome and card sizing
+    read the integer fields. The grid → pixel map must still work from the
+    unrounded 1× geometry, or the rounding gets multiplied by the cell index
+    and the elastic origin (which reaches -48) turns it into tens of pixels.
+    This is the pure-function half of the guardrail above.
+    """
+    base = screen_grid_metrics(())
+    pitch = base.column_width + base.gutter
+    rect = GridRect(0, 0, 4, 3)
+    worst_by_index = {}
+    for index in (0, 8, 16, 28, 40):
+        errors = []
+        zoom = 0.6
+        while zoom >= ZOOM_MIN:
+            metrics = scale_grid_metrics(base, zoom)
+            x, _y, _w, _h = rect_to_pixels(rect, metrics, origin_offset=(-index, 0))
+            errors.append(abs(x - (base.padding + index * pitch) * zoom))
+            zoom /= 1.1
+        worst_by_index[index] = max(errors)
+    for index, error in worst_by_index.items():
+        assert error <= 1.0, f"cell index {index} drifts {error:.2f}px from the exact map"
 
 
 def test_wheel_zoom_does_not_chase_viewport_while_scroll_is_in_flight(qtbot):
@@ -1323,10 +1436,12 @@ def test_zoom_at_keeps_board_point_under_cursor_in_every_corner(qtbot, fx, fy, d
         max(8, min(card.height() - 8, int(card.height() * fy))),
     )
     cursor = _viewport_cursor(harness.page, card, local)
-    logical_before = _viewport_logical(harness.page, cursor)
+    fractions = _cursor_fractions(
+        _card_rect_in_viewport(harness.page, card), cursor
+    )
     _wheel(card, delta, pos=local)
-    logical_after = _viewport_logical(harness.page, cursor)
-    assert logical_after == pytest.approx(logical_before, abs=1.0)
+    drift = _anchor_drift(harness.page, card, cursor, fractions)
+    assert max(abs(drift[0]), abs(drift[1])) <= 2.0
 
 
 def test_zoom_at_from_fit_does_not_collapse_onto_fit_origin(qtbot):
@@ -1337,11 +1452,13 @@ def test_zoom_at_from_fit_does_not_collapse_onto_fit_origin(qtbot):
     card = cards[0]
     local = QPoint(max(8, card.width() * 3 // 4), max(8, card.height() * 3 // 4))
     cursor = _viewport_cursor(harness.page, card, local)
-    logical_before = _viewport_logical(harness.page, cursor)
+    fractions = _cursor_fractions(
+        _card_rect_in_viewport(harness.page, card), cursor
+    )
     _wheel(card, 120, pos=local)
-    logical_after = _viewport_logical(harness.page, cursor)
+    drift = _anchor_drift(harness.page, card, cursor, fractions)
     assert harness.page.board_zoom() > 0.25
-    assert logical_after == pytest.approx(logical_before, abs=1.0)
+    assert max(abs(drift[0]), abs(drift[1])) <= 2.0
 
 
 def test_zoom_at_clamp_does_not_jump_scroll(qtbot):
@@ -1360,10 +1477,13 @@ def test_zoom_at_clamp_does_not_jump_scroll(qtbot):
 
 def test_toolbar_zoom_anchors_viewport_center(qtbot):
     harness = _Harness(qtbot)
-    _prepare_free_grid(harness, qtbot, "a", "b")
+    _free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
     viewport = harness.page.board_scroll_area().viewport()
     cursor = (viewport.width() / 2.0, viewport.height() / 2.0)
-    logical_before = _viewport_logical(harness.page, cursor)
+    card = cards[0]
+    fractions = _cursor_fractions(
+        _card_rect_in_viewport(harness.page, card), cursor
+    )
     harness.page.zoom_in()
-    logical_after = _viewport_logical(harness.page, cursor)
-    assert logical_after == pytest.approx(logical_before, abs=1.0)
+    drift = _anchor_drift(harness.page, card, cursor, fractions)
+    assert max(abs(drift[0]), abs(drift[1])) <= 2.0
