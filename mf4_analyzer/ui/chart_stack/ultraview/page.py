@@ -2399,17 +2399,14 @@ class UltraViewPage(QWidget):
         return isinstance(QApplication.focusWidget(), QLineEdit)
 
     def _viewport_router_is_active(self) -> bool:
-        """Limit QApplication gesture routing to the shown active Board host.
+        """Limit QApplication gesture routing to a shown Board host.
 
-        Offscreen Qt often has no ``activeWindow`` despite a visible test
-        widget; treating ``None`` as indeterminate retains deterministic
-        widget tests.  On a real desktop another active top-level window is
-        an explicit boundary, so the router never captures its gestures.
+        ``activeWindow()`` is not part of this predicate. Offscreen tests and
+        leftover parentless widgets (capture fakes) can remain the session's
+        active window after they should have gone away; a real foreign window
+        already causes ``WindowDeactivate`` to uninstall the filter.
         """
-        if not self.isVisible() or not self._canvas_host.isVisible():
-            return False
-        active = QApplication.activeWindow()
-        return active is None or active is self.window()
+        return bool(self.isVisible() and self._canvas_host.isVisible())
 
     def _on_app_focus_changed(self, _old, now) -> None:
         in_edit = isinstance(now, QLineEdit)

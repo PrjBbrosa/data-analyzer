@@ -8,7 +8,7 @@ import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent, QNativeGestureEvent, QWheelEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QPushButton
+from PyQt5.QtWidgets import QApplication, QPushButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.viewport_router import ViewportGestureRouter
 from mf4_analyzer.ui.ultraview_state import add_ref, make_ref, set_layout
@@ -84,6 +84,28 @@ def test_middle_pan_continues_across_canvas_children(qtbot, kind):
 
     assert not page.is_board_panning()
     assert horizontal.value() != before
+
+
+def test_middle_pan_survives_stale_foreign_active_window(qtbot, qapp):
+    """Capture tests leave parentless shown widgets as activeWindow.
+
+    The router must still begin a pan on the UltraView card; WindowDeactivate
+    already uninstalls when a real foreign window takes the session.
+    """
+    leftover = QWidget()
+    leftover.resize(64, 48)
+    leftover.show()
+    qtbot.addWidget(leftover)
+    harness = _Harness(qtbot)
+    page = harness.page
+    qapp.setActiveWindow(leftover)
+    page.set_board_zoom(2.0)
+    start_widget, _move_widget = _target(harness, qtbot, "template_card")
+    start = start_widget.rect().center()
+    QTest.mousePress(start_widget, Qt.MiddleButton, pos=start)
+    assert page.is_board_panning()
+    QTest.mouseRelease(start_widget, Qt.MiddleButton, pos=start)
+    leftover.hide()
 
 
 @pytest.mark.parametrize("kind", _START_KINDS)
