@@ -1393,18 +1393,45 @@ def test_board_toolbar_display_menu_emits_show_flags(qtbot):
     harness = _Harness(qtbot)
     titles = []
     sources = []
+    card_actions = []
     harness.page.show_titles_toggled.connect(titles.append)
     harness.page.show_sources_toggled.connect(sources.append)
+    harness.page.show_card_actions_toggled.connect(card_actions.append)
     toolbar = harness.page.board_toolbar()
     toolbar._act_titles.setChecked(False)
     toolbar._act_sources.setChecked(False)
+    toolbar._act_card_actions.setChecked(False)
     assert titles == [False]
     assert sources == [False]
+    assert card_actions == [False]
     harness.board.show_titles = False
     harness.board.show_sources = True
+    harness.board.show_card_actions = True
     harness.page.set_board(harness.board)
     assert toolbar._act_titles.isChecked() is False
     assert toolbar._act_sources.isChecked() is True
+    assert toolbar._act_card_actions.isChecked() is True
+    assert harness.page._display_card_actions.isChecked() is True
+
+
+def test_display_card_action_visibility_reaches_card_projection(qtbot, qapp):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.board.show_card_actions = False
+    harness.page.set_preview(
+        make_ref("time", "time-1"),
+        FakePreview(ref=make_ref("time", "time-1"), image=_image(), title="道路输入"),
+    )
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    assert card is not None
+    assert card.model().show_card_actions is False
+    QApplication.sendEvent(card, QEvent(QEvent.Leave))
+    qapp.processEvents()
+    assert card.action_bar().isHidden()
+    QApplication.sendEvent(card, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    assert card.action_bar().isVisible()
 
 
 def test_presentation_restores_visible_global_edit_controls(qtbot):

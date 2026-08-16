@@ -994,6 +994,7 @@ class UltraViewCoordinator(QObject):
             (page.free_grid_redo_requested, self._on_free_grid_redo),
             (page.show_titles_toggled, self._on_show_titles),
             (page.show_sources_toggled, self._on_show_sources),
+            (page.show_card_actions_toggled, self._on_show_card_actions),
             (page.feedback_requested, self._on_page_feedback),
             (page.viewport_changed, self._on_viewport_payload),
         )
@@ -2196,6 +2197,12 @@ class UltraViewCoordinator(QObject):
 
     def _on_show_sources(self, checked: bool) -> None:
         set_presentation_flags(active_board(self._workspace), show_sources=checked)
+        self._after_board_mutation()
+
+    def _on_show_card_actions(self, checked: bool) -> None:
+        set_presentation_flags(
+            active_board(self._workspace), show_card_actions=checked
+        )
         self._after_board_mutation()
 
     def _on_shift_slot(self, section: str, view_id: str, delta: int) -> None:

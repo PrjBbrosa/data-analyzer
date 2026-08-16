@@ -1,8 +1,11 @@
 """UltraView card action bar: remove affordance, alignment, and narrow LOD."""
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
+
 import pytest
-from PyQt5.QtCore import QPoint, QSize, Qt
+from PyQt5.QtCore import QEvent, QPoint, QSize, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox, QToolButton, QWidget
 
@@ -161,6 +164,30 @@ def test_card_action_bar_uses_font_awesome_and_marks_existing_remove_as_danger(
     remove = card.action_button("remove")
     assert remove is not None
     assert remove.property("danger") == "true"
+    stylesheet = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    assert '[role="cardAction"][danger="true"]' not in stylesheet
+
+
+def test_unpinned_card_actions_only_show_on_hover_or_keyboard_focus(qtbot, qapp):
+    card = _make_card(qtbot, qapp)
+    card.apply_model(replace(card.model(), show_card_actions=False))
+    QApplication.sendEvent(card, QEvent(QEvent.Leave))
+    qapp.processEvents()
+    assert card.action_bar().isHidden()
+
+    QApplication.sendEvent(card, QEvent(QEvent.Enter))
+    qapp.processEvents()
+    assert card.action_bar().isVisible()
+
+    QApplication.sendEvent(card, QEvent(QEvent.Leave))
+    card.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+    assert card.action_bar().isVisible()
+
+    card.clearFocus()
+    qapp.processEvents()
+    qapp.processEvents()
+    assert card.action_bar().isHidden()
 
 
 @pytest.mark.parametrize("free_grid", (False, True))

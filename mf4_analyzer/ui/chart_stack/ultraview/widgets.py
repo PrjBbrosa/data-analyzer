@@ -417,6 +417,7 @@ class CardViewModel:
     replacement_armed: bool = False
     show_title: bool = True
     show_source: bool = True
+    show_card_actions: bool = True
 
 
 def coerce_library_row(row: LibraryRow | Mapping[str, Any]) -> LibraryRow:
@@ -811,6 +812,7 @@ class BoardToolbar(QFrame):
     export_png_requested = pyqtSignal(int)
     show_titles_toggled = pyqtSignal(bool)
     show_sources_toggled = pyqtSignal(bool)
+    show_card_actions_toggled = pyqtSignal(bool)
     presentation_toggled = pyqtSignal(bool)
     overview_requested = pyqtSignal()
     board_name_changed = pyqtSignal(str)
@@ -894,8 +896,12 @@ class BoardToolbar(QFrame):
         self._act_sources = display_menu.addAction("显示来源")
         self._act_sources.setCheckable(True)
         self._act_sources.setChecked(True)
+        self._act_card_actions = display_menu.addAction("常驻显示卡片操作")
+        self._act_card_actions.setCheckable(True)
+        self._act_card_actions.setChecked(True)
         self._act_titles.toggled.connect(self.show_titles_toggled)
         self._act_sources.toggled.connect(self.show_sources_toggled)
+        self._act_card_actions.toggled.connect(self.show_card_actions_toggled)
         self._display.setMenu(display_menu)
         layout.addWidget(self._display, 0)
 
@@ -998,13 +1004,18 @@ class BoardToolbar(QFrame):
         self._presentation.setText("退出演示" if on else "演示")
         self._presentation.blockSignals(blocked)
 
-    def set_show_flags(self, titles: bool, sources: bool) -> None:
+    def set_show_flags(
+        self, titles: bool, sources: bool, card_actions: bool = True
+    ) -> None:
         blocked = self._act_titles.blockSignals(True)
         self._act_titles.setChecked(bool(titles))
         self._act_titles.blockSignals(blocked)
         blocked = self._act_sources.blockSignals(True)
         self._act_sources.setChecked(bool(sources))
         self._act_sources.blockSignals(blocked)
+        blocked = self._act_card_actions.blockSignals(True)
+        self._act_card_actions.setChecked(bool(card_actions))
+        self._act_card_actions.blockSignals(blocked)
 
     def set_edit_visible(self, visible: bool) -> None:
         for widget in (
@@ -1850,6 +1861,9 @@ class UltraViewCard(QFrame):
         self._lod_show_title = True
         self._lod_show_source = True
         self._lod_presentation = False
+        self._show_card_actions = bool(model.show_card_actions)
+        self._card_hovered = False
+        self._action_focus_revealed = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1903,6 +1917,13 @@ class UltraViewCard(QFrame):
         self._action_bar.button("fit").clicked.connect(self._emit_autofit)
         self._action_bar.button("remove").clicked.connect(self._emit_remove)
         self._action_bar.button("more").clicked.connect(self._emit_more)
+        self._action_buttons = tuple(
+            button
+            for action in ("open", "focus", "fit", "remove", "more")
+            if (button := self._action_bar.button(action)) is not None
+        )
+        for button in self._action_buttons:
+            button.installEventFilter(self)
         header.addWidget(self._action_bar, 0, Qt.AlignVCenter)
         root.addWidget(self._header, 0)
 
@@ -1967,7 +1988,18 @@ class UltraViewCard(QFrame):
     def _sync_action_bar(self) -> None:
         # Header actions are not lod_visibility.body_actions (that flag is
         # for orphan/body chrome). TITLE_ONLY still shows open / focus / remove.
-        show = not self._lod_presentation
+        show = not self._lod_presentation and (
+            self._show_card_actions
+            or self._card_hovered
+            or self.hasFocus()
+            or self._action_focus_revealed
+        )
+        if not show and not self._action_focus_revealed:
+            focused = QApplication.focusWidget()
+            if focused in self._action_buttons:
+                # Qt otherwise promotes a hidden action button's startup focus
+                # to the card, immediately re-opening a hover-only action bar.
+                focused.clearFocus()
         self._action_bar.setVisible(show)
         if not show:
             return
@@ -2037,6 +2069,12 @@ class UltraViewCard(QFrame):
         self._model = model
         self._lod_show_title = bool(model.show_title)
         self._lod_show_source = bool(model.show_source)
+        previous_show_actions = self._show_card_actions
+        self._show_card_actions = bool(model.show_card_actions)
+        if previous_show_actions and not self._show_card_actions:
+            # A newly hidden bar can retain startup focus on an offscreen Qt
+            # platform. Only an explicit later keyboard transfer reveals it.
+            self._action_focus_revealed = False
         title = model.title or model.view_id
         self._dot.set_color(model.tab_color)
         self._title.set_full_text(title)
@@ -2111,10 +2149,20 @@ class UltraViewCard(QFrame):
         self._menu = menu
         return menu
 
-    def apply_lod(self, level: str, *, show_title: bool, show_source: bool, presentation: bool = False) -> None:
+    def apply_lod(
+        self,
+        level: str,
+        *,
+        show_title: bool,
+        show_source: bool,
+        show_card_actions: bool | None = None,
+        presentation: bool = False,
+    ) -> None:
         self._lod_level = level if level in {LOD_FULL, LOD_NO_FOOTER, LOD_TITLE_ONLY} else LOD_FULL
         self._lod_show_title = bool(show_title)
         self._lod_show_source = bool(show_source)
+        if show_card_actions is not None:
+            self._show_card_actions = bool(show_card_actions)
         self._lod_presentation = bool(presentation)
         self._apply_lod_visibility()
 
@@ -2231,6 +2279,39 @@ class UltraViewCard(QFrame):
         self._sync_type_chip(SECTION_LABELS_ZH.get(self._model.section, self._model.section))
         self._sync_action_bar()
         self._squeeze_header_for_actions()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._card_hovered = True
+        super().enterEvent(event)
+        self._apply_lod_visibility()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._card_hovered = False
+        super().leaveEvent(event)
+        self._apply_lod_visibility()
+
+    def focusInEvent(self, event) -> None:  # noqa: N802
+        super().focusInEvent(event)
+        self._apply_lod_visibility()
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        QTimer.singleShot(0, self._apply_lod_visibility)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched in self._action_buttons:
+            if event.type() == QEvent.FocusIn:
+                self._action_focus_revealed = True
+                self._apply_lod_visibility()
+            elif event.type() == QEvent.FocusOut:
+                QTimer.singleShot(0, self._sync_action_focus_after_qt)
+        return super().eventFilter(watched, event)
+
+    def _sync_action_focus_after_qt(self) -> None:
+        self._action_focus_revealed = any(
+            button.hasFocus() for button in self._action_buttons
+        )
+        self._apply_lod_visibility()
         if lod_visibility(self._lod_level).preview:
             self._fit_card_image()
 

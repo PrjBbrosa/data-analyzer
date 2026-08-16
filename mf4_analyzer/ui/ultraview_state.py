@@ -49,6 +49,7 @@ _BOARD_PAYLOAD_KEYS = frozenset(
         "name",
         "show_titles",
         "show_sources",
+        "show_card_actions",
         "unplaced",
         "layout_mode",
         "layout_id",
@@ -323,6 +324,8 @@ class UltraViewBoardState:
     unplaced: list[UltraViewRef] = field(default_factory=list)
     show_titles: bool = True
     show_sources: bool = True
+    # True keeps the header action bar visible; false reveals it on hover/focus.
+    show_card_actions: bool = True
     layout_mode: str = LAYOUT_MODE_FREE_GRID
     free_grid: list[FreeGridPlacement] = field(default_factory=list)
     free_grid_default_size: str = "standard"
@@ -416,6 +419,7 @@ def default_board() -> UltraViewBoardState:
         unplaced=[],
         show_titles=True,
         show_sources=True,
+        show_card_actions=True,
         layout_mode=LAYOUT_MODE_FREE_GRID,
     )
 
@@ -513,6 +517,7 @@ def _copy_board(board: UltraViewBoardState) -> UltraViewBoardState:
         unplaced=list(board.unplaced),
         show_titles=board.show_titles,
         show_sources=board.show_sources,
+        show_card_actions=board.show_card_actions,
         layout_mode=board.layout_mode,
         free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
         free_grid_default_size=board.free_grid_default_size,
@@ -1355,12 +1360,15 @@ def set_presentation_flags(
     *,
     show_titles: bool | None = None,
     show_sources: bool | None = None,
+    show_card_actions: bool | None = None,
 ) -> list[str]:
     """Apply only explicitly supplied Board presentation flags."""
     if show_titles is not None:
         board.show_titles = bool(show_titles)
     if show_sources is not None:
         board.show_sources = bool(show_sources)
+    if show_card_actions is not None:
+        board.show_card_actions = bool(show_card_actions)
     return []
 
 
@@ -1404,6 +1412,7 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
         "name": board.name,
         "show_titles": bool(board.show_titles),
         "show_sources": bool(board.show_sources),
+        "show_card_actions": bool(board.show_card_actions),
         "unplaced": [ref.to_dict() for ref in board.unplaced],
         "layout_mode": board.layout_mode,
         # Free-grid mode still needs the last template identity so closing the
@@ -1481,6 +1490,7 @@ def normalize_board_payload(
     warnings.extend(set_ratio(board, board_raw.get("primary_ratio", DEFAULT_PRIMARY_RATIO)))
     board.show_titles = bool(board_raw.get("show_titles", True))
     board.show_sources = bool(board_raw.get("show_sources", True))
+    board.show_card_actions = bool(board_raw.get("show_card_actions", True))
     board.viewport, vp_warnings = _legalize_viewport(board_raw.get("viewport"))
     warnings.extend(vp_warnings)
     board.passthrough = {

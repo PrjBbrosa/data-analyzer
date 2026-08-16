@@ -230,6 +230,7 @@ class UltraViewPage(QWidget):
     presentation_toggled = pyqtSignal(bool)
     show_titles_toggled = pyqtSignal(bool)
     show_sources_toggled = pyqtSignal(bool)
+    show_card_actions_toggled = pyqtSignal(bool)
     rebind_ref_requested = pyqtSignal(str, str, str, str)
     locate_ref_requested = pyqtSignal(str, str)
     compare_filter_changed = pyqtSignal(str)
@@ -481,6 +482,7 @@ class UltraViewPage(QWidget):
         self._toolbar.export_png_requested.connect(self.export_png_requested)
         self._toolbar.show_titles_toggled.connect(self.show_titles_toggled)
         self._toolbar.show_sources_toggled.connect(self.show_sources_toggled)
+        self._toolbar.show_card_actions_toggled.connect(self.show_card_actions_toggled)
         self._toolbar.presentation_toggled.connect(self._on_presentation_button)
         self._toolbar.overview_requested.connect(self.show_overview)
         self._toolbar.board_name_changed.connect(self.board_name_changed)
@@ -777,8 +779,15 @@ class UltraViewPage(QWidget):
         self._display_sources.setCheckable(True)
         self._display_sources.setToolTip("切换来源文件")
         self._display_sources.toggled.connect(self.show_sources_toggled)
+        self._display_card_actions = QToolButton(frame)
+        self._display_card_actions.setObjectName("ultraViewDisplayCardActionsButton")
+        self._display_card_actions.setText("常驻显示卡片操作")
+        self._display_card_actions.setCheckable(True)
+        self._display_card_actions.setToolTip("取消后，悬停或键盘聚焦卡片时显示操作")
+        self._display_card_actions.toggled.connect(self.show_card_actions_toggled)
         layout.addWidget(self._display_titles, 0)
         layout.addWidget(self._display_sources, 0)
+        layout.addWidget(self._display_card_actions, 0)
         note = QLabel("预览状态始终可见", frame)
         note.setObjectName("ultraViewDisplayTrustNote")
         note.setToolTip("过期、缺失和孤儿 View 是可信度信息，不提供隐藏开关")
@@ -1681,11 +1690,13 @@ class UltraViewPage(QWidget):
         level = self._viewport.lod()
         show_title = bool(self._board.show_titles)
         show_source = bool(self._board.show_sources)
+        show_card_actions = bool(self._board.show_card_actions)
         for card in (*self._grid.card_widgets(), *self._free_grid.card_widgets()):
             card.apply_lod(
                 level,
                 show_title=show_title,
                 show_source=show_source,
+                show_card_actions=show_card_actions,
                 presentation=self._presentation,
             )
 
@@ -2247,7 +2258,9 @@ class UltraViewPage(QWidget):
         self._toolbar.set_board_name(board.name)
         self._toolbar.set_layout_id(board.layout_id)
         self._toolbar.set_free_grid_enabled(board.layout_mode == LAYOUT_MODE_FREE_GRID)
-        self._toolbar.set_show_flags(board.show_titles, board.show_sources)
+        self._toolbar.set_show_flags(
+            board.show_titles, board.show_sources, board.show_card_actions
+        )
         self._board_island.set_current_board(board.board_id, board.name)
         blocked = self._display_titles.blockSignals(True)
         self._display_titles.setChecked(bool(board.show_titles))
@@ -2255,6 +2268,9 @@ class UltraViewPage(QWidget):
         blocked = self._display_sources.blockSignals(True)
         self._display_sources.setChecked(bool(board.show_sources))
         self._display_sources.blockSignals(blocked)
+        blocked = self._display_card_actions.blockSignals(True)
+        self._display_card_actions.setChecked(bool(board.show_card_actions))
+        self._display_card_actions.blockSignals(blocked)
         self._tool_rail.set_badge(PANEL_UNPLACED, n_unplaced)
         self._sync_layout_popover()
         if self._drag_kind is not None:
@@ -2852,6 +2868,7 @@ class UltraViewPage(QWidget):
                 ),
                 show_title=bool(self._board.show_titles),
                 show_source=bool(self._board.show_sources),
+                show_card_actions=bool(self._board.show_card_actions),
             )
         self._grid.set_grid(self._board.layout_id, self._board.primary_ratio, models)
         self._sync_board_stack_geometry(self._grid)
@@ -2927,6 +2944,7 @@ class UltraViewPage(QWidget):
             replacement_armed=self._replacement_ref == ref,
             show_title=bool(self._board.show_titles),
             show_source=bool(self._board.show_sources),
+            show_card_actions=bool(self._board.show_card_actions),
         )
 
     def _refresh_free_grid_projection(self) -> None:

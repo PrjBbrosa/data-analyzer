@@ -9,6 +9,7 @@ from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
 
+import mf4_analyzer.ui.chart_stack.ultraview.chrome as ultraview_chrome
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     BOARD_POPOVER_WIDTH,
     PANEL_FILTER,
@@ -580,6 +581,31 @@ def test_card_context_residents_are_open_sync_focus_and_more(qtbot):
             assert button.toolTip()
             assert button.accessibleName()
             assert button.focusPolicy() == Qt.TabFocus
+
+
+def test_card_context_and_board_row_use_normalized_font_awesome_icons(qtbot, monkeypatch):
+    """Presentation-only regression: no card intent or popover entry changes."""
+    calls: list[str] = []
+    real_icon = ultraview_chrome.qta.icon
+
+    def record_icon(name, *args, **kwargs):
+        calls.append(str(name))
+        return real_icon(name, *args, **kwargs)
+
+    monkeypatch.setattr(ultraview_chrome.qta, "icon", record_icon)
+    context = CardContextIsland()
+    qtbot.addWidget(context)
+    context.show()
+    assert calls[:5] == [
+        "fa5s.external-link-alt",
+        "fa5s.sync-alt",
+        "fa5s.expand",
+        "fa5s.vector-square",
+        "fa5s.ellipsis-v",
+    ]
+
+    ultraview_chrome._BoardListDelegate()
+    assert calls[-2:] == ["fa5s.clone", "fa5s.trash-alt"]
 
 
 def test_overflow_menu_is_deleted_after_closing_instead_of_leaking_per_open(qtbot):

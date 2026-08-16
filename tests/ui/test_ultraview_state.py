@@ -645,6 +645,7 @@ def test_normalize_keeps_legal_missing_refs_and_warns_on_illegal():
             "primary_ratio": 1.5,
             "show_titles": True,
             "show_sources": False,
+            "show_card_actions": False,
             "placements": [
                 {"slot_id": "primary", "section": "time", "view_id": "keep"},
                 {"slot_id": "primary", "section": "fft", "view_id": "dup-slot"},
@@ -670,6 +671,7 @@ def test_normalize_keeps_legal_missing_refs_and_warns_on_illegal():
     assert 0.40 <= board.primary_ratio <= 0.80
     assert [p.ref.view_id for p in board.placements] == ["keep"]
     assert [ref.view_id for ref in board.unplaced] == ["dup-slot", "tray"]
+    assert board.show_card_actions is False
 
 
 def test_unknown_schema_degrades_to_empty_board():
@@ -926,9 +928,23 @@ def test_set_presentation_flags_changes_only_explicit_values():
     assert uvs.set_presentation_flags(board, show_sources=False) == []
     assert board.show_titles is False
     assert board.show_sources is False
+    assert board.show_card_actions is True
+    assert uvs.set_presentation_flags(board, show_card_actions=False) == []
+    assert board.show_card_actions is False
     assert uvs.set_presentation_flags(board) == []
     assert board.show_titles is False
     assert board.show_sources is False
+    assert board.show_card_actions is False
+
+
+def test_card_action_visibility_defaults_to_pinned_for_legacy_payloads():
+    board, warnings = uvs.normalize_board_payload(
+        {"schema": 3, "board": {"layout_id": "hero_left_4"}}
+    )
+
+    assert warnings == []
+    assert board.show_card_actions is True
+    assert uvs.board_to_payload(board)["board"]["show_card_actions"] is True
 
 
 def test_unknown_board_fields_passthrough_with_viewport():

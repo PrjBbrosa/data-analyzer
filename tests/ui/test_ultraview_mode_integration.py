@@ -716,10 +716,13 @@ def test_toolbar_show_titles_sync_cards(qapp, qtbot):
     uv.refresh_page()
     uv._on_show_titles(False)
     uv._on_show_sources(False)
+    uv._on_show_card_actions(False)
     card = page.card_widget("time", view_id)
     assert card.model().show_title is False
     assert card.model().show_source is False
+    assert card.model().show_card_actions is False
     assert page.board_toolbar()._act_titles.isChecked() is False
+    assert page.board_toolbar()._act_card_actions.isChecked() is False
     uv._on_show_titles(True)
     card = page.card_widget("time", view_id)
     assert card.model().show_title is True

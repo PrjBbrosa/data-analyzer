@@ -615,6 +615,13 @@ _HINTS = (
         priority=92,
     ),
     Hint(
+        id="ultraview.card_action_visibility",
+        text="右上显示可设卡片操作常驻或悬停",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=68,
+    ),
+    Hint(
         id="ultraview.direct_manip",
         text="直接拖卡片即可移动，不必再按 Option",
         surface="context",
