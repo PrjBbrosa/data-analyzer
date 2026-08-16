@@ -1,10 +1,12 @@
 # UltraView 接缝加固（结构护栏 + 五处接缝）· 实施 plan
 
 - 日期：2026-08-15 · 状态：**实施完成；1 条 Cocoa 前台门禁待解锁后补验** · 实施 9/9 Task
-- 执行记录（2026-08-16）：Task 0 的三条独立红（视觉 harness/card-context、
-  LayoutPicker 尺寸、QSS palette ratchet）已由用户明确接受为新基线，随后继续执行。
-  它们不属于 D0–D6 的接缝改动，详情见
-  `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/baseline.txt`。
+- 执行记录（2026-08-16）：Task 0 当时记下的三条失配已由用户明确接受为
+  接缝范围外基线，随后继续执行。B7 更正（当日评审跟进）：那不是「3 条独立红」，
+  而是 1 独立（视觉 harness/card-context）+ 1 污染（LayoutPicker 缩略图，单跑绿）
+  + 1 已修（QSS palette ratchet，64dbab74）。详情见
+  `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/baseline.txt` 与
+  `docs/analyzer/specs/2026-08-16-daily-review-followup-spec.md` B7。
 - spec：`docs/analyzer/specs/2026-08-15-ultraview-seam-hardening-spec.md`（决策编号 D0–D8 以它为准）
 - 历史基线：`c2502de1`；Task 0 已在 `f85f2323` 重锚，原在途的 View 库几何/材质批不再是
   本计划的前置条件。
@@ -40,8 +42,9 @@
 
 ## Task 0 · 锚定 + 清查 + 基线（失配即停）
 
-**结果（2026-08-16）：** 清查和三路历史基线已完成。三条独立失配曾使本 Task 阻塞，
-随后由用户明确接受为新基线；其 owner 不在本计划范围，故继续执行而不改写那些测试。
+**结果（2026-08-16）：** 清查和三路历史基线已完成。三条失配曾使本 Task 阻塞，
+随后由用户明确接受为接缝范围外基线；其 owner 不在本计划范围，故继续执行而不改写那些测试。
+B7 更正：1 独立（harness）+ 1 污染（layout picker）+ 1 已修（palette），不是 3 条独立红。
 
 **Files:** 新建 `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/inventory.md`
 （清查全表）与 `baseline.txt`（测试基线）；spec 行号如有漂移直接改 spec（标注「Task 0 重锚」）。
@@ -251,8 +254,9 @@ Run: `PYTEST tests/ui/test_ultraview_viewport_router.py STRUCT -q && PYTEST UV -
 
 ## Task 8 · 收尾
 
-- [x] **Step 1：** 按新的 `AGENTS.md` 聚焦门禁规则，未重跑全量；Task 0 的三条独立红
-  已由用户接受为新基线，且不属于本批代码改动。
+- [x] **Step 1：** 按新的 `AGENTS.md` 聚焦门禁规则，未重跑全量；Task 0 的三条失配
+  （后经 B7 更正为 1 独立 + 1 污染 + 1 已修）已由用户接受为接缝范围外基线，
+  且不属于本批代码改动。
 - [x] **Step 2：** spec 已改为实施状态，指标、Task 完成表和唯一未验证的 Cocoa 门禁均已记录。
 - [x] **Step 3：** D4 lesson 与索引已补；D1–D3 不额外拆 lesson。
 - [x] **Step 4：** 已核对 `ui/hints.py` / `ui/quickref.py` 为零改动；用户可见的快捷键和起手

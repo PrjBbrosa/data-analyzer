@@ -237,6 +237,10 @@ quality.py。
     新增用例(离 HEAD 仅 4 提交),污染源是否随本批引入待收尾复跑判定。
 - 结论:**本批(3b2d8cde..HEAD)零新增可复现失败**;真实遗留债 = 4 条既有红 +
   9 条顺序污染(待收尾全量复跑对账)。
+- **UltraView Task 0「3 条独立红」更正**(2026-08-16):见
+  `docs/analyzer/specs/2026-08-16-daily-review-followup-spec.md` B7 —
+  1 独立(harness)+ 1 污染(layout picker)+ 1 已修(palette)。证据:
+  `docs/analyzer/verify/2026-08-15-ultraview-seam-hardening/baseline.txt`。
 
 ## 7. 处置
 

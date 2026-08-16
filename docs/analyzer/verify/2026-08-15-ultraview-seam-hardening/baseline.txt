@@ -18,25 +18,30 @@
 # - tests/ui/test_ultraview_chrome.py::test_tool_rail_empty_board_paints_library_as_primary_cta
 # - tests/ui/test_ultraview_entry.py::test_rail_fitter_shrinks_to_compact_and_restores_full
 #
-# Task 0 mismatch: these three deterministic failures are outside that known
-# set and initially blocked this plan before Task 1:
+# Task 0 mismatch: these three failures sat outside that known set and
+# initially blocked this plan before Task 1. The original write-up labeled
+# all three "independent reds" after a focused re-run that placed them
+# together (polluter first). B7 correction (2026-08-16 daily followup):
+# 1 independent (harness) + 1 pollution (layout picker) + 1 already-fixed
+# (palette). See docs/analyzer/specs/2026-08-16-daily-review-followup-spec.md
+# B7.
 #
 # - tests/test_verify_ultraview_visuals.py::test_ultraview_visual_harness_geometry_and_contact_sheet
-#   (harness still requires visible selected-card floating actions)
+#   Independent red at Task 0 (harness required visible selected-card
+#   floating actions). Follow-up Task 8 aligned the harness; historical.
 # - tests/ui/test_ultraview_chrome.py::test_layout_picker_omits_free_grid_entry_and_keeps_template_thumbs
-#   (hero thumb minimumHeight=20; contract requires >=104)
+#   Order pollution, not independent. Isolated re-run is green; the three-
+#   test focused re-run put the QSS polluter first (hero thumb 20 vs >=104).
 # - tests/ui_kit/test_qss_palette_ratchet.py::test_distinct_hex_literals_may_only_shrink
-#   (261 six-digit literals; ceiling 244)
+#   Already fixed (64dbab74). Was 261 six-digit literals vs ceiling 244.
 #
-# Focused re-run of exactly those three tests: 3 failed in 2.32s, so they are
-# not order pollution. They are not a D0–D6 seam-hardening change.
-
-# Baseline disposition (2026-08-16): the user explicitly accepted these three
-# failures as the new baseline and authorized this seam-hardening plan to
-# continue. They remain owned by the visual harness/card-context, LayoutPicker
-# geometry, and QSS palette work respectively; this plan does not change them.
-# Per the current AGENTS.md focused-gate policy and the user's direction, no
-# fresh whole-suite rerun is required for the remaining seam tasks.
+# Focused re-run of those three together: 3 failed in 2.32s — that ordering
+# is why layout picker was misclassified. They are not a D0–D6 change.
+#
+# Baseline disposition (2026-08-16, pre-B7): the user accepted the three
+# Task 0 mismatches as out of D0–D6 scope so seam-hardening could continue.
+# Per the then-current AGENTS.md focused-gate policy, no fresh whole-suite
+# rerun was required for the remaining seam tasks.
 #
 # Acquisition suite (separate process):
 # 359 passed, 4 warnings in 10.63s
