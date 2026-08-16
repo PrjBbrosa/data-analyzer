@@ -754,7 +754,10 @@ class ToolRail(QFrame):
             button.setChecked(panel_open)
             factory = self._icon_factories.get(candidate)
             if factory is not None:
-                if empty_cta:
+                # A panel that is open is the user's current navigation
+                # destination, just like a persistent mode: it receives the
+                # shared filled chrome and must therefore carry a light icon.
+                if empty_cta or mode_active or panel_open:
                     button.setIcon(factory(UV_PRESENTATION_ICON))
                 else:
                     button.setIcon(
@@ -767,7 +770,9 @@ class ToolRail(QFrame):
         _set_flag(self._free_grid, "panelOpen", False)
         _set_flag(self._free_grid, "active", False)
         self._free_grid.setIcon(
-            Icons.ultraview_free_grid(_ultraview_icon_color(active=self._free_grid_enabled))
+            Icons.ultraview_free_grid(
+                UV_PRESENTATION_ICON if self._free_grid_enabled else UV_MUTED
+            )
         )
         sync_all = getattr(self, "_sync_all", None)
         if sync_all is not None:
@@ -1491,9 +1496,13 @@ class GlobalIsland(QFrame):
             _set_flag(button, "modeActive", False)
             _set_flag(button, "active", False)
         self._display.setIcon(
-            Icons.ultraview_display(_ultraview_icon_color(active=key == "display"))
+            Icons.ultraview_display(
+                UV_PRESENTATION_ICON if key == "display" else UV_MUTED
+            )
         )
-        self._export.setIcon(Icons.export(_ultraview_icon_color(active=key == "export")))
+        self._export.setIcon(
+            Icons.export(UV_PRESENTATION_ICON if key == "export" else UV_MUTED)
+        )
 
     def sizeHint(self) -> QSize:  # noqa: N802
         visible = [

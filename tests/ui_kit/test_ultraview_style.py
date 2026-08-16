@@ -9,6 +9,10 @@ from mf4_analyzer.ui_kit.ultraview_style import (
 def test_titanium_amber_core_roles_are_exact_and_separate_from_global_controls():
     assert titanium_color("brand") == "#24697C"
     assert titanium_color("amber") == "#E58F32"
+    assert titanium_color("rail_active_start") == "#3C8495"
+    assert titanium_color("rail_active_end") == "#F0A44C"
+    assert titanium_color("time_wash") == "#F5F8FF"
+    assert titanium_color("time_line") == "#A6C0F5"
     assert titanium_color("danger") == "#C94F4A"
     assert titanium_color("canvas") == "#F7F8F7"
     assert ULTRAVIEW_TITANIUM["surface_solid"] == "#FFFEFD"
@@ -21,8 +25,11 @@ def test_every_ultraview_qss_token_is_renderable_and_uses_a_named_role():
         "UV_SURFACE_SOLID",
         "UV_BRAND",
         "UV_AMBER",
+        "UV_RAIL_ACTIVE_START",
+        "UV_RAIL_ACTIVE_END",
         "UV_DANGER",
         "UV_TIME",
+        "UV_TIME_LINE",
         "UV_ORDER",
     }
     assert all(str(value).strip() for value in ULTRAVIEW_QSS_TOKENS.values())

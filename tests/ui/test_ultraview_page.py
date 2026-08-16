@@ -3677,7 +3677,9 @@ def test_library_section_headers_keep_titanium_category_wash_not_gray_slab(qtbot
     pos = header.mapTo(library, QPoint(max(12, header.width() - 8), header.height() // 2))
     image = library.grab().toImage()
     pixel = QColor(image.pixel(min(pos.x(), image.width() - 1), min(pos.y(), image.height() - 1)))
-    expected = QColor("#EEF3FF")
+    from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_TITANIUM
+
+    expected = QColor(ULTRAVIEW_TITANIUM["time_wash"])
     assert max(
         abs(pixel.red() - expected.red()),
         abs(pixel.green() - expected.green()),

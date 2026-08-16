@@ -746,7 +746,10 @@ def _icon_mean_color(button: QToolButton) -> QColor:
     count = 0
     for x in range(image.width()):
         for y in range(image.height()):
-            pixel = QColor(image.pixel(x, y))
+            # ``QColor(QImage.pixel())`` discards the alpha from an ARGB
+            # icon pixmap, turning its transparent background into opaque
+            # black and masking a white active glyph.
+            pixel = image.pixelColor(x, y)
             if pixel.alpha() < 40:
                 continue
             total[0] += pixel.red()
@@ -806,20 +809,41 @@ def test_tool_rail_icon_color_tracks_mode_and_panel_open(qtbot):
     free_rest = _icon_mean_color(free)
     assert _color_distance(layout_mode, library_rest) > 12
     assert layout_mode.blue() >= layout_mode.red()
+    # QIcon pixels are baked at creation time, so QSS ``color`` cannot rescue
+    # a dark glyph over the filled mode gradient.  Active rail glyphs must be
+    # explicitly rendered in the high-contrast light role.
+    assert min(layout_mode.red(), layout_mode.green(), layout_mode.blue()) >= 230
     rail.set_free_grid_enabled(True)
     layout_rest = _icon_mean_color(layout)
     free_mode = _icon_mean_color(free)
     assert _color_distance(layout_mode, layout_rest) > 12
     assert _color_distance(free_rest, free_mode) > 12
+    assert min(free_mode.red(), free_mode.green(), free_mode.blue()) >= 230
     rail.set_active_panel(PANEL_LIBRARY)
     library_open = _icon_mean_color(library)
     assert _color_distance(library_rest, library_open) > 12
+    assert min(library_open.red(), library_open.green(), library_open.blue()) >= 230
+    # Every rail destination carries the same explicit open feedback; the
+    # gradient is not reserved for the free-grid toggle alone.
+    for panel_id in (PANEL_LAYOUT, PANEL_FILTER, PANEL_UNPLACED):
+        rail.set_active_panel(panel_id)
+        opened = rail.panel_button(panel_id)
+        assert opened is not None
+        color = _icon_mean_color(opened)
+        assert min(color.red(), color.green(), color.blue()) >= 230
     rail.set_active_panel(None)
     assert library.property("panelOpen") != "true"
     assert layout.property("modeActive") != "true"
     assert free.property("modeActive") == "true"
     island = GlobalIsland()
     qtbot.addWidget(island)
+    island.set_active_panel("display")
+    display_open = _icon_mean_color(island.display_button())
+    assert min(display_open.red(), display_open.green(), display_open.blue()) >= 230
+    island.set_active_panel("export")
+    export_open = _icon_mean_color(island.export_button())
+    assert min(export_open.red(), export_open.green(), export_open.blue()) >= 230
+    island.set_active_panel(None)
     rest_presentation = _icon_mean_color(island.presentation_button())
     island.set_presentation_checked(True)
     presented = _icon_mean_color(island.presentation_button())
@@ -860,5 +884,10 @@ def test_tool_rail_empty_board_paints_library_as_primary_cta(qtbot):
     rail.set_empty_board(False)
     assert library.property("emptyCta") != "true"
     retracted = _icon_mean_color(library)
-    assert _color_distance(retracted, cta) > 12
-    assert retracted.blue() >= retracted.red()
+    # The empty-board CTA has retracted, but the library remains the visible
+    # destination; panel-open chrome deliberately keeps its filled treatment.
+    assert _color_distance(retracted, cta) < 12
+    rail.set_active_panel(None)
+    closed = _icon_mean_color(library)
+    assert _color_distance(closed, cta) > 12
+    assert closed.blue() >= closed.red()

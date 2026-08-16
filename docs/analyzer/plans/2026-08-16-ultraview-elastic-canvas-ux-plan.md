@@ -205,9 +205,9 @@
 | 类型/状态 | 视觉合同 |
 |---|---|
 | 普通浮层 icon button | `surfaceSolid` + `line`；图标 `muted`；hover 为 `surfaceTint` + `brandDeep`；pressed 使用更深的预合成钛蓝洗色；focus-visible 为 2px `brand` 外环 |
-| 持续 mode active | `qlineargradient` / `QLinearGradient(#24697C → #E58F32)`，白色图标；只用于当前模式，不用于“面板已打开” |
+| 持续 mode active | `qlineargradient` / `QLinearGradient(#3C8495 → #F0A44C)`，白色图标；hover/pressed 使用 `#2F7181`，且必须重绘为白色 `QIcon`（QSS `color` 不会重染既有图标）；只用于当前模式，不用于“面板已打开” |
 | 一次性主动作 | 空板“打开 View 库”、新建 Board `+`、当前上下文中的 Fit/演示主动作可使用同一钛蓝→琥珀渐变；动作完成或不再是主建议后恢复普通按钮 |
-| panel-open / selected | 钛蓝描边 + `surfaceTint`，不用主渐变，明确区分“当前模式”和“浮层已打开” |
+| panel-open / selected | 左侧 ToolRail 和右上 GlobalIsland 的已打开主面板使用同一钛蓝→琥珀渐变 + 白色图标，明确“当前目的地”；Board selector 菜单仍为钛蓝描边 + `surfaceTint`，避免所有浮层触发器同时抢眼 |
 | 危险动作 | `danger #C94F4A` 图标/边框和浅铜红 wash；卡片移除默认仍是普通图标，hover 后才显示 danger，避免动作区一直发红 |
 | disabled | `quiet` 降低对比，不保留琥珀高光；仍提供原因 tooltip/accessible description |
 
@@ -215,7 +215,7 @@
 
 #### 3.8.5 View 库类别强调色
 
-类别色只帮助扫描，不作为 View 或信号身份键：时域 `#3D79EF`、频谱 `#8B5FD5`、时频 `#00A998`、频响 `#E28735`、阶次 `#B75B4D`。组标题、左侧色点和低 alpha wash 共用同一类别 token；行文字、`+` 按钮和选中态仍遵守钛蓝琥珀交互角色，不能让类别色接管所有控件。
+类别色只帮助扫描，不作为 View 或信号身份键：时域 `#3D79EF`、频谱 `#8B5FD5`、时频 `#00A998`、频响 `#E28735`、阶次 `#B75B4D`。组标题、左侧色点保留类别色；大面积分类底和边框使用更淡的独立 wash/line token，避免把 View 库染成一块块实色面板。行文字、`+` 按钮和选中态仍遵守钛蓝琥珀交互角色，不能让类别色接管所有控件。
 
 ## 4. 架构与 owner
 
