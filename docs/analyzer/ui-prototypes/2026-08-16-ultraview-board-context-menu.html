@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UltraView · 看板右键菜单</title>
+  <style>
+    :root {
+      --night: #111b1f;
+      --night-2: #17272d;
+      --canvas: #f7f8f7;
+      --canvas-deep: #e9eff1;
+      --surface: rgba(255, 254, 253, .94);
+      --surface-soft: #edf2f2;
+      --ink: #183039;
+      --muted: #66787e;
+      --quiet: #8a999d;
+      --line: rgba(50, 86, 97, .25);
+      --line-strong: rgba(42, 78, 89, .42);
+      --brand: #24697c;
+      --brand-ink: #215d6e;
+      --amber: #f0a44c;
+      --amber-wash: #fff3e2;
+      --success: #198565;
+      --shadow: 0 22px 62px rgba(31, 61, 70, .16), 0 4px 14px rgba(31, 61, 70, .08);
+      --menu-shadow: 0 18px 48px rgba(22, 45, 53, .24), 0 2px 7px rgba(22, 45, 53, .12);
+      --font: "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 980px; color: #e8f0ee; font: 13px/1.45 var(--font); background: radial-gradient(900px 430px at 20% -10%, rgba(65, 139, 157, .22), transparent 70%), var(--night); }
+    button { font: inherit; color: inherit; }
+    button:focus-visible { outline: 3px solid rgba(240, 164, 76, .76); outline-offset: 3px; }
+
+    .page { width: min(1440px, calc(100vw - 44px)); margin: 0 auto; padding: 28px 0 42px; }
+    .brief { display: flex; justify-content: space-between; gap: 32px; align-items: end; margin: 0 4px 18px; }
+    .eyebrow { color: #9eb5b8; font: 700 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 8px 0 0; font-size: 29px; line-height: 1.1; letter-spacing: -.045em; }
+    .lede { max-width: 680px; margin: 10px 0 0; color: #afc0c2; font-size: 14px; }
+    .decision { max-width: 410px; padding: 13px 16px; border: 1px solid rgba(167, 203, 208, .2); border-radius: 13px; background: rgba(255,255,255,.06); color: #c5d7d9; }
+    .decision b { color: #ffd39b; }
+
+    .prototype { display: grid; grid-template-columns: minmax(0, 1fr) 258px; gap: 16px; align-items: stretch; }
+    .board-shell { position: relative; min-height: 700px; overflow: hidden; border: 1px solid rgba(202, 220, 220, .32); border-radius: 22px; background: var(--canvas); box-shadow: var(--shadow); }
+    .canvas {
+      position: absolute; inset: 0; overflow: hidden; background:
+        radial-gradient(circle at 73% 14%, rgba(240,164,76,.13), transparent 22rem),
+        radial-gradient(circle at 14% 97%, rgba(36,105,124,.12), transparent 25rem),
+        linear-gradient(rgba(44,82,93,.11) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(44,82,93,.11) 1px, transparent 1px), var(--canvas);
+      background-size: auto, auto, 24px 24px, 24px 24px, auto;
+    }
+    .canvas::after { content: ""; position: absolute; inset: 20px; z-index: 0; border: 1px dashed rgba(60, 104, 114, .24); border-radius: 16px; pointer-events: none; }
+
+    .island { position: absolute; z-index: 5; display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 5px; border: 1px solid rgba(55, 92, 102, .24); border-radius: 14px; color: var(--ink); background: var(--surface); box-shadow: 0 9px 24px rgba(39, 70, 78, .12); backdrop-filter: blur(16px); }
+    .board-id { left: 28px; top: 26px; padding: 5px 10px 5px 6px; }
+    .board-mark { display: grid; grid-template-columns: repeat(2, 5px); gap: 2px; padding: 8px; border-radius: 9px; background: linear-gradient(135deg, var(--brand), #3d8998); }
+    .board-mark i { width: 5px; height: 5px; border-radius: 2px; background: rgba(255,255,255,.88); }
+    .board-copy b { display: block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .board-copy small { display: block; margin-top: 1px; color: var(--muted); font: 10px/1.2 var(--mono); letter-spacing: .08em; }
+    .global-actions { right: 28px; top: 26px; }
+    .nav { right: 28px; bottom: 26px; }
+    .icon-button, .try-menu { min-width: 30px; height: 30px; padding: 0 9px; border: 0; border-radius: 9px; color: var(--brand-ink); background: transparent; cursor: pointer; }
+    .icon-button:hover, .try-menu:hover { background: #e7f0f1; }
+    .try-menu { min-width: auto; color: #fff; background: var(--brand); font-weight: 700; }
+    .try-menu:hover { background: #1e5b6c; }
+    .zoom { min-width: 46px; text-align: center; color: var(--muted); font: 11px/1 var(--mono); }
+
+    .canvas-cue { position: absolute; z-index: 1; left: 42px; bottom: 38px; color: rgba(48, 84, 92, .67); font-size: 12px; pointer-events: none; }
+    .canvas-cue kbd { padding: 2px 5px; border: 1px solid rgba(61, 96, 105, .22); border-bottom-width: 2px; border-radius: 5px; background: rgba(255,255,255,.55); color: var(--brand-ink); font: 10px var(--mono); }
+
+    .card { position: absolute; z-index: 2; overflow: hidden; min-width: 116px; min-height: 88px; border: 1px solid rgba(55, 99, 111, .34); border-radius: 12px; color: var(--ink); background: rgba(255,255,254,.97); box-shadow: 0 10px 22px rgba(30,65,73,.12); transition: left .5s cubic-bezier(.2,.8,.25,1), top .5s cubic-bezier(.2,.8,.25,1); }
+    .card-head { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-bottom: 1px solid #e5eded; font-size: 10px; font-weight: 760; }
+    .kind { margin-left: auto; padding: 2px 5px; border-radius: 999px; color: var(--brand-ink); background: #e6f0f2; font-size: 9px; font-weight: 700; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal, #3d8998); }
+    .trace { position: absolute; inset: 38px 10px 11px; opacity: .82; background: linear-gradient(161deg, transparent 0 21%, var(--signal, #3d8998) 22% 24%, transparent 25% 46%, var(--signal, #3d8998) 47% 49%, transparent 50% 69%, var(--signal, #3d8998) 70% 72%, transparent 73%), linear-gradient(rgba(52,97,106,.12) 1px, transparent 1px); background-size: auto, 100% 22px; }
+    .card.stale::before { content: "源已变化"; position: absolute; right: 7px; bottom: 6px; z-index: 2; padding: 2px 5px; border-radius: 5px; color: #9a5a12; background: var(--amber-wash); font-size: 9px; }
+    .card.local-menu { outline: 2px solid rgba(240,164,76,.75); outline-offset: 3px; }
+
+    .menu { position: absolute; z-index: 20; display: none; width: 238px; padding: 7px; border: 1px solid rgba(55, 92, 102, .30); border-radius: 14px; color: #172e36; background: rgba(255,255,254,.97); box-shadow: var(--menu-shadow); backdrop-filter: blur(18px); }
+    .menu.open { display: block; animation: menu-in .13s ease-out; }
+    @keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+    .menu-label { padding: 6px 9px 5px; color: var(--quiet); font: 700 10px/1 var(--mono); letter-spacing: .08em; }
+    .menu-item { display: grid; grid-template-columns: 24px 1fr auto; align-items: center; width: 100%; min-height: 38px; padding: 5px 8px; border: 0; border-radius: 9px; text-align: left; color: inherit; background: transparent; cursor: pointer; }
+    .menu-item:hover { background: #e8f1f2; }
+    .menu-item.primary:hover { background: #e1f0f2; color: #174f5e; }
+    .menu-item.arrange:hover { background: var(--amber-wash); color: #855014; }
+    .menu-icon { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; color: var(--brand-ink); background: #edf3f3; font-size: 13px; }
+    .arrange .menu-icon { color: #966019; background: #fff0dc; }
+    .menu-text { font-size: 13px; font-weight: 650; }
+    .menu-item small { color: var(--quiet); font: 10px var(--mono); }
+    .separator { height: 1px; margin: 6px 8px; background: rgba(79,112,120,.18); }
+    .menu-note { padding: 5px 9px 4px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .menu-item[hidden] { display: none; }
+
+    .overview { position: absolute; z-index: 16; inset: 84px 34px 82px; display: none; align-items: center; justify-content: center; border: 1px solid rgba(57,95,105,.36); border-radius: 18px; color: var(--ink); background: rgba(246,249,248,.94); backdrop-filter: blur(12px); }
+    .overview.open { display: flex; }
+    .overview-box { width: min(580px, 70%); padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: #fffefd; box-shadow: 0 16px 42px rgba(38,72,79,.14); }
+    .overview-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; font-weight: 780; }
+    .mini-grid { height: 180px; border: 1px dashed rgba(46,88,99,.35); border-radius: 10px; background: repeating-linear-gradient(90deg, transparent 0 35px, rgba(50,86,97,.10) 35px 36px), repeating-linear-gradient(transparent 0 28px, rgba(50,86,97,.10) 28px 29px); }
+    .overview-close { border: 0; border-radius: 8px; padding: 6px 9px; color: var(--brand-ink); background: #e7f0f1; cursor: pointer; }
+
+    .panel { display: flex; flex-direction: column; gap: 12px; padding: 18px; border: 1px solid rgba(190,211,210,.25); border-radius: 20px; color: #dce8e6; background: linear-gradient(160deg, rgba(35,57,64,.94), rgba(24,42,48,.96)); box-shadow: 0 18px 48px rgba(0,0,0,.18); }
+    .panel h2 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
+    .panel p { margin: 0; color: #aabdc0; font-size: 12px; line-height: 1.6; }
+    .rule { height: 1px; background: rgba(186,210,211,.17); }
+    .rule-list { display: grid; gap: 10px; }
+    .rule-item { display: grid; grid-template-columns: 22px 1fr; gap: 9px; align-items: start; }
+    .rule-item b { display: block; margin-bottom: 1px; color: #f4f8f7; font-size: 12px; }
+    .rule-item span { color: #aabdc0; font-size: 11px; line-height: 1.45; }
+    .badge { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 7px; color: #ffdfa9; background: rgba(240,164,76,.15); font: 700 10px var(--mono); }
+    .algorithm { margin-top: auto; padding: 12px; border: 1px solid rgba(238,185,111,.22); border-radius: 12px; background: rgba(240,164,76,.08); }
+    .algorithm strong { display: block; margin-bottom: 5px; color: #ffd49f; font-size: 12px; }
+    .algorithm code { display: block; color: #b8d4d6; font: 10px/1.6 var(--mono); white-space: pre-wrap; }
+
+    .toast { position: absolute; z-index: 30; left: 50%; bottom: 28px; max-width: min(560px, calc(100% - 80px)); padding: 9px 13px; border: 1px solid rgba(38,108,89,.32); border-radius: 11px; color: #175942; background: rgba(241,252,247,.96); box-shadow: 0 12px 28px rgba(30,79,64,.18); opacity: 0; transform: translate(-50%, 16px); pointer-events: none; transition: opacity .2s, transform .2s; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast b { font-weight: 800; }
+    .local-note { position: absolute; z-index: 14; display: none; padding: 7px 10px; border: 1px solid rgba(240,164,76,.36); border-radius: 9px; color: #775319; background: rgba(255,248,236,.97); box-shadow: 0 8px 20px rgba(91,65,22,.13); font-size: 11px; }
+    .local-note.show { display: block; }
+
+    @media (max-width: 1120px) { .page { width: calc(100vw - 28px); } .prototype { grid-template-columns: 1fr; } .panel { min-height: 220px; } .rule-list { grid-template-columns: repeat(3, 1fr); } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="brief">
+      <div>
+        <div class="eyebrow">TraceLab / UltraView / interaction prototype</div>
+        <h1>看板右键：只给“整板此刻需要的动作”</h1>
+        <p class="lede">在画布空白处右击，得到与单文件时域一致的轻量菜单密度；每一行直接执行，不出现二级菜单。卡片右键仍保留它自己的局部操作。</p>
+      </div>
+      <div class="decision"><b>已收敛的首发集</b><br>适应内容、复制为图片、导出 PNG 1×，加上真正的自由网格“自动排版”。另外只保留两个全局导航动作：恢复 100% 与查看整板概览。</div>
+    </header>
+
+    <section class="prototype" aria-label="UltraView 看板右键菜单交互原型">
+      <div class="board-shell" id="board-shell">
+        <div class="canvas" id="canvas" aria-label="UltraView 自由网格画布；在空白处右击打开看板菜单">
+          <div class="island board-id"><span class="board-mark"><i></i><i></i><i></i><i></i></span><span class="board-copy"><b>整车问题总览</b><small>BOARD · FREE GRID</small></span></div>
+          <div class="island global-actions"><button class="icon-button" title="显示设置">◐</button><button class="icon-button" title="演示模式">▣</button><button class="try-menu" id="try-menu">试右键菜单</button></div>
+          <div class="island nav"><button class="icon-button" id="overview-button" title="查看整板概览">⌗</button><button class="icon-button" id="zoom-out" title="缩小">−</button><span class="zoom" id="zoom-label">86%</span><button class="icon-button" id="zoom-in" title="放大">＋</button><button class="icon-button" id="fit-button" title="适应内容">⌁</button></div>
+          <div class="canvas-cue">在<strong>空白画布</strong>右击 · <kbd>⌘</kbd> + 滚轮缩放 · <kbd>Space</kbd> + 拖动平移</div>
+
+          <article class="card" style="--signal:#287f95;left:7%;top:19%;width:25%;height:25%;" data-initial="7,19" data-arranged="6,17"><div class="card-head"><i class="dot"></i>车内声压<span class="kind">时域</span></div><div class="trace"></div></article>
+          <article class="card stale" style="--signal:#ce7d38;left:43%;top:15%;width:20%;height:29%;" data-initial="43,15" data-arranged="33,17"><div class="card-head"><i class="dot"></i>发动机阶次<span class="kind">阶次</span></div><div class="trace"></div></article>
+          <article class="card" style="--signal:#7965b5;left:69%;top:21%;width:19%;height:23%;" data-initial="69,21" data-arranged="56,17"><div class="card-head"><i class="dot"></i>座椅导轨<span class="kind">频响</span></div><div class="trace"></div></article>
+          <article class="card" style="--signal:#4d9f73;left:29%;top:48%;width:24%;height:28%;" data-initial="29,48" data-arranged="78,17"><div class="card-head"><i class="dot"></i>方向盘振动<span class="kind">时频</span></div><div class="trace"></div></article>
+          <article class="card" style="--signal:#ab5870;left:59%;top:58%;width:24%;height:24%;" data-initial="59,58" data-arranged="6,50"><div class="card-head"><i class="dot"></i>前地板<span class="kind">时域</span></div><div class="trace"></div></article>
+          <article class="card" style="--signal:#4386c6;left:9%;top:56%;width:15%;height:21%;" data-initial="9,56" data-arranged="33,50"><div class="card-head"><i class="dot"></i>悬置<span class="kind">频谱</span></div><div class="trace"></div></article>
+          <article class="card" style="--signal:#2f9b9f;left:77%;top:47%;width:14%;height:29%;" data-initial="77,47" data-arranged="51,50"><div class="card-head"><i class="dot"></i>车轮<span class="kind">时域</span></div><div class="trace"></div></article>
+
+          <div class="overview" id="overview" aria-hidden="true"><div class="overview-box"><div class="overview-top"><span>整板概览 <small style="color:var(--muted);font-weight:500">· 点击空白返回画布</small></span><button class="overview-close" id="overview-close">关闭</button></div><div class="mini-grid"></div></div></div>
+
+          <div class="menu" id="board-menu" role="menu" aria-label="看板快捷菜单">
+            <div class="menu-label">当前 Board</div>
+            <button class="menu-item primary" data-action="fit"><span class="menu-icon">⌁</span><span class="menu-text">适应内容</span><small>F</small></button>
+            <button class="menu-item" data-action="reset"><span class="menu-icon">100</span><span class="menu-text">恢复 100%</span><small>⌘0</small></button>
+            <button class="menu-item" data-action="overview"><span class="menu-icon">⌗</span><span class="menu-text">查看整板概览</span><small></small></button>
+            <div class="separator"></div>
+            <button class="menu-item arrange" data-action="arrange"><span class="menu-icon">⌘</span><span class="menu-text">自动排版</span><small>⌘⇧L</small></button>
+            <button class="menu-item" data-action="undo" id="undo-action" hidden><span class="menu-icon">↶</span><span class="menu-text">撤销自动排版</span><small>⌘Z</small></button>
+            <div class="menu-note">仅自由网格 · 保留每张卡片的尺寸和比例</div>
+            <div class="separator"></div>
+            <button class="menu-item" data-action="copy"><span class="menu-icon">▧</span><span class="menu-text">复制为图片</span><small></small></button>
+            <button class="menu-item" data-action="export"><span class="menu-icon">⇩</span><span class="menu-text">导出 PNG 1×</span><small></small></button>
+          </div>
+          <div class="local-note" id="local-note">卡片右键保持“打开原 View / 临时放大 / …”等局部菜单。</div>
+          <div class="toast" id="toast" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <aside class="panel">
+        <h2>这版的边界</h2>
+        <p>菜单服务“整板镜头、整板输出、整板排布”。不放选择 View、切布局、显示偏好或卡片动作。</p>
+        <div class="rule"></div>
+        <div class="rule-list">
+          <div class="rule-item"><span class="badge">01</span><div><b>看板级适应</b><span>仅缩放并居中已放置内容，不改变任何卡片尺寸。</span></div></div>
+          <div class="rule-item"><span class="badge">02</span><div><b>自动排版是新能力</b><span>不是“整理空行”；它会重新排入紧凑的阅读顺序，但不改变比例。</span></div></div>
+          <div class="rule-item"><span class="badge">03</span><div><b>错误有退路</b><span>自动排版作为一次原子变更，菜单中显示一次撤销，快捷键也继续有效。</span></div></div>
+        </div>
+        <div class="algorithm"><strong>自动排版 · 预期算法</strong><code>current reading order
+→ keep each GridRect span
+→ first legal top-left slot
+→ one placement transaction
+→ Cmd+Z restores all cards</code></div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const canvas = document.querySelector('#canvas');
+    const menu = document.querySelector('#board-menu');
+    const toast = document.querySelector('#toast');
+    const cards = [...document.querySelectorAll('.card')];
+    const zoomLabel = document.querySelector('#zoom-label');
+    const overview = document.querySelector('#overview');
+    const localNote = document.querySelector('#local-note');
+    const undoAction = document.querySelector('#undo-action');
+    let arranged = false;
+    let toastTimer;
+
+    function notify(message) {
+      toast.innerHTML = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+    }
+
+    function closeMenu() { menu.classList.remove('open'); }
+    function showMenu(clientX, clientY) {
+      const box = canvas.getBoundingClientRect();
+      const width = 238, height = 334;
+      const left = Math.max(16, Math.min(clientX - box.left, box.width - width - 16));
+      const top = Math.max(62, Math.min(clientY - box.top, box.height - height - 18));
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+      menu.classList.add('open');
+    }
+    function setCardPosition(source) {
+      cards.forEach(card => {
+        const [left, top] = card.dataset[source].split(',');
+        card.style.left = `${left}%`;
+        card.style.top = `${top}%`;
+      });
+    }
+    function toggleOverview(show) {
+      overview.classList.toggle('open', show);
+      overview.setAttribute('aria-hidden', String(!show));
+    }
+
+    canvas.addEventListener('contextmenu', event => {
+      event.preventDefault();
+      const card = event.target.closest('.card');
+      if (card) {
+        card.classList.add('local-menu');
+        localNote.style.left = `${Math.min(event.offsetX + 12, canvas.clientWidth - 300)}px`;
+        localNote.style.top = `${Math.min(event.offsetY + 12, canvas.clientHeight - 68)}px`;
+        localNote.classList.add('show');
+        setTimeout(() => { card.classList.remove('local-menu'); localNote.classList.remove('show'); }, 2300);
+        return;
+      }
+      toggleOverview(false);
+      showMenu(event.clientX, event.clientY);
+    });
+    document.querySelector('#try-menu').addEventListener('click', () => showMenu(canvas.getBoundingClientRect().left + canvas.clientWidth * .54, canvas.getBoundingClientRect().top + 150));
+    document.querySelector('#overview-button').addEventListener('click', () => toggleOverview(true));
+    document.querySelector('#overview-close').addEventListener('click', () => toggleOverview(false));
+    overview.addEventListener('click', event => { if (event.target === overview) toggleOverview(false); });
+    document.querySelector('#fit-button').addEventListener('click', () => { zoomLabel.textContent = '86%'; notify('<b>已适应内容</b> · 已放置卡片居中填满安全区'); });
+    document.querySelector('#zoom-out').addEventListener('click', () => { zoomLabel.textContent = '76%'; });
+    document.querySelector('#zoom-in').addEventListener('click', () => { zoomLabel.textContent = '96%'; });
+
+    menu.addEventListener('click', event => {
+      const action = event.target.closest('[data-action]')?.dataset.action;
+      if (!action) return;
+      closeMenu();
+      if (action === 'fit') { zoomLabel.textContent = '86%'; notify('<b>已适应内容</b> · 仅调整看板镜头，不改变卡片大小'); }
+      if (action === 'reset') { zoomLabel.textContent = '100%'; notify('<b>已恢复 100%</b> · 保持当前画布中心'); }
+      if (action === 'overview') { toggleOverview(true); }
+      if (action === 'copy') { notify('<b>已复制整板图片</b> · 使用当前 Board 的 1× 组合图'); }
+      if (action === 'export') { notify('<b>导出 PNG 1×</b> · 原型中以状态提示代替系统存储对话框'); }
+      if (action === 'arrange') {
+        setCardPosition('arranged'); arranged = true; undoAction.hidden = false;
+        notify('<b>已自动排版 7 张卡片</b> · 保留每张卡片尺寸与比例 · 可按 ⌘Z 撤销');
+      }
+      if (action === 'undo' && arranged) {
+        setCardPosition('initial'); arranged = false; undoAction.hidden = true;
+        notify('<b>已撤销自动排版</b> · 恢复刚才的手动位置');
+      }
+    });
+    document.addEventListener('click', event => { if (!event.target.closest('#board-menu') && !event.target.closest('#try-menu')) closeMenu(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMenu(); toggleOverview(false); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z' && arranged) { setCardPosition('initial'); arranged = false; undoAction.hidden = true; notify('<b>已撤销自动排版</b> · 恢复刚才的手动位置'); } });
+  </script>
+</body>
+</html>
