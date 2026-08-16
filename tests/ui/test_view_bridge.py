@@ -3,6 +3,15 @@ from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 from mf4_analyzer.ui.view_state import ViewState
 
 
+_REMARK = {
+    "source": ["f1", "rpm"],
+    "x": 1.25,
+    "y": 3.5,
+    "label_dx": 0.08,
+    "label_dy": 0.4,
+}
+
+
 class _Nav:
     def __init__(self):
         self._checked = [("f1", "rpm", "#111111")]
@@ -53,6 +62,40 @@ class _Canvas:
         self.applied_y = None
         self.cursor_visible = None
         self.dual_cursor = None
+        self._remarks_snapshot = []
+        self._cursor_placement_snapshot = None
+        self.restored_remarks = "<unset>"
+        self.restored_placement = "<unset>"
+
+    def get_visible_xlim(self):
+        return self._xlim
+
+    def restore_visible_xlim(self, xlim):
+        self.applied_x = xlim
+
+    def get_visible_ylims(self):
+        return dict(self._ylims)
+
+    def restore_visible_ylims(self, ylims):
+        self.applied_y = dict(ylims)
+
+    def set_cursor_visible(self, visible):
+        self.cursor_visible = visible
+
+    def set_dual_cursor_mode(self, enabled):
+        self.dual_cursor = enabled
+
+    def snapshot_remarks(self):
+        return list(self._remarks_snapshot)
+
+    def snapshot_cursor_placement(self):
+        return self._cursor_placement_snapshot
+
+    def restore_remarks(self, payload):
+        self.restored_remarks = payload
+
+    def restore_cursor_placement(self, placement):
+        self.restored_placement = placement
 
     def get_visible_xlim(self):
         return self._xlim
@@ -395,6 +438,23 @@ def test_restore_axes_calls_canvas_restore_methods():
     assert win.chart_stack.canvas_time.applied_y == {"f1::rpm": (-2.0, 2.0)}
 
 
+def test_apply_view_does_not_restore_remarks_or_cursor_placement():
+    win = _Window()
+    state = ViewState(
+        name="v",
+        tab_color="#000000",
+        cursor_mode="dual",
+        remarks=[dict(_REMARK)],
+        cursor_placement={"ax": 1.0, "bx": 2.0},
+    )
+
+    view_bridge.apply_view(state, win)
+
+    assert win.chart_stack.canvas_time.restored_remarks == "<unset>"
+    assert win.chart_stack.canvas_time.restored_placement == "<unset>"
+    assert win.chart_stack._cursor_mode == "dual"
+
+
 def test_restore_axes_passes_none_xlim_through_canvas_contract():
     win = _Window()
     state = ViewState(name="v", tab_color="#000000", xlim=None, ylims={})
@@ -424,3 +484,86 @@ def test_capture_ranges_preserves_hidden_channel_ylim():
         '["f1","[sample] rpm"]': (-1.0, 1.0),
         '["f1","[sample] torque"]': (-2.0, 2.0),
     }
+
+
+def test_capture_keeps_hidden_channel_remarks_when_live_snapshot_empty():
+    win = _Window()
+    previous = dict(_REMARK)
+    previous["note"] = "keep-hidden"
+    state = ViewState(
+        name="v",
+        tab_color="#000000",
+        attached_file_ids=["f1"],
+        checked=[("f1", "rpm")],
+        hidden_channels=[("f1", "rpm")],
+        remarks=[previous],
+    )
+    win.chart_stack.canvas_time._remarks_snapshot = []
+
+    view_bridge.capture_controls_into(state, win)
+
+    assert state.remarks == [
+        {
+            "source": ["f1", "rpm"],
+            "x": 1.25,
+            "y": 3.5,
+            "label_dx": 0.08,
+            "label_dy": 0.4,
+            "note": "keep-hidden",
+        }
+    ]
+
+
+def test_capture_drops_visible_channel_remark_when_live_snapshot_empty():
+    win = _Window()
+    win.navigator._hidden = []
+    state = ViewState(
+        name="v",
+        tab_color="#000000",
+        attached_file_ids=["f1"],
+        checked=[("f1", "rpm")],
+        hidden_channels=[],
+        remarks=[dict(_REMARK)],
+    )
+    win.chart_stack.canvas_time._remarks_snapshot = []
+
+    view_bridge.capture_controls_into(state, win)
+
+    assert state.remarks == []
+
+
+def test_capture_dual_mode_stores_placement_single_and_off_store_none():
+    win = _Window()
+    canvas = win.chart_stack.canvas_time
+    canvas._cursor_placement_snapshot = {"ax": 1.0, "bx": 2.5}
+    state = ViewState(name="v", tab_color="#000000", cursor_placement={"ax": 9.0})
+
+    win.chart_stack._cursor_mode = "dual"
+    view_bridge.capture_controls_into(state, win)
+    assert state.cursor_mode == "dual"
+    assert state.cursor_placement == {"ax": 1.0, "bx": 2.5}
+
+    win.chart_stack._cursor_mode = "single"
+    view_bridge.capture_controls_into(state, win)
+    assert state.cursor_mode == "single"
+    assert state.cursor_placement is None
+
+    win.chart_stack._cursor_mode = "off"
+    view_bridge.capture_controls_into(state, win)
+    assert state.cursor_mode == "off"
+    assert state.cursor_placement is None
+
+
+def test_capture_view_picks_up_canvas_remarks_and_dual_placement():
+    win = _Window()
+    win.chart_stack.canvas_time._remarks_snapshot = [dict(_REMARK)]
+    win.chart_stack._cursor_mode = "dual"
+    win.chart_stack.canvas_time._cursor_placement_snapshot = {
+        "ax": 0.5,
+        "bx": 1.5,
+    }
+
+    state = view_bridge.capture_view(win)
+
+    assert state.remarks == [dict(_REMARK)]
+    assert state.cursor_placement == {"ax": 0.5, "bx": 1.5}

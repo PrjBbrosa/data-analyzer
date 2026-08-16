@@ -301,6 +301,47 @@ def test_remap_drops_frf_time_view_signature_when_either_endpoint_is_missing():
     assert "frf_source_signature" not in out["axis_opts"]
 
 
+def test_remap_rewrites_remarks_fid_drops_missing_and_keeps_cursor_placement():
+    view = {
+        "name": "V",
+        "tab_color": "#fff",
+        "checked": [["f0", "rpm"], ["f1", "spd"]],
+        "remarks": [
+            {
+                "source": ["f0", "rpm"],
+                "x": 1.25,
+                "y": 3.5,
+                "label_dx": 0.08,
+                "label_dy": 0.4,
+                "note": "keep",
+            },
+            {
+                "source": ["f1", "spd"],
+                "x": 2.0,
+                "y": 4.0,
+                "label_dx": 0.0,
+                "label_dy": 0.1,
+            },
+        ],
+        "cursor_placement": {"ax": 1.0, "bx": 2.5, "placing": True},
+        "cursor_mode": "dual",
+    }
+
+    out = pio.remap_view_fids([view], {"f0": "f9"})[0]
+
+    assert out["remarks"] == [
+        {
+            "source": ["f9", "rpm"],
+            "x": 1.25,
+            "y": 3.5,
+            "label_dx": 0.08,
+            "label_dy": 0.4,
+            "note": "keep",
+        }
+    ]
+    assert out["cursor_placement"] == {"ax": 1.0, "bx": 2.5, "placing": True}
+
+
 def test_ultraview_field_is_last_and_positional_construction_unchanged():
     import dataclasses
 

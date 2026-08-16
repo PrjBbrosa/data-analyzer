@@ -2,18 +2,101 @@
 
 from __future__ import annotations
 
+import json
+from math import isfinite
+
 import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
+from mf4_analyzer.ui.view_overlay_state import raw_channel_name
+
 from . import _binding  # noqa: F401
 from ._backref import _CanvasBackref
+from ._shared import _view_state_channel_key
 from .remarks import (
     RemarkArtist,
     RemarkPoint,
     _annotation_pen_cursor,
     format_remark_label,
+    remark_label_offset,
+    remark_qt_alive,
 )
+
+
+def _finite_float(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(number):
+        return None
+    return number
+
+
+def _source_tuple(raw):
+    """Return a ChannelKey-shaped ``(fid, channel)`` tuple, or None."""
+    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+        fid, channel = raw[0], raw[1]
+    elif isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not (isinstance(parsed, list) and len(parsed) == 2):
+            return None
+        fid, channel = parsed[0], parsed[1]
+    else:
+        return None
+    if channel is None:
+        return None
+    channel_name = str(channel)
+    if not channel_name:
+        return None
+    channel_name = raw_channel_name(channel_name)
+    if fid is None:
+        return (None, channel_name)
+    return (str(fid), channel_name)
+
+
+def _json_source_list(source):
+    parsed = _source_tuple(source)
+    if parsed is None:
+        return None
+    fid, channel = parsed
+    return [fid, channel]
+
+
+def _snap_channel_xy(tf, sf, x):
+    """Snap ``x`` to the nearest sample on this channel; y comes from that sample."""
+    try:
+        tf_arr = np.asarray(tf, dtype=float).reshape(-1)
+        sf_arr = np.asarray(sf, dtype=float).reshape(-1)
+        target = float(x)
+    except (TypeError, ValueError):
+        return None
+    if tf_arr.size == 0 or sf_arr.size == 0 or not isfinite(target):
+        return None
+    n = tf_arr.size
+    finite = np.isfinite(tf_arr)
+    if sf_arr.size < n:
+        y_ok = np.zeros(n, dtype=bool)
+        y_ok[:sf_arr.size] = np.isfinite(sf_arr)
+        finite = finite & y_ok
+    else:
+        finite = finite & np.isfinite(sf_arr[:n])
+    if not finite.any():
+        return None
+    idxs = np.flatnonzero(finite)
+    local = int(np.argmin(np.abs(tf_arr[idxs] - target)))
+    idx = int(idxs[local])
+    if idx >= sf_arr.size:
+        return None
+    sx = float(tf_arr[idx])
+    sy = float(sf_arr[idx])
+    if not (isfinite(sx) and isfinite(sy)):
+        return None
+    return sx, sy
 
 
 class AnnotationManager(_CanvasBackref):
@@ -44,6 +127,8 @@ class AnnotationManager(_CanvasBackref):
         "_remove_remark_at",
         "_remove_remark_by_index",
         "clear_remarks",
+        "snapshot_remarks",
+        "restore_remarks",
     })
 
     def __init__(self, canvas):
@@ -87,7 +172,7 @@ class AnnotationManager(_CanvasBackref):
         return self._axis_handle_at_scene_pos(scene_pos)
 
     def _nearest_data_point(self, viewport_pos):
-        """Return (ch_name, x, y, color, unit) nearest to viewport_pos."""
+        """Return (ch_name, x, y, color, unit, ck) nearest to viewport_pos."""
         x_data = self._cursor_data_x_from_viewport_pos(viewport_pos)
         if x_data is None or not self.channel_data:
             return None
@@ -178,16 +263,19 @@ class AnnotationManager(_CanvasBackref):
                             float(sf_arr[src_idx]),
                             color,
                             unit,
+                            ck,
                         )
                 except Exception:
                     if best is None:
                         idx = int(np.argmin(np.abs(tf - x_data)))
-                        best = (ch, float(tf[idx]), float(sf[idx]), color, unit)
+                        best = (
+                            ch, float(tf[idx]), float(sf[idx]), color, unit, ck,
+                        )
             else:
                 if best is None:
                     idx = int(np.argmin(np.abs(tf - x_data)))
                     sx, sy = float(tf[idx]), float(sf[idx])
-                    best = (ch, sx, sy, color, unit)
+                    best = (ch, sx, sy, color, unit, ck)
         return best
 
     def _add_remark(self, viewport_pos):
@@ -195,13 +283,22 @@ class AnnotationManager(_CanvasBackref):
         found = self._nearest_data_point(viewport_pos)
         if found is None:
             return
-        if len(found) >= 5:
-            ch, dx, dy, color, unit = found[:5]
-        else:
-            ch, dx, dy, color = found
-            unit = ""
+        ch, dx, dy, color = found[0], found[1], found[2], found[3]
+        unit = found[4] if len(found) >= 5 else ""
+        ck = found[5] if len(found) >= 6 else None
+        if isinstance(ck, (list, tuple)) and len(ck) == 2:
+            ck = _view_state_channel_key(ck[0], ck[1])
+        if ck is None:
+            ck = self._channel_lines.resolve_unique(ch)
+        lookup_ck = ck
+        if lookup_ck is None:
+            lookup_ck = self._channel_lines.composite_key_for(ch)
         try:
-            ax = self._channel_lines.get(ch, (None, None))[0]
+            ax = None
+            if lookup_ck is not None:
+                pair = self._channel_lines.get(lookup_ck)
+                if pair:
+                    ax = pair[0]
             if ax is None:
                 ax = self._remark_target_axis_handle(viewport_pos)
             if ax is None:
@@ -222,6 +319,9 @@ class AnnotationManager(_CanvasBackref):
             unit_y=unit or "",
         )
         remark = self._artist.add(point)
+        source = _source_tuple(ck)
+        if source is not None:
+            remark["source"] = source
         self.remarks.append(remark)
         self._bump_markup_revision()
 
@@ -377,6 +477,116 @@ class AnnotationManager(_CanvasBackref):
             return
         self._artist.clear(self.remarks)
         self._bump_markup_revision()
+
+    def snapshot_remarks(self):
+        """Return Qt-free D2 dicts for live, identity-bearing remarks."""
+        payload = []
+        for remark in list(self.remarks):
+            if not isinstance(remark, dict):
+                continue
+            if not remark_qt_alive(remark.get("vb")):
+                continue
+            if not remark_qt_alive(remark.get("text")):
+                continue
+            source = _json_source_list(remark.get("source"))
+            if source is None:
+                continue
+            x = _finite_float(remark.get("data_x"))
+            y = _finite_float(remark.get("data_y"))
+            if x is None or y is None:
+                continue
+            offset = remark_label_offset(remark)
+            if offset is None:
+                continue
+            payload.append({
+                "source": source,
+                "x": x,
+                "y": y,
+                "label_dx": float(offset[0]),
+                "label_dy": float(offset[1]),
+            })
+        return payload
+
+    def restore_remarks(self, payload):
+        """Clear live remarks and rebind payload items by composite channel key."""
+        self.clear_remarks()
+        if not isinstance(payload, (list, tuple)):
+            return
+        for raw in payload:
+            self._restore_one_remark(raw)
+
+    def _line_binding_for_source(self, source):
+        """Return ``(axis_line_pair, channel_data_row)`` for a remark source.
+
+        Persisted identity is ``(fid, raw channel)``. Live plot rows are
+        keyed by ``(fid, [{short}] channel)``, so exact composite lookup is
+        tried first and a fid-scoped display-name match is the fallback.
+        """
+        parsed = _source_tuple(source)
+        if parsed is None or parsed[0] is None:
+            return None, None
+        fid, channel = parsed
+        lines = self._channel_lines
+        data = self.channel_data
+        ck = _view_state_channel_key(fid, channel)
+        pair = lines.get(ck) if hasattr(lines, "get") else None
+        row = data.get(ck) if hasattr(data, "get") else None
+        if pair and row:
+            return pair, row
+        composite_items = getattr(lines, "composite_items", None)
+        if not callable(composite_items):
+            return None, None
+        wanted = (fid, channel)
+        for item_ck, _display_name, item_pair in composite_items():
+            if _source_tuple(item_ck) != wanted:
+                continue
+            item_row = data.get(item_ck) if hasattr(data, "get") else None
+            if item_pair and item_row:
+                return item_pair, item_row
+        return None, None
+
+    def _restore_one_remark(self, raw):
+        if not isinstance(raw, dict):
+            return
+        pair, row = self._line_binding_for_source(raw.get("source"))
+        if not pair or not row:
+            return
+        try:
+            ax = pair[0]
+        except (TypeError, IndexError):
+            return
+        vb = ax.view_box if ax is not None else None
+        if vb is None:
+            return
+        try:
+            tf, sf, color, unit = row[0], row[1], row[2], row[3]
+        except (TypeError, IndexError, ValueError):
+            return
+        x = _finite_float(raw.get("x"))
+        if x is None:
+            return
+        snapped = _snap_channel_xy(tf, sf, x)
+        if snapped is None:
+            return
+        sx, sy = snapped
+        source = _source_tuple(raw.get("source"))
+        point = RemarkPoint(
+            vb=vb,
+            x=sx,
+            y=sy,
+            color=color,
+            unit_x="s",
+            unit_y=unit or "",
+            label_dx=_finite_float(raw.get("label_dx")),
+            label_dy=_finite_float(raw.get("label_dy")),
+        )
+        try:
+            remark = self._artist.add(point)
+        except Exception:
+            return
+        if source is not None:
+            remark["source"] = source
+        self.remarks.append(remark)
 
 
 __all__ = ["AnnotationManager", "_annotation_pen_cursor"]

@@ -19,6 +19,34 @@ from mf4_analyzer.ui.plot_helpers import (
 )
 
 
+def _finite_float(value):
+    """Return a Python float when ``value`` is a finite number, else None."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def _parse_placement_payload(payload):
+    """Return ``(ax, bx)`` from a D3 dict, or None when the payload is invalid."""
+    if not isinstance(payload, dict) or "ax" not in payload:
+        return None
+    ax = _finite_float(payload.get("ax"))
+    if ax is None:
+        return None
+    if payload.get("bx") is None:
+        return ax, None
+    bx = _finite_float(payload.get("bx"))
+    if bx is None:
+        return None
+    return ax, bx
+
+
 class CursorController(_CanvasBackref):
     """Single/dual cursor and cursor HTML emission.
 
@@ -68,6 +96,8 @@ class CursorController(_CanvasBackref):
         "_emit_single_cursor_html",
         "_emit_dual_cursor_html",
         "_cursor_x_to_pixmap_x",
+        "snapshot_placement",
+        "restore_placement",
     })
 
     def __init__(self, canvas):
@@ -174,16 +204,23 @@ class CursorController(_CanvasBackref):
             self.draw_idle()
 
     def set_dual_cursor_mode(self, en):
-        """Toggle dual-cursor mode."""
+        """Toggle dual-cursor mode.
+
+        Turning dual off hides A/B lines and clears the pill, but keeps
+        the data-space placement. ``reset_cursor_state()`` is the explicit
+        wipe; ``snapshot_placement()`` still returns None while not dual.
+        """
         self._dual = bool(en)
         if not en:
-            self._ax = None
-            self._bx = None
-            self._placing = "A"
             self._hide_cursor_items(self._cursor_a_items)
             self._hide_cursor_items(self._cursor_b_items)
             self._hide_dual_cursor_extreme_markers()
             self.dual_cursor_info.emit("")
+            self.draw_idle()
+            return
+        if _finite_float(self._ax) is not None:
+            self._redraw_dual_placement_items()
+            self._emit_dual_cursor_html()
             self.draw_idle()
 
     def reset_cursor_state(self):
@@ -197,6 +234,52 @@ class CursorController(_CanvasBackref):
         self._hide_dual_cursor_extreme_markers()
         self.dual_cursor_info.emit("")
         self.draw_idle()
+
+    def snapshot_placement(self):
+        """Return dual-cursor data-space placement, or None if not persistable.
+
+        Only dual mode with a finite A position is stored. Single/off/hover
+        must not persist. ``bx`` may be None when only A has been placed.
+        """
+        if not self._dual:
+            return None
+        ax = _finite_float(self._ax)
+        if ax is None:
+            return None
+        return {"ax": ax, "bx": _finite_float(self._bx)}
+
+    def restore_placement(self, payload):
+        """Write dual-cursor placement and redraw when dual mode is already on.
+
+        None or invalid payloads are a no-op and must not turn dual off —
+        ``cursor_mode`` is owned by ViewState. ``clear()`` still does not
+        reset ``_ax``/``_bx``; this method overwrites them only on valid input.
+        """
+        parsed = _parse_placement_payload(payload)
+        if parsed is None:
+            return
+        self._ax, self._bx = parsed
+        self._placing = "A" if self._bx is not None else "B"
+        if not self._dual:
+            return
+        self._redraw_dual_placement_items()
+        self._emit_dual_cursor_html()
+        self.draw_idle()
+
+    def _redraw_dual_placement_items(self):
+        """Position A/B InfiniteLines from current ``_ax``/``_bx``."""
+        if self._ax is not None:
+            a_items = self._ensure_cursor_items(
+                "_cursor_a_items", color="#2563eb", width=1.1
+            )
+            self._set_cursor_items_pos(a_items, self._ax)
+        if self._bx is not None:
+            b_items = self._ensure_cursor_items(
+                "_cursor_b_items", color="#dc2626", width=1.1
+            )
+            self._set_cursor_items_pos(b_items, self._bx)
+        else:
+            self._hide_cursor_items(self._cursor_b_items)
 
     def draw_idle(self):
         """No-op equivalent of matplotlib FigureCanvas.draw_idle."""

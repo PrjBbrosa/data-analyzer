@@ -69,6 +69,8 @@ def test_viewstate_defaults_are_empty():
     assert st.ylims == {}
     assert st.overlay_primary is None
     assert st.axis_opts == {}
+    assert st.remarks == []
+    assert st.cursor_placement is None
     assert isinstance(st.view_id, str) and st.view_id
 
 
@@ -138,3 +140,56 @@ def test_remap_view_fids_preserves_explicit_empty_attachments():
     got = remap_view_fids(views, {"old-a": "f0"})
 
     assert got[0]["attached_file_ids"] == []
+
+
+def test_viewstate_from_dict_legacy_payload_has_empty_overlay_fields():
+    st = ViewState.from_dict({"name": "Legacy", "tab_color": "#2d7ff9"})
+
+    assert st.remarks == []
+    assert st.cursor_placement is None
+
+
+def test_viewstate_remarks_and_dual_placement_roundtrip_through_dict():
+    st = ViewState(
+        name="View 1",
+        tab_color="#2d7ff9",
+        cursor_mode="dual",
+        remarks=[
+            {
+                "source": ["f1", "rpm"],
+                "x": 1.25,
+                "y": 3.5,
+                "label_dx": 0.08,
+                "label_dy": 0.4,
+                "note": "keep",
+            }
+        ],
+        cursor_placement={"ax": 1.0, "bx": 2.5, "placing": True},
+    )
+
+    payload = json.loads(json.dumps(st.to_dict()))
+    again = ViewState.from_dict(payload)
+
+    assert again.remarks == [
+        {
+            "source": ["f1", "rpm"],
+            "x": 1.25,
+            "y": 3.5,
+            "label_dx": 0.08,
+            "label_dy": 0.4,
+            "note": "keep",
+        }
+    ]
+    assert again.cursor_placement == {"ax": 1.0, "bx": 2.5}
+    assert "placing" not in (payload["cursor_placement"] or {})
+
+
+def test_viewstate_to_dict_drops_placement_when_cursor_mode_is_not_dual():
+    st = ViewState(
+        name="View 1",
+        tab_color="#2d7ff9",
+        cursor_mode="single",
+        cursor_placement={"ax": 1.0, "bx": 2.0},
+    )
+
+    assert st.to_dict()["cursor_placement"] is None

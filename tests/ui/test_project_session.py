@@ -36,6 +36,26 @@ def _write_frf_csv(path, n=2_000):
             w.writerow([i / 1_000.0, float(i % 13), float((i + 3) % 17)])
 
 
+def _viewport_point_for_data(canvas, handle, x, y=None):
+    from PyQt5.QtCore import QPointF
+
+    vb = handle.view_box
+    assert vb is not None
+    if y is None:
+        _x_range, y_range = vb.viewRange()
+        y = (float(y_range[0]) + float(y_range[1])) / 2.0
+    scene_pos = vb.mapViewToScene(QPointF(float(x), float(y)))
+    return canvas._glw.mapFromScene(scene_pos)
+
+
+def _add_remark_on_first_axis(canvas, x, y=None):
+    assert canvas.axes_list, "expected a plotted axis before adding a remark"
+    handle = canvas.axes_list[0]
+    point = _viewport_point_for_data(canvas, handle, x, y)
+    canvas._annotations._add_remark(point)
+    assert canvas.remark_count() >= 1
+
+
 def _drain_analysis_restore(qapp, win, rounds=80):
     """Pump the one-View-per-tick restore queue until the bar is released."""
     for _ in range(rounds):
@@ -1049,3 +1069,132 @@ def test_close_all_cancel_keeps_ultraview_board(qapp, qtbot, monkeypatch):
     assert "f1" in mw.files
     assert uv.board.name == "会话保留"
     assert UltraViewRef("time", view_id) in membership_set(uv.board)
+
+
+def test_project_roundtrip_restores_remarks_and_dual_cursor(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=40)
+    proj = tmp_path / "overlay.tlproj"
+
+    mw = MainWindow()
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+
+    _add_remark_on_first_axis(mw.canvas_time, 0.10, 10.0)
+    live = mw.canvas_time.snapshot_remarks()
+    assert live
+    saved_x = live[0]["x"]
+    saved_channel = live[0]["source"][1]
+    assert live[0]["source"][0] == fid
+    assert saved_channel == "rpm"
+
+    mw.chart_stack.set_cursor_mode("dual")
+    qapp.processEvents()
+    mw.canvas_time.restore_cursor_placement({"ax": 0.10, "bx": 0.20})
+    qapp.processEvents()
+    mw._capture_focused_view()
+    state = mw.view_manager.get(0)
+    assert state.cursor_mode == "dual"
+    assert state.cursor_placement["ax"] == pytest.approx(0.10)
+    assert state.cursor_placement["bx"] == pytest.approx(0.20)
+    assert state.remarks
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    mw2.resize(1200, 800)
+    mw2.show()
+    last_info = []
+    last_rows = []
+    mw2.canvas_time.dual_cursor_info.connect(last_info.append)
+    mw2.canvas_time.dual_cursor_rows.connect(last_rows.append)
+    mw2.open_project(proj)
+    qapp.processEvents()
+
+    restored_fid = next(iter(mw2.files))
+    restored = mw2.view_manager.get(0)
+    assert restored.cursor_mode == "dual"
+    assert restored.cursor_placement["ax"] == pytest.approx(0.10)
+    assert restored.cursor_placement["bx"] == pytest.approx(0.20)
+    assert restored.remarks[0]["source"] == [restored_fid, saved_channel]
+    assert restored.remarks[0]["x"] == pytest.approx(saved_x)
+
+    assert mw2.canvas_time.remark_count() == 1
+    rebound = mw2.canvas_time.snapshot_remarks()
+    assert rebound[0]["source"] == [restored_fid, saved_channel]
+    assert rebound[0]["x"] == pytest.approx(saved_x)
+
+    cursor = mw2.canvas_time._cursor
+    assert cursor._ax == pytest.approx(0.10)
+    assert cursor._bx == pytest.approx(0.20)
+    assert cursor._cursor_a_items
+    assert cursor._cursor_b_items
+    assert all(item.isVisible() for item in cursor._cursor_a_items)
+    assert all(item.isVisible() for item in cursor._cursor_b_items)
+
+    assert mw2.chart_stack.cursor_pill_visible()
+    emitted_rows = last_rows[-1] if last_rows else []
+    visible_names = [ch for ch, _values in mw2.canvas_time.channel_data.items()]
+    assert len(emitted_rows) == len(visible_names)
+    blob = (last_info[-1] if last_info else "") + " ".join(
+        str(row[0]) for row in emitted_rows
+    )
+    for name in visible_names:
+        assert name in blob
+
+
+def test_view_switch_does_not_leak_remarks_across_time_views(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=40)
+
+    mw = MainWindow()
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+
+    _add_remark_on_first_axis(mw.canvas_time, 0.10, 10.0)
+    mw._capture_focused_view()
+    assert mw.view_manager.get(0).remarks
+    assert mw.canvas_time.remark_count() == 1
+
+    mw._on_view_new()
+    qapp.processEvents()
+    assert mw.view_manager.active == 1
+    mw._attach_files_to_focused_view([fid])
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+    assert mw.canvas_time.remark_count() == 0
+    assert mw.view_manager.get(1).remarks == []
+
+    mw._switch_view(0)
+    qapp.processEvents()
+    assert mw.canvas_time.remark_count() == 1
+    assert mw.view_manager.get(0).remarks
+    assert mw.view_manager.get(1).remarks == []
+
+    mw._switch_view(1)
+    qapp.processEvents()
+    assert mw.canvas_time.remark_count() == 0
+    assert mw.view_manager.get(1).remarks == []
+
+    mw._switch_view(0)
+    qapp.processEvents()
+    assert mw.canvas_time.remark_count() == 1
+    snap = mw.canvas_time.snapshot_remarks()
+    assert snap[0]["source"][0] == fid
+    assert snap[0]["source"][1] == "rpm"

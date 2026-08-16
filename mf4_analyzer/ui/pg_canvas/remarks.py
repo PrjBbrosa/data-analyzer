@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+from math import isfinite
 
+from PyQt5 import sip
 from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QApplication
@@ -36,6 +38,9 @@ class RemarkPoint:
     display_x: float | None = None
     z: float | None = None
     unit_z: str = ""
+    # Data-space label offset from the anchor. None → ViewBox 6%/8% heuristic.
+    label_dx: float | None = None
+    label_dy: float | None = None
 
 
 def _annotation_pen_cursor():
@@ -66,6 +71,49 @@ def _annotation_pen_cursor():
 def _value_with_unit(value: float, unit: str) -> str:
     suffix = f" {escape(str(unit))}" if unit else ""
     return f"{float(value):.4g}{suffix}"
+
+
+def remark_qt_alive(item) -> bool:
+    """Return False when ``item`` is None or a sip-deleted Qt wrapper."""
+    if item is None:
+        return False
+    try:
+        return not sip.isdeleted(item)
+    except TypeError:
+        return True
+    except RuntimeError:
+        return False
+
+
+def resolved_label_offset(explicit, heuristic: float) -> float:
+    """Use ``explicit`` when it is a finite number; otherwise ``heuristic``."""
+    if explicit is None:
+        return float(heuristic)
+    try:
+        value = float(explicit)
+    except (TypeError, ValueError):
+        return float(heuristic)
+    if not isfinite(value):
+        return float(heuristic)
+    return value
+
+
+def remark_label_offset(remark) -> tuple[float, float] | None:
+    """Return data-space ``(label_dx, label_dy)``, or None if unreadable."""
+    text = remark.get("text") if isinstance(remark, dict) else None
+    if not remark_qt_alive(text):
+        return None
+    try:
+        data_x = float(remark["data_x"])
+        data_y = float(remark["data_y"])
+        pos = text.pos()
+        dx = float(pos.x()) - data_x
+        dy = float(pos.y()) - data_y
+    except (KeyError, TypeError, ValueError, RuntimeError, AttributeError):
+        return None
+    if not (isfinite(dx) and isfinite(dy)):
+        return None
+    return dx, dy
 
 
 def format_remark_label(point: RemarkPoint) -> str:
@@ -112,10 +160,12 @@ class RemarkArtist:
         vb.addItem(dot)
         try:
             vrange = vb.viewRange()
-            ox = (vrange[0][1] - vrange[0][0]) * 0.06
-            oy = (vrange[1][1] - vrange[1][0]) * 0.08
+            heuristic_ox = (vrange[0][1] - vrange[0][0]) * 0.06
+            heuristic_oy = (vrange[1][1] - vrange[1][0]) * 0.08
         except Exception:
-            ox, oy = 0.0, 0.0
+            heuristic_ox, heuristic_oy = 0.0, 0.0
+        ox = resolved_label_offset(point.label_dx, heuristic_ox)
+        oy = resolved_label_offset(point.label_dy, heuristic_oy)
         lx, ly = point.x + ox, point.y + oy
         leader = pg.PlotDataItem(
             x=[point.x, lx],
@@ -373,5 +423,8 @@ __all__ = [
     "_annotation_pen_cursor",
     "format_remark_label",
     "remark_at_viewport_pos",
+    "remark_label_offset",
+    "remark_qt_alive",
+    "resolved_label_offset",
     "viewport_pos_to_scene",
 ]

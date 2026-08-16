@@ -14,6 +14,7 @@ from pathlib import Path
 import tempfile
 
 from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
+from .view_overlay_state import remap_remarks
 
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = {1, 2}
@@ -327,6 +328,9 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
             axis["x_axis"] = mapped_spec.to_axis_opts()
         if axis or "axis_opts" in view:
             v["axis_opts"] = axis
+
+        v["remarks"] = remap_remarks(view.get("remarks"), fid_map)
+        # cursor_placement has no fid; keep the payload as copied above.
 
         out.append(v)
     return out

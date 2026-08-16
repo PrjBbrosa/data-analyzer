@@ -12,6 +12,11 @@ import json
 from typing import Any, Iterable
 
 from .time_xaxis import CustomXAxisSpec, CHANNEL_MODE, EXACT_SOURCE
+from .view_overlay_state import (
+    merge_remarks_for_capture,
+    normalize_cursor_placement,
+    normalize_remarks,
+)
 from .view_state import ChannelKey, ViewState
 
 
@@ -70,6 +75,13 @@ def capture_view(window) -> ViewState:
     ]
     colors = _capture_colors(navigator, checked_rows)
 
+    cursor_mode = chart_stack.cursor_mode()
+    snapshot_remarks = getattr(canvas, "snapshot_remarks", None)
+    live_remarks = snapshot_remarks() if callable(snapshot_remarks) else []
+    snapshot_placement = getattr(canvas, "snapshot_cursor_placement", None)
+    live_placement = (
+        snapshot_placement() if callable(snapshot_placement) else None
+    )
     return ViewState(
         name="",
         tab_color="",
@@ -78,11 +90,15 @@ def capture_view(window) -> ViewState:
         hidden_channels=hidden_channels,
         colors=colors,
         plot_mode=chart_stack.plot_mode(),
-        cursor_mode=chart_stack.cursor_mode(),
+        cursor_mode=cursor_mode,
         xlim=canvas.get_visible_xlim(),
         ylims=canvas.get_visible_ylims(),
         overlay_primary=getattr(window, "_overlay_primary", None),
         axis_opts=capture_axis_opts(window),
+        remarks=normalize_remarks(live_remarks),
+        cursor_placement=normalize_cursor_placement(
+            live_placement, cursor_mode=cursor_mode
+        ),
     )
 
 
@@ -108,6 +124,29 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
         state.cursor_mode = cursor_for_canvas(target)
     else:
         state.cursor_mode = chart_stack.cursor_mode()
+
+    previous_remarks = state.remarks
+    snapshot_remarks = getattr(target, "snapshot_remarks", None)
+    live_remarks = snapshot_remarks() if callable(snapshot_remarks) else []
+    state.remarks = normalize_remarks(
+        merge_remarks_for_capture(
+            live_remarks,
+            previous_remarks,
+            attached_file_ids=state.attached_file_ids,
+            checked=state.checked,
+            hidden_channels=state.hidden_channels,
+        )
+    )
+    if state.cursor_mode == "dual":
+        snapshot_placement = getattr(target, "snapshot_cursor_placement", None)
+        live_placement = (
+            snapshot_placement() if callable(snapshot_placement) else None
+        )
+        state.cursor_placement = normalize_cursor_placement(
+            live_placement, cursor_mode="dual"
+        )
+    else:
+        state.cursor_placement = None
 
 
 def capture_canvas_ranges_into(state: ViewState, canvas) -> None:

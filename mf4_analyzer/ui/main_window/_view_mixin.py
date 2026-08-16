@@ -542,6 +542,15 @@ class ViewMixin:
                 int(tick_opts.get('y', default_y)),
             )
             canvas.settle_view_restore()
+            # Overlay projection after final geometry (spec D7). Must run
+            # while `_applying_view` is still True so capture cannot mix
+            # the outgoing canvas with the incoming View.
+            restore_remarks = getattr(canvas, "restore_remarks", None)
+            if callable(restore_remarks):
+                restore_remarks(state.remarks)
+            restore_placement = getattr(canvas, "restore_cursor_placement", None)
+            if callable(restore_placement):
+                restore_placement(state.cursor_placement)
         finally:
             self._applying_view = old_applying_view
             # F8: secondary-pane restore must not project time controls while

@@ -16,6 +16,8 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
+from .view_overlay_state import normalize_cursor_placement, normalize_remarks
+
 # Default per-manager View cap. The real cap is per ViewManager instance
 # (``max_views``); this is the shared product default for every section —
 # time-domain workspace and the four analysis managers all use 12. Narrow
@@ -53,6 +55,8 @@ class ViewState:
     # Appended to preserve the positional constructor contract of older
     # callers while giving persisted TimeDomain views a stable identity.
     view_id: str = field(default_factory=lambda: str(uuid4()))
+    remarks: list = field(default_factory=list)
+    cursor_placement: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -66,6 +70,10 @@ class ViewState:
         data["ylims"] = {key: list(value) for key, value in self.ylims.items()}
         data["overlay_primary"] = (
             list(self.overlay_primary) if self.overlay_primary is not None else None
+        )
+        data["remarks"] = normalize_remarks(self.remarks)
+        data["cursor_placement"] = normalize_cursor_placement(
+            self.cursor_placement, cursor_mode=self.cursor_mode
         )
         return data
 
@@ -97,6 +105,11 @@ class ViewState:
             },
             overlay_primary=_coerce_optional_channel_key(data.get("overlay_primary")),
             axis_opts=data.get("axis_opts", {}),
+            remarks=normalize_remarks(data.get("remarks")),
+            cursor_placement=normalize_cursor_placement(
+                data.get("cursor_placement"),
+                cursor_mode=data.get("cursor_mode", "off"),
+            ),
         )
 
 

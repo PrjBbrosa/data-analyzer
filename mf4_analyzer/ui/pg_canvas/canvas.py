@@ -1473,6 +1473,7 @@ class TimeDomainCanvasPG(QWidget):
                 "_cursor_b_items", color="#dc2626", width=1.1
             )
             self._set_cursor_items_pos(b_items, self._cursor.bx)
+        self._emit_dual_cursor_html()
 
     def _set_primary_line_visible(self, name, visible):
         """Hide/show a primary (original) curve in place without rebuilding.
@@ -2709,6 +2710,10 @@ class TimeDomainCanvasPG(QWidget):
         # Raster items live in channel ViewBoxes, so remove them before those
         # ViewBoxes are torn down by the overlay/layout cleanup below.
         self._dense_raster.clear()
+        # Remarks are Qt items parented to the same ViewBoxes. Drop them
+        # before overlay teardown / _glw.clear() so the live list cannot
+        # retain sip-deleted wrappers.
+        self.clear_remarks()
         self._interaction_depth = 0
         self._interaction_state = "idle"
         self._latest_target_xlim = None
@@ -2929,6 +2934,21 @@ class TimeDomainCanvasPG(QWidget):
 
     def clear_remarks(self):
         return self._annotations.clear_remarks()
+
+    def snapshot_remarks(self):
+        return self._annotations.snapshot_remarks()
+
+    def restore_remarks(self, payload):
+        return self._annotations.restore_remarks(payload)
+
+    def snapshot_cursor_placement(self):
+        fn = getattr(self._cursor, "snapshot_placement", None)
+        return fn() if callable(fn) else None
+
+    def restore_cursor_placement(self, placement):
+        fn = getattr(self._cursor, "restore_placement", None)
+        if callable(fn):
+            return fn(placement)
 
     def remark_count(self):
         return len(self._annotations.remarks)
