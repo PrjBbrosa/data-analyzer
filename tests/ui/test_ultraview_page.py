@@ -469,6 +469,10 @@ def test_chrome_size_fallbacks_track_floating_layout_constants(qtbot, monkeypatc
             page._tool_rail.sizeHint().height(),
         ),
     }
+    assert DEFAULT_NAVIGATION_ISLAND_SIZE == (
+        page._navigation_island.sizeHint().width(),
+        page._navigation_island.sizeHint().height(),
+    )
     for widget in (
         page._board_island,
         page._global_island,
@@ -3306,9 +3310,21 @@ def test_card_drag_near_viewport_edge_starts_page_edge_timer(qtbot):
     QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
     edge_global = viewport.mapToGlobal(QPoint(2, max(1, viewport.height() // 2)))
     edge_local = card.mapFromGlobal(edge_global)
+    overlay = page._free_grid.ghost_overlay()
+    ghost_before = overlay._ghost_rect
+    bar = page.board_scroll_area().horizontalScrollBar()
+    bar.setValue(bar.maximum())
+    before = bar.value()
     _send_mouse_move(card, edge_local)
     assert page._edge_pan_timer.isActive()
     assert page._edge_pan_active
+    page._edge_pan_tick_for_global(edge_global)
+    page._edge_pan_tick_for_global(edge_global)
+    assert bar.value() < before
+    ghost_after = overlay._ghost_rect
+    assert ghost_after is not None
+    if ghost_before is not None:
+        assert ghost_after != ghost_before
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, edge_local)
     assert not page._edge_pan_timer.isActive()
     assert not page._edge_pan_active

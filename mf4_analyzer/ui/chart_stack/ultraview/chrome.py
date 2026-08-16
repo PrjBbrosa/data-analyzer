@@ -53,9 +53,9 @@ from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, pa
 
 from .floating_layout import (
     BOARD_ISLAND_MAX_WIDTH,
+    DEFAULT_NAVIGATION_ISLAND_SIZE,
     GLOBAL_ISLAND_WIDTH,
     ISLAND_HEIGHT,
-    NAVIGATION_ISLAND_WIDTH,
     RAIL_CONTENT_HEIGHT,
     RAIL_WIDTH,
     STATUS_ISLAND_WIDTH,
@@ -1656,10 +1656,7 @@ class NavigationIsland(QFrame):
         layout.addWidget(self._reset, 0)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(
-            min(NAVIGATION_ISLAND_WIDTH, 4 + 32 * 5 + 42 + 2 * 6 + 4),
-            ISLAND_HEIGHT,
-        )
+        return QSize(*DEFAULT_NAVIGATION_ISLAND_SIZE)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()

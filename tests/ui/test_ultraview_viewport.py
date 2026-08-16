@@ -1372,11 +1372,19 @@ def test_page_edge_timer_is_owned_by_the_page_and_stops_on_gesture_end(qtbot):
     page = harness.page
     free = page._free_grid
     viewport = page.board_scroll_area().viewport()
+    scroll = page.board_scroll_area()
+    bar = scroll.horizontalScrollBar()
+    bar.setValue(bar.maximum())
     pointer = viewport.mapToGlobal(QPoint(1, viewport.height() // 2))
 
     free.workspace_gesture_changed.emit(True, pointer)
     assert page._edge_pan_timer.isActive()
     assert page._edge_pan_active
+    before = bar.value()
+    assert before > 0
+    page._edge_pan_tick_for_global(pointer)
+    page._edge_pan_tick_for_global(pointer)
+    assert bar.value() < before
 
     free.workspace_gesture_changed.emit(False, None)
     assert not page._edge_pan_timer.isActive()

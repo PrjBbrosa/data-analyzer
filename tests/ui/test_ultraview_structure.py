@@ -17,7 +17,7 @@ UI_ROOT = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui"
 ULTRAVIEW_ROOT = UI_ROOT / "chart_stack" / "ultraview"
 STATE_PATH = UI_ROOT / "ultraview_state.py"
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
-VIEW_LAYER_PATHS = tuple(ULTRAVIEW_ROOT / name for name in ("page.py", "widgets.py", "chrome.py"))
+VIEW_LAYER_PATHS = tuple(sorted(ULTRAVIEW_ROOT.glob("*.py")))
 
 # Measured in Task 0.  ``empty_slots`` is deliberately excluded: despite its
 # ``list[str]`` return annotation, it is a pure query and never mutates Board.
@@ -74,7 +74,13 @@ FROZEN_MUTATION_FUNNEL_EXCEPTIONS = frozenset(
 
 FROZEN_PAGE_PRIVATE_SURFACE = frozenset()
 
-FROZEN_FLOATING_GEOMETRY_LITERALS = Counter()
+FROZEN_FLOATING_GEOMETRY_LITERALS = Counter(
+    {
+        # Pre-C3 leaks that D2's setMinimum* scan newly sees. Do not add more.
+        ("chrome.py", "setMinimumWidth", (48,)): 1,  # BoardIsland name field
+        ("widgets.py", "setMinimumSize", (240,)): 2,  # focus layer + overview hosts
+    }
+)
 
 
 def _parse(path: Path) -> ast.Module:
@@ -133,18 +139,26 @@ def _assignment_targets(tree: ast.AST):
             yield node.target
 
 
+def _model_field_names() -> frozenset[str]:
+    names: set[str] = set()
+    for cls_name in ("UltraViewBoardState", "UltraViewWorkspaceState"):
+        for node in _parse(STATE_PATH).body:
+            if not isinstance(node, ast.ClassDef) or node.name != cls_name:
+                continue
+            for item in node.body:
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    names.add(item.target.id)
+    return frozenset(names)
+
+
 def _model_field_writes() -> frozenset[tuple[str, str]]:
+    fields = _model_field_names()
     result: set[tuple[str, str]] = set()
-    for path in (ULTRAVIEW_ROOT / "page.py", COORDINATOR_PATH):
+    paths = (*VIEW_LAYER_PATHS, COORDINATOR_PATH)
+    for path in paths:
         for target in _assignment_targets(_parse(path)):
-            source = ast.unparse(target)
-            if source in {
-                "self._board.viewport",
-                "board.name",
-                "active_board(self._workspace).show_titles",
-                "active_board(self._workspace).show_sources",
-            }:
-                result.add((path.name, source))
+            if isinstance(target, ast.Attribute) and target.attr in fields:
+                result.add((path.name, f"{ast.unparse(target.value)}.{target.attr}"))
     return frozenset(result)
 
 
@@ -198,12 +212,14 @@ def _mutation_funnel_exceptions() -> frozenset[str]:
 def _page_private_surface() -> frozenset[str]:
     surface: set[str] = set()
     for node in ast.walk(_parse(COORDINATOR_PATH)):
-        if (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "page"
-            and node.attr.startswith("_")
-        ):
+        if not isinstance(node, ast.Attribute) or not node.attr.startswith("_"):
+            continue
+        value = node.value
+        if isinstance(value, ast.Name) and value.id == "page":
+            surface.add(node.attr)
+        elif isinstance(value, ast.Attribute) and value.attr in {"page", "_page"}:
+            surface.add(node.attr)
+        elif isinstance(value, ast.Call) and _callee_name(value) in {"page", "_page"}:
             surface.add(node.attr)
     return frozenset(surface)
 
@@ -216,7 +232,11 @@ def _floating_geometry_literals() -> Counter[tuple[str, str, tuple[int, ...]]]:
             if not isinstance(node, ast.Call):
                 continue
             callee = _callee_name(node)
-            if not (callee.startswith("setFixed") or callee in {"QSize", "_hint"}):
+            if not (
+                callee.startswith("setFixed")
+                or callee.startswith("setMinimum")
+                or callee in {"QSize", "_hint", "resize", "QRect"}
+            ):
                 continue
             found = tuple(sorted(
                 child.value
@@ -293,3 +313,17 @@ def test_zoom_broadcast_single_site():
 
 def test_floating_geometry_literals_live_only_in_floating_layout():
     assert _floating_geometry_literals() == FROZEN_FLOATING_GEOMETRY_LITERALS
+
+
+def test_zoom_at_does_not_refresh_workspace_extent():
+    page = _parse(ULTRAVIEW_ROOT / "page.py")
+    for node in ast.walk(page):
+        if isinstance(node, ast.FunctionDef) and node.name == "_zoom_at":
+            calls = {
+                _callee_name(item)
+                for item in ast.walk(node)
+                if isinstance(item, ast.Call)
+            }
+            assert "_refresh_workspace_extent" not in calls
+            return
+    raise AssertionError("_zoom_at not found")

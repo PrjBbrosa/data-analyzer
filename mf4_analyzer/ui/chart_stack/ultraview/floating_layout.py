@@ -28,10 +28,13 @@ RAIL_CONTENT_HEIGHT = 268
 DEFAULT_OVERLAY_SIZE: Size = (280, 384)
 DEFAULT_MINIMAP_SIZE: Size = (172, 112)
 DEFAULT_CARD_CONTEXT_SIZE: Size = (232, ISLAND_HEIGHT)
-# The live navigation island keeps its intrinsic control width.  This fallback
-# is only used before Qt can report a size hint, so it must mirror that real
-# widget rather than the wider layout ceiling above.
-DEFAULT_NAVIGATION_ISLAND_SIZE: Size = (222, ISLAND_HEIGHT)
+# Intrinsic navigation island width: 4px margins + five 32px buttons + 42px
+# zoom label + six 2px gaps. Must stay in lockstep with NavigationIsland.
+NAVIGATION_ISLAND_INTRINSIC_WIDTH = 4 + 32 * 5 + 42 + 2 * 6 + 4
+DEFAULT_NAVIGATION_ISLAND_SIZE: Size = (
+    min(NAVIGATION_ISLAND_WIDTH, NAVIGATION_ISLAND_INTRINSIC_WIDTH),
+    ISLAND_HEIGHT,
+)
 OVERLAY_ANCHOR_RAIL = "rail"
 OVERLAY_ANCHOR_GLOBAL = "global"
 
