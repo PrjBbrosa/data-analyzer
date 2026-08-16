@@ -436,6 +436,50 @@ def test_wheel_zoom_anchor_holds_after_the_elastic_origin_expands(qtbot):
     assert worst <= 2.0, f"cursor anchor drifted {worst:.1f}px on a signed origin"
 
 
+def test_extent_rebase_keeps_the_view_still(qtbot):
+    """Growing the signed origin must not shift what the user is looking at.
+
+    ``_refresh_workspace_extent`` rebases the widget-local plane and
+    compensates the scroll bars. Computing that compensation as ``rounded
+    pitch * cell delta`` reintroduces the zoom-map quantization error, so the
+    board slides a few pixels every time the halo grows. Measured 0 px with
+    the exact pitch against up to 3 px with the rounded one, at the 12-column
+    rebase this zoom triggers.
+    """
+    harness = _Harness(qtbot)
+    free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    page = harness.page
+    card = cards[0]
+    viewport = page.board_scroll_area().viewport()
+    center = (viewport.width() / 2.0, viewport.height() / 2.0)
+
+    def settle():
+        page._smooth_timer.stop()
+        page._on_smooth_preview_timeout()
+
+    # Walk the zoom down in steps, settling each one, so the halo grows the way
+    # it does in a session. The last step is the widest rebase before the
+    # extent saturates against the safety bound.
+    for target in (0.9, 0.75, 0.6, 0.45, 0.35):
+        page.set_board_zoom(target, center)
+        settle()
+    page.set_board_zoom(ZOOM_MIN, center)
+    before_extent = page._workspace_extent
+    before = _card_rect_in_viewport(page, card)
+    settle()
+    after_extent = page._workspace_extent
+    # Guard the guardrail: a settle that grew nothing proves nothing.
+    assert before_extent is not None and after_extent is not None
+    assert (after_extent.column, after_extent.row) != (
+        before_extent.column,
+        before_extent.row,
+    )
+    after = _card_rect_in_viewport(page, card)
+    assert abs(after[0] - before[0]) <= 1.0
+    assert abs(after[1] - before[1]) <= 1.0
+    assert free.workspace_extent() == after_extent
+
+
 def test_zoomed_pixel_map_error_does_not_grow_with_the_cell_index():
     """Rounding must not be multiplied by the workspace origin.
 

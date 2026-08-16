@@ -12,7 +12,7 @@ paths:
 checks:
   - rg -n "exact_pitch|exact_padding|exact_cell|zoom_anchor_at|point_for_zoom_anchor" mf4_analyzer/ui/chart_stack/ultraview/free_grid.py mf4_analyzer/ui/chart_stack/ultraview/widgets.py mf4_analyzer/ui/chart_stack/ultraview/page.py
 tests:
-  - TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_ultraview_viewport.py::test_wheel_zoom_anchor_holds_after_the_elastic_origin_expands tests/ui/test_ultraview_viewport.py::test_zoomed_pixel_map_error_does_not_grow_with_the_cell_index tests/ui/test_ultraview_viewport.py::test_ctrl_wheel_keeps_the_logical_point_under_the_cursor "tests/ui/test_ultraview_viewport.py::test_zoom_at_keeps_board_point_under_cursor_in_every_corner" -q
+  - TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_ultraview_viewport.py::test_wheel_zoom_anchor_holds_after_the_elastic_origin_expands tests/ui/test_ultraview_viewport.py::test_zoomed_pixel_map_error_does_not_grow_with_the_cell_index tests/ui/test_ultraview_viewport.py::test_ctrl_wheel_keeps_the_logical_point_under_the_cursor tests/ui/test_ultraview_viewport.py::test_extent_rebase_keeps_the_view_still "tests/ui/test_ultraview_viewport.py::test_zoom_at_keeps_board_point_under_cursor_in_every_corner" -q
 ---
 
 # UltraView Zoom Anchors On Canvas Metrics, Not `logical * zoom`
@@ -58,14 +58,23 @@ Rule:
   between the two calls; `BoardGrid` uses `linear_zoom_anchor` /
   `linear_zoom_point`, which keeps `viewport.zoom_at` the single source of the
   linear math.
+- The same rule covers the *scroll compensation* when an extent rebase moves
+  the widget-local plane (`_refresh_workspace_extent`). Round the two origins
+  and subtract; never `rounded pitch * cell delta`. That third site was missed
+  on the first pass and left the view sliding up to 3 px on every halo growth.
 - An anchor guardrail must measure **real widget geometry** (where the card
   actually sits in the scroll viewport), not `scroll / zoom`. Multi-notch, both
   directions, and with the elastic origin already expanded — a single notch at
-  the default origin lands inside the old error and proves nothing.
+  the default origin lands inside the old error and proves nothing. Drive the
+  extent through the real wheel+settle path: parking `_workspace_extent`
+  directly leaves the scroll bars clamped against the old maximum and the test
+  measures its own setup instead of the defect.
 
 Verification: `test_wheel_zoom_anchor_holds_after_the_elastic_origin_expands`,
 `test_zoomed_pixel_map_error_does_not_grow_with_the_cell_index`,
 `test_ctrl_wheel_keeps_the_logical_point_under_the_cursor`,
-`test_zoom_at_keeps_board_point_under_cursor_in_every_corner`. All 13 anchor
-cases fail without the fix. Real-window (`QT_QPA_PLATFORM=cocoa`) drift over a
-24-notch in/out sweep: **76.4 px worst / 26.1 px mean → 3.0 px / 1.0 px**.
+`test_zoom_at_keeps_board_point_under_cursor_in_every_corner`,
+`test_extent_rebase_keeps_the_view_still`. All 13 anchor cases fail without the
+map fix; the rebase case shifts 4 px without the compensation fix. Real-window
+(`QT_QPA_PLATFORM=cocoa`) drift over a 24-notch in/out sweep: **76.4 px worst /
+26.1 px mean → 1.6 px / 0.6 px**.

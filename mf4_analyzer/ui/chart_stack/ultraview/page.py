@@ -1291,11 +1291,15 @@ class UltraViewPage(QWidget):
             # setValue so Qt cannot clamp against yesterday's maximum.
             self._sync_board_stack_geometry(self._free_grid)
             metrics = self._free_grid.metrics()
-            delta_x = (int(before.column) - int(after.column)) * (
-                int(metrics.column_width) + int(metrics.gutter)
+            # Round the two origins, not the pitch: a rounded pitch times the
+            # cell delta is the same quantization error that made zoom jitter,
+            # and it would leave the view a few pixels off after every rebase.
+            pitch_x, pitch_y = metrics.exact_pitch()
+            delta_x = int(round(int(before.column) * pitch_x)) - int(
+                round(int(after.column) * pitch_x)
             )
-            delta_y = (int(before.row) - int(after.row)) * (
-                int(metrics.row_height) + int(metrics.gutter)
+            delta_y = int(round(int(before.row) * pitch_y)) - int(
+                round(int(after.row) * pitch_y)
             )
             horizontal = self._board_scroll.horizontalScrollBar()
             vertical = self._board_scroll.verticalScrollBar()
