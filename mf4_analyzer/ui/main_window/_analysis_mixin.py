@@ -285,8 +285,30 @@ class AnalysisMixin:
             self._capture_analysis_time_range(section, state)
         if section in {'fft', 'frf'}:
             self._capture_frequency_cursor_controls(section, state)
+        self._capture_analysis_overlay(section, state)
         if capture_sources:
             self._capture_analysis_sources(section, state)
+
+    def _capture_analysis_overlay(self, section, state):
+        from ..analysis_view_bridge import capture_overlay_from_canvas
+
+        page = self._analysis_page(section)
+        if not getattr(page, "_overlay_session_bound", False):
+            return
+        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            capture_overlay_from_canvas(
+                page.pane_canvas(pane_idx), state.panes[pane_idx],
+            )
+
+    def _apply_analysis_overlay(self, section, state):
+        from ..analysis_view_bridge import apply_overlay_to_canvas
+
+        page = self._analysis_page(section)
+        page._overlay_session_bound = True
+        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            apply_overlay_to_canvas(
+                page.pane_canvas(pane_idx), state.panes[pane_idx],
+            )
 
     def _sync_active_analysis_params(self, section):
         """Persist the active contextual's full View payload immediately.
@@ -385,6 +407,7 @@ class AnalysisMixin:
                 self._apply_frequency_cursor_controls(section, state)
             self._apply_analysis_sources(section, state)
             self._apply_analysis_time_range(section, state)
+            self._apply_analysis_overlay(section, state)
         finally:
             self._applying_analysis_view = False
         # 5. Render from cache only (spec §4: switching never auto-computes).
@@ -1119,6 +1142,7 @@ class AnalysisMixin:
                     # returning to that View must still restore its lower
                     # time-domain preview after the pane sources are applied.
                     self._clear_analysis_canvas(canvas)
+                    self._rebind_pane_overlay(canvas, pane)
                     if pane.sources:
                         if pane_idx == page.focused_index():
                             self._refresh_fft_time_preview(
@@ -1127,6 +1151,7 @@ class AnalysisMixin:
             else:
                 if not pane.sources:
                     self._clear_analysis_canvas(canvas)
+                    self._rebind_pane_overlay(canvas, pane)
                     self._replace_analysis_pane_pins(
                         section, state.view_id, pane_idx, ())
                     continue
@@ -1143,6 +1168,7 @@ class AnalysisMixin:
                 if result is None:
                     any_missing = True
                     self._clear_analysis_canvas(canvas)
+                    self._rebind_pane_overlay(canvas, pane)
                     self._show_analysis_empty_hint(canvas)
                 else:
                     self._render_cached_heatmap(
@@ -1155,6 +1181,11 @@ class AnalysisMixin:
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
         notify_ultraview_plot(self, section, "analysis-restore-plot")
+
+    def _rebind_pane_overlay(self, canvas, pane) -> None:
+        from ..analysis_view_bridge import apply_overlay_to_canvas
+
+        apply_overlay_to_canvas(canvas, pane)
 
     def _show_analysis_empty_hint(self, canvas):
         canvas.show_empty_hint("点击『计算』生成")

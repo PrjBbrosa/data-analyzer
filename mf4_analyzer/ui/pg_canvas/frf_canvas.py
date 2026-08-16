@@ -49,6 +49,8 @@ from .remarks import (
     remark_at_viewport_pos,
     viewport_pos_to_scene,
 )
+from .overlay_intent import AnalysisRemarkStore, snapshot_frequency_cursor
+from mf4_analyzer.ui.view_overlay_state import normalize_cursor_placement
 from .renderer import _quantize_y_span_key
 
 
@@ -306,6 +308,7 @@ class PgFrfCanvas(QWidget):
         # panel's nearest physical-frequency sample and preserves Hz labels on
         # log axes whose ViewBox coordinates are log10(Hz).
         self._remarks = []
+        self._remark_intent = AnalysisRemarkStore()
         self._remark_enabled = False
         self.markup_revision = 0
         self._remark_artist = RemarkArtist(on_moved=self._bump_markup_revision)
@@ -860,9 +863,9 @@ class PgFrfCanvas(QWidget):
             raise ValueError("FRF result arrays must be one-dimensional")
         if not (frequencies.size == transfer.size == coherence.size):
             raise ValueError("FRF result arrays must have equal length")
-        # Point labels include panel values, so they cannot survive a new
-        # calculation even if the frequency grid happens to be unchanged.
-        self.clear_remarks()
+        # Point labels include panel values, so a new calculation must
+        # re-snap Y. Intent stays; Qt items are a projection.
+        self._drop_remark_projection()
         self._result = result
         self._context = dict(context or {})
         if display_params:
@@ -870,7 +873,7 @@ class PgFrfCanvas(QWidget):
                 self._normalise_display_params(dict(display_params))
             )
         self._state = "ready"
-        self._clear_frequency_cursor_readout()
+        self._hide_frequency_cursor_items()
         self.clear_empty_hint()
         self._render_result()
         # Spec §3.4 step 1: the caller returns after a cheap non-AA frame; the
@@ -878,6 +881,8 @@ class PgFrfCanvas(QWidget):
         self.arm_discrete_aa()
         self._plot_host.schedule_alignment()
         self._run_replot_callbacks()
+        self._project_remarks()
+        self._project_frequency_cursors()
         self.layout_geometry_changed.emit()
 
     def set_display_params(self, params) -> None:
@@ -888,13 +893,15 @@ class PgFrfCanvas(QWidget):
         if self._result is not None:
             # Magnitude scale, phase wrapping, and coherence presentation can
             # all change the value written into an existing remark label.
-            self.clear_remarks()
+            self._drop_remark_projection()
             self._render_result()
             if old_xlim is not None:
                 self.set_xlim(*old_xlim)
             # Magnitude scale / phase wrapping / fading all reshape the drawn
             # curves, so the previous AA verdict was about a different picture.
             self.arm_discrete_aa()
+            self._project_remarks()
+            self._project_frequency_cursors()
             self.layout_geometry_changed.emit()
             self._plot_host.schedule_alignment()
 
@@ -1173,10 +1180,65 @@ class PgFrfCanvas(QWidget):
         )
 
     def clear_remarks(self) -> None:
+        self._remark_intent.clear()
+        if not self._remarks:
+            return
+        self._drop_remark_projection()
+        self._bump_markup_revision()
+
+    def _drop_remark_projection(self) -> None:
         if not self._remarks:
             return
         self._remark_artist.clear(self._remarks)
-        self._bump_markup_revision()
+
+    def _project_remarks(self) -> None:
+        self._drop_remark_projection()
+        for item in list(self._remark_intent.items):
+            self._restore_one_remark(item)
+
+    def snapshot_remarks(self):
+        return self._remark_intent.snapshot(self._remarks)
+
+    def restore_remarks(self, payload) -> None:
+        self._remark_intent.replace(payload)
+        self._project_remarks()
+
+    def _overlay_source(self):
+        raw = self._context.get("output_source")
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            return (str(raw[0]), str(raw[1]))
+        return None
+
+    def _restore_one_remark(self, item) -> None:
+        if not isinstance(item, dict):
+            return
+        panel = str(item.get("panel") or "magnitude")
+        try:
+            frequency = float(item["x"])
+        except (KeyError, TypeError, ValueError):
+            return
+        source = item.get("source")
+        overlay = self._overlay_source()
+        if source is not None and overlay is not None:
+            parsed = (str(source[0]), str(source[1])) if (
+                isinstance(source, (list, tuple)) and len(source) == 2
+            ) else None
+            if parsed is not None and parsed != overlay:
+                return
+        point = self._remark_point_at(
+            panel, frequency,
+            label_dx=item.get("label_dx"),
+            label_dy=item.get("label_dy"),
+        )
+        if point is None:
+            return
+        remark = self._remark_artist.add(point)
+        remark["panel"] = panel
+        if overlay is not None:
+            remark["source"] = overlay
+        elif source is not None:
+            remark["source"] = source
+        self._remarks.append(remark)
 
     def _bump_markup_revision(self) -> None:
         self.markup_revision = int(self.markup_revision) + 1
@@ -1197,7 +1259,7 @@ class PgFrfCanvas(QWidget):
                 return panel, plot
         return None
 
-    def _remark_point_at(self, panel: str, frequency: float):
+    def _remark_point_at(self, panel: str, frequency: float, *, label_dx=None, label_dy=None):
         idx = self._nearest_frequency_index(frequency)
         if idx is None:
             return None
@@ -1237,17 +1299,27 @@ class PgFrfCanvas(QWidget):
             unit_x="Hz",
             unit_y=unit_y,
             display_x=physical_frequency,
+            label_dx=label_dx,
+            label_dy=label_dy,
         )
 
     def add_remark_at(self, panel: str, frequency: float) -> None:
         if not self._remark_enabled:
             return
         point = self._remark_point_at(panel, frequency)
-        if point is not None:
-            self._remarks.append(self._remark_artist.add(point))
-            self._bump_markup_revision()
+        if point is None:
+            return
+        remark = self._remark_artist.add(point)
+        remark["panel"] = str(panel)
+        source = self._overlay_source()
+        if source is not None:
+            remark["source"] = source
+        self._remarks.append(remark)
+        self._remark_intent.record(remark, panel=str(panel))
+        self._bump_markup_revision()
 
     def _remove_remark(self, remark) -> None:
+        self._remark_intent.discard(remark)
         self._remark_artist.remove(remark)
         try:
             self._remarks.remove(remark)
@@ -1485,16 +1557,48 @@ class PgFrfCanvas(QWidget):
         for line in lines:
             line.hide()
 
-    def _clear_frequency_cursor_readout(self) -> None:
-        """Clear samples/lines without changing the persisted cursor mode."""
+    def _hide_frequency_cursor_items(self, *, emit_empty: bool = True) -> None:
         self._hide_frequency_lines(self._cursor_lines)
         self._hide_frequency_lines(self._cursor_a_lines)
         self._hide_frequency_lines(self._cursor_b_lines)
+        if emit_empty:
+            self.cursor_info.emit("")
+            self.dual_cursor_info.emit("")
+
+    def _clear_frequency_cursor_readout(self) -> None:
+        """Wipe A/B placement and hide lines. File-close / empty-canvas path."""
         self._cursor_a_frequency = None
         self._cursor_b_frequency = None
         self._next_dual_cursor = "a"
-        self.cursor_info.emit("")
-        self.dual_cursor_info.emit("")
+        self._hide_frequency_cursor_items()
+
+    def _project_frequency_cursors(self) -> None:
+        if self._cursor_mode == "dual" and self._cursor_a_frequency is not None:
+            self.set_dual_cursor_frequencies(
+                self._cursor_a_frequency, self._cursor_b_frequency,
+            )
+            return
+        self._hide_frequency_cursor_items()
+
+    def snapshot_cursor_placement(self):
+        return snapshot_frequency_cursor(
+            self._cursor_a_frequency,
+            self._cursor_b_frequency,
+            cursor_mode=self._cursor_mode,
+        )
+
+    def restore_cursor_placement(self, payload) -> None:
+        normalized = normalize_cursor_placement(
+            payload, cursor_mode=self._cursor_mode,
+        )
+        if normalized is None:
+            self._cursor_a_frequency = None
+            self._cursor_b_frequency = None
+            self._next_dual_cursor = "a"
+        else:
+            self._cursor_a_frequency = normalized["ax"]
+            self._cursor_b_frequency = normalized.get("bx")
+        self._project_frequency_cursors()
 
     def set_cursor_frequency(self, frequency) -> str:
         idx = self._nearest_frequency_index(frequency)
@@ -1579,7 +1683,7 @@ class PgFrfCanvas(QWidget):
         if mode not in {"off", "single", "dual"}:
             return
         self._cursor_mode = mode
-        self._clear_frequency_cursor_readout()
+        self._project_frequency_cursors()
 
     def cursor_enabled(self) -> bool:
         """Whether this FRF pane exposes its linked frequency readout."""

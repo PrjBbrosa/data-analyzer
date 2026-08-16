@@ -159,7 +159,8 @@
 - `reset_cursor_state()` 仍是显式抹除。
 - 切到 `off` 仍必须清主 pill（既有 split 契约不变）。
 
-**D9 · 本批次明确不做。**
+**D9 · 本批次明确不做。** （分析区标注与频率双游标随后由
+`2026-08-16-analysis-overlay-persistence-spec.md` 落地，取代本条。）
 
 - 分析 View / FRF / 频谱 / 热图标注与频率双游标
 - pill mini/full 与用户拖位

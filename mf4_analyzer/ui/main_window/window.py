@@ -1403,6 +1403,8 @@ class MainWindow(
                 'color': color or '#2563eb',
                 'time': t,
                 'signal': sig,
+                'fid': fid,
+                'channel': ch,
             })
         return entries
 
@@ -1569,6 +1571,8 @@ class MainWindow(
             'time': [] if t is None else t,
             'signal': [] if sig is None else sig,
             'db_reference_resolution': resolution,
+            'fid': fid,
+            'channel': ch,
         }
 
     def _fft_apply_amplitude_display(self, entries, amp_y, weighting):

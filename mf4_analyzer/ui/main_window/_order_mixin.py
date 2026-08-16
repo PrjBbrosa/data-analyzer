@@ -634,6 +634,9 @@ class OrderMixin:
         # 'Amplitude (dB)' vs 'Amplitude' correctly (Order renders through
         # plot_or_update_heatmap, which does not set it like plot_result does).
         canvas._amplitude_mode = amp_mode_token
+        setter = getattr(canvas, "set_overlay_source", None)
+        if callable(setter):
+            setter(source)
         canvas.plot_or_update_heatmap(
             matrix=matrix,
             x_extent=time_axis_display_extent(

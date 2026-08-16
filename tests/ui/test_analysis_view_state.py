@@ -17,7 +17,7 @@ def test_analysis_view_default_attachment_is_explicitly_empty():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert v.attached_file_ids == []
     payload = v.to_dict()
-    assert payload["schema"] == 7
+    assert payload["schema"] == 8
     assert payload["attached_file_ids"] == []
     assert AnalysisViewState.from_dict(payload).attached_file_ids == []
 
@@ -66,6 +66,13 @@ def test_round_trip_preserves_everything():
         PaneState(
             sources=[("f1", "vib_x"), ("f2", "vib_x")],
             time_range=(1.25, 2.75),
+            remarks=[{
+                "source": ["f1", "vib_x"],
+                "x": 12.0,
+                "y": 0.4,
+                "panel": "amp",
+            }],
+            cursor_placement={"ax": 12.0, "bx": 40.0},
         ),
         PaneState(
             sources=[("f1", "vib_y")],
@@ -79,6 +86,8 @@ def test_round_trip_preserves_everything():
     assert v2.name == "对比"
     assert v2.panes[0].sources == [("f1", "vib_x"), ("f2", "vib_x")]
     assert v2.panes[0].time_range == (1.25, 2.75)
+    assert v2.panes[0].remarks[0]["panel"] == "amp"
+    assert v2.panes[0].cursor_placement["ax"] == 12.0
     assert v2.panes[1].rpm_source == ("f1", "rpm")
     assert v2.panes[1].time_range == (5.0, 8.0)
     assert v2.params["nfft"] == 4096
@@ -90,6 +99,8 @@ def test_from_dict_tolerates_missing_fields():
     v = AnalysisViewState.from_dict({"name": "x", "tab_color": "#fff"})
     assert v.panes[0].sources == []
     assert v.panes[0].time_range is None
+    assert v.panes[0].remarks == []
+    assert v.panes[0].cursor_placement is None
     assert v.params == {}
     assert isinstance(v.view_id, str) and v.view_id
 
@@ -142,6 +153,13 @@ def test_frf_role_state_round_trip_keeps_sources_as_a_separate_contract():
         },
         source_time_view_id="time-view-123",
         cursor_mode="dual",
+        remarks=[{
+            "source": ["f1", "accel"],
+            "x": 10.0,
+            "y": 1.5,
+            "panel": "magnitude",
+        }],
+        cursor_placement={"ax": 10.0, "bx": 40.0},
     )
 
     payload = pane.to_dict()
@@ -158,6 +176,13 @@ def test_frf_role_state_round_trip_keeps_sources_as_a_separate_contract():
     assert "source_time_view_id" not in payload
     assert restored.source_time_view_id is None
     assert restored.cursor_mode == "dual"
+    assert restored.remarks == [{
+        "source": ["f1", "accel"],
+        "x": 10.0,
+        "y": 1.5,
+        "panel": "magnitude",
+    }]
+    assert restored.cursor_placement == {"ax": 10.0, "bx": 40.0}
 
 
 def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
@@ -167,7 +192,7 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
 
     payload = view.to_dict()
 
-    assert payload["schema"] == 7
+    assert payload["schema"] == 8
     assert payload["attached_file_ids"] == []
     legacy = AnalysisViewState.from_dict({
         "schema": 2,

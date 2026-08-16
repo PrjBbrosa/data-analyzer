@@ -54,6 +54,46 @@ def test_remap_drops_missing_fids():
     assert srcs == [["F1", "vib"]]
 
 
+def test_remap_analysis_remarks_rewrites_fid_and_drops_missing():
+    analysis_views = {
+        "fft": {
+            "active": 0,
+            "views": [{
+                "schema": 8,
+                "name": "FFT",
+                "tab_color": "#2d7ff9",
+                "panes": [{
+                    "sources": [["f1", "vib"]],
+                    "remarks": [
+                        {
+                            "source": ["f1", "vib"],
+                            "x": 12.0,
+                            "y": 0.4,
+                            "panel": "amp",
+                        },
+                        {
+                            "source": ["f-missing", "vib"],
+                            "x": 20.0,
+                            "y": 0.1,
+                            "panel": "amp",
+                        },
+                    ],
+                    "cursor_placement": {"ax": 12.0, "bx": 40.0},
+                }],
+            }],
+        },
+    }
+    out = remap_analysis_view_fids(analysis_views, {"f1": "F1"})
+    pane = out["fft"]["views"][0]["panes"][0]
+    assert pane["remarks"] == [{
+        "source": ["F1", "vib"],
+        "x": 12.0,
+        "y": 0.4,
+        "panel": "amp",
+    }]
+    assert pane["cursor_placement"] == {"ax": 12.0, "bx": 40.0}
+
+
 def test_remap_frf_role_endpoints_is_directional_and_symmetric():
     analysis_views = {
         "frf": {
@@ -116,7 +156,7 @@ def test_analysis_view_schema6_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 7
+    assert d["schema"] == 8
 
     v2 = AnalysisViewState.from_dict(d)
     assert v2.params["db_reference_mode"] == "manual"

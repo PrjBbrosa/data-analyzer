@@ -1,8 +1,9 @@
-"""Qt-free time-domain overlay semantics: remarks and dual-cursor placement.
+"""Qt-free overlay semantics: remarks and dual-cursor placement.
 
-ViewState holds the lists this module normalizes. Live canvases and
-``view_bridge`` are not imported here — this layer must stay free of
-PyQt5, pyqtgraph, and ``mf4_analyzer.ui.pg_canvas``.
+Time-domain ``ViewState`` and analysis ``PaneState`` both hold the lists
+this module normalizes. Live canvases and ``view_bridge`` are not imported
+here — this layer must stay free of PyQt5, pyqtgraph, and
+``mf4_analyzer.ui.pg_canvas``.
 """
 from __future__ import annotations
 
@@ -11,8 +12,18 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-_REMARK_NUM_KEYS = ("x", "y", "label_dx", "label_dy")
-_REMARK_KNOWN_KEYS = frozenset(("source", *_REMARK_NUM_KEYS))
+_REMARK_REQUIRED_NUM_KEYS = ("x", "y")
+_REMARK_OPTIONAL_NUM_KEYS = ("label_dx", "label_dy")
+_REMARK_OPTIONAL_STR_KEYS = ("panel",)
+_REMARK_KNOWN_KEYS = frozenset((
+    "source",
+    *_REMARK_REQUIRED_NUM_KEYS,
+    *_REMARK_OPTIONAL_NUM_KEYS,
+    *_REMARK_OPTIONAL_STR_KEYS,
+))
+ANALYSIS_REMARK_PANELS = frozenset({
+    "amp", "time", "heatmap", "magnitude", "phase", "coherence",
+})
 
 
 def raw_channel_name(channel: Any) -> str:
@@ -30,10 +41,12 @@ def raw_channel_name(channel: Any) -> str:
 def normalize_remark(raw: Any) -> dict | None:
     """Return a JSON-safe remark dict, or ``None`` if the item is illegal.
 
-    Illegal: missing ``source``, ``source`` not a 2-list/tuple, or any of
-    ``x`` / ``y`` / ``label_dx`` / ``label_dy`` missing or non-finite.
-    Unknown extra keys on the remark object are preserved. ``source`` is
-    emitted as a JSON-safe 2-list; never flattened via ``dict(source)``.
+    Illegal: missing ``source``, ``source`` not a 2-list/tuple, or ``x`` / ``y``
+    missing or non-finite. ``label_dx`` / ``label_dy`` are optional: omit the
+    keys when absent or non-finite (never emit NaN); restore uses the ViewBox
+    6%/8% heuristic. Unknown extra keys on the remark object are preserved.
+    ``source`` is emitted as a JSON-safe 2-list; never flattened via
+    ``dict(source)``.
     """
     if not isinstance(raw, Mapping):
         return None
@@ -41,7 +54,7 @@ def normalize_remark(raw: Any) -> dict | None:
     if source is None:
         return None
     numbers: dict[str, float] = {}
-    for key in _REMARK_NUM_KEYS:
+    for key in _REMARK_REQUIRED_NUM_KEYS:
         value = _finite_float(raw.get(key))
         if value is None:
             return None
@@ -50,9 +63,17 @@ def normalize_remark(raw: Any) -> dict | None:
         "source": source,
         "x": numbers["x"],
         "y": numbers["y"],
-        "label_dx": numbers["label_dx"],
-        "label_dy": numbers["label_dy"],
     }
+    for key in _REMARK_OPTIONAL_NUM_KEYS:
+        if key not in raw:
+            continue
+        value = _finite_float(raw.get(key))
+        if value is None:
+            continue
+        out[key] = value
+    panel = raw.get("panel")
+    if isinstance(panel, str) and panel.strip():
+        out["panel"] = panel.strip()
     for key, value in raw.items():
         if key not in _REMARK_KNOWN_KEYS:
             out[key] = value

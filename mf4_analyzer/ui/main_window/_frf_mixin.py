@@ -765,6 +765,7 @@ class FrfMixin:
             key = self._frf_cache_key_for_pane(state, pane)
             if key is None:
                 canvas.full_reset()
+                self._rebind_pane_overlay(canvas, pane)
                 self._replace_analysis_pane_pins(
                     "frf", state.view_id, pane_idx, ())
                 continue
@@ -774,6 +775,7 @@ class FrfMixin:
             if result is None:
                 missing = True
                 canvas.full_reset()
+                self._rebind_pane_overlay(canvas, pane)
                 canvas.show_empty_hint("点击『计算频响』生成")
                 continue
             canvas.set_result(

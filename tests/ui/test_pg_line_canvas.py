@@ -1926,6 +1926,47 @@ def test_remark_snaps_to_curve(canvas):
     assert canvas._remarks == []
 
 
+def test_plot_spectra_reprojects_remarks_and_keeps_dual_cursor(canvas):
+    entry = _entry()
+    entry["fid"] = "fid-a"
+    entry["channel"] = "vib"
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at('amp', 119.0, 0.5)
+    canvas.set_cursor_mode('dual')
+    canvas.set_dual_cursor_frequencies(100.0, 200.0)
+    payload = canvas.snapshot_remarks()
+    assert payload[0]["source"] == ["fid-a", "vib"]
+    assert payload[0]["panel"] == "amp"
+    placement = canvas.snapshot_cursor_placement()
+    assert placement["ax"] == pytest.approx(canvas._cursor_a_frequency)
+    assert placement["bx"] == pytest.approx(canvas._cursor_b_frequency)
+
+    canvas.set_cursor_mode('off')
+    assert canvas._cursor_a_frequency == pytest.approx(placement["ax"])
+    assert all(not line.isVisible() for line in canvas._cursor_a_lines)
+
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    assert canvas.remark_count() == 1
+    rebound = canvas.snapshot_remarks()
+    assert rebound[0]["source"] == ["fid-a", "vib"]
+    canvas.set_cursor_mode('dual')
+    assert canvas._cursor_a_frequency == pytest.approx(placement["ax"])
+    assert all(line.isVisible() for line in canvas._cursor_a_lines)
+
+    canvas.clear_remarks()
+    canvas.restore_remarks(payload)
+    assert canvas.remark_count() == 1
+    canvas.restore_cursor_placement(None)
+    assert canvas._cursor_a_frequency is None
+
+
 def test_remark_markup_revision_bumps_on_edit_not_empty_clear(canvas):
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',

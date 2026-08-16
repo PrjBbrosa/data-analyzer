@@ -78,6 +78,8 @@ from .remarks import (
     remark_at_viewport_pos,
     viewport_pos_to_scene,
 )
+from .overlay_intent import AnalysisRemarkStore, snapshot_frequency_cursor
+from mf4_analyzer.ui.view_overlay_state import normalize_cursor_placement
 from ._shared import show_major_grid_left_bottom_only
 from ._split_mixin import (
     _CollapsedRail,
@@ -387,6 +389,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._entries = []
         self._selected_time_entry_idx = None
         self._remarks = []
+        self._remark_intent = AnalysisRemarkStore()
         self._remark_enabled = False
         self.markup_revision = 0
         self._remark_artist = RemarkArtist(on_moved=self._bump_markup_revision)
@@ -1575,7 +1578,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                      y_auto=True, y_min=0.0, y_max=0.0):
         """Plot FFT curves and show all source time traces below."""
         self.clear_empty_hint()
-        self._clear_frequency_cursor_readout()
+        self._hide_frequency_cursor_items()
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
             for c in curves:
@@ -1584,7 +1587,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # A newly calculated FFT replaces the amplitude collection, so begin
         # its AA hysteresis from the actual combined drawn-point density.
         self._reset_spectrum_aa_density_gate()
-        self.clear_remarks()
+        self._drop_remark_projection()
         # A fresh compute supersedes any stale marker; restore the NORMAL
         # visual state (full-opacity curves rebuilt below + marker removed).
         self._clear_spectrum_stale()
@@ -1648,6 +1651,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # Re-bind history capture + re-apply mouse mode on the rebuilt view
         # (Task C: lets the toolbar's back/forward seed a baseline).
         self._run_replot_callbacks()
+        self._project_remarks()
+        self._project_frequency_cursors()
 
     def plot_time_preview(self, entries, *, title="时域预览",
                           clear_spectrum=True) -> None:
@@ -1665,7 +1670,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 self._plot_amp.removeItem(c)
             self._amp_curves.clear()
             self._reset_spectrum_aa_density_gate()
-            self.clear_remarks()
+            self._drop_remark_projection()
             self._clear_spectrum_stale()
             self._entries = []
             self._selected_time_entry_idx = None
@@ -1684,6 +1689,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._plot_time_preview_entries(list(entries or []), title=title)
         # Task C: re-bind history capture + re-apply mouse mode after rebuild.
         self._run_replot_callbacks()
+        self._project_remarks()
 
     # ------------------------------------------------------------------
     # stale spectrum state (selection changed, awaiting re-compute)
@@ -2507,6 +2513,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                                         antialias=antialias)
                 aux_vb.addItem(curve)
             curve._channel_name = e.get('label', '')
+            curve._overlay_source = self._entry_source(e)
             self._time_curves.append(curve)
             x_bounds.append((float(t[0]), float(t[-1])))
         if x_bounds:
@@ -2850,18 +2857,30 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             line.setValue(float(frequency))
             line.show()
 
-    def _clear_frequency_cursor_readout(self) -> None:
-        """Clear samples/lines without changing the pane's selected mode."""
+    def _hide_frequency_cursor_items(self, *, emit_empty: bool = True) -> None:
         for lines in (
             self._cursor_lines, self._cursor_a_lines, self._cursor_b_lines,
         ):
             self._hide_frequency_cursor_lines(lines)
+        if emit_empty:
+            self.cursor_info.emit("")
+            self.dual_cursor_info.emit("")
+            self.frequency_cursor_rows.emit([])
+
+    def _clear_frequency_cursor_readout(self) -> None:
+        """Wipe A/B placement and hide lines. File-close / empty-canvas path."""
         self._cursor_a_frequency = None
         self._cursor_b_frequency = None
         self._next_dual_cursor = "a"
-        self.cursor_info.emit("")
-        self.dual_cursor_info.emit("")
-        self.frequency_cursor_rows.emit([])
+        self._hide_frequency_cursor_items()
+
+    def _project_frequency_cursors(self) -> None:
+        if self._cursor_mode == "dual" and self._cursor_a_frequency is not None:
+            self.set_dual_cursor_frequencies(
+                self._cursor_a_frequency, self._cursor_b_frequency,
+            )
+            return
+        self._hide_frequency_cursor_items()
 
     def cursor_mode(self) -> str:
         return self._cursor_mode
@@ -2870,7 +2889,27 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if mode not in {"off", "single", "dual"}:
             return
         self._cursor_mode = mode
-        self._clear_frequency_cursor_readout()
+        self._project_frequency_cursors()
+
+    def snapshot_cursor_placement(self):
+        return snapshot_frequency_cursor(
+            self._cursor_a_frequency,
+            self._cursor_b_frequency,
+            cursor_mode=self._cursor_mode,
+        )
+
+    def restore_cursor_placement(self, payload) -> None:
+        normalized = normalize_cursor_placement(
+            payload, cursor_mode=self._cursor_mode,
+        )
+        if normalized is None:
+            self._cursor_a_frequency = None
+            self._cursor_b_frequency = None
+            self._next_dual_cursor = "a"
+        else:
+            self._cursor_a_frequency = normalized["ax"]
+            self._cursor_b_frequency = normalized.get("bx")
+        self._project_frequency_cursors()
 
     def _nearest_frequency(self, frequency):
         rows = self.readout_at(float(frequency))
@@ -3080,10 +3119,115 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         )
 
     def clear_remarks(self) -> None:
+        self._remark_intent.clear()
+        if not self._remarks:
+            return
+        self._drop_remark_projection()
+        self._bump_markup_revision()
+
+    def _drop_remark_projection(self) -> None:
         if not self._remarks:
             return
         self._remark_artist.clear(self._remarks)
-        self._bump_markup_revision()
+
+    def _project_remarks(self) -> None:
+        self._drop_remark_projection()
+        for item in list(self._remark_intent.items):
+            self._restore_one_remark(item)
+
+    def _restore_one_remark(self, item) -> None:
+        if not isinstance(item, dict):
+            return
+        panel = str(item.get("panel") or "amp")
+        x = item.get("x")
+        try:
+            x = float(x)
+        except (TypeError, ValueError):
+            return
+        source = item.get("source")
+        label_dx = item.get("label_dx")
+        label_dy = item.get("label_dy")
+        if panel == "time":
+            self._restore_time_remark(
+                source, x, label_dx=label_dx, label_dy=label_dy,
+            )
+            return
+        self._restore_amp_remark(
+            source, x, label_dx=label_dx, label_dy=label_dy,
+        )
+
+    def _restore_amp_remark(self, source, x, *, label_dx, label_dy) -> None:
+        entry = self._entry_for_source(source)
+        if entry is None:
+            return
+        freq = np.asarray(entry.get("freq", ()), dtype=float)
+        amp = np.asarray(entry.get("amp", ()), dtype=float)
+        n = min(freq.size, amp.size)
+        if n == 0:
+            return
+        idx = int(np.argmin(np.abs(freq[:n] - x)))
+        self._append_remark(
+            vb=self._plot_amp.vb,
+            x=float(freq[idx]),
+            y=float(amp[idx]),
+            color=entry.get("color", "#2563eb"),
+            unit_x="Hz",
+            unit_y=self._amp_y_unit(),
+            plot=self._plot_amp,
+            source=self._entry_source(entry) or source,
+            panel="amp",
+            label_dx=label_dx,
+            label_dy=label_dy,
+            record_intent=False,
+            bump=False,
+        )
+
+    def _restore_time_remark(self, source, x, *, label_dx, label_dy) -> None:
+        parsed = None
+        if isinstance(source, (list, tuple)) and len(source) == 2:
+            parsed = (str(source[0]), str(source[1]))
+        for curve, vb, plot in self._time_curve_owners():
+            curve_source = getattr(curve, "_overlay_source", None)
+            if parsed is not None and curve_source != parsed:
+                continue
+            if parsed is None and curve_source is not None:
+                continue
+            try:
+                xs, ys = curve.getData()
+            except Exception:
+                continue
+            if xs is None or ys is None:
+                continue
+            xs = np.asarray(xs, dtype=float)
+            ys = np.asarray(ys, dtype=float)
+            mask = np.isfinite(xs) & np.isfinite(ys)
+            if not mask.any():
+                continue
+            xs, ys = xs[mask], ys[mask]
+            idx = int(np.argmin(np.abs(xs - x)))
+            self._append_remark(
+                vb=vb,
+                x=float(xs[idx]),
+                y=float(ys[idx]),
+                color=self._curve_color(curve),
+                unit_x="s",
+                unit_y="",
+                plot=plot,
+                source=curve_source or source,
+                panel="time",
+                label_dx=label_dx,
+                label_dy=label_dy,
+                record_intent=False,
+                bump=False,
+            )
+            return
+
+    def snapshot_remarks(self):
+        return self._remark_intent.snapshot(self._remarks)
+
+    def restore_remarks(self, payload) -> None:
+        self._remark_intent.replace(payload)
+        self._project_remarks()
 
     def _bump_markup_revision(self) -> None:
         self.markup_revision = int(self.markup_revision) + 1
@@ -3092,9 +3236,35 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def remark_count(self) -> int:
         return len(self._remarks)
 
+    @staticmethod
+    def _entry_source(entry):
+        if not isinstance(entry, dict):
+            return None
+        fid, channel = entry.get("fid"), entry.get("channel")
+        if fid is None or channel is None:
+            return None
+        return (str(fid), str(channel))
+
+    def _entry_for_source(self, source):
+        parsed = None
+        if isinstance(source, (list, tuple)) and len(source) == 2:
+            parsed = (str(source[0]), str(source[1]))
+        matches = []
+        for entry in self._entries:
+            identity = self._entry_source(entry)
+            if parsed is None:
+                matches.append(entry)
+            elif identity == parsed:
+                return entry
+        if parsed is None and len(matches) == 1:
+            return matches[0]
+        return None
+
     def _append_remark(
         self, *, vb, x: float, y: float, color: str, unit_x: str,
-        unit_y: str = "", plot=None,
+        unit_y: str = "", plot=None, source=None, panel=None,
+        label_dx=None, label_dy=None, record_intent: bool = True,
+        bump: bool = True,
     ) -> None:
         point = RemarkPoint(
             vb=vb,
@@ -3103,13 +3273,23 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             color=color or "#dc2626",
             unit_x=unit_x,
             unit_y=unit_y,
+            label_dx=label_dx,
+            label_dy=label_dy,
         )
         remark = self._remark_artist.add(point)
         remark['plot'] = plot
+        if panel:
+            remark['panel'] = panel
+        if source is not None:
+            remark['source'] = source
         self._remarks.append(remark)
-        self._bump_markup_revision()
+        if record_intent:
+            self._remark_intent.record(remark, panel=panel)
+        if bump:
+            self._bump_markup_revision()
 
     def _remove_remark(self, remark) -> None:
+        self._remark_intent.discard(remark)
         self._remark_artist.remove(remark)
         try:
             self._remarks.remove(remark)
@@ -3135,10 +3315,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             sx, sy = float(freq_arr[idx]), float(amp_arr[idx])
             dy = abs(sy - y)
             if best is None or dy < best[0]:
-                best = (dy, sx, sy, e.get('color', '#2563eb'))
+                best = (dy, sx, sy, e.get('color', '#2563eb'), e)
         if best is None:
             return
-        _dy, sx, sy, color = best
+        _dy, sx, sy, color, entry = best
         self._append_remark(
             vb=self._plot_amp.vb,
             x=sx,
@@ -3147,6 +3327,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             unit_x="Hz",
             unit_y=self._amp_y_unit(),
             plot=self._plot_amp,
+            source=self._entry_source(entry),
+            panel="amp",
         )
 
     def _nearest_amp_remark_candidate(self, scene_pos):
@@ -3197,14 +3379,14 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 dy = pt.y() - scene_pos.y()
                 d2 = dx * dx + dy * dy
                 if best is None or d2 < best[0]:
-                    best = (d2, sx, sy, e.get('color', '#2563eb'))
+                    best = (d2, sx, sy, e.get('color', '#2563eb'), e)
         return best
 
     def _add_amp_remark_at_scene(self, scene_pos) -> None:
         best = self._nearest_amp_remark_candidate(scene_pos)
         if best is None:
             return
-        _d2, sx, sy, color = best
+        _d2, sx, sy, color, entry = best
         self._append_remark(
             vb=self._plot_amp.vb,
             x=sx,
@@ -3213,6 +3395,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             unit_x="Hz",
             unit_y=self._amp_y_unit(),
             plot=self._plot_amp,
+            source=self._entry_source(entry),
+            panel="amp",
         )
 
     def _time_curve_owners(self):
@@ -3243,7 +3427,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             click_scene = self._plot_time.vb.mapViewToScene(QPointF(x, y))
         except Exception:
             return
-        best = None  # (dist2, sx, sy, vb, plot_or_none, color)
+        best = None  # (dist2, sx, sy, vb, plot_or_none, color, source)
         for curve, vb, plot in self._time_curve_owners():
             try:
                 xs, ys = curve.getData()
@@ -3272,10 +3456,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 dy = pt.y() - click_scene.y()
                 d2 = dx * dx + dy * dy
                 if best is None or d2 < best[0]:
-                    best = (d2, sx, sy, vb, plot, self._curve_color(curve))
+                    best = (
+                        d2, sx, sy, vb, plot, self._curve_color(curve),
+                        getattr(curve, "_overlay_source", None),
+                    )
         if best is None:
             return
-        _d2, sx, sy, vb, plot, color = best
+        _d2, sx, sy, vb, plot, color, source = best
         self._append_remark(
             vb=vb,
             x=sx,
@@ -3284,6 +3471,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             unit_x="s",
             unit_y="",
             plot=plot,
+            source=source,
+            panel="time",
         )
 
     def remove_remark_near(self, which: str, x: float) -> None:

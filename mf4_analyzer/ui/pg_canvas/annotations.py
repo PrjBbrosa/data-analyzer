@@ -509,16 +509,18 @@ class AnnotationManager(_CanvasBackref):
         source = _json_source_list(remark.get("source"))
         x = _finite_float(remark.get("data_x"))
         y = _finite_float(remark.get("data_y"))
-        offset = remark_label_offset(remark)
-        if source is None or x is None or y is None or offset is None:
+        if source is None or x is None or y is None:
             return None
-        return normalize_remark({
+        payload = {
             "source": source,
             "x": x,
             "y": y,
-            "label_dx": float(offset[0]),
-            "label_dy": float(offset[1]),
-        })
+        }
+        offset = remark_label_offset(remark)
+        if offset is not None:
+            payload["label_dx"] = float(offset[0])
+            payload["label_dy"] = float(offset[1])
+        return normalize_remark(payload)
 
     def _pop_intent_for_remark(self, remark):
         source = _source_tuple(remark.get("source") if isinstance(remark, dict) else None)
@@ -538,7 +540,12 @@ class AnnotationManager(_CanvasBackref):
         self._intent.pop(best_i)
 
     def snapshot_remarks(self):
-        """Return the Qt-free intent list, reading live offsets back when drawn."""
+        """Return the Qt-free intent list, reading live offsets back when drawn.
+
+        Intent is the source of truth. Live remarks that never made it into
+        ``_intent`` (for example when a label offset was unreadable at add
+        time) are appended so capture still sees what is on the plot.
+        """
         used = set()
         payload = []
         for intent in list(self._intent):
@@ -555,7 +562,16 @@ class AnnotationManager(_CanvasBackref):
                     item["x"] = x
                 if y is not None:
                     item["y"] = y
-            payload.append(item)
+            normalized = normalize_remark(item)
+            if normalized is not None:
+                payload.append(normalized)
+        for i, remark in enumerate(self.remarks):
+            if i in used:
+                continue
+            extra = self._intent_dict_from_remark(remark)
+            if extra is None:
+                continue
+            payload.append(extra)
         return payload
 
     def _live_remark_for_intent(self, intent, used):
@@ -657,6 +673,8 @@ class AnnotationManager(_CanvasBackref):
             return
         sx, sy = snapped
         source = _source_tuple(raw.get("source"))
+        # Missing / non-finite offsets stay None so RemarkArtist uses the
+        # ViewBox 6%/8% heuristic (spec D2).
         point = RemarkPoint(
             vb=vb,
             x=sx,

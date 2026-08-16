@@ -7,6 +7,11 @@ a contextual provides it; older duck-typed contextuals still expose only
 """
 from __future__ import annotations
 
+from .view_overlay_state import (
+    normalize_cursor_placement,
+    normalize_remarks,
+)
+
 
 def capture_params_to_state(ctx, state) -> None:
     current_params = getattr(ctx, "current_params", None)
@@ -23,3 +28,25 @@ def apply_params_from_state(ctx, state) -> None:
     reset = getattr(ctx, "reset_to_defaults", None)
     if callable(reset):
         reset()
+
+
+def capture_overlay_from_canvas(canvas, pane) -> None:
+    """Write live analysis remarks / frequency placement onto one pane."""
+    snapshot = getattr(canvas, "snapshot_remarks", None)
+    if callable(snapshot):
+        pane.remarks = normalize_remarks(snapshot())
+    placement = getattr(canvas, "snapshot_cursor_placement", None)
+    if callable(placement):
+        pane.cursor_placement = normalize_cursor_placement(
+            placement(), cursor_mode=getattr(pane, "cursor_mode", "off"),
+        )
+
+
+def apply_overlay_to_canvas(canvas, pane) -> None:
+    """Replace canvas overlay intent from the pane. Plot closeout projects."""
+    restore = getattr(canvas, "restore_remarks", None)
+    if callable(restore):
+        restore(getattr(pane, "remarks", None) or [])
+    restore_placement = getattr(canvas, "restore_cursor_placement", None)
+    if callable(restore_placement):
+        restore_placement(getattr(pane, "cursor_placement", None))

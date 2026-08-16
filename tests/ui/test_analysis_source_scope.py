@@ -35,7 +35,7 @@ def test_analysis_view_default_attachment_is_explicitly_empty():
     state = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert state.attached_file_ids == []
     payload = state.to_dict()
-    assert payload["schema"] == 7
+    assert payload["schema"] == 8
     assert payload["attached_file_ids"] == []
     restored = AnalysisViewState.from_dict(payload)
     assert restored.attached_file_ids == []

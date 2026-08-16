@@ -57,8 +57,6 @@ def test_normalize_remark_emits_tuple_source_as_json_two_list():
         {"source": "ab", "x": 1.0, "y": 2.0, "label_dx": 0.0, "label_dy": 0.0},
         {"source": ["fid-a", "torque"], "y": 2.0, "label_dx": 0.0, "label_dy": 0.0},
         {"source": ["fid-a", "torque"], "x": 1.0, "label_dx": 0.0, "label_dy": 0.0},
-        {"source": ["fid-a", "torque"], "x": 1.0, "y": 2.0, "label_dy": 0.0},
-        {"source": ["fid-a", "torque"], "x": 1.0, "y": 2.0, "label_dx": 0.0},
         {"source": ["fid-a", None], "x": 1.0, "y": 2.0, "label_dx": 0.0, "label_dy": 0.0},
     ],
 )
@@ -66,12 +64,65 @@ def test_normalize_remark_drops_missing_short_or_mapping_source(raw):
     assert normalize_remark(raw) is None
 
 
-@pytest.mark.parametrize("key", ["x", "y", "label_dx", "label_dy"])
+@pytest.mark.parametrize("key", ["x", "y"])
 @pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan, "nope", True, None])
 def test_normalize_remark_drops_non_finite_numbers(key, bad):
     raw = dict(_LEGAL)
     raw[key] = bad
     assert normalize_remark(raw) is None
+
+
+@pytest.mark.parametrize("key", ["label_dx", "label_dy"])
+@pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan, "nope", True, None])
+def test_normalize_remark_omits_non_finite_label_offset(key, bad):
+    raw = dict(_LEGAL)
+    raw[key] = bad
+    got = normalize_remark(raw)
+    assert got is not None
+    assert got["source"] == ["fid-a", "torque"]
+    assert got["x"] == 1.25
+    assert got["y"] == 3.5
+    assert key not in got
+    other = "label_dy" if key == "label_dx" else "label_dx"
+    assert got[other] == _LEGAL[other]
+
+
+@pytest.mark.parametrize("panel", [
+    "amp", "time", "heatmap", "magnitude", "phase", "coherence",
+])
+def test_normalize_remark_keeps_analysis_panel(panel):
+    raw = {
+        "source": ["fid-a", "torque"],
+        "x": 120.0,
+        "y": 0.5,
+        "panel": panel,
+    }
+    got = normalize_remark(raw)
+    assert got is not None
+    assert got["panel"] == panel
+
+
+def test_normalize_remark_keeps_xy_when_label_offset_omitted():
+    raw = {"source": ["fid-a", "torque"], "x": 1.25, "y": 3.5, "note": "keep"}
+    got = normalize_remark(raw)
+    assert got == {
+        "source": ["fid-a", "torque"],
+        "x": 1.25,
+        "y": 3.5,
+        "note": "keep",
+    }
+    assert "label_dx" not in got
+    assert "label_dy" not in got
+
+    only_dx = {"source": ["fid-a", "torque"], "x": 1.25, "y": 3.5, "label_dx": 0.08}
+    got_dx = normalize_remark(only_dx)
+    assert got_dx == {
+        "source": ["fid-a", "torque"],
+        "x": 1.25,
+        "y": 3.5,
+        "label_dx": 0.08,
+    }
+    assert "label_dy" not in got_dx
 
 
 def test_normalize_remark_strips_prefixed_display_name_to_raw_channel():

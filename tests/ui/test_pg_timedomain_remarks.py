@@ -260,3 +260,52 @@ def test_user_remove_drops_intent_from_snapshot(qapp):
     canvas._annotations._remove_remark_by_index(0)
     assert canvas.remark_count() == 0
     assert canvas.snapshot_remarks() == []
+
+
+def test_snapshot_falls_back_to_live_remarks_when_intent_empty(qapp):
+    canvas = _pg_canvas(qapp)
+    _plot_speed(canvas)
+    _add_remark_on_speed(canvas)
+    assert canvas._annotations.remarks
+    canvas._annotations._intent = []
+
+    snap = canvas.snapshot_remarks()
+    assert len(snap) == 1
+    assert snap[0]["source"] == ["fid-1", "speed"]
+    assert math.isfinite(snap[0]["x"])
+    assert math.isfinite(snap[0]["y"])
+
+    from mf4_analyzer.ui.view_overlay_state import normalize_remarks
+
+    captured = normalize_remarks(snap)
+    assert captured
+    assert captured[0]["source"] == ["fid-1", "speed"]
+    assert math.isfinite(captured[0]["x"])
+    assert math.isfinite(captured[0]["y"])
+
+
+def test_restore_remarks_without_label_offset_uses_viewbox_heuristic(qapp):
+    canvas = _pg_canvas(qapp)
+    _plot_speed(canvas)
+    payload = [{"source": ["fid-1", "speed"], "x": 0.51, "y": 999.0}]
+
+    canvas.restore_remarks(payload)
+
+    assert canvas.remark_count() == 1
+    live = canvas._annotations.remarks[0]
+    assert live["source"] == ("fid-1", "speed")
+    assert live["data_x"] == pytest.approx(0.5)
+    assert live["data_y"] == pytest.approx(20.0)
+    vb = live["vb"]
+    x_range, y_range = vb.viewRange()
+    heuristic_ox = (float(x_range[1]) - float(x_range[0])) * 0.06
+    heuristic_oy = (float(y_range[1]) - float(y_range[0])) * 0.08
+    pos = live["text"].pos()
+    assert float(pos.x()) == pytest.approx(0.5 + heuristic_ox)
+    assert float(pos.y()) == pytest.approx(20.0 + heuristic_oy)
+
+    snap = canvas.snapshot_remarks()
+    assert len(snap) == 1
+    assert snap[0]["source"] == ["fid-1", "speed"]
+    assert "label_dx" not in canvas._annotations._intent[0]
+    assert "label_dy" not in canvas._annotations._intent[0]

@@ -88,6 +88,36 @@ def test_save_project_writes_file(qapp, tmp_path):
     assert doc.current_mode == "time"
 
 
+def test_save_project_writes_live_remarks_when_intent_empty(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=40)
+    proj = tmp_path / "remarks.tlproj"
+
+    mw = MainWindow()
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+
+    _add_remark_on_first_axis(mw.canvas_time, 0.10, 10.0)
+    mw.canvas_time._annotations._intent = []
+    assert mw.canvas_time.remark_count() >= 1
+
+    mw.save_project(proj)
+    payload = json.loads(proj.read_text(encoding="utf-8"))
+    remarks = payload["views"][0]["remarks"]
+    assert remarks
+    assert remarks[0]["source"][1] == "rpm"
+    assert isinstance(remarks[0]["x"], (int, float))
+    assert isinstance(remarks[0]["y"], (int, float))
+
+
 def test_open_project_roundtrip(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
@@ -1288,3 +1318,65 @@ def test_view_switch_does_not_leak_remarks_across_time_views(qapp, tmp_path):
     snap = mw.canvas_time.snapshot_remarks()
     assert snap[0]["source"][0] == fid
     assert snap[0]["source"][1] == "rpm"
+
+
+def test_project_roundtrip_restores_fft_remarks_and_frequency_cursor(
+        qapp, tmp_path, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=256)
+    proj = tmp_path / "fft_overlay.tlproj"
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.toolbar._set_mode("fft")
+    qapp.processEvents()
+    mw._attach_files_to_active_context([fid])
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    qapp.processEvents()
+    mw.do_fft()
+    qapp.processEvents()
+
+    canvas = mw.chart_stack.page_fft.pane_canvas(0)
+    assert canvas._amp_curves, "FFT compute must draw a spectrum"
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at("amp", 10.0, 0.0)
+    live = canvas.snapshot_remarks()
+    assert live
+    saved_x = live[0]["x"]
+    mw.chart_stack.page_fft._cards[0].set_cursor_mode("dual")
+    canvas.set_dual_cursor_frequencies(8.0, 20.0)
+    placement = canvas.snapshot_cursor_placement()
+    assert placement is not None
+    mw.save_project(proj)
+
+    payload = json.loads(proj.read_text(encoding="utf-8"))
+    pane = payload["analysis_views"]["fft"]["views"][0]["panes"][0]
+    assert pane["remarks"][0]["source"][1] == "rpm"
+    assert pane["cursor_placement"]["ax"] == pytest.approx(placement["ax"])
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.resize(1200, 800)
+    mw2.show()
+    mw2.open_project(proj)
+    _drain_analysis_restore(qapp, mw2)
+    mw2.toolbar._set_mode("fft")
+    qapp.processEvents()
+
+    canvas2 = mw2.chart_stack.page_fft.pane_canvas(0)
+    restored_fid = next(iter(mw2.files))
+    pane_state = mw2.analysis_managers["fft"].get(0).panes[0]
+    assert pane_state.remarks[0]["source"] == [restored_fid, "rpm"]
+    assert pane_state.remarks[0]["x"] == pytest.approx(saved_x)
+    assert canvas2.remark_count() == 1
+    assert canvas2._cursor_a_frequency == pytest.approx(placement["ax"])
+    assert canvas2._cursor_b_frequency == pytest.approx(placement["bx"])
+    assert all(line.isVisible() for line in canvas2._cursor_a_lines)
+

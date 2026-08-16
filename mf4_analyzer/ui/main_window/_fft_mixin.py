@@ -464,6 +464,8 @@ class FFTMixin:
                 'amp_for_xlim': amp,
                 'time': t,
                 'signal': sig,
+                'fid': sig_data[0] if sig_data else None,
+                'channel': sig_data[1] if sig_data else None,
             }
             self.canvas_fft.plot_spectra(
                 [entry],

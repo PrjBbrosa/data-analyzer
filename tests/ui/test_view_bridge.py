@@ -524,6 +524,28 @@ def test_capture_controls_empty_snapshot_clears_previous_remarks():
     assert state.remarks == []
 
 
+def test_capture_controls_keeps_remarks_without_label_offset():
+    win = _Window()
+    state = ViewState(name="v", tab_color="#000000", remarks=[])
+    win.chart_stack.canvas_time._remarks_snapshot = [{
+        "source": ["f1", "rpm"],
+        "x": 1.25,
+        "y": 3.5,
+        "note": "keep",
+    }]
+
+    view_bridge.capture_controls_into(state, win)
+
+    assert state.remarks == [{
+        "source": ["f1", "rpm"],
+        "x": 1.25,
+        "y": 3.5,
+        "note": "keep",
+    }]
+    assert "label_dx" not in state.remarks[0]
+    assert "label_dy" not in state.remarks[0]
+
+
 def test_capture_stores_placement_regardless_of_cursor_mode():
     win = _Window()
     canvas = win.chart_stack.canvas_time

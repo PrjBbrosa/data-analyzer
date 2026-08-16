@@ -191,6 +191,9 @@ class RemarkArtist:
             "data_x": float(point.x),
             "data_y": float(point.y),
             "data_z": None if point.z is None else float(point.z),
+            "display_x": (
+                None if point.display_x is None else float(point.display_x)
+            ),
         }
         self._connect_leader(remark)
         return remark

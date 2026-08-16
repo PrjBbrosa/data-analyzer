@@ -243,6 +243,43 @@ def test_frf_canvas_remarks_snap_to_panel_data_and_keep_hz_on_log_axis(qtbot):
     assert canvas.remark_count() == 0
 
 
+def test_frf_set_result_reprojects_remarks_and_keeps_dual_cursor(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    context = {"output_source": ("fid-a", "accel"), "output_unit": "m/s", "input_unit": "N"}
+    canvas.set_result(
+        _result(),
+        {"frequency_scale": "linear", "magnitude_scale": "linear"},
+        context,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at("magnitude", 1.0)
+    canvas.set_cursor_mode("dual")
+    canvas.set_dual_cursor_frequencies(1.0, 4.0)
+    payload = canvas.snapshot_remarks()
+    assert payload[0]["source"] == ["fid-a", "accel"]
+    assert payload[0]["panel"] == "magnitude"
+    placement = canvas.snapshot_cursor_placement()
+    assert placement["ax"] == pytest.approx(1.0)
+    assert placement["bx"] == pytest.approx(4.0)
+
+    canvas.set_cursor_mode("off")
+    assert canvas._cursor_a_frequency == pytest.approx(1.0)
+
+    canvas.set_result(
+        _result(),
+        {"frequency_scale": "linear", "magnitude_scale": "linear"},
+        context,
+    )
+    assert canvas.remark_count() == 1
+    canvas.set_cursor_mode("dual")
+    assert all(line.isVisible() for line in canvas._cursor_a_lines)
+    canvas.restore_cursor_placement(None)
+    assert canvas._cursor_a_frequency is None
+
+
 def test_frf_remark_markup_revision_bumps_on_edit_not_empty_clear(qtbot):
     from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
 

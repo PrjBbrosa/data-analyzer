@@ -373,6 +373,7 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
                         [fid_map[source[0]], source[1]]
                         if source and source[0] in fid_map else None
                     )
+                pn["remarks"] = remap_remarks(pane.get("remarks"), fid_map)
                 panes.append(pn)
             v["panes"] = panes
             if "attached_file_ids" in view:

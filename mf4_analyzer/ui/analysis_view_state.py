@@ -16,6 +16,10 @@ from typing import Any, Iterable, Mapping, Sequence
 from uuid import uuid4
 
 from ..db_reference import migrate_legacy_reference_params
+from .view_overlay_state import (
+    normalize_cursor_placement,
+    normalize_remarks,
+)
 
 ChannelKey = tuple[str, str]
 MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for later N
@@ -25,11 +29,12 @@ MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for late
 # shared frequency-domain off/single/dual cursor mode for FFT and FRF panes;
 # schema 6 removes the obsolete FRF Time-View link from persisted output;
 # schema 7 adds per-analysis-View ``attached_file_ids`` (Stage 1 source isolation).
+# schema 8 adds per-pane point remarks and frequency dual-cursor placement.
 # The additions are field-presence tolerant -- from_dict() keys the
 # migration off "params has db_reference and no db_reference_mode", NOT this
 # number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
-_SCHEMA = 7
+_SCHEMA = 8
 
 
 def _coerce_key(value: Any) -> ChannelKey:
@@ -110,6 +115,10 @@ class PaneState:
     # FFT and FRF only.  ``frf_cursor_enabled`` was the schema-4 predecessor;
     # old project payloads migrate its true value to the single-cursor mode.
     cursor_mode: str = "off"
+    # Point remarks and frequency A/B placement. Same Qt-free shapes as
+    # time-domain ViewState; analysis canvases reproject after recompute.
+    remarks: list[dict[str, Any]] = field(default_factory=list)
+    cursor_placement: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +139,10 @@ class PaneState:
                 if self.effective_time_range else None
             ),
             "cursor_mode": self.cursor_mode,
+            "remarks": normalize_remarks(self.remarks),
+            "cursor_placement": normalize_cursor_placement(
+                self.cursor_placement, cursor_mode=self.cursor_mode,
+            ),
         }
 
     @classmethod
@@ -158,6 +171,11 @@ class PaneState:
             ),
             effective_time_range=pair(data.get("effective_time_range")),
             cursor_mode=_cursor_mode_from_data(data),
+            remarks=normalize_remarks(data.get("remarks")),
+            cursor_placement=normalize_cursor_placement(
+                data.get("cursor_placement"),
+                cursor_mode=_cursor_mode_from_data(data),
+            ),
         )
 
 

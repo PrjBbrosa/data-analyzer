@@ -88,6 +88,7 @@ from mf4_analyzer.ui.pg_canvas.remarks import (
     remark_at_viewport_pos,
     viewport_pos_to_scene,
 )
+from mf4_analyzer.ui.pg_canvas.overlay_intent import AnalysisRemarkStore
 from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,
     _WheelDeltaGraphicsLayoutWidget,
@@ -318,6 +319,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._raw_title = ''
         self._split_title_width = None
         self._remarks = []
+        self._remark_intent = AnalysisRemarkStore()
+        self._overlay_source = None
         self._remark_enabled = False
         self.markup_revision = 0
         self._remark_artist = RemarkArtist(on_moved=self._bump_markup_revision)
@@ -837,10 +840,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         finally:
             self._heatmap_range_updating = False
 
-        # Remark labels embed the z value, so letting them survive a
-        # replot would display stale data against the new matrix (the
-        # mpl rebuild path dropped annotations on every replot anyway).
-        self.clear_remarks()
+        # Remark labels embed the z value, so a replot must re-snap to the
+        # new matrix. Intent stays; Qt items are a projection.
+        self._drop_remark_projection()
         self._matrix_disp = m
         self._extents = (x0, x1, y0, y1)
         self._has_result = True
@@ -851,6 +853,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self.levels_rebased.emit()
         self.layout_geometry_changed.emit()
         self.manual_zoom_changed.emit(False)
+        self._project_remarks()
 
     def has_result(self) -> bool:
         return self._has_result
@@ -867,6 +870,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         """
         self.clear_empty_hint()
         self.clear_remarks()
+        self._overlay_source = None
         self._img.clear()
         if self._cbar is not None:
             # setImageItem(insert_in=...) nested the bar in the host
@@ -1754,6 +1758,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         result = self._result
         return str(getattr(result, 'unit', '') or '')
 
+    def set_overlay_source(self, source) -> None:
+        if isinstance(source, (list, tuple)) and len(source) == 2:
+            self._overlay_source = (str(source[0]), str(source[1]))
+            return
+        self._overlay_source = None
+
     def set_remark_enabled(self, enabled: bool) -> None:
         self._remark_enabled = bool(enabled)
         # Right-click priority (measured, pg 0.14.0): ViewBox.mouseClickEvent
@@ -1770,10 +1780,62 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         )
 
     def clear_remarks(self) -> None:
+        self._remark_intent.clear()
+        if not self._remarks:
+            return
+        self._drop_remark_projection()
+        self._bump_markup_revision()
+
+    def _drop_remark_projection(self) -> None:
         if not self._remarks:
             return
         self._remark_artist.clear(self._remarks)
-        self._bump_markup_revision()
+
+    def _project_remarks(self) -> None:
+        self._drop_remark_projection()
+        for item in list(self._remark_intent.items):
+            self._restore_one_remark(item)
+
+    def snapshot_remarks(self):
+        return self._remark_intent.snapshot(self._remarks)
+
+    def restore_remarks(self, payload) -> None:
+        self._remark_intent.replace(payload)
+        self._project_remarks()
+
+    def _restore_one_remark(self, item) -> None:
+        if not isinstance(item, dict):
+            return
+        source = item.get("source")
+        if source is not None and self._overlay_source is not None:
+            parsed = (str(source[0]), str(source[1])) if (
+                isinstance(source, (list, tuple)) and len(source) == 2
+            ) else None
+            if parsed is not None and parsed != self._overlay_source:
+                return
+        try:
+            x = float(item["x"])
+            y = float(item["y"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if self._extents is not None:
+            x0, x1, y0, y1 = self._extents
+            x = min(max(x, x0), x1)
+            y = min(max(y, y0), y1)
+        point = self._remark_point_at(
+            x, y,
+            label_dx=item.get("label_dx"),
+            label_dy=item.get("label_dy"),
+        )
+        if point is None:
+            return
+        remark = self._remark_artist.add(point)
+        remark["panel"] = "heatmap"
+        if self._overlay_source is not None:
+            remark["source"] = self._overlay_source
+        elif source is not None:
+            remark["source"] = source
+        self._remarks.append(remark)
 
     def _bump_markup_revision(self) -> None:
         self.markup_revision = int(self.markup_revision) + 1
@@ -1782,7 +1844,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def remark_count(self) -> int:
         return len(self._remarks)
 
-    def _remark_point_at(self, x: float, y: float):
+    def _remark_point_at(self, x: float, y: float, *, label_dx=None, label_dy=None):
         if not self._has_result or self._matrix_disp is None:
             return None
         if self._extents is None:
@@ -1808,6 +1870,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             unit_x=self._axis_label_unit(self._x_label),
             unit_y=self._axis_label_unit(self._y_label),
             unit_z=self._z_unit(),
+            label_dx=label_dx,
+            label_dy=label_dy,
         )
 
     def add_remark_at(self, x: float, y: float) -> None:
@@ -1816,7 +1880,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         point = self._remark_point_at(x, y)
         if point is None:
             return
-        self._remarks.append(self._remark_artist.add(point))
+        remark = self._remark_artist.add(point)
+        remark["panel"] = "heatmap"
+        if self._overlay_source is not None:
+            remark["source"] = self._overlay_source
+        self._remarks.append(remark)
+        self._remark_intent.record(remark, panel="heatmap")
         self._bump_markup_revision()
 
     def remove_remark_near(self, x: float, y: float) -> None:
@@ -1831,6 +1900,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             return ((p[0][0] - x) / sx) ** 2 + ((p[1][0] - y) / sy) ** 2
 
         nearest = min(self._remarks, key=dist)
+        self._remark_intent.discard(nearest)
         self._remark_artist.remove(nearest)
         self._remarks.remove(nearest)
         self._bump_markup_revision()

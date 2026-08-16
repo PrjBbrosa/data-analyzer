@@ -549,6 +549,9 @@ class FFTTimeMixin:
         # the canvas's lowercase token ('amplitude_db' / 'amplitude') in
         # FFTTimeContextual.get_params, so no translation needed.
         z_auto = bool(p.get('z_auto', False))
+        setter = getattr(canvas, "set_overlay_source", None)
+        if callable(setter):
+            setter(source)
         amp_mode = p['amplitude_mode']
         # weighting: prefer the COMPUTED result's own SpectrogramParams (the
         # authoritative value actually used to build this matrix) over the

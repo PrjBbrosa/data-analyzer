@@ -876,10 +876,8 @@ def test_remark_markup_revision_bumps_on_edit_not_empty_clear(canvas):
     assert canvas.markup_revision == 5
 
 
-def test_replot_clears_stale_remarks(canvas):
-    # Unlike the mpl labels (x, y only), pg remark labels embed the z
-    # value — surviving a replot would display stale data. The mpl
-    # rebuild path (self.clear()) dropped annotations on every replot.
+def test_replot_reprojects_remarks_with_new_z(canvas):
+    canvas.set_overlay_source(("fid-a", "rpm"))
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
         amplitude_mode='amplitude', z_auto=True,
@@ -891,8 +889,28 @@ def test_replot_clears_stale_remarks(canvas):
         matrix=_mat() * 7.0, x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
         amplitude_mode='amplitude', z_auto=True,
     )
-    # Value at (5, 4) is now 7 — the retained label would still say 1.
-    assert canvas._remarks == []
+    assert len(canvas._remarks) == 1
+    assert 'Z=7' in canvas._remarks[0]['text'].textItem.toPlainText()
+    payload = canvas.snapshot_remarks()
+    assert payload[0]["source"] == ["fid-a", "rpm"]
+    assert payload[0]["panel"] == "heatmap"
+
+
+def test_heatmap_snapshot_restore_keeps_source_and_panel(canvas):
+    canvas.set_overlay_source(("fid-a", "rpm"))
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at(5.0, 4.0)
+    payload = canvas.snapshot_remarks()
+    assert payload[0]["source"] == ["fid-a", "rpm"]
+    assert payload[0]["panel"] == "heatmap"
+    canvas.clear_remarks()
+    assert canvas.remark_count() == 0
+    canvas.restore_remarks(payload)
+    assert canvas.remark_count() == 1
 
 
 def test_right_click_on_colorbar_region_keeps_remarks(canvas, qapp):
@@ -1121,6 +1139,8 @@ def test_full_reset_clears_state(canvas):
     assert len(canvas._remarks) == 1  # precondition pins the scenario
     canvas.full_reset()
     assert canvas._remarks == []
+    assert canvas.snapshot_remarks() == []
+    assert canvas._overlay_source is None
     assert not canvas.has_result()
     assert canvas._cbar is None
     assert canvas._matrix_disp is None
