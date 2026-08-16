@@ -39,9 +39,9 @@ RATIO_MIN = 0.40
 RATIO_MAX = 0.80
 RATIO_STEP = 0.05
 # The top-level .tlproj schema stays at 2.  This independent, nested schema
-# carries the Board-only evolution so ordinary projects remain readable by the
-# rest of the session codec.
-ULTRAVIEW_SCHEMA = 3
+# carries the UltraView workspace evolution so ordinary projects remain
+# readable by the rest of the session codec.
+ULTRAVIEW_SCHEMA = 4
 DIGEST_SCHEMA = 1
 _BOARD_PAYLOAD_KEYS = frozenset(
     {
@@ -49,7 +49,6 @@ _BOARD_PAYLOAD_KEYS = frozenset(
         "name",
         "show_titles",
         "show_sources",
-        "show_card_actions",
         "unplaced",
         "layout_mode",
         "layout_id",
@@ -59,6 +58,10 @@ _BOARD_PAYLOAD_KEYS = frozenset(
         "viewport",
     }
 )
+# Schema 1–3 stored this workspace preference on every Board.  Consume the
+# retired key during parsing so an editable schema-4 re-save cannot recreate a
+# conflicting Board-level source of truth.
+_RETIRED_BOARD_PAYLOAD_KEYS = frozenset({"show_card_actions"})
 
 LAYOUT_SLOTS: dict[str, tuple[str, ...]] = {
     "split_horizontal": ("left", "right"),
@@ -324,8 +327,6 @@ class UltraViewBoardState:
     unplaced: list[UltraViewRef] = field(default_factory=list)
     show_titles: bool = True
     show_sources: bool = True
-    # True keeps the header action bar visible; false reveals it on hover/focus.
-    show_card_actions: bool = True
     layout_mode: str = LAYOUT_MODE_FREE_GRID
     free_grid: list[FreeGridPlacement] = field(default_factory=list)
     free_grid_default_size: str = "standard"
@@ -346,6 +347,10 @@ class UltraViewWorkspaceState:
     # this application cannot interpret it yet.  The coordinator serializes
     # this blob unchanged unless the user mutates the workspace.
     opaque_payload: Mapping[str, Any] | None = None
+    # False reveals card actions on hover/focus; true pins them for every Board.
+    # Kept after existing fields so positional construction of this Qt-free DTO
+    # remains backward compatible.
+    show_card_actions: bool = False
 
 
 @dataclass
@@ -419,14 +424,17 @@ def default_board() -> UltraViewBoardState:
         unplaced=[],
         show_titles=True,
         show_sources=True,
-        show_card_actions=True,
         layout_mode=LAYOUT_MODE_FREE_GRID,
     )
 
 
 def default_workspace() -> UltraViewWorkspaceState:
     board = default_board()
-    return UltraViewWorkspaceState(active_board_id=board.board_id, boards=[board])
+    return UltraViewWorkspaceState(
+        active_board_id=board.board_id,
+        boards=[board],
+        show_card_actions=False,
+    )
 
 
 def active_board(workspace: UltraViewWorkspaceState) -> UltraViewBoardState:
@@ -478,6 +486,18 @@ def set_workspace_preview_sidecar(
     workspace.opaque_payload = payload
 
 
+def set_workspace_show_card_actions(
+    workspace: UltraViewWorkspaceState, checked: bool
+) -> None:
+    """Set the workspace-wide card action visibility preference.
+
+    This is intentionally not a Board presentation property: every current
+    and future Board in the project projects the same preference.
+    """
+    workspace.show_card_actions = bool(checked)
+    mark_workspace_mutated(workspace)
+
+
 def _board_index(workspace: UltraViewWorkspaceState, board_id: str) -> int | None:
     for index, board in enumerate(workspace.boards):
         if board.board_id == board_id:
@@ -517,7 +537,6 @@ def _copy_board(board: UltraViewBoardState) -> UltraViewBoardState:
         unplaced=list(board.unplaced),
         show_titles=board.show_titles,
         show_sources=board.show_sources,
-        show_card_actions=board.show_card_actions,
         layout_mode=board.layout_mode,
         free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
         free_grid_default_size=board.free_grid_default_size,
@@ -1360,15 +1379,12 @@ def set_presentation_flags(
     *,
     show_titles: bool | None = None,
     show_sources: bool | None = None,
-    show_card_actions: bool | None = None,
 ) -> list[str]:
     """Apply only explicitly supplied Board presentation flags."""
     if show_titles is not None:
         board.show_titles = bool(show_titles)
     if show_sources is not None:
         board.show_sources = bool(show_sources)
-    if show_card_actions is not None:
-        board.show_card_actions = bool(show_card_actions)
     return []
 
 
@@ -1412,7 +1428,6 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
         "name": board.name,
         "show_titles": bool(board.show_titles),
         "show_sources": bool(board.show_sources),
-        "show_card_actions": bool(board.show_card_actions),
         "unplaced": [ref.to_dict() for ref in board.unplaced],
         "layout_mode": board.layout_mode,
         # Free-grid mode still needs the last template identity so closing the
@@ -1460,7 +1475,7 @@ def normalize_board_payload(
 
     schema = payload.get("schema", 1)
     board_raw = payload.get("board", payload if "layout_id" in payload else None)
-    if schema not in {1, 2, 3}:
+    if schema not in {1, 2, 3, 4}:
         warnings.append(_warn("unknown_ultraview_schema", repr(schema)))
         return default_board(), warnings
     if not isinstance(board_raw, Mapping):
@@ -1490,13 +1505,12 @@ def normalize_board_payload(
     warnings.extend(set_ratio(board, board_raw.get("primary_ratio", DEFAULT_PRIMARY_RATIO)))
     board.show_titles = bool(board_raw.get("show_titles", True))
     board.show_sources = bool(board_raw.get("show_sources", True))
-    board.show_card_actions = bool(board_raw.get("show_card_actions", True))
     board.viewport, vp_warnings = _legalize_viewport(board_raw.get("viewport"))
     warnings.extend(vp_warnings)
     board.passthrough = {
         key: value
         for key, value in board_raw.items()
-        if key not in _BOARD_PAYLOAD_KEYS
+        if key not in _BOARD_PAYLOAD_KEYS | _RETIRED_BOARD_PAYLOAD_KEYS
     }
 
     seen_refs: set[UltraViewRef] = set()
@@ -1600,6 +1614,7 @@ def workspace_to_payload(workspace: UltraViewWorkspaceState) -> dict[str, Any]:
         "schema": ULTRAVIEW_SCHEMA,
         "workspace": {
             "active_board_id": active_board(workspace).board_id,
+            "show_card_actions": bool(workspace.show_card_actions),
             "boards": [_board_payload(board) for board in workspace.boards],
         },
         **({"preview_sidecar": dict(workspace.preview_sidecar)} if workspace.preview_sidecar else {}),
@@ -1609,7 +1624,7 @@ def workspace_to_payload(workspace: UltraViewWorkspaceState) -> dict[str, Any]:
 def normalize_workspace_payload(
     payload: Mapping[str, Any] | None,
 ) -> tuple[UltraViewWorkspaceState, list[str]]:
-    """Migrate schema 1/2/3 to one editable workspace, never dropping refs."""
+    """Migrate schema 1–4 to one editable workspace, never dropping refs."""
     warnings: list[str] = []
     if payload is None:
         return default_workspace(), warnings
@@ -1657,6 +1672,9 @@ def normalize_workspace_payload(
     return UltraViewWorkspaceState(
         active_board_id=active,
         boards=boards,
+        show_card_actions=(
+            bool(root.get("show_card_actions", False)) if schema >= 4 else False
+        ),
         preview_sidecar=dict(descriptor) if isinstance(descriptor, Mapping) else None,
     ), warnings
 

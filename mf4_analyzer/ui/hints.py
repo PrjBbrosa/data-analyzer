@@ -798,7 +798,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.display",
-        text="右上浮岛的显示可开关标题和来源",
+        text="显示：标题/来源；常驻操作随工程保存",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=35,

@@ -441,6 +441,15 @@ class _Harness:
         self.page.set_board(self.board)
 
 
+def _set_card_actions_pinned(harness: _Harness) -> None:
+    """Project the workspace preference for tests about the action bar itself."""
+    workspace = default_workspace()
+    workspace.boards = [harness.board]
+    workspace.active_board_id = harness.board.board_id
+    workspace.show_card_actions = True
+    harness.page.set_workspace(workspace)
+
+
 def test_chrome_size_fallbacks_track_floating_layout_constants(qtbot, monkeypatch):
     harness = _Harness(qtbot)
     page = harness.page
@@ -1398,26 +1407,56 @@ def test_board_toolbar_display_menu_emits_show_flags(qtbot):
     harness.page.show_sources_toggled.connect(sources.append)
     harness.page.show_card_actions_toggled.connect(card_actions.append)
     toolbar = harness.page.board_toolbar()
+    assert toolbar._act_card_actions.isChecked() is False
+    assert harness.page._display_card_actions.isChecked() is False
     toolbar._act_titles.setChecked(False)
     toolbar._act_sources.setChecked(False)
+    toolbar._act_card_actions.setChecked(True)
     toolbar._act_card_actions.setChecked(False)
     assert titles == [False]
     assert sources == [False]
-    assert card_actions == [False]
+    assert card_actions == [True, False]
     harness.board.show_titles = False
     harness.board.show_sources = True
-    harness.board.show_card_actions = True
     harness.page.set_board(harness.board)
     assert toolbar._act_titles.isChecked() is False
     assert toolbar._act_sources.isChecked() is True
+    assert toolbar._act_card_actions.isChecked() is False
+    assert harness.page._display_card_actions.isChecked() is False
+
+
+def test_workspace_card_actions_preference_projects_to_both_display_entries(qtbot):
+    harness = _Harness(qtbot)
+    workspace = default_workspace()
+    assert workspace.show_card_actions is False
+
+    harness.page.set_workspace(workspace)
+    toolbar = harness.page.board_toolbar()
+    assert toolbar._act_card_actions.isChecked() is False
+    assert harness.page._display_card_actions.isChecked() is False
+    note = harness.page.findChild(QLabel, "ultraViewDisplayPreferenceNote")
+    assert note is not None
+    assert note.text() == "适用于当前工程的所有 Board；保存项目后保留。"
+
+    def apply_preference(checked: bool) -> None:
+        workspace.show_card_actions = checked
+        harness.page.set_workspace(workspace)
+
+    harness.page.show_card_actions_toggled.connect(apply_preference)
+    toolbar._act_card_actions.setChecked(True)
+    assert workspace.show_card_actions is True
     assert toolbar._act_card_actions.isChecked() is True
     assert harness.page._display_card_actions.isChecked() is True
+
+    harness.page._display_card_actions.setChecked(False)
+    assert workspace.show_card_actions is False
+    assert toolbar._act_card_actions.isChecked() is False
+    assert harness.page._display_card_actions.isChecked() is False
 
 
 def test_display_card_action_visibility_reaches_card_projection(qtbot, qapp):
     harness = _Harness(qtbot)
     add_ref(harness.board, make_ref("time", "time-1"))
-    harness.board.show_card_actions = False
     harness.page.set_preview(
         make_ref("time", "time-1"),
         FakePreview(ref=make_ref("time", "time-1"), image=_image(), title="道路输入"),
@@ -1432,6 +1471,36 @@ def test_display_card_action_visibility_reaches_card_projection(qtbot, qapp):
     QApplication.sendEvent(card, QEvent(QEvent.Enter))
     qapp.processEvents()
     assert card.action_bar().isVisible()
+
+
+def test_reset_sheet_session_clears_compare_filter_and_library_pin(qtbot, qapp):
+    harness = _Harness(qtbot)
+    harness.board.show_titles = False
+    harness.board.show_sources = False
+    workspace = default_workspace()
+    workspace.boards = [harness.board]
+    workspace.active_board_id = harness.board.board_id
+    workspace.show_card_actions = True
+    harness.page.set_workspace(workspace)
+    harness.page.set_compare_filter("frequency")
+    harness.page.set_library_visible(True)
+    qapp.processEvents()
+    library = harness.page.library_panel()
+    library.set_pinned(True)
+    assert harness.page.compare_filter() == "frequency"
+    assert harness.page.compare_rail().filter_id() == "frequency"
+    assert library.is_pinned() is True
+    assert harness.page.canvas_host().overlay_closes_on_canvas(PANEL_LIBRARY) is False
+
+    harness.page.reset_sheet_session()
+
+    assert harness.page.compare_filter() == "all"
+    assert harness.page.compare_rail().filter_id() == "all"
+    assert library.is_pinned() is False
+    assert harness.page.canvas_host().overlay_closes_on_canvas(PANEL_LIBRARY) is True
+    assert workspace.show_card_actions is True
+    assert harness.board.show_titles is False
+    assert harness.board.show_sources is False
 
 
 def test_presentation_restores_visible_global_edit_controls(qtbot):
@@ -1667,6 +1736,7 @@ def test_card_focus_button_fits_inside_rounded_chrome(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)
+    _set_card_actions_pinned(harness)
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     harness.page.resize(1600, 900)
@@ -2623,6 +2693,7 @@ def test_free_grid_escape_clears_selection(qtbot):
 
 def test_template_escape_hides_card_context_island(qtbot):
     harness = _Harness(qtbot)
+    _set_card_actions_pinned(harness)
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)
     card = harness.page.card_widget("time", "time-1")
@@ -2652,6 +2723,7 @@ def _blank_board_point(board) -> QPoint:
 
 def test_free_grid_empty_click_hides_card_context_island(qtbot):
     harness = _Harness(qtbot)
+    _set_card_actions_pinned(harness)
     free, (card,) = _prepare_free_grid(harness, qtbot, "empty-click")
     _select_card(card)
     island = harness.page.card_context_island()
@@ -3992,6 +4064,7 @@ def test_new_board_first_show_fits_the_working_frame(qtbot):
 
 def test_autofit_button_disabled_in_template_mode(qtbot):
     harness = _Harness(qtbot)
+    _set_card_actions_pinned(harness)
     set_layout(harness.board, "grid_2x2")
     add_ref(harness.board, make_ref("time", "a"))
     harness.page.set_board(harness.board)
@@ -4007,6 +4080,7 @@ def test_autofit_button_disabled_in_template_mode(qtbot):
 
 def test_autofit_button_enabled_on_free_grid_without_selecting(qtbot):
     harness = _Harness(qtbot)
+    _set_card_actions_pinned(harness)
     _free, (card,) = _prepare_free_grid(harness, qtbot, "fit-ready")
     button = card.action_button("fit")
     assert button is not None
@@ -4023,6 +4097,7 @@ def test_autofit_button_enabled_on_free_grid_without_selecting(qtbot):
 
 def test_card_context_residents_do_not_overlap_at_800px(qtbot):
     harness = _Harness(qtbot)
+    _set_card_actions_pinned(harness)
     harness.page.resize(800, 560)
     add_ref(harness.board, make_ref("time", "time-1"))
     harness.page.set_board(harness.board)

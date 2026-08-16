@@ -419,7 +419,7 @@ class CardViewModel:
     replacement_armed: bool = False
     show_title: bool = True
     show_source: bool = True
-    show_card_actions: bool = True
+    show_card_actions: bool = False
 
 
 def coerce_library_row(row: LibraryRow | Mapping[str, Any]) -> LibraryRow:
@@ -900,7 +900,7 @@ class BoardToolbar(QFrame):
         self._act_sources.setChecked(True)
         self._act_card_actions = display_menu.addAction("常驻显示卡片操作")
         self._act_card_actions.setCheckable(True)
-        self._act_card_actions.setChecked(True)
+        self._act_card_actions.setChecked(False)
         self._act_titles.toggled.connect(self.show_titles_toggled)
         self._act_sources.toggled.connect(self.show_sources_toggled)
         self._act_card_actions.toggled.connect(self.show_card_actions_toggled)
@@ -1007,7 +1007,7 @@ class BoardToolbar(QFrame):
         self._presentation.blockSignals(blocked)
 
     def set_show_flags(
-        self, titles: bool, sources: bool, card_actions: bool = True
+        self, titles: bool, sources: bool, card_actions: bool = False
     ) -> None:
         blocked = self._act_titles.blockSignals(True)
         self._act_titles.setChecked(bool(titles))

@@ -45,6 +45,9 @@ def _model(**overrides) -> CardViewModel:
         view_id="view-1",
         title="View 1",
         status=STATUS_MISSING,
+        # These card-local chrome tests exercise the fully exposed action bar.
+        # The workspace default itself is covered by Page/state tests.
+        show_card_actions=True,
     )
     payload.update(overrides)
     return CardViewModel(**payload)

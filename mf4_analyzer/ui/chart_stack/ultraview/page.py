@@ -262,6 +262,10 @@ class UltraViewPage(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self._board = default_board()
         self._workspace: Any | None = None
+        # The action bar is a workspace preference, not Board content.  Keep a
+        # page projection so direct ``set_board()`` callers receive the new
+        # default even when they do not own an UltraViewWorkspaceState.
+        self._show_card_actions = False
         self._previews: dict[UltraViewRef, Any] = {}
         self._statuses: dict[UltraViewRef, str] = {}
         self._ref_exists: dict[UltraViewRef, bool] = {}
@@ -788,6 +792,10 @@ class UltraViewPage(QWidget):
         layout.addWidget(self._display_titles, 0)
         layout.addWidget(self._display_sources, 0)
         layout.addWidget(self._display_card_actions, 0)
+        preference_note = QLabel("适用于当前工程的所有 Board；保存项目后保留。", frame)
+        preference_note.setObjectName("ultraViewDisplayPreferenceNote")
+        preference_note.setWordWrap(True)
+        layout.addWidget(preference_note, 0)
         note = QLabel("预览状态始终可见", frame)
         note.setObjectName("ultraViewDisplayTrustNote")
         note.setToolTip("过期、缺失和孤儿 View 是可信度信息，不提供隐藏开关")
@@ -1674,7 +1682,7 @@ class UltraViewPage(QWidget):
         level = self._viewport.lod()
         show_title = bool(self._board.show_titles)
         show_source = bool(self._board.show_sources)
-        show_card_actions = bool(self._board.show_card_actions)
+        show_card_actions = self._show_card_actions
         for card in (*self._grid.card_widgets(), *self._free_grid.card_widgets()):
             card.apply_lod(
                 level,
@@ -1866,6 +1874,7 @@ class UltraViewPage(QWidget):
         boards = tuple(getattr(workspace, "boards", ()) or ())
         active_id = str(getattr(workspace, "active_board_id", "") or "")
         self._workspace = workspace
+        self._show_card_actions = bool(getattr(workspace, "show_card_actions", False))
         if self._switcher.isVisible():
             self._switcher.set_boards(boards, active_id)
             self._switcher.set_create_enabled(
@@ -2250,7 +2259,7 @@ class UltraViewPage(QWidget):
         self._toolbar.set_layout_id(board.layout_id)
         self._toolbar.set_free_grid_enabled(board.layout_mode == LAYOUT_MODE_FREE_GRID)
         self._toolbar.set_show_flags(
-            board.show_titles, board.show_sources, board.show_card_actions
+            board.show_titles, board.show_sources, self._show_card_actions
         )
         self._board_island.set_current_board(board.board_id, board.name)
         blocked = self._display_titles.blockSignals(True)
@@ -2260,7 +2269,7 @@ class UltraViewPage(QWidget):
         self._display_sources.setChecked(bool(board.show_sources))
         self._display_sources.blockSignals(blocked)
         blocked = self._display_card_actions.blockSignals(True)
-        self._display_card_actions.setChecked(bool(board.show_card_actions))
+        self._display_card_actions.setChecked(self._show_card_actions)
         self._display_card_actions.blockSignals(blocked)
         self._tool_rail.set_badge(PANEL_UNPLACED, n_unplaced)
         self._sync_layout_popover()
@@ -2357,6 +2366,8 @@ class UltraViewPage(QWidget):
 
     def reset_sheet_session(self, *, emit_presentation: bool = True) -> None:
         """Leave focus / replacement / presentation before the tool window closes."""
+        self.set_compare_filter(COMPARE_FILTER_ALL)
+        self._library.set_pinned(False)
         if self._focus.isVisible():
             self._focus.close_layer()
         self._close_active_panel()
@@ -2859,7 +2870,7 @@ class UltraViewPage(QWidget):
                 ),
                 show_title=bool(self._board.show_titles),
                 show_source=bool(self._board.show_sources),
-                show_card_actions=bool(self._board.show_card_actions),
+                show_card_actions=self._show_card_actions,
             )
         self._grid.set_grid(self._board.layout_id, self._board.primary_ratio, models)
         self._sync_board_stack_geometry(self._grid)
@@ -2935,7 +2946,7 @@ class UltraViewPage(QWidget):
             replacement_armed=self._replacement_ref == ref,
             show_title=bool(self._board.show_titles),
             show_source=bool(self._board.show_sources),
-            show_card_actions=bool(self._board.show_card_actions),
+            show_card_actions=self._show_card_actions,
         )
 
     def _refresh_free_grid_projection(self) -> None:

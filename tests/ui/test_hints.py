@@ -606,3 +606,6 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "四向" in by_id["ultraview.pan"].text
     assert "不删" in by_id["ultraview.remove"].text
     assert "Ctrl/Cmd+Z" in by_id["ultraview.undo"].text
+    display_hint = by_id["ultraview.display"].text
+    assert "工程" in display_hint
+    assert "保存" in display_hint

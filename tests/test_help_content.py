@@ -271,6 +271,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "一键更新源",
         "基准网格", "导出标尺", "四向平移", "自动适应", "切换 Board", "适应内容",
         "临时聚焦", "不删除源 View", "200", "Ctrl/Cmd+Z",
+        "常驻可关", "当前工程的所有 Board", "保存项目后保留",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (

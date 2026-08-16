@@ -15,9 +15,11 @@ from mf4_analyzer.ui.ultraview_state import (
     PreviewMeta,
     UltraViewRef,
     add_ref,
+    default_workspace,
     free_grid_placement_for,
     membership_set,
     normalize_workspace_payload,
+    workspace_to_payload,
 )
 from tests.ui.ultraview_fakes import ComputeProbe
 
@@ -82,7 +84,7 @@ def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_
     assert time_id in view_ids
     assert fft_id in view_ids
     assert "ghost-view" in view_ids
-    assert raw["ultraview"]["schema"] == 3
+    assert raw["ultraview"]["schema"] == 4
     text = json.dumps(raw["ultraview"])
     for needle in ("digest", "selected", "presentation", "QImage", "captured_digest"):
         assert needle not in text
@@ -131,6 +133,61 @@ def test_reopen_restores_board_without_entering_ultraview(qapp, qtbot, tmp_path)
     assert restored._analysis_restore_pending == set() or all(
         section != "ultraview" for section, _view_id in restored._analysis_restore_pending
     )
+
+
+def test_save_reopen_restores_workspace_card_action_preference(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "workspace-preference.csv"
+    proj = tmp_path / "workspace-preference.tlproj"
+    _write_csv(csv_a)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    uv = win._ultraview
+
+    assert uv.workspace.show_card_actions is False
+    uv._on_show_card_actions(True)
+    assert win.save_project(proj) is True
+
+    raw = json.loads(proj.read_text(encoding="utf-8"))["ultraview"]
+    assert raw["schema"] == 4
+    assert raw["workspace"]["show_card_actions"] is True
+    assert all(
+        "show_card_actions" not in board
+        for board in raw["workspace"]["boards"]
+    )
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    QCoreApplication.processEvents()
+    page = restored.chart_stack.page_ultraview
+    assert restored._ultraview.workspace.show_card_actions is True
+    assert page.board_toolbar()._act_card_actions.isChecked() is True
+    assert page._display_card_actions.isChecked() is True
+
+
+def test_project_restore_and_reset_clear_transient_filter_and_library_pin(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    page = win.chart_stack.page_ultraview
+
+    page.set_compare_filter("frequency")
+    page.set_library_visible(True)
+    page.library_panel().set_pinned(True)
+    assert page.compare_filter() == "frequency"
+    assert page.library_panel().is_pinned() is True
+
+    assert uv.restore_project_state(workspace_to_payload(default_workspace())) == []
+    assert page.compare_filter() == "all"
+    assert page.library_panel().is_pinned() is False
+
+    page.set_compare_filter("frequency")
+    page.set_library_visible(True)
+    page.library_panel().set_pinned(True)
+    uv.reset_project_state()
+    assert page.compare_filter() == "all"
+    assert page.library_panel().is_pinned() is False
 
 
 def test_project_sidecar_restores_shared_preview_without_compute(qapp, qtbot, tmp_path):

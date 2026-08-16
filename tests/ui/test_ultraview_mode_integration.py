@@ -728,6 +728,45 @@ def test_toolbar_show_titles_sync_cards(qapp, qtbot):
     assert card.model().show_title is True
 
 
+def test_card_action_preference_survives_board_lifecycle_and_sheet_reopen(qapp, qtbot):
+    """Card-action visibility is a workspace preference, not Board content."""
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    page = win.chart_stack.page_ultraview
+
+    assert uv.workspace.show_card_actions is False
+    uv._on_show_card_actions(True)
+    first_id = uv.board.board_id
+    assert uv.workspace.show_card_actions is True
+
+    uv._on_create_board()
+    second_id = uv.board.board_id
+    assert second_id != first_id
+    assert uv.workspace.show_card_actions is True
+
+    uv._on_select_board(first_id)
+    assert uv.board.board_id == first_id
+    assert uv.workspace.show_card_actions is True
+    uv._on_duplicate_board(first_id)
+    assert uv.workspace.show_card_actions is True
+    assert page.board_toolbar()._act_card_actions.isChecked() is True
+    assert page._display_card_actions.isChecked() is True
+
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    sheet = win._ultraview_sheet
+    assert sheet is not None
+    sheet.close()
+    QCoreApplication.processEvents()
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+
+    assert uv.workspace.show_card_actions is True
+    assert page.board_toolbar()._act_card_actions.isChecked() is True
+    assert page._display_card_actions.isChecked() is True
+
+
 def test_coordinator_orphan_rebind_end_to_end(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)

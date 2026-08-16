@@ -114,6 +114,90 @@ def test_workspace_board_lifecycle_keeps_board_identity_and_membership_isolated(
     assert uvs.delete_board(workspace, second.board_id) == ["last_board_retained"]
 
 
+def test_card_action_visibility_is_a_default_off_workspace_preference():
+    workspace = uvs.default_workspace()
+    first = uvs.active_board(workspace)
+
+    assert workspace.show_card_actions is False
+    assert not hasattr(first, "show_card_actions")
+
+    uvs.set_workspace_show_card_actions(workspace, True)
+    created = uvs.create_board(workspace)
+    assert created is not None
+    clone = uvs.duplicate_board(workspace, first.board_id)
+    assert clone is not None
+
+    assert workspace.show_card_actions is True
+    assert all(not hasattr(board, "show_card_actions") for board in workspace.boards)
+
+
+@pytest.mark.parametrize("schema", [1, 2, 3])
+def test_legacy_workspace_card_actions_migrates_to_false_and_retires_board_key(schema):
+    board = {
+        "board_id": f"legacy-{schema}",
+        "layout_id": "hero_left_4",
+        "placements": [],
+        "unplaced": [],
+        "show_card_actions": True,
+    }
+    payload = (
+        {"schema": schema, "board": board}
+        if schema == 1
+        else {
+            "schema": schema,
+            "workspace": {"active_board_id": board["board_id"], "boards": [board]},
+        }
+    )
+
+    workspace, warnings = uvs.normalize_workspace_payload(payload)
+
+    assert warnings == []
+    assert workspace.show_card_actions is False
+    restored_board = uvs.active_board(workspace)
+    assert "show_card_actions" not in restored_board.passthrough
+    round_tripped = uvs.workspace_to_payload(workspace)
+    assert round_tripped["schema"] == 4
+    assert round_tripped["workspace"]["show_card_actions"] is False
+    assert "show_card_actions" not in round_tripped["workspace"]["boards"][0]
+
+
+def test_workspace_card_actions_round_trip_is_written_once_and_missing_defaults_off():
+    workspace, warnings = uvs.normalize_workspace_payload(
+        {
+            "schema": 4,
+            "workspace": {
+                "active_board_id": "workspace-pref",
+                "show_card_actions": True,
+                "boards": [
+                    {
+                        "board_id": "workspace-pref",
+                        "layout_id": "hero_left_4",
+                        "placements": [],
+                        "unplaced": [],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert warnings == []
+    assert workspace.show_card_actions is True
+    payload = uvs.workspace_to_payload(workspace)
+    assert payload["workspace"]["show_card_actions"] is True
+    assert all("show_card_actions" not in board for board in payload["workspace"]["boards"])
+
+    missing, warnings = uvs.normalize_workspace_payload(
+        {
+            "schema": 4,
+            "workspace": {
+                "boards": [{"layout_id": "hero_left_4", "placements": [], "unplaced": []}],
+            },
+        }
+    )
+    assert warnings == []
+    assert missing.show_card_actions is False
+
+
 def test_ui_board_limit_blocks_create_but_loader_keeps_all_boards():
     workspace = uvs.default_workspace()
     for _ in range(19):
@@ -206,16 +290,20 @@ def test_workspace_migrates_schema_one_and_preserves_future_until_mutation():
     migrated, warnings = uvs.normalize_workspace_payload(legacy)
     assert warnings == []
     assert uvs.active_board(migrated).board_id == "legacy-board"
+    assert migrated.show_card_actions is False
     payload = uvs.workspace_to_payload(migrated)
     assert payload["schema"] == uvs.ULTRAVIEW_SCHEMA
+    assert payload["workspace"]["show_card_actions"] is False
     assert payload["workspace"]["boards"][0]["placements"][0]["view_id"] == "old"
 
     future = {"schema": 99, "workspace": {"boards": [{"unknown": "keep"}]}, "future": True}
     opaque, warnings = uvs.normalize_workspace_payload(future)
     assert warnings == ["future_ultraview_schema: 99"]
+    assert opaque.show_card_actions is False
     assert uvs.workspace_to_payload(opaque) == future
-    uvs.create_board(opaque)
+    uvs.set_workspace_show_card_actions(opaque, True)
     assert uvs.workspace_to_payload(opaque)["schema"] == uvs.ULTRAVIEW_SCHEMA
+    assert uvs.workspace_to_payload(opaque)["workspace"]["show_card_actions"] is True
 
 
 def test_future_schema_overlays_sidecar_descriptor_without_dropping_opaque_body():
@@ -671,7 +759,8 @@ def test_normalize_keeps_legal_missing_refs_and_warns_on_illegal():
     assert 0.40 <= board.primary_ratio <= 0.80
     assert [p.ref.view_id for p in board.placements] == ["keep"]
     assert [ref.view_id for ref in board.unplaced] == ["dup-slot", "tray"]
-    assert board.show_card_actions is False
+    assert "show_card_actions" not in board.passthrough
+    assert "show_card_actions" not in uvs.board_to_payload(board)["board"]
 
 
 def test_unknown_schema_degrades_to_empty_board():
@@ -928,23 +1017,25 @@ def test_set_presentation_flags_changes_only_explicit_values():
     assert uvs.set_presentation_flags(board, show_sources=False) == []
     assert board.show_titles is False
     assert board.show_sources is False
-    assert board.show_card_actions is True
-    assert uvs.set_presentation_flags(board, show_card_actions=False) == []
-    assert board.show_card_actions is False
+    with pytest.raises(TypeError):
+        uvs.set_presentation_flags(board, show_card_actions=False)
     assert uvs.set_presentation_flags(board) == []
     assert board.show_titles is False
     assert board.show_sources is False
-    assert board.show_card_actions is False
 
 
-def test_card_action_visibility_defaults_to_pinned_for_legacy_payloads():
+def test_legacy_board_card_action_key_is_consumed_without_passthrough_or_rewrite():
     board, warnings = uvs.normalize_board_payload(
-        {"schema": 3, "board": {"layout_id": "hero_left_4"}}
+        {
+            "schema": 3,
+            "board": {"layout_id": "hero_left_4", "show_card_actions": True},
+        }
     )
 
     assert warnings == []
-    assert board.show_card_actions is True
-    assert uvs.board_to_payload(board)["board"]["show_card_actions"] is True
+    assert not hasattr(board, "show_card_actions")
+    assert "show_card_actions" not in board.passthrough
+    assert "show_card_actions" not in uvs.board_to_payload(board)["board"]
 
 
 def test_unknown_board_fields_passthrough_with_viewport():

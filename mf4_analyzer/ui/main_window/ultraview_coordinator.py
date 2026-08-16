@@ -72,6 +72,7 @@ from ..ultraview_state import (
     set_free_grid_rect,
     set_free_grid_rects,
     set_presentation_flags,
+    set_workspace_show_card_actions,
     set_workspace_preview_sidecar,
     swap_slots,
     template_to_free_grid,
@@ -2200,10 +2201,10 @@ class UltraViewCoordinator(QObject):
         self._after_board_mutation()
 
     def _on_show_card_actions(self, checked: bool) -> None:
-        set_presentation_flags(
-            active_board(self._workspace), show_card_actions=checked
-        )
-        self._after_board_mutation()
+        set_workspace_show_card_actions(self._workspace, checked)
+        # This preference only changes UltraView chrome.  Do not route it
+        # through board mutation/capture/viewport paths.
+        self.refresh_page()
 
     def _on_shift_slot(self, section: str, view_id: str, delta: int) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
