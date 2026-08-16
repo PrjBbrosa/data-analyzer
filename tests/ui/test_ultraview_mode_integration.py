@@ -14,9 +14,11 @@ from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.side_panels import PanelState
 from mf4_analyzer.ui.ultraview_state import (
     DEFAULT_BOARD_NAME,
+    GridAnchor,
     STATUS_FRESH,
     UltraViewRef,
     add_ref,
+    free_grid_placement_for,
     membership_set,
 )
 from mf4_analyzer.ui_kit import load_stylesheet
@@ -941,3 +943,21 @@ def test_free_grid_collision_commit_is_one_undo_restoring_all_cards(qapp, qtbot)
     uv._on_free_grid_redo()
     redone = {item.ref: item.rect for item in uv.board.free_grid}
     assert redone == after
+
+
+def test_free_grid_insert_intent_reaches_coordinator_once_with_its_anchor(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.open_ultraview()
+    qapp.processEvents()
+    page = win.chart_stack.page_ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    ref = UltraViewRef("time", view_id)
+
+    page.free_grid_insert_requested.emit("time", view_id, GridAnchor(8.0, 9.5))
+    qapp.processEvents()
+
+    item = free_grid_placement_for(win._ultraview.board, ref)
+    assert item is not None
+    assert item.rect.column == 6
+    assert item.rect.row == 8

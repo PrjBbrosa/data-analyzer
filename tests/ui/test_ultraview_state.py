@@ -259,6 +259,39 @@ def test_free_grid_legalizes_collisions_and_template_conversion_keeps_tray():
     assert tray_ref in board.unplaced
 
 
+def test_free_grid_insert_anchor_prefers_nearest_empty_rect_without_changing_legacy_first_fit():
+    board = uvs.default_board()
+    legacy = _ref("time", "legacy")
+    assert uvs.add_ref(board, legacy) == []
+    assert uvs.free_grid_placement_for(board, legacy).rect == uvs.GridRect(0, 0, 4, 3)
+
+    centered = _ref("fft", "centered")
+    anchor = uvs.GridAnchor(8.0, 9.5)
+    assert uvs.add_ref(board, centered, preferred_anchor=anchor) == []
+    rect = uvs.free_grid_placement_for(board, centered).rect
+    assert rect == uvs.GridRect(6, 8, 4, 3)
+
+    blocked = uvs.default_board()
+    blocker = _ref("time", "blocker")
+    assert uvs.add_ref(blocked, blocker, preferred_anchor=anchor) == []
+    blocker_before = uvs.free_grid_placement_for(blocked, blocker).rect
+    inserted = _ref("order", "inserted")
+    assert uvs.add_ref(blocked, inserted, preferred_anchor=anchor) == []
+    inserted_rect = uvs.free_grid_placement_for(blocked, inserted).rect
+    assert inserted_rect != blocker_before
+    assert not uvs._grid_overlaps(inserted_rect, blocker_before)
+    assert uvs.free_grid_placement_for(blocked, blocker).rect == blocker_before
+
+    board.free_grid_default_size = "wide"
+    wide = _ref("frf", "wide")
+    assert uvs.add_ref(board, wide, preferred_anchor=uvs.GridAnchor(6.0, 20.0)) == []
+    assert uvs.free_grid_placement_for(board, wide).rect.column_span == 6
+    assert uvs.free_grid_placement_for(board, wide).rect.row_span == 3
+
+    with pytest.raises(uvs.UltraViewStateError):
+        uvs.GridAnchor(float("nan"), 1.0)
+
+
 def test_set_free_grid_rects_is_atomic_and_rejects_overflow():
     board = uvs.default_board()
     uvs.template_to_free_grid(board)

@@ -171,6 +171,28 @@ class GridRect:
     row_span: int
 
 
+@dataclass(frozen=True)
+class GridAnchor:
+    """Qt-free desired card centre in free-grid cell coordinates.
+
+    This is transient interaction intent, never persisted in a board payload.
+    """
+
+    column: float
+    row: float
+
+    def __post_init__(self) -> None:
+        try:
+            column = float(self.column)
+            row = float(self.row)
+        except (TypeError, ValueError) as exc:
+            raise UltraViewStateError("grid anchor must be numeric") from exc
+        if not math.isfinite(column) or not math.isfinite(row):
+            raise UltraViewStateError("grid anchor must be finite")
+        object.__setattr__(self, "column", column)
+        object.__setattr__(self, "row", row)
+
+
 @dataclass
 class FreeGridPlacement:
     ref: UltraViewRef
@@ -554,7 +576,12 @@ def _sort_placements(board: UltraViewBoardState) -> None:
     board.placements.sort(key=lambda p: order.get(p.slot_id, 10_000))
 
 
-def add_ref(board: UltraViewBoardState, ref: UltraViewRef) -> list[str]:
+def add_ref(
+    board: UltraViewBoardState,
+    ref: UltraViewRef,
+    *,
+    preferred_anchor: GridAnchor | None = None,
+) -> list[str]:
     """Add ``ref`` to the first empty slot, or the tray if the board is full.
 
     Duplicate membership is a no-op so the caller can locate the existing card.
@@ -568,7 +595,12 @@ def add_ref(board: UltraViewBoardState, ref: UltraViewRef) -> list[str]:
         if len(board.free_grid) >= MAX_PLACED_CARDS:
             _append_unplaced(board, ref)
             return warnings
-        rect = _first_free_grid_rect(board.free_grid)
+        span = free_grid_default_span(board)
+        rect = (
+            resolve_free_grid_insert_rect(board.free_grid, span=span, anchor=preferred_anchor)
+            if preferred_anchor is not None
+            else _first_free_grid_rect(board.free_grid, span=span)
+        )
         if rect is None:
             _append_unplaced(board, ref)
         else:
@@ -635,7 +667,10 @@ def place_from_unplaced(
 
 
 def place_free_grid_from_unplaced(
-    board: UltraViewBoardState, ref: UltraViewRef
+    board: UltraViewBoardState,
+    ref: UltraViewRef,
+    *,
+    preferred_anchor: GridAnchor | None = None,
 ) -> list[str]:
     """Place a tray ref at the next legal free-grid rect without re-compute."""
     if board.layout_mode != LAYOUT_MODE_FREE_GRID:
@@ -644,7 +679,12 @@ def place_free_grid_from_unplaced(
         return [_warn("not_unplaced", f"{ref.section}/{ref.view_id}")]
     if len(board.free_grid) >= MAX_PLACED_CARDS:
         return [_warn("grid_full")]
-    rect = _first_free_grid_rect(board.free_grid)
+    span = free_grid_default_span(board)
+    rect = (
+        resolve_free_grid_insert_rect(board.free_grid, span=span, anchor=preferred_anchor)
+        if preferred_anchor is not None
+        else _first_free_grid_rect(board.free_grid, span=span)
+    )
     if rect is None:
         return [_warn("grid_full")]
     board.unplaced.remove(ref)
@@ -819,6 +859,72 @@ def _first_free_grid_rect(
             if not any(_grid_overlaps(candidate, item.rect) for item in placements):
                 return candidate
     return None
+
+
+def free_grid_default_span(board: UltraViewBoardState) -> tuple[int, int]:
+    """Resolve the persisted preset name without widening payload semantics."""
+    return FREE_GRID_PRESETS.get(
+        str(board.free_grid_default_size), FREE_GRID_PRESETS["standard"]
+    )
+
+
+def _nearest_grid_index(value: float) -> int:
+    """Round half upward so replay does not depend on Python's banker's round."""
+    return int(math.floor(float(value) + 0.5))
+
+
+def resolve_free_grid_insert_rect(
+    placements: Sequence[FreeGridPlacement],
+    *,
+    span: tuple[int, int],
+    anchor: GridAnchor,
+) -> GridRect | None:
+    """Return the unoccupied rectangle whose centre is nearest ``anchor``.
+
+    This is intentionally a pure insertion resolver.  Unlike the interactive
+    layout planner, it never moves or resizes an existing placement.
+    """
+    prototype = _legal_grid_rect(
+        {
+            "column": 0,
+            "row": 0,
+            "column_span": span[0],
+            "row_span": span[1],
+        }
+    )
+    if prototype is None:
+        return None
+    requested = _legal_grid_rect(
+        {
+            "column": _nearest_grid_index(anchor.column - prototype.column_span / 2.0),
+            "row": _nearest_grid_index(anchor.row - prototype.row_span / 2.0),
+            "column_span": prototype.column_span,
+            "row_span": prototype.row_span,
+        }
+    )
+    if requested is not None and not any(
+        _grid_overlaps(requested, item.rect) for item in placements
+    ):
+        return requested
+
+    candidates: list[tuple[float, int, int, GridRect]] = []
+    for row in range(MAX_GRID_ROWS - prototype.row_span + 1):
+        for column in range(GRID_COLUMNS - prototype.column_span + 1):
+            candidate = GridRect(
+                column, row, prototype.column_span, prototype.row_span
+            )
+            if any(_grid_overlaps(candidate, item.rect) for item in placements):
+                continue
+            centre_column = candidate.column + candidate.column_span / 2.0
+            centre_row = candidate.row + candidate.row_span / 2.0
+            distance_sq = (
+                (centre_column - anchor.column) ** 2
+                + (centre_row - anchor.row) ** 2
+            )
+            candidates.append((distance_sq, row, column, candidate))
+    if not candidates:
+        return None
+    return min(candidates)[3]
 
 
 def template_to_free_grid(board: UltraViewBoardState) -> list[str]:

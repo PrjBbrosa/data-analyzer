@@ -651,7 +651,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.replace_ring",
-        text="库或托盘拖到卡片上停留可替换",
+        text="自由网格拖入卡面，出现替换环才替换；否则附近插入",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=84,

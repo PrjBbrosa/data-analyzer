@@ -85,10 +85,12 @@ from mf4_analyzer.ui.ultraview_state import (
     default_board,
     default_workspace,
     first_empty_slot,
+    free_grid_placement_for,
     free_grid_to_template,
     make_ref,
     membership_set,
     move_to_unplaced,
+    place_free_grid_from_unplaced,
     place_from_unplaced,
     rebind_ref,
     remove_ref,
@@ -287,6 +289,7 @@ class _Harness:
         self.swapped: list[tuple[str, str]] = []
         self.placed: list[tuple[str, str, str]] = []
         self.grid_replaced: list[tuple[str, str, str, str]] = []
+        self.grid_inserted: list[tuple[str, str, object]] = []
         self.unplaced: list[tuple[str, str]] = []
         self.removed: list[tuple[str, str]] = []
         self.opened: list[tuple[str, str]] = []
@@ -308,6 +311,7 @@ class _Harness:
         self.page.replace_slot_requested.connect(self._on_replace)
         self.page.swap_slots_requested.connect(self._on_swap)
         self.page.place_from_unplaced_requested.connect(self._on_place)
+        self.page.free_grid_insert_requested.connect(self._on_grid_insert)
         self.page.free_grid_replace_requested.connect(self._on_grid_replace)
         self.page.move_to_unplaced_requested.connect(self._on_unplaced)
         self.page.remove_ref_requested.connect(self._on_remove)
@@ -350,6 +354,15 @@ class _Harness:
     def _on_place(self, slot_id: str, section: str, view_id: str) -> None:
         self.placed.append((slot_id, section, view_id))
         place_from_unplaced(self.board, slot_id, make_ref(section, view_id))
+        self.page.set_board(self.board)
+
+    def _on_grid_insert(self, section: str, view_id: str, anchor: object) -> None:
+        self.grid_inserted.append((section, view_id, anchor))
+        ref = make_ref(section, view_id)
+        if ref in self.board.unplaced:
+            place_free_grid_from_unplaced(self.board, ref, preferred_anchor=anchor)
+        else:
+            add_ref(self.board, ref, preferred_anchor=anchor)
         self.page.set_board(self.board)
 
     def _on_grid_replace(
@@ -2764,11 +2777,31 @@ def test_free_grid_library_drop_on_card_without_ring_does_not_replace(qtbot):
     free, (card,) = _prepare_free_grid(harness, qtbot, "ring-0")
     mime = _mime("order", "order-1")
     pos = card.geometry().center()
+    expected_anchor = free.grid_anchor_at(pos)
     free.dragEnterEvent(_enter(mime, pos))
     free.dragMoveEvent(_move(mime, pos))
+    assert free.ghost_overlay()._ghost_rect is not None
     free.dropEvent(_drop(mime, pos))
     assert harness.grid_replaced == []
-    assert harness.added == []
+    assert harness.grid_inserted == [("order", "order-1", expected_anchor)]
+    inserted = free_grid_placement_for(harness.board, make_ref("order", "order-1"))
+    assert inserted is not None
+    assert inserted.rect != GridRect(0, 0, 4, 3)
+
+
+def test_free_grid_add_without_pointer_uses_current_scroll_viewport_center(qtbot):
+    harness = _Harness(qtbot)
+    harness.page.resize(1000, 720)
+    qtbot.wait(10)
+    expected_anchor = harness.page.current_free_grid_insert_anchor()
+    assert expected_anchor is not None
+
+    harness.page.request_add("order", "centered-1")
+
+    assert harness.grid_inserted == [("order", "centered-1", expected_anchor)]
+    placed = free_grid_placement_for(harness.board, make_ref("order", "centered-1"))
+    assert placed is not None
+    assert placed.rect != GridRect(0, 0, 4, 3)
 
 
 def test_free_grid_library_drop_on_ring_replaces(qtbot, monkeypatch):
@@ -3435,10 +3468,10 @@ def test_library_add_refresh_keeps_all_sections_scrollable_without_reopen(qtbot,
     add_button = time_row.findChild(QToolButton, "ultraViewLibraryAdd")
     assert add_button is not None
     QTest.mouseClick(add_button, Qt.LeftButton)
-    assert harness.added == [("time", "time-1")]
-
-    add_ref(harness.board, make_ref("time", "time-1"))
-    page.set_board(harness.board)
+    assert harness.added == []
+    assert [(section, view_id) for section, view_id, _anchor in harness.grid_inserted] == [
+        ("time", "time-1")
+    ]
     qtbot.wait(20)
 
     assert library._body.minimumHeight() > library._scroll.viewport().height()

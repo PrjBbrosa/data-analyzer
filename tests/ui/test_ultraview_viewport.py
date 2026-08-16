@@ -5,12 +5,13 @@ import math
 from dataclasses import replace
 
 import pytest
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QCursor, QImage, QMouseEvent, QNativeGestureEvent, QWheelEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import grid_metrics
+from mf4_analyzer.ui.chart_stack.ultraview import widgets as uv_widgets
 from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     RAIL_TO_CANVAS_GAP,
     RAIL_WIDTH,
@@ -465,6 +466,32 @@ def test_card_reuses_scaled_preview_buffer_when_size_is_unchanged(qtbot):
     assert first is not None
     card._fit_card_image()
     assert card.scale_buffer() is first
+
+
+def test_card_preview_buffer_uses_physical_target_and_dpr_metadata(qtbot, monkeypatch):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "retina")
+    card = cards[0]
+    image = QImage(2000, 1500, QImage.Format_ARGB32)
+    image.fill(Qt.blue)
+    monkeypatch.setattr(uv_widgets, "_effective_device_pixel_ratio", lambda _widget: 2.0)
+
+    card._raw_image = image
+    card._source_pixmap = None
+    card._scale_buffer = None
+    card._scale_key = None
+    card._fit_card_image()
+
+    pixmap = card.scale_buffer()
+    assert pixmap is not None
+    logical_box = card._preview_fit_size()
+    physical_box = QSize(logical_box.width() * 2, logical_box.height() * 2)
+    expected = image.size()
+    expected.scale(physical_box, Qt.KeepAspectRatio)
+    assert pixmap.size() == expected
+    assert pixmap.devicePixelRatioF() == pytest.approx(2.0)
+    assert pixmap.width() / pixmap.devicePixelRatioF() == pytest.approx(expected.width() / 2.0)
+    assert pixmap.height() / pixmap.devicePixelRatioF() == pytest.approx(expected.height() / 2.0)
 
 
 def test_title_only_lod_skips_pixmap_scaling_until_preview_returns(qtbot, monkeypatch):

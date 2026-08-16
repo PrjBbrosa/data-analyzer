@@ -35,6 +35,7 @@ from mf4_analyzer.ui.ultraview_state import (
     ULTRAVIEW_PAGE_OBJECT_NAME,
     UltraViewBoardState,
     UltraViewRef,
+    GridAnchor,
     axis_consistency_facts,
     all_refs,
     best_template_for,
@@ -44,6 +45,7 @@ from mf4_analyzer.ui.ultraview_state import (
     derive_preview_status,
     first_empty_slot,
     free_grid_placement_for,
+    free_grid_default_span,
     layout_capacity,
     layout_slots,
     LAYOUT_MODE_FREE_GRID,
@@ -193,6 +195,7 @@ class UltraViewPage(QWidget):
     swap_slots_requested = pyqtSignal(str, str)
     place_from_unplaced_requested = pyqtSignal(str, str, str)
     place_free_grid_from_unplaced_requested = pyqtSignal(str, str)
+    free_grid_insert_requested = pyqtSignal(str, str, object)
     free_grid_replace_requested = pyqtSignal(str, str, str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
     remove_ref_requested = pyqtSignal(str, str)
@@ -487,7 +490,7 @@ class UltraViewPage(QWidget):
         self._grid.drag_finished.connect(self._on_drag_finished)
         self._grid.slot_swap_requested.connect(self.swap_slots_requested)
 
-        self._free_grid.ref_dropped.connect(self._on_free_grid_ref_dropped)
+        self._free_grid.insert_requested.connect(self._on_free_grid_insert_requested)
         self._free_grid.geometry_requested.connect(self.free_grid_geometry_requested)
         self._free_grid.group_geometry_requested.connect(
             self.free_grid_group_geometry_requested
@@ -551,6 +554,22 @@ class UltraViewPage(QWidget):
 
     def board_grid(self) -> BoardGrid:
         return self._grid
+
+    def current_free_grid_insert_anchor(self) -> GridAnchor | None:
+        """Return the actual scroll viewport centre in free-grid cell space."""
+        if (
+            self._board is None
+            or self._board.layout_mode != LAYOUT_MODE_FREE_GRID
+            or not self.isVisible()
+        ):
+            return None
+        viewport = self._board_scroll.viewport()
+        if viewport is None:
+            return None
+        global_center = viewport.mapToGlobal(viewport.rect().center())
+        return self._free_grid.grid_anchor_at(
+            self._free_grid.mapFromGlobal(global_center)
+        )
 
     def unplaced_tray(self) -> UnplacedTray:
         return self._tray
@@ -1845,6 +1864,7 @@ class UltraViewPage(QWidget):
         prev = self._prev_unplaced_count
         previous_fingerprint = self._prev_layout_fingerprint
         self._board = board
+        self._free_grid.set_default_insert_span(free_grid_default_span(board))
         self._prune_runtime_caches()
         n_unplaced = len(board.unplaced)
         fingerprint = (str(board.layout_id), str(board.layout_mode))
@@ -2204,7 +2224,11 @@ class UltraViewPage(QWidget):
 
     def _on_tray_place(self, section: str, view_id: str) -> None:
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
-            self.place_free_grid_from_unplaced_requested.emit(section, view_id)
+            anchor = self.current_free_grid_insert_anchor()
+            if anchor is not None:
+                self.free_grid_insert_requested.emit(section, view_id, anchor)
+            else:
+                self.place_free_grid_from_unplaced_requested.emit(section, view_id)
             return
         slot = first_empty_slot(self._board)
         if slot is None:
@@ -2219,14 +2243,16 @@ class UltraViewPage(QWidget):
         if placement_for(self._board, ref) is not None or free_grid_placement_for(self._board, ref) is not None:
             self.move_to_unplaced_requested.emit(section, view_id)
 
-    def _on_free_grid_ref_dropped(self, section: str, view_id: str) -> None:
+    def _on_free_grid_insert_requested(
+        self, section: str, view_id: str, anchor: GridAnchor
+    ) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
         if ref in self._board.unplaced:
-            self.place_free_grid_from_unplaced_requested.emit(section, view_id)
+            self.free_grid_insert_requested.emit(section, view_id, anchor)
         elif ref not in membership_set(self._board):
-            self.add_ref_requested.emit(section, view_id)
+            self.free_grid_insert_requested.emit(section, view_id, anchor)
         else:
             self._on_locate(section, view_id)
 
@@ -2291,6 +2317,11 @@ class UltraViewPage(QWidget):
         if self._replacement_ref is not None or self._replacement_slot:
             self._finish_armed_replacement(section, view_id)
             return
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            anchor = self.current_free_grid_insert_anchor()
+            if anchor is not None:
+                self.free_grid_insert_requested.emit(section, view_id, anchor)
+                return
         self.add_ref_requested.emit(section, view_id)
 
     def _finish_armed_replacement(self, section: str, view_id: str) -> None:

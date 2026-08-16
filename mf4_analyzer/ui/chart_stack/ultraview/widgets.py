@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Mapping, Sequence
@@ -63,10 +64,12 @@ from mf4_analyzer.ui.ultraview_state import (
     ULTRAVIEW_PAGE_OBJECT_NAME,
     ULTRAVIEW_REF_MIME,
     FreeGridPlacement,
+    GridAnchor,
     GridRect,
     UltraViewBoardState,
     UltraViewRef,
     parse_ref_payload,
+    resolve_free_grid_insert_rect,
     section_search_haystack,
 )
 from mf4_analyzer.ui_kit.icons import Icons
@@ -147,6 +150,15 @@ def _page_of(widget: QWidget):
             return current
         current = current.parentWidget()
     return None
+
+
+def _effective_device_pixel_ratio(widget: QWidget) -> float:
+    """Return a usable DPR without retaining a deleted Qt wrapper."""
+    try:
+        value = float(widget.devicePixelRatioF())
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return 1.0
+    return value if math.isfinite(value) and value > 0.0 else 1.0
 
 
 def _union_pixel_rect(rects) -> tuple[float, float, float, float] | None:
@@ -1909,10 +1921,7 @@ class UltraViewCard(QFrame):
 
     def preview_display_size(self) -> tuple[int, int]:
         size = self._preview_fit_size()
-        try:
-            dpr = float(self.devicePixelRatioF())
-        except RuntimeError:
-            dpr = 1.0
+        dpr = _effective_device_pixel_ratio(self)
         return (
             max(1, int(round(max(1, size.width()) * dpr))),
             max(1, int(round(max(1, size.height()) * dpr))),
@@ -2135,11 +2144,13 @@ class UltraViewCard(QFrame):
         avail = self._preview_fit_size()
         if avail.width() < 2 or avail.height() < 2:
             return
-        cap_w = max(1, min(avail.width(), raw_w))
-        cap_h = max(1, min(avail.height(), raw_h))
+        dpr = _effective_device_pixel_ratio(self)
+        cap_w = max(1, min(int(round(avail.width() * dpr)), raw_w))
+        cap_h = max(1, min(int(round(avail.height() * dpr)), raw_h))
         key = (
             cap_w,
             cap_h,
+            dpr,
             self._preview_quality,
             int(self._raw_image.cacheKey()),
         )
@@ -2156,6 +2167,7 @@ class UltraViewCard(QFrame):
         scaled = self._source_pixmap.scaled(
             cap_w, cap_h, Qt.KeepAspectRatio, transform
         )
+        scaled.setDevicePixelRatio(dpr)
         self._scale_buffer = scaled
         self._scale_key = key
         self._image.setPixmap(scaled)
@@ -2839,6 +2851,7 @@ class FreeGridBoard(QWidget):
     """Controlled 12-column visual projection of persisted free-grid state."""
 
     ref_dropped = pyqtSignal(str, str)
+    insert_requested = pyqtSignal(str, str, object)
     geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
     group_geometry_requested = pyqtSignal(object)
     preset_requested = pyqtSignal(str, str, str)
@@ -2880,6 +2893,8 @@ class FreeGridBoard(QWidget):
         self._pending_shift_toggle: UltraViewRef | None = None
         self._layout_revision = 0
         self._gesture_dimmed = False
+        self._default_insert_span = (4, 3)
+        self._insert_preview_rect: GridRect | None = None
         # Cards currently wearing the drag dim, owned by the board so the set
         # can shrink mid-gesture; the plan's preview set changes on every move.
         self._dimmed_refs: set[UltraViewRef] = set()
@@ -2925,6 +2940,23 @@ class FreeGridBoard(QWidget):
         for card in self._widgets.values():
             card.set_preview_quality(quality)
 
+    def set_default_insert_span(self, span: tuple[int, int]) -> None:
+        """Set the board-state preset span used for external-card insertion."""
+        try:
+            column_span, row_span = int(span[0]), int(span[1])
+        except (IndexError, TypeError, ValueError):
+            column_span, row_span = 4, 3
+        self._default_insert_span = (column_span, row_span)
+
+    def grid_anchor_at(self, pos: QPoint) -> GridAnchor:
+        """Map a board-local pixel point to a desired card centre in cells."""
+        unit_x = max(1, self._metrics.column_width + self._metrics.gutter)
+        unit_y = max(1, self._metrics.row_height + self._metrics.gutter)
+        return GridAnchor(
+            (pos.x() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_x,
+            (pos.y() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_y,
+        )
+
     def metrics(self) -> GridMetrics:
         return self._metrics
 
@@ -2936,6 +2968,10 @@ class FreeGridBoard(QWidget):
 
     def cancel_gesture(self) -> bool:
         cancelled = False
+        if self._insert_preview_rect is not None:
+            self._clear_insert_preview()
+            self._replace.clear()
+            cancelled = True
         if self._pending_shift_toggle is not None:
             self._pending_shift_toggle = None
             cancelled = True
@@ -3060,6 +3096,28 @@ class FreeGridBoard(QWidget):
             row_span=row_span,
         )
         return legal.column, legal.row
+
+    def _insertion_rect_at(self, pos: QPoint) -> GridRect | None:
+        return resolve_free_grid_insert_rect(
+            tuple(self._placements.values()),
+            span=self._default_insert_span,
+            anchor=self.grid_anchor_at(pos),
+        )
+
+    def _show_insert_preview(self, pos: QPoint) -> None:
+        rect = self._insertion_rect_at(pos)
+        self._insert_preview_rect = rect
+        if rect is None:
+            self._overlay.set_move_previews((), (), legal=False)
+            return
+        pixel_rect = rect_to_pixels(rect, self._metrics)
+        self._overlay.set_move_preview(
+            None, pixel_rect, pixel_rect, legal=True, badge=""
+        )
+
+    def _clear_insert_preview(self) -> None:
+        self._insert_preview_rect = None
+        self._overlay.set_move_previews((), (), legal=True)
 
     def _board_pos(self, card: QWidget, local: QPoint) -> tuple[int, int]:
         mapped = card.mapTo(self, local)
@@ -3580,10 +3638,17 @@ class FreeGridBoard(QWidget):
         card = self._card_at(event.pos())
         if card is None:
             self._replace.hover(None)
+            self._show_insert_preview(event.pos())
             return
-        self._replace.hover(f"{card.model().section}/{card.model().view_id}")
+        key = f"{card.model().section}/{card.model().view_id}"
+        self._replace.hover(key)
+        if self._replace.is_armed(key):
+            self._clear_insert_preview()
+            return
+        self._show_insert_preview(event.pos())
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self._clear_insert_preview()
         self._replace.clear()
         event.accept()
 
@@ -3597,10 +3662,16 @@ class FreeGridBoard(QWidget):
                 self.replace_requested.emit(
                     card.model().section, card.model().view_id, ref[0], ref[1]
                 )
-            self._replace.clear()
-            return
+                self._clear_insert_preview()
+                self._replace.clear()
+                return
+        anchor = self.grid_anchor_at(event.pos())
+        self._clear_insert_preview()
         self._replace.clear()
         if ref is not None:
+            self.insert_requested.emit(ref[0], ref[1], anchor)
+            # Compatibility for callers that only observe the historical
+            # ref-only event.  The production Page consumes ``insert_requested``.
             self.ref_dropped.emit(*ref)
 
     def _card_at(self, pos: QPoint) -> FreeGridCard | None:
@@ -3614,6 +3685,7 @@ class FreeGridBoard(QWidget):
         card = self.card_for(section, view_id)
         if card is None:
             return
+        self._clear_insert_preview()
         geom = card.geometry()
         self._overlay.set_replace_ring((geom.x(), geom.y(), geom.width(), geom.height()))
 

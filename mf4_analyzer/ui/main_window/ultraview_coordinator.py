@@ -32,6 +32,7 @@ from ..ultraview_state import (
     UltraViewBoardState,
     UltraViewWorkspaceState,
     UltraViewRef,
+    GridAnchor,
     active_board,
     add_ref,
     apply_free_grid_preset,
@@ -938,6 +939,7 @@ class UltraViewCoordinator(QObject):
             (page.swap_slots_requested, self._on_swap_slots),
             (page.place_from_unplaced_requested, self._on_place_from_unplaced),
             (page.place_free_grid_from_unplaced_requested, self._on_place_free_grid_from_unplaced),
+            (page.free_grid_insert_requested, self._on_free_grid_insert),
             (page.free_grid_replace_requested, self._on_free_grid_replace),
             (page.move_to_unplaced_requested, self._on_move_to_unplaced),
             (page.remove_ref_requested, self._on_remove_ref),
@@ -1048,7 +1050,11 @@ class UltraViewCoordinator(QObject):
                     if widget is not None:
                         self.bind_canvas(widget, ref)
                         self.request_capture(ref, widget, "add-from-tab")
-        self._apply_add_ref(ref)
+        page = self.page()
+        anchor = (
+            page.current_free_grid_insert_anchor() if page is not None else None
+        )
+        self._apply_add_ref(ref, preferred_anchor=anchor)
 
     def _time_canvas_for_ref(self, ref: UltraViewRef):
         """Resolve time-domain canvas by pane ownership, not click-focus.
@@ -1384,7 +1390,9 @@ class UltraViewCoordinator(QObject):
         mark_workspace_mutated(self._workspace)
         self.refresh_page()
 
-    def _apply_add_ref(self, ref: UltraViewRef) -> None:
+    def _apply_add_ref(
+        self, ref: UltraViewRef, *, preferred_anchor: GridAnchor | None = None
+    ) -> None:
         if self._inactive():
             return
         page = self.page()
@@ -1393,7 +1401,7 @@ class UltraViewCoordinator(QObject):
             if page is not None:
                 page.select_ref(ref)
             return
-        warnings = add_ref(board, ref)
+        warnings = add_ref(board, ref, preferred_anchor=preferred_anchor)
         if warnings and warnings[0] == "membership_limit":
             self._toast("本 Board 卡片已达上限", "warning")
             return
@@ -1404,7 +1412,11 @@ class UltraViewCoordinator(QObject):
             return
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is not None:
-            self._apply_add_ref(ref)
+            page = self.page()
+            anchor = (
+                page.current_free_grid_insert_anchor() if page is not None else None
+            )
+            self._apply_add_ref(ref, preferred_anchor=anchor)
 
     def _on_replace_slot(self, slot_id: str, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -1442,10 +1454,44 @@ class UltraViewCoordinator(QObject):
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        warnings = place_free_grid_from_unplaced(active_board(self._workspace), ref)
+        page = self.page()
+        anchor = (
+            page.current_free_grid_insert_anchor() if page is not None else None
+        )
+        warnings = place_free_grid_from_unplaced(
+            active_board(self._workspace), ref, preferred_anchor=anchor
+        )
         if warnings:
             self._toast_grid_warnings(warnings)
             return
+        self._after_board_mutation()
+
+    def _on_free_grid_insert(
+        self, section: str, view_id: str, anchor: GridAnchor
+    ) -> None:
+        if self._inactive():
+            return
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        board = active_board(self._workspace)
+        page = self.page()
+        if ref in membership_set(board):
+            if page is not None:
+                page.select_ref(ref)
+            return
+        if ref in board.unplaced:
+            warnings = place_free_grid_from_unplaced(
+                board, ref, preferred_anchor=anchor
+            )
+            if warnings:
+                self._toast_grid_warnings(warnings)
+                return
+        else:
+            warnings = add_ref(board, ref, preferred_anchor=anchor)
+            if warnings and warnings[0] == "membership_limit":
+                self._toast("本 Board 卡片已达上限", "warning")
+                return
         self._after_board_mutation()
 
     def _on_free_grid_replace(
