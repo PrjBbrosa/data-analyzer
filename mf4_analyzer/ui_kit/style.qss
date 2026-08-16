@@ -4423,8 +4423,11 @@ QScrollArea#ultraViewLayoutPopoverScroll QWidget#qt_scrollarea_viewport {
     background-color: transparent;
 }
 QFrame#ultraViewLayoutPopover QToolButton[role="layoutThumb"] {
-    min-width: 0;
-    min-height: 0;
+    /* Content box = `_LAYOUT_THUMB_CELL` (168×118) − padding − 2×1px border.
+     * Must set min-* so the generic `QToolButton { min-height: 22px }` does
+     * not polish the Python minimum down to 42px. */
+    min-width: 154px;
+    min-height: 98px;
     padding: 8px 6px 10px 6px;
     border-width: 1px;
     border-style: solid;
@@ -4467,10 +4470,13 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"] {
     color: {{UV_MUTED}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"] {
-    min-width: 36px;
-    max-width: 36px;
-    min-height: 36px;
-    max-height: 36px;
+    /* Content box = RAIL_BUTTON_SIZE (36) − 2×1px border. QSS min/max is
+     * content width; polish would otherwise grow the Python fixed 36px
+     * outer box to 38. */
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 34px;
+    max-height: 34px;
     padding: 0;
     margin: 0;
     border: 1px solid transparent;
@@ -4700,10 +4706,12 @@ QLabel#ultraViewRailSyncAllBadge {
 }
 
 QLabel#ultraViewRailFilterWarningDot {
-    min-width: 8px;
-    max-width: 8px;
-    min-height: 8px;
-    max-height: 8px;
+    /* Content box = 8px outer (chrome.py setFixedSize) − 2×1px border.
+     * Radius is half of the final 8px box so the dot stays circular. */
+    min-width: 6px;
+    max-width: 6px;
+    min-height: 6px;
+    max-height: 6px;
     border: 1px solid #ffffff;
     border-radius: 4px;
     background-color: {{UV_WARNING}};

@@ -917,3 +917,31 @@ def test_tool_rail_empty_board_paints_library_as_primary_cta(qtbot):
     closed = _icon_mean_color(library)
     assert _color_distance(closed, cta) > 12
     assert closed.blue() >= closed.red()
+
+
+class TestChromeGeometryUnderProductionQss:
+    """User-visible sizes must match Python constants after production QSS polish."""
+
+    def test_rail_buttons_warning_dot_and_layout_thumbs_match_python_constants(
+        self, qapp, qtbot
+    ):
+        from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+
+        load_stylesheet(qapp)
+        rail = ToolRail()
+        picker = LayoutPicker(LAYOUT_LABELS_ZH)
+        qtbot.addWidget(rail)
+        qtbot.addWidget(picker)
+        rail.show()
+        picker.show()
+        qapp.processEvents()
+
+        library = rail.panel_button(PANEL_LIBRARY)
+        assert library is not None
+        assert library.size() == QSize(RAIL_BUTTON_SIZE, RAIL_BUTTON_SIZE)
+        assert rail._filter_dot.size() == QSize(8, 8)
+        thumbs = list(picker._buttons.values())
+        assert thumbs
+        for thumb in thumbs:
+            assert thumb.minimumHeight() >= 104
+            assert thumb.minimumWidth() >= 168
