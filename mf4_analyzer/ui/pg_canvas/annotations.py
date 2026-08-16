@@ -9,7 +9,11 @@ import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
-from mf4_analyzer.ui.view_overlay_state import raw_channel_name
+from mf4_analyzer.ui.view_overlay_state import (
+    normalize_remark,
+    normalize_remarks,
+    raw_channel_name,
+)
 
 from . import _binding  # noqa: F401
 from ._backref import _CanvasBackref
@@ -108,6 +112,7 @@ class AnnotationManager(_CanvasBackref):
         "press_pos",
         "press_dragged",
         "_artist",
+        "_intent",
         "markup_revision",
     })
 
@@ -127,6 +132,8 @@ class AnnotationManager(_CanvasBackref):
         "_remove_remark_at",
         "_remove_remark_by_index",
         "clear_remarks",
+        "_drop_remark_projection",
+        "_project_remarks",
         "snapshot_remarks",
         "restore_remarks",
     })
@@ -135,6 +142,7 @@ class AnnotationManager(_CanvasBackref):
         super().__init__(canvas)
         self.enabled = False
         self.remarks = []
+        self._intent = []
         self.press_pos = None
         self.press_dragged = False
         self.markup_revision = 0
@@ -323,6 +331,9 @@ class AnnotationManager(_CanvasBackref):
         if source is not None:
             remark["source"] = source
         self.remarks.append(remark)
+        intent = self._intent_dict_from_remark(remark)
+        if intent is not None:
+            self._intent.append(intent)
         self._bump_markup_revision()
 
     def _format_remark_label(self, x_value, y_value, color=None):
@@ -469,51 +480,112 @@ class AnnotationManager(_CanvasBackref):
             self._artist.remove(r)
         except Exception:
             return
+        self._pop_intent_for_remark(r)
         self._bump_markup_revision()
 
     def clear_remarks(self):
-        """Remove all annotations."""
+        """Remove all annotations (intent + Qt projection)."""
+        self._intent = []
+        if not self.remarks:
+            return
+        self._drop_remark_projection()
+        self._bump_markup_revision()
+
+    def _drop_remark_projection(self):
+        """Remove Qt remark items without touching the intent list."""
         if not self.remarks:
             return
         self._artist.clear(self.remarks)
-        self._bump_markup_revision()
+
+    def _project_remarks(self):
+        """Rebind the intent list onto the current channel lines."""
+        self._drop_remark_projection()
+        for item in list(self._intent):
+            self._restore_one_remark(item)
+
+    def _intent_dict_from_remark(self, remark):
+        if not isinstance(remark, dict):
+            return None
+        source = _json_source_list(remark.get("source"))
+        x = _finite_float(remark.get("data_x"))
+        y = _finite_float(remark.get("data_y"))
+        offset = remark_label_offset(remark)
+        if source is None or x is None or y is None or offset is None:
+            return None
+        return normalize_remark({
+            "source": source,
+            "x": x,
+            "y": y,
+            "label_dx": float(offset[0]),
+            "label_dy": float(offset[1]),
+        })
+
+    def _pop_intent_for_remark(self, remark):
+        source = _source_tuple(remark.get("source") if isinstance(remark, dict) else None)
+        rx = _finite_float(remark.get("data_x") if isinstance(remark, dict) else None)
+        best_i, best_d = None, float("inf")
+        for i, intent in enumerate(self._intent):
+            if _source_tuple(intent.get("source")) != source:
+                continue
+            ix = _finite_float(intent.get("x"))
+            if ix is None or rx is None:
+                continue
+            dist = abs(ix - rx)
+            if dist < best_d:
+                best_i, best_d = i, dist
+        if best_i is None:
+            return
+        self._intent.pop(best_i)
 
     def snapshot_remarks(self):
-        """Return Qt-free D2 dicts for live, identity-bearing remarks."""
+        """Return the Qt-free intent list, reading live offsets back when drawn."""
+        used = set()
         payload = []
-        for remark in list(self.remarks):
-            if not isinstance(remark, dict):
+        for intent in list(self._intent):
+            item = dict(intent)
+            live = self._live_remark_for_intent(item, used)
+            if live is not None:
+                offset = remark_label_offset(live)
+                if offset is not None:
+                    item["label_dx"] = float(offset[0])
+                    item["label_dy"] = float(offset[1])
+                x = _finite_float(live.get("data_x"))
+                y = _finite_float(live.get("data_y"))
+                if x is not None:
+                    item["x"] = x
+                if y is not None:
+                    item["y"] = y
+            payload.append(item)
+        return payload
+
+    def _live_remark_for_intent(self, intent, used):
+        source = _source_tuple(intent.get("source"))
+        ix = _finite_float(intent.get("x"))
+        best_i, best_d = None, float("inf")
+        for i, remark in enumerate(self.remarks):
+            if i in used or not isinstance(remark, dict):
                 continue
             if not remark_qt_alive(remark.get("vb")):
                 continue
             if not remark_qt_alive(remark.get("text")):
                 continue
-            source = _json_source_list(remark.get("source"))
-            if source is None:
+            if _source_tuple(remark.get("source")) != source:
                 continue
-            x = _finite_float(remark.get("data_x"))
-            y = _finite_float(remark.get("data_y"))
-            if x is None or y is None:
+            rx = _finite_float(remark.get("data_x"))
+            if rx is None or ix is None:
                 continue
-            offset = remark_label_offset(remark)
-            if offset is None:
-                continue
-            payload.append({
-                "source": source,
-                "x": x,
-                "y": y,
-                "label_dx": float(offset[0]),
-                "label_dy": float(offset[1]),
-            })
-        return payload
+            dist = abs(rx - ix)
+            if dist < best_d:
+                best_i, best_d = i, dist
+        if best_i is None:
+            return None
+        used.add(best_i)
+        return self.remarks[best_i]
 
     def restore_remarks(self, payload):
-        """Clear live remarks and rebind payload items by composite channel key."""
-        self.clear_remarks()
-        if not isinstance(payload, (list, tuple)):
-            return
-        for raw in payload:
-            self._restore_one_remark(raw)
+        """Replace the intent list and project it onto the current plot."""
+        self._intent = normalize_remarks(payload)
+        self._project_remarks()
 
     def _line_binding_for_source(self, source):
         """Return ``(axis_line_pair, channel_data_row)`` for a remark source.
@@ -545,11 +617,26 @@ class AnnotationManager(_CanvasBackref):
                 return item_pair, item_row
         return None, None
 
+    def _line_is_drawn(self, pair):
+        try:
+            line = pair[1]
+        except (TypeError, IndexError):
+            return False
+        pdi = getattr(line, "plot_data_item", None)
+        if pdi is None:
+            return True
+        try:
+            return bool(pdi.isVisible())
+        except Exception:
+            return True
+
     def _restore_one_remark(self, raw):
         if not isinstance(raw, dict):
             return
         pair, row = self._line_binding_for_source(raw.get("source"))
         if not pair or not row:
+            return
+        if not self._line_is_drawn(pair):
             return
         try:
             ax = pair[0]

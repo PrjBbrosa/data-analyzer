@@ -67,18 +67,20 @@ def test_add_remark_snapshot_has_source_and_finite_xy(qapp):
     assert math.isfinite(item["label_dy"])
 
 
-def test_clear_drops_remarks_and_snapshot_is_empty(qapp):
+def test_clear_drops_projection_but_keeps_intent(qapp):
     canvas = _pg_canvas(qapp)
     _plot_speed(canvas)
     _add_remark_on_speed(canvas)
     assert canvas._annotations.remarks
-    assert canvas.snapshot_remarks()
+    snap = canvas.snapshot_remarks()
+    assert snap
 
     canvas.clear()
 
     assert canvas._annotations.remarks == []
-    assert canvas.snapshot_remarks() == []
     assert canvas.remark_count() == 0
+    assert canvas.snapshot_remarks()
+    assert canvas.snapshot_remarks()[0]["source"] == snap[0]["source"]
 
 
 def test_restore_remarks_rebinds_after_plot_channels_rebuild(qapp):
@@ -140,7 +142,9 @@ def test_restore_remarks_skips_missing_channel_without_throwing(qapp):
     canvas.restore_remarks(payload)
 
     assert canvas.remark_count() == 1
-    assert canvas.snapshot_remarks()[0]["source"] == ["fid-1", "speed"]
+    sources = [item["source"] for item in canvas.snapshot_remarks()]
+    assert ["fid-1", "speed"] in sources
+    assert ["missing-fid", "nope"] in sources
 
 
 def test_restore_remarks_survives_two_full_plot_channels_rebuilds(qapp):
@@ -154,13 +158,12 @@ def test_restore_remarks_survives_two_full_plot_channels_rebuilds(qapp):
 
     canvas.plot_channels(rows, mode="subplot")
     QCoreApplication.processEvents()
-    assert canvas.remark_count() == 0
+    assert canvas.remark_count() == 1
 
     canvas.plot_channels(rows, mode="subplot")
     QCoreApplication.processEvents()
-    assert canvas.remark_count() == 0
+    assert canvas.remark_count() == 1
 
-    canvas.restore_remarks(snap)
     rebound = canvas.snapshot_remarks()
     assert len(rebound) == 1
     assert rebound[0]["source"] == source
@@ -197,3 +200,63 @@ def test_prefixed_plot_name_snapshots_raw_channel_and_restores(qapp):
     assert rebound[0]["source"] == ["fid-1", "speed"]
     assert rebound[0]["x"] == pytest.approx(0.5)
     assert rebound[0]["y"] == pytest.approx(20.0)
+
+
+def _speed_and_torque_rows():
+    t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+    return [
+        ("speed", True, t, np.asarray([10.0, 20.0, 30.0], dtype=np.float64),
+         "#1769e0", "rpm", "fid-1"),
+        ("torque", True, t, np.asarray([1.0, 2.0, 3.0], dtype=np.float64),
+         "#ef4444", "Nm", "fid-1"),
+    ]
+
+
+@pytest.mark.parametrize("mode", ["overlay", "subplot"])
+def test_replot_keeps_remark_when_another_channel_is_unchecked(qapp, mode):
+    canvas = _pg_canvas(qapp)
+    both = _speed_and_torque_rows()
+    canvas.plot_channels(both, mode=mode)
+    QCoreApplication.processEvents()
+    _add_remark_on_speed(canvas)
+    snap = canvas.snapshot_remarks()
+    assert len(snap) == 1
+    assert snap[0]["source"] == ["fid-1", "speed"]
+
+    canvas.plot_channels([both[0]], mode=mode)
+    QCoreApplication.processEvents()
+    assert canvas.remark_count() == 1
+    kept = canvas.snapshot_remarks()
+    assert len(kept) == 1
+    assert kept[0]["source"] == ["fid-1", "speed"]
+
+
+@pytest.mark.parametrize("mode", ["overlay", "subplot"])
+def test_hidden_channel_keeps_intent_and_reprojects_when_shown(qapp, mode):
+    canvas = _pg_canvas(qapp)
+    both = _speed_and_torque_rows()
+    canvas.plot_channels(both, mode=mode)
+    QCoreApplication.processEvents()
+    _add_remark_on_speed(canvas)
+
+    canvas.plot_channels([both[1]], mode=mode)
+    QCoreApplication.processEvents()
+    assert canvas.remark_count() == 0
+    hidden_snap = canvas.snapshot_remarks()
+    assert len(hidden_snap) == 1
+    assert hidden_snap[0]["source"] == ["fid-1", "speed"]
+
+    canvas.plot_channels(both, mode=mode)
+    QCoreApplication.processEvents()
+    assert canvas.remark_count() == 1
+    assert canvas.snapshot_remarks()[0]["source"] == ["fid-1", "speed"]
+
+
+def test_user_remove_drops_intent_from_snapshot(qapp):
+    canvas = _pg_canvas(qapp)
+    _plot_speed(canvas)
+    _add_remark_on_speed(canvas)
+    assert canvas.snapshot_remarks()
+    canvas._annotations._remove_remark_by_index(0)
+    assert canvas.remark_count() == 0
+    assert canvas.snapshot_remarks() == []

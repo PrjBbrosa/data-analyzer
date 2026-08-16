@@ -486,10 +486,10 @@ def test_capture_ranges_preserves_hidden_channel_ylim():
     }
 
 
-def test_capture_keeps_hidden_channel_remarks_when_live_snapshot_empty():
+def test_capture_controls_uses_snapshot_without_merging_previous():
     win = _Window()
     previous = dict(_REMARK)
-    previous["note"] = "keep-hidden"
+    previous["note"] = "stale-previous"
     state = ViewState(
         name="v",
         tab_color="#000000",
@@ -498,23 +498,15 @@ def test_capture_keeps_hidden_channel_remarks_when_live_snapshot_empty():
         hidden_channels=[("f1", "rpm")],
         remarks=[previous],
     )
-    win.chart_stack.canvas_time._remarks_snapshot = []
+    win.chart_stack.canvas_time._remarks_snapshot = [dict(_REMARK)]
 
     view_bridge.capture_controls_into(state, win)
 
-    assert state.remarks == [
-        {
-            "source": ["f1", "rpm"],
-            "x": 1.25,
-            "y": 3.5,
-            "label_dx": 0.08,
-            "label_dy": 0.4,
-            "note": "keep-hidden",
-        }
-    ]
+    assert state.remarks == [dict(_REMARK)]
+    assert "note" not in state.remarks[0]
 
 
-def test_capture_drops_visible_channel_remark_when_live_snapshot_empty():
+def test_capture_controls_empty_snapshot_clears_previous_remarks():
     win = _Window()
     win.navigator._hidden = []
     state = ViewState(

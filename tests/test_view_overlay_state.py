@@ -82,13 +82,14 @@ def test_normalize_remark_strips_prefixed_display_name_to_raw_channel():
     assert got["source"] == ["fid-a", "torque"]
 
 
-def test_merge_remarks_treats_prefixed_live_source_as_raw_checked_key():
+def test_merge_remarks_is_passthrough_of_live_snapshot():
+    """Deprecated helper is a no-op merge: live snapshot is the truth."""
     live = [{
         **_LEGAL,
         "source": ["fid-a", "[session] torque"],
         "x": 2.0,
     }]
-    previous = [{**_LEGAL, "x": 1.0}]
+    previous = [{**_LEGAL, "x": 1.0, "note": "ignored"}]
     got = merge_remarks_for_capture(
         live,
         previous,
@@ -96,17 +97,20 @@ def test_merge_remarks_treats_prefixed_live_source_as_raw_checked_key():
         checked=[("fid-a", "torque")],
         hidden_channels=[],
     )
-    assert len(got) == 1
-    assert got[0]["source"] == ["fid-a", "torque"]
-    assert got[0]["x"] == 2.0
-    raw = dict(_LEGAL)
-    raw["note"] = "keep-me"
-    raw["style"] = {"color": "#fff"}
-    got = normalize_remark(raw)
-    assert got is not None
-    assert got["note"] == "keep-me"
-    assert got["style"] == {"color": "#fff"}
-    assert got["source"] == ["fid-a", "torque"]
+    assert got == [{
+        "source": ["fid-a", "torque"],
+        "x": 2.0,
+        "y": 3.5,
+        "label_dx": 0.08,
+        "label_dy": 0.4,
+    }]
+    assert merge_remarks_for_capture(
+        [],
+        previous,
+        attached_file_ids=["fid-a"],
+        checked=[("fid-a", "torque")],
+        hidden_channels=[("fid-a", "torque")],
+    ) == []
 
 
 def test_normalize_remarks_skips_illegal_items_and_non_lists():
@@ -172,77 +176,6 @@ def test_remap_remarks_rewrites_fid_drops_missing_and_keeps_extra_keys():
     ]
     assert remap_remarks(remarks, {}) == []
     assert remap_remarks(None, {"fid-a": "fid-z"}) == []
-
-
-def test_merge_remarks_keeps_hidden_source_when_live_is_empty():
-    previous = [{**_LEGAL, "note": "hidden"}]
-    got = merge_remarks_for_capture(
-        [],
-        previous,
-        attached_file_ids=["fid-a"],
-        checked=[("fid-a", "torque")],
-        hidden_channels=[("fid-a", "torque")],
-    )
-    assert got == [{**_LEGAL, "note": "hidden"}]
-
-
-def test_merge_remarks_drops_visible_source_missing_from_live():
-    got = merge_remarks_for_capture(
-        [],
-        [_LEGAL],
-        attached_file_ids=["fid-a"],
-        checked=[("fid-a", "torque")],
-        hidden_channels=[],
-    )
-    assert got == []
-
-
-def test_merge_remarks_live_wins_same_source_and_keeps_other_hidden():
-    live = [
-        {
-            "source": ["fid-a", "torque"],
-            "x": 9.0,
-            "y": 8.0,
-            "label_dx": 0.1,
-            "label_dy": 0.2,
-        }
-    ]
-    hidden = {
-        "source": ["fid-a", "rpm"],
-        "x": 0.5,
-        "y": 1.0,
-        "label_dx": 0.0,
-        "label_dy": 0.0,
-    }
-    stale_visible = dict(_LEGAL)
-    got = merge_remarks_for_capture(
-        live,
-        [stale_visible, hidden],
-        attached_file_ids=["fid-a"],
-        checked=[("fid-a", "torque"), ("fid-a", "rpm")],
-        hidden_channels=[("fid-a", "rpm")],
-    )
-    assert got == [
-        {
-            "source": ["fid-a", "torque"],
-            "x": 9.0,
-            "y": 8.0,
-            "label_dx": 0.1,
-            "label_dy": 0.2,
-        },
-        hidden,
-    ]
-
-
-def test_merge_remarks_drops_source_that_left_the_view():
-    got = merge_remarks_for_capture(
-        [],
-        [_LEGAL],
-        attached_file_ids=["other"],
-        checked=[],
-        hidden_channels=[],
-    )
-    assert got == []
 
 
 def test_overlay_module_does_not_import_qt_or_canvas():

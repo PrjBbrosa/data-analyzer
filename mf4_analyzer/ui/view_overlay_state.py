@@ -92,43 +92,14 @@ def merge_remarks_for_capture(
     checked: Any = (),
     hidden_channels: Any = (),
 ) -> list[dict]:
-    """Merge a live canvas snapshot with prior ViewState remarks (spec D5).
+    """Deprecated pass-through: return ``normalize_remarks(live)``.
 
-    Live items win for every source present in ``live``. Previous items are
-    kept only when their source still belongs to this View and is not
-    currently visible. A visible source missing from ``live`` is treated as
-    a user deletion and is not restored from ``previous``.
+    Annotation intent already includes hidden-channel entries, so D5's
+    live/previous/visibility merge has no remaining caller. Kept for one
+    compatibility release (2026-08-16 daily-review-followup spec A2).
     """
-    live_norm = normalize_remarks(live)
-    prev_norm = normalize_remarks(previous)
-    live_sources = {
-        key
-        for key in (_source_identity(item["source"]) for item in live_norm)
-        if key is not None
-    }
-    attached = {
-        str(fid)
-        for fid in _as_sequence(attached_file_ids)
-        if fid is not None
-    }
-    checked_keys = _identity_set(checked)
-    hidden_keys = _identity_set(hidden_channels)
-    kept: list[dict] = []
-    for item in prev_norm:
-        key = _source_identity(item["source"])
-        if key is None or key in live_sources:
-            continue
-        visible = key in checked_keys and key not in hidden_keys
-        if visible:
-            continue
-        belongs = (
-            key[0] in attached
-            or key in checked_keys
-            or key in hidden_keys
-        )
-        if belongs:
-            kept.append(item)
-    return live_norm + kept
+    del previous, attached_file_ids, checked, hidden_channels
+    return normalize_remarks(live)
 
 
 def normalize_cursor_placement(raw: Any, *, cursor_mode: str) -> dict | None:
@@ -150,41 +121,6 @@ def normalize_cursor_placement(raw: Any, *, cursor_mode: str) -> dict | None:
         if bx is None:
             bx = None
     return {"ax": ax, "bx": bx}
-
-
-def _as_sequence(value: Any) -> Sequence:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return value
-    return ()
-
-
-def _identity_pair(value: Any) -> tuple[str, str] | None:
-    if isinstance(value, Mapping):
-        return None
-    if isinstance(value, (str, bytes, bytearray)):
-        return None
-    if not isinstance(value, Sequence) or len(value) < 2:
-        return None
-    fid, channel = value[0], value[1]
-    if fid is None or channel is None:
-        return None
-    return (str(fid), str(channel))
-
-
-def _identity_set(items: Any) -> set[tuple[str, str]]:
-    out: set[tuple[str, str]] = set()
-    for item in _as_sequence(items):
-        key = _identity_pair(item)
-        if key is not None:
-            out.add(key)
-    return out
-
-
-def _source_identity(value: Any) -> tuple[str, str] | None:
-    two = _source_two_list(value)
-    if two is None:
-        return None
-    return (two[0], two[1])
 
 
 def _source_two_list(value: Any) -> list[str] | None:

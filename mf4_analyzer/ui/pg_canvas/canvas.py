@@ -748,6 +748,7 @@ class TimeDomainCanvasPG(QWidget):
         if not vis:
             # No channel owns an axis (every original hidden AND no visible
             # companion) → nothing to draw and nothing to anchor companions to.
+            self._project_remarks()
             self.chart_rebuilt.emit()
             report_progress(1000)
             return
@@ -1074,6 +1075,7 @@ class TimeDomainCanvasPG(QWidget):
             self._arm_interaction_settle()
 
         self._restore_dual_cursor_items()
+        self._project_remarks()
 
         self.chart_rebuilt.emit()
         self._display_x_coverage = (
@@ -1429,6 +1431,7 @@ class TimeDomainCanvasPG(QWidget):
             return failure
 
         self._restore_dual_cursor_items()
+        self._project_remarks()
 
         probe_w = self._overlay_axes._initial_bind_pixel_width()
         self._subplot_dense_count = 0
@@ -2710,10 +2713,11 @@ class TimeDomainCanvasPG(QWidget):
         # Raster items live in channel ViewBoxes, so remove them before those
         # ViewBoxes are torn down by the overlay/layout cleanup below.
         self._dense_raster.clear()
-        # Remarks are Qt items parented to the same ViewBoxes. Drop them
-        # before overlay teardown / _glw.clear() so the live list cannot
-        # retain sip-deleted wrappers.
-        self.clear_remarks()
+        # Remarks are Qt items parented to the same ViewBoxes. Drop the
+        # projection before overlay teardown / _glw.clear() so the live list
+        # cannot retain sip-deleted wrappers. Intent stays so plot_channels
+        # can reproject after the rebuild.
+        self._drop_remark_projection()
         self._interaction_depth = 0
         self._interaction_state = "idle"
         self._latest_target_xlim = None
@@ -2934,6 +2938,12 @@ class TimeDomainCanvasPG(QWidget):
 
     def clear_remarks(self):
         return self._annotations.clear_remarks()
+
+    def _drop_remark_projection(self):
+        return self._annotations._drop_remark_projection()
+
+    def _project_remarks(self):
+        return self._annotations._project_remarks()
 
     def snapshot_remarks(self):
         return self._annotations.snapshot_remarks()

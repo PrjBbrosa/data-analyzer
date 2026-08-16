@@ -523,6 +523,11 @@ class ViewMixin:
             self._view_bridge.apply_controls_from_state(state, self, canvas)
             if update_primary_ui and state.cursor_mode == 'off':
                 self.chart_stack.clear_cursor_pill()
+            # Write incoming remark intent before the plot so the plot-channels
+            # closeout (not a post-settle second pass) is the single projector.
+            restore_remarks = getattr(canvas, "restore_remarks", None)
+            if callable(restore_remarks):
+                restore_remarks(state.remarks)
             rendered = self._plot_time_on_canvas(
                 canvas,
                 update_primary_ui=update_primary_ui,
@@ -542,12 +547,6 @@ class ViewMixin:
                 int(tick_opts.get('y', default_y)),
             )
             canvas.settle_view_restore()
-            # Overlay projection after final geometry (spec D7). Must run
-            # while `_applying_view` is still True so capture cannot mix
-            # the outgoing canvas with the incoming View.
-            restore_remarks = getattr(canvas, "restore_remarks", None)
-            if callable(restore_remarks):
-                restore_remarks(state.remarks)
             restore_placement = getattr(canvas, "restore_cursor_placement", None)
             if callable(restore_placement):
                 restore_placement(state.cursor_placement)
