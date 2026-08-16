@@ -22,6 +22,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.preview_store import (
     MAX_PREVIEW_RAW_EDGE,
     RESIDENCY_TIER_ACTIVE_PLACED,
     RESIDENCY_TIER_FOCUS,
+    PreviewStore,
     ResidencyRequest,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
@@ -2384,6 +2385,23 @@ def test_frf_dataclass_cache_key_still_yields_a_digest(qapp, monkeypatch, caplog
     # ...and the same key is the same digest, across independent encodings.
     window._analysis_pins.replace("frf", "frf-a", 0, (key,))
     assert coord.current_digest_for(ref) == pinned
+
+    # The digest is not the deliverable — the preview is. ``request_capture``
+    # returns early on a ``None`` digest, so an FRF View that had computed a
+    # result could never publish a card at all. Close that loop here rather
+    # than inferring it from the digest being computable.
+    canvas = window.pages["frf"].pane_canvas(0)
+    coord.bind_canvas(canvas, ref)
+    with caplog.at_level(logging.WARNING, logger=_COORDINATOR_LOGGER):
+        coord.request_capture(ref, canvas, "frf-plot")
+        _flush()
+    assert canvas.grab_calls == 1
+    record = coord.store.get(ref)
+    assert record is not None
+    assert record.captured_digest == pinned
+    assert PreviewStore.image_valid(record.image)
+    assert "capture skipped" not in caplog.text
+
     window.pages["frf"].deleteLater()
     coord.clear()
     coord.deleteLater()
