@@ -97,9 +97,7 @@ from .feedback import (
     FEEDBACK_OUT_OF_GRID,
     FEEDBACK_REARRANGED,
     FEEDBACK_SEARCH_BUDGET,
-    REMOVE_ACTION,
     format_rearranged,
-    text_for_key,
     text_for_reason,
 )
 from .free_grid import (
@@ -2133,20 +2131,14 @@ class UltraViewCard(QFrame):
         menu = QMenu(self)
         menu.setObjectName("ultraViewCardMenu")
         apply_rounded_menu_chrome(menu)
-        open_act = menu.addAction("打开原 View")
-        open_act.triggered.connect(self._emit_open_source)
         if self._model.status == STATUS_STALE:
             sync_act = menu.addAction("同步到最新")
             sync_act.triggered.connect(self._emit_sync)
-        focus_act = menu.addAction("临时放大")
         replace_act = menu.addAction("替换为…")
         unplaced_act = menu.addAction("移到未放置")
-        remove_act = menu.addAction(text_for_key(REMOVE_ACTION))
         copy_act = menu.addAction("复制本卡图像")
-        focus_act.triggered.connect(self._emit_focus)
         replace_act.triggered.connect(self._emit_rebind)
         unplaced_act.triggered.connect(self._emit_unplaced)
-        remove_act.triggered.connect(self._emit_remove)
         copy_act.triggered.connect(self._emit_copy)
         self._menu = menu
         return menu
@@ -2978,8 +2970,6 @@ class FreeGridCard(UltraViewCard):
         ):
             action = size_menu.addAction(label)
             action.triggered.connect(partial(self._emit_preset, preset))
-        fit_action = size_menu.addAction("按原图比例")
-        fit_action.triggered.connect(self._emit_autofit)
         return menu
 
     def _emit_preset(self, preset: str, _checked: bool = False) -> None:

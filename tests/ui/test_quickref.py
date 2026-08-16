@@ -153,8 +153,9 @@ def test_quickref_context_menu_covers_add_to_overview():
     assert "加入总览" in tab_row.sub
     assert "不重新计算" in tab_row.sub
     card_row = next(r for r in group.rows if r.desc == "总览卡片右键")
-    assert "打开原 View" in card_row.sub
-    assert "同步到最新" in card_row.sub
+    assert "替换为" in card_row.sub
+    assert "右上角" in card_row.sub
+    assert "同步" in card_row.sub
 
 
 def test_coaxis_row_released_no_soon_badge():

@@ -286,13 +286,15 @@ def test_narrow_width_omits_title_before_remove(qtbot, qapp):
     assert not card._title.isVisible() or card._title.width() <= 8
 
 
-def test_more_menu_still_offers_remove_but_is_not_the_only_entry(qtbot, qapp):
+def test_more_menu_does_not_duplicate_header_open_focus_or_remove(qtbot, qapp):
     card = _make_card(qtbot, qapp)
     remove = card.action_button("remove")
     assert remove is not None and remove.isVisible()
     menu = card.make_context_menu()
     texts = [action.text() for action in menu.actions() if action.text()]
-    assert any("移除" in text for text in texts)
+    assert "打开原 View" not in texts
+    assert "临时放大" not in texts
+    assert not any("移除" in text for text in texts)
     assert remove.isVisible()
     assert "ultraViewCardRemoveButton" in _tab_object_names(card)
 

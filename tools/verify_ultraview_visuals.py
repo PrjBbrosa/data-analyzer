@@ -807,7 +807,19 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         card_actions = []
         if card is not None:
             card_menu = card.make_context_menu()
-            card_actions = [action.text() for action in card_menu.actions() if action.text()]
+
+            def _flatten_menu(menu) -> list[str]:
+                labels: list[str] = []
+                for action in menu.actions():
+                    text = action.text()
+                    if text:
+                        labels.append(text)
+                    submenu = action.menu()
+                    if submenu is not None:
+                        labels.extend(_flatten_menu(submenu))
+                return labels
+
+            card_actions = _flatten_menu(card_menu)
             card_menu.close()
         manifest["geometry"]["board_context_1280"]["card_actions"] = card_actions
         manifest["geometry"]["board_context_1280"]["wanted_fit"] = BOARD_MENU_FIT
@@ -1009,8 +1021,16 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
     card_actions = board_menu.get("card_actions") or []
     if "自动排版" in card_actions:
         errors.append("card context leaked board auto-arrange")
-    if "打开原 View" not in card_actions:
-        errors.append("card context missing 打开原 View")
+    if "打开原 View" in card_actions:
+        errors.append("card context still lists 打开原 View")
+    if "临时放大" in card_actions:
+        errors.append("card context still lists 临时放大")
+    if any("移除" in text for text in card_actions):
+        errors.append("card context still lists remove")
+    if "按原图比例" in card_actions:
+        errors.append("card context still lists 按原图比例")
+    if "复制本卡图像" not in card_actions:
+        errors.append("card context missing 复制本卡图像")
     before = (geometry.get("arrange_before_1280") or {}).get("free_grid") or []
     after = (geometry.get("arrange_after_1280") or {}).get("free_grid") or []
     if len(before) >= 2 and before == after:

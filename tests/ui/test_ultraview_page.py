@@ -1017,8 +1017,11 @@ def test_menu_double_click_and_keyboard_share_intents(qtbot):
     card = harness.page.card_widget("fft", "fft-1")
     menu = card.make_context_menu()
     by_text = {action.text(): action for action in menu.actions()}
-    by_text["打开原 View"].trigger()
-    by_text["临时放大"].trigger()
+    assert "打开原 View" not in by_text
+    assert "临时放大" not in by_text
+    assert not any("移除" in text for text in by_text)
+    card.action_button("open").click()
+    card.action_button("focus").click()
     by_text["替换为…"].trigger()
     by_text["移到未放置"].trigger()
     by_text["复制本卡图像"].trigger()
@@ -2151,7 +2154,11 @@ def test_free_grid_size_context_submenu_uses_rounded_popup_shell(qtbot):
     _free, (card,) = _prepare_free_grid(harness, qtbot, "size-ctx")
     menu = card.make_context_menu()
     _assert_rounded_menu_shell(menu)
-    _assert_rounded_menu_shell(_size_submenu(menu))
+    size_menu = _size_submenu(menu)
+    _assert_rounded_menu_shell(size_menu)
+    assert "按原图比例" not in {
+        action.text() for action in size_menu.actions() if action.text()
+    }
 
 
 def test_free_grid_size_overflow_submenu_uses_rounded_popup_shell(qtbot, monkeypatch):

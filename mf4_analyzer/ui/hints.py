@@ -672,7 +672,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.preset",
-        text="卡片右键可选尺寸预设或按原图比例",
+        text="右键尺寸预设，按原图比例在右上角",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=84,
