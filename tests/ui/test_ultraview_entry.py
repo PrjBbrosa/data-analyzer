@@ -30,6 +30,7 @@ from mf4_analyzer.ui.widgets.ultraview_entry import (
     TOOLTIP,
     UltraViewEntryButton,
     UltraViewRailFitter,
+    _widget_min_width,
     dock_compact_required,
     make_ultraview_separator,
 )
@@ -507,18 +508,18 @@ def test_dock_compact_required_uses_intrinsic_hints_not_window_width() -> None:
             margins=8,
             spacing=6,
         )
-        is False
+        is True
     )
     assert (
         dock_compact_required(
-            available_width=full_required - 1,
+            available_width=full_required + 1,
             non_dock_minimum=80,
             full_dock_hint=40,
             compact_dock_hint=22,
             margins=8,
             spacing=6,
         )
-        is True
+        is False
     )
     # Hysteresis is a small extra on the same intrinsic full_required, not a
     # window breakpoint: stay compact until the host recovers the deadband.
@@ -538,6 +539,19 @@ def test_dock_compact_required_uses_intrinsic_hints_not_window_width() -> None:
     assert (
         dock_compact_required(
             available_width=full_required + 4,
+            non_dock_minimum=80,
+            full_dock_hint=40,
+            compact_dock_hint=22,
+            margins=8,
+            spacing=6,
+            hysteresis=4,
+            currently_compact=True,
+        )
+        is True
+    )
+    assert (
+        dock_compact_required(
+            available_width=full_required + 5,
             non_dock_minimum=80,
             full_dock_hint=40,
             compact_dock_hint=22,
@@ -578,17 +592,20 @@ class _StretchBar(QWidget):
 
 
 def _measured_full_required(host, bar, extra, sep, entry) -> int:
+    """Same width the fitter uses: ``_widget_min_width`` after polish, not pre-show sizeHint."""
     layout = host.layout()
     margins = layout.contentsMargins()
-    visible = [widget for widget in (bar, extra, sep, entry) if not widget.isHidden()]
+    visible = [
+        widget
+        for widget in (bar, extra, sep, entry)
+        if widget is not None and not widget.isHidden()
+    ]
     spacing = max(0, len(visible) - 1) * layout.spacing()
-    non_dock = bar.minimumSizeHint().width()
+    non_dock = _widget_min_width(bar)
     if extra is not None and not extra.isHidden():
-        non_dock += extra.sizeHint().width()
-    was_compact = entry.is_compact()
-    entry.set_compact(False)
-    full_dock = sep.sizeHint().width() + entry.sizeHint().width()
-    entry.set_compact(was_compact)
+        non_dock += _widget_min_width(extra)
+    separator_width = _widget_min_width(sep)
+    full_dock = separator_width + entry._size_hint_for(False).width()
     return non_dock + full_dock + margins.left() + margins.right() + spacing
 
 
@@ -610,13 +627,17 @@ def test_rail_fitter_shrinks_to_compact_and_restores_full(qtbot) -> None:
     qtbot.addWidget(host)
 
     fitter = UltraViewRailFitter(host, bar, entry, extra_widgets=(extra,))
+    host.resize(800, 40)
+    host.show()
+    qtbot.waitExposed(host)
+    QApplication.processEvents()
+    QApplication.style().polish(host)
+    QApplication.processEvents()
     required = _measured_full_required(host, bar, extra, sep, entry)
     wide = required + 48
     narrow = required - 12
 
     host.resize(wide, 40)
-    host.show()
-    qtbot.waitExposed(host)
     fitter.schedule()
     qtbot.waitUntil(lambda: entry.is_compact() is False, timeout=2000)
     assert entry.is_compact() is False
@@ -668,3 +689,50 @@ def test_visual_states_paint_without_raising(qtbot) -> None:
     QApplication.sendEvent(button, QEvent(QEvent.Leave))
     QApplication.processEvents()
     button.grab()
+
+
+def test_chart_stack_rail_fitter_reaches_compact_under_production_qss(qapp, qtbot) -> None:
+    """Production ChartStack rail goes compact at the layout floor.
+
+    Observed (spec B3): ``host.minimumSizeHint()`` equals the fitter's
+    ``full_required``, so the host can never become strictly smaller than
+    that sum. ``dock_compact_required`` therefore uses ``<=``. Pinning the
+    live rail to that floor must compact the dock; restoring slack restores
+    the wordmark.
+    """
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.view_state import ViewManager
+    from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+
+    load_stylesheet(qapp)
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.attach_view_tabbar(ViewManager())
+    cs.resize(1280, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+    entry = cs.ultraview_entry
+    fitter = cs._ultraview_rail_fitter
+    host = cs._time_view_rail
+    assert entry is not None
+    fitter.schedule()
+    qapp.processEvents()
+    assert entry.is_compact() is False
+
+    floor = host.minimumSizeHint().width()
+    assert floor == _measured_full_required(
+        host, cs._view_tabbar, None, cs.ultraview_separator, entry
+    )
+    host.setMaximumWidth(floor)
+    qapp.processEvents()
+    fitter.schedule()
+    qtbot.waitUntil(lambda: entry.is_compact() is True, timeout=2000)
+    assert entry.is_compact() is True
+
+    host.setMaximumWidth(16777215)
+    cs.resize(1280, 520)
+    qapp.processEvents()
+    fitter.schedule()
+    qtbot.waitUntil(lambda: entry.is_compact() is False, timeout=2000)
+    assert entry.is_compact() is False

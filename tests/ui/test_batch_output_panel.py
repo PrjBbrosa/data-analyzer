@@ -12,6 +12,7 @@ from PyQt5.QtCore import QPoint, QRect, Qt
 from PyQt5.QtGui import QGuiApplication, QValidator
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
+    QApplication,
     QGroupBox, QPushButton, QScrollArea, QStyle, QStyleOptionSlider, QWidget,
 )
 
@@ -627,13 +628,19 @@ def test_batch_render_style_sliders_drag_and_sync_to_recipe(
     panel = _make_panel(qtbot)
     panel.resize(430, 720)
     panel.show()
+    qtbot.waitExposed(panel)
+    # QSS reflow is deferred; opening the popover before it settles lets the
+    # panel's Move/Resize hide the popup (render_style_popover eventFilter).
+    for _ in range(5):
+        QApplication.processEvents()
     panel._on_render_style_clicked()
     popover = panel._render_style_popover
-    popover.show()
-    qtbot.wait(20)
+    assert popover is not None
+    assert popover.isVisible()
 
     slider = getattr(popover, slider_name)
     spin = getattr(popover, spin_name)
+    assert slider.isVisible() and slider.width() > 0
     start = slider.value()
     emissions = []
     panel.changed.connect(lambda: emissions.append(panel.render_style()))
@@ -642,12 +649,16 @@ def test_batch_render_style_sliders_drag_and_sync_to_recipe(
     handle = slider.style().subControlRect(
         QStyle.CC_Slider, option, QStyle.SC_SliderHandle, slider,
     )
-    target = QPoint(slider.width() - 5, handle.center().y())
+    groove = slider.style().subControlRect(
+        QStyle.CC_Slider, option, QStyle.SC_SliderGroove, slider,
+    )
+    target = QPoint(groove.right() - 2, handle.center().y())
 
     QTest.mousePress(slider, Qt.LeftButton, pos=handle.center())
     QTest.mouseMove(slider, target, delay=10)
     QTest.mouseRelease(slider, Qt.LeftButton, pos=target)
-    qtbot.wait(20)
+    QApplication.processEvents()
+    assert popover.isVisible()
 
     assert slider.value() != start
     assert spin.value() == slider.value()

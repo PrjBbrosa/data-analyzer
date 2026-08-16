@@ -161,6 +161,10 @@ def dock_compact_required(
     visible non-dock minimum, the full dock, layout margins and spacings.
     Optional hysteresis is a small extra on that same intrinsic sum (capped
     by the full-minus-compact delta) so restore does not chatter at the edge.
+
+    Equality is compact: a host whose layout minimum equals ``full_required``
+    can never become strictly smaller, so ``<`` would leave the dock full
+    forever at the floor (spec B3).
     """
     full_required = (
         int(non_dock_minimum)
@@ -172,7 +176,7 @@ def dock_compact_required(
     if currently_compact:
         delta = max(0, int(full_dock_hint) - int(compact_dock_hint))
         extra = min(max(0, int(hysteresis)), delta)
-    return int(available_width) < full_required + extra
+    return int(available_width) <= full_required + extra
 
 
 def make_ultraview_separator(parent=None) -> QFrame:

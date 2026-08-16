@@ -1140,6 +1140,10 @@ def test_time_toolbar_has_no_loc_label_to_jostle_right_controls(qapp, qtbot):
     cs.resize(1500, 520)
     cs.show()
     qtbot.waitExposed(cs)
+    # Production QSS can reflow the toolbar one tick after expose
+    # (1420 → 1436). Read ``before`` only after that settle.
+    qapp.processEvents()
+    qapp.processEvents()
 
     card = cs._time_card
     loc_label = getattr(card.toolbar, 'locLabel', None)

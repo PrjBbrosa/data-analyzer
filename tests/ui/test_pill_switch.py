@@ -5,8 +5,9 @@ import inspect
 
 import pytest
 from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtGui import QColor, QImage, QPainter
+from PyQt5.QtGui import QColor, QImage, QPainter, QRegion
 from PyQt5.QtTest import QSignalSpy, QTest
+from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
 from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
@@ -22,7 +23,11 @@ def _render_at_dpr(widget: PillSwitch, dpr: int) -> QImage:
     image.setDevicePixelRatio(float(dpr))
     image.fill(Qt.transparent)
     painter = QPainter(image)
-    widget.render(painter)
+    # DrawChildren only: the default DrawWindowBackground fills the logical
+    # rect with the app QWidget background (white under production QSS),
+    # which at dpr=2 leaks past the 1px track stroke at x=0 and is then
+    # counted as the white knob.
+    widget.render(painter, QPoint(), QRegion(), QWidget.DrawChildren)
     painter.end()
     return image
 
