@@ -93,7 +93,7 @@
 
 1. 工作区至少包含 base frame 和 content bounds。
 2. 四周 halo 取 `max(4 cells, 0.5 × 当前安全视口)`；所以空 Board、100% 和内容比窗口小时仍有可用滚动范围。
-3. extent 按 4 列 / 4 行为一组扩展。当前 Board 会话内只扩不缩，避免删除卡片或窗口 resize 时 scroll origin 跳变；切板/重开后从内容、持久化 viewport 和 halo 重建。
+3. extent 按 4 列 / 4 行为一组扩展。当前 Board 会话内只扩不缩，避免删除卡片或窗口 resize 时 scroll origin 跳变；切板 / 重开 / 首次进入从内容包围盒 + halo 重建（高水位不跨板、不进工程）。
 4. `100%` 只改变 scale，并保持当前视口中心；它不得把滚动范围钳成 0，也不得把卡片吸回 base frame。
 5. 手掌、Space+左拖、中键拖和 trackpad 平移继续通过现有 `ViewportGestureRouter`；不得再给 card/preview/overlay 各加一套 event forwarding。
 6. 缩放、pan 和 extent 扩展只改变 viewport/runtime geometry，不调用 `_after_board_mutation()`，也不让工程进入内容脏状态。
@@ -119,12 +119,15 @@
 
 ### 3.4 缩放、Fit 与初始视图
 
-- 新建 Board 或旧项目中没有 viewport payload 的 Board：`zoom = min(0.66, fit(two-card working frame, safe viewport))`，永不因大屏上调到 66% 以上。
-- 有合法持久化 viewport 的 Board：精确恢复，不擅自改成新默认值。
-- “适应内容”：以 placed cards 的并集为目标，保留约 6% 安全边距，`zoom <= 1.0`；空 Board 适应 two-card working frame，不适应整张弹性 extent。
+相机合同（2026-08-16 当日评审跟进 C2 (a′)）：
+
+- **打开工程 / 首次进入某 Board / 跨会话** → `fit_on_open()`（适应内容）。相机不进 `.tlproj`；旧工程里的 `viewport` 读到即忽略，不弹 toast。
+- **同一会话内切板往返** → 恢复离开该板时的 zoom 与滚动中心，前提是该板的弹性 extent 签名 `(column, row, column_span, row_span)` 没变。加卡 / 删卡 / 拖进负象限导致 rebase → 回到适应。
+- 相机是 page 内存 `_session_camera`，不进 `UltraViewBoardState` / `UltraViewWorkspaceState`。
+- “适应内容”：以 placed cards 的并集为目标；空 Board 适应 two-card working frame，不适应整张弹性 extent。
 - “100%”：围绕当前视口中心恢复 1×，不回原点、不取消 halo。
 - 双击卡片/聚焦层：允许临时放大到 300%，并保存进入前 viewport；Esc 精确返回。
-- 加卡、删卡、预览到达、窗口 resize 不自动改变用户当前 viewport。自动改变的只有首次未初始化视图和用户显式触发 Fit/100%/聚焦。
+- 加卡、删卡、预览到达、窗口 resize 不自动改变用户当前 viewport。自动改变的只有首次未初始化视图、extent 签名变化后的切回、以及用户显式触发 Fit/100%/聚焦。
 
 ### 3.5 新卡一次性按预览比例
 
@@ -269,11 +272,11 @@
 - [ ] Page 为每个 Board 持有 session-only extent high-water mark；set/reset/teardown 对称清理。
 - [ ] host size 来自动态 extent，不再来自固定 1600 宽；用 workspace offset 投影 cards、selection、ghost、minimap 和 insert anchor。
 - [ ] 实现 halo，确保空 Board/单卡/100% 下水平和垂直均有 pan slack；fit parking origin 不可吞掉 slack。
-- [ ] 新 Board/default viewport 使用 `min(0.66, two-card fit)`；合法旧 viewport 精确恢复。
+- [ ] 打开 / 首次进板 / 跨会话走 `fit_on_open`；同一会话切板往返恢复 page 内存相机，extent 签名变化则回到适应。相机不进工程。
 - [ ] Board Fit 使用 content bounds、6% margin、上限 100%；100% 保持中心；Focus 300% 与 Esc 返回语义不变。
 - [ ] projection batch 内只重算一次 extent/minimap，不因每张 card geometry signal 反复 resize host。
 
-**退出条件：** 66%、100%、Fit、窗口 resize、切 Board、保存/重开均不跳原点；viewport 改变不标记 Board 内容 mutation。
+**退出条件：** Fit、100%、窗口 resize、保存/重开均不跳原点；会话内切板往返恢复相机；viewport 改变不标记 Board 内容 mutation。
 
 ### Task 3 — 边缘自动平移、无感扩展与弱提示
 
@@ -363,17 +366,17 @@
 
 | 编号 | 场景 | 通过标准 |
 |---|---|---|
-| UX-01 | 新建空 Board | 初始 zoom <=66%；画布中心有两张标准卡的工作余量 |
+| UX-01 | 新建空 Board | 打开即适应；画布中心有两张标准卡的工作余量 |
 | UX-02 | 加入宽图/竖图 | 首次显示已按预览比例只缩不放；无 preview 也立即出现 |
 | UX-03 | 100% + 两张卡 | 卡片尺寸保持 1×，四向仍能 pan，不出现 scroll max=0 的锁死 |
 | UX-04 | 拖过原第 12 列 | 卡片与 ghost 连续移动，工作区扩展，无红墙 |
 | UX-05 | 拖到 viewport 四边 | 不松手即可自动 pan；速度连续，release 后立即停止 |
 | UX-06 | 达到 safety bounds | 显示弱到强的边界升级、拒绝原因和下一步，模型不提交非法 rect |
 | UX-07 | 碰撞 | 所有受影响卡 ghost 可见；接受时一条 undo，拒绝时有可行动文案 |
-| UX-08 | Fit/100%/Focus | Fit<=100%；100% 保持中心；Focus 可到300%，Esc 精确返回 |
+| UX-08 | Fit/100%/Focus | 打开/首次进板/跨会话 Fit；100% 保持中心；Focus 可到300%，Esc 精确返回 |
 | UX-09 | 动作图标 | 纵向中心误差<=1px；remove 一步可达且 tooltip 说明“不删除源 View” |
 | UX-10 | remove→undo→redo | 原 membership、slot/GridRect、tray 顺序精确恢复 |
-| UX-11 | 保存/重开 | signed rect、viewport 精确恢复；runtime extent 从内容+halo 重建不漂移 |
+| UX-11 | 保存/重开 | signed rect 精确恢复；相机不进工程；runtime extent 从内容+halo 重建不漂移；会话内切板往返恢复 zoom+center |
 | UX-12 | 导出 | base-frame 结果不变；负坐标卡被包含；超限提示实际尺寸与解决方案 |
 | UX-13 | 24张卡持续操作 | 无明显 ghost/auto-pan 卡顿、无 Toast storm、无 timer/Qt wrapper 泄漏 |
 | UX-14 | 钛蓝琥珀整体视觉 | 背景有冷暖纵深而不灰蒙；浮层、卡片和画布层级清楚；预览与信号原色不被污染 |

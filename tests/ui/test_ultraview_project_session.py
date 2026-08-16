@@ -429,7 +429,7 @@ def test_viewport_is_not_written_into_saved_project(qapp, qtbot, tmp_path):
     assert opened == pytest.approx(page.board_zoom())
 
 
-def test_switching_boards_fits_instead_of_restoring_saved_camera(qapp, qtbot, tmp_path):
+def test_switching_boards_restores_session_camera(qapp, qtbot, tmp_path):
     csv_a = tmp_path / "switch-viewport.csv"
     _write_csv(csv_a)
     win = MainWindow()
@@ -442,18 +442,23 @@ def test_switching_boards_fits_instead_of_restoring_saved_camera(qapp, qtbot, tm
     first = coordinator.board
 
     page.set_board_zoom(1.5)
-    leftover = page.board_zoom()
+    scroll = page.board_scroll_area()
+    if scroll.horizontalScrollBar().maximum() > 0:
+        scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
+    parked = (
+        page.board_zoom(),
+        scroll.horizontalScrollBar().value(),
+        scroll.verticalScrollBar().value(),
+    )
     coordinator._on_create_board()
     second = coordinator.board
-
     assert second.board_id != first.board_id
-    assert leftover == pytest.approx(1.5)
 
     coordinator._on_select_board(first.board_id)
     QCoreApplication.processEvents()
-    opened = page.board_zoom()
-    page.zoom_fit()
-    assert opened == pytest.approx(page.board_zoom())
+    assert page.board_zoom() == pytest.approx(parked[0])
+    assert scroll.horizontalScrollBar().value() == parked[1]
+    assert scroll.verticalScrollBar().value() == parked[2]
 
     restored_workspace, warnings = normalize_workspace_payload(
         coordinator.to_project_payload()
@@ -463,8 +468,77 @@ def test_switching_boards_fits_instead_of_restoring_saved_camera(qapp, qtbot, tm
         board for board in restored_workspace.boards if board.board_id == first.board_id
     )
     assert not hasattr(restored_first, "viewport")
-    payload = coordinator.to_project_payload()
-    assert "viewport" not in json.dumps(payload)
+    assert "viewport" not in json.dumps(coordinator.to_project_payload())
+
+
+def test_extent_rebase_drops_session_camera_back_to_fit(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "rebase-camera.csv"
+    _write_csv(csv_a)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    coordinator = win._ultraview
+    page = win.chart_stack.page_ultraview
+    first = coordinator.board
+    page.set_board_zoom(2.0)
+    leftover = page.board_zoom()
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    coordinator._apply_add_ref(ref)
+    coordinator._on_create_board()
+    coordinator._on_select_board(first.board_id)
+    QCoreApplication.processEvents()
+    opened = page.board_zoom()
+    page.zoom_fit()
+    assert leftover != pytest.approx(page.board_zoom())
+    assert opened == pytest.approx(page.board_zoom())
+
+
+def test_reset_sheet_session_forgets_session_camera(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "reset-camera.csv"
+    _write_csv(csv_a)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    page = win.chart_stack.page_ultraview
+    page.set_board_zoom(2.0)
+    leftover = page.board_zoom()
+    page.reset_sheet_session()
+    QCoreApplication.processEvents()
+    opened = page.board_zoom()
+    page.zoom_fit()
+    assert leftover != pytest.approx(page.board_zoom())
+    assert opened == pytest.approx(page.board_zoom())
+
+
+def test_legacy_viewport_payload_does_not_warn_on_restore(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "legacy-viewport.csv"
+    _write_csv(csv_a)
+    proj = tmp_path / "legacy-viewport.tlproj"
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    assert win.save_project(proj) is True
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    raw["ultraview"]["workspace"]["boards"][0]["viewport"] = {
+        "zoom": "nope",
+        "center_x": float("inf"),
+        "center_y": 1.0,
+    }
+    proj.write_text(json.dumps(raw), encoding="utf-8")
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    QCoreApplication.processEvents()
+    warnings = restored._ultraview.restore_project_state(raw["ultraview"])
+    assert warnings == []
+    assert all("viewport" not in item for item in warnings)
 
 
 def test_reopened_placed_card_does_not_auto_aspect(qapp, qtbot, tmp_path):

@@ -289,7 +289,9 @@ class UltraViewPage(QWidget):
         self._prev_unplaced_count: int | None = None
         self._prev_layout_fingerprint: tuple[str, str] | None = None
         self._viewport = BoardViewport()
+        self._session_camera: dict[str, tuple[float, tuple[float, float], tuple[int, int, int, int]]] = {}
         self._restoring_viewport = False
+        self._rebasing_extent = False
         self._pending_viewport_restore: dict[str, float] | None = None
         self._pending_fit = True
         # The extent is deliberately page-local session state.  Placements are
@@ -1201,9 +1203,21 @@ class UltraViewPage(QWidget):
         self._card_context.setGeometry(_qrect(placed.rect))
         self._card_context.raise_()
 
+    def _extent_signature(self, board=None) -> tuple[int, int, int, int]:
+        target = self._board if board is None else board
+        bounds = content_bounds(target.free_grid)
+        return (bounds.column, bounds.row, bounds.column_span, bounds.row_span)
+
     def _persist_viewport_to_board(self) -> None:
         if self._restoring_viewport or self._board is None:
             return
+        center = self._current_center()
+        self._viewport.set_center(center)
+        self._session_camera[str(self._board.board_id)] = (
+            float(self._viewport.zoom()),
+            (float(center[0]), float(center[1])),
+            self._extent_signature(),
+        )
         self.camera_settled.emit()
 
     def _workspace_cell_pitch(self) -> tuple[float, float]:
@@ -1304,8 +1318,12 @@ class UltraViewPage(QWidget):
             )
             horizontal = self._board_scroll.horizontalScrollBar()
             vertical = self._board_scroll.verticalScrollBar()
-            horizontal.setValue(int(horizontal.value() + delta_x))
-            vertical.setValue(int(vertical.value() + delta_y))
+            self._rebasing_extent = True
+            try:
+                horizontal.setValue(int(horizontal.value() + delta_x))
+                vertical.setValue(int(vertical.value() + delta_y))
+            finally:
+                self._rebasing_extent = False
         return True
 
     def _working_frame_center(self) -> tuple[float, float]:
@@ -1326,11 +1344,11 @@ class UltraViewPage(QWidget):
         )
 
     def fit_on_open(self) -> None:
-        """Park on 适应 for window open/raise and every Board switch.
+        """Park on 适应 for window open/raise, first visit, and extent rebase.
 
-        Restoring a stored centre on the signed elastic halo is what made
-        open and switch land in an unexplained place. Persisted pan/zoom is
-        still written on leave, but it is not the show camera.
+        Same-session Board switches restore the page-local camera when the
+        content extent signature is unchanged. The camera never enters a
+        project payload.
         """
         fill = self._content_fill_rect()
         if fill.width <= 1 or fill.height <= 1:
@@ -1485,11 +1503,24 @@ class UltraViewPage(QWidget):
         )
 
     def _restore_viewport_from_board(self, board) -> None:
-        """Board switch / deferred switch: park on 适应 until session camera lands."""
-        del board
-        self.fit_on_open()
+        """Replay the session camera when this Board's extent signature still matches."""
+        camera = self._session_camera.get(str(board.board_id))
+        signature = self._extent_signature(board)
+        if camera is None or camera[2] != signature:
+            self.fit_on_open()
+            return
+        zoom, center, _saved = camera
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            self._refresh_workspace_extent(reset=True, preserve_visible=False)
+        self._restoring_viewport = True
+        try:
+            self._apply_zoom_and_center(zoom, center)
+        finally:
+            self._restoring_viewport = False
 
     def _on_board_scrolled(self, _value: int = 0) -> None:
+        if self._restoring_viewport or self._rebasing_extent:
+            return
         self._persist_viewport_to_board()
 
     def set_board_zoom(self, zoom: float, cursor_in_viewport=None) -> None:
@@ -2209,7 +2240,6 @@ class UltraViewPage(QWidget):
         )
         switching = board.board_id != self._board.board_id
         if switching:
-            self._persist_viewport_to_board()
             self._stop_edge_pan()
             # The high-water mark belongs to the active board session, not a
             # project payload and not the next Board's initial view.
@@ -2363,10 +2393,12 @@ class UltraViewPage(QWidget):
         self._close_active_panel()
         self.clear_card_selection()
         self.clear_replacement_arm()
+        self._session_camera.clear()
         if self._presentation:
             self.set_presentation_active(False)
             if emit_presentation:
                 self.presentation_toggled.emit(False)
+        self.fit_on_open()
 
     def _on_escape_shortcut(self) -> None:
         if self._text_field_has_focus():
