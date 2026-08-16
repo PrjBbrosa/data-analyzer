@@ -615,6 +615,17 @@ class Icons:
         return _line_icon(draw, c)
 
     @classmethod
+    def ultraview_remove_from_board(cls, color=None):
+        """Minus-from-board: drop this card from the current Board only."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(3.0, 5.5, 11.0, 11.0), 1.6, 1.6)
+            p.drawLine(QPointF(10.2, 10.0), QPointF(17.0, 10.0))
+
+        return _line_icon(draw, c)
+
+    @classmethod
     def ultraview_sync(cls, color=None):
         """Recapture the live source View into this UltraView card."""
         c = color or BLUE

@@ -35,6 +35,7 @@ from mf4_analyzer.ui.ultraview_state import (
     ULTRAVIEW_PAGE_OBJECT_NAME,
     UltraViewBoardState,
     UltraViewRef,
+    GridBounds,
     GridAnchor,
     axis_consistency_facts,
     all_refs,
@@ -63,16 +64,24 @@ from .viewport import (
     SMOOTH_DELAY_MS,
     ZOOM_BUTTON_STEP,
     BoardViewport,
+    board_fit_zoom,
     center_from_scroll,
     clamp_zoom,
-    fit_zoom,
+    initial_viewport,
     scroll_for_center,
+    two_card_working_frame,
     wheel_zoom_factor,
     zoom_at,
     zoom_percent,
     zoom_to_rect,
-    FIT_CONTENT_MARGIN,
 )
+from .elastic_workspace import (
+    content_bounds,
+    desired_extent,
+    edge_pan_velocity,
+    expand_extent,
+)
+from .free_grid import screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
@@ -267,6 +276,15 @@ class UltraViewPage(QWidget):
         self._restoring_viewport = False
         self._pending_viewport_restore: dict[str, float] | None = None
         self._pending_fit = True
+        # The extent is deliberately page-local session state.  Placements are
+        # signed grid coordinates; the working halo, high-water mark and edge
+        # timer must never become a project mutation or a viewport payload.
+        self._workspace_extent = None
+        self._edge_pan_timer = QTimer(self)
+        self._edge_pan_timer.setObjectName("ultraViewWorkspaceEdgePanTimer")
+        self._edge_pan_timer.setInterval(16)
+        self._edge_pan_timer.timeout.connect(self._on_edge_pan_tick)
+        self._edge_pan_active = False
         self._smooth_timer = QTimer(self)
         self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
         self._smooth_timer.setSingleShot(True)
@@ -302,6 +320,7 @@ class UltraViewPage(QWidget):
             pinch=self.handle_pinch,
             note_space=self.note_space,
             text_field_has_focus=self._text_field_has_focus,
+            is_active=self._viewport_router_is_active,
             parent=self,
         )
         self._canvas_stage = QFrame(self._canvas_host)
@@ -509,6 +528,10 @@ class UltraViewPage(QWidget):
         self._free_grid.drag_finished.connect(self._on_drag_finished)
         self._free_grid.feedback_requested.connect(self._emit_feedback)
         self._free_grid.replace_requested.connect(self.free_grid_replace_requested)
+        workspace_gesture = getattr(self._free_grid, "workspace_gesture_changed", None)
+        if workspace_gesture is not None:
+            workspace_gesture.connect(self._on_workspace_gesture_changed)
+        self._free_grid.destroyed.connect(self._stop_edge_pan)
 
         self._tray.place_requested.connect(self._on_tray_place)
         self._tray.remove_requested.connect(self.remove_ref_requested)
@@ -582,6 +605,15 @@ class UltraViewPage(QWidget):
 
     def board_viewport(self) -> BoardViewport:
         return self._viewport
+
+    def workspace_extent(self):
+        """Return the current free-grid runtime extent, never persisted.
+
+        ``GridBounds`` deliberately stays behind the Qt-free state boundary;
+        this narrow inspection seam exists for viewport tests and minimap/
+        edge-paint collaborators.  Callers must not mutate it in place.
+        """
+        return self._workspace_extent
 
     def board_zoom(self) -> float:
         return self._viewport.zoom()
@@ -1133,6 +1165,177 @@ class UltraViewPage(QWidget):
         }
         self.viewport_changed.emit(str(self._board.board_id), payload)
 
+    def _workspace_cell_pitch(self) -> tuple[float, float]:
+        """Return the 1× free-grid pitch without asking a widget for state.
+
+        ``FreeGridBoard.metrics()`` is already zoomed.  The elastic extent
+        takes the unzoomed pitch plus the current zoom separately, which keeps
+        the halo invariant in screen space rather than accidentally squaring
+        the scale.
+        """
+        metrics = screen_grid_metrics(self._board.free_grid)
+        return (
+            float(metrics.column_width + metrics.gutter),
+            float(metrics.row_height + metrics.gutter),
+        )
+
+    def _visible_workspace_bounds(self) -> GridBounds:
+        """Current scroll viewport expressed in signed free-grid cells.
+
+        Content alone cannot make a canvas elastic: once a user pans into its
+        halo, the content is unchanged while the visible window moves.  Fold
+        the visible cell bounds into desired_extent so high-water growth keeps
+        following navigation rather than recreating a hidden wall.
+        """
+        viewport = self._board_scroll.viewport()
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            return GridBounds(0, 0, 0, 0)
+        top_left = self._free_grid.mapFromGlobal(viewport.mapToGlobal(QPoint(0, 0)))
+        bottom_right = self._free_grid.mapFromGlobal(
+            viewport.mapToGlobal(QPoint(viewport.width(), viewport.height()))
+        )
+        first = self._free_grid.grid_anchor_at(top_left)
+        second = self._free_grid.grid_anchor_at(bottom_right)
+        left = math.floor(min(first.column, second.column))
+        top = math.floor(min(first.row, second.row))
+        right = math.ceil(max(first.column, second.column))
+        bottom = math.ceil(max(first.row, second.row))
+        return GridBounds.from_edges(left, top, max(left + 1, right), max(top + 1, bottom))
+
+    def _refresh_workspace_extent(
+        self, *, reset: bool = False, preserve_visible: bool = True
+    ) -> bool:
+        """Grow the free-grid session extent and project it into the canvas.
+
+        The high-water mark is Page-owned runtime geometry: it grows on pan,
+        resize, zoom and incoming placements but never writes ``BoardState``.
+        A board switch/reset intentionally starts fresh from that board's
+        content + viewport halo.
+        """
+        if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            self._workspace_extent = None
+            return False
+        viewport = self._board_scroll.viewport()
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            return False
+        content = content_bounds(self._board.free_grid).union(
+            self._visible_workspace_bounds()
+        )
+        wanted = desired_extent(
+            content,
+            (float(viewport.width()), float(viewport.height())),
+            self._workspace_cell_pitch(),
+            zoom=self._viewport.zoom(),
+        )
+        before = self._workspace_extent
+        after = wanted if reset or before is None else expand_extent(before, wanted)
+        if after == before:
+            return False
+        self._workspace_extent = after
+        setter = getattr(self._free_grid, "set_workspace_extent", None)
+        if callable(setter):
+            setter(after)
+        if before is not None and preserve_visible:
+            # Growing into negative cells rebases the widget-local coordinate
+            # plane.  Compensate the scroll bars in the same transaction so a
+            # quiet resize/LOD repaint does not make every card visibly jump.
+            # _sync_board_stack_geometry publishes the new canvas size before
+            # setValue so Qt cannot clamp against yesterday's maximum.
+            self._sync_board_stack_geometry(self._free_grid)
+            metrics = self._free_grid.metrics()
+            delta_x = (int(before.column) - int(after.column)) * (
+                int(metrics.column_width) + int(metrics.gutter)
+            )
+            delta_y = (int(before.row) - int(after.row)) * (
+                int(metrics.row_height) + int(metrics.gutter)
+            )
+            horizontal = self._board_scroll.horizontalScrollBar()
+            vertical = self._board_scroll.verticalScrollBar()
+            horizontal.setValue(int(horizontal.value() + delta_x))
+            vertical.setValue(int(vertical.value() + delta_y))
+        return True
+
+    def _working_frame_center(self) -> tuple[float, float]:
+        """Pixel centre of the empty-board two-card frame in this extent."""
+        metrics = screen_grid_metrics(())
+        frame_w, frame_h = two_card_working_frame(metrics)
+        extent = self._workspace_extent
+        if extent is None:
+            return (frame_w / 2.0, frame_h / 2.0)
+        pitch_x = float(metrics.column_width + metrics.gutter)
+        pitch_y = float(metrics.row_height + metrics.gutter)
+        # FreeGridBoard renders signed cells relative to extent.column/row.
+        # Keep the visible empty working frame centred on base-frame cells,
+        # not on the negative halo's top-left corner.
+        return (
+            frame_w / 2.0 - float(extent.column) * pitch_x,
+            frame_h / 2.0 - float(extent.row) * pitch_y,
+        )
+
+    def _apply_initial_viewport(self) -> None:
+        """Apply the 66%-capped first-view policy after the host has a size."""
+        fit = self._content_fit_rect()
+        if fit.width <= 1 or fit.height <= 1:
+            self._pending_fit = True
+            return
+        if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            self.zoom_fit()
+            return
+        self._refresh_workspace_extent(preserve_visible=False)
+        frame = two_card_working_frame(screen_grid_metrics(()))
+        payload = initial_viewport(
+            (float(fit.width), float(fit.height)), frame
+        )
+        # initial_viewport's logical centre is relative to the canonical base
+        # frame.  The actual canvas has a signed halo origin, so use the
+        # projected pixel centre for the scroll transaction.
+        self._apply_zoom_and_center(payload["zoom"], self._working_frame_center())
+
+    def _on_workspace_gesture_changed(self, active: bool, global_pos=None) -> None:
+        """Widget contract: Page owns edge-pan lifetime and all timer work."""
+        self._edge_pan_active = bool(active)
+        if not self._edge_pan_active:
+            self._stop_edge_pan()
+            return
+        self._refresh_workspace_extent()
+        if global_pos is not None:
+            # The timer deliberately samples QCursor on every tick; this first
+            # update only makes a just-entered activation band feel immediate.
+            self._edge_pan_tick_for_global(global_pos)
+        if not self._edge_pan_timer.isActive():
+            self._edge_pan_timer.start()
+
+    def _stop_edge_pan(self, *_args) -> None:
+        self._edge_pan_active = False
+        if self._edge_pan_timer.isActive():
+            self._edge_pan_timer.stop()
+
+    def _on_edge_pan_tick(self) -> None:
+        if not self._edge_pan_active or self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            self._stop_edge_pan()
+            return
+        self._edge_pan_tick_for_global(QCursor.pos())
+
+    def _edge_pan_tick_for_global(self, global_pos) -> None:
+        viewport = self._board_scroll.viewport()
+        local = viewport.mapFromGlobal(global_pos)
+        velocity = edge_pan_velocity(
+            (float(local.x()), float(local.y())),
+            (float(viewport.width()), float(viewport.height())),
+        )
+        if velocity == (0.0, 0.0):
+            return
+        # Expand before writing the bars so an edge drag never hits an
+        # invisible scrollbar wall.  The canvas re-layout remains runtime-only.
+        changed = self._refresh_workspace_extent()
+        if changed:
+            self._sync_board_stack_geometry(self._free_grid)
+        horizontal = self._board_scroll.horizontalScrollBar()
+        vertical = self._board_scroll.verticalScrollBar()
+        horizontal.setValue(int(round(horizontal.value() + velocity[0])))
+        vertical.setValue(int(round(vertical.value() + velocity[1])))
+        self._restart_smooth_timer()
+
     def _restore_viewport_from_board(self, board, payload: Mapping[str, Any] | None = None) -> None:
         source = payload if payload is not None else getattr(board, "viewport", None)
         if not isinstance(source, Mapping) or "zoom" not in source:
@@ -1140,7 +1343,7 @@ class UltraViewPage(QWidget):
             viewport = self._board_scroll.viewport()
             if viewport.width() > 1 and viewport.height() > 1:
                 self._pending_fit = False
-                self.zoom_fit()
+                self._apply_initial_viewport()
             return
         self._pending_fit = False
         self._restoring_viewport = True
@@ -1186,7 +1389,11 @@ class UltraViewPage(QWidget):
         self.set_board_zoom(self._viewport.zoom() - ZOOM_BUTTON_STEP)
 
     def zoom_reset(self) -> None:
-        self.set_board_zoom(1.0)
+        # 100% is a scale reset, not a parking/fit command.  Preserve the
+        # world point currently at the viewport centre so users do not get
+        # teleported back to the base-frame origin on a wide monitor.
+        self._filled_card = None
+        self._apply_zoom_and_center(1.0, self._current_center())
 
     def zoom_fit(self) -> None:
         self._filled_card = None
@@ -1194,9 +1401,17 @@ class UltraViewPage(QWidget):
         fit = self._content_fit_rect()
         content = canvas.content_rect_1x()
         if content is None:
+            if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+                self._refresh_workspace_extent()
+                frame = two_card_working_frame(screen_grid_metrics(()))
+                self._apply_zoom_and_center(
+                    board_fit_zoom(frame, (float(fit.width), float(fit.height))),
+                    self._working_frame_center(),
+                )
+                return
             size = canvas.unzoomed_size()
             self._park_zoom(
-                fit_zoom(
+                board_fit_zoom(
                     (size.width(), size.height()),
                     (float(fit.width), float(fit.height)),
                 )
@@ -1205,9 +1420,12 @@ class UltraViewPage(QWidget):
         # Fit the placed-content box into the chrome-safe rect. zoom_to_card
         # uses the raw viewport so a double-click can bleed under the toolbar;
         # 适应 must keep cards inside the floating-chrome safe zone.
-        zoom, center = zoom_to_rect(
-            content, (float(fit.width), float(fit.height)), margin=FIT_CONTENT_MARGIN
+        zoom = board_fit_zoom(
+            (float(content[2]), float(content[3])),
+            (float(fit.width), float(fit.height)),
         )
+        center = (float(content[0]) + float(content[2]) / 2.0,
+                  float(content[1]) + float(content[3]) / 2.0)
         self._apply_zoom_and_center(
             zoom, center, viewport_size=(float(fit.width), float(fit.height))
         )
@@ -1240,6 +1458,9 @@ class UltraViewPage(QWidget):
             self._viewport.set_zoom(zoom)
         self._grid.set_zoom(zoom)
         self._free_grid.set_zoom(zoom)
+        # Caller owns the following scroll transaction (cursor anchor, Fit or
+        # 100% centre), so do not first compensate the old geometry here.
+        self._refresh_workspace_extent(preserve_visible=False)
 
     def zoom_to_card(self, section: str, view_id: str, *, animate: bool = True) -> None:
         rect_1x = self._card_rect_1x(section, view_id)
@@ -1480,6 +1701,7 @@ class UltraViewPage(QWidget):
         layout_size = self._board_layout_viewport_size(size)
         self._grid.set_viewport_size(layout_size)
         self._free_grid.set_viewport_size(layout_size)
+        self._refresh_workspace_extent()
         # QStackedWidget keeps the prior canvas size hint.  Once the floating
         # host gives the scroll area its final rect, propagate the active
         # canvas's new logical size back to the stack so first paint shows the
@@ -1487,7 +1709,7 @@ class UltraViewPage(QWidget):
         self._sync_board_stack_geometry(self._active_canvas())
         if self._pending_fit and self._board_scroll.viewport().width() > 1:
             self._pending_fit = False
-            self.zoom_fit()
+            self._apply_initial_viewport()
         self._refresh_card_context()
 
     def _on_smooth_preview_timeout(self) -> None:
@@ -1853,6 +2075,10 @@ class UltraViewPage(QWidget):
         switching = board.board_id != self._board.board_id
         if switching:
             self._persist_viewport_to_board()
+            self._stop_edge_pan()
+            # The high-water mark belongs to the active board session, not a
+            # project payload and not the next Board's initial view.
+            self._workspace_extent = None
         incoming_viewport = dict(getattr(board, "viewport", None) or {})
         if not keep_overview:
             self.hide_overview()
@@ -1920,6 +2146,9 @@ class UltraViewPage(QWidget):
             self._restore_viewport_from_board(board, payload=incoming_viewport)
         else:
             self._refresh_projection()
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            if self._refresh_workspace_extent():
+                self._sync_board_stack_geometry(self._free_grid)
         self._set_zoom_percent(zoom_percent(self._viewport.zoom()))
         self._apply_floating_layout()
 
@@ -2018,6 +2247,19 @@ class UltraViewPage(QWidget):
     def _text_field_has_focus(self) -> bool:
         return isinstance(QApplication.focusWidget(), QLineEdit)
 
+    def _viewport_router_is_active(self) -> bool:
+        """Limit QApplication gesture routing to the shown active Board host.
+
+        Offscreen Qt often has no ``activeWindow`` despite a visible test
+        widget; treating ``None`` as indeterminate retains deterministic
+        widget tests.  On a real desktop another active top-level window is
+        an explicit boundary, so the router never captures its gestures.
+        """
+        if not self.isVisible() or not self._canvas_host.isVisible():
+            return False
+        active = QApplication.activeWindow()
+        return active is None or active is self.window()
+
     def _on_app_focus_changed(self, _old, now) -> None:
         in_edit = isinstance(now, QLineEdit)
         self._esc.setEnabled(not in_edit)
@@ -2064,6 +2306,7 @@ class UltraViewPage(QWidget):
         return False
 
     def resizeEvent(self, event) -> None:  # noqa: N802
+        self._stop_edge_pan()
         if self._grid.is_gesture_active():
             self._grid.cancel_gesture()
         if self._free_grid.gesture().is_active():
@@ -2096,6 +2339,7 @@ class UltraViewPage(QWidget):
         return super().eventFilter(watched, event)
 
     def _cancel_board_gestures(self) -> None:
+        self._stop_edge_pan()
         if self._viewport.is_panning():
             self.end_board_pan()
         if self._grid.is_gesture_active():
@@ -2118,6 +2362,7 @@ class UltraViewPage(QWidget):
 
     def hideEvent(self, event) -> None:  # noqa: N802
         self._viewport_router.uninstall()
+        self._stop_edge_pan()
         self.note_space(False)
         self._cancel_board_gestures()
         super().hideEvent(event)
@@ -2555,6 +2800,11 @@ class UltraViewPage(QWidget):
         }
         self._board_stack.setCurrentWidget(self._free_grid)
         self._free_grid.set_free_grid(self._board.free_grid, models)
+        # Selection/preview refreshes run through this projection too.  Do
+        # not rebase the runtime coordinate plane for those view-only events;
+        # board mutation, resize, zoom and edge-pan own extent growth.
+        if self._workspace_extent is None:
+            self._refresh_workspace_extent()
         self._sync_board_stack_geometry(self._free_grid)
         self._apply_lod_chrome()
         titles = {}
@@ -2639,6 +2889,11 @@ class UltraViewPage(QWidget):
     def _minimap_should_show(self) -> bool:
         if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
             return False
+        # Runtime halo intentionally creates pan slack even on an empty
+        # Board.  It is not user content and must not by itself summon a
+        # minimap/navigation affordance.
+        if not self._board.free_grid:
+            return False
         if self._presentation or self._overview.isVisible():
             return False
         if self._active_panel is not None:
@@ -2677,6 +2932,7 @@ class UltraViewPage(QWidget):
                 viewport.width(),
                 viewport.height(),
             ),
+            workspace_extent=self._workspace_extent,
         )
         self._minimap.show()
         self._position_minimap()

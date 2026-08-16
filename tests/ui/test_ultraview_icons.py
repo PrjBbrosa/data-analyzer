@@ -25,6 +25,7 @@ from mf4_analyzer.ui_kit.icons import Icons
         "ultraview_help",
         "ultraview_add",
         "ultraview_open_source",
+        "ultraview_remove_from_board",
         "ultraview_sync",
         "ultraview_move_to_tray",
         "ultraview_pin",

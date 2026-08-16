@@ -537,6 +537,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.lod",
         "ultraview.boards",
         "ultraview.limits",
+        "ultraview.pan",
+        "ultraview.remove",
     }
     assert required <= set(by_id)
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
@@ -587,5 +589,18 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
             )
         assert found_rail, mode
     haystack = " ".join(hint.text for hint in by_id.values())
-    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "实时", "直播", "Alt+拖"):
+    for banned in (
+        "PDF", "SVG", "sidecar", "live card", "后台补图", "实时", "直播", "Alt+拖",
+        "逻辑画布固定", "默认适应视口", "铺满视口", "12 列受控",
+    ):
         assert banned not in haystack
+    assert "标尺" in by_id["ultraview.limits"].text
+    assert "24" in by_id["ultraview.limits"].text
+    assert "200" in by_id["ultraview.limits"].text
+    assert "66%" in by_id["ultraview.zoom"].text
+    assert "100%" in by_id["ultraview.zoom"].text
+    assert "300%" in by_id["ultraview.inspect"].text
+    assert "Esc" in by_id["ultraview.inspect"].text
+    assert "四向" in by_id["ultraview.pan"].text
+    assert "不删" in by_id["ultraview.remove"].text
+    assert "Ctrl/Cmd+Z" in by_id["ultraview.undo"].text

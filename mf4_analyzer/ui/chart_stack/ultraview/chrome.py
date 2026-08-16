@@ -14,8 +14,18 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 
-from PyQt5.QtCore import QEvent, QPoint, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import (
+    QColor,
+    QFont,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QRadialGradient,
+)
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -37,6 +47,7 @@ from PyQt5.QtWidgets import (
 
 from mf4_analyzer.ui_kit.icons import Icons, icon_device_pixel_ratio
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.ultraview_style import titanium_color
 from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, parse_ref_payload
 
 from .floating_layout import (
@@ -73,17 +84,27 @@ def board_popover_height(rows: int) -> int:
     list_h = count * BOARD_ROW_HEIGHT + max(0, count - 1) + _BOARD_LIST_BOTTOM_PAD
     return _BOARD_POPOVER_MARGIN * 2 + list_h + _BOARD_POPOVER_GAP + _BOARD_CREATE_HEIGHT
 
-# UltraView-local moonstone tokens.  Do not fold these into CONTROL_COLORS.
-ULTRAVIEW_MOON = QColor("#EDF2F5")
-ULTRAVIEW_DOT = QColor(77, 109, 132, 38)
-ULTRAVIEW_PAPER = QColor("#FCFDFE")
-ULTRAVIEW_STONE = QColor("#3E709C")
-ULTRAVIEW_STONE_DEEP = QColor("#315E85")
-ULTRAVIEW_WASH = QColor("#EAF2F8")
-ULTRAVIEW_LINE = QColor("#C7D4DF")
-ULTRAVIEW_INK = QColor("#203347")
-ULTRAVIEW_MUTED = QColor("#6B7D8E")
-ULTRAVIEW_PRESENTATION_ICON = QColor("#ffffff")
+# UltraView-local Titanium Amber palette.  Keep this role mapping isolated
+# from CONTROL_COLORS: the rest of the Analyzer must not inherit this canvas.
+UV_CANVAS = QColor(titanium_color("canvas"))
+UV_CANVAS_DEEP = QColor(titanium_color("canvas_deep"))
+UV_DOT = QColor(44, 82, 93, 43)
+UV_GRID = QColor(38, 74, 86, 26)
+UV_GLOW_TEAL = QColor(31, 104, 128, 41)
+UV_GLOW_AMBER = QColor(238, 151, 58, 33)
+UV_GLOW_COPPER = QColor(197, 76, 64, 20)
+UV_PAPER = QColor(titanium_color("surface_solid"))
+UV_BRAND = QColor(titanium_color("brand"))
+UV_BRAND_DEEP = QColor(titanium_color("brand_deep"))
+UV_AMBER = QColor(titanium_color("amber"))
+UV_WASH = QColor(titanium_color("surface_tint"))
+UV_LINE = QColor(50, 86, 97, 59)
+UV_INK = QColor(titanium_color("ink"))
+UV_MUTED = QColor(titanium_color("muted"))
+UV_PRESENTATION_ICON = QColor("#FFFFFF")
+# Compatibility seam for the card module.  Keep only this import alias while
+# widgets moves to the role palette; all paint decisions above use ``UV_*``.
+ULTRAVIEW_MUTED = UV_MUTED
 _LAYOUT_THUMB_SIZE = QSize(88, 54)
 _LAYOUT_THUMB_CELL = QSize(168, 118)
 _HERO_LAYOUT_IDS = frozenset({"hero_left_4", "hero_top_4"})
@@ -125,8 +146,8 @@ _LAYOUT_THUMB_SCHEMES: dict[str, tuple[tuple[float, float, float, float], ...]] 
 
 
 def _ultraview_icon_color(*, active: bool) -> QColor:
-    """Rest icons stay muted; mode/panel-open icons pick up stone blue."""
-    return QColor(ULTRAVIEW_STONE if active else ULTRAVIEW_MUTED)
+    """Rest icons stay muted; mode/panel-open icons pick up titanium blue."""
+    return QColor(UV_BRAND if active else UV_MUTED)
 
 
 def layout_thumbnail_icon(layout_id: str) -> QIcon:
@@ -138,19 +159,19 @@ def layout_thumbnail_icon(layout_id: str) -> QIcon:
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setPen(ULTRAVIEW_LINE)
-    painter.setBrush(ULTRAVIEW_PAPER)
+    painter.setPen(UV_LINE)
+    painter.setBrush(UV_PAPER)
     painter.drawRoundedRect(QRectF(0.5, 0.5, logical_w - 1.0, logical_h - 1.0), 7, 7)
     inset = QRectF(5.0, 5.0, logical_w - 10.0, logical_h - 10.0)
     painter.setPen(Qt.NoPen)
-    painter.setBrush(ULTRAVIEW_MOON)
+    painter.setBrush(UV_CANVAS_DEEP)
     painter.drawRoundedRect(inset, 4, 4)
     cells = _LAYOUT_THUMB_SCHEMES.get(str(layout_id), _LAYOUT_THUMB_SCHEMES["grid_2x2"])
     gutter = 2.4
     hero = str(layout_id) in _HERO_LAYOUT_IDS
-    slot_line = QColor(62, 112, 156, 55)
-    aux_fill = QColor("#E4ECF1")
-    hero_fill = QColor("#C9D9E6")
+    slot_line = QColor(UV_BRAND.red(), UV_BRAND.green(), UV_BRAND.blue(), 55)
+    aux_fill = QColor("#E2EAEC")
+    hero_fill = QColor("#C9DBDE")
     for index, (left, top, width, height) in enumerate(cells):
         x = inset.x() + left * inset.width() + gutter
         y = inset.y() + top * inset.height() + gutter
@@ -285,6 +306,8 @@ class CanvasHost(QFrame):
         self._active_overlay: str | None = None
         self._dot_tile: QPixmap | None = None
         self._dot_tile_key: tuple[str, int] | None = None
+        self._background: QPixmap | None = None
+        self._background_size = QSize()
 
     def canvas_widget(self) -> QWidget | None:
         return self._canvas
@@ -413,21 +436,80 @@ class CanvasHost(QFrame):
                 self.set_overlay_geometry(key, overlay.geometry())
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        """Paint the one memorable Miro cue once beneath all Qt children."""
+        """Paint the cached Titanium Amber canvas beneath all Qt children."""
         painter = QPainter(self)
-        painter.fillRect(self.rect(), ULTRAVIEW_MOON)
-        key = (ULTRAVIEW_MOON.name(), ULTRAVIEW_DOT.rgba())
+        size = self.size()
+        if self._background is None or self._background_size != size:
+            self._background = self._build_canvas_background(size)
+            self._background_size = QSize(size)
+        painter.drawPixmap(self.rect(), self._background)
+
+    def _build_canvas_background(self, size: QSize) -> QPixmap:
+        """Create a static multi-layer backdrop once per resize, never per pan."""
+        width, height = max(1, size.width()), max(1, size.height())
+        background = QPixmap(width, height)
+        background.fill(UV_CANVAS)
+        painter = QPainter(background)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = QRectF(0.0, 0.0, float(width), float(height))
+
+        base = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        base.setColorAt(0.0, UV_CANVAS)
+        base.setColorAt(1.0, UV_CANVAS_DEEP)
+        painter.fillRect(rect, base)
+        for center, radius, color in (
+            (QPointF(width * 0.16, height * 0.04), max(width, height) * 0.46, UV_GLOW_TEAL),
+            (QPointF(width * 0.88, height * 0.09), max(width, height) * 0.42, UV_GLOW_AMBER),
+            (QPointF(width * 0.64, height * 1.04), max(width, height) * 0.48, UV_GLOW_COPPER),
+        ):
+            glow = QRadialGradient(center, radius)
+            glow.setColorAt(0.0, color)
+            edge = QColor(color)
+            edge.setAlpha(0)
+            glow.setColorAt(1.0, edge)
+            painter.fillRect(rect, glow)
+
+        key = (UV_CANVAS.name(), UV_DOT.rgba())
         if self._dot_tile is None or self._dot_tile_key != key:
             tile = QPixmap(_DOT_PITCH_PX, _DOT_PITCH_PX)
             tile.fill(Qt.transparent)
             dots = QPainter(tile)
             dots.setPen(Qt.NoPen)
-            dots.setBrush(ULTRAVIEW_DOT)
+            dots.setBrush(UV_DOT)
             dots.drawRect(10, 10, 2, 2)
             dots.end()
             self._dot_tile = tile
             self._dot_tile_key = key
-        painter.drawTiledPixmap(self.rect(), self._dot_tile)
+        painter.drawTiledPixmap(QRectF(rect), self._dot_tile)
+
+        grid_pen = QPen(UV_GRID)
+        grid_pen.setWidthF(1.0)
+        painter.setPen(grid_pen)
+        coarse_pitch = _DOT_PITCH_PX * 5
+        for x in range(0, width + 1, coarse_pitch):
+            painter.drawLine(x, 0, x, height)
+        for y in range(0, height + 1, coarse_pitch):
+            painter.drawLine(0, y, width, y)
+
+        horizon = QPainterPath(QPointF(0.0, height * 0.15))
+        horizon.cubicTo(
+            width * 0.18, height * 0.10, width * 0.25, height * 0.20, width * 0.42, height * 0.14
+        )
+        horizon.cubicTo(
+            width * 0.58, height * 0.08, width * 0.73, height * 0.20, float(width), height * 0.12
+        )
+        horizon_gradient = QLinearGradient(0.0, 0.0, float(width), 0.0)
+        for stop, color in ((0.0, UV_BRAND), (0.55, UV_AMBER), (1.0, QColor(titanium_color("copper")))):
+            faint = QColor(color)
+            faint.setAlpha(36)
+            horizon_gradient.setColorAt(stop, faint)
+        horizon_pen = QPen(horizon_gradient, 1.0, Qt.DashLine)
+        horizon_pen.setDashPattern((2.0, 6.0))
+        painter.setPen(horizon_pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(horizon)
+        painter.end()
+        return background
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key_Escape and self.close_active_overlay():
@@ -514,7 +596,7 @@ class ToolRail(QFrame):
                 self._free_grid = _rail_button(
                     self,
                     object_name="ultraViewRailFreeGridButton",
-                    icon=Icons.ultraview_free_grid(ULTRAVIEW_MUTED),
+                    icon=Icons.ultraview_free_grid(UV_MUTED),
                     tooltip="切换 12 列受控自由网格",
                     accessible_name="切换 12 列受控自由网格",
                 )
@@ -530,7 +612,7 @@ class ToolRail(QFrame):
             button = _rail_button(
                 self,
                 object_name=f"ultraViewRail{short_name}Button",
-                icon=icon_factory(ULTRAVIEW_MUTED),
+                icon=icon_factory(UV_MUTED),
                 tooltip=tooltip,
                 accessible_name=tooltip,
             )
@@ -559,7 +641,7 @@ class ToolRail(QFrame):
         self._sync_all = _rail_button(
             self,
             object_name="ultraViewRailSyncAllButton",
-            icon=Icons.ultraview_sync(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_sync(UV_MUTED),
             tooltip="一键更新源",
             accessible_name="一键更新全部已变化的预览",
         )
@@ -673,7 +755,7 @@ class ToolRail(QFrame):
             factory = self._icon_factories.get(candidate)
             if factory is not None:
                 if empty_cta:
-                    button.setIcon(factory(ULTRAVIEW_PRESENTATION_ICON))
+                    button.setIcon(factory(UV_PRESENTATION_ICON))
                 else:
                     button.setIcon(
                         factory(_ultraview_icon_color(active=mode_active or panel_open))
@@ -832,7 +914,7 @@ class BoardIsland(QFrame):
         self._menu = _icon_button(
             self,
             object_name="ultraViewBoardMenuButton",
-            icon=Icons.chevron_down(ULTRAVIEW_MUTED),
+            icon=Icons.chevron_down(UV_MUTED),
             tooltip="切换或管理 Board",
             accessible_name="切换或管理当前 Board",
         )
@@ -841,7 +923,7 @@ class BoardIsland(QFrame):
         self._add = _icon_button(
             self,
             object_name="ultraViewBoardAddButton",
-            icon=Icons.ultraview_add(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_add(UV_MUTED),
             tooltip="新建 Board",
             accessible_name="新建 Board",
         )
@@ -929,15 +1011,15 @@ class _BoardListDelegate(QStyledItemDelegate):
         hovered = index.row() == self._hovered_row
         current = bool(index.data(_BOARD_CURRENT_ROLE))
         if selected:
-            painter.setPen(ULTRAVIEW_STONE)
-            painter.setBrush(ULTRAVIEW_WASH)
+            painter.setPen(UV_BRAND)
+            painter.setBrush(UV_WASH)
             painter.drawRoundedRect(QRectF(rect), 6, 6)
         elif hovered:
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor("#F7FAFC"))
             painter.drawRoundedRect(QRectF(rect), 6, 6)
         check_rect = QRect(rect.left() + 4, rect.top(), 16, rect.height())
-        painter.setPen(ULTRAVIEW_STONE if current else Qt.transparent)
+        painter.setPen(UV_BRAND if current else Qt.transparent)
         painter.drawText(check_rect, Qt.AlignCenter, "✓" if current else "")
         copy_rect, delete_rect = self.action_rects(option.rect)
         name_rect = QRect(
@@ -948,7 +1030,7 @@ class _BoardListDelegate(QStyledItemDelegate):
         )
         metrics = option.fontMetrics
         name = metrics.elidedText(str(index.data(Qt.DisplayRole) or ""), Qt.ElideRight, name_rect.width())
-        painter.setPen(ULTRAVIEW_INK)
+        painter.setPen(UV_INK)
         painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
         self._paint_icon(painter, self._copy_icon, copy_rect)
         self._paint_icon(painter, self._delete_icon, delete_rect)
@@ -1350,7 +1432,7 @@ class GlobalIsland(QFrame):
         self._display = _icon_button(
             self,
             object_name="ultraViewGlobalDisplayButton",
-            icon=Icons.ultraview_display(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_display(UV_MUTED),
             tooltip="显示标题和来源",
             accessible_name="显示标题和来源",
         )
@@ -1360,7 +1442,7 @@ class GlobalIsland(QFrame):
         self._export = _icon_button(
             self,
             object_name="ultraViewGlobalExportButton",
-            icon=Icons.export(ULTRAVIEW_MUTED),
+            icon=Icons.export(UV_MUTED),
             tooltip="复制或导出 Board",
             accessible_name="复制或导出 Board",
         )
@@ -1370,7 +1452,7 @@ class GlobalIsland(QFrame):
         self._presentation = _icon_button(
             self,
             object_name="ultraViewGlobalPresentationButton",
-            icon=Icons.ultraview_presentation(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_presentation(UV_MUTED),
             tooltip="进入演示",
             accessible_name="进入演示",
         )
@@ -1441,7 +1523,7 @@ class GlobalIsland(QFrame):
             _repolish(self._presentation)
         self._presentation.setIcon(
             Icons.ultraview_presentation(
-                ULTRAVIEW_PRESENTATION_ICON if checked else ULTRAVIEW_MUTED
+                UV_PRESENTATION_ICON if checked else UV_MUTED
             )
         )
         if not checked:
@@ -1471,7 +1553,7 @@ class NavigationIsland(QFrame):
         self._overview = _icon_button(
             self,
             object_name="ultraViewNavOverviewButton",
-            icon=Icons.ultraview_overview(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_overview(UV_MUTED),
             tooltip="查看整板概览",
             accessible_name="查看整板概览",
         )
@@ -1480,7 +1562,7 @@ class NavigationIsland(QFrame):
         self._zoom_out = _icon_button(
             self,
             object_name="ultraViewNavZoomOutButton",
-            icon=Icons.ultraview_zoom_out(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_zoom_out(UV_MUTED),
             tooltip="缩小画布",
             accessible_name="缩小画布",
         )
@@ -1499,7 +1581,7 @@ class NavigationIsland(QFrame):
         self._zoom_in = _icon_button(
             self,
             object_name="ultraViewNavZoomInButton",
-            icon=Icons.ultraview_zoom_in(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_zoom_in(UV_MUTED),
             tooltip="放大画布",
             accessible_name="放大画布",
         )
@@ -1508,7 +1590,7 @@ class NavigationIsland(QFrame):
         self._fit = _icon_button(
             self,
             object_name="ultraViewNavFitButton",
-            icon=Icons.ultraview_fit(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_fit(UV_MUTED),
             tooltip="画布适应视口",
             accessible_name="画布适应视口",
         )
@@ -1517,7 +1599,7 @@ class NavigationIsland(QFrame):
         self._reset = _icon_button(
             self,
             object_name="ultraViewNavResetButton",
-            icon=Icons.ultraview_reset_zoom(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_reset_zoom(UV_MUTED),
             tooltip="恢复 100% 缩放",
             accessible_name="恢复 100% 缩放",
         )
@@ -1569,7 +1651,7 @@ class StatusIsland(QFrame):
         self._quickref = _icon_button(
             self,
             object_name="ultraViewStatusHelpButton",
-            icon=Icons.ultraview_help(ULTRAVIEW_MUTED),
+            icon=Icons.ultraview_help(UV_MUTED),
             tooltip="操作速查",
             accessible_name="打开 UltraView 操作速查",
         )
@@ -1641,11 +1723,11 @@ class CardContextIsland(QFrame):
         self._stale = False
         self._fit_enabled = False
         for action, object_name, icon, tooltip in (
-            ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(ULTRAVIEW_MUTED), "打开原 View"),
-            ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(ULTRAVIEW_MUTED), "同步到最新预览"),
-            ("focus", "ultraViewContextFocusButton", Icons.expand_focus(ULTRAVIEW_MUTED), "临时放大预览"),
-            ("fit", "ultraViewContextFitButton", Icons.ultraview_fit_to_image(ULTRAVIEW_MUTED), self._FIT_TOOLTIP),
-            ("more", "ultraViewContextMoreButton", Icons.menu(ULTRAVIEW_MUTED), "更多卡片操作"),
+            ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(UV_MUTED), "打开原 View"),
+            ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(UV_MUTED), "同步到最新预览"),
+            ("focus", "ultraViewContextFocusButton", Icons.expand_focus(UV_MUTED), "临时放大预览"),
+            ("fit", "ultraViewContextFitButton", Icons.ultraview_fit_to_image(UV_MUTED), self._FIT_TOOLTIP),
+            ("more", "ultraViewContextMoreButton", Icons.menu(UV_MUTED), "更多卡片操作"),
         ):
             button = _icon_button(
                 self,

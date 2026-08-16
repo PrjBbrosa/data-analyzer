@@ -143,6 +143,13 @@ def _card_facts(page) -> list[dict[str, Any]]:
             item["footer_h"] = int(card.footer_height())
             item["chrome_h"] = int(card.chrome_height())
             item["title_visible"] = bool(card._title.isVisible())
+            action_bar = card.action_bar()
+            item["actions_visible"] = bool(action_bar.isVisible())
+            item["visible_actions"] = [
+                action
+                for action in ("open", "focus", "fit", "remove", "more")
+                if (button := card.action_button(action)) is not None and button.isVisible()
+            ]
             item["geom"] = _rect(card)
         facts.append(item)
     return facts
@@ -810,7 +817,13 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
             errors.append(f"{name} did not expose its popover")
 
     context = geometry.get("card_context_1280") or {}
-    if not (context.get("card_context") or {}).get("visible"):
+    selected_actions = [
+        card
+        for card in context.get("cards") or []
+        if card.get("actions_visible")
+        and {"open", "focus", "remove", "more"} <= set(card.get("visible_actions") or [])
+    ]
+    if not selected_actions:
         errors.append("card_context_1280 missing selected-card actions")
 
     grid = geometry.get("grid_6_1440") or {}

@@ -23,6 +23,7 @@ class ViewportGestureRouter(QObject):
         pinch: Callable[[QNativeGestureEvent, QWidget], bool],
         note_space: Callable[[bool], None],
         text_field_has_focus: Callable[[], bool],
+        is_active: Callable[[], bool] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -35,6 +36,7 @@ class ViewportGestureRouter(QObject):
         self._pinch = pinch
         self._note_space = note_space
         self._text_field_has_focus = text_field_has_focus
+        self._is_active = is_active
         self._installed = False
 
     def install(self) -> None:
@@ -55,6 +57,11 @@ class ViewportGestureRouter(QObject):
         self._installed = False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        # This is an QApplication-level filter solely to keep a gesture alive
+        # while Qt changes the receiver beneath it.  It must be inert whenever
+        # the Board is hidden or another top-level window is active.
+        if self._is_active is not None and not self._is_active():
+            return False
         if not self._is_canvas_descendant(watched):
             return False
         event_type = event.type()
@@ -98,6 +105,8 @@ class ViewportGestureRouter(QObject):
         return True
 
     def _is_canvas_descendant(self, watched) -> bool:
+        if not self._canvas_host.isVisible():
+            return False
         if not isinstance(watched, QWidget):
             return False
         current: QWidget | None = watched

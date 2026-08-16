@@ -49,7 +49,10 @@ from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
     GRID_MIN_COLUMN_SPAN,
     GRID_MIN_ROW_SPAN,
-    MAX_GRID_ROWS,
+    SAFETY_COLUMN_MAX,
+    SAFETY_COLUMN_MIN,
+    SAFETY_ROW_MAX,
+    SAFETY_ROW_MIN,
     FreeGridPlacement,
     GridRect,
     make_ref,
@@ -98,7 +101,10 @@ def test_move_resize_candidate_and_collision_rejection_are_deterministic():
     assert not rect_is_available(candidate, [first, second], excluding=first.ref)
     resized = candidate_resize(first.rect, 2, 0)
     assert not rect_is_available(resized, [first, second], excluding=first.ref)
-    assert candidate_move(first.rect, -10, -10) == GridRect(0, 0, 4, 3)
+    assert candidate_move(first.rect, -10, -10) == GridRect(-10, -10, 4, 3)
+    assert candidate_move(first.rect, -100, -100) == GridRect(
+        SAFETY_COLUMN_MIN, SAFETY_ROW_MIN, 4, 3
+    )
     assert candidate_resize(first.rect, -10, -10) == GridRect(0, 0, 2, 2)
 
 
@@ -112,12 +118,18 @@ def test_organize_only_removes_fully_empty_rows_and_is_idempotent():
     assert organized_placements(organized) == organized
 
 
-def test_clamp_rect_keeps_origin_plus_span_inside_board():
-    legal = clamp_rect(GridRect(11, 47, 6, 3))
-    assert legal.column_span == 6
-    assert legal.row_span == 3
-    assert legal.column + legal.column_span <= GRID_COLUMNS
-    assert legal.row + legal.row_span <= MAX_GRID_ROWS
+def test_clamp_rect_keeps_origin_plus_span_inside_safety():
+    still_legal = clamp_rect(GridRect(11, 47, 6, 3))
+    assert still_legal == GridRect(11, 47, 6, 3)
+    overflow = clamp_rect(GridRect(58, 94, 6, 3))
+    assert overflow.column_span == 6
+    assert overflow.row_span == 3
+    assert overflow.column + overflow.column_span <= SAFETY_COLUMN_MAX
+    assert overflow.row + overflow.row_span <= SAFETY_ROW_MAX
+    assert overflow.column == SAFETY_COLUMN_MAX - 6
+    assert overflow.row == SAFETY_ROW_MAX - 3
+    negative = clamp_rect(GridRect(-50, -50, 4, 3))
+    assert negative == GridRect(SAFETY_COLUMN_MIN, SAFETY_ROW_MIN, 4, 3)
 
 
 def test_export_grid_metrics_crop_short_boards_and_keep_screen_floor():
@@ -227,14 +239,16 @@ def test_snapped_move_rect_matches_candidate_move_and_stays_clamped():
     snapped = snapped_move_rect(origin, delta, metrics)
     assert snapped == candidate_move(origin, *pixels_to_grid_delta(delta, metrics))
     assert snapped == clamp_rect(snapped)
-    assert snapped.column + snapped.column_span <= GRID_COLUMNS
+    assert snapped.column + snapped.column_span <= SAFETY_COLUMN_MAX
+    assert snapped.column >= SAFETY_COLUMN_MIN
 
 
 def test_legal_grid_rect_clamps_origin_plus_span():
     metrics = grid_metrics((1280, 800), [])
     legal = legal_grid_rect((metrics.board_width - 2, 20), metrics, column_span=6, row_span=3)
     assert legal == clamp_rect(legal)
-    assert legal.column + legal.column_span <= GRID_COLUMNS
+    assert legal.column + legal.column_span <= SAFETY_COLUMN_MAX
+    assert legal.column >= SAFETY_COLUMN_MIN
 
 
 def test_gesture_move_plans_overlap_as_legal_same_size_translate():
@@ -260,7 +274,7 @@ def test_gesture_move_plans_overlap_as_legal_same_size_translate():
     assert gesture.is_armed() is False
 
 
-def test_gesture_move_keeps_out_of_bounds_candidate_illegal():
+def test_gesture_move_across_base_frame_is_legal():
     metrics = grid_metrics((1280, 800), [])
     origin = GridRect(0, 0, 4, 3)
     placements = [_placement("a", origin)]
@@ -272,15 +286,31 @@ def test_gesture_move_keeps_out_of_bounds_candidate_illegal():
     )
     assert session is not None and session.active
     assert session.candidate == translated_move_rect(origin, (-unit * 8, 0), metrics)
+    assert session.candidate == GridRect(-8, 0, 4, 3)
+    assert session.candidate == clamp_rect(session.candidate)
+    assert session.legal is True
+
+
+def test_gesture_move_keeps_out_of_bounds_candidate_illegal():
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 4, 3)
+    placements = [_placement("a", origin)]
+    gesture = FreeGridGesture()
+    gesture.press(make_ref("time", "a"), origin, (10, 10), (10, 10))
+    unit = metrics.column_width + metrics.gutter
+    past_safety = abs(SAFETY_COLUMN_MIN) + origin.column_span + 8
+    session = gesture.update(
+        (10 - unit * past_safety, 10), metrics, placements, start_drag_distance=20
+    )
+    assert session is not None and session.active
+    assert session.candidate == translated_move_rect(
+        origin, (-unit * past_safety, 0), metrics
+    )
     assert session.candidate != clamp_rect(session.candidate)
     assert session.legal is False
 
 
-def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
-    """An out-of-board group drag commits nothing, so its ghost must keep showing
-    the rigid translation in the reject state.  Clamping each member on its own
-    drew a squashed, self-overlapping shape that was neither the pointer position
-    nor the outcome (review 2026-08-15 §4.3 群组越界 ghost)."""
+def test_group_move_left_by_three_stays_inside_safety():
     metrics = grid_metrics((1280, 800), [])
     first = GridRect(0, 0, 4, 3)
     second = GridRect(4, 0, 4, 3)
@@ -295,9 +325,33 @@ def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
         (10 - unit * 3, 10), metrics, placements, start_drag_distance=20
     )
     assert session is not None and session.active
+    assert session.legal is True
+    assert session.plan is not None and session.plan.accepted
+
+
+def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
+    """An out-of-safety group drag commits nothing, so its ghost must keep showing
+    the rigid translation in the reject state.  Clamping each member on its own
+    drew a squashed, self-overlapping shape that was neither the pointer position
+    nor the outcome (review 2026-08-15 §4.3 群组越界 ghost)."""
+    metrics = grid_metrics((1280, 800), [])
+    first = GridRect(0, 0, 4, 3)
+    second = GridRect(4, 0, 4, 3)
+    placements = [_placement("a", first), _placement("b", second)]
+    origins = {make_ref("time", "a"): first, make_ref("time", "b"): second}
+    gesture = FreeGridGesture()
+    gesture.press(
+        make_ref("time", "a"), first, (10, 10), (10, 10), group_origins=origins
+    )
+    unit = metrics.column_width + metrics.gutter
+    past_safety = abs(SAFETY_COLUMN_MIN) + 8
+    session = gesture.update(
+        (10 - unit * past_safety, 10), metrics, placements, start_drag_distance=20
+    )
+    assert session is not None and session.active
     assert session.legal is False and session.plan is None
 
-    ghosts = session.group_ghost_pixels(metrics, (10 - unit * 3, 10))
+    ghosts = session.group_ghost_pixels(metrics, (10 - unit * past_safety, 10))
     highlights = session.group_highlight_pixels(metrics)
     assert len(ghosts) == len(highlights) == 2
     assert ghosts == highlights
@@ -308,9 +362,7 @@ def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
     for ghost, origin in zip(ghosts, (first, second)):
         expected = rect_to_pixels(origin, metrics)
         assert (ghost[2], ghost[3]) == (expected[2], expected[3])
-    # Out of the board on the left, i.e. not clamped back onto the first column.
     assert ghosts[0][0] < 0
-    # And no self-overlap, which is exactly what per-member clamping produced.
     assert ghosts[0][0] + ghosts[0][2] <= ghosts[1][0]
 
 
@@ -367,8 +419,12 @@ def test_union_and_group_translate_reject_overflow_or_union_collision():
     assert legal_down is True
     assert down[make_ref("time", "a")] == GridRect(0, 1, 6, 3)
     assert down[make_ref("time", "b")] == GridRect(6, 1, 6, 3)
-    _overflow, legal_right = group_translate_rects(selected, (), 1, 0)
-    assert legal_right is False
+    _across_base, legal_right = group_translate_rects(selected, (), 1, 0)
+    assert legal_right is True
+    _overflow, legal_past_safety = group_translate_rects(
+        selected, (), SAFETY_COLUMN_MAX, 0
+    )
+    assert legal_past_safety is False
     _blocked, legal_blocked = group_translate_rects(selected, (blocker,), 0, 1)
     assert legal_blocked is False
     empty, legal_empty = group_translate_rects({}, (), 1, 0)
@@ -384,7 +440,7 @@ def test_avoidance_preferred_delta_follows_move_then_resize_axis():
     assert avoidance_preferred_delta(origin, GridRect(0, 0, 6, 5)) == (0, 1)
 
 
-def test_overlap_avoidance_slides_blocker_down_when_right_is_blocked():
+def test_overlap_avoidance_slides_blocker_past_the_old_twelve_column_wall():
     first = _placement("a", GridRect(0, 0, 6, 3))
     second = _placement("b", GridRect(6, 0, 6, 3))
     updates, ok = plan_overlap_avoidance(
@@ -395,7 +451,21 @@ def test_overlap_avoidance_slides_blocker_down_when_right_is_blocked():
     assert ok is True
     by_ref = dict(updates)
     assert by_ref[first.ref] == GridRect(6, 0, 6, 3)
-    assert by_ref[second.ref] == GridRect(6, 3, 6, 3)
+    assert by_ref[second.ref] == GridRect(12, 0, 6, 3)
+
+
+def test_overlap_avoidance_slides_blocker_down_when_safety_right_is_blocked():
+    first = _placement("a", GridRect(SAFETY_COLUMN_MAX - 12, 0, 6, 3))
+    second = _placement("b", GridRect(SAFETY_COLUMN_MAX - 6, 0, 6, 3))
+    updates, ok = plan_overlap_avoidance(
+        {first.ref: GridRect(SAFETY_COLUMN_MAX - 6, 0, 6, 3)},
+        [first, second],
+        preferred=(1, 0),
+    )
+    assert ok is True
+    by_ref = dict(updates)
+    assert by_ref[first.ref] == GridRect(SAFETY_COLUMN_MAX - 6, 0, 6, 3)
+    assert by_ref[second.ref] == GridRect(SAFETY_COLUMN_MAX - 6, 3, 6, 3)
 
 
 def test_overlap_avoidance_slides_blocker_along_preferred_axis_when_open():
@@ -411,7 +481,7 @@ def test_overlap_avoidance_slides_blocker_along_preferred_axis_when_open():
     assert by_ref[second.ref] == GridRect(8, 0, 4, 3)
 
 
-def test_overlap_avoidance_fails_when_board_is_packed():
+def test_overlap_avoidance_slides_past_the_old_twelve_column_wall():
     cards = [
         _placement(f"c{index}", GridRect(0, index * 8, 12, 8))
         for index in range(6)
@@ -421,20 +491,24 @@ def test_overlap_avoidance_fails_when_board_is_packed():
         cards,
         preferred=(0, 1),
     )
-    assert ok is False
-    assert updates == ()
+    assert ok is True
+    by_ref = dict(updates)
+    assert by_ref[cards[0].ref] == GridRect(0, 1, 12, 8)
+    blocker = by_ref[cards[1].ref]
+    assert (blocker.column_span, blocker.row_span) == (12, 8)
+    assert blocker.column + blocker.column_span > GRID_COLUMNS or blocker.row != 8
 
 
-def test_out_of_board_drop_clamps_into_the_empty_cell():
+def test_signed_origin_inside_safety_is_accepted_without_rebasing():
     card = _placement("a", GridRect(2, 0, 4, 3))
     plan = plan_layout(
         [card], card.ref, GridRect(-2, 0, 4, 3), LAYOUT_MOVE, preferred=(-1, 0)
     )
     assert plan.accepted is True
-    assert dict(plan.committed_updates())[card.ref] == GridRect(0, 0, 4, 3)
+    assert dict(plan.committed_updates())[card.ref] == GridRect(-2, 0, 4, 3)
 
 
-def test_out_of_board_drop_rejects_wall_instead_of_shrinking_neighbors():
+def test_crossing_base_frame_is_legal_and_does_not_shrink_neighbors():
     left_top = _placement("a", GridRect(0, 0, 4, 3))
     left_bottom = _placement("b", GridRect(0, 3, 4, 3))
     mover = _placement("c", GridRect(4, 0, 8, 6))
@@ -445,22 +519,40 @@ def test_out_of_board_drop_rejects_wall_instead_of_shrinking_neighbors():
         LAYOUT_MOVE,
         preferred=(1, 0),
     )
-    assert plan.accepted is False
-    assert plan.committed_updates() == ()
+    assert plan.accepted is True
+    assert dict(plan.committed_updates())[mover.ref] == GridRect(5, 0, 8, 6)
     assert left_top.rect == GridRect(0, 0, 4, 3)
-    assert mover.rect == GridRect(4, 0, 8, 6)
+    assert left_bottom.rect == GridRect(0, 3, 4, 3)
 
 
-def test_out_of_board_drop_fails_when_left_neighbors_are_already_minimum():
-    left_top = _placement("a", GridRect(0, 0, 2, 3))
-    left_bottom = _placement("b", GridRect(0, 3, 2, 3))
-    mover = _placement("c", GridRect(2, 0, 10, 6))
+def test_safety_edge_drop_rejects_wall_instead_of_shrinking_neighbors():
+    left_top = _placement("a", GridRect(SAFETY_COLUMN_MIN, 0, 4, 3))
+    left_bottom = _placement("b", GridRect(SAFETY_COLUMN_MIN, 3, 4, 3))
+    mover = _placement("c", GridRect(SAFETY_COLUMN_MIN + 4, 0, 8, 6))
     plan = plan_layout(
         [left_top, left_bottom, mover],
         mover.ref,
-        GridRect(3, 0, 10, 6),
+        GridRect(SAFETY_COLUMN_MIN - 1, 0, 8, 6),
         LAYOUT_MOVE,
-        preferred=(1, 0),
+        preferred=(-1, 0),
+    )
+    assert plan.accepted is False
+    assert plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
+    assert plan.committed_updates() == ()
+    assert left_top.rect == GridRect(SAFETY_COLUMN_MIN, 0, 4, 3)
+    assert mover.rect == GridRect(SAFETY_COLUMN_MIN + 4, 0, 8, 6)
+
+
+def test_safety_edge_fails_when_left_neighbors_are_already_minimum():
+    left_top = _placement("a", GridRect(SAFETY_COLUMN_MIN, 0, 2, 3))
+    left_bottom = _placement("b", GridRect(SAFETY_COLUMN_MIN, 3, 2, 3))
+    mover = _placement("c", GridRect(SAFETY_COLUMN_MIN + 2, 0, 10, 6))
+    plan = plan_layout(
+        [left_top, left_bottom, mover],
+        mover.ref,
+        GridRect(SAFETY_COLUMN_MIN - 1, 0, 10, 6),
+        LAYOUT_MOVE,
+        preferred=(-1, 0),
     )
     assert plan.accepted is False
     assert plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
@@ -489,7 +581,7 @@ def test_plan_layout_move_keeps_every_span():
     assert blocker.before == second.rect
     assert blocker.after.column_span == 6
     assert blocker.after.row_span == 3
-    assert blocker.after == GridRect(6, 3, 6, 3)
+    assert blocker.after == GridRect(12, 0, 6, 3)
 
 
 def test_plan_layout_resize_only_changes_mover_span():
@@ -511,15 +603,15 @@ def test_plan_layout_resize_only_changes_mover_span():
 
 
 def test_plan_layout_edge_without_hole_rejects_without_grow_or_shrink():
-    left_top = _placement("a", GridRect(0, 0, 4, 3))
-    left_bottom = _placement("b", GridRect(0, 3, 4, 3))
-    mover = _placement("c", GridRect(4, 0, 8, 6))
+    left_top = _placement("a", GridRect(SAFETY_COLUMN_MIN, 0, 4, 3))
+    left_bottom = _placement("b", GridRect(SAFETY_COLUMN_MIN, 3, 4, 3))
+    mover = _placement("c", GridRect(SAFETY_COLUMN_MIN + 4, 0, 8, 6))
     plan = plan_layout(
         [left_top, left_bottom, mover],
         mover.ref,
-        GridRect(5, 0, 8, 6),
+        GridRect(SAFETY_COLUMN_MIN - 1, 0, 8, 6),
         LAYOUT_MOVE,
-        preferred=(1, 0),
+        preferred=(-1, 0),
     )
     assert plan.accepted is False
     assert plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
@@ -570,20 +662,18 @@ def test_plan_layout_24_card_search_is_capped():
     )
     assert plan.accepted, "a one-cell shove on a 24-card board has a legal layout"
     assert plan.search_visits <= PLANNER_SEARCH_CAP * len(cards)
-    packed = [
-        _placement(f"p{index}", GridRect(0, index * 8, 12, 8))
-        for index in range(6)
-    ]
+    edge = _placement("edge", GridRect(SAFETY_COLUMN_MAX - 4, 0, 4, 3))
     rejected = plan_layout(
-        packed,
-        packed[0].ref,
-        GridRect(0, 1, 12, 8),
+        [edge],
+        edge.ref,
+        GridRect(SAFETY_COLUMN_MAX - 3, 0, 4, 3),
         LAYOUT_MOVE,
-        preferred=(0, 1),
-        search_cap=64,
+        preferred=(1, 0),
+        search_cap=PLANNER_SEARCH_CAP,
     )
     assert rejected.accepted is False
-    assert rejected.search_visits <= 64 * len(packed)
+    assert rejected.reason is LayoutRejectReason.OUT_OF_BOUNDS
+    assert rejected.search_visits <= PLANNER_SEARCH_CAP
 
 
 @pytest.mark.parametrize("count", (48, 60))
@@ -634,16 +724,17 @@ def test_search_cap_reject_is_distinct_from_no_legal_layout():
     )
     assert starved.accepted is False
     assert starved.reason is LayoutRejectReason.SEARCH_CAP
-    full = [
-        _placement(f"p{index}", GridRect(0, index * 8, 12, 8))
-        for index in range(MAX_GRID_ROWS // 8)
-    ]
+    first = _placement("a", GridRect(0, 0, 4, 3))
+    second = _placement("b", GridRect(4, 0, 4, 3))
     boxed = plan_layout(
-        full,
-        full[0].ref,
-        GridRect(0, 1, 12, 8),
+        [first, second],
+        first.ref,
+        GridRect(0, 0, 4, 3),
         LAYOUT_MOVE,
-        preferred=(0, 1),
+        incoming={
+            first.ref: GridRect(0, 0, 4, 3),
+            second.ref: GridRect(0, 0, 4, 3),
+        },
         search_cap=PLANNER_SEARCH_CAP,
     )
     assert boxed.accepted is False
@@ -651,26 +742,77 @@ def test_search_cap_reject_is_distinct_from_no_legal_layout():
 
 
 def test_neighbor_shrink_packs_blockers_into_remaining_columns():
-    left_top = _placement("a", GridRect(0, 0, 4, 3))
-    left_bottom = _placement("b", GridRect(0, 3, 4, 3))
-    mover = _placement("c", GridRect(4, 0, 8, 6))
+    right_top = _placement("a", GridRect(SAFETY_COLUMN_MAX - 4, 0, 4, 3))
+    right_bottom = _placement("b", GridRect(SAFETY_COLUMN_MAX - 4, 3, 4, 3))
+    mover = _placement("c", GridRect(SAFETY_COLUMN_MAX - 12, 0, 8, 6))
     updates, ok = plan_neighbor_shrink(
-        {mover.ref: GridRect(0, 0, 10, 6)},
-        [left_top, left_bottom, mover],
+        {mover.ref: GridRect(SAFETY_COLUMN_MAX - 12, 0, 10, 6)},
+        [right_top, right_bottom, mover],
     )
     assert ok is True
     by_ref = dict(updates)
-    assert by_ref[mover.ref] == GridRect(0, 0, 10, 6)
-    assert by_ref[left_top.ref] == GridRect(10, 0, 2, 3)
-    assert by_ref[left_bottom.ref] == GridRect(10, 3, 2, 3)
+    assert by_ref[mover.ref] == GridRect(SAFETY_COLUMN_MAX - 12, 0, 10, 6)
+    assert by_ref[right_top.ref] == GridRect(SAFETY_COLUMN_MAX - 2, 0, 2, 3)
+    assert by_ref[right_bottom.ref] == GridRect(SAFETY_COLUMN_MAX - 2, 3, 2, 3)
 
 
 def test_neighbor_shrink_fails_below_minimum_span():
-    left = _placement("a", GridRect(0, 0, 2, 3))
-    mover = _placement("c", GridRect(2, 0, 10, 3))
+    fillers = [
+        _placement(
+            f"m{index}",
+            GridRect(SAFETY_COLUMN_MIN + index * 12, 0, 12, 3),
+        )
+        for index in range(8)
+    ]
+    last = _placement("m8", GridRect(SAFETY_COLUMN_MIN + 96, 0, 10, 3))
+    blocker = _placement("b", GridRect(SAFETY_COLUMN_MAX - 2, 0, 2, 3))
+    incoming = {item.ref: item.rect for item in fillers}
+    incoming[last.ref] = GridRect(SAFETY_COLUMN_MIN + 96, 0, 11, 3)
     updates, ok = plan_neighbor_shrink(
-        {mover.ref: GridRect(0, 0, 11, 3)},
-        [left, mover],
+        incoming,
+        [*fillers, last, blocker],
     )
     assert ok is False
     assert updates == ()
+
+
+def test_rect_to_pixels_supports_negative_cells_without_rebasing():
+    metrics = screen_grid_metrics([])
+    origin = GridRect(0, 0, 4, 3)
+    negative = GridRect(-4, -3, 4, 3)
+    x0, y0, w0, h0 = rect_to_pixels(origin, metrics)
+    xn, yn, wn, hn = rect_to_pixels(negative, metrics)
+    assert (wn, hn) == (w0, h0)
+    unit_x = metrics.column_width + metrics.gutter
+    unit_y = metrics.row_height + metrics.gutter
+    assert xn == x0 - 4 * unit_x
+    assert yn == y0 - 3 * unit_y
+    shifted = rect_to_pixels(negative, metrics, origin_offset=(-4, -3))
+    assert shifted == (x0, y0, w0, h0)
+    assert negative == GridRect(-4, -3, 4, 3)
+
+
+def test_organize_compresses_signed_rows_toward_the_base_origin():
+    placements = [
+        _placement("above", GridRect(-6, -5, 4, 2)),
+        _placement("below", GridRect(2, 4, 3, 3)),
+    ]
+    organized = organized_placements(placements)
+    assert organized[0].rect == GridRect(-6, -2, 4, 2)
+    assert organized[1].rect == GridRect(2, 0, 3, 3)
+    assert organized_placements(organized) == organized
+
+
+def test_planner_search_stays_capped_for_signed_safety_board():
+    cards = _dense_2x2_board(24)
+    plan = plan_layout(
+        cards,
+        cards[0].ref,
+        GridRect(-4, 0, 2, 2),
+        LAYOUT_MOVE,
+        preferred=(-1, 0),
+        search_cap=PLANNER_SEARCH_CAP,
+    )
+    assert plan.accepted is True
+    assert plan.search_visits <= PLANNER_SEARCH_CAP * len(cards)
+    assert plan.mover_after == GridRect(-4, 0, 2, 2)

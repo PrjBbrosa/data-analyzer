@@ -33,7 +33,9 @@ from tests.ui_kit._qss_parse import load_style_qss, strip_qss_comments
 # ``#ffffff`` are out because white carries contrast duty sheet-wide, as is any
 # pair co-occurring inside one rule block, where the tiny delta is the design
 # (fill vs. edge) rather than drift. Net distinct = 234.
-MAX_DISTINCT_HEX_LITERALS = 234
+# Titanium Amber moves UltraView's former one-off literals into the isolated
+# ``ULTRAVIEW_QSS_TOKENS`` map shared by QSS and QPainter.
+MAX_DISTINCT_HEX_LITERALS = 212
 
 # Not preceded/followed by another hex digit, so #11223344 is not #112233.
 _HEX6_RE = re.compile(r"(?<![0-9a-fA-F])#([0-9a-fA-F]{6})(?![0-9a-fA-F])")

@@ -20,11 +20,17 @@ ZOOM_MAX = 3.0
 ZOOM_DEFAULT = 1.0
 ZOOM_BUTTON_STEP = 0.10
 ZOOM_WHEEL_BASE = 1.1
-# zoom_to_card fills the raw viewport; keep a generous frame so a single
-# card does not kiss the window edge. zoom_fit already targets the
-# chrome-safe rect, so the same 8% would double-pad and leave a halo.
+# zoom_to_card / focus fills the raw viewport; keep a generous frame so a
+# single card does not kiss the window edge. Board Fit uses
+# ``FIT_CONTENT_MARGIN`` on the chrome-safe rect instead, so these two
+# constants must stay distinct.
 ZOOM_TO_RECT_MARGIN = 0.08
-FIT_CONTENT_MARGIN = 0.02
+# Board Fit ("适应内容"): ~6% inset each side. Focus keeps ZOOM_TO_RECT_MARGIN.
+FIT_CONTENT_MARGIN = 0.06
+BOARD_FIT_ZOOM_MAX = 1.0
+NEW_BOARD_ZOOM_MAX = 0.66
+# Empty-board working frame: two standard 4×3 cards placed side by side.
+STANDARD_CARD_SPAN = (4, 3)
 SMOOTH_DELAY_MS = 300
 QUALITY_FAST = "fast"
 QUALITY_SMOOTH = "smooth"
@@ -162,12 +168,90 @@ zoom_at_cursor = zoom_at
 def fit_zoom(
     board_size: tuple[float, float], viewport_size: tuple[float, float]
 ) -> float:
-    """Largest zoom that fits the 1x board in the visible viewport."""
+    """Largest zoom that fits ``board_size`` in the viewport, never above 100%.
+
+    ``page.zoom_fit`` still calls this for the empty-canvas branch, so the
+    100% cap lands without waiting for page.py. Prefer ``board_fit_zoom``
+    for Board Fit (6% margin + 100% cap) and ``zoom_to_rect`` for focus,
+    which may still reach ``ZOOM_MAX``.
+    """
     board_w = max(1.0, float(board_size[0]))
     board_h = max(1.0, float(board_size[1]))
     view_w = max(1.0, float(viewport_size[0]))
     view_h = max(1.0, float(viewport_size[1]))
-    return clamp_zoom(min(view_w / board_w, view_h / board_h))
+    return min(BOARD_FIT_ZOOM_MAX, clamp_zoom(min(view_w / board_w, view_h / board_h)))
+
+
+def two_card_working_frame(metrics: GridMetrics) -> tuple[float, float]:
+    """Pixel size of two standard 4×3 cards at 1× plus padding and gutter.
+
+    Empty Board Fit targets this frame, not the 1600×1020 logical canvas
+    and not the elastic extent. Callers must pass unzoomed 1× metrics.
+    """
+    columns = int(STANDARD_CARD_SPAN[0]) * 2
+    rows = int(STANDARD_CARD_SPAN[1])
+    col_w = float(metrics.column_width)
+    row_h = float(metrics.row_height)
+    gutter = float(metrics.gutter)
+    padding = float(metrics.padding)
+    width = 2.0 * padding + columns * col_w + max(0, columns - 1) * gutter
+    height = 2.0 * padding + rows * row_h + max(0, rows - 1) * gutter
+    return (width, height)
+
+
+def board_fit_zoom(
+    content_size: tuple[float, float],
+    viewport_size: tuple[float, float],
+    *,
+    margin: float = FIT_CONTENT_MARGIN,
+) -> float:
+    """Board Fit zoom for a placed-card union or empty working frame.
+
+    Shrinks to fit with ``margin`` inset on each side and never amplifies
+    above 100%. Focus / ``zoom_to_rect`` / ``zoom_to_card`` are uncapped
+    relative to this helper and may still reach ``ZOOM_MAX``.
+    """
+    content_w = max(1.0, float(content_size[0]))
+    content_h = max(1.0, float(content_size[1]))
+    view_w = max(1.0, float(viewport_size[0]))
+    view_h = max(1.0, float(viewport_size[1]))
+    inset = max(0.0, min(0.45, float(margin)))
+    usable_w = max(1.0, view_w * (1.0 - 2.0 * inset))
+    usable_h = max(1.0, view_h * (1.0 - 2.0 * inset))
+    computed = min(usable_w / content_w, usable_h / content_h)
+    return min(BOARD_FIT_ZOOM_MAX, clamp_zoom(computed))
+
+
+def default_board_zoom(
+    viewport_size: tuple[float, float],
+    frame_size: tuple[float, float],
+) -> float:
+    """New Board / missing-payload zoom: ``min(0.66, board-fit of frame)``.
+
+    Never raises above 66% because the window is huge. Empty Fit still
+    uses ``board_fit_zoom`` (cap 100%) of the same frame.
+    """
+    return min(NEW_BOARD_ZOOM_MAX, board_fit_zoom(frame_size, viewport_size))
+
+
+def initial_viewport(
+    safe_viewport_size: tuple[float, float],
+    frame_size: tuple[float, float],
+) -> dict[str, float]:
+    """Default viewport dict for a new Board or a missing payload.
+
+    Legal persisted viewports must be restored as-is via
+    ``normalize_viewport_payload`` / ``BoardViewport.restore_payload``.
+    ``default_viewport_payload`` stays the persist-legalization fallback
+    (zoom 1.0) and must not encode the 66% policy, which needs a viewport.
+    Page.py should call this instead of ``zoom_fit`` on first show.
+    """
+    zoom = default_board_zoom(safe_viewport_size, frame_size)
+    return {
+        "zoom": float(zoom),
+        "center_x": max(0.0, float(frame_size[0]) / 2.0),
+        "center_y": max(0.0, float(frame_size[1]) / 2.0),
+    }
 
 
 def zoom_to_rect(
@@ -176,7 +260,12 @@ def zoom_to_rect(
     *,
     margin: float = ZOOM_TO_RECT_MARGIN,
 ) -> tuple[float, ViewportPoint]:
-    """Return ``(zoom, center)`` so ``rect`` fills the viewport with a margin."""
+    """Return ``(zoom, center)`` so ``rect`` fills the viewport with a margin.
+
+    Focus / ``zoom_to_card`` may reach ``ZOOM_MAX`` (300%). Do not use this
+    for Board Fit; call ``board_fit_zoom`` so a single card is never
+    amplified past 100%.
+    """
     _x, _y, width, height = (float(part) for part in rect)
     view_w = max(1.0, float(viewport_size[0]))
     view_h = max(1.0, float(viewport_size[1]))
@@ -208,6 +297,13 @@ def scroll_for_center(
     viewport_size: tuple[float, float],
     zoom: float,
 ) -> ViewportPoint:
+    """Scroll offset that places ``center`` in the middle of the viewport.
+
+    100% (``zoom == 1.0``) must keep the current viewport center; page.py
+    applies this after ``zoom_reset`` once the zoomed canvas is laid out.
+    Do not re-park at the fit origin afterwards — that would throw the
+    center away. Viewport changes must not mark Board content mutation.
+    """
     z = clamp_zoom(zoom)
     return (
         float(center[0]) * z - float(viewport_size[0]) / 2.0,
@@ -342,6 +438,7 @@ def normalize_viewport_payload(
 
 
 def default_viewport_payload() -> dict[str, float]:
+    """Persist-legalization fallback. New Boards use ``initial_viewport``."""
     return {"zoom": ZOOM_DEFAULT, "center_x": 0.0, "center_y": 0.0}
 
 

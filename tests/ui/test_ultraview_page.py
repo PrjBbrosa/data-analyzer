@@ -48,12 +48,12 @@ from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     STATUS_ISLAND_WIDTH,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED, PANEL_BOARDS
+from mf4_analyzer.ui.chart_stack.ultraview.feedback import format_rearranged
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
     FEEDBACK_NO_LEGAL_LAYOUT,
     FEEDBACK_OUT_OF_GRID,
-    FEEDBACK_REARRANGED,
     LIBRARY_DEFAULT_WIDTH,
     MISSING_CARD_COPY,
     LibraryRow,
@@ -63,9 +63,10 @@ from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     make_ref_mime,
 )
 from mf4_analyzer.ui.ultraview_state import (
-    GRID_COLUMNS,
-    MAX_GRID_ROWS,
     MAX_UI_BOARDS,
+    SAFETY_COLUMN_MAX,
+    SAFETY_COLUMN_MIN,
+    SAFETY_ROW_MAX,
     LAYOUT_SLOTS,
     SOURCE_SECTIONS,
     STATUS_MISSING,
@@ -1653,7 +1654,7 @@ def test_card_focus_button_fits_inside_rounded_chrome(qtbot, qapp):
     assert mapped.top() >= 2
     assert mapped.right() <= card.width() - 4
     assert mapped.bottom() <= card.header_height()
-    for action in ("open", "focus", "fit", "more"):
+    for action in ("open", "focus", "fit", "remove", "more"):
         button = card.action_button(action)
         assert button is not None
         assert button.isVisible()
@@ -1872,7 +1873,7 @@ def test_card_rebuild_is_deferred_until_drag_finishes(qtbot):
     assert sip.isdeleted(card)
 
 
-def test_free_grid_drop_clamps_span_inside_board(qtbot):
+def test_free_grid_drop_clamps_span_inside_safety_bounds(qtbot):
     harness = _Harness(qtbot)
     set_layout(harness.board, "grid_2x2")
     add_ref(harness.board, make_ref("time", "time-1"))
@@ -1892,8 +1893,11 @@ def test_free_grid_drop_clamps_span_inside_board(qtbot):
     clamped = GridRect(column, row, span.column_span, span.row_span)
     assert clamp_rect(clamped) == clamped
     assert clamp_rect(clamped) == _legal_grid_rect(clamped)
-    assert column + span.column_span <= GRID_COLUMNS
-    assert row + span.row_span <= MAX_GRID_ROWS
+    # The canonical 12×48 base frame is a scale reference, not a drag wall.
+    # The widget can project its session extent well past it, but its resolver
+    # still cannot emit a rect beyond the engineering guard.
+    assert column + span.column_span <= SAFETY_COLUMN_MAX
+    assert row + span.row_span <= SAFETY_ROW_MAX
 
 
 def test_hidden_overview_defers_compose_until_shown(qtbot):
@@ -2131,11 +2135,11 @@ def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
     assert group == [
         (
             ("time", "block-0", 6, 0, 6, 3),
-            ("time", "block-1", 6, 3, 6, 3),
+            ("time", "block-1", 12, 0, 6, 3),
         )
     ]
-    assert toasts == [FEEDBACK_REARRANGED.format(count=2)]
-    committed = [(6, 0, 6, 3), (6, 3, 6, 3)]
+    assert toasts == [format_rearranged(2)]
+    committed = [(6, 0, 6, 3), (12, 0, 6, 3)]
     assert planned == committed
     assert len(ghost_geoms) == 2
 
@@ -2211,7 +2215,7 @@ def test_free_grid_overlap_drop_does_not_construct_message_box(qtbot, monkeypatc
     assert seen == []
 
 
-def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot):
+def test_free_grid_overlap_past_base_frame_rearranges_without_modal(qtbot):
     harness = _Harness(qtbot)
     ids = tuple(f"pack-{index}" for index in range(6))
     harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
@@ -2226,16 +2230,22 @@ def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot):
     free = harness.page._free_grid
     card = harness.page.card_widget("time", "pack-0")
     assert card is not None and card.width() > 20
-    origin = QRect(card.geometry())
     group = []
     toasts = []
     harness.page.free_grid_group_geometry_requested.connect(group.append)
     harness.page.feedback_requested.connect(toasts.append)
     unit = free.metrics().row_height + free.metrics().gutter
     _drag_card(card, QPoint(16, 16), QPoint(16, 16 + unit))
-    assert group == []
-    assert toasts == [FEEDBACK_NO_LEGAL_LAYOUT]
-    assert card.geometry().topLeft() == origin.topLeft()
+    assert group == [
+        (
+            ("time", "pack-0", 0, 1, 12, 8),
+            ("time", "pack-1", 0, 48, 12, 8),
+        )
+    ]
+    assert toasts == [
+        format_rearranged(2),
+        uv_widgets.FEEDBACK_DISPLACED_OFFSCREEN,
+    ]
 
 
 def test_displacing_a_card_out_of_the_viewport_hints_and_logs(qtbot, caplog):
@@ -2264,7 +2274,13 @@ def test_displacing_a_card_out_of_the_viewport_hints_and_logs(qtbot, caplog):
             )
             is True
         )
-    pushed = QRect(*rect_to_pixels(GridRect(0, 16, 12, 8), free.metrics()))
+    pushed = QRect(
+        *rect_to_pixels(
+            GridRect(0, 16, 12, 8),
+            free.metrics(),
+            free._workspace_origin_offset(),
+        )
+    )
     assert not visible.intersects(pushed)
     assert uv_widgets.FEEDBACK_DISPLACED_OFFSCREEN in toasts
     assert any(
@@ -2285,7 +2301,7 @@ def test_displacement_inside_the_viewport_stays_quiet(qtbot):
         )
         is True
     )
-    assert toasts == [FEEDBACK_REARRANGED.format(count=2)]
+    assert toasts == [format_rearranged(2)]
 
 
 def test_search_budget_reject_has_its_own_copy_and_a_warning_trace(qtbot, monkeypatch, caplog):
@@ -2447,11 +2463,11 @@ def test_free_grid_overlap_resize_moves_blocker_without_modal(qtbot):
     unit = metrics.column_width + metrics.gutter
     start = _east_handle_pos(card)
     _drag_card(card, start, QPoint(start.x() + unit * 2, start.y()))
-    assert toasts == [FEEDBACK_REARRANGED.format(count=2)]
+    assert toasts == [format_rearranged(2)]
     assert group == [
         (
             ("time", "hit-0", 0, 0, 8, 3),
-            ("time", "hit-1", 6, 3, 6, 3),
+            ("time", "hit-1", 8, 0, 6, 3),
         )
     ]
 
@@ -2528,7 +2544,7 @@ def test_free_grid_group_move_commits_once_and_keeps_relative_layout(qtbot):
     ]
 
 
-def test_free_grid_group_out_of_bounds_move_toasts_without_commit(qtbot):
+def test_free_grid_group_move_past_base_frame_commits_without_warning(qtbot):
     harness = _Harness(qtbot)
     free, (left, right) = _prepare_free_grid(harness, qtbot, "bad-0", "bad-1")
     _select_card(left)
@@ -2540,8 +2556,13 @@ def test_free_grid_group_out_of_bounds_move_toasts_without_commit(qtbot):
     metrics = free.metrics()
     unit = metrics.column_width + metrics.gutter
     _drag_card(left, QPoint(24, 24), QPoint(24 + unit, 24))
-    assert group == []
-    assert toasts == [FEEDBACK_OUT_OF_GRID]
+    assert group == [
+        (
+            ("time", "bad-0", 1, 0, 6, 3),
+            ("time", "bad-1", 7, 0, 6, 3),
+        )
+    ]
+    assert toasts == [format_rearranged(2)]
 
 
 def test_free_grid_delete_and_backspace_apply_to_whole_selection(qtbot):
@@ -3020,7 +3041,7 @@ def test_template_slot_drag_escape_cancels_without_swap(qtbot):
     assert harness.swapped == []
 
 
-def test_free_grid_out_of_bounds_move_toasts_without_commit(qtbot):
+def test_free_grid_move_past_base_frame_commits_without_warning(qtbot):
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "oob-0")
     requested = []
@@ -3031,8 +3052,8 @@ def test_free_grid_out_of_bounds_move_toasts_without_commit(qtbot):
     unit = metrics.column_width + metrics.gutter
     start = QPoint(16, 16)
     _drag_card(card, start, QPoint(start.x() - unit * 8, start.y()))
-    assert requested == []
-    assert toasts == ["不能移出网格"]
+    assert requested == [("time", "oob-0", -8, 0, 6, 3, "drag-move")]
+    assert toasts == []
 
 
 def test_free_grid_edge_drop_rejects_without_shrinking_neighbors(qtbot):
@@ -3041,9 +3062,15 @@ def test_free_grid_edge_drop_rejects_without_shrinking_neighbors(qtbot):
     harness.board.placements.clear()
     harness.board.unplaced.clear()
     harness.board.free_grid = [
-        FreeGridPlacement(make_ref("time", "left-0"), GridRect(0, 0, 4, 3)),
-        FreeGridPlacement(make_ref("time", "left-1"), GridRect(0, 3, 4, 3)),
-        FreeGridPlacement(make_ref("time", "right-0"), GridRect(4, 0, 8, 6)),
+        FreeGridPlacement(
+            make_ref("time", "left-0"), GridRect(SAFETY_COLUMN_MIN, 0, 4, 3)
+        ),
+        FreeGridPlacement(
+            make_ref("time", "left-1"), GridRect(SAFETY_COLUMN_MIN, 3, 4, 3)
+        ),
+        FreeGridPlacement(
+            make_ref("time", "right-0"), GridRect(SAFETY_COLUMN_MIN + 4, 0, 8, 6)
+        ),
     ]
     harness.page.set_board(harness.board)
     qtbot.wait(10)
@@ -3059,7 +3086,9 @@ def test_free_grid_edge_drop_rejects_without_shrinking_neighbors(qtbot):
     harness.page.feedback_requested.connect(toasts.append)
     unit = free.metrics().column_width + free.metrics().gutter
     start = QPoint(24, 24)
-    mid = QPoint(24 + unit, 24)
+    # The mover begins four cells inside the safety edge, so cross five cells
+    # to reach the only real wall rather than the old 12-column base frame.
+    mid = QPoint(24 - unit * 5, 24)
     _drag_card(card, start, mid, release=False)
     overlay = free.ghost_overlay()
     assert overlay.is_showing()
@@ -3118,7 +3147,7 @@ def test_app_focus_changed_to_none_no_longer_cancels_active_move(qtbot):
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
 
 
-def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):
+def test_free_grid_move_to_signed_empty_cell_without_toast(qtbot):
     harness = _Harness(qtbot)
     harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
     harness.board.placements.clear()
@@ -3141,7 +3170,7 @@ def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):
     _drag_card(card, QPoint(16, 16), QPoint(16 - unit * 4, 16))
     assert toasts == []
     assert group == []
-    assert requested == [("time", "clamp-1", 0, 0, 4, 3, "drag-move")]
+    assert requested == [("time", "clamp-1", -2, 0, 4, 3, "drag-move")]
 
 
 def test_inactive_canvas_drops_stale_cards_when_mode_switches(qtbot):
@@ -3525,7 +3554,7 @@ def test_library_width_contract_and_selected_row_gutter_have_no_crossing_rule(qt
     assert spread < 18, [pixel.name() for pixel in pixels]
 
 
-def test_library_sections_use_distinct_low_saturation_moonstone_materials(qtbot, qapp):
+def test_library_sections_use_selected_titanium_amber_category_materials(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)
@@ -3536,17 +3565,31 @@ def test_library_sections_use_distinct_low_saturation_moonstone_materials(qtbot,
     page.set_library_visible(True)
     qapp.processEvents()
     library = page.library_panel()
+    from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_TITANIUM
+
+    expected_roles = {
+        "time": "time_wash",
+        "fft": "fft_wash",
+        "fft_time": "fft_time_wash",
+        "frf": "frf_wash",
+        "order": "order_wash",
+    }
     fills = []
     for section in SOURCE_SECTIONS:
         frame = library.section_widgets()[section]
         header = library.section_headers()[section]
         image = frame.grab().toImage()
         point = header.mapTo(frame, QPoint(header.width() - 34, header.height() // 2))
-        fills.append(QColor(image.pixel(point)))
+        fill = QColor(image.pixel(point))
+        expected = QColor(ULTRAVIEW_TITANIUM[expected_roles[section]])
+        assert max(
+            abs(fill.red() - expected.red()),
+            abs(fill.green() - expected.green()),
+            abs(fill.blue() - expected.blue()),
+        ) <= 8
+        fills.append(fill)
     assert len({fill.name() for fill in fills}) == len(SOURCE_SECTIONS)
-    assert all(fill.saturationF() < 0.13 for fill in fills)
-    hues = [fill.hue() for fill in fills if fill.hue() >= 0]
-    assert max(hues) - min(hues) <= 38
+    assert all(fill.lightness() >= 230 for fill in fills)
 
 
 def test_library_row_action_button_is_calm_and_square(qtbot, qapp):
@@ -3623,7 +3666,7 @@ def test_library_pin_keeps_overlay_open_on_canvas_click(qtbot, qapp):
     assert library.is_pinned() is True
 
 
-def test_library_section_headers_are_not_heavy_gray_slabs(qtbot, qapp):
+def test_library_section_headers_keep_titanium_category_wash_not_gray_slab(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)
@@ -3634,8 +3677,12 @@ def test_library_section_headers_are_not_heavy_gray_slabs(qtbot, qapp):
     pos = header.mapTo(library, QPoint(max(12, header.width() - 8), header.height() // 2))
     image = library.grab().toImage()
     pixel = QColor(image.pixel(min(pos.x(), image.width() - 1), min(pos.y(), image.height() - 1)))
-    heavy = QColor("#eef1f5")
-    assert abs(pixel.red() - heavy.red()) > 8 or abs(pixel.green() - heavy.green()) > 8
+    expected = QColor("#EEF3FF")
+    assert max(
+        abs(pixel.red() - expected.red()),
+        abs(pixel.green() - expected.green()),
+        abs(pixel.blue() - expected.blue()),
+    ) <= 8
     assert pixel.lightness() >= 235
 
 
@@ -3790,18 +3837,22 @@ def test_closing_layout_panel_does_not_change_layout_mode(qtbot):
     assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
 
 
-def test_new_board_first_show_uses_fit_zoom(qtbot):
+def test_new_board_first_show_uses_the_66_percent_working_frame(qtbot):
     harness = _Harness(qtbot)
-    canvas = harness.page._active_canvas()
-    size = canvas.unzoomed_size()
     fit = harness.page._content_fit_rect()
-    from mf4_analyzer.ui.chart_stack.ultraview.viewport import fit_zoom
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import screen_grid_metrics
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
+        NEW_BOARD_ZOOM_MAX,
+        default_board_zoom,
+        two_card_working_frame,
+    )
 
-    expected = fit_zoom(
-        (size.width(), size.height()),
+    expected = default_board_zoom(
         (float(fit.width), float(fit.height)),
+        two_card_working_frame(screen_grid_metrics(())),
     )
     assert harness.page.board_zoom() == pytest.approx(expected)
+    assert harness.page.board_zoom() <= NEW_BOARD_ZOOM_MAX
     assert harness.page.board().layout_mode == LAYOUT_MODE_FREE_GRID
 
 
@@ -3852,7 +3903,7 @@ def test_card_context_residents_do_not_overlap_at_800px(qtbot):
         for button in bar.findChildren(QToolButton)
         if button.isVisible()
     ]
-    assert visible_actions == ["open", "focus", "fit", "more"]
+    assert visible_actions == ["open", "focus", "fit", "remove", "more"]
     boxes = [
         button.geometry()
         for button in bar.findChildren(QToolButton)

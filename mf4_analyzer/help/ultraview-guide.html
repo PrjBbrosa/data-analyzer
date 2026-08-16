@@ -27,7 +27,7 @@
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">打开</div><div class="ptxt">在时域 / 频谱 / 时频 / 阶次 / 频响里，点各工作区 <b>View 栏最右侧 UltraView</b>，打开只读对照板。不重新计算、不补图、不改源 View。</div></div>
         <div class="path reveal d4"><div class="tagA g">加入</div><div class="ptxt">在源工作区里，<b>View 标签右键 → 加入总览</b>。也可以从总览左侧 <b>View 库</b>搜索后添加。没有现成预览时卡片就是「缺」，不会在后台悄悄跑分析。</div></div>
-        <div class="path reveal d5"><div class="tagA">打开原 View</div><div class="ptxt">每张卡片右上角胶囊可直接点「打开原 View」、临时放大、按原图比例和更多，不用先选中。过期才出现「同步」。复制本卡图像、移到未放置、重新绑定、从总览移除在更多菜单和右键里。点「打开原 View」回到那个稳定身份的源工作区，而不是按显示名称猜测。左侧工具栏「一键更新源」可一次同步全部已变化预览，仍不重新计算。</div></div>
+        <div class="path reveal d5"><div class="tagA">打开原 View</div><div class="ptxt">每张卡片右上角胶囊可直接点「打开原 View」、临时聚焦、按原图比例、<b>从当前 Board 移除</b>和更多，不用先选中；移除<b>不删除源 View</b>，可用 Ctrl/Cmd+Z 恢复。过期才出现「同步」。复制本卡图像、移到未放置和重新绑定仍在更多菜单和右键里。点「打开原 View」回到那个稳定身份的源工作区，而不是按显示名称猜测。左侧工具栏「一键更新源」可一次同步全部已变化预览，仍不重新计算。</div></div>
       </div>
     </div>
   </section>
@@ -60,7 +60,7 @@
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">新 / 旧</div><div class="ptxt"><b>新</b>表示预览与当前展示一致。<b>旧</b>表示源 View 后来变了，总览仍显示上次抓到的图，等你回到源 View 再捕获。</div></div>
         <div class="path reveal d4"><div class="tagA g">缺</div><div class="ptxt"><b>缺</b>是合法状态：这个 View 还在，但进程里没有可用像素（例如刚重开项目）。不会自动补图。</div></div>
-        <div class="path reveal d5"><div class="tagA">孤儿</div><div class="ptxt">源 View 已被删掉。卡片提供<b>重新绑定</b>或从总览移除，不会假装还活着。</div></div>
+        <div class="path reveal d5"><div class="tagA">孤儿</div><div class="ptxt">源 View 已被删掉。卡片提供<b>重新绑定</b>或从当前 Board 移除；移除不删除任何仍存在的源 View，不会假装还活着。</div></div>
       </div>
       <div class="tip reveal d5"><span class="ic">!</span><p>重开 <span class="ui">.tlproj</span> 会恢复板位和名称，但预览像素不随项目文件走。缺图保持「缺」，不会自动进入总览，也不会后台补算。</p></div>
     </div>
@@ -72,9 +72,9 @@
       <div class="step-head reveal d2"><span class="big">Esc · PNG</span><h2>看清、复制、导出，不改数据</h2></div>
       <div class="step-grid">
         <div class="instr">
-          <div class="blk reveal d3"><span class="k">Esc</span><p>先关焦点放大，再取消替换，再退出演示，最后关掉弹出菜单。优先级固定，避免一层 Esc 连退两层。</p></div>
+          <div class="blk reveal d3"><span class="k">Esc</span><p>临时聚焦时 Esc 精确返回进入前视口。先关焦点放大，再取消替换，再退出演示，最后关掉弹出菜单。优先级固定，避免一层 Esc 连退两层。</p></div>
           <div class="blk reveal d4"><span class="k">演示</span><p>演示隐藏左侧 View 库和编辑控件，只留对照板。Esc 或再点演示退出。</p></div>
-          <div class="blk reveal d5"><span class="k">导出</span><p>复制整板、复制单卡、导出 PNG（1× 或 2×）。卡图按 contain 放入格子，任何方向都不超过原图像素。</p></div>
+          <div class="blk reveal d5"><span class="k">导出</span><p>复制整板、复制单卡、导出 PNG（1× 或 2×）。超出安全上限时提示实际尺寸，可改用 1× 或整理卡片，不拿画布墙限制布局。卡图按 contain 放入格子，任何方向都不超过原图像素。</p></div>
         </div>
         <div class="mock reveal d3">
           <div class="cap"><span>显示开关</span><em>跟导出一致</em></div>
@@ -102,20 +102,20 @@
   <section class="slide">
     <div class="frame">
       <div class="topbar reveal d1"><span class="eyebrow">06 · <b>Board 与自由网格</b></span><span class="turbo-rule"></span></div>
-      <div class="step-head reveal d2"><span class="big">多板 · 12 列</span><h2>一块对照墙，可以按问题拆成多张 Board</h2></div>
+      <div class="step-head reveal d2"><span class="big">多板 · 弹性画布</span><h2>一块对照板，可以按问题拆成多张 Board</h2></div>
       <div class="step-grid">
         <div class="instr">
           <div class="blk reveal d3"><span class="k">Board</span><p>左上名称旁的 ▾ 打开弹层：点行切换，拖拽排序，行尾复制 / 删除。双击名称或 F2 重命名。顶栏 <b>＋</b> 新建空板。最多创建 <b>20</b> 个 Board；从项目读回时超过 20 只警告，不会丢板。</p></div>
-          <div class="blk reveal d4"><span class="k">自由网格</span><p>新 Board <b>默认自由网格</b>。12 列、最多 24 张卡。逻辑画布固定 1600 宽，与导出同口径，窗口拉伸或缩放<b>不改变卡片长宽比</b>。库或托盘拖入时，卡片按<b>释放点附近</b>插入；拖到已有卡片并停留出现替换环，才会替换。<b>直接拖卡片移动</b>，选中后拖边角改尺寸（Shift 保持比例）。右上角「按原图比例」或右键把卡片<b>缩到</b>贴合预览图宽高比（只缩不放）。移动不改任何卡的格数，缩放只改当前卡。拖动时完整 ghost 同时显示本卡和被推移卡的最终位置；无合法落点则拒绝并保持原布局，不弹确认框。空白处拖动画框<b>框选</b>多张，Shift+点加减选，组移动一次提交。Delete / Backspace 作用于全组。键盘仍可用 <b>Option+方向键</b> 微调、<b>Option+Shift+方向键</b> 改尺寸。卡片右键选尺寸预设。直接移动或调整后可使用 <b>Ctrl+Z / Ctrl+Shift+Z</b> 恢复或重做（编辑板名或搜索时仍走文本撤销）。</p></div>
+          <div class="blk reveal d4"><span class="k">自由网格</span><p>新 Board <b>默认自由网格</b>。<b>12 列</b>是基准网格和导出标尺，不是日常可拖动边界。工作区随内容扩展，四周可<b>四向平移</b>；拖到边缘会自动平移并扩展画布。最多 <b>24 张</b>已放置、<b>200</b> 个 View。整数网格，与导出同口径，窗口拉伸或缩放<b>不改变卡片长宽比</b>。库或托盘拖入时，卡片按<b>释放点附近</b>插入；拖到已有卡片并停留出现替换环，才会替换。<b>直接拖卡片移动</b>，选中后拖边角改尺寸（Shift 保持比例）。右上角「按原图比例」或右键把卡片<b>缩到</b>贴合预览图宽高比（只缩不放）。移动不改任何卡的格数，缩放只改当前卡。拖动时完整 ghost 同时显示本卡和被推移卡的最终位置；无合法落点则拒绝并说明原因和下一步，不弹确认框。空白处拖动画框<b>框选</b>多张，Shift+点加减选，组移动一次提交。Delete / Backspace 从当前 Board 移除全组，<b>不删除源 View</b>。键盘仍可用 <b>Option+方向键</b> 微调、<b>Option+Shift+方向键</b> 改尺寸。卡片右键选尺寸预设。直接移动、调整或移除后可使用 <b>Ctrl/Cmd+Z / Ctrl+Shift+Z</b> 恢复或重做（编辑板名或搜索时仍走文本撤销）。</p></div>
           <div class="blk reveal d5"><span class="k">定位</span><p>右下角缩略图（minimap）只在<b>自由网格</b>且内容超出视口、出现真实滚动条时显示；模板、整板概览、演示或打开控制面板时隐藏。工具栏「概览」看整板，点一张卡回到阅读位置。当前布局模式用填充高亮，打开的面板用描边；关掉面板不会切换布局。都不改源 View、不重新计算。</p></div>
-          <div class="blk reveal d5"><span class="k">画布缩放</span><p>新板<b>默认适应视口</b>，旁边仍留得出空格插入卡片。<b>Ctrl+滚轮</b>或触控板捏合以光标为锚缩放，范围 <b>25%–300%</b>。空格+拖或中键拖平移。工具栏 − / 百分比 / ＋ / <b>适应</b> / 100%。<b>适应</b>把已放置卡片居中放进浮层安全区。<b>双击卡片</b>把该卡铺满视口。≥60% 为完整卡片；40%–59% 为紧凑卡（隐藏页脚，保留预览、类型标签和信任状态）；低于 40% 为标题卡（预览高度为 0，并隐藏页脚与正文动作）。三种缩放都保留类型标签；用户标题不会被自动改名。整板概览仍保留，因为适应档位不能替代点卡片跳转。</p></div>
+          <div class="blk reveal d5"><span class="k">画布缩放</span><p>新 Board 初始缩放不超过 <b>66%</b>，不把整张基准画布放大到 100% 以上。<b>Ctrl+滚轮</b>或触控板捏合以光标为锚缩放，范围 <b>25%–300%</b>。空格+拖、中键拖或手掌<b>四向平移</b>；拖到边缘自动平移并扩展画布。工具栏 − / 百分比 / ＋ / <b>适应</b> / 100%。<b>适应内容</b>只缩不放、最高 <b>100%</b>；<b>100%</b> 保持当前视口中心。双击卡片<b>临时聚焦</b>最高 300%，<b>Esc</b> 返回。≥60% 为完整卡片；40%–59% 为紧凑卡（隐藏页脚，保留预览、类型标签和信任状态）；低于 40% 为标题卡（预览高度为 0，并隐藏页脚与正文动作）。三种缩放都保留类型标签；用户标题不会被自动改名。整板概览仍保留，因为适应档位不能替代点卡片跳转。</p></div>
         </div>
         <div class="mock reveal d3">
           <div class="cap"><span>容量</span><em>硬上限</em></div>
           <div class="row"><span>Board</span><b>UI 20 张</b></div>
-          <div class="row"><span>放置</span><b>24 张 / 12 列</b></div>
+          <div class="row"><span>放置 / 成员</span><b>24 张 / 200 View</b></div>
           <div class="row"><span>模板</span><b>2 / 4 / 6 / 9 / 12</b></div>
-          <p class="note">托盘仍收放不下的卡。恶意超大清单会截断并留下 warning，不把界面拖死。</p>
+          <p class="note">12 列是基准网格和导出标尺，不是拖动墙。托盘仍收放不下的卡。恶意超大清单会截断并留下 warning，不把界面拖死。</p>
         </div>
       </div>
     </div>

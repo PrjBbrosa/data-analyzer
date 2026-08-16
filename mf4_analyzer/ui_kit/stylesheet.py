@@ -15,6 +15,7 @@ from .combo_popup_shell import install_combo_popup_shell
 from .control_style import CONTROL_QSS_TOKENS
 from .icons import ensure_icon_cache, render_qss_template
 from .message_box_buttons import install_message_box_button_roles
+from .ultraview_style import ULTRAVIEW_QSS_TOKENS
 
 
 def load_stylesheet(app):
@@ -42,7 +43,7 @@ def load_stylesheet(app):
         icon_paths = ensure_icon_cache()
         stylesheet = render_qss_template(
             template,
-            {**CONTROL_QSS_TOKENS, **icon_paths},
+            {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS, **icon_paths},
         )
     except Exception as exc:
         # Defensive: if qtawesome import or icon rendering fails (e.g.
@@ -55,7 +56,9 @@ def load_stylesheet(app):
         )
         # Control tokens do not depend on icon rendering, so retain the shared
         # action-control contract even when the optional icon cache is absent.
-        stylesheet = render_qss_template(template, CONTROL_QSS_TOKENS)
+        stylesheet = render_qss_template(
+            template, {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS}
+        )
     app.setStyleSheet(stylesheet)
     # The QSS above rounds the inner QComboBox list, but the popup's
     # top-level window stays a square, natively shadowed rectangle that

@@ -11,6 +11,7 @@ from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.side_panels import SidePanelStrip
 from mf4_analyzer.ui_kit.control_style import CONTROL_QSS_TOKENS
 from mf4_analyzer.ui_kit.icons import render_qss_template
+from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_QSS_TOKENS
 
 
 QSS_PATH = Path("mf4_analyzer/ui_kit/style.qss")
@@ -28,7 +29,8 @@ def _apply_widget_qss(widget):
     # (rather than repolishing every live qapp widget), but resolve the shared
     # control tokens exactly as the production stylesheet loader does.
     widget.setStyleSheet(render_qss_template(
-        QSS_PATH.read_text(encoding="utf-8"), CONTROL_QSS_TOKENS,
+        QSS_PATH.read_text(encoding="utf-8"),
+        {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS},
     ))
     return widget
 

@@ -65,6 +65,7 @@ from mf4_analyzer.ui.ultraview_state import (
     ULTRAVIEW_REF_MIME,
     FreeGridPlacement,
     GridAnchor,
+    GridBounds,
     GridRect,
     UltraViewBoardState,
     UltraViewRef,
@@ -86,6 +87,17 @@ from .layouts import (
     content_rect,
     logical_board_size,
     slot_rects,
+)
+from .feedback import (
+    FEEDBACK_DISPLACED_OFFSCREEN,
+    FEEDBACK_NO_LEGAL_LAYOUT,
+    FEEDBACK_OUT_OF_GRID,
+    FEEDBACK_REARRANGED,
+    FEEDBACK_SEARCH_BUDGET,
+    REMOVE_ACTION,
+    format_rearranged,
+    text_for_key,
+    text_for_reason,
 )
 from .free_grid import (
     GridMetrics,
@@ -130,13 +142,6 @@ HANDLE_CURSORS = {
 }
 
 REPLACE_HOVER_MS = 600
-FEEDBACK_OUT_OF_GRID = "不能移出网格"
-FEEDBACK_NO_LEGAL_LAYOUT = "当前位置放不下，已保持原布局"
-# A blown search budget is *not* "it does not fit": a legal layout may well
-# exist, the planner just stopped looking (review 2026-08-15 P1-4).
-FEEDBACK_SEARCH_BUDGET = "布局搜索超出预算，已保持原布局 · 可先整理布局再试"
-FEEDBACK_REARRANGED = "已重排 {count} 张 · Ctrl+Z 撤销"
-FEEDBACK_DISPLACED_OFFSCREEN = "被让位的卡片已移出可视区 · 向下滚动查看"
 
 _PLANNER_LOG = logging.getLogger(__name__)
 _PLANNER_LOG_MONO = 0.0
@@ -198,11 +203,7 @@ def _log_plan_result(plan: LayoutPlan) -> None:
 
 def _reject_feedback(reason: LayoutRejectReason | None) -> str:
     """One mapping from reject reason to user copy, for every commit path."""
-    if reason is LayoutRejectReason.OUT_OF_BOUNDS:
-        return FEEDBACK_OUT_OF_GRID
-    if reason is LayoutRejectReason.SEARCH_CAP:
-        return FEEDBACK_SEARCH_BUDGET
-    return FEEDBACK_NO_LEGAL_LAYOUT
+    return text_for_reason(reason)
 
 
 def _clear_page_card_selection(widget: QWidget) -> None:
@@ -1680,19 +1681,34 @@ class EmptySlotWidget(QFrame):
 
 
 class _CardActionBar(QFrame):
-    """Always-visible top-right capsule: open, focus, fit, more."""
+    """Header capsule: open, focus, fit, remove, more.
+
+    Height is owned by ``sizeHint`` / ``minimumSizeHint`` only. A separate
+    ``setFixedHeight`` used to disagree with the layout hint (24 vs 28),
+    which dropped the buttons ~2 px below the header center.
+    """
 
     _FIT_TOOLTIP = "按原图比例调整卡片"
     _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
+    _REMOVE_TOOLTIP = "从当前 Board 移除（不删除源 View）"
+    _HEIGHT = 24
+    _BUTTON = 22
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("ultraViewCardActionBar")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setContentsMargins(0, 0, 0, 0)
+        # Minimum: never shrink below the visible actions (remove stays).
+        # Fixed vertical: height is sizeHint, not a second fixed-height call.
+        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(3, 2, 3, 2)
-        layout.setSpacing(1)
+        layout.setContentsMargins(3, 0, 3, 0)
+        # Adjacent 22 px hit targets share capsule background but never overlap.
+        # Zero layout spacing keeps the five-action bar inside a standard card.
+        layout.setSpacing(0)
+        layout.setAlignment(Qt.AlignVCenter)
         self._buttons: dict[str, QToolButton] = {}
         for action, object_name, icon, tooltip in (
             (
@@ -1714,6 +1730,12 @@ class _CardActionBar(QFrame):
                 self._FIT_TOOLTIP,
             ),
             (
+                "remove",
+                "ultraViewCardRemoveButton",
+                Icons.ultraview_remove_from_board(ULTRAVIEW_MUTED),
+                self._REMOVE_TOOLTIP,
+            ),
+            (
                 "more",
                 "ultraViewCardMoreButton",
                 Icons.menu(ULTRAVIEW_MUTED),
@@ -1728,7 +1750,7 @@ class _CardActionBar(QFrame):
             button.setAutoRaise(True)
             button.setAutoFillBackground(False)
             button.setAttribute(Qt.WA_StyledBackground, True)
-            button.setFixedSize(22, 22)
+            button.setFixedSize(self._BUTTON, self._BUTTON)
             button.setFocusPolicy(Qt.TabFocus)
             button.setCursor(Qt.PointingHandCursor)
             button.setToolTip(tooltip)
@@ -1737,10 +1759,44 @@ class _CardActionBar(QFrame):
             button.setProperty("chrome", "ultraview")
             button.setProperty("contextAction", action)
             self._buttons[action] = button
-            layout.addWidget(button, 0)
+            layout.addWidget(button, 0, Qt.AlignVCenter)
+        self._sync_action_width()
+
+    def _required_action_width(self) -> int:
+        layout = self.layout()
+        margins = layout.contentsMargins() if layout is not None else self.contentsMargins()
+        spacing = layout.spacing() if layout is not None else 0
+        visible = [button for button in self._buttons.values() if not button.isHidden()]
+        return (
+            margins.left()
+            + margins.right()
+            + len(visible) * self._BUTTON
+            + max(0, len(visible) - 1) * max(0, spacing)
+        )
+
+    def _sync_action_width(self) -> None:
+        # Qt otherwise compresses this nested layout before fixed child widths,
+        # producing overlapping hit targets on compact cards.
+        self.setFixedWidth(self._required_action_width())
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        hint = super().sizeHint()
+        return QSize(max(hint.width(), self._required_action_width()), self._HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return self.sizeHint()
 
     def button(self, action: str) -> QToolButton | None:
         return self._buttons.get(str(action))
+
+    def set_compact(self, compact: bool) -> None:
+        """Hide infrequent actions (fit); keep open / focus / remove / more."""
+        fit = self._buttons.get("fit")
+        if fit is None:
+            return
+        fit.setVisible(not bool(compact))
+        self._sync_action_width()
+        self.updateGeometry()
 
     def set_fit_enabled(self, enabled: bool) -> None:
         button = self._buttons.get("fit")
@@ -1796,10 +1852,12 @@ class UltraViewCard(QFrame):
         self._header.setObjectName("ultraViewCardHeader")
         self._header.setFixedHeight(CARD_HEADER_HEIGHT)
         header = QHBoxLayout(self._header)
-        header.setContentsMargins(8, 5, 10, 5)
+        # Vertical margins stay 0 so AlignVCenter is relative to contentsRect()
+        # (the 34 px header), not a second inset that fought the action-bar hint.
+        header.setContentsMargins(8, 0, 10, 0)
         header.setSpacing(6)
         self._dot = _ColorDot(self._header)
-        header.addWidget(self._dot, 0)
+        header.addWidget(self._dot, 0, Qt.AlignVCenter)
         self._type_chip = QToolButton(self._header)
         self._type_chip.setObjectName("ultraViewCardTypeChip")
         self._type_chip.setAutoRaise(False)
@@ -1814,10 +1872,10 @@ class UltraViewCard(QFrame):
         self._type_chip.setProperty("role", "typeChip")
         header.addWidget(self._type_chip, 0, Qt.AlignVCenter)
         self._title = _ElideLabel("", self._header)
-        header.addWidget(self._title, 1)
+        header.addWidget(self._title, 1, Qt.AlignVCenter)
         self._status = QLabel("", self._header)
         self._status.setObjectName("ultraViewCardStatus")
-        header.addWidget(self._status, 0)
+        header.addWidget(self._status, 0, Qt.AlignVCenter)
         self._sync_btn = QToolButton(self._header)
         self._sync_btn.setObjectName("ultraViewCardSyncButton")
         self._sync_btn.setText("同步")
@@ -1836,6 +1894,7 @@ class UltraViewCard(QFrame):
         self._action_bar.button("open").clicked.connect(self._emit_open_source)
         self._action_bar.button("focus").clicked.connect(self._emit_focus)
         self._action_bar.button("fit").clicked.connect(self._emit_autofit)
+        self._action_bar.button("remove").clicked.connect(self._emit_remove)
         self._action_bar.button("more").clicked.connect(self._emit_more)
         header.addWidget(self._action_bar, 0, Qt.AlignVCenter)
         root.addWidget(self._header, 0)
@@ -1857,7 +1916,7 @@ class UltraViewCard(QFrame):
         self._rebind_btn.setObjectName("ultraViewCardRebindButton")
         self._rebind_btn.clicked.connect(self._emit_rebind)
         self._remove_btn = QPushButton("从总览移除", self._orphan_bar)
-        self._remove_btn.setObjectName("ultraViewCardRemoveButton")
+        self._remove_btn.setObjectName("ultraViewCardOrphanRemoveButton")
         self._remove_btn.clicked.connect(self._emit_remove)
         orphan.addWidget(self._rebind_btn)
         orphan.addWidget(self._remove_btn)
@@ -1894,11 +1953,47 @@ class UltraViewCard(QFrame):
     def _fit_is_enabled(self) -> bool:
         return False
 
+    def _header_is_narrow(self) -> bool:
+        width = self._header.width()
+        return width > 0 and width < TYPE_CHIP_ICON_ONLY_WIDTH
+
     def _sync_action_bar(self) -> None:
-        vis = lod_visibility(self._lod_level)
-        show = bool(vis.body_actions) and not self._lod_presentation
+        # Header actions are not lod_visibility.body_actions (that flag is
+        # for orphan/body chrome). TITLE_ONLY still shows open / focus / remove.
+        show = not self._lod_presentation
         self._action_bar.setVisible(show)
-        self._action_bar.set_fit_enabled(show and self._fit_is_enabled())
+        if not show:
+            return
+        compact = self._lod_level == LOD_TITLE_ONLY or self._header_is_narrow()
+        self._action_bar.set_compact(compact)
+        self._action_bar.set_fit_enabled(self._fit_is_enabled())
+
+    def _squeeze_header_for_actions(self) -> None:
+        """Omit title/status before the action bar would have to hide remove."""
+        if self._lod_presentation or not self._action_bar.isVisible():
+            return
+        header = self._header
+        layout = header.layout()
+        if layout is None or header.width() <= 0:
+            return
+        margins = layout.contentsMargins()
+        spacing = layout.spacing()
+        extras = [
+            widget
+            for widget in (self._dot, self._type_chip, self._sync_btn)
+            if widget.isVisible()
+        ]
+        reserved = margins.left() + margins.right()
+        reserved += self._action_bar.sizeHint().width()
+        reserved += sum(
+            max(widget.width(), widget.sizeHint().width()) for widget in extras
+        )
+        reserved += spacing * (len(extras) + 1)
+        leftover = header.width() - reserved
+        if leftover < 36:
+            self._status.setVisible(False)
+        if leftover < 24:
+            self._title.setVisible(False)
 
     def _emit_autofit(self, _checked: bool = False) -> None:
         if not self._fit_is_enabled():
@@ -1999,7 +2094,7 @@ class UltraViewCard(QFrame):
         focus_act = menu.addAction("临时放大")
         replace_act = menu.addAction("替换为…")
         unplaced_act = menu.addAction("移到未放置")
-        remove_act = menu.addAction("从总览移除")
+        remove_act = menu.addAction(text_for_key(REMOVE_ACTION))
         copy_act = menu.addAction("复制本卡图像")
         focus_act.triggered.connect(self._emit_focus)
         replace_act.triggered.connect(self._emit_rebind)
@@ -2027,6 +2122,7 @@ class UltraViewCard(QFrame):
         self._status.setVisible(bool(vis.trust and has_status))
         self._sync_btn.setVisible(bool(vis.trust and self._model.status == STATUS_STALE))
         self._sync_action_bar()
+        self._squeeze_header_for_actions()
         footer = bool(vis.footer and self._lod_show_source)
         self._footer.setVisible(footer)
         self._footer.setFixedHeight(CARD_FOOTER_HEIGHT if footer else 0)
@@ -2126,6 +2222,8 @@ class UltraViewCard(QFrame):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._sync_type_chip(SECTION_LABELS_ZH.get(self._model.section, self._model.section))
+        self._sync_action_bar()
+        self._squeeze_header_for_actions()
         if lod_visibility(self._lod_level).preview:
             self._fit_card_image()
 
@@ -2848,7 +2946,14 @@ class FreeGridCard(UltraViewCard):
 
 
 class FreeGridBoard(QWidget):
-    """Controlled 12-column visual projection of persisted free-grid state."""
+    """Visual projection of persisted free-grid state.
+
+    ``GridRect`` stays in its canonical logical coordinate system.  The Page
+    supplies a session-only ``GridBounds`` workspace extent when it needs
+    room around those rects; this widget only maps that extent to local pixels.
+    It deliberately owns neither the edge timer nor any viewport event
+    forwarding.
+    """
 
     ref_dropped = pyqtSignal(str, str)
     insert_requested = pyqtSignal(str, str, object)
@@ -2868,6 +2973,10 @@ class FreeGridBoard(QWidget):
     drag_finished = pyqtSignal()
     feedback_requested = pyqtSignal(str)
     replace_requested = pyqtSignal(str, str, str, str)
+    # ``active`` begins for a live move/resize/marquee/external drop and ends
+    # on every finish/cancel path.  The Page owns the edge-pan timer and reads
+    # the current cursor itself, so this is only a lifetime/pointer handoff.
+    workspace_gesture_changed = pyqtSignal(bool, object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -2884,6 +2993,8 @@ class FreeGridBoard(QWidget):
         self._zoom = ZOOM_DEFAULT
         self._metrics = screen_grid_metrics([])
         self._base_metrics = self._metrics
+        self._workspace_extent: GridBounds | None = None
+        self._workspace_gesture_active = False
         self._gesture = FreeGridGesture()
         self._overlay = GhostOverlay(self)
         self._overlay.hide()
@@ -2898,6 +3009,7 @@ class FreeGridBoard(QWidget):
         # Cards currently wearing the drag dim, owned by the board so the set
         # can shrink mid-gesture; the plan's preview set changes on every move.
         self._dimmed_refs: set[UltraViewRef] = set()
+        self.destroyed.connect(self._on_workspace_destroyed)
 
     def set_viewport_size(self, size: QSize) -> None:
         """Record the scroll viewport. Metrics use ``screen_grid_metrics``.
@@ -2919,20 +3031,39 @@ class FreeGridBoard(QWidget):
         self._zoom = value
         self._sync_metrics()
 
+    def set_workspace_extent(self, bounds: GridBounds | None) -> None:
+        """Apply a runtime-only workspace origin/size without touching cards.
+
+        ``bounds`` is intentionally not copied into ``UltraViewBoardState``.
+        A ``None`` extent preserves the historical base-frame mapping, which
+        keeps old callers and exported geometry unchanged.
+        """
+        wanted = bounds if bounds is not None and not bounds.empty() else None
+        if wanted == self._workspace_extent:
+            return
+        self._workspace_extent = wanted
+        self._sync_metrics()
+
+    def workspace_extent(self) -> GridBounds | None:
+        """Return the Page-owned runtime extent; never a persisted payload."""
+        return self._workspace_extent
+
     def unzoomed_size(self) -> QSize:
-        return QSize(self._base_metrics.board_width, self._base_metrics.board_height)
+        return self._workspace_size(self._base_metrics)
 
     def content_rect_1x(self) -> tuple[float, float, float, float] | None:
         """Union of placed free-grid cards at 1×. Empty board returns None."""
         return _union_pixel_rect(
-            rect_to_pixels(item.rect, self._base_metrics)
+            rect_to_pixels(
+                item.rect, self._base_metrics, self._workspace_origin_offset()
+            )
             for item in self._placements.values()
         )
 
     def content_rect(self) -> tuple[float, float, float, float] | None:
         """Union of placed free-grid cards at the current zoom."""
         return _union_pixel_rect(
-            rect_to_pixels(item.rect, self._metrics)
+            rect_to_pixels(item.rect, self._metrics, self._workspace_origin_offset())
             for item in self._placements.values()
         )
 
@@ -2952,9 +3083,12 @@ class FreeGridBoard(QWidget):
         """Map a board-local pixel point to a desired card centre in cells."""
         unit_x = max(1, self._metrics.column_width + self._metrics.gutter)
         unit_y = max(1, self._metrics.row_height + self._metrics.gutter)
+        origin_column, origin_row = self._workspace_origin_offset()
         return GridAnchor(
-            (pos.x() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_x,
-            (pos.y() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_y,
+            origin_column
+            + (pos.x() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_x,
+            origin_row
+            + (pos.y() - self._metrics.padding + self._metrics.gutter / 2.0) / unit_y,
         )
 
     def metrics(self) -> GridMetrics:
@@ -2965,6 +3099,80 @@ class FreeGridBoard(QWidget):
 
     def ghost_overlay(self) -> GhostOverlay:
         return self._overlay
+
+    def _workspace_origin_offset(self) -> tuple[int, int]:
+        bounds = self._workspace_extent
+        if bounds is None:
+            return 0, 0
+        return bounds.column, bounds.row
+
+    def _workspace_size(self, metrics: GridMetrics) -> QSize:
+        """Pixel size of the transient extent at ``metrics`` scale."""
+        bounds = self._workspace_extent
+        if bounds is None:
+            return QSize(metrics.board_width, metrics.board_height)
+        columns = max(1, bounds.column_span)
+        rows = max(1, bounds.row_span)
+        width = (
+            2 * metrics.padding
+            + columns * metrics.column_width
+            + max(0, columns - 1) * metrics.gutter
+        )
+        height = (
+            2 * metrics.padding
+            + rows * metrics.row_height
+            + max(0, rows - 1) * metrics.gutter
+        )
+        return QSize(width, height)
+
+    def _logical_board_pos(self, local: tuple[int, int]) -> tuple[int, int]:
+        """Translate workspace-local pixels back to the canonical grid plane."""
+        origin_column, origin_row = self._workspace_origin_offset()
+        unit_x = self._metrics.column_width + self._metrics.gutter
+        unit_y = self._metrics.row_height + self._metrics.gutter
+        return (
+            int(local[0]) + origin_column * unit_x,
+            int(local[1]) + origin_row * unit_y,
+        )
+
+    def _workspace_pixel_rect(self, logical_rect: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        """Translate a canonical-grid pixel rect into this widget's local plane."""
+        origin_column, origin_row = self._workspace_origin_offset()
+        unit_x = self._metrics.column_width + self._metrics.gutter
+        unit_y = self._metrics.row_height + self._metrics.gutter
+        return (
+            int(logical_rect[0]) - origin_column * unit_x,
+            int(logical_rect[1]) - origin_row * unit_y,
+            int(logical_rect[2]),
+            int(logical_rect[3]),
+        )
+
+    def _emit_workspace_gesture(
+        self, active: bool, global_pos: QPoint | None = None
+    ) -> None:
+        """Publish a gesture lifetime to the Page without handling it here."""
+        wanted = bool(active)
+        if not wanted:
+            if not self._workspace_gesture_active:
+                return
+            self._workspace_gesture_active = False
+            self.workspace_gesture_changed.emit(False, None)
+            return
+        self._workspace_gesture_active = True
+        self.workspace_gesture_changed.emit(True, QPoint(global_pos) if global_pos else None)
+
+    def _on_workspace_destroyed(self, _object=None) -> None:
+        # QObject teardown can arrive after child deletion.  Emitting the
+        # lifetime end is safe and lets Page stop an edge timer it owns.
+        if not self._workspace_gesture_active:
+            return
+        self._workspace_gesture_active = False
+        try:
+            self.workspace_gesture_changed.emit(False, None)
+        except RuntimeError:
+            # Qt may already have torn down this wrapper; no live receiver can
+            # remain on it, and Page also cancels on hide/deactivation.
+            pass
 
     def cancel_gesture(self) -> bool:
         cancelled = False
@@ -2985,6 +3193,7 @@ class FreeGridBoard(QWidget):
             cancelled = True
         if cancelled:
             self._relayout()
+        self._emit_workspace_gesture(False)
         return cancelled
 
     def select_only(self, section: str, view_id: str) -> None:
@@ -3066,7 +3275,7 @@ class FreeGridBoard(QWidget):
     def _sync_metrics(self) -> None:
         self._base_metrics = screen_grid_metrics(list(self._placements.values()))
         self._metrics = scale_grid_metrics(self._base_metrics, self._zoom)
-        target = QSize(self._metrics.board_width, self._metrics.board_height)
+        target = self._workspace_size(self._metrics)
         if self.minimumSize() != target:
             self.setMinimumSize(target)
         if self.size() != target:
@@ -3084,7 +3293,11 @@ class FreeGridBoard(QWidget):
         for ref, placement in self._placements.items():
             widget = self._widgets.get(ref)
             if widget is not None:
-                widget.setGeometry(*rect_to_pixels(placement.rect, self._metrics))
+                widget.setGeometry(
+                    *rect_to_pixels(
+                        placement.rect, self._metrics, self._workspace_origin_offset()
+                    )
+                )
         self._raise_overlay()
         self._apply_selection_flags()
 
@@ -3110,7 +3323,9 @@ class FreeGridBoard(QWidget):
         if rect is None:
             self._overlay.set_move_previews((), (), legal=False)
             return
-        pixel_rect = rect_to_pixels(rect, self._metrics)
+        pixel_rect = rect_to_pixels(
+            rect, self._metrics, self._workspace_origin_offset()
+        )
         self._overlay.set_move_preview(
             None, pixel_rect, pixel_rect, legal=True, badge=""
         )
@@ -3170,7 +3385,9 @@ class FreeGridBoard(QWidget):
                     (event.pos().x(), event.pos().y()),
                 )
             if handle is not None:
-                board_pos = self._board_pos(card, event.pos())
+                board_pos = self._logical_board_pos(
+                    self._board_pos(card, event.pos())
+                )
                 grab = (event.pos().x(), event.pos().y())
                 self._gesture.press_resize(
                     ref,
@@ -3192,7 +3409,7 @@ class FreeGridBoard(QWidget):
                 (0, 0, card.width(), card.height()),
                 (event.pos().x(), event.pos().y()),
             )
-        board_pos = self._board_pos(card, event.pos())
+        board_pos = self._logical_board_pos(self._board_pos(card, event.pos()))
         grab = (event.pos().x(), event.pos().y())
         group_origins = None
         if handle is None:
@@ -3240,8 +3457,9 @@ class FreeGridBoard(QWidget):
 
     def handle_card_mouse_move(self, card: FreeGridCard, event: QMouseEvent) -> None:
         self._update_gesture_at(
-            self._board_pos(card, event.pos()),
+            self._logical_board_pos(self._board_pos(card, event.pos())),
             keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
+            global_pos=event.globalPos(),
         )
 
     def handle_card_mouse_release(self, card: FreeGridCard, event: QMouseEvent) -> None:
@@ -3251,8 +3469,9 @@ class FreeGridBoard(QWidget):
             return
         if self._gesture.is_armed():
             self._update_gesture_at(
-                self._board_pos(card, event.pos()),
+                self._logical_board_pos(self._board_pos(card, event.pos())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
+                global_pos=event.globalPos(),
             )
         self._finish_gesture(commit=True, global_pos=event.globalPos())
 
@@ -3285,6 +3504,7 @@ class FreeGridBoard(QWidget):
                 self._apply_selection_flags()
         self._gesture.begin_marquee((event.pos().x(), event.pos().y()), additive)
         self._overlay.set_marquee(self._gesture.marquee_rect())
+        self._emit_workspace_gesture(True, event.globalPos())
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -3294,13 +3514,15 @@ class FreeGridBoard(QWidget):
         ):
             self._gesture.update_marquee((event.pos().x(), event.pos().y()))
             self._overlay.set_marquee(self._gesture.marquee_rect())
+            self._emit_workspace_gesture(True, event.globalPos())
             if QWidget.mouseGrabber() is None:
                 self.grabMouse()
             return
         if self._gesture.is_armed() and (event.buttons() & Qt.LeftButton or grabbed):
             self._update_gesture_at(
-                (event.pos().x(), event.pos().y()),
+                self._logical_board_pos((event.pos().x(), event.pos().y())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
+                global_pos=event.globalPos(),
             )
             return
         super().mouseMoveEvent(event)
@@ -3310,6 +3532,7 @@ class FreeGridBoard(QWidget):
             session = self._gesture.take_marquee()
             self._release_mouse_if_grabbed()
             self._overlay.set_marquee(None)
+            self._emit_workspace_gesture(False)
             if session is not None:
                 self._finish_marquee(session)
             self.setFocus(Qt.OtherFocusReason)
@@ -3318,8 +3541,9 @@ class FreeGridBoard(QWidget):
             return
         if self._gesture.is_armed() and event.button() == Qt.LeftButton:
             self._update_gesture_at(
-                (event.pos().x(), event.pos().y()),
+                self._logical_board_pos((event.pos().x(), event.pos().y())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
+                global_pos=event.globalPos(),
             )
             self._finish_gesture(commit=True, global_pos=event.globalPos())
             return
@@ -3367,7 +3591,11 @@ class FreeGridBoard(QWidget):
             self.releaseMouse()
 
     def _update_gesture_at(
-        self, board_pos: tuple[int, int], *, keep_aspect: bool = False
+        self,
+        board_pos: tuple[int, int],
+        *,
+        keep_aspect: bool = False,
+        global_pos: QPoint | None = None,
     ) -> None:
         session = self._gesture.update(
             board_pos,
@@ -3387,18 +3615,29 @@ class FreeGridBoard(QWidget):
         if not self._gesture_dimmed:
             self.drag_started.emit("layout")
             self._gesture_dimmed = True
+        self._emit_workspace_gesture(True, global_pos)
         self._sync_gesture_dim(dim_refs)
         ghosts = []
-        ghost_rects = session.group_ghost_pixels(self._metrics, board_pos)
+        ghost_rects = tuple(
+            self._workspace_pixel_rect(rect)
+            for rect in session.group_ghost_pixels(self._metrics, board_pos)
+        )
         refs = list(preview_refs)
         if len(ghost_rects) != len(refs):
             refs = [session.ref]
-            ghost_rects = (session.ghost_pixels(self._metrics, board_pos),)
+            ghost_rects = (
+                self._workspace_pixel_rect(
+                    session.ghost_pixels(self._metrics, board_pos)
+                ),
+            )
         for ref, ghost in zip(refs, ghost_rects):
             card = self._widgets.get(ref)
             image = getattr(card, "_raw_image", None) if card is not None else None
             ghosts.append((image, ghost))
-        highlights = session.group_highlight_pixels(self._metrics)
+        highlights = tuple(
+            self._workspace_pixel_rect(rect)
+            for rect in session.group_highlight_pixels(self._metrics)
+        )
         self._overlay.set_move_previews(
             ghosts,
             highlights,
@@ -3462,6 +3701,7 @@ class FreeGridBoard(QWidget):
                     card.unsetCursor()
             self._overlay.clear()
             self._sync_selection_handles()
+            self._emit_workspace_gesture(False)
             if session.active:
                 self.drag_finished.emit()
 
@@ -3538,9 +3778,7 @@ class FreeGridBoard(QWidget):
             )
             self.group_geometry_requested.emit(payload)
         if plan.affected_count() > 1:
-            self.feedback_requested.emit(
-                FEEDBACK_REARRANGED.format(count=plan.affected_count())
-            )
+            self.feedback_requested.emit(format_rearranged(plan.affected_count()))
         self._warn_if_displaced_offscreen(plan)
         return True
 
@@ -3571,7 +3809,13 @@ class FreeGridBoard(QWidget):
         gone = [
             item
             for item in plan.displaced_before_after
-            if not visible.intersects(QRect(*rect_to_pixels(item.after, self._metrics)))
+            if not visible.intersects(
+                QRect(
+                    *rect_to_pixels(
+                        item.after, self._metrics, self._workspace_origin_offset()
+                    )
+                )
+            )
         ]
         if not gone:
             return
@@ -3630,11 +3874,13 @@ class FreeGridBoard(QWidget):
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
             event.acceptProposedAction()
+            self._emit_workspace_gesture(True, self.mapToGlobal(event.pos()))
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
         if not _accept_ultraview_drag(event):
             return
         event.acceptProposedAction()
+        self._emit_workspace_gesture(True, self.mapToGlobal(event.pos()))
         card = self._card_at(event.pos())
         if card is None:
             self._replace.hover(None)
@@ -3650,12 +3896,14 @@ class FreeGridBoard(QWidget):
     def dragLeaveEvent(self, event) -> None:  # noqa: N802
         self._clear_insert_preview()
         self._replace.clear()
+        self._emit_workspace_gesture(False)
         event.accept()
 
     def dropEvent(self, event) -> None:  # noqa: N802
         ref = extract_ref_strings(event.mimeData())
         card = self._card_at(event.pos())
         event.acceptProposedAction()
+        self._emit_workspace_gesture(False)
         if card is not None:
             key = f"{card.model().section}/{card.model().view_id}"
             if ref is not None and self._replace.is_armed(key):
@@ -3707,24 +3955,55 @@ class FreeGridMinimap(QFrame):
         self._metrics: GridMetrics | None = None
         self._placements: tuple[FreeGridPlacement, ...] = ()
         self._viewport = QRect()
+        self._workspace_extent: GridBounds | None = None
 
     def set_projection(
         self,
         metrics: GridMetrics,
         placements: Sequence[FreeGridPlacement],
         viewport: QRect,
+        workspace_extent: GridBounds | None = None,
     ) -> None:
         self._metrics = metrics
         self._placements = tuple(placements)
         self._viewport = QRect(viewport)
+        self._workspace_extent = (
+            workspace_extent
+            if workspace_extent is not None and not workspace_extent.empty()
+            else None
+        )
         self.update()
+
+    def _origin_offset(self) -> tuple[int, int]:
+        bounds = self._workspace_extent
+        return (bounds.column, bounds.row) if bounds is not None else (0, 0)
+
+    def _canvas_size(self) -> tuple[int, int]:
+        metrics = self._metrics
+        if metrics is None or self._workspace_extent is None:
+            return (
+                metrics.board_width if metrics is not None else 1,
+                metrics.board_height if metrics is not None else 1,
+            )
+        bounds = self._workspace_extent
+        columns = max(1, bounds.column_span)
+        rows = max(1, bounds.row_span)
+        return (
+            2 * metrics.padding
+            + columns * metrics.column_width
+            + max(0, columns - 1) * metrics.gutter,
+            2 * metrics.padding
+            + rows * metrics.row_height
+            + max(0, rows - 1) * metrics.gutter,
+        )
 
     def _scale(self) -> tuple[float, float]:
         if self._metrics is None:
             return 1.0, 1.0
+        canvas_width, canvas_height = self._canvas_size()
         return (
-            max(1, self.width() - 12) / float(max(1, self._metrics.board_width)),
-            max(1, self.height() - 12) / float(max(1, self._metrics.board_height)),
+            max(1, self.width() - 12) / float(max(1, canvas_width)),
+            max(1, self.height() - 12) / float(max(1, canvas_height)),
         )
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -3741,7 +4020,9 @@ class FreeGridMinimap(QFrame):
             painter.setBrush(QColor("#bcd5f5"))
             painter.setPen(QColor("#6da3d9"))
             for item in self._placements:
-                x, y, width, height = rect_to_pixels(item.rect, self._metrics)
+                x, y, width, height = rect_to_pixels(
+                    item.rect, self._metrics, self._origin_offset()
+                )
                 painter.drawRect(
                     int(6 + x * sx), int(6 + y * sy),
                     max(1, int(width * sx)), max(1, int(height * sy)),

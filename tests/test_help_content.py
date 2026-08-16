@@ -269,6 +269,8 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "标题卡", "类型标签", "完整 ghost",
         "点行切换", "拖拽排序", "行尾复制",
         "一键更新源",
+        "基准网格", "导出标尺", "四向平移", "66%", "适应内容",
+        "临时聚焦", "不删除源 View", "200", "Ctrl/Cmd+Z",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (
@@ -276,6 +278,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "工具栏「总览」", "顶栏「总览」", "顶部「总览」",
         "Alt+拖", "Option 拖动位置",
         "隐藏来源条", "约 60%", "约 40% 只留标题", "碰撞会提示",
+        "逻辑画布固定", "默认适应视口", "铺满视口", "12 列受控",
     ):
         assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
 

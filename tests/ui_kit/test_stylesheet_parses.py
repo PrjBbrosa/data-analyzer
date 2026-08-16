@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui_kit.control_style import CONTROL_QSS_TOKENS
 from mf4_analyzer.ui_kit.icons import render_qss_template
+from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_QSS_TOKENS
 
 _QSS_PATH = (
     Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
@@ -37,9 +38,11 @@ def _rendered_sheet() -> str:
     dummy_icons = {
         name: "/nonexistent/guard-dummy.png"
         for name in placeholders
-        if name not in CONTROL_QSS_TOKENS
+        if name not in CONTROL_QSS_TOKENS and name not in ULTRAVIEW_QSS_TOKENS
     }
-    return render_qss_template(template, {**CONTROL_QSS_TOKENS, **dummy_icons})
+    return render_qss_template(
+        template, {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS, **dummy_icons}
+    )
 
 
 def test_rendered_stylesheet_has_no_leftover_placeholders():

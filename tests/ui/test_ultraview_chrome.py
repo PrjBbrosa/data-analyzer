@@ -610,7 +610,7 @@ def test_overflow_menu_is_deleted_after_closing_instead_of_leaking_per_open(qtbo
     assert sip.isdeleted(third)
 
 
-_EXIT_FILL = QColor("#3e709c")
+_EXIT_FILL = QColor("#24697C")
 _QSS_PATH = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
 
 
@@ -704,7 +704,9 @@ def test_idle_presentation_button_is_not_exit_fill(qapp, qtbot):
         assert island.property("presentation") == "true"
         assert _accent_fill_hits(button) >= 6
         assert _white_padding_hits(island) == 0
-        assert _center_luma_hits(button, max_luma=90) == 0
+        # The titanium end of the gradient is deliberately darker than the
+        # former flat blue fill.  Verify the light glyph itself, not a fake
+        # all-bright centre region that would reject a legitimate gradient.
         assert _center_luma_hits(button, min_luma=200) >= 4
 
         island.set_presentation_checked(False)
@@ -764,21 +766,21 @@ def _color_distance(left: QColor, right: QColor) -> float:
     ) ** 0.5
 
 
-def test_canvas_host_paints_moonstone_field(qtbot):
+def test_canvas_host_paints_titanium_amber_field(qtbot):
     host = CanvasHost()
     qtbot.addWidget(host)
     host.resize(240, 160)
     host.show()
     qtbot.waitExposed(host)
     image = host.grab().toImage()
-    expected = QColor("#EDF2F5")
+    expected = QColor("#F7F8F7")
     for x, y in ((12, 12), (60, 40), (180, 20), (30, 140)):
         pixel = QColor(image.pixel(x, y))
         assert abs(pixel.red() - expected.red()) < 28
         assert abs(pixel.green() - expected.green()) < 28
         assert abs(pixel.blue() - expected.blue()) < 28
     assert host._dot_tile is not None
-    assert host._dot_tile_key == (expected.name(), QColor(77, 109, 132, 38).rgba())
+    assert host._dot_tile_key == (expected.name(), QColor(44, 82, 93, 43).rgba())
     tile = host._dot_tile.toImage()
     alphas = [
         tile.pixelColor(x, y).alpha()
@@ -787,7 +789,7 @@ def test_canvas_host_paints_moonstone_field(qtbot):
         if tile.pixelColor(x, y).alpha() > 0
     ]
     assert alphas, "dot tile must contain a visible mark"
-    assert max(alphas) in (36, 37, 38, 39, 40)
+    assert max(alphas) in (41, 42, 43, 44)
 
 
 def test_tool_rail_icon_color_tracks_mode_and_panel_open(qtbot):

@@ -140,8 +140,15 @@ class CardPlacement:
     ref: UltraViewRef
 
 
+# 12×48 is the canonical 1× card pitch / base frame, not the screen drag wall.
 GRID_COLUMNS = 12
 MAX_GRID_ROWS = 48
+# Engineering safety cap: base frame plus 48 columns on each side, and one
+# extra base-frame height above and below the 48-row baseline. Half-open.
+SAFETY_COLUMN_MIN = -48
+SAFETY_COLUMN_MAX = 60
+SAFETY_ROW_MIN = -48
+SAFETY_ROW_MAX = 96
 MAX_PLACED_CARDS = 24
 MAX_UI_BOARDS = 20
 MAX_BOARD_MEMBERSHIP = 200
@@ -163,12 +170,102 @@ FREE_GRID_PRESETS: dict[str, tuple[int, int]] = {
 
 @dataclass(frozen=True)
 class GridRect:
-    """Stable, screen-independent card rectangle for P2's controlled grid."""
+    """Stable, screen-independent card rectangle for P2's controlled grid.
+
+    ``column`` / ``row`` are signed. The base frame occupies columns
+    ``[0, GRID_COLUMNS)`` and rows ``[0, MAX_GRID_ROWS)``; legal cards may sit
+    anywhere inside the safety half-open interval
+    ``[SAFETY_COLUMN_MIN, SAFETY_COLUMN_MAX)`` ×
+    ``[SAFETY_ROW_MIN, SAFETY_ROW_MAX)``.
+    """
 
     column: int
     row: int
     column_span: int
     row_span: int
+
+
+@dataclass(frozen=True)
+class GridBounds:
+    """Immutable half-open cell rectangle ``[column, column_end) × [row, row_end)``."""
+
+    column: int
+    row: int
+    column_span: int
+    row_span: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "column", int(self.column))
+        object.__setattr__(self, "row", int(self.row))
+        object.__setattr__(self, "column_span", max(0, int(self.column_span)))
+        object.__setattr__(self, "row_span", max(0, int(self.row_span)))
+
+    @property
+    def column_end(self) -> int:
+        return self.column + self.column_span
+
+    @property
+    def row_end(self) -> int:
+        return self.row + self.row_span
+
+    def empty(self) -> bool:
+        return self.column_span == 0 or self.row_span == 0
+
+    def union(self, other: "GridBounds") -> "GridBounds":
+        if self.empty():
+            return other
+        if other.empty():
+            return self
+        column = min(self.column, other.column)
+        row = min(self.row, other.row)
+        return GridBounds(
+            column,
+            row,
+            max(self.column_end, other.column_end) - column,
+            max(self.row_end, other.row_end) - row,
+        )
+
+    @classmethod
+    def from_rect(cls, rect: GridRect) -> "GridBounds":
+        return cls(rect.column, rect.row, rect.column_span, rect.row_span)
+
+    @classmethod
+    def from_edges(
+        cls, column: int, row: int, column_end: int, row_end: int
+    ) -> "GridBounds":
+        return cls(column, row, column_end - column, row_end - row)
+
+
+def base_frame_bounds() -> GridBounds:
+    """Canonical 1× pitch rectangle: columns ``[0, 12)`` × rows ``[0, 48)``."""
+    return GridBounds(0, 0, GRID_COLUMNS, MAX_GRID_ROWS)
+
+
+def safety_grid_bounds() -> GridBounds:
+    """Engineering cap. Not a daily layout suggestion and not persisted."""
+    return GridBounds(
+        SAFETY_COLUMN_MIN,
+        SAFETY_ROW_MIN,
+        SAFETY_COLUMN_MAX - SAFETY_COLUMN_MIN,
+        SAFETY_ROW_MAX - SAFETY_ROW_MIN,
+    )
+
+
+def clamp_grid_rect(rect: GridRect) -> GridRect:
+    """Clamp origin+span into the safety bounds. Spans keep their existing min/max."""
+    col_span = min(GRID_MAX_COLUMN_SPAN, max(GRID_MIN_COLUMN_SPAN, int(rect.column_span)))
+    row_span = min(GRID_MAX_ROW_SPAN, max(GRID_MIN_ROW_SPAN, int(rect.row_span)))
+    return GridRect(
+        column=min(SAFETY_COLUMN_MAX - col_span, max(SAFETY_COLUMN_MIN, int(rect.column))),
+        row=min(SAFETY_ROW_MAX - row_span, max(SAFETY_ROW_MIN, int(rect.row))),
+        column_span=col_span,
+        row_span=row_span,
+    )
+
+
+def grid_rect_in_safety(rect: GridRect) -> bool:
+    """True when ``rect`` already sits inside safety with a legal span."""
+    return clamp_grid_rect(rect) == rect
 
 
 @dataclass(frozen=True)
@@ -815,7 +912,11 @@ def _coerce_grid_int(value: object, *, default: int) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
-def _legal_grid_rect(raw: Mapping[str, Any] | GridRect) -> GridRect | None:
+def _legal_grid_rect(
+    raw: Mapping[str, Any] | GridRect,
+    *,
+    warnings: list[str] | None = None,
+) -> GridRect | None:
     if isinstance(raw, GridRect):
         values = (raw.column, raw.row, raw.column_span, raw.row_span)
     elif isinstance(raw, Mapping):
@@ -828,14 +929,16 @@ def _legal_grid_rect(raw: Mapping[str, Any] | GridRect) -> GridRect | None:
     else:
         return None
     column, row, col_span, row_span = values
-    col_span = min(GRID_MAX_COLUMN_SPAN, max(GRID_MIN_COLUMN_SPAN, col_span))
-    row_span = min(GRID_MAX_ROW_SPAN, max(GRID_MIN_ROW_SPAN, row_span))
-    return GridRect(
-        min(GRID_COLUMNS - col_span, max(0, column)),
-        min(MAX_GRID_ROWS - row_span, max(0, row)),
-        col_span,
-        row_span,
-    )
+    parsed = GridRect(int(column), int(row), int(col_span), int(row_span))
+    legal = clamp_grid_rect(parsed)
+    if warnings is not None and legal != parsed:
+        warnings.append(
+            _warn(
+                "grid_rect_clamped",
+                f"{parsed.column},{parsed.row},{parsed.column_span},{parsed.row_span}",
+            )
+        )
+    return legal
 
 
 def _grid_overlaps(left: GridRect, right: GridRect) -> bool:
@@ -847,17 +950,36 @@ def _grid_overlaps(left: GridRect, right: GridRect) -> bool:
     )
 
 
+def _iter_safety_origins(col_span: int, row_span: int):
+    """Every legal origin for ``(col_span, row_span)`` inside safety bounds."""
+    for row in range(SAFETY_ROW_MIN, SAFETY_ROW_MAX - row_span + 1):
+        for column in range(SAFETY_COLUMN_MIN, SAFETY_COLUMN_MAX - col_span + 1):
+            yield column, row
+
+
+def _iter_first_free_origins(col_span: int, row_span: int):
+    """Base-frame origins first so legacy first-fit still lands at ``(0, 0)``."""
+    base_row_last = MAX_GRID_ROWS - row_span
+    base_col_last = GRID_COLUMNS - col_span
+    for row in range(0, base_row_last + 1):
+        for column in range(0, base_col_last + 1):
+            yield column, row
+    for column, row in _iter_safety_origins(col_span, row_span):
+        if 0 <= row <= base_row_last and 0 <= column <= base_col_last:
+            continue
+        yield column, row
+
+
 def _first_free_grid_rect(
     placements: Sequence[FreeGridPlacement], *, span: tuple[int, int] = (4, 3)
 ) -> GridRect | None:
     prototype = _legal_grid_rect({"column": 0, "row": 0, "column_span": span[0], "row_span": span[1]})
     if prototype is None:
         return None
-    for row in range(MAX_GRID_ROWS - prototype.row_span + 1):
-        for column in range(GRID_COLUMNS - prototype.column_span + 1):
-            candidate = GridRect(column, row, prototype.column_span, prototype.row_span)
-            if not any(_grid_overlaps(candidate, item.rect) for item in placements):
-                return candidate
+    for column, row in _iter_first_free_origins(prototype.column_span, prototype.row_span):
+        candidate = GridRect(column, row, prototype.column_span, prototype.row_span)
+        if not any(_grid_overlaps(candidate, item.rect) for item in placements):
+            return candidate
     return None
 
 
@@ -908,20 +1030,19 @@ def resolve_free_grid_insert_rect(
         return requested
 
     candidates: list[tuple[float, int, int, GridRect]] = []
-    for row in range(MAX_GRID_ROWS - prototype.row_span + 1):
-        for column in range(GRID_COLUMNS - prototype.column_span + 1):
-            candidate = GridRect(
-                column, row, prototype.column_span, prototype.row_span
-            )
-            if any(_grid_overlaps(candidate, item.rect) for item in placements):
-                continue
-            centre_column = candidate.column + candidate.column_span / 2.0
-            centre_row = candidate.row + candidate.row_span / 2.0
-            distance_sq = (
-                (centre_column - anchor.column) ** 2
-                + (centre_row - anchor.row) ** 2
-            )
-            candidates.append((distance_sq, row, column, candidate))
+    for column, row in _iter_safety_origins(prototype.column_span, prototype.row_span):
+        candidate = GridRect(
+            column, row, prototype.column_span, prototype.row_span
+        )
+        if any(_grid_overlaps(candidate, item.rect) for item in placements):
+            continue
+        centre_column = candidate.column + candidate.column_span / 2.0
+        centre_row = candidate.row + candidate.row_span / 2.0
+        distance_sq = (
+            (centre_column - anchor.column) ** 2
+            + (centre_row - anchor.row) ** 2
+        )
+        candidates.append((distance_sq, row, column, candidate))
     if not candidates:
         return None
     return min(candidates)[3]
@@ -1041,23 +1162,30 @@ def apply_free_grid_preset(
 def organized_placements(
     placements: Sequence[FreeGridPlacement],
 ) -> list[FreeGridPlacement]:
-    """Remove fully empty rows while retaining each card's size/order/column."""
+    """Remove fully empty rows while retaining each card's size/order/column.
+
+    Empty rows compress toward row 0 (the base-frame origin) from both
+    sides, so a legacy board whose cards sit at rows 2 and 5 still packs to
+    0 and 2, and signed cards above the origin pack downward toward 0.
+    """
     occupied_rows = {
         row
         for item in placements
         for row in range(item.rect.row, item.rect.row + item.rect.row_span)
     }
-    empty_before = [
-        row for row in range(MAX_GRID_ROWS) if row not in occupied_rows
-    ]
     result: list[FreeGridPlacement] = []
     for item in placements:
-        shift = sum(1 for row in empty_before if row < item.rect.row)
         rect = item.rect
+        if rect.row >= 0:
+            shift = sum(1 for row in range(0, rect.row) if row not in occupied_rows)
+            new_row = rect.row - shift
+        else:
+            shift = sum(1 for row in range(rect.row, 0) if row not in occupied_rows)
+            new_row = rect.row + shift
         result.append(
             FreeGridPlacement(
                 item.ref,
-                GridRect(rect.column, rect.row - shift, rect.column_span, rect.row_span),
+                GridRect(rect.column, new_row, rect.column_span, rect.row_span),
             )
         )
     return result
@@ -1300,7 +1428,7 @@ def normalize_board_payload(
                 warnings.append(_warn("illegal_grid_placement"))
                 continue
             ref = parse_ref_payload(item)
-            rect = _legal_grid_rect(item)
+            rect = _legal_grid_rect(item, warnings=warnings)
             if ref is None or rect is None:
                 warnings.append(_warn("illegal_grid_placement"))
                 continue

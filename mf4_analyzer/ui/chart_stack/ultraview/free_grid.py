@@ -15,10 +15,14 @@ from mf4_analyzer.ui.ultraview_state import (
     GRID_MAX_ROW_SPAN,
     GRID_MIN_COLUMN_SPAN,
     GRID_MIN_ROW_SPAN,
-    MAX_GRID_ROWS,
+    SAFETY_COLUMN_MAX,
+    SAFETY_COLUMN_MIN,
+    SAFETY_ROW_MAX,
+    SAFETY_ROW_MIN,
     FreeGridPlacement,
     GridRect,
     UltraViewRef,
+    clamp_grid_rect,
 )
 
 from .layouts import (
@@ -43,9 +47,9 @@ Rect = tuple[int, int, int, int]
 # Cell probes granted to *each* blocker the planner has to relocate, not to the
 # whole plan (see ``_SearchBudget``).  A shared pool made dense-but-solvable
 # boards report "no legal layout" (review 2026-08-15 P1-4).  Sized so one card
-# can exhaust the board: a minimum-span card has 11×47 = 517 in-board origins
-# plus at most 4×47 directional probes, so an unreachable hole is *proved*
-# rather than guessed, and ``SEARCH_CAP`` stays reserved for real give-ups.
+# can exhaust the *safety* board: a minimum-span card has 106×142 in-board
+# origins, so ``SEARCH_CAP`` stays reserved for real give-ups rather than a
+# full-board proof.
 PLANNER_SEARCH_CAP = 768
 LAYOUT_MOVE = "move"
 LAYOUT_RESIZE = "resize"
@@ -113,7 +117,7 @@ class LayoutPlan:
 
 @dataclass(frozen=True)
 class GridMetrics:
-    """Pixel mapping for the fixed 12-column, vertically growing Board."""
+    """Pixel mapping for the 12-column 1× pitch. Screen extent is separate."""
 
     board_width: int
     board_height: int
@@ -162,7 +166,7 @@ def grid_metrics(
     )
     if min_visible_rows is None:
         occupied_rows += GRID_SPARE_ROWS
-    occupied_rows = min(MAX_GRID_ROWS, max(floor_rows, occupied_rows))
+    occupied_rows = min(SAFETY_ROW_MAX, max(floor_rows, occupied_rows))
     minimum_height = (
         2 * BOARD_PADDING
         + occupied_rows * GRID_ROW_HEIGHT
@@ -216,10 +220,10 @@ def fit_rect_for_aspect(
     max_row = min(int(origin.row_span), GRID_MAX_ROW_SPAN)
     best: tuple[tuple[float, int], GridRect] | None = None
     for col_span in range(GRID_MIN_COLUMN_SPAN, max_col + 1):
-        if int(origin.column) + col_span > GRID_COLUMNS:
+        if int(origin.column) + col_span > SAFETY_COLUMN_MAX:
             continue
         for row_span in range(GRID_MIN_ROW_SPAN, max_row + 1):
-            if int(origin.row) + row_span > MAX_GRID_ROWS:
+            if int(origin.row) + row_span > SAFETY_ROW_MAX:
                 continue
             candidate = GridRect(
                 int(origin.column), int(origin.row), col_span, row_span
@@ -234,10 +238,20 @@ def fit_rect_for_aspect(
     return best[1] if best is not None else origin
 
 
-def rect_to_pixels(rect: GridRect, metrics: GridMetrics) -> Rect:
-    """Map a legal logical rectangle to the same pixel rectangle everywhere."""
-    x = metrics.padding + rect.column * (metrics.column_width + metrics.gutter)
-    y = metrics.padding + rect.row * (metrics.row_height + metrics.gutter)
+def rect_to_pixels(
+    rect: GridRect,
+    metrics: GridMetrics,
+    origin_offset: tuple[int, int] = (0, 0),
+) -> Rect:
+    """Map a logical rectangle to pixels without rebasing the GridRect.
+
+    Negative cells produce negative (or sub-padding) pixel origins. Callers
+    that need a non-negative screen/export bitmap pass ``origin_offset`` as
+    the workspace or content origin; the rect itself is left unchanged.
+    """
+    col0, row0 = int(origin_offset[0]), int(origin_offset[1])
+    x = metrics.padding + (rect.column - col0) * (metrics.column_width + metrics.gutter)
+    y = metrics.padding + (rect.row - row0) * (metrics.row_height + metrics.gutter)
     width = rect.column_span * metrics.column_width + (rect.column_span - 1) * metrics.gutter
     height = rect.row_span * metrics.row_height + (rect.row_span - 1) * metrics.gutter
     return x, y, width, height
@@ -309,14 +323,8 @@ def rects_overlap(left: GridRect, right: GridRect) -> bool:
 
 
 def clamp_rect(rect: GridRect) -> GridRect:
-    col_span = min(GRID_MAX_COLUMN_SPAN, max(GRID_MIN_COLUMN_SPAN, int(rect.column_span)))
-    row_span = min(GRID_MAX_ROW_SPAN, max(GRID_MIN_ROW_SPAN, int(rect.row_span)))
-    return GridRect(
-        column=min(GRID_COLUMNS - col_span, max(0, int(rect.column))),
-        row=min(MAX_GRID_ROWS - row_span, max(0, int(rect.row))),
-        column_span=col_span,
-        row_span=row_span,
-    )
+    """Clamp origin+span into the safety bounds, not the 12-column base frame."""
+    return clamp_grid_rect(rect)
 
 
 def candidate_move(rect: GridRect, column_delta: int, row_delta: int) -> GridRect:
@@ -408,19 +416,19 @@ def candidate_resize_handle(
     bottom = rect.row + rect.row_span
     if handle in _HANDLE_WEST:
         left += int(column_delta)
-        left = max(0, min(left, right - GRID_MIN_COLUMN_SPAN))
+        left = max(SAFETY_COLUMN_MIN, min(left, right - GRID_MIN_COLUMN_SPAN))
         left = max(right - GRID_MAX_COLUMN_SPAN, left)
     elif handle in _HANDLE_EAST:
         right += int(column_delta)
-        right = min(GRID_COLUMNS, max(right, left + GRID_MIN_COLUMN_SPAN))
+        right = min(SAFETY_COLUMN_MAX, max(right, left + GRID_MIN_COLUMN_SPAN))
         right = min(left + GRID_MAX_COLUMN_SPAN, right)
     if handle in _HANDLE_NORTH:
         top += int(row_delta)
-        top = max(0, min(top, bottom - GRID_MIN_ROW_SPAN))
+        top = max(SAFETY_ROW_MIN, min(top, bottom - GRID_MIN_ROW_SPAN))
         top = max(bottom - GRID_MAX_ROW_SPAN, top)
     elif handle in _HANDLE_SOUTH:
         bottom += int(row_delta)
-        bottom = min(MAX_GRID_ROWS, max(bottom, top + GRID_MIN_ROW_SPAN))
+        bottom = min(SAFETY_ROW_MAX, max(bottom, top + GRID_MIN_ROW_SPAN))
         bottom = min(top + GRID_MAX_ROW_SPAN, bottom)
     return clamp_rect(GridRect(left, top, right - left, bottom - top))
 
@@ -536,7 +544,10 @@ def group_translate_rects(
 
 
 _CARDINAL_DELTAS = ((0, 1), (1, 0), (-1, 0), (0, -1))
-_AVOID_SEARCH_LIMIT = max(GRID_COLUMNS, MAX_GRID_ROWS)
+_AVOID_SEARCH_LIMIT = max(
+    SAFETY_COLUMN_MAX - SAFETY_COLUMN_MIN,
+    SAFETY_ROW_MAX - SAFETY_ROW_MIN,
+)
 
 
 class _SearchBudget:
@@ -630,10 +641,10 @@ def find_avoidance_rect(
     # Ring offsets are pruned to the ones that can land in-board at all, so the
     # loop cost tracks the budget instead of the (much larger) offset square.
     # The order in which in-board candidates are visited is unchanged.
-    min_dc = -int(rect.column)
-    max_dc = GRID_COLUMNS - int(rect.column_span) - int(rect.column)
-    min_dr = -int(rect.row)
-    max_dr = MAX_GRID_ROWS - int(rect.row_span) - int(rect.row)
+    min_dc = SAFETY_COLUMN_MIN - int(rect.column)
+    max_dc = SAFETY_COLUMN_MAX - int(rect.column_span) - int(rect.column)
+    min_dr = SAFETY_ROW_MIN - int(rect.row)
+    max_dr = SAFETY_ROW_MAX - int(rect.row_span) - int(rect.row)
     max_dist = (
         max(abs(min_dc), abs(max_dc)) + max(abs(min_dr), abs(max_dr)) + 1
     )
@@ -804,10 +815,10 @@ def _min_packed_span(
 
 
 def _rect_overflow(rect: GridRect) -> tuple[int, int, int, int]:
-    left = max(0, -int(rect.column))
-    top = max(0, -int(rect.row))
-    right = max(0, int(rect.column) + int(rect.column_span) - GRID_COLUMNS)
-    bottom = max(0, int(rect.row) + int(rect.row_span) - MAX_GRID_ROWS)
+    left = max(0, SAFETY_COLUMN_MIN - int(rect.column))
+    top = max(0, SAFETY_ROW_MIN - int(rect.row))
+    right = max(0, int(rect.column) + int(rect.column_span) - SAFETY_COLUMN_MAX)
+    bottom = max(0, int(rect.row) + int(rect.row_span) - SAFETY_ROW_MAX)
     return left, top, right, bottom
 
 
@@ -1004,8 +1015,7 @@ def plan_layout(
     budget = _SearchBudget(search_cap)
 
     out_of_bounds = any(clamp_rect(rect) != rect for rect in raw.values())
-    wanted = {ref: clamp_rect(rect) for ref, rect in raw.items()}
-    if out_of_bounds and all(wanted[ref] == current[ref] for ref in wanted):
+    if out_of_bounds:
         return _empty_plan(
             accepted=False,
             reason=LayoutRejectReason.OUT_OF_BOUNDS,
@@ -1013,9 +1023,10 @@ def plan_layout(
             layout_revision=layout_revision,
             mover_ref=mover_ref,
             mover_before=origin,
-            mover_after=wanted[mover_ref],
+            mover_after=clamp_rect(raw[mover_ref]),
             search_visits=budget.visits,
         )
+    wanted = dict(raw)
     if op != LAYOUT_ARRANGE and not _span_invariants_hold(op, current, wanted, mover_ref):
         return _empty_plan(
             accepted=False,
@@ -1208,9 +1219,9 @@ def plan_neighbor_shrink(
         return updates, bool(updates)
 
     if horizontal:
-        left_origin, left_span = 0, union.column
+        left_origin, left_span = SAFETY_COLUMN_MIN, union.column - SAFETY_COLUMN_MIN
         right_origin = union.column + union.column_span
-        right_span = GRID_COLUMNS - right_origin
+        right_span = SAFETY_COLUMN_MAX - right_origin
         left_refs: list[UltraViewRef] = []
         right_refs: list[UltraViewRef] = []
         mover_mid = union.column * 2 + union.column_span
@@ -1232,9 +1243,9 @@ def plan_neighbor_shrink(
             right_refs, current, right_origin, right_span, horizontal=True
         )
     else:
-        top_origin, top_span = 0, union.row
+        top_origin, top_span = SAFETY_ROW_MIN, union.row - SAFETY_ROW_MIN
         bottom_origin = union.row + union.row_span
-        bottom_span = MAX_GRID_ROWS - bottom_origin
+        bottom_span = SAFETY_ROW_MAX - bottom_origin
         top_refs: list[UltraViewRef] = []
         bottom_refs: list[UltraViewRef] = []
         mover_mid = union.row * 2 + union.row_span
@@ -1314,10 +1325,10 @@ def _wall_grow_wanted(
     if not neighbors:
         return None
     pocket_span = (
-        origin.column if side == "left"
-        else GRID_COLUMNS - (origin.column + origin.column_span) if side == "right"
-        else origin.row if side == "top"
-        else MAX_GRID_ROWS - (origin.row + origin.row_span)
+        origin.column - SAFETY_COLUMN_MIN if side == "left"
+        else SAFETY_COLUMN_MAX - (origin.column + origin.column_span) if side == "right"
+        else origin.row - SAFETY_ROW_MIN if side == "top"
+        else SAFETY_ROW_MAX - (origin.row + origin.row_span)
     )
     yieldable = pocket_span - _min_packed_span(
         neighbors, current, horizontal=horizontal
