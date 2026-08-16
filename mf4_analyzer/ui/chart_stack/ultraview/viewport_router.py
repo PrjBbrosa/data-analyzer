@@ -11,6 +11,18 @@ from PyQt5.QtWidgets import QApplication, QWidget
 class ViewportGestureRouter(QObject):
     """Keep pan and zoom continuous while Qt changes the event receiver."""
 
+    _HANDLED_TYPES = frozenset(
+        {
+            QEvent.KeyPress,
+            QEvent.KeyRelease,
+            QEvent.MouseButtonPress,
+            QEvent.MouseMove,
+            QEvent.MouseButtonRelease,
+            QEvent.Wheel,
+            QEvent.NativeGesture,
+        }
+    )
+
     def __init__(
         self,
         *,
@@ -57,9 +69,11 @@ class ViewportGestureRouter(QObject):
         self._installed = False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        # This is an QApplication-level filter solely to keep a gesture alive
-        # while Qt changes the receiver beneath it.  It must be inert whenever
-        # the Board is hidden or another top-level window is active.
+        # Application-level filter: keep a gesture alive while Qt changes the
+        # receiver.  Bail out on unrelated event types before walking the
+        # parent chain or consulting Board activity.
+        if event.type() not in self._HANDLED_TYPES:
+            return False
         if self._is_active is not None and not self._is_active():
             return False
         if not self._is_canvas_descendant(watched):
