@@ -184,12 +184,17 @@ def test_viewstate_remarks_and_dual_placement_roundtrip_through_dict():
     assert "placing" not in (payload["cursor_placement"] or {})
 
 
-def test_viewstate_to_dict_drops_placement_when_cursor_mode_is_not_dual():
+def test_viewstate_to_dict_keeps_placement_when_cursor_mode_is_off():
+    """D3 2026-08-16: cursor_mode no longer gates cursor_placement."""
     st = ViewState(
         name="View 1",
         tab_color="#2d7ff9",
-        cursor_mode="single",
+        cursor_mode="off",
         cursor_placement={"ax": 1.0, "bx": 2.0},
     )
 
-    assert st.to_dict()["cursor_placement"] is None
+    payload = st.to_dict()
+    assert payload["cursor_placement"] == {"ax": 1.0, "bx": 2.0}
+    again = ViewState.from_dict(payload)
+    assert again.cursor_mode == "off"
+    assert again.cursor_placement == {"ax": 1.0, "bx": 2.0}

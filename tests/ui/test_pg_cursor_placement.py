@@ -55,14 +55,22 @@ def _place_dual_ab(canvas, ax=0.25, bx=0.75):
     QCoreApplication.processEvents()
 
 
-def test_single_cursor_mode_snapshot_is_none(qapp):
+def test_snapshot_placement_ignores_cursor_mode(qapp):
+    """Off/single still persist A/B (D3 2026-08-16 revision)."""
     canvas = _pg_canvas(qapp)
     canvas.set_cursor_visible(True)
     cursor = canvas._cursor
     cursor._ax = 0.40
     cursor._bx = 0.70
-    assert cursor.snapshot_placement() is None
-    assert CursorController.snapshot_placement(cursor) is None
+    assert cursor.snapshot_placement() == {
+        "ax": pytest.approx(0.40),
+        "bx": pytest.approx(0.70),
+    }
+    canvas.set_dual_cursor_mode(False)
+    assert cursor.snapshot_placement() == {
+        "ax": pytest.approx(0.40),
+        "bx": pytest.approx(0.70),
+    }
 
 
 def test_dual_placed_a_and_b_snapshot_has_ax_bx(qapp):
@@ -108,16 +116,30 @@ def test_restore_placement_with_dual_on_redraws_a_b_lines(qapp):
     assert [item.value() for item in b_items] == pytest.approx([0.80] * len(b_items))
 
 
-def test_invalid_restore_does_not_turn_dual_off(qapp):
+def test_invalid_restore_clears_placement_and_keeps_dual_on(qapp):
+    """restore_placement(None/illegal) is the View-transaction empty wipe."""
     canvas = _pg_canvas(qapp)
     canvas.set_dual_cursor_mode(True)
     cursor = canvas._cursor
-    cursor._ax = 0.10
+    CursorController.restore_placement(cursor, {"ax": 0.10, "bx": 0.40})
+    QCoreApplication.processEvents()
+    last_primary = []
+    canvas.cursor_info.connect(last_primary.append)
     cursor.restore_placement(None)
+    QCoreApplication.processEvents()
+    assert cursor._dual is True
+    assert cursor._ax is None
+    assert cursor._bx is None
+    assert cursor._placing == "A"
+    a_items = cursor._cursor_a_items
+    b_items = cursor._cursor_b_items
+    assert a_items and all(not item.isVisible() for item in a_items)
+    assert b_items and all(not item.isVisible() for item in b_items)
     cursor.restore_placement({"ax": float("nan"), "bx": 0.5})
     cursor.restore_placement("not-a-dict")
-    assert cursor._dual is True
-    assert cursor._ax == pytest.approx(0.10)
+    assert cursor._ax is None
+    assert cursor._bx is None
+    assert last_primary[-1] == "Click A"
 
 
 def test_dual_placed_a_and_b_pill_rows_match_visible_channels(qapp):
@@ -169,7 +191,10 @@ def test_off_then_dual_keeps_placement_and_restores_pill(qapp):
     assert cursor._ax == pytest.approx(ax)
     assert cursor._bx == pytest.approx(bx)
     assert cursor._placing == "B"
-    assert cursor.snapshot_placement() is None
+    assert cursor.snapshot_placement() == {
+        "ax": pytest.approx(ax),
+        "bx": pytest.approx(bx),
+    }
     assert last["info"] == ""
     a_items = cursor._cursor_a_items
     b_items = cursor._cursor_b_items
@@ -191,3 +216,98 @@ def test_off_then_dual_keeps_placement_and_restores_pill(qapp):
     blob = (last["info"] or "") + " ".join(str(row[0]) for row in rows)
     for name in _visible_display_names(canvas):
         assert name in blob
+
+
+def test_new_view_does_not_inherit_previous_dual_placement(qapp, tmp_path, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    csv_a.write_text("time,rpm\n" + "\n".join(
+        f"{i / 100.0},{float(i)}" for i in range(40)
+    ))
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+    mw.chart_stack.set_cursor_mode("dual")
+    qapp.processEvents()
+    mw.canvas_time.restore_cursor_placement({"ax": 0.10, "bx": 0.20})
+    qapp.processEvents()
+    mw._capture_focused_view()
+
+    mw._on_view_new()
+    qapp.processEvents()
+    mw._attach_files_to_focused_view([fid])
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+    assert mw.chart_stack.cursor_mode() == "off"
+    mw.chart_stack.set_cursor_mode("dual")
+    qapp.processEvents()
+
+    cursor = mw.canvas_time._cursor
+    assert cursor._ax is None
+    assert cursor._bx is None
+    a_items = cursor._cursor_a_items
+    b_items = cursor._cursor_b_items
+    assert not a_items or all(not item.isVisible() for item in a_items)
+    assert not b_items or all(not item.isVisible() for item in b_items)
+    assert mw.chart_stack.cursor_pill_text() == "Click A"
+
+
+def test_off_save_reopen_restores_placement_when_dual_turns_on(
+        qapp, tmp_path, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    csv_a.write_text("time,rpm\n" + "\n".join(
+        f"{i / 100.0},{float(i)}" for i in range(40)
+    ))
+    proj = tmp_path / "off-placement.tlproj"
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+    mw.chart_stack.set_cursor_mode("dual")
+    qapp.processEvents()
+    mw.canvas_time.restore_cursor_placement({"ax": 0.10, "bx": 0.20})
+    qapp.processEvents()
+    mw.chart_stack.set_cursor_mode("off")
+    qapp.processEvents()
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.resize(1200, 800)
+    mw2.show()
+    last_rows = []
+    mw2.canvas_time.dual_cursor_rows.connect(last_rows.append)
+    mw2.open_project(proj)
+    qapp.processEvents()
+    restored = mw2.view_manager.get(0)
+    assert restored.cursor_mode == "off"
+    assert restored.cursor_placement["ax"] == pytest.approx(0.10)
+    assert restored.cursor_placement["bx"] == pytest.approx(0.20)
+
+    mw2.chart_stack.set_cursor_mode("dual")
+    qapp.processEvents()
+    cursor = mw2.canvas_time._cursor
+    assert cursor._ax == pytest.approx(0.10)
+    assert cursor._bx == pytest.approx(0.20)
+    assert all(item.isVisible() for item in cursor._cursor_a_items)
+    assert all(item.isVisible() for item in cursor._cursor_b_items)
+    emitted_rows = last_rows[-1] if last_rows else []
+    visible_names = [ch for ch, _values in mw2.canvas_time.channel_data.items()]
+    assert len(emitted_rows) == len(visible_names)

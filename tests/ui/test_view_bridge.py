@@ -524,7 +524,7 @@ def test_capture_controls_empty_snapshot_clears_previous_remarks():
     assert state.remarks == []
 
 
-def test_capture_dual_mode_stores_placement_single_and_off_store_none():
+def test_capture_stores_placement_regardless_of_cursor_mode():
     win = _Window()
     canvas = win.chart_stack.canvas_time
     canvas._cursor_placement_snapshot = {"ax": 1.0, "bx": 2.5}
@@ -538,12 +538,12 @@ def test_capture_dual_mode_stores_placement_single_and_off_store_none():
     win.chart_stack._cursor_mode = "single"
     view_bridge.capture_controls_into(state, win)
     assert state.cursor_mode == "single"
-    assert state.cursor_placement is None
+    assert state.cursor_placement == {"ax": 1.0, "bx": 2.5}
 
     win.chart_stack._cursor_mode = "off"
     view_bridge.capture_controls_into(state, win)
     assert state.cursor_mode == "off"
-    assert state.cursor_placement is None
+    assert state.cursor_placement == {"ax": 1.0, "bx": 2.5}
 
 
 def test_capture_view_picks_up_canvas_remarks_and_dual_placement():

@@ -208,7 +208,8 @@ class CursorController(_CanvasBackref):
 
         Turning dual off hides A/B lines and clears the pill, but keeps
         the data-space placement. ``reset_cursor_state()`` is the explicit
-        wipe; ``snapshot_placement()`` still returns None while not dual.
+        wipe; ``snapshot_placement()`` returns the stored A/B regardless of
+        mode (D3 2026-08-16 revision).
         """
         self._dual = bool(en)
         if not en:
@@ -222,6 +223,12 @@ class CursorController(_CanvasBackref):
             self._redraw_dual_placement_items()
             self._emit_dual_cursor_html()
             self.draw_idle()
+            return
+        self._hide_cursor_items(self._cursor_a_items)
+        self._hide_cursor_items(self._cursor_b_items)
+        self._hide_dual_cursor_extreme_markers()
+        self._emit_dual_cursor_html()
+        self.draw_idle()
 
     def reset_cursor_state(self):
         """Drop dual-cursor placement and request a redraw."""
@@ -236,27 +243,37 @@ class CursorController(_CanvasBackref):
         self.draw_idle()
 
     def snapshot_placement(self):
-        """Return dual-cursor data-space placement, or None if not persistable.
+        """Return dual-cursor data-space placement, or None if A is unset.
 
-        Only dual mode with a finite A position is stored. Single/off/hover
-        must not persist. ``bx`` may be None when only A has been placed.
+        Mode is not a gate (D3 2026-08-16): off/single still persist A/B so
+        turning dual back on restores the same points. ``bx`` may be None
+        when only A has been placed.
         """
-        if not self._dual:
-            return None
         ax = _finite_float(self._ax)
         if ax is None:
             return None
         return {"ax": ax, "bx": _finite_float(self._bx)}
 
     def restore_placement(self, payload):
-        """Write dual-cursor placement and redraw when dual mode is already on.
+        """Write dual-cursor placement, or clear it when the payload is empty.
 
-        None or invalid payloads are a no-op and must not turn dual off —
-        ``cursor_mode`` is owned by ViewState. ``clear()`` still does not
-        reset ``_ax``/``_bx``; this method overwrites them only on valid input.
+        None / illegal payloads wipe ``_ax``/``_bx``, hide A/B items and
+        extrema, and reset ``_placing`` to ``"A"``. Dual mode then emits
+        once so the pill returns to ``Click A``. This is the View-transaction
+        seam that prevents View A placement from leaking into View B.
+        ``clear()`` still does not reset ``_ax``/``_bx``.
         """
         parsed = _parse_placement_payload(payload)
         if parsed is None:
+            self._ax = None
+            self._bx = None
+            self._placing = "A"
+            self._hide_cursor_items(self._cursor_a_items)
+            self._hide_cursor_items(self._cursor_b_items)
+            self._hide_dual_cursor_extreme_markers()
+            if self._dual:
+                self._emit_dual_cursor_html()
+            self.draw_idle()
             return
         self._ax, self._bx = parsed
         self._placing = "A" if self._bx is not None else "B"

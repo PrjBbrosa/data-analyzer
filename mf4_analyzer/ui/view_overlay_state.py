@@ -103,13 +103,15 @@ def merge_remarks_for_capture(
 
 
 def normalize_cursor_placement(raw: Any, *, cursor_mode: str) -> dict | None:
-    """Persist dual-cursor A/B data coordinates only.
+    """Persist dual-cursor A/B data coordinates regardless of ``cursor_mode``.
 
-    Returns ``{"ax": float, "bx": float|None}`` when ``cursor_mode == "dual"``
-    and ``ax`` is finite; otherwise ``None``. Does not persist ``placing``,
-    single-cursor x, or pill HTML.
+    ``cursor_mode`` remains in the signature for call-site compatibility
+    (D3 2026-08-16 revision) and is not used as a filter. Returns
+    ``{"ax": float, "bx": float|None}`` when ``ax`` is finite; otherwise
+    ``None``. Does not persist ``placing``, single-cursor x, or pill HTML.
     """
-    if cursor_mode != "dual" or not isinstance(raw, Mapping):
+    del cursor_mode
+    if not isinstance(raw, Mapping):
         return None
     ax = _finite_float(raw.get("ax"))
     if ax is None:

@@ -125,17 +125,24 @@ def test_normalize_remarks_skips_illegal_items_and_non_lists():
 @pytest.mark.parametrize(
     "mode, raw",
     [
-        ("off", {"ax": 1.0, "bx": 2.0}),
-        ("single", {"ax": 1.0, "bx": 2.0}),
         ("dual", None),
         ("dual", {"bx": 2.0}),
         ("dual", {"ax": math.inf, "bx": 2.0}),
         ("dual", {"ax": math.nan}),
         ("dual", {"ax": "nope"}),
+        ("off", None),
+        ("single", {"bx": 2.0}),
     ],
 )
-def test_normalize_cursor_placement_none_unless_dual_with_finite_ax(mode, raw):
+def test_normalize_cursor_placement_none_unless_finite_ax(mode, raw):
+    """D3 2026-08-16: mode is not a filter; illegal payloads stay None."""
     assert normalize_cursor_placement(raw, cursor_mode=mode) is None
+
+
+@pytest.mark.parametrize("mode", ["off", "single", "dual"])
+def test_normalize_cursor_placement_keeps_finite_ax_regardless_of_mode(mode):
+    got = normalize_cursor_placement({"ax": 1.0, "bx": 2.0}, cursor_mode=mode)
+    assert got == {"ax": 1.0, "bx": 2.0}
 
 
 def test_normalize_cursor_placement_allows_null_bx_and_strips_chrome():

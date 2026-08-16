@@ -127,16 +127,13 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     snapshot_remarks = getattr(target, "snapshot_remarks", None)
     live_remarks = snapshot_remarks() if callable(snapshot_remarks) else []
     state.remarks = normalize_remarks(live_remarks)
-    if state.cursor_mode == "dual":
-        snapshot_placement = getattr(target, "snapshot_cursor_placement", None)
-        live_placement = (
-            snapshot_placement() if callable(snapshot_placement) else None
-        )
-        state.cursor_placement = normalize_cursor_placement(
-            live_placement, cursor_mode="dual"
-        )
-    else:
-        state.cursor_placement = None
+    snapshot_placement = getattr(target, "snapshot_cursor_placement", None)
+    live_placement = (
+        snapshot_placement() if callable(snapshot_placement) else None
+    )
+    state.cursor_placement = normalize_cursor_placement(
+        live_placement, cursor_mode=state.cursor_mode
+    )
 
 
 def capture_canvas_ranges_into(state: ViewState, canvas) -> None:
