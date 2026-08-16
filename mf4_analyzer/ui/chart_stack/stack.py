@@ -1272,6 +1272,21 @@ class ChartStack(QWidget):
             return self._pill_secondary
         return self._pill
 
+    def _cursor_source_on_screen(self, source):
+        """True when the emitting canvas belongs to the currently visible section.
+
+        Off-screen analysis canvases share the primary pill via
+        ``_pill_for_canvas``, so their empty-readout emits must not clear a
+        time-domain dual-cursor pill. ``source is None`` is the historical
+        primary-time-canvas call and is treated as on-screen.
+        """
+        if source is None:
+            return True
+        card = self._card_for_canvas(source)
+        if card is self._secondary_card:
+            return self.current_mode() == 'time'
+        return getattr(card, '_chart_mode', None) == self.current_mode()
+
     def _cursor_pill_visible_for_mode(self, mode=None, source=None):
         mode = self.current_mode() if mode is None else mode
         if mode == 'time':
@@ -1303,6 +1318,8 @@ class ChartStack(QWidget):
             self._reposition_one_pill(pill, card)
 
     def _on_cursor_info(self, text, source=None):
+        if not self._cursor_source_on_screen(source):
+            return
         mode = self._cursor_mode_for_canvas(source)
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
@@ -1355,6 +1372,8 @@ class ChartStack(QWidget):
         return strip_html(value)
 
     def _on_dual_cursor_info(self, text, source=None):
+        if not self._cursor_source_on_screen(source):
+            return
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         pill = self._pill_for_canvas(source)
@@ -1369,6 +1388,8 @@ class ChartStack(QWidget):
         self._update_pill_content(pill, card, update)
 
     def _on_dual_cursor_rows(self, rows, source=None):
+        if not self._cursor_source_on_screen(source):
+            return
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         pill = self._pill_for_canvas(source)
@@ -1383,6 +1404,8 @@ class ChartStack(QWidget):
 
     def _on_frequency_cursor_rows(self, rows, source=None):
         """Render FFT A/B values through the pill's reversible row contract."""
+        if not self._cursor_source_on_screen(source):
+            return
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         pill = self._pill_for_canvas(source)

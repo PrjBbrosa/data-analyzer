@@ -1150,6 +1150,96 @@ def test_project_roundtrip_restores_remarks_and_dual_cursor(qapp, tmp_path):
         assert name in blob
 
 
+def test_reopen_with_frf_view_keeps_time_dual_cursor_pill(qapp, tmp_path, qtbot):
+    """Off-screen FRF restore must not clear the shared time-domain pill."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "pair.csv"
+    _write_frf_csv(csv_a)
+    proj = tmp_path / "time-plus-frf.tlproj"
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "input")])
+    mw.plot_time()
+    qapp.processEvents()
+
+    mw.chart_stack.set_cursor_mode("dual")
+    qapp.processEvents()
+    mw.canvas_time.restore_cursor_placement({"ax": 0.10, "bx": 0.20})
+    qapp.processEvents()
+
+    frf_state = mw.analysis_managers["frf"].get(0)
+    frf_state.attached_file_ids = [fid]
+    pane = frf_state.panes[0]
+    pane.input_source = (fid, "input")
+    pane.output_source = (fid, "output")
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.resize(1200, 800)
+    mw2.show()
+    last_rows = []
+    mw2.canvas_time.dual_cursor_rows.connect(last_rows.append)
+    mw2.open_project(proj)
+    qapp.processEvents()
+    _drain_analysis_restore(qapp, mw2)
+
+    assert mw2.chart_stack.current_mode() == "time"
+    assert mw2.chart_stack.cursor_pill_visible()
+    emitted_rows = last_rows[-1] if last_rows else []
+    visible_names = [ch for ch, _values in mw2.canvas_time.channel_data.items()]
+    assert len(emitted_rows) == len(visible_names)
+    cursor = mw2.canvas_time._cursor
+    assert cursor._cursor_a_items
+    assert cursor._cursor_b_items
+    assert all(item.isVisible() for item in cursor._cursor_a_items)
+    assert all(item.isVisible() for item in cursor._cursor_b_items)
+
+
+def test_switch_to_frf_and_back_keeps_time_pill(qapp, tmp_path, qtbot):
+    """Leaving FRF and returning to time must restore the dual-cursor pill."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "pair.csv"
+    _write_frf_csv(csv_a)
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "input")])
+    mw.plot_time()
+    qapp.processEvents()
+
+    mw.chart_stack.set_cursor_mode("dual")
+    qapp.processEvents()
+    mw.canvas_time.restore_cursor_placement({"ax": 0.10, "bx": 0.20})
+    qapp.processEvents()
+    assert mw.chart_stack.cursor_pill_visible()
+
+    mw.toolbar._set_mode("frf")
+    qapp.processEvents()
+    mw.toolbar._set_mode("time")
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert mw.chart_stack.current_mode() == "time"
+    assert mw.chart_stack.cursor_pill_visible()
+    cursor = mw.canvas_time._cursor
+    assert all(item.isVisible() for item in cursor._cursor_a_items)
+    assert all(item.isVisible() for item in cursor._cursor_b_items)
+
+
 def test_view_switch_does_not_leak_remarks_across_time_views(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 
