@@ -12,7 +12,14 @@ import math
 import time
 
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, QTimer, QVariantAnimation, Qt, pyqtSignal
-from PyQt5.QtGui import QCursor, QKeySequence, QMouseEvent, QNativeGestureEvent, QWheelEvent
+from PyQt5.QtGui import (
+    QContextMenuEvent,
+    QCursor,
+    QKeySequence,
+    QMouseEvent,
+    QNativeGestureEvent,
+    QWheelEvent,
+)
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -28,6 +35,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui.ultraview_state import (
     COMPARE_FILTER_ALL,
     STATUS_ORPHANED,
@@ -108,6 +116,7 @@ from .widgets import (
     LibraryRow,
     UltraViewHintBar,
     UnplacedTray,
+    UltraViewCard,
     ViewLibraryPanel,
     coerce_library_row,
     preview_image,
@@ -208,6 +217,31 @@ def _event_global_xy(event) -> tuple[float, float]:
     return (float(point.x()), float(point.y()))
 
 
+BOARD_MENU_OBJECT_NAME = "ultraViewBoardContextMenu"
+BOARD_MENU_FIT = "适应内容"
+BOARD_MENU_RESET = "100%"
+BOARD_MENU_OVERVIEW = "概览"
+BOARD_MENU_ARRANGE = "自动排版"
+BOARD_MENU_UNDO_ARRANGE = "撤销排版"
+BOARD_MENU_COPY = "复制图片"
+BOARD_MENU_EXPORT = "导出 PNG"
+_BOARD_MENU_CHROME_NAMES = frozenset(
+    {
+        "ultraViewFreeGridMinimap",
+        "ultraViewToolRail",
+        "ultraViewBoardIsland",
+        "ultraViewStatusIsland",
+        "ultraViewGlobalIsland",
+        "ultraViewNavigationIsland",
+        "ultraViewEmptyBoardHint",
+        "ultraViewCardContextIsland",
+        "ultraViewGhostOverlay",
+        "ultraViewBoardPopover",
+        "ultraViewLayoutPopover",
+    }
+)
+
+
 class UltraViewPage(QWidget):
     add_ref_requested = pyqtSignal(str, str)
     replace_slot_requested = pyqtSignal(str, str, str)
@@ -250,6 +284,7 @@ class UltraViewPage(QWidget):
     free_grid_preset_requested = pyqtSignal(str, str, str)
     free_grid_autofit_requested = pyqtSignal(str, str)
     organize_free_grid_requested = pyqtSignal()
+    auto_arrange_requested = pyqtSignal()
     free_grid_undo_requested = pyqtSignal()
     free_grid_redo_requested = pyqtSignal()
     camera_settled = pyqtSignal()
@@ -363,6 +398,8 @@ class UltraViewPage(QWidget):
         self._board_scroll.setWidget(self._board_host)
         self._board_host.installEventFilter(self)
         self._board_scroll.viewport().installEventFilter(self)
+        self._grid.installEventFilter(self)
+        self._free_grid.installEventFilter(self)
         self._canvas_host.set_canvas_widget(self._canvas_stage)
         root.addWidget(self._canvas_host, 1)
 
@@ -557,6 +594,8 @@ class UltraViewPage(QWidget):
             workspace_gesture.connect(self._on_workspace_gesture_changed)
         self._free_grid.destroyed.connect(self._stop_edge_pan)
         self.resolve_insert_span = None
+        self.can_undo_auto_arrange = None
+        self._board_context_menu: QMenu | None = None
         self._free_grid.set_insert_span_resolver(self._resolve_insert_span_for_drag)
 
         self._tray.place_requested.connect(self._on_tray_place)
@@ -2514,7 +2553,137 @@ class UltraViewPage(QWidget):
             and event.button() == Qt.LeftButton
         ):
             self.clear_card_selection()
+        elif self._is_board_context_menu_event(watched, event):
+            return self._handle_board_context_menu(watched, event)
         return super().eventFilter(watched, event)
+
+    def _is_board_context_menu_event(self, watched, event) -> bool:
+        if event.type() != QEvent.ContextMenu:
+            return False
+        if getattr(self, "_board_scroll", None) is None:
+            return False
+        return watched in {
+            self._board_scroll.viewport(),
+            self._board_host,
+            self._free_grid,
+            self._grid,
+        }
+
+    def _board_context_menu_blocked(self) -> bool:
+        return bool(
+            self._presentation
+            or self._overview.isVisible()
+            or self._focus.isVisible()
+            or self._drag_kind
+            or self._viewport.is_panning()
+            or self._grid.is_gesture_active()
+            or self._free_grid.gesture().is_active()
+        )
+
+    def _context_menu_hit_widget(self, watched, event) -> QWidget | None:
+        widget = QApplication.widgetAt(event.globalPos()) if hasattr(event, "globalPos") else None
+        if widget is not None:
+            return widget
+        pos = event.pos() if hasattr(event, "pos") else QPoint()
+        child = watched.childAt(pos) if watched is not None else None
+        return child if child is not None else watched
+
+    def _is_blank_board_context_hit(self, watched, event) -> bool:
+        widget = self._context_menu_hit_widget(watched, event)
+        current = widget
+        while current is not None:
+            if isinstance(current, (UltraViewCard, CardContextIsland)):
+                return False
+            name = current.objectName()
+            if name in _BOARD_MENU_CHROME_NAMES or name == "ultraViewCard":
+                return False
+            if current in (self._board_host, self._free_grid, self._grid, self._board_scroll.viewport()):
+                break
+            current = current.parentWidget()
+        return True
+
+    def _handle_board_context_menu(self, watched, event) -> bool:
+        if self._board_context_menu_blocked():
+            event.accept()
+            return True
+        if not self._is_blank_board_context_hit(watched, event):
+            return False
+        global_pos = event.globalPos() if isinstance(event, QContextMenuEvent) else QCursor.pos()
+        self._popup_board_context_menu(global_pos)
+        event.accept()
+        return True
+
+    def make_board_context_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.setObjectName(BOARD_MENU_OBJECT_NAME)
+        apply_rounded_menu_chrome(menu)
+        fit = menu.addAction(BOARD_MENU_FIT)
+        fit.triggered.connect(self._on_board_menu_zoom_fit)
+        reset = menu.addAction(BOARD_MENU_RESET)
+        reset.triggered.connect(self._on_board_menu_zoom_reset)
+        overview = menu.addAction(BOARD_MENU_OVERVIEW)
+        overview.triggered.connect(self._on_board_menu_overview)
+        free_grid = self._board.layout_mode == LAYOUT_MODE_FREE_GRID
+        placed = len(self._board.free_grid) if free_grid else 0
+        if free_grid and placed >= 2:
+            menu.addSeparator()
+            arrange = menu.addAction(BOARD_MENU_ARRANGE)
+            arrange.triggered.connect(self._on_board_menu_auto_arrange)
+            if self._auto_arrange_undo_available():
+                undo = menu.addAction(BOARD_MENU_UNDO_ARRANGE)
+                undo.triggered.connect(self._on_board_menu_undo_arrange)
+        menu.addSeparator()
+        copy_act = menu.addAction(BOARD_MENU_COPY)
+        copy_act.triggered.connect(self._on_board_menu_copy)
+        export_act = menu.addAction(BOARD_MENU_EXPORT)
+        export_act.triggered.connect(self._on_board_menu_export)
+        return menu
+
+    def _auto_arrange_undo_available(self) -> bool:
+        resolver = getattr(self, "can_undo_auto_arrange", None)
+        return bool(callable(resolver) and resolver())
+
+    def _popup_board_context_menu(self, global_pos: QPoint) -> None:
+        self._close_board_context_menu()
+        menu = self.make_board_context_menu()
+        menu.aboutToHide.connect(self._on_board_context_menu_hidden)
+        self._board_context_menu = menu
+        menu.popup(global_pos)
+
+    def _close_board_context_menu(self) -> None:
+        menu = self._board_context_menu
+        self._board_context_menu = None
+        if menu is None:
+            return
+        menu.close()
+        menu.deleteLater()
+
+    def _on_board_context_menu_hidden(self) -> None:
+        menu = self._board_context_menu
+        self._board_context_menu = None
+        if menu is not None:
+            menu.deleteLater()
+
+    def _on_board_menu_zoom_fit(self, _checked: bool = False) -> None:
+        self.zoom_fit()
+
+    def _on_board_menu_zoom_reset(self, _checked: bool = False) -> None:
+        self.zoom_reset()
+
+    def _on_board_menu_overview(self, _checked: bool = False) -> None:
+        self.show_overview()
+
+    def _on_board_menu_auto_arrange(self, _checked: bool = False) -> None:
+        self.auto_arrange_requested.emit()
+
+    def _on_board_menu_undo_arrange(self, _checked: bool = False) -> None:
+        self.free_grid_undo_requested.emit()
+
+    def _on_board_menu_copy(self, _checked: bool = False) -> None:
+        self.copy_board_requested.emit()
+
+    def _on_board_menu_export(self, _checked: bool = False) -> None:
+        self.export_png_requested.emit(1)
 
     def _cancel_board_gestures(self) -> None:
         self._stop_edge_pan()

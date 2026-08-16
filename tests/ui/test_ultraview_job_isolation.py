@@ -52,6 +52,7 @@ def test_ultraview_board_sequence_does_not_compute_or_mutate_sources(qapp, qtbot
     after_enter = snapshot_source_state(win)
     uv.add_from_source_tab("time", time_id)
     uv.add_from_source_tab("fft", fft_id)
+    uv._on_auto_arrange_free_grid()
     uv._on_layout("grid_2x2")
     uv._on_layout("hero_left_4")
     uv._on_ratio_nudge(1)

@@ -153,17 +153,15 @@
           <div class="overview" id="overview" aria-hidden="true"><div class="overview-box"><div class="overview-top"><span>整板概览 <small style="color:var(--muted);font-weight:500">· 点击空白返回画布</small></span><button class="overview-close" id="overview-close">关闭</button></div><div class="mini-grid"></div></div></div>
 
           <div class="menu" id="board-menu" role="menu" aria-label="看板快捷菜单">
-            <div class="menu-label">当前 Board</div>
-            <button class="menu-item primary" data-action="fit"><span class="menu-icon">⌁</span><span class="menu-text">适应内容</span><small>F</small></button>
-            <button class="menu-item" data-action="reset"><span class="menu-icon">100</span><span class="menu-text">恢复 100%</span><small>⌘0</small></button>
-            <button class="menu-item" data-action="overview"><span class="menu-icon">⌗</span><span class="menu-text">查看整板概览</span><small></small></button>
+            <button class="menu-item primary" data-action="fit"><span class="menu-icon">⌁</span><span class="menu-text">适应内容</span></button>
+            <button class="menu-item" data-action="reset"><span class="menu-icon">100</span><span class="menu-text">100%</span></button>
+            <button class="menu-item" data-action="overview"><span class="menu-icon">⌗</span><span class="menu-text">概览</span></button>
             <div class="separator"></div>
-            <button class="menu-item arrange" data-action="arrange"><span class="menu-icon">⌘</span><span class="menu-text">自动排版</span><small>⌘⇧L</small></button>
-            <button class="menu-item" data-action="undo" id="undo-action" hidden><span class="menu-icon">↶</span><span class="menu-text">撤销自动排版</span><small>⌘Z</small></button>
-            <div class="menu-note">仅自由网格 · 保留每张卡片的尺寸和比例</div>
+            <button class="menu-item arrange" data-action="arrange"><span class="menu-icon">⌘</span><span class="menu-text">自动排版</span></button>
+            <button class="menu-item" data-action="undo" id="undo-action" hidden><span class="menu-icon">↶</span><span class="menu-text">撤销排版</span></button>
             <div class="separator"></div>
-            <button class="menu-item" data-action="copy"><span class="menu-icon">▧</span><span class="menu-text">复制为图片</span><small></small></button>
-            <button class="menu-item" data-action="export"><span class="menu-icon">⇩</span><span class="menu-text">导出 PNG 1×</span><small></small></button>
+            <button class="menu-item" data-action="copy"><span class="menu-icon">▧</span><span class="menu-text">复制图片</span></button>
+            <button class="menu-item" data-action="export"><span class="menu-icon">⇩</span><span class="menu-text">导出 PNG</span></button>
           </div>
           <div class="local-note" id="local-note">卡片右键保持“打开原 View / 临时放大 / …”等局部菜单。</div>
           <div class="toast" id="toast" aria-live="polite"></div>

@@ -539,6 +539,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.limits",
         "ultraview.pan",
         "ultraview.remove",
+        "ultraview.board_menu",
     }
     assert required <= set(by_id)
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
@@ -606,6 +607,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "四向" in by_id["ultraview.pan"].text
     assert "不删" in by_id["ultraview.remove"].text
     assert "Ctrl/Cmd+Z" in by_id["ultraview.undo"].text
+    assert "空白" in by_id["ultraview.board_menu"].text
+    assert "排版" in by_id["ultraview.board_menu"].text
     display_hint = by_id["ultraview.display"].text
     assert "工程" in display_hint
     assert "保存" in display_hint

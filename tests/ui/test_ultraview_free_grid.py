@@ -14,6 +14,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     HANDLE_HIT_PX,
     LAYOUT_MOVE,
     LAYOUT_RESIZE,
+    LAYOUT_ARRANGE,
     PLANNER_SEARCH_CAP,
     LayoutRejectReason,
     avoidance_preferred_delta,
@@ -30,6 +31,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     legal_grid_rect,
     pixels_to_grid_delta,
     plan_layout,
+    plan_auto_arrange,
     plan_neighbor_shrink,
     plan_overlap_avoidance,
     rect_is_available,
@@ -920,3 +922,109 @@ def test_planner_search_stays_capped_for_signed_safety_board():
     assert plan.accepted is True
     assert plan.search_visits <= PLANNER_SEARCH_CAP * len(cards)
     assert plan.mover_after == GridRect(-4, 0, 2, 2)
+
+
+def test_plan_auto_arrange_is_idempotent_and_keeps_spans():
+    scattered = [
+        _placement("b", GridRect(8, 10, 4, 3)),
+        _placement("a", GridRect(0, 20, 6, 4)),
+        _placement("c", GridRect(3, 2, 3, 2)),
+    ]
+    original = [(item.ref, item.rect) for item in scattered]
+    first = plan_auto_arrange(scattered, layout_revision=7)
+    second = plan_auto_arrange(scattered, layout_revision=7)
+    assert first == second
+    assert first.accepted is True
+    assert first.operation == LAYOUT_ARRANGE
+    assert first.mover_ref is None
+    assert first.based_on_layout_revision == 7
+    assert [(item.ref, item.rect) for item in scattered] == original
+    by_ref = {item.ref: item.rect for item in scattered}
+    updates = dict(first.committed_updates())
+    assert set(updates) <= set(by_ref)
+    packed = []
+    for item in scattered:
+        after = updates.get(item.ref, item.rect)
+        assert (after.column_span, after.row_span) == (
+            item.rect.column_span,
+            item.rect.row_span,
+        )
+        assert clamp_rect(after) == after
+        packed.append(after)
+    for index, left in enumerate(packed):
+        for right in packed[index + 1 :]:
+            assert not rects_overlap(left, right)
+    ordered = sorted(
+        scattered,
+        key=lambda item: (item.rect.row, item.rect.column, item.ref.view_id),
+    )
+    first_after = updates.get(ordered[0].ref, ordered[0].rect)
+    assert first_after.column == 0
+    assert first_after.row == 0
+
+
+def test_plan_auto_arrange_compacts_unlike_empty_row_organize():
+    placements = [
+        _placement("left", GridRect(8, 0, 4, 3)),
+        _placement("right", GridRect(8, 10, 4, 3)),
+    ]
+    organized = organized_placements(placements)
+    assert organized[0].rect.column == 8
+    plan = plan_auto_arrange(placements)
+    assert plan.accepted is True
+    updates = dict(plan.committed_updates())
+    assert updates[placements[0].ref] == GridRect(0, 0, 4, 3)
+    assert updates[placements[1].ref] == GridRect(4, 0, 4, 3)
+    again = plan_auto_arrange(
+        [
+            FreeGridPlacement(item.ref, updates[item.ref])
+            for item in placements
+        ]
+    )
+    assert again.accepted is True
+    assert again.committed_updates() == ()
+
+
+def test_plan_auto_arrange_rejects_illegal_or_unsolvable_input():
+    too_few = plan_auto_arrange([_placement("only", GridRect(0, 0, 4, 3))])
+    assert too_few.accepted is False
+    assert too_few.reason is LayoutRejectReason.INVALID_INPUT
+    assert too_few.committed_updates() == ()
+
+    overlap = plan_auto_arrange(
+        [
+            _placement("a", GridRect(0, 0, 4, 3)),
+            _placement("b", GridRect(2, 0, 4, 3)),
+        ]
+    )
+    assert overlap.accepted is False
+    assert overlap.reason is LayoutRejectReason.INVALID_INPUT
+
+    duplicate = plan_auto_arrange(
+        [
+            FreeGridPlacement(make_ref("time", "same"), GridRect(0, 0, 4, 3)),
+            FreeGridPlacement(make_ref("time", "same"), GridRect(4, 0, 4, 3)),
+        ]
+    )
+    assert duplicate.accepted is False
+
+    illegal = plan_auto_arrange(
+        [
+            _placement("thin", GridRect(0, 0, 1, 3)),
+            _placement("ok", GridRect(4, 0, 4, 3)),
+        ]
+    )
+    assert illegal.accepted is False
+    assert illegal.reason is LayoutRejectReason.INVALID_INPUT
+
+    # 12×8 cards fill rows 0–95; a 13th legal card cannot fit.
+    unsolvable = [
+        _placement(f"huge-{index}", GridRect(0, index * 8, 12, 8))
+        for index in range(12)
+    ]
+    unsolvable.append(_placement("overflow", GridRect(0, -8, 12, 8)))
+    rejected = plan_auto_arrange(unsolvable)
+    assert rejected.accepted is False
+    assert rejected.reason is LayoutRejectReason.NO_LEGAL_LAYOUT
+    assert rejected.committed_updates() == ()
+    assert unsolvable[-1].rect == GridRect(0, -8, 12, 8)

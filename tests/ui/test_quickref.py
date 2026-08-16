@@ -383,6 +383,8 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "拖拽排序" in haystack
     assert "行尾复制" in haystack
     assert "一键更新源" in haystack
+    assert "空白右击" in haystack or "画布右键" in haystack or "空白处" in haystack
+    assert "自动排版" in haystack
     overview = _row_by_desc("总览")
     assert "当前工程所有 Board" in overview.sub
     assert "保存项目后保留" in overview.sub

@@ -770,6 +770,15 @@ _EXIT_FILL = QColor("#24697C")
 _QSS_PATH = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
 
 
+def test_board_context_menu_qss_matches_pg_density():
+    import re
+
+    qss = re.sub(r"/\*.*?\*/", "", _QSS_PATH.read_text(encoding="utf-8"), flags=re.S)
+    assert "QMenu#ultraViewBoardContextMenu" in qss
+    assert "QMenu#ultraViewBoardContextMenu::item" in qss
+    assert "min-height: 30px" in qss
+
+
 def test_presentation_exit_qss_does_not_use_page_descendant_id():
     import re
 

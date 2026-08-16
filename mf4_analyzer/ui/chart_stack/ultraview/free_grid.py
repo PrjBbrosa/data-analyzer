@@ -58,10 +58,10 @@ Rect = tuple[int, int, int, int]
 PLANNER_SEARCH_CAP = 768
 LAYOUT_MOVE = "move"
 LAYOUT_RESIZE = "resize"
-# spec D9.7 预留，UI 整理入口未接：没有生产调用方传 "arrange"。板上的「整理」
-# 走 ultraview_state.organized_placements（只压空行），不经 plan_layout，也没有
-# 提交前整体预览。保留常量与 plan_neighbor_shrink 以待接线；2026-08-15 review
-# §4.3 已确认现状，spec D9.7 处有对应批注。
+# Board-level auto-arrange owns this operation via ``plan_auto_arrange``.
+# Do not feed it to ``plan_layout``: that path's fallback is
+# ``plan_neighbor_shrink`` and may shrink neighbours.  Empty-row compaction
+# stays on ``organized_placements``.
 LAYOUT_ARRANGE = "arrange"
 
 
@@ -1091,6 +1091,126 @@ def _plan_from_updates(
         based_on_layout_revision=int(layout_revision),
         mover_ref=mover_ref,
         search_visits=search_visits,
+    )
+
+
+def _arrange_rect_legal(rect: GridRect) -> bool:
+    if not (
+        GRID_MIN_COLUMN_SPAN <= int(rect.column_span) <= GRID_MAX_COLUMN_SPAN
+        and GRID_MIN_ROW_SPAN <= int(rect.row_span) <= GRID_MAX_ROW_SPAN
+    ):
+        return False
+    return clamp_rect(rect) == rect
+
+
+def _first_fit_arrange_rect(
+    column_span: int,
+    row_span: int,
+    occupied: Sequence[GridRect],
+) -> tuple[GridRect | None, int]:
+    """First legal origin in the 12-column base frame, row then column.
+
+    Packing starts at ``(0, 0)`` — the visible 12-column origin — and stays
+    inside columns ``[0, GRID_COLUMNS)``.  ``SAFETY_*`` still gates legality
+    through ``clamp_rect``; negative safety cells are not a packing target.
+    """
+    visits = 0
+    max_column = GRID_COLUMNS - int(column_span)
+    max_row = SAFETY_ROW_MAX - int(row_span)
+    for row in range(0, max_row + 1):
+        for column in range(0, max_column + 1):
+            visits += 1
+            candidate = GridRect(column, row, int(column_span), int(row_span))
+            if clamp_rect(candidate) != candidate:
+                continue
+            if any(rects_overlap(candidate, other) for other in occupied):
+                continue
+            return candidate, visits
+    return None, visits
+
+
+def plan_auto_arrange(
+    placements: Sequence[FreeGridPlacement],
+    layout_revision: int = 0,
+) -> LayoutPlan:
+    """Pack free-grid cards into the 12-column base frame, keeping each span.
+
+    Reading order is ``(row, column, input_index, section, view_id)``.  The
+    function does not mutate ``placements``, import Qt, or shrink any card.
+    Already-compact input is accepted with an empty transition list so the
+    caller can skip undo.  Illegal input or a board that cannot fit inside
+    the safety grid is rejected with no partial layout.
+    """
+    revision = int(layout_revision)
+    items = tuple(placements)
+    if len(items) < 2:
+        return _empty_plan(
+            accepted=False,
+            reason=LayoutRejectReason.INVALID_INPUT,
+            operation=LAYOUT_ARRANGE,
+            layout_revision=revision,
+        )
+    seen: set[UltraViewRef] = set()
+    for item in items:
+        if item.ref in seen or not _arrange_rect_legal(item.rect):
+            return _empty_plan(
+                accepted=False,
+                reason=LayoutRejectReason.INVALID_INPUT,
+                operation=LAYOUT_ARRANGE,
+                layout_revision=revision,
+            )
+        seen.add(item.ref)
+    for index, left in enumerate(items):
+        for right in items[index + 1 :]:
+            if rects_overlap(left.rect, right.rect):
+                return _empty_plan(
+                    accepted=False,
+                    reason=LayoutRejectReason.INVALID_INPUT,
+                    operation=LAYOUT_ARRANGE,
+                    layout_revision=revision,
+                )
+
+    ordered = sorted(
+        enumerate(items),
+        key=lambda pair: (
+            pair[1].rect.row,
+            pair[1].rect.column,
+            pair[0],
+            pair[1].ref.section,
+            pair[1].ref.view_id,
+        ),
+    )
+    occupied: list[GridRect] = []
+    displaced: list[RectTransition] = []
+    visits = 0
+    for _index, item in ordered:
+        found, probed = _first_fit_arrange_rect(
+            item.rect.column_span, item.rect.row_span, occupied
+        )
+        visits += probed
+        if found is None:
+            return _empty_plan(
+                accepted=False,
+                reason=LayoutRejectReason.NO_LEGAL_LAYOUT,
+                operation=LAYOUT_ARRANGE,
+                layout_revision=revision,
+                search_visits=visits,
+            )
+        occupied.append(found)
+        if found != item.rect:
+            displaced.append(
+                RectTransition(ref=item.ref, before=item.rect, after=found)
+            )
+    return LayoutPlan(
+        accepted=True,
+        reason=None,
+        mover_before=None,
+        mover_after=None,
+        displaced_before_after=tuple(displaced),
+        operation=LAYOUT_ARRANGE,
+        based_on_layout_revision=revision,
+        mover_ref=None,
+        search_visits=visits,
     )
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, QSize, Qt
-from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
+from PyQt5.QtGui import QColor, QContextMenuEvent, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
@@ -49,7 +49,17 @@ from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED, PANEL_BOARDS
 from mf4_analyzer.ui.chart_stack.ultraview.feedback import COPY, CONTINUE_EXPAND, format_rearranged
-from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
+from mf4_analyzer.ui.chart_stack.ultraview.page import (
+    BOARD_MENU_ARRANGE,
+    BOARD_MENU_COPY,
+    BOARD_MENU_EXPORT,
+    BOARD_MENU_FIT,
+    BOARD_MENU_OBJECT_NAME,
+    BOARD_MENU_OVERVIEW,
+    BOARD_MENU_RESET,
+    BOARD_MENU_UNDO_ARRANGE,
+    UltraViewPage,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
     FEEDBACK_NO_LEGAL_LAYOUT,
@@ -301,6 +311,8 @@ class _Harness:
         self.copied_cards: list[tuple[str, str]] = []
         self.copied_board = 0
         self.exports: list[int] = []
+        self.auto_arrange = 0
+        self.grid_undo = 0
         self.filters: list[str] = []
         self.layouts: list[str] = []
         self.free_grid: list[bool] = []
@@ -323,6 +335,8 @@ class _Harness:
         self.page.copy_card_image_requested.connect(self._record_copy_card)
         self.page.copy_board_requested.connect(self._record_copy_board)
         self.page.export_png_requested.connect(self._record_export)
+        self.page.auto_arrange_requested.connect(self._record_auto_arrange)
+        self.page.free_grid_undo_requested.connect(self._record_grid_undo)
         self.page.compare_filter_changed.connect(self._record_filter)
         self.page.layout_changed.connect(self._record_layout)
         self.page.free_grid_toggled.connect(self._record_free_grid)
@@ -411,6 +425,12 @@ class _Harness:
 
     def _record_export(self, scale: int) -> None:
         self.exports.append(int(scale))
+
+    def _record_auto_arrange(self) -> None:
+        self.auto_arrange += 1
+
+    def _record_grid_undo(self) -> None:
+        self.grid_undo += 1
 
     def _record_filter(self, filter_id: str) -> None:
         self.filters.append(filter_id)
@@ -4484,3 +4504,162 @@ def test_board_popover_grows_with_new_board_and_keeps_first_row_visible(qtbot, q
     last_rect = popover.list_widget().visualItemRect(last)
     assert last_rect.top() >= 0
     assert last_rect.bottom() <= popover.list_widget().viewport().height()
+
+
+def _send_context_menu(widget, pos: QPoint) -> None:
+    event = QContextMenuEvent(QContextMenuEvent.Mouse, pos, widget.mapToGlobal(pos))
+    QApplication.sendEvent(widget, event)
+    QApplication.processEvents()
+
+
+def _visible_menus(object_name: str) -> list[QMenu]:
+    return [
+        widget
+        for widget in QApplication.topLevelWidgets()
+        if isinstance(widget, QMenu)
+        and widget.objectName() == object_name
+        and widget.isVisible()
+    ]
+
+
+def _close_named_menus(object_name: str) -> None:
+    for menu in _visible_menus(object_name):
+        menu.close()
+    QApplication.processEvents()
+
+
+def _empty_free_grid_pos(free) -> QPoint:
+    for x, y in (
+        (free.width() - 16, free.height() - 16),
+        (free.width() - 16, 8),
+        (8, free.height() - 16),
+    ):
+        pos = QPoint(max(4, x), max(4, y))
+        child = free.childAt(pos)
+        current = child
+        on_card = False
+        while current is not None and current is not free:
+            if isinstance(current, UltraViewCard):
+                on_card = True
+                break
+            current = current.parentWidget()
+        if not on_card:
+            return pos
+    pytest.fail("no empty free-grid point for board context menu")
+
+
+def _menu_texts(menu: QMenu) -> list[str]:
+    return [action.text() for action in menu.actions() if action.text()]
+
+
+def test_viewport_router_does_not_claim_context_menu():
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport_router import ViewportGestureRouter
+
+    assert QEvent.ContextMenu not in ViewportGestureRouter._HANDLED_TYPES
+
+
+def test_board_context_menu_labels_and_visibility_matrix(qtbot):
+    harness = _Harness(qtbot)
+    menu = harness.page.make_board_context_menu()
+    assert menu.objectName() == BOARD_MENU_OBJECT_NAME
+    assert _menu_texts(menu) == [
+        BOARD_MENU_FIT,
+        BOARD_MENU_RESET,
+        BOARD_MENU_OVERVIEW,
+        BOARD_MENU_COPY,
+        BOARD_MENU_EXPORT,
+    ]
+    assert BOARD_MENU_ARRANGE not in _menu_texts(menu)
+
+    _prepare_free_grid(harness, qtbot, "only")
+    one = harness.page.make_board_context_menu()
+    assert BOARD_MENU_ARRANGE not in _menu_texts(one)
+
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    two = harness.page.make_board_context_menu()
+    assert _menu_texts(two)[:3] == [
+        BOARD_MENU_FIT,
+        BOARD_MENU_RESET,
+        BOARD_MENU_OVERVIEW,
+    ]
+    assert BOARD_MENU_ARRANGE in _menu_texts(two)
+    assert BOARD_MENU_UNDO_ARRANGE not in _menu_texts(two)
+    harness.page.can_undo_auto_arrange = lambda: True
+    with_undo = harness.page.make_board_context_menu()
+    assert BOARD_MENU_UNDO_ARRANGE in _menu_texts(with_undo)
+
+    set_layout(harness.board, "grid_2x2")
+    harness.page.set_board(harness.board)
+    template = harness.page.make_board_context_menu()
+    assert harness.board.layout_mode == LAYOUT_MODE_TEMPLATE
+    assert BOARD_MENU_ARRANGE not in _menu_texts(template)
+    assert BOARD_MENU_FIT in _menu_texts(template)
+
+
+def test_blank_canvas_context_menu_opens_board_menu(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    free = harness.page._free_grid
+    _send_context_menu(free, _empty_free_grid_pos(free))
+    menus = _visible_menus(BOARD_MENU_OBJECT_NAME)
+    assert len(menus) == 1
+    assert BOARD_MENU_ARRANGE in _menu_texts(menus[0])
+    _close_named_menus(BOARD_MENU_OBJECT_NAME)
+
+
+def test_card_context_menu_does_not_open_board_menu(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "card-ctx")
+    _send_context_menu(card, QPoint(8, 8))
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
+    card_menus = _visible_menus("ultraViewCardMenu")
+    assert card_menus
+    _close_named_menus("ultraViewCardMenu")
+
+
+def test_board_context_menu_suppressed_during_overview_presentation_and_drag(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    free = harness.page._free_grid
+    pos = _empty_free_grid_pos(free)
+
+    harness.page.show_overview()
+    _send_context_menu(free, pos)
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
+    harness.page.hide_overview()
+
+    harness.page.set_presentation_active(True)
+    _send_context_menu(free, pos)
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
+    harness.page.set_presentation_active(False)
+
+    harness.page._drag_kind = "card"
+    _send_context_menu(free, pos)
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
+    harness.page._drag_kind = None
+
+
+def test_board_context_menu_escape_closes_and_actions_emit(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    free = harness.page._free_grid
+    _send_context_menu(free, _empty_free_grid_pos(free))
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME)
+    assert harness.page.handle_escape() is True
+    QApplication.processEvents()
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
+
+    menu = harness.page.make_board_context_menu()
+    by_text = {action.text(): action for action in menu.actions()}
+    by_text[BOARD_MENU_FIT].trigger()
+    by_text[BOARD_MENU_COPY].trigger()
+    by_text[BOARD_MENU_EXPORT].trigger()
+    by_text[BOARD_MENU_ARRANGE].trigger()
+    assert harness.copied_board == 1
+    assert harness.exports == [1]
+    assert harness.auto_arrange == 1
+    harness.page.can_undo_auto_arrange = lambda: True
+    undo_menu = harness.page.make_board_context_menu()
+    undo_by_text = {action.text(): action for action in undo_menu.actions()}
+    undo_by_text[BOARD_MENU_UNDO_ARRANGE].trigger()
+    assert harness.grid_undo == 1

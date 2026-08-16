@@ -748,6 +748,13 @@ _HINTS = (
         priority=80,
     ),
     Hint(
+        id="ultraview.board_menu",
+        text="画布空白右击可排版、适应、复制",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=80,
+    ),
+    Hint(
         id="ultraview.sync",
         text="源已变化时可同步最新预览",
         surface="context",

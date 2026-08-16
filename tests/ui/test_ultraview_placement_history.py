@@ -24,6 +24,7 @@ from mf4_analyzer.ui.ultraview_state import (
     make_ref,
     membership_set,
     GridRect,
+    set_free_grid_rects,
 )
 
 
@@ -304,3 +305,34 @@ def test_insert_ghost_span_matches_fitted_drop_span(qapp, qtbot):
     item = free_grid_placement_for(uv.board, ref)
     assert item is not None
     assert (item.rect.column_span, item.rect.row_span) == expected
+
+
+def test_auto_arrange_undo_redo_restores_every_rect(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    first = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    second = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    uv._apply_add_ref(first)
+    uv._apply_add_ref(second)
+    warnings = set_free_grid_rects(
+        uv.board,
+        (
+            (first, GridRect(8, 6, 4, 3)),
+            (second, GridRect(0, 14, 6, 3)),
+        ),
+    )
+    assert warnings == []
+    before = {item.ref: item.rect for item in uv.board.free_grid}
+    uv._on_auto_arrange_free_grid()
+    arranged = {item.ref: item.rect for item in uv.board.free_grid}
+    assert arranged != before
+    assert arranged[first].column_span == before[first].column_span
+    assert arranged[second].row_span == before[second].row_span
+    assert uv._can_undo_auto_arrange() is True
+    uv._on_free_grid_undo()
+    assert {item.ref: item.rect for item in uv.board.free_grid} == before
+    assert uv._can_undo_auto_arrange() is False
+    uv._on_free_grid_redo()
+    assert {item.ref: item.rect for item in uv.board.free_grid} == arranged
+    assert uv._can_undo_auto_arrange() is True

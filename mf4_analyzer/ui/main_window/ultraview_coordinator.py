@@ -102,8 +102,10 @@ from ..chart_stack.ultraview.feedback import (
     text_for_key,
 )
 from ..chart_stack.ultraview.free_grid import (
+    LAYOUT_ARRANGE,
     LAYOUT_RESIZE,
     fit_rect_for_aspect,
+    plan_auto_arrange,
     plan_layout,
     screen_grid_metrics,
 )
@@ -165,6 +167,7 @@ _PLACEMENT_HISTORY_CAP = 100
 class _GridHistoryEntry:
     before: BoardPlacementSnapshot
     after: BoardPlacementSnapshot
+    kind: str = ""
 
 
 @dataclass
@@ -1004,6 +1007,7 @@ class UltraViewCoordinator(QObject):
             (page.free_grid_preset_requested, self._on_free_grid_preset),
             (page.free_grid_autofit_requested, self._on_free_grid_autofit),
             (page.organize_free_grid_requested, self._on_organize_free_grid),
+            (page.auto_arrange_requested, self._on_auto_arrange_free_grid),
             (page.free_grid_undo_requested, self._on_free_grid_undo),
             (page.free_grid_redo_requested, self._on_free_grid_redo),
             (page.show_titles_toggled, self._on_show_titles),
@@ -1016,6 +1020,7 @@ class UltraViewCoordinator(QObject):
             signal.connect(slot)
             self._page_hooks.append((page, signal, slot))
         page.resolve_insert_span = self._insert_span_for_drag
+        page.can_undo_auto_arrange = self._can_undo_auto_arrange
 
     def _connect_managers(self) -> None:
         if self._manager_hooks:
@@ -1755,6 +1760,47 @@ class UltraViewCoordinator(QObject):
         if not organize_free_grid(board):
             self._record_grid_transition(board, before)
 
+    def _on_auto_arrange_free_grid(self) -> None:
+        if self._inactive():
+            return
+        board = active_board(self._workspace)
+        if board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            return
+        if len(board.free_grid) < 2:
+            self._toast("卡片不足", "info")
+            return
+        before = self._placement_snapshot(board)
+        plan = plan_auto_arrange(
+            tuple(board.free_grid),
+            layout_revision=self._current_layout_revision(board.board_id),
+        )
+        if not plan.accepted:
+            self._toast("无法排入安全区", "warning")
+            return
+        updates = plan.committed_updates()
+        if not updates:
+            self._toast("已是紧凑布局", "info")
+            return
+        warnings = set_free_grid_rects(board, updates)
+        if warnings:
+            self._toast_grid_warnings(warnings)
+            return
+        self._cancel_pending_for_board(board.board_id)
+        self._bump_layout_revision(board.board_id)
+        self._record_grid_transition(board, before, kind=LAYOUT_ARRANGE)
+        self._toast("已排版", "info")
+
+    def _can_undo_auto_arrange(self) -> bool:
+        if self._inactive():
+            return False
+        board = active_board(self._workspace)
+        history = self._grid_histories.get(board.board_id)
+        return bool(
+            history is not None
+            and history.undo
+            and history.undo[-1].kind == LAYOUT_ARRANGE
+        )
+
     def _grid_history(self, board: UltraViewBoardState) -> _GridHistory:
         return self._grid_histories.setdefault(board.board_id, _GridHistory([], []))
 
@@ -1766,12 +1812,14 @@ class UltraViewCoordinator(QObject):
         self,
         board: UltraViewBoardState,
         before: BoardPlacementSnapshot,
+        *,
+        kind: str = "",
     ) -> bool:
         after = self._placement_snapshot(board)
         if after == before:
             return False
         history = self._grid_history(board)
-        history.undo.append(_GridHistoryEntry(before, after))
+        history.undo.append(_GridHistoryEntry(before, after, kind=str(kind or "")))
         overflow = len(history.undo) - _PLACEMENT_HISTORY_CAP
         if overflow > 0:
             del history.undo[:overflow]
@@ -2009,7 +2057,9 @@ class UltraViewCoordinator(QObject):
             history = self._grid_histories.get(board.board_id)
             if history is not None and history.undo:
                 last = history.undo[-1]
-                history.undo[-1] = _GridHistoryEntry(last.before, after)
+                history.undo[-1] = _GridHistoryEntry(
+                    last.before, after, kind=last.kind
+                )
                 history.redo.clear()
         self._after_board_mutation()
 

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtCore import QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QWidget
 
@@ -37,6 +37,10 @@ REQUIRED_SHOTS = (
     "export_1280",
     "boards_1280",
     "card_context_1280",
+    "board_context_1280",
+    "board_context_800",
+    "arrange_before_1280",
+    "arrange_after_1280",
     "presentation_1280",
 )
 
@@ -709,6 +713,107 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         snap("presentation_1280", page, _page_snapshot(page))
         page.set_presentation_active(False)
 
+        from mf4_analyzer.ui.chart_stack.ultraview.free_grid import plan_auto_arrange
+        from mf4_analyzer.ui.chart_stack.ultraview.page import (
+            BOARD_MENU_ARRANGE,
+            BOARD_MENU_FIT,
+            BOARD_MENU_OBJECT_NAME,
+        )
+        from mf4_analyzer.ui.ultraview_state import (
+            GridRect,
+            set_free_grid_rects,
+            template_to_free_grid,
+        )
+
+        page.resize(1280, 800)
+        template_to_free_grid(page.board())
+        board = page.board()
+        if len(board.free_grid) >= 2:
+            first, second = board.free_grid[0], board.free_grid[1]
+            set_free_grid_rects(
+                board,
+                (
+                    (
+                        first.ref,
+                        GridRect(8, 6, first.rect.column_span, first.rect.row_span),
+                    ),
+                    (
+                        second.ref,
+                        GridRect(0, 14, second.rect.column_span, second.rect.row_span),
+                    ),
+                ),
+            )
+        page.set_board(page.board())
+        _pump(app, page)
+
+        def _rect_facts():
+            return [
+                {
+                    "view_id": item.ref.view_id,
+                    "column": item.rect.column,
+                    "row": item.rect.row,
+                    "column_span": item.rect.column_span,
+                    "row_span": item.rect.row_span,
+                }
+                for item in page.board().free_grid
+            ]
+
+        snap(
+            "arrange_before_1280",
+            page,
+            _page_snapshot(page, {"free_grid": _rect_facts()}),
+        )
+        plan = plan_auto_arrange(tuple(page.board().free_grid))
+        if plan.accepted and plan.committed_updates():
+            set_free_grid_rects(page.board(), plan.committed_updates())
+            page.set_board(page.board())
+            _pump(app, page)
+        snap(
+            "arrange_after_1280",
+            page,
+            _page_snapshot(page, {"free_grid": _rect_facts()}),
+        )
+        menu = page.make_board_context_menu()
+        menu.popup(page.mapToGlobal(QPoint(420, 260)))
+        _pump(app, page)
+        board_actions = [action.text() for action in menu.actions() if action.text()]
+        snap(
+            "board_context_1280",
+            menu if menu.width() > 10 else page,
+            {
+                "object_name": menu.objectName(),
+                "actions": board_actions,
+            },
+        )
+        menu.close()
+        page.resize(800, 560)
+        _pump(app, page)
+        menu_800 = page.make_board_context_menu()
+        menu_800.popup(page.mapToGlobal(QPoint(240, 180)))
+        _pump(app, page)
+        snap(
+            "board_context_800",
+            menu_800 if menu_800.width() > 10 else page,
+            {
+                "object_name": menu_800.objectName(),
+                "actions": [action.text() for action in menu_800.actions() if action.text()],
+            },
+        )
+        menu_800.close()
+        card = None
+        if page.board().free_grid:
+            ref = page.board().free_grid[0].ref
+            card = page.card_widget(ref.section, ref.view_id)
+        card_actions = []
+        if card is not None:
+            card_menu = card.make_context_menu()
+            card_actions = [action.text() for action in card_menu.actions() if action.text()]
+            card_menu.close()
+        manifest["geometry"]["board_context_1280"]["card_actions"] = card_actions
+        manifest["geometry"]["board_context_1280"]["wanted_fit"] = BOARD_MENU_FIT
+        manifest["geometry"]["board_context_1280"]["wanted_arrange"] = BOARD_MENU_ARRANGE
+        manifest["geometry"]["board_context_1280"]["wanted_name"] = BOARD_MENU_OBJECT_NAME
+
         toolbar.resize(1100, 44)
         _pump(app, toolbar)
         snap("toolbar_1100", toolbar, _toolbar_snapshot(toolbar))
@@ -892,6 +997,24 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         errors.append("presentation flag off")
     if presentation.get("library_visible") is True:
         errors.append("presentation still shows library")
+
+    board_menu = geometry.get("board_context_1280") or {}
+    if board_menu.get("object_name") != "ultraViewBoardContextMenu":
+        errors.append("board_context_1280 objectName mismatch")
+    actions = board_menu.get("actions") or []
+    if "适应内容" not in actions:
+        errors.append("board_context_1280 missing 适应内容")
+    if "自动排版" not in actions:
+        errors.append("board_context_1280 missing 自动排版")
+    card_actions = board_menu.get("card_actions") or []
+    if "自动排版" in card_actions:
+        errors.append("card context leaked board auto-arrange")
+    if "打开原 View" not in card_actions:
+        errors.append("card context missing 打开原 View")
+    before = (geometry.get("arrange_before_1280") or {}).get("free_grid") or []
+    after = (geometry.get("arrange_after_1280") or {}).get("free_grid") or []
+    if len(before) >= 2 and before == after:
+        errors.append("auto-arrange did not change scattered placements")
 
     moon = (narrow_1280.get("moonstone") or {})
     sample = moon.get("canvas_sample") or {}

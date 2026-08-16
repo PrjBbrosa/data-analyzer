@@ -2932,6 +2932,36 @@ QMenu#pgContextMenu::separator {
     background-color: rgba(148, 163, 184, 90);
 }
 
+/* UltraView blank-canvas board menu: same density as #pgContextMenu,
+ * scoped to this objectName so global QMenu is unchanged. */
+QMenu#ultraViewBoardContextMenu {
+    padding-top: 8px;
+    padding-right: 8px;
+    padding-bottom: 8px;
+    padding-left: 8px;
+    border: 1px solid rgba(177, 195, 217, 200);
+    border-radius: 14px;
+    background-color: #ffffff;
+}
+QMenu#ultraViewBoardContextMenu::item {
+    min-height: 30px;
+    padding-top: 6px;
+    padding-right: 30px;
+    padding-bottom: 6px;
+    padding-left: 14px;
+    border-radius: 9px;
+    color: #172033;
+}
+QMenu#ultraViewBoardContextMenu::item:selected {
+    background-color: #e8efff;
+    color: {{CONTROL_ACCENT_INK}};
+}
+QMenu#ultraViewBoardContextMenu::separator {
+    height: 1px;
+    margin: 6px 12px;
+    background-color: rgba(148, 163, 184, 90);
+}
+
 QStatusBar#surfaceStatusBar {
     background-color: #ffffff;
     color: #64748b;
