@@ -1119,7 +1119,7 @@ def test_state_and_viewport_legalizers_agree_on_clamp():
     assert warnings == board_warnings
 
 
-def test_zoom_persists_on_board_and_restores_when_switching(qtbot):
+def test_switching_boards_fits_content_instead_of_restoring_zoom(qtbot):
     harness = _Harness(qtbot)
     first = harness.board
     _prepare_free_grid(harness, qtbot, "a")
@@ -1134,10 +1134,13 @@ def test_zoom_persists_on_board_and_restores_when_switching(qtbot):
         (float(fill.width), float(fill.height)),
     )
     actual = harness.page.board_zoom()
+    assert first.viewport["zoom"] == pytest.approx(1.5)
     harness.page.set_board(first)
-    assert harness.page.board_zoom() == pytest.approx(1.5)
+    opened = harness.page.board_zoom()
+    harness.page.zoom_fit()
     assert actual == pytest.approx(expected)
     assert expected <= BOARD_FIT_ZOOM_MAX
+    assert opened == pytest.approx(harness.page.board_zoom())
 
 
 def test_fit_on_open_ignores_leftover_pan_and_zoom(qtbot):
@@ -1249,10 +1252,14 @@ def test_switching_boards_does_not_copy_viewport_via_scroll_clamp(qtbot):
     second.name = "另一块板"
     second.viewport = {"zoom": 0.5, "center_x": 12.0, "center_y": 8.0}
     harness.page.set_board(second)
-    assert second.viewport["zoom"] == pytest.approx(0.5)
-    assert harness.page.board_zoom() == pytest.approx(0.5)
-    harness.page.set_board(first)
     assert first.viewport["zoom"] == pytest.approx(1.5)
+    opened = harness.page.board_zoom()
+    harness.page.zoom_fit()
+    assert opened == pytest.approx(harness.page.board_zoom())
+    harness.page.set_board(first)
+    returned = harness.page.board_zoom()
+    harness.page.zoom_fit()
+    assert returned == pytest.approx(harness.page.board_zoom())
 
 
 def test_template_grid_3x3_shrinks_when_zooming_out(qtbot):

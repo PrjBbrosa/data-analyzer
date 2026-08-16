@@ -1314,11 +1314,11 @@ class UltraViewPage(QWidget):
         )
 
     def fit_on_open(self) -> None:
-        """Park on 适应 whenever the UltraView window is opened or raised.
+        """Park on 适应 for window open/raise and every Board switch.
 
-        Persisted pan/zoom is for in-session Board switching, not the open
-        camera. Restoring a stored centre on the signed elastic halo is what
-        made every open land in an unexplained place.
+        Restoring a stored centre on the signed elastic halo is what made
+        open and switch land in an unexplained place. Persisted pan/zoom is
+        still written on leave, but it is not the show camera.
         """
         fill = self._content_fill_rect()
         if fill.width <= 1 or fill.height <= 1:
@@ -1473,42 +1473,9 @@ class UltraViewPage(QWidget):
         )
 
     def _restore_viewport_from_board(self, board, payload: Mapping[str, Any] | None = None) -> None:
-        source = payload if payload is not None else getattr(board, "viewport", None)
-        if not isinstance(source, Mapping) or "zoom" not in source:
-            self._pending_fit = True
-            viewport = self._board_scroll.viewport()
-            if viewport.width() > 1 and viewport.height() > 1:
-                self._pending_fit = False
-                self._apply_initial_viewport()
-            return
-        self._pending_fit = False
-        self._restoring_viewport = True
-        try:
-            with self._zoom_transaction():
-                self._viewport.restore_payload(source)
-                zoom = self._viewport.zoom()
-                # ``restore_payload`` already applied the viewport zoom.  Keep
-                # that behavior while broadcasting it to both render surfaces.
-                self._broadcast_zoom(zoom, viewport=False)
-                origin = self._fit_origin()
-                self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
-                viewport = self._board_scroll.viewport()
-                scroll = scroll_for_center(
-                    self._viewport.center(),
-                    (float(viewport.width()), float(viewport.height())),
-                    zoom,
-                )
-                applied = self._place_canvas_for_scroll(
-                    self._active_canvas(),
-                    (scroll[0] + origin[0], scroll[1] + origin[1]),
-                )
-                self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
-                self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
-                self._set_zoom_percent(zoom_percent(zoom))
-                self._apply_lod_chrome()
-        finally:
-            self._restoring_viewport = False
-        self._persist_viewport_to_board()
+        """Board switch / deferred switch: park on 适应, ignore leftover camera."""
+        del board, payload
+        self.fit_on_open()
 
     def _on_board_scrolled(self, _value: int = 0) -> None:
         self._persist_viewport_to_board()

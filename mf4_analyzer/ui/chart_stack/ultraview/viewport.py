@@ -243,9 +243,8 @@ def initial_viewport(
 ) -> dict[str, float]:
     """Conservative empty-board viewport dict (66% cap).
 
-    UltraView open / first show call ``zoom_fit`` instead of this payload.
-    Legal persisted viewports still restore as-is on in-session Board
-    switch via ``normalize_viewport_payload`` / ``restore_payload``.
+    UltraView open, first show, and Board switch call ``zoom_fit`` instead
+    of this payload. Persisted viewports remain a leave-board snapshot.
     """
     zoom = default_board_zoom(safe_viewport_size, frame_size)
     return {
