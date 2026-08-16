@@ -1,6 +1,6 @@
 # 2026-08-16 当日评审跟进 · 实施 plan
 
-- 日期：2026-08-16 · 状态：**已定稿，实施待授权，0/16 Task**（C2 已裁决 (a′)，无待决项）
+- 日期：2026-08-16 · 状态：**代码已实施 16/16 Task**（C2 已裁决 (a′)）。B8 全量绿；C5 Cocoa **UNVERIFIED**（本机无前台会话）。
 - spec：`docs/analyzer/specs/2026-08-16-daily-review-followup-spec.md`（决策编号 A1–A5 /
   B1–B8 / C1–C5 以它为准）
 - 评审：`docs/analyzer/reviews/2026-08-16-codex-cursor-daily-batch-review.md`
@@ -21,22 +21,22 @@
 
 | Wave | Task | 决策 | 结果 |
 |---|---|---|---|
-| A 持久化收口 | 1 pill 路由门禁 | A1 | |
-| A | 2 标注意图层 + 收口投影 | A2 | |
-| A | 3 落点单一真相 | A3 | |
-| A | 4 护栏改判据 + 帮助句 + 原 spec 修订 | A4 A5 | |
-| B 门禁稳定 | 5 `tests/conftest.py` 样式隔离 | B1 | |
-| B | 6 QSS↔Python 几何三处 + 生产 QSS 护栏 | B2 | |
-| B | 7 五处测试时序探针 + fitter 观察 | B3 | |
-| B | 8 视觉 harness / LOD 用例对齐 | B4 | |
-| B | 9 d491d41e 三条红 + 托盘文案 | B5 | |
-| B | 10 router 顺序污染 | B6 | |
-| C UltraView 收尾 | 11 画布背景 DPR | C1 | |
-| C | 12 相机改会话内记忆、不进工程 | C2 (a′) | |
-| C | 13 日志分级 / eventFilter 早退 / 护栏泛化 / D2.3 / zoom 结构钉 / edge-pan 断言 | C3 | |
-| C | 14 文档同步 + lessons | C4 | |
-| 收尾 | 15 基线文档更正 | B7 | |
-| 收尾 | 16 全量一次 + Cocoa 走查 | B8 C5 | |
+| A 持久化收口 | 1 pill 路由门禁 | A1 | `40e83832` |
+| A | 2 标注意图层 + 收口投影 | A2 | `5508c467` |
+| A | 3 落点单一真相 | A3 | `8d68dc38` |
+| A | 4 护栏改判据 + 帮助句 + 原 spec 修订 | A4 A5 | `e745479b` |
+| B 门禁稳定 | 5 `tests/conftest.py` 样式隔离 | B1 | `825bf6ef` |
+| B | 6 QSS↔Python 几何三处 + 生产 QSS 护栏 | B2 | `8cddf61b` |
+| B | 7 五处测试时序探针 + fitter 观察 | B3 | `5889ea18` |
+| B | 8 视觉 harness / LOD 用例对齐 | B4 | `1fd79433` |
+| B | 9 d491d41e 三条红 + 托盘文案 | B5 | `59cb0bff` |
+| B | 10 router 顺序污染 | B6 | `7af0a960` |
+| C UltraView 收尾 | 11 画布背景 DPR | C1 | `d4bee68a` |
+| C | 12 相机改会话内记忆、不进工程 | C2 (a′) | `f5bbcac8` `45ab984f` `8dd0a533` |
+| C | 13 日志分级 / eventFilter 早退 / 护栏泛化 / D2.3 / zoom 结构钉 / edge-pan 断言 | C3 | `09b10ece` `410c6685` `18422edc` |
+| C | 14 文档同步 + lessons | C4 | `48466190` |
+| 收尾 | 15 基线文档更正 | B7 | `86dcd491` |
+| 收尾 | 16 全量一次 + Cocoa 走查 | B8 C5 | 主体 7402 passed / 0 failed；acquisition_ui 359 passed；HEAD `23d0a1b7` 稳定。Cocoa UNVERIFIED |
 
 ---
 
@@ -316,15 +316,16 @@ commit：`docs: schema 4 迁移说明、CLAUDE.md 版本备注、三条 lessons`
 ### Task 16 · 全量一次 + Cocoa 走查（B8 C5）
 
 **协调者独占。** 前置：Task 1–15 全部合入、工作区干净、`pgrep -fl pytest` 无人在跑。
-- [ ] Step 1：记 `HEAD` 与 `git status`；两条命令、串行、前台：
+- [x] Step 1：记 `HEAD` 与 `git status`；两条命令、串行、前台：
   `PYTEST --ignore=tests/acquisition_ui` → `PYTEST tests/acquisition_ui`；跑完再记一次
   `HEAD` / `git status`，不一致则结论 `UNVERIFIED` 重跑。
-- [ ] Step 2：目标主体 0 failed（`test_gen_help_screenshots` 环境性除外）；每一条剩余红都
-  要在本 plan 追加 Task 名字，不得记为「既有」。
-- [ ] Step 3：Cocoa 一次走查，产出 `docs/analyzer/verify/2026-08-16-daily-followup/
-  cocoa-walkthrough.md`：手势路由五起点；钛金琥珀 + 背景锐度截图（Task 11 前后对比）；
-  edge-pan 手感；hover 操作条；A1–A3 三条验收判据 + 原持久化 plan Wave 3 两条。
-- [ ] Step 4：spec 状态改「已实施」，本表填结果。
+  实测：跑前跑后 `HEAD 23d0a1b7`、porcelain 空。主体 **7402 passed / 14 skipped / 3 deselected / 0 failed**（1154.19s）。`tests/acquisition_ui` **359 passed**（9.12s）。
+- [x] Step 2：目标主体 0 failed（`test_gen_help_screenshots` 环境性除外）；每一条剩余红都
+  要在本 plan 追加 Task 名字，不得记为「既有」。无剩余红。
+- [x] Step 3：写出 `docs/analyzer/verify/2026-08-16-daily-followup/cocoa-walkthrough.md`。
+  **Cocoa 本身 UNVERIFIED**：本机无前台会话（`DISPLAY` 空），未启动 TraceLab、无锐度截图。
+  清单已按手势五起点 / 钛金琥珀+C1 / edge-pan / hover 操作条 / A1–A3 / Wave 3 两条列全，解锁后补验。
+- [x] Step 4：spec 状态改为代码已实施 + Cocoa UNVERIFIED；本表填结果。
 
 ## 显式不做（本 plan 结束仍不做）
 - 相机跨会话落盘持久化（C2 备选 (a) 已否决）。

@@ -1,6 +1,6 @@
 # 2026-08-16 当日评审跟进：持久化收口 + 门禁稳定 + UltraView 收尾 · spec
 
-- 日期：2026-08-16 · 状态：**已定稿，实施待授权**（只有设计，未动代码）。
+- 日期：2026-08-16 · 状态：**代码已实施（Task 1–15 合入 `claude/daily-review-followup-0816`）。B8 全量绿（HEAD `23d0a1b7`：主体 7402 passed / 0 failed；`tests/acquisition_ui` 359 passed）。C5 Cocoa 真机走查 UNVERIFIED**（见 `docs/analyzer/verify/2026-08-16-daily-followup/cocoa-walkthrough.md`）。
   唯一的产品决策 C2 已由用户于 2026-08-16 裁决为 (a′)，本文无待决项。
 - 来源：`docs/analyzer/reviews/2026-08-16-codex-cursor-daily-batch-review.md`（下称「评审」，
   §号引用均指它）
