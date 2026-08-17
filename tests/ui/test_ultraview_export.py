@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack.ultraview.compositor import (
     BOARD_BG,
+    BOARD_PADDING,
     TITLE_BAND,
     ComposeError,
     MAX_EXPORT_EDGE,
@@ -38,6 +39,7 @@ from mf4_analyzer.ui.ultraview_state import (
     set_layout,
     template_to_free_grid,
     GridRect,
+    GRID_COLUMNS,
 )
 from tests.ui.ultraview_fakes import ComputeProbe
 from tests.ui.test_ultraview_preview_store import _image, _meta
@@ -137,7 +139,7 @@ def test_missing_placeholder_and_stale_keep_old_image(qapp):
     assert 0 < magenta <= 16 * 16
 
 
-def test_free_grid_export_uses_full_logical_board_not_current_viewport(qapp):
+def test_free_grid_export_includes_far_cards_not_live_viewport(qapp):
     board = default_board()
     add_ref(board, make_ref("time", "top"))
     add_ref(board, make_ref("fft", "bottom"))
@@ -147,7 +149,10 @@ def test_free_grid_export_uses_full_logical_board_not_current_viewport(qapp):
     image = compose_board(board, {}, {}, scale=1)
     assert (image.width(), image.height()) == free_grid_output_size(board, 1)
     assert image.height() > 900
-    assert (compose_board(board, {}, {}, scale=2).width(), compose_board(board, {}, {}, scale=2).height()) == free_grid_output_size(board, 2)
+    two = compose_board(board, {}, {}, scale=2)
+    assert (two.width(), two.height()) == free_grid_output_size(board, 2)
+    assert two.width() == image.width() * 2
+    assert two.height() == image.height() * 2
 
 
 def test_output_size_is_template_aware_and_keeps_small_layout_baseline(qapp):
@@ -175,28 +180,97 @@ def test_free_grid_short_board_export_crops_trailing_whitespace(qapp):
     template_to_free_grid(board)
     image = compose_board(board, {}, {}, scale=1)
     assert image.height() < 900
+    assert image.width() < 1600
     untitled = compose_board(board, {}, {}, scale=1, title=False)
     assert untitled.height() < image.height()
 
 
 def test_pathological_free_grid_2x_export_is_rejected(qapp):
     board = default_board()
-    add_ref(board, make_ref("time", "deep"))
+    add_ref(board, make_ref("time", "anchor"))
+    add_ref(board, make_ref("fft", "deep"))
     template_to_free_grid(board)
-    assert set_free_grid_rect(board, make_ref("time", "deep"), GridRect(0, 40, 4, 8)) == []
+    assert set_free_grid_rect(board, make_ref("time", "anchor"), GridRect(0, 0, 4, 3)) == []
+    assert set_free_grid_rect(board, make_ref("fft", "deep"), GridRect(0, 40, 4, 8)) == []
     width, height = free_grid_output_size(board, 2)
     assert width > MAX_EXPORT_EDGE or height > MAX_EXPORT_EDGE or width * height > MAX_EXPORT_PIXELS
     one = compose_board(board, {}, {}, scale=1)
-    assert one.width() == 1600
+    assert one.width() < 1600
+    assert one.height() > 900
     try:
         compose_board(board, {}, {}, scale=2)
-        raise AssertionError("2× 48-row export should be rejected")
+        raise AssertionError("2× tall content-union export should be rejected")
     except ComposeError as exc:
         assert exc.code == "export_too_large"
         assert exc.message == format_export_too_large(width, height)
         assert "改用 1× 或整理卡片" in exc.message
         assert str(MAX_EXPORT_EDGE) not in exc.message
         assert str(MAX_EXPORT_PIXELS) not in exc.message
+
+
+def test_free_grid_export_crops_to_content_like_autofit(qapp):
+    """A left-packed 2×2 must fill the PNG; the empty 12-column floor is omitted."""
+    board = default_board()
+    board.name = "全局对比"
+    refs_and_rects = (
+        (make_ref("time", "v1"), GridRect(0, 0, 4, 3)),
+        (make_ref("fft", "v2"), GridRect(4, 0, 4, 3)),
+        (make_ref("order", "v3"), GridRect(0, 3, 4, 3)),
+        (make_ref("frf", "v4"), GridRect(4, 3, 4, 3)),
+    )
+    for ref, rect in refs_and_rects:
+        add_ref(board, ref)
+        assert set_free_grid_rect(board, ref, rect) == []
+    one = compose_board(board, {}, {}, scale=1)
+    two = compose_board(board, {}, {}, scale=2)
+    metrics = export_grid_metrics(board.free_grid)
+    expected_w = (
+        2 * metrics.padding
+        + 8 * metrics.column_width
+        + 7 * metrics.gutter
+    )
+    expected_h = (
+        TITLE_BAND
+        + 2 * metrics.padding
+        + 6 * metrics.row_height
+        + 5 * metrics.gutter
+    )
+    assert (one.width(), one.height()) == (expected_w, expected_h)
+    assert one.width() < 1600
+    assert (two.width(), two.height()) == (expected_w * 2, expected_h * 2)
+    rects = composed_slot_rects(board, scale=1, title=True)
+    left = min(slot[0] for slot in rects.values())
+    right = max(slot[0] + slot[2] for slot in rects.values())
+    top = min(slot[1] for slot in rects.values())
+    bottom = max(slot[1] + slot[3] for slot in rects.values())
+    assert left == metrics.padding
+    assert right == one.width() - metrics.padding
+    assert top == TITLE_BAND + metrics.padding
+    assert bottom == one.height() - metrics.padding
+    assert BOARD_PADDING == metrics.padding
+
+
+def test_free_grid_export_keeps_gaps_between_cards(qapp):
+    """Fit-to-content crops the outer floor, not the empty cells inside the union."""
+    board = default_board()
+    left = make_ref("time", "left")
+    right = make_ref("fft", "right")
+    add_ref(board, left)
+    add_ref(board, right)
+    assert set_free_grid_rect(board, left, GridRect(0, 0, 4, 3)) == []
+    assert set_free_grid_rect(board, right, GridRect(8, 0, 4, 3)) == []
+    image = compose_board(board, {}, {}, scale=1, title=False)
+    metrics = export_grid_metrics(board.free_grid)
+    assert image.width() == (
+        2 * metrics.padding
+        + GRID_COLUMNS * metrics.column_width
+        + (GRID_COLUMNS - 1) * metrics.gutter
+    )
+    rects = composed_slot_rects(board, scale=1, title=False)
+    left_slot = rects[f"grid:{left.section}:{left.view_id}"]
+    right_slot = rects[f"grid:{right.section}:{right.view_id}"]
+    gap = right_slot[0] - (left_slot[0] + left_slot[2])
+    assert gap == 4 * metrics.column_width + 5 * metrics.gutter
 
 
 def test_base_frame_export_pixel_positions_stay_on_1600_pitch(qapp):
@@ -222,7 +296,11 @@ def test_base_frame_export_pixel_positions_stay_on_1600_pitch(qapp):
     assert composed_slot_rects(board, scale=1, title=True) == expected
     image = compose_board(board, {}, {}, scale=1)
     assert (image.width(), image.height()) == free_grid_output_size(board, 1)
-    assert image.width() == 1600
+    assert image.width() == (
+        2 * metrics.padding
+        + GRID_COLUMNS * metrics.column_width
+        + (GRID_COLUMNS - 1) * metrics.gutter
+    )
     assert [item.rect for item in board.free_grid] == [
         GridRect(0, 0, 4, 3),
         GridRect(8, 0, 4, 3),
@@ -239,15 +317,15 @@ def test_negative_column_card_is_present_in_export(qapp):
     store = PreviewStore()
     store.publish(ref, _image(48, 32, color="#cc1122"), digest="n", meta=_meta(ref))
     image = compose_board(board, {ref: store.get(ref)}, {ref: "fresh"}, scale=1)
-    assert image.width() > 1600
+    assert image.width() < 1600
     metrics = export_grid_metrics(board.free_grid)
-    col0_x = rect_to_pixels(GridRect(0, 0, 1, 1), metrics, origin_offset=(-4, 0))[0]
     slot = composed_slot_rects(board, scale=1, title=True)[f"grid:{ref.section}:{ref.view_id}"]
-    assert slot[0] + slot[2] <= col0_x
+    assert slot[0] == metrics.padding
+    assert slot[0] + slot[2] == image.width() - metrics.padding
     ink = 0
     bg = BOARD_BG.rgb()
     for y in range(slot[1], slot[1] + slot[3]):
-        for x in range(slot[0], min(col0_x, slot[0] + slot[2])):
+        for x in range(slot[0], slot[0] + slot[2]):
             if image.pixel(x, y) != bg:
                 ink += 1
     assert ink > 0
@@ -509,7 +587,10 @@ def test_export_too_large_toasts_dimensions_and_limits(qapp, qtbot, monkeypatch)
     ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     add_ref(uv.board, ref)
     uv._on_free_grid_toggled(True)
-    assert set_free_grid_rect(uv.board, ref, GridRect(0, 40, 4, 8)) == []
+    extra = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    add_ref(uv.board, extra)
+    assert set_free_grid_rect(uv.board, ref, GridRect(0, 0, 4, 3)) == []
+    assert set_free_grid_rect(uv.board, extra, GridRect(0, 40, 4, 8)) == []
     assert uv._compose_or_toast(scale=2, action="导出 PNG") is None
     assert toasts
     message, level = toasts[-1]

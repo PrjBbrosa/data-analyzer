@@ -1,9 +1,10 @@
 """Off-screen UltraView board compositor.
 
 Template boards stay on the 1600×900 (1×) / 3200×1800 (2×) baseline.
-Free-grid export uses content bounds ∪ the canonical 1600-wide base frame,
-never screen halo or the live viewport. Does not import MainWindow, grab
-widgets, or call analysis compute.
+Free-grid export uses the placed-content bounding box at the canonical
+1600-wide cell pitch — the same crop on-screen fit-to-content uses — never
+the empty 12-column floor, screen halo, or the live viewport zoom. Does not
+import MainWindow, grab widgets, or call analysis compute.
 """
 from __future__ import annotations
 
@@ -84,16 +85,34 @@ def output_size(scale: int, layout_id: str | None = None) -> tuple[int, int]:
     return width * factor, height * factor
 
 
+def _extent_pixels(metrics: GridMetrics, n_cols: int, n_rows: int) -> tuple[int, int]:
+    """Return 1× pixel size for ``n_cols`` × ``n_rows`` at the export pitch."""
+    columns = max(1, int(n_cols))
+    rows = max(1, int(n_rows))
+    width = (
+        2 * metrics.padding
+        + columns * metrics.column_width
+        + max(0, columns - 1) * metrics.gutter
+    )
+    height = (
+        2 * metrics.padding
+        + rows * metrics.row_height
+        + max(0, rows - 1) * metrics.gutter
+    )
+    return width, height
+
+
 def _free_grid_export_layout(
     board: UltraViewBoardState,
 ) -> tuple[GridMetrics, tuple[int, int], int, int]:
     """Return 1× ``(metrics, origin_offset, width, height)`` without the title band.
 
-    ``origin_offset`` is the content origin so the leftmost/topmost occupied
-    cell maps to padding when it sits left/above the base frame. Positive
-    cards keep the base-frame origin ``(0, 0)``; GridRect values are not
-    rewritten. Canvas size is content bounds plus canonical padding, floored
-    at the 1600-wide base frame and the existing occupied-row height.
+    The canvas is the axis-aligned union of placed cards plus canonical
+    padding, at the 1600-wide 12-column pitch. Empty columns/rows outside
+    that union are not exported — matching on-screen fit-to-content. Gaps
+    *between* cards stay. GridRect values are not rewritten; ``origin_offset``
+    maps the leftmost/topmost occupied cell to padding. An empty board keeps
+    a one-row 12-column placeholder.
     """
     placements = tuple(board.free_grid)
     metrics = export_grid_metrics(placements)
@@ -103,18 +122,12 @@ def _free_grid_export_layout(
         column_end = GRID_COLUMNS
         row_end = 1
     else:
-        col0 = min(0, content.column)
-        row0 = min(0, content.row)
-        column_end = max(GRID_COLUMNS, content.column_end)
-        row_end = max(1, content.row_end)
-    extra_cols = (0 - col0) + (column_end - GRID_COLUMNS)
-    pitch_x = metrics.column_width + metrics.gutter
-    width = metrics.board_width + extra_cols * pitch_x
-    n_rows = row_end - row0
-    height = (
-        2 * metrics.padding
-        + n_rows * metrics.row_height
-        + max(0, n_rows - 1) * metrics.gutter
+        col0 = content.column
+        row0 = content.row
+        column_end = max(content.column + 1, content.column_end)
+        row_end = max(content.row + 1, content.row_end)
+    width, height = _extent_pixels(
+        metrics, column_end - col0, row_end - row0
     )
     return metrics, (col0, row0), width, height
 
@@ -122,7 +135,7 @@ def _free_grid_export_layout(
 def free_grid_output_size(
     board: UltraViewBoardState, scale: int, *, title: bool = True
 ) -> tuple[int, int]:
-    """Return the free-grid export canvas: content ∪ base-frame floor, no halo."""
+    """Return the free-grid export canvas: content bounding box, no halo."""
     _metrics, _origin, width, height = _free_grid_export_layout(board)
     factor = 1 if int(scale) <= 1 else 2
     extra = TITLE_BAND if title else 0

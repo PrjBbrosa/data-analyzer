@@ -777,7 +777,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.export",
-        text="右上浮岛可复制整板或导出 PNG",
+        text="导出 PNG 按适应内容裁切，不含空白底板",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=60,

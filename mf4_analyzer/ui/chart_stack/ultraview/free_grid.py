@@ -221,7 +221,11 @@ def grid_metrics(
 
 
 def export_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
-    """Canonical free-grid export metrics: 1600-wide, cropped to occupied rows."""
+    """Canonical free-grid export pitch: 1600-wide columns, occupied-row height.
+
+    The compositor then crops the canvas to the placed-content bounding box;
+    this helper only supplies the 1× cell size, not the PNG extent.
+    """
     return grid_metrics(
         (BASE_BOARD_SIZE[0], 0), placements, min_visible_rows=1
     )
