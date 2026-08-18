@@ -320,7 +320,10 @@ class CursorController(_CanvasBackref):
         """ViewBox owners for vertical cursor/hover lines."""
         if self._overlay_mode and self._x_master_handle is not None:
             return [self._x_master_handle]
-        return list(self.axes_list)
+        return [
+            handle for handle in self.axes_list
+            if not getattr(handle, "placeholder", False)
+        ]
 
     def _ensure_cursor_items(self, attr_name, *, color, width=1.0, style=Qt.SolidLine):
         handles = self._cursor_line_handles()
@@ -395,7 +398,11 @@ class CursorController(_CanvasBackref):
 
     def _ensure_dual_cursor_extreme_markers(self):
         markers = getattr(self, "_dual_cursor_extreme_markers", [])
-        if len(markers) == len(self.axes_list):
+        handles = [
+            handle for handle in self.axes_list
+            if not getattr(handle, "placeholder", False)
+        ]
+        if len(markers) == len(handles):
             return markers
         for marker in markers or []:
             try:
@@ -403,7 +410,7 @@ class CursorController(_CanvasBackref):
             except Exception:
                 pass
         new_markers = []
-        for handle in self.axes_list:
+        for handle in handles:
             vb = handle.view_box
             if vb is None:
                 continue
@@ -438,7 +445,9 @@ class CursorController(_CanvasBackref):
                 (min_x, min_y, "#16a34a"),
                 (max_x, max_y, "#dc2626"),
             ))
-        for marker, handle in zip(markers, self.axes_list):
+        for marker, handle in zip(markers, [
+            h for h in self.axes_list if not getattr(h, "placeholder", False)
+        ]):
             points = points_by_handle.get(handle, [])
             try:
                 if not points:

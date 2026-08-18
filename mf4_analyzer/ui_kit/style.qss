@@ -1802,6 +1802,12 @@ QLabel#fileRowMeta {
     color: #64748b;
     font-size: 11px;
 }
+QFrame#fileInsertLine,
+QFrame#channelInsertLine {
+    background-color: {{CONTROL_ACCENT}};
+    min-height: 2px;
+    max-height: 2px;
+}
 
 QLineEdit#channelSearch {
     min-height: {{CONTROL_H_BASE_INPUT_CONTENT}};
@@ -2431,6 +2437,18 @@ QWidget#chartCard {
 QWidget#chartCard[focused="true"] {
     border-radius: 6px;
     background-color: #ffffff;
+}
+
+QWidget#chartCard[dropZone="plot"] {
+    border-color: {{CONTROL_ACCENT}};
+    background-color: #f5f8ff;
+}
+
+QFrame#xaxisDropHighlight {
+    background-color: rgba(45, 127, 249, 48);
+    border-top-width: 2px;
+    border-top-style: solid;
+    border-top-color: {{CONTROL_ACCENT}};
 }
 
 /* 2026-06-13 slice info panel — sits in the colorbar column below the

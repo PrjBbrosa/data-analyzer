@@ -1,10 +1,13 @@
 """The multi-file channel tree: MultiFileChannelWidget and its private helpers."""
 import json
+import logging
 import sys
 from collections import Counter
 
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -20,9 +23,21 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QIcon, QPainter, QPen, QPolygon
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QDrag,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygon,
+)
 from PyQt5.QtCore import (
     Qt,
+    QEvent,
+    QMimeData,
     QPoint,
     QRect,
     QSettings,
@@ -35,6 +50,11 @@ from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ...ui_kit.widgets import SearchField
 from .. import hints
 from ..axis_group_palette import axis_group_color
+from ..channel_drag import (
+    INTERNAL_CHANNEL_MIME,
+    decode_channel_drag,
+    encode_channel_drag,
+)
 from .channel_config_bar import ChannelConfigBar
 # ``MultiFileChannelWidget`` resolves these through *this* module's globals, so
 # a dev script that swaps the swatch renderer must rebind them here.
@@ -42,6 +62,9 @@ from ._swatches import _fmt_rate, _swatch_icon
 
 
 INTERNAL_FILE_FIDS_MIME = "application/x-tracelab-file-fids"
+logger = logging.getLogger(__name__)
+_CHANNEL_ORDER_BEFORE = "before"
+_CHANNEL_ORDER_AFTER = "after"
 
 
 def _channel_tip(channel, fd):
@@ -399,6 +422,8 @@ class _CheckTolerantTree(QTreeWidget):
         super().__init__(*args, **kwargs)
         self._consume_check_release = False
         self._owner = None  # set by MultiFileChannelWidget; drawBranches reads it
+        self._drag_press_pos = None
+        self._drag_channel = None
         self._channel_delegate = _ChannelLeafDelegate(self)
         # Darwin-only: selected-row tint washes out Fusion's branch glyph, so
         # drawBranches overpaints a dark chevron in the branch slot. Kept as a
@@ -478,6 +503,7 @@ class _CheckTolerantTree(QTreeWidget):
                     # here handles the press, and mouseReleaseEvent suppresses
                     # Qt's native indicator release toggle.
                     self._consume_check_release = True
+                    self._clear_channel_drag_candidate()
                     owner = getattr(self, "_owner", None)
                     if not (
                         owner is not None
@@ -486,21 +512,61 @@ class _CheckTolerantTree(QTreeWidget):
                         item.setCheckState(0, new_state)
                     event.accept()
                     return
+                if self._is_channel_body_press(item, pos):
+                    data = item.data(0, Qt.UserRole)
+                    self._drag_press_pos = QPoint(pos)
+                    self._drag_channel = (str(data[1]), str(data[2]))
+                else:
+                    self._clear_channel_drag_candidate()
+            else:
+                self._clear_channel_drag_candidate()
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self._consume_check_release:
             self._consume_check_release = False
+            self._clear_channel_drag_candidate()
             event.accept()
             return
+        if event.button() == Qt.LeftButton:
+            self._clear_channel_drag_candidate()
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):
         """Keep a left-button row drag from extending the tree selection."""
         if event.buttons() & Qt.LeftButton:
+            if self._maybe_start_channel_drag(event):
+                event.accept()
+                return
             event.accept()
             return
         super().mouseMoveEvent(event)
+
+    def _clear_channel_drag_candidate(self):
+        self._drag_press_pos = None
+        self._drag_channel = None
+
+    def _is_channel_body_press(self, item, pos):
+        if item is None or self.columnAt(pos.x()) != 0:
+            return False
+        data = item.data(0, Qt.UserRole)
+        return bool(data and data[0] == "channel")
+
+    def _maybe_start_channel_drag(self, event):
+        if self._drag_channel is None or self._drag_press_pos is None:
+            return False
+        if (
+            (event.pos() - self._drag_press_pos).manhattanLength()
+            < QApplication.startDragDistance()
+        ):
+            return False
+        fid, channel = self._drag_channel
+        self._clear_channel_drag_candidate()
+        owner = getattr(self, "_owner", None)
+        if owner is None:
+            return False
+        owner._start_channel_drag(fid, channel)
+        return True
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -630,6 +696,7 @@ class MultiFileChannelWidget(QWidget):
     axis_groups_changed = pyqtSignal()
     files_attach_requested = pyqtSignal(object)
     files_detach_requested = pyqtSignal(object, str)
+    channel_order_requested = pyqtSignal(str, str, str, str)
     MAX_CHANNELS_WARNING = 8  # 超过此数量时警告
 
     def __init__(self, parent=None):
@@ -746,6 +813,15 @@ class MultiFileChannelWidget(QWidget):
         # ``None`` forces the first call to always do the full replay.
         self._projection_chrome_signature = None
         self.axis_groups_changed.connect(self.tree.viewport().update)
+        self.tree.viewport().setAcceptDrops(True)
+        self.tree.viewport().setAccessibleName("通道树排序")
+        self.tree.viewport().installEventFilter(self)
+        self._channel_insert_line = QFrame(self.tree.viewport())
+        self._channel_insert_line.setObjectName("channelInsertLine")
+        self._channel_insert_line.setAccessibleName("通道插入位置")
+        self._channel_insert_line.setFixedHeight(2)
+        self._channel_insert_line.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._channel_insert_line.hide()
         self._sync_empty_state()
         self._sync_projection_chrome()
 
@@ -858,7 +934,101 @@ class MultiFileChannelWidget(QWidget):
         # analysis_candidates stays non-checkable after add/refresh.
         self._sync_projection_chrome()
 
-    def refresh_file(self, fid, fd):
+    def project_file_order(self, ordered_fids):
+        """Move existing top-level file/source nodes to match workspace order."""
+        desired = []
+        seen = set()
+        for fid in ordered_fids or ():
+            fid = str(fid)
+            item = None
+            if fid in self._raster_items:
+                raster = self._raster_items[fid]
+                item = raster.parent() or raster
+            elif fid in self._file_items:
+                item = self._file_items[fid]
+                parent = item.parent()
+                if parent is not None:
+                    item = parent
+            if item is None:
+                continue
+            key = id(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            desired.append(item)
+        leftovers = []
+        for idx in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(idx)
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            leftovers.append(item)
+        desired.extend(leftovers)
+        current = [
+            self.tree.topLevelItem(idx)
+            for idx in range(self.tree.topLevelItemCount())
+        ]
+        if current == desired:
+            return
+        taken = []
+        while self.tree.topLevelItemCount():
+            taken.append(self.tree.takeTopLevelItem(0))
+        by_id = {id(item): item for item in taken}
+        for item in desired:
+            real = by_id.get(id(item))
+            if real is not None:
+                self.tree.addTopLevelItem(real)
+
+    def project_channel_order(self, fid, ordered_channels):
+        """Move existing channel leaves under one fid/raster parent."""
+        parent = self._file_items.get(str(fid))
+        if parent is None:
+            return
+        by_name = {}
+        current = []
+        idx = 0
+        while idx < parent.childCount():
+            child = parent.child(idx)
+            data = child.data(0, Qt.UserRole)
+            if data and data[0] == "channel":
+                by_name[str(data[2])] = child
+                current.append(child)
+            idx += 1
+        if not current:
+            return
+        desired = []
+        seen = set()
+        for name in ordered_channels or ():
+            name = str(name)
+            item = by_name.get(name)
+            if item is None or name in seen:
+                continue
+            seen.add(name)
+            desired.append(item)
+        for item in current:
+            name = str(item.data(0, Qt.UserRole)[2])
+            if name in seen:
+                continue
+            seen.add(name)
+            desired.append(item)
+        if desired == current:
+            return
+        selected = {id(item) for item in self.tree.selectedItems()}
+        current_item = self.tree.currentItem()
+        expanded = parent.isExpanded()
+        for item in current:
+            parent.removeChild(item)
+        for item in desired:
+            parent.addChild(item)
+        parent.setExpanded(expanded)
+        for item in desired:
+            item.setSelected(id(item) in selected)
+        if current_item is not None:
+            self.tree.setCurrentItem(current_item)
+        self._refresh_visibility_icons()
+        self._apply_filters()
+
+    def refresh_file(self, fid, fd, channel_order=None):
         """Rebuild one file's channel rows without detaching it from a View.
 
         ``remove_file`` has intentionally destructive lifecycle semantics: it
@@ -869,6 +1039,8 @@ class MultiFileChannelWidget(QWidget):
         fid = str(fid)
         if fid not in self._files:
             self.add_file(fid, fd)
+            if channel_order:
+                self.project_channel_order(fid, channel_order)
             return
 
         checked = list(self.get_checked_channels())
@@ -888,6 +1060,8 @@ class MultiFileChannelWidget(QWidget):
         self.set_hidden_channels(hidden)
         self._restore_axis_groups(axis_groups)
         self._restore_file_tree_state(tree_state)
+        if channel_order:
+            self.project_channel_order(fid, channel_order)
 
     def _file_tree_state(self, fid):
         """Capture selection/expansion for the visual subtree of one file."""
@@ -1075,6 +1249,209 @@ class MultiFileChannelWidget(QWidget):
         self.files_attach_requested.emit(fids)
         event.setDropAction(Qt.CopyAction)
         event.accept()
+
+    def eventFilter(self, watched, event):
+        if watched is self.tree.viewport():
+            etype = event.type()
+            if etype == QEvent.DragLeave:
+                self._clear_channel_insert_line()
+                self._set_drop_active(False)
+                event.accept()
+                return True
+            if etype in (QEvent.DragEnter, QEvent.DragMove, QEvent.Drop):
+                mime = event.mimeData()
+                if mime is not None and mime.hasFormat(INTERNAL_CHANNEL_MIME):
+                    if etype == QEvent.DragEnter:
+                        self._handle_channel_drag_enter(event)
+                    elif etype == QEvent.DragMove:
+                        self._handle_channel_drag_move(event)
+                    else:
+                        self._handle_channel_drop(event)
+                    return True
+                if etype == QEvent.DragEnter:
+                    self.dragEnterEvent(event)
+                elif etype == QEvent.DragMove:
+                    self.dragMoveEvent(event)
+                else:
+                    self.dropEvent(event)
+                return True
+        return super().eventFilter(watched, event)
+
+    def _start_channel_drag(self, fid, channel):
+        mime = QMimeData()
+        mime.setData(INTERNAL_CHANNEL_MIME, encode_channel_drag(fid, channel))
+        host = self.window() or self
+        drag = QDrag(host)
+        drag.setMimeData(mime)
+        drag.setPixmap(self._channel_drag_pixmap(fid, channel))
+        drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+
+    def _channel_drag_pixmap(self, fid, channel):
+        fd = self._files.get(fid)
+        source = ""
+        if fd is not None:
+            fp = getattr(fd, "filepath", None)
+            if fp is not None:
+                source = fp.stem
+            else:
+                source = (
+                    getattr(fd, "short_name", "")
+                    or getattr(fd, "filename", "")
+                    or str(fid)
+                )
+        label = f"{channel}  ·  {source}" if source else str(channel)
+        color = QColor(self._colors.get((fid, channel), "#1f77b4"))
+        pixmap = QPixmap(240, 28)
+        pixmap.fill(QColor("#f8fafc"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(8, 8, 12, 12)
+        painter.setPen(QColor("#111827"))
+        text_rect = QRect(26, 0, 206, 28)
+        painter.drawText(
+            text_rect,
+            Qt.AlignVCenter | Qt.AlignLeft,
+            painter.fontMetrics().elidedText(label, Qt.ElideMiddle, 206),
+        )
+        painter.end()
+        return pixmap
+
+    def _channel_drag_payload(self, mime):
+        if mime is None or not mime.hasFormat(INTERNAL_CHANNEL_MIME):
+            return None
+        decoded = decode_channel_drag(bytes(mime.data(INTERNAL_CHANNEL_MIME)))
+        if decoded is None:
+            return None
+        fid, channel = decoded
+        if self._channel_item_for(fid, channel) is None:
+            return None
+        return fid, channel
+
+    def _channel_reorder_allowed(self):
+        return (
+            not self.search.text().strip()
+            and self._projection_role == "time"
+        )
+
+    def _channel_drop_target(self, event, source_fid, source_channel):
+        item = self.tree.itemAt(event.pos())
+        if item is None:
+            return None, None, False
+        data = item.data(0, Qt.UserRole)
+        if not (data and data[0] == "channel"):
+            return None, None, False
+        target_fid = str(data[1])
+        target_channel = str(data[2])
+        source_item = self._channel_item_for(source_fid, source_channel)
+        same_parent = (
+            source_item is not None
+            and item.parent() is source_item.parent()
+            and target_fid == str(source_fid)
+        )
+        geo = self.tree.visualItemRect(item)
+        placement = (
+            _CHANNEL_ORDER_BEFORE
+            if event.pos().y() < geo.center().y()
+            else _CHANNEL_ORDER_AFTER
+        )
+        return target_channel, placement, same_parent
+
+    def _channel_order_is_noop(self, source_item, target_item, placement):
+        parent = source_item.parent() if source_item is not None else None
+        if parent is None or target_item is None or target_item.parent() is not parent:
+            return True
+        if source_item is target_item:
+            return True
+        source_at = parent.indexOfChild(source_item)
+        target_at = parent.indexOfChild(target_item)
+        if placement == _CHANNEL_ORDER_BEFORE:
+            return source_at == target_at - 1
+        if placement == _CHANNEL_ORDER_AFTER:
+            return source_at == target_at + 1
+        return True
+
+    def _show_channel_insert_line(self, item, placement):
+        geo = self.tree.visualItemRect(item)
+        y = geo.top() if placement == _CHANNEL_ORDER_BEFORE else geo.bottom() - 1
+        viewport = self.tree.viewport()
+        width = max(8, viewport.width() - 8)
+        self._channel_insert_line.setGeometry(4, max(0, y - 1), width, 2)
+        self._channel_insert_line.show()
+        self._channel_insert_line.raise_()
+
+    def _clear_channel_insert_line(self):
+        self._channel_insert_line.hide()
+
+    def _handle_channel_drag_enter(self, event):
+        try:
+            payload = self._channel_drag_payload(event.mimeData())
+            if payload is None or not self._channel_reorder_allowed():
+                self._clear_channel_insert_line()
+                event.ignore()
+                return
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        except Exception:
+            logger.exception("channel tree drag enter failed")
+            self._clear_channel_insert_line()
+            event.ignore()
+
+    def _handle_channel_drag_move(self, event):
+        try:
+            payload = self._channel_drag_payload(event.mimeData())
+            if payload is None or not self._channel_reorder_allowed():
+                self._clear_channel_insert_line()
+                event.ignore()
+                return
+            source_fid, source_channel = payload
+            target_channel, placement, same_parent = self._channel_drop_target(
+                event, source_fid, source_channel
+            )
+            if not same_parent or target_channel is None:
+                self._clear_channel_insert_line()
+                event.ignore()
+                return
+            source_item = self._channel_item_for(source_fid, source_channel)
+            target_item = self._channel_item_for(source_fid, target_channel)
+            if self._channel_order_is_noop(source_item, target_item, placement):
+                self._clear_channel_insert_line()
+            else:
+                self._show_channel_insert_line(target_item, placement)
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        except Exception:
+            logger.exception("channel tree drag move failed")
+            self._clear_channel_insert_line()
+            event.ignore()
+
+    def _handle_channel_drop(self, event):
+        self._clear_channel_insert_line()
+        try:
+            payload = self._channel_drag_payload(event.mimeData())
+            if payload is None or not self._channel_reorder_allowed():
+                event.ignore()
+                return
+            source_fid, source_channel = payload
+            target_channel, placement, same_parent = self._channel_drop_target(
+                event, source_fid, source_channel
+            )
+            if not same_parent or target_channel is None:
+                event.ignore()
+                return
+            source_item = self._channel_item_for(source_fid, source_channel)
+            target_item = self._channel_item_for(source_fid, target_channel)
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+            if self._channel_order_is_noop(source_item, target_item, placement):
+                return
+            self.channel_order_requested.emit(
+                source_fid, source_channel, target_channel, placement
+            )
+        except Exception:
+            logger.exception("channel tree drop failed")
+            event.ignore()
 
     def _set_drop_active(self, active):
         self.setProperty("dropActive", bool(active))

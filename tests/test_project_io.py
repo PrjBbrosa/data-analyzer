@@ -47,7 +47,7 @@ def test_project_save_is_same_directory_atomic_replace(tmp_path, monkeypatch):
         target = type(path)(target)
         assert source.parent == path.parent
         assert source.exists()
-        assert json.loads(source.read_text(encoding="utf-8"))["schema_version"] == 2
+        assert json.loads(source.read_text(encoding="utf-8"))["schema_version"] == 3
         replaced.append((source, target))
         return original_replace(source, target)
 
@@ -351,7 +351,7 @@ def test_ultraview_field_is_last_and_positional_construction_unchanged():
     assert doc.active_file == "f0"
     assert doc.current_mode == "fft"
     assert doc.ultraview is None
-    assert pio.SCHEMA_VERSION == 2
+    assert pio.SCHEMA_VERSION == 3
 
 
 def test_ultraview_board_roundtrips_without_runtime_keys(tmp_path):
@@ -378,7 +378,7 @@ def test_ultraview_board_roundtrips_without_runtime_keys(tmp_path):
     doc.ultraview = payload
     pio.save_project_to_json(doc, path)
     raw = json.loads(path.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 2
+    assert raw["schema_version"] == 3
     assert raw["ultraview"]["board"]["name"] == "全局对比-A"
     forbidden = {
         "digest", "selected", "presentation", "image", "qimage",
@@ -438,3 +438,76 @@ def test_old_reader_drops_ultraview_on_resave(tmp_path):
     pio.save_project_to_json(loaded, rewrite)
     rewritten = json.loads(rewrite.read_text(encoding="utf-8"))
     assert rewritten["ultraview"] is None
+
+
+def test_schema_v3_roundtrips_file_and_channel_order(tmp_path):
+    path = tmp_path / "ordered.tlproj"
+    doc = pio.ProjectDocument(
+        active_file="f1",
+        current_mode="time",
+        files=[
+            pio.ProjectFileRef(
+                fid="f1",
+                path_abs="/data/b.mf4",
+                path_rel="b.mf4",
+                fs=1000.0,
+                time_source="generated",
+                channel_order=["torque", "speed"],
+            ),
+            pio.ProjectFileRef(
+                fid="f0a",
+                path_abs="/data/grouped.hdf",
+                path_rel="grouped.hdf",
+                fs=1000.0,
+                time_source="generated",
+                channel_order=["x", "y"],
+            ),
+            pio.ProjectFileRef(
+                fid="f0b",
+                path_abs="/data/grouped.hdf",
+                path_rel="grouped.hdf",
+                fs=2000.0,
+                time_source="generated",
+                channel_order=["z"],
+            ),
+        ],
+        views=[],
+        view_manager={},
+    )
+    pio.save_project_to_json(doc, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 3
+    assert [entry["fid"] for entry in raw["files"]] == ["f1", "f0a", "f0b"]
+    assert raw["files"][0]["channel_order"] == ["torque", "speed"]
+    assert raw["files"][1]["channel_order"] == ["x", "y"]
+    assert raw["files"][2]["channel_order"] == ["z"]
+
+    loaded = pio.load_project_from_json(path)
+    assert [ref.fid for ref in loaded.files] == ["f1", "f0a", "f0b"]
+    assert loaded.files[0].channel_order == ["torque", "speed"]
+    assert loaded.files[1].channel_order == ["x", "y"]
+    assert loaded.files[2].channel_order == ["z"]
+
+
+def test_schema_v1_and_v2_default_missing_channel_order(tmp_path):
+    for version in (1, 2):
+        path = tmp_path / f"old-v{version}.tlproj"
+        raw = {
+            "schema_version": version,
+            "active_file": "f0",
+            "current_mode": "time",
+            "files": [
+                {
+                    "fid": "f0",
+                    "path_abs": "/data/a.mf4",
+                    "path_rel": "a.mf4",
+                    "fs": 1000.0,
+                    "time_source": "generated",
+                }
+            ],
+            "views": [],
+            "view_manager": {},
+        }
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        loaded = pio.load_project_from_json(path)
+        assert loaded.files[0].channel_order == []

@@ -73,7 +73,7 @@ def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_
 
     raw = json.loads(proj.read_text(encoding="utf-8"))
     assert raw["current_mode"] == "fft"
-    assert raw["schema_version"] == 2
+    assert raw["schema_version"] == 3
     board = raw["ultraview"]["workspace"]["boards"][0]
     assert board["name"] == "整车问题总览"
     assert board["layout_id"] == "grid_2x2"

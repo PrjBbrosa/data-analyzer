@@ -1390,7 +1390,12 @@ def test_custom_xaxis_uses_largest_normalized_unit_cohort(qapp, qtbot, tmp_path)
     assert [issue.code for issue in result.issues] == ["x_unit_incompatible"]
     assert result.issues[0].source_fid == fids[2]
     assert result.x_unit == "m/s²"
+    assert [slot.kind for slot in result.slots] == [
+        "success", "success", "placeholder",
+    ]
+    assert result.slots[2].issue.code == "x_unit_incompatible"
 
+    w.chart_stack.set_plot_mode("overlay")
     w.plot_time()
     qapp.processEvents()
     delta_results = []
@@ -1411,6 +1416,65 @@ def test_custom_xaxis_uses_largest_normalized_unit_cohort(qapp, qtbot, tmp_path)
         QToolButton, "timePlotDiagnosticsButton"
     )
     assert pill.text() == "⚠ 已绘制 2/3 · 1 条未绘制"
+
+
+def test_custom_xaxis_slots_keep_workspace_order_and_overlay_skips_placeholders(
+    qapp, qtbot, tmp_path
+):
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    with_x = tmp_path / "with-x.csv"
+    missing_x = tmp_path / "missing-x.csv"
+    pd.DataFrame({
+        "time": [0.0, 1.0, 2.0],
+        "angle": [10.0, 20.0, 30.0],
+        "force": [1.0, 2.0, 3.0],
+    }).to_csv(with_x, index=False)
+    pd.DataFrame({
+        "time": [0.0, 1.0, 2.0],
+        "force": [4.0, 5.0, 6.0],
+    }).to_csv(missing_x, index=False)
+
+    w = MainWindow(); qtbot.addWidget(w)
+    w._load_one(str(with_x))
+    w._load_one(str(missing_x))
+    fids = list(w.files)
+    ok_fid, miss_fid = fids
+    w.navigator.set_checked_channels([(ok_fid, "force"), (miss_fid, "force")])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="per_source_name", channel="angle",
+    )
+
+    result = w._build_time_plot_data()
+    assert [slot.kind for slot in result.slots] == ["success", "placeholder"]
+    assert [slot.key for slot in result.slots] == [
+        (ok_fid, "force"), (miss_fid, "force"),
+    ]
+    assert result.slots[1].issue.code == "missing_x_channel"
+    subplot_rows = result.render_rows("subplot")
+    overlay_rows = result.render_rows("overlay")
+    assert len(subplot_rows) == 2
+    assert subplot_rows[1][7]["placeholder"] is True
+    assert len(overlay_rows) == 1
+    assert overlay_rows[0][6] == ok_fid
+
+    assert w.navigator_order.move_file_block([ok_fid], miss_fid, "after")
+    w.navigator.project_file_order(w.navigator_order.file_fids())
+    reordered = w._build_time_plot_data()
+    assert [slot.key for slot in reordered.slots] == [
+        (miss_fid, "force"), (ok_fid, "force"),
+    ]
+    assert [slot.kind for slot in reordered.slots] == ["placeholder", "success"]
+
+    w.navigator.set_checked_channels([(miss_fid, "force")])
+    unchecked = w._build_time_plot_data()
+    assert [slot.key for slot in unchecked.slots] == [(miss_fid, "force")]
+    assert unchecked.slots[0].kind == "placeholder"
+    assert not unchecked.render_rows("overlay")
+    assert w._custom_xaxis_spec.channel == "angle"
 
 
 def test_custom_xaxis_unit_cohort_uses_only_range_finite_sources(
@@ -1595,7 +1659,12 @@ def test_all_custom_x_failures_use_empty_hint_and_card_diagnostic(
     w._apply_xaxis()
     qapp.processEvents()
 
-    assert w.canvas_time._empty_hint_text == "自定义横坐标无法绘制 · 0/1"
+    # Subplot all-fail keeps one placeholder row instead of an empty-chart
+    # overlay; overlay still uses the 0/N empty hint.
+    assert w.chart_stack.plot_mode_for_canvas(w.canvas_time) == "subplot"
+    assert w.canvas_time._empty_hint_text == ""
+    assert len(w.canvas_time.axes_list) == 1
+    assert getattr(w.canvas_time.axes_list[0], "placeholder", False) is True
     pill = w.chart_stack._time_card.findChild(
         QToolButton, "timePlotDiagnosticsButton"
     )
@@ -1606,7 +1675,15 @@ def test_all_custom_x_failures_use_empty_hint_and_card_diagnostic(
     )
     assert "缺少横坐标通道 angle" in details.text()
     assert ("横坐标已更新", "success") not in toast_calls
-    assert w.statusBar.currentMessage() == "绘制: 0/1 通道"
+    assert w.statusBar.currentMessage().startswith("绘制: 0/1 通道")
+
+    w.chart_stack.set_plot_mode("overlay")
+    w.plot_time()
+    qapp.processEvents()
+    assert w.canvas_time._empty_hint_text == "自定义横坐标无法绘制 · 0/1"
+    assert not any(
+        getattr(handle, "placeholder", False) for handle in w.canvas_time.axes_list
+    )
 
 
 def test_channel_edit_refreshes_custom_xaxis_candidates(qapp, qtbot, loaded_csv):

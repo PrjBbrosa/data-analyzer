@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from PyQt5.QtCore import QMimeData, QPoint, QPointF, Qt
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent
+from PyQt5.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PyQt5.QtWidgets import QToolButton
 
 from mf4_analyzer.ui.file_navigator import FileNavigator, _FileRow
@@ -20,6 +20,7 @@ def test_file_navigator_signals_exist(qapp):
     assert hasattr(nav, 'close_all_requested')
     assert hasattr(nav, 'channels_changed')
     assert hasattr(nav, 'visibility_changed')
+    assert hasattr(nav, 'file_order_requested')
 
 
 class FakeFd:
@@ -776,3 +777,244 @@ def test_malformed_internal_file_drop_is_ignored(qapp, qtbot):
         nav.channel_list.dropEvent(event)
 
     assert not event.isAccepted()
+
+
+def _file_mime(fids):
+    mime = QMimeData()
+    mime.setData(_FileRow.MIME_TYPE, json.dumps(list(fids)).encode("utf-8"))
+    return mime
+
+
+def _shown_file_nav(qtbot, *entries):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    for fid, fd in entries:
+        nav.add_file(fid, fd)
+    nav.resize(320, 480)
+    nav.show()
+    qtbot.waitExposed(nav)
+    nav._file_holder.adjustSize()
+    return nav
+
+
+def _pos_on_row(row, *, after=False):
+    geo = row.geometry()
+    y = geo.bottom() - 1 if after else geo.top() + 1
+    return QPoint(max(4, geo.center().x()), y)
+
+
+def _file_list_drop(nav, mime, pos, action=Qt.MoveAction):
+    event = QDropEvent(
+        pos, action | Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier
+    )
+    event._mime_ref = mime
+    nav._handle_file_list_drop(event, nav._file_holder)
+    return event
+
+
+def test_file_list_drop_moves_first_card_to_end(qapp, qtbot):
+    nav = _shown_file_nav(
+        qtbot,
+        ("f0", FakeFd(filename="a.csv")),
+        ("f1", FakeFd(filename="b.csv")),
+        ("f2", FakeFd(filename="c.csv")),
+    )
+    mime = _file_mime(["f0"])
+    captured = []
+    nav.file_order_requested.connect(
+        lambda fids, target, placement: captured.append(
+            (list(fids), list(target), placement)
+        )
+    )
+
+    with qtbot.assertNotEmitted(nav.files_attach_requested):
+        with qtbot.assertNotEmitted(nav.file_close_requested):
+            event = _file_list_drop(
+                nav, mime, _pos_on_row(nav._ordered_file_rows()[-1], after=True)
+            )
+
+    assert event.isAccepted()
+    assert event.dropAction() == Qt.MoveAction
+    assert captured == [(["f0"], ["f2"], "after")]
+    nav.project_file_order(["f1", "f2", "f0"])
+    assert nav.ordered_file_fids() == ["f1", "f2", "f0"]
+    assert [
+        nav.channel_list.tree.topLevelItem(idx).data(0, Qt.UserRole)[1]
+        for idx in range(nav.channel_list.tree.topLevelItemCount())
+    ] == ["f1", "f2", "f0"]
+
+
+def test_file_list_drop_moves_last_card_to_front(qapp, qtbot):
+    nav = _shown_file_nav(
+        qtbot,
+        ("f0", FakeFd(filename="a.csv")),
+        ("f1", FakeFd(filename="b.csv")),
+        ("f2", FakeFd(filename="c.csv")),
+    )
+    mime = _file_mime(["f2"])
+    captured = []
+    nav.file_order_requested.connect(
+        lambda fids, target, placement: captured.append(
+            (list(fids), list(target), placement)
+        )
+    )
+
+    event = _file_list_drop(
+        nav, mime, _pos_on_row(nav._ordered_file_rows()[0], after=False)
+    )
+
+    assert event.dropAction() == Qt.MoveAction
+    assert captured == [(["f2"], ["f0"], "before")]
+    nav.project_file_order(["f2", "f0", "f1"])
+    assert nav.ordered_file_fids() == ["f2", "f0", "f1"]
+
+
+def test_file_list_same_slot_drop_is_noop(qapp, qtbot):
+    nav = _shown_file_nav(
+        qtbot,
+        ("f0", FakeFd()),
+        ("f1", FakeFd()),
+    )
+    mime = _file_mime(["f0"])
+    with qtbot.assertNotEmitted(nav.file_order_requested):
+        event = _file_list_drop(
+            nav, mime, _pos_on_row(nav._ordered_file_rows()[0], after=True)
+        )
+    assert event.isAccepted()
+    assert nav.ordered_file_fids() == ["f0", "f1"]
+
+
+def test_file_list_group_card_moves_as_one_block(qapp, qtbot):
+    source = "C:/data/grouped.hdf"
+    nav = _shown_file_nav(
+        qtbot,
+        ("f0", FakeFd(filepath=source, label_suffix="1 kHz")),
+        ("f1", FakeFd(filepath=source, label_suffix="2 kHz")),
+        ("f2", FakeFd(filename="other.csv")),
+    )
+    mime = _file_mime(["f1", "f0"])
+    captured = []
+    nav.file_order_requested.connect(
+        lambda fids, target, placement: captured.append(
+            (list(fids), list(target), placement)
+        )
+    )
+
+    event = _file_list_drop(
+        nav, mime, _pos_on_row(nav._ordered_file_rows()[-1], after=True)
+    )
+
+    assert event.dropAction() == Qt.MoveAction
+    assert captured == [(["f0", "f1"], ["f2"], "after")]
+    nav.project_file_order(["f2", "f0", "f1"])
+    assert nav.ordered_file_fids() == ["f2", "f0", "f1"]
+    tree = nav.channel_list.tree
+    assert tree.topLevelItemCount() == 2
+    assert tree.topLevelItem(0).data(0, Qt.UserRole)[0] == "file"
+    assert tree.topLevelItem(1).data(0, Qt.UserRole)[0] == "source"
+
+
+def test_file_list_unknown_or_malformed_mime_is_ignored(qapp, qtbot):
+    nav = _shown_file_nav(qtbot, ("f0", FakeFd()), ("f1", FakeFd()))
+    last = _pos_on_row(nav._ordered_file_rows()[-1], after=True)
+    with qtbot.assertNotEmitted(nav.file_order_requested):
+        bad = QMimeData()
+        bad.setData(_FileRow.MIME_TYPE, b"not-json")
+        event = _file_list_drop(nav, bad, last)
+        assert not event.isAccepted()
+
+        missing = _file_mime(["missing"])
+        event = _file_list_drop(nav, missing, last)
+        assert not event.isAccepted()
+
+        mixed = _file_mime(["f0", "f1"])
+        event = _file_list_drop(nav, mixed, last)
+        assert not event.isAccepted()
+    assert nav.ordered_file_fids() == ["f0", "f1"]
+
+
+def test_file_insert_line_clears_on_leave_drop_and_noop(qapp, qtbot):
+    nav = _shown_file_nav(qtbot, ("f0", FakeFd()), ("f1", FakeFd()))
+    mime = _file_mime(["f0"])
+    move = QDragMoveEvent(
+        _pos_on_row(nav._ordered_file_rows()[-1], after=True),
+        Qt.MoveAction | Qt.CopyAction,
+        mime,
+        Qt.LeftButton,
+        Qt.NoModifier,
+    )
+    move._mime_ref = mime
+    nav._handle_file_list_drag_move(move, nav._file_holder)
+    assert nav._file_insert_line.isVisible()
+
+    leave = QDragLeaveEvent()
+    nav.eventFilter(nav._file_holder, leave)
+    assert not nav._file_insert_line.isVisible()
+
+    nav._handle_file_list_drag_move(move, nav._file_holder)
+    assert nav._file_insert_line.isVisible()
+    _file_list_drop(
+        nav, mime, _pos_on_row(nav._ordered_file_rows()[-1], after=True)
+    )
+    assert not nav._file_insert_line.isVisible()
+
+    nav._handle_file_list_drag_move(
+        QDragMoveEvent(
+            _pos_on_row(nav._ordered_file_rows()[0], after=True),
+            Qt.MoveAction | Qt.CopyAction,
+            mime,
+            Qt.LeftButton,
+            Qt.NoModifier,
+        ),
+        nav._file_holder,
+    )
+    assert not nav._file_insert_line.isVisible()
+
+
+def test_file_list_and_channel_pane_keep_move_vs_copy_actions(qapp, qtbot):
+    nav = _shown_file_nav(qtbot, ("f0", FakeFd()), ("f1", FakeFd()))
+    mime = _file_mime(["f0"])
+
+    file_event = _file_list_drop(
+        nav, mime, _pos_on_row(nav._ordered_file_rows()[-1], after=True)
+    )
+    assert file_event.dropAction() == Qt.MoveAction
+
+    channel_event = QDropEvent(
+        QPointF(4, 4), Qt.CopyAction | Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier
+    )
+    channel_event._mime_ref = mime
+    nav.channel_list.dropEvent(channel_event)
+    assert channel_event.dropAction() == Qt.CopyAction
+    assert channel_event.isAccepted()
+
+
+def test_file_row_drag_parent_is_stable_host(qapp, qtbot, monkeypatch):
+    nav = _shown_file_nav(qtbot, ("f0", FakeFd()))
+    parents = []
+
+    class _FakeDrag:
+        def __init__(self, parent):
+            parents.append(parent)
+
+        def setMimeData(self, mime):
+            self.mime = mime
+
+        def exec_(self, *args, **kwargs):
+            return Qt.CopyAction
+
+    monkeypatch.setattr("mf4_analyzer.ui.file_navigator.QDrag", _FakeDrag)
+    row = nav._ordered_file_rows()[0]
+    row._drag_start = QPoint(0, 0)
+    from PyQt5.QtGui import QMouseEvent
+    from PyQt5.QtCore import QEvent
+
+    event = QMouseEvent(
+        QEvent.MouseMove,
+        QPoint(40, 40),
+        Qt.NoButton,
+        Qt.LeftButton,
+        Qt.NoModifier,
+    )
+    row.mouseMoveEvent(event)
+    assert parents == [nav.window()]

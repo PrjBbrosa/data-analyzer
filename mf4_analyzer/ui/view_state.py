@@ -3,6 +3,10 @@
 ViewState records the interactive screen state for a time-domain chart. It is
 kept widget-free so it can round-trip through JSON and be reused by future
 project persistence.
+
+``checked`` stores composite channel membership for a View. Drawing order is
+not stored here: the workspace ``NavigatorOrderState`` sorts checked keys
+immediately before a TimeDomain payload is built.
 """
 from __future__ import annotations
 

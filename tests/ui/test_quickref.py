@@ -17,6 +17,18 @@ from mf4_analyzer.ui import quickref
 from mf4_analyzer.ui import hints
 
 
+def test_quickref_documents_channel_drop_and_navigator_order():
+    gestures = next(g for g in quickref.QUICKREF if g.title == "图表手势")
+    join = next(r for r in gestures.rows if r.desc == "拖通道加入当前 View")
+    assert "绘图区" in (join.gesture or "")
+    xaxis = next(r for r in gestures.rows if r.desc == "拖通道设为横坐标")
+    assert "X 带" in (xaxis.gesture or "")
+    assert "占位" in (xaxis.sub or "") or "跳过" in (xaxis.sub or "")
+    tree = next(g for g in quickref.QUICKREF if g.title == "通道树（左侧）")
+    order = next(r for r in tree.rows if "顺序" in r.desc)
+    assert "画布内不能拖行" in (order.sub or "")
+
+
 EXPECTED_TITLES = [
     "开始 · 文件",
     "五个分析工作区 + 总览",

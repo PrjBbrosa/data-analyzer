@@ -16,8 +16,8 @@ import tempfile
 from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
 from .view_overlay_state import remap_remarks
 
-SCHEMA_VERSION = 2
-SUPPORTED_SCHEMA_VERSIONS = {1, 2}
+SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3}
 _SOURCE_MODES = frozenset({"time", "fft", "fft_time", "frf", "order"})
 
 
@@ -39,6 +39,7 @@ class ProjectFileRef:
     fs: float
     time_source: str
     dbc_refs: list = field(default_factory=list)  # list[ProjectPathRef]
+    channel_order: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -73,6 +74,10 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
                         "path_rel": d.path_rel,
                     }
                     for d in getattr(r, "dbc_refs", [])
+                ],
+                "channel_order": [
+                    str(name) for name in (getattr(r, "channel_order", None) or [])
+                    if str(name).strip()
                 ],
             }
             for r in doc.files
@@ -153,6 +158,11 @@ def load_project_from_json(path) -> ProjectDocument:
                     path_rel=d.get("path_rel"),
                 )
                 for d in f.get("dbc_refs", [])
+            ],
+            channel_order=[
+                str(name).strip()
+                for name in (f.get("channel_order") or [])
+                if str(name).strip()
             ],
         )
         for f in raw.get("files", [])

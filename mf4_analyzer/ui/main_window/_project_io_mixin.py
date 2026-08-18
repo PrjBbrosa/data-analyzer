@@ -452,6 +452,12 @@ class ProjectIOMixin:
             except Exception:
                 fd.fs = float(fs)
         self.files[fid] = fd
+        channels = (
+            fd.get_signal_channels()
+            if hasattr(fd, "get_signal_channels")
+            else chs
+        )
+        self.navigator_order.register_file(fid, channels)
         self.navigator.add_file(fid, fd)
         self.canvas_time.invalidate_envelope_cache("file loaded")
         self.canvas_time.invalidate_monotonicity_cache()
@@ -1707,6 +1713,7 @@ class ProjectIOMixin:
         self._remove_file_from_all_time_views(fid)
         self._remove_file_from_all_analysis_views(fid)
         del self.files[fid]
+        self.navigator_order.remove_fid(fid)
         self.navigator.remove_file(fid, emit=False)
         resolved = self._focused_time_view_state()
         if resolved is not None and self.chart_stack.current_mode() == "time":
@@ -1756,7 +1763,14 @@ class ProjectIOMixin:
                 sec, capture_sources=(sec == current_mode))
 
         file_refs = []
-        for fid, fd in self.files.items():
+        ordered_fids = [
+            fid for fid in self.navigator_order.file_fids() if fid in self.files
+        ]
+        for fid in self.files:
+            if fid not in ordered_fids:
+                ordered_fids.append(fid)
+        for fid in ordered_fids:
+            fd = self.files[fid]
             abs_p = str(Path(fd.filepath).resolve())
             dbc_refs = [
                 pio.make_path_ref(str(Path(dbc).resolve()), path)
@@ -1769,6 +1783,7 @@ class ProjectIOMixin:
                 fs=float(fd.fs),
                 time_source=fd._time_source,
                 dbc_refs=dbc_refs,
+                channel_order=list(self.navigator_order.channel_order(fid)),
             ))
 
         vm = {
@@ -1847,6 +1862,17 @@ class ProjectIOMixin:
                 # must not be promoted to a real/manual axis merely because we
                 # reconstructed it at the saved sampling rate.
                 fd._time_source = ref.time_source
+            if getattr(ref, "channel_order", None):
+                self.navigator_order.apply_channel_order(new_fid, ref.channel_order)
+        desired = [
+            fid_map[ref.fid] for ref in doc.files if ref.fid in fid_map
+        ]
+        self.navigator_order.set_file_order(desired)
+        self.navigator.project_file_order(self.navigator_order.file_fids())
+        for fid in self.navigator_order.file_fids():
+            self.navigator.channel_list.project_channel_order(
+                fid, self.navigator_order.channel_order(fid)
+            )
         return ProjectFileRestoreResult(
             fid_map=fid_map,
             missing_paths=missing_paths,
@@ -2100,6 +2126,7 @@ class ProjectIOMixin:
             self._remove_file_from_all_time_views(fid)
             self._remove_file_from_all_analysis_views(fid)
             del self.files[fid]
+            self.navigator_order.remove_fid(fid)
             self.navigator.remove_file(fid, emit=False)
         self._active = None
         if health is not None:

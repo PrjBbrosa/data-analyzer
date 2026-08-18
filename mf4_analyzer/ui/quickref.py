@@ -173,6 +173,16 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow("平移", gesture="直接拖动"),
             QuickRow(
+                "拖通道加入当前 View",
+                sub="松手在绘图区即勾选并绘图；已在 View 中则只聚焦，不重复",
+                gesture="拖到绘图区",
+            ),
+            QuickRow(
+                "拖通道设为横坐标",
+                sub="按各来源匹配同名通道；失败只占位/跳过该来源，不回滚成时间轴",
+                gesture="拖到最底部 X 带",
+            ),
+            QuickRow(
                 "单独调某通道 Y（叠加）",
                 gesture="滚轮停在该通道 Y 轴上",
                 sub="Shift+滚轮缩放，平滚轮平移",
@@ -239,6 +249,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         title="通道树（左侧）",
         rows=(
             QuickRow("绘制 / 取消通道", gesture="勾选复选框"),
+            QuickRow(
+                "调整文件 / 通道顺序",
+                sub="拖文件卡片移动整个文件块；拖通道只改同一来源内顺序。分屏与叠加都跟左侧顺序，画布内不能拖行",
+                gesture="左侧拖动",
+            ),
             QuickRow("设为叠加图左轴", gesture="右键通道"),
             QuickRow(
                 "合并为共轴比幅值",

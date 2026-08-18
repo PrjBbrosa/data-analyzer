@@ -120,6 +120,47 @@ def test_ui_kit_never_imports_from_analyzer_ui_or_acquisition_ui():
     )
 
 
+def test_navigator_order_does_not_import_qt_or_mainwindow():
+    """Workspace order is a Qt-free collaborator; it must not pull widgets."""
+    src = PACKAGE_ROOT / "ui" / "navigator_order.py"
+    imported = _imported_module_names(src)
+    forbidden = (
+        "PyQt5",
+        "pyqtgraph",
+        "mf4_analyzer.ui.main_window",
+        "mf4_analyzer.ui.file_navigator",
+        "mf4_analyzer.ui.widgets",
+        "mf4_analyzer.ui.chart_stack",
+        "mf4_analyzer.acquisition_ui",
+    )
+    violations = [
+        name
+        for name in imported
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+    ]
+    assert not violations, violations
+
+
+def test_channel_drag_does_not_import_qt_or_widgets():
+    src = PACKAGE_ROOT / "ui" / "channel_drag.py"
+    imported = _imported_module_names(src)
+    forbidden = (
+        "PyQt5",
+        "pyqtgraph",
+        "mf4_analyzer.ui.main_window",
+        "mf4_analyzer.ui.file_navigator",
+        "mf4_analyzer.ui.widgets",
+        "mf4_analyzer.ui.chart_stack",
+        "mf4_analyzer.acquisition_ui",
+    )
+    violations = [
+        name
+        for name in imported
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+    ]
+    assert not violations, violations
+
+
 def test_analyzer_ui_never_imports_from_acquisition_ui():
     """``mf4_analyzer.ui.*`` (Analyzer) must not import the Cockpit
     package. The Cockpit may import from Analyzer (one-way arrow)."""

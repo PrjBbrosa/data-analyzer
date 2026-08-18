@@ -10370,6 +10370,45 @@ def test_time_card_diagnostics_pill_hides_after_full_success(qapp, qtbot):
     ).isVisibleTo(card)
 
 
+def test_subplot_placeholder_keeps_empty_row_out_of_channel_data(qapp, qtbot):
+    import numpy as np
+
+    canvas = _pg_canvas(qapp)
+    qtbot.addWidget(canvas)
+    t = np.linspace(0.0, 1.0, 40)
+    rows = [
+        ("ok", True, t, np.sin(t), "#2d7ff9", "N", "f1"),
+        (
+            "file-b / force",
+            True,
+            np.array([], dtype=float),
+            np.array([], dtype=float),
+            "#9aa0a6",
+            "",
+            "f2",
+            {
+                "placeholder": True,
+                "placeholder_reason": "缺少横坐标 angle",
+            },
+        ),
+    ]
+    canvas.plot_channels(rows, mode="subplot")
+    qapp.processEvents()
+
+    assert len(canvas.axes_list) == 2
+    assert getattr(canvas.axes_list[1], "placeholder", False) is True
+    assert "ok" in canvas._channel_lines
+    assert "file-b / force" not in canvas._channel_lines
+    assert canvas.axes_list[1].view_box is not None
+    assert canvas.axes_list[1].view_box.state["mouseEnabled"] == [False, False]
+
+    canvas.plot_channels(rows, mode="overlay")
+    qapp.processEvents()
+    assert not any(getattr(handle, "placeholder", False) for handle in canvas.axes_list)
+    assert "ok" in canvas._channel_lines
+    assert "file-b / force" not in canvas._channel_lines
+
+
 def _renderer_cls():
     from mf4_analyzer.ui.pg_canvas.renderer import Renderer
 

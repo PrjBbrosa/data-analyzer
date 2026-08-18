@@ -642,6 +642,96 @@ class TimeDomainCanvasPG(QWidget):
                 slots.append({"gid": gid, "members": [v]})
         return slots
 
+    def _subplot_layout_slots(self, layout_entries, vis):
+        """Ordered subplot slots mixing success members and placeholders."""
+        # Display names collide across files; identity is (name, data_id).
+        vis_map = {(v[0], v[5]): v for v in vis}
+        slots = []
+        slot_of_gid = {}
+        for kind, payload in layout_entries:
+            if kind == "placeholder":
+                slots.append({
+                    "placeholder": payload,
+                    "gid": None,
+                    "members": [],
+                })
+                continue
+            name = payload[0]
+            data_id = payload[6] if len(payload) > 6 else None
+            vis_row = vis_map.get((name, data_id))
+            if vis_row is None:
+                continue
+            gid = vis_row[7]
+            if gid is None:
+                slots.append({
+                    "placeholder": None,
+                    "gid": None,
+                    "members": [vis_row],
+                })
+            elif gid in slot_of_gid:
+                slots[slot_of_gid[gid]]["members"].append(vis_row)
+            else:
+                slot_of_gid[gid] = len(slots)
+                slots.append({
+                    "placeholder": None,
+                    "gid": gid,
+                    "members": [vis_row],
+                })
+        return slots
+
+    def _add_placeholder_subplot(self, payload, *, xlabel, is_bottom, row):
+        """Neutral empty subplot row that does not join cursor/Y-fit/ink."""
+        pi = self._add_plot_item(row=row, col=0)
+        handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
+        handle.placeholder = True
+        self.axes_list.append(handle)
+        reason = str(payload.get("reason") or "无法绘制")
+        name = str(payload.get("name") or "")
+        vb = handle.view_box
+        if vb is not None:
+            vb.setMouseEnabled(x=False, y=False)
+            try:
+                vb.setMenuEnabled(False)
+            except Exception:
+                pass
+            try:
+                vb.enableAutoRange(enable=False)
+                vb.setRange(xRange=(0.0, 1.0), yRange=(0.0, 1.0), padding=0.0)
+            except Exception:
+                pass
+            escaped = (
+                reason.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+            label = pg.TextItem(
+                html=(
+                    f'<span style="color:#64748b;font-size:11pt">{escaped}</span>'
+                ),
+                anchor=(0.5, 0.5),
+            )
+            try:
+                vb.addItem(label, ignoreBounds=True)
+                label.setPos(0.5, 0.5)
+            except Exception:
+                pass
+        if name:
+            try:
+                pi.getAxis("left").setLabel(name)
+            except Exception:
+                pass
+        if xlabel and is_bottom:
+            try:
+                pi.setLabel("bottom", xlabel)
+            except Exception:
+                pass
+        self._overlay_axes._configure_subplot_bottom_axis(
+            handle, is_bottom=is_bottom,
+        )
+        self._subplot_label_specs.append(
+            (handle, name or reason, "#9aa0a6", "")
+        )
+
     def plot_channels(
         self,
         ch_list,
@@ -704,6 +794,7 @@ class TimeDomainCanvasPG(QWidget):
         primaries = []
         companions = []
         companion_visible_by_source = {}
+        layout_entries = []
         for row in ch_list:
             if len(row) >= 8 and isinstance(row[7], dict):
                 name, visible, t, sig, color, unit, data_id, meta = row[:8]
@@ -714,6 +805,16 @@ class TimeDomainCanvasPG(QWidget):
                 name, visible, t, sig, color, unit = row[:6]
                 data_id = None
                 meta = None
+            if meta and meta.get("placeholder"):
+                layout_entries.append((
+                    "placeholder",
+                    {
+                        "name": name,
+                        "reason": str(meta.get("placeholder_reason") or "无法绘制"),
+                        "data_id": data_id,
+                    },
+                ))
+                continue
             companion_of = meta.get("companion_of") if meta else None
             if companion_of is not None:
                 cvis = bool(visible)
@@ -725,9 +826,11 @@ class TimeDomainCanvasPG(QWidget):
                     companion_visible_by_source[companion_of] = True
                 continue
             axis_group = meta.get("axis_group") if meta else None
-            primaries.append(
-                (name, bool(visible), t, sig, color, unit, data_id, axis_group)
+            primary = (
+                name, bool(visible), t, sig, color, unit, data_id, axis_group
             )
+            primaries.append(primary)
+            layout_entries.append(("primary", primary))
         report_progress(100)
 
         # ``vis`` = primaries that own an axis this rebuild = original visible
@@ -739,13 +842,14 @@ class TimeDomainCanvasPG(QWidget):
             for (name, p_visible, t, sig, color, unit, data_id, axis_group) in primaries
             if p_visible or companion_visible_by_source.get(name)
         ]
+        subplot_layout_slots = self._subplot_layout_slots(layout_entries, vis)
 
         # Situational nudge signals (channel count / units / amplitude / clip)
         # for the footer — see hints.HintState. Derived from the visible rows
         # here so the empty-chart path below resets them to calm too.
         self._nudge_signals = _compute_time_nudge_signals(vis)
 
-        if not vis:
+        if not vis and not (mode == "subplot" and subplot_layout_slots):
             # No channel owns an axis (every original hidden AND no visible
             # companion) → nothing to draw and nothing to anchor companions to.
             self._project_remarks()
@@ -768,7 +872,16 @@ class TimeDomainCanvasPG(QWidget):
         report_progress(150)
 
         overlay_mode = (mode == "overlay" and len(vis) >= 2)
-        subplot_mode = (mode == "subplot" and len(vis) > 1)
+        subplot_mode = (
+            mode == "subplot"
+            and (
+                len(subplot_layout_slots) > 1
+                or (
+                    len(subplot_layout_slots) == 1
+                    and subplot_layout_slots[0].get("placeholder")
+                )
+            )
+        )
         self._overlay_mode = overlay_mode  # parity attr name with TimeDomainCanvas
 
         # Subplot dense-stack bucket cap (满高竖线墙): count how many of the
@@ -797,18 +910,26 @@ class TimeDomainCanvasPG(QWidget):
             # channels each own their own row exactly as before. The slot order
             # (and merge rule) is the SAME helper the overlay branch uses, so
             # subplot/overlay group identically.
-            slots = self._group_visible_into_slots(vis)
+            slots = subplot_layout_slots
             n_slots = len(slots)
             # Subplot labels need bbox-overlap-driven inside/outside flip; build
             # one spec PER SLOT (group rows carry the group color + member-name
             # label, ungrouped rows carry the channel's own color).
             self._subplot_label_specs = []
             for slot_idx, slot in enumerate(slots):
+                is_bottom = (slot_idx == n_slots - 1)
+                if slot.get("placeholder"):
+                    self._add_placeholder_subplot(
+                        slot["placeholder"],
+                        xlabel=xlabel,
+                        is_bottom=is_bottom,
+                        row=slot_idx,
+                    )
+                    continue
                 pi = self._add_plot_item(row=slot_idx, col=0)
                 handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
                 self.axes_list.append(handle)
                 members = slot["members"]
-                is_bottom = (slot_idx == n_slots - 1)
                 if slot["gid"] is None:
                     name, t, sig, color, unit, data_id, p_visible, _ag = members[0]
                     self._overlay_axes._bind_channel(

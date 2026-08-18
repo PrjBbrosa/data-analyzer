@@ -38,9 +38,11 @@ DEFAULT_PRIMARY_RATIO = 0.67
 RATIO_MIN = 0.40
 RATIO_MAX = 0.80
 RATIO_STEP = 0.05
-# The top-level .tlproj schema stays at 2.  This independent, nested schema
-# carries the UltraView workspace evolution so ordinary projects remain
-# readable by the rest of the session codec.
+# The nested UltraView workspace schema is independent of the top-level
+# .tlproj document schema. Ordinary session fields (files, views,
+# channel_order) live on the document; this number only versions the
+# UltraView workspace blob so the rest of the session codec can keep
+# reading older projects.
 ULTRAVIEW_SCHEMA = 4
 DIGEST_SCHEMA = 1
 _BOARD_PAYLOAD_KEYS = frozenset(

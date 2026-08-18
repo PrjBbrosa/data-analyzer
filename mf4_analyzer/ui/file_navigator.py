@@ -1,8 +1,9 @@
 """Left pane: file list (replacing QTabWidget) + channel tree."""
 import json
+import logging
 
 import qtawesome as qta
-from PyQt5.QtCore import QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMenu,
@@ -12,6 +13,10 @@ from PyQt5.QtWidgets import (
 from ..ui_kit.icons import Icons
 from ..ui_kit.menus import apply_rounded_menu_chrome
 from .widgets import INTERNAL_FILE_FIDS_MIME, MultiFileChannelWidget
+
+logger = logging.getLogger(__name__)
+_FILE_ORDER_BEFORE = "before"
+_FILE_ORDER_AFTER = "after"
 
 
 class _ElidedLabel(QLabel):
@@ -165,9 +170,12 @@ class _FileRow(QFrame):
         ):
             return super().mouseMoveEvent(event)
         self._drag_start = None
-        drag = QDrag(self)
+        host = self.window()
+        if host is None:
+            host = self.parent() or self
+        drag = QDrag(host)
         drag.setMimeData(self._build_drag_mime())
-        drag.exec_(Qt.CopyAction)
+        drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
 
     def mouseReleaseEvent(self, event):
         self._drag_start = None
@@ -203,6 +211,9 @@ class FileNavigator(QWidget):
     channel_editor_requested = pyqtSignal()
     files_attach_requested = pyqtSignal(object)
     files_detach_requested = pyqtSignal(object, str)
+    channel_order_requested = pyqtSignal(str, str, str, str)
+    # Structured file-card reorder: (source_fids, target_fids, "before"|"after").
+    file_order_requested = pyqtSignal(object, object, str)
     # Item-1 shim: still emitted when attach_on_load flips so older callers
     # (and tests) keep working without knowing about the follow menu.
     auto_attach_changed = pyqtSignal(bool)
@@ -325,6 +336,19 @@ class FileNavigator(QWidget):
         scroll.setWidget(self._file_holder)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setMinimumHeight(150)
+        self._file_scroll = scroll
+        self._file_holder.setAcceptDrops(True)
+        self._file_holder.setAccessibleName("文件列表")
+        scroll.viewport().setAcceptDrops(True)
+        scroll.viewport().setAccessibleName("文件列表排序")
+        self._file_insert_line = QFrame(self._file_holder)
+        self._file_insert_line.setObjectName("fileInsertLine")
+        self._file_insert_line.setAccessibleName("文件插入位置")
+        self._file_insert_line.setFixedHeight(2)
+        self._file_insert_line.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._file_insert_line.hide()
+        self._file_holder.installEventFilter(self)
+        scroll.viewport().installEventFilter(self)
         file_lay.addWidget(scroll, stretch=1)
         splitter.addWidget(file_area)
 
@@ -346,6 +370,9 @@ class FileNavigator(QWidget):
         )
         self.channel_list.files_detach_requested.connect(
             self.files_detach_requested
+        )
+        self.channel_list.channel_order_requested.connect(
+            self.channel_order_requested
         )
         config_bar = self.channel_list.config_bar
         config_bar.save_requested.connect(self.channel_config_save_requested)
@@ -396,9 +423,210 @@ class FileNavigator(QWidget):
         self._refresh_header()
         self._activate(fid)
 
-    def refresh_file(self, fid, fd):
+    def ordered_file_fids(self):
+        """Logical-source ids in the current file-card layout order."""
+        ordered = []
+        for row in self._ordered_file_rows():
+            ordered.extend(str(fid) for fid in row._fids)
+        return ordered
+
+    def project_file_order(self, ordered_fids):
+        """Move existing file cards and channel-tree roots to ``ordered_fids``."""
+        desired_rows = []
+        seen = set()
+        for fid in ordered_fids or ():
+            key = self._fid_to_key.get(str(fid))
+            if key is None or key in seen:
+                continue
+            row = self._rows.get(key)
+            if row is None:
+                continue
+            seen.add(key)
+            desired_rows.append(row)
+        for row in self._ordered_file_rows():
+            key = row._rows_key
+            if key in seen:
+                continue
+            seen.add(key)
+            desired_rows.append(row)
+        current = self._ordered_file_rows()
+        if current != desired_rows:
+            for row in current:
+                self._file_layout.removeWidget(row)
+            for idx, row in enumerate(desired_rows):
+                self._file_layout.insertWidget(idx, row)
+        self.channel_list.project_file_order(ordered_fids)
+
+    def _ordered_file_rows(self):
+        rows = []
+        for idx in range(self._file_layout.count()):
+            item = self._file_layout.itemAt(idx)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, _FileRow):
+                rows.append(widget)
+        return rows
+
+    def eventFilter(self, watched, event):
+        hosts = (self._file_holder, self._file_scroll.viewport())
+        if watched in hosts:
+            etype = event.type()
+            if etype == QEvent.DragEnter:
+                self._handle_file_list_drag_enter(event)
+                return True
+            if etype == QEvent.DragMove:
+                self._handle_file_list_drag_move(event, watched)
+                return True
+            if etype == QEvent.DragLeave:
+                self._clear_file_insert_line()
+                event.accept()
+                return True
+            if etype == QEvent.Drop:
+                self._handle_file_list_drop(event, watched)
+                return True
+        return super().eventFilter(watched, event)
+
+    def _file_order_payload(self, mime):
+        if mime is None or not mime.hasFormat(INTERNAL_FILE_FIDS_MIME):
+            return None
+        try:
+            payload = json.loads(
+                bytes(mime.data(INTERNAL_FILE_FIDS_MIME)).decode("utf-8")
+            )
+        except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, list):
+            return None
+        known = []
+        seen = set()
+        for value in payload:
+            if not isinstance(value, str) or value in seen:
+                continue
+            if value not in self._fid_to_key:
+                continue
+            seen.add(value)
+            known.append(value)
+        if not known:
+            return None
+        keys = {self._fid_to_key[fid] for fid in known}
+        if len(keys) != 1:
+            return None
+        row = self._rows.get(next(iter(keys)))
+        if row is None:
+            return None
+        return [str(fid) for fid in row._fids]
+
+    def _holder_pos(self, event, watched):
+        pos = event.pos()
+        if watched is self._file_scroll.viewport():
+            return self._file_holder.mapFrom(watched, pos)
+        return pos
+
+    def _file_drop_target(self, event, watched):
+        rows = self._ordered_file_rows()
+        if not rows:
+            return None, None
+        y = self._holder_pos(event, watched).y()
+        for row in rows:
+            geo = row.geometry()
+            if y < geo.top():
+                return row, _FILE_ORDER_BEFORE
+            if y <= geo.bottom():
+                mid = geo.top() + geo.height() / 2.0
+                placement = (
+                    _FILE_ORDER_BEFORE if y < mid else _FILE_ORDER_AFTER
+                )
+                return row, placement
+        return rows[-1], _FILE_ORDER_AFTER
+
+    def _file_order_is_noop(self, source_fids, target_fids, placement):
+        rows = self._ordered_file_rows()
+        source_key = self._fid_to_key.get(str(source_fids[0])) if source_fids else None
+        target_key = self._fid_to_key.get(str(target_fids[0])) if target_fids else None
+        if source_key is None or target_key is None:
+            return True
+        source_row = self._rows.get(source_key)
+        target_row = self._rows.get(target_key)
+        if source_row is None or target_row is None:
+            return True
+        if source_row is target_row:
+            return True
+        try:
+            source_at = rows.index(source_row)
+            target_at = rows.index(target_row)
+        except ValueError:
+            return True
+        if placement == _FILE_ORDER_BEFORE:
+            return source_at == target_at - 1
+        if placement == _FILE_ORDER_AFTER:
+            return source_at == target_at + 1
+        return True
+
+    def _show_file_insert_line(self, row, placement):
+        geo = row.geometry()
+        y = geo.top() if placement == _FILE_ORDER_BEFORE else geo.bottom() - 1
+        width = max(8, self._file_holder.width() - 8)
+        self._file_insert_line.setGeometry(4, max(0, y - 1), width, 2)
+        self._file_insert_line.show()
+        self._file_insert_line.raise_()
+
+    def _clear_file_insert_line(self):
+        self._file_insert_line.hide()
+
+    def _handle_file_list_drag_enter(self, event):
+        try:
+            if self._file_order_payload(event.mimeData()) is None:
+                self._clear_file_insert_line()
+                event.ignore()
+                return
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        except Exception:
+            logger.exception("file list drag enter failed")
+            self._clear_file_insert_line()
+            event.ignore()
+
+    def _handle_file_list_drag_move(self, event, watched):
+        try:
+            payload = self._file_order_payload(event.mimeData())
+            target_row, placement = self._file_drop_target(event, watched)
+            if payload is None or target_row is None:
+                self._clear_file_insert_line()
+                event.ignore()
+                return
+            if self._file_order_is_noop(payload, list(target_row._fids), placement):
+                self._clear_file_insert_line()
+            else:
+                self._show_file_insert_line(target_row, placement)
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        except Exception:
+            logger.exception("file list drag move failed")
+            self._clear_file_insert_line()
+            event.ignore()
+
+    def _handle_file_list_drop(self, event, watched):
+        self._clear_file_insert_line()
+        try:
+            payload = self._file_order_payload(event.mimeData())
+            target_row, placement = self._file_drop_target(event, watched)
+            if payload is None or target_row is None:
+                event.ignore()
+                return
+            target_fids = [str(fid) for fid in target_row._fids]
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+            if self._file_order_is_noop(payload, target_fids, placement):
+                return
+            self.file_order_requested.emit(
+                tuple(payload), tuple(target_fids), placement
+            )
+        except Exception:
+            logger.exception("file list drop failed")
+            event.ignore()
+
+    def refresh_file(self, fid, fd, channel_order=None):
         """Refresh channel rows for an existing file without changing cards."""
-        self.channel_list.refresh_file(fid, fd)
+        self.channel_list.refresh_file(fid, fd, channel_order=channel_order)
 
     def remove_file(self, fid, *, emit=True):
         rows_key = self._fid_to_key.pop(fid, None)

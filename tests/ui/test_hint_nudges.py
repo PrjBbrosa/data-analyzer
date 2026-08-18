@@ -343,7 +343,10 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "toolbar.shortcuts_exist",
         "chart.copy_image",
         "chart.right_click_menu",
+        "time.drop_join_view",
+        "time.drop_set_xaxis",
         "channel.right_click",
+        "time.nav_reorder",
         "file.scope_follow",
         # 58030e4d: same priority 70 as coaxis.merge; registry order wins.
         "channel.export_wwt_storage",

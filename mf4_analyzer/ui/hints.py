@@ -212,6 +212,27 @@ _HINTS = (
         priority=80,
     ),
     Hint(
+        id="time.drop_join_view",
+        text="拖通道到绘图区即可加入 View",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        priority=83,
+    ),
+    Hint(
+        id="time.drop_set_xaxis",
+        text="拖到底部横坐标带设为 X",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        priority=82,
+    ),
+    Hint(
+        id="time.nav_reorder",
+        text="左侧拖文件/通道排序，画布内不能拖行",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        priority=79,
+    ),
+    Hint(
         id="file.scope_follow",
         text="链接=文件范围跟随（加载/新建/切分析）",
         surface="discovery",

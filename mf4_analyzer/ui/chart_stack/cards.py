@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
     QAction, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy,
     QToolButton, QVBoxLayout, QWidget,
 )
+from PyQt5 import sip
 
 import qtawesome as qta
 
@@ -1040,6 +1041,19 @@ class TimeChartCard(_ChartCard):
 
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent, chart_mode='time')
+        self._xaxis_drop_overlay = None
+        canvas.setAccessibleName("时域绘图区")
+        glw = getattr(canvas, "_glw", None)
+        viewport = None
+        if glw is not None:
+            try:
+                viewport = glw.viewport()
+            except Exception:
+                viewport = None
+        if viewport is not None:
+            viewport.setAccessibleName("时域绘图区")
+            viewport.setAcceptDrops(True)
+        canvas.setAcceptDrops(True)
         if self.toolbar.layout() is not None:
             self.toolbar.layout().setSpacing(4)
         zoom_act = _find_action(self.toolbar, 'zoom')
@@ -1180,6 +1194,69 @@ class TimeChartCard(_ChartCard):
         # label whenever it flips.
         self._refresh_bottom_hint()
         self.cursor_mode_changed.emit(mode)
+
+    def set_channel_drop_zone(self, zone, x_rect=None):
+        """Show plot-join or X-axis drop highlight; ``zone`` is plot/xaxis/''."""
+        zone = zone or ""
+        if self.property("dropZone") != zone:
+            self.setProperty("dropZone", zone)
+            style = self.style()
+            if style is not None:
+                style.unpolish(self)
+                style.polish(self)
+            self.update()
+        overlay = getattr(self, "_xaxis_drop_overlay", None)
+        if zone == "xaxis" and x_rect is not None and not x_rect.isNull():
+            overlay = self._ensure_xaxis_drop_overlay()
+            if overlay is None:
+                return
+            overlay.setGeometry(x_rect)
+            overlay.show()
+            overlay.raise_()
+            return
+        if overlay is not None and not sip.isdeleted(overlay):
+            overlay.hide()
+
+    def _canvas_viewport_widget(self):
+        canvas = getattr(self, "canvas", None)
+        if canvas is None or sip.isdeleted(canvas):
+            return None
+        glw = getattr(canvas, "_glw", None)
+        if glw is None:
+            return None
+        try:
+            viewport = glw.viewport()
+        except Exception:
+            return None
+        if viewport is None or sip.isdeleted(viewport):
+            return None
+        return viewport
+
+    def _ensure_xaxis_drop_overlay(self):
+        """Parent the X-band overlay on the canvas viewport.
+
+        ``x_rect`` is already viewport-local. Mapping it through
+        ``QWidget.mapFrom`` during a live drag can segfault on Cocoa, so the
+        overlay lives on the same widget the rect is measured in.
+        """
+        parent = self._canvas_viewport_widget()
+        if parent is None:
+            return None
+        overlay = getattr(self, "_xaxis_drop_overlay", None)
+        if overlay is not None and not sip.isdeleted(overlay):
+            if overlay.parent() is parent:
+                return overlay
+            overlay.hide()
+            overlay.setParent(None)
+            overlay.deleteLater()
+        overlay = QFrame(parent)
+        overlay.setObjectName("xaxisDropHighlight")
+        overlay.setAccessibleName("时域横坐标带")
+        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        overlay.setAttribute(Qt.WA_StyledBackground, True)
+        overlay.hide()
+        self._xaxis_drop_overlay = overlay
+        return overlay
 
     def _hint_state(self):
         return hints.HintState(

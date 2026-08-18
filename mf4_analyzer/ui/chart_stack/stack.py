@@ -2,7 +2,7 @@
 import logging
 from functools import partial
 
-from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QHBoxLayout, QSizePolicy, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
@@ -41,6 +41,7 @@ from .cursor_pill import (
 )
 from .toolbar import PgNavigationToolbar
 from ...ui_kit.qt_lifecycle import as_weak_callable
+from ..channel_drag import INTERNAL_CHANNEL_MIME, decode_channel_drag
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,9 @@ class ChartStack(QWidget):
     quickref_requested = pyqtSignal()
     add_to_ultraview_requested = pyqtSignal(str, str)
     open_ultraview_requested = pyqtSignal()
+    # Time-domain channel MIME drop. ``zone`` is ``plot`` or ``xaxis``.
+    # Carries (canvas, (fid, channel), zone); MainWindow owns View writes.
+    channel_drop_requested = pyqtSignal(object, object, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -669,6 +673,8 @@ class ChartStack(QWidget):
                 except Exception:
                     viewport = None
             if viewport is not None:
+                viewport.setAcceptDrops(True)
+                viewport.setAccessibleName("时域绘图区")
                 viewport.installEventFilter(self)
 
     def _card_for_object(self, obj):
@@ -695,11 +701,191 @@ class ChartStack(QWidget):
         return None
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.MouseButtonPress and self.split_active():
+        etype = event.type()
+        if etype in (
+            QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop,
+        ):
+            if self._handle_time_channel_drag(obj, event):
+                return True
+        if etype == QEvent.MouseButtonPress and self.split_active():
             card = self._card_for_object(obj)
             if card is not None and card is not self._focused_card:
                 self.set_focused_card(card)
         return super().eventFilter(obj, event)
+
+    def _handle_time_channel_drag(self, obj, event):
+        """Route a channel MIME drag over a time card. Returns True if consumed."""
+        if self.current_mode() != "time":
+            return False
+        card = self._card_for_object(obj)
+        if card is None:
+            return False
+        etype = event.type()
+        if etype == QEvent.DragLeave:
+            self._clear_channel_drop_highlights()
+            return True
+        mime = event.mimeData()
+        if mime is None or not mime.hasFormat(INTERNAL_CHANNEL_MIME):
+            return False
+        key = decode_channel_drag(bytes(mime.data(INTERNAL_CHANNEL_MIME)))
+        if key is None:
+            return False
+        if etype in (QEvent.DragEnter, QEvent.DragMove):
+            zone = self._channel_drop_zone(card, obj, event)
+            self._set_channel_drop_highlight(card, zone)
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            return True
+        if etype == QEvent.Drop:
+            zone = self._channel_drop_zone(card, obj, event)
+            canvas = getattr(card, "canvas", None)
+            self._clear_channel_drop_highlights()
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            if canvas is not None:
+                self.channel_drop_requested.emit(canvas, key, zone)
+            return True
+        return False
+
+    def xaxis_drop_rect(self, canvas):
+        """Viewport-local QRect of the bottom-most visible X AxisItem, or None."""
+        if canvas is None:
+            return None
+        glw = getattr(canvas, "_glw", None)
+        if glw is None:
+            return None
+        seen = set()
+        bottom_rects = []
+        handles = list(getattr(canvas, "axes_list", []) or [])
+        master = getattr(canvas, "_x_master_handle", None)
+        if master is not None:
+            handles.append(master)
+        plot_items = []
+        for handle in handles:
+            plot_item = getattr(handle, "plot_item", None)
+            if plot_item is not None and plot_item not in plot_items:
+                plot_items.append(plot_item)
+        layout = getattr(glw, "ci", None)
+        items = getattr(layout, "items", None) or {}
+        for item in list(items.keys()):
+            if hasattr(item, "getAxis") and item not in plot_items:
+                plot_items.append(item)
+        for plot_item in plot_items:
+            self._collect_bottom_axis_scene_rects(plot_item, bottom_rects, seen)
+        if not bottom_rects:
+            return None
+        scene_rect = max(bottom_rects, key=lambda rect: rect.bottom())
+        try:
+            top_left = glw.mapFromScene(scene_rect.topLeft())
+            bottom_right = glw.mapFromScene(scene_rect.bottomRight())
+        except Exception:
+            return None
+        x = int(min(top_left.x(), bottom_right.x()))
+        y = int(min(top_left.y(), bottom_right.y()))
+        width = max(1, int(abs(bottom_right.x() - top_left.x())))
+        height = max(1, int(abs(bottom_right.y() - top_left.y())))
+        mapped = QRect(x, y, width, height)
+        try:
+            view_rect = glw.viewport().rect()
+            mapped = mapped.intersected(view_rect)
+            # AxisItem.sceneBoundingRect() can cover the whole plot because
+            # it paints the X grid. Reject that as an X drop zone.
+            if mapped.height() > max(80, int(view_rect.height() * 0.28)):
+                return None
+        except Exception:
+            pass
+        if mapped.isNull() or mapped.height() <= 0:
+            return None
+        return mapped
+
+    @staticmethod
+    def _collect_bottom_axis_scene_rects(plot_item, bottom_rects, seen):
+        """Use the PlotItem grid cell, not AxisItem.sceneBoundingRect.
+
+        pyqtgraph's bottom AxisItem bounding rect includes the linked ViewBox
+        so it can paint the X grid; that would make the whole plot an X-drop
+        zone. The layout cell is the actual tick/label band.
+        """
+        layout = getattr(plot_item, "layout", None)
+        axis_items = []
+        if layout is not None:
+            try:
+                rows = int(layout.rowCount())
+                cols = int(layout.columnCount())
+            except Exception:
+                rows = cols = 0
+            for row in range(rows):
+                for col in range(cols):
+                    try:
+                        item = layout.itemAt(row, col)
+                    except Exception:
+                        item = None
+                    if getattr(item, "orientation", None) == "bottom":
+                        axis_items.append(item)
+        if not axis_items:
+            getter = getattr(plot_item, "getAxis", None)
+            if callable(getter):
+                axis_items.append(getter("bottom"))
+        mapper = getattr(plot_item, "mapRectToScene", None)
+        for axis in axis_items:
+            if axis is None or id(axis) in seen:
+                continue
+            seen.add(id(axis))
+            try:
+                geom = axis.geometry()
+                if callable(mapper):
+                    scene_rect = mapper(geom)
+                else:
+                    scene_rect = axis.sceneBoundingRect()
+            except Exception:
+                continue
+            if scene_rect is None or scene_rect.isNull() or scene_rect.height() <= 1:
+                continue
+            bottom_rects.append(scene_rect)
+
+    def _channel_drop_zone(self, card, watched, event):
+        canvas = getattr(card, "canvas", None)
+        if canvas is None:
+            return "plot"
+        glw = getattr(canvas, "_glw", None)
+        viewport = None
+        if glw is not None:
+            try:
+                viewport = glw.viewport()
+            except Exception:
+                viewport = None
+        pos = event.pos()
+        if not isinstance(pos, QPoint):
+            pos = pos.toPoint() if hasattr(pos, "toPoint") else QPoint(int(pos.x()), int(pos.y()))
+        if viewport is not None and watched is not viewport:
+            pos = viewport.mapFrom(watched, pos)
+        x_rect = self.xaxis_drop_rect(canvas)
+        if x_rect is not None and x_rect.adjusted(0, -4, 0, 6).contains(pos):
+            return "xaxis"
+        return "plot"
+
+    def _set_channel_drop_highlight(self, card, zone):
+        x_rect = None
+        if zone == "xaxis":
+            x_rect = self.xaxis_drop_rect(getattr(card, "canvas", None))
+        for other in (self._time_card, self._secondary_card):
+            if other is None:
+                continue
+            setter = getattr(other, "set_channel_drop_zone", None)
+            if not callable(setter):
+                continue
+            if other is card:
+                setter(zone, x_rect)
+            else:
+                setter("")
+
+    def _clear_channel_drop_highlights(self):
+        for card in (self._time_card, self._secondary_card):
+            if card is None:
+                continue
+            setter = getattr(card, "set_channel_drop_zone", None)
+            if callable(setter):
+                setter("")
 
     def enter_split(self):
         if self._secondary_card is None:

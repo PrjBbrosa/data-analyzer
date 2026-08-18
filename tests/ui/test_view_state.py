@@ -38,6 +38,7 @@ def test_viewstate_roundtrips_through_dict():
     assert again.xlim == (0.0, 12.4)
     assert again.ylims["[f] rpm"] == (-1.0, 1.0)
     assert again.overlay_primary == ("f1", "rpm")
+    assert "plot_order" not in payload
 
 
 def test_viewstate_color_keys_roundtrip_when_values_contain_separator():

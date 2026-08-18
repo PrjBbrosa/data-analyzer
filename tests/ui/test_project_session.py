@@ -137,6 +137,50 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert mw2.chart_stack.current_mode() == "time"
 
 
+def test_project_roundtrip_preserves_navigator_file_and_channel_order(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    def _write(path, channels):
+        with open(path, "w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["time", *channels])
+            for i in range(20):
+                writer.writerow(
+                    [i / 100.0, *[float(i + offset) for offset in range(len(channels))]]
+                )
+
+    csv_a = tmp_path / "a.csv"
+    csv_b = tmp_path / "b.csv"
+    _write(csv_a, ["rpm", "torque", "speed"])
+    _write(csv_b, ["rpm", "torque"])
+    proj = tmp_path / "ordered.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    mw._load_one(str(csv_b))
+    fids = list(mw.navigator_order.file_fids())
+    assert len(fids) == 2
+    assert mw.navigator_order.move_file_block([fids[0]], fids[1], "after")
+    assert mw.navigator_order.move_channel(fids[0], "speed", "rpm", "before")
+    mw.navigator.project_file_order(mw.navigator_order.file_fids())
+    mw.navigator.channel_list.project_channel_order(
+        fids[0], mw.navigator_order.channel_order(fids[0])
+    )
+    mw.save_project(proj)
+
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 3
+    assert [entry["path_rel"] for entry in raw["files"]] == ["b.csv", "a.csv"]
+    assert raw["files"][1]["channel_order"][0] == "speed"
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+    restored = list(mw2.navigator_order.file_fids())
+    assert [mw2.files[fid].filename for fid in restored] == ["b.csv", "a.csv"]
+    assert mw2.navigator.ordered_file_fids() == restored
+    assert mw2.navigator_order.channel_order(restored[1])[0] == "speed"
+
+
 def test_open_project_migrates_legacy_frf_range_to_explicit_seconds(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 

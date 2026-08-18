@@ -50,6 +50,7 @@ from ..time_xaxis import (
     selection_payload,
     spec_from_selection,
 )
+from ..navigator_order import NavigatorOrderState
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -76,6 +77,43 @@ _STATUS_HINTS_VISIBLE_SETTINGS_KEY = "quickref/status_hints_visible_v2"
 
 
 @dataclass
+class TimePlotSlot:
+    """One attempted ``(fid, channel)`` in workspace order.
+
+    Success slots carry the drawable row(s) for that target (original plus an
+    optional filtered companion). Recoverable failures carry a placeholder
+    issue so subplot layout can keep the row instead of collapsing it.
+    """
+
+    key: tuple[str, str]
+    kind: str
+    issue: TimePlotIssue | None = None
+    rows: list = field(default_factory=list)
+
+    def placeholder_row(self):
+        fid, channel = self.key
+        issue = self.issue
+        source = str((issue.source_label if issue is not None else "") or fid)
+        target = str((issue.target_channel if issue is not None else "") or channel)
+        detail = str((issue.detail if issue is not None else "") or "无法绘制")
+        return (
+            f"{source} / {target}",
+            True,
+            np.array([], dtype=float),
+            np.array([], dtype=float),
+            "#9aa0a6",
+            "",
+            str(fid),
+            {
+                "placeholder": True,
+                "placeholder_reason": detail,
+                "placeholder_code": issue.code if issue is not None else "",
+                "target_channel": target,
+            },
+        )
+
+
+@dataclass
 class TimePlotBuildResult:
     """One authoritative TimeDomain payload plus its render accounting."""
 
@@ -83,12 +121,29 @@ class TimePlotBuildResult:
     issues: list[TimePlotIssue] = field(default_factory=list)
     attempted_channel_keys: set[tuple[str, str]] = field(default_factory=set)
     successful_channel_keys: set[tuple[str, str]] = field(default_factory=set)
+    slots: list = field(default_factory=list)
     # ``None`` = time mode / no drawable custom-X cohort resolved.
     # ``""`` = a drawable custom-X cohort whose known unit is empty.
     x_unit: str | None = None
 
     def __bool__(self):
         return bool(self.rows)
+
+    def render_rows(self, mode):
+        """Rows the canvas should consume for ``mode``.
+
+        Overlay keeps success-only rows. Subplot walks ``slots`` so placeholders
+        stay in workspace order; tests that only populate ``rows`` still work.
+        """
+        if mode == "subplot" and self.slots:
+            out = []
+            for slot in self.slots:
+                if slot.kind == "success":
+                    out.extend(slot.rows)
+                else:
+                    out.append(slot.placeholder_row())
+            return out
+        return list(self.rows)
 
 
 class SurfaceStatusBar(QStatusBar):
@@ -189,6 +244,7 @@ class MainWindow(
         # Spec §9 minimum window size: 1100 × 640.
         self.setMinimumSize(1100, 640)
         self.files = OrderedDict();
+        self.navigator_order = NavigatorOrderState()
         self._fc = 0;
         self._active = None
         self._project_path = None
@@ -1047,6 +1103,12 @@ class MainWindow(
         self.navigator.files_attach_requested.connect(
             self._attach_files_from_drop
         )
+        self.navigator.file_order_requested.connect(
+            self._on_file_order_requested
+        )
+        self.navigator.channel_order_requested.connect(
+            self._on_channel_order_requested
+        )
         self.navigator.files_detach_requested.connect(
             self._detach_files_from_active_context
         )
@@ -1180,6 +1242,7 @@ class MainWindow(
         )
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
+        self.chart_stack.channel_drop_requested.connect(self._on_time_channel_drop)
         self.chart_stack.quickref_requested.connect(self.toggle_quickref_panel)
         self.chart_stack.home_triggered.connect(
             lambda: self._hint_focused_pane("复位")
@@ -2646,6 +2709,55 @@ class MainWindow(
             self.toolbar.current_mode(), has_file=bool(self.files)
         )
 
+    def _on_file_order_requested(self, fids, target_fids, placement):
+        if not self.navigator_order.move_file_block(fids, target_fids, placement):
+            return
+        self.navigator.project_file_order(self.navigator_order.file_fids())
+        self._replot_visible_time_after_order_change()
+
+    def _on_channel_order_requested(self, fid, channel, target_channel, placement):
+        widget = self.navigator.channel_list
+        if widget.btn_selected_only.isChecked():
+            visible = [
+                item.data(0, Qt.UserRole)[2]
+                for item in widget._iter_channel_items()
+                if (
+                    not item.isHidden()
+                    and item.data(0, Qt.UserRole)
+                    and item.data(0, Qt.UserRole)[0] == "channel"
+                    and str(item.data(0, Qt.UserRole)[1]) == str(fid)
+                )
+            ]
+            moved = self.navigator_order.move_channel_among_visible(
+                fid, channel, target_channel, placement, visible
+            )
+        else:
+            moved = self.navigator_order.move_channel(
+                fid, channel, target_channel, placement
+            )
+        if not moved:
+            return
+        widget.project_channel_order(fid, self.navigator_order.channel_order(fid))
+        self._replot_visible_time_after_order_change()
+
+    def _replot_visible_time_after_order_change(self):
+        """Rebuild visible time panes from workspace order without clearing caches."""
+        if self.chart_stack.current_mode() != "time":
+            return
+        canvases = [self.canvas_time]
+        secondary = self.chart_stack.secondary_canvas()
+        if secondary is not None and secondary not in canvases:
+            canvases.append(secondary)
+        seen = set()
+        for canvas in canvases:
+            if canvas is None or id(canvas) in seen:
+                continue
+            seen.add(id(canvas))
+            idx = self._view_index_for_canvas(canvas)
+            if idx is None:
+                continue
+            self._replot_canvas_for_view(idx, canvas, preserve_xlim=True)
+
     def _on_file_close_requested(self, fid):
         self._close(fid)
 
@@ -2816,24 +2928,12 @@ class MainWindow(
     def _apply_xaxis(self):
         """应用横坐标设置"""
         canvas = self.chart_stack.focused_canvas()
-        idx = self._view_index_for_canvas(canvas)
-        previous_spec = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
         mode = self.inspector.top.xaxis_mode()
-        # NOTE: this method writes through the compatibility shims rather than
-        # `self._custom_xaxis` directly.  `tests/ui/test_task4_cache_
-        # invalidation.py` drives it with a `SimpleNamespace` standing in for a
-        # narrow MainWindow protocol and then asserts on these very attribute
-        # names, so the holder does not exist on `self` here.  The shims mean
-        # the writes still land on the holder for a real window, and
-        # `_view_mixin` no longer touches these names at all -- which is what
-        # the ownership ratchet measures.
         if mode == 'time':
-            self._custom_xlabel = self.inspector.top.xaxis_label() or None
-            self._custom_xaxis_spec = CustomXAxisSpec(
-                mode='time', label=self._custom_xlabel or '',
+            spec = CustomXAxisSpec(
+                mode='time',
+                label=self.inspector.top.xaxis_label() or '',
             )
-            self._custom_xaxis_fid = None
-            self._custom_xaxis_ch = None
         else:
             data = self.inspector.top.xaxis_channel_data()
             if not data:
@@ -2844,22 +2944,42 @@ class MainWindow(
             if selected.mode != CHANNEL_MODE or not selected.channel:
                 self.toast("横坐标选择无效", "warning")
                 return
-            self._custom_xlabel = (
+            label = (
                 raw_label if raw_label and raw_label != 'Time (s)' else None
             ) or selected.channel
-            self._custom_xaxis_spec = CustomXAxisSpec(
+            spec = CustomXAxisSpec(
                 mode=selected.mode,
                 resolver=selected.resolver,
                 channel=selected.channel,
                 source_fid=selected.source_fid,
-                label=self._custom_xlabel,
+                label=label,
             )
-            if selected.resolver == EXACT_SOURCE:
-                self._custom_xaxis_fid = selected.source_fid
-                self._custom_xaxis_ch = selected.channel
-            else:
-                self._custom_xaxis_fid = None
-                self._custom_xaxis_ch = None
+        return MainWindow.apply_time_xaxis_spec(
+            self, spec, canvas, sync_inspector=False,
+        )
+
+    def apply_time_xaxis_spec(self, spec, canvas=None, *, sync_inspector=True):
+        """Apply one custom-X spec to ``canvas`` (Inspector and drop share this)."""
+        canvas = canvas or self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(canvas)
+        previous_spec = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
+        spec = spec or CustomXAxisSpec()
+        # NOTE: write through the compatibility shims rather than
+        # ``self._custom_xaxis`` directly.  ``tests/ui/test_task4_cache_
+        # invalidation.py`` drives this with a ``SimpleNamespace`` standing in
+        # for a narrow MainWindow protocol and then asserts on these attribute
+        # names, so the holder does not exist on ``self`` here.
+        self._custom_xlabel = spec.label or None
+        self._custom_xaxis_spec = spec
+        if spec.mode == CHANNEL_MODE and spec.resolver == EXACT_SOURCE:
+            self._custom_xaxis_fid = spec.source_fid
+            self._custom_xaxis_ch = spec.channel
+        else:
+            self._custom_xaxis_fid = None
+            self._custom_xaxis_ch = None
+
+        if sync_inspector:
+            self._sync_inspector_to_xaxis_spec(spec)
 
         current_spec = self._custom_xaxis_spec
         x_source_changed = (
@@ -2891,9 +3011,14 @@ class MainWindow(
         # FFT and Order do not consume this display control, so their caches
         # remain valid and must not be needlessly evicted.
         if x_source_changed:
-            self.analysis_caches['fft_time'].clear()
-            self._clear_analysis_section_pins('fft_time')
-        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            caches = getattr(self, 'analysis_caches', None)
+            if isinstance(caches, dict) and 'fft_time' in caches:
+                caches['fft_time'].clear()
+            clearer = getattr(self, '_clear_analysis_section_pins', None)
+            if callable(clearer):
+                clearer('fft_time')
+        views = getattr(getattr(self, 'view_manager', None), 'views', ())
+        if idx is not None and 0 <= idx < len(views):
             state = self.view_manager.get(idx)
             self._view_bridge.capture_controls_into(state, self, canvas)
             if x_source_changed:
@@ -2910,20 +3035,115 @@ class MainWindow(
             )
         else:
             rendered = self.plot_time()
-        all_custom_x_failed = (
+        incomplete = (
             current_spec.mode == CHANNEL_MODE
             and isinstance(rendered, TimePlotBuildResult)
-            and bool(rendered.attempted_channel_keys)
-            and not rendered.successful_channel_keys
+            and (
+                not rendered.successful_channel_keys
+                or len(rendered.successful_channel_keys)
+                < len(rendered.attempted_channel_keys)
+            )
         )
-        if all_custom_x_failed:
-            # The render path has already installed the empty hint, diagnostic
-            # pill, and truthful ``0/N`` status. Do not overwrite those facts
-            # with a contradictory success message or toast.
-            return
-        self.statusBar.showMessage(f"横坐标已更新")
+        if incomplete:
+            # Keep the applied spec. The render path already installed the
+            # empty hint / placeholder / N/M pill. Do not overwrite those
+            # facts with a contradictory success message or toast.
+            return rendered
+        status = getattr(self, 'statusBar', None)
+        if status is not None:
+            status.showMessage("横坐标已更新")
         if not self._hint_focused_pane("坐标设置"):
             self.toast("横坐标已更新", "success")
+        return rendered
+
+    def _sync_inspector_to_xaxis_spec(self, spec):
+        top = getattr(getattr(self, 'inspector', None), 'top', None)
+        if top is None:
+            return
+        old_mode = top.combo_xaxis.blockSignals(True)
+        old_combo = top._combo_xaxis_ch.blockSignals(True)
+        old_label = top.edit_xlabel.blockSignals(True)
+        line_edit = top._combo_xaxis_ch.lineEdit()
+        old_line = line_edit.blockSignals(True) if line_edit is not None else False
+        try:
+            if spec.mode == CHANNEL_MODE:
+                top.set_xaxis_mode('channel')
+                top._combo_xaxis_ch.setEnabled(True)
+            else:
+                top.set_xaxis_mode('time')
+                top._combo_xaxis_ch.setEnabled(False)
+        finally:
+            top.edit_xlabel.blockSignals(old_label)
+            top._combo_xaxis_ch.blockSignals(old_combo)
+            top.combo_xaxis.blockSignals(old_mode)
+            if line_edit is not None:
+                line_edit.blockSignals(old_line)
+        if spec.mode == CHANNEL_MODE:
+            self._refresh_xaxis_candidates()
+            payload = selection_payload(spec)
+            top.set_xaxis_channel_data(payload)
+            top.set_xaxis_label(spec.label or spec.channel or '')
+            top._xlabel_auto_from_channel = False
+        else:
+            top.set_xaxis_label(spec.label or '')
+
+    def _on_time_channel_drop(self, canvas, key, zone):
+        """Join a dragged channel to the drop-target time View, or set custom X."""
+        if getattr(self, "_opening_project", False) or getattr(self, "_restoring_project", False):
+            return
+        if self.chart_stack.current_mode() != "time":
+            return
+        if self._projection_role() != "time":
+            return
+        try:
+            from PyQt5 import sip
+            if canvas is None or sip.isdeleted(canvas):
+                return
+        except (RuntimeError, TypeError):
+            if canvas is None:
+                return
+        if not isinstance(key, (tuple, list)) or len(key) != 2:
+            return
+        fid, channel = str(key[0]), str(key[1])
+        fd = self.files.get(fid)
+        if fd is None or channel not in fd.data.columns:
+            return
+        card_for = getattr(self.chart_stack, "_card_for_canvas", None)
+        card = card_for(canvas) if callable(card_for) else None
+        if card is not None and self.chart_stack.split_active():
+            self.chart_stack.set_focused_card(card)
+        if zone == "xaxis":
+            spec = CustomXAxisSpec(
+                mode=CHANNEL_MODE,
+                resolver=PER_SOURCE_NAME,
+                source_fid=None,
+                channel=channel,
+                label=channel,
+            )
+            self.apply_time_xaxis_spec(spec, canvas, sync_inspector=True)
+            return
+        self._add_channel_to_time_view(canvas, fid, channel)
+
+    def _add_channel_to_time_view(self, canvas, fid, channel):
+        idx = self._view_index_for_canvas(canvas)
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
+            return
+        state = self.view_manager.get(idx)
+        fid = str(fid)
+        channel = str(channel)
+        if fid not in state.attached_file_ids:
+            state.attached_file_ids.append(fid)
+        key = (fid, channel)
+        existed = key in {(str(item[0]), str(item[1])) for item in state.checked}
+        if not existed:
+            state.checked.append(key)
+        self._project_view_controls(idx)
+        refresh = getattr(self, "_refresh_channel_config_context", None)
+        if callable(refresh):
+            refresh()
+        if existed:
+            self.toast("通道已在当前 View 中", "info")
+        self._replot_canvas_for_view(idx, canvas, preserve_xlim=True)
 
     def _reset_cursors(self):
         """Reset both single and dual cursor state on the time-domain canvas.
@@ -3460,6 +3680,28 @@ class MainWindow(
         if target is self.canvas_time:
             self._last_plot_mode = prev_mode
 
+    def _checked_with_overlay_primary(self, checked):
+        """Keep workspace order, then pin the overlay left-axis pick at index 0.
+
+        Overlay「设为左轴」is a View-local left-axis owner, not a second tree
+        order. Subplot callers must not use this helper.
+        """
+        primary = getattr(self, "_overlay_primary", None)
+        if primary is None or not checked:
+            return list(checked)
+        pfid, pch = str(primary[0]), str(primary[1])
+        out = list(checked)
+        primary_idx = next(
+            (
+                i for i, item in enumerate(out)
+                if str(item[0]) == pfid and str(item[1]) == pch
+            ),
+            None,
+        )
+        if primary_idx is not None and primary_idx != 0:
+            out.insert(0, out.pop(primary_idx))
+        return out
+
     def _plot_time_on_canvas(
         self,
         canvas,
@@ -3477,6 +3719,9 @@ class MainWindow(
                 self._warn_action_blocked("请先打开数据文件")
             return
         all_checked = self.channel_list.get_checked_channels()
+        order = getattr(self, "navigator_order", None)
+        if order is not None:
+            all_checked = order.order_checked(all_checked)
         if not all_checked:
             self._set_time_plot_diagnostics(canvas)
             mode = self.chart_stack.plot_mode_for_canvas(canvas)
@@ -3498,6 +3743,8 @@ class MainWindow(
                 self._warn_action_blocked("请在左侧勾选至少一个通道")
             return
         checked = self.channel_list.get_visible_checked_channels()
+        if order is not None:
+            checked = order.order_checked(checked)
 
         # Per-pane plot mode (P2 Task 9 1b): read the layout (subplot/overlay)
         # from the card that owns the TARGET canvas, not always the primary.
@@ -3511,21 +3758,15 @@ class MainWindow(
         # onto the left axis. Outside overlay mode the pick is inert (each
         # channel owns its own axis), but we keep it stored for a later toggle.
         if self._overlay_primary is not None:
-            pfid, pch = self._overlay_primary
+            pfid, pch = str(self._overlay_primary[0]), str(self._overlay_primary[1])
             primary_is_checked = any(
-                cfid == pfid and cch == pch
-                for cfid, cch, _color in all_checked
+                str(item[0]) == pfid and str(item[1]) == pch
+                for item in all_checked
             )
             if not primary_is_checked:
                 self._overlay_primary = None
             elif mode == 'overlay':
-                primary_idx = next(
-                    (i for i, (cfid, cch, _color) in enumerate(checked)
-                     if cfid == pfid and cch == pch),
-                    None,
-                )
-                if primary_idx is not None and primary_idx != 0:
-                    checked.insert(0, checked.pop(primary_idx))
+                checked = self._checked_with_overlay_primary(checked)
         # Cache invalidation site 7: structural plot-mode change (overlay
         # ↔ subplot) reuses the same (data_id, channel) keys but the line
         # ownership switches between an axes-stack and a single ax with
@@ -3678,9 +3919,11 @@ class MainWindow(
                 result = self._build_time_plot_data(
                     checked, None, range_enabled, range_lo, range_hi,
                     progress_callback=prepare_progress,
+                    plot_mode=mode,
                 )
             self._set_time_plot_diagnostics(canvas, result)
-            if not result.rows:
+            data = result.render_rows(mode)
+            if not data:
                 done_progress = phase_progress(1000, 1000, "绘图 · 无数据")
                 if done_progress is not None:
                     done_progress(1, 1)
@@ -3698,7 +3941,6 @@ class MainWindow(
                     )
                 return result
 
-            data = result.rows
             # Empty string is an explicit, known custom-X unit cohort. Do not
             # collapse it to None, which means "derive from a provider" and
             # could leak the first provider's unrelated unit into the title.
@@ -3722,16 +3964,23 @@ class MainWindow(
             if contexts is not None:
                 contexts[id(canvas)] = render_context_key
             canvas_progress = phase_progress(520, 960, "绘图 · 构建")
-            delta = getattr(canvas, "try_apply_selection_delta", None)
-            delta_result = (
-                delta(
-                    data,
-                    mode=mode,
-                    render_context_key=render_context_key,
-                )
-                if callable(delta)
-                else {"applied": False, "reason": "delta-api-unavailable"}
+            has_placeholder = any(
+                getattr(slot, "kind", None) == "placeholder"
+                for slot in getattr(result, "slots", ())
             )
+            delta = getattr(canvas, "try_apply_selection_delta", None)
+            if mode == "subplot" and has_placeholder:
+                delta_result = {"applied": False, "reason": "placeholder-slots"}
+            else:
+                delta_result = (
+                    delta(
+                        data,
+                        mode=mode,
+                        render_context_key=render_context_key,
+                    )
+                    if callable(delta)
+                    else {"applied": False, "reason": "delta-api-unavailable"}
+                )
             if not delta_result.get("applied"):
                 rebuild_reason = str(
                     delta_result.get("reason") or "selection-delta-incompatible"
@@ -3792,7 +4041,7 @@ class MainWindow(
             self.statusBar.showMessage(
                 f"绘制: {successful}/{attempted} 通道，{success_files} 文件"
             )
-        return True
+        return result
 
     def _build_time_statistics(
         self, checked, range_enabled, range_lo, range_hi,
@@ -3835,7 +4084,7 @@ class MainWindow(
 
     def _build_time_plot_data(self, checked=None, custom_x=None,
                               range_enabled=None, range_lo=0.0, range_hi=0.0,
-                              progress_callback=None):
+                              progress_callback=None, *, plot_mode=None):
         """Assemble per-curve TimeDomain rows and source-level diagnostics.
 
         Pure w.r.t. ``channel_data`` — it never mutates samples. Each checked
@@ -3862,6 +4111,11 @@ class MainWindow(
 
         if checked is None:
             checked = self.channel_list.get_checked_channels()
+        order = getattr(self, "navigator_order", None)
+        if order is not None:
+            checked = order.order_checked(checked)
+        if plot_mode == "overlay":
+            checked = self._checked_with_overlay_primary(checked)
         if range_enabled is None:
             range_enabled = self.inspector.top.range_enabled()
             range_lo, range_hi = self.inspector.top.range_values()
@@ -3953,6 +4207,14 @@ class MainWindow(
                 if resolved.ready
             ), None)
 
+        def append_placeholder(issue):
+            result.issues.append(issue)
+            result.slots.append(TimePlotSlot(
+                key=(str(issue.source_fid), str(issue.target_channel)),
+                kind="placeholder",
+                issue=issue,
+            ))
+
         report_progress()
         for fid, ch, color in checked:
             fd = self.channel_list.get_file_data(fid)
@@ -3960,7 +4222,7 @@ class MainWindow(
                 getattr(fd, 'short_name', '') or fid
             ) if fd is not None else str(fid)
             if fd is None or ch not in fd.data.columns:
-                result.issues.append(TimePlotIssue(
+                append_placeholder(TimePlotIssue(
                     code='missing_target_channel',
                     source_fid=str(fid),
                     source_label=source_label,
@@ -3981,7 +4243,16 @@ class MainWindow(
                 )
                 if not resolved.ready:
                     if resolved.issue is not None:
-                        result.issues.append(resolved.issue)
+                        append_placeholder(resolved.issue)
+                    else:
+                        append_placeholder(TimePlotIssue(
+                            code='missing_x_channel',
+                            source_fid=str(fid),
+                            source_label=source_label,
+                            target_channel=str(ch),
+                            x_channel=str(applied_x.channel or ''),
+                            detail='无法解析横坐标',
+                        ))
                     completed_work += source_work * (2 if filt_enabled else 1)
                     report_progress()
                     continue
@@ -3996,7 +4267,7 @@ class MainWindow(
                 m = (time_axis >= range_lo) & (time_axis <= range_hi)
                 x_axis, sig = x_axis[m], sig[m]
             if len(sig) == 0:
-                result.issues.append(TimePlotIssue(
+                append_placeholder(TimePlotIssue(
                     code='empty_after_time_range',
                     source_fid=str(fid),
                     source_label=source_label,
@@ -4024,7 +4295,7 @@ class MainWindow(
             if applied_x.mode == CHANNEL_MODE:
                 finite_x = np.isfinite(np.asarray(x_axis, dtype=float))
                 if not finite_x.any():
-                    result.issues.append(TimePlotIssue(
+                    append_placeholder(TimePlotIssue(
                         code='non_finite_x',
                         source_fid=str(fid),
                         source_label=source_label,
@@ -4037,7 +4308,7 @@ class MainWindow(
                     continue
                 incompatible = incompatible_units.get(str(fid))
                 if incompatible is not None:
-                    result.issues.append(TimePlotIssue(
+                    append_placeholder(TimePlotIssue(
                         code='x_unit_incompatible',
                         source_fid=str(fid),
                         source_label=source_label,
@@ -4062,14 +4333,16 @@ class MainWindow(
 
             gid = eff_groups.get((fid, ch))
             if gid is not None:
-                result.rows.append((
+                primary_row = (
                     name, show_orig, x_axis, sig, color, unit, fid,
                     {"axis_group": gid},
-                ))
-            else:
-                result.rows.append(
-                    (name, show_orig, x_axis, sig, color, unit, fid)
                 )
+            else:
+                primary_row = (
+                    name, show_orig, x_axis, sig, color, unit, fid
+                )
+            slot_rows = [primary_row]
+            result.rows.append(primary_row)
             result.successful_channel_keys.add((fid, ch))
 
             completed_work += source_work
@@ -4083,14 +4356,21 @@ class MainWindow(
                 # the SAME axis/row instead of allocating a fresh subplot row.
                 # Original 7-tuple rows are unchanged → backward compatible.
                 meta = {"companion_of": name, "dash": True}
-                result.rows.append(
-                    (fname, show_filt, x_axis, filtered, color, unit, fid, meta)
+                companion_row = (
+                    fname, show_filt, x_axis, filtered, color, unit, fid, meta
                 )
+                slot_rows.append(companion_row)
+                result.rows.append(companion_row)
                 completed_work += source_work
                 report_progress()
             elif filt_enabled:
                 completed_work += source_work
                 report_progress()
+            result.slots.append(TimePlotSlot(
+                key=(str(fid), str(ch)),
+                kind="success",
+                rows=slot_rows,
+            ))
         completed_work = total_work
         report_progress()
         return result
@@ -4170,7 +4450,10 @@ class MainWindow(
         nav_blocked = self.navigator.blockSignals(True)
         list_blocked = self.channel_list.blockSignals(True)
         try:
-            self.navigator.refresh_file(fid, fd)
+            self.navigator_order.refresh_channels(fid, fd.get_signal_channels())
+            self.navigator.refresh_file(
+                fid, fd, channel_order=self.navigator_order.channel_order(fid)
+            )
         finally:
             self.channel_list.blockSignals(list_blocked)
             self.navigator.blockSignals(nav_blocked)

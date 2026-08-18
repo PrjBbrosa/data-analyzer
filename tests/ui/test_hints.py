@@ -232,6 +232,22 @@ def test_markup_capabilities_is_markup_scoped_ship_now_discovery():
     assert "双击编辑文本" in hint.text
 
 
+def test_time_drop_hints_stay_in_budget_and_time_scoped():
+    ids = (
+        "time.drop_join_view",
+        "time.drop_set_xaxis",
+        "time.nav_reorder",
+    )
+    found = {hint.id: hint for hint in hints.all_hints() if hint.id in ids}
+    assert set(found) == set(ids)
+    for hint in found.values():
+        assert hint.modes == frozenset({"time"})
+        assert hint.surface == "discovery"
+        assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+        assert "拖" in hint.text
+    assert "画布内不能拖行" in found["time.nav_reorder"].text
+
+
 def test_chart_discovery_queue_excludes_markup_scope():
     state = HintState()
     ids = []

@@ -380,6 +380,19 @@ class PersistentTop(QWidget):
     def xaxis_label(self):
         return self.edit_xlabel.text().strip()
 
+    def set_xaxis_label(self, text):
+        self.edit_xlabel.setText("" if text is None else str(text))
+
+    def set_xaxis_channel_data(self, payload):
+        """Select the Inspector candidate whose tagged triple equals ``payload``."""
+        if payload is None:
+            return False
+        for i in range(self._combo_xaxis_ch.count()):
+            if self._combo_xaxis_ch.itemData(i) == payload:
+                self._combo_xaxis_ch.setCurrentIndex(i)
+                return True
+        return False
+
     def set_xaxis_candidates(self, candidates):
         """Set ``(display_text, (resolver, fid, channel))`` candidates."""
         prev = self._combo_xaxis_ch.currentData()
