@@ -512,6 +512,8 @@ def _finite_or_warn(
 class PanSession:
     last: ViewportPoint
     button: int = 0
+    origin: ViewportPoint = (0.0, 0.0)
+    committed: bool = True
 
 
 @dataclass
@@ -567,19 +569,42 @@ class BoardViewport:
     def is_panning(self) -> bool:
         return self._pan is not None
 
-    def begin_pan(self, global_pos: ViewportPoint, button: int = 0) -> None:
-        self._pan = PanSession(
-            (float(global_pos[0]), float(global_pos[1])), int(button)
-        )
-        self._quality = QUALITY_FAST
+    def pan_button(self) -> int:
+        return 0 if self._pan is None else int(self._pan.button)
 
-    def update_pan(self, global_pos: ViewportPoint) -> ViewportPoint:
+    def pan_committed(self) -> bool:
+        return bool(self._pan is not None and self._pan.committed)
+
+    def begin_pan(
+        self, global_pos: ViewportPoint, button: int = 0, *, deferred: bool = False
+    ) -> None:
+        pos = (float(global_pos[0]), float(global_pos[1]))
+        self._pan = PanSession(
+            last=pos,
+            button=int(button),
+            origin=pos,
+            committed=not deferred,
+        )
+        if not deferred:
+            self._quality = QUALITY_FAST
+
+    def update_pan(
+        self, global_pos: ViewportPoint, threshold: float = 0.0
+    ) -> ViewportPoint:
         if self._pan is None:
             return (0.0, 0.0)
+        x = float(global_pos[0])
+        y = float(global_pos[1])
+        if not self._pan.committed:
+            origin_x, origin_y = self._pan.origin
+            if abs(x - origin_x) + abs(y - origin_y) < float(threshold):
+                self._pan.last = (x, y)
+                return (0.0, 0.0)
+            self._pan.committed = True
         last_x, last_y = self._pan.last
-        dx = last_x - float(global_pos[0])
-        dy = last_y - float(global_pos[1])
-        self._pan.last = (float(global_pos[0]), float(global_pos[1]))
+        dx = last_x - x
+        dy = last_y - y
+        self._pan.last = (x, y)
         return (dx, dy)
 
     def end_pan(self, button: int | None = None) -> bool:

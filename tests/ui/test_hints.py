@@ -605,6 +605,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "300%" in by_id["ultraview.inspect"].text
     assert "Esc" in by_id["ultraview.inspect"].text
     assert "四向" in by_id["ultraview.pan"].text
+    assert "右键拖" in by_id["ultraview.pan"].text
     assert "不删" in by_id["ultraview.remove"].text
     assert "Ctrl/Cmd+Z" in by_id["ultraview.undo"].text
     assert "空白" in by_id["ultraview.board_menu"].text

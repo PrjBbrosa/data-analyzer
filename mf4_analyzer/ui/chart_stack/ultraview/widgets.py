@@ -618,7 +618,7 @@ class UltraViewHintBar(QFrame):
         self._quickref.setCursor(Qt.PointingHandCursor)
         self._quickref.setToolTip("操作速查")
         self._quickref.clicked.connect(self.quickref_requested.emit)
-        self._context = QLabel("拖卡片移动 · 拖边角改尺寸 · 框选 · Ctrl+滚轮缩放", self)
+        self._context = QLabel("拖卡片移动 · 左键框选 · 右键拖动画布 · Ctrl+滚轮缩放", self)
         self._context.setObjectName("chartHintContext")
         self._context.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._context.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)

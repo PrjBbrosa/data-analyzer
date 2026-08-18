@@ -4559,10 +4559,16 @@ def _menu_texts(menu: QMenu) -> list[str]:
     return [action.text() for action in menu.actions() if action.text()]
 
 
-def test_viewport_router_does_not_claim_context_menu():
+def test_viewport_router_swallows_context_menu_but_does_not_open_one():
     from mf4_analyzer.ui.chart_stack.ultraview.viewport_router import ViewportGestureRouter
 
-    assert QEvent.ContextMenu not in ViewportGestureRouter._HANDLED_TYPES
+    assert QEvent.ContextMenu in ViewportGestureRouter._HANDLED_TYPES
+    source = Path(
+        __file__
+    ).resolve().parents[2] / "mf4_analyzer" / "ui" / "chart_stack" / "ultraview" / "viewport_router.py"
+    text = source.read_text(encoding="utf-8")
+    assert "QMenu" not in text
+    assert ".popup(" not in text
 
 
 def test_board_context_menu_labels_and_visibility_matrix(qtbot):
@@ -4614,6 +4620,44 @@ def test_blank_canvas_context_menu_opens_board_menu(qtbot):
     _close_named_menus(BOARD_MENU_OBJECT_NAME)
 
 
+def test_right_click_without_drag_opens_board_menu(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    free = harness.page._free_grid
+    pos = _empty_free_grid_pos(free)
+    QTest.mousePress(free, Qt.RightButton, pos=pos)
+    assert harness.page.is_board_panning()
+    assert not harness.page.board_viewport().pan_committed()
+    QTest.mouseRelease(free, Qt.RightButton, pos=pos)
+    QApplication.processEvents()
+    menus = _visible_menus(BOARD_MENU_OBJECT_NAME)
+    assert len(menus) == 1
+    _close_named_menus(BOARD_MENU_OBJECT_NAME)
+
+
+def test_right_drag_does_not_open_board_menu(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b")
+    harness.page.set_board_zoom(2.0)
+    free = harness.page._free_grid
+    pos = _empty_free_grid_pos(free)
+    QTest.mousePress(free, Qt.RightButton, pos=pos)
+    end = QPoint(max(4, pos.x() - 48), pos.y())
+    move = QMouseEvent(
+        QEvent.MouseMove,
+        end,
+        free.mapToGlobal(end),
+        Qt.NoButton,
+        Qt.RightButton,
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(free, move)
+    assert harness.page.board_viewport().pan_committed()
+    QTest.mouseRelease(free, Qt.RightButton, pos=end)
+    QApplication.processEvents()
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
+
+
 def test_card_context_menu_does_not_open_board_menu(qtbot):
     harness = _Harness(qtbot)
     _free, (card,) = _prepare_free_grid(harness, qtbot, "card-ctx")
@@ -4621,6 +4665,19 @@ def test_card_context_menu_does_not_open_board_menu(qtbot):
     assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
     card_menus = _visible_menus("ultraViewCardMenu")
     assert card_menus
+    _close_named_menus("ultraViewCardMenu")
+
+
+def test_right_click_on_card_without_drag_opens_card_menu(qtbot):
+    harness = _Harness(qtbot)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "card-right")
+    pos = card.rect().center()
+    QTest.mousePress(card, Qt.RightButton, pos=pos)
+    assert harness.page.is_board_panning()
+    QTest.mouseRelease(card, Qt.RightButton, pos=pos)
+    QApplication.processEvents()
+    assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
+    assert _visible_menus("ultraViewCardMenu")
     _close_named_menus("ultraViewCardMenu")
 
 

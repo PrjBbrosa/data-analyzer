@@ -323,6 +323,8 @@ class UltraViewPage(QWidget):
         self._prev_unplaced_count: int | None = None
         self._prev_layout_fingerprint: tuple[str, str] | None = None
         self._viewport = BoardViewport()
+        self._ignore_next_context_menu = False
+        self._right_gesture_widget: QWidget | None = None
         self._session_camera: dict[str, tuple[float, tuple[float, float], tuple[int, int, int, int]]] = {}
         self._restoring_viewport = False
         self._rebasing_extent = False
@@ -378,6 +380,7 @@ class UltraViewPage(QWidget):
             pinch=self.handle_pinch,
             note_space=self.note_space,
             text_field_has_focus=self._text_field_has_focus,
+            suppress_context_menu=self.suppress_board_context_menu_event,
             is_active=self._viewport_router_is_active,
             parent=self,
         )
@@ -1783,24 +1786,42 @@ class UltraViewPage(QWidget):
         elif not self._viewport.is_panning():
             self._board_scroll.viewport().unsetCursor()
 
-    def begin_board_pan(self, event) -> bool:
+    def begin_board_pan(self, event, widget=None) -> bool:
         button = event.button()
+        is_right = button == Qt.RightButton
         if button != Qt.MiddleButton and not (
             button == Qt.LeftButton and self._viewport.space_down()
-        ):
+        ) and not is_right:
             return False
-        self.cancel_board_gestures()
+        if widget is None and hasattr(event, "globalPos"):
+            widget = QApplication.widgetAt(event.globalPos())
+        if is_right and not self._is_board_canvas_widget(widget):
+            return False
+        if not is_right:
+            self.cancel_board_gestures()
         global_pos = _event_global_xy(event)
-        self._viewport.begin_pan(global_pos, int(button))
-        self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
-        self._apply_preview_quality(QUALITY_FAST)
-        self._restart_smooth_timer()
+        self._viewport.begin_pan(global_pos, int(button), deferred=is_right)
+        self._right_gesture_widget = widget if is_right else None
+        if not is_right:
+            self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
+            self._apply_preview_quality(QUALITY_FAST)
+            self._restart_smooth_timer()
         return True
 
     def update_board_pan(self, event) -> None:
         if not self._viewport.is_panning():
             return
-        dx, dy = self._viewport.update_pan(_event_global_xy(event))
+        threshold = 0.0
+        if self._viewport.pan_button() == int(Qt.RightButton):
+            threshold = float(QApplication.startDragDistance())
+        was_committed = self._viewport.pan_committed()
+        dx, dy = self._viewport.update_pan(_event_global_xy(event), threshold=threshold)
+        if self._viewport.pan_committed() and not was_committed:
+            self.cancel_board_gestures()
+            self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
+            self._apply_preview_quality(QUALITY_FAST)
+        if dx == 0.0 and dy == 0.0:
+            return
         horizontal = self._board_scroll.horizontalScrollBar()
         vertical = self._board_scroll.verticalScrollBar()
         horizontal.setValue(int(horizontal.value() + dx))
@@ -1808,15 +1829,83 @@ class UltraViewPage(QWidget):
         self._restart_smooth_timer()
 
     def end_board_pan_for_event(self, event) -> bool:
+        pan_button = self._viewport.pan_button()
+        committed = self._viewport.pan_committed()
         if not self._viewport.end_pan(int(event.button())):
             return False
         self._after_end_board_pan()
+        if pan_button == int(Qt.RightButton):
+            if not committed:
+                self._deliver_right_click_menu(event)
+            self._arm_context_menu_suppress()
+        self._right_gesture_widget = None
         return True
 
     def end_board_pan(self) -> None:
+        if self._viewport.pan_button() == int(Qt.RightButton):
+            self._arm_context_menu_suppress()
         if not self._viewport.end_pan(None):
+            self._right_gesture_widget = None
             return
+        self._right_gesture_widget = None
         self._after_end_board_pan()
+
+    def suppress_board_context_menu_event(self, _event) -> bool:
+        if self._ignore_next_context_menu:
+            self._ignore_next_context_menu = False
+            return True
+        return bool(self._viewport.is_panning())
+
+    def _arm_context_menu_suppress(self) -> None:
+        self._ignore_next_context_menu = True
+        QTimer.singleShot(0, self._expire_context_menu_suppress)
+
+    def _expire_context_menu_suppress(self) -> None:
+        self._ignore_next_context_menu = False
+
+    def _is_board_canvas_widget(self, widget) -> bool:
+        current = widget if isinstance(widget, QWidget) else None
+        while current is not None:
+            if current is self._canvas_stage:
+                return True
+            if current is self._canvas_host:
+                return False
+            current = current.parentWidget()
+        return False
+
+    def _deliver_right_click_menu(self, event) -> None:
+        global_pos = event.globalPos() if hasattr(event, "globalPos") else QCursor.pos()
+        widget = QApplication.widgetAt(global_pos)
+        if widget is None:
+            widget = self._right_gesture_widget
+        target = None
+        current = widget
+        while current is not None:
+            if isinstance(current, UltraViewCard):
+                target = current
+                break
+            if current in (
+                self._free_grid,
+                self._grid,
+                self._board_host,
+                self._board_scroll.viewport(),
+            ):
+                target = current
+                break
+            if current is self._canvas_stage or current is self._canvas_host:
+                target = (
+                    self._free_grid
+                    if self._board.layout_mode == LAYOUT_MODE_FREE_GRID
+                    else self._grid
+                )
+                break
+            current = current.parentWidget()
+        if target is None:
+            return
+        pos = target.mapFromGlobal(global_pos)
+        QApplication.sendEvent(
+            target, QContextMenuEvent(QContextMenuEvent.Mouse, pos, global_pos)
+        )
 
     def _after_end_board_pan(self) -> None:
         if self._viewport.space_down():

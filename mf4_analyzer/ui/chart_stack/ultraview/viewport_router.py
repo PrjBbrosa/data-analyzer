@@ -18,6 +18,7 @@ class ViewportGestureRouter(QObject):
             QEvent.MouseButtonPress,
             QEvent.MouseMove,
             QEvent.MouseButtonRelease,
+            QEvent.ContextMenu,
             QEvent.Wheel,
             QEvent.NativeGesture,
         }
@@ -28,13 +29,14 @@ class ViewportGestureRouter(QObject):
         *,
         canvas_host: QWidget,
         viewport,
-        begin_pan: Callable[[object], bool],
+        begin_pan: Callable[[object, object], bool],
         update_pan: Callable[[object], None],
         end_pan: Callable[[object], bool],
         zoom_wheel: Callable[[QWheelEvent, QWidget], bool],
         pinch: Callable[[QNativeGestureEvent, QWidget], bool],
         note_space: Callable[[bool], None],
         text_field_has_focus: Callable[[], bool],
+        suppress_context_menu: Callable[[object], bool] | None = None,
         is_active: Callable[[], bool] | None = None,
         parent: QObject | None = None,
     ) -> None:
@@ -48,6 +50,7 @@ class ViewportGestureRouter(QObject):
         self._pinch = pinch
         self._note_space = note_space
         self._text_field_has_focus = text_field_has_focus
+        self._suppress_context_menu = suppress_context_menu
         self._is_active = is_active
         self._installed = False
 
@@ -82,7 +85,7 @@ class ViewportGestureRouter(QObject):
         if event_type in (QEvent.KeyPress, QEvent.KeyRelease):
             return self._route_space(event, pressed=event_type == QEvent.KeyPress)
         if event_type == QEvent.MouseButtonPress:
-            if self._begin_pan(event):
+            if self._begin_pan(event, watched):
                 event.accept()
                 return True
             return False
@@ -94,6 +97,11 @@ class ViewportGestureRouter(QObject):
             return False
         if event_type == QEvent.MouseButtonRelease:
             if self._end_pan(event):
+                event.accept()
+                return True
+            return False
+        if event_type == QEvent.ContextMenu:
+            if self._suppress_context_menu is not None and self._suppress_context_menu(event):
                 event.accept()
                 return True
             return False

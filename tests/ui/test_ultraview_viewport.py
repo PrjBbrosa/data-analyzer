@@ -261,6 +261,19 @@ def test_board_viewport_owns_zoom_quality_and_pan_delta():
     assert not viewport.is_panning()
 
 
+def test_board_viewport_defers_right_pan_until_drag_threshold():
+    viewport = BoardViewport()
+    viewport.begin_pan((10.0, 20.0), button=2, deferred=True)
+    assert viewport.is_panning()
+    assert not viewport.pan_committed()
+    assert viewport.pan_button() == 2
+    assert viewport.update_pan((12.0, 20.0), threshold=10.0) == pytest.approx((0.0, 0.0))
+    assert not viewport.pan_committed()
+    assert viewport.update_pan((22.0, 20.0), threshold=10.0) == pytest.approx((-10.0, 0.0))
+    assert viewport.pan_committed()
+    assert viewport.update_pan((18.0, 16.0), threshold=10.0) == pytest.approx((4.0, 4.0))
+
+
 def _wheel(
     widget,
     delta_y,

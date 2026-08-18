@@ -707,7 +707,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.pan",
-        text="四向平移，拖到边缘会扩展画布",
+        text="左键框选，右键拖动画布，四向可平移",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,

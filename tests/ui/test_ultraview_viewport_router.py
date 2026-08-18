@@ -242,6 +242,43 @@ def test_plain_left_press_on_card_does_not_start_board_pan(qtbot):
     QTest.mouseRelease(card, Qt.LeftButton, pos=card.rect().center())
 
 
+@pytest.mark.parametrize("kind", _START_KINDS)
+def test_right_pan_continues_across_canvas_children(qtbot, kind):
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.set_board_zoom(2.0)
+    start_widget, move_widget = _target(harness, qtbot, kind)
+    scroll = page.board_scroll_area()
+    horizontal = scroll.horizontalScrollBar()
+    horizontal.setValue(max(30, horizontal.maximum() // 2))
+    before = horizontal.value()
+    start = start_widget.rect().center()
+    global_start = start_widget.mapToGlobal(start)
+    QTest.mousePress(start_widget, Qt.RightButton, pos=start)
+    assert page.is_board_panning()
+    assert not page.board_viewport().pan_committed()
+
+    global_end = global_start - QPoint(48, 0)
+    _send_move(move_widget, global_end, buttons=Qt.RightButton)
+    assert page.is_board_panning()
+    assert page.board_viewport().pan_committed()
+    _send_release(move_widget, global_end, Qt.RightButton)
+
+    assert not page.is_board_panning()
+    assert horizontal.value() != before
+
+
+def test_right_press_on_library_does_not_start_board_pan(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.set_library_visible(True)
+    field = page.library_panel().search_field()
+    qtbot.wait(10)
+    QTest.mousePress(field, Qt.RightButton, pos=field.rect().center())
+    assert not page.is_board_panning()
+    QTest.mouseRelease(field, Qt.RightButton, pos=field.rect().center())
+
+
 def test_space_is_not_consumed_while_text_input_has_focus(qtbot):
     harness = _Harness(qtbot)
     page = harness.page
