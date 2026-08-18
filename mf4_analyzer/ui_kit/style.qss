@@ -1803,7 +1803,8 @@ QLabel#fileRowMeta {
     font-size: 11px;
 }
 QFrame#fileInsertLine,
-QFrame#channelInsertLine {
+QFrame#channelInsertLine,
+QFrame#fileTreeInsertLine {
     background-color: {{CONTROL_ACCENT}};
     min-height: 2px;
     max-height: 2px;

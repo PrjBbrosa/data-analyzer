@@ -245,6 +245,7 @@ def test_time_drop_hints_stay_in_budget_and_time_scoped():
         assert hint.surface == "discovery"
         assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
         assert "拖" in hint.text
+    assert "通道树" in found["time.nav_reorder"].text
     assert "画布内不能拖行" in found["time.nav_reorder"].text
 
 

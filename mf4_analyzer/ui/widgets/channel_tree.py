@@ -424,6 +424,8 @@ class _CheckTolerantTree(QTreeWidget):
         self._owner = None  # set by MultiFileChannelWidget; drawBranches reads it
         self._drag_press_pos = None
         self._drag_channel = None
+        self._drag_file_press_pos = None
+        self._drag_file_anchor_fid = None
         self._channel_delegate = _ChannelLeafDelegate(self)
         # Darwin-only: selected-row tint washes out Fusion's branch glyph, so
         # drawBranches overpaints a dark chevron in the branch slot. Kept as a
@@ -485,6 +487,8 @@ class _CheckTolerantTree(QTreeWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self._clear_channel_drag_candidate()
+            self._clear_file_drag_candidate()
             pos = event.pos()
             item = self.itemAt(pos)
             if item is not None:
@@ -503,7 +507,6 @@ class _CheckTolerantTree(QTreeWidget):
                     # here handles the press, and mouseReleaseEvent suppresses
                     # Qt's native indicator release toggle.
                     self._consume_check_release = True
-                    self._clear_channel_drag_candidate()
                     owner = getattr(self, "_owner", None)
                     if not (
                         owner is not None
@@ -516,26 +519,32 @@ class _CheckTolerantTree(QTreeWidget):
                     data = item.data(0, Qt.UserRole)
                     self._drag_press_pos = QPoint(pos)
                     self._drag_channel = (str(data[1]), str(data[2]))
-                else:
-                    self._clear_channel_drag_candidate()
-            else:
-                self._clear_channel_drag_candidate()
+                elif self._is_file_body_press(item, pos):
+                    anchor_fid = self._file_anchor_for_item(item)
+                    if anchor_fid is not None:
+                        self._drag_file_press_pos = QPoint(pos)
+                        self._drag_file_anchor_fid = anchor_fid
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self._consume_check_release:
             self._consume_check_release = False
             self._clear_channel_drag_candidate()
+            self._clear_file_drag_candidate()
             event.accept()
             return
         if event.button() == Qt.LeftButton:
             self._clear_channel_drag_candidate()
+            self._clear_file_drag_candidate()
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):
         """Keep a left-button row drag from extending the tree selection."""
         if event.buttons() & Qt.LeftButton:
             if self._maybe_start_channel_drag(event):
+                event.accept()
+                return
+            if self._maybe_start_file_drag(event):
                 event.accept()
                 return
             event.accept()
@@ -546,11 +555,44 @@ class _CheckTolerantTree(QTreeWidget):
         self._drag_press_pos = None
         self._drag_channel = None
 
+    def _clear_file_drag_candidate(self):
+        self._drag_file_press_pos = None
+        self._drag_file_anchor_fid = None
+
     def _is_channel_body_press(self, item, pos):
         if item is None or self.columnAt(pos.x()) != 0:
             return False
         data = item.data(0, Qt.UserRole)
         return bool(data and data[0] == "channel")
+
+    def _file_anchor_for_item(self, item):
+        """Return one logical-source id for a draggable top-level file node."""
+        if item is None or item.parent() is not None:
+            return None
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return None
+        if data[0] == "file":
+            return str(data[1])
+        if data[0] != "source":
+            return None
+        for index in range(item.childCount()):
+            child_data = item.child(index).data(0, Qt.UserRole)
+            if child_data and child_data[0] == "raster":
+                return str(child_data[1])
+        return None
+
+    def _is_file_body_press(self, item, pos):
+        if item is None or self.columnAt(pos.x()) != 0:
+            return False
+        if self._file_anchor_for_item(item) is None:
+            return False
+        index = self.indexFromItem(item, 0)
+        checkbox = self._check_hit_rect(item, index)
+        # The expander lives left of the checkbox. Starting only after the
+        # enlarged checkbox band keeps expand/collapse and selection gestures
+        # independent from the file-order drag source.
+        return checkbox is not None and pos.x() > checkbox.right()
 
     def _maybe_start_channel_drag(self, event):
         if self._drag_channel is None or self._drag_press_pos is None:
@@ -566,6 +608,22 @@ class _CheckTolerantTree(QTreeWidget):
         if owner is None:
             return False
         owner._start_channel_drag(fid, channel)
+        return True
+
+    def _maybe_start_file_drag(self, event):
+        if self._drag_file_anchor_fid is None or self._drag_file_press_pos is None:
+            return False
+        if (
+            (event.pos() - self._drag_file_press_pos).manhattanLength()
+            < QApplication.startDragDistance()
+        ):
+            return False
+        anchor_fid = self._drag_file_anchor_fid
+        self._clear_file_drag_candidate()
+        owner = getattr(self, "_owner", None)
+        if owner is None or not owner._tree_file_reorder_allowed():
+            return False
+        owner._start_tree_file_drag(anchor_fid)
         return True
 
     def mouseDoubleClickEvent(self, event):
@@ -697,6 +755,10 @@ class MultiFileChannelWidget(QWidget):
     files_attach_requested = pyqtSignal(object)
     files_detach_requested = pyqtSignal(object, str)
     channel_order_requested = pyqtSignal(str, str, str, str)
+    # Tree-root reorder intent. FileNavigator expands either fid to its
+    # physical card block before forwarding the existing file_order_requested
+    # signal to the workspace order owner.
+    file_tree_order_requested = pyqtSignal(str, str, str)
     MAX_CHANNELS_WARNING = 8  # 超过此数量时警告
 
     def __init__(self, parent=None):
@@ -822,6 +884,14 @@ class MultiFileChannelWidget(QWidget):
         self._channel_insert_line.setFixedHeight(2)
         self._channel_insert_line.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._channel_insert_line.hide()
+        self._file_tree_insert_line = QFrame(self.tree.viewport())
+        self._file_tree_insert_line.setObjectName("fileTreeInsertLine")
+        self._file_tree_insert_line.setAccessibleName("文件插入位置")
+        self._file_tree_insert_line.setFixedHeight(2)
+        self._file_tree_insert_line.setAttribute(
+            Qt.WA_TransparentForMouseEvents, True
+        )
+        self._file_tree_insert_line.hide()
         self._sync_empty_state()
         self._sync_projection_chrome()
 
@@ -1255,6 +1325,7 @@ class MultiFileChannelWidget(QWidget):
             etype = event.type()
             if etype == QEvent.DragLeave:
                 self._clear_channel_insert_line()
+                self._clear_file_tree_insert_line()
                 self._set_drop_active(False)
                 event.accept()
                 return True
@@ -1268,6 +1339,15 @@ class MultiFileChannelWidget(QWidget):
                     else:
                         self._handle_channel_drop(event)
                     return True
+                if mime is not None and mime.hasFormat(INTERNAL_FILE_FIDS_MIME):
+                    if etype == QEvent.DragEnter:
+                        handled = self._handle_tree_file_drag_enter(event)
+                    elif etype == QEvent.DragMove:
+                        handled = self._handle_tree_file_drag_move(event)
+                    else:
+                        handled = self._handle_tree_file_drop(event)
+                    if handled:
+                        return True
                 if etype == QEvent.DragEnter:
                     self.dragEnterEvent(event)
                 elif etype == QEvent.DragMove:
@@ -1285,6 +1365,18 @@ class MultiFileChannelWidget(QWidget):
         drag.setMimeData(mime)
         drag.setPixmap(self._channel_drag_pixmap(fid, channel))
         drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+
+    def _start_tree_file_drag(self, anchor_fid):
+        """Start a file-card-compatible drag from a top-level tree node."""
+        mime = QMimeData()
+        mime.setData(
+            INTERNAL_FILE_FIDS_MIME,
+            json.dumps([str(anchor_fid)]).encode("utf-8"),
+        )
+        host = self.window() or self
+        drag = QDrag(host)
+        drag.setMimeData(mime)
+        drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.MoveAction)
 
     def _channel_drag_pixmap(self, fid, channel):
         fd = self._files.get(fid)
@@ -1452,6 +1544,134 @@ class MultiFileChannelWidget(QWidget):
         except Exception:
             logger.exception("channel tree drop failed")
             event.ignore()
+
+    def _tree_file_reorder_allowed(self):
+        return (
+            not self.search.text().strip()
+            and self._projection_role == "time"
+        )
+
+    def _tree_file_root_for_fid(self, fid):
+        item = self._file_items.get(str(fid))
+        if item is None:
+            return None
+        while item.parent() is not None:
+            item = item.parent()
+        data = item.data(0, Qt.UserRole)
+        if data and data[0] in ("file", "source"):
+            return item
+        return None
+
+    def _tree_file_anchor_for_item(self, item):
+        return self.tree._file_anchor_for_item(item)
+
+    def _tree_file_drag_anchor(self, mime):
+        """Validate that a file drag represents exactly one physical root."""
+        fids = self._file_fids_from_mime(mime)
+        if not fids:
+            return None
+        root = None
+        for fid in fids:
+            candidate = self._tree_file_root_for_fid(fid)
+            if candidate is None:
+                return None
+            if root is None:
+                root = candidate
+            elif candidate is not root:
+                return None
+        if root is None or not self._is_item_attached(root):
+            return None
+        return self._tree_file_anchor_for_item(root)
+
+    def _tree_file_drop_target(self, event):
+        item = self.tree.itemAt(event.pos())
+        anchor_fid = self._tree_file_anchor_for_item(item)
+        if (
+            anchor_fid is None
+            or item is None
+            or not self._is_item_attached(item)
+        ):
+            return None, None, None
+        geo = self.tree.visualItemRect(item)
+        placement = (
+            _CHANNEL_ORDER_BEFORE
+            if event.pos().y() < geo.center().y()
+            else _CHANNEL_ORDER_AFTER
+        )
+        return anchor_fid, placement, item
+
+    def _tree_file_order_is_noop(self, source_fid, target_item, placement):
+        source_item = self._tree_file_root_for_fid(source_fid)
+        if source_item is None or target_item is None or source_item is target_item:
+            return True
+        source_at = self.tree.indexOfTopLevelItem(source_item)
+        target_at = self.tree.indexOfTopLevelItem(target_item)
+        if source_at < 0 or target_at < 0:
+            return True
+        if placement == _CHANNEL_ORDER_BEFORE:
+            return source_at == target_at - 1
+        if placement == _CHANNEL_ORDER_AFTER:
+            return source_at == target_at + 1
+        return True
+
+    def _show_file_tree_insert_line(self, item, placement):
+        geo = self.tree.visualItemRect(item)
+        y = geo.top() if placement == _CHANNEL_ORDER_BEFORE else geo.bottom() - 1
+        viewport = self.tree.viewport()
+        width = max(8, viewport.width() - 8)
+        self._file_tree_insert_line.setGeometry(4, max(0, y - 1), width, 2)
+        self._file_tree_insert_line.show()
+        self._file_tree_insert_line.raise_()
+
+    def _clear_file_tree_insert_line(self):
+        self._file_tree_insert_line.hide()
+
+    def _handle_tree_file_drag_enter(self, event):
+        anchor_fid = self._tree_file_drag_anchor(event.mimeData())
+        if anchor_fid is None or not self._tree_file_reorder_allowed():
+            self._clear_file_tree_insert_line()
+            return False
+        self._set_drop_active(False)
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+        return True
+
+    def _handle_tree_file_drag_move(self, event):
+        anchor_fid = self._tree_file_drag_anchor(event.mimeData())
+        target_fid, placement, target_item = self._tree_file_drop_target(event)
+        if (
+            anchor_fid is None
+            or target_fid is None
+            or not self._tree_file_reorder_allowed()
+        ):
+            self._clear_file_tree_insert_line()
+            return False
+        self._set_drop_active(False)
+        if self._tree_file_order_is_noop(anchor_fid, target_item, placement):
+            self._clear_file_tree_insert_line()
+        else:
+            self._show_file_tree_insert_line(target_item, placement)
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+        return True
+
+    def _handle_tree_file_drop(self, event):
+        self._clear_file_tree_insert_line()
+        anchor_fid = self._tree_file_drag_anchor(event.mimeData())
+        target_fid, placement, target_item = self._tree_file_drop_target(event)
+        if (
+            anchor_fid is None
+            or target_fid is None
+            or not self._tree_file_reorder_allowed()
+        ):
+            return False
+        self._set_drop_active(False)
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+        if self._tree_file_order_is_noop(anchor_fid, target_item, placement):
+            return True
+        self.file_tree_order_requested.emit(anchor_fid, target_fid, placement)
+        return True
 
     def _set_drop_active(self, active):
         self.setProperty("dropActive", bool(active))

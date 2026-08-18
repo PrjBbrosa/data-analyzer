@@ -26,6 +26,7 @@ def test_quickref_documents_channel_drop_and_navigator_order():
     assert "占位" in (xaxis.sub or "") or "跳过" in (xaxis.sub or "")
     tree = next(g for g in quickref.QUICKREF if g.title == "通道树（左侧）")
     order = next(r for r in tree.rows if "顺序" in r.desc)
+    assert "通道树文件根节点" in (order.sub or "")
     assert "画布内不能拖行" in (order.sub or "")
 
 

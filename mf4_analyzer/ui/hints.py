@@ -227,7 +227,7 @@ _HINTS = (
     ),
     Hint(
         id="time.nav_reorder",
-        text="左侧拖文件/通道排序，画布内不能拖行",
+        text="通道树拖文件/通道排序，画布内不能拖行",
         surface="discovery",
         modes=frozenset({"time"}),
         priority=79,

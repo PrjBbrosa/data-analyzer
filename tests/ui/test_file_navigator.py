@@ -914,6 +914,26 @@ def test_file_list_group_card_moves_as_one_block(qapp, qtbot):
     assert tree.topLevelItem(1).data(0, Qt.UserRole)[0] == "source"
 
 
+def test_channel_tree_file_order_uses_whole_physical_file_block(qapp, qtbot):
+    source = "C:/data/grouped.hdf"
+    nav = _shown_file_nav(
+        qtbot,
+        ("f0", FakeFd(filepath=source, label_suffix="1 kHz")),
+        ("f1", FakeFd(filepath=source, label_suffix="2 kHz")),
+        ("f2", FakeFd(filename="other.csv")),
+    )
+    captured = []
+    nav.file_order_requested.connect(
+        lambda fids, target, placement: captured.append(
+            (list(fids), list(target), placement)
+        )
+    )
+
+    nav.channel_list.file_tree_order_requested.emit("f1", "f2", "after")
+
+    assert captured == [(["f0", "f1"], ["f2"], "after")]
+
+
 def test_file_list_unknown_or_malformed_mime_is_ignored(qapp, qtbot):
     nav = _shown_file_nav(qtbot, ("f0", FakeFd()), ("f1", FakeFd()))
     last = _pos_on_row(nav._ordered_file_rows()[-1], after=True)

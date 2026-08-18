@@ -1,7 +1,8 @@
+import json
 from pathlib import Path
 
 from PyQt5.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, Qt
-from PyQt5.QtGui import QColor, QDropEvent, QMouseEvent
+from PyQt5.QtGui import QColor, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox, QPushButton
 
@@ -13,7 +14,7 @@ from mf4_analyzer.ui.channel_drag import (
 
 from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui_kit.icons import Icons
-from mf4_analyzer.ui.widgets import MultiFileChannelWidget
+from mf4_analyzer.ui.widgets import INTERNAL_FILE_FIDS_MIME, MultiFileChannelWidget
 
 
 def test_channel_tree_selected_rows_render_approved_windows_highlight(qapp, qtbot):
@@ -1041,6 +1042,12 @@ def _channel_mime(fid, channel):
     return mime
 
 
+def _file_mime(fids):
+    mime = QMimeData()
+    mime.setData(INTERNAL_FILE_FIDS_MIME, json.dumps(list(fids)).encode("utf-8"))
+    return mime
+
+
 class _FakeChannelDrag:
     last_mime = None
     parents = []
@@ -1097,7 +1104,7 @@ def test_channel_body_drag_encodes_composite_mime(qapp, qtbot, monkeypatch):
     assert _FakeChannelDrag.parents == [widget.window()]
 
 
-def test_checkbox_and_parent_do_not_start_channel_drag(qapp, qtbot, monkeypatch):
+def test_checkbox_does_not_start_tree_drag(qapp, qtbot, monkeypatch):
     _FakeChannelDrag.last_mime = None
     monkeypatch.setattr("mf4_analyzer.ui.widgets.channel_tree.QDrag", _FakeChannelDrag)
     widget = MultiFileChannelWidget()
@@ -1134,10 +1141,29 @@ def test_checkbox_and_parent_do_not_start_channel_drag(qapp, qtbot, monkeypatch)
     )
     assert _FakeChannelDrag.last_mime is None
 
+
+def test_file_root_drag_encodes_file_mime(qapp, qtbot, monkeypatch):
+    _FakeChannelDrag.last_mime = None
+    _FakeChannelDrag.parents = []
+    monkeypatch.setattr("mf4_analyzer.ui.widgets.channel_tree.QDrag", _FakeChannelDrag)
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    widget.tree.expandAll()
+    qapp.processEvents()
+
+    tree = widget.tree
+    parent = widget._file_items["file-a"]
+    row = tree.visualItemRect(parent)
+    hit = tree._check_hit_rect(parent, tree.indexFromItem(parent, 0))
+    pos = QPoint(hit.right() + 12, row.center().y())
     tree.mousePressEvent(
         QMouseEvent(
             QEvent.MouseButtonPress,
-            tree.visualItemRect(parent).center(),
+            pos,
             Qt.LeftButton,
             Qt.LeftButton,
             Qt.NoModifier,
@@ -1146,13 +1172,117 @@ def test_checkbox_and_parent_do_not_start_channel_drag(qapp, qtbot, monkeypatch)
     tree.mouseMoveEvent(
         QMouseEvent(
             QEvent.MouseMove,
-            QPoint(20, 20 + QApplication.startDragDistance() + 8),
+            pos + QPoint(0, QApplication.startDragDistance() + 8),
             Qt.NoButton,
             Qt.LeftButton,
             Qt.NoModifier,
         )
     )
+    assert _FakeChannelDrag.last_mime is not None
+    assert json.loads(
+        bytes(_FakeChannelDrag.last_mime.data(INTERNAL_FILE_FIDS_MIME)).decode("utf-8")
+    ) == ["file-a"]
+    assert _FakeChannelDrag.parents == [widget.window()]
+
+
+def test_file_root_drag_is_time_tree_only(qapp, qtbot, monkeypatch):
+    _FakeChannelDrag.last_mime = None
+    monkeypatch.setattr("mf4_analyzer.ui.widgets.channel_tree.QDrag", _FakeChannelDrag)
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    widget.set_projection_role("fft_sources")
+    widget.tree.expandAll()
+    qapp.processEvents()
+
+    tree = widget.tree
+    parent = widget._file_items["file-a"]
+    row = tree.visualItemRect(parent)
+    hit = tree._check_hit_rect(parent, tree.indexFromItem(parent, 0))
+    pos = QPoint(hit.right() + 12, row.center().y())
+    tree.mousePressEvent(
+        QMouseEvent(QEvent.MouseButtonPress, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    )
+    tree.mouseMoveEvent(
+        QMouseEvent(
+            QEvent.MouseMove,
+            pos + QPoint(0, QApplication.startDragDistance() + 8),
+            Qt.NoButton,
+            Qt.LeftButton,
+            Qt.NoModifier,
+        )
+    )
+
     assert _FakeChannelDrag.last_mime is None
+
+
+def test_file_root_drop_emits_tree_file_order_request(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 320)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-b", _FakeFileData())
+    widget.tree.expandAll()
+    qapp.processEvents()
+
+    target = widget._file_items["file-b"]
+    target_row = widget.tree.visualItemRect(target)
+    pos = target_row.bottomLeft() - QPoint(-8, 2)
+    mime = _file_mime(["file-a"])
+    event = QDropEvent(
+        pos, Qt.MoveAction | Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier
+    )
+    event._mime_ref = mime
+    captured = []
+    widget.file_tree_order_requested.connect(
+        lambda source, target, placement: captured.append(
+            (source, target, placement)
+        )
+    )
+
+    with qtbot.assertNotEmitted(widget.files_attach_requested):
+        assert widget.eventFilter(widget.tree.viewport(), event) is True
+
+    assert event.isAccepted()
+    assert event.dropAction() == Qt.MoveAction
+    assert captured == [("file-a", "file-b", "after")]
+
+
+def test_file_root_drag_move_shows_and_clears_tree_insert_line(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 320)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-b", _FakeFileData())
+    widget.tree.expandAll()
+    qapp.processEvents()
+
+    target = widget._file_items["file-b"]
+    target_row = widget.tree.visualItemRect(target)
+    mime = _file_mime(["file-a"])
+    move = QDragMoveEvent(
+        target_row.bottomLeft() - QPoint(-8, 2),
+        Qt.MoveAction | Qt.CopyAction,
+        mime,
+        Qt.LeftButton,
+        Qt.NoModifier,
+    )
+    move._mime_ref = mime
+
+    assert widget.eventFilter(widget.tree.viewport(), move) is True
+    assert move.isAccepted()
+    assert move.dropAction() == Qt.MoveAction
+    assert widget._file_tree_insert_line.isVisible()
+
+    assert widget.eventFilter(widget.tree.viewport(), QDragLeaveEvent()) is True
+    assert not widget._file_tree_insert_line.isVisible()
 
 
 def test_short_channel_move_is_still_a_click(qapp, qtbot, monkeypatch):

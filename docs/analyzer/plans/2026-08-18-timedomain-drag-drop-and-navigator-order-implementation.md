@@ -85,6 +85,9 @@
 6. MainWindow/协调器接受 intent 后先更新 `NavigatorOrderState`，再调用 navigator
    `project_file_order(...)` 移动现有 layout widgets 与通道树文件/source 节点。
 7. grouped card 作为一个块；内部 fids 顺序不变，active fid 和卡片 active chrome 不变。
+8. 通道树 top-level `file` / `source` 根节点复用文件 MIME；树内 drop 先发 fid anchor intent，
+   由 `FileNavigator` 展开为同一物理卡片的完整 fid 块并复用第 2 步的排序链路。raster 子节点
+   不可作为文件排序源，时域以外投影禁用该入口。
 
 测试必须覆盖：首→尾、尾→首、同位 no-op、group card、未知/畸形 MIME、插入线清理、
 Copy/Move 目标区分以及排序不发关闭/附件信号。合成事件要把 `QMimeData` 引用挂在事件或
@@ -342,7 +345,7 @@ git diff --check
 2. 左右对比中分别拖到主栏、副栏；只修改鼠标所在 View，右侧面板随焦点切换。
 3. 通道 → 最底部 X 带；高亮区域准确，Inspector 同步。
 4. subplot 下 A/B 正常、C 同位置占位；overlay 下 C 不画且 pill 显示 2/3。
-5. 拖文件卡片首尾互换；grouped 卡片整块移动，分屏行随之变化。
+5. 拖文件卡片或通道树文件根节点首尾互换；grouped 卡片整块移动，分屏行随之变化。
 6. 同一 fid 内拖通道；跨 fid drop 禁止；搜索态只允许外部 drop。
 7. 在已缩放 X/Y 状态完成加入/排序，确认旧范围保留、新通道 Y-fit 正确。
 8. 保存项目、关闭、重开：文件/通道/X 设置/占位顺序一致。

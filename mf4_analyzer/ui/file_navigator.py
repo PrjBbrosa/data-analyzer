@@ -374,6 +374,9 @@ class FileNavigator(QWidget):
         self.channel_list.channel_order_requested.connect(
             self.channel_order_requested
         )
+        self.channel_list.file_tree_order_requested.connect(
+            self._on_tree_file_order_requested
+        )
         config_bar = self.channel_list.config_bar
         config_bar.save_requested.connect(self.channel_config_save_requested)
         config_bar.apply_requested.connect(self.channel_config_apply_requested)
@@ -514,6 +517,25 @@ class FileNavigator(QWidget):
         if row is None:
             return None
         return [str(fid) for fid in row._fids]
+
+    def _file_group_fids_for(self, fid):
+        key = self._fid_to_key.get(str(fid))
+        row = self._rows.get(key) if key is not None else None
+        if row is None:
+            return ()
+        return tuple(str(member) for member in row._fids)
+
+    def _on_tree_file_order_requested(self, source_fid, target_fid, placement):
+        """Expand tree root anchors into physical file-card blocks."""
+        if placement not in (_FILE_ORDER_BEFORE, _FILE_ORDER_AFTER):
+            return
+        source_fids = self._file_group_fids_for(source_fid)
+        target_fids = self._file_group_fids_for(target_fid)
+        if not source_fids or not target_fids:
+            return
+        if self._file_order_is_noop(source_fids, target_fids, placement):
+            return
+        self.file_order_requested.emit(source_fids, target_fids, placement)
 
     def _holder_pos(self, event, watched):
         pos = event.pos()
