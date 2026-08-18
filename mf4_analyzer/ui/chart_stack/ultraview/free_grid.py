@@ -46,6 +46,10 @@ GRID_SPARE_ROWS = 2
 # when plot-area letterbox still exceeds about one row. Never a full-board
 # exhaustive search (the old 7×8 unbounded grow).
 FIT_SHORT_SIDE_GROW_MAX = 2
+# Extra cost on unused plot height so discrete GridRect search prefers
+# pillarboxing (side breathing room) over letterboxing (flush sides,
+# empty bottom).
+FIT_LETTERBOX_COST = 0.35
 
 Rect = tuple[int, int, int, int]
 
@@ -253,10 +257,17 @@ def _aspect_error_key(
     target: float,
     metrics: GridMetrics,
     chrome: int,
+    image_size: tuple[int, int],
 ) -> tuple[float, int]:
     width, plot_h = _plot_size_px(rect, metrics, chrome)
     ratio = width / float(plot_h)
-    return (abs(ratio - target), -(rect.column_span * rect.row_span))
+    _leftover_w, leftover_h = _contain_letterbox_px(
+        rect, image_size, metrics, chrome
+    )
+    cost = abs(ratio - target) + FIT_LETTERBOX_COST * (
+        leftover_h / float(plot_h)
+    )
+    return (cost, -(rect.column_span * rect.row_span))
 
 
 def _contain_letterbox_px(
@@ -282,6 +293,7 @@ def _best_origin_span(
     target: float,
     metrics: GridMetrics,
     chrome: int,
+    image_size: tuple[int, int],
 ) -> GridRect | None:
     best: tuple[tuple[float, int], GridRect] | None = None
     for col_span in range(col_min, col_max + 1):
@@ -293,7 +305,9 @@ def _best_origin_span(
             candidate = GridRect(
                 int(origin.column), int(origin.row), col_span, row_span
             )
-            key = _aspect_error_key(candidate, target, metrics, chrome)
+            key = _aspect_error_key(
+                candidate, target, metrics, chrome, image_size
+            )
             if best is None or key < best[0]:
                 best = (key, candidate)
     return None if best is None else best[1]
@@ -310,7 +324,8 @@ def fit_rect_for_aspect(
 
     Phase 1 is the 2026-08-15 shrink-only search inside the current span.
     Plot-area chrome is header + footer + 2× image padding so the ratio is
-    the inner ``contentsRect``, not the label box.
+    the inner ``contentsRect``, not the label box. Search cost prefers
+    leftover width (side gutter) over leftover height (empty bottom).
 
     Phase 2: if the contain letterbox on the plot's leftover axis still
     exceeds about one ``GRID_ROW_HEIGHT``, grow only the short side by at
@@ -321,6 +336,7 @@ def fit_rect_for_aspect(
     image_h = max(1, int(image_size[1]))
     target = image_w / float(image_h)
     chrome = max(0, int(chrome_height))
+    image = (image_w, image_h)
     max_col = min(int(origin.column_span), GRID_MAX_COLUMN_SPAN)
     max_row = min(int(origin.row_span), GRID_MAX_ROW_SPAN)
     shrunk = _best_origin_span(
@@ -332,16 +348,17 @@ def fit_rect_for_aspect(
         target,
         metrics,
         chrome,
+        image,
     )
     if shrunk is None:
         return origin
     leftover_w, leftover_h = _contain_letterbox_px(
-        shrunk, (image_w, image_h), metrics, chrome
+        shrunk, image, metrics, chrome
     )
     if max(leftover_w, leftover_h) <= GRID_ROW_HEIGHT:
         return shrunk
     best = shrunk
-    best_key = _aspect_error_key(shrunk, target, metrics, chrome)
+    best_key = _aspect_error_key(shrunk, target, metrics, chrome, image)
     grow_rows = leftover_w >= leftover_h
     for extra in range(1, FIT_SHORT_SIDE_GROW_MAX + 1):
         col_span = shrunk.column_span + (0 if grow_rows else extra)
@@ -355,7 +372,7 @@ def fit_rect_for_aspect(
         candidate = GridRect(
             int(origin.column), int(origin.row), col_span, row_span
         )
-        key = _aspect_error_key(candidate, target, metrics, chrome)
+        key = _aspect_error_key(candidate, target, metrics, chrome, image)
         if key < best_key:
             best_key = key
             best = candidate

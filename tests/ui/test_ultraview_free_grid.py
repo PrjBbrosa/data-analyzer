@@ -50,6 +50,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     CARD_HEADER_HEIGHT,
     CARD_IMAGE_PADDING,
     MIN_CARD_CHROME_HEIGHT,
+    preview_reading_box,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.ultraview_state import (
@@ -184,6 +185,43 @@ def test_fit_rect_for_aspect_prefers_matching_span():
     assert ww / max(1, wh - chrome) > tw / max(1, th - chrome)
 
 
+def test_preview_reading_box_height_fills_a_wide_16x9_capture():
+    box_w, box_h = preview_reading_box(512, 214, (1600, 900))
+    assert box_h == 214
+    assert box_w < 512
+    assert box_w / box_h == pytest.approx(1600 / 900, rel=0.02)
+    assert abs(box_w / box_h - 4 / 3) > 0.2
+
+
+def test_preview_reading_box_uses_the_capture_aspect_not_4x3():
+    box_w, box_h = preview_reading_box(400, 500, (1600, 900))
+    assert box_w == 400
+    assert box_h < 500
+    assert box_w / box_h == pytest.approx(1600 / 900, rel=0.02)
+
+
+def test_fit_rect_for_aspect_prefers_side_gutter_over_bottom_gap():
+    metrics = screen_grid_metrics([])
+    chrome = CARD_FIT_CHROME_HEIGHT
+    origin = GridRect(0, 0, 4, 5)
+    image = (1600, 900)
+
+    def leftover_h(rect):
+        _x, _y, width, height = rect_to_pixels(rect, metrics)
+        plot_h = max(1, height - chrome)
+        scale = min(width / float(image[0]), plot_h / float(image[1]))
+        return plot_h - image[1] * scale
+
+    fitted = fit_rect_for_aspect(origin, image, metrics)
+    assert leftover_h(fitted) <= leftover_h(origin) + 1
+    _x, _y, width, height = rect_to_pixels(fitted, metrics)
+    plot_h = max(1, height - chrome)
+    scale = min(width / float(image[0]), plot_h / float(image[1]))
+    side = width - image[0] * scale
+    bottom = plot_h - image[1] * scale
+    assert side + 1 >= bottom
+
+
 def test_fit_rect_for_aspect_grows_short_side_at_most_two_cells():
     """Shrink first; only the short side may grow, and by at most two cells."""
     metrics = screen_grid_metrics([])
@@ -311,7 +349,7 @@ def test_insert_preview_uses_resolver_span_not_default(qapp):
     assert (fallback.column_span, fallback.row_span) == (4, 3)
 
 
-def test_card_preview_pixmap_is_top_centered_not_stretched(qapp, qtbot):
+def test_card_preview_pixmap_is_centered_not_stretched(qapp, qtbot):
     from PyQt5.QtCore import Qt
     from PyQt5.QtGui import QImage
 
@@ -327,12 +365,17 @@ def test_card_preview_pixmap_is_top_centered_not_stretched(qapp, qtbot):
     card.show()
     qtbot.wait(10)
     card._fit_card_image()
-    assert card._image.alignment() == (Qt.AlignHCenter | Qt.AlignTop)
+    assert card._image.alignment() == Qt.AlignCenter
     pixmap = card.scale_buffer()
     assert pixmap is not None
     logical_w = pixmap.width() / pixmap.devicePixelRatioF()
     logical_h = pixmap.height() / pixmap.devicePixelRatioF()
     avail = card._preview_fit_size()
+    box_w, box_h = preview_reading_box(
+        avail.width(), avail.height(), (120, 80)
+    )
+    assert logical_w == pytest.approx(box_w, abs=1)
+    assert logical_h == pytest.approx(box_h, abs=1)
     assert logical_w <= avail.width() + 1
     assert logical_h <= avail.height() + 1
     assert abs(logical_w / logical_h - 120 / 80) < 0.05

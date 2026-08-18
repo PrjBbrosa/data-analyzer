@@ -33,6 +33,30 @@ CARD_IMAGE_PADDING = 8
 CARD_FIT_CHROME_HEIGHT = (
     CARD_HEADER_HEIGHT + CARD_FOOTER_HEIGHT + 2 * CARD_IMAGE_PADDING
 )
+# Plot-area contain uses the capture's real aspect. A 4:3 frame letterboxed
+# fullscreen 16:9 grabs and put white bands above and below the chart.
+# Height-first contain fills the slot height when the card is wider than
+# the image; leftover belongs on the sides.
+
+
+def preview_reading_box(
+    avail_width: int,
+    avail_height: int,
+    image_size: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Return the KeepAspectRatio size of ``image_size`` in the plot area.
+
+    Prefers filling height (side gaps) over filling width (top/bottom
+    bands). Without ``image_size`` the full plot area is the contain box.
+    """
+    width = max(1, int(avail_width))
+    height = max(1, int(avail_height))
+    if image_size is None:
+        return width, height
+    image_w = max(1, int(image_size[0]))
+    image_h = max(1, int(image_size[1]))
+    scale = min(width / float(image_w), height / float(image_h), 1.0)
+    return max(1, int(round(image_w * scale))), max(1, int(round(image_h * scale)))
 
 Rect = tuple[int, int, int, int]
 

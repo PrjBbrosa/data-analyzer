@@ -89,6 +89,7 @@ from .layouts import (
     MIN_CARD_CHROME_HEIGHT,
     content_rect,
     logical_board_size,
+    preview_reading_box,
     slot_rects,
 )
 from .feedback import (
@@ -1929,7 +1930,7 @@ class UltraViewCard(QFrame):
 
         self._image = QLabel(self)
         self._image.setObjectName("ultraViewCardImage")
-        self._image.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self._image.setAlignment(Qt.AlignCenter)
         self._image.setWordWrap(True)
         self._image.setMinimumHeight(max(8, MIN_CARD_CHROME_HEIGHT // 4))
         self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -2325,9 +2326,12 @@ class UltraViewCard(QFrame):
         avail = self._preview_fit_size()
         if avail.width() < 2 or avail.height() < 2:
             return
+        box_w, box_h = preview_reading_box(
+            avail.width(), avail.height(), (raw_w, raw_h)
+        )
         dpr = _effective_device_pixel_ratio(self)
-        cap_w = max(1, min(int(round(avail.width() * dpr)), raw_w))
-        cap_h = max(1, min(int(round(avail.height() * dpr)), raw_h))
+        cap_w = max(1, min(int(round(box_w * dpr)), raw_w))
+        cap_h = max(1, min(int(round(box_h * dpr)), raw_h))
         key = (
             cap_w,
             cap_h,
@@ -2336,7 +2340,7 @@ class UltraViewCard(QFrame):
             int(self._raw_image.cacheKey()),
         )
         if self._scale_buffer is not None and self._scale_key == key:
-            self._image.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+            self._image.setAlignment(Qt.AlignCenter)
             self._image.setPixmap(self._scale_buffer)
             return
         if self._source_pixmap is None:
@@ -2352,7 +2356,7 @@ class UltraViewCard(QFrame):
         scaled.setDevicePixelRatio(dpr)
         self._scale_buffer = scaled
         self._scale_key = key
-        self._image.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self._image.setAlignment(Qt.AlignCenter)
         self._image.setPixmap(scaled)
 
     def restore_dim(self) -> None:

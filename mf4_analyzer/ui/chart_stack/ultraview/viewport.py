@@ -29,8 +29,9 @@ ZOOM_TO_RECT_MARGIN = 0.08
 # canvas instead of floating in a 6%-per-side frame. Focus keeps
 # ZOOM_TO_RECT_MARGIN.
 FIT_CONTENT_MARGIN = 0.02
-# Board Fit fills the chrome-safe viewport; the ceiling is the same 300%
-# cap as wheel / focus. Opening UltraView uses Fit, not a leftover camera.
+# Board Fit fills the stage-safe fill rect (rail-clear left, SAFE_MARGIN
+# top and bottom); the ceiling is the same 300% cap as wheel / focus.
+# Opening UltraView uses Fit, not a leftover camera.
 BOARD_FIT_ZOOM_MAX = ZOOM_MAX
 # Empty-board working frame: two standard 4×3 cards placed side by side.
 STANDARD_CARD_SPAN = (4, 3)

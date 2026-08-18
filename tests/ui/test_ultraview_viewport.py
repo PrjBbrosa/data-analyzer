@@ -15,6 +15,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     rect_to_pixels,
     screen_grid_metrics,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.layouts import preview_reading_box
 from mf4_analyzer.ui.chart_stack.ultraview import widgets as uv_widgets
 from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     RAIL_TO_CANVAS_GAP,
@@ -746,7 +747,10 @@ def test_card_preview_buffer_uses_physical_target_and_dpr_metadata(qtbot, monkey
     pixmap = card.scale_buffer()
     assert pixmap is not None
     logical_box = card._preview_fit_size()
-    physical_box = QSize(logical_box.width() * 2, logical_box.height() * 2)
+    box_w, box_h = preview_reading_box(
+        logical_box.width(), logical_box.height(), (2000, 1500)
+    )
+    physical_box = QSize(box_w * 2, box_h * 2)
     expected = image.size()
     expected.scale(physical_box, Qt.KeepAspectRatio)
     assert pixmap.size() == expected
@@ -1021,11 +1025,15 @@ def _union_cards_in_host(page, cards):
 
 def test_zoom_fit_fill_rect_is_taller_than_parking_fit(qtbot):
     harness = _Harness(qtbot)
+    layout = harness.page._floating_layout()
     fit = harness.page._content_fit_rect()
     fill = harness.page._content_fill_rect()
     assert fill.x == fit.x
-    assert fill.y == fit.y
     assert fill.width == fit.width
+    assert fill.y == SAFE_MARGIN
+    assert fill.y < fit.y
+    assert fill.bottom == layout.board.height - SAFE_MARGIN
+    assert fill.y + fill.height / 2.0 == pytest.approx(layout.board.height / 2.0)
     assert fill.height > fit.height
     harness = _Harness(qtbot)
     _free, cards = _prepare_free_grid(harness, qtbot, "a", "b", "c", "d")
@@ -1049,6 +1057,8 @@ def test_zoom_fit_centers_content_in_the_safe_zone(qtbot):
     x, y, width, height = _union_cards_in_host(harness.page, cards)
     assert x + width / 2.0 == pytest.approx(float(target.x) + float(target.width) / 2.0, abs=2)
     assert y + height / 2.0 == pytest.approx(float(target.y) + float(target.height) / 2.0, abs=2)
+    host = harness.page._canvas_host
+    assert y + height / 2.0 == pytest.approx(float(host.height()) / 2.0, abs=2)
 
 
 def test_zoom_fit_on_an_empty_board_uses_two_card_working_frame(qtbot):

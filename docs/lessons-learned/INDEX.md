@@ -200,6 +200,8 @@ lesson by default.
 | [QSS Polish Overrides Python setFixedSize](pyqt-ui/2026-08-16-qss-polish-overrides-python-fixed-size.md) | Pairing a Python `setFixedSize` / `setMinimumSize` with QSS `min-width` / `min-height` on the same UltraView control. | `tests/ui/test_ultraview_chrome.py`; `docs/analyzer/verify/2026-08-16-daily-followup/qss-python-size-inventory.md` |
 | [Shared Cursor Pill Needs A Section Gate](pyqt-ui/2026-08-16-shared-pill-needs-section-gate.md) | Routing time-domain cursor / dual-cursor readout into the shared ChartStack pill from an analysis canvas, View restore, or FRF/FFT tab switch. | `tests/ui/test_project_session.py`; `tests/ui/test_split_routing.py` |
 | [Tools Installing App QSS Pollute The Test Session](pyqt-ui/2026-08-16-tools-installing-app-qss-pollutes-test-session.md) | Importing or running a `tools/` visual harness inside pytest, or adding a test that calls `qApp.setStyleSheet` without restoring the previous sheet. | `tests/conftest.py`; `tests/test_verify_ultraview_visuals.py` |
+| [UltraView Fit Fill Is Vertically Stage-Centered](pyqt-ui/2026-08-17-ultraview-fit-fill-vertical-center.md) | Changing UltraView `_content_fill_rect`, `zoom_fit`, `_apply_zoom_and_center` origin, or `SAFE_MARGIN` vs parking `fit.y`. | See lesson |
+| [UltraView Card Preview Uses Capture Aspect](pyqt-ui/2026-08-18-ultraview-preview-reading-gutter.md) | Changing UltraView card preview scaling, `QLabel#ultraViewCardImage` alignment, `_fit_card_image`, export `_draw_preview`, or `preview_reading_box`. | See lesson |
 
 ## Selection Rules
 

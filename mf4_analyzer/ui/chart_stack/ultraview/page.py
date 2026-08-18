@@ -928,18 +928,21 @@ class UltraViewPage(QWidget):
         return layout.fit
 
     def _content_fill_rect(self):
-        """适应 target: same left/top as Fit parking, full safe bottom.
+        """适应 target: rail-clear left, stage-safe top and bottom.
 
-        ``fit`` stops above the navigation island so 1× cards stay clear of
-        that chrome. 适应 must fill the dotted stage, so it uses the
-        stage-safe bottom instead of giving up that whole band.
+        ``fit`` parks 1× below the top islands and above the navigation
+        island. 适应 treats the edge chrome as overlays on the dotted
+        stage: same left as ``fit`` so the rail keeps a dedicated band,
+        but top and bottom both use ``SAFE_MARGIN``. Matching those
+        vertical insets keeps the fill centre on the stage centre.
         """
         layout = self._floating_layout()
         if self._presentation:
             return layout.board
         fit = layout.fit
+        top = SAFE_MARGIN
         bottom = max(int(fit.bottom), int(layout.board.height) - SAFE_MARGIN)
-        return FloatingRect(fit.x, fit.y, fit.width, max(0, bottom - fit.y))
+        return FloatingRect(fit.x, top, fit.width, max(0, bottom - top))
 
     def _fit_origin(self) -> tuple[float, float]:
         """Chrome-safe parking origin. Fit / 1× / restore park the stack here."""
@@ -1614,8 +1617,8 @@ class UltraViewPage(QWidget):
             return
         # Fit the placed-content box into the fill rect. zoom_to_card
         # uses the raw viewport so a double-click can bleed under the toolbar;
-        # 适应 keeps left/top clear of the rail and top islands but uses the
-        # full stage-safe bottom so the cluster fills the dotted canvas.
+        # 适应 keeps the rail-clear left of ``fit`` and uses the stage-safe
+        # top and bottom so the cluster fills the dotted canvas.
         zoom = board_fit_zoom(
             (float(content[2]), float(content[3])),
             (float(fill.width), float(fill.height)),
@@ -1717,13 +1720,23 @@ class UltraViewPage(QWidget):
         center: tuple[float, float],
         *,
         viewport_size: tuple[float, float] | None = None,
+        viewport_origin: tuple[float, float] | None = None,
     ) -> None:
         self.cancel_board_gestures()
         self._apply_preview_quality(QUALITY_FAST)
         after = clamp_zoom(zoom)
         self._broadcast_zoom(after)
         self._viewport.set_center(center)
-        origin = self._fit_origin()
+        # zoom_fit passes the fill size; its origin must match that rect.
+        # Parking ``fit`` sits below the top islands. Using it here would
+        # leave the visual centre low after raising fill.y.
+        if viewport_origin is not None:
+            origin = (float(viewport_origin[0]), float(viewport_origin[1]))
+        elif viewport_size is not None:
+            fill = self._content_fill_rect()
+            origin = (float(fill.x), float(fill.y))
+        else:
+            origin = self._fit_origin()
         self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
         if viewport_size is None:
             viewport = self._board_scroll.viewport()

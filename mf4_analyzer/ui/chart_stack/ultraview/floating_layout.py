@@ -140,9 +140,10 @@ class FloatingLayout:
     """One CanvasHost layout pass, expressed entirely in stage coordinates.
 
     ``board`` is the full-bleed scroll host so zoom/pan can travel under the
-    floating chrome.  ``fit`` is the chrome-safe 1×/适应 parking rect: the
-    same inset the previous Board allocation used, so Fit still keeps cards
-    clear of the rail and top islands.
+    floating chrome.  ``fit`` is the chrome-safe 1× parking rect: the same
+    inset the previous Board allocation used, so 1× still keeps cards clear
+    of the rail and top islands. 适应 uses a taller fill (same left, stage-safe
+    top and bottom) so floating chrome does not shrink the panel.
     """
 
     stage: Rect
