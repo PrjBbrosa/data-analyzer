@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v8.0.0 · 使用说明</title>
+<title>TraceLab v8.0.1 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -255,11 +255,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v8.0.0",
-    "versionLabel": "使用说明 · V8.0.0",
+    "version": "v8.0.1",
+    "versionLabel": "使用说明 · V8.0.1",
     "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
     "docVersion": "3.0",
-    "updated": "2026-08-14"
+    "updated": "2026-08-18"
   },
   "slides": [
     { "type": "cover" },
@@ -281,7 +281,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       ] },
 
     { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
-      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v8.0.0 时域主界面的真实截图'><div class='shotcap reveal'>当前 v8.0.0 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
+      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v8.0.1 时域主界面的真实截图'><div class='shotcap reveal'>当前 v8.0.1 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
 
     { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab", "density": "compact",
       "blocks": [
@@ -305,9 +305,9 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
       ] },
 
-    { "id": "imports", "sec": "真实导入", "kicker": "V8.0.0 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
+    { "id": "imports", "sec": "真实导入", "kicker": "V8.0.1 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
       "blocks": [
-        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v8.0.0 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
+        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v8.0.1 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
       ] },
 
     { "id": "project", "sec": "存工程", "kicker": "PROJECT · .tlproj", "title": "把整个分析存成<c>工程</c>", "foot": "保存项目 → 下次一键还原",
@@ -531,18 +531,23 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.0.0 · 使用说明", "density": "compact",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.0.1 · 使用说明", "density": "compact",
       "blocks": [
         { "type": "flow", "height": 550, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v8.0.0" }
+        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v8.0.1" }
       ] }
   ],
 
   "changelog": [
+    { "v": "v8.0.1", "date": "2026-08-18", "items": [
+      "UltraView 的自由网格导出会贴合已放置卡片，去掉没有内容的空白底板。",
+      "适应视图时卡片会在可用区域内竖直居中；卡片预览按实际抓图比例铺满高度。",
+      "总览画布支持右键拖动平移，左键拖动仍用于框选卡片。"
+    ] },
     { "v": "v8.0.0", "date": "2026-08-14", "items": [
       "新增 <b>UltraView</b> 只读总览：把时域、频谱、时频、频响和阶次 View 放进多个 Board 对照，不重新计算、不修改源 View。",
       "总览支持模板和 <b>12 列自由网格</b>，可直接拖动、缩放、框选及成组移动卡片；画布提供缩放、平移、适应视图、minimap 和逐 Board 撤销 / 重做。",
