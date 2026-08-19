@@ -10,6 +10,8 @@ import math
 from typing import Iterable
 
 from mf4_analyzer.ui.ultraview_state import (
+    ConnectorObject,
+    GRID_RESOLUTION,
     SAFETY_COLUMN_MAX,
     SAFETY_COLUMN_MIN,
     SAFETY_ROW_MAX,
@@ -17,22 +19,80 @@ from mf4_analyzer.ui.ultraview_state import (
     FreeGridPlacement,
     GridBounds,
     GridRect,
+    ShapeObject,
+    StickyObject,
+    StrokeObject,
+    TextObject,
     base_frame_bounds,
     safety_grid_bounds,
 )
 
-HALO_MIN_CELLS = 4
-EXTENT_CHUNK_COLUMNS = 4
-EXTENT_CHUNK_ROWS = 4
+from .author_geometry import geometry_grid_bounds
+
+# A schema-5 cell is a micro-grid unit.  Keep the physical four-cell halo and
+# expansion cadence from schema 4 rather than making the canvas appear to
+# contract just because its coordinates gained twice the resolution.
+HALO_MIN_CELLS = 4 * GRID_RESOLUTION
+EXTENT_CHUNK_COLUMNS = 4 * GRID_RESOLUTION
+EXTENT_CHUNK_ROWS = 4 * GRID_RESOLUTION
 EDGE_PAN_BAND_PX = 72
 EDGE_PAN_SPEED_MIN = 4.0
 EDGE_PAN_SPEED_MAX = 22.0
 
 _PlacementLike = FreeGridPlacement | GridRect | GridBounds
 
+# Author line width is measured in 1× pixels while the elastic workspace is
+# measured in micro-grid cells.  One cell is deliberately conservative for
+# the widest V1 64 px cap/head at the canonical 1600-wide pitch.  It avoids
+# clipping ink at Fit/export edges without making the persistent state depend
+# on a live widget or zoom factor.
+AUTHOR_INK_BOUNDS_INFLATE = 1.0
 
-def content_bounds(placements: Iterable[_PlacementLike]) -> GridBounds:
-    """Union of placed card rectangles. Empty input yields an empty bounds."""
+
+def author_content_bounds(objects: Iterable[object]) -> GridBounds:
+    """Return signed, conservative bounds of renderable author content.
+
+    Future/unknown objects deliberately contribute no geometry: they are
+    retained by persistence but the current renderer cannot make a truthful
+    promise about their footprint.  Recognized line-like objects receive a
+    one-cell ink margin so rounded caps and arrow heads survive crop/fit.
+    """
+    union = GridBounds(0, 0, 0, 0)
+    for item in objects:
+        if isinstance(item, (StickyObject, TextObject, ShapeObject)):
+            union = union.union(
+                geometry_grid_bounds(
+                    boxes=((item.box.x, item.box.y, item.box.width, item.box.height),)
+                )
+            )
+        elif isinstance(item, StrokeObject):
+            union = union.union(
+                geometry_grid_bounds(
+                    points=((point.x, point.y) for point in item.points),
+                    inflate=AUTHOR_INK_BOUNDS_INFLATE,
+                )
+            )
+        elif isinstance(item, ConnectorObject):
+            union = union.union(
+                geometry_grid_bounds(
+                    points=(
+                        (item.start.point.x, item.start.point.y),
+                        (item.end.point.x, item.end.point.y),
+                    ),
+                    inflate=AUTHOR_INK_BOUNDS_INFLATE,
+                )
+            )
+    return union
+
+
+def content_bounds(
+    placements: Iterable[_PlacementLike], *, author_objects: Iterable[object] = ()
+) -> GridBounds:
+    """Union placed-card and renderable-author geometry.
+
+    Empty input yields empty bounds.  ``author_objects`` is keyword-only so
+    historical card-only callers retain their exact public call shape.
+    """
     union = GridBounds(0, 0, 0, 0)
     for item in placements:
         if isinstance(item, GridBounds):
@@ -41,7 +101,7 @@ def content_bounds(placements: Iterable[_PlacementLike]) -> GridBounds:
             union = union.union(GridBounds.from_rect(item))
         else:
             union = union.union(GridBounds.from_rect(item.rect))
-    return union
+    return union.union(author_content_bounds(author_objects))
 
 
 def desired_extent(
@@ -187,6 +247,8 @@ __all__ = [
     "EXTENT_CHUNK_COLUMNS",
     "EXTENT_CHUNK_ROWS",
     "HALO_MIN_CELLS",
+    "AUTHOR_INK_BOUNDS_INFLATE",
+    "author_content_bounds",
     "content_bounds",
     "desired_extent",
     "edge_pan_velocity",

@@ -9,12 +9,21 @@ import MainWindow, grab widgets, or call analysis compute.
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 from pathlib import Path
 from typing import Mapping
 
 from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen
+from PyQt5.QtGui import (
+    QColor,
+    QFont,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QRadialGradient,
+)
 
 from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
@@ -25,11 +34,13 @@ from mf4_analyzer.ui.ultraview_state import (
     STATUS_STALE,
     UltraViewBoardState,
     UltraViewRef,
+    GridRect,
     layout_slots,
     slot_occupant,
 )
 
-from .elastic_workspace import content_bounds
+from .author_render import draw_author_objects
+from .elastic_workspace import author_content_bounds, content_bounds
 from .feedback import format_export_too_large
 from .free_grid import GridMetrics, export_grid_metrics, rect_to_pixels
 from .layouts import (
@@ -46,9 +57,11 @@ from .preview_store import PreviewStore
 TITLE_BAND = 36
 MAX_EXPORT_EDGE = 8192
 MAX_EXPORT_PIXELS = 16_000_000
-BOARD_BG = QColor("#f5f7fb")
-CARD_BG = QColor("#ffffff")
-CARD_BORDER = QColor("#d7dee8")
+BOARD_BG = QColor("#F7F8F7")
+BOARD_BG_DEEP = QColor("#E9EFF1")
+CARD_BG = QColor(255, 255, 254, 118)
+CARD_BORDER = QColor(255, 255, 255, 166)
+CARD_FOOTER_WASH = QColor(237, 242, 242, 126)
 TITLE_COLOR = QColor("#1b2430")
 MUTED_COLOR = QColor("#5b6775")
 PLACEHOLDER_BG = QColor("#e8edf4")
@@ -86,20 +99,14 @@ def output_size(scale: int, layout_id: str | None = None) -> tuple[int, int]:
 
 
 def _extent_pixels(metrics: GridMetrics, n_cols: int, n_rows: int) -> tuple[int, int]:
-    """Return 1× pixel size for ``n_cols`` × ``n_rows`` at the export pitch."""
+    """Return 1× pixel size for a micro-grid extent at the export pitch."""
     columns = max(1, int(n_cols))
     rows = max(1, int(n_rows))
-    width = (
-        2 * metrics.padding
-        + columns * metrics.column_width
-        + max(0, columns - 1) * metrics.gutter
+    _x, _y, width, height = rect_to_pixels(
+        GridRect(0, 0, columns, rows), metrics
     )
-    height = (
-        2 * metrics.padding
-        + rows * metrics.row_height
-        + max(0, rows - 1) * metrics.gutter
-    )
-    return width, height
+    padding = metrics.exact_padding()
+    return int(round(width + 2 * padding)), int(round(height + 2 * padding))
 
 
 def _free_grid_export_layout(
@@ -116,7 +123,8 @@ def _free_grid_export_layout(
     """
     placements = tuple(board.free_grid)
     metrics = export_grid_metrics(placements)
-    content = content_bounds(placements)
+    author = author_content_bounds(board.author_objects)
+    content = content_bounds(placements, author_objects=board.author_objects)
     if content.empty():
         col0, row0 = 0, 0
         column_end = GRID_COLUMNS
@@ -129,6 +137,17 @@ def _free_grid_export_layout(
     width, height = _extent_pixels(
         metrics, column_end - col0, row_end - row0
     )
+    if not author.empty():
+        # Card rectangles intentionally omit their terminal inter-card gutter;
+        # author geometry is continuous and may legitimately reach a cell edge.
+        # Grow only when the author union needs that terminal pitch, preserving
+        # the byte-for-byte card-only crop contract.
+        padding = metrics.exact_padding()
+        pitch_x, pitch_y = metrics.exact_pitch()
+        author_right = padding + (author.column_end - col0) * pitch_x + padding
+        author_bottom = padding + (author.row_end - row0) * pitch_y + padding
+        width = max(width, int(math.ceil(author_right)))
+        height = max(height, int(math.ceil(author_bottom)))
     return metrics, (col0, row0), width, height
 
 
@@ -233,6 +252,7 @@ def compose_board(
     try:
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
+        _draw_export_canvas(painter, width, height)
         _draw_board(painter, board, records, statuses, factor, title=title)
     finally:
         painter.end()
@@ -284,6 +304,7 @@ def _draw_board(painter, board, records, statuses, factor: int, *, title: bool) 
         for item in board.free_grid:
             key = f"grid:{item.ref.section}:{item.ref.view_id}"
             _draw_slot(painter, board, rects[key], item.ref, records, statuses, factor)
+        _draw_free_grid_author_objects(painter, board, factor, title=title)
         return
     for slot_id in layout_slots(board.layout_id):
         _draw_slot(
@@ -295,6 +316,74 @@ def _draw_board(painter, board, records, statuses, factor: int, *, title: bool) 
             statuses,
             factor,
         )
+
+
+def _draw_free_grid_author_objects(
+    painter: QPainter,
+    board: UltraViewBoardState,
+    factor: int,
+    *,
+    title: bool,
+) -> None:
+    """Paint persisted author ink above cards in the shared export path.
+
+    Template mode intentionally has no call site: authoring is a Free Grid
+    capability and template boards retain their saved author payload without
+    showing it.  The title band is a compositor-only offset, never part of a
+    persisted Board coordinate.
+    """
+    if not board.author_objects:
+        return
+    metrics, origin, _width, _height = _free_grid_export_layout(board)
+    painter.save()
+    try:
+        if title:
+            painter.translate(0.0, float(TITLE_BAND * factor))
+        draw_author_objects(
+            painter,
+            board.author_objects,
+            metrics,
+            origin_offset=origin,
+            scale=float(factor),
+        )
+    finally:
+        painter.restore()
+
+
+def _draw_export_canvas(painter: QPainter, width: int, height: int) -> None:
+    """Flatten the Titanium canvas for deterministic PNG output.
+
+    The live card shell is translucent over :class:`CanvasHost`.  Export has
+    no desktop backdrop, so it paints the same restrained paper, glow, dot and
+    grid material first, then lets the card alpha blend into that fixed base.
+    """
+    gradient = QLinearGradient(0, 0, width, height)
+    gradient.setColorAt(0.0, BOARD_BG)
+    gradient.setColorAt(1.0, BOARD_BG_DEEP)
+    painter.fillRect(0, 0, width, height, gradient)
+    for center_x, center_y, radius, color in (
+        (width * 0.16, height * 0.04, max(width, height) * 0.46, QColor(31, 104, 128, 31)),
+        (width * 0.88, height * 0.09, max(width, height) * 0.42, QColor(238, 151, 58, 25)),
+        (width * 0.64, height * 1.04, max(width, height) * 0.48, QColor(197, 76, 64, 16)),
+    ):
+        glow = QRadialGradient(center_x, center_y, radius)
+        glow.setColorAt(0.0, color)
+        edge = QColor(color)
+        edge.setAlpha(0)
+        glow.setColorAt(1.0, edge)
+        painter.fillRect(0, 0, width, height, glow)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(44, 82, 93, 43))
+    for y in range(10, height, 22):
+        for x in range(10, width, 22):
+            painter.drawRect(x, y, 1, 1)
+    grid_pen = QPen(QColor(38, 74, 86, 26))
+    grid_pen.setWidthF(1.0)
+    painter.setPen(grid_pen)
+    for x in range(0, width + 1, 110):
+        painter.drawLine(x, 0, x, height)
+    for y in range(0, height + 1, 110):
+        painter.drawLine(0, y, width, y)
 
 
 def _draw_slot(painter, board, slot, ref, records, statuses, factor: int) -> None:
@@ -374,7 +463,7 @@ def _draw_status_chip(painter, status, x, y, w, h, factor) -> None:
 
 
 def _draw_footer(painter, ref, record, x, y, w, h, factor) -> None:
-    painter.fillRect(x + 1 * factor, y, w - 2 * factor, h, QColor("#eef2f7"))
+    painter.fillRect(x + 1 * factor, y, w - 2 * factor, h, CARD_FOOTER_WASH)
     summary = getattr(record, "source_summary", "") if record is not None else ""
     section = SECTION_LABELS_ZH.get(ref.section, ref.section)
     text = str(summary or section)

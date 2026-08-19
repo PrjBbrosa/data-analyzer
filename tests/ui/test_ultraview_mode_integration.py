@@ -1021,10 +1021,10 @@ def test_free_grid_insert_intent_reaches_coordinator_once_with_its_anchor(qapp, 
     view_id = str(win.view_manager.get(0).view_id)
     ref = UltraViewRef("time", view_id)
 
-    page.free_grid_insert_requested.emit("time", view_id, GridAnchor(8.0, 9.5))
+    page.free_grid_insert_requested.emit("time", view_id, GridAnchor(16.0, 19.0))
     qapp.processEvents()
 
     item = free_grid_placement_for(win._ultraview.board, ref)
     assert item is not None
-    assert item.rect.column == 6
-    assert item.rect.row == 8
+    assert item.rect.column == 12
+    assert item.rect.row == 16

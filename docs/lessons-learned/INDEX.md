@@ -202,6 +202,8 @@ lesson by default.
 | [Tools Installing App QSS Pollute The Test Session](pyqt-ui/2026-08-16-tools-installing-app-qss-pollutes-test-session.md) | Importing or running a `tools/` visual harness inside pytest, or adding a test that calls `qApp.setStyleSheet` without restoring the previous sheet. | `tests/conftest.py`; `tests/test_verify_ultraview_visuals.py` |
 | [UltraView Fit Fill Is Vertically Stage-Centered](pyqt-ui/2026-08-17-ultraview-fit-fill-vertical-center.md) | Changing UltraView `_content_fill_rect`, `zoom_fit`, `_apply_zoom_and_center` origin, or `SAFE_MARGIN` vs parking `fit.y`. | See lesson |
 | [UltraView Card Preview Uses Capture Aspect](pyqt-ui/2026-08-18-ultraview-preview-reading-gutter.md) | Changing UltraView card preview scaling, `QLabel#ultraViewCardImage` alignment, `_fit_card_image`, export `_draw_preview`, or `preview_reading_box`. | See lesson |
+| [UltraView Micro-grid Coordinate Space](2026-08-19-ultraview-microgrid-coordinate-space.md) | Increasing Free Grid placement precision or changing its persisted coordinate scale. | See lesson |
+| [UltraView Preview Fit Uses Logical Pixels](pyqt-ui/2026-08-19-ultraview-preview-logical-fit.md) | Changing an UltraView preview-to-Free-Grid aspect-fit path. | See lesson |
 
 ## Selection Rules
 

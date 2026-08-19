@@ -38,8 +38,9 @@ from mf4_analyzer.ui.ultraview_state import (
     set_free_grid_rect,
     set_layout,
     template_to_free_grid,
-    GridRect,
+    GridRect as _GridRect,
     GRID_COLUMNS,
+    GRID_RESOLUTION,
 )
 from tests.ui.ultraview_fakes import ComputeProbe
 from tests.ui.test_ultraview_preview_store import _image, _meta
@@ -52,6 +53,16 @@ _COMPOSITOR = (
     / "ultraview"
     / "compositor.py"
 )
+
+
+def GridRect(column: int, row: int, column_span: int, row_span: int) -> _GridRect:
+    """Lift historical free-grid fixtures into schema-5 micro-grid units."""
+    return _GridRect(
+        column * GRID_RESOLUTION,
+        row * GRID_RESOLUTION,
+        column_span * GRID_RESOLUTION,
+        row_span * GRID_RESOLUTION,
+    )
 
 
 def test_compositor_does_not_import_main_window_or_grab_widgets():
@@ -263,8 +274,8 @@ def test_free_grid_export_keeps_gaps_between_cards(qapp):
     metrics = export_grid_metrics(board.free_grid)
     assert image.width() == (
         2 * metrics.padding
-        + GRID_COLUMNS * metrics.column_width
-        + (GRID_COLUMNS - 1) * metrics.gutter
+        + (GRID_COLUMNS // GRID_RESOLUTION) * metrics.column_width
+        + (GRID_COLUMNS // GRID_RESOLUTION - 1) * metrics.gutter
     )
     rects = composed_slot_rects(board, scale=1, title=False)
     left_slot = rects[f"grid:{left.section}:{left.view_id}"]
@@ -298,8 +309,8 @@ def test_base_frame_export_pixel_positions_stay_on_1600_pitch(qapp):
     assert (image.width(), image.height()) == free_grid_output_size(board, 1)
     assert image.width() == (
         2 * metrics.padding
-        + GRID_COLUMNS * metrics.column_width
-        + (GRID_COLUMNS - 1) * metrics.gutter
+        + (GRID_COLUMNS // GRID_RESOLUTION) * metrics.column_width
+        + (GRID_COLUMNS // GRID_RESOLUTION - 1) * metrics.gutter
     )
     assert [item.rect for item in board.free_grid] == [
         GridRect(0, 0, 4, 3),

@@ -11,7 +11,8 @@ import hashlib
 import json
 import math
 import uuid
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Sequence
 
 SOURCE_SECTIONS = ("time", "fft", "fft_time", "frf", "order")
@@ -43,7 +44,7 @@ RATIO_STEP = 0.05
 # channel_order) live on the document; this number only versions the
 # UltraView workspace blob so the rest of the session codec can keep
 # reading older projects.
-ULTRAVIEW_SCHEMA = 4
+ULTRAVIEW_SCHEMA = 5
 DIGEST_SCHEMA = 1
 _BOARD_PAYLOAD_KEYS = frozenset(
     {
@@ -57,6 +58,7 @@ _BOARD_PAYLOAD_KEYS = frozenset(
         "primary_ratio",
         "free_grid",
         "placements",
+        "author_objects",
     }
 )
 # Schema 1–3 stored this workspace preference on every Board.  Consume the
@@ -147,31 +149,41 @@ class CardPlacement:
     ref: UltraViewRef
 
 
-# 12×48 is the canonical 1× card pitch / base frame, not the screen drag wall.
-GRID_COLUMNS = 12
-MAX_GRID_ROWS = 48
-# Engineering safety cap: base frame plus 48 columns on each side, and one
-# extra base-frame height above and below the 48-row baseline. Half-open.
-SAFETY_COLUMN_MIN = -48
-SAFETY_COLUMN_MAX = 60
-SAFETY_ROW_MIN = -48
-SAFETY_ROW_MAX = 96
+# Schema 5 subdivides every schema-4 grid cell into a 2×2 logical lattice.
+# The 12×48 physical reading frame and its pixel pitch do not change: only
+# persisted coordinates gain half-cell placement and sizing precision.
+GRID_RESOLUTION = 2
+LEGACY_GRID_COLUMNS = 12
+LEGACY_MAX_GRID_ROWS = 48
+GRID_COLUMNS = LEGACY_GRID_COLUMNS * GRID_RESOLUTION
+MAX_GRID_ROWS = LEGACY_MAX_GRID_ROWS * GRID_RESOLUTION
+# Engineering safety cap remains the same physical extent as schema 4.
+SAFETY_COLUMN_MIN = -48 * GRID_RESOLUTION
+SAFETY_COLUMN_MAX = 60 * GRID_RESOLUTION
+SAFETY_ROW_MIN = -48 * GRID_RESOLUTION
+SAFETY_ROW_MAX = 96 * GRID_RESOLUTION
 MAX_PLACED_CARDS = 24
 MAX_UI_BOARDS = 20
 MAX_BOARD_MEMBERSHIP = 200
-GRID_MIN_COLUMN_SPAN = 2
-GRID_MAX_COLUMN_SPAN = 12
-GRID_MIN_ROW_SPAN = 2
-GRID_MAX_ROW_SPAN = 8
+MAX_AUTHOR_OBJECTS = 240
+MAX_STICKY_TEXT = 3_000
+MAX_TEXT_TEXT = 6_000
+MAX_SHAPE_TEXT = 3_000
+MAX_STROKE_POINTS = 2_048
+MAX_AUTHOR_POINTS = 60_000
+GRID_MIN_COLUMN_SPAN = 2 * GRID_RESOLUTION
+GRID_MAX_COLUMN_SPAN = LEGACY_GRID_COLUMNS * GRID_RESOLUTION
+GRID_MIN_ROW_SPAN = 2 * GRID_RESOLUTION
+GRID_MAX_ROW_SPAN = 8 * GRID_RESOLUTION
 LAYOUT_MODE_TEMPLATE = "template"
 LAYOUT_MODE_FREE_GRID = "free_grid"
 FREE_GRID_PRESETS: dict[str, tuple[int, int]] = {
-    "small": (3, 2),
-    "standard": (4, 3),
-    "wide": (6, 3),
-    "tall": (4, 5),
-    "large": (6, 6),
-    "banner": (12, 4),
+    "small": (6, 4),
+    "standard": (8, 6),
+    "wide": (12, 6),
+    "tall": (8, 10),
+    "large": (12, 12),
+    "banner": (24, 8),
 }
 
 
@@ -244,7 +256,7 @@ class GridBounds:
 
 
 def base_frame_bounds() -> GridBounds:
-    """Canonical 1× pitch rectangle: columns ``[0, 12)`` × rows ``[0, 48)``."""
+    """Canonical physical frame in schema-5 micro-grid coordinates."""
     return GridBounds(0, 0, GRID_COLUMNS, MAX_GRID_ROWS)
 
 
@@ -297,6 +309,351 @@ class GridAnchor:
         object.__setattr__(self, "row", row)
 
 
+def _finite_coordinate(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        raise UltraViewStateError(f"{name} must be numeric")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise UltraViewStateError(f"{name} must be numeric") from exc
+    if not math.isfinite(number):
+        raise UltraViewStateError(f"{name} must be finite")
+    return number
+
+
+@dataclass(frozen=True)
+class BoardPoint:
+    """Persistent author-content point in schema-5 micro-grid coordinates."""
+
+    x: float
+    y: float
+
+    def __post_init__(self) -> None:
+        x = _finite_coordinate(self.x, "point.x")
+        y = _finite_coordinate(self.y, "point.y")
+        if not (SAFETY_COLUMN_MIN <= x < SAFETY_COLUMN_MAX):
+            raise UltraViewStateError("point.x outside board safety bounds")
+        if not (SAFETY_ROW_MIN <= y < SAFETY_ROW_MAX):
+            raise UltraViewStateError("point.y outside board safety bounds")
+        object.__setattr__(self, "x", x)
+        object.__setattr__(self, "y", y)
+
+    def to_dict(self) -> dict[str, float]:
+        return {"x": self.x, "y": self.y}
+
+
+@dataclass(frozen=True)
+class BoardBox:
+    """Persistent author-content box fully contained by the signed safety area."""
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+    def __post_init__(self) -> None:
+        x = _finite_coordinate(self.x, "box.x")
+        y = _finite_coordinate(self.y, "box.y")
+        width = _finite_coordinate(self.width, "box.width")
+        height = _finite_coordinate(self.height, "box.height")
+        if width <= 0 or height <= 0:
+            raise UltraViewStateError("box dimensions must be positive")
+        if not (
+            SAFETY_COLUMN_MIN <= x < SAFETY_COLUMN_MAX
+            and SAFETY_ROW_MIN <= y < SAFETY_ROW_MAX
+            and x + width <= SAFETY_COLUMN_MAX
+            and y + height <= SAFETY_ROW_MAX
+        ):
+            raise UltraViewStateError("box outside board safety bounds")
+        object.__setattr__(self, "x", x)
+        object.__setattr__(self, "y", y)
+        object.__setattr__(self, "width", width)
+        object.__setattr__(self, "height", height)
+
+    def to_dict(self) -> dict[str, float]:
+        return {"x": self.x, "y": self.y, "width": self.width, "height": self.height}
+
+
+def _author_id(value: object, field_name: str = "object id") -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise UltraViewStateError(f"{field_name} must be a non-empty string")
+    cleaned = value.strip()
+    if len(cleaned) > 128:
+        raise UltraViewStateError(f"{field_name} is too long")
+    return cleaned
+
+
+@dataclass(frozen=True)
+class BoardItemKey:
+    """Unambiguous selection identity for a card or a persisted author object."""
+
+    kind: str
+    ref: UltraViewRef | None = None
+    object_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind == "card" and isinstance(self.ref, UltraViewRef) and self.object_id is None:
+            return
+        if self.kind == "author" and self.ref is None and self.object_id is not None:
+            object.__setattr__(self, "object_id", _author_id(self.object_id))
+            return
+        raise UltraViewStateError("BoardItemKey must identify exactly one card or author object")
+
+    @classmethod
+    def card(cls, ref: UltraViewRef) -> "BoardItemKey":
+        return cls("card", ref=ref)
+
+    @classmethod
+    def author(cls, object_id: str) -> "BoardItemKey":
+        return cls("author", object_id=object_id)
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.kind == "card":
+            assert self.ref is not None
+            return {"kind": "card", "ref": self.ref.to_dict()}
+        assert self.object_id is not None
+        return {"kind": "author", "object_id": self.object_id}
+
+
+@dataclass(frozen=True)
+class AnchorTarget:
+    """Structured connector target; names alone never select a card/object."""
+
+    kind: str
+    card: UltraViewRef | None = None
+    object_id: str | None = None
+    anchor: str = "auto"
+
+    def __post_init__(self) -> None:
+        if self.anchor not in {"auto", "n", "e", "s", "w"}:
+            raise UltraViewStateError("anchor must be auto, n, e, s, or w")
+        if self.kind == "card" and isinstance(self.card, UltraViewRef) and self.object_id is None:
+            return
+        if self.kind == "author" and self.card is None and self.object_id is not None:
+            object.__setattr__(self, "object_id", _author_id(self.object_id))
+            return
+        raise UltraViewStateError("AnchorTarget must identify exactly one card or author object")
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.kind == "card":
+            assert self.card is not None
+            return {"kind": "card", "card": self.card.to_dict(), "anchor": self.anchor}
+        assert self.object_id is not None
+        return {"kind": "author", "object_id": self.object_id, "anchor": self.anchor}
+
+
+def _checked_string(value: object, field_name: str, *, limit: int) -> str:
+    if not isinstance(value, str):
+        raise UltraViewStateError(f"{field_name} must be a string")
+    if len(value) > limit:
+        raise UltraViewStateError(f"{field_name} is too long")
+    return value
+
+
+@dataclass(frozen=True)
+class AuthorCommon:
+    object_id: str
+    kind: str
+    locked: bool = False
+
+    def _validate_common(self, expected_kind: str) -> None:
+        object.__setattr__(self, "object_id", _author_id(self.object_id))
+        if self.kind != expected_kind:
+            raise UltraViewStateError(f"author kind must be {expected_kind}")
+        object.__setattr__(self, "locked", bool(self.locked))
+
+
+@dataclass(frozen=True)
+class StickyObject(AuthorCommon):
+    box: BoardBox = field(default_factory=lambda: BoardBox(0, 0, 1, 1))
+    text: str = ""
+    palette: str = "yellow"
+    shape: str = "square"
+    font_size: int | str = "auto"
+
+    def __post_init__(self) -> None:
+        self._validate_common("sticky")
+        if self.shape not in {"square", "wide"}:
+            raise UltraViewStateError("unknown sticky shape")
+        if self.font_size != "auto" and (
+            isinstance(self.font_size, bool) or not isinstance(self.font_size, int) or not 8 <= self.font_size <= 96
+        ):
+            raise UltraViewStateError("illegal sticky font size")
+        _checked_string(self.text, "sticky text", limit=MAX_STICKY_TEXT)
+        _checked_string(self.palette, "sticky palette", limit=64)
+
+
+@dataclass(frozen=True)
+class TextObject(AuthorCommon):
+    box: BoardBox = field(default_factory=lambda: BoardBox(0, 0, 1, 1))
+    text: str = ""
+    font_role: str = "sans"
+    font_size: int = 14
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    align: str = "left"
+    list_style: str = "none"
+    text_palette: str = "ink"
+    fill_palette: str | None = None
+    opacity: int = 100
+    link: str | None = None
+
+    def __post_init__(self) -> None:
+        self._validate_common("text")
+        _checked_string(self.text, "text", limit=MAX_TEXT_TEXT)
+        if self.font_role not in {"sans", "serif", "mono"}:
+            raise UltraViewStateError("unknown font role")
+        if isinstance(self.font_size, bool) or not isinstance(self.font_size, int) or not 8 <= self.font_size <= 96:
+            raise UltraViewStateError("illegal text font size")
+        if self.align not in {"left", "center", "right"}:
+            raise UltraViewStateError("unknown text alignment")
+        if self.list_style not in {"none", "bullet", "number"}:
+            raise UltraViewStateError("unknown list style")
+        _checked_string(self.text_palette, "text palette", limit=64)
+        if self.fill_palette is not None:
+            _checked_string(self.fill_palette, "fill palette", limit=64)
+        if isinstance(self.opacity, bool) or not isinstance(self.opacity, int) or not 0 <= self.opacity <= 100:
+            raise UltraViewStateError("illegal text opacity")
+        if self.link is not None:
+            _checked_string(self.link, "link", limit=2_048)
+
+
+@dataclass(frozen=True)
+class ShapeTextStyle:
+    font_size: int = 14
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    align: str = "center"
+    text_palette: str = "ink"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.font_size, bool) or not isinstance(self.font_size, int) or not 8 <= self.font_size <= 96:
+            raise UltraViewStateError("illegal shape label font size")
+        if self.align not in {"left", "center", "right"}:
+            raise UltraViewStateError("unknown shape label alignment")
+        _checked_string(self.text_palette, "shape text palette", limit=64)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "font_size": self.font_size,
+            "bold": bool(self.bold),
+            "italic": bool(self.italic),
+            "underline": bool(self.underline),
+            "align": self.align,
+            "text_palette": self.text_palette,
+        }
+
+
+@dataclass(frozen=True)
+class ShapeObject(AuthorCommon):
+    box: BoardBox = field(default_factory=lambda: BoardBox(0, 0, 1, 1))
+    shape: str = "rectangle"
+    text: str = ""
+    fill_palette: str | None = None
+    stroke_palette: str = "ink"
+    stroke_width: int = 1
+    line_style: str = "solid"
+    text_style: ShapeTextStyle = field(default_factory=ShapeTextStyle)
+
+    def __post_init__(self) -> None:
+        self._validate_common("shape")
+        if self.shape not in {"rectangle", "oval", "rhombus", "triangle", "block_arrow"}:
+            raise UltraViewStateError("unknown shape")
+        _checked_string(self.text, "shape text", limit=MAX_SHAPE_TEXT)
+        if self.fill_palette is not None:
+            _checked_string(self.fill_palette, "shape fill palette", limit=64)
+        _checked_string(self.stroke_palette, "shape stroke palette", limit=64)
+        if isinstance(self.stroke_width, bool) or not isinstance(self.stroke_width, int) or not 1 <= self.stroke_width <= 32:
+            raise UltraViewStateError("illegal shape stroke width")
+        if self.line_style not in {"solid", "dashed"}:
+            raise UltraViewStateError("unknown shape line style")
+        if not isinstance(self.text_style, ShapeTextStyle):
+            raise UltraViewStateError("shape text style must be typed")
+
+
+@dataclass(frozen=True)
+class StrokeObject(AuthorCommon):
+    points: tuple[BoardPoint, ...] = ()
+    tool: str = "pen"
+    palette: str = "ink"
+    width_px_100: int = 1
+
+    def __post_init__(self) -> None:
+        self._validate_common("stroke")
+        if not isinstance(self.points, tuple) or not 2 <= len(self.points) <= MAX_STROKE_POINTS:
+            raise UltraViewStateError("stroke must contain 2..MAX_STROKE_POINTS points")
+        if not all(isinstance(point, BoardPoint) for point in self.points):
+            raise UltraViewStateError("stroke points must be BoardPoint values")
+        if self.tool not in {"pen", "highlighter"}:
+            raise UltraViewStateError("unknown stroke tool")
+        _checked_string(self.palette, "stroke palette", limit=64)
+        if isinstance(self.width_px_100, bool) or not isinstance(self.width_px_100, int) or not 1 <= self.width_px_100 <= 64:
+            raise UltraViewStateError("illegal stroke width")
+
+
+@dataclass(frozen=True)
+class ConnectorEndpoint:
+    point: BoardPoint
+    target: AnchorTarget | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.point, BoardPoint):
+            raise UltraViewStateError("connector endpoint point must be typed")
+        if self.target is not None and not isinstance(self.target, AnchorTarget):
+            raise UltraViewStateError("connector endpoint target must be typed")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"point": self.point.to_dict(), "target": None if self.target is None else self.target.to_dict()}
+
+
+@dataclass(frozen=True)
+class ConnectorObject(AuthorCommon):
+    start: ConnectorEndpoint = field(default_factory=lambda: ConnectorEndpoint(BoardPoint(0, 0)))
+    end: ConnectorEndpoint = field(default_factory=lambda: ConnectorEndpoint(BoardPoint(1, 1)))
+    route: str = "straight"
+    elbow_bias: float | None = None
+    line_style: str = "solid"
+    stroke_palette: str = "ink"
+    stroke_width: int = 1
+    start_head: str = "none"
+    end_head: str = "arrow"
+
+    def __post_init__(self) -> None:
+        self._validate_common("connector")
+        if not isinstance(self.start, ConnectorEndpoint) or not isinstance(self.end, ConnectorEndpoint):
+            raise UltraViewStateError("connector endpoints must be typed")
+        if self.route not in {"straight", "elbow"}:
+            raise UltraViewStateError("unknown connector route")
+        if self.elbow_bias is not None:
+            bias = _finite_coordinate(self.elbow_bias, "elbow bias")
+            if not 0.0 <= bias <= 1.0:
+                raise UltraViewStateError("elbow bias outside 0..1")
+            object.__setattr__(self, "elbow_bias", bias)
+        if self.line_style not in {"solid", "dashed"}:
+            raise UltraViewStateError("unknown connector line style")
+        _checked_string(self.stroke_palette, "connector stroke palette", limit=64)
+        if isinstance(self.stroke_width, bool) or not isinstance(self.stroke_width, int) or not 1 <= self.stroke_width <= 32:
+            raise UltraViewStateError("illegal connector stroke width")
+        if self.start_head not in {"none", "arrow"} or self.end_head not in {"none", "arrow"}:
+            raise UltraViewStateError("unknown connector head")
+
+
+@dataclass(frozen=True)
+class UnknownAuthorObject:
+    """Newer author object retained exactly, without pretending to render it."""
+
+    raw: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.raw, dict):
+            raise UltraViewStateError("unknown author object must retain a mapping")
+
+
+AuthorObject = StickyObject | TextObject | ShapeObject | StrokeObject | ConnectorObject | UnknownAuthorObject
+
+
 @dataclass
 class FreeGridPlacement:
     ref: UltraViewRef
@@ -320,6 +677,86 @@ class BoardPlacementSnapshot:
     unplaced: tuple[UltraViewRef, ...]
 
 
+@dataclass(frozen=True)
+class ObjectPatch:
+    """One reversible author-object change, including its z-order positions.
+
+    Payload mappings are deliberately retained instead of typed DTO instances:
+    the history must restore an unknown future object just as faithfully as a
+    known Sticky or Stroke.  The constructor defensively copies the mappings
+    because callers commonly build a draft payload then continue editing it.
+    """
+
+    object_id: str
+    before: Mapping[str, Any] | None
+    after: Mapping[str, Any] | None
+    before_index: int | None
+    after_index: int | None
+
+    def __post_init__(self) -> None:
+        object_id = _author_id(self.object_id, "patch object id")
+        object.__setattr__(self, "object_id", object_id)
+        for name, payload, index in (
+            ("before", self.before, self.before_index),
+            ("after", self.after, self.after_index),
+        ):
+            if payload is None:
+                if index is not None:
+                    raise UltraViewStateError(f"{name}_index requires {name} payload")
+                continue
+            if not isinstance(payload, Mapping):
+                raise UltraViewStateError(f"patch {name} must be a mapping")
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                raise UltraViewStateError(f"patch {name}_index must be non-negative")
+            copied = deepcopy(dict(payload))
+            if _author_id(copied.get("id"), f"patch {name} id") != object_id:
+                raise UltraViewStateError("patch object id does not match payload")
+            object.__setattr__(self, name, copied)
+        if self.before is None and self.after is None:
+            raise UltraViewStateError("object patch cannot be empty")
+
+
+@dataclass(frozen=True)
+class BoardEditEntry:
+    """Atomic board edit: optional card placement plus author-object patches."""
+
+    label: str
+    placement_before: BoardPlacementSnapshot | None
+    placement_after: BoardPlacementSnapshot | None
+    object_patches: tuple[ObjectPatch, ...]
+
+    def __post_init__(self) -> None:
+        _checked_string(self.label, "board edit label", limit=128)
+        if (self.placement_before is None) != (self.placement_after is None):
+            raise UltraViewStateError("board edit placement snapshots must be paired")
+        if not isinstance(self.object_patches, tuple) or not all(
+            isinstance(item, ObjectPatch) for item in self.object_patches
+        ):
+            raise UltraViewStateError("board edit patches must be ObjectPatch values")
+        object_ids = [item.object_id for item in self.object_patches]
+        if len(set(object_ids)) != len(object_ids):
+            raise UltraViewStateError("board edit cannot patch one object twice")
+        if self.placement_before is None and not self.object_patches:
+            raise UltraViewStateError("board edit cannot be empty")
+
+    @property
+    def kind(self) -> str:
+        """Compatibility with placement-history callers that inspect ``kind``."""
+        return self.label
+
+
+@dataclass(frozen=True)
+class AuthorMutationResult:
+    """Qt-free mutation result; the coordinator decides dirty/history policy."""
+
+    patches: tuple[ObjectPatch, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.patches)
+
+
 @dataclass
 class UltraViewBoardState:
     board_id: str
@@ -333,6 +770,8 @@ class UltraViewBoardState:
     layout_mode: str = LAYOUT_MODE_FREE_GRID
     free_grid: list[FreeGridPlacement] = field(default_factory=list)
     free_grid_default_size: str = "standard"
+    # Additive schema-5 authoring content.  List order is the author z-order.
+    author_objects: list[AuthorObject] = field(default_factory=list)
     passthrough: dict[str, Any] = field(default_factory=dict)
 
 
@@ -540,7 +979,11 @@ def _copy_board(board: UltraViewBoardState) -> UltraViewBoardState:
         layout_mode=board.layout_mode,
         free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
         free_grid_default_size=board.free_grid_default_size,
-        passthrough=dict(board.passthrough),
+        author_objects=_clone_author_objects(board.author_objects),
+        # Unknown future fields may contain nested authoring payloads.  A Board
+        # duplicate is independently editable, so a shallow outer dict here
+        # would let one Board rewrite another Board's preserved extension.
+        passthrough=deepcopy(board.passthrough),
     )
     return clone
 
@@ -989,6 +1432,44 @@ def _legal_grid_rect(
     return legal
 
 
+def _legacy_grid_rect(
+    raw: Mapping[str, Any], *, warnings: list[str] | None = None
+) -> GridRect:
+    """Legalize a schema-1–4 rect, then lift it into schema-5 coordinates.
+
+    Legacy validation intentionally happens before scaling.  Applying the
+    schema-5 four-cell floor first would turn a valid old 4×3 card into 8×8,
+    changing its physical height during the migration.
+    """
+    parsed = GridRect(
+        _coerce_grid_int(raw.get("column"), default=0),
+        _coerce_grid_int(raw.get("row"), default=0),
+        _coerce_grid_int(raw.get("column_span"), default=4),
+        _coerce_grid_int(raw.get("row_span"), default=3),
+    )
+    col_span = min(LEGACY_GRID_COLUMNS, max(2, int(parsed.column_span)))
+    row_span = min(8, max(2, int(parsed.row_span)))
+    legal = GridRect(
+        column=min(60 - col_span, max(-48, int(parsed.column))),
+        row=min(96 - row_span, max(-48, int(parsed.row))),
+        column_span=col_span,
+        row_span=row_span,
+    )
+    if warnings is not None and legal != parsed:
+        warnings.append(
+            _warn(
+                "grid_rect_clamped",
+                f"{parsed.column},{parsed.row},{parsed.column_span},{parsed.row_span}",
+            )
+        )
+    return GridRect(
+        legal.column * GRID_RESOLUTION,
+        legal.row * GRID_RESOLUTION,
+        legal.column_span * GRID_RESOLUTION,
+        legal.row_span * GRID_RESOLUTION,
+    )
+
+
 def _grid_overlaps(left: GridRect, right: GridRect) -> bool:
     return (
         left.column < right.column + right.column_span
@@ -1305,7 +1786,7 @@ def organize_free_grid(board: UltraViewBoardState) -> list[str]:
 
 
 def _template_grid_rects(layout_id: str) -> list[GridRect]:
-    """Frozen conversion map from P0/P1 templates to P2's integer grid."""
+    """Frozen conversion map from P0/P1 templates to schema-5 micro-grid."""
     maps: dict[str, list[GridRect]] = {
         "split_horizontal": [GridRect(0, 0, 6, 3), GridRect(6, 0, 6, 3)],
         "split_vertical": [GridRect(0, 0, 12, 3), GridRect(0, 3, 12, 3)],
@@ -1323,14 +1804,23 @@ def _template_grid_rects(layout_id: str) -> list[GridRect]:
         ],
     }
     if layout_id in maps:
-        return list(maps[layout_id])
+        return [_scale_legacy_grid_rect(rect) for rect in maps[layout_id]]
     if layout_id == "grid_3x2":
-        return [GridRect(col * 4, row * 3, 4, 3) for row in range(2) for col in range(3)]
+        return [_scale_legacy_grid_rect(GridRect(col * 4, row * 3, 4, 3)) for row in range(2) for col in range(3)]
     if layout_id == "grid_3x3":
-        return [GridRect(col * 4, row * 3, 4, 3) for row in range(3) for col in range(3)]
+        return [_scale_legacy_grid_rect(GridRect(col * 4, row * 3, 4, 3)) for row in range(3) for col in range(3)]
     if layout_id == "grid_4x3":
-        return [GridRect(col * 3, row * 3, 3, 3) for row in range(3) for col in range(4)]
+        return [_scale_legacy_grid_rect(GridRect(col * 3, row * 3, 3, 3)) for row in range(3) for col in range(4)]
     return _template_grid_rects(DEFAULT_LAYOUT_ID)
+
+
+def _scale_legacy_grid_rect(rect: GridRect) -> GridRect:
+    return GridRect(
+        rect.column * GRID_RESOLUTION,
+        rect.row * GRID_RESOLUTION,
+        rect.column_span * GRID_RESOLUTION,
+        rect.row_span * GRID_RESOLUTION,
+    )
 
 
 def set_presentation_flags(
@@ -1347,10 +1837,599 @@ def set_presentation_flags(
     return []
 
 
+_RECOGNIZED_AUTHOR_KINDS = frozenset({"sticky", "text", "shape", "stroke", "connector"})
+
+
+def _point_from_payload(raw: object) -> BoardPoint:
+    if not isinstance(raw, Mapping):
+        raise UltraViewStateError("point must be a mapping")
+    return BoardPoint(raw.get("x"), raw.get("y"))
+
+
+def _box_from_payload(raw: object) -> BoardBox:
+    if not isinstance(raw, Mapping):
+        raise UltraViewStateError("box must be a mapping")
+    return BoardBox(raw.get("x"), raw.get("y"), raw.get("width"), raw.get("height"))
+
+
+def _anchor_target_from_payload(raw: object) -> AnchorTarget | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise UltraViewStateError("anchor target must be a mapping or null")
+    kind = raw.get("kind")
+    anchor = raw.get("anchor", "auto")
+    if kind == "card":
+        card_raw = raw.get("card", raw.get("ref"))
+        card = parse_ref_payload(card_raw if isinstance(card_raw, Mapping) else None)
+        if card is None:
+            raise UltraViewStateError("card anchor target must contain a structured ref")
+        return AnchorTarget("card", card=card, anchor=anchor)
+    if kind == "author":
+        return AnchorTarget("author", object_id=raw.get("object_id"), anchor=anchor)
+    raise UltraViewStateError("anchor target kind must be card or author")
+
+
+def _endpoint_from_payload(raw: object) -> ConnectorEndpoint:
+    if not isinstance(raw, Mapping):
+        raise UltraViewStateError("connector endpoint must be a mapping")
+    return ConnectorEndpoint(
+        point=_point_from_payload(raw.get("point")),
+        target=_anchor_target_from_payload(raw.get("target")),
+    )
+
+
+def _shape_text_style_from_payload(raw: object) -> ShapeTextStyle:
+    if raw is None:
+        return ShapeTextStyle()
+    if not isinstance(raw, Mapping):
+        raise UltraViewStateError("shape text style must be a mapping")
+    return ShapeTextStyle(
+        font_size=raw.get("font_size", 14),
+        bold=raw.get("bold", False),
+        italic=raw.get("italic", False),
+        underline=raw.get("underline", False),
+        align=raw.get("align", "center"),
+        text_palette=raw.get("text_palette", "ink"),
+    )
+
+
+def _recognized_author_object_from_payload(raw: Mapping[str, Any]) -> AuthorObject:
+    kind = raw.get("kind")
+    common = {
+        "object_id": raw.get("id"),
+        "kind": kind,
+        "locked": raw.get("locked", False),
+    }
+    if kind == "sticky":
+        return StickyObject(
+            **common,
+            box=_box_from_payload(raw.get("box")),
+            text=raw.get("text", ""),
+            palette=raw.get("palette", "yellow"),
+            shape=raw.get("shape", "square"),
+            font_size=raw.get("font_size", "auto"),
+        )
+    if kind == "text":
+        return TextObject(
+            **common,
+            box=_box_from_payload(raw.get("box")),
+            text=raw.get("text", ""),
+            font_role=raw.get("font_role", "sans"),
+            font_size=raw.get("font_size", 14),
+            bold=raw.get("bold", False),
+            italic=raw.get("italic", False),
+            underline=raw.get("underline", False),
+            align=raw.get("align", "left"),
+            list_style=raw.get("list_style", "none"),
+            text_palette=raw.get("text_palette", "ink"),
+            fill_palette=raw.get("fill_palette"),
+            opacity=raw.get("opacity", 100),
+            link=raw.get("link"),
+        )
+    if kind == "shape":
+        return ShapeObject(
+            **common,
+            box=_box_from_payload(raw.get("box")),
+            shape=raw.get("shape", "rectangle"),
+            text=raw.get("text", ""),
+            fill_palette=raw.get("fill_palette"),
+            stroke_palette=raw.get("stroke_palette", "ink"),
+            stroke_width=raw.get("stroke_width", 1),
+            line_style=raw.get("line_style", "solid"),
+            text_style=_shape_text_style_from_payload(raw.get("text_style")),
+        )
+    if kind == "stroke":
+        raw_points = raw.get("points")
+        if not isinstance(raw_points, list):
+            raise UltraViewStateError("stroke points must be a list")
+        return StrokeObject(
+            **common,
+            points=tuple(_point_from_payload(point) for point in raw_points),
+            tool=raw.get("tool", "pen"),
+            palette=raw.get("palette", "ink"),
+            width_px_100=raw.get("width_px_100", 1),
+        )
+    if kind == "connector":
+        return ConnectorObject(
+            **common,
+            start=_endpoint_from_payload(raw.get("start")),
+            end=_endpoint_from_payload(raw.get("end")),
+            route=raw.get("route", "straight"),
+            elbow_bias=raw.get("elbow_bias"),
+            line_style=raw.get("line_style", "solid"),
+            stroke_palette=raw.get("stroke_palette", "ink"),
+            stroke_width=raw.get("stroke_width", 1),
+            start_head=raw.get("start_head", "none"),
+            end_head=raw.get("end_head", "arrow"),
+        )
+    raise UltraViewStateError("unrecognized author kind")
+
+
+def author_object_to_payload(item: AuthorObject) -> dict[str, Any]:
+    """Serialize one author object as a new, JSON-ready mapping."""
+    if isinstance(item, UnknownAuthorObject):
+        return deepcopy(item.raw)
+    common = {"id": item.object_id, "kind": item.kind, "locked": bool(item.locked)}
+    if isinstance(item, StickyObject):
+        return {
+            **common, "box": item.box.to_dict(), "text": item.text, "palette": item.palette,
+            "shape": item.shape, "font_size": item.font_size,
+        }
+    if isinstance(item, TextObject):
+        return {
+            **common, "box": item.box.to_dict(), "text": item.text, "font_role": item.font_role,
+            "font_size": item.font_size, "bold": bool(item.bold), "italic": bool(item.italic),
+            "underline": bool(item.underline), "align": item.align, "list_style": item.list_style,
+            "text_palette": item.text_palette, "fill_palette": item.fill_palette,
+            "opacity": item.opacity, "link": item.link,
+        }
+    if isinstance(item, ShapeObject):
+        return {
+            **common, "box": item.box.to_dict(), "shape": item.shape, "text": item.text,
+            "fill_palette": item.fill_palette, "stroke_palette": item.stroke_palette,
+            "stroke_width": item.stroke_width, "line_style": item.line_style,
+            "text_style": item.text_style.to_dict(),
+        }
+    if isinstance(item, StrokeObject):
+        return {
+            **common, "points": [point.to_dict() for point in item.points], "tool": item.tool,
+            "palette": item.palette, "width_px_100": item.width_px_100,
+        }
+    if isinstance(item, ConnectorObject):
+        return {
+            **common, "start": item.start.to_dict(), "end": item.end.to_dict(),
+            "route": item.route, "elbow_bias": item.elbow_bias, "line_style": item.line_style,
+            "stroke_palette": item.stroke_palette, "stroke_width": item.stroke_width,
+            "start_head": item.start_head, "end_head": item.end_head,
+        }
+    raise TypeError(f"unsupported author object {type(item).__name__}")
+
+
+def _clone_author_objects(items: Sequence[AuthorObject]) -> list[AuthorObject]:
+    """Clone via payload so future raw mappings and every nested list are isolated."""
+    cloned: list[AuthorObject] = []
+    for item in items:
+        raw = author_object_to_payload(item)
+        if isinstance(item, UnknownAuthorObject):
+            cloned.append(UnknownAuthorObject(deepcopy(raw)))
+        else:
+            cloned.append(_recognized_author_object_from_payload(raw))
+    return cloned
+
+
+def _author_object_id(item: AuthorObject) -> str:
+    """Return a stable id for known and opaque future objects alike."""
+    if isinstance(item, UnknownAuthorObject):
+        return _author_id(item.raw.get("id"))
+    return item.object_id
+
+
+def _author_object_from_payload(raw: Mapping[str, Any]) -> AuthorObject:
+    """Decode one history payload without dropping an unknown future kind."""
+    copied = deepcopy(dict(raw))
+    _author_id(copied.get("id"))
+    kind = copied.get("kind")
+    if not isinstance(kind, str):
+        raise UltraViewStateError("author object kind must be a string")
+    if kind in _RECOGNIZED_AUTHOR_KINDS:
+        return _recognized_author_object_from_payload(copied)
+    return UnknownAuthorObject(copied)
+
+
+def _author_objects_valid(items: Sequence[AuthorObject]) -> bool:
+    """Strict mutation-time limits; normalization warnings are not a mutation API."""
+    if len(items) > MAX_AUTHOR_OBJECTS:
+        return False
+    seen: set[str] = set()
+    total_points = 0
+    try:
+        for item in items:
+            object_id = _author_object_id(item)
+            if object_id in seen:
+                return False
+            seen.add(object_id)
+            if isinstance(item, StrokeObject):
+                total_points += len(item.points)
+                if total_points > MAX_AUTHOR_POINTS:
+                    return False
+    except UltraViewStateError:
+        return False
+    return True
+
+
+def _payload_equal(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
+    """JSON payload equality keeps unknown nested mappings deterministic."""
+    try:
+        return json.dumps(first, ensure_ascii=False, sort_keys=True, separators=(",", ":")) == json.dumps(
+            second, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    except (TypeError, ValueError):
+        return first == second
+
+
+def _author_patch_candidate(
+    items: Sequence[AuthorObject],
+    patches: Sequence[ObjectPatch],
+    *,
+    forward: bool,
+) -> list[AuthorObject] | None:
+    """Build a target z-order without mutating ``items`` on a failed patch."""
+    if not patches:
+        return _clone_author_objects(items)
+    if len({patch.object_id for patch in patches}) != len(patches):
+        return None
+    current = _clone_author_objects(items)
+    current_ids = [_author_object_id(item) for item in current]
+    if len(set(current_ids)) != len(current_ids):
+        return None
+    target_values: list[tuple[int, AuthorObject]] = []
+    removed_ids: set[str] = set()
+    for patch in patches:
+        source = patch.before if forward else patch.after
+        source_index = patch.before_index if forward else patch.after_index
+        target = patch.after if forward else patch.before
+        target_index = patch.after_index if forward else patch.before_index
+        if source is None:
+            if patch.object_id in current_ids:
+                return None
+        else:
+            assert source_index is not None
+            if source_index >= len(current) or current_ids[source_index] != patch.object_id:
+                return None
+            if not _payload_equal(author_object_to_payload(current[source_index]), source):
+                return None
+            removed_ids.add(patch.object_id)
+        if target is not None:
+            assert target_index is not None
+            try:
+                decoded = _author_object_from_payload(target)
+            except UltraViewStateError:
+                return None
+            if _author_object_id(decoded) != patch.object_id:
+                return None
+            target_values.append((target_index, decoded))
+
+    retained = [item for item in current if _author_object_id(item) not in removed_ids]
+    retained_ids = {_author_object_id(item) for item in retained}
+    target_ids = [_author_object_id(item) for _index, item in target_values]
+    if len(set(target_ids)) != len(target_ids) or retained_ids.intersection(target_ids):
+        return None
+    final_size = len(retained) + len(target_values)
+    target_indexes = [index for index, _item in target_values]
+    if (
+        len(set(target_indexes)) != len(target_indexes)
+        or any(index < 0 or index >= final_size for index in target_indexes)
+    ):
+        return None
+    candidate = list(retained)
+    for index, item in sorted(target_values, key=lambda pair: pair[0]):
+        candidate.insert(index, item)
+    return candidate if _author_objects_valid(candidate) else None
+
+
+def apply_author_patches(
+    board: UltraViewBoardState,
+    patches: Sequence[ObjectPatch],
+    *,
+    forward: bool,
+) -> bool:
+    """Atomically apply the before or after side of object patches."""
+    candidate = _author_patch_candidate(board.author_objects, patches, forward=forward)
+    if candidate is None:
+        return False
+    board.author_objects = candidate
+    return True
+
+
+def _author_mutation(patches: Sequence[ObjectPatch]) -> AuthorMutationResult:
+    return AuthorMutationResult(tuple(patches), ())
+
+
+def _author_warning(code: str) -> AuthorMutationResult:
+    return AuthorMutationResult((), (code,))
+
+
+def _author_index(board: UltraViewBoardState, object_id: str) -> int | None:
+    try:
+        checked = _author_id(object_id)
+    except UltraViewStateError:
+        return None
+    for index, item in enumerate(board.author_objects):
+        if _author_object_id(item) == checked:
+            return index
+    return None
+
+
+def create_author_object(
+    board: UltraViewBoardState,
+    item: AuthorObject,
+    *,
+    index: int | None = None,
+) -> AuthorMutationResult:
+    """Insert one typed or opaque author object and return its reversible patch."""
+    try:
+        payload = author_object_to_payload(item)
+        object_id = _author_id(payload.get("id"))
+    except (TypeError, UltraViewStateError):
+        return _author_warning("illegal_author_object")
+    if _author_index(board, object_id) is not None:
+        return _author_warning("duplicate_author_object_id")
+    target_index = len(board.author_objects) if index is None else index
+    if isinstance(target_index, bool) or not isinstance(target_index, int) or not 0 <= target_index <= len(board.author_objects):
+        return _author_warning("illegal_author_index")
+    patch = ObjectPatch(object_id, None, payload, None, target_index)
+    if not apply_author_patches(board, (patch,), forward=True):
+        return _author_warning("author_object_limit")
+    return _author_mutation((patch,))
+
+
+def update_author_object(
+    board: UltraViewBoardState,
+    object_id: str,
+    item: AuthorObject,
+) -> AuthorMutationResult:
+    """Replace one object payload in place (style/text/geometry are all one patch)."""
+    index = _author_index(board, object_id)
+    if index is None:
+        return _author_warning("author_object_missing")
+    try:
+        before = author_object_to_payload(board.author_objects[index])
+        after = author_object_to_payload(item)
+        checked = _author_id(object_id)
+    except (TypeError, UltraViewStateError):
+        return _author_warning("illegal_author_object")
+    if _author_id(after.get("id")) != checked:
+        return _author_warning("author_object_id_changed")
+    if _payload_equal(before, after):
+        return AuthorMutationResult()
+    patch = ObjectPatch(checked, before, after, index, index)
+    if not apply_author_patches(board, (patch,), forward=True):
+        return _author_warning("illegal_author_object")
+    return _author_mutation((patch,))
+
+
+def delete_author_objects(
+    board: UltraViewBoardState, object_ids: Iterable[str]
+) -> AuthorMutationResult:
+    """Delete a deterministic sweep of objects as one multi-patch mutation."""
+    requested: set[str] = set()
+    for object_id in object_ids:
+        try:
+            requested.add(_author_id(object_id))
+        except UltraViewStateError:
+            return _author_warning("illegal_author_object_id")
+    patches = tuple(
+        ObjectPatch(
+            _author_object_id(item), author_object_to_payload(item), None, index, None
+        )
+        for index, item in enumerate(board.author_objects)
+        if _author_object_id(item) in requested
+    )
+    if not patches:
+        return _author_warning("author_object_missing")
+    if not apply_author_patches(board, patches, forward=True):
+        return _author_warning("illegal_author_object")
+    return _author_mutation(patches)
+
+
+def reorder_author_object(
+    board: UltraViewBoardState, object_id: str, index: int
+) -> AuthorMutationResult:
+    """Move an object to its final author z-order index."""
+    before_index = _author_index(board, object_id)
+    if before_index is None:
+        return _author_warning("author_object_missing")
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(board.author_objects):
+        return _author_warning("illegal_author_index")
+    if index == before_index:
+        return AuthorMutationResult()
+    item = board.author_objects[before_index]
+    payload = author_object_to_payload(item)
+    patch = ObjectPatch(_author_object_id(item), payload, payload, before_index, index)
+    if not apply_author_patches(board, (patch,), forward=True):
+        return _author_warning("illegal_author_object")
+    return _author_mutation((patch,))
+
+
+def set_author_locked(
+    board: UltraViewBoardState, object_id: str, locked: bool
+) -> AuthorMutationResult:
+    """Set a known author's lock bit without special-casing a renderer."""
+    index = _author_index(board, object_id)
+    if index is None:
+        return _author_warning("author_object_missing")
+    item = board.author_objects[index]
+    if isinstance(item, UnknownAuthorObject):
+        return _author_warning("unknown_author_object")
+    return update_author_object(board, object_id, replace(item, locked=bool(locked)))
+
+
+def _placement_snapshot_payload(snapshot: BoardPlacementSnapshot) -> dict[str, Any]:
+    return {
+        "layout_mode": snapshot.layout_mode,
+        "layout_id": snapshot.layout_id,
+        "primary_ratio": snapshot.primary_ratio,
+        "placements": [
+            {"slot_id": slot_id, "ref": ref.to_dict()}
+            for slot_id, ref in snapshot.placements
+        ],
+        "free_grid": [
+            {"ref": ref.to_dict(), "rect": rect.__dict__}
+            for ref, rect in snapshot.free_grid
+        ],
+        "unplaced": [ref.to_dict() for ref in snapshot.unplaced],
+    }
+
+
+def board_edit_entry_byte_cost(entry: BoardEditEntry) -> int:
+    """Stable UTF-8 payload cost used by the bounded per-Board history."""
+    payload = {
+        "label": entry.label,
+        "placement_before": None if entry.placement_before is None else _placement_snapshot_payload(entry.placement_before),
+        "placement_after": None if entry.placement_after is None else _placement_snapshot_payload(entry.placement_after),
+        "object_patches": [
+            {
+                "object_id": patch.object_id,
+                "before": patch.before,
+                "after": patch.after,
+                "before_index": patch.before_index,
+                "after_index": patch.after_index,
+            }
+            for patch in entry.object_patches
+        ],
+    }
+    try:
+        return len(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError):
+        # A future opaque object that cannot be represented as JSON must never
+        # silently evade the byte budget.
+        return 32 * 1024 * 1024 + 1
+
+
+def apply_board_edit_entry(
+    board: UltraViewBoardState,
+    entry: BoardEditEntry,
+    *,
+    forward: bool,
+) -> bool:
+    """Restore a mixed placement+author edit atomically or leave ``board`` untouched."""
+    staged = replace(
+        board,
+        placements=[CardPlacement(item.slot_id, item.ref) for item in board.placements],
+        unplaced=list(board.unplaced),
+        free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
+        author_objects=_clone_author_objects(board.author_objects),
+    )
+    snapshot = entry.placement_after if forward else entry.placement_before
+    if snapshot is not None and not apply_board_placement(staged, snapshot):
+        return False
+    if entry.object_patches and not apply_author_patches(
+        staged, entry.object_patches, forward=forward
+    ):
+        return False
+    if snapshot is not None:
+        board.layout_mode = staged.layout_mode
+        board.layout_id = staged.layout_id
+        board.primary_ratio = staged.primary_ratio
+        board.placements = staged.placements
+        board.free_grid = staged.free_grid
+        board.unplaced = staged.unplaced
+    if entry.object_patches:
+        board.author_objects = staged.author_objects
+    return True
+
+
+def _reconcile_connector_targets(
+    objects: Sequence[AuthorObject],
+    *,
+    placed_cards: set[UltraViewRef],
+    warnings: list[str],
+) -> list[AuthorObject]:
+    anchorable_ids = {
+        item.object_id
+        for item in objects
+        if isinstance(item, (StickyObject, TextObject, ShapeObject))
+    }
+
+    def detached(endpoint: ConnectorEndpoint) -> ConnectorEndpoint:
+        target = endpoint.target
+        if target is None:
+            return endpoint
+        if target.kind == "author" and target.object_id not in anchorable_ids:
+            warnings.append(_warn("dangling_author_target", str(target.object_id)))
+            return replace(endpoint, target=None)
+        if target.kind == "card" and target.card not in placed_cards:
+            detail = "" if target.card is None else f"{target.card.section}/{target.card.view_id}"
+            warnings.append(_warn("dangling_card_target", detail))
+            return replace(endpoint, target=None)
+        return endpoint
+
+    normalized: list[AuthorObject] = []
+    for item in objects:
+        if isinstance(item, ConnectorObject):
+            normalized.append(replace(item, start=detached(item.start), end=detached(item.end)))
+        else:
+            normalized.append(item)
+    return normalized
+
+
+def _normalize_author_objects(
+    raw_objects: object,
+    *,
+    placed_cards: set[UltraViewRef],
+    warnings: list[str],
+) -> list[AuthorObject]:
+    if raw_objects is None:
+        return []
+    if not isinstance(raw_objects, list):
+        warnings.append(_warn("illegal_author_objects", type(raw_objects).__name__))
+        return []
+    objects: list[AuthorObject] = []
+    seen_ids: set[str] = set()
+    total_points = 0
+    for raw in raw_objects:
+        if len(objects) >= MAX_AUTHOR_OBJECTS:
+            warnings.append(_warn("author_object_limit"))
+            break
+        if not isinstance(raw, Mapping):
+            warnings.append(_warn("illegal_author_object", type(raw).__name__))
+            continue
+        kind = raw.get("kind")
+        if not isinstance(kind, str) or kind not in _RECOGNIZED_AUTHOR_KINDS:
+            objects.append(UnknownAuthorObject(deepcopy(dict(raw))))
+            continue
+        object_id = raw.get("id")
+        try:
+            checked_id = _author_id(object_id)
+        except UltraViewStateError:
+            checked_id = str(object_id)
+        if checked_id in seen_ids:
+            warnings.append(_warn("duplicate_author_object_id", checked_id))
+            continue
+        try:
+            item = _recognized_author_object_from_payload(raw)
+        except UltraViewStateError:
+            warnings.append(_warn("illegal_author_object", f"{kind}/{checked_id}"))
+            continue
+        if isinstance(item, StrokeObject) and total_points + len(item.points) > MAX_AUTHOR_POINTS:
+            warnings.append(_warn("author_point_limit", item.object_id))
+            continue
+        seen_ids.add(item.object_id)
+        if isinstance(item, StrokeObject):
+            total_points += len(item.points)
+        objects.append(item)
+    return _reconcile_connector_targets(objects, placed_cards=placed_cards, warnings=warnings)
+
+
 def board_identity_payload(board: UltraViewBoardState) -> dict[str, Any]:
-    """Board payload without retired view-state fields (digest / identity)."""
+    """Card-presentation payload without transient/authoring-only content."""
     payload = _board_payload(board)
     payload.pop("viewport", None)
+    # Preview freshness describes captured analysis cards.  Board notes and
+    # ink must persist and export, but cannot stale an otherwise unchanged
+    # card preview or perturb the capture digest.
+    payload.pop("author_objects", None)
     return payload
 
 
@@ -1369,7 +2448,8 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
     }
     for key, value in board.passthrough.items():
         if key not in payload:
-            payload[key] = value
+            # Serialization is a snapshot, not an alias to mutable state.
+            payload[key] = deepcopy(value)
     if board.layout_mode == LAYOUT_MODE_FREE_GRID:
         payload["free_grid"] = {
             "columns": GRID_COLUMNS,
@@ -1383,6 +2463,12 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
     else:
         payload["placements"] = [
             {"slot_id": item.slot_id, **item.ref.to_dict()} for item in board.placements
+        ]
+    # Omit the empty additive field so loading and re-saving a pre-authoring
+    # board produces no needless payload churn.
+    if board.author_objects:
+        payload["author_objects"] = [
+            author_object_to_payload(item) for item in board.author_objects
         ]
     return payload
 
@@ -1404,7 +2490,7 @@ def normalize_board_payload(
 
     schema = payload.get("schema", 1)
     board_raw = payload.get("board", payload if "layout_id" in payload else None)
-    if schema not in {1, 2, 3, 4}:
+    if schema not in {1, 2, 3, 4, 5}:
         warnings.append(_warn("unknown_ultraview_schema", repr(schema)))
         return default_board(), warnings
     if not isinstance(board_raw, Mapping):
@@ -1435,7 +2521,7 @@ def normalize_board_payload(
     board.show_titles = bool(board_raw.get("show_titles", True))
     board.show_sources = bool(board_raw.get("show_sources", True))
     board.passthrough = {
-        key: value
+        key: deepcopy(value)
         for key, value in board_raw.items()
         if key not in _BOARD_PAYLOAD_KEYS | _RETIRED_BOARD_PAYLOAD_KEYS
     }
@@ -1446,7 +2532,9 @@ def normalize_board_payload(
         if not isinstance(free_raw, Mapping):
             warnings.append(_warn("missing_free_grid"))
             free_raw = {}
-        if free_raw.get("columns", GRID_COLUMNS) != GRID_COLUMNS:
+        legacy_grid = schema < ULTRAVIEW_SCHEMA
+        expected_columns = LEGACY_GRID_COLUMNS if legacy_grid else GRID_COLUMNS
+        if free_raw.get("columns", expected_columns) != expected_columns:
             warnings.append(_warn("grid_columns_normalized"))
         default_size = free_raw.get("default_size")
         if isinstance(default_size, str) and default_size:
@@ -1456,7 +2544,11 @@ def normalize_board_payload(
                 warnings.append(_warn("illegal_grid_placement"))
                 continue
             ref = parse_ref_payload(item)
-            rect = _legal_grid_rect(item, warnings=warnings)
+            rect = (
+                _legacy_grid_rect(item, warnings=warnings)
+                if legacy_grid
+                else _legal_grid_rect(item, warnings=warnings)
+            )
             if ref is None or rect is None:
                 warnings.append(_warn("illegal_grid_placement"))
                 continue
@@ -1475,6 +2567,11 @@ def normalize_board_payload(
                 warnings.append(_warn("illegal_ref"))
             elif _take_membership(seen_refs, ref, warnings):
                 board.unplaced.append(ref)
+        board.author_objects = _normalize_author_objects(
+            board_raw.get("author_objects"),
+            placed_cards=placed_ref_set(board),
+            warnings=warnings,
+        )
         return board, warnings
 
     seen_slots: set[str] = set()
@@ -1530,6 +2627,11 @@ def normalize_board_payload(
             continue
         board.unplaced.append(ref)
 
+    board.author_objects = _normalize_author_objects(
+        board_raw.get("author_objects"),
+        placed_cards=placed_ref_set(board),
+        warnings=warnings,
+    )
     return board, warnings
 
 
@@ -1551,7 +2653,7 @@ def workspace_to_payload(workspace: UltraViewWorkspaceState) -> dict[str, Any]:
 def normalize_workspace_payload(
     payload: Mapping[str, Any] | None,
 ) -> tuple[UltraViewWorkspaceState, list[str]]:
-    """Migrate schema 1–4 to one editable workspace, never dropping refs."""
+    """Migrate schema 1–5 to one editable workspace, never dropping refs."""
     warnings: list[str] = []
     if payload is None:
         return default_workspace(), warnings

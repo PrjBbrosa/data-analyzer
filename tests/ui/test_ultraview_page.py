@@ -1896,8 +1896,8 @@ def test_free_grid_projects_cards_preserves_scroll_and_emits_keyboard_geometry(q
     assert card is not None
     requested = []
     harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
-    card.layout_key_requested.emit("time", "free-0", 0, 6, False)
-    assert requested == [("time", "free-0", 0, 6, 4, 3, "keyboard-move")]
+    card.layout_key_requested.emit("time", "free-0", 0, 12, False)
+    assert requested == [("time", "free-0", 0, 12, 8, 6, "keyboard-move")]
     harness.page.show_overview()
     overview = harness.page.board_overview()
     assert overview.isVisible()
@@ -2239,7 +2239,7 @@ def test_free_grid_drag_past_threshold_shows_ghost_and_commits_legal_move(qtbot)
     assert free.gesture().is_active()
     assert free.ghost_overlay().is_showing()
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
-    assert requested == [("time", "move-0", 6, 0, 6, 3, "drag-move")]
+    assert requested == [("time", "move-0", 12, 0, 12, 6, "drag-move")]
     assert not free.gesture().is_armed()
     assert free.ghost_overlay()._ghost_rect is None
     assert free.ghost_overlay()._handles_rect is not None
@@ -2283,12 +2283,12 @@ def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
     assert requested == []
     assert group == [
         (
-            ("time", "block-0", 6, 0, 6, 3),
-            ("time", "block-1", 12, 0, 6, 3),
+            ("time", "block-0", 12, 0, 12, 6),
+            ("time", "block-1", 24, 0, 12, 6),
         )
     ]
     assert toasts == [format_rearranged(2)]
-    committed = [(6, 0, 6, 3), (12, 0, 6, 3)]
+    committed = [(12, 0, 12, 6), (24, 0, 12, 6)]
     assert planned == committed
     assert len(ghost_geoms) == 2
 
@@ -2387,7 +2387,7 @@ def test_free_grid_overlap_past_base_frame_rearranges_without_modal(qtbot):
     _drag_card(card, QPoint(16, 16), QPoint(16, 16 + unit))
     assert group == [
         (
-            ("time", "pack-0", 0, 1, 12, 8),
+            ("time", "pack-0", 0, 2, 12, 8),
             ("time", "pack-1", 0, 48, 12, 8),
         )
     ]
@@ -2552,10 +2552,10 @@ def test_free_grid_resize_handle_snaps_shows_badge_and_commits(qtbot):
     _drag_card(card, start, end, release=False)
     session = free.gesture().session()
     assert session is not None and session.handle == "e"
-    assert session.badge() == "8×3"
-    assert free.ghost_overlay()._badge == "8×3"
+    assert session.badge() == "16×6"
+    assert free.ghost_overlay()._badge == "16×6"
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, end)
-    assert requested == [("time", "resize-0", 0, 0, 8, 3, "drag-resize")]
+    assert requested == [("time", "resize-0", 0, 0, 16, 6, "drag-resize")]
 
 
 def test_free_grid_shift_resize_keeps_aspect_ratio(qtbot):
@@ -2572,7 +2572,7 @@ def test_free_grid_shift_resize_keeps_aspect_ratio(qtbot):
     start = _east_handle_pos(card)
     end = QPoint(start.x() + unit * 2, start.y())
     _drag_card(card, start, end, modifiers=Qt.ShiftModifier)
-    assert requested == [("time", "ratio-0", 0, 0, 8, 4, "drag-resize")]
+    assert requested == [("time", "ratio-0", 0, 0, 16, 8, "drag-resize")]
 
 
 def test_free_grid_resize_span_clamps_to_grid_limits(qtbot):
@@ -2588,14 +2588,14 @@ def test_free_grid_resize_span_clamps_to_grid_limits(qtbot):
     unit = metrics.column_width + metrics.gutter
     start = _east_handle_pos(card)
     _drag_card(card, start, QPoint(start.x() + unit * 20, start.y()))
-    assert requested == [("time", "clamp-0", 0, 0, 12, 3, "drag-resize")]
+    assert requested == [("time", "clamp-0", 0, 0, 24, 6, "drag-resize")]
     _select_card(card)
     qtbot.wait(10)
     card = harness.page.card_widget("time", "clamp-0")
     requested.clear()
     start = _east_handle_pos(card)
     _drag_card(card, start, QPoint(start.x() - unit * 20, start.y()))
-    assert requested == [("time", "clamp-0", 0, 0, 2, 3, "drag-resize")]
+    assert requested == [("time", "clamp-0", 0, 0, 4, 6, "drag-resize")]
 
 
 def test_free_grid_overlap_resize_moves_blocker_without_modal(qtbot):
@@ -2616,8 +2616,8 @@ def test_free_grid_overlap_resize_moves_blocker_without_modal(qtbot):
     assert toasts == [format_rearranged(2)]
     assert group == [
         (
-            ("time", "hit-0", 0, 0, 8, 3),
-            ("time", "hit-1", 8, 0, 6, 3),
+            ("time", "hit-0", 0, 0, 16, 6),
+            ("time", "hit-1", 16, 0, 12, 6),
         )
     ]
 
@@ -2631,7 +2631,7 @@ def test_free_grid_alt_shift_arrow_uses_keyboard_resize(qtbot):
     requested = []
     harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
     qtbot.keyClick(card, Qt.Key_Right, Qt.AltModifier | Qt.ShiftModifier)
-    assert requested == [("time", "key-1", 0, 0, 7, 3, "keyboard-resize")]
+    assert requested == [("time", "key-1", 0, 0, 13, 6, "keyboard-resize")]
 
 
 def _selection_view_ids(free) -> set[str]:
@@ -2688,8 +2688,8 @@ def test_free_grid_group_move_commits_once_and_keeps_relative_layout(qtbot):
     assert requested == []
     assert group == [
         (
-            ("time", "grp-0", 0, 1, 6, 3),
-            ("time", "grp-1", 6, 1, 6, 3),
+            ("time", "grp-0", 0, 2, 12, 6),
+            ("time", "grp-1", 12, 2, 12, 6),
         )
     ]
 
@@ -2708,8 +2708,8 @@ def test_free_grid_group_move_past_base_frame_commits_without_warning(qtbot):
     _drag_card(left, QPoint(24, 24), QPoint(24 + unit, 24))
     assert group == [
         (
-            ("time", "bad-0", 1, 0, 6, 3),
-            ("time", "bad-1", 7, 0, 6, 3),
+            ("time", "bad-0", 2, 0, 12, 6),
+            ("time", "bad-1", 14, 0, 12, 6),
         )
     ]
     assert toasts == [format_rearranged(2)]
@@ -3204,7 +3204,7 @@ def test_free_grid_move_past_base_frame_commits_without_warning(qtbot):
     unit = metrics.column_width + metrics.gutter
     start = QPoint(16, 16)
     _drag_card(card, start, QPoint(start.x() - unit * 8, start.y()))
-    assert requested == [("time", "oob-0", -8, 0, 6, 3, "drag-move")]
+    assert requested == [("time", "oob-0", -16, 0, 12, 6, "drag-move")]
     assert toasts == []
 
 
@@ -3422,7 +3422,7 @@ def test_free_grid_move_to_signed_empty_cell_without_toast(qtbot):
     harness.board.placements.clear()
     harness.board.unplaced.clear()
     harness.board.free_grid = [
-        FreeGridPlacement(make_ref("time", "clamp-1"), GridRect(2, 0, 4, 3)),
+        FreeGridPlacement(make_ref("time", "clamp-1"), GridRect(4, 0, 8, 6)),
     ]
     harness.page.set_board(harness.board)
     qtbot.wait(10)
@@ -3439,7 +3439,7 @@ def test_free_grid_move_to_signed_empty_cell_without_toast(qtbot):
     _drag_card(card, QPoint(16, 16), QPoint(16 - unit * 4, 16))
     assert toasts == []
     assert group == []
-    assert requested == [("time", "clamp-1", -2, 0, 4, 3, "drag-move")]
+    assert requested == [("time", "clamp-1", -4, 0, 8, 6, "drag-move")]
 
 
 def test_inactive_canvas_drops_stale_cards_when_mode_switches(qtbot):

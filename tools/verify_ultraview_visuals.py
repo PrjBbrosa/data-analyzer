@@ -735,11 +735,11 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
                 (
                     (
                         first.ref,
-                        GridRect(8, 6, first.rect.column_span, first.rect.row_span),
+                        GridRect(16, 12, first.rect.column_span, first.rect.row_span),
                     ),
                     (
                         second.ref,
-                        GridRect(0, 14, second.rect.column_span, second.rect.row_span),
+                        GridRect(0, 28, second.rect.column_span, second.rect.row_span),
                     ),
                 ),
             )

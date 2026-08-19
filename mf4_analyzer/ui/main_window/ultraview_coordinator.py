@@ -80,7 +80,11 @@ from ..ultraview_state import (
     free_grid_placement_for,
     organize_free_grid,
     BoardPlacementSnapshot,
+    BoardEditEntry,
+    AuthorMutationResult,
     GridRect,
+    apply_board_edit_entry,
+    board_edit_entry_byte_cost,
     workspace_to_payload,
     DEFAULT_BOARD_NAME,
 )
@@ -161,6 +165,7 @@ _SECTION_X_UNIT = {
 
 
 _PLACEMENT_HISTORY_CAP = 100
+_BOARD_HISTORY_BYTE_BUDGET = 32 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -172,8 +177,12 @@ class _GridHistoryEntry:
 
 @dataclass
 class _GridHistory:
-    undo: list[_GridHistoryEntry]
-    redo: list[_GridHistoryEntry]
+    # Keep the historical name/type around for placement callers.  Schema-5
+    # authoring entries share this per-Board owner so a mixed move is one undo.
+    undo: list[_GridHistoryEntry | BoardEditEntry]
+    redo: list[_GridHistoryEntry | BoardEditEntry]
+    undo_bytes: int = 0
+    redo_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -1457,7 +1466,7 @@ class UltraViewCoordinator(QObject):
             if page is not None:
                 page.select_ref(ref)
             return
-        image_size = self._preview_image_size(ref)
+        image_size = self._preview_fit_image_size(ref)
         span = None
         if board.layout_mode == LAYOUT_MODE_FREE_GRID:
             span = self._insert_span_for_ref(board, ref)
@@ -1734,9 +1743,11 @@ class UltraViewCoordinator(QObject):
         before = self._placement_snapshot(board)
         self._cancel_pending_for_ref(board.board_id, ref)
         metrics = screen_grid_metrics(board.free_grid)
-        wanted = fit_rect_for_aspect(
-            item.rect, (int(image.width()), int(image.height())), metrics
-        )
+        image_size = self._preview_fit_image_size(ref)
+        if image_size is None:
+            self._toast("没有可用预览，无法按原图比例调整", "warning")
+            return
+        wanted = fit_rect_for_aspect(item.rect, image_size, metrics)
         if wanted == item.rect:
             return
         plan = plan_layout(
@@ -1798,6 +1809,7 @@ class UltraViewCoordinator(QObject):
         return bool(
             history is not None
             and history.undo
+            and isinstance(history.undo[-1], _GridHistoryEntry)
             and history.undo[-1].kind == LAYOUT_ARRANGE
         )
 
@@ -1819,14 +1831,103 @@ class UltraViewCoordinator(QObject):
         if after == before:
             return False
         history = self._grid_history(board)
-        history.undo.append(_GridHistoryEntry(before, after, kind=str(kind or "")))
-        overflow = len(history.undo) - _PLACEMENT_HISTORY_CAP
-        if overflow > 0:
-            del history.undo[:overflow]
-        history.redo.clear()
+        self._push_history_undo(
+            history, _GridHistoryEntry(before, after, kind=str(kind or ""))
+        )
+        self._clear_history_redo(history)
         self._clear_pending_merge_flags()
         self._after_board_mutation()
         return True
+
+    def _commit_author_mutation(
+        self,
+        board: UltraViewBoardState,
+        mutation: AuthorMutationResult,
+        *,
+        label: str,
+        placement_before: BoardPlacementSnapshot | None = None,
+    ) -> bool:
+        """Record an already-applied author mutation as one atomic Board edit.
+
+        State owns object validation and mutation; this owner alone decides
+        history, dirty state, and the redo fork.  Passing a placement snapshot
+        turns a card+author gesture into a single undo entry.
+        """
+        if not mutation.changed:
+            return False
+        placement_after = (
+            self._placement_snapshot(board) if placement_before is not None else None
+        )
+        entry = BoardEditEntry(
+            str(label or "author-edit"),
+            placement_before,
+            placement_after,
+            tuple(mutation.patches),
+        )
+        return self._record_board_edit(board, entry)
+
+    def _record_board_edit(
+        self, board: UltraViewBoardState, entry: BoardEditEntry
+    ) -> bool:
+        """Push a reversible author/mixed edit and preserve an existing API."""
+        if board_edit_entry_byte_cost(entry) > _BOARD_HISTORY_BYTE_BUDGET:
+            # State limits prevent normal strokes reaching this path.  Keeping
+            # the edit is safer than a surprise rollback; it simply cannot be
+            # retained as an undoable history entry.
+            self._after_board_mutation()
+            return False
+        history = self._grid_history(board)
+        self._push_history_undo(history, entry)
+        self._clear_history_redo(history)
+        # A delayed first-preview aspect correction must only merge into the
+        # preceding placement insertion, never replace a newer author patch.
+        self._clear_pending_merge_flags()
+        self._after_board_mutation()
+        return True
+
+    @staticmethod
+    def _history_entry_byte_cost(entry: _GridHistoryEntry | BoardEditEntry) -> int:
+        if isinstance(entry, BoardEditEntry):
+            return board_edit_entry_byte_cost(entry)
+        return board_edit_entry_byte_cost(
+            BoardEditEntry(entry.kind, entry.before, entry.after, ())
+        )
+
+    def _push_history_undo(
+        self, history: _GridHistory, entry: _GridHistoryEntry | BoardEditEntry
+    ) -> None:
+        history.undo.append(entry)
+        history.undo_bytes += self._history_entry_byte_cost(entry)
+        while history.undo and (
+            len(history.undo) > _PLACEMENT_HISTORY_CAP
+            or history.undo_bytes > _BOARD_HISTORY_BYTE_BUDGET
+        ):
+            removed = history.undo.pop(0)
+            history.undo_bytes -= self._history_entry_byte_cost(removed)
+
+    def _push_history_redo(
+        self, history: _GridHistory, entry: _GridHistoryEntry | BoardEditEntry
+    ) -> None:
+        history.redo.append(entry)
+        history.redo_bytes += self._history_entry_byte_cost(entry)
+
+    def _clear_history_redo(self, history: _GridHistory) -> None:
+        history.redo.clear()
+        history.redo_bytes = 0
+
+    def _pop_history_undo(
+        self, history: _GridHistory
+    ) -> _GridHistoryEntry | BoardEditEntry:
+        entry = history.undo.pop()
+        history.undo_bytes -= self._history_entry_byte_cost(entry)
+        return entry
+
+    def _pop_history_redo(
+        self, history: _GridHistory
+    ) -> _GridHistoryEntry | BoardEditEntry:
+        entry = history.redo.pop()
+        history.redo_bytes -= self._history_entry_byte_cost(entry)
+        return entry
 
     def _commit_grid_change(
         self,
@@ -1864,6 +1965,8 @@ class UltraViewCoordinator(QObject):
     def _discard_stale_grid_history(self, history: _GridHistory) -> None:
         history.undo.clear()
         history.redo.clear()
+        history.undo_bytes = 0
+        history.redo_bytes = 0
 
     @staticmethod
     def _apply_grid_snapshot(
@@ -1877,12 +1980,17 @@ class UltraViewCoordinator(QObject):
         history = self._grid_histories.get(board.board_id)
         if history is None or not history.undo:
             return
-        entry = history.undo.pop()
-        if not self._apply_grid_snapshot(board, entry.before):
-            history.undo.append(entry)
+        entry = self._pop_history_undo(history)
+        restored = (
+            self._apply_grid_snapshot(board, entry.before)
+            if isinstance(entry, _GridHistoryEntry)
+            else apply_board_edit_entry(board, entry, forward=False)
+        )
+        if not restored:
+            self._push_history_undo(history, entry)
             return
         self._cancel_pending_for_board(board.board_id)
-        history.redo.append(entry)
+        self._push_history_redo(history, entry)
         self._after_board_mutation()
 
     def _on_free_grid_redo(self) -> None:
@@ -1890,12 +1998,17 @@ class UltraViewCoordinator(QObject):
         history = self._grid_histories.get(board.board_id)
         if history is None or not history.redo:
             return
-        entry = history.redo.pop()
-        if not self._apply_grid_snapshot(board, entry.after):
-            history.redo.append(entry)
+        entry = self._pop_history_redo(history)
+        restored = (
+            self._apply_grid_snapshot(board, entry.after)
+            if isinstance(entry, _GridHistoryEntry)
+            else apply_board_edit_entry(board, entry, forward=True)
+        )
+        if not restored:
+            self._push_history_redo(history, entry)
             return
         self._cancel_pending_for_board(board.board_id)
-        history.undo.append(entry)
+        self._push_history_undo(history, entry)
         self._after_board_mutation()
 
     def _preview_image_size(self, ref: UltraViewRef) -> tuple[int, int] | None:
@@ -1905,10 +2018,41 @@ class UltraViewCoordinator(QObject):
             return None
         return (int(image.width()), int(image.height()))
 
+    def _preview_fit_device_pixel_ratio(self) -> float:
+        """Return the logical-pixel scale of the card's current screen.
+
+        ``PreviewStore`` deliberately keeps DPR-normalized raw pixels so its
+        memory budget and sidecar stay portable. Free-grid geometry, however,
+        is expressed in widget logical pixels. Using raw Retina dimensions in
+        the aspect solver makes a capture look twice as large as its eventual
+        card pixmap, which leaves an oversized shell around a new View.
+        """
+        for widget in (self.page(), self._window):
+            if widget is None:
+                continue
+            try:
+                ratio = float(widget.devicePixelRatioF())
+            except RuntimeError:
+                continue
+            if ratio > 0.0:
+                return max(1.0, ratio)
+        return 1.0
+
+    def _preview_fit_image_size(self, ref: UltraViewRef) -> tuple[int, int] | None:
+        """Return the stored preview's size in the card solver's pixel space."""
+        raw_size = self._preview_image_size(ref)
+        if raw_size is None:
+            return None
+        dpr = self._preview_fit_device_pixel_ratio()
+        return (
+            max(1, int(round(raw_size[0] / dpr))),
+            max(1, int(round(raw_size[1] / dpr))),
+        )
+
     def _insert_span_for_ref(
         self, board: UltraViewBoardState, ref: UltraViewRef
     ) -> tuple[int, int] | None:
-        image_size = self._preview_image_size(ref)
+        image_size = self._preview_fit_image_size(ref)
         if image_size is None:
             return None
         return self._fitted_insert_span(board, image_size)
@@ -2035,7 +2179,7 @@ class UltraViewCoordinator(QObject):
             or item.rect.row_span != token.inserted_rect.row_span
         ):
             return
-        image_size = self._preview_image_size(token.ref)
+        image_size = self._preview_fit_image_size(token.ref)
         if image_size is None:
             return
         cap = GridRect(
@@ -2055,12 +2199,21 @@ class UltraViewCoordinator(QObject):
         after = self._placement_snapshot(board)
         if token.merge_add:
             history = self._grid_histories.get(board.board_id)
-            if history is not None and history.undo:
+            if (
+                history is not None
+                and history.undo
+                and isinstance(history.undo[-1], _GridHistoryEntry)
+            ):
                 last = history.undo[-1]
-                history.undo[-1] = _GridHistoryEntry(
+                replacement = _GridHistoryEntry(
                     last.before, after, kind=last.kind
                 )
-                history.redo.clear()
+                history.undo[-1] = replacement
+                history.undo_bytes += (
+                    self._history_entry_byte_cost(replacement)
+                    - self._history_entry_byte_cost(last)
+                )
+                self._clear_history_redo(history)
         self._after_board_mutation()
 
     def _on_focus(self, section: str, view_id: str) -> None:

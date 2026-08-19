@@ -84,7 +84,7 @@ def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_
     assert time_id in view_ids
     assert fft_id in view_ids
     assert "ghost-view" in view_ids
-    assert raw["ultraview"]["schema"] == 4
+    assert raw["ultraview"]["schema"] == 5
     text = json.dumps(raw["ultraview"])
     for needle in ("digest", "selected", "presentation", "QImage", "captured_digest"):
         assert needle not in text
@@ -149,7 +149,7 @@ def test_save_reopen_restores_workspace_card_action_preference(qapp, qtbot, tmp_
     assert win.save_project(proj) is True
 
     raw = json.loads(proj.read_text(encoding="utf-8"))["ultraview"]
-    assert raw["schema"] == 4
+    assert raw["schema"] == 5
     assert raw["workspace"]["show_card_actions"] is True
     assert all(
         "show_card_actions" not in board
@@ -552,8 +552,8 @@ def test_reopened_placed_card_does_not_auto_aspect(qapp, qtbot, tmp_path):
     ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     uv._apply_add_ref(ref)
     original = free_grid_placement_for(uv.board, ref).rect
-    assert original.column_span == 4
-    assert original.row_span == 3
+    assert original.column_span == 8
+    assert original.row_span == 6
     assert win.save_project(proj) is True
 
     restored = MainWindow()

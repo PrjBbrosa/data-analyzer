@@ -144,6 +144,7 @@ def scale_grid_metrics(metrics: GridMetrics, zoom: float) -> GridMetrics:
         row_height=_scale(base.row_height, min_value=1),
         gutter=_scale(base.gutter, min_value=0),
         padding=_scale(base.padding, min_value=0),
+        resolution=base.resolution,
         scale=z,
         base=base,
     )

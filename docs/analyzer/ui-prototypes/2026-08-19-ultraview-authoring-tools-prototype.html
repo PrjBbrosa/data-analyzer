@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UltraView · Board authoring tools decision prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #e7edef;
+      --canvas: #f8faf9;
+      --canvas-2: #eef4f4;
+      --surface: rgba(255, 255, 254, .87);
+      --surface-solid: #fffefd;
+      --surface-soft: #edf3f3;
+      --ink: #183039;
+      --muted: #66787e;
+      --quiet: #92a0a4;
+      --line: rgba(51, 85, 96, .20);
+      --line-strong: rgba(47, 82, 93, .38);
+      --brand: #24697c;
+      --brand-2: #347d91;
+      --brand-wash: #e4f0f2;
+      --blue: #3d64e8;
+      --blue-wash: #edf0ff;
+      --paper: #fff19a;
+      --paper-border: #e1c64e;
+      --shadow: 0 22px 62px rgba(31, 61, 70, .16), 0 4px 14px rgba(31, 61, 70, .08);
+      --floating-shadow: 0 14px 34px rgba(32, 62, 72, .17), 0 2px 7px rgba(32, 62, 72, .10);
+      --grid: rgba(42, 82, 94, .10);
+      --grid-major: rgba(42, 82, 94, .16);
+      --rail-width: 64px;
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --page: #101c21;
+      --canvas: #18262c;
+      --canvas-2: #1d3036;
+      --surface: rgba(29, 46, 53, .88);
+      --surface-solid: #20343b;
+      --surface-soft: #294149;
+      --ink: #eff6f4;
+      --muted: #b1c0c2;
+      --quiet: #809599;
+      --line: rgba(194, 218, 218, .19);
+      --line-strong: rgba(211, 230, 230, .35);
+      --brand: #7cc7d6;
+      --brand-2: #5fa8b7;
+      --brand-wash: #294a53;
+      --blue: #8ba3ff;
+      --blue-wash: #2d385c;
+      --grid: rgba(178, 210, 213, .09);
+      --grid-major: rgba(178, 210, 213, .14);
+      --paper: #716829;
+      --paper-border: #b6a349;
+      --shadow: 0 26px 76px rgba(0, 0, 0, .36), 0 4px 15px rgba(0, 0, 0, .28);
+      --floating-shadow: 0 17px 42px rgba(0, 0, 0, .38), 0 2px 7px rgba(0, 0, 0, .27);
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body { overflow: auto; background: radial-gradient(900px 500px at 18% -8%, rgba(60,139,157,.20), transparent 72%), var(--page); color: var(--ink); font: 13px/1.4 var(--font); }
+    button { font: inherit; }
+    button, [role="button"] { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible { outline: 3px solid color-mix(in srgb, var(--blue) 66%, transparent); outline-offset: 2px; }
+
+    .page { width: min(1680px, calc(100vw - 42px)); margin: 0 auto; padding: 24px 0 38px; }
+    .brief { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin: 0 4px 16px; }
+    .eyebrow { color: var(--brand); font: 750 10px/1 var(--mono); letter-spacing: .13em; text-transform: uppercase; }
+    h1 { margin: 8px 0 0; font-size: clamp(25px, 2.1vw, 34px); line-height: 1.07; letter-spacing: -.052em; }
+    .lede { max-width: 720px; margin: 9px 0 0; color: var(--muted); font-size: 13px; }
+    .decision { max-width: 402px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 13px; color: var(--muted); background: color-mix(in srgb, var(--surface) 84%, transparent); box-shadow: 0 7px 20px rgba(36,73,80,.08); }
+    .decision b { color: var(--ink); }
+
+    .prototype { display: grid; grid-template-columns: minmax(0, 1fr) 278px; gap: 16px; align-items: stretch; }
+    .board-shell { position: relative; min-height: 690px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 22px; background: var(--canvas); box-shadow: var(--shadow); isolation: isolate; }
+    .board { position: absolute; inset: 0; overflow: hidden; background:
+      radial-gradient(circle at 78% 20%, color-mix(in srgb, #f0a44c 16%, transparent), transparent 20rem),
+      radial-gradient(circle at 16% 102%, color-mix(in srgb, var(--brand) 14%, transparent), transparent 26rem),
+      linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px), var(--canvas);
+      background-size: auto, auto, 24px 24px, 24px 24px, auto; }
+    .board::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(135deg, color-mix(in srgb, white 23%, transparent), transparent 35%); }
+
+    .topbar, .rail, .nav, .popover, .text-toolbar { border: 1px solid var(--line); background: var(--surface); box-shadow: var(--floating-shadow); backdrop-filter: blur(18px) saturate(125%); }
+    .topbar { position: absolute; z-index: 20; top: 18px; left: 20px; right: 20px; display: flex; align-items: center; justify-content: space-between; min-height: 45px; padding: 5px 7px 5px 7px; border-radius: 14px; }
+    .brand-lockup { display: flex; align-items: center; gap: 9px; padding-left: 3px; }
+    .brand-mark { display: grid; grid-template-columns: repeat(2, 5px); gap: 2px; width: 29px; height: 29px; place-content: center; border-radius: 9px; background: linear-gradient(145deg, var(--brand), #e59a42); box-shadow: inset 0 1px 0 rgba(255,255,255,.36); }
+    .brand-mark i { width: 5px; height: 5px; border-radius: 2px; background: rgba(255,255,255,.9); }
+    .brand-copy b { display: block; font-size: 12px; letter-spacing: -.01em; }
+    .brand-copy small { display: block; margin-top: 1px; color: var(--muted); font: 9px/1.1 var(--mono); letter-spacing: .06em; }
+    .top-actions { display: flex; align-items: center; gap: 4px; }
+    .theme-switch, .zoom-readout { border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: color-mix(in srgb, var(--surface-soft) 70%, transparent); }
+    .theme-switch { height: 30px; padding: 0 9px; cursor: pointer; font-size: 11px; font-weight: 700; }
+    .zoom-readout { padding: 5px 7px; font: 10px/1 var(--mono); }
+
+    .rail-stack { position: absolute; z-index: 18; top: 82px; bottom: 18px; left: 20px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+    .rail { width: var(--rail-width); padding: 6px; border-radius: 15px; }
+    .rail.primary { display: grid; gap: 2px; }
+    .rail.authoring { display: grid; gap: 2px; padding-top: 8px; padding-bottom: 8px; }
+    .rail.nav-rail { display: grid; gap: 2px; margin-top: auto; }
+    .rail-divider { height: 1px; margin: 5px 5px; background: var(--line); }
+    .rail-label { margin: 0 0 3px; color: var(--quiet); font: 750 8px/1 var(--mono); text-align: center; letter-spacing: .08em; }
+    .tool { position: relative; display: grid; width: 50px; height: 46px; place-items: center; padding: 0; border: 0; border-radius: 10px; color: var(--ink); background: transparent; cursor: pointer; }
+    .tool:hover { background: var(--surface-soft); }
+    .tool.active { color: var(--blue); background: var(--blue-wash); }
+    .tool.active::before { content: ""; position: absolute; left: -6px; width: 3px; height: 20px; border-radius: 0 4px 4px 0; background: var(--blue); }
+    .tool .glyph { display: grid; width: 27px; height: 27px; place-items: center; }
+    .tool .shortcut { position: absolute; right: 5px; bottom: 4px; color: var(--quiet); font: 700 8px/1 var(--mono); }
+    .tooltip { position: absolute; z-index: 40; left: calc(100% + 10px); display: none; width: max-content; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--surface-solid); box-shadow: 0 5px 14px rgba(20,48,56,.15); font-size: 11px; white-space: nowrap; }
+    .tool:hover .tooltip { display: block; }
+    .glyph svg, .toolbar-icon svg { width: 24px; height: 24px; overflow: visible; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; fill: none; stroke-width: 2.15; }
+    .glyph .filled { fill: currentColor; stroke: none; }
+
+    .canvas-content { position: absolute; z-index: 3; inset: 84px 38px 60px 99px; min-width: 620px; }
+    .card { position: absolute; overflow: hidden; border: 1px solid rgba(63,95,106,.32); border-radius: 12px; color: var(--ink); background: color-mix(in srgb, var(--surface-solid) 94%, transparent); box-shadow: 0 10px 22px rgba(30,65,73,.12); }
+    .card h3 { display: flex; align-items: center; gap: 6px; height: 30px; margin: 0; padding: 0 9px; border-bottom: 1px solid var(--line); font-size: 10px; }
+    .card h3 i { width: 6px; height: 6px; border-radius: 50%; background: var(--signal); }
+    .card h3 span { margin-left: auto; padding: 2px 5px; border-radius: 5px; color: var(--brand); background: var(--brand-wash); font-size: 8px; }
+    .trace { position: absolute; inset: 41px 11px 12px; opacity: .8; background: linear-gradient(159deg, transparent 0 20%, var(--signal) 21% 23%, transparent 24% 43%, var(--signal) 44% 46%, transparent 47% 70%, var(--signal) 71% 73%, transparent 74%), linear-gradient(var(--line) 1px, transparent 1px); background-size: auto, 100% 22px; }
+    .note { position: absolute; z-index: 7; width: 138px; min-height: 128px; padding: 16px 15px; border: 1px solid var(--paper-border); color: #4c482c; background: var(--paper); box-shadow: 0 13px 23px rgba(100,79,26,.16), inset 0 1px 0 rgba(255,255,255,.45); font-size: 13px; line-height: 1.46; transform: rotate(-1deg); }
+    .note b { display: block; margin-bottom: 6px; font-size: 14px; }
+    .note.slate { --paper:#b9e9e8; --paper-border:#5da8a5; color:#214d51; transform: rotate(1.4deg); }
+    .note.stack-note { display: none; }
+    .note.selected, .shape.selected, .text-box.selected { outline: 2px solid var(--blue); outline-offset: 3px; }
+    .selected .handle { display: block; }
+    .handle { position: absolute; right: -7px; bottom: -7px; display: none; width: 11px; height: 11px; border: 2px solid var(--blue); border-radius: 50%; background: var(--surface-solid); }
+    .shape { position: absolute; z-index: 5; color: var(--blue); pointer-events: none; }
+    .shape.rectangle { width: 174px; height: 96px; border: 3px solid currentColor; border-radius: 8px; background: color-mix(in srgb, var(--blue) 8%, transparent); }
+    .shape.diamond { width: 72px; height: 72px; border: 3px solid currentColor; background: color-mix(in srgb, var(--blue) 8%, transparent); transform: rotate(45deg); }
+    .shape .shape-label { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink); font-size: 11px; font-weight: 750; transform: rotate(0deg); }
+    .shape.diamond .shape-label { transform: rotate(-45deg); }
+    .connector { position: absolute; z-index: 4; left: 36%; top: 33%; width: 275px; height: 170px; color: var(--brand); pointer-events: none; }
+    .connector path { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    .connector marker path { fill: currentColor; stroke: none; }
+    .stroke { position: absolute; z-index: 6; left: 9%; top: 65%; width: 258px; height: 78px; color: #a45b95; pointer-events: none; }
+    .stroke path { fill: none; stroke: currentColor; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; opacity: .82; }
+    .text-box { position: absolute; z-index: 8; min-width: 185px; min-height: 54px; padding: 8px 10px; color: var(--ink); font-size: 17px; line-height: 1.35; }
+    .text-box small { display: block; color: var(--muted); font-size: 11px; }
+    .text-caret { display: inline-block; width: 1px; height: 18px; margin-left: 2px; vertical-align: -3px; background: var(--blue); animation: blink .95s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .text-toolbar { position: absolute; z-index: 25; top: 186px; left: 35%; display: flex; align-items: center; min-height: 48px; padding: 4px; border-radius: 12px; color: var(--ink); }
+    .text-toolbar[hidden] { display: none; }
+    .toolbar-button, .font-select { height: 38px; border: 0; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; }
+    .toolbar-button { display: grid; min-width: 36px; place-items: center; padding: 0 8px; }
+    .toolbar-button:hover, .toolbar-button.active { color: var(--blue); background: var(--blue-wash); }
+    .font-select { min-width: 104px; padding: 0 10px; text-align: left; font-weight: 650; }
+    .toolbar-divider { width: 1px; height: 25px; margin: 0 3px; background: var(--line); }
+    .toolbar-text { font-size: 18px; font-weight: 750; line-height: 1; }
+    .toolbar-text.italic { font-style: italic; }
+    .toolbar-text.underline { text-decoration: underline; }
+    .toolbar-color { width: 18px; height: 18px; border: 2px solid var(--ink); border-radius: 50%; background: #e97885; }
+    .toolbar-fill { background: linear-gradient(135deg, transparent 39%, #e8dfb1 40% 100%); }
+
+    .popover { position: absolute; z-index: 30; left: 93px; top: 242px; display: none; width: 262px; padding: 12px; border-radius: 16px; color: var(--ink); }
+    .popover.open { display: block; animation: pop .14s ease-out; }
+    @keyframes pop { from { opacity: 0; transform: translate(-5px, -3px) scale(.98); } to { opacity: 1; transform: none; } }
+    .popover-title { display: flex; align-items: baseline; justify-content: space-between; margin: 0 2px 9px; font-size: 12px; font-weight: 760; }
+    .popover-title small { color: var(--muted); font: 10px var(--mono); }
+    .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .color { aspect-ratio: 1; border: 2px solid var(--swatch-line); box-shadow: inset 0 1px rgba(255,255,255,.48), 0 3px 7px rgba(53,61,46,.12); background: var(--swatch); cursor: pointer; }
+    .color:hover, .color.selected { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .pop-divider { height: 1px; margin: 12px 0; background: var(--line); }
+    .stack-button, .wide-action { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 37px; gap: 7px; border: 0; border-radius: 9px; color: var(--ink); background: var(--surface-soft); cursor: pointer; font-weight: 760; }
+    .stack-button:hover, .wide-action:hover { color: var(--brand); background: var(--brand-wash); }
+    .stack-mark { position: relative; width: 18px; height: 18px; border: 2px solid currentColor; border-radius: 3px; }
+    .stack-mark::after { content: ""; position: absolute; inset: -6px 5px 5px -6px; border: 2px solid currentColor; border-radius: 3px; opacity: .58; }
+    .shape-list { display: grid; gap: 2px; }
+    .shape-choice { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; min-height: 38px; padding: 4px 6px; border: 0; border-radius: 8px; color: inherit; text-align: left; background: transparent; cursor: pointer; }
+    .shape-choice:hover, .shape-choice.active { color: var(--blue); background: var(--blue-wash); }
+    .shape-choice small { color: var(--quiet); font: 10px var(--mono); }
+    .shape-icon { display: grid; place-items: center; width: 24px; color: currentColor; font-size: 20px; }
+    .pen-preset { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+    .pen-size { display: grid; min-height: 56px; place-items: center; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface-soft); cursor: pointer; }
+    .pen-size.active { border-color: var(--blue); color: var(--blue); background: var(--blue-wash); }
+    .pen-dot { display: block; border-radius: 50%; background: currentColor; }
+    .pen-colors { display: flex; gap: 8px; }
+    .pen-color { width: 26px; height: 26px; border: 2px solid rgba(39,56,60,.33); border-radius: 50%; background: var(--pc); cursor: pointer; }
+    .pen-color.active { outline: 3px solid var(--blue); outline-offset: 2px; }
+    .mode-list { display: grid; gap: 2px; margin-bottom: 10px; }
+    .mode-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 7px; border-radius: 8px; cursor: pointer; }
+    .mode-row:hover, .mode-row.active { color: var(--blue); background: var(--blue-wash); }
+    .mode-row b { font-size: 12px; }
+    .mode-row small { margin-left: auto; color: var(--quiet); font: 10px var(--mono); }
+
+    .nav { position: absolute; z-index: 20; right: 20px; bottom: 18px; display: flex; align-items: center; gap: 3px; min-height: 39px; padding: 4px; border-radius: 12px; }
+    .nav button { display: grid; width: 31px; height: 30px; place-items: center; border: 0; border-radius: 8px; color: var(--brand); background: transparent; cursor: pointer; font-size: 17px; }
+    .nav button:hover { background: var(--brand-wash); }
+    .nav .fit { width: 38px; font-size: 15px; }
+    .hint { position: absolute; z-index: 5; bottom: 24px; left: 110px; color: var(--muted); font-size: 11px; }
+    .hint kbd { padding: 2px 4px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; color: var(--brand); background: var(--surface); font: 9px var(--mono); }
+
+    .aside { display: flex; flex-direction: column; gap: 14px; padding: 18px; border: 1px solid rgba(190,211,210,.24); border-radius: 20px; color: #dce8e6; background: linear-gradient(160deg, #233940, #182a30); box-shadow: 0 18px 48px rgba(0,0,0,.18); }
+    .aside h2 { margin: 0; color: #f2f8f7; font-size: 15px; letter-spacing: -.02em; }
+    .aside > p { margin: -6px 0 0; color: #aec0c2; font-size: 12px; line-height: 1.56; }
+    .aside-rule { height: 1px; background: rgba(186,210,211,.16); }
+    .rule { display: grid; grid-template-columns: 24px 1fr; gap: 9px; }
+    .rule-num { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; color: #a6d7de; background: rgba(83,173,190,.15); font: 700 10px var(--mono); }
+    .rule b { display: block; margin-bottom: 2px; color: #f4f8f7; font-size: 12px; }
+    .rule span { color: #aec0c2; font-size: 11px; line-height: 1.48; }
+    .scope { margin-top: auto; padding: 11px 12px; border: 1px solid rgba(240,184,106,.25); border-radius: 11px; color: #c5d9db; background: rgba(240,164,76,.08); font-size: 11px; line-height: 1.52; }
+    .scope b { display: block; margin-bottom: 4px; color: #ffdcab; }
+    .toast { position: absolute; z-index: 50; left: 50%; bottom: 66px; padding: 8px 11px; border: 1px solid color-mix(in srgb, var(--brand) 35%, transparent); border-radius: 9px; color: var(--ink); background: var(--surface-solid); box-shadow: var(--floating-shadow); opacity: 0; transform: translate(-50%, 10px); pointer-events: none; transition: opacity .16s, transform .16s; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 1320px) { .page { width: calc(100vw - 28px); padding-top: 16px; } .prototype { grid-template-columns: 1fr; } .aside { min-height: 176px; display: grid; grid-template-columns: 1fr 1fr 1fr; } .aside h2, .aside > p, .aside-rule, .scope { grid-column: span 3; } .scope { margin-top: 0; } .board-shell { min-height: 650px; } }
+    @media (max-height: 780px) { .page { padding-top: 13px; } .brief { margin-bottom: 11px; } .board-shell { min-height: 600px; } .aside { padding: 15px; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="brief">
+      <div>
+        <div class="eyebrow">TraceLab / UltraView / decision prototype</div>
+        <h1>作者工具：像白板，但仍然是工程看板</h1>
+        <p class="lede">独立的创作段放在 rail 中部。便签、文字、形状和画笔直接在板上工作；既有右键板级菜单继续只负责 Fit、概览和导出。</p>
+      </div>
+      <div class="decision"><b>本原型的单一决定</b><br>把 Miro 的创作速度留下来，但用钛金属青灰的工具岛、克制的配置浮层和工程读数，避免把 UltraView 变成通用协作白板。</div>
+    </header>
+
+    <section class="prototype" aria-label="UltraView 作者工具交互原型">
+      <div class="board-shell" id="shell">
+        <div class="board" id="board">
+          <header class="topbar">
+            <div class="brand-lockup"><span class="brand-mark"><i></i><i></i><i></i><i></i></span><span class="brand-copy"><b>整车问题总览</b><small>BOARD · FREE GRID · 8 OBJECTS</small></span></div>
+            <div class="top-actions"><span class="zoom-readout">84%</span><button class="theme-switch" id="theme-toggle" type="button">切换深色</button></div>
+          </header>
+
+          <div class="rail-stack" aria-label="UltraView 工具栏">
+            <nav class="rail primary" aria-label="已有看板工具">
+              <p class="rail-label">BOARD</p>
+              <button class="tool" type="button"><span class="glyph"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg></span><span class="tooltip">视图库</span></button>
+              <button class="tool" type="button"><span class="glyph"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M10 5v14"/></svg></span><span class="tooltip">布局</span></button>
+              <button class="tool" type="button"><span class="glyph"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 9h10M7 13h6"/></svg></span><span class="tooltip">筛选</span></button>
+            </nav>
+
+            <nav class="rail authoring" aria-label="作者工具">
+              <p class="rail-label">CREATE</p>
+              <button class="tool active" type="button" data-tool="select"><span class="glyph"><svg viewBox="0 0 24 24"><path d="m5 3 14 8-6 2-2 6z"/><path d="m13 13 5 6"/></svg></span><span class="shortcut">V</span><span class="tooltip">选择</span></button>
+              <button class="tool" type="button" data-tool="sticky"><span class="glyph"><svg viewBox="0 0 24 24"><path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/></svg></span><span class="shortcut">N</span><span class="tooltip">便签贴纸</span></button>
+              <button class="tool" type="button" data-tool="text"><span class="glyph"><svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14M8 19h8"/></svg></span><span class="shortcut">T</span><span class="tooltip">文字</span></button>
+              <button class="tool" type="button" data-tool="shapes"><span class="glyph"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><circle cx="17" cy="7" r="3"/><path d="m6 19 4-6 4 6zM17 15l3 5h-6z"/></svg></span><span class="shortcut">S</span><span class="tooltip">形状与箭头</span></button>
+              <button class="tool" type="button" data-tool="draw"><span class="glyph"><svg viewBox="0 0 24 24"><path d="m4 19 3-7L17 2l3 3-10 10z"/><path d="m6 15 3 3"/></svg></span><span class="shortcut">P</span><span class="tooltip">画笔</span></button>
+            </nav>
+
+            <nav class="rail nav-rail" aria-label="视图工具">
+              <button class="tool" type="button"><span class="glyph"><svg viewBox="0 0 24 24"><path d="M6 12a6 6 0 0 1 10-4l2 2"/><path d="M18 5v5h-5"/></svg></span><span class="tooltip">撤销</span></button>
+              <button class="tool" type="button"><span class="glyph"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg></span><span class="tooltip">概览</span></button>
+            </nav>
+          </div>
+
+          <div class="canvas-content" aria-label="自由网格与作者内容">
+            <article class="card" style="left:4%;top:14%;width:226px;height:146px;--signal:#287f95"><h3><i></i>车内声压 <span>时域</span></h3><div class="trace"></div></article>
+            <article class="card" style="left:48%;top:11%;width:195px;height:172px;--signal:#ce7d38"><h3><i></i>发动机阶次 <span>阶次</span></h3><div class="trace"></div></article>
+            <article class="card" style="left:34%;top:53%;width:224px;height:148px;--signal:#8267b4"><h3><i></i>座椅导轨 <span>频响</span></h3><div class="trace"></div></article>
+            <svg class="connector" viewBox="0 0 275 170" aria-hidden="true"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z"/></marker></defs><path d="M12 145 L88 145 L88 44 L256 44" marker-end="url(#arrow)"/></svg>
+            <svg class="stroke" viewBox="0 0 258 78" aria-hidden="true"><path d="M7 56 C28 39, 35 63, 55 48 S82 24, 99 40 S124 62, 144 39 S172 15, 190 32 S217 56, 250 20"/></svg>
+            <div class="shape rectangle" style="left:69%;top:48%"><span class="shape-label">振动链路</span><span class="handle"></span></div>
+            <div class="shape diamond" style="left:21%;top:52%"><span class="shape-label">?</span></div>
+            <article class="note" style="left:16%;top:31%"><b>起步异响</b>第 3 阶次在 1,800 rpm 附近叠加。<span class="handle"></span></article>
+            <article class="note slate stack-note" id="stack-a" style="left:20%;top:36%"><b>复测</b>温度稳定后再确认。</article>
+            <article class="note stack-note" id="stack-b" style="left:24%;top:41%"><b>待办</b>检查悬置刚度。</article>
+            <div class="text-box selected" id="text-box" style="left:54%;top:34%"><strong>横向对比</strong><br><small>低温样本存在明显偏移<span class="text-caret"></span></small><span class="handle"></span></div>
+          </div>
+
+          <div class="text-toolbar" id="text-toolbar" aria-label="文字格式工具条">
+            <button class="font-select" type="button">界面无衬线⌄</button><span class="toolbar-divider"></span>
+            <button class="toolbar-button" type="button">14⌃</button>
+            <button class="toolbar-button active" type="button"><span class="toolbar-text">B</span></button>
+            <button class="toolbar-button" type="button"><span class="toolbar-text italic">I</span></button>
+            <button class="toolbar-button" type="button"><span class="toolbar-text underline">U</span></button><span class="toolbar-divider"></span>
+            <button class="toolbar-button" type="button">≡</button><button class="toolbar-button" type="button">☷</button>
+            <button class="toolbar-button" type="button" title="链接">↗</button><span class="toolbar-divider"></span>
+            <button class="toolbar-button" type="button"><span class="toolbar-color"></span></button>
+            <button class="toolbar-button" type="button"><span class="toolbar-color toolbar-fill"></span></button>
+            <button class="toolbar-button" type="button" title="锁定">⌑</button>
+          </div>
+
+          <div class="popover" id="sticky-popover" aria-label="便签色板">
+            <div class="popover-title"><span>便签贴纸</span><small>N · 单次放置</small></div>
+            <div class="color-grid" id="sticky-colors">
+              <button class="color selected" style="--swatch:#fff19a;--swatch-line:#dfc64a" aria-label="浅黄"></button><button class="color" style="--swatch:#ffe675;--swatch-line:#d8ab31" aria-label="亮黄"></button><button class="color" style="--swatch:#ffbc78;--swatch-line:#d98b39" aria-label="橙"></button><button class="color" style="--swatch:#ff9a9f;--swatch-line:#d6545d" aria-label="珊瑚"></button>
+              <button class="color" style="--swatch:#f5c1e9;--swatch-line:#d76bc3" aria-label="粉"></button><button class="color" style="--swatch:#ec91e2;--swatch-line:#c955b8" aria-label="洋红"></button><button class="color" style="--swatch:#a8c7f2;--swatch-line:#548bcf" aria-label="浅蓝"></button><button class="color" style="--swatch:#b09fec;--swatch-line:#6954c8" aria-label="紫"></button>
+              <button class="color" style="--swatch:#87d8ea;--swatch-line:#1595b7" aria-label="青"></button><button class="color" style="--swatch:#76aaf0;--swatch-line:#3c76cc" aria-label="蓝"></button><button class="color" style="--swatch:#74ded3;--swatch-line:#1aab9e" aria-label="绿松"></button><button class="color" style="--swatch:#61d987;--swatch-line:#27a952" aria-label="绿"></button>
+              <button class="color" style="--swatch:#c9ed9d;--swatch-line:#88b84b" aria-label="浅绿"></button><button class="color" style="--swatch:#b6e855;--swatch-line:#79af27" aria-label="黄绿"></button><button class="color" style="--swatch:#edf1f2;--swatch-line:#98a5a7" aria-label="灰"></button><button class="color" style="--swatch:#303235;--swatch-line:#151617" aria-label="黑"></button>
+            </div>
+            <div class="pop-divider"></div><button class="stack-button" id="stack-button" type="button"><span class="stack-mark"></span>Stack · 连续贴便签</button>
+          </div>
+
+          <div class="popover" id="shape-popover" aria-label="形状菜单">
+            <div class="popover-title"><span>形状与连接</span><small>S</small></div>
+            <div class="shape-list">
+              <button class="shape-choice" type="button"><span class="shape-icon">／</span><span>直线</span><small>L</small></button>
+              <button class="shape-choice active" type="button"><span class="shape-icon">↗</span><span>箭头</span><small>A</small></button>
+              <button class="shape-choice" type="button"><span class="shape-icon">⌟</span><span>折线箭头</span><small>简化</small></button>
+              <button class="shape-choice" type="button"><span class="shape-icon">➤</span><span>块箭头</span><small></small></button>
+            </div>
+            <div class="pop-divider"></div>
+            <div class="shape-list">
+              <button class="shape-choice" type="button"><span class="shape-icon">□</span><span>矩形</span><small>R</small></button>
+              <button class="shape-choice" type="button"><span class="shape-icon">○</span><span>椭圆</span><small>O</small></button>
+              <button class="shape-choice" type="button"><span class="shape-icon">◇</span><span>菱形</span><small></small></button>
+              <button class="shape-choice" type="button"><span class="shape-icon">△</span><span>三角形</span><small></small></button>
+              <button class="shape-choice" type="button"><span class="shape-icon">—</span><span>分隔线</span><small></small></button>
+            </div>
+          </div>
+
+          <div class="popover" id="draw-popover" aria-label="画笔预设">
+            <div class="popover-title"><span>画笔</span><small>P · 持续绘制</small></div>
+            <div class="mode-list"><div class="mode-row active"><b>✎ 画笔</b><small>实线</small></div><div class="mode-row"><b>▨ 荧光笔</b><small>半透明</small></div><div class="mode-row"><b>⌫ 整笔擦除</b><small>不做像素擦除</small></div></div>
+            <div class="pen-preset"><button class="pen-size" type="button"><i class="pen-dot" style="width:4px;height:4px"></i><small>细</small></button><button class="pen-size active" type="button"><i class="pen-dot" style="width:8px;height:8px"></i><small>中</small></button><button class="pen-size" type="button"><i class="pen-dot" style="width:14px;height:14px"></i><small>粗</small></button></div>
+            <div class="pop-divider"></div><div class="pen-colors"><button class="pen-color active" style="--pc:#a45b95"></button><button class="pen-color" style="--pc:#24697c"></button><button class="pen-color" style="--pc:#e47676"></button><button class="pen-color" style="--pc:#3fa26d"></button><button class="pen-color" style="--pc:#34383a"></button></div>
+          </div>
+
+          <p class="hint">按 <kbd>V</kbd> 选择 · <kbd>N</kbd> 便签 · <kbd>T</kbd> 文字 · <kbd>S</kbd> 形状 · <kbd>P</kbd> 画笔 · <kbd>Esc</kbd> 回到选择</p>
+          <div class="nav" aria-label="画布导航"><button type="button" title="缩小">−</button><span class="zoom-readout">84%</span><button type="button" title="放大">＋</button><button class="fit" type="button" title="适应内容">⌁</button></div>
+          <div class="toast" id="toast" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <aside class="aside">
+        <h2>交互裁决</h2>
+        <p>工具轨不承担设置面板职责。它只选择“下一次在画布上做什么”，选中对象的格式在画布上方出现。</p>
+        <div class="aside-rule"></div>
+        <div class="rule"><span class="rule-num">01</span><div><b>三段而非一列混放</b><span>BOARD 保留已有入口，CREATE 专给创作，底部保留镜头与撤销。</span></div></div>
+        <div class="rule"><span class="rule-num">02</span><div><b>一次性与连续性清楚</b><span>便签、文字、形状放置一次即回选择；画笔保持，直到 Esc。</span></div></div>
+        <div class="rule"><span class="rule-num">03</span><div><b>复杂度停在边界</b><span>折线箭头不做自动避障；擦除整笔；文字工具条不伪造字符级富文本。</span></div></div>
+        <div class="scope"><b>Miro 借鉴 / UltraView 取舍</b>16 色便签、轻量 Stack、形状清单、三档画笔与选中后浮动文字条均保留。AI Generate、评论、协作、自动连线避障和压感不进入首发。</div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const board = document.getElementById('board');
+    const toast = document.getElementById('toast');
+    const textToolbar = document.getElementById('text-toolbar');
+    const textBox = document.getElementById('text-box');
+    const toolButtons = [...document.querySelectorAll('[data-tool]')];
+    const popovers = {
+      sticky: document.getElementById('sticky-popover'),
+      shapes: document.getElementById('shape-popover'),
+      draw: document.getElementById('draw-popover')
+    };
+    let toastTimer;
+    function notify(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+    }
+    function setTool(name) {
+      toolButtons.forEach(button => button.classList.toggle('active', button.dataset.tool === name));
+      Object.entries(popovers).forEach(([key, popup]) => popup.classList.toggle('open', key === name));
+      textToolbar.hidden = name !== 'text';
+      textBox.classList.toggle('selected', name === 'text');
+      if (name === 'select') notify('选择工具 · 可移动、缩放、锁定和调整层级');
+      if (name === 'sticky') notify('选择颜色后，在画布放一张便签');
+      if (name === 'text') notify('文字工具 · 格式只影响当前文本框');
+      if (name === 'shapes') notify('选择形状后，在画布拖拽创建');
+      if (name === 'draw') notify('画笔保持激活；Esc 回到选择');
+    }
+    toolButtons.forEach(button => button.addEventListener('click', () => setTool(button.dataset.tool)));
+    document.querySelectorAll('.color').forEach(color => color.addEventListener('click', () => {
+      document.querySelectorAll('.color').forEach(item => item.classList.remove('selected'));
+      color.classList.add('selected');
+      notify(`已选便签色 · ${color.getAttribute('aria-label')} · 点击画布放置`);
+    }));
+    document.querySelectorAll('.shape-choice').forEach(choice => choice.addEventListener('click', () => {
+      document.querySelectorAll('.shape-choice').forEach(item => item.classList.remove('active'));
+      choice.classList.add('active');
+      notify(`已选${choice.children[1].textContent} · 在画布拖拽创建`);
+    }));
+    document.querySelectorAll('.pen-size').forEach(preset => preset.addEventListener('click', () => {
+      document.querySelectorAll('.pen-size').forEach(item => item.classList.remove('active'));
+      preset.classList.add('active');
+    }));
+    document.querySelectorAll('.pen-color').forEach(color => color.addEventListener('click', () => {
+      document.querySelectorAll('.pen-color').forEach(item => item.classList.remove('active'));
+      color.classList.add('active');
+    }));
+    document.querySelectorAll('.mode-row').forEach(row => row.addEventListener('click', () => {
+      document.querySelectorAll('.mode-row').forEach(item => item.classList.remove('active'));
+      row.classList.add('active');
+    }));
+    document.getElementById('stack-button').addEventListener('click', () => {
+      document.getElementById('stack-a').style.display = 'block';
+      document.getElementById('stack-b').style.display = 'block';
+      notify('Stack · 新便签会沿同一节拍连续落在画布上');
+    });
+    document.getElementById('theme-toggle').addEventListener('click', event => {
+      const dark = document.documentElement.dataset.theme !== 'dark';
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      event.currentTarget.textContent = dark ? '切换浅色' : '切换深色';
+    });
+    document.addEventListener('keydown', event => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const key = event.key.toLowerCase();
+      const map = { v: 'select', n: 'sticky', t: 'text', s: 'shapes', p: 'draw' };
+      if (event.key === 'Escape') setTool('select');
+      else if (map[key]) setTool(map[key]);
+    });
+    board.addEventListener('click', event => {
+      if (event.target === board) document.querySelectorAll('.popover').forEach(popover => popover.classList.remove('open'));
+    });
+  </script>
+</body>
+</html>

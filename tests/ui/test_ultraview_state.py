@@ -24,6 +24,16 @@ def _ref(section="time", view_id="view-a") -> uvs.UltraViewRef:
     return uvs.make_ref(section, view_id)
 
 
+def _legacy_rect(column: int, row: int, column_span: int, row_span: int) -> uvs.GridRect:
+    """Express pre-schema-5 fixture geometry in the dense-grid model."""
+    return uvs.GridRect(
+        column * uvs.GRID_RESOLUTION,
+        row * uvs.GRID_RESOLUTION,
+        column_span * uvs.GRID_RESOLUTION,
+        row_span * uvs.GRID_RESOLUTION,
+    )
+
+
 def _filled(layout_id: str, count: int | None = None) -> uvs.UltraViewBoardState:
     board = uvs.default_board()
     uvs.set_layout(board, layout_id)
@@ -154,7 +164,7 @@ def test_legacy_workspace_card_actions_migrates_to_false_and_retires_board_key(s
     restored_board = uvs.active_board(workspace)
     assert "show_card_actions" not in restored_board.passthrough
     round_tripped = uvs.workspace_to_payload(workspace)
-    assert round_tripped["schema"] == 4
+    assert round_tripped["schema"] == uvs.ULTRAVIEW_SCHEMA
     assert round_tripped["workspace"]["show_card_actions"] is False
     assert "show_card_actions" not in round_tripped["workspace"]["boards"][0]
 
@@ -349,13 +359,13 @@ def test_free_grid_insert_anchor_prefers_nearest_empty_rect_without_changing_leg
     board = uvs.default_board()
     legacy = _ref("time", "legacy")
     assert uvs.add_ref(board, legacy) == []
-    assert uvs.free_grid_placement_for(board, legacy).rect == uvs.GridRect(0, 0, 4, 3)
+    assert uvs.free_grid_placement_for(board, legacy).rect == _legacy_rect(0, 0, 4, 3)
 
     centered = _ref("fft", "centered")
-    anchor = uvs.GridAnchor(8.0, 9.5)
+    anchor = uvs.GridAnchor(16.0, 19.0)
     assert uvs.add_ref(board, centered, preferred_anchor=anchor) == []
     rect = uvs.free_grid_placement_for(board, centered).rect
-    assert rect == uvs.GridRect(6, 8, 4, 3)
+    assert rect == _legacy_rect(6, 8, 4, 3)
 
     blocked = uvs.default_board()
     blocker = _ref("time", "blocker")
@@ -370,9 +380,9 @@ def test_free_grid_insert_anchor_prefers_nearest_empty_rect_without_changing_leg
 
     board.free_grid_default_size = "wide"
     wide = _ref("frf", "wide")
-    assert uvs.add_ref(board, wide, preferred_anchor=uvs.GridAnchor(6.0, 20.0)) == []
-    assert uvs.free_grid_placement_for(board, wide).rect.column_span == 6
-    assert uvs.free_grid_placement_for(board, wide).rect.row_span == 3
+    assert uvs.add_ref(board, wide, preferred_anchor=uvs.GridAnchor(12.0, 40.0)) == []
+    assert uvs.free_grid_placement_for(board, wide).rect.column_span == 12
+    assert uvs.free_grid_placement_for(board, wide).rect.row_span == 6
 
     with pytest.raises(uvs.UltraViewStateError):
         uvs.GridAnchor(float("nan"), 1.0)
@@ -385,30 +395,30 @@ def test_set_free_grid_rects_is_atomic_and_rejects_overflow():
     second = _ref("fft", "two")
     uvs.add_ref(board, first)
     uvs.add_ref(board, second)
-    assert uvs.set_free_grid_rect(board, first, uvs.GridRect(0, 0, 4, 3)) == []
-    assert uvs.set_free_grid_rect(board, second, uvs.GridRect(6, 0, 4, 3)) == []
+    assert uvs.set_free_grid_rect(board, first, _legacy_rect(0, 0, 4, 3)) == []
+    assert uvs.set_free_grid_rect(board, second, _legacy_rect(6, 0, 4, 3)) == []
     assert uvs.set_free_grid_rects(
         board,
         [
-            (first, uvs.GridRect(0, 1, 4, 3)),
-            (second, uvs.GridRect(6, 1, 4, 3)),
+            (first, _legacy_rect(0, 1, 4, 3)),
+            (second, _legacy_rect(6, 1, 4, 3)),
         ],
     ) == []
-    assert uvs.free_grid_placement_for(board, first).rect == uvs.GridRect(0, 1, 4, 3)
-    assert uvs.free_grid_placement_for(board, second).rect == uvs.GridRect(6, 1, 4, 3)
+    assert uvs.free_grid_placement_for(board, first).rect == _legacy_rect(0, 1, 4, 3)
+    assert uvs.free_grid_placement_for(board, second).rect == _legacy_rect(6, 1, 4, 3)
     assert uvs.set_free_grid_rects(
         board,
-        [(first, uvs.GridRect(0, 1, 4, 3)), (second, uvs.GridRect(0, 1, 4, 3))],
+        [(first, _legacy_rect(0, 1, 4, 3)), (second, _legacy_rect(0, 1, 4, 3))],
     ) == ["grid_collision"]
-    assert uvs.free_grid_placement_for(board, second).rect == uvs.GridRect(6, 1, 4, 3)
+    assert uvs.free_grid_placement_for(board, second).rect == _legacy_rect(6, 1, 4, 3)
     assert uvs.set_free_grid_rects(
-        board, [(first, uvs.GridRect(uvs.SAFETY_COLUMN_MAX - 11, 1, 12, 3))]
+        board, [(first, uvs.GridRect(uvs.SAFETY_COLUMN_MAX - 23, 2, 24, 6))]
     ) == ["invalid_grid_rect"]
-    assert uvs.free_grid_placement_for(board, first).rect == uvs.GridRect(0, 1, 4, 3)
+    assert uvs.free_grid_placement_for(board, first).rect == _legacy_rect(0, 1, 4, 3)
     assert uvs.set_free_grid_rects(
-        board, [(first, uvs.GridRect(12, 1, 4, 3))]
+        board, [(first, _legacy_rect(12, 1, 4, 3))]
     ) == []
-    assert uvs.free_grid_placement_for(board, first).rect == uvs.GridRect(12, 1, 4, 3)
+    assert uvs.free_grid_placement_for(board, first).rect == _legacy_rect(12, 1, 4, 3)
 
 
 def test_template_to_free_grid_uses_stable_non_overlapping_conversion_maps():
@@ -429,13 +439,13 @@ def test_free_grid_preset_and_organize_keep_geometry_legal():
     second = _ref("fft", "two")
     uvs.add_ref(board, first)
     uvs.add_ref(board, second)
-    assert uvs.set_free_grid_rect(board, first, uvs.GridRect(0, 8, 4, 3)) == []
-    assert uvs.set_free_grid_rect(board, second, uvs.GridRect(6, 12, 4, 3)) == []
+    assert uvs.set_free_grid_rect(board, first, _legacy_rect(0, 8, 4, 3)) == []
+    assert uvs.set_free_grid_rect(board, second, _legacy_rect(6, 12, 4, 3)) == []
     assert uvs.apply_free_grid_preset(board, first, "wide") == []
-    assert uvs.free_grid_placement_for(board, first).rect == uvs.GridRect(0, 8, 6, 3)
+    assert uvs.free_grid_placement_for(board, first).rect == _legacy_rect(0, 8, 6, 3)
     assert uvs.organize_free_grid(board) == []
     assert uvs.free_grid_placement_for(board, first).rect.row == 0
-    assert uvs.free_grid_placement_for(board, second).rect.row == 3
+    assert uvs.free_grid_placement_for(board, second).rect.row == 6
 
 
 def test_free_grid_payload_moves_duplicate_and_collision_to_tray_with_warning():
@@ -467,9 +477,9 @@ def test_free_grid_payload_moves_duplicate_and_collision_to_tray_with_warning():
     assert uvs.all_refs(restored) == uvs.all_refs(board)
 
 
-def test_old_base_frame_payload_restores_bit_identically():
+def test_schema4_free_grid_payload_migrates_to_dense_coordinates_without_loss():
     payload = {
-        "schema": 3,
+        "schema": 4,
         "board": {
             "board_id": "legacy-grid",
             "name": "旧板",
@@ -502,15 +512,18 @@ def test_old_base_frame_payload_restores_bit_identically():
     board, warnings = uvs.normalize_board_payload(payload)
     assert warnings == []
     assert [item.rect for item in board.free_grid] == [
-        uvs.GridRect(0, 0, 4, 3),
-        uvs.GridRect(8, 45, 4, 3),
+        uvs.GridRect(0, 0, 8, 6),
+        uvs.GridRect(16, 90, 8, 6),
     ]
-    restored = uvs.board_to_payload(board)["board"]["free_grid"]["placements"]
+    persisted = uvs.board_to_payload(board)
+    assert persisted["schema"] == uvs.ULTRAVIEW_SCHEMA == 5
+    assert persisted["board"]["free_grid"]["columns"] == uvs.GRID_COLUMNS == 24
+    restored = persisted["board"]["free_grid"]["placements"]
     assert restored[0]["column"] == 0
     assert restored[0]["row"] == 0
-    assert restored[1]["column"] == 8
-    assert restored[1]["row"] == 45
-    again, again_warnings = uvs.normalize_board_payload(uvs.board_to_payload(board))
+    assert restored[1]["column"] == 16
+    assert restored[1]["row"] == 90
+    again, again_warnings = uvs.normalize_board_payload(persisted)
     assert again_warnings == []
     assert [item.rect for item in again.free_grid] == [item.rect for item in board.free_grid]
 
@@ -547,13 +560,13 @@ def test_signed_grid_rect_payload_round_trip_keeps_negatives():
     }
     board, warnings = uvs.normalize_board_payload(payload)
     assert warnings == []
-    assert board.free_grid[0].rect == uvs.GridRect(-8, -4, 4, 3)
-    assert board.free_grid[1].rect == uvs.GridRect(16, 50, 6, 3)
+    assert board.free_grid[0].rect == uvs.GridRect(-16, -8, 8, 6)
+    assert board.free_grid[1].rect == uvs.GridRect(32, 100, 12, 6)
     dumped = uvs.board_to_payload(board)["board"]["free_grid"]["placements"]
-    assert dumped[0]["column"] == -8
-    assert dumped[0]["row"] == -4
-    assert dumped[1]["column"] == 16
-    assert dumped[1]["row"] == 50
+    assert dumped[0]["column"] == -16
+    assert dumped[0]["row"] == -8
+    assert dumped[1]["column"] == 32
+    assert dumped[1]["row"] == 100
     restored, roundtrip_warnings = uvs.normalize_board_payload(uvs.board_to_payload(board))
     assert roundtrip_warnings == []
     assert [item.rect for item in restored.free_grid] == [item.rect for item in board.free_grid]
@@ -583,7 +596,7 @@ def test_extreme_grid_payload_warns_and_clamps_into_safety():
     assert any(item.startswith("grid_rect_clamped:") for item in warnings)
     assert len(board.free_grid) == 1
     assert board.free_grid[0].rect == uvs.GridRect(
-        uvs.SAFETY_COLUMN_MAX - 4, uvs.SAFETY_ROW_MIN, 4, 3
+        uvs.SAFETY_COLUMN_MAX - 8, uvs.SAFETY_ROW_MIN, 8, 6
     )
     assert uvs.grid_rect_in_safety(board.free_grid[0].rect)
 
@@ -591,11 +604,11 @@ def test_extreme_grid_payload_warns_and_clamps_into_safety():
 def test_free_grid_insert_anchor_accepts_signed_origin_inside_safety():
     board = uvs.default_board()
     ref = _ref("time", "east")
-    assert uvs.add_ref(board, ref, preferred_anchor=uvs.GridAnchor(20.0, 3.0)) == []
+    assert uvs.add_ref(board, ref, preferred_anchor=uvs.GridAnchor(40.0, 6.0)) == []
     rect = uvs.free_grid_placement_for(board, ref).rect
-    assert rect == uvs.GridRect(18, 2, 4, 3)
-    assert uvs.set_free_grid_rect(board, ref, uvs.GridRect(-12, 0, 4, 3)) == []
-    assert uvs.free_grid_placement_for(board, ref).rect == uvs.GridRect(-12, 0, 4, 3)
+    assert rect == uvs.GridRect(36, 3, 8, 6)
+    assert uvs.set_free_grid_rect(board, ref, _legacy_rect(-12, 0, 4, 3)) == []
+    assert uvs.free_grid_placement_for(board, ref).rect == _legacy_rect(-12, 0, 4, 3)
 
 
 @pytest.mark.parametrize(
@@ -943,11 +956,11 @@ def test_organize_free_grid_is_idempotent():
     uvs.template_to_free_grid(board)
     first = board.free_grid[0].ref
     second = board.free_grid[1].ref
-    assert uvs.set_free_grid_rect(board, first, uvs.GridRect(0, 2, 4, 2)) == []
-    assert uvs.set_free_grid_rect(board, second, uvs.GridRect(6, 5, 3, 3)) == []
+    assert uvs.set_free_grid_rect(board, first, _legacy_rect(0, 2, 4, 2)) == []
+    assert uvs.set_free_grid_rect(board, second, _legacy_rect(6, 5, 3, 3)) == []
     assert uvs.organize_free_grid(board) == []
     once = [item.rect for item in board.free_grid]
-    assert once == [uvs.GridRect(0, 0, 4, 2), uvs.GridRect(6, 2, 3, 3)]
+    assert once == [_legacy_rect(0, 0, 4, 2), _legacy_rect(6, 2, 3, 3)]
     assert uvs.organize_free_grid(board) == []
     assert [item.rect for item in board.free_grid] == once
 
@@ -1014,10 +1027,10 @@ def test_unknown_board_fields_passthrough_without_retired_viewport():
 def test_add_ref_honors_explicit_span_for_insert_resolver():
     board = uvs.default_board()
     ref = _ref("time", "wide")
-    assert uvs.add_ref(board, ref, span=(6, 2)) == []
+    assert uvs.add_ref(board, ref, span=(12, 4)) == []
     item = uvs.free_grid_placement_for(board, ref)
     assert item is not None
-    assert item.rect == uvs.GridRect(0, 0, 6, 2)
+    assert item.rect == _legacy_rect(0, 0, 6, 2)
 
 
 def test_board_placement_snapshot_omits_name_and_restores_exact_geometry():

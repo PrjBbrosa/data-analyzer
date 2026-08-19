@@ -16,6 +16,7 @@ from mf4_analyzer.ui.ultraview_state import (
     GRID_MAX_ROW_SPAN,
     GRID_MIN_COLUMN_SPAN,
     GRID_MIN_ROW_SPAN,
+    GRID_RESOLUTION,
     SAFETY_COLUMN_MAX,
     SAFETY_COLUMN_MIN,
     SAFETY_ROW_MAX,
@@ -31,24 +32,25 @@ from .layouts import (
     BOARD_PADDING,
     CARD_FIT_CHROME_HEIGHT,
     SLOT_GUTTER,
+    preview_reading_box,
 )
 
-# These are deliberately smaller than P1's reading-card floor.  A 2-column
-# free-grid card is an allowed thumbnail role; the Board scrolls rather than
-# reducing a column below this fixed chrome-readable width.
+# These are deliberately smaller than P1's reading-card floor.  A four-micro-
+# column free-grid card is an allowed thumbnail role; the Board scrolls rather
+# than reducing a column below this fixed chrome-readable width.
 GRID_MIN_COLUMN_WIDTH = 96
 GRID_ROW_HEIGHT = 88
-GRID_MIN_VISIBLE_ROWS = 10
+GRID_MIN_VISIBLE_ROWS = 10 * GRID_RESOLUTION
 # Extra empty rows past the last occupied card so a 1× / fit canvas still
 # has a drop target below the current layout. Export does not add these.
-GRID_SPARE_ROWS = 2
+GRID_SPARE_ROWS = 2 * GRID_RESOLUTION
 # After shrink-only fit, the short side may grow by at most this many cells
 # when plot-area letterbox still exceeds about one row. Never a full-board
 # exhaustive search (the old 7×8 unbounded grow).
-FIT_SHORT_SIDE_GROW_MAX = 2
+FIT_SHORT_SIDE_GROW_MAX = 2 * GRID_RESOLUTION
 # Extra cost on unused plot height so discrete GridRect search prefers
 # pillarboxing (side breathing room) over letterboxing (flush sides,
-# empty bottom).
+# empty bottom) when the total unused area is otherwise comparable.
 FIT_LETTERBOX_COST = 0.35
 
 Rect = tuple[int, int, int, int]
@@ -126,7 +128,7 @@ class LayoutPlan:
 
 @dataclass(frozen=True)
 class GridMetrics:
-    """Pixel mapping for the 12-column 1× pitch. Screen extent is separate.
+    """Pixel mapping for the schema-5 2× micro-grid. Screen extent is separate.
 
     ``scale`` / ``base`` carry the screen zoom and the 1× metrics it came
     from, so the pixel map can multiply *before* rounding.  Rounding each
@@ -143,6 +145,7 @@ class GridMetrics:
     row_height: int
     gutter: int = SLOT_GUTTER
     padding: int = BOARD_PADDING
+    resolution: int = GRID_RESOLUTION
     scale: float = 1.0
     base: "GridMetrics | None" = None
 
@@ -161,17 +164,22 @@ class GridMetrics:
         return base.padding * scale
 
     def exact_pitch(self) -> tuple[float, float]:
-        """Unrounded cell pitch. Use this for every grid ↔ pixel mapping."""
+        """Unrounded micro-cell pitch for every grid ↔ pixel mapping."""
         base, scale = self._exact_source()
+        resolution = max(1, int(base.resolution))
         return (
-            (base.column_width + base.gutter) * scale,
-            (base.row_height + base.gutter) * scale,
+            (base.column_width + base.gutter) * scale / resolution,
+            (base.row_height + base.gutter) * scale / resolution,
         )
 
     def exact_cell(self) -> tuple[float, float]:
-        """Unrounded card cell size, i.e. pitch minus one gutter."""
+        """Unrounded micro-card size, i.e. pitch minus one physical gutter."""
         base, scale = self._exact_source()
-        return (base.column_width * scale, base.row_height * scale)
+        pitch_x, pitch_y = self.exact_pitch()
+        return (
+            pitch_x - base.gutter * scale,
+            pitch_y - base.gutter * scale,
+        )
 
 
 def grid_metrics(
@@ -193,14 +201,15 @@ def grid_metrics(
         if min_visible_rows is None
         else max(1, int(min_visible_rows))
     )
+    physical_columns = max(1, GRID_COLUMNS // GRID_RESOLUTION)
     minimum_width = (
         2 * BOARD_PADDING
-        + GRID_COLUMNS * GRID_MIN_COLUMN_WIDTH
-        + (GRID_COLUMNS - 1) * SLOT_GUTTER
+        + physical_columns * GRID_MIN_COLUMN_WIDTH
+        + (physical_columns - 1) * SLOT_GUTTER
     )
     board_width = max(viewport_w, minimum_width)
-    usable_width = board_width - 2 * BOARD_PADDING - (GRID_COLUMNS - 1) * SLOT_GUTTER
-    column_width = max(GRID_MIN_COLUMN_WIDTH, usable_width // GRID_COLUMNS)
+    usable_width = board_width - 2 * BOARD_PADDING - (physical_columns - 1) * SLOT_GUTTER
+    column_width = max(GRID_MIN_COLUMN_WIDTH, usable_width // physical_columns)
     # The Board can always add a new standard card into the initially visible
     # canvas, but its height only grows from actual, persistent row identity.
     occupied_rows = max(
@@ -210,10 +219,11 @@ def grid_metrics(
     if min_visible_rows is None:
         occupied_rows += GRID_SPARE_ROWS
     occupied_rows = min(SAFETY_ROW_MAX, max(floor_rows, occupied_rows))
+    physical_rows = max(1, math.ceil(occupied_rows / GRID_RESOLUTION))
     minimum_height = (
         2 * BOARD_PADDING
-        + occupied_rows * GRID_ROW_HEIGHT
-        + max(0, occupied_rows - 1) * SLOT_GUTTER
+        + physical_rows * GRID_ROW_HEIGHT
+        + max(0, physical_rows - 1) * SLOT_GUTTER
     )
     board_height = minimum_height if raw_h <= 0 else max(raw_h, minimum_height)
     return GridMetrics(
@@ -221,6 +231,7 @@ def grid_metrics(
         board_height=board_height,
         column_width=column_width,
         row_height=GRID_ROW_HEIGHT,
+        resolution=GRID_RESOLUTION,
     )
 
 
@@ -252,22 +263,44 @@ def _plot_size_px(
     return max(1, int(width)), max(1, int(height) - chrome)
 
 
+def _preview_unused_area_px(
+    rect: GridRect,
+    image_size: tuple[int, int],
+    metrics: GridMetrics,
+    chrome: int,
+) -> tuple[float, float, float]:
+    """Return actual unused plot area plus side/bottom axes after contain.
+
+    This deliberately shares :func:`preview_reading_box` with the QWidget
+    renderer.  In particular, a small capture is not theoretically enlarged
+    just because its card has room, so the solver scores what the user sees.
+    """
+    width, plot_h = _plot_size_px(rect, metrics, chrome)
+    reading_w, reading_h = preview_reading_box(width, plot_h, image_size)
+    side = max(0.0, float(width - reading_w))
+    bottom = max(0.0, float(plot_h - reading_h))
+    area = max(0.0, float(width * plot_h - reading_w * reading_h))
+    return area, side, bottom
+
+
 def _aspect_error_key(
     rect: GridRect,
     target: float,
     metrics: GridMetrics,
     chrome: int,
     image_size: tuple[int, int],
-) -> tuple[float, int]:
-    width, plot_h = _plot_size_px(rect, metrics, chrome)
-    ratio = width / float(plot_h)
-    _leftover_w, leftover_h = _contain_letterbox_px(
+) -> tuple[float, float, int]:
+    unused_area, _side, bottom = _preview_unused_area_px(
         rect, image_size, metrics, chrome
     )
-    cost = abs(ratio - target) + FIT_LETTERBOX_COST * (
-        leftover_h / float(plot_h)
-    )
-    return (cost, -(rect.column_span * rect.row_span))
+    width, plot_h = _plot_size_px(rect, metrics, chrome)
+    # The vertical component is a tie preference, not a request to distort the
+    # capture.  Weight it in area units so it cannot swamp a clearly smaller
+    # overall unused region.
+    plot_area = max(1.0, float(width * plot_h))
+    vertical_area = width * bottom
+    cost = (unused_area + FIT_LETTERBOX_COST * vertical_area) / plot_area
+    return (cost, bottom / max(1.0, float(plot_h)), -(rect.column_span * rect.row_span))
 
 
 def _contain_letterbox_px(
@@ -277,11 +310,8 @@ def _contain_letterbox_px(
     chrome: int,
 ) -> tuple[float, float]:
     """Unused plot-area width/height after KeepAspectRatio contain."""
-    width, plot_h = _plot_size_px(rect, metrics, chrome)
-    image_w = max(1, int(image_size[0]))
-    image_h = max(1, int(image_size[1]))
-    scale = min(width / float(image_w), plot_h / float(image_h))
-    return width - image_w * scale, plot_h - image_h * scale
+    _area, side, bottom = _preview_unused_area_px(rect, image_size, metrics, chrome)
+    return side, bottom
 
 
 def _best_origin_span(
@@ -295,7 +325,7 @@ def _best_origin_span(
     chrome: int,
     image_size: tuple[int, int],
 ) -> GridRect | None:
-    best: tuple[tuple[float, int], GridRect] | None = None
+    best: tuple[tuple[float, float, int], GridRect] | None = None
     for col_span in range(col_min, col_max + 1):
         if int(origin.column) + col_span > SAFETY_COLUMN_MAX:
             continue

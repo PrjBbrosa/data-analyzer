@@ -700,7 +700,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.autofit",
-        text="按原图比例只缩小，不放大",
+        text="按原图比例收敛卡片，减少预览留白",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=83,

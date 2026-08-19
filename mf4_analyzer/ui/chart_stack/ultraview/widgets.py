@@ -116,6 +116,11 @@ from .free_grid import (
     rect_to_pixels,
     screen_grid_metrics,
 )
+from .author_geometry import board_box_to_pixels
+from .author_layer import AuthorLayerModel, AuthorPaintLayer
+from .author_style import DEFAULT_THEME
+from .author_widgets import BoardTextEditor
+from .elastic_workspace import author_content_bounds
 from .gesture import FreeGridGesture
 from .ghost_overlay import GhostOverlay
 from .compositor import compose_board, composed_slot_rects
@@ -3089,6 +3094,18 @@ class FreeGridBoard(QWidget):
         self._metrics = screen_grid_metrics([])
         self._base_metrics = self._metrics
         self._workspace_extent: GridBounds | None = None
+        # Author-created objects share the FreeGrid's signed coordinate plane,
+        # but their renderer is deliberately a transparent sibling.  Do not
+        # make it an event-filter owner: cards, marquee and Page right-pan
+        # keep their existing Qt delivery paths.
+        self._author_objects: tuple[object, ...] = ()
+        self._author_theme = DEFAULT_THEME
+        self._author_selection_ids: set[str] = set()
+        self._author_layer = AuthorPaintLayer(self)
+        # Text editing needs a real widget for CJK IME.  It remains hidden
+        # until the creation controller starts an edit transaction; painting
+        # ordinary TextObject instances stays in AuthorPaintLayer.
+        self._author_text_editor = BoardTextEditor(self)
         self._workspace_gesture_active = False
         self._gesture = FreeGridGesture()
         self._overlay = GhostOverlay(self)
@@ -3099,7 +3116,10 @@ class FreeGridBoard(QWidget):
         self._pending_shift_toggle: UltraViewRef | None = None
         self._layout_revision = 0
         self._gesture_dimmed = False
-        self._default_insert_span = (4, 3)
+        # This is replaced from ``free_grid_default_span`` when a Board is
+        # installed.  Keep the standalone default in schema-5 micro-grid
+        # units as well, so test/harness boards never create undersized cards.
+        self._default_insert_span = (8, 6)
         self._insert_preview_rect: GridRect | None = None
         self._insert_span_resolver: Callable[[str, str], tuple[int, int] | None] | None = None
         self._insert_drag_ref: tuple[str, str] | None = None
@@ -3153,20 +3173,120 @@ class FreeGridBoard(QWidget):
         return self._workspace_size(self._base_metrics)
 
     def content_rect_1x(self) -> tuple[float, float, float, float] | None:
-        """Union of placed free-grid cards at 1×. Empty board returns None."""
+        """Union of cards and rendered author content at 1×.
+
+        The live fit path uses this method, so author-only Boards and signed
+        negative ink must not fall back to the ordinary empty-card frame.
+        """
         return _union_pixel_rect(
-            rect_to_pixels(
-                item.rect, self._base_metrics, self._workspace_origin_offset()
-            )
-            for item in self._placements.values()
+            [
+                *(
+                    rect_to_pixels(
+                        item.rect, self._base_metrics, self._workspace_origin_offset()
+                    )
+                    for item in self._placements.values()
+                ),
+                *self._author_pixel_rect(self._base_metrics),
+            ]
         )
 
     def content_rect(self) -> tuple[float, float, float, float] | None:
-        """Union of placed free-grid cards at the current zoom."""
+        """Union of cards and rendered author content at the current zoom."""
         return _union_pixel_rect(
-            rect_to_pixels(item.rect, self._metrics, self._workspace_origin_offset())
-            for item in self._placements.values()
+            [
+                *(
+                    rect_to_pixels(item.rect, self._metrics, self._workspace_origin_offset())
+                    for item in self._placements.values()
+                ),
+                *self._author_pixel_rect(self._metrics),
+            ]
         )
+
+    def author_paint_layer(self) -> AuthorPaintLayer:
+        """Return the transparent paint-only author projection layer."""
+        return self._author_layer
+
+    def author_text_editor(self) -> BoardTextEditor:
+        """Return the direct-child IME-safe editor owned by this Board."""
+        return self._author_text_editor
+
+    def set_author_objects(
+        self,
+        objects: Sequence[object],
+        *,
+        theme: str = DEFAULT_THEME,
+    ) -> None:
+        """Project persisted author objects without taking mutation ownership."""
+        self._author_objects = tuple(objects)
+        self._author_theme = str(theme or DEFAULT_THEME)
+        self._author_selection_ids.intersection_update(
+            {
+                str(getattr(item, "object_id", ""))
+                for item in self._author_objects
+                if getattr(item, "object_id", None)
+            }
+        )
+        self._sync_author_projection()
+
+    def clear_author_selection(self) -> bool:
+        """Clear the Board-owned author selection chrome, if any.
+
+        The creation controller may later populate this set through a single
+        owner; Page only asks the Board to clear it alongside card selection.
+        """
+        if not self._author_selection_ids:
+            return False
+        self._author_selection_ids.clear()
+        self._sync_author_projection()
+        return True
+
+    def _author_pixel_rect(
+        self, metrics: GridMetrics
+    ) -> tuple[tuple[float, float, float, float], ...]:
+        bounds = author_content_bounds(self._author_objects)
+        if bounds.empty():
+            return ()
+        mapped = board_box_to_pixels(
+            (
+                float(bounds.column),
+                float(bounds.row),
+                float(bounds.column_span),
+                float(bounds.row_span),
+            ),
+            metrics,
+            origin_offset=self._workspace_origin_offset(),
+        )
+        return () if mapped is None else (mapped,)
+
+    def _sync_author_projection(self) -> None:
+        boxes = []
+        selected = self._author_selection_ids
+        if selected:
+            for item in self._author_objects:
+                if str(getattr(item, "object_id", "")) not in selected:
+                    continue
+                box = getattr(item, "box", None)
+                if box is not None:
+                    boxes.append((box.x, box.y, box.width, box.height))
+        self._author_layer.set_model(
+            AuthorLayerModel(
+                objects=self._author_objects,
+                metrics=self._metrics,
+                origin_offset=self._workspace_origin_offset(),
+                theme=self._author_theme,
+                selection_boxes=tuple(boxes),
+            )
+        )
+        self._author_layer.set_view_geometry(
+            self._metrics,
+            origin_offset=self._workspace_origin_offset(),
+            zoom=self._zoom,
+        )
+        if self._author_text_editor.is_editing():
+            self._author_text_editor.update_board_geometry(
+                self._metrics,
+                origin_offset=self._workspace_origin_offset(),
+            )
 
     def set_preview_quality(self, quality: str) -> None:
         for card in self._widgets.values():
@@ -3516,6 +3636,10 @@ class FreeGridBoard(QWidget):
         card.autofit_requested.connect(self.autofit_requested)
 
     def _raise_overlay(self) -> None:
+        self._author_layer.setGeometry(self.rect())
+        self._author_layer.raise_()
+        if self._author_text_editor.is_editing():
+            self._author_text_editor.raise_()
         self._overlay.setGeometry(self.rect())
         self._overlay.raise_()
 
@@ -3535,6 +3659,7 @@ class FreeGridBoard(QWidget):
         self._raise_overlay()
 
     def _relayout(self) -> None:
+        self._sync_author_projection()
         if self._gesture.is_active():
             return
         for ref, placement in self._placements.items():

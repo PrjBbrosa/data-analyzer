@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 
 import qtawesome as qta
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
@@ -45,13 +46,15 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from mf4_analyzer.ui_kit.icons import Icons, icon_device_pixel_ratio
-from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.menus import add_rounded_submenu, apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.ultraview_style import titanium_color
 from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, parse_ref_payload
 
+from .author_style import DEFAULT_THEME, STICKY_PALETTE_TOKENS, sticky_colors
 from .floating_layout import (
     BOARD_ISLAND_MAX_WIDTH,
     DEFAULT_NAVIGATION_ISLAND_SIZE,
@@ -68,6 +71,18 @@ PANEL_LAYOUT = "layout"
 PANEL_FILTER = "filter"
 PANEL_UNPLACED = "unplaced"
 PANEL_BOARDS = "boards"
+AUTHOR_TOOL_SELECT = "select"
+AUTHOR_TOOL_STICKY = "sticky"
+AUTHOR_TOOL_TEXT = "text"
+AUTHOR_TOOL_SHAPES = "shapes"
+AUTHOR_TOOL_DRAW = "draw"
+AUTHOR_TOOLS = (
+    AUTHOR_TOOL_SELECT,
+    AUTHOR_TOOL_STICKY,
+    AUTHOR_TOOL_TEXT,
+    AUTHOR_TOOL_SHAPES,
+    AUTHOR_TOOL_DRAW,
+)
 RAIL_BUTTON_SIZE = 36
 RAIL_ICON_SIZE = 20
 BOARD_POPOVER_WIDTH = 260
@@ -78,6 +93,31 @@ _BOARD_POPOVER_MARGIN = 8
 _BOARD_POPOVER_GAP = 6
 _BOARD_CREATE_HEIGHT = 28
 _BOARD_LIST_BOTTOM_PAD = 6
+
+
+def _author_tool_icon(tool: str, *, active: bool) -> QIcon:
+    """Return one compact, stable line icon for an authoring rail tool."""
+    names = {
+        AUTHOR_TOOL_SELECT: "fa5s.mouse-pointer",
+        AUTHOR_TOOL_STICKY: "fa5s.sticky-note",
+        AUTHOR_TOOL_TEXT: "fa5s.font",
+        AUTHOR_TOOL_SHAPES: "fa5s.shapes",
+        AUTHOR_TOOL_DRAW: "fa5s.pen",
+    }
+    return qta.icon(names[str(tool)], color=UV_PRESENTATION_ICON if active else UV_MUTED)
+
+
+class _AuthorToolButton(QToolButton):
+    """A rail button that distinguishes a click from the pin gesture."""
+
+    pin_requested = pyqtSignal(str)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self.isEnabled():
+            self.pin_requested.emit(str(self.property("authorTool") or ""))
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 def board_popover_height(rows: int) -> int:
@@ -636,6 +676,411 @@ class CanvasHost(QFrame):
             widget.setFocus(Qt.OtherFocusReason)
 
 
+class StickyPopover(QMenu):
+    """Rounded Miro-style 4×4 Sticky palette with a deliberately simple Stack.
+
+    This widget only emits an intent and the chosen semantic palette token.
+    Page/controller code owns object creation and its single undo transaction.
+    """
+
+    palette_selected = pyqtSignal(str)
+    stack_requested = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewStickyPopover")
+        self._selected_palette = STICKY_PALETTE_TOKENS[0]
+        self._palette_buttons: dict[str, QToolButton] = {}
+        apply_rounded_menu_chrome(self)
+        self._build_palette()
+        self.addSeparator()
+        self._stack = self.addAction("Stack")
+        self._stack.setProperty("authorAction", "stack")
+        self._stack.triggered.connect(self.request_stack)
+
+    def palette_tokens(self) -> tuple[str, ...]:
+        return STICKY_PALETTE_TOKENS
+
+    def palette_buttons(self) -> tuple[QToolButton, ...]:
+        return tuple(self._palette_buttons[token] for token in STICKY_PALETTE_TOKENS)
+
+    def selected_palette(self) -> str:
+        return self._selected_palette
+
+    def choose_palette(self, token: str) -> None:
+        checked = str(token)
+        if checked not in self._palette_buttons:
+            raise ValueError(f"unknown Sticky palette: {checked}")
+        self._selected_palette = checked
+        for candidate, button in self._palette_buttons.items():
+            button.setChecked(candidate == checked)
+        self.palette_selected.emit(checked)
+
+    def request_stack(self) -> None:
+        self.stack_requested.emit(self._selected_palette)
+
+    def _build_palette(self) -> None:
+        host = QWidget(self)
+        host.setObjectName("ultraViewStickyPaletteGrid")
+        grid = QGridLayout(host)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for index, token in enumerate(STICKY_PALETTE_TOKENS):
+            fill, border, _foreground = sticky_colors(token, DEFAULT_THEME)
+            button = QToolButton(host)
+            button.setObjectName(f"ultraViewStickyPalette{token.title()}Button")
+            button.setProperty("palette", token)
+            button.setCheckable(True)
+            button.setAutoRaise(False)
+            button.setFixedSize(28, 28)
+            button.setToolTip(f"便签颜色：{token}")
+            button.setAccessibleName(f"便签颜色：{token}")
+            button.setStyleSheet(
+                "QToolButton {"
+                f"background-color: rgb({fill[0]}, {fill[1]}, {fill[2]});"
+                f"border: 1px solid rgb({border[0]}, {border[1]}, {border[2]});"
+                "border-radius: 4px; }"
+                "QToolButton:checked { border: 2px solid #2563eb; }"
+            )
+            button.clicked.connect(self._on_palette_clicked)
+            self._palette_buttons[token] = button
+            grid.addWidget(button, index // 4, index % 4)
+        self._palette_buttons[self._selected_palette].setChecked(True)
+        action = QWidgetAction(self)
+        action.setDefaultWidget(host)
+        self.addAction(action)
+
+    def _on_palette_clicked(self) -> None:
+        sender = self.sender()
+        if isinstance(sender, QToolButton):
+            self.choose_palette(str(sender.property("palette") or ""))
+
+
+class ShapePopover(QMenu):
+    """Rounded menu exposing precisely the nine V1 shape and line choices."""
+
+    shape_selected = pyqtSignal(str)
+    _SHAPES = (
+        ("line", "Line"),
+        ("arrow", "Arrow"),
+        ("elbow_arrow", "Elbow arrow"),
+        ("block_arrow", "Block arrow"),
+        ("rectangle", "Rectangle"),
+        ("oval", "Oval"),
+        ("rhombus", "Rhombus"),
+        ("triangle", "Triangle"),
+        ("divider", "Divider"),
+    )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewShapePopover")
+        apply_rounded_menu_chrome(self)
+        for index, (shape, label) in enumerate(self._SHAPES):
+            if index == 4:
+                self.addSeparator()
+            action = self.addAction(label)
+            action.setProperty("shapeType", shape)
+            action.triggered.connect(self._on_shape_triggered)
+
+    def shape_types(self) -> tuple[str, ...]:
+        return tuple(shape for shape, _label in self._SHAPES)
+
+    def choose_shape(self, shape: str) -> None:
+        checked = str(shape)
+        if checked not in self.shape_types():
+            raise ValueError(f"unknown author shape: {checked}")
+        self.shape_selected.emit(checked)
+
+    def _on_shape_triggered(self) -> None:
+        sender = self.sender()
+        if sender is not None:
+            self.choose_shape(str(sender.property("shapeType") or ""))
+
+
+@dataclass(frozen=True)
+class DrawPreset:
+    """One local, non-persistent draw preset projected by :class:`DrawPopover`."""
+
+    palette: str
+    width_px_100: int
+
+
+class DrawPopover(QMenu):
+    """Rounded Pen/Highlighter preset picker plus Eraser and Lasso intents."""
+
+    tool_selected = pyqtSignal(str, int)
+    _SUBTOOLS = ("pen", "highlighter", "eraser", "lasso")
+    _DEFAULT_PRESETS = {
+        "pen": (
+            DrawPreset("ink", 2), DrawPreset("blue", 4), DrawPreset("red", 8),
+        ),
+        "highlighter": (
+            DrawPreset("yellow", 8), DrawPreset("green", 12), DrawPreset("pink", 16),
+        ),
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewDrawPopover")
+        self._presets = dict(self._DEFAULT_PRESETS)
+        self._active_tool = "pen"
+        self._active_preset = 0
+        apply_rounded_menu_chrome(self)
+        self._build_actions()
+
+    def subtools(self) -> tuple[str, ...]:
+        return self._SUBTOOLS
+
+    def presets(self, tool: str) -> tuple[DrawPreset, ...]:
+        return tuple(self._presets.get(str(tool), ()))
+
+    def active_tool(self) -> tuple[str, int]:
+        return self._active_tool, self._active_preset
+
+    def set_presets(self, tool: str, presets: tuple[DrawPreset, ...]) -> None:
+        checked = str(tool)
+        if checked not in {"pen", "highlighter"} or len(presets) != 3:
+            raise ValueError("Pen and Highlighter require exactly three presets")
+        if not all(isinstance(preset, DrawPreset) for preset in presets):
+            raise TypeError("draw presets must be DrawPreset instances")
+        self._presets[checked] = tuple(presets)
+        self.clear()
+        self._build_actions()
+
+    def choose_tool(self, tool: str, preset_index: int = 0) -> None:
+        checked = str(tool)
+        if checked not in self._SUBTOOLS:
+            raise ValueError(f"unknown draw tool: {checked}")
+        index = int(preset_index)
+        if checked in self._presets and not 0 <= index < len(self._presets[checked]):
+            raise ValueError(f"unknown {checked} preset: {index}")
+        if checked not in self._presets:
+            index = 0
+        self._active_tool = checked
+        self._active_preset = index
+        self.tool_selected.emit(checked, index)
+
+    def _build_actions(self) -> None:
+        labels = {"pen": "Pen", "highlighter": "Highlighter"}
+        for tool in ("pen", "highlighter"):
+            submenu = add_rounded_submenu(self, labels[tool])
+            for index, preset in enumerate(self._presets[tool], start=1):
+                action = submenu.addAction(f"Preset {index} · {preset.width_px_100}px")
+                action.setProperty("drawTool", tool)
+                action.setProperty("presetIndex", index - 1)
+                action.triggered.connect(self._on_draw_action_triggered)
+        self.addSeparator()
+        for tool, label in (("eraser", "Eraser"), ("lasso", "Lasso")):
+            action = self.addAction(label)
+            action.setProperty("drawTool", tool)
+            action.setProperty("presetIndex", 0)
+            action.triggered.connect(self._on_draw_action_triggered)
+
+    def _on_draw_action_triggered(self) -> None:
+        sender = self.sender()
+        if sender is not None:
+            self.choose_tool(
+                str(sender.property("drawTool") or ""),
+                int(sender.property("presetIndex") or 0),
+            )
+
+
+class TextFormattingToolbar(QFrame):
+    """Small typed formatting surface for a selected/new Board text object.
+
+    The surface intentionally knows no ``QTextDocument``.  It emits compact
+    object-level changes, leaving editor selection semantics to the authoring
+    controller and keeping V1 honest about its whole-box formatting contract.
+    """
+
+    format_requested = pyqtSignal(str, object)
+    _FONT_ROLES = ("sans", "serif", "mono")
+    _ALIGNMENTS = ("left", "center", "right")
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewTextFormattingToolbar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setProperty("surface", "island")
+        self._format = {
+            "font_role": "sans", "font_size": 14, "bold": False, "italic": False,
+            "underline": False, "align": "left", "list_style": "none",
+            "text_palette": "ink", "fill_palette": None, "locked": False,
+        }
+        self._buttons: dict[str, QToolButton] = {}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(2)
+        layout.addWidget(
+            self._menu_button(
+                "font_role", "Sans", "字体", (("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")),
+            )
+        )
+        layout.addWidget(
+            self._menu_button(
+                "font_size", "14", "字号", tuple((size, str(size)) for size in (8, 10, 12, 14, 18, 24, 32, 48)),
+            )
+        )
+        for key, label, tooltip in (
+            ("bold", "B", "加粗"), ("italic", "I", "斜体"), ("underline", "U", "下划线"),
+        ):
+            button = self._format_button(key, label, tooltip, checkable=True)
+            button.clicked.connect(self._on_toggle_format)
+            layout.addWidget(button)
+        divider = QFrame(self)
+        divider.setFrameShape(QFrame.VLine)
+        divider.setFixedWidth(1)
+        layout.addWidget(divider)
+        for alignment, label in (("left", "左"), ("center", "中"), ("right", "右")):
+            button = self._format_button(f"align:{alignment}", label, f"{label}对齐", checkable=True)
+            button.setProperty("alignment", alignment)
+            button.clicked.connect(self._on_alignment_clicked)
+            layout.addWidget(button)
+        layout.addWidget(
+            self._menu_button(
+                "list_style", "•", "列表", (("none", "无列表"), ("bullet", "项目符号"), ("number", "编号列表")),
+            )
+        )
+        layout.addWidget(
+            self._menu_button(
+                "text_palette", "A", "文字颜色", (("ink", "墨色"), ("blue", "蓝色"), ("red", "红色"), ("green", "绿色")),
+            )
+        )
+        layout.addWidget(
+            self._menu_button(
+                "fill_palette", "▨", "文字底色", ((None, "透明"), ("yellow", "黄色"), ("blue", "蓝色"), ("green", "绿色")),
+            )
+        )
+        lock = self._format_button("locked", "锁", "锁定", checkable=True)
+        lock.clicked.connect(self._on_toggle_format)
+        layout.addWidget(lock)
+
+    def button(self, key: str) -> QToolButton | None:
+        return self._buttons.get(str(key))
+
+    def formatting(self) -> dict[str, object]:
+        return dict(self._format)
+
+    def set_available(self, enabled: bool, reason: str = "") -> None:
+        text = str(reason or "文字格式")
+        for button in self._buttons.values():
+            button.setEnabled(bool(enabled))
+            button.setToolTip(text if not enabled else button.accessibleName())
+
+    def set_font_role(self, role: str) -> None:
+        checked = str(role)
+        if checked not in self._FONT_ROLES:
+            raise ValueError(f"unknown text font role: {checked}")
+        self._set_format("font_role", checked)
+
+    def set_font_size(self, size: int) -> None:
+        checked = int(size)
+        if not 8 <= checked <= 96:
+            raise ValueError("text font size must be 8..96")
+        self._set_format("font_size", checked)
+
+    def set_alignment(self, alignment: str) -> None:
+        checked = str(alignment)
+        if checked not in self._ALIGNMENTS:
+            raise ValueError(f"unknown text alignment: {checked}")
+        self._set_format("align", checked)
+        for candidate in self._ALIGNMENTS:
+            button = self._buttons[f"align:{candidate}"]
+            button.setChecked(candidate == checked)
+
+    def set_list_style(self, style: str) -> None:
+        checked = str(style)
+        if checked not in {"none", "bullet", "number"}:
+            raise ValueError(f"unknown text list style: {checked}")
+        self._set_format("list_style", checked)
+
+    def set_text_palette(self, palette: str) -> None:
+        self._set_format("text_palette", str(palette))
+
+    def set_fill_palette(self, palette: str | None) -> None:
+        self._set_format("fill_palette", None if palette is None else str(palette))
+
+    def set_locked(self, locked: bool) -> None:
+        self._set_format("locked", bool(locked))
+        self._buttons["locked"].setChecked(bool(locked))
+
+    def set_link(self, link: str | None) -> None:
+        self._set_format("link", None if link is None else str(link))
+
+    def _format_button(self, key: str, label: str, tooltip: str, *, checkable: bool) -> QToolButton:
+        button = _icon_button(
+            self,
+            object_name=f"ultraViewTextToolbar{key.replace(':', '').title()}Button",
+            icon=QIcon(),
+            tooltip=tooltip,
+            accessible_name=tooltip,
+            size=28,
+            icon_size=16,
+        )
+        button.setText(label)
+        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        button.setCheckable(checkable)
+        button.setProperty("formatKey", key)
+        self._buttons[key] = button
+        return button
+
+    def _menu_button(
+        self,
+        key: str,
+        label: str,
+        tooltip: str,
+        choices: tuple[tuple[object, str], ...],
+    ) -> QToolButton:
+        button = self._format_button(key, label, tooltip, checkable=False)
+        menu = QMenu(button)
+        apply_rounded_menu_chrome(menu)
+        for value, choice_label in choices:
+            action = menu.addAction(choice_label)
+            action.setProperty("formatMenuKey", key)
+            action.setProperty("formatMenuValue", value)
+            action.triggered.connect(self._on_menu_format_triggered)
+        button.setMenu(menu)
+        button.setPopupMode(QToolButton.InstantPopup)
+        return button
+
+    def _on_toggle_format(self) -> None:
+        sender = self.sender()
+        if isinstance(sender, QToolButton):
+            key = str(sender.property("formatKey") or "")
+            if key in {"bold", "italic", "underline", "locked"}:
+                self._set_format(key, sender.isChecked())
+
+    def _on_alignment_clicked(self) -> None:
+        sender = self.sender()
+        if isinstance(sender, QToolButton):
+            self.set_alignment(str(sender.property("alignment") or ""))
+
+    def _on_menu_format_triggered(self) -> None:
+        sender = self.sender()
+        if sender is None:
+            return
+        key = str(sender.property("formatMenuKey") or "")
+        value = sender.property("formatMenuValue")
+        if key == "font_role":
+            self.set_font_role(str(value))
+        elif key == "font_size":
+            self.set_font_size(int(value))
+        elif key == "list_style":
+            self.set_list_style(str(value))
+        elif key == "text_palette":
+            self.set_text_palette(str(value))
+        elif key == "fill_palette":
+            self.set_fill_palette(None if value is None else str(value))
+
+    def _set_format(self, key: str, value: object) -> None:
+        if self._format.get(key) == value:
+            return
+        self._format[key] = value
+        self.format_requested.emit(key, value)
+
+
 class ToolRail(QFrame):
     """The fixed left rail; Page owns which requested panel opens.
 
@@ -645,6 +1090,8 @@ class ToolRail(QFrame):
     """
 
     panel_requested = pyqtSignal(str)
+    tool_requested = pyqtSignal(str)
+    tool_pinned_changed = pyqtSignal(str, bool)
     free_grid_toggled = pyqtSignal(bool)
     ref_dropped = pyqtSignal(str, str)
     sync_all_requested = pyqtSignal()
@@ -655,6 +1102,13 @@ class ToolRail(QFrame):
         (PANEL_FILTER, "Filter", "筛选可对比的 View", Icons.ultraview_filter),
         (PANEL_UNPLACED, "Unplaced", "查看未放置的 View", Icons.ultraview_unplaced),
     )
+    _CREATION_SPECS: tuple[tuple[str, str, str], ...] = (
+        (AUTHOR_TOOL_SELECT, "Select", "选择对象 (V)"),
+        (AUTHOR_TOOL_STICKY, "Sticky", "添加便签贴纸 (N)"),
+        (AUTHOR_TOOL_TEXT, "Text", "添加文字 (T)"),
+        (AUTHOR_TOOL_SHAPES, "Shapes", "添加形状或连接线"),
+        (AUTHOR_TOOL_DRAW, "Draw", "画笔、高亮、擦除或套索 (P)"),
+    )
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -664,6 +1118,7 @@ class ToolRail(QFrame):
         self.setProperty("surface", "island")
         self.setFixedWidth(RAIL_WIDTH)
         self._buttons: dict[str, QToolButton] = {}
+        self._tool_buttons: dict[str, _AuthorToolButton] = {}
         self._icon_factories: dict[str, Callable[..., QIcon]] = {}
         self._badges: dict[str, QLabel] = {}
         self._active_panel: str | None = None
@@ -671,9 +1126,16 @@ class ToolRail(QFrame):
         self._free_grid_enabled = False
         self._empty_board = False
         self._stale_count = 0
+        self._creation_enabled = False
+        self._creation_disabled_reason = "创作工具将在自由网格中可用"
+        self._active_tool = AUTHOR_TOOL_SELECT
+        self._pinned_tool: str | None = None
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(5)
+        # Eleven 36px targets must remain fully usable in the 800×560 compact
+        # stage.  Keep the Miro-like rail as one dense, accessible column
+        # instead of allowing Page's safe-band clamp to crop its last tools.
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(1)
         # Visual order: Library, FreeGrid, Layout, Filter, divider, Unplaced,
         # SyncAll.
         for index, (panel_id, short_name, tooltip, icon_factory) in enumerate(self._PANEL_SPECS):
@@ -689,11 +1151,9 @@ class ToolRail(QFrame):
                 self._free_grid.clicked.connect(self._on_free_grid_clicked)
                 root.addWidget(self._free_grid, 0, Qt.AlignHCenter)
             if index == 3:
-                divider = QFrame(self)
-                divider.setObjectName("ultraViewToolRailDivider")
-                divider.setFrameShape(QFrame.HLine)
-                divider.setFixedHeight(1)
-                root.addWidget(divider, 0)
+                self._add_rail_divider(root, "ultraViewToolRailCreationDivider")
+                self._add_creation_section(root)
+                self._add_rail_divider(root, "ultraViewToolRailPostCreationDivider")
             button = _rail_button(
                 self,
                 object_name=f"ultraViewRail{short_name}Button",
@@ -741,12 +1201,55 @@ class ToolRail(QFrame):
         self._sync_all_badge.hide()
         self.set_stale_count(0)
         self.set_active_panel(None)
+        self._sync_creation_states()
 
     def panel_button(self, panel_id: str) -> QToolButton | None:
         return self._buttons.get(str(panel_id))
 
     def free_grid_button(self) -> QToolButton:
         return self._free_grid
+
+    def tool_button(self, tool: str) -> QToolButton | None:
+        """Return a creation-tool button without exposing its panel siblings."""
+        return self._tool_buttons.get(str(tool))
+
+    def active_tool(self) -> str:
+        return self._active_tool
+
+    def pinned_tool(self) -> str | None:
+        return self._pinned_tool
+
+    def set_creation_enabled(self, enabled: bool, reason: str = "") -> None:
+        """Gate the visible creation section for template/presentation states.
+
+        Page supplies the reason so disabled chrome remains explanatory rather
+        than looking like an unavailable implementation stub.
+        """
+        self._creation_enabled = bool(enabled)
+        self._creation_disabled_reason = str(reason or "创作工具仅在自由网格中可用")
+        if not self._creation_enabled:
+            self._active_tool = AUTHOR_TOOL_SELECT
+            self._pinned_tool = None
+        self._sync_creation_states()
+
+    set_authoring_enabled = set_creation_enabled
+
+    def set_active_tool(self, tool: str, *, pinned: bool = False) -> None:
+        checked = str(tool)
+        if checked not in self._tool_buttons:
+            raise ValueError(f"unknown authoring tool: {checked}")
+        self._active_tool = checked
+        self._pinned_tool = checked if pinned and checked != AUTHOR_TOOL_SELECT else None
+        self._sync_creation_states()
+
+    def make_sticky_popover(self, parent: QWidget | None = None) -> StickyPopover:
+        return StickyPopover(parent or self)
+
+    def make_shape_popover(self, parent: QWidget | None = None) -> ShapePopover:
+        return ShapePopover(parent or self)
+
+    def make_draw_popover(self, parent: QWidget | None = None) -> DrawPopover:
+        return DrawPopover(parent or self)
 
     def sync_all_button(self) -> QToolButton:
         return self._sync_all
@@ -867,6 +1370,55 @@ class ToolRail(QFrame):
                 )
             )
 
+    def _sync_creation_states(self) -> None:
+        for tool, button in self._tool_buttons.items():
+            is_active = self._creation_enabled and tool == self._active_tool
+            is_pinned = self._creation_enabled and tool == self._pinned_tool
+            button.setEnabled(self._creation_enabled)
+            button.setChecked(is_active)
+            button.setToolTip(
+                button.accessibleName() if self._creation_enabled else self._creation_disabled_reason
+            )
+            _set_flag(button, "active", is_active)
+            _set_flag(button, "pinned", is_pinned)
+            _set_flag(button, "modeActive", False)
+            _set_flag(button, "panelOpen", False)
+            button.setIcon(_author_tool_icon(tool, active=is_active))
+
+    def _add_rail_divider(self, layout: QVBoxLayout, object_name: str) -> None:
+        divider = QFrame(self)
+        divider.setObjectName(object_name)
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFixedHeight(1)
+        layout.addWidget(divider, 0)
+
+    def _add_creation_section(self, layout: QVBoxLayout) -> None:
+        for tool, short_name, tooltip in self._CREATION_SPECS:
+            button = _AuthorToolButton(self)
+            button.setObjectName(f"ultraViewRail{short_name}Button")
+            button.setIcon(_author_tool_icon(tool, active=False))
+            button.setIconSize(QSize(RAIL_ICON_SIZE, RAIL_ICON_SIZE))
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setAutoRaise(True)
+            button.setAutoFillBackground(False)
+            button.setAttribute(Qt.WA_StyledBackground, True)
+            button.setFixedSize(RAIL_BUTTON_SIZE, RAIL_BUTTON_SIZE)
+            button.setFocusPolicy(Qt.TabFocus)
+            button.setToolTip(tooltip)
+            button.setAccessibleName(tooltip)
+            button.setProperty("role", "icon")
+            button.setProperty("chrome", "ultraview")
+            button.setProperty("authorTool", tool)
+            button.setProperty("active", "false")
+            button.setProperty("pinned", "false")
+            button.setProperty("modeActive", "false")
+            button.setProperty("panelOpen", "false")
+            button.setCheckable(True)
+            button.clicked.connect(self._on_tool_clicked)
+            button.pin_requested.connect(self._on_tool_pin_requested)
+            self._tool_buttons[tool] = button
+            layout.addWidget(button, 0, Qt.AlignHCenter)
+
     def set_badge(self, panel_id: str, count: int | None) -> None:
         """Set an exact count badge; zero/None intentionally shows no badge."""
         key = str(panel_id)
@@ -941,6 +1493,24 @@ class ToolRail(QFrame):
         panel_id = str(button.property("panel") or "")
         if panel_id in self._buttons:
             self.panel_requested.emit(panel_id)
+
+    def _on_tool_clicked(self) -> None:
+        button = self.sender()
+        if not isinstance(button, QToolButton) or not self._creation_enabled:
+            return
+        tool = str(button.property("authorTool") or "")
+        if tool not in self._tool_buttons:
+            return
+        self.set_active_tool(tool, pinned=False)
+        self.tool_requested.emit(tool)
+
+    def _on_tool_pin_requested(self, tool: str) -> None:
+        checked = str(tool)
+        if not self._creation_enabled or checked not in self._tool_buttons:
+            return
+        now_pinned = checked != self._pinned_tool
+        self.set_active_tool(checked, pinned=now_pinned)
+        self.tool_pinned_changed.emit(checked, now_pinned)
 
     def _on_free_grid_clicked(self) -> None:
         self.free_grid_toggled.emit(self._free_grid.isChecked())

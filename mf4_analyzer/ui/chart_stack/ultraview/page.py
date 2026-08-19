@@ -27,10 +27,12 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QShortcut,
     QStackedWidget,
     QToolButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -345,6 +347,7 @@ class UltraViewPage(QWidget):
         self._feedback_gate = FeedbackThrottle()
         self._monotonic = time.monotonic
         self._edge_pan_reentrant = False
+        self._edge_pan_global_pos: QPoint | None = None
         self._smooth_timer = QTimer(self)
         self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
         self._smooth_timer.setSingleShot(True)
@@ -1258,7 +1261,7 @@ class UltraViewPage(QWidget):
 
     def _extent_signature(self, board=None) -> tuple[int, int, int, int]:
         target = self._board if board is None else board
-        bounds = content_bounds(target.free_grid)
+        bounds = content_bounds(target.free_grid, author_objects=target.author_objects)
         return (bounds.column, bounds.row, bounds.column_span, bounds.row_span)
 
     def _persist_viewport_to_board(self) -> None:
@@ -1282,10 +1285,7 @@ class UltraViewPage(QWidget):
         the scale.
         """
         metrics = screen_grid_metrics(self._board.free_grid)
-        return (
-            float(metrics.column_width + metrics.gutter),
-            float(metrics.row_height + metrics.gutter),
-        )
+        return metrics.exact_pitch()
 
     def _visible_workspace_bounds(self) -> GridBounds:
         """Current scroll viewport expressed in signed free-grid cells.
@@ -1334,7 +1334,9 @@ class UltraViewPage(QWidget):
         viewport = self._board_scroll.viewport()
         if viewport.width() <= 0 or viewport.height() <= 0:
             return False
-        content = content_bounds(self._board.free_grid).union(
+        content = content_bounds(
+            self._board.free_grid, author_objects=self._board.author_objects
+        ).union(
             self._visible_workspace_bounds()
         )
         wanted = desired_extent(
@@ -1386,8 +1388,7 @@ class UltraViewPage(QWidget):
         extent = self._workspace_extent
         if extent is None:
             return (frame_w / 2.0, frame_h / 2.0)
-        pitch_x = float(metrics.column_width + metrics.gutter)
-        pitch_y = float(metrics.row_height + metrics.gutter)
+        pitch_x, pitch_y = metrics.exact_pitch()
         # FreeGridBoard renders signed cells relative to extent.column/row.
         # Keep the visible empty working frame centred on base-frame cells,
         # not on the negative halo's top-left corner.
@@ -1427,8 +1428,10 @@ class UltraViewPage(QWidget):
         self._edge_pan_active = True
         self._refresh_workspace_extent()
         if global_pos is not None:
-            # The timer deliberately samples QCursor on every tick; this first
-            # update only makes a just-entered activation band feel immediate.
+            # Keep the last event position for timer ticks.  This is the
+            # authoritative location during a native drag and avoids a stale
+            # platform cursor clearing a replacement hover between events.
+            self._edge_pan_global_pos = QPoint(global_pos)
             self._edge_pan_tick_for_global(global_pos)
         if not self._edge_pan_timer.isActive():
             self._edge_pan_timer.start()
@@ -1443,6 +1446,7 @@ class UltraViewPage(QWidget):
             self._edge_pan_timer.stop()
         self._edge_hint_since = None
         self._edge_copy = ""
+        self._edge_pan_global_pos = None
         self._feedback_gate.end_gesture(self._edge_gesture_id)
         self._clear_workspace_edge_hint()
 
@@ -1462,7 +1466,7 @@ class UltraViewPage(QWidget):
         if not self._edge_pan_active or self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
             self._stop_edge_pan()
             return
-        self._edge_pan_tick_for_global(QCursor.pos())
+        self._edge_pan_tick_for_global(self._edge_pan_global_pos or QCursor.pos())
 
     def _edge_pan_tick_for_global(self, global_pos) -> None:
         if global_pos is None or self._edge_pan_reentrant:
@@ -2161,8 +2165,9 @@ class UltraViewPage(QWidget):
         Library row highlight stays: empty-slot place reads it.
         """
         grid_cleared = self._free_grid.clear_selection()
+        author_cleared = self._free_grid.clear_author_selection()
         had = self._selected is not None
-        if not had and not grid_cleared:
+        if not had and not grid_cleared and not author_cleared:
             return False
         self._selected = None
         for card in self._grid.card_widgets():
@@ -2262,6 +2267,7 @@ class UltraViewPage(QWidget):
             if restore_panel is not None:
                 self._open_panel(restore_panel)
             self._refresh_card_context()
+        self._sync_authoring_availability()
         layout_size = self._board_layout_viewport_size()
         self._grid.set_viewport_size(layout_size)
         self._free_grid.set_viewport_size(layout_size)
@@ -2442,6 +2448,7 @@ class UltraViewPage(QWidget):
         self._display_card_actions.blockSignals(blocked)
         self._tool_rail.set_badge(PANEL_UNPLACED, n_unplaced)
         self._sync_layout_popover()
+        self._sync_authoring_availability()
         if self._drag_kind is not None:
             # Drop handlers mutate the board inside QDrag.exec_(). Rebuilding
             # library/grid/tray here would deleteLater the drag source before
@@ -2483,11 +2490,13 @@ class UltraViewPage(QWidget):
         self._overview.raise_()
         self._overview.show()
         self._overview.setFocus(Qt.OtherFocusReason)
+        self._sync_authoring_availability()
         self._sync_empty_board_cue()
 
     def hide_overview(self) -> None:
         if self._overview.isVisible():
             self._overview.hide()
+            self._sync_authoring_availability()
             self._sync_empty_board_cue()
 
     def _on_overview_slot(self, slot_id: str) -> None:
@@ -2567,7 +2576,9 @@ class UltraViewPage(QWidget):
             self.free_grid_redo_requested.emit()
 
     def _text_field_has_focus(self) -> bool:
-        return isinstance(QApplication.focusWidget(), QLineEdit)
+        return isinstance(
+            QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QTextEdit)
+        )
 
     def _viewport_router_is_active(self) -> bool:
         """Limit QApplication gesture routing to a shown Board host.
@@ -3132,6 +3143,7 @@ class UltraViewPage(QWidget):
             return
         if self._free_grid.card_widgets():
             self._free_grid.set_free_grid([], {})
+        self._free_grid.set_author_objects(())
         self._minimap.hide()
         self._board_stack.setCurrentWidget(self._grid)
         models: dict[str, CardViewModel | None] = {}
@@ -3219,6 +3231,19 @@ class UltraViewPage(QWidget):
             self._status_island.set_status("只读预览 · 不计算")
         self._refresh_card_context()
 
+    def _sync_authoring_availability(self) -> None:
+        """Enable creation controls exactly for an editable free-grid Board."""
+        if self._presentation:
+            self._tool_rail.set_creation_enabled(False, "演示模式中不能创建")
+            return
+        if self._overview.isVisible():
+            self._tool_rail.set_creation_enabled(False, "总览为只读视图")
+            return
+        if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            self._tool_rail.set_creation_enabled(False, "创作工具仅在自由网格中可用")
+            return
+        self._tool_rail.set_creation_enabled(True)
+
     def _refresh_card_context(self) -> None:
         """Card actions now live on each card; the floating island stays hidden."""
         self._card_context.clear_ref()
@@ -3262,6 +3287,7 @@ class UltraViewPage(QWidget):
         }
         self._board_stack.setCurrentWidget(self._free_grid)
         self._free_grid.set_free_grid(self._board.free_grid, models)
+        self._free_grid.set_author_objects(self._board.author_objects)
         # Selection/preview refreshes run through this projection too.  Do
         # not rebase the runtime coordinate plane for those view-only events;
         # board mutation, resize, zoom and edge-pan own extent growth.

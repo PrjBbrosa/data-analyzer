@@ -59,17 +59,28 @@ from mf4_analyzer.ui.ultraview_state import (
     GRID_MAX_ROW_SPAN,
     GRID_MIN_COLUMN_SPAN,
     GRID_MIN_ROW_SPAN,
+    GRID_RESOLUTION,
     SAFETY_COLUMN_MAX,
     SAFETY_COLUMN_MIN,
     SAFETY_ROW_MAX,
     SAFETY_ROW_MIN,
     FreeGridPlacement,
-    GridRect,
+    GridRect as _GridRect,
     default_board,
     make_ref,
     organized_placements,
     place_free_grid_from_unplaced,
 )
+
+
+def GridRect(column: int, row: int, column_span: int, row_span: int) -> _GridRect:
+    """Lift existing schema-4 fixtures into the schema-5 micro-grid."""
+    return _GridRect(
+        column * GRID_RESOLUTION,
+        row * GRID_RESOLUTION,
+        column_span * GRID_RESOLUTION,
+        row_span * GRID_RESOLUTION,
+    )
 
 
 def _placement(view_id: str, rect: GridRect) -> FreeGridPlacement:
@@ -80,10 +91,11 @@ def test_grid_metrics_keeps_twelve_columns_chrome_readable_and_scrollable():
     metrics = grid_metrics((1280, 800), [])
     assert metrics.column_width >= GRID_MIN_COLUMN_WIDTH
     assert metrics.board_width > 1280
+    physical_rows = GRID_MIN_VISIBLE_ROWS // GRID_RESOLUTION
     floor_h = (
         32
-        + GRID_MIN_VISIBLE_ROWS * GRID_ROW_HEIGHT
-        + (GRID_MIN_VISIBLE_ROWS - 1) * metrics.gutter
+        + physical_rows * GRID_ROW_HEIGHT
+        + (physical_rows - 1) * metrics.gutter
     )
     assert metrics.board_height == max(800, floor_h)
     assert metrics.content_width >= 12 * GRID_MIN_COLUMN_WIDTH + 11 * metrics.gutter
@@ -102,8 +114,29 @@ def test_grid_pixel_mapping_is_inside_logical_canvas_and_non_overlapping():
         assert x + width <= metrics.board_width - metrics.padding
         assert y + height <= metrics.board_height - metrics.padding
     assert not rects_overlap(placements[0].rect, placements[1].rect)
-    assert pixels_to_grid_delta((metrics.column_width + metrics.gutter, 0), metrics) == (1, 0)
-    assert pixels_to_grid_delta((0, -(metrics.row_height + metrics.gutter)), metrics) == (0, -1)
+    pitch_x, pitch_y = metrics.exact_pitch()
+    assert pixels_to_grid_delta((pitch_x, 0), metrics) == (1, 0)
+    assert pixels_to_grid_delta((0, -pitch_y), metrics) == (0, -1)
+
+
+def test_microgrid_keeps_a_schema4_card_on_its_legacy_pixel_rect():
+    """Doubling persistent cells must not move or resize existing cards."""
+    metrics = screen_grid_metrics(())
+    legacy = _GridRect(2, 3, 4, 3)
+    migrated = _GridRect(4, 6, 8, 6)
+
+    # This is the frozen schema-4 12-column / 88px-row geometry at 1600px.
+    old_pitch_x = (1600 - 2 * metrics.padding - 11 * metrics.gutter) // 12 + metrics.gutter
+    old_pitch_y = GRID_ROW_HEIGHT + metrics.gutter
+    expected = (
+        metrics.padding + legacy.column * old_pitch_x,
+        metrics.padding + legacy.row * old_pitch_y,
+        legacy.column_span * old_pitch_x - metrics.gutter,
+        legacy.row_span * old_pitch_y - metrics.gutter,
+    )
+
+    assert rect_to_pixels(migrated, metrics) == expected
+    assert pixels_to_grid_delta((old_pitch_x // 2, old_pitch_y // 2), metrics) == (1, 1)
 
 
 def test_move_resize_candidate_and_collision_rejection_are_deterministic():
@@ -113,11 +146,11 @@ def test_move_resize_candidate_and_collision_rejection_are_deterministic():
     assert not rect_is_available(candidate, [first, second], excluding=first.ref)
     resized = candidate_resize(first.rect, 2, 0)
     assert not rect_is_available(resized, [first, second], excluding=first.ref)
-    assert candidate_move(first.rect, -10, -10) == GridRect(-10, -10, 4, 3)
-    assert candidate_move(first.rect, -100, -100) == GridRect(
-        SAFETY_COLUMN_MIN, SAFETY_ROW_MIN, 4, 3
+    assert candidate_move(first.rect, -20, -20) == GridRect(-10, -10, 4, 3)
+    assert candidate_move(first.rect, -200, -200) == _GridRect(
+        SAFETY_COLUMN_MIN, SAFETY_ROW_MIN, 8, 6
     )
-    assert candidate_resize(first.rect, -10, -10) == GridRect(0, 0, 2, 2)
+    assert candidate_resize(first.rect, -10, -10) == _GridRect(0, 0, 4, 4)
 
 
 def test_organize_only_removes_fully_empty_rows_and_is_idempotent():
@@ -134,14 +167,14 @@ def test_clamp_rect_keeps_origin_plus_span_inside_safety():
     still_legal = clamp_rect(GridRect(11, 47, 6, 3))
     assert still_legal == GridRect(11, 47, 6, 3)
     overflow = clamp_rect(GridRect(58, 94, 6, 3))
-    assert overflow.column_span == 6
-    assert overflow.row_span == 3
+    assert overflow.column_span == 12
+    assert overflow.row_span == 6
     assert overflow.column + overflow.column_span <= SAFETY_COLUMN_MAX
     assert overflow.row + overflow.row_span <= SAFETY_ROW_MAX
-    assert overflow.column == SAFETY_COLUMN_MAX - 6
-    assert overflow.row == SAFETY_ROW_MAX - 3
+    assert overflow.column == SAFETY_COLUMN_MAX - 12
+    assert overflow.row == SAFETY_ROW_MAX - 6
     negative = clamp_rect(GridRect(-50, -50, 4, 3))
-    assert negative == GridRect(SAFETY_COLUMN_MIN, SAFETY_ROW_MIN, 4, 3)
+    assert negative == _GridRect(SAFETY_COLUMN_MIN, SAFETY_ROW_MIN, 8, 6)
 
 
 def test_export_grid_metrics_crop_short_boards_and_keep_screen_floor():
@@ -222,6 +255,28 @@ def test_fit_rect_for_aspect_prefers_side_gutter_over_bottom_gap():
     assert side + 1 >= bottom
 
 
+def test_microgrid_autofit_reduces_actual_preview_unused_fraction():
+    """A half-cell candidate improves a 4:3 capture beyond coarse even spans."""
+    metrics = screen_grid_metrics([])
+    image = (1600, 1200)
+    origin = _GridRect(0, 0, 8, 6)  # migrated schema-4 4×3 standard card
+
+    def unused_fraction(rect: _GridRect) -> float:
+        _x, _y, width, height = rect_to_pixels(rect, metrics)
+        plot_h = max(1, height - CARD_FIT_CHROME_HEIGHT)
+        reading_w, reading_h = preview_reading_box(width, plot_h, image)
+        return 1.0 - (reading_w * reading_h) / float(width * plot_h)
+
+    fitted = fit_rect_for_aspect(origin, image, metrics)
+    coarse = [
+        _GridRect(0, 0, columns, rows)
+        for columns in range(4, origin.column_span + 1, 2)
+        for rows in range(4, origin.row_span + 1, 2)
+    ]
+    assert fitted.column_span % GRID_RESOLUTION != 0
+    assert unused_fraction(fitted) < min(unused_fraction(rect) for rect in coarse)
+
+
 def test_fit_rect_for_aspect_grows_short_side_at_most_two_cells():
     """Shrink first; only the short side may grow, and by at most two cells."""
     metrics = screen_grid_metrics([])
@@ -294,8 +349,9 @@ def test_fit_rect_for_aspect_prefers_the_largest_span_on_a_tie():
     square = replace(metrics, column_width=metrics.row_height, gutter=0)
     origin = GridRect(0, 0, 4, 4)
     fitted = fit_rect_for_aspect(origin, (100, 100), square, chrome_height=0)
-    assert fitted == origin
-    assert (fitted.column_span, fitted.row_span) != (2, 2)
+    # A small source is not upscaled by the real card renderer, so minimizing
+    # actual unused area selects the smallest readable square micro-card.
+    assert fitted == GridRect(0, 0, 2, 2)
 
 
 def test_fit_rect_for_aspect_result_is_a_subset():
@@ -314,10 +370,10 @@ def test_place_free_grid_from_unplaced_honors_optional_span():
     board = default_board()
     ref = make_ref("time", "tray")
     board.unplaced.append(ref)
-    assert place_free_grid_from_unplaced(board, ref, span=(2, 5)) == []
+    assert place_free_grid_from_unplaced(board, ref, span=(4, 10)) == []
     item = board.free_grid[0]
     assert item.ref == ref
-    assert (item.rect.column_span, item.rect.row_span) == (2, 5)
+    assert (item.rect.column_span, item.rect.row_span) == (4, 10)
 
 
 def test_place_free_grid_from_unplaced_defaults_to_standard_span():
@@ -326,7 +382,7 @@ def test_place_free_grid_from_unplaced_defaults_to_standard_span():
     board.unplaced.append(ref)
     assert place_free_grid_from_unplaced(board, ref) == []
     item = board.free_grid[0]
-    assert (item.rect.column_span, item.rect.row_span) == (4, 3)
+    assert (item.rect.column_span, item.rect.row_span) == (8, 6)
 
 
 def test_insert_preview_uses_resolver_span_not_default(qapp):
@@ -335,18 +391,18 @@ def test_insert_preview_uses_resolver_span_not_default(qapp):
     from mf4_analyzer.ui.chart_stack.ultraview.widgets import FreeGridBoard
 
     board = FreeGridBoard()
-    board.set_default_insert_span((4, 3))
+    board.set_default_insert_span((8, 6))
     board.set_insert_span_resolver(
-        lambda section, view_id: (2, 5) if section == "frf" else None
+        lambda section, view_id: (4, 10) if section == "frf" else None
     )
     board._insert_drag_ref = ("frf", "bode")
     fitted = board._insertion_rect_at(QPoint(80, 80))
     assert fitted is not None
-    assert (fitted.column_span, fitted.row_span) == (2, 5)
+    assert (fitted.column_span, fitted.row_span) == (4, 10)
     board._insert_drag_ref = ("time", "missing-preview")
     fallback = board._insertion_rect_at(QPoint(80, 80))
     assert fallback is not None
-    assert (fallback.column_span, fallback.row_span) == (4, 3)
+    assert (fallback.column_span, fallback.row_span) == (8, 6)
 
 
 def test_card_preview_pixmap_is_centered_not_stretched(qapp, qtbot):
@@ -416,8 +472,8 @@ def test_gesture_move_plans_overlap_as_legal_same_size_translate():
     assert session.legal is True
     assert session.plan is not None and session.plan.accepted
     displaced = {item.ref: item.after for item in session.plan.displaced_before_after}
-    assert displaced[make_ref("time", "b")].column_span == 4
-    assert displaced[make_ref("time", "b")].row_span == 3
+    assert displaced[make_ref("time", "b")].column_span == 8
+    assert displaced[make_ref("time", "b")].row_span == 6
     cancelled = gesture.cancel()
     assert cancelled is session
     assert gesture.is_armed() is False
@@ -535,12 +591,12 @@ def test_resize_handle_snaps_clamps_and_keeps_aspect():
     unit = metrics.column_width + metrics.gutter
     grown = snapped_resize_rect(origin, (unit * 2, 0), metrics, "e")
     assert grown == GridRect(0, 0, 8, 3)
-    assert grown.column_span <= 12
+    assert grown.column_span <= GRID_MAX_COLUMN_SPAN
     clamped = candidate_resize_handle(origin, "e", 40, 0)
-    assert clamped.column_span == 12
-    assert clamped.row_span == 3
+    assert clamped.column_span == GRID_MAX_COLUMN_SPAN
+    assert clamped.row_span == 6
     shrunk = candidate_resize_handle(origin, "e", -40, 0)
-    assert shrunk.column_span == 2
+    assert shrunk.column_span == GRID_MIN_COLUMN_SPAN
     ratio = keep_aspect_resize(origin, GridRect(0, 0, 8, 3), "e")
     assert ratio == GridRect(0, 0, 8, 4)
     gesture = FreeGridGesture()
@@ -549,9 +605,9 @@ def test_resize_handle_snaps_clamps_and_keeps_aspect():
         (100 + unit * 2, 50), metrics, [_placement("a", origin)], 1, keep_aspect=True
     )
     assert session is not None
-    assert session.badge() == "8×4"
-    assert session.candidate.column_span <= 12
-    assert session.candidate.row_span <= 8
+    assert session.badge() == "16×8"
+    assert session.candidate.column_span <= GRID_MAX_COLUMN_SPAN
+    assert session.candidate.row_span <= GRID_MAX_ROW_SPAN
 
 
 def test_union_and_group_translate_reject_overflow_or_union_collision():
@@ -564,17 +620,17 @@ def test_union_and_group_translate_reject_overflow_or_union_collision():
         make_ref("time", "a"): first,
         make_ref("time", "b"): second,
     }
-    down, legal_down = group_translate_rects(selected, (), 0, 1)
+    down, legal_down = group_translate_rects(selected, (), 0, GRID_RESOLUTION)
     assert legal_down is True
     assert down[make_ref("time", "a")] == GridRect(0, 1, 6, 3)
     assert down[make_ref("time", "b")] == GridRect(6, 1, 6, 3)
-    _across_base, legal_right = group_translate_rects(selected, (), 1, 0)
+    _across_base, legal_right = group_translate_rects(selected, (), GRID_RESOLUTION, 0)
     assert legal_right is True
     _overflow, legal_past_safety = group_translate_rects(
         selected, (), SAFETY_COLUMN_MAX, 0
     )
     assert legal_past_safety is False
-    _blocked, legal_blocked = group_translate_rects(selected, (blocker,), 0, 1)
+    _blocked, legal_blocked = group_translate_rects(selected, (blocker,), 0, GRID_RESOLUTION)
     assert legal_blocked is False
     empty, legal_empty = group_translate_rects({}, (), 1, 0)
     assert legal_empty is False
@@ -604,17 +660,17 @@ def test_overlap_avoidance_slides_blocker_past_the_old_twelve_column_wall():
 
 
 def test_overlap_avoidance_slides_blocker_down_when_safety_right_is_blocked():
-    first = _placement("a", GridRect(SAFETY_COLUMN_MAX - 12, 0, 6, 3))
-    second = _placement("b", GridRect(SAFETY_COLUMN_MAX - 6, 0, 6, 3))
+    first = _placement("a", _GridRect(SAFETY_COLUMN_MAX - 24, 0, 12, 6))
+    second = _placement("b", _GridRect(SAFETY_COLUMN_MAX - 12, 0, 12, 6))
     updates, ok = plan_overlap_avoidance(
-        {first.ref: GridRect(SAFETY_COLUMN_MAX - 6, 0, 6, 3)},
+        {first.ref: _GridRect(SAFETY_COLUMN_MAX - 12, 0, 12, 6)},
         [first, second],
         preferred=(1, 0),
     )
     assert ok is True
     by_ref = dict(updates)
-    assert by_ref[first.ref] == GridRect(SAFETY_COLUMN_MAX - 6, 0, 6, 3)
-    assert by_ref[second.ref] == GridRect(SAFETY_COLUMN_MAX - 6, 3, 6, 3)
+    assert by_ref[first.ref] == _GridRect(SAFETY_COLUMN_MAX - 12, 0, 12, 6)
+    assert by_ref[second.ref] == _GridRect(SAFETY_COLUMN_MAX - 12, 6, 12, 6)
 
 
 def test_overlap_avoidance_slides_blocker_along_preferred_axis_when_open():
@@ -644,7 +700,7 @@ def test_overlap_avoidance_slides_past_the_old_twelve_column_wall():
     by_ref = dict(updates)
     assert by_ref[cards[0].ref] == GridRect(0, 1, 12, 8)
     blocker = by_ref[cards[1].ref]
-    assert (blocker.column_span, blocker.row_span) == (12, 8)
+    assert (blocker.column_span, blocker.row_span) == (24, 16)
     assert blocker.column + blocker.column_span > GRID_COLUMNS or blocker.row != 8
 
 
@@ -723,13 +779,13 @@ def test_plan_layout_move_keeps_every_span():
     assert plan.based_on_layout_revision == 7
     assert plan.mover_before == first.rect
     assert plan.mover_after == GridRect(6, 0, 6, 3)
-    assert plan.mover_after.column_span == 6
-    assert plan.mover_after.row_span == 3
+    assert plan.mover_after.column_span == 12
+    assert plan.mover_after.row_span == 6
     blocker = plan.displaced_before_after[0]
     assert blocker.ref == second.ref
     assert blocker.before == second.rect
-    assert blocker.after.column_span == 6
-    assert blocker.after.row_span == 3
+    assert blocker.after.column_span == 12
+    assert blocker.after.row_span == 6
     assert blocker.after == GridRect(12, 0, 6, 3)
 
 
@@ -746,8 +802,8 @@ def test_plan_layout_resize_only_changes_mover_span():
     assert plan.accepted is True
     assert plan.mover_after == GridRect(0, 0, 8, 3)
     blocker = plan.displaced_before_after[0]
-    assert blocker.after.column_span == 6
-    assert blocker.after.row_span == 3
+    assert blocker.after.column_span == 12
+    assert blocker.after.row_span == 6
     assert blocker.after.column != blocker.before.column or blocker.after.row != blocker.before.row
 
 
@@ -891,18 +947,18 @@ def test_search_cap_reject_is_distinct_from_no_legal_layout():
 
 
 def test_neighbor_shrink_packs_blockers_into_remaining_columns():
-    right_top = _placement("a", GridRect(SAFETY_COLUMN_MAX - 4, 0, 4, 3))
-    right_bottom = _placement("b", GridRect(SAFETY_COLUMN_MAX - 4, 3, 4, 3))
-    mover = _placement("c", GridRect(SAFETY_COLUMN_MAX - 12, 0, 8, 6))
+    right_top = _placement("a", _GridRect(SAFETY_COLUMN_MAX - 8, 0, 8, 6))
+    right_bottom = _placement("b", _GridRect(SAFETY_COLUMN_MAX - 8, 6, 8, 6))
+    mover = _placement("c", _GridRect(SAFETY_COLUMN_MAX - 24, 0, 16, 12))
     updates, ok = plan_neighbor_shrink(
-        {mover.ref: GridRect(SAFETY_COLUMN_MAX - 12, 0, 10, 6)},
+        {mover.ref: _GridRect(SAFETY_COLUMN_MAX - 24, 0, 20, 12)},
         [right_top, right_bottom, mover],
     )
     assert ok is True
     by_ref = dict(updates)
-    assert by_ref[mover.ref] == GridRect(SAFETY_COLUMN_MAX - 12, 0, 10, 6)
-    assert by_ref[right_top.ref] == GridRect(SAFETY_COLUMN_MAX - 2, 0, 2, 3)
-    assert by_ref[right_bottom.ref] == GridRect(SAFETY_COLUMN_MAX - 2, 3, 2, 3)
+    assert by_ref[mover.ref] == _GridRect(SAFETY_COLUMN_MAX - 24, 0, 20, 12)
+    assert by_ref[right_top.ref] == _GridRect(SAFETY_COLUMN_MAX - 4, 0, 4, 6)
+    assert by_ref[right_bottom.ref] == _GridRect(SAFETY_COLUMN_MAX - 4, 6, 4, 6)
 
 
 def test_neighbor_shrink_fails_below_minimum_span():
@@ -932,11 +988,10 @@ def test_rect_to_pixels_supports_negative_cells_without_rebasing():
     x0, y0, w0, h0 = rect_to_pixels(origin, metrics)
     xn, yn, wn, hn = rect_to_pixels(negative, metrics)
     assert (wn, hn) == (w0, h0)
-    unit_x = metrics.column_width + metrics.gutter
-    unit_y = metrics.row_height + metrics.gutter
-    assert xn == x0 - 4 * unit_x
-    assert yn == y0 - 3 * unit_y
-    shifted = rect_to_pixels(negative, metrics, origin_offset=(-4, -3))
+    unit_x, unit_y = metrics.exact_pitch()
+    assert xn == x0 - int(round(8 * unit_x))
+    assert yn == y0 - int(round(6 * unit_y))
+    shifted = rect_to_pixels(negative, metrics, origin_offset=(-8, -6))
     assert shifted == (x0, y0, w0, h0)
     assert negative == GridRect(-4, -3, 4, 3)
 
@@ -1012,7 +1067,7 @@ def test_plan_auto_arrange_compacts_unlike_empty_row_organize():
         _placement("right", GridRect(8, 10, 4, 3)),
     ]
     organized = organized_placements(placements)
-    assert organized[0].rect.column == 8
+    assert organized[0].rect.column == 16
     plan = plan_auto_arrange(placements)
     assert plan.accepted is True
     updates = dict(plan.committed_updates())

@@ -24,6 +24,8 @@ from mf4_analyzer.ui.ultraview_state import (
     make_ref,
     membership_set,
     GridRect,
+    GRID_RESOLUTION,
+    free_grid_default_span,
     set_free_grid_rects,
 )
 
@@ -43,9 +45,24 @@ def _publish(uv, ref: UltraViewRef, width: int, height: int) -> None:
     )
 
 
+def _legacy_rect(
+    column: int, row: int, column_span: int, row_span: int
+) -> GridRect:
+    """Express a pre-schema-5 fixture in the persisted micro-grid."""
+    return GridRect(
+        column * GRID_RESOLUTION,
+        row * GRID_RESOLUTION,
+        column_span * GRID_RESOLUTION,
+        row_span * GRID_RESOLUTION,
+    )
+
+
 def _fitted_span(board, image_size: tuple[int, int]) -> tuple[int, int]:
+    column_span, row_span = free_grid_default_span(board)
     wanted = fit_rect_for_aspect(
-        GridRect(0, 0, 4, 3), image_size, screen_grid_metrics(board.free_grid)
+        GridRect(0, 0, column_span, row_span),
+        image_size,
+        screen_grid_metrics(board.free_grid),
     )
     return wanted.column_span, wanted.row_span
 
@@ -67,6 +84,28 @@ def test_add_with_preview_shrinks_on_first_insert(qapp, qtbot):
     assert len(history.undo) == 1
 
 
+def test_add_with_retina_preview_uses_logical_pixels_for_first_fit(
+    qapp, qtbot, monkeypatch
+):
+    """A raw DPR=2 capture must not make the new card reserve 2× the space."""
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    monkeypatch.setattr(uv, "_preview_fit_device_pixel_ratio", lambda: 2.0)
+    _publish(uv, ref, 800, 200)
+
+    assert uv._preview_fit_image_size(ref) == (400, 100)
+    uv._apply_add_ref(ref)
+
+    item = free_grid_placement_for(uv.board, ref)
+    assert item is not None
+    expected = _fitted_span(uv.board, (400, 100))
+    raw_pixel_expected = _fitted_span(uv.board, (800, 200))
+    assert (item.rect.column_span, item.rect.row_span) == expected
+    assert expected != raw_pixel_expected
+
+
 def test_add_without_preview_applies_once_if_span_unchanged(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
@@ -75,7 +114,7 @@ def test_add_without_preview_applies_once_if_span_unchanged(qapp, qtbot):
     uv._apply_add_ref(ref)
     item = free_grid_placement_for(uv.board, ref)
     assert item is not None
-    assert item.rect == GridRect(0, 0, 4, 3)
+    assert item.rect == _legacy_rect(0, 0, 4, 3)
     assert (uv.board.board_id, ref) in uv._pending_auto_aspect
     _publish(uv, ref, 800, 200)
     uv._push_preview(ref)
@@ -96,14 +135,14 @@ def test_resize_and_preset_cancel_pending_but_move_does_not(qapp, qtbot):
     moved = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     uv._apply_add_ref(moved)
     uv._on_free_grid_geometry(
-        moved.section, moved.view_id, 8, 0, 4, 3, "drag-move"
+        moved.section, moved.view_id, 16, 0, 8, 6, "drag-move"
     )
     assert (uv.board.board_id, moved) in uv._pending_auto_aspect
     _publish(uv, moved, 800, 200)
     uv._push_preview(moved)
     item = free_grid_placement_for(uv.board, moved)
     expected = fit_rect_for_aspect(
-        GridRect(8, 0, 4, 3),
+        _legacy_rect(8, 0, 4, 3),
         (800, 200),
         screen_grid_metrics(uv.board.free_grid),
     )
@@ -118,8 +157,8 @@ def test_resize_and_preset_cancel_pending_but_move_does_not(qapp, qtbot):
         resized.view_id,
         current.rect.column,
         current.rect.row,
+        12,
         6,
-        3,
         "drag-resize",
     )
     assert (uv.board.board_id, resized) not in uv._pending_auto_aspect
@@ -148,7 +187,7 @@ def test_remove_undo_redo_restores_exact_membership_and_geometry(qapp, qtbot, mo
     fft_ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
     uv._apply_add_ref(time_ref)
     uv._apply_add_ref(fft_ref)
-    uv._on_free_grid_geometry(fft_ref.section, fft_ref.view_id, 6, 4, 4, 3, "drag-move")
+    uv._on_free_grid_geometry(fft_ref.section, fft_ref.view_id, 12, 8, 8, 6, "drag-move")
     parked = {item.ref: item.rect for item in uv.board.free_grid}
     uv._on_remove_ref(fft_ref.section, fft_ref.view_id)
     assert fft_ref not in membership_set(uv.board)
@@ -187,7 +226,7 @@ def test_membership_edits_do_not_wipe_prior_move_history(qapp, qtbot):
     time_ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
     fft_ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
     uv._apply_add_ref(time_ref)
-    uv._on_free_grid_geometry(time_ref.section, time_ref.view_id, 0, 6, 4, 3, "drag-move")
+    uv._on_free_grid_geometry(time_ref.section, time_ref.view_id, 0, 12, 8, 6, "drag-move")
     history = uv._grid_histories[uv.board.board_id]
     assert len(history.undo) == 2
     uv._apply_add_ref(fft_ref)
@@ -196,7 +235,7 @@ def test_membership_edits_do_not_wipe_prior_move_history(qapp, qtbot):
     assert fft_ref not in membership_set(uv.board)
     moved = free_grid_placement_for(uv.board, time_ref)
     assert moved is not None
-    assert moved.rect.row == 6
+    assert moved.rect.row == 12
     uv._on_free_grid_undo()
     assert free_grid_placement_for(uv.board, time_ref).rect.row == 0
 
@@ -279,7 +318,7 @@ def test_tray_place_without_preview_keeps_pending_auto_aspect(qapp, qtbot):
     uv._on_place_free_grid_from_unplaced(ref.section, ref.view_id)
     item = free_grid_placement_for(uv.board, ref)
     assert item is not None
-    assert item.rect == GridRect(0, 0, 4, 3)
+    assert item.rect == _legacy_rect(0, 0, 4, 3)
     assert (uv.board.board_id, ref) in uv._pending_auto_aspect
 
 
@@ -318,8 +357,8 @@ def test_auto_arrange_undo_redo_restores_every_rect(qapp, qtbot):
     warnings = set_free_grid_rects(
         uv.board,
         (
-            (first, GridRect(8, 6, 4, 3)),
-            (second, GridRect(0, 14, 6, 3)),
+            (first, _legacy_rect(8, 6, 4, 3)),
+            (second, _legacy_rect(0, 14, 6, 3)),
         ),
     )
     assert warnings == []

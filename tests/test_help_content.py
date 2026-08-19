@@ -279,14 +279,14 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "Esc", "演示", "UltraView（总览）", "View 栏最右侧 UltraView",
         "Board", "自由网格", "12 列", "24 张", "Option+Shift", "Ctrl+Shift+Z",
         "minimap", "直接拖卡片", "框选", "替换环",
-        "Ctrl+滚轮", "适应", "25%", "300%", "只缩不放", "双击",
+        "Ctrl+滚轮", "适应", "25%", "300%", "减少留白", "双击",
         "标题卡", "类型标签", "完整 ghost",
         "点行切换", "拖拽排序", "行尾复制",
         "一键更新源",
         "基准网格", "导出标尺", "四向平移", "自动适应", "切换 Board", "适应内容",
         "临时聚焦", "不删除源 View", "200", "Ctrl/Cmd+Z",
         "常驻可关", "当前工程的所有 Board", "保存项目后保留",
-        "schema 4", "自动排版", "空白处右击", "右键按住", "左键按住空白框选",
+        "schema 4", "schema 5", "24 列微格", "自动排版", "空白处右击", "右键按住", "左键按住空白框选",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (
