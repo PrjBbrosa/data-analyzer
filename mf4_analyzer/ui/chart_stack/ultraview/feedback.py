@@ -24,6 +24,7 @@ REMOVED_FROM_BOARD = "removed_from_board"
 EXPORT_TOO_LARGE = "export_too_large"
 SEARCH_CAP = "search_cap"
 DISPLACED_OFFSCREEN = "displaced_offscreen"
+DISPLACE_PREVIEW = "displace_preview"
 REMOVE_ACTION = "remove_action"
 AUTHOR_LOCKED = "author_locked"
 
@@ -39,6 +40,7 @@ COPY: dict[str, str] = {
     EXPORT_TOO_LARGE: "{width}×{height} 超出导出上限 · 改用 1× 或整理卡片",
     SEARCH_CAP: "布局搜索超出预算 · 可先整理 Board 再试",
     DISPLACED_OFFSCREEN: "被让位的卡片已移出可视区 · 四向平移查看",
+    DISPLACE_PREVIEW: "让位 {n} 张",
     REMOVE_ACTION: "从当前 Board 移除（不删除源 View）",
     AUTHOR_LOCKED: "对象已锁定，不能移动、缩放或删除",
 }
@@ -56,6 +58,7 @@ ACCESSIBLE: dict[str, str] = {
     EXPORT_TOO_LARGE: COPY[EXPORT_TOO_LARGE],
     SEARCH_CAP: COPY[SEARCH_CAP],
     DISPLACED_OFFSCREEN: COPY[DISPLACED_OFFSCREEN],
+    DISPLACE_PREVIEW: COPY[DISPLACE_PREVIEW],
     REMOVE_ACTION: COPY[REMOVE_ACTION],
     AUTHOR_LOCKED: COPY[AUTHOR_LOCKED],
 }
@@ -123,6 +126,10 @@ def text_for_reason(reason: LayoutRejectReason | None) -> str:
 
 def format_rearranged(n: int) -> str:
     return text_for_key(REARRANGED, n=int(n))
+
+
+def format_displace_preview(n: int) -> str:
+    return text_for_key(DISPLACE_PREVIEW, n=int(n))
 
 
 def format_export_too_large(width: int, height: int) -> str:

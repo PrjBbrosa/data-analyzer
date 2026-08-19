@@ -49,6 +49,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED, PANEL_BOARDS
 from mf4_analyzer.ui.chart_stack.ultraview.feedback import COPY, CONTINUE_EXPAND, format_rearranged
+from mf4_analyzer.ui.chart_stack.ultraview.ghost_overlay import PREVIEW_DISPLACED_WARNING
 from mf4_analyzer.ui.chart_stack.ultraview.page import (
     BOARD_MENU_ARRANGE,
     BOARD_MENU_COPY,
@@ -2301,9 +2302,8 @@ def test_drag_over_neighbour_and_back_leaves_no_dim_behind(qtbot):
     """Dragging across a neighbour and back must not leave a drag effect.
 
     Recovery R1 stopped allocating ``QGraphicsOpacityEffect`` mid-gesture.
-    The mover keeps a shell-only placeholder; displaced neighbours stay
-    opaque and are previewed as overlay outlines. Leaving the plan must
-    still restore the mover placeholder set on the same consumed sample.
+    Live cards stay intact; origin wash and displaced previews paint on
+    the overlay. Leaving the plan must not leave a dim/effect behind.
     """
     harness = _Harness(qtbot)
     free, (card, other) = _prepare_free_grid(harness, qtbot, "dim-0", "dim-1")
@@ -2320,8 +2320,9 @@ def test_drag_over_neighbour_and_back_leaves_no_dim_behind(qtbot):
     assert free.gesture().is_active()
     assert other.graphicsEffect() is None
     assert other._drag_shell_only is False
-    assert card._drag_shell_only is True
+    assert card._drag_shell_only is False
     assert len(free._overlay._highlights) >= 2
+    assert PREVIEW_DISPLACED_WARNING in free._overlay.preview_roles()
     _send_mouse_move(card, start)
     session = free.gesture().session()
     assert session is not None and session.plan is not None
@@ -2348,7 +2349,7 @@ def test_cancelled_drag_restores_every_dimmed_card(qtbot):
     start = QPoint(16, 16)
     QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
     _send_mouse_move(card, QPoint(start.x() + unit * 6, start.y()))
-    assert card._drag_shell_only is True
+    assert card._drag_shell_only is False
     assert other.graphicsEffect() is None
     assert other._drag_shell_only is False
     assert free.cancel_gesture() is True
@@ -3258,7 +3259,8 @@ def test_free_grid_edge_drop_rejects_without_shrinking_neighbors(qtbot):
     overlay = free.ghost_overlay()
     assert overlay.is_showing()
     assert overlay._legal is False
-    assert overlay._reject_mark is True
+    assert overlay._safety_wall is True
+    assert overlay._reject_mark is False
     assert overlay.edge_hint_mode() == "safety"
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
     assert requested == []
@@ -3336,7 +3338,8 @@ def test_safety_bounds_use_copper_wall_not_base_frame(qtbot):
     assert overlay.is_showing()
     assert overlay.edge_hint_mode() == "safety"
     assert overlay._legal is False
-    assert overlay._reject_mark is True
+    assert overlay._safety_wall is True
+    assert overlay._reject_mark is False
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, QPoint(24 - unit * 2, 24))
 
 

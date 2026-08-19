@@ -23,6 +23,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.feedback import (
     SEARCH_CAP,
     FeedbackThrottle,
     accessible_for_key,
+    format_displace_preview,
     format_export_too_large,
     format_rearranged,
     key_for_reason,
@@ -75,6 +76,8 @@ def test_stable_copy_strings():
     )
     assert COPY[REMOVE_ACTION] == "从当前 Board 移除（不删除源 View）"
     assert format_rearranged(3) == "已重排 3 张 · Ctrl/Cmd+Z 撤销"
+    assert format_displace_preview(1) == "让位 1 张"
+    assert format_displace_preview(3) == "让位 3 张"
     assert format_export_too_large(9000, 12000) == (
         "9000×12000 超出导出上限 · 改用 1× 或整理卡片"
     )

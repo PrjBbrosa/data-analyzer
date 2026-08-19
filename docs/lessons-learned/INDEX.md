@@ -205,6 +205,7 @@ lesson by default.
 | [UltraView Micro-grid Coordinate Space](2026-08-19-ultraview-microgrid-coordinate-space.md) | Increasing Free Grid placement precision or changing its persisted coordinate scale. | See lesson |
 | [UltraView Preview Fit Uses Logical Pixels](pyqt-ui/2026-08-19-ultraview-preview-logical-fit.md) | Changing an UltraView preview-to-Free-Grid aspect-fit path. | See lesson |
 | [UltraView Card Fit Hugs Current Scale](pyqt-ui/2026-08-20-ultraview-card-fit-hugs-current-scale.md) | Changing UltraView Card Fit / 「按原图比例」, `solve_card_fit`, `fit_rect_for_aspect`, first-insert auto-aspect, or spec F3. | See lesson |
+| [UltraView Preview Paints Every Plan Rect](pyqt-ui/2026-08-20-ultraview-preview-paints-every-plan-rect.md) | Changing UltraView free-grid drag/resize preview, `GhostOverlay.set_move_previews`, pointer coalescing, or collision/safety paint. | See lesson |
 
 ## Selection Rules
 

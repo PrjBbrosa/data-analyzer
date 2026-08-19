@@ -31,6 +31,15 @@ _BADGE_PAD_Y = 4
 _BRAND = QColor(titanium_color("brand"))
 _COPPER = QColor(titanium_color("copper"))
 _INK = QColor(titanium_color("ink"))
+ORIGIN_MASK_FILL = QColor(246, 248, 247, 200)
+ORIGIN_MASK_PEN = QColor(15, 23, 42, 36)
+
+PREVIEW_MOVER_VALID = "mover_valid"
+PREVIEW_DISPLACED_WARNING = "displaced_warning"
+PREVIEW_COLLISION_REJECT = "collision_reject"
+PREVIEW_SAFETY_WALL = "safety_wall"
+
+_GhostItem = tuple[QImage | QPixmap | None, QRect, str]
 
 
 class GhostOverlay(QWidget):
@@ -52,6 +61,8 @@ class GhostOverlay(QWidget):
         "_viewport_rect",
         "_safety_bounds_rect",
         "_safety_sides",
+        "_origin_masks",
+        "_displace_copy",
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -60,7 +71,7 @@ class GhostOverlay(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
-        self._ghosts: tuple[tuple[QImage | QPixmap | None, QRect], ...] = ()
+        self._ghosts: tuple[_GhostItem, ...] = ()
         self._highlights: tuple[QRect, ...] = ()
         self._legal = True
         self._badge = ""
@@ -75,6 +86,8 @@ class GhostOverlay(QWidget):
         self._viewport_rect: QRect | None = None
         self._safety_bounds_rect: QRect | None = None
         self._safety_sides: tuple[str, ...] = ()
+        self._origin_masks: tuple[QRect, ...] = ()
+        self._displace_copy = ""
         self.hide()
 
     @property
@@ -103,7 +116,15 @@ class GhostOverlay(QWidget):
             or self._continue_sides
             or self._safety_sides
             or self._hint_copy
+            or self._origin_masks
+            or self._displace_copy
         )
+
+    def preview_roles(self) -> tuple[str, ...]:
+        return tuple(role for _image, _rect, role in self._ghosts)
+
+    def ghost_images(self) -> tuple[QImage | QPixmap | None, ...]:
+        return tuple(image for image, _rect, _role in self._ghosts)
 
     def edge_hint_mode(self) -> str | None:
         """``safety`` wall, ``continue`` fade, or no edge hint."""
@@ -187,6 +208,8 @@ class GhostOverlay(QWidget):
         self._badge = ""
         self._reject_mark = False
         self._safety_wall = False
+        self._origin_masks = ()
+        self._displace_copy = ""
         self._present()
 
     def set_move_preview(
@@ -209,7 +232,7 @@ class GhostOverlay(QWidget):
 
     def set_move_previews(
         self,
-        ghosts: Sequence[tuple[QImage | QPixmap | None, Rect]],
+        ghosts: Sequence[tuple],
         highlights: Sequence[Rect],
         *,
         legal: bool,
@@ -218,16 +241,27 @@ class GhostOverlay(QWidget):
         safety_wall: bool = False,
         safety_bounds: QRect | None = None,
         safety_sides: Sequence[str] = (),
+        origin_masks: Sequence[Rect] = (),
+        displace_copy: str = "",
     ) -> None:
         old_dirty = self._preview_dirty_rect()
         old_signature = self._preview_signature()
-        self._ghosts = tuple(
-            (image, QRect(*ghost)) for image, ghost in ghosts if ghost is not None
-        )
+        parsed: list[_GhostItem] = []
+        for index, item in enumerate(ghosts):
+            if not item or item[1] is None:
+                continue
+            parsed.append(
+                _coerce_preview_item(
+                    item, index=index, legal=legal, safety_wall=safety_wall
+                )
+            )
+        self._ghosts = tuple(parsed)
         self._highlights = tuple(QRect(*item) for item in highlights)
+        self._origin_masks = tuple(QRect(*item) for item in origin_masks)
+        self._displace_copy = str(displace_copy or "")
         self._legal = bool(legal)
         self._safety_wall = bool(safety_wall)
-        self._reject_mark = not self._legal
+        self._reject_mark = (not self._legal) and (not self._safety_wall)
         self._badge = str(badge)
         if self._safety_wall:
             self._safety_bounds_rect = (
@@ -242,8 +276,13 @@ class GhostOverlay(QWidget):
         )
         if (
             self._preview_signature() == old_signature
-            and self.isVisible() == bool(self._has_content())
+            and self.isVisible()
+            and self._has_content()
         ):
+            # Same geometry still needs a full composite. A skipped paint
+            # leaves a blank translucent layer over the live cards.
+            self.raise_()
+            self.update()
             return
         self._present(self._united_dirty(old_dirty, self._preview_dirty_rect()))
 
@@ -262,6 +301,8 @@ class GhostOverlay(QWidget):
         self._viewport_rect = None
         self._safety_bounds_rect = None
         self._safety_sides = ()
+        self._origin_masks = ()
+        self._displace_copy = ""
         self.hide()
         self.update()
 
@@ -273,12 +314,17 @@ class GhostOverlay(QWidget):
                 ghost.y(),
                 ghost.width(),
                 ghost.height(),
+                role,
             )
-            for image, ghost in self._ghosts
+            for image, ghost, role in self._ghosts
         )
         highlights = tuple(
             (item.x(), item.y(), item.width(), item.height())
             for item in self._highlights
+        )
+        origins = tuple(
+            (item.x(), item.y(), item.width(), item.height())
+            for item in self._origin_masks
         )
         handles = None
         if self._handles_rect is not None:
@@ -291,20 +337,28 @@ class GhostOverlay(QWidget):
         return (
             ghosts,
             highlights,
+            origins,
             self._legal,
             self._badge,
+            self._displace_copy,
             handles,
             self._safety_wall,
             self._reject_mark,
         )
 
     def _preview_dirty_rect(self) -> QRect:
-        boxes = [ghost for _image, ghost in self._ghosts]
+        boxes = [ghost for _image, ghost, _role in self._ghosts]
         boxes.extend(self._highlights)
+        boxes.extend(self._origin_masks)
         if self._handles_rect is not None:
             boxes.append(self._handles_rect)
         if self._badge and self._highlights:
             boxes.append(self._highlights[0].adjusted(0, 0, 0, 0))
+        if self._displace_copy:
+            for _image, ghost, role in self._ghosts:
+                if role == PREVIEW_DISPLACED_WARNING:
+                    boxes.append(ghost)
+                    break
         if self._safety_bounds_rect is not None:
             boxes.append(self._safety_bounds_rect)
         if not boxes:
@@ -324,22 +378,16 @@ class GhostOverlay(QWidget):
         return old.united(new)
 
     def _present(self, dirty: QRect | None = None) -> None:
+        # Translucent Cocoa backing stores drop pixels outside a clipped
+        # update(). Always repaint the whole overlay; dirty is only a
+        # coalescing hint for callers.
         if not self._has_content():
             self.hide()
             return
-        first_show = not self.isVisible()
-        if first_show:
+        if not self.isVisible():
             self.show()
-            self.raise_()
-            dirty = None
-        if dirty is None or dirty.isNull() or not dirty.isValid():
-            self.update()
-            return
-        clipped = dirty.intersected(self.rect()) if self.rect().isValid() else dirty
-        if clipped.isEmpty():
-            self.update()
-            return
-        self.update(clipped)
+        self.raise_()
+        self.update()
 
     def _paint_continue_hint(self, painter: QPainter) -> None:
         if not self._continue_sides:
@@ -403,6 +451,45 @@ class GhostOverlay(QWidget):
             text,
         )
 
+    def _paint_origin_masks(self, painter: QPainter) -> None:
+        """Static wash over live cards. Overlay-owned; no widget opacity."""
+        if not self._origin_masks:
+            return
+        painter.setPen(QPen(ORIGIN_MASK_PEN, 1))
+        painter.setBrush(ORIGIN_MASK_FILL)
+        for rect in self._origin_masks:
+            painter.drawRect(rect)
+
+    def _paint_displace_badge(self, painter: QPainter) -> None:
+        anchor = None
+        for index, (_image, ghost, role) in enumerate(self._ghosts):
+            if role == PREVIEW_DISPLACED_WARNING:
+                if index < len(self._highlights):
+                    anchor = self._highlights[index]
+                else:
+                    anchor = ghost
+                break
+        if anchor is None:
+            return
+        font = QFont(painter.font())
+        font.setPixelSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        text = str(self._displace_copy)
+        metrics = painter.fontMetrics()
+        width = metrics.horizontalAdvance(text) + 2 * _BADGE_PAD_X
+        height = metrics.height() + 2 * _BADGE_PAD_Y
+        chip = QRect(anchor.left() + 6, anchor.top() + 6, width, height)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(ILLEGAL_PEN))
+        painter.drawRoundedRect(chip, 4, 4)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(
+            chip.adjusted(_BADGE_PAD_X, 0, -_BADGE_PAD_X, 0),
+            Qt.AlignVCenter | Qt.AlignLeft,
+            text,
+        )
+
     def _paint_safety_wall(self, painter: QPainter) -> None:
         if not self._safety_sides or self._safety_bounds_rect is None:
             return
@@ -423,23 +510,31 @@ class GhostOverlay(QWidget):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.Antialiasing, True)
+            # SourceOver alpha-0 is a no-op. Do not Source-clear the whole
+            # sibling overlay: that punches the parent canvas through and
+            # hides the cards underneath.
             painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
             self._paint_continue_hint(painter)
             self._paint_safety_wall(painter)
-            # Safety wall keeps a legal-looking mover; collision reject stays
-            # red. Pixmaps go down first so stroke + badge stay readable.
-            card_legal = self._legal or self._safety_wall
-            fill = LEGAL_FILL if card_legal else ILLEGAL_FILL
-            pen = LEGAL_PEN if card_legal else ILLEGAL_PEN
-            style = Qt.SolidLine if card_legal else Qt.DashLine
-            stroke = 2 if card_legal else 4
-            for highlight in self._highlights:
-                if not self._safety_wall:
+            self._paint_origin_masks(painter)
+            # Per-item roles: legal mover stays blue, displaced neighbours
+            # keep a red collision edge, and only an unsolvable target is a
+            # dashed reject. Safety remains the copper wall, not this stroke.
+            roles = self.preview_roles()
+            for index, highlight in enumerate(self._highlights):
+                role = roles[index] if index < len(roles) else (
+                    PREVIEW_MOVER_VALID if (self._legal or self._safety_wall)
+                    else PREVIEW_COLLISION_REJECT
+                )
+                fill, _pen, _style, _stroke = _style_for_role(role)
+                if role != PREVIEW_SAFETY_WALL:
                     painter.fillRect(highlight, fill)
-            for image, ghost in self._ghosts:
+            for image, ghost, role in self._ghosts:
                 if image is None:
                     continue
-                painter.setOpacity(0.55 if not card_legal else GHOST_OPACITY)
+                painter.setOpacity(
+                    0.55 if role == PREVIEW_COLLISION_REJECT else GHOST_OPACITY
+                )
                 painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
                 if isinstance(image, QPixmap):
                     painter.drawPixmap(ghost, image)
@@ -447,16 +542,24 @@ class GhostOverlay(QWidget):
                     painter.drawImage(ghost, image)
                 painter.setOpacity(1.0)
             for index, highlight in enumerate(self._highlights):
-                painter.setPen(QPen(pen, stroke if index == 0 else 2, style))
+                role = roles[index] if index < len(roles) else (
+                    PREVIEW_MOVER_VALID if (self._legal or self._safety_wall)
+                    else PREVIEW_COLLISION_REJECT
+                )
+                _fill, pen, style, stroke = _style_for_role(role)
+                painter.setPen(QPen(pen, stroke, style))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(highlight.adjusted(1, 1, -1, -1))
             if self._badge and self._highlights:
-                self._paint_size_badge(painter, self._highlights[0], card_legal)
+                mover_legal = self._legal or self._safety_wall
+                self._paint_size_badge(painter, self._highlights[0], mover_legal)
+            if self._displace_copy:
+                self._paint_displace_badge(painter)
             if self._reject_mark and self._highlights:
                 mark = self._highlights[0]
                 cx = mark.right() - 16
                 cy = mark.top() + 16
-                mark_pen = QPen(_COPPER if self._safety_wall else ILLEGAL_PEN, 2)
+                mark_pen = QPen(ILLEGAL_PEN, 2)
                 painter.setPen(mark_pen)
                 painter.setBrush(Qt.NoBrush)
                 painter.drawEllipse(cx - 7, cy - 7, 14, 14)
@@ -489,6 +592,37 @@ class GhostOverlay(QWidget):
                     painter.drawRect(hx, hy, hw, hh)
         finally:
             painter.end()
+
+
+def _coerce_preview_item(
+    item: tuple,
+    *,
+    index: int,
+    legal: bool,
+    safety_wall: bool,
+) -> _GhostItem:
+    image = item[0]
+    ghost = item[1]
+    rect = QRect(ghost) if isinstance(ghost, QRect) else QRect(*ghost)
+    if len(item) >= 3 and item[2]:
+        role = str(item[2])
+    elif safety_wall:
+        role = PREVIEW_SAFETY_WALL
+    elif not legal:
+        role = PREVIEW_COLLISION_REJECT
+    elif index == 0:
+        role = PREVIEW_MOVER_VALID
+    else:
+        role = PREVIEW_DISPLACED_WARNING
+    return image, rect, role
+
+
+def _style_for_role(role: str) -> tuple[QColor, QColor, Qt.PenStyle, int]:
+    if role == PREVIEW_DISPLACED_WARNING:
+        return ILLEGAL_FILL, ILLEGAL_PEN, Qt.SolidLine, 2
+    if role == PREVIEW_COLLISION_REJECT:
+        return ILLEGAL_FILL, ILLEGAL_PEN, Qt.DashLine, 4
+    return LEGAL_FILL, LEGAL_PEN, Qt.SolidLine, 2
 
 
 def _band_geometry(

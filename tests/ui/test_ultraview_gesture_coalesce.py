@@ -126,7 +126,7 @@ def _wrap_present(overlay):
     return calls
 
 
-def test_first_live_frame_hides_card_then_presents_overlay_once(qtbot, monkeypatch):
+def test_first_live_frame_presents_overlay_once_without_hiding_card(qtbot, monkeypatch):
     board = _prepare_board(qtbot, "flash-0")
     card = board.card_for("time", "flash-0")
     assert card is not None
@@ -137,8 +137,9 @@ def test_first_live_frame_hides_card_then_presents_overlay_once(qtbot, monkeypat
     _press(card, start)
     _send_move(card, QPoint(start.x() + unit * 2, start.y()))
     QApplication.processEvents()
-    assert card._drag_shell_only is True
+    assert card._drag_shell_only is False
     assert board.ghost_overlay().is_showing()
+    assert board.ghost_overlay()._origin_masks
     assert len(present_calls) == 1
     _release(card, QPoint(start.x() + unit * 2, start.y()))
 
@@ -161,6 +162,8 @@ def test_same_snapped_candidate_plans_and_presents_once(qtbot, monkeypatch):
     assert board.gesture().is_active()
     assert len(plan_targets) == 1
     assert len(present_calls) == 1
+    assert board.ghost_overlay().is_showing()
+    assert board.ghost_overlay()._highlights
     _release(card, QPoint(start.x() + 24, start.y()))
 
 
@@ -177,7 +180,7 @@ def test_drag_shows_snap_overlay_without_waiting_for_the_timer(qtbot):
     assert board.gesture().is_active()
     assert overlay.is_showing()
     assert overlay._highlights
-    assert card._drag_shell_only is True
+    assert card._drag_shell_only is False
     _release(card, QPoint(start.x() + unit * 2, start.y()))
 
 
@@ -310,8 +313,9 @@ def test_displaced_preview_does_not_leak_opacity_effects(qtbot):
     assert displaced
     assert other.graphicsEffect() is None
     assert card.graphicsEffect() is None
-    assert card._drag_shell_only is True
+    assert card._drag_shell_only is False
     assert other._drag_shell_only is False
+    assert all(image is not None for image in board.ghost_overlay().ghost_images())
 
     _send_move(card, start)
     QApplication.processEvents()

@@ -101,6 +101,7 @@ from .feedback import (
     FEEDBACK_OUT_OF_GRID,
     FEEDBACK_REARRANGED,
     FEEDBACK_SEARCH_BUDGET,
+    format_displace_preview,
     format_rearranged,
     text_for_key,
     text_for_reason,
@@ -143,7 +144,13 @@ from .author_tools import (
 from .author_widgets import BoardTextEditor, StickyNoteWidget
 from .elastic_workspace import author_content_bounds
 from .gesture import FreeGridGesture
-from .ghost_overlay import GhostOverlay
+from .ghost_overlay import (
+    GhostOverlay,
+    PREVIEW_COLLISION_REJECT,
+    PREVIEW_DISPLACED_WARNING,
+    PREVIEW_MOVER_VALID,
+    PREVIEW_SAFETY_WALL,
+)
 from .compositor import compose_board, composed_slot_rects
 from .viewport import (
     QUALITY_FAST,
@@ -3165,6 +3172,8 @@ class FreeGridBoard(QWidget):
         self._overlay = GhostOverlay(self)
         self._overlay.hide()
         self._latest_pointer_sample: tuple[tuple[int, int], bool, QPoint | None] | None = None
+        self._last_pointer_sample: tuple[tuple[int, int], bool, QPoint | None] | None = None
+        self._paint_fingerprint_seen: tuple | None = None
         self._pointer_coalesce_timer = QTimer(self)
         self._pointer_coalesce_timer.setSingleShot(True)
         self._pointer_coalesce_timer.setInterval(0)
@@ -3505,14 +3514,14 @@ class FreeGridBoard(QWidget):
         """Re-resolve ghost/insert/marquee from the current pointer.
 
         Edge-pan ticks move the board under a still pointer.  The commit path
-        and this refresh share ``_update_gesture_at`` / ``_show_insert_preview``.
+        and this refresh share ``_ingest_pointer_sample`` / ``_show_insert_preview``.
         """
         if global_pos is None:
             return
         local = self.mapFromGlobal(QPoint(global_pos))
         if self._gesture.is_armed():
             keep_aspect = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
-            self._update_gesture_at(
+            self._ingest_pointer_sample(
                 self._logical_board_pos((local.x(), local.y())),
                 keep_aspect=keep_aspect,
                 global_pos=QPoint(global_pos),
@@ -3559,6 +3568,8 @@ class FreeGridBoard(QWidget):
             marquee.origin = (marquee.origin[0] + dx, marquee.origin[1] + dy)
             marquee.current = (marquee.current[0] + dx, marquee.current[1] + dy)
             self._overlay.set_marquee(self._gesture.marquee_rect())
+        self._paint_fingerprint_seen = None
+        self._reproject_live_preview()
 
     def _workspace_origin_offset(self) -> tuple[int, int]:
         bounds = self._workspace_extent
@@ -3678,6 +3689,8 @@ class FreeGridBoard(QWidget):
             self._relayout()
         self._last_legal_ghosts = ()
         self._last_legal_highlights = ()
+        self._last_pointer_sample = None
+        self._paint_fingerprint_seen = None
         self._overlay.clear_edge_hint()
         self._emit_workspace_gesture(False)
         return cancelled
@@ -3786,7 +3799,8 @@ class FreeGridBoard(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         armed = self._gesture.is_armed() or self._gesture.marquee() is not None
-        self._stop_pointer_coalesce(drop=not armed)
+        if not armed:
+            self._stop_pointer_coalesce(drop=True)
         super().resizeEvent(event)
         if armed:
             geom = self.rect()
@@ -3794,6 +3808,9 @@ class FreeGridBoard(QWidget):
                 self._overlay.setGeometry(geom)
             if self._author_layer.geometry() != geom:
                 self._author_layer.setGeometry(geom)
+            self._raise_overlay()
+            self._paint_fingerprint_seen = None
+            self._reproject_live_preview()
             return
         self._relayout()
         self._raise_overlay()
@@ -4014,7 +4031,7 @@ class FreeGridBoard(QWidget):
     def handle_card_mouse_move(self, card: FreeGridCard, event: QMouseEvent) -> None:
         if not self._gesture.is_armed():
             return
-        self._update_gesture_at(
+        self._ingest_pointer_sample(
             self._logical_board_pos(self._board_pos(card, event.pos())),
             keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
             global_pos=event.globalPos(),
@@ -4026,7 +4043,7 @@ class FreeGridBoard(QWidget):
         if self._finish_pending_shift_toggle():
             return
         if self._gesture.is_armed():
-            self._update_gesture_at(
+            self._ingest_pointer_sample(
                 self._logical_board_pos(self._board_pos(card, event.pos())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
                 global_pos=event.globalPos(),
@@ -4356,7 +4373,7 @@ class FreeGridBoard(QWidget):
                 self.grabMouse()
             return
         if self._gesture.is_armed() and (event.buttons() & Qt.LeftButton or grabbed):
-            self._update_gesture_at(
+            self._ingest_pointer_sample(
                 self._logical_board_pos((event.pos().x(), event.pos().y())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
                 global_pos=event.globalPos(),
@@ -4385,7 +4402,7 @@ class FreeGridBoard(QWidget):
         if event.button() == Qt.LeftButton and self._finish_pending_shift_toggle():
             return
         if self._gesture.is_armed() and event.button() == Qt.LeftButton:
-            self._update_gesture_at(
+            self._ingest_pointer_sample(
                 self._logical_board_pos((event.pos().x(), event.pos().y())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
                 global_pos=event.globalPos(),
@@ -4486,6 +4503,43 @@ class FreeGridBoard(QWidget):
         if QWidget.mouseGrabber() is self:
             self.releaseMouse()
 
+    def _pointer_sample_tuple(
+        self,
+        board_pos: tuple[int, int],
+        *,
+        keep_aspect: bool = False,
+        global_pos: QPoint | None = None,
+    ) -> tuple[tuple[int, int], bool, QPoint | None]:
+        return (
+            (int(board_pos[0]), int(board_pos[1])),
+            bool(keep_aspect),
+            QPoint(global_pos) if global_pos is not None else None,
+        )
+
+    def _ingest_pointer_sample(
+        self,
+        board_pos: tuple[int, int],
+        *,
+        keep_aspect: bool = False,
+        global_pos: QPoint | None = None,
+    ) -> None:
+        sample = self._pointer_sample_tuple(
+            board_pos, keep_aspect=keep_aspect, global_pos=global_pos
+        )
+        self._latest_pointer_sample = sample
+        self._last_pointer_sample = sample
+        session = self._gesture.session()
+        if session is None or not session.active:
+            # Crossing the drag threshold must paint this frame. Later
+            # pointer events overwrite latest_sample and wait for the 0 ms
+            # coalescer so one display frame consumes one sample.
+            self._flush_pointer_sample()
+            return
+        if getattr(self, "_gesture_presenting", False):
+            self._schedule_pointer_coalesce()
+            return
+        self._schedule_pointer_coalesce()
+
     def _queue_pointer_sample(
         self,
         board_pos: tuple[int, int],
@@ -4493,11 +4547,14 @@ class FreeGridBoard(QWidget):
         keep_aspect: bool = False,
         global_pos: QPoint | None = None,
     ) -> None:
-        self._latest_pointer_sample = (
-            (int(board_pos[0]), int(board_pos[1])),
-            bool(keep_aspect),
-            QPoint(global_pos) if global_pos is not None else None,
+        sample = self._pointer_sample_tuple(
+            board_pos, keep_aspect=keep_aspect, global_pos=global_pos
         )
+        self._latest_pointer_sample = sample
+        self._last_pointer_sample = sample
+        self._schedule_pointer_coalesce()
+
+    def _schedule_pointer_coalesce(self) -> None:
         timer = getattr(self, "_pointer_coalesce_timer", None)
         if timer is None:
             return
@@ -4523,6 +4580,19 @@ class FreeGridBoard(QWidget):
     def _flush_pointer_sample(self) -> None:
         self._stop_pointer_coalesce(drop=False)
         self._consume_latest_pointer_sample()
+
+    def _reproject_live_preview(self) -> None:
+        """Re-draw the current sample after zoom/origin/overlay size changes."""
+        if not self._gesture.is_active():
+            return
+        sample = self._latest_pointer_sample or self._last_pointer_sample
+        if sample is None:
+            return
+        self._latest_pointer_sample = sample
+        if getattr(self, "_gesture_presenting", False):
+            self._schedule_pointer_coalesce()
+            return
+        self._flush_pointer_sample()
 
     def _consume_latest_pointer_sample(self) -> None:
         try:
@@ -4565,6 +4635,24 @@ class FreeGridBoard(QWidget):
         self._ghost_buffers[ref] = scaled
         return scaled
 
+    def _paint_fingerprint(self, session, board_pos: tuple[int, int]) -> tuple:
+        origin = self._workspace_origin_offset()
+        size = self._overlay.size()
+        ghosts = tuple(
+            self._workspace_pixel_rect(rect)
+            for rect in session.group_ghost_pixels(self._metrics, board_pos)
+        )
+        return (
+            origin,
+            int(size.width()),
+            int(size.height()),
+            float(self._zoom),
+            bool(session.legal),
+            bool(self._session_hits_safety(session)),
+            session.badge(),
+            ghosts,
+        )
+
     def _update_gesture_at(
         self,
         board_pos: tuple[int, int],
@@ -4572,6 +4660,13 @@ class FreeGridBoard(QWidget):
         keep_aspect: bool = False,
         global_pos: QPoint | None = None,
     ) -> None:
+        if getattr(self, "_gesture_presenting", False):
+            self._latest_pointer_sample = self._pointer_sample_tuple(
+                board_pos, keep_aspect=keep_aspect, global_pos=global_pos
+            )
+            self._last_pointer_sample = self._latest_pointer_sample
+            self._schedule_pointer_coalesce()
+            return
         session = self._gesture.update(
             board_pos,
             self._metrics,
@@ -4581,13 +4676,15 @@ class FreeGridBoard(QWidget):
         )
         if session is None or not session.active:
             return
-        if getattr(self, "_gesture_presenting", False):
-            return
+        paint_fp = self._paint_fingerprint(session, board_pos)
         self._gesture_presenting = True
         try:
             self._present_live_gesture(session, board_pos, global_pos)
+            self._paint_fingerprint_seen = paint_fp
         finally:
             self._gesture_presenting = False
+            if self._latest_pointer_sample is not None:
+                self._schedule_pointer_coalesce()
 
     def _present_live_gesture(
         self,
@@ -4597,71 +4694,93 @@ class FreeGridBoard(QWidget):
     ) -> None:
         if QWidget.mouseGrabber() is None:
             self.grabMouse()
-        if not self._gesture_dimmed:
+        first_live = not self._gesture_dimmed
+        if first_live:
             self.drag_started.emit("layout")
             self._gesture_dimmed = True
+            # Extent/edge-pan refresh must land as a pending sample, not a
+            # dropped re-entrant present of the pre-origin coordinates.
+            self._emit_workspace_gesture(True, global_pos)
         members = session.group_origins or {session.ref: session.origin}
-        for ref in members:
+        refs = list(session.preview_refs())
+        for ref in refs:
             self._ghost_source_for(ref)
-        frozen: list = []
-        for ref in members:
+        ghosts = []
+        ghost_rects = tuple(
+            self._workspace_pixel_rect(rect)
+            for rect in session.group_ghost_pixels(self._metrics, board_pos)
+        )
+        if len(ghost_rects) != len(refs):
+            refs = [session.ref]
+            ghost_rects = (
+                self._workspace_pixel_rect(
+                    session.ghost_pixels(self._metrics, board_pos)
+                ),
+            )
+        mover_refs = set(members)
+        displaced_count = 0
+        safety = self._session_hits_safety(session)
+        for ref, ghost in zip(refs, ghost_rects):
+            image = self._ghost_source_for(ref)
+            if session.legal:
+                if ref in mover_refs:
+                    role = PREVIEW_MOVER_VALID
+                else:
+                    role = PREVIEW_DISPLACED_WARNING
+                    displaced_count += 1
+            elif safety:
+                role = PREVIEW_SAFETY_WALL
+            else:
+                role = PREVIEW_COLLISION_REJECT
+            ghosts.append((image, ghost, role))
+        highlights = tuple(
+            self._workspace_pixel_rect(rect)
+            for rect in session.group_highlight_pixels(self._metrics)
+        )
+        origin_masks = []
+        involved = set(mover_refs)
+        if session.plan is not None:
+            involved.update(ref for ref, _rect in session.plan.preview_rects())
+        for ref in involved:
             card = self._widgets.get(ref)
             if card is None:
                 continue
-            card.setUpdatesEnabled(False)
-            frozen.append(card)
-        try:
-            # Hide the live card before the overlay appears so one frame never
-            # stacks original pixels under a full-opacity ghost.
-            self._sync_gesture_dim(set(members))
-            ghosts = []
-            ghost_rects = tuple(
-                self._workspace_pixel_rect(rect)
-                for rect in session.group_ghost_pixels(self._metrics, board_pos)
+            geom = card.geometry()
+            origin_masks.append((geom.x(), geom.y(), geom.width(), geom.height()))
+        if session.legal:
+            self._last_legal_ghosts = tuple(ghosts)
+            self._last_legal_highlights = highlights
+        elif safety:
+            # Only the mover leaving the safety wall keeps the last legal
+            # ghost. A neighbour that cannot be pushed is a collision reject
+            # and must keep the attempted red outline.
+            ghosts, highlights = self._last_legal_preview(ghosts, highlights)
+            displaced_count = sum(
+                1
+                for item in ghosts
+                if len(item) > 2 and item[2] == PREVIEW_DISPLACED_WARNING
             )
-            refs = list(session.preview_refs())
-            if len(ghost_rects) != len(refs):
-                refs = [session.ref]
-                ghost_rects = (
-                    self._workspace_pixel_rect(
-                        session.ghost_pixels(self._metrics, board_pos)
-                    ),
-                )
-            mover_refs = set(members)
-            for ref, ghost in zip(refs, ghost_rects):
-                image = self._ghost_source_for(ref) if ref in mover_refs else None
-                ghosts.append((image, ghost))
-            highlights = tuple(
-                self._workspace_pixel_rect(rect)
-                for rect in session.group_highlight_pixels(self._metrics)
-            )
-            safety = self._session_hits_safety(session)
-            if session.legal:
-                self._last_legal_ghosts = tuple(ghosts)
-                self._last_legal_highlights = highlights
-            elif safety:
-                # Only the mover leaving the safety wall keeps the last legal
-                # ghost. A neighbour that cannot be pushed is a collision reject
-                # and must keep the attempted red outline.
-                ghosts, highlights = self._last_legal_preview(ghosts, highlights)
-            self._overlay.set_move_previews(
-                ghosts,
-                highlights,
-                legal=session.legal,
-                badge=session.badge(),
-                handles=session.handle is not None,
-                safety_wall=safety,
-                safety_bounds=self._safety_bounds_pixel_rect() if safety else None,
-                safety_sides=self._safety_sides_for(session.candidate) if safety else (),
-            )
-            if safety:
-                self.setCursor(Qt.ForbiddenCursor)
-            elif self.cursor().shape() == Qt.ForbiddenCursor:
-                self.unsetCursor()
-        finally:
-            for card in frozen:
-                card.setUpdatesEnabled(True)
-        self._emit_workspace_gesture(True, global_pos)
+        displace_copy = (
+            format_displace_preview(displaced_count) if displaced_count else ""
+        )
+        self._overlay.set_move_previews(
+            ghosts,
+            highlights,
+            legal=session.legal,
+            badge=session.badge(),
+            handles=session.handle is not None,
+            safety_wall=safety,
+            safety_bounds=self._safety_bounds_pixel_rect() if safety else None,
+            safety_sides=self._safety_sides_for(session.candidate) if safety else (),
+            origin_masks=origin_masks,
+            displace_copy=displace_copy,
+        )
+        if safety:
+            self.setCursor(Qt.ForbiddenCursor)
+        elif self.cursor().shape() == Qt.ForbiddenCursor:
+            self.unsetCursor()
+        if not first_live:
+            self._emit_workspace_gesture(True, global_pos)
 
     def _session_hits_safety(self, session) -> bool:
         """True only when the mover itself crossed the engineering bound.
@@ -4705,11 +4824,10 @@ class FreeGridBoard(QWidget):
         return tuple(sides) or ("left",)
 
     def _sync_gesture_dim(self, wanted: set[UltraViewRef]) -> None:
-        """Show a stable shell-only placeholder on movers; never allocate opacity.
+        """Restore leftover placeholders. Live drag no longer hides card pixels.
 
-        Displaced neighbours stay fully opaque; their preview is the overlay
-        outline. The placeholder set still shrinks mid-gesture so a neighbour
-        that left the plan cannot keep a leftover dim/effect.
+        Origin wash, destination ghosts, and displaced previews all paint on
+        the overlay so real cards are not frozen or cleared per frame.
         """
         for ref in self._dimmed_refs - wanted:
             card = self._widgets.get(ref)
@@ -4764,6 +4882,8 @@ class FreeGridBoard(QWidget):
             self._sync_selection_handles()
             self._last_legal_ghosts = ()
             self._last_legal_highlights = ()
+            self._last_pointer_sample = None
+            self._paint_fingerprint_seen = None
             self._emit_workspace_gesture(False)
             if session.active:
                 self.drag_finished.emit()
