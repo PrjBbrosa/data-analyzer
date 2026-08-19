@@ -11,6 +11,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     AUTHOR_TOOL_SHAPES,
     AUTHOR_TOOL_STICKY,
     AUTHOR_TOOL_TEXT,
+    AUTHOR_TOOLS,
     DrawPopover,
     ShapePopover,
     StickyPopover,
@@ -20,7 +21,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
 
 
 def test_creation_rail_is_independent_from_panel_selection_and_starts_disabled(qtbot):
-    rail = ToolRail()
+    rail = ToolRail(visible_author_tools=AUTHOR_TOOLS)
     qtbot.addWidget(rail)
     rail.show()
 
@@ -62,7 +63,7 @@ def test_creation_rail_is_independent_from_panel_selection_and_starts_disabled(q
 
 
 def test_creation_rail_stays_whole_and_keyboard_reachable_in_compact_safe_band(qtbot):
-    rail = ToolRail()
+    rail = ToolRail(visible_author_tools=AUTHOR_TOOLS)
     qtbot.addWidget(rail)
     rail.resize(56, 432)
     rail.show()

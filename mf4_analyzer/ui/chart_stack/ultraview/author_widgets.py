@@ -116,8 +116,14 @@ class StickyNoteWidget(QFrame):
     def editor(self) -> QPlainTextEdit:
         return self._editor
 
+    def is_editing(self) -> bool:
+        return self.isVisible() and bool(self._object_id)
+
     def object_id(self) -> str:
         return self._object_id
+
+    def current_text(self) -> str:
+        return self._editor.toPlainText()
 
     def apply_object(
         self,
@@ -168,6 +174,8 @@ class StickyNoteWidget(QFrame):
 
     def begin_edit(self) -> None:
         self._original_text = self._editor.toPlainText()
+        self.show()
+        self.raise_()
         self._editor.setFocus(Qt.OtherFocusReason)
         self._editor.selectAll()
 
@@ -179,8 +187,16 @@ class StickyNoteWidget(QFrame):
 
     def cancel(self) -> None:
         self._editor.set_bounded_text(self._original_text)
-        if self._object_id:
-            self.edit_cancelled.emit(self._object_id)
+        object_id = self._object_id
+        self.hide_edit()
+        if object_id:
+            self.edit_cancelled.emit(object_id)
+
+    def hide_edit(self) -> None:
+        self.hide()
+        self._object_id = ""
+        self._box = None
+        self._metrics = None
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

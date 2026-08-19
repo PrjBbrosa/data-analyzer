@@ -12,7 +12,7 @@ or the minimap.  ``floating_layout.py`` / ``UltraViewPage`` own that geometry;
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import qtawesome as qta
@@ -83,6 +83,8 @@ AUTHOR_TOOLS = (
     AUTHOR_TOOL_SHAPES,
     AUTHOR_TOOL_DRAW,
 )
+# Recovery R4: only the delivered Select + Sticky slice is on the release rail.
+RELEASE_AUTHOR_TOOLS: tuple[str, ...] = (AUTHOR_TOOL_SELECT, AUTHOR_TOOL_STICKY)
 RAIL_BUTTON_SIZE = 36
 RAIL_ICON_SIZE = 20
 BOARD_POPOVER_WIDTH = 260
@@ -692,6 +694,7 @@ class StickyPopover(QMenu):
         self._selected_palette = STICKY_PALETTE_TOKENS[0]
         self._palette_buttons: dict[str, QToolButton] = {}
         apply_rounded_menu_chrome(self)
+        self.setAttribute(Qt.WA_NoMouseReplay, True)
         self._build_palette()
         self.addSeparator()
         self._stack = self.addAction("Stack")
@@ -730,7 +733,7 @@ class StickyPopover(QMenu):
             fill, border, _foreground = sticky_colors(token, DEFAULT_THEME)
             button = QToolButton(host)
             button.setObjectName(f"ultraViewStickyPalette{token.title()}Button")
-            button.setProperty("palette", token)
+            button.setProperty("stickyPalette", token)
             button.setCheckable(True)
             button.setAutoRaise(False)
             button.setFixedSize(28, 28)
@@ -754,7 +757,8 @@ class StickyPopover(QMenu):
     def _on_palette_clicked(self) -> None:
         sender = self.sender()
         if isinstance(sender, QToolButton):
-            self.choose_palette(str(sender.property("palette") or ""))
+            self.choose_palette(str(sender.property("stickyPalette") or ""))
+            self.close()
 
 
 class ShapePopover(QMenu):
@@ -1110,7 +1114,12 @@ class ToolRail(QFrame):
         (AUTHOR_TOOL_DRAW, "Draw", "画笔、高亮、擦除或套索 (P)"),
     )
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        visible_author_tools: Sequence[str] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("ultraViewToolRail")
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -1130,6 +1139,15 @@ class ToolRail(QFrame):
         self._creation_disabled_reason = "创作工具将在自由网格中可用"
         self._active_tool = AUTHOR_TOOL_SELECT
         self._pinned_tool: str | None = None
+        # Release rail uses RELEASE_AUTHOR_TOOLS.  Isolated chrome tests pass
+        # AUTHOR_TOOLS to exercise the still-present widget surface.
+        if visible_author_tools is None:
+            allowed = set(RELEASE_AUTHOR_TOOLS)
+        else:
+            allowed = {str(tool) for tool in visible_author_tools}
+        self._visible_author_tools = tuple(
+            tool for tool, _short, _tip in self._CREATION_SPECS if tool in allowed
+        )
         root = QVBoxLayout(self)
         # Eleven 36px targets must remain fully usable in the 800×560 compact
         # stage.  Keep the Miro-like rail as one dense, accessible column
@@ -1150,7 +1168,7 @@ class ToolRail(QFrame):
                 self._free_grid.setCheckable(True)
                 self._free_grid.clicked.connect(self._on_free_grid_clicked)
                 root.addWidget(self._free_grid, 0, Qt.AlignHCenter)
-            if index == 3:
+            if index == 3 and self._visible_author_tools:
                 self._add_rail_divider(root, "ultraViewToolRailCreationDivider")
                 self._add_creation_section(root)
                 self._add_rail_divider(root, "ultraViewToolRailPostCreationDivider")
@@ -1212,6 +1230,22 @@ class ToolRail(QFrame):
     def tool_button(self, tool: str) -> QToolButton | None:
         """Return a creation-tool button without exposing its panel siblings."""
         return self._tool_buttons.get(str(tool))
+
+    def visible_author_tools(self) -> tuple[str, ...]:
+        """Tools actually constructed on this rail; Select + Sticky in R4."""
+        return self._visible_author_tools
+
+    def visible_enabled_author_tools(self) -> tuple[str, ...]:
+        return tuple(
+            tool
+            for tool, button in self._tool_buttons.items()
+            if button.isVisible() and button.isEnabled()
+        )
+
+    def creation_section_visible(self) -> bool:
+        return bool(self._visible_author_tools) and any(
+            button.isVisible() for button in self._tool_buttons.values()
+        )
 
     def active_tool(self) -> str:
         return self._active_tool
@@ -1393,7 +1427,12 @@ class ToolRail(QFrame):
         layout.addWidget(divider, 0)
 
     def _add_creation_section(self, layout: QVBoxLayout) -> None:
-        for tool, short_name, tooltip in self._CREATION_SPECS:
+        specs = {
+            tool: (short_name, tooltip)
+            for tool, short_name, tooltip in self._CREATION_SPECS
+        }
+        for tool in self._visible_author_tools:
+            short_name, tooltip = specs[tool]
             button = _AuthorToolButton(self)
             button.setObjectName(f"ultraViewRail{short_name}Button")
             button.setIcon(_author_tool_icon(tool, active=False))
@@ -1501,7 +1540,8 @@ class ToolRail(QFrame):
         tool = str(button.property("authorTool") or "")
         if tool not in self._tool_buttons:
             return
-        self.set_active_tool(tool, pinned=False)
+        if tool != self._active_tool:
+            self.set_active_tool(tool, pinned=False)
         self.tool_requested.emit(tool)
 
     def _on_tool_pin_requested(self, tool: str) -> None:
@@ -2533,7 +2573,7 @@ class CardContextIsland(QFrame):
     remove_requested = pyqtSignal(str, str)
     fit_requested = pyqtSignal(str, str)
 
-    _FIT_TOOLTIP = "按原图比例调整卡片"
+    _FIT_TOOLTIP = "按原图比例收紧当前卡片，不移动邻卡、不整板改尺寸"
     _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
 
     def __init__(self, parent: QWidget | None = None) -> None:

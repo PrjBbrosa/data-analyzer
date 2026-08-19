@@ -68,10 +68,10 @@ def test_floating_chrome_dimension_contracts(qtbot):
 
     assert RAIL_WIDTH == FLOATING_RAIL_WIDTH
     assert RAIL_CONTENT_HEIGHT == FLOATING_RAIL_CONTENT_HEIGHT
-    # The authoring section grows the rail, while its original baseline
-    # remains the minimum fallback for small/legacy layouts.
+    # The original panel-only baseline remains the sizeHint floor.  Hidden
+    # unfinished creation tools must not force the release rail taller.
     assert rail.sizeHint().width() == FLOATING_RAIL_WIDTH
-    assert rail.sizeHint().height() > FLOATING_RAIL_CONTENT_HEIGHT
+    assert rail.sizeHint().height() >= FLOATING_RAIL_CONTENT_HEIGHT
     assert rail.minimumSizeHint() == rail.sizeHint()
     assert board.maximumHeight() == ISLAND_HEIGHT
     assert board.maximumWidth() == BOARD_ISLAND_MAX_WIDTH

@@ -6,11 +6,18 @@ from PyQt5.QtWidgets import QPlainTextEdit, QTextEdit
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import board_box_to_pixels
 from mf4_analyzer.ui.chart_stack.ultraview.elastic_workspace import author_content_bounds
-from mf4_analyzer.ui.chart_stack.ultraview.chrome import AUTHOR_TOOLS
+from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
+    AUTHOR_TOOL_DRAW,
+    AUTHOR_TOOL_SELECT,
+    AUTHOR_TOOL_SHAPES,
+    AUTHOR_TOOL_STICKY,
+    AUTHOR_TOOL_TEXT,
+    AUTHOR_TOOLS,
+    ToolRail,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.ultraview_state import (
     BoardBox,
-    LAYOUT_MODE_TEMPLATE,
     StickyObject,
     TextObject,
     default_board,
@@ -125,6 +132,18 @@ def test_author_direct_text_editor_is_not_a_canvas_shortcut_target(qapp, qtbot):
     assert page._text_field_has_focus() is True
 
 
+def test_release_tool_rail_hides_unfinished_creation_tools(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+    assert rail.visible_author_tools() == (AUTHOR_TOOL_SELECT, AUTHOR_TOOL_STICKY)
+    assert rail.creation_section_visible() is True
+    assert rail.tool_button(AUTHOR_TOOL_STICKY) is not None
+    assert rail.tool_button(AUTHOR_TOOL_TEXT) is None
+    assert rail.tool_button(AUTHOR_TOOL_SHAPES) is None
+    assert rail.tool_button(AUTHOR_TOOL_DRAW) is None
+
+
 def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
     page = UltraViewPage()
     qtbot.addWidget(page)
@@ -133,22 +152,19 @@ def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
     qapp.processEvents()
 
     rail = page.tool_rail()
-    assert all(rail.tool_button(tool).isEnabled() for tool in AUTHOR_TOOLS)
-
-    template = default_board()
-    template.layout_mode = LAYOUT_MODE_TEMPLATE
-    page.set_board(template)
-    qapp.processEvents()
-    assert all(not rail.tool_button(tool).isEnabled() for tool in AUTHOR_TOOLS)
+    assert rail.visible_author_tools() == (AUTHOR_TOOL_SELECT, AUTHOR_TOOL_STICKY)
+    assert rail.tool_button(AUTHOR_TOOL_TEXT) is None
 
     page.set_board(default_board())
     qapp.processEvents()
-    assert all(rail.tool_button(tool).isEnabled() for tool in AUTHOR_TOOLS)
+    assert rail.creation_section_visible() is True
+    assert set(rail.visible_enabled_author_tools()) == {
+        AUTHOR_TOOL_SELECT,
+        AUTHOR_TOOL_STICKY,
+    }
 
     page.show_overview()
-    assert all(not rail.tool_button(tool).isEnabled() for tool in AUTHOR_TOOLS)
+    assert rail.visible_enabled_author_tools() == ()
     page.hide_overview()
-    assert all(rail.tool_button(tool).isEnabled() for tool in AUTHOR_TOOLS)
-
     page.set_presentation_active(True)
-    assert all(not rail.tool_button(tool).isEnabled() for tool in AUTHOR_TOOLS)
+    assert rail.visible_enabled_author_tools() == ()

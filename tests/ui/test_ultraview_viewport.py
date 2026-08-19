@@ -1321,6 +1321,27 @@ def test_switching_boards_restores_session_camera(qtbot):
     assert harness.page.board_zoom() == pytest.approx(leftover)
 
 
+def test_session_camera_restore_replays_stack_origin_not_fit_origin(qtbot):
+    harness = _Harness(qtbot)
+    first = harness.board
+    page = harness.page
+    page.set_board_zoom(1.5)
+    QApplication.processEvents()
+    parked_origin = page._board_content_origin()
+    parked_zoom = page.board_zoom()
+    second = default_board()
+    second.name = "另一块板"
+    page.set_board(second)
+    page._park_zoom(1.0)
+    QApplication.processEvents()
+    assert page._board_content_origin()[1] == pytest.approx(page._fit_origin()[1])
+    assert page._fit_origin()[1] != pytest.approx(parked_origin[1])
+    page.set_board(first)
+    QApplication.processEvents()
+    assert page.board_zoom() == pytest.approx(parked_zoom)
+    assert page._board_content_origin() == pytest.approx(parked_origin)
+
+
 def test_fit_on_open_ignores_leftover_pan_and_zoom(qtbot):
     harness = _Harness(qtbot)
     _prepare_free_grid(harness, qtbot, "a", "b")

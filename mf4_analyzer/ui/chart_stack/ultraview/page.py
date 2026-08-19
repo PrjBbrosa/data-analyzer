@@ -101,6 +101,7 @@ from .feedback import (
 )
 from .free_grid import screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
+from .author_tools import TOOL_SELECT, TOOL_STICKY
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
     LIBRARY_OVERLAY_MIN_HEIGHT,
@@ -138,6 +139,7 @@ from .chrome import (
     LayoutPicker,
     NavigationIsland,
     StatusIsland,
+    StickyPopover,
     ToolRail,
     board_popover_height,
 )
@@ -290,6 +292,9 @@ class UltraViewPage(QWidget):
     free_grid_undo_requested = pyqtSignal()
     free_grid_redo_requested = pyqtSignal()
     camera_settled = pyqtSignal()
+    author_create_requested = pyqtSignal(object)
+    author_update_requested = pyqtSignal(object)
+    author_delete_requested = pyqtSignal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -305,7 +310,6 @@ class UltraViewPage(QWidget):
         self._previews: dict[UltraViewRef, Any] = {}
         self._statuses: dict[UltraViewRef, str] = {}
         self._ref_exists: dict[UltraViewRef, bool] = {}
-        self._selected: UltraViewRef | None = None
         self._replacement_slot: str | None = None
         self._replacement_ref: UltraViewRef | None = None
         self._compare_filter = COMPARE_FILTER_ALL
@@ -327,7 +331,10 @@ class UltraViewPage(QWidget):
         self._viewport = BoardViewport()
         self._ignore_next_context_menu = False
         self._right_gesture_widget: QWidget | None = None
-        self._session_camera: dict[str, tuple[float, tuple[float, float], tuple[int, int, int, int]]] = {}
+        self._session_camera: dict[
+            str,
+            tuple[float, tuple[float, float], tuple[int, int, int, int], tuple[float, float]],
+        ] = {}
         self._restoring_viewport = False
         self._rebasing_extent = False
         self._pending_viewport_restore: dict[str, float] | None = None
@@ -393,6 +400,7 @@ class UltraViewPage(QWidget):
         self._board_column = self._canvas_stage  # compatibility-only internal alias
         self._grid = BoardGrid(self._canvas_stage)
         self._free_grid = FreeGridBoard(self._canvas_stage)
+        self._interaction = self._free_grid.interaction()
         self._board_host = QWidget(self._canvas_stage)
         self._board_host.setObjectName("ultraViewBoardHost")
         self._board_host.setAttribute(Qt.WA_StyledBackground, True)
@@ -489,6 +497,10 @@ class UltraViewPage(QWidget):
         self._tool_rail.free_grid_toggled.connect(self._on_free_grid_toggled)
         self._tool_rail.sync_all_requested.connect(self._on_sync_all_requested)
         self._tool_rail.ref_dropped.connect(self._on_tray_drop)
+        self._tool_rail.tool_requested.connect(self._on_author_tool_requested)
+        self._tool_rail.tool_pinned_changed.connect(self._on_author_tool_pinned)
+        self._sticky_popover = self._tool_rail.make_sticky_popover(self)
+        self._sticky_popover.palette_selected.connect(self._on_sticky_palette_selected)
         self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
         self._board_island.board_menu_requested.connect(self._show_board_menu)
         self._board_island.create_requested.connect(self.create_board_requested)
@@ -594,6 +606,9 @@ class UltraViewPage(QWidget):
         self._free_grid.drag_started.connect(self._on_drag_started)
         self._free_grid.drag_finished.connect(self._on_drag_finished)
         self._free_grid.feedback_requested.connect(self._emit_feedback)
+        self._free_grid.author_create_requested.connect(self._on_author_create_requested)
+        self._free_grid.author_update_requested.connect(self._on_author_update_requested)
+        self._free_grid.author_delete_requested.connect(self._on_author_delete_requested)
         self._free_grid.replace_requested.connect(self.free_grid_replace_requested)
         workspace_gesture = getattr(self._free_grid, "workspace_gesture_changed", None)
         if workspace_gesture is not None:
@@ -622,6 +637,12 @@ class UltraViewPage(QWidget):
         self._grid_redo = QShortcut(QKeySequence.Redo, self)
         self._grid_redo.setContext(Qt.WidgetWithChildrenShortcut)
         self._grid_redo.activated.connect(self._on_grid_redo_shortcut)
+        self._select_tool_shortcut = QShortcut(QKeySequence(Qt.Key_V), self)
+        self._select_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._select_tool_shortcut.activated.connect(self._on_select_tool_shortcut)
+        self._sticky_tool_shortcut = QShortcut(QKeySequence(Qt.Key_N), self)
+        self._sticky_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._sticky_tool_shortcut.activated.connect(self._on_sticky_tool_shortcut)
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
@@ -715,6 +736,18 @@ class UltraViewPage(QWidget):
 
     def tool_rail(self) -> ToolRail:
         return self._tool_rail
+
+    def visible_author_tools(self) -> tuple[str, ...]:
+        """Release rail projection: Select + Sticky after the R4 slice."""
+        return self._tool_rail.visible_author_tools()
+
+    def interaction(self):
+        """Board interaction owner. Page selection is a projection of this."""
+        return self._interaction
+
+    @property
+    def _selected(self) -> UltraViewRef | None:
+        return self._interaction.primary_card()
 
     def board_island(self) -> BoardIsland:
         return self._board_island
@@ -1268,11 +1301,13 @@ class UltraViewPage(QWidget):
         if self._restoring_viewport or self._board is None:
             return
         center = self._current_center()
+        origin = self._board_content_origin()
         self._viewport.set_center(center)
         self._session_camera[str(self._board.board_id)] = (
             float(self._viewport.zoom()),
             (float(center[0]), float(center[1])),
             self._extent_signature(),
+            (float(origin[0]), float(origin[1])),
         )
         self.camera_settled.emit()
 
@@ -1566,12 +1601,13 @@ class UltraViewPage(QWidget):
         if camera is None or camera[2] != signature:
             self.fit_on_open()
             return
-        zoom, center, _saved = camera
+        zoom, center, _saved, *rest = camera
+        origin = rest[0] if rest else self._board_content_origin()
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             self._refresh_workspace_extent(reset=True, preserve_visible=False)
         self._restoring_viewport = True
         try:
-            self._apply_zoom_and_center(zoom, center)
+            self._apply_zoom_and_center(zoom, center, viewport_origin=origin)
         finally:
             self._restoring_viewport = False
 
@@ -1736,14 +1772,15 @@ class UltraViewPage(QWidget):
         self._viewport.set_center(center)
         # zoom_fit passes the fill size; its origin must match that rect.
         # Parking ``fit`` sits below the top islands. Using it here would
-        # leave the visual centre low after raising fill.y.
+        # leave the visual centre low after raising fill.y, and would also
+        # rewrite session-camera scrollbars by that island gap on restore.
         if viewport_origin is not None:
             origin = (float(viewport_origin[0]), float(viewport_origin[1]))
         elif viewport_size is not None:
             fill = self._content_fill_rect()
             origin = (float(fill.x), float(fill.y))
         else:
-            origin = self._fit_origin()
+            origin = self._board_content_origin()
         self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
         if viewport_size is None:
             viewport = self._board_scroll.viewport()
@@ -2153,25 +2190,26 @@ class UltraViewPage(QWidget):
         return self._replacement_ref.section, self._replacement_ref.view_id
 
     def selected_ref(self) -> tuple[str, str] | None:
-        if self._selected is None:
+        ref = self._interaction.primary_card()
+        if ref is None:
             return None
-        return self._selected.section, self._selected.view_id
+        return ref.section, ref.view_id
 
     def clear_card_selection(self) -> bool:
-        """Hide card-context chrome and drop every owner of View selection.
+        """Hide card-context chrome and clear the single interaction selection.
 
-        Free-grid rings live on the gesture; the 5-icon island follows
-        ``_selected``. Clearing only one owner leaves the other visible.
-        Library row highlight stays: empty-slot place reads it.
+        Template cards, free-grid rings, and author chrome are projections of
+        ``BoardInteractionController``. Library row highlight stays: empty-slot
+        place reads it.
         """
-        grid_cleared = self._free_grid.clear_selection()
-        author_cleared = self._free_grid.clear_author_selection()
-        had = self._selected is not None
-        if not had and not grid_cleared and not author_cleared:
-            return False
-        self._selected = None
+        changed = self._free_grid.clear_selection()
+        template_cleared = False
         for card in self._grid.card_widgets():
-            card.set_selected(False)
+            if card.model().selected:
+                card.set_selected(False)
+                template_cleared = True
+        if not changed and not template_cleared:
+            return False
         self._refresh_card_context()
         return True
 
@@ -2399,6 +2437,8 @@ class UltraViewPage(QWidget):
             # The high-water mark belongs to the active board session, not a
             # project payload and not the next Board's initial view.
             self._workspace_extent = None
+            self._free_grid.cancel_gesture()
+            self._free_grid.reset_transient_interaction()
         if not keep_overview:
             self.hide_overview()
         if self._workspace is None and self._switcher.isVisible():
@@ -2604,12 +2644,31 @@ class UltraViewPage(QWidget):
         # both of which call _cancel_board_gestures() themselves.
 
     def handle_escape(self) -> bool:
+        if self._free_grid.sticky_note_widget().is_editing():
+            self._free_grid.sticky_note_widget().cancel()
+            return True
+        if (
+            self._free_grid.author_text_editor().is_editing()
+            or self._interaction.is_editor_active()
+        ):
+            self._free_grid.hide_author_editor()
+            return True
+        if self._interaction.draft() is not None:
+            self._interaction.cancel_draft()
+            return True
         if self._viewport.is_panning():
             self.end_board_pan()
             return True
         if self._grid.cancel_gesture():
             return True
         if self._free_grid.cancel_gesture():
+            return True
+        if self._interaction.active_tool() != TOOL_SELECT:
+            self._interaction.set_active_tool(TOOL_SELECT)
+            self._sync_tool_rail_from_controller()
+            self._free_grid.sync_tool_cursor()
+            return True
+        if self.clear_card_selection():
             return True
         if self._focus.isVisible():
             self._focus.close_layer()
@@ -2630,8 +2689,6 @@ class UltraViewPage(QWidget):
         popup = QApplication.activePopupWidget()
         if isinstance(popup, QMenu) and popup.isVisible():
             popup.close()
-            return True
-        if self.clear_card_selection():
             return True
         return False
 
@@ -3053,15 +3110,76 @@ class UltraViewPage(QWidget):
             self.replace_slot_requested.emit(slot, section, view_id)
 
     def _select_ref(self, ref: UltraViewRef) -> None:
-        self._selected = ref
+        self._interaction.select_only_card(ref)
         self._library.set_selected(ref.section, ref.view_id)
         if ref in self._board.unplaced:
             self._open_panel(PANEL_UNPLACED)
             self._tray.focus_first_item()
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
-            self._free_grid.select_only(ref.section, ref.view_id)
+            self._free_grid.sync_selection_projection()
         self._refresh_projection()
         self.selection_changed.emit(ref.section, ref.view_id)
+
+    def _on_author_tool_requested(self, tool: str) -> None:
+        if tool == TOOL_STICKY and self._interaction.active_tool() == TOOL_STICKY:
+            self._show_sticky_popover()
+            return
+        self._interaction.set_active_tool(tool)
+        self._sync_tool_rail_from_controller()
+        self._free_grid.sync_tool_cursor()
+
+    def _on_author_tool_pinned(self, tool: str, pinned: bool) -> None:
+        self._interaction.set_active_tool(tool, pinned=bool(pinned))
+        self._sync_tool_rail_from_controller()
+        self._free_grid.sync_tool_cursor()
+
+    def _on_sticky_palette_selected(self, token: str) -> None:
+        self._interaction.set_sticky_palette(token)
+        if self._interaction.active_tool() != TOOL_STICKY:
+            self._interaction.set_active_tool(TOOL_STICKY)
+            self._sync_tool_rail_from_controller()
+            self._free_grid.sync_tool_cursor()
+
+    def _show_sticky_popover(self) -> None:
+        button = self._tool_rail.tool_button(TOOL_STICKY)
+        if button is None:
+            return
+        self._sticky_popover.choose_palette(self._interaction.sticky_palette())
+        anchor = button.mapToGlobal(button.rect().center())
+        self._sticky_popover.popup(anchor)
+
+    def sticky_popover(self) -> StickyPopover:
+        return self._sticky_popover
+
+    def _sync_tool_rail_from_controller(self) -> None:
+        if not self._tool_rail.visible_author_tools():
+            return
+        tool = self._interaction.active_tool()
+        pinned = self._interaction.pinned_tool() == tool and tool != TOOL_SELECT
+        try:
+            self._tool_rail.set_active_tool(tool, pinned=pinned)
+        except ValueError:
+            return
+
+    def _on_select_tool_shortcut(self) -> None:
+        if self._text_field_has_focus() or not self._tool_rail.visible_author_tools():
+            return
+        self._on_author_tool_requested(TOOL_SELECT)
+
+    def _on_sticky_tool_shortcut(self) -> None:
+        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
+            return
+        self._on_author_tool_requested(TOOL_STICKY)
+
+    def _on_author_create_requested(self, intent) -> None:
+        self._sync_tool_rail_from_controller()
+        self.author_create_requested.emit(intent)
+
+    def _on_author_update_requested(self, intent) -> None:
+        self.author_update_requested.emit(intent)
+
+    def _on_author_delete_requested(self, intent) -> None:
+        self.author_delete_requested.emit(intent)
 
     def select_ref(self, ref: UltraViewRef) -> None:
         """Select a Board reference for coordinator-driven locate actions."""
@@ -3180,7 +3298,7 @@ class UltraViewPage(QWidget):
                 x_unit=x_unit,
                 x_range=x_range,
                 image=preview_image(record),
-                selected=self._selected == ref,
+                selected=ref in self._interaction.card_selection(),
                 dimmed=not card_matches_compare_filter(axis_kind, self._compare_filter),
                 replacement_armed=(
                     self._replacement_ref == ref
@@ -3232,17 +3350,25 @@ class UltraViewPage(QWidget):
         self._refresh_card_context()
 
     def _sync_authoring_availability(self) -> None:
-        """Enable creation controls exactly for an editable free-grid Board."""
+        """Gate creation chrome; unfinished tools stay hidden on the release rail."""
+        if not self._tool_rail.visible_author_tools():
+            self._tool_rail.set_creation_enabled(False, "创作工具尚未启用")
+            self._free_grid.set_creation_allowed(False)
+            return
         if self._presentation:
             self._tool_rail.set_creation_enabled(False, "演示模式中不能创建")
+            self._free_grid.set_creation_allowed(False)
             return
         if self._overview.isVisible():
-            self._tool_rail.set_creation_enabled(False, "总览为只读视图")
+            self._tool_rail.set_creation_enabled(False, "整板概览中不能创建")
+            self._free_grid.set_creation_allowed(False)
             return
         if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
             self._tool_rail.set_creation_enabled(False, "创作工具仅在自由网格中可用")
+            self._free_grid.set_creation_allowed(False)
             return
         self._tool_rail.set_creation_enabled(True)
+        self._free_grid.set_creation_allowed(True)
 
     def _refresh_card_context(self) -> None:
         """Card actions now live on each card; the floating island stays hidden."""
@@ -3272,7 +3398,7 @@ class UltraViewPage(QWidget):
             x_unit=x_unit,
             x_range=x_range,
             image=preview_image(record),
-            selected=self._selected == ref,
+            selected=ref in self._interaction.card_selection(),
             dimmed=not card_matches_compare_filter(axis_kind, self._compare_filter),
             replacement_armed=self._replacement_ref == ref,
             show_title=bool(self._board.show_titles),

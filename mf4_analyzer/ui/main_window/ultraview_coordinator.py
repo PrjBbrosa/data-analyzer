@@ -82,6 +82,11 @@ from ..ultraview_state import (
     BoardPlacementSnapshot,
     BoardEditEntry,
     AuthorMutationResult,
+    BoardBox,
+    StickyObject,
+    create_author_object,
+    update_author_object,
+    delete_author_objects,
     GridRect,
     apply_board_edit_entry,
     board_edit_entry_byte_cost,
@@ -105,13 +110,22 @@ from ..chart_stack.ultraview.feedback import (
     REMOVED_FROM_BOARD,
     text_for_key,
 )
+from ..chart_stack.ultraview.card_fit import (
+    REASON_NO_PREVIEW,
+    REASON_NO_SPACE,
+    CardFitFacts,
+    solve_card_fit,
+)
 from ..chart_stack.ultraview.free_grid import (
     LAYOUT_ARRANGE,
-    LAYOUT_RESIZE,
     fit_rect_for_aspect,
     plan_auto_arrange,
-    plan_layout,
     screen_grid_metrics,
+)
+from ..chart_stack.ultraview.layouts import (
+    CARD_FOOTER_HEIGHT,
+    CARD_HEADER_HEIGHT,
+    CARD_IMAGE_PADDING,
 )
 from ..chart_stack.ultraview.viewport import (
     SMOOTH_DELAY_MS,
@@ -209,6 +223,12 @@ def _alive(obj) -> bool:
         return not sip.isdeleted(obj)
     except (RuntimeError, TypeError):
         return True
+
+
+def _visible_widget_height(widget) -> int:
+    if widget is None or not _alive(widget) or widget.isHidden():
+        return 0
+    return max(0, int(widget.height()))
 
 
 def _iter_overlay_hosts(widget):
@@ -1019,6 +1039,9 @@ class UltraViewCoordinator(QObject):
             (page.auto_arrange_requested, self._on_auto_arrange_free_grid),
             (page.free_grid_undo_requested, self._on_free_grid_undo),
             (page.free_grid_redo_requested, self._on_free_grid_redo),
+            (page.author_create_requested, self._on_author_create),
+            (page.author_update_requested, self._on_author_update),
+            (page.author_delete_requested, self._on_author_delete),
             (page.show_titles_toggled, self._on_show_titles),
             (page.show_sources_toggled, self._on_show_sources),
             (page.show_card_actions_toggled, self._on_show_card_actions),
@@ -1735,35 +1758,86 @@ class UltraViewCoordinator(QObject):
         item = free_grid_placement_for(board, ref)
         if item is None:
             return
-        record = self._store.get(ref)
-        image = getattr(record, "image", None) if record is not None else None
-        if not PreviewStore.image_valid(image):
+        image_size = self._preview_fit_image_size(ref)
+        facts = self._card_fit_facts_for(board, item, image_size)
+        result = solve_card_fit(facts)
+        if result.reason == REASON_NO_PREVIEW:
             self._toast("没有可用预览，无法按原图比例调整", "warning")
+            return
+        if result.reason == REASON_NO_SPACE:
+            self._toast("附近空间不足", "warning")
+            return
+        if not result.improved or result.candidate == item.rect:
             return
         before = self._placement_snapshot(board)
         self._cancel_pending_for_ref(board.board_id, ref)
-        metrics = screen_grid_metrics(board.free_grid)
-        image_size = self._preview_fit_image_size(ref)
-        if image_size is None:
-            self._toast("没有可用预览，无法按原图比例调整", "warning")
-            return
-        wanted = fit_rect_for_aspect(item.rect, image_size, metrics)
-        if wanted == item.rect:
-            return
-        plan = plan_layout(
-            board.free_grid,
-            ref,
-            wanted,
-            LAYOUT_RESIZE,
-        )
-        if not plan.accepted:
-            self._toast("目标位置与其他卡片重叠", "warning")
-            return
-        updates = plan.committed_updates()
-        if not updates:
-            return
-        warnings = set_free_grid_rects(board, updates)
+        warnings = set_free_grid_rects(board, ((ref, result.candidate),))
         self._commit_grid_change(board, before, warnings)
+
+    def _card_fit_facts_for(
+        self,
+        board: UltraViewBoardState,
+        item,
+        image_size: tuple[int, int] | None,
+    ) -> CardFitFacts:
+        occupied = tuple(
+            other.rect for other in board.free_grid if other.ref != item.ref
+        )
+        header, footer, margin_x, margin_y, orphan = self._live_card_fit_chrome(
+            item.ref
+        )
+        return CardFitFacts(
+            image_logical_size=image_size,
+            current_rect=item.rect,
+            metrics=screen_grid_metrics(board.free_grid),
+            header_height=header,
+            footer_height=footer,
+            image_margin_x=margin_x,
+            image_margin_y=margin_y,
+            occupied=occupied,
+            orphan_height=orphan,
+        )
+
+    def _live_card_fit_chrome(
+        self, ref: UltraViewRef
+    ) -> tuple[int, int, int, int, int]:
+        """Header/footer/orphan heights and image margins from the live card.
+
+        Falls back to CARD_* constants when the widget is missing (headless
+        tests) so occupied-neighbour rejection still applies.
+        """
+        defaults = (
+            CARD_HEADER_HEIGHT,
+            CARD_FOOTER_HEIGHT,
+            CARD_IMAGE_PADDING,
+            CARD_IMAGE_PADDING,
+            0,
+        )
+        page = self.page()
+        finder = getattr(page, "card_widget", None) if page is not None else None
+        card = finder(ref.section, ref.view_id) if callable(finder) else None
+        if card is None or not _alive(card):
+            return defaults
+        image = card.findChild(QWidget, "ultraViewCardImage")
+        header = card.findChild(QWidget, "ultraViewCardHeader")
+        footer = card.findChild(QWidget, "ultraViewCardFooter")
+        orphan = card.findChild(QWidget, "ultraViewCardOrphanBar")
+        if image is None or not _alive(image):
+            return defaults
+        contents = image.contentsRect()
+        if image.width() >= 2 and contents.width() >= 1:
+            margin_x = max(0, int(contents.x()))
+            margin_y = max(0, int(contents.y()))
+        else:
+            margin_x = CARD_IMAGE_PADDING
+            margin_y = CARD_IMAGE_PADDING
+        return (
+            _visible_widget_height(header),
+            _visible_widget_height(footer),
+            margin_x,
+            margin_y,
+            _visible_widget_height(orphan),
+        )
 
     def _on_organize_free_grid(self) -> None:
         board = active_board(self._workspace)
@@ -1884,6 +1958,67 @@ class UltraViewCoordinator(QObject):
         self._clear_pending_merge_flags()
         self._after_board_mutation()
         return True
+
+    def _on_author_create(self, intent) -> None:
+        board = active_board(self._workspace)
+        kind = str(getattr(intent, "kind", "") or "")
+        if kind != "sticky":
+            return
+        box = getattr(intent, "box", None)
+        if not isinstance(box, tuple) or len(box) != 4:
+            return
+        try:
+            item = StickyObject(
+                str(getattr(intent, "object_id", "")),
+                "sticky",
+                box=BoardBox(*box),
+                text=str(getattr(intent, "text", "") or ""),
+                palette=str(getattr(intent, "palette", "") or "yellow"),
+            )
+        except (TypeError, ValueError):
+            return
+        mutation = create_author_object(board, item)
+        self._commit_author_mutation(board, mutation, label="sticky-create")
+
+    def _on_author_update(self, intent) -> None:
+        board = active_board(self._workspace)
+        object_id = str(getattr(intent, "object_id", "") or "")
+        current = next(
+            (
+                item
+                for item in board.author_objects
+                if getattr(item, "object_id", "") == object_id
+            ),
+            None,
+        )
+        if not isinstance(current, StickyObject):
+            return
+        box = getattr(intent, "box", None)
+        text = getattr(intent, "text", None)
+        palette = getattr(intent, "palette", None)
+        try:
+            item = StickyObject(
+                current.object_id,
+                "sticky",
+                locked=current.locked,
+                box=BoardBox(*box) if isinstance(box, tuple) and len(box) == 4 else current.box,
+                text=current.text if text is None else str(text),
+                palette=current.palette if palette is None else str(palette),
+                shape=current.shape,
+                font_size=current.font_size,
+            )
+        except (TypeError, ValueError):
+            return
+        mutation = update_author_object(board, object_id, item)
+        self._commit_author_mutation(board, mutation, label="sticky-edit")
+
+    def _on_author_delete(self, intent) -> None:
+        board = active_board(self._workspace)
+        object_ids = tuple(getattr(intent, "object_ids", ()) or ())
+        if not object_ids:
+            return
+        mutation = delete_author_objects(board, object_ids)
+        self._commit_author_mutation(board, mutation, label="sticky-delete")
 
     @staticmethod
     def _history_entry_byte_cost(entry: _GridHistoryEntry | BoardEditEntry) -> int:

@@ -2114,6 +2114,10 @@ def _send_mouse_move(
         modifiers,
     )
     QApplication.sendEvent(widget, event)
+    # FreeGrid move/resize coalesces pointer samples onto a 0 ms timer.
+    # Offscreen tests that send raw QMouseEvent must pump once so the board
+    # consumes the latest sample before the next assertion.
+    QApplication.processEvents()
 
 
 def _drag_card(
@@ -2294,10 +2298,13 @@ def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
 
 
 def test_drag_over_neighbour_and_back_leaves_no_dim_behind(qtbot):
-    """Dragging across a neighbour and back to the original cell must not leave the
-    neighbour at drag opacity: the dim set is recomputed every move, so it has to be
-    undimmed incrementally and cleared unconditionally on release
-    (review 2026-08-15 §4.3 dim 泄漏)."""
+    """Dragging across a neighbour and back must not leave a drag effect.
+
+    Recovery R1 stopped allocating ``QGraphicsOpacityEffect`` mid-gesture.
+    The mover keeps a shell-only placeholder; displaced neighbours stay
+    opaque and are previewed as overlay outlines. Leaving the plan must
+    still restore the mover placeholder set on the same consumed sample.
+    """
     harness = _Harness(qtbot)
     free, (card, other) = _prepare_free_grid(harness, qtbot, "dim-0", "dim-1")
     requested = []
@@ -2311,26 +2318,29 @@ def test_drag_over_neighbour_and_back_leaves_no_dim_behind(qtbot):
     QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
     _send_mouse_move(card, over)
     assert free.gesture().is_active()
-    assert other.graphicsEffect() is not None, "the displaced neighbour is previewed"
+    assert other.graphicsEffect() is None
+    assert other._drag_shell_only is False
+    assert card._drag_shell_only is True
+    assert len(free._overlay._highlights) >= 2
     _send_mouse_move(card, start)
     session = free.gesture().session()
     assert session is not None and session.plan is not None
     assert [ref for ref, _rect in session.plan.preview_rects()] == [
         make_ref("time", "dim-0")
     ]
-    assert other.graphicsEffect() is None, (
-        "the neighbour left the plan, so its dim must be dropped on the same frame"
-    )
+    assert other.graphicsEffect() is None
+    assert other._drag_shell_only is False
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, start)
     assert requested == [] and group == []
     assert other.graphicsEffect() is None
     assert card.graphicsEffect() is None
+    assert card._drag_shell_only is False
     assert free._dimmed_refs == set()
 
 
 def test_cancelled_drag_restores_every_dimmed_card(qtbot):
-    """Esc is the path where nothing re-applies the model, so the board's own dim
-    bookkeeping is the only thing that can undo it."""
+    """Esc is the path where nothing re-applies the model, so the board's own
+    placeholder bookkeeping is the only thing that can undo it."""
     harness = _Harness(qtbot)
     free, (card, other) = _prepare_free_grid(harness, qtbot, "esc-dim-0", "esc-dim-1")
     metrics = free.metrics()
@@ -2338,10 +2348,13 @@ def test_cancelled_drag_restores_every_dimmed_card(qtbot):
     start = QPoint(16, 16)
     QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
     _send_mouse_move(card, QPoint(start.x() + unit * 6, start.y()))
-    assert other.graphicsEffect() is not None
+    assert card._drag_shell_only is True
+    assert other.graphicsEffect() is None
+    assert other._drag_shell_only is False
     assert free.cancel_gesture() is True
     assert other.graphicsEffect() is None
     assert card.graphicsEffect() is None
+    assert card._drag_shell_only is False
     assert free._dimmed_refs == set()
 
 
@@ -4701,6 +4714,27 @@ def test_board_context_menu_suppressed_during_overview_presentation_and_drag(qtb
     _send_context_menu(free, pos)
     assert _visible_menus(BOARD_MENU_OBJECT_NAME) == []
     harness.page._drag_kind = None
+
+
+def test_board_zoom_fit_does_not_mutate_placements(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref("time", "fit-a"))
+    add_ref(harness.board, make_ref("fft", "fit-b"))
+    harness.page.set_board(harness.board)
+    template_to_free_grid(harness.board)
+    before = tuple((item.ref, item.rect) for item in harness.board.free_grid)
+    authors = tuple(harness.board.author_objects)
+    unplaced = tuple(harness.board.unplaced)
+    assert before
+    harness.page.zoom_fit()
+    qtbot.wait(10)
+    after = tuple((item.ref, item.rect) for item in harness.board.free_grid)
+    assert after == before
+    assert tuple(harness.board.author_objects) == authors
+    assert tuple(harness.board.unplaced) == unplaced
+    assert harness.auto_arrange == 0
+    assert harness.grid_undo == 0
 
 
 def test_board_context_menu_escape_closes_and_actions_emit(qtbot):

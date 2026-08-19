@@ -2,7 +2,8 @@
 
 Qt-free: pixel positions are ``(x, y)`` tuples. Widgets feed events in and
 commit through the existing ``geometry_requested`` intent. No second write path.
-Selection and marquee live here so the board does not keep a parallel copy.
+Card selection is a projection of ``BoardInteractionController``; this module
+owns only the move/resize/marquee session.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from typing import ClassVar, Iterable
 
 from mf4_analyzer.ui.ultraview_state import FreeGridPlacement, GridRect, UltraViewRef
 
+from .author_tools import BoardInteractionController
 from .free_grid import (
     GridMetrics,
     LAYOUT_MOVE,
@@ -44,6 +46,7 @@ class GestureSession:
     group_candidates: dict[UltraViewRef, GridRect] = field(default_factory=dict)
     plan: LayoutPlan | None = None
     layout_revision: int = 0
+    plan_reused: bool = False
 
     def ghost_pixels(self, metrics: GridMetrics, pos: tuple[int, int]) -> Rect:
         rect = self._preview_rect()
@@ -143,12 +146,19 @@ MoveSession = GestureSession
 
 @dataclass
 class FreeGridGesture:
-    """Owned move/resize/selection session. Widgets must not keep a parallel copy."""
+    """Owned move/resize session. Card selection is a projection of the controller."""
 
-    _owned_names: ClassVar[tuple[str, ...]] = ("_session", "_selection", "_marquee")
+    interaction: BoardInteractionController = field(
+        default_factory=BoardInteractionController
+    )
+    _owned_names: ClassVar[tuple[str, ...]] = (
+        "_session",
+        "_marquee",
+        "_plan_fingerprint",
+    )
     _session: GestureSession | None = field(default=None, init=False)
-    _selection: frozenset[UltraViewRef] = field(default_factory=frozenset, init=False)
     _marquee: MarqueeSession | None = field(default=None, init=False)
+    _plan_fingerprint: tuple | None = field(default=None, init=False)
 
     def session(self) -> GestureSession | None:
         return self._session
@@ -160,31 +170,25 @@ class FreeGridGesture:
         return self._session is not None
 
     def selection(self) -> frozenset[UltraViewRef]:
-        return self._selection
+        return self.interaction.card_selection()
 
     def select_only(self, ref: UltraViewRef) -> None:
-        self._selection = frozenset((ref,))
+        self.interaction.select_only_card(ref)
 
     def toggle_selected(self, ref: UltraViewRef) -> None:
-        current = set(self._selection)
-        if ref in current:
-            current.discard(ref)
-        else:
-            current.add(ref)
-        self._selection = frozenset(current)
+        self.interaction.toggle_card(ref)
 
     def set_selection(self, refs: Iterable[UltraViewRef]) -> None:
-        self._selection = frozenset(refs)
+        self.interaction.replace_card_selection(refs)
 
     def add_to_selection(self, refs: Iterable[UltraViewRef]) -> None:
-        self._selection = self._selection | frozenset(refs)
+        self.interaction.add_cards_to_selection(refs)
 
     def clear_selection(self) -> None:
-        self._selection = frozenset()
+        self.interaction.clear_card_keys()
 
     def restrict_selection(self, wanted: Iterable[UltraViewRef]) -> None:
-        allowed = set(wanted)
-        self._selection = frozenset(ref for ref in self._selection if ref in allowed)
+        self.interaction.restrict_cards(wanted)
 
     def marquee(self) -> MarqueeSession | None:
         return self._marquee
@@ -228,6 +232,7 @@ class FreeGridGesture:
         layout_revision: int = 0,
     ) -> None:
         origins = dict(group_origins) if group_origins else {ref: origin}
+        self._plan_fingerprint = None
         self._session = GestureSession(
             ref=ref,
             origin=origin,
@@ -274,6 +279,7 @@ class FreeGridGesture:
         dy = pos[1] - session.press[1]
         if not session.active:
             if abs(dx) + abs(dy) < max(1, int(start_drag_distance)):
+                session.plan_reused = False
                 return session
             session.active = True
         session.keep_aspect = bool(keep_aspect) and session.handle is not None
@@ -282,8 +288,17 @@ class FreeGridGesture:
             translated, in_bounds = group_translate_rects(
                 session.group_origins, (), column_delta, row_delta
             )
+            candidate = translated.get(session.ref, session.origin)
+            fingerprint = _layout_fingerprint(
+                session, candidate, translated, LAYOUT_MOVE
+            )
+            if fingerprint == self._plan_fingerprint:
+                session.plan_reused = True
+                return session
+            session.plan_reused = False
             session.group_candidates = translated
-            session.candidate = translated.get(session.ref, session.origin)
+            session.candidate = candidate
+            self._plan_fingerprint = fingerprint
             if not in_bounds:
                 session.plan = None
                 session.legal = False
@@ -302,18 +317,26 @@ class FreeGridGesture:
                 session.candidate = session.plan.mover_after
             return session
         if session.handle is None:
-            session.candidate = translated_move_rect(session.origin, (dx, dy), metrics)
-            session.group_candidates = {session.ref: session.candidate}
+            candidate = translated_move_rect(session.origin, (dx, dy), metrics)
+            incoming = {session.ref: candidate}
         else:
-            session.candidate = snapped_resize_rect(
+            candidate = snapped_resize_rect(
                 session.origin,
                 (dx, dy),
                 metrics,
                 session.handle,
                 keep_aspect=session.keep_aspect,
             )
-            session.group_candidates = {session.ref: session.candidate}
+            incoming = {session.ref: candidate}
         operation = LAYOUT_RESIZE if session.handle is not None else LAYOUT_MOVE
+        fingerprint = _layout_fingerprint(session, candidate, incoming, operation)
+        if fingerprint == self._plan_fingerprint:
+            session.plan_reused = True
+            return session
+        session.plan_reused = False
+        session.candidate = candidate
+        session.group_candidates = dict(incoming)
+        self._plan_fingerprint = fingerprint
         session.plan = plan_layout(
             placements,
             session.ref,
@@ -332,7 +355,43 @@ class FreeGridGesture:
     def cancel(self) -> GestureSession | None:
         session = self._session
         self._session = None
+        self._plan_fingerprint = None
         return session
 
     def take(self) -> GestureSession | None:
         return self.cancel()
+
+
+def _layout_fingerprint(
+    session: GestureSession,
+    candidate: GridRect,
+    incoming: dict[UltraViewRef, GridRect],
+    operation: str,
+) -> tuple:
+    """Cache key for drag-time plan_layout: skip identical snapped candidates."""
+    incoming_key = tuple(
+        (
+            ref.section,
+            ref.view_id,
+            rect.column,
+            rect.row,
+            rect.column_span,
+            rect.row_span,
+        )
+        for ref, rect in sorted(
+            incoming.items(),
+            key=lambda item: (item[0].section, item[0].view_id),
+        )
+    )
+    return (
+        session.layout_revision,
+        session.ref.section,
+        session.ref.view_id,
+        candidate.column,
+        candidate.row,
+        candidate.column_span,
+        candidate.row_span,
+        operation,
+        incoming_key,
+        session.keep_aspect,
+    )

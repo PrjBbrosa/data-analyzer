@@ -68,6 +68,8 @@ from mf4_analyzer.ui.ultraview_state import (
     GridAnchor,
     GridBounds,
     GridRect,
+    BoardBox,
+    StickyObject,
     UltraViewBoardState,
     safety_grid_bounds,
     UltraViewRef,
@@ -93,12 +95,14 @@ from .layouts import (
     slot_rects,
 )
 from .feedback import (
+    AUTHOR_LOCKED,
     FEEDBACK_DISPLACED_OFFSCREEN,
     FEEDBACK_NO_LEGAL_LAYOUT,
     FEEDBACK_OUT_OF_GRID,
     FEEDBACK_REARRANGED,
     FEEDBACK_SEARCH_BUDGET,
     format_rearranged,
+    text_for_key,
     text_for_reason,
 )
 from .free_grid import (
@@ -116,10 +120,26 @@ from .free_grid import (
     rect_to_pixels,
     screen_grid_metrics,
 )
-from .author_geometry import board_box_to_pixels
+from .author_geometry import board_box_to_pixels, pixels_to_board_point
 from .author_layer import AuthorLayerModel, AuthorPaintLayer
-from .author_style import DEFAULT_THEME
-from .author_widgets import BoardTextEditor
+from .author_style import DEFAULT_STICKY_PALETTE, DEFAULT_THEME
+from .author_tools import (
+    HIT_AUTHOR,
+    HIT_BLANK,
+    TOOL_STICKY,
+    AuthorCreateIntent,
+    AuthorDeleteIntent,
+    AuthorKey,
+    AuthorUpdateIntent,
+    BoardInteractionController,
+    CardKey,
+    HitTarget,
+    clamp_author_box,
+    new_author_object_id,
+    resolve_board_hit,
+    sticky_box_from_points,
+)
+from .author_widgets import BoardTextEditor, StickyNoteWidget
 from .elastic_workspace import author_content_bounds
 from .gesture import FreeGridGesture
 from .ghost_overlay import GhostOverlay
@@ -1711,7 +1731,7 @@ class _CardActionBar(QFrame):
     which dropped the buttons ~2 px below the header center.
     """
 
-    _FIT_TOOLTIP = "按原图比例调整卡片"
+    _FIT_TOOLTIP = "按原图比例收紧当前卡片，不移动邻卡、不整板改尺寸"
     _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
     _REMOVE_TOOLTIP = "从当前 Board 移除（不删除源 View）"
     _HEIGHT = 24
@@ -2407,6 +2427,10 @@ class UltraViewCard(QFrame):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
+            router = getattr(self.parentWidget(), "route_card_press", None)
+            if callable(router) and router(self, event):
+                event.accept()
+                return
             self._press_pos = QPoint(event.pos())
             self.selected.emit(self._model.section, self._model.view_id)
             handler = getattr(self.parentWidget(), "handle_card_mouse_press", None)
@@ -2959,9 +2983,29 @@ class FreeGridCard(UltraViewCard):
     preset_requested = pyqtSignal(str, str, str)
 
     def __init__(self, model: CardViewModel, parent: QWidget | None = None) -> None:
+        self._drag_shell_only = False
         super().__init__(model, parent)
         self.setMouseTracking(True)
         self.setAcceptDrops(False)
+
+    def set_drag_placeholder(self, on: bool) -> None:
+        """Hide preview pixels while keeping the card shell during a live drag."""
+        wanted = bool(on)
+        if self._drag_shell_only == wanted:
+            return
+        self._drag_shell_only = wanted
+        if wanted:
+            self._image.clear()
+            return
+        if self._raw_image is not None:
+            self._fit_card_image()
+            return
+        self._set_image(self._model)
+
+    def _fit_card_image(self) -> None:
+        if getattr(self, "_drag_shell_only", False):
+            return
+        super()._fit_card_image()
 
     def _fit_is_enabled(self) -> bool:
         return True
@@ -3077,6 +3121,9 @@ class FreeGridBoard(QWidget):
     # on every finish/cancel path.  The Page owns the edge-pan timer and reads
     # the current cursor itself, so this is only a lifetime/pointer handoff.
     workspace_gesture_changed = pyqtSignal(bool, object)
+    author_create_requested = pyqtSignal(object)
+    author_update_requested = pyqtSignal(object)
+    author_delete_requested = pyqtSignal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -3100,16 +3147,28 @@ class FreeGridBoard(QWidget):
         # keep their existing Qt delivery paths.
         self._author_objects: tuple[object, ...] = ()
         self._author_theme = DEFAULT_THEME
-        self._author_selection_ids: set[str] = set()
         self._author_layer = AuthorPaintLayer(self)
         # Text editing needs a real widget for CJK IME.  It remains hidden
         # until the creation controller starts an edit transaction; painting
         # ordinary TextObject instances stays in AuthorPaintLayer.
         self._author_text_editor = BoardTextEditor(self)
+        self._sticky_note = StickyNoteWidget(self)
+        self._sticky_note.hide()
+        self._sticky_note.text_committed.connect(self._on_sticky_text_committed)
+        self._sticky_note.edit_cancelled.connect(self._on_sticky_edit_cancelled)
+        self._creation_allowed = False
+        self._author_geometry_session: dict[str, object] | None = None
         self._workspace_gesture_active = False
-        self._gesture = FreeGridGesture()
+        self._interaction = BoardInteractionController()
+        self._gesture = FreeGridGesture(self._interaction)
         self._overlay = GhostOverlay(self)
         self._overlay.hide()
+        self._latest_pointer_sample: tuple[tuple[int, int], bool, QPoint | None] | None = None
+        self._pointer_coalesce_timer = QTimer(self)
+        self._pointer_coalesce_timer.setSingleShot(True)
+        self._pointer_coalesce_timer.setInterval(0)
+        self._pointer_coalesce_timer.timeout.connect(self._consume_latest_pointer_sample)
+        self._ghost_buffers: dict[UltraViewRef, QPixmap] = {}
         self._replace = ReplaceHoverController(self)
         self._replace.armed.connect(self._on_replace_armed)
         self._replace.cleared.connect(self._on_replace_cleared)
@@ -3123,10 +3182,9 @@ class FreeGridBoard(QWidget):
         self._insert_preview_rect: GridRect | None = None
         self._insert_span_resolver: Callable[[str, str], tuple[int, int] | None] | None = None
         self._insert_drag_ref: tuple[str, str] | None = None
-        # Cards currently wearing the drag dim, owned by the board so the set
-        # can shrink mid-gesture; the plan's preview set changes on every move.
+        # Movers currently showing a shell-only placeholder (no drag opacity).
         self._dimmed_refs: set[UltraViewRef] = set()
-        self._last_legal_ghosts: tuple[tuple[QImage | None, tuple[int, int, int, int]], ...] = ()
+        self._last_legal_ghosts: tuple[tuple[QImage | QPixmap | None, tuple[int, int, int, int]], ...] = ()
         self._last_legal_highlights: tuple[tuple[int, int, int, int], ...] = ()
         self.destroyed.connect(self._on_workspace_destroyed)
 
@@ -3138,6 +3196,7 @@ class FreeGridBoard(QWidget):
         """
         if size == self._viewport_size:
             return
+        self._stop_pointer_coalesce(drop=True)
         if self._gesture.is_active():
             self.cancel_gesture()
         self._viewport_size = QSize(size)
@@ -3210,6 +3269,29 @@ class FreeGridBoard(QWidget):
         """Return the direct-child IME-safe editor owned by this Board."""
         return self._author_text_editor
 
+    def sticky_note_widget(self) -> StickyNoteWidget:
+        """Return the sibling Sticky editor; never parented to the paint layer."""
+        return self._sticky_note
+
+    def set_creation_allowed(self, allowed: bool) -> None:
+        """Page gates Sticky create for presentation / overview / template."""
+        self._creation_allowed = bool(allowed)
+        if self._creation_allowed:
+            self._sync_tool_cursor()
+            return
+        self.hide_author_editor()
+        if self._interaction.draft() is not None:
+            self._interaction.cancel_draft()
+            self._overlay.set_marquee(None)
+        self._sync_tool_cursor()
+
+    def creation_allowed(self) -> bool:
+        return self._creation_allowed
+
+    def interaction(self) -> BoardInteractionController:
+        """Single Board interaction owner. Selection/tool/draft live here."""
+        return self._interaction
+
     def set_author_objects(
         self,
         objects: Sequence[object],
@@ -3219,7 +3301,7 @@ class FreeGridBoard(QWidget):
         """Project persisted author objects without taking mutation ownership."""
         self._author_objects = tuple(objects)
         self._author_theme = str(theme or DEFAULT_THEME)
-        self._author_selection_ids.intersection_update(
+        self._interaction.restrict_authors(
             {
                 str(getattr(item, "object_id", ""))
                 for item in self._author_objects
@@ -3229,16 +3311,34 @@ class FreeGridBoard(QWidget):
         self._sync_author_projection()
 
     def clear_author_selection(self) -> bool:
-        """Clear the Board-owned author selection chrome, if any.
-
-        The creation controller may later populate this set through a single
-        owner; Page only asks the Board to clear it alongside card selection.
-        """
-        if not self._author_selection_ids:
+        """Clear author keys through the shared controller."""
+        if not self._interaction.clear_author_keys():
             return False
-        self._author_selection_ids.clear()
         self._sync_author_projection()
         return True
+
+    def author_selection_ids(self) -> frozenset[str]:
+        return self._interaction.author_selection_ids()
+
+    def hide_author_editor(self) -> bool:
+        """Hide the IME editor without committing. Safe when nothing is editing."""
+        hidden = False
+        if self._sticky_note.is_editing():
+            self._sticky_note.hide_edit()
+            hidden = True
+        editor = self._author_text_editor
+        if editor.is_editing():
+            editor.cancel()
+            hidden = True
+        self._interaction.set_editor_active(False)
+        return hidden
+
+    def reset_transient_interaction(self) -> None:
+        """Board switch/clear: drop tool/selection/draft/hover; keep coalesce owner."""
+        self.hide_author_editor()
+        self._interaction.reset_session()
+        self._apply_selection_flags()
+        self._sync_author_projection()
 
     def _author_pixel_rect(
         self, metrics: GridMetrics
@@ -3260,7 +3360,7 @@ class FreeGridBoard(QWidget):
 
     def _sync_author_projection(self) -> None:
         boxes = []
-        selected = self._author_selection_ids
+        selected = self._interaction.author_selection_ids()
         if selected:
             for item in self._author_objects:
                 if str(getattr(item, "object_id", "")) not in selected:
@@ -3284,6 +3384,11 @@ class FreeGridBoard(QWidget):
         )
         if self._author_text_editor.is_editing():
             self._author_text_editor.update_board_geometry(
+                self._metrics,
+                origin_offset=self._workspace_origin_offset(),
+            )
+        if self._sticky_note.is_editing():
+            self._sticky_note.update_board_geometry(
                 self._metrics,
                 origin_offset=self._workspace_origin_offset(),
             )
@@ -3528,6 +3633,9 @@ class FreeGridBoard(QWidget):
     def _on_workspace_destroyed(self, _object=None) -> None:
         # QObject teardown can arrive after child deletion.  Emitting the
         # lifetime end is safe and lets Page stop an edge timer it owns.
+        self._stop_pointer_coalesce(drop=True)
+        self.hide_author_editor()
+        self._interaction.reset_session()
         if not self._workspace_gesture_active:
             return
         self._workspace_gesture_active = False
@@ -3539,6 +3647,7 @@ class FreeGridBoard(QWidget):
             pass
 
     def cancel_gesture(self) -> bool:
+        self._stop_pointer_coalesce(drop=True)
         cancelled = False
         if self._insert_preview_rect is not None:
             self._clear_insert_preview()
@@ -3546,6 +3655,14 @@ class FreeGridBoard(QWidget):
             cancelled = True
         if self._pending_shift_toggle is not None:
             self._pending_shift_toggle = None
+            cancelled = True
+        if self._interaction.draft() is not None:
+            self._interaction.cancel_draft()
+            self._overlay.set_marquee(None)
+            self.hide_author_editor()
+            cancelled = True
+        if self._author_geometry_session is not None:
+            self._author_geometry_session = None
             cancelled = True
         if self._gesture.session() is not None:
             self._finish_gesture(commit=False)
@@ -3563,17 +3680,21 @@ class FreeGridBoard(QWidget):
         self._emit_workspace_gesture(False)
         return cancelled
 
+    def sync_selection_projection(self) -> None:
+        """Refresh card/author chrome from the shared controller."""
+        self._apply_selection_flags()
+
     def select_only(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        self._gesture.select_only(ref)
+        self._interaction.select_only_card(ref)
         self._apply_selection_flags()
 
     def clear_selection(self) -> bool:
-        if not self._gesture.selection():
+        changed = self._interaction.clear_selection()
+        if not changed:
             return False
-        self._gesture.clear_selection()
         self._apply_selection_flags()
         return True
 
@@ -3589,6 +3710,8 @@ class FreeGridBoard(QWidget):
         placements: Sequence[FreeGridPlacement],
         models: Mapping[UltraViewRef, CardViewModel],
     ) -> None:
+        self._stop_pointer_coalesce(drop=True)
+        self._ghost_buffers.clear()
         self._placements = {item.ref: item for item in placements}
         self._models = dict(models)
         self._layout_revision += 1
@@ -3638,10 +3761,12 @@ class FreeGridBoard(QWidget):
     def _raise_overlay(self) -> None:
         self._author_layer.setGeometry(self.rect())
         self._author_layer.raise_()
-        if self._author_text_editor.is_editing():
-            self._author_text_editor.raise_()
         self._overlay.setGeometry(self.rect())
         self._overlay.raise_()
+        if self._author_text_editor.is_editing():
+            self._author_text_editor.raise_()
+        if self._sticky_note.is_editing():
+            self._sticky_note.raise_()
 
     def _sync_metrics(self) -> None:
         self._base_metrics = screen_grid_metrics(list(self._placements.values()))
@@ -3654,6 +3779,7 @@ class FreeGridBoard(QWidget):
         self._relayout()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
+        self._stop_pointer_coalesce(drop=True)
         super().resizeEvent(event)
         self._relayout()
         self._raise_overlay()
@@ -3745,6 +3871,7 @@ class FreeGridBoard(QWidget):
             self._models[ref] = updated
             widget.apply_model(updated)
         self._sync_selection_handles()
+        self._sync_author_projection()
 
     def _sync_selection_handles(self) -> None:
         if self._gesture.is_active() or self._gesture.marquee() is not None:
@@ -3756,6 +3883,21 @@ class FreeGridBoard(QWidget):
                 continue
             geom = widget.geometry()
             rects.append((geom.x(), geom.y(), geom.width(), geom.height()))
+        origin = self._workspace_origin_offset()
+        for item in self._author_objects:
+            object_id = str(getattr(item, "object_id", "") or "")
+            if object_id not in self._interaction.author_selection_ids():
+                continue
+            box = getattr(item, "box", None)
+            if box is None:
+                continue
+            mapped = board_box_to_pixels(
+                (box.x, box.y, box.width, box.height),
+                self._metrics,
+                origin_offset=origin,
+            )
+            if mapped is not None:
+                rects.append(self._pixel_box(mapped))
         self._overlay.set_selection_rects(rects, handles=len(rects) == 1)
 
     def handle_card_mouse_press(
@@ -3797,7 +3939,7 @@ class FreeGridBoard(QWidget):
             self._pending_shift_toggle = ref
             return
         if ref not in self._gesture.selection():
-            self._gesture.select_only(ref)
+            self._interaction.select_only_card(ref)
             self._apply_selection_flags()
         handle = None
         if already_selected and len(self._gesture.selection()) == 1:
@@ -3852,7 +3994,9 @@ class FreeGridBoard(QWidget):
             card.setCursor(cursor)
 
     def handle_card_mouse_move(self, card: FreeGridCard, event: QMouseEvent) -> None:
-        self._update_gesture_at(
+        if not self._gesture.is_armed():
+            return
+        self._queue_pointer_sample(
             self._logical_board_pos(self._board_pos(card, event.pos())),
             keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
             global_pos=event.globalPos(),
@@ -3864,11 +4008,12 @@ class FreeGridBoard(QWidget):
         if self._finish_pending_shift_toggle():
             return
         if self._gesture.is_armed():
-            self._update_gesture_at(
+            self._queue_pointer_sample(
                 self._logical_board_pos(self._board_pos(card, event.pos())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
                 global_pos=event.globalPos(),
             )
+            self._flush_pointer_sample()
         self._finish_gesture(commit=True, global_pos=event.globalPos())
 
     def _finish_pending_shift_toggle(self) -> bool:
@@ -3876,13 +4021,278 @@ class FreeGridBoard(QWidget):
         self._pending_shift_toggle = None
         if ref is None:
             return False
-        self._gesture.toggle_selected(ref)
+        self._interaction.toggle_card(ref)
         self._apply_selection_flags()
         return True
+
+    def sync_tool_cursor(self) -> None:
+        self._sync_tool_cursor()
+
+    def _sticky_create_armed(self) -> bool:
+        return (
+            self._creation_allowed
+            and self._interaction.active_tool() == TOOL_STICKY
+            and not self._interaction.is_editor_active()
+        )
+
+    def _sync_tool_cursor(self) -> None:
+        if self._sticky_create_armed():
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.unsetCursor()
+
+    def _pixel_to_board_point(self, pos: QPoint) -> tuple[float, float] | None:
+        return pixels_to_board_point(
+            (float(pos.x()), float(pos.y())),
+            self._metrics,
+            origin_offset=self._workspace_origin_offset(),
+        )
+
+    def _author_item(self, object_id: str):
+        for item in self._author_objects:
+            if str(getattr(item, "object_id", "") or "") == object_id:
+                return item
+        return None
+
+    def _draft_pixel_rect(self) -> tuple[int, int, int, int] | None:
+        draft = self._interaction.draft()
+        if draft is None or draft.origin is None:
+            return None
+        box = sticky_box_from_points(draft.origin, draft.current)
+        mapped = board_box_to_pixels(box, self._metrics, origin_offset=self._workspace_origin_offset())
+        if mapped is None:
+            return None
+        return self._pixel_box(mapped)
+
+    def _pixel_box(
+        self, mapped: tuple[float, float, float, float]
+    ) -> tuple[int, int, int, int]:
+        x, y, width, height = mapped
+        return (
+            int(round(x)),
+            int(round(y)),
+            max(1, int(round(width))),
+            max(1, int(round(height))),
+        )
+
+    def route_card_press(self, card: FreeGridCard, event: QMouseEvent) -> bool:
+        """I3: author objects above a card consume the press before card drag."""
+        mapped = QPoint(*self._board_pos(card, event.pos()))
+        self._close_sticky_editor_if_outside(mapped)
+        hit = self.classify_press(mapped, modifiers=event.modifiers())
+        if hit.kind != HIT_AUTHOR:
+            return False
+        self._handle_author_press(hit, event, mapped)
+        return True
+
+    def _close_sticky_editor_if_outside(self, pos: QPoint) -> None:
+        if not self._sticky_note.is_editing():
+            return
+        if self._sticky_note.geometry().contains(pos):
+            return
+        self._commit_or_cancel_sticky_editor()
+
+    def _commit_or_cancel_sticky_editor(self) -> None:
+        if not self._sticky_note.is_editing():
+            return
+        if not str(self._sticky_note.current_text() or "").strip():
+            self._sticky_note.cancel()
+            return
+        self._sticky_note.commit()
+
+    def _handle_author_press(
+        self, hit: HitTarget, event: QMouseEvent, pos: QPoint
+    ) -> None:
+        if not isinstance(hit.item, AuthorKey):
+            return
+        item = self._author_item(hit.item.object_id)
+        additive = bool(event.modifiers() & Qt.ShiftModifier)
+        if additive:
+            self._interaction.toggle(hit.item)
+            self._apply_selection_flags()
+            return
+        self._interaction.select_only(hit.item)
+        self._apply_selection_flags()
+        if item is not None and bool(getattr(item, "locked", False)):
+            self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
+            return
+        if event.type() == QEvent.MouseButtonDblClick:
+            self._begin_sticky_edit(item)
+            return
+        if item is None or not isinstance(item, StickyObject):
+            return
+        box = item.box
+        mapped = board_box_to_pixels(
+            (box.x, box.y, box.width, box.height),
+            self._metrics,
+            origin_offset=self._workspace_origin_offset(),
+        )
+        if mapped is None:
+            return
+        handle = hit_handle(
+            (int(mapped[0]), int(mapped[1]), int(mapped[2]), int(mapped[3])),
+            (pos.x(), pos.y()),
+        )
+        board_point = self._pixel_to_board_point(pos)
+        self._author_geometry_session = {
+            "object_id": item.object_id,
+            "kind": "resize" if handle else "move",
+            "handle": handle,
+            "origin": board_point,
+            "box": (box.x, box.y, box.width, box.height),
+        }
+
+    def _begin_sticky_draft(self, pos: QPoint) -> None:
+        origin = self._pixel_to_board_point(pos)
+        if origin is None:
+            return
+        self._interaction.begin_draft(
+            TOOL_STICKY, origin=origin, object_id=new_author_object_id()
+        )
+        self._overlay.set_marquee(self._draft_pixel_rect())
+        self._emit_workspace_gesture(True)
+
+    def _update_sticky_draft(self, pos: QPoint) -> None:
+        current = self._pixel_to_board_point(pos)
+        self._interaction.update_draft(current)
+        rect = self._draft_pixel_rect()
+        if rect is not None:
+            self._overlay.set_marquee(rect)
+
+    def _finish_sticky_draft(self) -> None:
+        draft = self._interaction.draft()
+        self._release_mouse_if_grabbed()
+        self._overlay.set_marquee(None)
+        self._emit_workspace_gesture(False)
+        if draft is None or draft.origin is None or draft.object_id is None:
+            self._interaction.cancel_draft()
+            return
+        box = sticky_box_from_points(draft.origin, draft.current)
+        item = StickyObject(
+            draft.object_id,
+            "sticky",
+            box=BoardBox(*box),
+            text="",
+            palette=str(draft.palette or DEFAULT_STICKY_PALETTE),
+        )
+        self._sticky_note.apply_object(
+            item,
+            self._metrics,
+            origin_offset=self._workspace_origin_offset(),
+            theme=self._author_theme,
+        )
+        self._interaction.set_editor_active(True)
+        self._sticky_note.begin_edit()
+        self._raise_overlay()
+
+    def _begin_sticky_edit(self, item) -> None:
+        if not isinstance(item, StickyObject):
+            return
+        if bool(getattr(item, "locked", False)):
+            self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
+            return
+        self._sticky_note.apply_object(
+            item,
+            self._metrics,
+            origin_offset=self._workspace_origin_offset(),
+            theme=self._author_theme,
+        )
+        self._interaction.set_editor_active(True)
+        self._sticky_note.begin_edit()
+        self._raise_overlay()
+
+    def _on_sticky_text_committed(self, object_id: str, text: str) -> None:
+        draft = self._interaction.draft()
+        pending = draft is not None and draft.object_id == object_id
+        self._sticky_note.hide_edit()
+        self._interaction.set_editor_active(False)
+        cleaned = str(text or "")
+        if pending:
+            if not cleaned.strip():
+                self._interaction.cancel_draft()
+                self._sync_tool_cursor()
+                return
+            box = sticky_box_from_points(draft.origin or (0.0, 0.0), draft.current)
+            self._interaction.commit_draft()
+            self.author_create_requested.emit(
+                AuthorCreateIntent(
+                    TOOL_STICKY,
+                    object_id,
+                    box,
+                    cleaned,
+                    str(draft.palette or DEFAULT_STICKY_PALETTE),
+                )
+            )
+            self._sync_tool_cursor()
+            return
+        self.author_update_requested.emit(AuthorUpdateIntent(object_id, text=cleaned))
+
+    def _on_sticky_edit_cancelled(self, object_id: str) -> None:
+        draft = self._interaction.draft()
+        self._interaction.set_editor_active(False)
+        if draft is not None and draft.object_id == object_id:
+            self._interaction.cancel_draft()
+        self._sync_tool_cursor()
+
+    def _update_author_geometry(self, pos: QPoint) -> None:
+        session = self._author_geometry_session
+        if not session or session.get("origin") is None:
+            return
+        current = self._pixel_to_board_point(pos)
+        if current is None:
+            return
+        ox, oy = session["origin"]  # type: ignore[misc]
+        x, y, width, height = session["box"]  # type: ignore[misc]
+        dx = current[0] - ox
+        dy = current[1] - oy
+        handle = session.get("handle")
+        if session.get("kind") == "move" or not handle:
+            box = clamp_author_box(x + dx, y + dy, width, height)  # type: ignore[name-defined]
+        else:
+            box = self._resize_author_box((x, y, width, height), str(handle), dx, dy)
+        mapped = board_box_to_pixels(box, self._metrics, origin_offset=self._workspace_origin_offset())
+        if mapped is not None:
+            self._overlay.set_selection_rects((self._pixel_box(mapped),), handles=True)
+
+    def _resize_author_box(
+        self,
+        box: tuple[float, float, float, float],
+        handle: str,
+        dx: float,
+        dy: float,
+    ) -> tuple[float, float, float, float]:
+        x, y, width, height = box
+        x2, y2 = x + width, y + height
+        if "w" in handle:
+            x = x + dx
+        if "e" in handle:
+            x2 = x2 + dx
+        if "n" in handle:
+            y = y + dy
+        if "s" in handle:
+            y2 = y2 + dy
+        return clamp_author_box(min(x, x2), min(y, y2), abs(x2 - x), abs(y2 - y))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
+            return
+        was_editing = self._sticky_note.is_editing() or self._author_text_editor.is_editing()
+        self._close_sticky_editor_if_outside(event.pos())
+        if was_editing:
+            event.accept()
+            return
+        hit = self.classify_press(
+            event.pos(),
+            modifiers=event.modifiers(),
+            viewport_pan=False,
+        )
+        if hit.kind == HIT_AUTHOR:
+            page = _page_of(self)
+            if page is not None:
+                page.notify_canvas_click()
+            self._handle_author_press(hit, event, event.pos())
+            event.accept()
             return
         if self._card_at(event.pos()) is not None:
             super().mousePressEvent(event)
@@ -3890,13 +4300,16 @@ class FreeGridBoard(QWidget):
         page = _page_of(self)
         if page is not None:
             page.notify_canvas_click()
+        if self._sticky_create_armed() and hit.kind == HIT_BLANK:
+            self._begin_sticky_draft(event.pos())
+            event.accept()
+            return
         additive = bool(event.modifiers() & Qt.ShiftModifier)
         if not additive:
-            page = _page_of(self)
             if page is not None:
                 page.clear_card_selection()
-            elif self._gesture.selection():
-                self._gesture.clear_selection()
+            elif self._interaction.selection():
+                self._interaction.clear_selection()
                 self._apply_selection_flags()
         self._gesture.begin_marquee((event.pos().x(), event.pos().y()), additive)
         self._overlay.set_marquee(self._gesture.marquee_rect())
@@ -3905,6 +4318,16 @@ class FreeGridBoard(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         grabbed = QWidget.mouseGrabber() is self
+        if self._interaction.draft() is not None and (
+            event.buttons() & Qt.LeftButton or grabbed
+        ):
+            self._update_sticky_draft(event.pos())
+            return
+        if self._author_geometry_session is not None and (
+            event.buttons() & Qt.LeftButton or grabbed
+        ):
+            self._update_author_geometry(event.pos())
+            return
         if self._gesture.marquee() is not None and (
             event.buttons() & Qt.LeftButton or grabbed
         ):
@@ -3915,7 +4338,7 @@ class FreeGridBoard(QWidget):
                 self.grabMouse()
             return
         if self._gesture.is_armed() and (event.buttons() & Qt.LeftButton or grabbed):
-            self._update_gesture_at(
+            self._queue_pointer_sample(
                 self._logical_board_pos((event.pos().x(), event.pos().y())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
                 global_pos=event.globalPos(),
@@ -3924,6 +4347,14 @@ class FreeGridBoard(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._interaction.draft() is not None:
+            self._update_sticky_draft(event.pos())
+            self._finish_sticky_draft()
+            return
+        if event.button() == Qt.LeftButton and self._author_geometry_session is not None:
+            self._update_author_geometry(event.pos())
+            self._finish_author_geometry(event.pos())
+            return
         if event.button() == Qt.LeftButton and self._gesture.marquee() is not None:
             session = self._gesture.take_marquee()
             self._release_mouse_if_grabbed()
@@ -3936,14 +4367,26 @@ class FreeGridBoard(QWidget):
         if event.button() == Qt.LeftButton and self._finish_pending_shift_toggle():
             return
         if self._gesture.is_armed() and event.button() == Qt.LeftButton:
-            self._update_gesture_at(
+            self._queue_pointer_sample(
                 self._logical_board_pos((event.pos().x(), event.pos().y())),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
                 global_pos=event.globalPos(),
             )
+            self._flush_pointer_sample()
             self._finish_gesture(commit=True, global_pos=event.globalPos())
             return
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() != Qt.LeftButton:
+            super().mouseDoubleClickEvent(event)
+            return
+        hit = self.classify_press(event.pos(), modifiers=event.modifiers())
+        if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
+            self._begin_sticky_edit(self._author_item(hit.item.object_id))
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if self.handle_selection_key(event):
@@ -3955,6 +4398,17 @@ class FreeGridBoard(QWidget):
         key = event.key()
         if key not in (Qt.Key_Delete, Qt.Key_Backspace):
             return False
+        author_ids = tuple(self._interaction.author_selection_ids())
+        if author_ids:
+            locked = any(
+                bool(getattr(self._author_item(object_id), "locked", False))
+                for object_id in author_ids
+            )
+            if locked:
+                self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
+                return True
+            self.author_delete_requested.emit(AuthorDeleteIntent(author_ids))
+            return True
         refs = [ref for ref in self._gesture.selection() if ref in self._widgets]
         if not refs:
             return False
@@ -3964,6 +4418,34 @@ class FreeGridBoard(QWidget):
             else:
                 self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
         return True
+
+    def _finish_author_geometry(self, pos: QPoint) -> None:
+        session = self._author_geometry_session
+        if not session or session.get("origin") is None:
+            self._author_geometry_session = None
+            self._release_mouse_if_grabbed()
+            self._sync_selection_handles()
+            return
+        current = self._pixel_to_board_point(pos)
+        origin = session["origin"]
+        box = session["box"]
+        self._author_geometry_session = None
+        self._release_mouse_if_grabbed()
+        if current is None:
+            self._sync_selection_handles()
+            return
+        dx = current[0] - origin[0]
+        dy = current[1] - origin[1]
+        handle = session.get("handle")
+        x, y, width, height = box  # type: ignore[misc]
+        if session.get("kind") == "resize" and handle:
+            next_box = self._resize_author_box((x, y, width, height), str(handle), dx, dy)
+        else:
+            next_box = clamp_author_box(x + dx, y + dy, width, height)
+        object_id = str(session.get("object_id") or "")
+        if next_box != (x, y, width, height) and object_id:
+            self.author_update_requested.emit(AuthorUpdateIntent(object_id, box=next_box))
+        self._sync_selection_handles()
 
     def _finish_marquee(self, session) -> None:
         x, y, width, height = session.rect()
@@ -3986,6 +4468,85 @@ class FreeGridBoard(QWidget):
         if QWidget.mouseGrabber() is self:
             self.releaseMouse()
 
+    def _queue_pointer_sample(
+        self,
+        board_pos: tuple[int, int],
+        *,
+        keep_aspect: bool = False,
+        global_pos: QPoint | None = None,
+    ) -> None:
+        self._latest_pointer_sample = (
+            (int(board_pos[0]), int(board_pos[1])),
+            bool(keep_aspect),
+            QPoint(global_pos) if global_pos is not None else None,
+        )
+        timer = getattr(self, "_pointer_coalesce_timer", None)
+        if timer is None:
+            return
+        try:
+            if sip.isdeleted(timer):
+                return
+            if not timer.isActive():
+                timer.start()
+        except RuntimeError:
+            return
+
+    def _stop_pointer_coalesce(self, *, drop: bool) -> None:
+        timer = getattr(self, "_pointer_coalesce_timer", None)
+        if timer is not None:
+            try:
+                if not sip.isdeleted(timer):
+                    timer.stop()
+            except RuntimeError:
+                pass
+        if drop:
+            self._latest_pointer_sample = None
+
+    def _flush_pointer_sample(self) -> None:
+        self._stop_pointer_coalesce(drop=False)
+        self._consume_latest_pointer_sample()
+
+    def _consume_latest_pointer_sample(self) -> None:
+        try:
+            if sip.isdeleted(self):
+                self._latest_pointer_sample = None
+                return
+        except RuntimeError:
+            self._latest_pointer_sample = None
+            return
+        sample = self._latest_pointer_sample
+        self._latest_pointer_sample = None
+        if sample is None:
+            return
+        board_pos, keep_aspect, global_pos = sample
+        self._update_gesture_at(
+            board_pos, keep_aspect=keep_aspect, global_pos=global_pos
+        )
+
+    def _ghost_source_for(self, ref: UltraViewRef) -> QPixmap | QImage | None:
+        cached = self._ghost_buffers.get(ref)
+        if cached is not None:
+            return cached
+        card = self._widgets.get(ref)
+        if card is None:
+            return None
+        raw = getattr(card, "_raw_image", None)
+        if raw is None:
+            return None
+        dpr = _effective_device_pixel_ratio(card)
+        width = max(1, int(round(max(card.width(), 1) * dpr)))
+        height = max(1, int(round(max(card.height(), 1) * dpr)))
+        source = getattr(card, "_source_pixmap", None)
+        if source is None:
+            source = QPixmap.fromImage(raw)
+            card._source_pixmap = source
+        scaled = source.scaled(
+            width, height, Qt.KeepAspectRatio, Qt.FastTransformation
+        )
+        scaled.setDevicePixelRatio(dpr)
+        self._ghost_buffers[ref] = scaled
+        return scaled
+
     def _update_gesture_at(
         self,
         board_pos: tuple[int, int],
@@ -4002,23 +4563,32 @@ class FreeGridBoard(QWidget):
         )
         if session is None or not session.active:
             return
+        # Snapshot before Page edge-pan / extent refresh re-enters update()
+        # and flips the same session.plan_reused flag.
+        reused = bool(session.plan_reused)
         if QWidget.mouseGrabber() is None:
             self.grabMouse()
-        preview_refs = session.preview_refs()
-        members = session.group_origins or {session.ref: session.origin}
-        dim_refs = set(members)
-        dim_refs.update(preview_refs)
         if not self._gesture_dimmed:
             self.drag_started.emit("layout")
             self._gesture_dimmed = True
-        self._emit_workspace_gesture(True, global_pos)
-        self._sync_gesture_dim(dim_refs)
+        if reused:
+            safety = self._session_hits_safety(session)
+            if safety:
+                self.setCursor(Qt.ForbiddenCursor)
+            elif self.cursor().shape() == Qt.ForbiddenCursor:
+                self.unsetCursor()
+            self._emit_workspace_gesture(True, global_pos)
+            return
+        members = session.group_origins or {session.ref: session.origin}
+        for ref in members:
+            self._ghost_source_for(ref)
+        self._sync_gesture_dim(set(members))
         ghosts = []
         ghost_rects = tuple(
             self._workspace_pixel_rect(rect)
             for rect in session.group_ghost_pixels(self._metrics, board_pos)
         )
-        refs = list(preview_refs)
+        refs = list(session.preview_refs())
         if len(ghost_rects) != len(refs):
             refs = [session.ref]
             ghost_rects = (
@@ -4026,9 +4596,9 @@ class FreeGridBoard(QWidget):
                     session.ghost_pixels(self._metrics, board_pos)
                 ),
             )
+        mover_refs = set(members)
         for ref, ghost in zip(refs, ghost_rects):
-            card = self._widgets.get(ref)
-            image = getattr(card, "_raw_image", None) if card is not None else None
+            image = self._ghost_source_for(ref) if ref in mover_refs else None
             ghosts.append((image, ghost))
         highlights = tuple(
             self._workspace_pixel_rect(rect)
@@ -4057,6 +4627,7 @@ class FreeGridBoard(QWidget):
         else:
             if self.cursor().shape() == Qt.ForbiddenCursor:
                 self.unsetCursor()
+        self._emit_workspace_gesture(True, global_pos)
 
     def _session_hits_safety(self, session) -> bool:
         if session.plan is not None:
@@ -4092,35 +4663,34 @@ class FreeGridBoard(QWidget):
         return tuple(sides) or ("left",)
 
     def _sync_gesture_dim(self, wanted: set[UltraViewRef]) -> None:
-        """Dim exactly ``wanted`` and undim whatever left the plan.
+        """Show a stable shell-only placeholder on movers; never allocate opacity.
 
-        The plan's displaced set changes as the pointer moves, so a set computed
-        once on the first frame does not match the set restored on release: a
-        neighbour that was pushed and then stopped being pushed used to stay at
-        40% opacity forever (review 2026-08-15 §4.3 dim 泄漏).
+        Displaced neighbours stay fully opaque; their preview is the overlay
+        outline. The placeholder set still shrinks mid-gesture so a neighbour
+        that left the plan cannot keep a leftover dim/effect.
         """
         for ref in self._dimmed_refs - wanted:
             card = self._widgets.get(ref)
             if card is not None:
-                card.restore_dim()
+                card.set_drag_placeholder(False)
         for ref in wanted - self._dimmed_refs:
             card = self._widgets.get(ref)
             if card is None:
                 continue
-            effect = QGraphicsOpacityEffect(card)
-            effect.setOpacity(DRAG_DIM_OPACITY)
-            card.setGraphicsEffect(effect)
+            card.set_drag_placeholder(True)
         self._dimmed_refs = {ref for ref in wanted if ref in self._widgets}
 
     def _clear_gesture_dim(self) -> None:
-        """Unconditional restore: whatever the board dimmed, the board undims."""
+        """Unconditional restore: whatever the board hid, the board restores."""
         for ref in self._dimmed_refs:
             card = self._widgets.get(ref)
             if card is not None:
+                card.set_drag_placeholder(False)
                 card.restore_dim()
         self._dimmed_refs = set()
 
     def _finish_gesture(self, *, commit: bool, global_pos: QPoint | None = None) -> None:
+        self._stop_pointer_coalesce(drop=True)
         session = self._gesture.take()
         self._release_mouse_if_grabbed()
         self._gesture_dimmed = False
@@ -4139,9 +4709,11 @@ class FreeGridBoard(QWidget):
                 return
             preview_open = False
             self._clear_gesture_dim()
+            self._ghost_buffers.clear()
             for ref in restore_refs:
                 card = self._widgets.get(ref)
                 if card is not None:
+                    card.set_drag_placeholder(False)
                     card.restore_dim()
                     card.unsetCursor()
             self._overlay.clear()
@@ -4380,6 +4952,74 @@ class FreeGridBoard(QWidget):
             if widget.geometry().contains(pos):
                 return widget
         return None
+
+    def classify_press(
+        self,
+        pos: QPoint,
+        *,
+        modifiers=Qt.NoModifier,
+        viewport_pan: bool = False,
+        card: FreeGridCard | None = None,
+        already_selected: bool = False,
+    ) -> HitTarget:
+        """Spec I3 routing skeleton. Author objects stay mouse-transparent."""
+        del modifiers
+        editor_active = bool(
+            self._author_text_editor.is_editing() or self._interaction.is_editor_active()
+        )
+        handle = None
+        card_key = None
+        target = card if card is not None else self._card_at(pos)
+        if target is not None:
+            ref = parse_ref_payload(
+                {"section": target.model().section, "view_id": target.model().view_id}
+            )
+            if ref is not None:
+                card_key = CardKey(ref)
+                selected = already_selected or ref in self._interaction.card_selection()
+                if selected and len(self._interaction.card_selection()) == 1:
+                    local = target.mapFrom(self, pos) if card is None else pos
+                    handle = hit_handle(
+                        (0, 0, target.width(), target.height()),
+                        (local.x(), local.y()),
+                    )
+        author_hits = self._author_keys_at(pos)
+        hit = resolve_board_hit(
+            editor_active=editor_active,
+            viewport_pan=bool(viewport_pan),
+            resize_handle=handle,
+            author_hits_rev_z=author_hits,
+            card=card_key,
+        )
+        self._interaction.set_hover_target(hit.item)
+        return hit
+
+    def _author_keys_at(self, pos: QPoint) -> tuple[AuthorKey, ...]:
+        """Reverse-z hit list. The paint layer itself remains mouse-transparent."""
+        hits: list[AuthorKey] = []
+        origin = self._workspace_origin_offset()
+        for item in reversed(self._author_objects):
+            object_id = str(getattr(item, "object_id", "") or "")
+            box = getattr(item, "box", None)
+            if not object_id or box is None:
+                continue
+            mapped = board_box_to_pixels(
+                (box.x, box.y, box.width, box.height),
+                self._metrics,
+                origin_offset=origin,
+            )
+            if mapped is None:
+                continue
+            x, y, width, height = mapped
+            rect = QRect(
+                int(round(x)),
+                int(round(y)),
+                max(1, int(round(width))),
+                max(1, int(round(height))),
+            )
+            if rect.contains(pos):
+                hits.append(AuthorKey(object_id))
+        return tuple(hits)
 
     def _on_replace_armed(self, key: str) -> None:
         section, _, view_id = key.partition("/")

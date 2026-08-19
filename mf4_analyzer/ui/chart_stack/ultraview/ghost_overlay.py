@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Sequence
 
 from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtGui import QColor, QImage, QLinearGradient, QPainter, QPen
+from PyQt5.QtGui import QColor, QImage, QLinearGradient, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui_kit.ultraview_style import titanium_color
@@ -23,8 +23,9 @@ ILLEGAL_PEN = QColor("#ff2038")
 HANDLE_FILL = QColor("#ffffff")
 HANDLE_EDGE = QColor("#2d7ff9")
 MARQUEE_FILL = QColor(45, 127, 249, 24)
-GHOST_OPACITY = 0.45
+GHOST_OPACITY = 1.0
 CONTINUE_BAND_PX = 72
+_PREVIEW_DIRTY_MARGIN = 32
 _BRAND = QColor(titanium_color("brand"))
 _COPPER = QColor(titanium_color("copper"))
 _INK = QColor(titanium_color("ink"))
@@ -57,7 +58,7 @@ class GhostOverlay(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
-        self._ghosts: tuple[tuple[QImage | None, QRect], ...] = ()
+        self._ghosts: tuple[tuple[QImage | QPixmap | None, QRect], ...] = ()
         self._highlights: tuple[QRect, ...] = ()
         self._legal = True
         self._badge = ""
@@ -83,7 +84,7 @@ class GhostOverlay(QWidget):
         return self._highlights[0] if self._highlights else None
 
     @property
-    def _ghost_image(self) -> QImage | None:
+    def _ghost_image(self) -> QImage | QPixmap | None:
         return self._ghosts[0][0] if self._ghosts else None
 
     def is_showing(self) -> bool:
@@ -179,7 +180,7 @@ class GhostOverlay(QWidget):
 
     def set_move_preview(
         self,
-        image: QImage | None,
+        image: QImage | QPixmap | None,
         ghost: Rect,
         highlight: Rect,
         *,
@@ -197,7 +198,7 @@ class GhostOverlay(QWidget):
 
     def set_move_previews(
         self,
-        ghosts: Sequence[tuple[QImage | None, Rect]],
+        ghosts: Sequence[tuple[QImage | QPixmap | None, Rect]],
         highlights: Sequence[Rect],
         *,
         legal: bool,
@@ -205,6 +206,8 @@ class GhostOverlay(QWidget):
         handles: bool = False,
         safety_wall: bool = False,
     ) -> None:
+        old_dirty = self._preview_dirty_rect()
+        old_signature = self._preview_signature()
         self._ghosts = tuple(
             (image, QRect(*ghost)) for image, ghost in ghosts if ghost is not None
         )
@@ -219,7 +222,12 @@ class GhostOverlay(QWidget):
         self._handles_rect = (
             QRect(self._highlights[0]) if handles and self._highlights else None
         )
-        self._present()
+        if (
+            self._preview_signature() == old_signature
+            and self.isVisible() == bool(self._has_content())
+        ):
+            return
+        self._present(self._united_dirty(old_dirty, self._preview_dirty_rect()))
 
     def clear(self) -> None:
         self._ghosts = ()
@@ -239,13 +247,75 @@ class GhostOverlay(QWidget):
         self.hide()
         self.update()
 
-    def _present(self) -> None:
+    def _preview_signature(self) -> tuple:
+        ghosts = tuple(
+            (
+                None if image is None else id(image),
+                ghost.x(),
+                ghost.y(),
+                ghost.width(),
+                ghost.height(),
+            )
+            for image, ghost in self._ghosts
+        )
+        highlights = tuple(
+            (item.x(), item.y(), item.width(), item.height())
+            for item in self._highlights
+        )
+        handles = None
+        if self._handles_rect is not None:
+            handles = (
+                self._handles_rect.x(),
+                self._handles_rect.y(),
+                self._handles_rect.width(),
+                self._handles_rect.height(),
+            )
+        return (
+            ghosts,
+            highlights,
+            self._legal,
+            self._badge,
+            handles,
+            self._safety_wall,
+            self._reject_mark,
+        )
+
+    def _preview_dirty_rect(self) -> QRect:
+        boxes = [ghost for _image, ghost in self._ghosts]
+        boxes.extend(self._highlights)
+        if self._handles_rect is not None:
+            boxes.append(self._handles_rect)
+        if self._safety_bounds_rect is not None:
+            boxes.append(self._safety_bounds_rect)
+        if not boxes:
+            return QRect()
+        united = QRect(boxes[0])
+        for box in boxes[1:]:
+            united = united.united(box)
+        margin = _PREVIEW_DIRTY_MARGIN
+        return united.adjusted(-margin, -margin, margin, margin)
+
+    @staticmethod
+    def _united_dirty(old: QRect, new: QRect) -> QRect:
+        if old.isNull() or not old.isValid():
+            return QRect(new)
+        if new.isNull() or not new.isValid():
+            return QRect(old)
+        return old.united(new)
+
+    def _present(self, dirty: QRect | None = None) -> None:
         if not self._has_content():
             self.hide()
         elif not self.isVisible():
             self.show()
         self.raise_()
-        self.update()
+        if dirty is None or dirty.isNull() or not dirty.isValid():
+            self.update()
+            return
+        clipped = dirty.intersected(self.rect()) if self.rect().isValid() else dirty
+        if clipped.isEmpty():
+            return
+        self.update(clipped)
 
     def _paint_continue_hint(self, painter: QPainter) -> None:
         if not self._continue_sides:
@@ -320,8 +390,11 @@ class GhostOverlay(QWidget):
                 if image is None:
                     continue
                 painter.setOpacity(GHOST_OPACITY)
-                painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-                painter.drawImage(ghost, image)
+                painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+                if isinstance(image, QPixmap):
+                    painter.drawPixmap(ghost, image)
+                else:
+                    painter.drawImage(ghost, image)
                 painter.setOpacity(1.0)
             if self._badge and self._highlights:
                 painter.setPen(QColor("#0f172a"))
