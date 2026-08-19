@@ -204,6 +204,7 @@ lesson by default.
 | [UltraView Card Preview Uses Capture Aspect](pyqt-ui/2026-08-18-ultraview-preview-reading-gutter.md) | Changing UltraView card preview scaling, `QLabel#ultraViewCardImage` alignment, `_fit_card_image`, export `_draw_preview`, or `preview_reading_box`. | See lesson |
 | [UltraView Micro-grid Coordinate Space](2026-08-19-ultraview-microgrid-coordinate-space.md) | Increasing Free Grid placement precision or changing its persisted coordinate scale. | See lesson |
 | [UltraView Preview Fit Uses Logical Pixels](pyqt-ui/2026-08-19-ultraview-preview-logical-fit.md) | Changing an UltraView preview-to-Free-Grid aspect-fit path. | See lesson |
+| [UltraView Card Fit Hugs Current Scale](pyqt-ui/2026-08-20-ultraview-card-fit-hugs-current-scale.md) | Changing UltraView Card Fit / 「按原图比例」, `solve_card_fit`, `fit_rect_for_aspect`, first-insert auto-aspect, or spec F3. | See lesson |
 
 ## Selection Rules
 

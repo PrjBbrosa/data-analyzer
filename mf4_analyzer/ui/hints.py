@@ -657,6 +657,13 @@ _HINTS = (
         priority=90,
     ),
     Hint(
+        id="ultraview.sticky",
+        text="左侧 Sticky 点画布可加便签，不改源 View",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=87,
+    ),
+    Hint(
         id="ultraview.free_grid",
         text="自由网格可扩展，窄轨切回模板",
         surface="context",
@@ -700,7 +707,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.autofit",
-        text="按原图比例收敛卡片，减少预览留白",
+        text="按原图比例收紧卡片，不整板改尺寸",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=83,

@@ -10,7 +10,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_VISIBLE_ROWS,
     GRID_ROW_HEIGHT,
     GRID_SPARE_ROWS,
-    FIT_SHORT_SIDE_GROW_MAX,
     HANDLE_HIT_PX,
     LAYOUT_MOVE,
     LAYOUT_RESIZE,
@@ -42,6 +41,10 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     snapped_resize_rect,
     translated_move_rect,
     union_grid_rect,
+)
+from mf4_analyzer.ui.chart_stack.ultraview.card_fit import (
+    card_fit_plot_size,
+    unconstrained_card_fit_facts,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BASE_BOARD_SIZE,
@@ -210,12 +213,16 @@ def test_fit_rect_for_aspect_prefers_matching_span():
     square = fit_rect_for_aspect(origin, (800, 800), metrics)
     assert wide.column_span > wide.row_span
     assert tall.row_span >= tall.column_span
-    assert abs(square.column_span - square.row_span) <= 2
     assert wide.column == origin.column and wide.row == origin.row
-    chrome = CARD_FIT_CHROME_HEIGHT
-    _, _, ww, wh = rect_to_pixels(wide, metrics)
-    _, _, tw, th = rect_to_pixels(tall, metrics)
-    assert ww / max(1, wh - chrome) > tw / max(1, th - chrome)
+    wide_facts = unconstrained_card_fit_facts(wide, (1600, 400), metrics)
+    tall_facts = unconstrained_card_fit_facts(tall, (400, 1600), metrics)
+    square_facts = unconstrained_card_fit_facts(square, (800, 800), metrics)
+    wide_plot = card_fit_plot_size(wide, wide_facts)
+    tall_plot = card_fit_plot_size(tall, tall_facts)
+    square_plot = card_fit_plot_size(square, square_facts)
+    assert wide_plot is not None and tall_plot is not None and square_plot is not None
+    assert wide_plot[0] / wide_plot[1] > tall_plot[0] / tall_plot[1]
+    assert square_plot[0] / square_plot[1] == pytest.approx(1.0, rel=0.25)
 
 
 def test_preview_reading_box_height_fills_a_wide_16x9_capture():
@@ -235,23 +242,25 @@ def test_preview_reading_box_uses_the_capture_aspect_not_4x3():
 
 def test_fit_rect_for_aspect_prefers_side_gutter_over_bottom_gap():
     metrics = screen_grid_metrics([])
-    chrome = CARD_FIT_CHROME_HEIGHT
     origin = GridRect(0, 0, 4, 5)
     image = (1600, 900)
+    facts = unconstrained_card_fit_facts(origin, image, metrics)
 
     def leftover_h(rect):
-        _x, _y, width, height = rect_to_pixels(rect, metrics)
-        plot_h = max(1, height - chrome)
-        scale = min(width / float(image[0]), plot_h / float(image[1]))
-        return plot_h - image[1] * scale
+        plot = card_fit_plot_size(rect, facts)
+        assert plot is not None
+        width, plot_h = plot
+        reading_w, reading_h = preview_reading_box(width, plot_h, image)
+        return plot_h - reading_h
 
     fitted = fit_rect_for_aspect(origin, image, metrics)
     assert leftover_h(fitted) <= leftover_h(origin) + 1
-    _x, _y, width, height = rect_to_pixels(fitted, metrics)
-    plot_h = max(1, height - chrome)
-    scale = min(width / float(image[0]), plot_h / float(image[1]))
-    side = width - image[0] * scale
-    bottom = plot_h - image[1] * scale
+    plot = card_fit_plot_size(fitted, facts)
+    assert plot is not None
+    width, plot_h = plot
+    reading_w, reading_h = preview_reading_box(width, plot_h, image)
+    side = width - reading_w
+    bottom = plot_h - reading_h
     assert side + 1 >= bottom
 
 
@@ -260,10 +269,12 @@ def test_microgrid_autofit_reduces_actual_preview_unused_fraction():
     metrics = screen_grid_metrics([])
     image = (1600, 1200)
     origin = _GridRect(0, 0, 8, 6)  # migrated schema-4 4×3 standard card
+    facts = unconstrained_card_fit_facts(origin, image, metrics)
 
     def unused_fraction(rect: _GridRect) -> float:
-        _x, _y, width, height = rect_to_pixels(rect, metrics)
-        plot_h = max(1, height - CARD_FIT_CHROME_HEIGHT)
+        plot = card_fit_plot_size(rect, facts)
+        assert plot is not None
+        width, plot_h = plot
         reading_w, reading_h = preview_reading_box(width, plot_h, image)
         return 1.0 - (reading_w * reading_h) / float(width * plot_h)
 
@@ -273,48 +284,34 @@ def test_microgrid_autofit_reduces_actual_preview_unused_fraction():
         for columns in range(4, origin.column_span + 1, 2)
         for rows in range(4, origin.row_span + 1, 2)
     ]
-    assert fitted.column_span % GRID_RESOLUTION != 0
     assert unused_fraction(fitted) < min(unused_fraction(rect) for rect in coarse)
 
 
-def test_fit_rect_for_aspect_grows_short_side_at_most_two_cells():
-    """Shrink first; only the short side may grow, and by at most two cells."""
+def test_fit_rect_for_aspect_stays_near_the_current_scale():
+    """Hug reshapes around the current card; it does not pick a global size."""
     metrics = screen_grid_metrics([])
-    image = (1000, 800)
-    origins = (
-        GridRect(0, 0, 4, 6),
-        GridRect(0, 0, 10, 3),
-        GridRect(0, 0, 6, 4),
-    )
-    results = [fit_rect_for_aspect(origin, image, metrics) for origin in origins]
-    spans = [(item.column_span, item.row_span) for item in results]
-    assert len(set(spans)) == 3
-    for origin, fitted in zip(origins, results):
-        assert fitted.column == origin.column and fitted.row == origin.row
-        dc = fitted.column_span - origin.column_span
-        dr = fitted.row_span - origin.row_span
-        assert dc <= FIT_SHORT_SIDE_GROW_MAX
-        assert dr <= FIT_SHORT_SIDE_GROW_MAX
-        assert dc <= 0 or dr <= 0
-        assert fitted.column_span <= GRID_MAX_COLUMN_SPAN
-        assert fitted.row_span <= GRID_MAX_ROW_SPAN
-        assert fitted.column_span >= GRID_MIN_COLUMN_SPAN
-        assert fitted.row_span >= GRID_MIN_ROW_SPAN
-        assert (fitted.column_span, fitted.row_span) != (7, 8)
+    image = (1600, 900)
+    origin = _GridRect(2, 3, 8, 6)
+    fitted = fit_rect_for_aspect(origin, image, metrics)
+    assert fitted.column == origin.column and fitted.row == origin.row
+    assert fitted.column_span >= GRID_MIN_COLUMN_SPAN
+    assert fitted.row_span >= GRID_MIN_ROW_SPAN
+    assert fitted.column_span <= GRID_MAX_COLUMN_SPAN
+    assert fitted.row_span <= GRID_MAX_ROW_SPAN
+    assert fitted.column_span * fitted.row_span <= origin.column_span * origin.row_span * 2
+    assert (fitted.column_span, fitted.row_span) != (13, 11)
 
 
-def test_fit_rect_for_aspect_tall_frf_from_standard_adds_rows():
-    """A portrait FRF-style preview starting at 4×3 grows rows instead of letterboxing."""
+def test_fit_rect_for_aspect_tall_frf_from_standard_trims_width():
+    """A portrait preview keeps the current height and trims leftover width."""
     metrics = screen_grid_metrics([])
-    origin = GridRect(0, 0, 4, 3)
+    origin = _GridRect(0, 0, 8, 6)
     image = (800, 1400)
     fitted = fit_rect_for_aspect(origin, image, metrics)
     assert fitted.column == origin.column and fitted.row == origin.row
-    assert fitted.row_span > origin.row_span
-    assert fitted.row_span - origin.row_span <= FIT_SHORT_SIDE_GROW_MAX
-    assert fitted.column_span <= origin.column_span
-    assert fitted.column_span <= GRID_MAX_COLUMN_SPAN
-    assert fitted.row_span <= GRID_MAX_ROW_SPAN
+    assert fitted.row_span == origin.row_span
+    assert fitted.column_span < origin.column_span
+    assert fitted.column_span >= GRID_MIN_COLUMN_SPAN
 
 
 def test_fit_chrome_includes_image_padding():
@@ -328,13 +325,14 @@ def test_fit_chrome_includes_image_padding():
 def test_fit_rect_for_aspect_matches_user_contract():
     """Wide bottleneck keeps columns; tall bottleneck keeps rows (pixel + chrome)."""
     metrics = screen_grid_metrics([])
-    chrome = CARD_FIT_CHROME_HEIGHT
     target = GridRect(0, 0, 6, 4)
-    _x, _y, width, height = rect_to_pixels(target, metrics)
-    image = (width, max(1, height - chrome))
-    extra_rows = GridRect(0, 0, target.column_span, target.row_span * 2)
-    extra_cols = GridRect(
-        0, 0, min(GRID_COLUMNS, target.column_span * 2), target.row_span
+    facts = unconstrained_card_fit_facts(target, (1, 1), metrics)
+    plot = card_fit_plot_size(target, facts)
+    assert plot is not None
+    image = plot
+    extra_rows = _GridRect(0, 0, target.column_span, min(GRID_MAX_ROW_SPAN, target.row_span * 2))
+    extra_cols = _GridRect(
+        0, 0, min(GRID_MAX_COLUMN_SPAN, target.column_span * 2), target.row_span
     )
     keep_cols = fit_rect_for_aspect(extra_rows, image, metrics)
     keep_rows = fit_rect_for_aspect(extra_cols, image, metrics)
@@ -344,26 +342,28 @@ def test_fit_rect_for_aspect_matches_user_contract():
     assert keep_rows.column_span == target.column_span
 
 
-def test_fit_rect_for_aspect_prefers_the_largest_span_on_a_tie():
+def test_fit_rect_for_aspect_does_not_collapse_to_native_pixels_on_a_tie():
     metrics = screen_grid_metrics([])
     square = replace(metrics, column_width=metrics.row_height, gutter=0)
     origin = GridRect(0, 0, 4, 4)
     fitted = fit_rect_for_aspect(origin, (100, 100), square, chrome_height=0)
-    # A small source is not upscaled by the real card renderer, so minimizing
-    # actual unused area selects the smallest readable square micro-card.
-    assert fitted == GridRect(0, 0, 2, 2)
+    # No-upscale gutter around a small capture is a render policy, not a
+    # reason to shrink the card to the native pixel box.
+    assert fitted.column_span >= 4
+    assert fitted.row_span >= 4
+    assert fitted.column_span * fitted.row_span >= origin.column_span * origin.row_span // 2
 
 
-def test_fit_rect_for_aspect_result_is_a_subset():
+def test_fit_rect_for_aspect_keeps_origin_pinned():
     metrics = screen_grid_metrics([])
     origin = GridRect(2, 3, 6, 5)
     fitted = fit_rect_for_aspect(origin, (1000, 800), metrics)
     assert fitted.column == origin.column
     assert fitted.row == origin.row
-    assert fitted.column_span <= origin.column_span
-    assert fitted.row_span <= origin.row_span
-    assert fitted.column + fitted.column_span <= origin.column + origin.column_span
-    assert fitted.row + fitted.row_span <= origin.row + origin.row_span
+    assert fitted.column_span >= GRID_MIN_COLUMN_SPAN
+    assert fitted.row_span >= GRID_MIN_ROW_SPAN
+    assert fitted.column + fitted.column_span <= SAFETY_COLUMN_MAX
+    assert fitted.row + fitted.row_span <= SAFETY_ROW_MAX
 
 
 def test_place_free_grid_from_unplaced_honors_optional_span():

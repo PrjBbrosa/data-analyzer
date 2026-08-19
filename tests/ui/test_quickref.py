@@ -384,7 +384,7 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "画布缩放" in haystack
     assert "适应" in haystack
     assert "25%–300%" in haystack
-    assert "只缩不放" in haystack
+    assert "当前预览尺度" in haystack
     assert "居中" in haystack
     assert "按原图比例" in haystack
     assert "Option+Shift" in haystack

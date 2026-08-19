@@ -103,7 +103,11 @@ def test_add_with_retina_preview_uses_logical_pixels_for_first_fit(
     expected = _fitted_span(uv.board, (400, 100))
     raw_pixel_expected = _fitted_span(uv.board, (800, 200))
     assert (item.rect.column_span, item.rect.row_span) == expected
-    assert expected != raw_pixel_expected
+    # Same 4:1 capture at DPR 1 or 2 must hug the default card, not reserve
+    # 2× space for the retina buffer. Aspect-only hug makes both spans equal.
+    assert expected == raw_pixel_expected
+    default = free_grid_default_span(uv.board)
+    assert expected[0] * expected[1] <= default[0] * default[1] * 2
 
 
 def test_add_without_preview_applies_once_if_span_unchanged(qapp, qtbot):

@@ -32,7 +32,6 @@ from .layouts import (
     BOARD_PADDING,
     CARD_FIT_CHROME_HEIGHT,
     SLOT_GUTTER,
-    preview_reading_box,
 )
 
 # These are deliberately smaller than P1's reading-card floor.  A four-micro-
@@ -44,14 +43,6 @@ GRID_MIN_VISIBLE_ROWS = 10 * GRID_RESOLUTION
 # Extra empty rows past the last occupied card so a 1× / fit canvas still
 # has a drop target below the current layout. Export does not add these.
 GRID_SPARE_ROWS = 2 * GRID_RESOLUTION
-# After shrink-only fit, the short side may grow by at most this many cells
-# when plot-area letterbox still exceeds about one row. Never a full-board
-# exhaustive search (the old 7×8 unbounded grow).
-FIT_SHORT_SIDE_GROW_MAX = 2 * GRID_RESOLUTION
-# Extra cost on unused plot height so discrete GridRect search prefers
-# pillarboxing (side breathing room) over letterboxing (flush sides,
-# empty bottom) when the total unused area is otherwise comparable.
-FIT_LETTERBOX_COST = 0.35
 
 Rect = tuple[int, int, int, int]
 
@@ -256,93 +247,6 @@ def screen_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
     return grid_metrics((BASE_BOARD_SIZE[0], 0), placements)
 
 
-def _plot_size_px(
-    rect: GridRect, metrics: GridMetrics, chrome: int
-) -> tuple[int, int]:
-    _x, _y, width, height = rect_to_pixels(rect, metrics)
-    return max(1, int(width)), max(1, int(height) - chrome)
-
-
-def _preview_unused_area_px(
-    rect: GridRect,
-    image_size: tuple[int, int],
-    metrics: GridMetrics,
-    chrome: int,
-) -> tuple[float, float, float]:
-    """Return actual unused plot area plus side/bottom axes after contain.
-
-    This deliberately shares :func:`preview_reading_box` with the QWidget
-    renderer.  In particular, a small capture is not theoretically enlarged
-    just because its card has room, so the solver scores what the user sees.
-    """
-    width, plot_h = _plot_size_px(rect, metrics, chrome)
-    reading_w, reading_h = preview_reading_box(width, plot_h, image_size)
-    side = max(0.0, float(width - reading_w))
-    bottom = max(0.0, float(plot_h - reading_h))
-    area = max(0.0, float(width * plot_h - reading_w * reading_h))
-    return area, side, bottom
-
-
-def _aspect_error_key(
-    rect: GridRect,
-    target: float,
-    metrics: GridMetrics,
-    chrome: int,
-    image_size: tuple[int, int],
-) -> tuple[float, float, int]:
-    unused_area, _side, bottom = _preview_unused_area_px(
-        rect, image_size, metrics, chrome
-    )
-    width, plot_h = _plot_size_px(rect, metrics, chrome)
-    # The vertical component is a tie preference, not a request to distort the
-    # capture.  Weight it in area units so it cannot swamp a clearly smaller
-    # overall unused region.
-    plot_area = max(1.0, float(width * plot_h))
-    vertical_area = width * bottom
-    cost = (unused_area + FIT_LETTERBOX_COST * vertical_area) / plot_area
-    return (cost, bottom / max(1.0, float(plot_h)), -(rect.column_span * rect.row_span))
-
-
-def _contain_letterbox_px(
-    rect: GridRect,
-    image_size: tuple[int, int],
-    metrics: GridMetrics,
-    chrome: int,
-) -> tuple[float, float]:
-    """Unused plot-area width/height after KeepAspectRatio contain."""
-    _area, side, bottom = _preview_unused_area_px(rect, image_size, metrics, chrome)
-    return side, bottom
-
-
-def _best_origin_span(
-    origin: GridRect,
-    col_min: int,
-    col_max: int,
-    row_min: int,
-    row_max: int,
-    target: float,
-    metrics: GridMetrics,
-    chrome: int,
-    image_size: tuple[int, int],
-) -> GridRect | None:
-    best: tuple[tuple[float, float, int], GridRect] | None = None
-    for col_span in range(col_min, col_max + 1):
-        if int(origin.column) + col_span > SAFETY_COLUMN_MAX:
-            continue
-        for row_span in range(row_min, row_max + 1):
-            if int(origin.row) + row_span > SAFETY_ROW_MAX:
-                continue
-            candidate = GridRect(
-                int(origin.column), int(origin.row), col_span, row_span
-            )
-            key = _aspect_error_key(
-                candidate, target, metrics, chrome, image_size
-            )
-            if best is None or key < best[0]:
-                best = (key, candidate)
-    return None if best is None else best[1]
-
-
 def fit_rect_for_aspect(
     origin: GridRect,
     image_size: tuple[int, int],
@@ -350,63 +254,24 @@ def fit_rect_for_aspect(
     *,
     chrome_height: int = CARD_FIT_CHROME_HEIGHT,
 ) -> GridRect:
-    """Contain the image aspect at the origin: shrink first, then a bounded grow.
+    """Compatibility wrapper: unconstrained Card Fit at the pinned origin.
 
-    Phase 1 is the 2026-08-15 shrink-only search inside the current span.
-    Plot-area chrome is header + footer + 2× image padding so the ratio is
-    the inner ``contentsRect``, not the label box. Search cost prefers
-    leftover width (side gutter) over leftover height (empty bottom).
-
-    Phase 2: if the contain letterbox on the plot's leftover axis still
-    exceeds about one ``GRID_ROW_HEIGHT``, grow only the short side by at
-    most ``FIT_SHORT_SIDE_GROW_MAX`` cells. Origin stays pinned. Spans stay
-    inside ``GRID_MAX_*`` / safety. This is not the old unbounded 7×8 search.
+    Search and scoring live in :mod:`card_fit`. Occupied neighbours are not
+    considered here; the Card Fit command builds full :class:`CardFitFacts`.
     """
+    from .card_fit import solve_card_fit, unconstrained_card_fit_facts
+
     image_w = max(1, int(image_size[0]))
     image_h = max(1, int(image_size[1]))
-    target = image_w / float(image_h)
-    chrome = max(0, int(chrome_height))
-    image = (image_w, image_h)
-    max_col = min(int(origin.column_span), GRID_MAX_COLUMN_SPAN)
-    max_row = min(int(origin.row_span), GRID_MAX_ROW_SPAN)
-    shrunk = _best_origin_span(
-        origin,
-        GRID_MIN_COLUMN_SPAN,
-        max_col,
-        GRID_MIN_ROW_SPAN,
-        max_row,
-        target,
-        metrics,
-        chrome,
-        image,
-    )
-    if shrunk is None:
-        return origin
-    leftover_w, leftover_h = _contain_letterbox_px(
-        shrunk, image, metrics, chrome
-    )
-    if max(leftover_w, leftover_h) <= GRID_ROW_HEIGHT:
-        return shrunk
-    best = shrunk
-    best_key = _aspect_error_key(shrunk, target, metrics, chrome, image)
-    grow_rows = leftover_w >= leftover_h
-    for extra in range(1, FIT_SHORT_SIDE_GROW_MAX + 1):
-        col_span = shrunk.column_span + (0 if grow_rows else extra)
-        row_span = shrunk.row_span + (extra if grow_rows else 0)
-        if col_span > GRID_MAX_COLUMN_SPAN or row_span > GRID_MAX_ROW_SPAN:
-            continue
-        if int(origin.column) + col_span > SAFETY_COLUMN_MAX:
-            continue
-        if int(origin.row) + row_span > SAFETY_ROW_MAX:
-            continue
-        candidate = GridRect(
-            int(origin.column), int(origin.row), col_span, row_span
+    result = solve_card_fit(
+        unconstrained_card_fit_facts(
+            origin,
+            (image_w, image_h),
+            metrics,
+            chrome_height=chrome_height,
         )
-        key = _aspect_error_key(candidate, target, metrics, chrome, image)
-        if key < best_key:
-            best_key = key
-            best = candidate
-    return best
+    )
+    return result.candidate
 
 
 def rect_to_pixels(
