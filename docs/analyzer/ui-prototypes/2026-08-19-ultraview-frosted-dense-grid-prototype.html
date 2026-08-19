@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UltraView · 透明磨砂与密网格原型</title>
+  <style>
+    :root {
+      --ink: #183039;
+      --muted: #66787e;
+      --line: rgba(50, 86, 97, .30);
+      --grid: rgba(42, 82, 94, .105);
+      --grid-major: rgba(42, 82, 94, .18);
+      --card: rgba(255, 255, 254, .68);
+      --card-border: rgba(255, 255, 255, .84);
+      --card-shadow: 0 16px 36px rgba(35, 66, 75, .11), 0 2px 7px rgba(35, 66, 75, .06);
+      --chip: rgba(244, 248, 250, .78);
+      --accent: #24697c;
+      --gap: 12px;
+      --cell: 64px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      min-width: 1100px;
+      overflow: auto;
+      background: #e8eff1;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    .topbar {
+      position: fixed; z-index: 10; top: 18px; left: 24px; right: 24px;
+      display: flex; align-items: center; justify-content: space-between; gap: 20px;
+      height: 48px; padding: 7px 9px 7px 17px; border: 1px solid rgba(255,255,255,.78);
+      border-radius: 15px; background: rgba(255,255,254,.70); box-shadow: 0 8px 28px rgba(31,65,73,.12);
+      backdrop-filter: blur(18px) saturate(118%);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 760; letter-spacing: .01em; }
+    .brand-mark { width: 18px; height: 18px; border-radius: 6px; background: linear-gradient(135deg, #24697c, #e58f32); box-shadow: inset 0 0 0 1px rgba(255,255,255,.5); }
+    .brand small { color: var(--muted); font-size: 11px; font-weight: 560; }
+    .switch { display: inline-flex; padding: 3px; gap: 3px; border: 1px solid rgba(50,86,97,.16); border-radius: 10px; background: rgba(235, 241, 242, .72); }
+    .switch button { border: 0; border-radius: 7px; padding: 6px 10px; background: transparent; color: var(--muted); font: 650 11px/1 inherit; cursor: pointer; }
+    .switch button.active { background: rgba(255,255,255,.94); color: var(--accent); box-shadow: 0 1px 4px rgba(20,52,61,.10); }
+    .legend { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 11px; }
+    .legend b { color: var(--ink); font-weight: 720; }
+
+    .stage {
+      position: relative; min-height: 100vh; padding: 104px 56px 58px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 16% 0%, rgba(83,154,171,.20), transparent 28%),
+        radial-gradient(circle at 91% 6%, rgba(233,162,75,.17), transparent 25%),
+        radial-gradient(circle at 60% 106%, rgba(197,89,76,.12), transparent 30%),
+        linear-gradient(135deg, #f5f8f7, #e7edef 60%, #f4f1ed);
+    }
+    .stage::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .92;
+      background-image:
+        linear-gradient(var(--grid-major) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-major) 1px, transparent 1px),
+        radial-gradient(circle, rgba(44,82,93,.30) 1.15px, transparent 1.25px);
+      background-size: calc(var(--cell) * 4) calc(var(--cell) * 4), calc(var(--cell) * 4) calc(var(--cell) * 4), var(--cell) var(--cell);
+      background-position: 0 0, 0 0, calc(var(--cell) / 2) calc(var(--cell) / 2);
+    }
+    .stage.dense {
+      --cell: 42px; --gap: 8px;
+      --grid: rgba(42,82,94,.10); --grid-major: rgba(42,82,94,.16);
+    }
+    .stage.dense::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .62;
+      background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: var(--cell) var(--cell);
+    }
+    .board {
+      position: relative; z-index: 1; display: grid;
+      grid-template-columns: 1.1fr 1.1fr 1.1fr; grid-auto-rows: minmax(286px, 31vh);
+      gap: var(--gap); width: min(1880px, 100%); margin: 0 auto;
+    }
+    .view {
+      position: relative; display: grid; grid-template-rows: 46px 1fr 36px; min-height: 0;
+      overflow: hidden; border: 1px solid var(--card-border); border-radius: 17px;
+      background: var(--card); box-shadow: var(--card-shadow); isolation: isolate;
+      backdrop-filter: blur(20px) saturate(126%);
+    }
+    .view::before {
+      content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+      background: linear-gradient(120deg, rgba(255,255,255,.30), transparent 43%, rgba(255,255,255,.12));
+    }
+    .view:hover { border-color: rgba(61,121,239,.48); box-shadow: 0 19px 44px rgba(35,66,75,.16), 0 2px 7px rgba(35,66,75,.07); }
+    .view.large { grid-column: span 2; }
+    .view.tall { grid-row: span 2; }
+    .view-header { display: flex; align-items: center; gap: 8px; padding: 0 12px 0 14px; border-bottom: 1px solid rgba(50,86,97,.12); }
+    .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; background: var(--tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 14%, transparent); }
+    .chip { display: inline-flex; align-items: center; gap: 5px; height: 27px; padding: 0 8px; border: 1px solid rgba(112,143,157,.28); border-radius: 7px; background: var(--chip); color: #294452; font-size: 11px; font-weight: 700; }
+    .chip i { color: var(--tone); font-size: 14px; font-style: normal; }
+    .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #203743; font-size: 14px; font-weight: 730; }
+    .actions { display: flex; margin-left: auto; gap: 2px; opacity: .68; }
+    .actions span { display: grid; width: 23px; height: 23px; place-items: center; border-radius: 6px; color: #496772; font: 700 14px/1 ui-sans-serif; }
+    .actions span:last-child { color: #c94f4a; }
+    .chart { position: relative; min-height: 0; margin: 8px 8px 0; overflow: hidden; border: 1px solid rgba(82,115,126,.18); background: rgba(255,255,255,.29); }
+    .chart::before { content: ""; position: absolute; inset: 0; opacity: .72; background-image: linear-gradient(rgba(84,118,128,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(84,118,128,.12) 1px, transparent 1px); background-size: 34px 25px; }
+    .chart svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+    .chart-label { position: absolute; z-index: 1; top: 8px; left: 8px; max-width: 64%; padding: 3px 5px; border: 1px solid color-mix(in srgb, var(--tone) 37%, rgba(255,255,255,.8)); border-radius: 3px; background: rgba(255,255,255,.56); color: color-mix(in srgb, var(--tone) 76%, #183039); font-size: 8px; line-height: 1.25; }
+    .view-footer { display: flex; align-items: center; gap: 8px; padding: 0 14px; color: #36505b; font-size: 11px; font-weight: 620; }
+    .view-footer span:last-child { margin-left: auto; color: var(--muted); font-size: 10px; font-weight: 520; }
+    .status { position: absolute; right: 16px; bottom: 13px; z-index: 2; display: none; padding: 4px 7px; border: 1px solid rgba(36,105,124,.22); border-radius: 6px; background: rgba(255,255,255,.7); color: var(--accent); font-size: 10px; font-weight: 700; backdrop-filter: blur(10px); }
+    .dense .status { display: block; }
+    .annotation { position: fixed; z-index: 4; right: 32px; bottom: 24px; width: 288px; padding: 12px 14px; border: 1px solid rgba(255,255,255,.83); border-radius: 14px; background: rgba(255,255,254,.70); box-shadow: 0 12px 35px rgba(35,66,75,.13); backdrop-filter: blur(18px); }
+    .annotation strong { display: block; margin-bottom: 3px; color: var(--ink); font-size: 12px; }
+    .annotation p { margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+    .current-note { display: none; }
+    .stage:not(.dense) .dense-note { display: none; }
+    .stage:not(.dense) .current-note { display: inline; }
+    @media (max-width: 1280px) { .board { grid-template-columns: repeat(2, 1fr); } .view.large { grid-column: span 1; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark"></span>UltraView <small>透明磨砂 · 密网格探索</small></div>
+    <div class="switch" aria-label="原型对照">
+      <button id="dense" class="active" type="button">建议：16 列密网格</button>
+      <button id="current" type="button">当前：12 列网格</button>
+    </div>
+    <div class="legend"><b id="modeText">间距 8 px · 42 px 细网格</b><span>卡片拖拽与缩放均可对齐</span></div>
+  </header>
+
+  <main id="stage" class="stage dense">
+    <section class="board" aria-label="UltraView 透明磨砂卡片预览">
+      <article class="view tall" style="--tone:#ff5d16">
+        <div class="view-header"><span class="dot"></span><span class="chip"><i>⌁</i> 时域</span><span class="name">View 2</span></div>
+        <div class="chart"><span class="chart-label">[tayak] File_RlPck0mp_mFricCompMotTor_xds16</span><svg viewBox="0 0 600 520" preserveAspectRatio="none"><path d="M0 55 L5 430 10 70 15 310 20 14 25 435 30 90 35 240 40 32 45 460 50 50 56 370 62 110 68 470 74 28 80 330 88 130 96 445 102 80 110 255 117 35 125 485 132 65 140 388 147 150 155 465 163 40 170 300 178 100 187 470 195 15 203 340 212 80 220 450 230 120 240 405 250 40 260 460 270 70 280 325 290 135 300 485 310 95 320 390 330 32 340 455 352 96 364 290 376 22 388 440 400 115 412 350 424 68 436 490 448 90 462 250 476 35 490 460 504 105 518 348 532 52 546 480 560 88 574 330 588 122 600 445" fill="none" stroke="#52677a" stroke-width="1.3" opacity=".86"/></svg></div>
+        <div class="chart"><span class="chart-label">Rte_MostTempperatureCalculation_OCSPTemp_xds16</span><svg viewBox="0 0 600 330" preserveAspectRatio="none"><path d="M0 270 L10 280 20 240 30 265 40 225 50 255 60 235 70 280 80 278 90 252 100 226 110 220 120 185 130 205 140 170 150 195 160 168 170 190 180 162 190 188 200 165 210 190 220 155 230 165 240 142 250 154 260 130 270 145 280 122 290 140 300 113 310 135 320 105 330 120 340 98 350 110 360 86 370 99 380 67 390 78 400 55 410 78 420 58 430 35 440 46 450 23 460 41 470 15 480 35 490 25 500 48 510 58 520 55 530 61 540 62 550 58 560 54 570 52 580 57 590 53 600 48" fill="none" stroke="#276cf0" stroke-width="2"/></svg></div>
+        <footer class="view-footer">时域 · 0.0108413—81.531 s <span>2 个通道</span></footer>
+      </article>
+
+      <article class="view" style="--tone:#1684ee">
+        <div class="view-header"><span class="dot"></span><span class="chip"><i>⌁</i> 时域</span><span class="name">View 1</span><span class="actions"><span>↗</span><span>⌗</span><span>⋮</span></span></div>
+        <div class="chart"><span class="chart-label">Rte_ActEstPhaJsul_mActiveReturnMotorTorq_xds16</span><svg viewBox="0 0 600 330" preserveAspectRatio="none"><path d="M0 162 L40 162 72 157 85 145 94 148 103 120 111 145 119 90 126 154 134 62 142 139 151 78 160 152 178 182 190 236 200 220 208 268 216 195 224 291 234 208 244 302 254 221 264 286 276 230 288 277 300 198 312 250 324 213 338 160 350 115 362 123 374 87 386 132 398 101 410 142 422 98 434 130 446 90 458 121 470 82 482 140 494 94 506 125 518 76 530 120 542 80 554 138 566 86 578 124 590 148 600 162" fill="none" stroke="#0caaca" stroke-width="1.65"/></svg></div>
+        <footer class="view-footer">时域 · 0.00844361—217.049 s <span>1 个通道</span></footer>
+      </article>
+
+      <article class="view" style="--tone:#00a55a">
+        <div class="view-header"><span class="dot"></span><span class="chip"><i>⌁</i> 时域</span><span class="name">View 3</span></div>
+        <div class="chart"><span class="chart-label">Rte_TAS_mTorsionBarTorque_xds16</span><svg viewBox="0 0 600 330" preserveAspectRatio="none"><path d="M0 165 L5 85 10 212 15 38 20 220 25 74 30 200 35 98 40 181 45 84 50 200 55 90 60 184 65 97 70 195 75 80 80 194 85 88 90 205 95 92 100 196 105 100 110 202 115 84 120 190 125 92 130 202 135 86 140 204 145 94 150 190 155 83 160 205 165 100 170 198 175 93 180 208 185 96 190 197 195 81 200 210 205 92 210 201 215 96 220 204 225 90 230 197 235 80 240 211 245 103 250 198 255 94 260 202 265 90 270 200 275 80 280 210 285 95 290 200 295 90 300 205 305 60 310 205 315 105 320 212 325 95 330 200 335 90 340 210 345 100 350 208 355 70 360 209 365 95 370 196 375 90 380 213 385 80 390 202 395 100 400 212 405 94 410 197 415 105 420 214 425 85 430 202 435 95 440 215 445 80 450 205 455 100 460 195 465 80 470 205 475 90 480 205 485 75 490 210 495 95 500 190 505 120 510 215 515 55 520 205 525 96 530 195 535 90 540 212 545 90 550 197 555 75 560 215 565 108 570 205 575 330 580 75 585 315 590 105 595 285 600 155" fill="none" stroke="#2078ff" stroke-width="1.45"/></svg></div>
+        <footer class="view-footer">时域 · 0.00786958—324.681 s <span>2 个通道</span></footer>
+      </article>
+
+      <article class="view large" style="--tone:#a833c7">
+        <div class="view-header"><span class="dot"></span><span class="chip"><i>⌁</i> 时域</span><span class="name">View 4</span></div>
+        <div class="chart"><span class="chart-label">File_TempDrv_cMotTemp_xds16</span><svg viewBox="0 0 900 330" preserveAspectRatio="none"><path d="M0 296 L15 290 30 286 45 278 60 279 75 267 90 261 105 257 120 250 135 242 150 233 165 232 180 219 195 212 210 208 225 195 240 197 255 181 270 176 285 166 300 161 315 153 330 152 345 143 360 132 375 128 390 118 405 111 420 108 435 98 450 91 465 86 480 78 495 70 510 65 525 60 540 54 555 45 570 45 585 34 600 28 615 30 630 22 645 18 660 12 675 16 690 7 705 13 720 4 735 9 750 2 765 0 780 9 795 12 810 18 825 15 840 20 855 24 870 18 885 23 900 20" fill="none" stroke="#ae58e6" stroke-width="2.1"/></svg></div>
+        <footer class="view-footer">时域 · 0.00786258—200.681 s <span>2 个通道</span></footer>
+      </article>
+    </section>
+    <span class="status dense-note">密网格：对齐步长更细，卡片间距由 12 px 收到 8 px</span>
+    <aside class="annotation"><strong>原型意图</strong><p class="dense-note">保留画布的工程感，但把大方格降为“弱背景”；卡片用低不透明度磨砂，而不是纯白面板。</p><p class="current-note">当前对照保持粗网格与较大间距；它适合大屏展示，但多卡片时更容易显得稀疏。</p></aside>
+  </main>
+  <script>
+    const stage = document.getElementById('stage');
+    const dense = document.getElementById('dense');
+    const current = document.getElementById('current');
+    const modeText = document.getElementById('modeText');
+    function setMode(isDense) {
+      stage.classList.toggle('dense', isDense);
+      dense.classList.toggle('active', isDense);
+      current.classList.toggle('active', !isDense);
+      modeText.textContent = isDense ? '间距 8 px · 42 px 细网格' : '间距 12 px · 110 px 粗网格';
+    }
+    dense.addEventListener('click', () => setMode(true));
+    current.addEventListener('click', () => setMode(false));
+  </script>
+</body>
+</html>

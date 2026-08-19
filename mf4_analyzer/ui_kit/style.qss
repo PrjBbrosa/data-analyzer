@@ -4277,8 +4277,8 @@ QToolButton#ultraViewZoomResetButton:hover {
     border-color: #cbd5e1;
 }
 QFrame#ultraViewCardActionBar {
-    background-color: #fcfdfe;
-    border: 1px solid #d6e0eb;
+    background-color: rgba(255, 255, 254, 182);
+    border: 1px solid rgba(255, 255, 255, 210);
     border-radius: 10px;
 }
 QFrame#ultraViewCardActionBar QToolButton[chrome="ultraview"][role="cardAction"] {
@@ -4305,6 +4305,7 @@ QFrame#ultraViewCardActionBar QToolButton[chrome="ultraview"][role="cardAction"]
     background-color: transparent;
 }
 QLabel#ultraViewCardImage {
+    background-color: transparent;
     color: #64748b;
     padding: 8px;
 }
@@ -4883,18 +4884,18 @@ QToolButton[chrome="ultraview"][role="presentationExit"]:checked:pressed {
 /* Existing cards inherit the canvas material without a shadow.  These rules
  * also preserve the current-object names until Page finishes its migration. */
 QWidget#ultraViewCard {
-    border-color: #d5e0e9;
+    border-color: {{UV_FROST_EDGE}};
     border-radius: 11px;
-    background-color: #ffffff;
+    background-color: {{UV_FROST}};
 }
 QWidget#ultraViewCard[selected="true"] {
     border-color: #3e709c;
-    background-color: #ffffff;
+    background-color: rgba(242, 249, 250, 142);
 }
 QWidget#ultraViewCard[replacementArmed="true"],
 QWidget#ultraViewCard[dropActive="true"] {
     border-color: #3e709c;
-    background-color: #eaf2f8;
+    background-color: rgba(223, 239, 244, 154);
 }
 QWidget#ultraViewCard[orphaned="true"] {
     border-color: #d88b16;

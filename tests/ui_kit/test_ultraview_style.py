@@ -19,6 +19,12 @@ def test_titanium_amber_core_roles_are_exact_and_separate_from_global_controls()
     assert "CONTROL_ACCENT" not in ULTRAVIEW_QSS_TOKENS
 
 
+def test_card_shell_is_translucent_while_preview_content_keeps_its_own_material():
+    """The frosted perimeter must expose the board without fading plot pixels."""
+    assert ULTRAVIEW_TITANIUM["surface_frost"] == "rgba(255, 255, 254, 118)"
+    assert ULTRAVIEW_TITANIUM["surface_frost_edge"] == "rgba(255, 255, 255, 166)"
+
+
 def test_every_ultraview_qss_token_is_renderable_and_uses_a_named_role():
     assert set(ULTRAVIEW_QSS_TOKENS) >= {
         "UV_CANVAS",
