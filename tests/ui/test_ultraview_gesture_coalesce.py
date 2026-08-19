@@ -126,6 +126,23 @@ def _wrap_present(overlay):
     return calls
 
 
+def test_first_live_frame_hides_card_then_presents_overlay_once(qtbot, monkeypatch):
+    board = _prepare_board(qtbot, "flash-0")
+    card = board.card_for("time", "flash-0")
+    assert card is not None
+    present_calls = _wrap_present(board.ghost_overlay())
+    start = QPoint(16, 16)
+    metrics = board.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _press(card, start)
+    _send_move(card, QPoint(start.x() + unit * 2, start.y()))
+    QApplication.processEvents()
+    assert card._drag_shell_only is True
+    assert board.ghost_overlay().is_showing()
+    assert len(present_calls) == 1
+    _release(card, QPoint(start.x() + unit * 2, start.y()))
+
+
 def test_same_snapped_candidate_plans_and_presents_once(qtbot, monkeypatch):
     board = _prepare_board(qtbot, "same-0")
     card = board.card_for("time", "same-0")
@@ -147,48 +164,77 @@ def test_same_snapped_candidate_plans_and_presents_once(qtbot, monkeypatch):
     _release(card, QPoint(start.x() + 24, start.y()))
 
 
-def test_one_frame_keeps_only_latest_sample_and_release_flushes(qtbot, monkeypatch):
-    board = _prepare_board(qtbot, "late-0")
-    card = board.card_for("time", "late-0")
+def test_drag_shows_snap_overlay_without_waiting_for_the_timer(qtbot):
+    board = _prepare_board(qtbot, "live-0")
+    card = board.card_for("time", "live-0")
     assert card is not None
-    consumed: list[tuple[int, int]] = []
-    real_update = board._update_gesture_at
-
-    def wrapped(board_pos, *, keep_aspect=False, global_pos=None):
-        consumed.append(board_pos)
-        return real_update(board_pos, keep_aspect=keep_aspect, global_pos=global_pos)
-
-    board._update_gesture_at = wrapped
-    plan_targets = _wrap_plan_layout(monkeypatch)
-
     start = QPoint(16, 16)
     metrics = board.metrics()
     unit = metrics.column_width + metrics.gutter
-    pos_a = QPoint(start.x() + unit, start.y())
-    pos_b = QPoint(start.x() + unit * 2, start.y())
-    pos_c = QPoint(start.x() + unit * 3, start.y())
     _press(card, start)
-    _send_move(card, pos_a)
-    _send_move(card, pos_b)
-    _send_move(card, pos_c)
-    assert board._latest_pointer_sample is not None
-    assert board._pointer_coalesce_timer.isActive()
-    assert consumed == []
+    _send_move(card, QPoint(start.x() + unit * 2, start.y()))
+    overlay = board.ghost_overlay()
+    assert board.gesture().is_active()
+    assert overlay.is_showing()
+    assert overlay._highlights
+    assert card._drag_shell_only is True
+    _release(card, QPoint(start.x() + unit * 2, start.y()))
 
-    QApplication.processEvents()
-    assert len(consumed) == 1
-    assert consumed[0] == board._logical_board_pos(
-        (card.mapTo(board, pos_c).x(), card.mapTo(board, pos_c).y())
-    )
-    assert len(plan_targets) == 1
-    assert board._latest_pointer_sample is None
 
-    _send_move(card, QPoint(start.x() + unit * 4, start.y()))
-    assert board._latest_pointer_sample is not None
-    _release(card, QPoint(start.x() + unit * 4, start.y()))
-    assert board._latest_pointer_sample is None
-    assert board._pointer_coalesce_timer.isActive() is False
-    assert len(consumed) == 2
+def test_resize_drag_shows_handle_badge_before_event_pump(qtbot):
+    board = _prepare_board(qtbot, "live-resize-0")
+    card = board.card_for("time", "live-resize-0")
+    assert card is not None
+    board.select_only("time", "live-resize-0")
+    handle = QPoint(card.width() - 2, card.height() // 2)
+    metrics = board.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _press(card, handle)
+    _send_move(card, QPoint(handle.x() + unit * 2, handle.y()))
+    overlay = board.ghost_overlay()
+    assert board.gesture().is_active()
+    session = board.gesture().session()
+    assert session is not None and session.handle is not None
+    assert overlay.is_showing()
+    assert overlay._highlights
+    assert overlay._badge
+    _release(card, QPoint(handle.x() + unit * 2, handle.y()))
+
+
+def test_relayout_while_armed_does_not_clear_live_ghosts(qtbot):
+    board = _prepare_board(qtbot, "armed-0")
+    card = board.card_for("time", "armed-0")
+    assert card is not None
+    start = QPoint(16, 16)
+    metrics = board.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _press(card, start)
+    _send_move(card, QPoint(start.x() + unit * 2, start.y()))
+    overlay = board.ghost_overlay()
+    assert overlay._highlights
+    board._relayout()
+    board._sync_selection_handles()
+    assert overlay.is_showing()
+    assert overlay._highlights
+    _release(card, QPoint(start.x() + unit * 2, start.y()))
+
+
+def test_resize_event_during_drag_does_not_drop_the_overlay(qtbot):
+    board = _prepare_board(qtbot, "resize-evt-0")
+    card = board.card_for("time", "resize-evt-0")
+    assert card is not None
+    start = QPoint(16, 16)
+    metrics = board.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _press(card, start)
+    _send_move(card, QPoint(start.x() + unit * 2, start.y()))
+    overlay = board.ghost_overlay()
+    assert overlay.is_showing()
+    board.resize(board.width() + 8, board.height() + 8)
+    assert board.gesture().is_active()
+    assert overlay.is_showing()
+    assert overlay._highlights
+    _release(card, QPoint(start.x() + unit * 2, start.y()))
 
 
 def test_resize_release_emits_geometry_once(qtbot):
@@ -282,6 +328,105 @@ def test_displaced_preview_does_not_leak_opacity_effects(qtbot):
     assert other._drag_shell_only is False
     assert card.graphicsEffect() is None
     assert other.graphicsEffect() is None
+
+
+def test_move_and_resize_both_publish_a_size_badge(qtbot):
+    board = _prepare_board(qtbot, "badge-0")
+    card = board.card_for("time", "badge-0")
+    assert card is not None
+    start = QPoint(16, 16)
+    metrics = board.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _press(card, start)
+    _send_move(card, QPoint(start.x() + unit * 2, start.y()))
+    overlay = board.ghost_overlay()
+    session = board.gesture().session()
+    assert session is not None
+    assert overlay._badge == (
+        f"{session.candidate.column_span}×{session.candidate.row_span}"
+    )
+    _release(card, QPoint(start.x() + unit * 2, start.y()))
+
+
+def test_session_hits_safety_only_when_the_mover_left_the_board(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+        LAYOUT_RESIZE,
+        LayoutPlan,
+        LayoutRejectReason,
+    )
+    from mf4_analyzer.ui.ultraview_state import SAFETY_COLUMN_MAX
+
+    board = _prepare_board(qtbot, "safe-0")
+    origin = GridRect(0, 0, 4, 3)
+    in_bounds = GridRect(0, 0, 8, 3)
+    oob = GridRect(SAFETY_COLUMN_MAX - 2, 0, 8, 3)
+    plan = LayoutPlan(
+        accepted=False,
+        reason=LayoutRejectReason.OUT_OF_BOUNDS,
+        mover_before=origin,
+        mover_after=in_bounds,
+        displaced_before_after=(),
+        operation=LAYOUT_RESIZE,
+        based_on_layout_revision=0,
+        mover_ref=make_ref("time", "safe-0"),
+    )
+
+    class _Session:
+        legal = False
+        candidate = in_bounds
+
+        def is_group_move(self):
+            return False
+
+    session = _Session()
+    session.plan = plan
+    assert board._session_hits_safety(session) is False
+    session.candidate = oob
+    assert board._session_hits_safety(session) is True
+
+
+def test_resize_toward_neighbor_shows_size_and_collision_or_displace(qtbot):
+    board = _prepare_board(qtbot, "hit-0", "hit-1")
+    left = board.card_for("time", "hit-0")
+    assert left is not None
+    board.select_only("time", "hit-0")
+    handle = QPoint(left.width() - 2, left.height() // 2)
+    metrics = board.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _press(left, handle)
+    _send_move(left, QPoint(handle.x() + unit * 4, handle.y()))
+    overlay = board.ghost_overlay()
+    session = board.gesture().session()
+    assert session is not None
+    assert overlay.is_showing()
+    assert overlay._badge
+    assert overlay._highlights
+    if session.legal:
+        assert len(overlay._highlights) >= 1
+    else:
+        assert overlay._safety_wall is False
+        assert overlay._reject_mark is True
+        assert overlay._legal is False
+    _release(left, QPoint(handle.x() + unit * 4, handle.y()))
+
+
+def test_illegal_preview_keeps_attempted_rect_and_size_badge(qtbot):
+    board = _prepare_board(qtbot, "reject-0")
+    overlay = board.ghost_overlay()
+    attempted = (20, 20, 200, 120)
+    overlay.set_move_previews(
+        ((None, attempted),),
+        (attempted,),
+        legal=False,
+        badge="12×6",
+        handles=True,
+    )
+    assert overlay._legal is False
+    assert overlay._reject_mark is True
+    assert overlay._safety_wall is False
+    assert overlay._badge == "12×6"
+    assert overlay._highlights
+    assert overlay._highlights[0].width() == 200
 
 
 def test_shift_aspect_and_handles_match_snapped_resize_plan():

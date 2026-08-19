@@ -119,8 +119,6 @@ class GestureSession:
         return (self.ref,)
 
     def badge(self) -> str:
-        if self.handle is None:
-            return ""
         return f"{self.candidate.column_span}×{self.candidate.row_span}"
 
     def is_group_move(self) -> bool:

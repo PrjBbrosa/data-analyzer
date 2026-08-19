@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Sequence
 
 from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtGui import QColor, QImage, QLinearGradient, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui_kit.ultraview_style import titanium_color
@@ -25,7 +25,9 @@ HANDLE_EDGE = QColor("#2d7ff9")
 MARQUEE_FILL = QColor(45, 127, 249, 24)
 GHOST_OPACITY = 1.0
 CONTINUE_BAND_PX = 72
-_PREVIEW_DIRTY_MARGIN = 32
+_PREVIEW_DIRTY_MARGIN = 48
+_BADGE_PAD_X = 8
+_BADGE_PAD_Y = 4
 _BRAND = QColor(titanium_color("brand"))
 _COPPER = QColor(titanium_color("copper"))
 _INK = QColor(titanium_color("ink"))
@@ -124,9 +126,18 @@ class GhostOverlay(QWidget):
         viewport: QRect | None = None,
     ) -> None:
         """Gesture-only titanium-blue fade band. Not a toast, not a wall."""
-        self._continue_sides = tuple(side for side in sides if side)
-        self._hint_copy = str(copy or "")
-        self._viewport_rect = QRect(viewport) if viewport is not None else None
+        next_sides = tuple(side for side in sides if side)
+        next_copy = str(copy or "")
+        next_viewport = QRect(viewport) if viewport is not None else None
+        if (
+            next_sides == self._continue_sides
+            and next_copy == self._hint_copy
+            and next_viewport == self._viewport_rect
+        ):
+            return
+        self._continue_sides = next_sides
+        self._hint_copy = next_copy
+        self._viewport_rect = next_viewport
         self._present()
 
     def set_safety_bounds(
@@ -205,6 +216,8 @@ class GhostOverlay(QWidget):
         badge: str = "",
         handles: bool = False,
         safety_wall: bool = False,
+        safety_bounds: QRect | None = None,
+        safety_sides: Sequence[str] = (),
     ) -> None:
         old_dirty = self._preview_dirty_rect()
         old_signature = self._preview_signature()
@@ -216,7 +229,12 @@ class GhostOverlay(QWidget):
         self._safety_wall = bool(safety_wall)
         self._reject_mark = not self._legal
         self._badge = str(badge)
-        if not self._safety_wall:
+        if self._safety_wall:
+            self._safety_bounds_rect = (
+                QRect(safety_bounds) if safety_bounds is not None else None
+            )
+            self._safety_sides = tuple(side for side in safety_sides if side)
+        else:
             self._safety_bounds_rect = None
             self._safety_sides = ()
         self._handles_rect = (
@@ -285,6 +303,8 @@ class GhostOverlay(QWidget):
         boxes.extend(self._highlights)
         if self._handles_rect is not None:
             boxes.append(self._handles_rect)
+        if self._badge and self._highlights:
+            boxes.append(self._highlights[0].adjusted(0, 0, 0, 0))
         if self._safety_bounds_rect is not None:
             boxes.append(self._safety_bounds_rect)
         if not boxes:
@@ -306,14 +326,18 @@ class GhostOverlay(QWidget):
     def _present(self, dirty: QRect | None = None) -> None:
         if not self._has_content():
             self.hide()
-        elif not self.isVisible():
+            return
+        first_show = not self.isVisible()
+        if first_show:
             self.show()
-        self.raise_()
+            self.raise_()
+            dirty = None
         if dirty is None or dirty.isNull() or not dirty.isValid():
             self.update()
             return
         clipped = dirty.intersected(self.rect()) if self.rect().isValid() else dirty
         if clipped.isEmpty():
+            self.update()
             return
         self.update(clipped)
 
@@ -351,6 +375,34 @@ class GhostOverlay(QWidget):
             box = viewport.adjusted(12, 12, -12, -12)
             painter.drawText(box, Qt.AlignTop | Qt.AlignHCenter, self._hint_copy)
 
+    def _paint_size_badge(
+        self, painter: QPainter, anchor: QRect, legal: bool
+    ) -> None:
+        """Opaque size chip so the span stays readable over the preview."""
+        font = QFont(painter.font())
+        font.setPixelSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        text = str(self._badge)
+        metrics = painter.fontMetrics()
+        text_w = metrics.horizontalAdvance(text)
+        text_h = metrics.height()
+        width = text_w + 2 * _BADGE_PAD_X
+        height = text_h + 2 * _BADGE_PAD_Y
+        x = anchor.left() + 6
+        y = anchor.top() + 6
+        chip = QRect(x, y, width, height)
+        fill = QColor(ILLEGAL_PEN if not legal else LEGAL_PEN)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(chip, 4, 4)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(
+            chip.adjusted(_BADGE_PAD_X, 0, -_BADGE_PAD_X, 0),
+            Qt.AlignVCenter | Qt.AlignLeft,
+            text,
+        )
+
     def _paint_safety_wall(self, painter: QPainter) -> None:
         if not self._safety_sides or self._safety_bounds_rect is None:
             return
@@ -374,35 +426,32 @@ class GhostOverlay(QWidget):
             painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
             self._paint_continue_hint(painter)
             self._paint_safety_wall(painter)
-            # A safety reject keeps the last legal ghost; the copper wall is
-            # the "cannot continue" signal, not a red fill on the card.
+            # Safety wall keeps a legal-looking mover; collision reject stays
+            # red. Pixmaps go down first so stroke + badge stay readable.
             card_legal = self._legal or self._safety_wall
             fill = LEGAL_FILL if card_legal else ILLEGAL_FILL
             pen = LEGAL_PEN if card_legal else ILLEGAL_PEN
             style = Qt.SolidLine if card_legal else Qt.DashLine
+            stroke = 2 if card_legal else 4
             for highlight in self._highlights:
                 if not self._safety_wall:
                     painter.fillRect(highlight, fill)
-                painter.setPen(QPen(pen, 2 if card_legal else 3, style))
-                painter.setBrush(Qt.NoBrush)
-                painter.drawRect(highlight.adjusted(1, 1, -1, -1))
             for image, ghost in self._ghosts:
                 if image is None:
                     continue
-                painter.setOpacity(GHOST_OPACITY)
+                painter.setOpacity(0.55 if not card_legal else GHOST_OPACITY)
                 painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
                 if isinstance(image, QPixmap):
                     painter.drawPixmap(ghost, image)
                 else:
                     painter.drawImage(ghost, image)
                 painter.setOpacity(1.0)
+            for index, highlight in enumerate(self._highlights):
+                painter.setPen(QPen(pen, stroke if index == 0 else 2, style))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(highlight.adjusted(1, 1, -1, -1))
             if self._badge and self._highlights:
-                painter.setPen(QColor("#0f172a"))
-                painter.drawText(
-                    self._highlights[0].adjusted(8, 4, -8, -4),
-                    Qt.AlignTop | Qt.AlignLeft,
-                    self._badge,
-                )
+                self._paint_size_badge(painter, self._highlights[0], card_legal)
             if self._reject_mark and self._highlights:
                 mark = self._highlights[0]
                 cx = mark.right() - 16
