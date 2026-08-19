@@ -12,11 +12,9 @@ from PyQt5.QtGui import QColor, QImage, QPainter
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
-    AUTHOR_TOOL_DRAW,
     AUTHOR_TOOL_SELECT,
-    AUTHOR_TOOL_SHAPES,
     AUTHOR_TOOL_STICKY,
-    AUTHOR_TOOL_TEXT,
+    RELEASE_AUTHOR_TOOLS,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.compositor import _draw_preview
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import preview_reading_box
@@ -218,9 +216,10 @@ def test_compact_stages_keep_select_sticky_and_hide_undelivered_tools(qtbot, siz
     sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
     assert select is not None and select.isVisible() and select.isEnabled()
     assert sticky is not None and sticky.isVisible()
-    assert rail.tool_button(AUTHOR_TOOL_TEXT) is None
-    assert rail.tool_button(AUTHOR_TOOL_SHAPES) is None
-    assert rail.tool_button(AUTHOR_TOOL_DRAW) is None
+    for tool in RELEASE_AUTHOR_TOOLS:
+        button = rail.tool_button(tool)
+        assert button is not None and button.isVisible()
+    assert rail.visible_author_tools() == RELEASE_AUTHOR_TOOLS
     assert select.geometry().right() <= rail.width()
     assert sticky.geometry().bottom() <= rail.height()
 

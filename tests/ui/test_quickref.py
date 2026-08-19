@@ -422,3 +422,33 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "默认适应视口" not in haystack
     assert "铺满视口" not in haystack
     assert "12 列受控" not in haystack
+
+
+def test_ultraview_quickref_describes_released_authoring_tools():
+    group = next(g for g in quickref.QUICKREF if g.title == "总览 · Board 与自由网格")
+    haystack = " ".join(f"{row.desc} {row.sub}" for row in group.rows)
+    assert "左侧 Select / Sticky" not in haystack
+    assert "尚未提供" not in haystack
+    assert "Coming Soon" not in haystack
+    rows = {row.desc: row for row in group.rows}
+    sticky = rows["便签 Sticky"]
+    text = rows["文字 Text"]
+    shape = rows["形状 Shape"]
+    connector = rows["连接线 Connector"]
+    draw = rows["画笔 Draw"]
+    assert sticky.keys == ("N",)
+    assert text.keys == ("T",)
+    assert shape.keys == ("S",)
+    assert connector.keys == ("L",)
+    assert draw.keys == ("P",)
+    assert "V / N / T / S / L / P" in sticky.sub
+    assert "固定连续创建" in sticky.sub
+    assert "整框" in text.sub
+    assert "固定连续创建" in text.sub
+    assert "矩形" in shape.sub
+    assert "固定连续创建" in shape.sub
+    assert "不做自动避障" in connector.sub
+    assert "固定连续创建" in connector.sub
+    assert "整笔擦除" in draw.sub
+    assert "套索" in draw.sub
+    assert "保持连续" in draw.sub

@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UltraView · Miro 式作者体验 · 决策 Prototype</title>
+<style>
+  :root {
+    --uvx-canvas: #F6F8F7;
+    --uvx-surface: #FFFFFF;
+    --uvx-ink: #203038;
+    --uvx-muted: #677880;
+    --uvx-selection: #4262FF;
+    --uvx-signal: #24697C;
+    --uvx-line: rgba(32, 48, 56, .16);
+    --uvx-line-strong: rgba(32, 48, 56, .28);
+    --uvx-wash: #EEF1FF;
+    --uvx-hover: #F1F4F5;
+    --uvx-shadow: 0 6px 18px rgba(32, 48, 56, .10), 0 1px 3px rgba(32, 48, 56, .08);
+    --uvx-warning: #C47A14;
+    --uvx-warning-wash: #FFF4DF;
+    --page: #E6EBEC;
+    --page-ink: #203038;
+    --banner: #8B1E1E;
+    --time: #24697C;
+    --fft: #3A78C3;
+    --tf: #2A8F7B;
+    --frf: #6D5CA8;
+    --order: #C46A2B;
+    --font: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    color: var(--page-ink);
+    background: var(--page);
+    font: 13px/1.45 var(--font);
+  }
+  button { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+  button:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--uvx-selection);
+    outline-offset: 2px;
+  }
+
+  .banner {
+    position: sticky; top: 0; z-index: 80;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    min-height: 34px; padding: 6px 16px;
+    color: #FFF8F6; background: #8B1E1E;
+    font: 700 11px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  }
+
+  .review { width: min(1320px, calc(100vw - 28px)); margin: 0 auto; padding: 18px 0 36px; }
+  .review h1 { margin: 8px 0 0; font-size: 26px; letter-spacing: -.035em; line-height: 1.15; }
+  .lede { max-width: 760px; margin: 8px 0 0; color: var(--uvx-muted); }
+  .lede b { color: var(--page-ink); font-weight: 650; }
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin: 16px 0 12px;
+  }
+  .seg {
+    display: flex; gap: 2px; padding: 3px; border: 1px solid var(--uvx-line);
+    border-radius: 10px; background: var(--uvx-surface);
+  }
+  .seg button {
+    min-height: 28px; padding: 0 10px; border: 0; border-radius: 7px;
+    background: transparent; cursor: pointer; color: var(--uvx-muted);
+  }
+  .seg button[aria-pressed="true"] {
+    color: var(--uvx-ink); background: var(--uvx-wash); font-weight: 650;
+  }
+  .stage-wrap {
+    display: flex; justify-content: flex-start; overflow: auto;
+    padding: 4px 0 18px;
+  }
+  .window {
+    position: relative; flex: 0 0 auto;
+    width: 1280px; height: 720px;
+    overflow: hidden;
+    border: 1px solid var(--uvx-line-strong);
+    border-radius: 10px;
+    background: var(--uvx-canvas);
+    box-shadow: var(--uvx-shadow);
+    color: var(--uvx-ink);
+  }
+  .window[data-size="compact"] { width: 800px; height: 560px; }
+  .osbar {
+    display: flex; align-items: center; gap: 8px;
+    height: 28px; padding: 0 10px;
+    border-bottom: 1px solid var(--uvx-line);
+    background: var(--uvx-surface);
+    color: var(--uvx-muted); font-size: 11px;
+  }
+  .traffic { display: flex; gap: 6px; }
+  .traffic i { width: 10px; height: 10px; border-radius: 50%; background: #E25B58; }
+  .traffic i:nth-child(2) { background: #E3B341; }
+  .traffic i:nth-child(3) { background: #3CB464; }
+  .stage { position: absolute; inset: 28px 0 0 0; overflow: hidden; }
+  .dots {
+    position: absolute; inset: 0;
+    background-image: radial-gradient(circle, rgba(32,48,56,.14) 1px, transparent 1.2px);
+    background-size: 22px 22px;
+    pointer-events: none;
+  }
+
+
+  .island, .rail, .toolbar, .flyout, .menu, .status, .chip-panel {
+    position: absolute;
+    background: var(--uvx-surface);
+    border: 1px solid var(--uvx-line);
+    box-shadow: var(--uvx-shadow);
+  }
+  .island, .toolbar, .status { height: 40px; border-radius: 12px; }
+  .board-island { top: 12px; left: 12px; display: flex; align-items: center; gap: 2px; padding: 4px 4px 4px 8px; z-index: 20; }
+  .global-island { top: 12px; right: 12px; display: flex; align-items: center; gap: 2px; padding: 4px; z-index: 20; }
+  .nav-island { right: 12px; bottom: 12px; display: flex; align-items: center; gap: 2px; padding: 4px; z-index: 20; }
+  .status { left: 12px; bottom: 12px; width: max-content; max-width: 240px; padding: 0 12px; display: flex; align-items: center; gap: 8px; z-index: 20; color: var(--uvx-muted); }
+  .rail {
+    top: 60px; bottom: 60px; left: 12px; width: 56px; padding: 8px 10px;
+    border-radius: 14px; display: grid; align-content: center; gap: 1px; z-index: 21;
+  }
+  .rail-div { height: 1px; margin: 5px 4px; background: var(--uvx-line); }
+  .badge {
+    position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px;
+    border-radius: 7px; background: var(--uvx-warning); color: #fff; font: 700 9px/14px var(--mono); text-align: center;
+  }
+  .icon-btn, .text-btn {
+    display: grid; place-items: center;
+    height: 32px; border: 0; border-radius: 8px;
+    background: transparent; cursor: pointer; color: var(--uvx-ink);
+  }
+  .text-btn { padding: 0 10px; height: 32px; font-size: 12px; white-space: nowrap; }
+  .icon-btn:hover, .text-btn:hover, .tool:hover { background: var(--uvx-hover); }
+  .board-name { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px 0 2px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font-weight: 650; }
+  .chev { width: 10px; height: 10px; opacity: .7; }
+  .window[data-size="compact"] .wide-only,
+  .window[data-size="wide"] .compact-only { display: none !important; }
+  .window[data-size="compact"] .board-label { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .tool {
+    position: relative; width: 36px; height: 36px; padding: 0; border: 0;
+    border-radius: 8px; background: transparent; color: var(--uvx-ink); cursor: pointer;
+  }
+  .window[data-size="compact"] .tool { width: 32px; height: 32px; }
+  .window[data-size="compact"] .rail { width: 48px; padding: 6px 8px; }
+  .tool svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.85; stroke-linecap: round; stroke-linejoin: round; }
+  .tool .filled { fill: currentColor; stroke: none; }
+  .tool[data-hover="true"], .window[data-demo="hover"] .tool[data-tool="sticky"] { background: var(--uvx-hover); }
+  .window[data-demo="hover"] .tool[data-tool="sticky"] .tip { display: block; }
+  .tool.active { background: var(--uvx-wash); color: var(--uvx-selection); }
+  .tool.active::before {
+    content: ""; position: absolute; left: 2px; top: 8px; width: 2px; height: 20px;
+    border-radius: 2px; background: var(--uvx-selection);
+  }
+  .tool.panel-open { background: var(--uvx-hover); color: var(--uvx-ink); }
+  .tool.mode-on { background: #E4F0F2; color: var(--uvx-signal); }
+  .tool.flyout-open::after {
+    content: ""; position: absolute; right: 3px; top: 50%; width: 3px; height: 3px;
+    border-radius: 50%; background: var(--uvx-selection); transform: translateY(-50%);
+  }
+  .tool.pinned .pin-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--uvx-selection); }
+  .tip {
+    position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+    display: none; padding: 5px 8px; border: 1px solid var(--uvx-line); border-radius: 7px;
+    background: var(--uvx-surface); color: var(--uvx-ink); white-space: nowrap;
+    box-shadow: var(--uvx-shadow); font-size: 12px; z-index: 40;
+  }
+  .tip kbd { margin-left: 6px; color: var(--uvx-muted); font: 11px var(--mono); }
+  .tool:hover .tip { display: block; }
+  .window[data-size="compact"] .tool:hover .tip { left: auto; right: calc(100% + 8px); }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 2px; padding: 4px; z-index: 24;
+    max-width: calc(100% - 160px); overflow: visible; white-space: nowrap;
+  }
+  #toolbarBody { display: flex; align-items: center; gap: 2px; min-width: 0; }
+  .spine {
+    display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 8px 0 6px;
+    font: 700 10px/1 var(--mono); letter-spacing: .06em; color: var(--uvx-selection);
+  }
+  .spine i { width: 3px; height: 18px; border-radius: 2px; background: currentColor; }
+  .spine[data-kind="card"] { color: var(--fft); }
+  .spine[data-kind="note"] { color: var(--uvx-selection); }
+  .tb-div { width: 1px; height: 18px; margin: 0 3px; background: var(--uvx-line); }
+  .swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--uvx-line-strong); }
+  .handle-box { position: absolute; inset: -6px; border: 1.5px solid var(--uvx-selection); border-radius: 4px; pointer-events: none; }
+  .handle-box b { position: absolute; width: 10px; height: 10px; border: 1.5px solid var(--uvx-selection); background: var(--uvx-surface); border-radius: 2px; }
+  .handle-box b.nw { left: -6px; top: -6px; } .handle-box b.ne { right: -6px; top: -6px; }
+  .handle-box b.sw { left: -6px; bottom: -6px; } .handle-box b.se { right: -6px; bottom: -6px; }
+  .handle-box b.n { left: 50%; top: -6px; transform: translateX(-50%); }
+  .handle-box b.s { left: 50%; bottom: -6px; transform: translateX(-50%); }
+  .handle-box b.w { left: -6px; top: 50%; transform: translateY(-50%); }
+  .handle-box b.e { right: -6px; top: 50%; transform: translateY(-50%); }
+
+  .flyout, .menu, .chip-panel {
+    z-index: 30; border-radius: 12px; padding: 10px;
+  }
+  .flyout { left: 76px; width: 284px; }
+  .flyout.sticky { width: 248px; }
+  .flyout-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 2px 8px; font-weight: 650; }
+  .flyout-head small { color: var(--uvx-muted); font: 11px var(--mono); }
+  .palette { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .color {
+    aspect-ratio: 1; border-radius: 6px; border: 1px solid rgba(32,48,56,.22);
+    cursor: pointer; background: var(--c);
+  }
+  .color.selected { box-shadow: 0 0 0 2px var(--uvx-surface), 0 0 0 4px var(--uvx-selection); }
+  .pin-row, .wide {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    width: 100%; min-height: 34px; margin-top: 10px; border: 0; border-radius: 8px;
+    background: var(--uvx-hover); cursor: pointer;
+  }
+  .pin-row[aria-pressed="true"] { color: var(--uvx-selection); background: var(--uvx-wash); }
+  .shape-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .shape-cell, .conn-cell, .draw-mode {
+    display: grid; place-items: center; gap: 6px; min-height: 64px; padding: 8px 4px;
+    border: 1px solid var(--uvx-line); border-radius: 8px; background: transparent; cursor: pointer;
+    color: var(--uvx-ink);
+  }
+  .shape-cell small, .conn-cell small, .draw-mode small { color: var(--uvx-muted); font-size: 11px; }
+  .shape-cell.active, .conn-cell.active, .draw-mode.active, .preset.active {
+    border-color: var(--uvx-selection); background: var(--uvx-wash); color: var(--uvx-selection);
+  }
+  .shape-cell svg, .conn-cell svg { width: 28px; height: 22px; stroke: currentColor; fill: color-mix(in srgb, currentColor 12%, transparent); stroke-width: 1.8; }
+  .conn-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .draw-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .presets { display: grid; gap: 6px; margin-top: 10px; }
+  .preset {
+    display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 8px;
+    min-height: 36px; padding: 0 8px; border: 1px solid var(--uvx-line); border-radius: 8px;
+    background: transparent; cursor: pointer; text-align: left;
+  }
+  .preset i { height: var(--w); border-radius: 99px; background: var(--c); opacity: var(--a, 1); }
+  .menu { top: 56px; left: 12px; width: 220px; padding: 6px; }
+  .menu button {
+    display: flex; width: 100%; align-items: center; justify-content: space-between;
+    min-height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; cursor: pointer;
+  }
+  .menu button:hover { background: var(--uvx-hover); }
+  .menu small { color: var(--uvx-muted); font: 11px var(--mono); }
+  .chip-panel { left: 12px; bottom: 60px; width: 260px; }
+  .more-menu { position: absolute; top: 44px; right: 4px; width: 168px; padding: 6px; z-index: 32; }
+
+  .card, .note, .textbox, .shape, .ink {
+    position: absolute; cursor: pointer;
+  }
+  .card {
+    width: 228px; height: 148px; border-radius: 12px; overflow: hidden;
+    border: 1px solid var(--uvx-line-strong); background: var(--uvx-surface);
+    box-shadow: 0 8px 18px rgba(32,48,56,.08);
+  }
+  .card header {
+    display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px;
+    border-bottom: 1px solid var(--uvx-line); font-size: 11px;
+  }
+  .card header i { width: 6px; height: 6px; border-radius: 50%; background: var(--kind); }
+  .card header span { margin-left: auto; color: var(--uvx-muted); font: 10px var(--mono); }
+  .trace {
+    position: absolute; inset: 36px 10px 12px;
+    background:
+      linear-gradient(var(--uvx-line) 1px, transparent 1px),
+      linear-gradient(159deg, transparent 0 18%, var(--kind) 19% 21%, transparent 22% 48%, var(--kind) 49% 51%, transparent 52% 74%, var(--kind) 75% 77%, transparent 78%);
+    background-size: 100% 18px, auto; opacity: .85;
+  }
+  .note {
+    width: 148px; min-height: 126px; padding: 14px 13px;
+    background: #FFF19A; color: #3F3A22; border: 1px solid #E1C64E;
+    box-shadow: 0 8px 16px rgba(120,90,20,.12);
+    font-size: 13px; line-height: 1.45;
+  }
+  .note b { display: block; margin-bottom: 6px; font-size: 14px; }
+  .textbox { min-width: 188px; font-size: 16px; line-height: 1.35; padding: 4px 2px; }
+  .textbox small { display: block; color: var(--uvx-muted); font-size: 12px; }
+  .caret { display: inline-block; width: 1px; height: 16px; margin-left: 2px; background: var(--uvx-selection); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .shape-box {
+    width: 168px; height: 92px; border: 2px solid var(--uvx-selection);
+    border-radius: 16px; background: color-mix(in srgb, var(--uvx-selection) 10%, var(--uvx-surface));
+    display: grid; place-items: center; font-weight: 650; font-size: 12px;
+  }
+  .ink svg { overflow: visible; }
+  .selected { z-index: 8; }
+  .window[data-demo="drawing"] .ink { filter: none; }
+
+  .guide { display: none; }
+
+  .signoff, .compare, .states-doc {
+    margin-top: 8px; padding: 14px 16px; border: 1px solid var(--uvx-line);
+    border-radius: 12px; background: var(--uvx-surface);
+  }
+  .signoff h2, .compare h2, .states-doc h2 { margin: 0 0 8px; font-size: 15px; }
+  .signoff ol { margin: 0; padding-left: 20px; }
+  .signoff li { margin: 6px 0; }
+  .ia {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px;
+  }
+  .ia article { padding: 10px 12px; border: 1px solid var(--uvx-line); border-radius: 10px; }
+  .ia b { display: block; margin-bottom: 4px; }
+  .ia span { color: var(--uvx-muted); font-size: 12px; }
+  .ia .bad b { color: #9B2C2C; }
+  .ia .good b { color: var(--uvx-signal); }
+
+  .state-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+  .state-card { min-width: 0; }
+  .state-card p { margin: 0 0 6px; font: 700 11px/1.2 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--uvx-muted); }
+  .mini {
+    width: 100%; aspect-ratio: 1280 / 720; overflow: hidden; border: 1px solid var(--uvx-line-strong);
+    border-radius: 8px; background: var(--uvx-canvas); position: relative;
+  }
+  .mini iframe { position: absolute; inset: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; pointer-events: none; }
+
+  body.capture { background: var(--uvx-canvas); }
+  body.capture .banner, body.capture .review-chrome, body.capture .state-board-wrap { display: none !important; }
+  body.capture .stage-wrap { margin: 0; padding: 0; overflow: hidden; }
+  body.capture .window { border: 0; border-radius: 0; box-shadow: none; }
+  body.capture .osbar { display: none; }
+  body.capture .stage { inset: 0; }
+  body.states-only .review-main { display: none; }
+  body.states-only .state-board-wrap { display: block; padding: 16px; }
+</style>
+</head>
+<body>
+  <div class="banner">DECISION PROTOTYPE — NOT PRODUCT EVIDENCE · 2026-08-20 · 旧 08-19 prototype 为 REJECTED</div>
+  <main class="review">
+    <div class="review-chrome">
+      <div class="eyebrow" style="color:var(--uvx-signal);font:700 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase">UltraView / M0 决策原型</div>
+      <h1>Miro 的创作节奏，TraceLab 的信号上下文</h1>
+      <p class="lede">
+        M0.3 已采纳：<b>rail 保留现有全部入口</b>，作者工具插在 Filter 与 Unplaced 之间；
+        <b>左上 Board Island 保持现状</b>（板名 / 切换 / 新建 Board）；<b>不做 dark 变体</b>。
+        采纳的是上下文工具条、Shape/Draw flyout、800×560 overflow，以及 active tool 与 panel 的视觉分离。
+      </p>
+      <div class="controls" role="toolbar" aria-label="原型控制">
+        <div class="seg" data-ctl="size">
+          <button type="button" data-size="wide" aria-pressed="true">1280×720</button>
+          <button type="button" data-size="compact">800×560</button>
+        </div>
+        <div class="seg" data-ctl="demo">
+          <button type="button" data-demo="idle" aria-pressed="true">idle</button>
+          <button type="button" data-demo="hover">hover</button>
+          <button type="button" data-demo="active">active</button>
+          <button type="button" data-demo="flyout">flyout</button>
+          <button type="button" data-demo="selected">selected</button>
+          <button type="button" data-demo="editing">editing</button>
+          <button type="button" data-demo="drawing">drawing</button>
+          <button type="button" data-demo="overflow">overflow</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="review-main">
+      <div class="stage-wrap">
+        <section class="window" id="window" data-size="wide" data-demo="idle" aria-label="UltraView 产品窗口">
+          <div class="osbar"><span class="traffic"><i></i><i></i><i></i></span>TraceLab · UltraView · 只读对照</div>
+          <div class="stage" id="stage">
+            <div class="dots"></div>
+
+            <div class="island board-island">
+              <button class="board-name" id="boardBtn" type="button" aria-haspopup="menu" aria-expanded="false">
+                <span class="board-label">整车问题总览</span>
+                <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 7 8 3.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+              </button>
+              <button class="icon-btn" id="boardAdd" type="button" title="新建 Board">＋</button>
+            </div>
+
+            <div class="island global-island">
+              <button class="text-btn wide-only" type="button">显示</button>
+              <button class="text-btn wide-only" type="button">导出</button>
+              <button class="icon-btn compact-only" id="globalMore" type="button" title="更多">⋯</button>
+              <button class="text-btn" type="button">演示</button>
+            </div>
+
+            <nav class="rail" aria-label="UltraView 工具栏">
+              <button class="tool" data-panel="library" type="button"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg><span class="tip">View 库</span></button>
+              <button class="tool mode-on" data-panel="grid" type="button"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 10h16M10 4v16"/></svg><span class="tip">自由网格</span></button>
+              <button class="tool" data-panel="layout" type="button"><svg viewBox="0 0 24 24"><path d="M4 5h7v14H4zM13 5h7v6h-7zM13 13h7v6h-7z"/></svg><span class="tip">布局</span></button>
+              <button class="tool" data-panel="filter" type="button"><svg viewBox="0 0 24 24"><path d="M4 5h16l-6 7v6l-4 2v-8z"/></svg><span class="tip">筛选</span></button>
+              <div class="rail-div"></div>
+              <button class="tool active" data-tool="select" type="button"><svg viewBox="0 0 24 24"><path d="m5 3 14 8-6.2 2.1L10.8 21z"/><path d="m13 13 5.5 6"/></svg><span class="tip">选择 <kbd>V</kbd></span></button>
+              <button class="tool" data-tool="sticky" type="button"><svg viewBox="0 0 24 24"><path d="M6 4h12v11l-5 5H6z"/><path d="M13 20v-5h5"/></svg><span class="pin-dot" hidden></span><span class="tip">便签贴纸 <kbd>N</kbd></span></button>
+              <button class="tool" data-tool="text" type="button"><svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M8 19h8"/></svg><span class="tip">文字 <kbd>T</kbd></span></button>
+              <button class="tool" data-tool="shape" type="button"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="7" height="6" rx="1"/><circle cx="17" cy="8" r="3"/><path d="m7 20 3.2-6 3.2 6z"/></svg><span class="pin-dot" hidden></span><span class="tip">形状 <kbd>S</kbd></span></button>
+              <button class="tool" data-tool="connector" type="button"><svg viewBox="0 0 24 24"><path d="M5 18h7V6h4"/><path d="m14 3 4 3-4 3"/></svg><span class="pin-dot" hidden></span><span class="tip">连接线 <kbd>L</kbd></span></button>
+              <button class="tool" data-tool="draw" type="button"><svg viewBox="0 0 24 24"><path d="m5 19 3-7L17 3l4 4-9 9z"/><path d="m7 15 3 3"/></svg><span class="pin-dot" hidden></span><span class="tip">画笔 <kbd>P</kbd></span></button>
+              <div class="rail-div"></div>
+              <button class="tool" data-panel="unplaced" type="button"><svg viewBox="0 0 24 24"><path d="M4 8h16v11H4zM8 8V6h8v2"/><path d="M8 13h8"/></svg><span class="badge">3</span><span class="tip">未放置</span></button>
+              <button class="tool" data-panel="sync" type="button"><svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 12-4l2 2"/><path d="M19 5v5h-5"/><path d="M19 12a7 7 0 0 1-12 4l-2-2"/><path d="M5 19v-5h5"/></svg><span class="badge">1</span><span class="tip">一键更新源</span></button>
+            </nav>
+
+            <article class="card" data-obj="card" style="left:18%;top:18%;--kind:var(--time)">
+              <header><i></i>方向盘扭矩 <span>TIME</span></header>
+              <div class="trace"></div>
+              <div class="handle-box" hidden><b class="nw"></b><b class="n"></b><b class="ne"></b><b class="w"></b><b class="e"></b><b class="sw"></b><b class="s"></b><b class="se"></b></div>
+            </article>
+            <article class="card" data-obj="card-fft" style="left:58%;top:12%;--kind:var(--fft)">
+              <header><i></i>电机转速 <span>FFT</span></header>
+              <div class="trace"></div>
+            </article>
+            <article class="card" data-obj="card-order" style="left:40%;top:58%;--kind:var(--order)">
+              <header><i></i>电机扭矩阶次 <span>ORDER</span></header>
+              <div class="trace"></div>
+            </article>
+
+            <article class="note" data-obj="sticky" style="left:22%;top:42%">
+              <b>起步异响</b>第 3 阶次在 1,800 rpm 附近叠加。
+              <div class="handle-box" hidden><b class="nw"></b><b class="n"></b><b class="ne"></b><b class="w"></b><b class="e"></b><b class="sw"></b><b class="s"></b><b class="se"></b></div>
+            </article>
+            <div class="textbox" data-obj="text" style="left:46%;top:30%">
+              <strong>横向对比</strong>
+              <small>低温样本存在明显偏移<span class="caret" hidden></span></small>
+              <div class="handle-box" hidden><b class="nw"></b><b class="n"></b><b class="ne"></b><b class="w"></b><b class="e"></b><b class="sw"></b><b class="s"></b><b class="se"></b></div>
+            </div>
+            <div class="shape" data-obj="shape" style="left:72%;top:54%">
+              <div class="shape-box">振动链路</div>
+              <div class="handle-box" hidden><b class="nw"></b><b class="n"></b><b class="ne"></b><b class="w"></b><b class="e"></b><b class="sw"></b><b class="s"></b><b class="se"></b></div>
+            </div>
+            <svg class="ink" data-obj="stroke" style="left:14%;top:68%;width:260px;height:70px" viewBox="0 0 260 70" aria-hidden="true">
+              <path d="M6 48 C30 28 42 58 64 40 S102 12 124 34 S160 62 188 30 S220 8 252 22" fill="none" stroke="#A45B95" stroke-width="5" stroke-linecap="round"/>
+            </svg>
+            <svg style="position:absolute;left:34%;top:28%;width:280px;height:160px;pointer-events:none" viewBox="0 0 280 160" aria-hidden="true">
+              <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3.5" orient="auto"><path d="M0 0 7 3.5 0 7Z" fill="#24697C"/></marker></defs>
+              <path d="M8 132 H96 V36 H262" fill="none" stroke="#24697C" stroke-width="2" marker-end="url(#arr)"/>
+            </svg>
+
+            <div class="toolbar" id="toolbar" hidden>
+              <span class="spine" id="spine" data-kind="shape"><i></i><span id="spineLabel">SHAPE</span></span>
+              <span class="tb-div"></span>
+              <div id="toolbarBody"></div>
+              <span class="tb-div"></span>
+              <button class="icon-btn" type="button" title="复制">⧉</button>
+              <button class="icon-btn" type="button" title="锁定">⌑</button>
+              <button class="icon-btn" type="button" title="排列">▦</button>
+              <button class="icon-btn" id="tbMore" type="button" title="更多">⋯</button>
+              <div class="more-menu menu" id="tbMoreMenu" hidden>
+                <button type="button">置于顶层</button>
+                <button type="button">置于底层</button>
+                <button type="button">删除</button>
+              </div>
+            </div>
+
+            <div class="flyout sticky" id="flySticky" hidden>
+              <div class="flyout-head">便签贴纸 <small>N · 单击放置</small></div>
+              <div class="palette" id="palette"></div>
+              <button class="pin-row" data-pin="sticky" type="button" aria-pressed="false">固定连续创建</button>
+            </div>
+            <div class="flyout shape" id="flyShape" hidden>
+              <div class="flyout-head">形状 <small>S · 5 个闭合形状</small></div>
+              <div class="shape-grid">
+                <button class="shape-cell active" type="button"><svg viewBox="0 0 28 22"><rect x="3" y="4" width="22" height="14"/></svg><small>矩形</small></button>
+                <button class="shape-cell" type="button"><svg viewBox="0 0 28 22"><rect x="3" y="4" width="22" height="14" rx="5"/></svg><small>圆角矩形</small></button>
+                <button class="shape-cell" type="button"><svg viewBox="0 0 28 22"><ellipse cx="14" cy="11" rx="10" ry="7"/></svg><small>椭圆</small></button>
+                <button class="shape-cell" type="button"><svg viewBox="0 0 28 22"><path d="M14 3 25 11 14 19 3 11Z"/></svg><small>菱形</small></button>
+                <button class="shape-cell" type="button"><svg viewBox="0 0 28 22"><path d="M14 3 25 19H3Z"/></svg><small>三角形</small></button>
+              </div>
+              <button class="pin-row" data-pin="shape" type="button" aria-pressed="false">固定连续创建</button>
+            </div>
+            <div class="flyout connector" id="flyConn" hidden>
+              <div class="flyout-head">连接线 <small>L · 直线 / 箭头 / 折线</small></div>
+              <div class="conn-row">
+                <button class="conn-cell" type="button"><svg viewBox="0 0 28 22"><path d="M3 18 25 4" fill="none"/></svg><small>直线</small></button>
+                <button class="conn-cell active" type="button"><svg viewBox="0 0 28 22"><path d="M3 18 22 6" fill="none"/><path d="m18 4 6 1-3 6" fill="none"/></svg><small>箭头</small></button>
+                <button class="conn-cell" type="button"><svg viewBox="0 0 28 22"><path d="M3 18H14V5H25" fill="none"/></svg><small>折线箭头</small></button>
+              </div>
+              <button class="pin-row" data-pin="connector" type="button" aria-pressed="false">固定连续创建</button>
+            </div>
+            <div class="flyout draw" id="flyDraw" hidden>
+              <div class="flyout-head">画笔 <small>P · 保持直到 V / Esc</small></div>
+              <div class="draw-modes">
+                <button class="draw-mode active" data-draw="pen" type="button"><small>画笔</small></button>
+                <button class="draw-mode" data-draw="high" type="button"><small>荧光笔</small></button>
+                <button class="draw-mode" data-draw="eraser" type="button"><small>整笔擦除</small></button>
+                <button class="draw-mode" data-draw="lasso" type="button"><small>套索</small></button>
+              </div>
+              <div class="presets" id="penPresets">
+                <button class="preset active" type="button"><i style="--c:#203038;--w:2px"></i>墨水细线 <small>2</small></button>
+                <button class="preset" type="button"><i style="--c:#24697C;--w:4px"></i>信号中线 <small>4</small></button>
+                <button class="preset" type="button"><i style="--c:#C45B5B;--w:8px"></i>强调粗线 <small>8</small></button>
+              </div>
+              <div class="presets" id="highPresets" hidden>
+                <button class="preset active" type="button"><i style="--c:#F2D04B;--w:12px;--a:.45"></i>黄高亮 <small>12</small></button>
+                <button class="preset" type="button"><i style="--c:#6BC7D6;--w:12px;--a:.45"></i>青高亮 <small>12</small></button>
+                <button class="preset" type="button"><i style="--c:#E59AD2;--w:12px;--a:.45"></i>粉高亮 <small>12</small></button>
+              </div>
+            </div>
+
+            <div class="menu" id="boardMenu" hidden>
+              <button type="button">整车问题总览 <small>当前</small></button>
+              <button type="button">NVH 复测板</button>
+            </div>
+            <div class="menu more-menu" id="globalMenu" hidden style="top:56px;right:12px;left:auto">
+              <button type="button">显示</button>
+              <button type="button">导出</button>
+            </div>
+
+            <div class="island status" id="statusChip">只读预览 · 不计算</div>
+            <div class="island nav-island">
+              <button class="text-btn wide-only" type="button">概览</button>
+              <button class="icon-btn" type="button">−</button>
+              <span class="text-btn" style="cursor:default;color:var(--uvx-muted);font:12px var(--mono)">84%</span>
+              <button class="icon-btn" type="button">＋</button>
+              <button class="text-btn" type="button">适应</button>
+              <button class="text-btn wide-only" type="button">1:1</button>
+            </div>
+            <p class="guide">V 选择 · N 便签 · T 文字 · S 形状 · L 连接 · P 画笔 · Esc 回选择</p>
+          </div>
+        </section>
+      </div>
+
+      <section class="signoff">
+        <h2>M0.3 已记录的产品决定</h2>
+        <ol>
+          <li><b>ACCEPTED — rail 保留全部：</b>Library / Free Grid / Layout / Filter / Select / Sticky / Text / Shape / Connector / Draw / Unplaced / Sync 都留在左轨。作者工具插在 Filter 与 Unplaced 之间。</li>
+          <li><b>ACCEPTED — 左上保持现状：</b>Board Island 仍是板名 + 切换 + 新建 Board。不把 View Library 改成 + View。</li>
+          <li><b>ACCEPTED — selection toolbar：</b>40px 单行，Signal Spine，Delete 进 More，拖动中隐藏。</li>
+          <li><b>ACCEPTED — Shape / Draw flyout：</b>图形网格 + 真实 preset，不用平台 QMenu。Connector 独立。</li>
+          <li><b>ACCEPTED — 不做 dark：</b>作者 chrome 只按 light 设计和验收。不新增 uvx dark 变体。</li>
+          <li><b>ACCEPTED — compact：</b>800×560 Global 收进 ⋯，toolbar 不换行，rail 不截断、不改成横向条。</li>
+        </ol>
+      </section>
+      <section class="compare">
+        <h2>确定性截图（产品窗口，非 Cocoa 验收）</h2>
+        <p class="lede" style="margin-top:0">两档窗口 light 线框 + 状态板。当前 app 对照是 offscreen Qt 结构图。</p>
+        <div class="ia">
+          <article><b>1280×720 light</b><span><a href="screenshots/2026-08-20-ultraview-miro-authoring/1280x720-light.png">1280x720-light.png</a></span></article>
+          <article><b>800×560 light</b><span><a href="screenshots/2026-08-20-ultraview-miro-authoring/800x560-light.png">800x560-light.png</a></span></article>
+          <article><b>状态板</b><span><a href="screenshots/2026-08-20-ultraview-miro-authoring/state-board.png">state-board.png</a></span></article>
+          <article><b>当前 app 对照（offscreen）</b><span><a href="screenshots/2026-08-20-ultraview-miro-authoring/current-vs-proposed-1280.png">current-vs-proposed-1280.png</a></span></article>
+        </div>
+      </section>
+      <section class="compare">
+        <h2>相对当前产品</h2>
+        <div class="ia">
+          <article class="bad"><b>当前视觉问题（仍修）</b><span>panelOpen 与 tool active 共用钛蓝-琥珀渐变。Shape/Draw 仍是 QMenu。选中后没有 typed toolbar。</span></article>
+          <article class="good"><b>本原型保留的 IA</b><span>左轨全部入口不动，左上 Board Island 不动。作者工具按完整纵切逐步解锁，而不是先改分区。</span></article>
+          <article class="good"><b>本原型要落地的新语法</b><span>active tool = wash + 左条；panel 只用中性填充；第二次点击打开 flyout；选中后出现 Signal Spine 工具条。</span></article>
+          <article class="good"><b>窗口合同</b><span>1280×720 与 800×560 light。截图走 ?capture=1。</span></article>
+        </div>
+      </section>
+    </div>
+
+    <section class="state-board-wrap">
+      <div class="states-doc review-chrome">
+        <h2>状态板</h2>
+        <p class="lede" style="margin-top:0">idle / hover / active / flyout / selected / editing / drawing / compact overflow。缩小窗口仅为对照，不是第二套视觉。</p>
+      </div>
+      <div class="state-board" id="stateBoard"></div>
+    </section>
+  </main>
+
+<script>
+const $ = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
+const windowEl = $("#window");
+const params = new URLSearchParams(location.search);
+const PALETTE = ["#FFF19A","#FFE675","#FFBC78","#FF9A9F","#F5C1E9","#EC91E2","#A8C7F2","#B09FEC","#87D8EA","#76AAF0","#74DED3","#61D987","#C9ED9D","#B6E855","#EDF1F2","#303235"];
+const TOOLBARS = {
+  card: { spine: ["card","FFT"], body: `<button class="text-btn" type="button">打开源</button><button class="text-btn" type="button">同步</button><button class="text-btn wide-only" type="button">聚焦</button><button class="text-btn" type="button">Card Fit</button>` },
+  sticky: { spine: ["note","NOTE"], body: `<button class="icon-btn" type="button"><span class="swatch" style="background:#FFF19A"></span></button><button class="text-btn" type="button">方形</button><button class="text-btn" type="button">14</button><button class="icon-btn" type="button">≡</button>` },
+  text: { spine: ["note","TEXT"], body: `<button class="text-btn wide-only" type="button">无衬线</button><button class="text-btn wide-only" type="button">14</button><button class="icon-btn" type="button"><b>B</b></button><button class="icon-btn wide-only" type="button"><i>I</i></button><button class="icon-btn wide-only" type="button"><u>U</u></button><button class="icon-btn" type="button">≡</button><button class="icon-btn wide-only" type="button">链</button>` },
+  shape: { spine: ["shape","SHAPE"], body: `<button class="text-btn" type="button">圆角</button><button class="icon-btn" type="button"><span class="swatch" style="background:#C9D3FF;border-color:#4262FF"></span></button><button class="text-btn" type="button">2</button><button class="text-btn wide-only" type="button">文字</button>` },
+  connector: { spine: ["note","LINE"], body: `<button class="text-btn" type="button">折线</button><button class="text-btn" type="button">箭头</button><button class="text-btn" type="button">2 px</button>` },
+  stroke: { spine: ["note","INK"], body: `<button class="text-btn" type="button">画笔</button><button class="icon-btn" type="button"><span class="swatch" style="background:#A45B95"></span></button><button class="text-btn" type="button">5</button>` }
+};
+
+const state = {
+  size: params.get("size") === "800" ? "compact" : "wide",
+  demo: params.get("state") || "idle",
+  tool: "select",
+  flyout: null,
+  selection: null,
+  editing: false,
+  pinned: {},
+  menus: {}
+};
+
+PALETTE.forEach((c, i) => {
+  const b = document.createElement("button");
+  b.className = "color" + (i === 0 ? " selected" : "");
+  b.style.setProperty("--c", c);
+  b.type = "button";
+  b.addEventListener("click", () => { $$(".color").forEach(x => x.classList.toggle("selected", x === b)); });
+  $("#palette").appendChild(b);
+});
+
+function setPressed(group, attr, value) {
+  $$(`[data-ctl="${group}"] button`).forEach(btn => {
+    btn.setAttribute("aria-pressed", String(btn.getAttribute(`data-${group === "demo" ? "demo" : group}`) === value));
+  });
+}
+
+function hideFlyouts() {
+  ["flySticky","flyShape","flyConn","flyDraw"].forEach(id => $(`#${id}`).hidden = true);
+  $$(".tool").forEach(t => t.classList.remove("flyout-open"));
+  state.flyout = null;
+}
+function hideMenus() {
+  ["boardMenu","globalMenu","tbMoreMenu"].forEach(id => { const n = $(`#${id}`); if (n) n.hidden = true; });
+  $("#boardBtn").setAttribute("aria-expanded", "false");
+}
+function positionFlyout(el, toolName) {
+  const btn = $(`.tool[data-tool="${toolName}"]`);
+  if (!btn || !el) return;
+  const wr = windowEl.getBoundingClientRect();
+  const br = btn.getBoundingClientRect();
+  const top = Math.max(12, Math.min(br.top - wr.top, wr.height - el.offsetHeight - 12));
+  el.style.top = `${top}px`;
+  el.style.left = `${br.right - wr.left + 8}px`;
+}
+function setTool(name, {openFlyout=false} = {}) {
+  state.tool = name;
+  state.editing = false;
+  $$(".tool[data-tool]").forEach(t => {
+    t.classList.toggle("active", t.dataset.tool === name);
+    t.classList.toggle("pinned", Boolean(state.pinned[t.dataset.tool]));
+    t.querySelector(".pin-dot") && (t.querySelector(".pin-dot").hidden = !state.pinned[t.dataset.tool]);
+  });
+  const flyMap = { sticky: "flySticky", shape: "flyShape", connector: "flyConn", draw: "flyDraw" };
+  if (openFlyout && flyMap[name]) {
+    hideFlyouts();
+    hideMenus();
+    const fly = $(`#${flyMap[name]}`);
+    fly.hidden = false;
+    $(`.tool[data-tool="${name}"]`).classList.add("flyout-open");
+    state.flyout = name;
+    positionFlyout(fly, name);
+  } else if (!openFlyout) {
+    hideFlyouts();
+  }
+}
+function setSelection(kind) {
+  state.selection = kind;
+  state.editing = kind === "text" && state.demo === "editing";
+  $$("[data-obj]").forEach(el => {
+    const match = (kind === "card" && el.dataset.obj === "card") || el.dataset.obj === kind;
+    el.classList.toggle("selected", Boolean(kind) && match);
+    const box = el.querySelector(".handle-box");
+    if (box) box.hidden = !(kind && match);
+  });
+  const caret = $(".caret");
+  if (caret) caret.hidden = !(kind === "text" && state.editing);
+  const tb = $("#toolbar");
+  if (!kind) { tb.hidden = true; return; }
+  const spec = TOOLBARS[kind] || TOOLBARS.shape;
+  $("#spine").dataset.kind = spec.spine[0];
+  $("#spineLabel").textContent = spec.spine[1];
+  $("#toolbarBody").innerHTML = spec.body;
+  tb.hidden = false;
+  const host = kind === "card" ? $('[data-obj="card"]') : $(`[data-obj="${kind}"]`);
+  if (host) {
+    const r = host.getBoundingClientRect();
+    const wr = windowEl.getBoundingClientRect();
+    const compact = windowEl.dataset.size === "compact";
+    let left = r.left - wr.left;
+    let top = r.top - wr.top - 48;
+    const maxLeft = wr.width - (compact ? 360 : 520);
+    left = Math.max(68, Math.min(left, maxLeft));
+    if (top < 56) top = r.bottom - wr.top + 8;
+    tb.style.left = `${left}px`;
+    tb.style.top = `${top}px`;
+  }
+}
+
+function applyDemo(demo) {
+  state.demo = demo;
+  windowEl.dataset.demo = demo;
+  hideMenus();
+  hideFlyouts();
+  $("#tbMoreMenu").hidden = true;
+  if (demo === "compact" || demo === "overflow") {
+    state.size = "compact";
+    windowEl.dataset.size = "compact";
+    setPressed("size", "size", "compact");
+  }
+  const table = {
+    idle: () => { setTool("select"); setSelection(null); },
+    hover: () => { setTool("select"); setSelection(null); },
+    active: () => { setTool("text"); setSelection(null); },
+    flyout: () => { setTool("sticky", {openFlyout:true}); setSelection(null); },
+    selected: () => { setTool("select"); setSelection("shape"); },
+    editing: () => { setTool("text"); setSelection("text"); state.editing = true; $(".caret").hidden = false; },
+    drawing: () => { setTool("draw"); setSelection(null); },
+    overflow: () => { setTool("select"); setSelection("text"); $("#tbMoreMenu").hidden = false; }
+  };
+  (table[demo] || table.idle)();
+}
+
+function applySize(size) {
+  state.size = size;
+  windowEl.dataset.size = size;
+  setPressed("size", "size", size);
+  if (state.selection) setSelection(state.selection);
+}
+
+$$("[data-ctl='size'] button").forEach(btn => btn.addEventListener("click", () => applySize(btn.dataset.size)));
+$$("[data-ctl='demo'] button").forEach(btn => btn.addEventListener("click", () => { applyDemo(btn.dataset.demo); setPressed("demo", "demo", btn.dataset.demo); }));
+
+$$(".tool[data-tool]").forEach(btn => btn.addEventListener("click", () => {
+  const name = btn.dataset.tool;
+  const again = state.tool === name;
+  const hasFly = ["sticky","shape","connector","draw"].includes(name);
+  if (again && hasFly) setTool(name, {openFlyout: true});
+  else setTool(name, {openFlyout: false});
+  if (name !== "select") setSelection(null);
+}));
+$$(".tool[data-panel]").forEach(btn => btn.addEventListener("click", ev => {
+  ev.stopPropagation();
+  hideFlyouts();
+  hideMenus();
+  if (btn.dataset.panel === "grid") {
+    btn.classList.toggle("mode-on");
+    return;
+  }
+  const open = !btn.classList.contains("panel-open");
+  $$(".tool[data-panel]").forEach(x => {
+    if (x.dataset.panel !== "grid") x.classList.remove("panel-open");
+  });
+  btn.classList.toggle("panel-open", open);
+}));
+$$("[data-obj]").forEach(el => el.addEventListener("click", ev => {
+  ev.stopPropagation();
+  const kind = el.dataset.obj.startsWith("card") ? "card" : el.dataset.obj;
+  setTool("select");
+  setSelection(kind);
+}));
+$("#stage").addEventListener("click", ev => {
+  if (ev.target === ev.currentTarget || ev.target.classList.contains("dots")) {
+    hideFlyouts(); hideMenus(); setSelection(null);
+  }
+});
+$("#boardBtn").addEventListener("click", ev => {
+  ev.stopPropagation();
+  const open = $("#boardMenu").hidden;
+  hideMenus(); hideFlyouts();
+  $("#boardMenu").hidden = !open;
+  $("#boardBtn").setAttribute("aria-expanded", String(open));
+});
+$("#globalMore").addEventListener("click", ev => {
+  ev.stopPropagation();
+  const open = $("#globalMenu").hidden;
+  hideMenus();
+  $("#globalMenu").hidden = !open;
+});
+$("#tbMore").addEventListener("click", ev => {
+  ev.stopPropagation();
+  $("#tbMoreMenu").hidden = !$("#tbMoreMenu").hidden;
+});
+$$("[data-pin]").forEach(btn => btn.addEventListener("click", () => {
+  const key = btn.dataset.pin;
+  state.pinned[key] = !state.pinned[key];
+  btn.setAttribute("aria-pressed", String(state.pinned[key]));
+  setTool(state.tool, {openFlyout: true});
+}));
+$$(".shape-cell").forEach(btn => btn.addEventListener("click", () => { $$(".shape-cell").forEach(x => x.classList.toggle("active", x === btn)); }));
+$$(".conn-cell").forEach(btn => btn.addEventListener("click", () => { $$(".conn-cell").forEach(x => x.classList.toggle("active", x === btn)); }));
+$$(".draw-mode").forEach(btn => btn.addEventListener("click", () => {
+  $$(".draw-mode").forEach(x => x.classList.toggle("active", x === btn));
+  $("#penPresets").hidden = btn.dataset.draw !== "pen";
+  $("#highPresets").hidden = btn.dataset.draw !== "high";
+}));
+$$(".preset").forEach(btn => btn.addEventListener("click", () => {
+  btn.parentElement.querySelectorAll(".preset").forEach(x => x.classList.toggle("active", x === btn));
+}));
+document.addEventListener("keydown", ev => {
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const map = { v:"select", n:"sticky", t:"text", s:"shape", l:"connector", p:"draw" };
+  const key = ev.key.toLowerCase();
+  if (map[key] && !state.editing) { ev.preventDefault(); setTool(map[key]); setSelection(null); }
+  if (ev.key === "Escape") {
+    if (state.editing) { state.editing = false; $(".caret").hidden = true; return; }
+    if (state.flyout) { hideFlyouts(); return; }
+    if (state.tool !== "select") { setTool("select"); return; }
+    setSelection(null); hideMenus();
+  }
+});
+
+function buildStateBoard() {
+  const host = $("#stateBoard");
+  if (!host || params.get("capture") === "1") return;
+  const file = location.pathname.split("/").pop();
+  const states = ["idle","hover","active","flyout","selected","editing","drawing","overflow"];
+  states.forEach(name => {
+    const card = document.createElement("article");
+    card.className = "state-card";
+    const size = name === "overflow" ? "800" : "1280";
+    const src = `${file}?capture=1&size=${size}&state=${name}`;
+    card.innerHTML = `<p>${name}${name==="overflow"?" · 800×560":""}</p><div class="mini"><iframe title="${name}" src="${src}"></iframe></div>`;
+    host.appendChild(card);
+    const iframe = card.querySelector("iframe");
+    iframe.addEventListener("load", () => {
+      const scale = card.querySelector(".mini").clientWidth / Number(size);
+      iframe.style.transform = `scale(${scale})`;
+    });
+  });
+}
+
+if (params.get("capture") === "1") document.body.classList.add("capture");
+if (params.get("view") === "states") document.body.classList.add("states-only");
+applySize(state.size);
+applyDemo(state.demo);
+setPressed("demo", "demo", state.demo);
+buildStateBoard();
+</script>
+</body>
+</html>

@@ -82,16 +82,39 @@ from ..ultraview_state import (
     BoardPlacementSnapshot,
     BoardEditEntry,
     AuthorMutationResult,
-    BoardBox,
-    StickyObject,
-    create_author_object,
-    update_author_object,
-    delete_author_objects,
     GridRect,
     apply_board_edit_entry,
     board_edit_entry_byte_cost,
     workspace_to_payload,
     DEFAULT_BOARD_NAME,
+)
+from ..chart_stack.ultraview.author_edits import (
+    apply_author_create,
+    apply_author_delete,
+    apply_author_intent,
+    apply_author_nudge,
+    apply_author_update,
+    re_resolve_connector_endpoints,
+    warning_copy,
+)
+from ..chart_stack.ultraview.author_tools import (
+    AuthorAlignIntent,
+    AuthorBatchStyleIntent,
+    AuthorDeleteIntent,
+    AuthorDistributeIntent,
+    AuthorDuplicateIntent,
+    AuthorLockIntent,
+    AuthorNudgeIntent,
+    AuthorPasteIntent,
+    AuthorZOrderIntent,
+    ConnectorCreateIntent,
+    ConnectorUpdateIntent,
+    SelectionDeleteIntent,
+    SelectionNudgeIntent,
+    ShapeCreateIntent,
+    ShapeUpdateIntent,
+    TextCreateIntent,
+    TextUpdateIntent,
 )
 from ..chart_stack.ultraview.preview_store import (
     MAX_PREVIEW_RAW_EDGE,
@@ -1042,6 +1065,7 @@ class UltraViewCoordinator(QObject):
             (page.author_create_requested, self._on_author_create),
             (page.author_update_requested, self._on_author_update),
             (page.author_delete_requested, self._on_author_delete),
+            (page.author_batch_requested, self._on_author_batch),
             (page.show_titles_toggled, self._on_show_titles),
             (page.show_sources_toggled, self._on_show_sources),
             (page.show_card_actions_toggled, self._on_show_card_actions),
@@ -1626,7 +1650,7 @@ class UltraViewCoordinator(QObject):
         before = self._placement_snapshot(board)
         self._cancel_pending_for_ref(board.board_id, ref)
         move_to_unplaced(board, ref)
-        self._commit_grid_change(board, before, [])
+        self._commit_grid_change(board, before, [], lost_cards=(ref,))
 
     def _on_remove_ref(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -1638,7 +1662,7 @@ class UltraViewCoordinator(QObject):
         before = self._placement_snapshot(board)
         self._cancel_pending_for_ref(board.board_id, ref)
         warnings = remove_ref(board, ref)
-        self._commit_grid_change(board, before, warnings)
+        self._commit_grid_change(board, before, warnings, lost_cards=(ref,))
         if not warnings:
             self._toast(text_for_key(REMOVED_FROM_BOARD), "info")
 
@@ -1961,64 +1985,133 @@ class UltraViewCoordinator(QObject):
 
     def _on_author_create(self, intent) -> None:
         board = active_board(self._workspace)
-        kind = str(getattr(intent, "kind", "") or "")
-        if kind != "sticky":
-            return
-        box = getattr(intent, "box", None)
-        if not isinstance(box, tuple) or len(box) != 4:
-            return
-        try:
-            item = StickyObject(
-                str(getattr(intent, "object_id", "")),
-                "sticky",
-                box=BoardBox(*box),
-                text=str(getattr(intent, "text", "") or ""),
-                palette=str(getattr(intent, "palette", "") or "yellow"),
-            )
-        except (TypeError, ValueError):
-            return
-        mutation = create_author_object(board, item)
-        self._commit_author_mutation(board, mutation, label="sticky-create")
+        mutation = apply_author_create(board, intent)
+        if isinstance(intent, TextCreateIntent):
+            label = "text-create"
+        elif isinstance(intent, ShapeCreateIntent):
+            label = "shape-create"
+        elif isinstance(intent, ConnectorCreateIntent):
+            label = "connector-create"
+        else:
+            label = "sticky-create"
+        self._publish_author_mutation(board, mutation, label=label)
 
     def _on_author_update(self, intent) -> None:
         board = active_board(self._workspace)
-        object_id = str(getattr(intent, "object_id", "") or "")
-        current = next(
-            (
-                item
-                for item in board.author_objects
-                if getattr(item, "object_id", "") == object_id
-            ),
-            None,
-        )
-        if not isinstance(current, StickyObject):
-            return
-        box = getattr(intent, "box", None)
-        text = getattr(intent, "text", None)
-        palette = getattr(intent, "palette", None)
-        try:
-            item = StickyObject(
-                current.object_id,
-                "sticky",
-                locked=current.locked,
-                box=BoardBox(*box) if isinstance(box, tuple) and len(box) == 4 else current.box,
-                text=current.text if text is None else str(text),
-                palette=current.palette if palette is None else str(palette),
-                shape=current.shape,
-                font_size=current.font_size,
-            )
-        except (TypeError, ValueError):
-            return
-        mutation = update_author_object(board, object_id, item)
-        self._commit_author_mutation(board, mutation, label="sticky-edit")
+        mutation = apply_author_update(board, intent)
+        if isinstance(intent, TextUpdateIntent):
+            label = "text-edit"
+        elif isinstance(intent, ShapeUpdateIntent):
+            label = "shape-edit"
+        elif isinstance(intent, ConnectorUpdateIntent):
+            label = "connector-edit"
+        else:
+            label = "sticky-edit"
+        self._publish_author_mutation(board, mutation, label=label)
 
     def _on_author_delete(self, intent) -> None:
         board = active_board(self._workspace)
-        object_ids = tuple(getattr(intent, "object_ids", ()) or ())
-        if not object_ids:
+        mutation = apply_author_delete(board, intent)
+        self._publish_author_mutation(board, mutation, label="author-delete")
+
+    def _on_author_batch(self, intent) -> None:
+        board = active_board(self._workspace)
+        if isinstance(intent, SelectionDeleteIntent):
+            self._on_selection_delete(board, intent)
             return
-        mutation = delete_author_objects(board, object_ids)
-        self._commit_author_mutation(board, mutation, label="sticky-delete")
+        if isinstance(intent, SelectionNudgeIntent):
+            self._on_selection_nudge(board, intent)
+            return
+        mutation = apply_author_intent(board, intent)
+        labels = {
+            AuthorBatchStyleIntent: "author-style",
+            AuthorAlignIntent: "author-align",
+            AuthorDistributeIntent: "author-distribute",
+            AuthorDuplicateIntent: "author-duplicate",
+            AuthorLockIntent: "author-lock",
+            AuthorZOrderIntent: "author-z-order",
+            AuthorNudgeIntent: "author-nudge",
+            AuthorPasteIntent: "author-paste",
+        }
+        self._publish_author_mutation(
+            board, mutation, label=labels.get(type(intent), "author-batch")
+        )
+
+    def _on_selection_delete(self, board, intent: SelectionDeleteIntent) -> None:
+        placement_before = self._placement_snapshot(board)
+        for ref in intent.card_refs:
+            move_to_unplaced(board, ref)
+        if intent.author_ids:
+            mutation = apply_author_delete(
+                board,
+                AuthorDeleteIntent(intent.author_ids),
+                lost_card_refs=intent.card_refs,
+            )
+        else:
+            mutation = AuthorMutationResult()
+        placement_after = self._placement_snapshot(board)
+        for code in mutation.warnings:
+            self._toast(warning_copy(code), "warning")
+        if mutation.changed:
+            self._commit_author_mutation(
+                board,
+                mutation,
+                label="mixed-delete",
+                placement_before=placement_before
+                if placement_after != placement_before
+                else None,
+            )
+            return
+        if placement_after != placement_before:
+            self._record_grid_transition(board, placement_before)
+
+    def _on_selection_nudge(self, board, intent: SelectionNudgeIntent) -> None:
+        placement_before = self._placement_snapshot(board)
+        parsed = []
+        for ref in intent.card_refs:
+            current = free_grid_placement_for(board, ref)
+            if current is None:
+                continue
+            parsed.append(
+                (
+                    ref,
+                    GridRect(
+                        int(round(current.rect.column + intent.dx)),
+                        int(round(current.rect.row + intent.dy)),
+                        current.rect.column_span,
+                        current.rect.row_span,
+                    ),
+                )
+            )
+        if parsed:
+            set_free_grid_rects(board, parsed)
+        mutation = apply_author_nudge(board, intent.author_ids, intent.dx, intent.dy)
+        placement_after = self._placement_snapshot(board)
+        if mutation.changed:
+            self._commit_author_mutation(
+                board,
+                mutation,
+                label="mixed-nudge" if parsed else "author-nudge",
+                placement_before=placement_before if placement_after != placement_before else None,
+            )
+            return
+        if placement_after != placement_before:
+            self._record_grid_transition(board, placement_before)
+
+    def _publish_author_mutation(
+        self,
+        board,
+        mutation,
+        *,
+        label: str,
+        placement_before=None,
+    ) -> None:
+        for code in mutation.warnings:
+            self._toast(warning_copy(code), "warning")
+        if mutation.changed:
+            self._commit_author_mutation(
+                board, mutation, label=label, placement_before=placement_before
+            )
 
     @staticmethod
     def _history_entry_byte_cost(entry: _GridHistoryEntry | BoardEditEntry) -> int:
@@ -2069,9 +2162,22 @@ class UltraViewCoordinator(QObject):
         board: UltraViewBoardState,
         before: BoardPlacementSnapshot,
         warnings: list[str],
+        *,
+        lost_cards=(),
     ) -> None:
         if warnings:
             self._toast_grid_warnings(warnings)
+            return
+        mutation = re_resolve_connector_endpoints(board, lost_card_refs=lost_cards)
+        for code in mutation.warnings:
+            self._toast(warning_copy(code), "warning")
+        if mutation.changed:
+            self._commit_author_mutation(
+                board,
+                mutation,
+                label="connector-retarget",
+                placement_before=before,
+            )
             return
         self._record_grid_transition(board, before)
 

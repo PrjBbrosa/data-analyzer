@@ -27,7 +27,7 @@ from mf4_analyzer.ui.ultraview_state import (
     safety_grid_bounds,
 )
 
-from .author_geometry import geometry_grid_bounds
+from .author_geometry import connector_hit_bounds, geometry_grid_bounds
 
 # A schema-5 cell is a micro-grid unit.  Keep the physical four-cell halo and
 # expansion cadence from schema 4 rather than making the canvas appear to
@@ -73,15 +73,16 @@ def author_content_bounds(objects: Iterable[object]) -> GridBounds:
                 )
             )
         elif isinstance(item, ConnectorObject):
-            union = union.union(
-                geometry_grid_bounds(
-                    points=(
-                        (item.start.point.x, item.start.point.y),
-                        (item.end.point.x, item.end.point.y),
-                    ),
-                    inflate=AUTHOR_INK_BOUNDS_INFLATE,
-                )
+            bounds = connector_hit_bounds(
+                (item.start.point.x, item.start.point.y),
+                (item.end.point.x, item.end.point.y),
+                route=item.route,
+                stroke_width=item.stroke_width,
+                start_head=item.start_head,
+                end_head=item.end_head,
+                elbow_bias=item.elbow_bias,
             )
+            union = union.union(geometry_grid_bounds(boxes=(bounds,)))
     return union
 
 

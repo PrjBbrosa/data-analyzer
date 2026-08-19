@@ -1,9 +1,13 @@
 # UltraView 画布创作工具（便签贴纸 + 画笔 + 形状 + 文字）实施 Plan
 
-- 日期：2026-08-19 · 状态：**待授权执行**
+- 日期：2026-08-19 · 状态：**SUPERSEDED FOR EXECUTION；保留为历史任务/测试清单**
 - spec：`docs/analyzer/specs/2026-08-15-ultraview-annotation-notes-arrows-spec.md`
 - 范围：一个完整 feature 批次；不是 annotation polish，也不能拆成四套彼此独立的实现
-- 当前执行结论：**旧 plan 不可直接执行；本 plan 在 Task 0 五个硬门通过后可执行**
+- 当前执行结论：**不得从本 plan Task 0 直接开工；改用 2026-08-20 M0–M8 Plan**
+
+> 当前计划：`docs/analyzer/plans/2026-08-20-ultraview-miro-authoring-completion-plan.md`。
+> 本文仍可作为旧风险、owner 和测试候选索引，但其中 rail 结构、当前代码事实与一次性大 feature 批次
+> 已过期；执行者必须以当前 checkout 和新 Plan 为准。
 
 ## 0. 当前软件状态与计划修正
 

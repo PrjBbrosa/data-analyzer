@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from PyQt5.QtCore import QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QFontDatabase, QInputMethodEvent, QTextOption
-from PyQt5.QtWidgets import QFrame, QPlainTextEdit, QWidget
+from PyQt5.QtWidgets import QFrame, QLineEdit, QPlainTextEdit, QTextEdit, QWidget
 
 from mf4_analyzer.ui.ultraview_state import (
     MAX_STICKY_TEXT,
@@ -32,14 +32,19 @@ class _BoundedPlainTextEdit(QPlainTextEdit):
     commit_requested = pyqtSignal()
     cancel_requested = pyqtSignal()
     ime_committed = pyqtSignal(str)
+    limit_reached = pyqtSignal()
 
     def __init__(self, limit: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._limit = max(1, int(limit))
         self._clamping = False
+        self._ime_composing = False
         self.setTabChangesFocus(False)
         self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.textChanged.connect(self._clamp_to_limit)
+
+    def is_ime_composing(self) -> bool:
+        return bool(self._ime_composing)
 
     def set_bounded_text(self, text: object) -> None:
         bounded = str(text or "")[: self._limit]
@@ -50,6 +55,13 @@ class _BoundedPlainTextEdit(QPlainTextEdit):
             self.blockSignals(False)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._ime_composing and event.key() in (
+            Qt.Key_Escape,
+            Qt.Key_Return,
+            Qt.Key_Enter,
+        ):
+            super().keyPressEvent(event)
+            return
         if event.key() == Qt.Key_Escape:
             self.cancel_requested.emit()
             event.accept()
@@ -64,8 +76,10 @@ class _BoundedPlainTextEdit(QPlainTextEdit):
 
     def inputMethodEvent(self, event: QInputMethodEvent) -> None:  # noqa: N802
         committed = event.commitString()
+        self._ime_composing = bool(event.preeditString()) and not committed
         super().inputMethodEvent(event)
         if committed:
+            self._ime_composing = False
             self.ime_committed.emit(committed)
 
     def _clamp_to_limit(self) -> None:
@@ -84,6 +98,7 @@ class _BoundedPlainTextEdit(QPlainTextEdit):
             self.setTextCursor(cursor)
         finally:
             self._clamping = False
+        self.limit_reached.emit()
 
 
 class StickyNoteWidget(QFrame):
@@ -230,6 +245,7 @@ class BoardTextEditor(_BoundedPlainTextEdit):
     text_committed = pyqtSignal(str, str)
     edit_cancelled = pyqtSignal(str)
     ime_text_committed = pyqtSignal(str, str)
+    focus_lost = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(MAX_TEXT_TEXT, parent)
@@ -244,9 +260,13 @@ class BoardTextEditor(_BoundedPlainTextEdit):
         self._metrics: GridMetrics | None = None
         self._origin_offset = (0.0, 0.0)
         self._theme = DEFAULT_THEME
+        self._style: TextObject | None = None
         self.commit_requested.connect(self.commit)
         self.cancel_requested.connect(self.cancel)
         self.ime_committed.connect(self._on_ime_committed)
+
+    def current_text(self) -> str:
+        return self.toPlainText()
 
     def is_editing(self) -> bool:
         return self.isVisible() and self._box is not None
@@ -273,11 +293,17 @@ class BoardTextEditor(_BoundedPlainTextEdit):
         self._origin_offset = _origin(origin_offset)
         self._theme = str(theme or DEFAULT_THEME)
         self.set_bounded_text(self._original_text)
-        self._apply_style(style)
+        self._style = style if isinstance(style, TextObject) else None
+        self._apply_style(self._style)
         self.update_board_geometry(metrics, origin_offset=self._origin_offset)
         self.show()
         self.raise_()
         self.setFocus(Qt.OtherFocusReason)
+
+    def apply_live_style(self, style: TextObject | None) -> None:
+        """Update whole-box editor chrome without restarting the IME session."""
+        self._style = style if isinstance(style, TextObject) else None
+        self._apply_style(self._style)
 
     def update_board_geometry(
         self,
@@ -319,11 +345,17 @@ class BoardTextEditor(_BoundedPlainTextEdit):
         self._finish()
         self.edit_cancelled.emit(object_id)
 
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        if self.is_editing() and not self.is_ime_composing():
+            self.focus_lost.emit()
+
     def _finish(self) -> None:
-        self.clearFocus()
-        self.hide()
         self._box = None
         self._metrics = None
+        self._style = None
+        self.clearFocus()
+        self.hide()
 
     def _apply_style(self, style: TextObject | None) -> None:
         item = style if isinstance(style, TextObject) else None
@@ -369,4 +401,14 @@ def _font_family(role: object) -> str:
     return QFont().defaultFamily()
 
 
-__all__ = ["BoardTextEditor", "StickyNoteWidget"]
+def is_text_input_widget(widget: QWidget | None) -> bool:
+    """True when *widget* is, or lives inside, a line/plain/rich text editor."""
+    current = widget
+    while current is not None:
+        if isinstance(current, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            return True
+        current = current.parentWidget()
+    return False
+
+
+__all__ = ["BoardTextEditor", "StickyNoteWidget", "is_text_input_widget"]

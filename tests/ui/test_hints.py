@@ -557,6 +557,13 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.pan",
         "ultraview.remove",
         "ultraview.board_menu",
+        "ultraview.sticky",
+        "ultraview.text",
+        "ultraview.shapes",
+        "ultraview.connector",
+        "ultraview.draw",
+        "ultraview.oneshot",
+        "ultraview.multiselect",
     }
     assert required <= set(by_id)
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
@@ -610,6 +617,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     for banned in (
         "PDF", "SVG", "sidecar", "live card", "后台补图", "实时", "直播", "Alt+拖",
         "逻辑画布固定", "默认适应视口", "铺满视口", "12 列受控",
+        "尚未提供", "Coming Soon",
     ):
         assert banned not in haystack
     assert "标尺" in by_id["ultraview.limits"].text
@@ -630,3 +638,12 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     display_hint = by_id["ultraview.display"].text
     assert "工程" in display_hint
     assert "保存" in display_hint
+    assert "整框" in by_id["ultraview.text"].text
+    assert "整笔" in by_id["ultraview.draw"].text
+    assert "避障" in by_id["ultraview.connector"].text
+    assert "回选择" in by_id["ultraview.oneshot"].text
+    assert "固定" in by_id["ultraview.oneshot"].text
+    assert "T " in by_id["ultraview.text"].text
+    assert "S " in by_id["ultraview.shapes"].text
+    assert "L " in by_id["ultraview.connector"].text
+    assert "P " in by_id["ultraview.draw"].text

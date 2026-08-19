@@ -1,7 +1,12 @@
 # UltraView 画布创作工具（便签贴纸 + 画笔 + 形状 + 文字）Spec
 
-日期：2026-08-19 · 状态：**DRAFT，未授权产品执行**
+日期：2026-08-19 · 状态：**DATA/BEHAVIOR BASELINE；UI/执行顺序已被 2026-08-20 文档取代**
 配套 plan：`docs/analyzer/plans/2026-08-15-ultraview-annotation-notes-arrows-plan.md`
+
+> 2026-08-20 supersession：本文的数据 DTO、geometry、history、bounds、export 和工具行为边界继续有效；
+> §4.1 的混合 rail 信息架构及原配套 plan 的执行顺序不再作为当前方案。当前 UI 合同见
+> `docs/analyzer/specs/2026-08-20-ultraview-miro-authoring-experience-spec.md`，当前实施顺序见
+> `docs/analyzer/plans/2026-08-20-ultraview-miro-authoring-completion-plan.md`。
 
 上游输入：
 

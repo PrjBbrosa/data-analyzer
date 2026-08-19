@@ -9,16 +9,17 @@ the Page-level viewport router retain their normal Qt delivery path.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Iterable
 
-from PyQt5.QtCore import QPointF, QRectF, Qt
+from PyQt5.QtCore import QPointF, QRect, QRectF, Qt
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QWidget
 
 from .author_geometry import board_box_to_pixels, board_point_to_pixels
-from .author_render import draw_author_objects
-from .author_style import DEFAULT_THEME
+from .author_render import draw_author_objects, shape_path
+from .author_style import DEFAULT_THEME, pen_color
 from .free_grid import GridMetrics
 
 
@@ -50,6 +51,8 @@ class AuthorLayerModel:
     selection_boxes: tuple[BoardBox, ...] = ()
     guide_lines: tuple[GuideLine, ...] = ()
     draft_points: tuple[BoardPoint, ...] = ()
+    draft_shape: str = ""
+    draft_box: BoardBox | None = None
     lod: str = _LOD_FULL
 
 
@@ -73,6 +76,11 @@ class AuthorPaintLayer(QWidget):
         self._model = AuthorLayerModel()
         self._zoom = 1.0
         self._requested_lod = _LOD_FULL
+        self._live_stroke_points: tuple[BoardPoint, ...] = ()
+        self._live_stroke_tool = "pen"
+        self._live_stroke_palette = "ink"
+        self._live_stroke_width = 2
+        self._live_stroke_role = "ink"
 
     def model(self) -> AuthorLayerModel:
         """Return the most recently injected immutable projection model."""
@@ -91,6 +99,8 @@ class AuthorPaintLayer(QWidget):
             selection_boxes=tuple(model.selection_boxes),
             guide_lines=tuple(model.guide_lines),
             draft_points=tuple(model.draft_points),
+            draft_shape=str(model.draft_shape or ""),
+            draft_box=model.draft_box,
             lod=_lod_for_zoom(self._zoom, requested=self._requested_lod),
         )
         self.update()
@@ -114,6 +124,8 @@ class AuthorPaintLayer(QWidget):
             selection_boxes=model.selection_boxes,
             guide_lines=model.guide_lines,
             draft_points=model.draft_points,
+            draft_shape=model.draft_shape,
+            draft_box=model.draft_box,
             lod=_lod_for_zoom(self._zoom, requested=self._requested_lod),
         )
         self.update()
@@ -130,6 +142,8 @@ class AuthorPaintLayer(QWidget):
             selection_boxes=model.selection_boxes,
             guide_lines=model.guide_lines,
             draft_points=model.draft_points,
+            draft_shape=model.draft_shape,
+            draft_box=model.draft_box,
             lod=_lod_for_zoom(self._zoom, requested=self._requested_lod),
         )
         self.update()
@@ -157,6 +171,70 @@ class AuthorPaintLayer(QWidget):
     def clear_guides(self) -> None:
         self.set_guides()
 
+    def set_draft_shape(self, shape: str | None, box: BoardBox | None) -> None:
+        """Paint an in-progress closed shape. Not a widget and not persisted."""
+        model = self._model
+        self._model = _replace_model(
+            model,
+            draft_shape=str(shape or ""),
+            draft_box=box,
+        )
+        self.update()
+
+    def live_stroke_points(self) -> tuple[BoardPoint, ...]:
+        return self._live_stroke_points
+
+    def set_live_stroke(
+        self,
+        points: Iterable[BoardPoint] = (),
+        *,
+        tool: str = "pen",
+        palette: str = "ink",
+        width_px: int = 2,
+        role: str = "ink",
+    ) -> None:
+        self._live_stroke_points = tuple(points)
+        self._live_stroke_tool = str(tool or "pen")
+        self._live_stroke_palette = str(palette or "ink")
+        self._live_stroke_role = "overlay" if str(role) == "overlay" else "ink"
+        try:
+            self._live_stroke_width = max(1, int(width_px))
+        except (TypeError, ValueError):
+            self._live_stroke_width = 2
+        self.update()
+
+    def append_live_stroke_point(
+        self,
+        point: BoardPoint,
+        *,
+        tool: str = "pen",
+        palette: str = "ink",
+        width_px: int = 2,
+        role: str = "ink",
+    ) -> None:
+        last = self._live_stroke_points[-1] if self._live_stroke_points else None
+        self._live_stroke_tool = str(tool or "pen")
+        self._live_stroke_palette = str(palette or "ink")
+        self._live_stroke_role = "overlay" if str(role) == "overlay" else "ink"
+        try:
+            self._live_stroke_width = max(1, int(width_px))
+        except (TypeError, ValueError):
+            self._live_stroke_width = 2
+        self._live_stroke_points = self._live_stroke_points + (point,)
+        dirty = self._stroke_segment_dirty_rect(last, point, self._live_stroke_width)
+        if dirty is None:
+            self.update()
+            return
+        self.update(dirty)
+
+    def clear_live_stroke(self) -> None:
+        if not self._live_stroke_points:
+            self._live_stroke_role = "ink"
+            return
+        self._live_stroke_points = ()
+        self._live_stroke_role = "ink"
+        self.update()
+
     def paintEvent(self, event) -> None:  # noqa: N802
         del event
         model = self._model
@@ -175,6 +253,8 @@ class AuthorPaintLayer(QWidget):
             )
             if model.lod != _LOD_MINIMAL:
                 self._draw_guides(painter, model, metrics)
+                self._draw_draft_shape(painter, model, metrics)
+                self._draw_live_stroke(painter, model, metrics)
             if model.lod != _LOD_MINIMAL:
                 self._draw_selection(painter, model, metrics)
         finally:
@@ -215,6 +295,98 @@ class AuthorPaintLayer(QWidget):
             path.lineTo(point)
         painter.drawPath(path)
 
+    def _draw_draft_shape(
+        self,
+        painter: QPainter,
+        model: AuthorLayerModel,
+        metrics: GridMetrics,
+    ) -> None:
+        if not model.draft_shape or model.draft_box is None:
+            return
+        pixel = board_box_to_pixels(model.draft_box, metrics, origin_offset=model.origin_offset)
+        if pixel is None:
+            return
+        rect = QRectF(*pixel)
+        if rect.width() <= 0.0 or rect.height() <= 0.0:
+            return
+        path = shape_path(model.draft_shape, rect)
+        if path.isEmpty():
+            return
+        pen = QPen(_GUIDE_COLOR)
+        pen.setWidthF(1.5)
+        pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+
+    def _draw_live_stroke(
+        self,
+        painter: QPainter,
+        model: AuthorLayerModel,
+        metrics: GridMetrics,
+    ) -> None:
+        if len(self._live_stroke_points) < 2:
+            return
+        points = []
+        for point in self._live_stroke_points:
+            mapped = board_point_to_pixels(point, metrics, origin_offset=model.origin_offset)
+            if mapped is not None:
+                points.append(QPointF(*mapped))
+        if len(points) < 2:
+            return
+        path = QPainterPath(points[0])
+        for point in points[1:]:
+            path.lineTo(point)
+        if self._live_stroke_role == "overlay":
+            pen = QPen(_GUIDE_COLOR)
+            pen.setWidthF(2.0)
+            pen.setStyle(Qt.DashLine)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+            return
+        color = QColor(*pen_color(self._live_stroke_palette, tool=self._live_stroke_tool, theme=model.theme))
+        pen = QPen(color)
+        pen.setWidthF(max(1.0, float(self._live_stroke_width)))
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+
+    def _stroke_segment_dirty_rect(
+        self, start: BoardPoint | None, end: BoardPoint, width_px: int
+    ) -> QRect | None:
+        metrics = self._model.metrics
+        if metrics is None:
+            return None
+        origin = self._model.origin_offset
+        mapped_end = board_point_to_pixels(end, metrics, origin_offset=origin)
+        mapped_start = (
+            board_point_to_pixels(start, metrics, origin_offset=origin)
+            if start is not None
+            else mapped_end
+        )
+        if mapped_end is None:
+            return None
+        if mapped_start is None:
+            mapped_start = mapped_end
+        pad = max(2.0, float(width_px) / 2.0 + 2.0)
+        left = min(mapped_start[0], mapped_end[0]) - pad
+        top = min(mapped_start[1], mapped_end[1]) - pad
+        right = max(mapped_start[0], mapped_end[0]) + pad
+        bottom = max(mapped_start[1], mapped_end[1]) + pad
+        return QRect(
+            int(math.floor(left)),
+            int(math.floor(top)),
+            max(1, int(math.ceil(right) - math.floor(left))),
+            max(1, int(math.ceil(bottom) - math.floor(top))),
+        )
+
     def _draw_selection(
         self,
         painter: QPainter,
@@ -245,6 +417,8 @@ def _replace_model(model: AuthorLayerModel, **changes) -> AuthorLayerModel:
         "selection_boxes": model.selection_boxes,
         "guide_lines": model.guide_lines,
         "draft_points": model.draft_points,
+        "draft_shape": model.draft_shape,
+        "draft_box": model.draft_box,
         "lod": model.lod,
     }
     values.update(changes)

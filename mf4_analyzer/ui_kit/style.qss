@@ -4433,11 +4433,24 @@ QFrame#ultraViewBoardIsland,
 QFrame#ultraViewGlobalIsland,
 QFrame#ultraViewNavigationIsland,
 QFrame#ultraViewStatusIsland,
-QFrame#ultraViewCardContextIsland {
+QFrame#ultraViewCardContextIsland,
+QFrame#ultraViewSelectionToolbar {
     background-color: {{UV_SURFACE_SOLID}};
     border: 1px solid {{UV_LINE}};
     border-radius: 11px;
     color: #203347;
+}
+QFrame#ultraViewToolFlyoutInner {
+    background-color: transparent;
+}
+QLabel#ultraViewSignalSpineLabel {
+    color: #4262FF;
+    font-size: 10px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+QFrame#ultraViewSignalSpine {
+    background-color: #4262FF;
+    border-radius: 2px;
 }
 QFrame#ultraViewToolRail {
     border-radius: 14px;
@@ -4607,7 +4620,12 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"]:f
     border-color: {{UV_BRAND}};
     background-color: {{UV_SURFACE_TINT}};
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"],
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"] {
+    border-left-width: 2px;
+    border-left-color: #4262FF;
+    background-color: #EEF1FF;
+    color: #4262FF;
+}
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
 QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
@@ -4617,7 +4635,12 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
     background-color: {{UV_SURFACE_TINT}};
     color: {{UV_BRAND}};
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover {
+    border-left-width: 2px;
+    border-left-color: #4262FF;
+    background-color: #E4E9FF;
+    color: #4262FF;
+}
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
 QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
@@ -4627,7 +4650,12 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
     background-color: {{UV_SURFACE_SOFT}};
     color: {{UV_BRAND_DEEP}};
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed {
+    border-left-width: 2px;
+    border-left-color: #4262FF;
+    background-color: #E4E9FF;
+    color: #4262FF;
+}
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
 QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
@@ -4643,9 +4671,9 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
  * it needs the same immediate, unambiguous feedback as a mode toggle. */
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"] {
-    border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
-    color: #ffffff;
+    border-color: {{UV_BRAND}};
+    background-color: {{UV_SURFACE_TINT}};
+    color: {{UV_BRAND}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover {
@@ -4661,9 +4689,9 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeAc
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
-    border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
-    color: #ffffff;
+    border-color: {{UV_LINE_STRONG}};
+    background-color: {{UV_SURFACE_SOFT}};
+    color: {{UV_INK}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
@@ -4696,9 +4724,9 @@ QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][panelOp
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"] {
-    border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
-    color: #ffffff;
+    border-color: {{UV_BRAND}};
+    background-color: {{UV_SURFACE_TINT}};
+    color: {{UV_BRAND}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover {
@@ -4718,7 +4746,7 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeAc
  * Use border-color, not the border shorthand: Qt would zero border-radius. */
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"],
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"][panelOpen="true"] {
-    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_BRAND}}, stop: 1 {{UV_AMBER}});
+    background-color: {{UV_BRAND}};
     border-color: {{UV_BRAND}};
     color: #ffffff;
 }

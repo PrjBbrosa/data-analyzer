@@ -168,7 +168,7 @@ MAX_BOARD_MEMBERSHIP = 200
 MAX_AUTHOR_OBJECTS = 240
 MAX_STICKY_TEXT = 3_000
 MAX_TEXT_TEXT = 6_000
-MAX_SHAPE_TEXT = 3_000
+MAX_SHAPE_TEXT = 6_000
 MAX_STROKE_POINTS = 2_048
 MAX_AUTHOR_POINTS = 60_000
 GRID_MIN_COLUMN_SPAN = 2 * GRID_RESOLUTION
@@ -546,6 +546,18 @@ class ShapeTextStyle:
         }
 
 
+_SHAPE_KINDS = {
+    "rectangle",
+    "rounded_rectangle",
+    "oval",
+    "rhombus",
+    "diamond",
+    "triangle",
+    "block_arrow",
+}
+_SHAPE_CORNERS = {0, 8, 16, 24}
+
+
 @dataclass(frozen=True)
 class ShapeObject(AuthorCommon):
     box: BoardBox = field(default_factory=lambda: BoardBox(0, 0, 1, 1))
@@ -556,10 +568,11 @@ class ShapeObject(AuthorCommon):
     stroke_width: int = 1
     line_style: str = "solid"
     text_style: ShapeTextStyle = field(default_factory=ShapeTextStyle)
+    corner_radius: int = 0
 
     def __post_init__(self) -> None:
         self._validate_common("shape")
-        if self.shape not in {"rectangle", "oval", "rhombus", "triangle", "block_arrow"}:
+        if self.shape not in _SHAPE_KINDS:
             raise UltraViewStateError("unknown shape")
         _checked_string(self.text, "shape text", limit=MAX_SHAPE_TEXT)
         if self.fill_palette is not None:
@@ -571,6 +584,8 @@ class ShapeObject(AuthorCommon):
             raise UltraViewStateError("unknown shape line style")
         if not isinstance(self.text_style, ShapeTextStyle):
             raise UltraViewStateError("shape text style must be typed")
+        if isinstance(self.corner_radius, bool) or not isinstance(self.corner_radius, int) or self.corner_radius not in _SHAPE_CORNERS:
+            raise UltraViewStateError("illegal shape corner radius")
 
 
 @dataclass(frozen=True)
@@ -619,6 +634,8 @@ class ConnectorObject(AuthorCommon):
     stroke_width: int = 1
     start_head: str = "none"
     end_head: str = "arrow"
+    text: str = ""
+    text_style: ShapeTextStyle = field(default_factory=ShapeTextStyle)
 
     def __post_init__(self) -> None:
         self._validate_common("connector")
@@ -638,6 +655,9 @@ class ConnectorObject(AuthorCommon):
             raise UltraViewStateError("illegal connector stroke width")
         if self.start_head not in {"none", "arrow"} or self.end_head not in {"none", "arrow"}:
             raise UltraViewStateError("unknown connector head")
+        _checked_string(self.text, "connector text", limit=MAX_SHAPE_TEXT)
+        if not isinstance(self.text_style, ShapeTextStyle):
+            raise UltraViewStateError("connector text style must be typed")
 
 
 @dataclass(frozen=True)
@@ -649,6 +669,18 @@ class UnknownAuthorObject:
     def __post_init__(self) -> None:
         if not isinstance(self.raw, dict):
             raise UltraViewStateError("unknown author object must retain a mapping")
+
+    @property
+    def object_id(self) -> str:
+        return str(self.raw.get("id") or "")
+
+    @property
+    def kind(self) -> str:
+        return str(self.raw.get("kind") or "unknown")
+
+    @property
+    def locked(self) -> bool:
+        return bool(self.raw.get("locked"))
 
 
 AuthorObject = StickyObject | TextObject | ShapeObject | StrokeObject | ConnectorObject | UnknownAuthorObject
@@ -1938,6 +1970,7 @@ def _recognized_author_object_from_payload(raw: Mapping[str, Any]) -> AuthorObje
             stroke_width=raw.get("stroke_width", 1),
             line_style=raw.get("line_style", "solid"),
             text_style=_shape_text_style_from_payload(raw.get("text_style")),
+            corner_radius=raw.get("corner_radius", 0),
         )
     if kind == "stroke":
         raw_points = raw.get("points")
@@ -1962,6 +1995,8 @@ def _recognized_author_object_from_payload(raw: Mapping[str, Any]) -> AuthorObje
             stroke_width=raw.get("stroke_width", 1),
             start_head=raw.get("start_head", "none"),
             end_head=raw.get("end_head", "arrow"),
+            text=raw.get("text", ""),
+            text_style=_shape_text_style_from_payload(raw.get("text_style")),
         )
     raise UltraViewStateError("unrecognized author kind")
 
@@ -1990,6 +2025,7 @@ def author_object_to_payload(item: AuthorObject) -> dict[str, Any]:
             "fill_palette": item.fill_palette, "stroke_palette": item.stroke_palette,
             "stroke_width": item.stroke_width, "line_style": item.line_style,
             "text_style": item.text_style.to_dict(),
+            "corner_radius": item.corner_radius,
         }
     if isinstance(item, StrokeObject):
         return {
@@ -2002,6 +2038,7 @@ def author_object_to_payload(item: AuthorObject) -> dict[str, Any]:
             "route": item.route, "elbow_bias": item.elbow_bias, "line_style": item.line_style,
             "stroke_palette": item.stroke_palette, "stroke_width": item.stroke_width,
             "start_head": item.start_head, "end_head": item.end_head,
+            "text": item.text, "text_style": item.text_style.to_dict(),
         }
     raise TypeError(f"unsupported author object {type(item).__name__}")
 

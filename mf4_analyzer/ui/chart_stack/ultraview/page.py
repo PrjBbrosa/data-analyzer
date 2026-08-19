@@ -15,24 +15,23 @@ from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, QTimer, QVariantAnimation
 from PyQt5.QtGui import (
     QContextMenuEvent,
     QCursor,
+    QKeyEvent,
     QKeySequence,
     QMouseEvent,
     QNativeGestureEvent,
+    QTabletEvent,
     QWheelEvent,
 )
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
     QLabel,
-    QLineEdit,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QShortcut,
     QStackedWidget,
     QToolButton,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -59,7 +58,16 @@ from mf4_analyzer.ui.ultraview_state import (
     free_grid_default_span,
     layout_capacity,
     layout_slots,
+    AnchorTarget,
+    BoardBox,
+    BoardPoint,
+    ConnectorObject,
     LAYOUT_MODE_FREE_GRID,
+    ShapeObject,
+    StickyObject,
+    StrokeObject,
+    TextObject,
+    UnknownAuthorObject,
     LAYOUT_SLOTS,
     MAX_UI_BOARDS,
     membership_set,
@@ -94,14 +102,105 @@ from .elastic_workspace import (
     safety_grid_bounds,
 )
 from .feedback import (
+    AUTHOR_LOCKED,
     CONTINUE_EXPAND,
     SAFETY_BOUNDS,
     FeedbackThrottle,
     text_for_key,
 )
-from .free_grid import screen_grid_metrics
+from .free_grid import hit_handle, screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
-from .author_tools import TOOL_SELECT, TOOL_STICKY
+from .author_edits import copy_author_objects
+from .author_selection import (
+    NUDGE_STEP,
+    NUDGE_STEP_SHIFT,
+    next_style_changes,
+    resolve_selection_capabilities,
+)
+from .author_geometry import (
+    board_box_to_pixels,
+    board_point_to_pixels,
+    box_anchor_point,
+    box_center,
+    constrain_shift_point,
+    connector_handle_points,
+    connector_hit_bounds,
+    connector_route_points,
+    hit_box_handle,
+    hit_connection_anchor,
+    hit_connector,
+    hit_connector_handle,
+    lasso_is_usable,
+    pixels_to_board_point,
+    polyline_center,
+    snap_board_point,
+    stroke_hit_record,
+    strokes_hit_by_segment,
+)
+from .author_tools import (
+    TOOL_SELECT,
+    TOOL_STICKY,
+    TOOL_TEXT,
+    TOOL_SHAPES,
+    TOOL_CONNECTOR,
+    TOOL_DRAW,
+    DRAW_ERASER,
+    DRAW_LASSO,
+    HIT_AUTHOR,
+    HIT_BLANK,
+    HIT_CARD,
+    HIT_RESIZE_HANDLE,
+    AuthorAlignIntent,
+    AuthorBatchStyleIntent,
+    AuthorDeleteIntent,
+    AuthorDistributeIntent,
+    AuthorDuplicateIntent,
+    AuthorKey,
+    AuthorLockIntent,
+    AuthorNudgeIntent,
+    AuthorPasteIntent,
+    AuthorUpdateIntent,
+    AuthorZOrderIntent,
+    CLOSED_SHAPE_TYPES,
+    CONNECTOR_CLICK_DRAG_THRESHOLD,
+    CONNECTOR_HEADS,
+    CONNECTOR_LINE_STYLES,
+    CONNECTOR_STROKE_PALETTES,
+    CONNECTOR_STROKE_WIDTHS,
+    CONNECTOR_TYPES,
+    SHAPE_CORNER_TYPES,
+    SHAPE_CORNERS,
+    SHAPE_FILL_PALETTES,
+    SHAPE_LINE_STYLES,
+    SHAPE_STROKE_PALETTES,
+    SHAPE_STROKE_WIDTHS,
+    TEXT_DEFAULT_WIDTH,
+    TEXT_MIN_HEIGHT,
+    TEXT_MIN_WIDTH,
+    ConnectorCreateIntent,
+    ConnectorUpdateIntent,
+    SelectionDeleteIntent,
+    SelectionNudgeIntent,
+    ShapeCreateIntent,
+    ShapeUpdateIntent,
+    StrokeCreateIntent,
+    StrokeUpdateIntent,
+    TextCreateIntent,
+    TextUpdateIntent,
+    clamp_author_box,
+    connector_style_from_type,
+    connector_type_from_style,
+    default_shape_corner,
+    is_draw_ink_subtool,
+    lasso_selection_keys,
+    new_author_object_id,
+    normalize_connector_type,
+    resize_shape_box,
+    resize_text_box,
+    shape_box_from_points,
+    text_box_from_points,
+)
+from .author_widgets import is_text_input_widget
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
     LIBRARY_OVERLAY_MIN_HEIGHT,
@@ -111,6 +210,7 @@ from .widgets import (
     BoardSwitcher,
     BoardGrid,
     FreeGridBoard,
+    FreeGridCard,
     FreeGridMinimap,
     BoardToolbar,
     CardViewModel,
@@ -138,6 +238,10 @@ from .chrome import (
     GlobalIsland,
     LayoutPicker,
     NavigationIsland,
+    SelectionToolbar,
+    ConnectorPopover,
+    DrawPopover,
+    ShapePopover,
     StatusIsland,
     StickyPopover,
     ToolRail,
@@ -295,8 +399,14 @@ class UltraViewPage(QWidget):
     author_create_requested = pyqtSignal(object)
     author_update_requested = pyqtSignal(object)
     author_delete_requested = pyqtSignal(object)
+    author_batch_requested = pyqtSignal(object)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        visible_author_tools: Sequence[str] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName(ULTRAVIEW_PAGE_OBJECT_NAME)
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -401,6 +511,17 @@ class UltraViewPage(QWidget):
         self._grid = BoardGrid(self._canvas_stage)
         self._free_grid = FreeGridBoard(self._canvas_stage)
         self._interaction = self._free_grid.interaction()
+        self._text_geometry_session: dict[str, object] | None = None
+        self._shape_geometry_session: dict[str, object] | None = None
+        self._connector_geometry_session: dict[str, object] | None = None
+        self._filtered_cards: set[int] = set()
+        self._text_limit_notified = False
+        self._editor_kind = ""
+        editor = self._free_grid.author_text_editor()
+        editor.text_committed.connect(self._on_text_committed)
+        editor.edit_cancelled.connect(self._on_text_cancelled)
+        editor.focus_lost.connect(self._on_text_focus_lost)
+        editor.limit_reached.connect(self._on_text_limit_reached)
         self._board_host = QWidget(self._canvas_stage)
         self._board_host.setObjectName("ultraViewBoardHost")
         self._board_host.setAttribute(Qt.WA_StyledBackground, True)
@@ -435,7 +556,9 @@ class UltraViewPage(QWidget):
         self._minimap = FreeGridMinimap(self._board_scroll.viewport())
         self._minimap.hide()
 
-        self._tool_rail = ToolRail(self._canvas_host)
+        self._tool_rail = ToolRail(
+            self._canvas_host, visible_author_tools=visible_author_tools
+        )
         self._empty_board_hint = QLabel("从左侧 View 库添加对比", self._canvas_host)
         self._empty_board_hint.setObjectName("ultraViewEmptyBoardHint")
         self._empty_board_hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -501,6 +624,20 @@ class UltraViewPage(QWidget):
         self._tool_rail.tool_pinned_changed.connect(self._on_author_tool_pinned)
         self._sticky_popover = self._tool_rail.make_sticky_popover(self)
         self._sticky_popover.palette_selected.connect(self._on_sticky_palette_selected)
+        self._sticky_popover.pin_requested.connect(self._on_sticky_pin_requested)
+        self._shape_popover = self._tool_rail.make_shape_popover(self)
+        self._shape_popover.shape_selected.connect(self._on_shape_selected)
+        self._shape_popover.pin_requested.connect(self._on_shape_pin_requested)
+        self._connector_popover = self._tool_rail.make_connector_popover(self)
+        self._connector_popover.connector_selected.connect(self._on_connector_selected)
+        self._connector_popover.pin_requested.connect(self._on_connector_pin_requested)
+        self._draw_popover = self._tool_rail.make_draw_popover(self)
+        self._draw_popover.tool_selected.connect(self._on_draw_tool_selected)
+        self._selection_toolbar = SelectionToolbar(self._canvas_host)
+        self._selection_toolbar.hide()
+        self._selection_toolbar.format_requested.connect(
+            self._on_selection_format_requested
+        )
         self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
         self._board_island.board_menu_requested.connect(self._show_board_menu)
         self._board_island.create_requested.connect(self.create_board_requested)
@@ -643,6 +780,18 @@ class UltraViewPage(QWidget):
         self._sticky_tool_shortcut = QShortcut(QKeySequence(Qt.Key_N), self)
         self._sticky_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self._sticky_tool_shortcut.activated.connect(self._on_sticky_tool_shortcut)
+        self._text_tool_shortcut = QShortcut(QKeySequence(Qt.Key_T), self)
+        self._text_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._text_tool_shortcut.activated.connect(self._on_text_tool_shortcut)
+        self._shape_tool_shortcut = QShortcut(QKeySequence(Qt.Key_S), self)
+        self._shape_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._shape_tool_shortcut.activated.connect(self._on_shape_tool_shortcut)
+        self._connector_tool_shortcut = QShortcut(QKeySequence(Qt.Key_L), self)
+        self._connector_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._connector_tool_shortcut.activated.connect(self._on_connector_tool_shortcut)
+        self._draw_tool_shortcut = QShortcut(QKeySequence(Qt.Key_P), self)
+        self._draw_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._draw_tool_shortcut.activated.connect(self._on_draw_tool_shortcut)
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
@@ -738,7 +887,7 @@ class UltraViewPage(QWidget):
         return self._tool_rail
 
     def visible_author_tools(self) -> tuple[str, ...]:
-        """Release rail projection: Select + Sticky after the R4 slice."""
+        """Release rail projection: Select + Sticky + Text + Shape + Connector + Draw after M5."""
         return self._tool_rail.visible_author_tools()
 
     def interaction(self):
@@ -1085,6 +1234,7 @@ class UltraViewPage(QWidget):
         self._position_minimap(layout)
         if not self._overview.isVisible():
             self._position_card_context()
+            self._refresh_author_toolbar()
 
     def _toggle_panel(self, panel_id: str) -> None:
         if self._active_panel == panel_id:
@@ -1823,9 +1973,13 @@ class UltraViewPage(QWidget):
     def note_space(self, down: bool) -> None:
         self._viewport.set_space_down(down)
         if down:
+            self._interaction.pause_draw_samples()
             self._board_scroll.viewport().setCursor(Qt.OpenHandCursor)
-        elif not self._viewport.is_panning():
-            self._board_scroll.viewport().unsetCursor()
+        else:
+            self._interaction.resume_draw_samples()
+            if not self._viewport.is_panning():
+                self._board_scroll.viewport().unsetCursor()
+                self._sync_tool_cursor()
 
     def begin_board_pan(self, event, widget=None) -> bool:
         button = event.button()
@@ -1840,6 +1994,7 @@ class UltraViewPage(QWidget):
             return False
         if not is_right:
             self.cancel_board_gestures()
+            self._interaction.pause_draw_samples()
         global_pos = _event_global_xy(event)
         self._viewport.begin_pan(global_pos, int(button), deferred=is_right)
         self._right_gesture_widget = widget if is_right else None
@@ -1859,6 +2014,7 @@ class UltraViewPage(QWidget):
         dx, dy = self._viewport.update_pan(_event_global_xy(event), threshold=threshold)
         if self._viewport.pan_committed() and not was_committed:
             self.cancel_board_gestures()
+            self._interaction.pause_draw_samples()
             self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
             self._apply_preview_quality(QUALITY_FAST)
         if dx == 0.0 and dy == 0.0:
@@ -1953,6 +2109,8 @@ class UltraViewPage(QWidget):
             self._board_scroll.viewport().setCursor(Qt.OpenHandCursor)
         else:
             self._board_scroll.viewport().unsetCursor()
+            self._interaction.resume_draw_samples()
+            self._sync_tool_cursor()
         self._persist_viewport_to_board()
         self._restart_smooth_timer()
 
@@ -2439,6 +2597,7 @@ class UltraViewPage(QWidget):
             self._workspace_extent = None
             self._free_grid.cancel_gesture()
             self._free_grid.reset_transient_interaction()
+            self._clear_draw_draft_paint()
         if not keep_overview:
             self.hide_overview()
         if self._workspace is None and self._switcher.isVisible():
@@ -2616,9 +2775,7 @@ class UltraViewPage(QWidget):
             self.free_grid_redo_requested.emit()
 
     def _text_field_has_focus(self) -> bool:
-        return isinstance(
-            QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QTextEdit)
-        )
+        return is_text_input_widget(QApplication.focusWidget())
 
     def _viewport_router_is_active(self) -> bool:
         """Limit QApplication gesture routing to a shown Board host.
@@ -2631,10 +2788,20 @@ class UltraViewPage(QWidget):
         return bool(self.isVisible() and self._canvas_host.isVisible())
 
     def _on_app_focus_changed(self, _old, now) -> None:
-        in_edit = isinstance(now, QLineEdit)
-        self._esc.setEnabled(not in_edit)
-        self._grid_undo.setEnabled(not in_edit)
-        self._grid_redo.setEnabled(not in_edit)
+        in_edit = is_text_input_widget(now)
+        for shortcut in (
+            self._esc,
+            self._grid_undo,
+            self._grid_redo,
+            self._select_tool_shortcut,
+            self._sticky_tool_shortcut,
+            getattr(self, "_text_tool_shortcut", None),
+            getattr(self, "_shape_tool_shortcut", None),
+            getattr(self, "_connector_tool_shortcut", None),
+            getattr(self, "_draw_tool_shortcut", None),
+        ):
+            if shortcut is not None:
+                shortcut.setEnabled(not in_edit)
         if in_edit:
             self.note_space(False)
         # ``now is None`` also fires for transient, non-deactivation reasons
@@ -2654,7 +2821,16 @@ class UltraViewPage(QWidget):
             self._free_grid.hide_author_editor()
             return True
         if self._interaction.draft() is not None:
+            tool = self._interaction.draft().tool
             self._interaction.cancel_draft()
+            if tool == TOOL_SHAPES:
+                self._clear_shape_draft_paint()
+            if tool == TOOL_CONNECTOR:
+                self._clear_connector_draft_paint()
+            if tool == TOOL_DRAW:
+                self._clear_draw_draft_paint()
+            self._sync_tool_rail_from_controller()
+            self._sync_tool_cursor()
             return True
         if self._viewport.is_panning():
             self.end_board_pan()
@@ -2725,6 +2901,34 @@ class UltraViewPage(QWidget):
             self.clear_card_selection()
         elif self._is_board_context_menu_event(watched, event):
             return self._handle_board_context_menu(watched, event)
+        elif getattr(self, "_free_grid", None) is not None and (
+            watched is self._free_grid or isinstance(watched, FreeGridCard)
+        ):
+            draw_draft = self._interaction.draft()
+            if self._interaction.active_tool() == TOOL_DRAW or (
+                draw_draft is not None and draw_draft.tool == TOOL_DRAW
+            ):
+                if self._handle_draw_board_event(watched, event):
+                    if event.type() in (QEvent.MouseButtonRelease, QEvent.TabletRelease):
+                        QTimer.singleShot(0, self._refresh_author_toolbar)
+                    return True
+            if self._handle_connector_board_event(watched, event):
+                if event.type() == QEvent.MouseButtonRelease:
+                    QTimer.singleShot(0, self._refresh_author_toolbar)
+                return True
+            if watched is self._free_grid:
+                if self._handle_text_board_event(event):
+                    if event.type() == QEvent.MouseButtonRelease:
+                        QTimer.singleShot(0, self._refresh_author_toolbar)
+                    return True
+                if self._handle_shape_board_event(event):
+                    if event.type() == QEvent.MouseButtonRelease:
+                        QTimer.singleShot(0, self._refresh_author_toolbar)
+                    return True
+            if event.type() == QEvent.KeyPress and self._handle_board_selection_key(event):
+                return True
+            if event.type() == QEvent.MouseButtonRelease:
+                QTimer.singleShot(0, self._refresh_author_toolbar)
         return super().eventFilter(watched, event)
 
     def _is_board_context_menu_event(self, watched, event) -> bool:
@@ -2856,6 +3060,19 @@ class UltraViewPage(QWidget):
         self.export_png_requested.emit(1)
 
     def _cancel_board_gestures(self) -> None:
+        self._commit_or_cancel_text_editor()
+        self._text_geometry_session = None
+        self._shape_geometry_session = None
+        self._connector_geometry_session = None
+        if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_SHAPES:
+            self._interaction.cancel_draft()
+            self._clear_shape_draft_paint()
+        if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_CONNECTOR:
+            self._interaction.cancel_draft()
+            self._clear_connector_draft_paint()
+        if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_DRAW:
+            self._interaction.cancel_draft()
+            self._clear_draw_draft_paint()
         self._stop_edge_pan()
         if self._viewport.is_panning():
             self.end_board_pan()
@@ -2863,6 +3080,23 @@ class UltraViewPage(QWidget):
             self._grid.cancel_gesture()
         if self._free_grid.gesture().is_active():
             self._free_grid.cancel_gesture()
+
+    def event(self, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.WindowDeactivate:
+            self._commit_or_cancel_text_editor()
+            self._text_geometry_session = None
+            self._shape_geometry_session = None
+            self._connector_geometry_session = None
+            if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_SHAPES:
+                self._interaction.cancel_draft()
+                self._clear_shape_draft_paint()
+            if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_CONNECTOR:
+                self._interaction.cancel_draft()
+                self._clear_connector_draft_paint()
+            if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_DRAW:
+                self._interaction.cancel_draft()
+                self._clear_draw_draft_paint()
+        return super().event(event)
 
     def changeEvent(self, event) -> None:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
@@ -3124,9 +3358,18 @@ class UltraViewPage(QWidget):
         if tool == TOOL_STICKY and self._interaction.active_tool() == TOOL_STICKY:
             self._show_sticky_popover()
             return
+        if tool == TOOL_SHAPES and self._interaction.active_tool() == TOOL_SHAPES:
+            self._show_shape_popover()
+            return
+        if tool == TOOL_CONNECTOR and self._interaction.active_tool() == TOOL_CONNECTOR:
+            self._show_connector_popover()
+            return
+        if tool == TOOL_DRAW and self._interaction.active_tool() == TOOL_DRAW:
+            self._show_draw_popover()
+            return
         self._interaction.set_active_tool(tool)
         self._sync_tool_rail_from_controller()
-        self._free_grid.sync_tool_cursor()
+        self._sync_tool_cursor()
 
     def _on_author_tool_pinned(self, tool: str, pinned: bool) -> None:
         self._interaction.set_active_tool(tool, pinned=bool(pinned))
@@ -3145,11 +3388,46 @@ class UltraViewPage(QWidget):
         if button is None:
             return
         self._sticky_popover.choose_palette(self._interaction.sticky_palette())
-        anchor = button.mapToGlobal(button.rect().center())
+        self._sticky_popover.set_pinned(self._interaction.pinned_tool() == TOOL_STICKY)
+        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
         self._sticky_popover.popup(anchor)
 
     def sticky_popover(self) -> StickyPopover:
         return self._sticky_popover
+
+    def shape_popover(self) -> ShapePopover:
+        return self._shape_popover
+
+    def connector_popover(self) -> ConnectorPopover:
+        return self._connector_popover
+
+    def draw_popover(self) -> DrawPopover:
+        return self._draw_popover
+
+    def selection_toolbar(self) -> SelectionToolbar:
+        return self._selection_toolbar
+
+    def _on_sticky_pin_requested(self, pinned: bool) -> None:
+        self._on_author_tool_pinned(TOOL_STICKY, bool(pinned))
+
+    def _on_shape_selected(self, shape: str) -> None:
+        self._interaction.set_last_shape(shape)
+        self._interaction.set_shape_format(shape=shape)
+        if self._interaction.active_tool() != TOOL_SHAPES:
+            self._interaction.set_active_tool(TOOL_SHAPES)
+        self._sync_tool_rail_from_controller()
+        self._free_grid.sync_tool_cursor()
+
+    def _on_shape_pin_requested(self, pinned: bool) -> None:
+        self._on_author_tool_pinned(TOOL_SHAPES, bool(pinned))
+
+    def _show_shape_popover(self) -> None:
+        button = self._tool_rail.tool_button(TOOL_SHAPES)
+        if button is None:
+            return
+        self._shape_popover.set_pinned(self._interaction.pinned_tool() == TOOL_SHAPES)
+        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
+        self._shape_popover.popup(anchor)
 
     def _sync_tool_rail_from_controller(self) -> None:
         if not self._tool_rail.visible_author_tools():
@@ -3157,6 +3435,7 @@ class UltraViewPage(QWidget):
         tool = self._interaction.active_tool()
         pinned = self._interaction.pinned_tool() == tool and tool != TOOL_SELECT
         try:
+            self._tool_rail.set_draw_subtool(self._interaction.last_draw_subtool())
             self._tool_rail.set_active_tool(tool, pinned=pinned)
         except ValueError:
             return
@@ -3170,6 +3449,1728 @@ class UltraViewPage(QWidget):
         if self._text_field_has_focus() or not self._free_grid.creation_allowed():
             return
         self._on_author_tool_requested(TOOL_STICKY)
+
+    def _on_text_tool_shortcut(self) -> None:
+        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
+            return
+        if TOOL_TEXT not in self._tool_rail.visible_author_tools():
+            return
+        self._on_author_tool_requested(TOOL_TEXT)
+
+    def _on_shape_tool_shortcut(self) -> None:
+        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
+            return
+        if TOOL_SHAPES not in self._tool_rail.visible_author_tools():
+            return
+        self._on_author_tool_requested(TOOL_SHAPES)
+
+    def _on_connector_selected(self, kind: str) -> None:
+        self._interaction.set_last_connector(kind)
+        self._interaction.set_connector_format(connector_type=kind)
+        if self._interaction.active_tool() != TOOL_CONNECTOR:
+            self._interaction.set_active_tool(TOOL_CONNECTOR)
+        self._sync_tool_rail_from_controller()
+        self._free_grid.sync_tool_cursor()
+
+    def _on_connector_pin_requested(self, pinned: bool) -> None:
+        self._on_author_tool_pinned(TOOL_CONNECTOR, bool(pinned))
+
+    def _show_connector_popover(self) -> None:
+        button = self._tool_rail.tool_button(TOOL_CONNECTOR)
+        if button is None:
+            return
+        self._connector_popover.set_pinned(self._interaction.pinned_tool() == TOOL_CONNECTOR)
+        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
+        self._connector_popover.popup(anchor)
+
+    def _on_connector_tool_shortcut(self) -> None:
+        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
+            return
+        if TOOL_CONNECTOR not in self._tool_rail.visible_author_tools():
+            return
+        self._on_author_tool_requested(TOOL_CONNECTOR)
+
+    def _on_draw_tool_selected(self, tool: str, preset_index: int) -> None:
+        if not is_draw_ink_subtool(tool):
+            self._interaction.set_draw_style(tool=tool, preset_index=0)
+            if self._interaction.active_tool() != TOOL_DRAW:
+                self._interaction.set_active_tool(TOOL_DRAW)
+            self._sync_tool_rail_from_controller()
+            self._sync_tool_cursor()
+            return
+        presets = self._draw_popover.presets(tool)
+        if not 0 <= int(preset_index) < len(presets):
+            return
+        preset = presets[int(preset_index)]
+        self._interaction.set_draw_style(
+            tool=tool,
+            palette=preset.palette,
+            width_px_100=preset.width_px_100,
+            preset_index=int(preset_index),
+        )
+        if self._interaction.active_tool() != TOOL_DRAW:
+            self._interaction.set_active_tool(TOOL_DRAW)
+        self._sync_tool_rail_from_controller()
+        self._sync_tool_cursor()
+
+    def _show_draw_popover(self) -> None:
+        button = self._tool_rail.tool_button(TOOL_DRAW)
+        if button is None:
+            return
+        subtool = self._interaction.last_draw_subtool()
+        preset = 0 if not is_draw_ink_subtool(subtool) else self._interaction.draw_preset_index()
+        self._draw_popover.choose_tool(subtool, preset)
+        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
+        self._draw_popover.popup(anchor)
+
+    def _on_draw_tool_shortcut(self) -> None:
+        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
+            return
+        if TOOL_DRAW not in self._tool_rail.visible_author_tools():
+            return
+        self._on_author_tool_requested(TOOL_DRAW)
+
+    def _sync_tool_cursor(self) -> None:
+        self._free_grid.sync_tool_cursor()
+        if (
+            self._draw_create_armed()
+            and not self._viewport.is_panning()
+            and not self._viewport.space_down()
+        ):
+            self._free_grid.setCursor(Qt.CrossCursor)
+
+    def _text_create_armed(self) -> bool:
+        return (
+            self._free_grid.creation_allowed()
+            and self._interaction.active_tool() == TOOL_TEXT
+            and not self._interaction.is_editor_active()
+            and not self._free_grid.author_text_editor().is_editing()
+        )
+
+    def _board_point_from_pos(self, pos: QPoint):
+        return pixels_to_board_point(
+            (float(pos.x()), float(pos.y())),
+            self._free_grid.metrics(),
+            origin_offset=self._free_grid.author_paint_layer().model().origin_offset,
+        )
+
+    def _draw_create_armed(self) -> bool:
+        return (
+            self._free_grid.creation_allowed()
+            and self._interaction.active_tool() == TOOL_DRAW
+            and not self._interaction.is_editor_active()
+            and not self._free_grid.author_text_editor().is_editing()
+        )
+
+    def _draw_dpr(self) -> float:
+        try:
+            ratio = float(self._free_grid.devicePixelRatioF())
+        except (AttributeError, TypeError, ValueError):
+            ratio = 1.0
+        return ratio if ratio > 0.0 else 1.0
+
+    def _clear_draw_draft_paint(self) -> None:
+        self._free_grid.author_paint_layer().clear_live_stroke()
+
+    def _paint_draw_sample(self, point, *, append: bool) -> None:
+        style = self._interaction.draw_style()
+        draft = self._interaction.draft()
+        tool = draft.subtool if draft is not None else style.tool
+        palette = draft.palette if draft is not None else style.palette
+        width = draft.width_px_100 if draft is not None else style.width_px_100
+        role = "overlay" if not is_draw_ink_subtool(tool) else "ink"
+        layer = self._free_grid.author_paint_layer()
+        if append:
+            layer.append_live_stroke_point(
+                point, tool=tool, palette=palette, width_px=width, role=role
+            )
+            return
+        layer.set_live_stroke(
+            (point,), tool=tool, palette=palette, width_px=width, role=role
+        )
+
+    def _handle_draw_board_event(self, watched, event) -> bool:
+        types = {
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease,
+            QEvent.MouseMove,
+            QEvent.TabletPress,
+            QEvent.TabletRelease,
+            QEvent.TabletMove,
+        }
+        if event.type() not in types:
+            return False
+        if self._viewport.is_panning():
+            if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_DRAW:
+                self._interaction.pause_draw_samples()
+                return False
+            return False
+        pos = self._event_board_pos(watched, event)
+        if event.type() in (QEvent.MouseButtonPress, QEvent.TabletPress):
+            is_tablet = isinstance(event, QTabletEvent)
+            button = event.button() if hasattr(event, "button") else Qt.NoButton
+            if not is_tablet and button != Qt.LeftButton:
+                return False
+            if self._draw_create_armed():
+                additive = bool(event.modifiers() & Qt.ShiftModifier) if hasattr(
+                    event, "modifiers"
+                ) else False
+                self._begin_draw_draft(pos, additive=additive)
+                return True
+            return False
+        if event.type() in (QEvent.MouseButtonRelease, QEvent.TabletRelease):
+            draft = self._interaction.draft()
+            if draft is not None and draft.tool == TOOL_DRAW:
+                self._finish_draw_draft(pos)
+                return True
+            return False
+        if event.type() in (QEvent.MouseMove, QEvent.TabletMove):
+            draft = self._interaction.draft()
+            if draft is not None and draft.tool == TOOL_DRAW:
+                if self._viewport.space_down():
+                    self._interaction.pause_draw_samples()
+                    return True
+                self._update_draw_draft(pos)
+                return True
+            return False
+        return False
+
+    def _begin_draw_draft(self, pos: QPoint, *, additive: bool = False) -> None:
+        origin = self._board_point_from_pos(pos)
+        if origin is None:
+            return
+        self._interaction.begin_draft(
+            TOOL_DRAW, origin=origin, object_id=new_author_object_id()
+        )
+        draft = self._interaction.draft()
+        if draft is None or not draft.points:
+            return
+        draft.additive = bool(additive)
+        if draft.subtool == DRAW_ERASER:
+            records = []
+            for item in self._board.author_objects:
+                if not isinstance(item, StrokeObject) or item.locked:
+                    continue
+                record = stroke_hit_record(
+                    item.object_id,
+                    ((point.x, point.y) for point in item.points),
+                    item.width_px_100,
+                )
+                if record is not None:
+                    records.append(record)
+            self._interaction.arm_eraser_index(records)
+            self._note_eraser_segment(draft.points[0], draft.points[0])
+        self._paint_draw_sample(draft.points[0], append=False)
+        self._free_grid.grabMouse()
+
+    def _update_draw_draft(self, pos: QPoint) -> None:
+        current = self._board_point_from_pos(pos)
+        draft = self._interaction.draft()
+        if draft is None or draft.tool != TOOL_DRAW:
+            return
+        before = len(draft.points)
+        last = draft.points[-1] if draft.points else None
+        code = self._interaction.append_draw_sample(
+            current, self._free_grid.metrics(), dpr=self._draw_dpr()
+        )
+        draft = self._interaction.draft()
+        if draft is not None and len(draft.points) > before:
+            if draft.subtool == DRAW_ERASER and last is not None:
+                self._note_eraser_segment(last, draft.points[-1])
+            self._paint_draw_sample(draft.points[-1], append=True)
+        if code == "stroke_sample_limit":
+            self._finish_draw_draft(pos)
+            self._emit_feedback("笔画点数已达上限，已结束当前笔画")
+
+    def _note_eraser_segment(self, start, end) -> None:
+        draft = self._interaction.draft()
+        if draft is None or draft.subtool != DRAW_ERASER:
+            return
+        self._interaction.note_eraser_hits(
+            strokes_hit_by_segment(draft.hit_index, start, end)
+        )
+
+    def _finish_draw_draft(self, pos: QPoint) -> None:
+        self._release_text_mouse()
+        draft = self._interaction.draft()
+        self._clear_draw_draft_paint()
+        if draft is None or draft.tool != TOOL_DRAW:
+            self._interaction.cancel_draft()
+            self._sync_tool_cursor()
+            return
+        current = self._board_point_from_pos(pos)
+        last = draft.points[-1] if draft.points else None
+        if current is not None:
+            before = len(draft.points)
+            self._interaction.append_draw_sample(
+                current, self._free_grid.metrics(), dpr=self._draw_dpr()
+            )
+            draft = self._interaction.draft() or draft
+            if (
+                draft.subtool == DRAW_ERASER
+                and last is not None
+                and len(draft.points) > before
+            ):
+                self._note_eraser_segment(last, draft.points[-1])
+        if draft.subtool == DRAW_LASSO:
+            self._finish_lasso_draft(draft)
+            return
+        if draft.subtool == DRAW_ERASER:
+            self._finish_eraser_draft(draft)
+            return
+        if draft.object_id is None:
+            self._interaction.cancel_draft()
+            self._sync_tool_cursor()
+            return
+        points = self._interaction.persist_draft_stroke(
+            self._free_grid.metrics(), dpr=self._draw_dpr()
+        )
+        style = self._interaction.draw_style()
+        object_id = draft.object_id
+        self._interaction.commit_draft()
+        if len(points) < 2:
+            self._sync_tool_rail_from_controller()
+            self._sync_tool_cursor()
+            return
+        self.author_create_requested.emit(
+            StrokeCreateIntent(
+                object_id=object_id,
+                points=points,
+                tool=draft.subtool or style.tool,
+                palette=draft.palette or style.palette,
+                width_px_100=draft.width_px_100 or style.width_px_100,
+            )
+        )
+        self._sync_tool_rail_from_controller()
+        self._sync_tool_cursor()
+
+    def _finish_eraser_draft(self, draft) -> None:
+        deleted = tuple(draft.erased_ids)
+        self._interaction.commit_draft()
+        if deleted:
+            self.author_delete_requested.emit(AuthorDeleteIntent(deleted))
+        self._sync_tool_rail_from_controller()
+        self._sync_tool_cursor()
+
+    def _finish_lasso_draft(self, draft) -> None:
+        if lasso_is_usable(draft.points):
+            keys = lasso_selection_keys(
+                path=tuple(draft.points),
+                author_centers=self._lasso_author_centers(),
+                card_centers=self._lasso_card_centers(),
+            )
+            self._interaction.finish_lasso_selection(keys, additive=bool(draft.additive))
+        else:
+            self._interaction.commit_draft()
+            self._interaction.set_active_tool(TOOL_SELECT)
+        self._free_grid.sync_selection_projection()
+        self._sync_tool_rail_from_controller()
+        self._sync_tool_cursor()
+
+    def _lasso_author_centers(self) -> tuple[tuple[str, tuple[float, float]], ...]:
+        centers = []
+        for item in self._board.author_objects:
+            object_id = str(getattr(item, "object_id", "") or "")
+            if not object_id:
+                continue
+            center = self._author_item_center(item)
+            if center is not None:
+                centers.append((object_id, center))
+        return tuple(centers)
+
+    def _lasso_card_centers(self) -> tuple[tuple[object, tuple[float, float]], ...]:
+        centers = []
+        for placement in self._board.free_grid:
+            rect = placement.rect
+            center = (
+                float(rect.column) + float(rect.column_span) / 2.0,
+                float(rect.row) + float(rect.row_span) / 2.0,
+            )
+            centers.append((placement.ref, center))
+        return tuple(centers)
+
+    def _author_item_center(self, item) -> tuple[float, float] | None:
+        box = getattr(item, "box", None)
+        if box is not None:
+            return box_center((box.x, box.y, box.width, box.height))
+        points = getattr(item, "points", None)
+        if points:
+            return polyline_center((point.x, point.y) for point in points)
+        start = getattr(item, "start", None)
+        end = getattr(item, "end", None)
+        if start is None or end is None:
+            return None
+        first = getattr(start, "point", start)
+        last = getattr(end, "point", end)
+        return polyline_center(((first.x, first.y), (last.x, last.y)))
+
+    def _author_item(self, object_id: str):
+        wanted = str(object_id or "")
+        for item in self._board.author_objects:
+            if getattr(item, "object_id", "") == wanted:
+                return item
+            if isinstance(item, UnknownAuthorObject) and str(item.raw.get("id") or "") == wanted:
+                return item
+        return None
+
+    def _release_text_mouse(self) -> None:
+        if QWidget.mouseGrabber() is self._free_grid:
+            self._free_grid.releaseMouse()
+
+    def _handle_text_board_event(self, event) -> bool:
+        editor = self._free_grid.author_text_editor()
+        if isinstance(event, QMouseEvent) and event.button() == Qt.LeftButton:
+            if event.type() == QEvent.MouseButtonPress:
+                if editor.is_editing() and not editor.geometry().contains(event.pos()):
+                    self._commit_or_cancel_text_editor()
+                    return True
+                hit = self._free_grid.classify_press(
+                    event.pos(), modifiers=event.modifiers()
+                )
+                if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
+                    item = self._author_item(hit.item.object_id)
+                    if isinstance(item, TextObject):
+                        self._handle_text_author_press(hit, event)
+                        return True
+                if self._text_create_armed() and hit.kind == HIT_BLANK:
+                    self._begin_text_draft(event.pos())
+                    return True
+                return False
+            if event.type() == QEvent.MouseButtonDblClick:
+                hit = self._free_grid.classify_press(
+                    event.pos(), modifiers=event.modifiers()
+                )
+                if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
+                    item = self._author_item(hit.item.object_id)
+                    if isinstance(item, TextObject):
+                        self._begin_text_edit(item, replace=False)
+                        return True
+                return False
+            if event.type() == QEvent.MouseButtonRelease:
+                if self._interaction.draft() is not None and (
+                    self._interaction.draft().tool == TOOL_TEXT
+                ):
+                    self._finish_text_draft(event.pos())
+                    return True
+                if self._text_geometry_session is not None:
+                    self._finish_text_geometry(event.pos())
+                    return True
+                return False
+        if event.type() == QEvent.MouseMove and isinstance(event, QMouseEvent):
+            draft = self._interaction.draft()
+            if draft is not None and draft.tool == TOOL_TEXT:
+                self._update_text_draft(event.pos())
+                return True
+            if self._text_geometry_session is not None:
+                self._update_text_geometry(event.pos())
+                return True
+            return False
+        if event.type() == QEvent.KeyPress and isinstance(event, QKeyEvent):
+            return self._handle_text_type_to_edit(event)
+        return False
+
+    def _handle_text_author_press(self, hit, event: QMouseEvent) -> None:
+        item = self._author_item(hit.item.object_id)
+        if not isinstance(item, TextObject):
+            return
+        additive = bool(event.modifiers() & Qt.ShiftModifier)
+        if additive:
+            self._interaction.toggle(hit.item)
+            self._free_grid.sync_selection_projection()
+            self._refresh_author_toolbar()
+            return
+        self._interaction.select_only(hit.item)
+        self._free_grid.sync_selection_projection()
+        self._refresh_author_toolbar()
+        if item.locked:
+            self._emit_feedback(text_for_key(AUTHOR_LOCKED))
+            return
+        mapped = board_box_to_pixels(
+            (item.box.x, item.box.y, item.box.width, item.box.height),
+            self._free_grid.metrics(),
+            origin_offset=self._free_grid.author_paint_layer().model().origin_offset,
+        )
+        handle = None
+        if mapped is not None:
+            handle = hit_handle(
+                (int(mapped[0]), int(mapped[1]), int(mapped[2]), int(mapped[3])),
+                (event.pos().x(), event.pos().y()),
+            )
+        self._text_geometry_session = {
+            "object_id": item.object_id,
+            "kind": "resize" if handle else "move",
+            "handle": handle,
+            "origin": self._board_point_from_pos(event.pos()),
+            "box": (item.box.x, item.box.y, item.box.width, item.box.height),
+        }
+
+    def _begin_text_draft(self, pos: QPoint) -> None:
+        origin = self._board_point_from_pos(pos)
+        if origin is None:
+            return
+        self._interaction.begin_draft(
+            TOOL_TEXT, origin=origin, object_id=new_author_object_id()
+        )
+        self._free_grid.grabMouse()
+
+    def _update_text_draft(self, pos: QPoint) -> None:
+        self._interaction.update_draft(self._board_point_from_pos(pos))
+
+    def _finish_text_draft(self, pos: QPoint) -> None:
+        self._release_text_mouse()
+        draft = self._interaction.draft()
+        if draft is None or draft.origin is None or draft.object_id is None:
+            self._interaction.cancel_draft()
+            return
+        self._interaction.update_draft(self._board_point_from_pos(pos))
+        current = self._interaction.draft()
+        box = text_box_from_points(draft.origin, None if current is None else current.current)
+        fmt = self._interaction.text_format()
+        style = TextObject(
+            draft.object_id,
+            "text",
+            box=BoardBox(*box),
+            text="",
+            font_role=fmt.font_role,
+            font_size=fmt.font_size,
+            bold=fmt.bold,
+            italic=fmt.italic,
+            underline=fmt.underline,
+            align=fmt.align,
+            list_style=fmt.list_style,
+            text_palette=fmt.text_palette,
+            fill_palette=fmt.fill_palette,
+            opacity=fmt.opacity,
+            link=fmt.link,
+        )
+        self._begin_text_edit(style, replace=False)
+        self._refresh_author_toolbar()
+
+    def _update_text_geometry(self, pos: QPoint) -> None:
+        session = self._text_geometry_session
+        if not session or session.get("origin") is None:
+            return
+        current = self._board_point_from_pos(pos)
+        if current is None:
+            return
+        origin = session["origin"]
+        dx = current[0] - origin[0]
+        dy = current[1] - origin[1]
+        box = session["box"]
+        handle = session.get("handle")
+        if session.get("kind") == "resize" and handle:
+            resize_text_box(box, str(handle), dx, dy)
+        else:
+            clamp_author_box(
+                box[0] + dx,
+                box[1] + dy,
+                box[2],
+                box[3],
+                min_width=TEXT_MIN_WIDTH,
+                min_height=TEXT_MIN_HEIGHT,
+            )
+
+    def _finish_text_geometry(self, pos: QPoint) -> None:
+        session = self._text_geometry_session
+        self._text_geometry_session = None
+        self._release_text_mouse()
+        if not session or session.get("origin") is None:
+            return
+        current = self._board_point_from_pos(pos)
+        if current is None:
+            return
+        origin = session["origin"]
+        dx = current[0] - origin[0]
+        dy = current[1] - origin[1]
+        box = session["box"]
+        handle = session.get("handle")
+        if session.get("kind") == "resize" and handle:
+            next_box = resize_text_box(box, str(handle), dx, dy)
+        else:
+            next_box = clamp_author_box(
+                box[0] + dx,
+                box[1] + dy,
+                box[2],
+                box[3],
+                min_width=TEXT_MIN_WIDTH,
+                min_height=TEXT_MIN_HEIGHT,
+            )
+        object_id = str(session.get("object_id") or "")
+        if object_id and next_box != box:
+            self.author_update_requested.emit(TextUpdateIntent(object_id, box=next_box))
+
+    def _handle_text_type_to_edit(self, event: QKeyEvent) -> bool:
+        if self._free_grid.author_text_editor().is_editing():
+            return False
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace, Qt.Key_Escape):
+            return False
+        ids = self._interaction.author_selection_ids()
+        if len(ids) != 1:
+            return False
+        item = self._author_item(next(iter(ids)))
+        if not isinstance(item, TextObject) or item.locked:
+            return False
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
+            self._begin_text_edit(item, replace=False)
+            return True
+        typed = event.text()
+        blocked = Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier
+        if typed and typed.isprintable() and not (event.modifiers() & blocked):
+            self._begin_text_edit(item, replace=True)
+            self._free_grid.author_text_editor().setPlainText(typed)
+            return True
+        return False
+
+    def _begin_text_edit(self, item: TextObject, *, replace: bool) -> None:
+        if bool(getattr(item, "locked", False)):
+            self._emit_feedback(text_for_key(AUTHOR_LOCKED))
+            return
+        self._text_geometry_session = None
+        self._text_limit_notified = False
+        self._free_grid.author_text_editor().begin_edit(
+            object_id=item.object_id,
+            box=item.box,
+            text="" if replace else item.text,
+            metrics=self._free_grid.metrics(),
+            origin_offset=self._free_grid.author_paint_layer().model().origin_offset,
+            style=item,
+        )
+        self._editor_kind = "text"
+        self._interaction.set_editor_active(True)
+        self._interaction.select_only_author(item.object_id)
+        self._free_grid.sync_selection_projection()
+
+    def _commit_or_cancel_text_editor(self) -> None:
+        editor = self._free_grid.author_text_editor()
+        if not editor.is_editing():
+            return
+        if self._editor_kind in {"shape", "connector"}:
+            editor.commit()
+            return
+        if not str(editor.current_text() or "").strip():
+            editor.cancel()
+            return
+        editor.commit()
+
+    def _on_text_committed(self, object_id: str, text: str) -> None:
+        kind = self._editor_kind
+        self._editor_kind = ""
+        self._interaction.set_editor_active(False)
+        self._text_limit_notified = False
+        cleaned = str(text or "")
+        if kind == "shape":
+            self.author_update_requested.emit(ShapeUpdateIntent(object_id, text=cleaned))
+            return
+        if kind == "connector":
+            self.author_update_requested.emit(ConnectorUpdateIntent(object_id, text=cleaned))
+            return
+        draft = self._interaction.draft()
+        pending = draft is not None and draft.object_id == object_id
+        if pending:
+            if not cleaned.strip():
+                self._interaction.cancel_draft()
+                self._sync_tool_rail_from_controller()
+                self._free_grid.sync_tool_cursor()
+                return
+            box = text_box_from_points(draft.origin or (0.0, 0.0), draft.current)
+            fmt = self._interaction.text_format()
+            self._interaction.commit_draft()
+            self.author_create_requested.emit(
+                TextCreateIntent(
+                    object_id=object_id,
+                    box=box,
+                    text=cleaned,
+                    font_role=fmt.font_role,
+                    font_size=fmt.font_size,
+                    bold=fmt.bold,
+                    italic=fmt.italic,
+                    underline=fmt.underline,
+                    align=fmt.align,
+                    list_style=fmt.list_style,
+                    text_palette=fmt.text_palette,
+                    fill_palette=fmt.fill_palette,
+                    opacity=fmt.opacity,
+                    link=fmt.link,
+                )
+            )
+            self._sync_tool_rail_from_controller()
+            self._free_grid.sync_tool_cursor()
+            return
+        self.author_update_requested.emit(TextUpdateIntent(object_id, text=cleaned))
+
+    def _on_text_cancelled(self, object_id: str) -> None:
+        self._editor_kind = ""
+        self._interaction.set_editor_active(False)
+        self._text_limit_notified = False
+        draft = self._interaction.draft()
+        if draft is not None and draft.object_id == object_id:
+            self._interaction.cancel_draft()
+        self._sync_tool_rail_from_controller()
+        self._free_grid.sync_tool_cursor()
+
+    def _on_text_focus_lost(self) -> None:
+        editor = self._free_grid.author_text_editor()
+        if not editor.is_editing():
+            return
+        now = QApplication.focusWidget()
+        if is_text_input_widget(now):
+            return
+        toolbar = getattr(self, "_selection_toolbar", None)
+        if toolbar is not None and now is not None and (
+            now is toolbar or toolbar.isAncestorOf(now)
+        ):
+            return
+        self._commit_or_cancel_text_editor()
+
+    def _on_text_limit_reached(self) -> None:
+        if self._text_limit_notified:
+            return
+        self._text_limit_notified = True
+        self._emit_feedback("文字已达 6000 字上限")
+
+    def _shape_create_armed(self) -> bool:
+        return (
+            self._free_grid.creation_allowed()
+            and self._interaction.active_tool() == TOOL_SHAPES
+            and not self._interaction.is_editor_active()
+            and not self._free_grid.author_text_editor().is_editing()
+        )
+
+    def _shape_modifiers(self, event) -> tuple[bool, bool, bool]:
+        modifiers = event.modifiers() if hasattr(event, "modifiers") else Qt.NoModifier
+        keep_aspect = bool(modifiers & Qt.ShiftModifier)
+        from_center = bool(modifiers & Qt.AltModifier)
+        snap = not bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+        return keep_aspect, from_center, snap
+
+    def _clear_shape_draft_paint(self) -> None:
+        self._free_grid.author_paint_layer().set_draft_shape(None, None)
+
+    def _paint_shape_draft(self, box: tuple[float, float, float, float], shape: str) -> None:
+        self._free_grid.author_paint_layer().set_draft_shape(shape, box)
+
+    def _handle_shape_board_event(self, event) -> bool:
+        editor = self._free_grid.author_text_editor()
+        if isinstance(event, QMouseEvent) and event.button() == Qt.LeftButton:
+            if event.type() == QEvent.MouseButtonPress:
+                if editor.is_editing() and not editor.geometry().contains(event.pos()):
+                    self._commit_or_cancel_text_editor()
+                    return True
+                hit = self._free_grid.classify_press(
+                    event.pos(), modifiers=event.modifiers()
+                )
+                if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
+                    item = self._author_item(hit.item.object_id)
+                    if isinstance(item, ShapeObject):
+                        self._handle_shape_author_press(hit, event)
+                        return True
+                if self._shape_create_armed() and hit.kind == HIT_BLANK:
+                    self._begin_shape_draft(event)
+                    return True
+                return False
+            if event.type() == QEvent.MouseButtonDblClick:
+                hit = self._free_grid.classify_press(
+                    event.pos(), modifiers=event.modifiers()
+                )
+                if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
+                    item = self._author_item(hit.item.object_id)
+                    if isinstance(item, ShapeObject):
+                        self._begin_shape_label_edit(item, replace=False)
+                        return True
+                return False
+            if event.type() == QEvent.MouseButtonRelease:
+                if self._interaction.draft() is not None and (
+                    self._interaction.draft().tool == TOOL_SHAPES
+                ):
+                    self._finish_shape_draft(event)
+                    return True
+                if self._shape_geometry_session is not None:
+                    self._finish_shape_geometry(event)
+                    return True
+                return False
+        if event.type() == QEvent.MouseMove and isinstance(event, QMouseEvent):
+            draft = self._interaction.draft()
+            if draft is not None and draft.tool == TOOL_SHAPES:
+                self._update_shape_draft(event)
+                return True
+            if self._shape_geometry_session is not None:
+                self._update_shape_geometry(event)
+                return True
+            return False
+        if event.type() == QEvent.KeyPress and isinstance(event, QKeyEvent):
+            return self._handle_shape_type_to_edit(event)
+        return False
+
+    def _handle_shape_author_press(self, hit, event: QMouseEvent) -> None:
+        item = self._author_item(hit.item.object_id)
+        if not isinstance(item, ShapeObject):
+            return
+        additive = bool(event.modifiers() & Qt.ShiftModifier)
+        if additive:
+            self._interaction.toggle(hit.item)
+            self._free_grid.sync_selection_projection()
+            self._refresh_author_toolbar()
+            return
+        self._interaction.select_only(hit.item)
+        self._free_grid.sync_selection_projection()
+        self._refresh_author_toolbar()
+        if item.locked:
+            self._emit_feedback(text_for_key(AUTHOR_LOCKED))
+            return
+        mapped = board_box_to_pixels(
+            (item.box.x, item.box.y, item.box.width, item.box.height),
+            self._free_grid.metrics(),
+            origin_offset=self._free_grid.author_paint_layer().model().origin_offset,
+        )
+        handle = None
+        if mapped is not None:
+            handle = hit_box_handle(
+                (int(mapped[0]), int(mapped[1]), int(mapped[2]), int(mapped[3])),
+                (event.pos().x(), event.pos().y()),
+            )
+        self._shape_geometry_session = {
+            "object_id": item.object_id,
+            "kind": "resize" if handle else "move",
+            "handle": handle or "move",
+            "origin": self._board_point_from_pos(event.pos()),
+            "box": (item.box.x, item.box.y, item.box.width, item.box.height),
+        }
+        self._free_grid.grabMouse()
+
+    def _begin_shape_draft(self, event: QMouseEvent) -> None:
+        origin = self._board_point_from_pos(event.pos())
+        if origin is None:
+            return
+        self._interaction.begin_draft(
+            TOOL_SHAPES, origin=origin, object_id=new_author_object_id()
+        )
+        keep_aspect, from_center, snap = self._shape_modifiers(event)
+        box = shape_box_from_points(
+            origin, None, keep_aspect=keep_aspect, from_center=from_center, snap=snap
+        )
+        self._paint_shape_draft(box, self._interaction.last_shape())
+        self._free_grid.grabMouse()
+
+    def _update_shape_draft(self, event: QMouseEvent) -> None:
+        current = self._board_point_from_pos(event.pos())
+        self._interaction.update_draft(current)
+        draft = self._interaction.draft()
+        if draft is None or draft.origin is None:
+            return
+        keep_aspect, from_center, snap = self._shape_modifiers(event)
+        box = shape_box_from_points(
+            draft.origin,
+            current,
+            keep_aspect=keep_aspect,
+            from_center=from_center,
+            snap=snap,
+        )
+        self._paint_shape_draft(box, draft.shape or self._interaction.last_shape())
+
+    def _finish_shape_draft(self, event: QMouseEvent) -> None:
+        self._release_text_mouse()
+        draft = self._interaction.draft()
+        self._clear_shape_draft_paint()
+        if draft is None or draft.origin is None or draft.object_id is None:
+            self._interaction.cancel_draft()
+            return
+        current = self._board_point_from_pos(event.pos())
+        keep_aspect, from_center, snap = self._shape_modifiers(event)
+        box = shape_box_from_points(
+            draft.origin,
+            current,
+            keep_aspect=keep_aspect,
+            from_center=from_center,
+            snap=snap,
+        )
+        shape = draft.shape or self._interaction.last_shape()
+        fmt = self._interaction.shape_format()
+        corner = fmt.corner_radius
+        if corner is None:
+            corner = default_shape_corner(shape)
+        self._interaction.commit_draft()
+        self.author_create_requested.emit(
+            ShapeCreateIntent(
+                object_id=draft.object_id,
+                box=box,
+                shape=shape,
+                text="",
+                fill_palette=fmt.fill_palette,
+                stroke_palette=fmt.stroke_palette,
+                stroke_width=fmt.stroke_width,
+                line_style=fmt.line_style,
+                corner_radius=corner,
+            )
+        )
+        self._interaction.select_only_author(draft.object_id)
+        self._sync_tool_rail_from_controller()
+        self._free_grid.sync_tool_cursor()
+        self._refresh_author_toolbar()
+
+    def _next_shape_box(self, event: QMouseEvent, session: dict) -> tuple[float, float, float, float] | None:
+        if session.get("origin") is None:
+            return None
+        current = self._board_point_from_pos(event.pos())
+        if current is None:
+            return None
+        origin = session["origin"]
+        dx = current[0] - origin[0]
+        dy = current[1] - origin[1]
+        box = session["box"]
+        keep_aspect, from_center, snap = self._shape_modifiers(event)
+        handle = str(session.get("handle") or "move")
+        return resize_shape_box(
+            box,
+            handle,
+            dx,
+            dy,
+            keep_aspect=keep_aspect,
+            from_center=from_center,
+            snap=snap,
+        )
+
+    def _update_shape_geometry(self, event: QMouseEvent) -> None:
+        session = self._shape_geometry_session
+        if not session:
+            return
+        next_box = self._next_shape_box(event, session)
+        if next_box is None:
+            return
+        item = self._author_item(str(session.get("object_id") or ""))
+        shape = item.shape if isinstance(item, ShapeObject) else self._interaction.last_shape()
+        self._paint_shape_draft(next_box, shape)
+
+    def _finish_shape_geometry(self, event: QMouseEvent) -> None:
+        session = self._shape_geometry_session
+        self._shape_geometry_session = None
+        self._release_text_mouse()
+        self._clear_shape_draft_paint()
+        if not session:
+            return
+        next_box = self._next_shape_box(event, session)
+        if next_box is None:
+            return
+        object_id = str(session.get("object_id") or "")
+        box = session.get("box")
+        if object_id and next_box != box:
+            self.author_update_requested.emit(ShapeUpdateIntent(object_id, box=next_box))
+
+    def _handle_shape_type_to_edit(self, event: QKeyEvent) -> bool:
+        if self._free_grid.author_text_editor().is_editing():
+            return False
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace, Qt.Key_Escape):
+            return False
+        ids = self._interaction.author_selection_ids()
+        if len(ids) != 1:
+            return False
+        item = self._author_item(next(iter(ids)))
+        if not isinstance(item, ShapeObject) or item.locked:
+            return False
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
+            self._begin_shape_label_edit(item, replace=False)
+            return True
+        typed = event.text()
+        blocked = Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier
+        if typed and typed.isprintable() and not (event.modifiers() & blocked):
+            self._begin_shape_label_edit(item, replace=True)
+            self._free_grid.author_text_editor().setPlainText(typed)
+            return True
+        return False
+
+    def _begin_shape_label_edit(self, item: ShapeObject, *, replace: bool) -> None:
+        if bool(getattr(item, "locked", False)):
+            self._emit_feedback(text_for_key(AUTHOR_LOCKED))
+            return
+        self._shape_geometry_session = None
+        self._text_limit_notified = False
+        self._editor_kind = "shape"
+        self._free_grid.author_text_editor().begin_edit(
+            object_id=item.object_id,
+            box=item.box,
+            text="" if replace else item.text,
+            metrics=self._free_grid.metrics(),
+            origin_offset=self._free_grid.author_paint_layer().model().origin_offset,
+        )
+        self._interaction.set_editor_active(True)
+        self._interaction.select_only_author(item.object_id)
+        self._free_grid.sync_selection_projection()
+
+    def _on_shape_format_requested(self, key: str, value: object) -> None:
+        ids = tuple(self._interaction.author_selection_ids())
+        items = [
+            item
+            for item in (self._author_item(object_id) for object_id in ids)
+            if isinstance(item, ShapeObject)
+        ]
+        if not items:
+            return
+        if key == "text":
+            if len(items) == 1:
+                self._begin_shape_label_edit(items[0], replace=False)
+            return
+        changes = _next_shape_format(items[0], key, value)
+        if not changes:
+            return
+        remembered = {
+            field: getattr(items[0], field)
+            for field in (
+                "shape",
+                "fill_palette",
+                "stroke_palette",
+                "stroke_width",
+                "line_style",
+                "corner_radius",
+            )
+        }
+        if changes.get("clear_fill"):
+            remembered["fill_palette"] = None
+        for field, next_value in changes.items():
+            if field in remembered:
+                remembered[field] = next_value
+        self._interaction.set_shape_format(**remembered)
+        for item in items:
+            payload = dict(changes)
+            if "shape" in payload and "corner_radius" not in payload:
+                next_shape = str(payload["shape"])
+                if next_shape not in SHAPE_CORNER_TYPES:
+                    payload["corner_radius"] = 0
+            self.author_update_requested.emit(ShapeUpdateIntent(item.object_id, **payload))
+        QTimer.singleShot(0, self._refresh_author_toolbar)
+
+    def _connector_create_armed(self) -> bool:
+        return (
+            self._free_grid.creation_allowed()
+            and self._interaction.active_tool() == TOOL_CONNECTOR
+            and not self._interaction.is_editor_active()
+            and not self._free_grid.author_text_editor().is_editing()
+        )
+
+    def _connector_snap_enabled(self, event) -> bool:
+        modifiers = event.modifiers() if hasattr(event, "modifiers") else Qt.NoModifier
+        return not bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+
+    def _connector_shift(self, event) -> bool:
+        modifiers = event.modifiers() if hasattr(event, "modifiers") else Qt.NoModifier
+        return bool(modifiers & Qt.ShiftModifier)
+
+    def _clear_connector_draft_paint(self) -> None:
+        self._free_grid.author_paint_layer().set_guides()
+
+    def _paint_connector_draft(self, start, end, *, route: str = "straight") -> None:
+        points = connector_route_points(start, end, route)
+        self._free_grid.author_paint_layer().set_guides(draft_points=points)
+
+    def _event_board_pos(self, watched, event) -> QPoint:
+        pos = event.pos()
+        if watched is self._free_grid or watched is None:
+            return pos
+        return watched.mapTo(self._free_grid, pos)
+
+    def _map_point(self, pos: QPoint, *, snap: bool) -> tuple[float, float] | None:
+        point = self._board_point_from_pos(pos)
+        if point is None:
+            return None
+        if not snap:
+            return point
+        snapped = snap_board_point(point)
+        return snapped if snapped is not None else point
+
+    def _handle_connector_board_event(self, watched, event) -> bool:
+        if event.type() not in {
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease,
+            QEvent.MouseButtonDblClick,
+            QEvent.MouseMove,
+        }:
+            return False
+        pos = self._event_board_pos(watched, event)
+        editor = self._free_grid.author_text_editor()
+        if isinstance(event, QMouseEvent) and event.button() == Qt.LeftButton:
+            if event.type() == QEvent.MouseButtonPress:
+                if editor.is_editing() and not editor.geometry().contains(pos):
+                    self._commit_or_cancel_text_editor()
+                    return True
+                draft = self._interaction.draft()
+                if (
+                    draft is not None
+                    and draft.tool == TOOL_CONNECTOR
+                    and draft.origin is not None
+                ):
+                    self._finish_connector_draft(event, pos)
+                    return True
+                handle = self._connector_handle_at(pos)
+                if handle is not None:
+                    self._begin_connector_geometry(handle, event, pos)
+                    return True
+                if self._connector_create_armed():
+                    self._begin_connector_draft(event, pos)
+                    return True
+                item = self._connector_at(pos)
+                if item is not None:
+                    self._interaction.select_only_author(item.object_id)
+                    self._free_grid.sync_selection_projection()
+                    self._refresh_author_toolbar()
+                    return True
+                return False
+            if event.type() == QEvent.MouseButtonDblClick:
+                draft = self._interaction.draft()
+                if draft is not None and draft.tool == TOOL_CONNECTOR:
+                    self._finish_connector_draft(event, pos)
+                    return True
+                item = self._connector_at(pos)
+                if item is not None:
+                    self._begin_connector_label_edit(item)
+                    return True
+                return False
+            if event.type() == QEvent.MouseButtonRelease:
+                if self._interaction.draft() is not None and (
+                    self._interaction.draft().tool == TOOL_CONNECTOR
+                ):
+                    self._finish_connector_draft(event, pos)
+                    return True
+                if self._connector_geometry_session is not None:
+                    self._finish_connector_geometry(event, pos)
+                    return True
+                return False
+        if event.type() == QEvent.MouseMove and isinstance(event, QMouseEvent):
+            draft = self._interaction.draft()
+            if draft is not None and draft.tool == TOOL_CONNECTOR:
+                self._update_connector_draft(event, pos)
+                return True
+            if self._connector_geometry_session is not None:
+                self._update_connector_geometry(event, pos)
+                return True
+            return False
+        return False
+
+    def _begin_connector_draft(self, event: QMouseEvent, pos: QPoint) -> None:
+        snap = self._connector_snap_enabled(event)
+        origin = self._map_point(pos, snap=snap)
+        if origin is None:
+            return
+        start_target = self._endpoint_target_at(pos, origin, snap=snap, preferred=None)
+        if start_target is not None:
+            box = self._box_for_target(start_target)
+            if box is not None:
+                origin = box_anchor_point(box, start_target.anchor, origin) or origin
+        self._interaction.begin_draft(
+            TOOL_CONNECTOR, origin=origin, object_id=new_author_object_id()
+        )
+        draft = self._interaction.draft()
+        if draft is not None:
+            draft.start_target = start_target
+            draft.current = origin
+        self._paint_connector_draft(
+            origin, origin, route=connector_style_from_type(self._interaction.last_connector())["route"]
+        )
+        self._free_grid.grabMouse()
+
+    def _update_connector_draft(self, event: QMouseEvent, pos: QPoint) -> None:
+        draft = self._interaction.draft()
+        if draft is None or draft.origin is None:
+            return
+        snap = self._connector_snap_enabled(event)
+        current = self._map_point(pos, snap=snap)
+        if current is None:
+            return
+        if self._connector_shift(event):
+            current = constrain_shift_point(draft.origin, current)
+        self._interaction.update_draft(current)
+        route = connector_style_from_type(draft.connector or self._interaction.last_connector())["route"]
+        self._paint_connector_draft(draft.origin, current, route=route)
+
+    def _finish_connector_draft(self, event: QMouseEvent, pos: QPoint) -> None:
+        draft = self._interaction.draft()
+        if draft is None or draft.origin is None or draft.object_id is None:
+            self._interaction.cancel_draft()
+            self._clear_connector_draft_paint()
+            self._release_text_mouse()
+            return
+        snap = self._connector_snap_enabled(event)
+        current = self._map_point(pos, snap=snap) or draft.current or draft.origin
+        if self._connector_shift(event):
+            current = constrain_shift_point(draft.origin, current)
+        dx = abs(current[0] - draft.origin[0])
+        dy = abs(current[1] - draft.origin[1])
+        if not draft.awaiting_end and dx < CONNECTOR_CLICK_DRAG_THRESHOLD and dy < CONNECTOR_CLICK_DRAG_THRESHOLD:
+            draft.awaiting_end = True
+            draft.current = current
+            self._release_text_mouse()
+            return
+        end_target = None
+        if snap:
+            end_target = self._endpoint_target_at(pos, current, snap=True, preferred=None)
+            if end_target is not None:
+                box = self._box_for_target(end_target)
+                if box is not None:
+                    current = box_anchor_point(box, end_target.anchor, draft.origin) or current
+        kind = draft.connector or self._interaction.last_connector()
+        fmt = self._interaction.connector_format()
+        style = connector_style_from_type(kind)
+        self._clear_connector_draft_paint()
+        self._release_text_mouse()
+        self._interaction.commit_draft()
+        self.author_create_requested.emit(
+            ConnectorCreateIntent(
+                object_id=draft.object_id,
+                start=draft.origin,
+                end=current,
+                connector_type=kind,
+                start_target=draft.start_target,
+                end_target=end_target,
+                line_style=fmt.line_style,
+                stroke_palette=fmt.stroke_palette,
+                stroke_width=fmt.stroke_width,
+                start_head=style["start_head"],
+                end_head=style["end_head"],
+            )
+        )
+        self._interaction.select_only_author(draft.object_id)
+        self._sync_tool_rail_from_controller()
+        self._free_grid.sync_tool_cursor()
+        self._refresh_author_toolbar()
+
+    def _begin_connector_geometry(self, handle: tuple[str, str], event: QMouseEvent, pos: QPoint) -> None:
+        kind, name = handle
+        if kind == "anchor":
+            self._interaction.set_active_tool(TOOL_CONNECTOR)
+            self._begin_connector_draft(event, pos)
+            draft = self._interaction.draft()
+            if draft is not None:
+                draft.start_target = self._anchor_target_from_handle(name, pos)
+            return
+        item = self._author_item(name)
+        if not isinstance(item, ConnectorObject):
+            return
+        self._interaction.select_only_author(item.object_id)
+        self._connector_geometry_session = {
+            "object_id": item.object_id,
+            "handle": kind,
+            "origin": self._board_point_from_pos(pos),
+            "start": (item.start.point.x, item.start.point.y),
+            "end": (item.end.point.x, item.end.point.y),
+            "start_target": item.start.target,
+            "end_target": item.end.target,
+            "route": item.route,
+            "elbow_bias": item.elbow_bias,
+        }
+        self._free_grid.grabMouse()
+
+    def _update_connector_geometry(self, event: QMouseEvent, pos: QPoint) -> None:
+        session = self._connector_geometry_session
+        if not session:
+            return
+        snap = self._connector_snap_enabled(event)
+        current = self._map_point(pos, snap=snap)
+        if current is None:
+            return
+        start = session["start"]
+        end = session["end"]
+        handle = str(session.get("handle") or "")
+        if handle == "start":
+            if self._connector_shift(event):
+                current = constrain_shift_point(end, current)
+            start = current
+        elif handle == "end":
+            if self._connector_shift(event):
+                current = constrain_shift_point(start, current)
+            end = current
+        elif handle == "elbow":
+            start_pt, end_pt = start, end
+            if abs(end_pt[0] - start_pt[0]) >= abs(end_pt[1] - start_pt[1]):
+                span = end_pt[0] - start_pt[0]
+                bias = 0.5 if span == 0 else min(1.0, max(0.0, (current[0] - start_pt[0]) / span))
+            else:
+                span = end_pt[1] - start_pt[1]
+                bias = 0.5 if span == 0 else min(1.0, max(0.0, (current[1] - start_pt[1]) / span))
+            session["elbow_bias"] = bias
+        session["live_start"] = start
+        session["live_end"] = end
+        self._paint_connector_draft(start, end, route=str(session.get("route") or "straight"))
+
+    def _finish_connector_geometry(self, event: QMouseEvent, pos: QPoint) -> None:
+        session = self._connector_geometry_session
+        self._connector_geometry_session = None
+        self._release_text_mouse()
+        self._clear_connector_draft_paint()
+        if not session:
+            return
+        self._update_connector_geometry(event, pos)
+        object_id = str(session.get("object_id") or "")
+        handle = str(session.get("handle") or "")
+        start = session.get("live_start") or session["start"]
+        end = session.get("live_end") or session["end"]
+        snap = self._connector_snap_enabled(event)
+        payload: dict[str, object] = {}
+        if handle == "start":
+            payload["start"] = start
+            if snap:
+                target = self._endpoint_target_at(pos, start, snap=True, preferred=None)
+                if target is None:
+                    payload["clear_start_target"] = True
+                else:
+                    payload["start_target"] = target
+            else:
+                payload["clear_start_target"] = True
+        elif handle == "end":
+            payload["end"] = end
+            if snap:
+                target = self._endpoint_target_at(pos, end, snap=True, preferred=None)
+                if target is None:
+                    payload["clear_end_target"] = True
+                else:
+                    payload["end_target"] = target
+            else:
+                payload["clear_end_target"] = True
+        elif handle == "elbow":
+            payload["elbow_bias"] = session.get("elbow_bias")
+        if object_id and payload:
+            self.author_update_requested.emit(ConnectorUpdateIntent(object_id, **payload))
+
+    def _connector_at(self, pos: QPoint) -> ConnectorObject | None:
+        point = self._board_point_from_pos(pos)
+        if point is None:
+            return None
+        for item in reversed(self._board.author_objects):
+            if not isinstance(item, ConnectorObject):
+                continue
+            if hit_connector(
+                (item.start.point.x, item.start.point.y),
+                (item.end.point.x, item.end.point.y),
+                point,
+                route=item.route,
+                stroke_width=item.stroke_width,
+                start_head=item.start_head,
+                end_head=item.end_head,
+                elbow_bias=item.elbow_bias,
+            ):
+                return item
+        return None
+
+    def _connector_handle_at(self, pos: QPoint) -> tuple[str, str] | None:
+        origin = self._free_grid.author_paint_layer().model().origin_offset
+        metrics = self._free_grid.metrics()
+        ids = self._interaction.author_selection_ids()
+        for item in self._board.author_objects:
+            if not isinstance(item, ConnectorObject) or item.object_id not in ids:
+                continue
+            handles = connector_handle_points(
+                (item.start.point.x, item.start.point.y),
+                (item.end.point.x, item.end.point.y),
+                route=item.route,
+                elbow_bias=item.elbow_bias,
+            )
+            mapped = {}
+            for name, point in handles.items():
+                pixel = board_point_to_pixels(point, metrics, origin_offset=origin)
+                if pixel is not None:
+                    mapped[name] = pixel
+            hit = hit_connector_handle(mapped, (pos.x(), pos.y()))
+            if hit is not None:
+                return (hit, item.object_id)
+        for key in self._interaction.selection():
+            box_px = self._selection_box_px(key)
+            if box_px is None:
+                continue
+            side = hit_connection_anchor(box_px, (pos.x(), pos.y()))
+            if side is not None:
+                return ("anchor", side)
+        return None
+
+    def _selection_box_px(self, key):
+        origin = self._free_grid.author_paint_layer().model().origin_offset
+        metrics = self._free_grid.metrics()
+        if isinstance(key, AuthorKey):
+            item = self._author_item(key.object_id)
+            box = getattr(item, "box", None)
+            if box is None:
+                return None
+            return board_box_to_pixels(
+                (box.x, box.y, box.width, box.height), metrics, origin_offset=origin
+            )
+        card = self._free_grid.card_for(key.ref.section, key.ref.view_id) if hasattr(key, "ref") else None
+        if card is None:
+            return None
+        geom = card.geometry()
+        return (float(geom.x()), float(geom.y()), float(geom.width()), float(geom.height()))
+
+    def _anchor_target_from_handle(self, side: str, pos: QPoint) -> AnchorTarget | None:
+        for key in self._interaction.selection():
+            box_px = self._selection_box_px(key)
+            if box_px is None:
+                continue
+            if hit_connection_anchor(box_px, (pos.x(), pos.y())) == side:
+                if isinstance(key, AuthorKey):
+                    return AnchorTarget("author", object_id=key.object_id, anchor=side)
+                if hasattr(key, "ref"):
+                    return AnchorTarget("card", card=key.ref, anchor=side)
+        return None
+
+    def _endpoint_target_at(self, pos: QPoint, point, *, snap: bool, preferred) -> AnchorTarget | None:
+        del preferred
+        if not snap:
+            return None
+        hit = self._free_grid.classify_press(pos)
+        if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
+            item = self._author_item(hit.item.object_id)
+            if isinstance(item, (StickyObject, TextObject, ShapeObject)):
+                box = (item.box.x, item.box.y, item.box.width, item.box.height)
+                side = "auto"
+                if box_anchor_point(box, "auto", point) is not None:
+                    side = "auto"
+                return AnchorTarget("author", object_id=item.object_id, anchor=side)
+        if hit.kind in {HIT_CARD, HIT_RESIZE_HANDLE} and hit.item is not None and hasattr(hit.item, "ref"):
+            return AnchorTarget("card", card=hit.item.ref, anchor="auto")
+        return None
+
+    def _box_for_target(self, target: AnchorTarget):
+        if target.kind == "author":
+            item = self._author_item(str(target.object_id or ""))
+            box = getattr(item, "box", None)
+            if box is None:
+                return None
+            return (box.x, box.y, box.width, box.height)
+        placement = None
+        for candidate in self._board.free_grid:
+            if candidate.ref == target.card:
+                placement = candidate
+                break
+        if placement is None:
+            return None
+        rect = placement.rect
+        return (float(rect.column), float(rect.row), float(rect.column_span), float(rect.row_span))
+
+    def _begin_connector_label_edit(self, item: ConnectorObject) -> None:
+        if bool(getattr(item, "locked", False)):
+            self._emit_feedback(text_for_key(AUTHOR_LOCKED))
+            return
+        bounds = connector_hit_bounds(
+            (item.start.point.x, item.start.point.y),
+            (item.end.point.x, item.end.point.y),
+            route=item.route,
+            stroke_width=item.stroke_width,
+            start_head=item.start_head,
+            end_head=item.end_head,
+            elbow_bias=item.elbow_bias,
+        )
+        mid_x = bounds[0] + bounds[2] / 2.0
+        mid_y = bounds[1] + bounds[3] / 2.0
+        box = BoardBox(mid_x - 3.0, mid_y - 0.6, 6.0, 1.2)
+        self._connector_geometry_session = None
+        self._text_limit_notified = False
+        self._editor_kind = "connector"
+        self._free_grid.author_text_editor().begin_edit(
+            object_id=item.object_id,
+            box=box,
+            text=item.text,
+            metrics=self._free_grid.metrics(),
+            origin_offset=self._free_grid.author_paint_layer().model().origin_offset,
+        )
+        self._interaction.set_editor_active(True)
+        self._interaction.select_only_author(item.object_id)
+        self._free_grid.sync_selection_projection()
+
+    def _on_connector_format_requested(self, key: str, value: object) -> None:
+        ids = tuple(self._interaction.author_selection_ids())
+        items = [
+            item
+            for item in (self._author_item(object_id) for object_id in ids)
+            if isinstance(item, ConnectorObject)
+        ]
+        if not items:
+            return
+        if key == "label":
+            if len(items) == 1:
+                self._begin_connector_label_edit(items[0])
+            return
+        changes = _next_connector_format(items[0], key, value)
+        if not changes:
+            return
+        remembered = {
+            "connector_type": connector_type_from_style(route=items[0].route, end_head=items[0].end_head),
+            "route": items[0].route,
+            "line_style": items[0].line_style,
+            "stroke_palette": items[0].stroke_palette,
+            "stroke_width": items[0].stroke_width,
+            "start_head": items[0].start_head,
+            "end_head": items[0].end_head,
+        }
+        for field, next_value in changes.items():
+            if field in remembered:
+                remembered[field] = next_value
+            if field == "route":
+                remembered["connector_type"] = connector_type_from_style(
+                    route=next_value, end_head=remembered["end_head"]
+                )
+        self._interaction.set_connector_format(**remembered)
+        for item in items:
+            self.author_update_requested.emit(ConnectorUpdateIntent(item.object_id, **changes))
+        QTimer.singleShot(0, self._refresh_author_toolbar)
+
+    def _install_card_connector_filters(self) -> None:
+        seen: set[int] = set()
+        for card in self._free_grid.card_widgets():
+            identity = id(card)
+            seen.add(identity)
+            if identity not in self._filtered_cards:
+                card.installEventFilter(self)
+                self._filtered_cards.add(identity)
+        self._filtered_cards.intersection_update(seen)
+
+    def _on_selection_format_requested(self, key: str, value: object) -> None:
+        caps = self._selection_capabilities()
+        if key == "duplicate":
+            self._duplicate_selection()
+            return
+        if key.startswith("align_"):
+            alignment = key[len("align_") :]
+            self.author_batch_requested.emit(AuthorAlignIntent(caps.author_ids, alignment))
+            return
+        if key == "distribute_h":
+            self.author_batch_requested.emit(
+                AuthorDistributeIntent(caps.author_ids, "horizontal")
+            )
+            return
+        if key == "distribute_v":
+            self.author_batch_requested.emit(
+                AuthorDistributeIntent(caps.author_ids, "vertical")
+            )
+            return
+        if key == "z_front":
+            self.author_batch_requested.emit(AuthorZOrderIntent(caps.author_ids, "front"))
+            return
+        if key == "z_back":
+            self.author_batch_requested.emit(AuthorZOrderIntent(caps.author_ids, "back"))
+            return
+        if key == "delete":
+            self._delete_selection()
+            return
+        if key == "lock" and (
+            len(caps.author_ids) != 1 or caps.kind in {"mixed", "card_author", "sticky", "stroke"}
+        ):
+            target = True if caps.lock_state is not True else False
+            self.author_batch_requested.emit(
+                AuthorLockIntent(caps.author_ids, locked=target)
+            )
+            QTimer.singleShot(0, self._refresh_author_toolbar)
+            return
+        if len(caps.author_ids) > 1 and key not in {"text", "label", "open", "sync", "fit"}:
+            self.author_batch_requested.emit(
+                AuthorBatchStyleIntent(caps.author_ids, key, value)
+            )
+            QTimer.singleShot(0, self._refresh_author_toolbar)
+            return
+        if caps.kind == "shape" or self._selection_toolbar.kind() == "shape":
+            self._on_shape_format_requested(key, value)
+            return
+        if caps.kind == "connector" or self._selection_toolbar.kind() == "connector":
+            self._on_connector_format_requested(key, value)
+            return
+        if caps.kind == "sticky":
+            self._on_sticky_format_requested(key, value)
+            return
+        if caps.kind == "stroke":
+            self._on_stroke_format_requested(key, value)
+            return
+        if caps.kind != "text" and self._selection_toolbar.kind() != "text":
+            return
+        editor = self._free_grid.author_text_editor()
+        object_id = editor.object_id() if editor.is_editing() else ""
+        if not object_id:
+            ids = self._interaction.author_selection_ids()
+            if len(ids) != 1:
+                return
+            object_id = next(iter(ids))
+        item = self._author_item(object_id)
+        current = item if isinstance(item, TextObject) else None
+        if current is None and editor.is_editing():
+            fmt = self._interaction.text_format()
+            current = TextObject(
+                object_id,
+                "text",
+                box=BoardBox(0.0, 0.0, TEXT_DEFAULT_WIDTH, 1.0),
+                text=editor.current_text(),
+                font_role=fmt.font_role,
+                font_size=fmt.font_size,
+                bold=fmt.bold,
+                italic=fmt.italic,
+                underline=fmt.underline,
+                align=fmt.align,
+                list_style=fmt.list_style,
+                text_palette=fmt.text_palette,
+                fill_palette=fmt.fill_palette,
+                opacity=fmt.opacity,
+                link=fmt.link,
+            )
+        if current is None:
+            return
+        changes = _next_text_format(current, key, value)
+        if not changes:
+            return
+        self._interaction.set_text_format(**{
+            field: getattr(current, field) if field not in changes else changes[field]
+            for field in (
+                "font_role",
+                "font_size",
+                "bold",
+                "italic",
+                "underline",
+                "align",
+                "list_style",
+                "text_palette",
+                "fill_palette",
+                "opacity",
+                "link",
+            )
+        })
+        if editor.is_editing() and editor.object_id() == object_id:
+            live = _replace_text_style(current, changes)
+            editor.apply_live_style(live)
+            if self._interaction.draft() is not None:
+                return
+        self.author_update_requested.emit(TextUpdateIntent(object_id, **changes))
+
+    def _on_sticky_format_requested(self, key: str, value: object) -> None:
+        ids = tuple(self._interaction.author_selection_ids())
+        item = self._author_item(ids[0]) if len(ids) == 1 else None
+        if not isinstance(item, StickyObject):
+            return
+        changes = next_style_changes(item, key, value)
+        if not changes:
+            return
+        payload = {}
+        if "palette" in changes:
+            payload["palette"] = changes["palette"]
+        if "shape" in changes:
+            payload["shape"] = changes["shape"]
+        if "font_size" in changes:
+            payload["font_size"] = changes["font_size"]
+        if "locked" in changes:
+            payload["locked"] = changes["locked"]
+        if payload:
+            self.author_update_requested.emit(AuthorUpdateIntent(item.object_id, **payload))
+            QTimer.singleShot(0, self._refresh_author_toolbar)
+
+    def _on_stroke_format_requested(self, key: str, value: object) -> None:
+        ids = tuple(self._interaction.author_selection_ids())
+        item = self._author_item(ids[0]) if len(ids) == 1 else None
+        if not isinstance(item, StrokeObject):
+            return
+        changes = next_style_changes(item, key, value)
+        if not changes:
+            return
+        self.author_update_requested.emit(StrokeUpdateIntent(item.object_id, **changes))
+        QTimer.singleShot(0, self._refresh_author_toolbar)
+
+    def _editable_author_ids(self) -> tuple[str, ...]:
+        caps = self._selection_capabilities()
+        skipped = set(caps.skipped_unknown) | set(caps.skipped_locked)
+        return tuple(object_id for object_id in caps.author_ids if object_id not in skipped)
+
+    def _duplicate_selection(self) -> None:
+        if self._board_shortcuts_blocked():
+            return
+        ids = self._editable_author_ids()
+        if not ids:
+            return
+        self.author_batch_requested.emit(AuthorDuplicateIntent(ids))
+
+    def _copy_selection(self) -> None:
+        if self._board_shortcuts_blocked():
+            return
+        caps = self._selection_capabilities()
+        payload = copy_author_objects(self._board, caps.author_ids)
+        self._interaction.set_clipboard(payload)
+
+    def _paste_selection(self) -> None:
+        if self._board_shortcuts_blocked():
+            return
+        payload = self._interaction.clipboard()
+        if payload is None or not payload.objects:
+            return
+        self.author_batch_requested.emit(AuthorPasteIntent(payload))
+
+    def _delete_selection(self) -> None:
+        if self._board_shortcuts_blocked():
+            return
+        caps = self._selection_capabilities()
+        author_ids = self._editable_author_ids()
+        if caps.card_refs and (author_ids or caps.author_ids):
+            self.author_batch_requested.emit(
+                SelectionDeleteIntent(author_ids, caps.card_refs)
+            )
+            return
+        if author_ids:
+            locked = bool(caps.skipped_locked) and not author_ids
+            if locked or (caps.skipped_locked and not author_ids):
+                self._emit_feedback(text_for_key(AUTHOR_LOCKED))
+                return
+            self.author_delete_requested.emit(AuthorDeleteIntent(author_ids))
+
+    def _nudge_selection(self, dx: float, dy: float) -> None:
+        if self._board_shortcuts_blocked():
+            return
+        caps = self._selection_capabilities()
+        author_ids = self._editable_author_ids()
+        if caps.card_refs:
+            self.author_batch_requested.emit(
+                SelectionNudgeIntent(author_ids, caps.card_refs, dx, dy)
+            )
+            return
+        if author_ids:
+            self.author_batch_requested.emit(AuthorNudgeIntent(author_ids, dx, dy))
+
+    def _board_shortcuts_blocked(self) -> bool:
+        if self._text_field_has_focus() or self._interaction.is_editor_active():
+            return True
+        if self._free_grid.author_text_editor().is_editing():
+            return True
+        if self._free_grid.sticky_note_widget().is_editing():
+            return True
+        return False
+
+    def _handle_board_selection_key(self, event) -> bool:
+        if self._board_shortcuts_blocked():
+            return False
+        key = event.key()
+        modifiers = event.modifiers()
+        ctrl = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+        if ctrl and key == Qt.Key_D:
+            self._duplicate_selection()
+            return True
+        if ctrl and key == Qt.Key_C:
+            self._copy_selection()
+            return True
+        if ctrl and key == Qt.Key_V:
+            self._paste_selection()
+            return True
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            caps = self._selection_capabilities()
+            if caps.card_refs and caps.author_ids:
+                self._delete_selection()
+                return True
+            return False
+        arrows = {
+            Qt.Key_Left: (-1.0, 0.0),
+            Qt.Key_Right: (1.0, 0.0),
+            Qt.Key_Up: (0.0, -1.0),
+            Qt.Key_Down: (0.0, 1.0),
+        }
+        delta = arrows.get(key)
+        if delta is None or ctrl:
+            return False
+        caps = self._selection_capabilities()
+        if not caps.author_ids:
+            return False
+        step = NUDGE_STEP_SHIFT if modifiers & Qt.ShiftModifier else NUDGE_STEP
+        self._nudge_selection(delta[0] * step, delta[1] * step)
+        return True
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._handle_board_selection_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _on_author_create_requested(self, intent) -> None:
         self._sync_tool_rail_from_controller()
@@ -3373,6 +5374,46 @@ class UltraViewPage(QWidget):
     def _refresh_card_context(self) -> None:
         """Card actions now live on each card; the floating island stays hidden."""
         self._card_context.clear_ref()
+        self._refresh_author_toolbar()
+
+    def _refresh_author_toolbar(self) -> None:
+        toolbar = getattr(self, "_selection_toolbar", None)
+        if toolbar is None:
+            return
+        if self._presentation or self._overview.isVisible():
+            toolbar.hide()
+            return
+        gesture = getattr(self._free_grid, "gesture", lambda: None)()
+        if self._drag_kind is not None or (gesture is not None and gesture.is_active()):
+            toolbar.hide()
+            return
+        caps = self._selection_capabilities()
+        if caps.kind in {"empty", ""}:
+            toolbar.hide()
+            return
+        toolbar.apply_capabilities(caps)
+        toolbar.set_compact(self.width() < 900)
+        toolbar.adjustSize()
+        hint = toolbar.sizeHint()
+        host = self._canvas_host.rect()
+        left = max(68, min(host.width() - hint.width() - 12, host.width() // 2 - hint.width() // 2))
+        toolbar.setGeometry(left, 56, max(hint.width(), 220), 40)
+        toolbar.show()
+        toolbar.raise_()
+
+    def _selection_capabilities(self):
+        editor = self._free_grid.author_text_editor()
+        editor_kind = ""
+        editor_id = ""
+        if editor.is_editing():
+            editor_kind = str(self._editor_kind or "text")
+            editor_id = editor.object_id()
+        return resolve_selection_capabilities(
+            self._board,
+            self._interaction.selection(),
+            editor_kind=editor_kind,
+            editor_object_id=editor_id,
+        )
 
     def _card_model(self, ref: UltraViewRef, *, slot_id: str) -> CardViewModel:
         record = self._previews.get(ref)
@@ -3414,6 +5455,7 @@ class UltraViewPage(QWidget):
         self._board_stack.setCurrentWidget(self._free_grid)
         self._free_grid.set_free_grid(self._board.free_grid, models)
         self._free_grid.set_author_objects(self._board.author_objects)
+        self._install_card_connector_filters()
         # Selection/preview refreshes run through this projection too.  Do
         # not rebase the runtime coordinate plane for those view-only events;
         # board mutation, resize, zoom and edge-pan own extent growth.
@@ -3561,3 +5603,109 @@ class UltraViewPage(QWidget):
         vertical.setValue(
             min(vertical.maximum(), max(vertical.minimum(), int(round(rect.y() + origin[1]))))
         )
+
+
+_TEXT_FONT_ROLES = ("sans", "serif", "mono")
+_TEXT_FONT_SIZES = (8, 10, 12, 14, 18, 24, 32, 48, 72)
+_TEXT_ALIGNS = ("left", "center", "right")
+_TEXT_LISTS = ("none", "bullet", "number")
+_TEXT_COLORS = ("ink", "blue", "red", "green")
+_TEXT_FILLS = (None, "yellow", "blue", "green")
+
+
+def _cycle(options: tuple, current: object):
+    if current in options:
+        return options[(options.index(current) + 1) % len(options)]
+    return options[0]
+
+
+def _next_text_format(item: TextObject, key: str, value: object) -> dict[str, object]:
+    if key == "font_role":
+        return {"font_role": _cycle(_TEXT_FONT_ROLES, item.font_role)}
+    if key == "font_size":
+        return {"font_size": _cycle(_TEXT_FONT_SIZES, item.font_size)}
+    if key == "bold":
+        return {"bold": bool(value) if isinstance(value, bool) else not item.bold}
+    if key == "italic":
+        return {"italic": bool(value) if isinstance(value, bool) else not item.italic}
+    if key == "underline":
+        return {"underline": bool(value) if isinstance(value, bool) else not item.underline}
+    if key == "align":
+        return {"align": _cycle(_TEXT_ALIGNS, item.align)}
+    if key == "list_style":
+        return {"list_style": _cycle(_TEXT_LISTS, item.list_style)}
+    if key == "text_palette":
+        return {"text_palette": _cycle(_TEXT_COLORS, item.text_palette)}
+    if key == "fill_palette":
+        return {"fill_palette": _cycle(_TEXT_FILLS, item.fill_palette)}
+    if key == "link":
+        if isinstance(value, str):
+            return {"link": value}
+        return {"link": None if item.link else "https://"}
+    if key == "lock":
+        return {"locked": not item.locked}
+    return {}
+
+
+def _next_connector_format(item: ConnectorObject, key: str, value: object) -> dict[str, object]:
+    if key == "route":
+        return {"route": "elbow" if item.route == "straight" else "straight"}
+    if key == "start_head":
+        return {"start_head": "arrow" if item.start_head == "none" else "none"}
+    if key == "end_head":
+        return {"end_head": "none" if item.end_head == "arrow" else "arrow"}
+    if key == "color":
+        return {"stroke_palette": _cycle(CONNECTOR_STROKE_PALETTES, item.stroke_palette)}
+    if key == "width":
+        return {"stroke_width": _cycle(CONNECTOR_STROKE_WIDTHS, item.stroke_width)}
+    if key == "dash":
+        return {"line_style": _cycle(CONNECTOR_LINE_STYLES, item.line_style)}
+    if key == "lock":
+        return {"locked": not item.locked}
+    del value
+    return {}
+
+
+def _next_shape_format(item: ShapeObject, key: str, value: object) -> dict[str, object]:
+    if key == "shape":
+        return {"shape": _cycle(CLOSED_SHAPE_TYPES, item.shape)}
+    if key == "fill":
+        nxt = _cycle(SHAPE_FILL_PALETTES, item.fill_palette)
+        if nxt is None:
+            return {"clear_fill": True}
+        return {"fill_palette": nxt}
+    if key == "stroke":
+        return {"stroke_palette": _cycle(SHAPE_STROKE_PALETTES, item.stroke_palette)}
+    if key == "width":
+        return {"stroke_width": _cycle(SHAPE_STROKE_WIDTHS, item.stroke_width)}
+    if key == "dash":
+        return {"line_style": _cycle(SHAPE_LINE_STYLES, item.line_style)}
+    if key == "corner":
+        if item.shape not in SHAPE_CORNER_TYPES:
+            return {}
+        return {"corner_radius": _cycle(SHAPE_CORNERS, item.corner_radius)}
+    if key == "lock":
+        return {"locked": not item.locked}
+    del value
+    return {}
+
+
+def _replace_text_style(item: TextObject, changes: dict[str, object]) -> TextObject:
+    fields = {
+        "font_role": item.font_role,
+        "font_size": item.font_size,
+        "bold": item.bold,
+        "italic": item.italic,
+        "underline": item.underline,
+        "align": item.align,
+        "list_style": item.list_style,
+        "text_palette": item.text_palette,
+        "fill_palette": item.fill_palette,
+        "opacity": item.opacity,
+        "link": item.link,
+        "locked": item.locked,
+        "text": item.text,
+        "box": item.box,
+    }
+    fields.update(changes)
+    return TextObject(item.object_id, "text", **fields)

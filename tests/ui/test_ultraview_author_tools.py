@@ -197,9 +197,9 @@ def test_sticky_palette_is_copied_into_the_next_draft():
 def test_page_and_gesture_share_one_controller(qtbot):
     harness = _Harness(qtbot)
     page = harness.page
-    assert page.visible_author_tools() == ("select", "sticky")
-    assert page.tool_rail().visible_author_tools() == ("select", "sticky")
-    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky")
+    assert page.visible_author_tools() == ("select", "sticky", "text", "shapes", "connector", "draw")
+    assert page.tool_rail().visible_author_tools() == ("select", "sticky", "text", "shapes", "connector", "draw")
+    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "connector", "draw")
     assert page.interaction() is page._free_grid.interaction()
     assert page._free_grid.gesture().interaction is page.interaction()
 
@@ -302,21 +302,22 @@ def test_card_move_still_commits_after_controller_wiring(qtbot):
     assert requested[0][6] in {"move", "drag-move"}
 
 
-def test_release_page_shows_select_and_sticky_only(qtbot):
+def test_release_page_shows_select_sticky_text_shapes_connector_and_draw(qtbot):
     page = UltraViewPage()
     qtbot.addWidget(page)
     page.resize(1280, 760)
     page.show()
     page.set_board(default_board())
     QApplication.processEvents()
-    assert page.visible_author_tools() == ("select", "sticky")
+    assert page.visible_author_tools() == ("select", "sticky", "text", "shapes", "connector", "draw")
     rail = page.tool_rail()
-    assert rail.visible_author_tools() == ("select", "sticky")
+    assert rail.visible_author_tools() == ("select", "sticky", "text", "shapes", "connector", "draw")
     assert rail.creation_section_visible() is True
-    assert rail.tool_button("text") is None
-    assert rail.tool_button("shapes") is None
-    assert rail.tool_button("draw") is None
-    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky")
+    assert rail.tool_button("text") is not None
+    assert rail.tool_button("shapes") is not None
+    assert rail.tool_button("connector") is not None
+    assert rail.tool_button("draw") is not None
+    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "connector", "draw")
 
 
 def test_page_and_board_do_not_grow_parallel_selection_writes():

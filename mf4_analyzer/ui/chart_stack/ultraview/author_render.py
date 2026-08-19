@@ -22,7 +22,7 @@ from mf4_analyzer.ui.ultraview_state import (
     TextObject,
 )
 
-from .author_geometry import board_box_to_pixels, board_point_to_pixels
+from .author_geometry import board_box_to_pixels, board_point_to_pixels, connector_route_points
 from .author_style import (
     DEFAULT_THEME,
     TRANSPARENT_TOKEN,
@@ -159,7 +159,7 @@ def _draw_shape(
     rect = _pixel_rect(item.box, metrics, origin, factor)
     if rect is None:
         return
-    path = _shape_path(item.shape, rect, factor)
+    path = shape_path(item.shape, rect, factor=factor, corner_radius=item.corner_radius)
     if path.isEmpty():
         return
     pen = _pen(ink_color(item.stroke_palette, theme), item.stroke_width * factor, item.line_style)
@@ -196,16 +196,14 @@ def _draw_stroke(
     theme: object,
     factor: float,
 ) -> None:
-    points = _pixel_points(item.points, metrics, origin, factor)
-    if len(points) < 2:
+    path = stroke_pixel_path(item.points, metrics, origin, factor)
+    if path.isEmpty():
         return
-    path = QPainterPath(points[0])
-    for point in points[1:]:
-        path.lineTo(point)
     color = QColor(*pen_color(item.palette, tool=item.tool, theme=theme))
     pen = _pen(color, item.width_px_100 * factor)
     pen.setCapStyle(Qt.RoundCap)
     pen.setJoinStyle(Qt.RoundJoin)
+    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)
     painter.drawPath(path)
@@ -244,6 +242,23 @@ def _draw_connector(
         head = _arrow_head(points[-1], points[-2], head_size)
         if not head.isEmpty():
             painter.drawPolygon(head)
+    if item.text:
+        style = item.text_style
+        mid = points[len(points) // 2]
+        label = QRectF(mid.x() - 48.0 * factor, mid.y() - 12.0 * factor, 96.0 * factor, 24.0 * factor)
+        _draw_plain_text(
+            painter,
+            label,
+            item.text,
+            color=QColor(*ink_color(style.text_palette, theme)),
+            font_role="sans",
+            font_px=float(style.font_size) * factor,
+            align=style.align,
+            bold=style.bold,
+            italic=style.italic,
+            underline=style.underline,
+            list_style="none",
+        )
 
 
 def _draw_plain_text(
@@ -290,6 +305,33 @@ def _pixel_rect(
     return QRectF(x * factor, y * factor, width * factor, height * factor)
 
 
+def stroke_pixel_path(
+    points: Iterable[object],
+    metrics: GridMetrics,
+    origin: tuple[float, float] = (0.0, 0.0),
+    factor: float = 1.0,
+) -> QPainterPath:
+    """Build the screen/export polyline from the same Board points."""
+    mapped = _pixel_points(points, metrics, origin, factor)
+    path = QPainterPath()
+    if len(mapped) < 2:
+        return path
+    path.moveTo(mapped[0])
+    for point in mapped[1:]:
+        path.lineTo(point)
+    return path
+
+
+def _point_xy(point: object) -> tuple[float, float] | None:
+    try:
+        if hasattr(point, "x") and hasattr(point, "y"):
+            return float(point.x), float(point.y)
+        x, y = point  # type: ignore[misc]
+        return float(x), float(y)
+    except (TypeError, ValueError):
+        return None
+
+
 def _pixel_points(
     points: Iterable[object],
     metrics: GridMetrics,
@@ -298,33 +340,50 @@ def _pixel_points(
 ) -> list[QPointF]:
     mapped: list[QPointF] = []
     for point in points:
-        coordinate = board_point_to_pixels((point.x, point.y), metrics, origin_offset=origin)
+        xy = _point_xy(point)
+        if xy is None:
+            continue
+        coordinate = board_point_to_pixels(xy, metrics, origin_offset=origin)
         if coordinate is not None:
             mapped.append(QPointF(coordinate[0] * factor, coordinate[1] * factor))
     return mapped
 
 
-def _shape_path(shape: str, rect: QRectF, factor: float) -> QPainterPath:
+def shape_path(
+    shape: str,
+    rect: QRectF,
+    *,
+    factor: float = 1.0,
+    corner_radius: int = 0,
+) -> QPainterPath:
+    """Qt path for one closed V1 shape. ``diamond`` is an alias of ``rhombus``."""
     path = QPainterPath()
-    if shape == "rectangle":
-        radius = min(6.0 * factor, max(0.0, min(rect.width(), rect.height()) / 8.0))
-        path.addRoundedRect(rect, radius, radius)
-    elif shape == "oval":
+    kind = "rhombus" if shape == "diamond" else str(shape)
+    if kind in {"rectangle", "rounded_rectangle"}:
+        radius = max(0.0, float(corner_radius) * factor)
+        if kind == "rounded_rectangle" and radius <= 0.0:
+            radius = 8.0 * factor
+        radius = min(radius, max(0.0, min(rect.width(), rect.height()) / 2.0))
+        if radius > 0.0:
+            path.addRoundedRect(rect, radius, radius)
+        else:
+            path.addRect(rect)
+    elif kind == "oval":
         path.addEllipse(rect)
-    elif shape == "rhombus":
+    elif kind == "rhombus":
         path.addPolygon(QPolygonF([
             QPointF(rect.center().x(), rect.top()),
             QPointF(rect.right(), rect.center().y()),
             QPointF(rect.center().x(), rect.bottom()),
             QPointF(rect.left(), rect.center().y()),
         ]))
-    elif shape == "triangle":
+    elif kind == "triangle":
         path.addPolygon(QPolygonF([
             QPointF(rect.center().x(), rect.top()),
             QPointF(rect.right(), rect.bottom()),
             QPointF(rect.left(), rect.bottom()),
         ]))
-    elif shape == "block_arrow":
+    elif kind == "block_arrow":
         center_y = rect.center().y()
         shaft = max(1.0, rect.height() * 0.28)
         head_x = rect.left() + rect.width() * 0.62
@@ -340,23 +399,18 @@ def _shape_path(shape: str, rect: QRectF, factor: float) -> QPainterPath:
     return path
 
 
+def _shape_path(shape: str, rect: QRectF, factor: float) -> QPainterPath:
+    return shape_path(shape, rect, factor=factor)
+
+
 def _connector_board_points(item: ConnectorObject) -> tuple[object, ...]:
     start = item.start.point
     end = item.end.point
-    if item.route != "elbow" or (start.x == end.x and start.y == end.y):
-        return start, end
-    bias = 0.5 if item.elbow_bias is None else item.elbow_bias
-    # The axis with the larger displacement takes the first leg.  This keeps
-    # a saved elbow deterministic while still avoiding an unnecessarily long
-    # first segment for ordinary diagonal endpoints; there is no obstacle
-    # routing or hidden graph search in this V1 renderer.
-    if abs(end.x - start.x) >= abs(end.y - start.y):
-        middle = type(start)(start.x + (end.x - start.x) * bias, start.y)
-        corner = type(start)(middle.x, end.y)
-    else:
-        middle = type(start)(start.x, start.y + (end.y - start.y) * bias)
-        corner = type(start)(end.x, middle.y)
-    return start, middle, corner, end
+    points = connector_route_points(
+        (start.x, start.y), (end.x, end.y), item.route, item.elbow_bias
+    )
+    cls = type(start)
+    return tuple(cls(point[0], point[1]) for point in points)
 
 
 def _arrow_head(tip: QPointF, prior: QPointF, size: float) -> QPolygonF:

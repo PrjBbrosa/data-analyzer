@@ -4,6 +4,8 @@
 - 状态：**IN PROGRESS**；R0–R4 已落地，R5 仅完成离屏门，**不能** `ACCEPTED ON macOS`
 - Spec：`docs/analyzer/specs/2026-08-19-ultraview-recovery-interaction-resize-autofit-spec.md`
 - Review：`docs/analyzer/reviews/2026-08-19-ultraview-two-wave-regression-review.md`
+- 后续体验 Spec：`docs/analyzer/specs/2026-08-20-ultraview-miro-authoring-experience-spec.md`
+- 后续完整 Plan：`docs/analyzer/plans/2026-08-20-ultraview-miro-authoring-completion-plan.md`
 - 原则：先恢复现有 UltraView 可用性，再以完整纵切扩展；本 Plan 不授权当前 review 直接改产品源码
 
 ## 0. 波次与总门
@@ -15,7 +17,11 @@ R0 隔离 dead UI / 冻结证据
   -> R3 单一 interaction owner
   -> R4 Sticky 完整纵切
   -> R5 视觉/help/集成验收
-  -> 后续独立批次：Text -> Shape/Connector -> Draw
+  -> M0 新 Miro-parity prototype
+  -> M1 chrome IA + Sticky 迁移
+  -> M2 Text -> M3 Shape -> M4 Connector
+  -> M5 Pen/Highlighter -> M6 Eraser/Lasso
+  -> M7 通用多选 -> M8 发布验收
 ```
 
 为什么先修 Resize/Fit，再接 Sticky：它们是当前 UltraView 已有卡片的高频主路径；如果在不稳定画布上继续加
@@ -297,15 +303,21 @@ Spec S3 全事务在 offscreen 和真实 Cocoa 同时通过；否则入口继续
 - Spec §10 **未全满足**，**不能**写 `ACCEPTED ON macOS`（缺 Cocoa 像素/帧、F4、full gate）。
 - Windows 独立通过后才写 `ACCEPTED`；当前 `WINDOWS UNVERIFIED`。
 
-## 6. 后续扩展顺序
+## 6. 后续扩展：已拆为正式 M0–M8 计划
 
-只有 R5 完成后，才分别创建独立 spec/plan 或增量波：
+原先只有三行的 `Text -> Shape/Connector -> Draw` 不是可执行计划，现由以下两份文档取代：
 
-1. Text：IME、whole-box formatting、focus/shortcut。
-2. Shape + Connector：hit/anchor/target lifecycle。
-3. Draw：stroke sampling/RDP/eraser/lasso/point budget。
+- 体验/视觉/交互合同：`2026-08-20-ultraview-miro-authoring-experience-spec.md`；
+- 逐波实施、测试和平台门：`2026-08-20-ultraview-miro-authoring-completion-plan.md`。
 
-每个工具重复 Sticky 的纵切门，不允许一次把三个按钮和底层模块同时铺开。
+关键顺序为：
+
+1. M0 先重做并确认 Miro-parity prototype；旧 2026-08-19 prototype 已被判定为拒绝路线。
+2. M1 先重构 creator rail / Board / Status / selection-toolbar 信息架构，并只迁移现有 Select + Sticky。
+3. M2–M6 依次交付 Text、Shape、Connector、Pen/Highlighter、Eraser/Lasso 完整纵向切片。
+4. M7 收敛通用多选/格式/arrange；M8 才跑稳定集成、性能、Cocoa 和 Windows 发布门。
+
+每波通过前对应 release 入口保持隐藏；不允许一次把按钮或底层模块全部铺开。
 
 ## 7. 回退策略
 
@@ -321,5 +333,6 @@ Plan 本身只在以下全部成立时可标完成：
 
 - R0–R5 每波出口有命令/截图/数字/项目 round-trip 证据。
 - review 中 P0/P1 findings 均有对应回归测试或测量 gate。
-- 产品 UI 只展示真正可用的 Select + Sticky；其余工具仍受后续独立批次控制。
+- 本恢复 Plan 收口时产品 UI 只需展示真正可用的 Select + Sticky；其余工具由 M0–M8 后续 Plan 的
+  release 入口矩阵逐波控制。
 - macOS 和 Windows 证据等级明确，没有用 prototype/offscreen 代替前台。

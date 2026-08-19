@@ -4,6 +4,8 @@
 - 状态：**IN PROGRESS**；用户已授权按配套 Plan 施工
 - Review：`docs/analyzer/reviews/2026-08-19-ultraview-two-wave-regression-review.md`
 - Plan：`docs/analyzer/plans/2026-08-19-ultraview-recovery-interaction-resize-autofit-plan.md`
+- 后续体验 Spec：`docs/analyzer/specs/2026-08-20-ultraview-miro-authoring-experience-spec.md`
+- 后续完整 Plan：`docs/analyzer/plans/2026-08-20-ultraview-miro-authoring-completion-plan.md`
 
 ## 0. 产品结论
 

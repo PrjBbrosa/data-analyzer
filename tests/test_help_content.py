@@ -287,6 +287,8 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "临时聚焦", "不删除源 View", "200", "Ctrl/Cmd+Z",
         "常驻可关", "当前工程的所有 Board", "保存项目后保留",
         "schema 4", "schema 5", "24 列微格", "自动排版", "空白处右击", "右键按住", "左键按住空白框选",
+        "固定连续创建", "整框", "整笔擦除", "连接线", "套索",
+        "V / N / T / S / L / P", "荧光笔",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (
@@ -295,6 +297,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "Alt+拖", "Option 拖动位置",
         "隐藏来源条", "约 60%", "约 40% 只留标题", "碰撞会提示",
         "逻辑画布固定", "默认适应视口", "铺满视口", "12 列受控",
+        "尚未提供", "Coming Soon",
     ):
         assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
 
