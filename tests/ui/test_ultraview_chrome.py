@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
-from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent
+from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent, QImage, QPainter, QPalette
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
 
 import mf4_analyzer.ui.chart_stack.ultraview.chrome as ultraview_chrome
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
+    AUTHOR_TOOL_STICKY,
     BOARD_POPOVER_WIDTH,
     PANEL_FILTER,
     PANEL_LAYOUT,
@@ -33,6 +34,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     RAIL_CONTENT_HEIGHT,
     RAIL_ICON_SIZE,
     RAIL_WIDTH,
+    RAIL_WIDTH_COMPACT,
     BoardIsland,
     BoardPopover,
     CanvasHost,
@@ -53,6 +55,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     STATUS_ISLAND_WIDTH,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import LAYOUT_LABELS_ZH, CompareRail, make_ref_mime
+from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_TITANIUM
 
 
 def test_floating_chrome_dimension_contracts(qtbot):
@@ -1133,3 +1136,156 @@ class TestChromeGeometryUnderProductionQss:
         for thumb in thumbs:
             assert thumb.minimumHeight() >= 104
             assert thumb.minimumWidth() >= 168
+
+
+_PARENT_FILL = QColor("#3A6A74")
+_SURFACE_SOLID = QColor(ULTRAVIEW_TITANIUM["surface_solid"])
+_RAIL_ACTIVE_START = QColor(ULTRAVIEW_TITANIUM["rail_active_start"])
+_RAIL_ACTIVE_END = QColor(ULTRAVIEW_TITANIUM["rail_active_end"])
+
+
+def _render_rail(rail: ToolRail, *, fill: QColor | None = None) -> QImage:
+    image = QImage(max(1, rail.width()), max(1, rail.height()), QImage.Format_ARGB32)
+    image.fill(Qt.transparent if fill is None else fill)
+    painter = QPainter(image)
+    flags = QWidget.DrawChildren if fill is not None else (
+        QWidget.DrawWindowBackground | QWidget.DrawChildren
+    )
+    rail.render(painter, flags=QWidget.RenderFlags(flags))
+    painter.end()
+    return image
+
+
+def _is_opaque_ivory(color: QColor) -> bool:
+    return (
+        color.alpha() == 255
+        and color.red() > 248
+        and color.green() > 248
+        and color.blue() > 248
+    )
+
+
+def _visible_button_rects(rail: ToolRail) -> list[QRect]:
+    return [
+        button.geometry()
+        for button in rail.findChildren(QToolButton)
+        if button.isVisible()
+    ]
+
+
+def _gutter_opaque_ivory_hits(image: QImage, rail: ToolRail) -> tuple[int, int]:
+    occupied = _visible_button_rects(rail)
+    hits = 0
+    scanned = 0
+    x = 4
+    for y in range(16, max(17, image.height() - 16)):
+        if any(rect.contains(x, y) for rect in occupied):
+            continue
+        scanned += 1
+        if _is_opaque_ivory(image.pixelColor(x, y)):
+            hits += 1
+    return hits, scanned
+
+
+def _prepare_styled_rail(qapp, qtbot, *, compact: bool = False) -> ToolRail:
+    from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+
+    load_stylesheet(qapp)
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    if compact:
+        rail.set_compact(True)
+    rail.adjustSize()
+    rail.show()
+    qtbot.waitExposed(rail)
+    qapp.processEvents()
+    return rail
+
+
+def test_tool_rail_groups_are_pass_through_not_solid_islands(qapp, qtbot):
+    rail = _prepare_styled_rail(qapp, qtbot)
+    assert rail.testAttribute(Qt.WA_TranslucentBackground)
+    assert rail.autoFillBackground() is False
+    groups = rail.findChildren(QWidget, "ultraViewToolRailGroup")
+    assert groups
+    for group in groups:
+        assert group.autoFillBackground() is False
+        assert group.testAttribute(Qt.WA_TranslucentBackground)
+        assert "transparent" in group.styleSheet()
+        window = group.palette().color(QPalette.Window)
+        assert window.alpha() < 32
+    wraps = [
+        rail.findChild(QWidget, "ultraViewToolRailCreationDividerWrap"),
+        rail.findChild(QWidget, "ultraViewToolRailPostCreationDividerWrap"),
+    ]
+    for wrap in wraps:
+        assert wrap is not None
+        assert wrap.autoFillBackground() is False
+        assert wrap.testAttribute(Qt.WA_TranslucentBackground)
+        assert "transparent" in wrap.styleSheet()
+
+
+def test_tool_rail_renders_frost_shell_not_opaque_white_inner_fill(qapp, qtbot):
+    rail = _prepare_styled_rail(qapp, qtbot)
+    rail.set_creation_enabled(True)
+    rail.set_active_tool(AUTHOR_TOOL_STICKY)
+    qapp.processEvents()
+
+    image = _render_rail(rail)
+    width, height = image.width(), image.height()
+    assert width == RAIL_WIDTH
+    for x, y in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
+        assert image.pixelColor(x, y).alpha() < 30
+
+    ivory_hits, scanned = _gutter_opaque_ivory_hits(image, rail)
+    assert scanned > 20
+    assert ivory_hits == 0
+
+    wrap = rail.findChild(QWidget, "ultraViewToolRailCreationDividerWrap")
+    assert wrap is not None
+    sample = wrap.mapTo(rail, QPoint(max(2, wrap.width() // 2), 2))
+    chrome = image.pixelColor(sample.x(), sample.y())
+    assert not _is_opaque_ivory(chrome)
+    assert chrome.alpha() < 200 or (
+        abs(chrome.red() - _SURFACE_SOLID.red())
+        + abs(chrome.green() - _SURFACE_SOLID.green())
+        + abs(chrome.blue() - _SURFACE_SOLID.blue())
+        > 12
+    )
+
+    composed = _render_rail(rail, fill=_PARENT_FILL)
+    blend = composed.pixelColor(sample.x(), sample.y())
+    assert not _is_opaque_ivory(blend)
+    # Frost over teal: parent hue still shows; opaque paper-white would not.
+    assert blend.red() < 220
+    assert blend.green() > blend.red()
+    assert blend.blue() > blend.red()
+    assert abs(blend.green() - blend.red()) >= 8
+
+    sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
+    assert sticky is not None
+    origin = sticky.mapTo(rail, QPoint(0, 0))
+    # Inset past the 10px button radius so the sample is fill, not frost.
+    start = image.pixelColor(origin.x() + 8, origin.y() + 8)
+    end = image.pixelColor(
+        origin.x() + sticky.width() - 9, origin.y() + sticky.height() - 9
+    )
+    assert start != end
+    assert abs(start.red() - _RAIL_ACTIVE_START.red()) < 80
+    assert abs(end.red() - _RAIL_ACTIVE_END.red()) < 80
+    assert start.red() < end.red() or start.blue() > end.blue()
+
+
+def test_tool_rail_compact_frost_shell_keeps_size_contract(qapp, qtbot):
+    rail = _prepare_styled_rail(qapp, qtbot, compact=True)
+    assert rail.sizeHint().width() == RAIL_WIDTH_COMPACT
+    assert rail.minimumSizeHint() == rail.sizeHint()
+    assert rail.width() == RAIL_WIDTH_COMPACT
+    image = _render_rail(rail)
+    width, height = image.width(), image.height()
+    assert width == RAIL_WIDTH_COMPACT
+    for x, y in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
+        assert image.pixelColor(x, y).alpha() < 30
+    ivory_hits, scanned = _gutter_opaque_ivory_hits(image, rail)
+    assert scanned > 10
+    assert ivory_hits == 0

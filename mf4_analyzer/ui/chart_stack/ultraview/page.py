@@ -661,6 +661,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._format_picker,
             close_on_canvas_click=True,
         )
+        self._selection_toolbar.schema_will_rebuild.connect(self._close_format_picker)
         self._more_menu: QMenu | None = None
         self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
         self._board_island.board_menu_requested.connect(self._show_board_menu)
@@ -2903,8 +2904,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if any(flyout.isVisible() for flyout in self._author_flyouts()):
             self._close_author_flyouts()
             return True
-        if self._format_picker.isVisible():
-            self._format_picker.close()
+        if self._format_picker.isVisible() or self._format_picker_key:
+            self._close_format_picker()
             return True
         if self._interaction.active_tool() != TOOL_SELECT:
             self._interaction.set_active_tool(TOOL_SELECT)
@@ -3789,28 +3790,40 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def format_picker(self) -> FormatChoiceFlyout:
         return self._format_picker
 
+    def _close_format_picker(self) -> None:
+        if self._canvas_host.active_overlay() == OVERLAY_AUTHOR_FORMAT:
+            self._canvas_host.close_overlay(OVERLAY_AUTHOR_FORMAT, restore_focus=False)
+        elif self._format_picker.isVisible():
+            self._format_picker.hide()
+        self._format_picker_key = ""
+
     def _format_picker_rect(self, button: QWidget, size: QSize) -> QRect:
         safe = self._author_flyout_safe_rect()
         width = min(max(1, size.width()), safe.width())
         height = min(max(1, size.height()), safe.height())
         origin = button.mapTo(self._canvas_host, QPoint(0, 0))
         x = origin.x()
-        y = origin.y() + button.height() + 6
-        if y + height > safe.bottom():
-            y = origin.y() - 6 - height
+        below = origin.y() + button.height() + 6
+        above = origin.y() - 6
+        below_room = safe.bottom() - below
+        above_room = above - safe.top()
+        if below_room >= height or below_room >= above_room:
+            y = below
+            height = min(height, max(1, below_room))
+        else:
+            height = min(height, max(1, above_room))
+            y = above - height
         if x + width > safe.right():
             x = origin.x() + button.width() - width
-        x = min(max(safe.left(), x), safe.right() - width)
-        y = min(max(safe.top(), y), safe.bottom() - height)
+        x = min(max(safe.left(), x), max(safe.left(), safe.right() - width))
+        y = min(max(safe.top(), y), max(safe.top(), safe.bottom() - height))
         return QRect(x, y, width, height)
 
     def _on_format_choice_selected(self, value: object) -> None:
         key = self._format_picker_key
         if not key:
             return
-        self._format_picker_key = ""
-        if self._canvas_host.active_overlay() == OVERLAY_AUTHOR_FORMAT:
-            self._canvas_host.close_overlay(OVERLAY_AUTHOR_FORMAT, restore_focus=False)
+        self._close_format_picker()
         self._on_selection_format_requested(key, value)
 
     def _popup_format_picker(self, key: str) -> None:
@@ -3819,6 +3832,13 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if button is None:
             return
         picker = self._format_picker
+        if (
+            self._format_picker_key == key
+            and self._canvas_host.active_overlay() == OVERLAY_AUTHOR_FORMAT
+            and picker.isVisible()
+        ):
+            self._close_format_picker()
+            return
         self._format_picker_key = key
         current = None
         ids = caps.author_ids
@@ -3876,10 +3896,15 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         elif key == "corner":
             picker.present_labels(tuple((value, str(value)) for value in SHAPE_CORNERS), current=getattr(item, "corner_radius", None))
         else:
-            self._format_picker_key = ""
+            self._close_format_picker()
             return
+        live_trigger = self._selection_toolbar.button(key) or button
         size = picker.content_size()
-        rect = self._format_picker_rect(button, size)
+        rect = self._format_picker_rect(live_trigger, size)
+        if rect.height() < size.height():
+            picker._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        else:
+            picker._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._canvas_host.open_overlay(OVERLAY_AUTHOR_FORMAT, rect)
 
     def _on_selection_format_requested(self, key: str, value: object) -> None:
@@ -4381,15 +4406,20 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         toolbar = getattr(self, "_selection_toolbar", None)
         if toolbar is None:
             return
-        if self._presentation or self._overview.isVisible():
+
+        def hide_toolbar() -> None:
+            self._close_format_picker()
             toolbar.hide()
+
+        if self._presentation or self._overview.isVisible():
+            hide_toolbar()
             return
         gesture = getattr(self._free_grid, "gesture", lambda: None)()
         if self._drag_kind is not None or (gesture is not None and gesture.is_active()):
-            toolbar.hide()
+            hide_toolbar()
             return
         if self._interaction.draft() is not None:
-            toolbar.hide()
+            hide_toolbar()
             return
         if (
             self._text_geometry_session is not None
@@ -4397,19 +4427,24 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             or self._connector_geometry_session is not None
             or getattr(self._free_grid, "_author_geometry_session", None) is not None
         ):
-            toolbar.hide()
+            hide_toolbar()
             return
         caps = self._selection_capabilities()
         if caps.kind in {"empty", "", "card", "card_author"}:
-            toolbar.hide()
+            hide_toolbar()
             return
         bounds = self._selection_bounds_in_host()
         if bounds is None or bounds.isNull():
-            toolbar.hide()
+            hide_toolbar()
             return
         toolbar.apply_capabilities(caps)
         toolbar.set_compact(self.width() < 900 or is_compact_stage((self.width(), self.height())))
-        toolbar.adjustSize()
+        layout = toolbar.layout()
+        if layout is not None:
+            layout.activate()
+        body_layout = getattr(toolbar, "_body_layout", None)
+        if body_layout is not None:
+            body_layout.activate()
         hint = toolbar.sizeHint()
         host = self._canvas_host.contentsRect()
         safe = host.adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)

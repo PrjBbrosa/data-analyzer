@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UltraView × Miro · Post-Grok 操作与 UI 对照</title>
+<style>
+:root{--paper:#f4f7f6;--surface:#fff;--ink:#183039;--muted:#687d83;--line:#d7e1e2;--teal:#087f8c;--amber:#f3a72d;--blue:#4262ff;--red:#b84f5f;--green:#168461;--orange:#ab6d0b;--shadow:0 18px 48px rgba(24,48,57,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:var(--ink);font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background-color:var(--paper);background-image:radial-gradient(rgba(8,127,140,.12) 1px,transparent 1px);background-size:24px 24px}a{color:#075d67;text-decoration:none}a:hover{text-decoration:underline}button{font:inherit}.wrap{width:min(1260px,calc(100% - 32px));margin:18px auto 54px}
+.audit{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;border:1px solid #e7c6cb;border-radius:12px;background:#fffafb;color:#71434b;font-size:13px}.flag{padding:5px 9px;border-radius:999px;background:var(--red);color:#fff;font:700 11px ui-monospace,monospace;letter-spacing:.08em}.audit .meta{margin-left:auto;font:600 11px ui-monospace,monospace;color:#86656b}
+.hero{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(310px,.8fr);gap:16px;margin-top:16px}.hero-main,.verdict{border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}.hero-main{position:relative;overflow:hidden;min-height:440px;padding:38px 42px;background:rgba(255,255,255,.96)}.hero-main:after{content:"POST";position:absolute;right:-8px;bottom:-44px;color:rgba(8,127,140,.04);font-weight:900;font-size:160px}.eyebrow{font:700 11px ui-monospace,monospace;letter-spacing:.18em;color:#075d67}h1{max-width:820px;margin:14px 0 18px;font-size:clamp(42px,5.3vw,72px);line-height:1.03;letter-spacing:-.045em}.lede{max-width:850px;margin:0;color:#50676d;font-size:17px;line-height:1.8}.lede b{color:var(--ink)}.facts{display:flex;gap:8px;flex-wrap:wrap;margin-top:22px}.fact{padding:7px 10px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:12px}.fact.good{color:var(--green);border-color:#a9d8c7;background:#eaf8f2}.fact.bad{color:var(--red);border-color:#e4bcc3;background:#fff1f3}
+.verdict{display:flex;flex-direction:column;justify-content:space-between;padding:30px;background:#193f49;color:#fff}.verdict .label{font:700 11px ui-monospace,monospace;letter-spacing:.14em;color:#a5c7cb}.verdict blockquote{margin:18px 0;font-size:25px;line-height:1.35;font-weight:750}.verdict p{color:#c6d8db;line-height:1.65}.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}.stat{padding:13px;border:1px solid rgba(255,255,255,.15);border-radius:10px;background:rgba(255,255,255,.04)}.stat b{display:block;font-size:26px}.stat span{font-size:12px;color:#c5d6d9}.verdict-foot{margin-top:20px;padding-top:16px;border-top:1px solid rgba(255,255,255,.16);font:12px/1.5 ui-monospace,monospace}
+.toc{position:sticky;top:8px;z-index:10;display:flex;gap:24px;overflow:auto;margin:16px 0;padding:14px 18px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.95);box-shadow:0 8px 22px rgba(24,48,57,.06);white-space:nowrap}.toc a{color:#536a70;font-size:13px;font-weight:650}
+.section{margin-top:42px;scroll-margin-top:84px}.section-head{display:flex;align-items:end;justify-content:space-between;gap:24px;margin-bottom:14px}.section-head h2{margin:0;font-size:30px;letter-spacing:-.03em}.section-head p{max-width:730px;margin:0;color:var(--muted);line-height:1.6;text-align:right}.panel{border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.96);box-shadow:0 14px 38px rgba(24,48,57,.06)}
+.evidence{display:grid;grid-template-columns:repeat(4,1fr);overflow:hidden}.evidence article{padding:20px;border-right:1px solid var(--line)}.evidence article:last-child{border:0}.source{font:700 10px ui-monospace,monospace;letter-spacing:.13em;color:var(--teal)}.evidence h3{margin:10px 0 8px;font-size:17px}.evidence p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.filters button{padding:7px 11px;border:1px solid var(--line);border-radius:999px;background:#fff;color:#536a70;cursor:pointer}.filters button[aria-pressed=true]{border-color:var(--teal);background:#e8f6f6;color:#075d67}.matrix{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:14px 13px;border-bottom:1px solid #e5ecec;text-align:left;vertical-align:top}th{position:sticky;top:0;background:#f8fbfa;color:#52686e;font-size:11px;letter-spacing:.06em}tr:last-child td{border-bottom:0}.op{font-weight:750;min-width:150px}.op small{display:block;margin-top:5px;color:#789096;font:11px ui-monospace,monospace}.status{display:inline-block;padding:5px 7px;border-radius:999px;font:700 10px ui-monospace,monospace;white-space:nowrap}.pass{color:var(--green);background:#eaf8f2}.partial{color:var(--orange);background:#fff6e4}.blocked{color:var(--red);background:#fff1f3}.intentional{color:#4656b8;background:#eef1ff}.unverified{color:#647980;background:#eef2f2}tr[hidden]{display:none}
+.compare{overflow:hidden}.compare-title{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}.key{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:#315f69;color:#fff;font:700 13px ui-monospace,monospace}.compare-title h3{margin:0;font-size:18px}.compare-title p{margin:3px 0 0;color:var(--muted);font-size:12px}.compare-title .status{margin-left:auto}.visual-grid{display:grid;grid-template-columns:1fr 1fr .78fr}.visual{padding:16px;border-right:1px solid var(--line)}.visual:last-child{border:0}.visual-label{display:flex;justify-content:space-between;margin-bottom:10px;color:#496068;font:700 10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.08em}.visual-label span{color:#91a1a5;font-weight:500}
+.image-button{display:block;width:100%;padding:0;border:1px solid #d8e1e2;border-radius:12px;background:#eef3f2;overflow:hidden;cursor:zoom-in}.image-button img{display:block;width:100%;height:320px;object-fit:contain;background:#f4f7f6}.image-button img.tall{height:420px}.note{margin:10px 2px 0;color:var(--muted);font-size:12px;line-height:1.55}.thumbs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.thumbs img{height:150px;object-fit:cover}.delta{padding:16px}.delta h3{margin:0 0 12px}.delta-list{display:grid;gap:8px}.delta-item{padding:10px 11px;border-left:3px solid var(--red);border-radius:8px;background:#fbfdfd;color:#53676d;font-size:12px;line-height:1.55}.delta-item.good{border-left-color:var(--green)}.delta-item.warn{border-left-color:var(--amber)}.flow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:16px}.flow span{padding:5px 7px;border:1px solid var(--line);border-radius:7px;background:#fff;font:10px ui-monospace,monospace}.flow i{color:#9aabad;font-style:normal}
+.toolbar-grid{display:grid;grid-template-columns:repeat(4,1fr);overflow:hidden}.tool-card{padding:15px;border-right:1px solid var(--line)}.tool-card:last-child{border:0}.tool-card h3{margin:0 0 10px}.tool-card img{height:190px;object-fit:cover}.tool-card p{color:var(--muted);font-size:12px;line-height:1.55}
+.rail-review{display:grid;grid-template-columns:185px 1fr;gap:20px;padding:18px}.rail-crop{height:660px!important;object-fit:cover!important;object-position:left center!important}.rail-notes{display:grid;grid-template-columns:1fr 1fr;gap:10px}.rail-note{padding:15px;border:1px solid var(--line);border-radius:12px;background:#fbfdfd}.rail-note h3{margin:0 0 7px;font-size:15px}.rail-note p{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+.source-grid{display:grid;grid-template-columns:1fr 1fr;overflow:hidden}.source-box{padding:20px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.source-box:nth-child(2n){border-right:0}.source-box:nth-last-child(-n+2){border-bottom:0}.source-box h3{margin:0 0 10px}.source-box li,.source-box p{color:var(--muted);font-size:13px;line-height:1.65}.source-box code{color:#244f58}.source-box pre{overflow:auto;margin:0;padding:14px;border-radius:10px;background:#153640;color:#d9eeee;font:12px/1.65 ui-monospace,monospace}.source-shot{margin-top:12px}.source-shot img{height:180px;object-fit:cover;object-position:left top}
+.gates{overflow:hidden}.gate{display:grid;grid-template-columns:42px 1fr auto;align-items:center;gap:14px;padding:16px 18px;border-bottom:1px solid var(--line)}.gate:last-child{border:0}.gate .n{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#edf4f4;color:#075d67;font:700 11px ui-monospace,monospace}.gate b{font-size:14px}.gate p{margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.5}.foot,.footer{margin-top:26px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.9);font-size:12px;line-height:1.7;color:#60777c}.footer{font-family:ui-monospace,monospace;color:#7a9095}
+.lightbox{position:fixed;inset:0;z-index:99;display:grid;place-items:center;padding:34px;background:rgba(8,24,30,.88)}.lightbox[hidden]{display:none}.lightbox img{max-width:min(1400px,95vw);max-height:90vh;border-radius:12px;background:#fff}.lightbox button{position:fixed;right:22px;top:18px;border:0;background:transparent;color:#fff;font-size:34px;cursor:pointer}
+@media(max-width:940px){.hero{grid-template-columns:1fr}.evidence{grid-template-columns:1fr 1fr}.visual-grid{grid-template-columns:1fr}.visual{border-right:0;border-bottom:1px solid var(--line)}.toolbar-grid{grid-template-columns:1fr 1fr}.rail-review{grid-template-columns:1fr}.rail-crop{height:350px!important;object-position:left top!important}.source-grid{grid-template-columns:1fr}.source-box{border-right:0!important;border-bottom:1px solid var(--line)!important}.section-head{display:block}.section-head p{text-align:left;margin-top:6px}}
+@media(max-width:620px){.wrap{width:min(100% - 18px,1260px)}.hero-main{padding:28px 22px;min-height:auto}.evidence,.toolbar-grid,.rail-notes{grid-template-columns:1fr}.gate{grid-template-columns:38px 1fr}.gate .status{grid-column:2}.audit .meta{margin-left:0}.image-button img,.image-button img.tall{height:auto}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<main class="wrap">
+<div class="audit"><span class="flag">CORRECTION ROUND · OFFSCREEN</span><span>2026-08-21 计划已落地：toolbar 幂等、picker 状态机、Shapes 三列与闭合边、Rail frost、Draw 同源图标与圆形 preset。Focused offscreen 242 passed。真实 Cocoa 连点矩阵本轮未重跑，故不写视觉 GO。</span><span class="meta">Offscreen 2026-08-21 · branch codex/ultraview-authoring-tools · parent c00d9f73</span></div>
+
+<section class="hero">
+<div class="hero-main">
+<div class="eyebrow">TRACELAB ULTRAVIEW / MIRO POST-IMPLEMENTATION REVIEW</div>
+<h1>五个前台缺陷已有自动化合同，<br>但 Cocoa 连点矩阵还没重跑。</h1>
+<p class="lede">纠偏轮按计划改了五件事：<b>selection toolbar 只在 schema 变化时重建</b>；<b>format picker 变成 toggle/replace，并丢掉旧 geometry</b>；<b>Shapes 三列绘制且 Triangle/Rhombus 闭合</b>；<b>Rail 外壳改 frost、去掉实心白底</b>；<b>Draw 四个子工具同源矢量图标，preset 改圆形 chip</b>。Focused/boundary offscreen <b>242 passed / 0 failed</b>。没有新的真实鼠标四帧，因此本页不把视觉验收写成 GO。</p>
+<div class="facts"><span class="fact good">W1–W5 代码已落地</span><span class="fact good">242 focused passed</span><span class="fact">Cocoa 连点矩阵未重跑</span><span class="fact">Select 隐藏为有意偏离</span></div>
+</div>
+<aside class="verdict"><div><div class="label">EXECUTIVE VERDICT</div><blockquote>Offscreen 合同已从 NEEDS REWORK 收口；前台视觉仍待 Cocoa 复验。</blockquote><p>用户 7 张图对应的根因都有测试：重复打开 picker、toolbar 幂等、闭合边像素、Rail 非白底、Draw 图标与圆形 preset。缺的是真实鼠标 before/open/second-click/after 四帧，不能用 offscreen 代替。</p><div class="stats"><div class="stat"><b>5</b><span>defects coded</span></div><div class="stat"><b>242</b><span>focused passed</span></div><div class="stat"><b>0</b><span>failed</span></div><div class="stat"><b>1</b><span>Cocoa matrix pending</span></div></div></div><div class="verdict-foot">FINAL ACCEPTANCE: OFFSCREEN GO · COCOA PENDING<br>Do not ship a visual GO until the live click matrix is re-shot.</div></aside>
+</section>
+
+<nav class="toc"><a href="#evidence">证据边界</a><a href="#matrix">操作矩阵</a><a href="#sticky">Sticky</a><a href="#shapes">Shapes</a><a href="#draw">Draw</a><a href="#text">Text</a><a href="#toolbar">工具条</a><a href="#rail">Rail</a><a href="#source">测试与源码</a><a href="#gate">收口门</a></nav>
+
+<section class="section" id="evidence">
+<div class="section-head"><h2>证据边界</h2><p>视觉用用户给出的 Miro 截图；行为用 Miro 官方文档；TraceLab 使用稳定后源码、focused offscreen 与真实 Cocoa 鼠标操作。无障碍 click 的假阴性已排除，不写入产品结论。</p></div>
+<div class="panel evidence">
+<article><div class="source">MIRO VISUAL</div><h3>4 张用户基准</h3><p>Sticky、Shapes、Draw、Text 的 panel / toolbar 结构，不用记忆补画。</p></article>
+<article><div class="source">MIRO BEHAVIOR</div><h3>官方 Help Center</h3><p>N/T/S/P、one-shot、Stack、3 preset、Eraser/Lasso、Text formatting。</p></article>
+<article><div class="source">TRACELAB FOREGROUND</div><h3>真实鼠标 + 键盘</h3><p>入口用坐标 click；N/T/S/P/V；选色、创建、选择、picker 应用均实际执行。</p></article>
+<article><div class="source">AUTOMATION BOUNDARY</div><h3>Focused gate 已全绿</h3><p>最终提交已迁移旧几何、强调归属、preset 尺寸与 overlay transport 合同：156 passed。</p></article>
+</div>
+</section>
+
+<section class="section" id="matrix">
+<div class="section-head"><h2>每个操作：Miro vs Post-Grok TraceLab</h2><p>“通过”表示当前稳定 Cocoa 实例中真实完成；“部分”表示主链成立但还有 UI/覆盖缺口。</p></div>
+<div class="filters"><button data-filter="all" aria-pressed="true">全部 18</button><button data-filter="pass" aria-pressed="false">通过</button><button data-filter="partial" aria-pressed="false">部分</button><button data-filter="blocked" aria-pressed="false">阻断</button><button data-filter="intentional" aria-pressed="false">有意偏离</button><button data-filter="unverified" aria-pressed="false">未验证</button></div>
+<div class="panel matrix"><table>
+<thead><tr><th>操作</th><th>Miro 结果</th><th>TraceLab Post-Grok 结果</th><th>判断</th><th>状态</th></tr></thead>
+<tbody>
+<tr data-status="intentional"><td class="op">01 · Select / 退出<small>V / Esc</small></td><td>Miro Creation toolbar 固定 Select/Hand。</td><td>release rail 继续不显示鼠标按钮；V 实测回内部 Select。</td><td>符合用户决定；不应把可见 Select 加回来。</td><td><span class="status intentional">INTENTIONAL</span></td></tr>
+<tr data-status="pass"><td class="op">02 · Rail 节奏<small>scan top → bottom</small></td><td>小图标、明确间距、同一家族。</td><td>outline Sticky/T/Shapes/Pen；6 px desktop gap；divider clear 10 px。</td><td>旧图标“忽大忽小”和零间距已显著收敛。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">03 · 当前工具强调<small>real mouse click</small></td><td>单一当前 creation tool。</td><td>只有当前作者工具持有钛蓝→琥珀；鼠标不移开仍看到琥珀端。</td><td>用户点名问题已通过前台。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">04 · 打开 Sticky<small>N / rail click</small></td><td>窄纵向 16 色板。</td><td>真实 click 与 N 均打开 2×8 rail-adjacent palette。</td><td>结构与 Miro 参考基本一致。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">05 · Sticky 选色并放置<small>red → canvas</small></td><td>选色后 one-shot 放置并输入。</td><td>真实选择 red，palette 关闭，创建 red Sticky 并进入输入。</td><td>主链通过。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="partial"><td class="op">06 · Sticky Stack<small>repeat placement</small></td><td>Stack 连续放置。</td><td>Stack 可见、尺寸权重已降低；本次没有连续放置多枚的完整前台录像。</td><td>UI 通过，连续行为保留为复验项。</td><td><span class="status partial">PARTIAL</span></td></tr>
+<tr data-status="pass"><td class="op">07 · Text 创建<small>T / rail → click → type</small></td><td>直接进入创建，不弹空菜单。</td><td>真实创建 “Miro text”，点击外部提交。</td><td>操作模型对齐。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">08 · Text toolbar<small>select text</small></td><td>单一横向 shell，按组排列。</td><td>Sans/14/B/I/U/align/list/colors/link/object actions 在一个 48 px shell 中。</td><td>旧“药丸火车”已消失。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">09 · Font picker / apply<small>open → close → open</small></td><td>锚定当前 cell，应用整个 text box。</td><td>152–168 px 单列；同 key 再点关闭；A→B→A 不继承旧宽高；第三次打开与第一次 geometry 相同（offscreen）。</td><td>图 1/3 的残缺白条与非幂等宽度已有合同；Cocoa 连点未重拍。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">10 · Size picker reopen<small>open → close → open</small></td><td>紧凑锚定选项。</td><td>104–120 px 单列，row 32 px；第二次关闭无可见白条（offscreen）。</td><td>图 4 的塌缩 picker 已有合同；Cocoa 连点未重拍。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">11 · 打开 Shapes & Lines<small>S / rail click</small></td><td>新版 Miro 合并 Shapes + Lines，纵向目录。</td><td>三列 row：icon 20×20 / 名称左对齐 / 快捷键右对齐；224–240 px；Triangle/Rhombus path 已 closeSubpath。</td><td>图 5 的中央空洞与缺边已有合同；Cocoa 未重拍。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">12 · 选类型并创建<small>Rectangle → drag</small></td><td>选择后 panel 关闭，one-shot 创建。</td><td>真实鼠标点 Rectangle 后 panel 关闭；拖拽创建并回 Select。</td><td>主链通过。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">13 · Shape toolbar / picker<small>select + style</small></td><td>selection bounds + context toolbar。</td><td>工具条跟随选框；Fill/Stroke/Width 等单壳分组；overlay 可打开。</td><td>位置和 chrome 均明显对齐。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">14 · 打开 Draw<small>P / rail click</small></td><td>窄纵向 subrail。</td><td>真实 click 与 P 均打开 4 tool + 3 preset 的窄板。</td><td>旧三条横排和 8 色长条已删除。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">15 · Draw subtool / preset<small>Pen → Highlighter</small></td><td>工具互斥；每个 ink tool 有 3 preset。</td><td>四图标同源矢量；无白框；三个圆形 chip 编码颜色/粗细/选中环。rail glyph 仍是 canonical pen。</td><td>图 7 的残缺图标与线段药丸已有 rendered 合同；无 tooltip 识别仍待 Cocoa。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="pass"><td class="op">16 · V / Esc 生命周期<small>tool / picker</small></td><td>切到 Select 或其他工具退出；Esc 关局部 surface。</td><td>V 清除作者 active；Esc 关闭 picker 并保留 selection toolbar。</td><td>核心层级通过。</td><td><span class="status pass">PASS</span></td></tr>
+<tr data-status="unverified"><td class="op">17 · Compact / 边缘锚定<small>800×560 / four edges</small></td><td>toolbar 单行、panel/picker 全在 safe rect。</td><td>offscreen 覆盖 1182×768 与 800×560、四边 safe rect；真实 Cocoa 窗口未重拍。</td><td>offscreen 不能替代 Cocoa。</td><td><span class="status unverified">UNVERIFIED</span></td></tr>
+<tr data-status="pass"><td class="op">18 · Focused test gate<small>correction commit</small></td><td>实现与自动化合同一致。</td><td>14 个 focused/boundary files：242 passed / 0 failed，18.20 s。</td><td>重复 picker、toolbar 幂等、闭合边、Rail frost、Draw mask/chip 合同均已同步。</td><td><span class="status pass">PASS</span></td></tr>
+</tbody></table></div>
+</section>
+
+<section class="section" id="sticky">
+<div class="section-head"><h2>Sticky：结构已对齐</h2><p>旧版 4×4 大板已被替换为 Miro 方向的 2×8 窄色板；真实选色与创建已走通。</p></div>
+<article class="panel compare"><div class="compare-title"><span class="key">N</span><div><h3>Palette → color / Stack → canvas</h3><p>Miro 参考 vs Post-Grok 真实 click</p></div><span class="status pass">PASS</span></div>
+<div class="visual-grid">
+<div class="visual"><div class="visual-label">Miro reference <span>2×8</span></div><button class="image-button" data-lightbox><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-sticky-palette.png" alt="Miro Sticky 纵向色板"></button><p class="note">Generate 属于 Miro AI，TraceLab 不实现是明确产品边界。</p></div>
+<div class="visual"><div class="visual-label">TraceLab post-Grok <span>real mouse</span></div><button class="image-button" data-lightbox><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-sticky-real-click.jpeg" alt="Post-Grok Sticky 2×8"></button><div class="thumbs"><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-sticky-red-created.jpeg" alt="红色 Sticky 创建"></button><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-sticky-size.jpeg" alt="Sticky 紧凑字号 picker"></button></div></div>
+<aside class="delta"><h3>差异结论</h3><div class="delta-list"><div class="delta-item good"><b>已改：</b>2×8、窄面板、Stack 收窄、圆角 backing 正常。</div><div class="delta-item good"><b>已证：</b>真实 click、选 red、panel 关闭、创建并输入。</div><div class="delta-item warn"><b>剩余：</b>Stack 连续多枚与 800×560 未验。</div><div class="delta-item good"><b>边界：</b>不加入 Generate。</div></div><div class="flow"><span>click / N</span><i>→</i><span>2×8</span><i>→</i><span>color</span><i>→</i><span>create</span></div></aside>
+</div></article>
+</section>
+
+<section class="section" id="shapes">
+<div class="section-head"><h2>Shapes & Lines：从猜图标变成可读目录</h2><p>连接线和闭合形状保持合并，现在每行有名称、图标、分组和快捷键。</p></div>
+<article class="panel compare"><div class="compare-title"><span class="key">S</span><div><h3>Catalog → choose → one-shot drag</h3><p>Miro vertical catalog vs TraceLab typed catalog</p></div><span class="status pass">PASS</span></div>
+<div class="visual-grid">
+<div class="visual"><div class="visual-label">Miro reference <span>named rows</span></div><button class="image-button" data-lightbox><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-shapes-menu.png" alt="Miro Shapes 菜单"></button><p class="note">Miro 的扩展 shapes library 不代表 TraceLab 必须复制全部能力。</p></div>
+<div class="visual"><div class="visual-label">TraceLab post-Grok <span>3 + 5 rows</span></div><button class="image-button" data-lightbox><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-shapes-real-click.jpeg" alt="Post-Grok Shapes 目录"></button><div class="thumbs"><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-shape-created.jpeg" alt="Shape 创建与工具条"></button><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-toolbar-picker.jpeg" alt="对象工具条 picker"></button></div></div>
+<aside class="delta"><h3>差异结论</h3><div class="delta-list"><div class="delta-item good"><b>已改：</b>单次 paint 画 icon/名称/快捷键三列，名称贴图标左对齐，不再走 native 居中。</div><div class="delta-item good"><b>已证：</b>Triangle/Rhombus 用 moveTo/lineTo/closeSubpath；catalog 与 author layer 66/100/150% 闭合边有墨。</div><div class="delta-item warn"><b>未证：</b>Cocoa 下三列紧凑感和缺边需真机再看。</div><div class="delta-item good"><b>边界：</b>不做 Block Arrow / Diagram。</div></div><div class="flow"><span>click / S</span><i>→</i><span>named row</span><i>→</i><span>drag</span></div></aside>
+</div></article>
+</section>
+
+<section class="section" id="draw">
+<div class="section-head"><h2>Draw：结构通过，图标还要抛光</h2><p>工具纵向、preset 纵向、常驻 8 色长条消失；剩下光学质量与 preset editor 复验。</p></div>
+<article class="panel compare"><div class="compare-title"><span class="key">P</span><div><h3>Tool → 3 presets → draw → V</h3><p>Pen / Highlighter / Eraser / Lasso</p></div><span class="status pass">PASS</span></div>
+<div class="visual-grid">
+<div class="visual"><div class="visual-label">Miro reference <span>vertical subrail</span></div><button class="image-button" data-lightbox><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-draw-panel.png" alt="Miro Draw subrail"></button><p class="note">Miro 官方：每个 ink tool 最多 3 preset，双击 preset 编辑。</p></div>
+<div class="visual"><div class="visual-label">TraceLab post-Grok <span>4 tools + 3 presets</span></div><button class="image-button" data-lightbox><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-draw-real-click.jpeg" alt="Post-Grok Draw panel"></button><div class="thumbs"><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-draw-highlighter-real.jpeg" alt="Highlighter presets"></button><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-draw-mouse-hover.jpeg" alt="Draw active hover"></button></div></div>
+<aside class="delta"><h3>差异结论</h3><div class="delta-list"><div class="delta-item good"><b>已改：</b>Pen/Highlighter/Eraser/Lasso 同源矢量；未选中无白框；preset 为圆形 chip。</div><div class="delta-item good"><b>已证：</b>四 alpha mask 不同、外圈 2px 无墨、选中淡蓝 cell + 蓝色外环（offscreen）。</div><div class="delta-item warn"><b>未证：</b>不看 tooltip 的真人识别、Cocoa 下 Eraser/Lasso 手势。</div><div class="delta-item good"><b>编辑器：</b>再点当前 preset 才打开，chip 本身不画假 affordance。</div></div><div class="flow"><span>click / P</span><i>→</i><span>tool</span><i>→</i><span>preset</span><i>→</i><span>V</span></div></aside>
+</div></article>
+</section>
+
+<section class="section" id="text">
+<div class="section-head"><h2>Text：从“low 大白板”变成真正 context toolbar</h2><p>入口直达、toolbar 单壳、分组、锚定 picker、选择并应用都已前台通过。</p></div>
+<article class="panel compare"><div class="compare-title"><span class="key">T</span><div><h3>Create → select → format → apply</h3><p>Miro one-shell toolbar vs TraceLab post-Grok</p></div><span class="status pass">PASS</span></div>
+<div class="visual-grid">
+<div class="visual"><div class="visual-label">Miro reference <span>single shell</span></div><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-text-toolbar.png" alt="Miro Text toolbar"></button><p class="note">字体、字号、格式、段落、颜色与对象动作在同一 surface。</p></div>
+<div class="visual"><div class="visual-label">TraceLab post-Grok <span>Serif applied</span></div><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-text-font.jpeg" alt="Post-Grok Text font picker"></button><div class="thumbs"><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-text-toolbar.jpeg" alt="Text toolbar"></button><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-text-serif-applied.jpeg" alt="Serif 应用结果"></button></div></div>
+<aside class="delta"><h3>差异结论</h3><div class="delta-list"><div class="delta-item good"><b>已改：</b>child border/gradient 泄漏消失，Font/Size 可读。</div><div class="delta-item good"><b>已证：</b>打开 Font，真实点 Serif 后关闭并更新 toolbar。</div><div class="delta-item good"><b>Picker：</b>字体 160 px；数字 104 px；不再固定 260 px。</div><div class="delta-item warn"><b>剩余：</b>compact overflow 与四边翻转未前台门。</div></div><div class="flow"><span>T</span><i>→</i><span>type</span><i>→</i><span>select</span><i>→</i><span>apply</span></div></aside>
+</div></article>
+</section>
+
+<section class="section" id="toolbar">
+<div class="section-head"><h2>对象工具条与二级 picker</h2><p>“按钮列车”和“大白板”已经被替换；四个状态均来自最新实例。</p></div>
+<div class="panel toolbar-grid">
+<article class="tool-card"><h3>Text</h3><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-text-toolbar.jpeg" alt="Text toolbar"></button><p>一个 shell；字体/格式/段落/对象动作有分组。</p><span class="status pass">PASS</span></article>
+<article class="tool-card"><h3>Sticky</h3><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-sticky-size.jpeg" alt="Sticky size picker"></button><p>auto/12/14/18/24 单列锚定。</p><span class="status pass">PASS</span></article>
+<article class="tool-card"><h3>Shape</h3><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-shape-created.jpeg" alt="Shape toolbar"></button><p>bounds + handles + 单壳属性条。</p><span class="status pass">PASS</span></article>
+<article class="tool-card"><h3>Connector</h3><button class="image-button" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-toolbar-picker.jpeg" alt="Connector width picker"></button><p>1/2/4/8 px overlay 真实打开。</p><span class="status pass">PASS</span></article>
+</div>
+</section>
+
+<section class="section" id="rail">
+<div class="section-head"><h2>Rail：用户点名的三件事都已改善</h2><p>间距拉开、作者图标同源、点击后保留琥珀端；可见鼠标按钮继续不加回。</p></div>
+<div class="panel rail-review"><button class="image-button" data-lightbox><img class="rail-crop" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-shapes-real-click.jpeg" alt="Post-Grok rail"></button>
+<div class="rail-notes">
+<article class="rail-note"><h3>01 · 间距 6 / 4</h3><p>desktop 6、compact 4；divider clear 10 / 8。作者四工具不再挤成一坨。</p></article>
+<article class="rail-note"><h3>02 · Outline 家族</h3><p>Sticky 折角、T、outline shapes、canonical pen；Draw 不随子工具换入口。</p></article>
+<article class="rail-note"><h3>03 · 唯一 primary fill</h3><p>author active &gt; panel open &gt; empty CTA &gt; persistent mode。</p></article>
+<article class="rail-note"><h3>04 · Hover 仍有琥珀</h3><p>真实鼠标停在入口，钛蓝—琥珀均可见，不再纯青。</p></article>
+<article class="rail-note"><h3>05 · Select 继续隐藏</h3><p>内部 V/Esc、选择、框选保留；不把第一个鼠标按钮加回。</p></article>
+<article class="rail-note"><h3>06 · 去掉实心白底</h3><p>外壳 frost + 圆角透明角；group/divider 全透明。offscreen 证明内部不是 #FFFEFD 长条；Cocoa 图 6 需重拍。</p></article>
+</div></div>
+</section>
+
+<section class="section" id="source">
+<div class="section-head"><h2>源码与测试：结构合同已收口</h2><p>本报告不修改产品源码；以下是 Grok 最终提交 <code>c00d9f73</code> 的只读审查与 focused 结果。</p></div>
+<div class="panel source-grid">
+<article class="source-box"><h3>Rail ownership</h3><ul><li><code>chrome.py:105–115</code>：尺寸、gap、divider、margin。</li><li><code>chrome.py:138–151</code>：同源 author icon。</li><li><code>chrome.py:1041–1060</code>：唯一 primary fill owner。</li><li><code>author_chrome.py:274–319</code>：Sticky 2×8。</li></ul></article>
+<article class="source-box"><h3>四 UI 结构</h3><ul><li><code>author_chrome.py:548–589</code>：Shapes 单列目录。</li><li><code>author_chrome.py:845–930</code>：Draw subrail。</li><li><code>author_chrome.py:1164–1209</code>：content-driven picker。</li><li><code>author_chrome.py:1415–1454</code>：48 px toolbar 单壳。</li></ul></article>
+<article class="source-box"><h3>Focused result</h3><pre>Scope: 14 focused/boundary files
+Result: 242 passed in 18.20s
+
+Correction round added:
+  picker open/close/open geometry
+  toolbar schema-stable buttons
+  triangle/rhombus closing edge
+  rail frost vs white gutter
+  draw icon masks + circular chips</pre></article>
+<article class="source-box"><h3>判定</h3><p>Offscreen 已把用户 7 张图的根因收成合同。本页截图仍是纠偏前 Cocoa，所以视觉验收保持 PENDING，不提前写 GO。</p><button class="image-button source-shot" data-lightbox><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-postgrok-final-idle.jpeg" alt="纠偏前 Cocoa idle 画面，仅作历史对照"></button></article>
+</div>
+</section>
+
+<section class="section" id="gate">
+<div class="section-head"><h2>下一轮只做收口，不再重构方向</h2><p>当前结构已经接近 Miro；继续大改会重新引入风险。</p></div>
+<div class="panel gates">
+<article class="gate"><span class="n">DONE</span><div><b>W1–W5 纠偏 + focused 242 passed</b><p>toolbar 幂等、picker toggle/replace、三列 catalog、闭合边、Rail frost、Draw 图标与圆形 preset。</p></div><span class="status pass">COMPLETE</span></article>
+<article class="gate"><span class="n">P0</span><div><b>真实 Cocoa 连点矩阵</b><p>Font/Size 三次开关、A→B→A、四边、800×560、Triangle/Rhombus 边、Rail 无白底、Draw 无 tooltip 识别。</p></div><span class="status unverified">UNVERIFIED</span></article>
+<article class="gate"><span class="n">P1</span><div><b>连续行为与 badge 最坏组合</b><p>Stack 多枚、Pen/Highlighter 连画、Eraser/Lasso、Unplaced/Sync 同时有数字。</p></div><span class="status partial">FOREGROUND</span></article>
+</div>
+</section>
+
+<div class="foot"><b>Miro 操作来源：</b> <a href="https://help.miro.com/hc/en-us/articles/360017730553-Toolbars">Toolbars</a> · <a href="https://help.miro.com/hc/en-us/articles/20967864443410-Miro-s-new-simplified-user-interface">Simplified UI</a> · <a href="https://help.miro.com/hc/en-us/articles/360017572054-Sticky-notes">Sticky notes</a> · <a href="https://help.miro.com/hc/en-us/articles/360017572094-Text">Text</a> · <a href="https://help.miro.com/hc/en-us/articles/360017730573-Pen">Pen</a>。视觉结构以用户提供截图为基准，官方文档只校验语义。</div>
+<footer class="footer">Artifact: docs/analyzer/reviews/2026-08-20-ultraview-miro-post-grok-comparison.html<br>Evidence: Miro screenshots / official docs / post-Grok Cocoa (pre-correction) / 2026-08-21 focused offscreen 242 passed.<br>Scope: product code landed on W1–W5; Cocoa live matrix still pending; no visual GO.</footer>
+</main>
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true"><button id="closeLightbox" aria-label="关闭大图">×</button><img id="lightboxImage" alt=""></div>
+<script>
+const filters=[...document.querySelectorAll('[data-filter]')],rows=[...document.querySelectorAll('tbody tr[data-status]')];
+filters.forEach(button=>button.addEventListener('click',()=>{const f=button.dataset.filter;filters.forEach(b=>b.setAttribute('aria-pressed',String(b===button)));rows.forEach(row=>row.hidden=f!=='all'&&row.dataset.status!==f)}));
+const box=document.querySelector('#lightbox'),boxImage=document.querySelector('#lightboxImage');const close=()=>{box.hidden=true;boxImage.removeAttribute('src')};
+document.querySelectorAll('[data-lightbox]').forEach(button=>button.addEventListener('click',()=>{const img=button.querySelector('img');boxImage.src=img.src;boxImage.alt=img.alt;box.hidden=false;document.querySelector('#closeLightbox').focus()}));
+document.querySelector('#closeLightbox').addEventListener('click',close);box.addEventListener('click',e=>{if(e.target===box)close()});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!box.hidden)close()});
+</script>
+</body>
+</html>

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QRect, Qt
 from PyQt5.QtGui import QColor, QImage, QPainter
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QMenu, QToolButton, QWidget
@@ -37,6 +37,7 @@ from mf4_analyzer.ui.ultraview_state import (
     BoardBox,
     ShapeObject,
     StickyObject,
+    TextObject,
     default_board,
     make_ref,
 )
@@ -344,3 +345,99 @@ def test_mode_and_panel_buttons_render_start_and_end_pixels(qtbot, qapp):
     assert "UV_RAIL_ACTIVE_START" in qss
     assert "qlineargradient" in qss
     del host
+
+
+def _visible_control_keys(toolbar: SelectionToolbar) -> tuple[str, ...]:
+    keys = []
+    for index in range(toolbar._body_layout.count()):
+        widget = toolbar._body_layout.itemAt(index).widget()
+        if isinstance(widget, QToolButton) and widget.isVisible():
+            key = widget.property("formatKey")
+            if key:
+                keys.append(str(key))
+    return tuple(keys)
+
+
+def test_same_selection_refresh_reuses_toolbar_buttons_and_geometry(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "id-0")
+    text = TextObject("t-id", "text", box=BoardBox(4.0, 8.0, 4.0, 2.0), text="Hello")
+    harness.board.author_objects = [text]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("t-id")
+    free.sync_selection_projection()
+    _refresh(harness.page)
+    toolbar = harness.page.selection_toolbar()
+    assert toolbar.isVisible()
+    font = toolbar.button("font_role")
+    size = toolbar.button("font_size")
+    assert font is not None and size is not None
+    before_rect = QRect(toolbar.geometry())
+    before_hint = toolbar.sizeHint()
+    before_keys = _visible_control_keys(toolbar)
+    before_dividers = toolbar.group_dividers()
+    font_rect = QRect(font.geometry())
+    size_rect = QRect(size.geometry())
+    divider_xs = tuple(divider.mapTo(toolbar, divider.rect().topLeft()).x() for divider in before_dividers)
+    assert font.x() < size.x()
+    assert not any(font.geometry().right() < x < size.x() for x in divider_xs)
+    _refresh(harness.page)
+    assert toolbar.button("font_role") is font
+    assert toolbar.button("font_size") is size
+    assert QRect(toolbar.geometry()) == before_rect
+    assert toolbar.sizeHint() == before_hint
+    assert _visible_control_keys(toolbar) == before_keys
+    assert toolbar.group_dividers() == before_dividers
+    assert QRect(font.geometry()) == font_rect
+    assert QRect(size.geometry()) == size_rect
+
+
+def test_picker_open_same_schema_refresh_does_not_rebuild_or_collapse(qtbot, qapp):
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.resize(1182, 768)
+    QApplication.processEvents()
+    free, _cards = _prepare_free_grid(harness, qtbot, "pick-0")
+    text = TextObject("t1", "text", box=BoardBox(4.0, 8.0, 4.0, 2.0), text="Hello")
+    harness.board.author_objects = [text]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("t1")
+    free.sync_selection_projection()
+    _refresh(harness.page)
+    toolbar = harness.page.selection_toolbar()
+    picker = harness.page.format_picker()
+    font = toolbar.button("font_role")
+    assert font is not None
+    QTest.mouseClick(font, Qt.LeftButton)
+    QApplication.processEvents()
+    assert picker.isVisible()
+    before_overlay = harness.page.canvas_host().active_overlay()
+    before_key = harness.page._format_picker_key
+    before_toolbar = QRect(toolbar.geometry())
+    before_picker = QRect(picker.geometry())
+    before_content = picker.content_size()
+    before_choices = sum(
+        1
+        for child in picker.findChildren(QToolButton)
+        if child.isVisible() and child.property("choiceValue") is not None
+    )
+    before_keys = _visible_control_keys(toolbar)
+    QApplication.processEvents()
+    _refresh(harness.page)
+    QApplication.processEvents()
+    assert harness.page.canvas_host().active_overlay() == before_overlay
+    assert harness.page._format_picker_key == before_key == "font_role"
+    assert picker.isVisible() is True
+    assert QRect(toolbar.geometry()) == before_toolbar
+    assert QRect(picker.geometry()) == before_picker
+    assert picker.content_size() == before_content
+    assert before_choices == 3
+    assert _visible_control_keys(toolbar) == before_keys
+    assert toolbar.button("font_role") is font
+    QTest.mouseClick(font, Qt.LeftButton)
+    QApplication.processEvents()
+    assert picker.isVisible() is False
+    assert harness.page._format_picker_key == ""
+    assert QRect(toolbar.geometry()) == before_toolbar

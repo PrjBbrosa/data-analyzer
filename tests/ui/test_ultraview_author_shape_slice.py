@@ -1,8 +1,11 @@
 """M3 Shape vertical slice: five closed shapes, no connectors."""
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QPoint, Qt
-from PyQt5.QtGui import QInputMethodEvent, QMouseEvent
+import math
+
+import pytest
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, Qt
+from PyQt5.QtGui import QColor, QImage, QInputMethodEvent, QMouseEvent, QPainter, QPainterPath, QPen
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QLineEdit, QMenu, QToolButton
 
@@ -18,6 +21,8 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import (
     hit_box_handle,
     pixels_to_board_point,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.author_render import draw_author_objects, shape_path
+from mf4_analyzer.ui.chart_stack.ultraview.free_grid import GridMetrics
 from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
     CLOSED_SHAPE_TYPES,
     SHAPE_DEFAULT_HEIGHT,
@@ -675,3 +680,196 @@ def test_presentation_overview_template_do_not_create(qtbot):
     _click_blank(harness.page._free_grid)
     assert harness.board.author_objects == []
     assert sink.undo == []
+
+
+_CLOSED_SHAPE_KINDS = ("triangle", "rhombus")
+_CLOSED_SHAPE_ZOOMS = (1.0, 0.66, 1.5)
+_STROKE_PEN_PX = 2.0
+_PATH_EPS = 1e-6
+
+
+def _base_grid_metrics() -> GridMetrics:
+    return GridMetrics(
+        board_width=640,
+        board_height=420,
+        column_width=120,
+        row_height=88,
+        gutter=16,
+        padding=20,
+        resolution=2,
+    )
+
+
+def _grid_metrics_at_zoom(zoom: float) -> GridMetrics:
+    base = _base_grid_metrics()
+    if abs(zoom - 1.0) < 1e-12:
+        return base
+    return GridMetrics(
+        board_width=base.board_width,
+        board_height=base.board_height,
+        column_width=base.column_width,
+        row_height=base.row_height,
+        gutter=base.gutter,
+        padding=base.padding,
+        resolution=base.resolution,
+        scale=zoom,
+        base=base,
+    )
+
+
+def _shape_vertices(kind: str, rect: QRectF) -> tuple[QPointF, ...]:
+    center = rect.center()
+    if kind == "triangle":
+        return (
+            QPointF(center.x(), rect.top()),
+            QPointF(rect.right(), rect.bottom()),
+            QPointF(rect.left(), rect.bottom()),
+        )
+    if kind in {"rhombus", "diamond"}:
+        return (
+            QPointF(center.x(), rect.top()),
+            QPointF(rect.right(), center.y()),
+            QPointF(center.x(), rect.bottom()),
+            QPointF(rect.left(), center.y()),
+        )
+    raise AssertionError(f"unsupported closed-shape kind: {kind}")
+
+
+def _points_close(left: QPointF, right: QPointF, eps: float = _PATH_EPS) -> bool:
+    return abs(left.x() - right.x()) <= eps and abs(left.y() - right.y()) <= eps
+
+
+def _assert_shape_path_closed(path: QPainterPath, start: QPointF) -> None:
+    assert path.elementCount() >= 4
+    first = path.elementAt(0)
+    assert first.type == QPainterPath.MoveToElement
+    assert abs(first.x - start.x()) <= _PATH_EPS
+    assert abs(first.y - start.y()) <= _PATH_EPS
+    last = path.elementAt(path.elementCount() - 1)
+    assert last.type == QPainterPath.LineToElement
+    assert abs(last.x - start.x()) <= _PATH_EPS
+    assert abs(last.y - start.y()) <= _PATH_EPS
+    assert _points_close(path.currentPosition(), start)
+
+
+def _closing_edge_samples(start: QPointF, end: QPointF) -> tuple[tuple[float, float], ...]:
+    dx = end.x() - start.x()
+    dy = end.y() - start.y()
+    length = math.hypot(dx, dy)
+    assert length > 12.0
+    ux, uy = dx / length, dy / length
+    mid_x = start.x() + dx * 0.5
+    mid_y = start.y() + dy * 0.5
+    return (
+        (mid_x, mid_y),
+        (mid_x - ux * 3.0, mid_y - uy * 3.0),
+        (mid_x + ux * 3.0, mid_y + uy * 3.0),
+    )
+
+
+def _stroke_path_image(path: QPainterPath, width: int, height: int) -> QImage:
+    image = QImage(width, height, QImage.Format_ARGB32)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    try:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(24, 48, 57, 255), _STROKE_PEN_PX))
+        painter.drawPath(path)
+    finally:
+        painter.end()
+    return image
+
+
+def _assert_closing_edge_has_ink(image: QImage, vertices: tuple[QPointF, ...]) -> None:
+    closing_start = vertices[-1]
+    closing_end = vertices[0]
+    samples = _closing_edge_samples(closing_start, closing_end)
+    assert len({(round(x), round(y)) for x, y in samples}) == 3
+    for x, y in samples:
+        px = int(round(x))
+        py = int(round(y))
+        assert 1 <= px < image.width() - 1
+        assert 1 <= py < image.height() - 1
+        assert image.pixelColor(px, py).alpha() > 0
+
+
+@pytest.mark.parametrize("kind", _CLOSED_SHAPE_KINDS)
+def test_triangle_and_rhombus_shape_path_subpath_is_closed(qapp, kind):
+    rect = QRectF(20.0, 16.0, 120.0, 80.0)
+    path = shape_path(kind, rect)
+    vertices = _shape_vertices(kind, rect)
+    _assert_shape_path_closed(path, vertices[0])
+
+
+def test_diamond_shape_path_is_closed_rhombus_alias(qapp):
+    rect = QRectF(20.0, 16.0, 120.0, 80.0)
+    diamond = shape_path("diamond", rect)
+    rhombus = shape_path("rhombus", rect)
+    vertices = _shape_vertices("rhombus", rect)
+    _assert_shape_path_closed(diamond, vertices[0])
+    assert diamond.elementCount() == rhombus.elementCount()
+    for index in range(diamond.elementCount()):
+        left = diamond.elementAt(index)
+        right = rhombus.elementAt(index)
+        assert left.type == right.type
+        assert abs(left.x - right.x) <= _PATH_EPS
+        assert abs(left.y - right.y) <= _PATH_EPS
+
+
+@pytest.mark.parametrize("kind", _CLOSED_SHAPE_KINDS)
+@pytest.mark.parametrize("zoom", _CLOSED_SHAPE_ZOOMS)
+def test_shape_path_stroke_paints_closing_edge_at_zoom(qapp, kind, zoom):
+    rect = QRectF(24.0, 24.0, 120.0 * zoom, 80.0 * zoom)
+    path = shape_path(kind, rect)
+    vertices = _shape_vertices(kind, rect)
+    _assert_shape_path_closed(path, vertices[0])
+    image = _stroke_path_image(
+        path,
+        int(math.ceil(rect.right() + 24.0)),
+        int(math.ceil(rect.bottom() + 24.0)),
+    )
+    _assert_closing_edge_has_ink(image, vertices)
+
+
+@pytest.mark.parametrize("kind", _CLOSED_SHAPE_KINDS)
+@pytest.mark.parametrize("zoom", _CLOSED_SHAPE_ZOOMS)
+def test_draw_author_objects_stroke_paints_closing_edge_at_zoom(qapp, kind, zoom):
+    metrics = _grid_metrics_at_zoom(zoom)
+    origin = (0.0, 0.0)
+    item = ShapeObject(
+        f"{kind}-closed",
+        "shape",
+        box=BoardBox(1.0, 1.0, 4.0, 3.0),
+        shape=kind,
+        fill_palette=None,
+        stroke_palette="ink",
+        stroke_width=2,
+    )
+    mapped = board_box_to_pixels(
+        (item.box.x, item.box.y, item.box.width, item.box.height),
+        metrics,
+        origin_offset=origin,
+    )
+    assert mapped is not None
+    rect = QRectF(*mapped)
+    vertices = _shape_vertices(kind, rect)
+    path = shape_path(kind, rect)
+    _assert_shape_path_closed(path, vertices[0])
+
+    width = int(math.ceil(rect.right() + 24.0))
+    height = int(math.ceil(rect.bottom() + 24.0))
+    image = QImage(width, height, QImage.Format_ARGB32)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    try:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        draw_author_objects(
+            painter,
+            (item,),
+            metrics,
+            origin_offset=origin,
+        )
+    finally:
+        painter.end()
+    _assert_closing_edge_has_ink(image, vertices)

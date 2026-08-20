@@ -5,7 +5,7 @@ import math
 
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSettings, Qt
-from PyQt5.QtGui import QMouseEvent, QPainter, QTabletEvent
+from PyQt5.QtGui import QColor, QImage, QMouseEvent, QPainter, QTabletEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QMenu, QToolButton
 
@@ -1000,3 +1000,123 @@ def test_lasso_handles_closed_open_self_intersect_and_short_paths():
         author_centers=(("note", (0.02, 0.0)),),
         card_centers=(),
     ) == ()
+
+
+def _render_widget(widget) -> QImage:
+    image = QImage(widget.size(), QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    widget.render(painter)
+    painter.end()
+    return image
+
+
+def _outer_corners_have_ink(image: QImage, alpha: int = 24) -> bool:
+    width, height = image.width(), image.height()
+    corners = (
+        (0, 0),
+        (1, 1),
+        (width - 1, 0),
+        (0, height - 1),
+        (width - 1, height - 1),
+        (width - 2, 1),
+        (1, height - 2),
+        (width - 2, height - 2),
+    )
+    return any(image.pixelColor(x, y).alpha() >= alpha for x, y in corners)
+
+
+def _alpha_mask(image: QImage) -> bytes:
+    return bytes(
+        image.pixelColor(x, y).alpha()
+        for y in range(image.height())
+        for x in range(image.width())
+    )
+
+
+def _has_solid_white_backing(image: QImage) -> bool:
+    white = 0
+    total = image.width() * image.height()
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.alpha() >= 240 and color.red() >= 250 and color.green() >= 250 and color.blue() >= 250:
+                white += 1
+    return white > total * 0.35
+
+
+def _mid_band_is_line_pill(image: QImage) -> bool:
+    mid = image.height() // 2
+    opaque = [image.pixelColor(x, mid).alpha() > 40 for x in range(image.width())]
+    run = 0
+    max_run = 0
+    for flag in opaque:
+        run = run + 1 if flag else 0
+        max_run = max(max_run, run)
+    if max_run < image.width() - 10:
+        return False
+    band = 0
+    total = 0
+    lo = max(0, mid - 1)
+    hi = min(image.height(), mid + 2)
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if image.pixelColor(x, y).alpha() <= 40:
+                continue
+            total += 1
+            if lo <= y < hi:
+                band += 1
+    return total > 0 and band / total >= 0.72
+
+
+def test_draw_tools_render_distinct_icons_without_clipping_or_white_backing(qtbot):
+    flyout = DrawPopover()
+    qtbot.addWidget(flyout)
+    flyout.show()
+    flyout.adjustSize()
+    QApplication.processEvents()
+    images = {}
+    for name in ("pen", "highlighter", "eraser", "lasso"):
+        button = flyout._tool_buttons[name]
+        button.setChecked(False)
+    QApplication.processEvents()
+    for name in ("pen", "highlighter", "eraser", "lasso"):
+        button = flyout._tool_buttons[name]
+        image = _render_widget(button)
+        images[name] = image
+        assert not _outer_corners_have_ink(image)
+        assert not _has_solid_white_backing(image)
+        assert image.pixelColor(1, 1).alpha() < 40
+    masks = {_alpha_mask(image) for image in images.values()}
+    assert len(masks) == 4
+    eraser = flyout.session_button("eraser")
+    lasso = flyout.session_button("lasso")
+    assert eraser is not None and lasso is not None
+    assert "整笔擦除" in eraser.toolTip()
+
+
+def test_draw_presets_are_circular_chips_not_line_pills(qtbot):
+    flyout = DrawPopover()
+    qtbot.addWidget(flyout)
+    flyout.show()
+    flyout.adjustSize()
+    QApplication.processEvents()
+    presets = flyout.preset_buttons("pen")
+    assert len(presets) == 3
+    for button in presets:
+        image = _render_widget(button)
+        assert not _mid_band_is_line_pill(image)
+        cx, cy = image.width() // 2, image.height() // 2
+        assert image.pixelColor(cx, cy).alpha() > 40
+        assert image.pixelColor(1, 1).alpha() < 40
+        assert image.pixelColor(image.width() - 2, 1).alpha() < 40
+    selected = presets[0]
+    selected.setChecked(True)
+    QApplication.processEvents()
+    selected_image = _render_widget(selected)
+    ring = selected_image.pixelColor(selected.width() // 2, 3)
+    center = selected_image.pixelColor(selected.width() // 2, selected.height() // 2)
+    assert ring.alpha() > 40
+    assert QColor(ring).blue() >= 180 or QColor(center).alpha() > 40
+    assert not _mid_band_is_line_pill(selected_image)
+    assert not flyout.preset_editor_visible()

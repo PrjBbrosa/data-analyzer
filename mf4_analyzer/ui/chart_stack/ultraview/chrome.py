@@ -24,6 +24,7 @@ from PyQt5.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
+    QPalette,
     QPen,
     QPixmap,
     QRadialGradient,
@@ -113,6 +114,7 @@ RAIL_DIVIDER_CLEAR_COMPACT = 8
 RAIL_DIVIDER_INSET = 8
 RAIL_MARGINS = (10, 8, 10, 8)
 RAIL_MARGINS_COMPACT = (6, 4, 6, 4)
+RAIL_RADIUS = 14
 RAIL_BADGE_MAX_HEIGHT = 18
 RAIL_BADGE_INSET = 2
 # Compatibility aliases: author buttons share the same rail box as panels.
@@ -186,6 +188,8 @@ UV_AMBER = QColor(titanium_color("amber"))
 UV_DANGER = QColor(titanium_color("danger"))
 UV_WASH = QColor(titanium_color("surface_tint"))
 UV_LINE = QColor(50, 86, 97, 59)
+UV_LINE_STRONG = QColor(42, 78, 89, 94)
+UV_FROST = QColor(255, 255, 254, 118)
 UV_INK = QColor(titanium_color("ink"))
 UV_MUTED = QColor(titanium_color("muted"))
 UV_PRESENTATION_ICON = QColor("#FFFFFF")
@@ -345,6 +349,26 @@ def _rail_button(
         accessible_name=accessible_name,
         size=RAIL_BUTTON_SIZE,
         icon_size=RAIL_ICON_SIZE,
+    )
+
+
+def _prepare_rail_pass_through(
+    widget: QWidget, *, object_name: str | None = None
+) -> None:
+    """Keep a rail child from painting an opaque backing through the frost."""
+    if object_name is not None:
+        widget.setObjectName(object_name)
+    widget.setAutoFillBackground(False)
+    widget.setAttribute(Qt.WA_StyledBackground, False)
+    widget.setAttribute(Qt.WA_TranslucentBackground, True)
+    widget.setAttribute(Qt.WA_NoSystemBackground, True)
+    widget.setProperty("railLayer", "passThrough")
+    palette = widget.palette()
+    palette.setColor(QPalette.Window, QColor(0, 0, 0, 0))
+    palette.setColor(QPalette.Base, QColor(0, 0, 0, 0))
+    widget.setPalette(palette)
+    widget.setStyleSheet(
+        'QWidget[railLayer="passThrough"] { background-color: transparent; }'
     )
 
 
@@ -759,7 +783,17 @@ class ToolRail(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("ultraViewToolRail")
+        self.setFrameShape(QFrame.NoFrame)
         self.setAttribute(Qt.WA_StyledBackground, True)
+        # WA_TranslucentBackground disables this frame's QSS fill; paintEvent
+        # owns the rounded frost so corner pixels stay transparent.
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
+        palette = self.palette()
+        palette.setColor(QPalette.Window, QColor(0, 0, 0, 0))
+        palette.setColor(QPalette.Base, QColor(0, 0, 0, 0))
+        self.setPalette(palette)
         self.setAcceptDrops(True)
         self.setProperty("surface", "island")
         self.setProperty("compact", "false")
@@ -1139,7 +1173,7 @@ class ToolRail(QFrame):
 
     def _make_rail_group(self) -> tuple[QWidget, QVBoxLayout]:
         host = QWidget(self)
-        host.setAttribute(Qt.WA_StyledBackground, False)
+        _prepare_rail_pass_through(host, object_name="ultraViewToolRailGroup")
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(self._group_gap())
@@ -1148,7 +1182,7 @@ class ToolRail(QFrame):
 
     def _add_rail_divider(self, layout: QVBoxLayout, object_name: str) -> None:
         wrap = QWidget(self)
-        wrap.setObjectName(f"{object_name}Wrap")
+        _prepare_rail_pass_through(wrap, object_name=f"{object_name}Wrap")
         wrap.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         inner = QVBoxLayout(wrap)
         clear = self._divider_clear()
@@ -1233,6 +1267,20 @@ class ToolRail(QFrame):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._position_badges()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(self.rect().adjusted(0, 0, -1, -1)),
+            float(RAIL_RADIUS),
+            float(RAIL_RADIUS),
+        )
+        painter.fillPath(path, UV_FROST)
+        painter.setPen(QPen(UV_LINE_STRONG, 1.0))
+        painter.drawPath(path)
 
     def set_compact(self, compact: bool) -> None:
         """Switch every rail icon between desktop 40px and compact 36px."""

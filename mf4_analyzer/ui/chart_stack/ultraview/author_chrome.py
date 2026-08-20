@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 import qtawesome as qta
 from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF, QRegion
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPolygonF, QRegion
 from PyQt5.QtWidgets import (
     QAbstractScrollArea,
     QApplication,
@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.popup_shell import apply_popup_shell
 
 from .author_render import shape_path
@@ -68,11 +69,23 @@ _SHAPE_CELL = 42
 _DRAW_CELL = 40
 _DRAW_PRESET = 36
 _DRAW_COLOR = 24
-_CATALOG_ROW_HEIGHT = 44
+_CATALOG_ROW_HEIGHT = 36
 _DRAW_COLORS = ("ink", "blue", "red", "yellow", "green", "pink", "teal", "purple")
 _PEN_WIDTHS = (2, 4, 8)
 _HIGHLIGHTER_WIDTHS = (8, 12, 16)
 _PICKER_GAP = 6
+_QWIDGETSIZE_MAX = 16777215
+_FONT_PICKER_MIN_WIDTH = 160
+_FONT_PICKER_MAX_WIDTH = 168
+_SIZE_PICKER_MIN_WIDTH = 104
+_SIZE_PICKER_MAX_WIDTH = 120
+_DRAW_TOOL_STYLE = (
+    "QToolButton {"
+    "min-width: 0; min-height: 0; padding: 0; margin: 0;"
+    "background-color: transparent; border: 0; border-radius: 8px; }"
+    "QToolButton:checked { background-color: #EEF1FF; }"
+    "QToolButton:hover { background-color: #F3F5F6; }"
+)
 
 
 class ToolFlyoutSurface(QFrame):
@@ -402,7 +415,7 @@ class _ShapeCellButton(QToolButton):
 
 
 class _CatalogRow(QToolButton):
-    """One icon + short name + optional shortcut row for Shapes & Connectors."""
+    """One paint system for icon, left title, and right shortcut."""
 
     def __init__(
         self,
@@ -415,30 +428,41 @@ class _CatalogRow(QToolButton):
         super().__init__(parent)
         self._kind = str(kind)
         self._family = str(family)
+        self._title = str(title)
+        self._shortcut = str(shortcut or "")
         self.setObjectName(f"ultraViewShapeCatalog{kind.title().replace('_', '')}Row")
         self.setProperty("catalogKind", self._kind)
         self.setProperty("catalogFamily", self._family)
         self.setCheckable(True)
         self.setFixedHeight(_CATALOG_ROW_HEIGHT)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.setText(title)
-        if shortcut:
-            self.setToolTip(f"{title} ({shortcut})")
+        self.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.setText("")
+        self.setIcon(QIcon())
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setAutoRaise(True)
+        self.setAutoFillBackground(False)
+        if self._shortcut:
+            self.setToolTip(f"{self._title} ({self._shortcut})")
+            self.setAccessibleName(f"{self._title} {self._shortcut}")
         else:
-            self.setToolTip(title)
-        self.setAccessibleName(title)
-        self.setShortcutLabel(shortcut)
+            self.setToolTip(self._title)
+            self.setAccessibleName(self._title)
         self.setStyleSheet(
             "QToolButton {"
             "background-color: transparent; border: 0; border-radius: 8px;"
-            "padding-left: 34px; text-align: left; color: #183039; }"
-            "QToolButton:checked { background-color: #EEF1FF; color: #4262FF; }"
-            "QToolButton:hover { background-color: #F3F5F6; }"
+            "padding: 0; margin: 0; }"
         )
 
     def setShortcutLabel(self, shortcut: str) -> None:  # noqa: N802
         self._shortcut = str(shortcut or "")
+        if self._shortcut:
+            self.setToolTip(f"{self._title} ({self._shortcut})")
+            self.setAccessibleName(f"{self._title} {self._shortcut}")
+        else:
+            self.setToolTip(self._title)
+            self.setAccessibleName(self._title)
+        self.update()
 
     def catalog_kind(self) -> str:
         return self._kind
@@ -446,23 +470,42 @@ class _CatalogRow(QToolButton):
     def catalog_family(self) -> str:
         return self._family
 
+    def catalog_title(self) -> str:
+        return self._title
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        super().leaveEvent(event)
+        self.update()
+
     def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
+        del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        icon_box = QRectF(8.0, 6.0, 24.0, 24.0)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        rect = QRectF(self.rect())
+        fill = QPainterPath()
+        fill.addRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0)
+        if self.isChecked():
+            painter.fillPath(fill, QColor("#EEF1FF"))
+        elif self.underMouse():
+            painter.fillPath(fill, QColor("#F3F5F6"))
+        icon_box = QRectF(12.0, (rect.height() - 20.0) / 2.0, 20.0, 20.0)
         painter.setPen(QPen(_INK, 1.6))
         painter.setBrush(QColor(66, 98, 255, 28) if self._family == "shape" else Qt.NoBrush)
         if self._family == "shape":
             path = shape_path(
                 self._kind,
-                icon_box.adjusted(2, 2, -2, -2),
+                icon_box.adjusted(1.0, 1.0, -1.0, -1.0),
                 corner_radius=6 if self._kind == "rounded_rectangle" else 0,
             )
             if not path.isEmpty():
                 painter.drawPath(path)
         else:
-            inset = icon_box.adjusted(2.0, 8.0, -2.0, -8.0)
+            inset = icon_box.adjusted(1.0, 6.0, -1.0, -6.0)
             path = QPainterPath()
             if self._kind == "elbow_arrow":
                 path.moveTo(inset.left(), inset.bottom())
@@ -482,11 +525,22 @@ class _CatalogRow(QToolButton):
                     QPointF(tip.x() - 6.0, tip.y() - 3.5),
                     QPointF(tip.x() - 6.0, tip.y() + 3.5),
                 ]))
+        title_color = QColor("#4262FF") if self.isChecked() else _INK
+        title_left = 46.0
+        shortcut_reserve = 36.0 if self._shortcut else 12.0
+        title_rect = QRectF(
+            title_left,
+            0.0,
+            max(8.0, rect.width() - title_left - shortcut_reserve),
+            rect.height(),
+        )
+        painter.setPen(title_color)
+        painter.drawText(title_rect, int(Qt.AlignVCenter | Qt.AlignLeft), self._title)
         if self._shortcut:
             painter.setPen(QColor("#66787E"))
             painter.drawText(
-                self.rect().adjusted(0, 0, -10, 0),
-                Qt.AlignVCenter | Qt.AlignRight,
+                rect.toRect().adjusted(0, 0, -12, 0),
+                int(Qt.AlignVCenter | Qt.AlignRight),
                 self._shortcut,
             )
 
@@ -555,7 +609,7 @@ class ShapePopover(ToolFlyoutSurface):
         for kind, title, shortcut, family in _SHAPE_CATALOG:
             if previous_family and family != previous_family:
                 spacer = QWidget(host)
-                spacer.setFixedHeight(8)
+                spacer.setFixedHeight(6)
                 layout.addWidget(spacer)
                 divider = QFrame(host)
                 divider.setObjectName("ultraViewShapeCatalogDivider")
@@ -564,7 +618,7 @@ class ShapePopover(ToolFlyoutSurface):
                 divider.setStyleSheet("background-color: rgba(50, 86, 97, 40); border: 0;")
                 layout.addWidget(divider)
                 after = QWidget(host)
-                after.setFixedHeight(8)
+                after.setFixedHeight(6)
                 layout.addWidget(after)
             button = _CatalogRow(kind, family, title, shortcut, host)
             button.clicked.connect(self._on_cell_clicked)
@@ -737,29 +791,46 @@ _ERASER_TOOLTIP = "橡皮擦 · 整笔擦除"
 _LASSO_TOOLTIP = "套索 · 按对象中心选择"
 
 
+def _draw_subtool_icon(tool: str) -> QIcon:
+    factories = {
+        "pen": Icons.ultraview_draw_pen,
+        "highlighter": Icons.ultraview_draw_highlighter,
+        DRAW_ERASER: Icons.ultraview_draw_eraser,
+        DRAW_LASSO: Icons.ultraview_draw_lasso,
+    }
+    factory = factories.get(str(tool))
+    if factory is None:
+        return QIcon()
+    return factory(color=QColor("#183039"))
+
+
+def _preset_dot_diameter(width_px: float) -> float:
+    clamped = max(2.0, min(16.0, float(width_px)))
+    return 8.0 + (clamped - 2.0) * (12.0 / 14.0)
+
+
 class _DrawPresetButton(QToolButton):
-    """40×40 chip with a real color/width stroke preview."""
+    """Circular chip: outer hit circle, center color/width dot, selected ring."""
 
     def __init__(self, tool: str, preset: DrawPreset, index: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._tool = str(tool)
         self._preset = preset
         self._index = int(index)
-        zh, en = _DRAW_ROW_LABELS.get(self._tool, (self._tool, self._tool))
+        zh, _en = _DRAW_ROW_LABELS.get(self._tool, (self._tool, self._tool))
         self.setObjectName(f"ultraViewDrawPreset{self._tool.title()}{self._index}Button")
         self.setProperty("drawTool", self._tool)
         self.setProperty("presetIndex", self._index)
         self.setCheckable(True)
-        self.setFixedSize(_DRAW_CELL, _DRAW_CELL)
+        self.setFixedSize(_DRAW_PRESET, _DRAW_PRESET)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setToolTip(f"{zh} · {preset.palette} · {preset.width_px_100}px")
         self.setAccessibleName(f"{zh}预设 {self._index + 1}")
         self.setStyleSheet(
             "QToolButton {"
-            "background-color: #FFFFFF;"
-            "min-width: 0; min-height: 0; padding: 0; margin: 0;"
-            "border-width: 1px; border-style: solid; border-color: rgba(32, 48, 56, 40);"
-            "border-radius: 8px; }"
-            "QToolButton:checked { border-color: #4262FF; }"
+            "background-color: transparent; border: 0;"
+            "min-width: 0; min-height: 0; padding: 0; margin: 0; }"
         )
 
     def draw_tool(self) -> str:
@@ -771,28 +842,37 @@ class _DrawPresetButton(QToolButton):
     def preset(self) -> DrawPreset:
         return self._preset
 
-    def set_preset(self, preset: DrawPreset) -> None:
+    def set_preset(self, preset: DrawPreset, tool: str | None = None) -> None:
+        if tool is not None:
+            self._tool = str(tool)
+            self.setProperty("drawTool", self._tool)
         self._preset = preset
         zh, _en = _DRAW_ROW_LABELS.get(self._tool, (self._tool, self._tool))
         self.setToolTip(f"{zh} · {preset.palette} · {preset.width_px_100}px")
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
+        del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        color = QColor(*pen_color(self._preset.palette, tool=self._tool, theme=DEFAULT_THEME))
-        pen = QPen(color)
-        pen.setWidthF(max(2.0, min(10.0, float(self._preset.width_px_100))))
-        pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(pen)
+        box = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+        center = box.center()
+        outer_r = min(box.width(), box.height()) / 2.0
+        if self.isChecked():
+            painter.setPen(QPen(QColor(_SELECTION_BLUE), 2.0))
+        else:
+            painter.setPen(QPen(QColor(32, 48, 56, 50), 1.0))
         painter.setBrush(Qt.NoBrush)
-        mid = float(self.height()) / 2.0
-        painter.drawLine(QPointF(8.0, mid), QPointF(float(self.width()) - 8.0, mid))
+        painter.drawEllipse(center, outer_r - 1.0, outer_r - 1.0)
+        color = QColor(*pen_color(self._preset.palette, tool=self._tool, theme=DEFAULT_THEME))
+        radius = _preset_dot_diameter(self._preset.width_px_100) / 2.0
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(center, radius, radius)
 
 
 class _DrawSessionButton(QToolButton):
-    """40×40 Eraser/Lasso cell. Tooltip states whole-stroke erase; no precision."""
+    """Shared Draw subtool cell. Eraser tooltip states whole-stroke erase."""
 
     def __init__(self, tool: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -802,44 +882,22 @@ class _DrawSessionButton(QToolButton):
         self.setProperty("drawTool", self._tool)
         self.setCheckable(True)
         self.setFixedSize(_DRAW_CELL, _DRAW_CELL)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet(_DRAW_TOOL_STYLE)
+        self.setIcon(_draw_subtool_icon(self._tool))
+        self.setIconSize(QSize(20, 20))
         if self._tool == DRAW_ERASER:
             self.setToolTip(_ERASER_TOOLTIP)
             self.setAccessibleName("橡皮擦 整笔擦除")
+        elif self._tool == DRAW_LASSO:
+            self.setToolTip(_LASSO_TOOLTIP)
+            self.setAccessibleName(zh)
         else:
             self.setToolTip(f"{zh} · {en}")
             self.setAccessibleName(zh)
-        self.setStyleSheet(
-            "QToolButton {"
-            "background-color: #FFFFFF;"
-            "min-width: 0; min-height: 0; padding: 0; margin: 0;"
-            "border-width: 1px; border-style: solid; border-color: rgba(32, 48, 56, 40);"
-            "border-radius: 8px; }"
-            "QToolButton:checked { border-color: #4262FF; }"
-        )
 
     def draw_tool(self) -> str:
         return self._tool
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        color = QColor("#2A3A42")
-        pen = QPen(color)
-        pen.setWidthF(2.0)
-        pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
-        if self._tool == DRAW_ERASER:
-            painter.drawLine(QPointF(10.0, 26.0), QPointF(26.0, 10.0))
-            painter.drawRect(QRectF(18.0, 8.0, 10.0, 8.0))
-            return
-        path = QPainterPath()
-        path.moveTo(10.0, 24.0)
-        path.cubicTo(10.0, 12.0, 18.0, 8.0, 26.0, 14.0)
-        path.cubicTo(30.0, 18.0, 28.0, 28.0, 18.0, 28.0)
-        path.cubicTo(14.0, 28.0, 12.0, 24.0, 14.0, 20.0)
-        painter.drawPath(path)
 
 
 class DrawPopover(ToolFlyoutSurface):
@@ -927,31 +985,11 @@ class DrawPopover(ToolFlyoutSurface):
         tool_col.setContentsMargins(0, 0, 0, 0)
         tool_col.setSpacing(4)
         for tool in DRAW_SUBTOOLS:
-            zh, en = _DRAW_ROW_LABELS[tool]
+            button = _DrawSessionButton(tool, tools)
             if tool in (DRAW_ERASER, DRAW_LASSO):
-                button = _DrawSessionButton(tool, tools)
                 button.clicked.connect(self._on_session_clicked)
                 self._session_buttons[tool] = button
             else:
-                button = QToolButton(tools)
-                button.setObjectName(f"ultraViewDraw{tool.title()}Button")
-                button.setProperty("drawTool", tool)
-                button.setCheckable(True)
-                button.setFixedSize(_DRAW_CELL, _DRAW_CELL)
-                button.setStyleSheet(
-                    "QToolButton {"
-                    "min-width: 0; min-height: 0; padding: 0; margin: 0;"
-                    "background-color: transparent; border: 0; border-radius: 8px; }"
-                    "QToolButton:checked { background-color: #EEF1FF; }"
-                    "QToolButton:hover { background-color: #F3F5F6; }"
-                )
-                button.setToolTip(f"{zh} · {en}")
-                button.setAccessibleName(zh)
-                button.setIcon(qta.icon(
-                    "fa5s.highlighter" if tool == "highlighter" else "fa5s.pen",
-                    color="#183039",
-                ))
-                button.setIconSize(QSize(20, 20))
                 button.clicked.connect(self._on_tool_cell_clicked)
             self._tool_buttons[tool] = button
             tool_col.addWidget(button, 0, Qt.AlignHCenter)
@@ -1057,8 +1095,7 @@ class DrawPopover(ToolFlyoutSurface):
         presets = self._presets.get(ink_tool, ())
         for index, button in enumerate(self._buttons["pen"]):
             if index < len(presets):
-                button.set_preset(presets[index])
-                button.setProperty("drawTool", ink_tool)
+                button.set_preset(presets[index], tool=ink_tool)
                 button.setChecked(self._active_tool == ink_tool and index == self._active_preset)
             else:
                 button.setChecked(False)
@@ -1173,7 +1210,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         self._columns = 1
 
     def present_labels(self, choices: Sequence[tuple[object, str]], *, current=None) -> None:
-        self._clear_body()
+        self._begin_present()
         host = QWidget(self._content)
         host.setObjectName("ultraViewFormatChoiceList")
         column = QVBoxLayout(host)
@@ -1183,12 +1220,20 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         labels = []
         for value, label in choices:
             labels.append(str(label))
+        named = {item.lower() for item in labels}
+        is_font = bool(named & {"sans", "serif", "mono"})
+        is_size = bool(labels) and all(
+            item == "auto" or item.replace(" px", "").replace(".", "", 1).isdigit()
+            for item in labels
+        )
+        row_h = 32 if is_size else 34
+        for value, label in choices:
             button = QToolButton(host)
             button.setText(str(label))
             button.setProperty("choiceValue", value)
             button.setCheckable(True)
             button.setChecked(value == current)
-            button.setFixedHeight(36)
+            button.setFixedHeight(row_h)
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             button.setStyleSheet(
                 "QToolButton {"
@@ -1199,14 +1244,18 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
             )
             button.clicked.connect(self._on_clicked)
             column.addWidget(button)
-        named = {item.lower() for item in labels}
-        if named & {"sans", "serif", "mono"}:
-            self.min_width = 160
-        elif all(item == "auto" or item.replace(" px", "").replace(".", "", 1).isdigit() for item in labels):
-            self.min_width = 104
+        if is_font:
+            self.min_width = _FONT_PICKER_MIN_WIDTH
+            self.setMinimumWidth(_FONT_PICKER_MIN_WIDTH)
+            self.setMaximumWidth(_FONT_PICKER_MAX_WIDTH)
+        elif is_size:
+            self.min_width = _SIZE_PICKER_MIN_WIDTH
+            self.setMinimumWidth(_SIZE_PICKER_MIN_WIDTH)
+            self.setMaximumWidth(_SIZE_PICKER_MAX_WIDTH)
         else:
             self.min_width = 120
-        self.setMinimumWidth(self.min_width)
+            self.setMinimumWidth(120)
+            self.setMaximumWidth(168)
         self.inner_layout().addWidget(host)
 
     def present_palette(
@@ -1216,7 +1265,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         current=None,
         color_rgb: dict[object, tuple[int, int, int]] | None = None,
     ) -> None:
-        self._clear_body()
+        self._begin_present()
         host = QWidget(self._content)
         grid = QGridLayout(host)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -1225,6 +1274,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         self._columns = 4
         self.min_width = 0
         self.setMinimumWidth(0)
+        self.setMaximumWidth(_QWIDGETSIZE_MAX)
         for index, token in enumerate(tokens):
             button = QToolButton(host)
             button.setFixedSize(28, 28)
@@ -1252,7 +1302,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         self.inner_layout().addWidget(host)
 
     def present_shapes(self, shapes: Sequence[str], *, current: str | None = None) -> None:
-        self._clear_body()
+        self._begin_present()
         host = QWidget(self._content)
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1260,6 +1310,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         self._columns = 1
         self.min_width = _SHAPE_FLYOUT_MIN_WIDTH
         self.setMinimumWidth(_SHAPE_FLYOUT_MIN_WIDTH)
+        self.setMaximumWidth(240)
         catalog = {kind: (title, shortcut, family) for kind, title, shortcut, family in _SHAPE_CATALOG}
         for shape in shapes:
             title, shortcut, family = catalog.get(str(shape), (str(shape), "", "shape"))
@@ -1273,13 +1324,79 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
     def column_count(self) -> int:
         return int(self._columns)
 
-    def _clear_body(self) -> None:
+    def content_size(self) -> QSize:  # noqa: N802
+        """Natural size from the new host layout, not the live scroll viewport."""
+        self.ensurePolished()
+        self._inner.ensurePolished()
+        self._content.ensurePolished()
         layout = self.inner_layout()
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        margins = layout.contentsMargins() if layout is not None else None
+        extra_w = (margins.left() + margins.right()) if margins is not None else 0
+        extra_h = (margins.top() + margins.bottom()) if margins is not None else 0
+        width = extra_w
+        height = extra_h
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+            spacing = int(layout.spacing())
+            counted = 0
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                widget = item.widget() if item is not None else None
+                if widget is None:
+                    continue
+                widget.ensurePolished()
+                inner = widget.layout()
+                if inner is not None:
+                    inner.invalidate()
+                    inner.activate()
+                    hint = inner.sizeHint()
+                else:
+                    hint = widget.sizeHint()
+                if counted:
+                    height += spacing
+                width = max(width, int(hint.width()) + extra_w)
+                height += max(int(hint.height()), 0)
+                counted += 1
+        width = max(width, int(self.min_width or 0), 1)
+        height = max(height, 1)
+        max_w = int(self.maximumWidth())
+        max_h = int(self.maximumHeight())
+        if 0 < max_w < _QWIDGETSIZE_MAX:
+            width = min(width, max_w)
+        if 0 < max_h < _QWIDGETSIZE_MAX:
+            height = min(height, max_h)
+        return QSize(width, height)
+
+    def _begin_present(self) -> None:
+        self._replace_content_root()
+        self.min_width = 0
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(_QWIDGETSIZE_MAX)
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(_QWIDGETSIZE_MAX)
+        self._scroll.setMinimumSize(0, 0)
+        self._scroll.setMaximumSize(_QWIDGETSIZE_MAX, _QWIDGETSIZE_MAX)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+    def _replace_content_root(self) -> None:
+        old = self._scroll.takeWidget()
+        if old is not None:
+            old.hide()
+            old.setParent(None)
+            old.deleteLater()
+        self._content = QWidget()
+        self._content.setObjectName("ultraViewToolFlyoutContent")
+        self._content.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._content.setAutoFillBackground(False)
+        self._body = QVBoxLayout(self._content)
+        self._body.setContentsMargins(12, 12, 12, 12)
+        self._body.setSpacing(8)
+        self._scroll.setWidget(self._content)
+
+    def _clear_body(self) -> None:
+        self._begin_present()
 
     def _on_clicked(self) -> None:
         sender = self.sender()
@@ -1319,9 +1436,6 @@ class _FormatButton(QToolButton):
         super().__init__(parent)
         self._control = control
         self.setObjectName(f"ultraViewSelection{control.key.title().replace('_', '')}Button")
-        self.setProperty("formatKey", control.key)
-        self.setProperty("iconRole", control.icon_role)
-        self.setProperty("mixed", "true" if control.mixed else "false")
         self.setProperty("role", "selectionToolbarCell")
         self.setProperty("chrome", "ultraview")
         if control.key == "font_role":
@@ -1330,18 +1444,29 @@ class _FormatButton(QToolButton):
             self.setFixedSize(_SIZE_CELL_WIDTH, _CONTROL_SIZE)
         else:
             self.setFixedSize(_CONTROL_SIZE, _CONTROL_SIZE)
-        self.setCheckable(control.checkable)
-        self.setChecked(control.checked)
-        self.setEnabled(control.enabled)
         self.setAutoRaise(True)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.apply_control(control)
+
+    def control(self) -> ToolbarControl:
+        return self._control
+
+    def apply_control(self, control: ToolbarControl) -> None:
+        self._control = control
+        self.setProperty("formatKey", control.key)
+        self.setProperty("iconRole", control.icon_role)
+        self.setProperty("mixed", "true" if control.mixed else "false")
+        self.setCheckable(control.checkable)
+        self.setChecked(control.checked)
+        self.setEnabled(control.enabled)
         tip = control.tooltip or control.label
         self.setToolTip(tip)
         self.setAccessibleName(tip)
         if control.icon_role in {"value", "glyph"} and control.visible_text and not control.mixed:
             self.setText(control.visible_text)
             self.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            self.setIcon(QIcon())
         else:
             self.setText("")
             self.setToolButtonStyle(Qt.ToolButtonIconOnly)
@@ -1353,9 +1478,9 @@ class _FormatButton(QToolButton):
                     icon_name = "fa5s.unlock"
                 self.setIcon(qta.icon(icon_name, color="#183039"))
                 self.setIconSize(QSize(18, 18))
-
-    def control(self) -> ToolbarControl:
-        return self._control
+            else:
+                self.setIcon(QIcon())
+        self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -1412,11 +1537,19 @@ class _FormatButton(QToolButton):
                 painter.drawPath(path)
 
 
+def _controls_schema(kind: str, controls: Sequence[ToolbarControl]) -> tuple:
+    return (
+        str(kind),
+        tuple((control.key, str(control.group or ""), bool(control.wide), str(control.icon_role)) for control in controls),
+    )
+
+
 class SelectionToolbar(QFrame):
     """48 px icon-first selection chrome. Page owns when it is shown."""
 
     format_requested = pyqtSignal(str, object)
     more_requested = pyqtSignal()
+    schema_will_rebuild = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1427,6 +1560,9 @@ class SelectionToolbar(QFrame):
         self._kind = ""
         self._compact = False
         self._caps: SelectionCapabilities | None = None
+        self._schema: tuple | None = None
+        self._buttons_by_key: dict[str, QToolButton] = {}
+        self._dividers: list[QFrame] = []
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 6, 4, 6)
         layout.setSpacing(0)
@@ -1483,9 +1619,11 @@ class SelectionToolbar(QFrame):
 
     def set_kind(self, kind: str) -> None:
         checked = str(kind or "sticky")
+        self.schema_will_rebuild.emit()
         self._kind = checked
         self._clear_body()
         if checked in {"card", "card_author"}:
+            self._schema = _controls_schema(checked, ())
             self.set_compact(self._compact)
             return
         placeholders = {
@@ -1528,31 +1666,42 @@ class SelectionToolbar(QFrame):
                 ToolbarControl("lock", "锁定", "锁定", checkable=True, icon_role="icon", group="object"),
             ),
         }
-        for control in placeholders.get(checked, ()):
+        controls = placeholders.get(checked, ())
+        for control in controls:
             self._add_control(control)
+        self._schema = _controls_schema(checked, controls)
         self.set_compact(self._compact)
 
     def apply_capabilities(self, caps: SelectionCapabilities) -> None:
-        """Rebuild controls from a typed resolver result."""
+        """Update controls in place unless the control schema changed."""
         self._caps = caps
-        self._kind = str(caps.kind or "mixed")
-        self._clear_body()
-        if self._kind in {"card", "card_author", "empty", ""}:
+        kind = str(caps.kind or "mixed")
+        self._kind = kind
+        if kind in {"card", "card_author", "empty", ""}:
+            schema = _controls_schema(kind, ())
+            if schema != self._schema:
+                self.schema_will_rebuild.emit()
+                self._clear_body()
+                self._schema = schema
             self.set_compact(self._compact)
             return
+        schema = _controls_schema(kind, caps.controls)
+        if schema == self._schema and self._buttons_by_key:
+            self._update_controls(caps.controls)
+            self.set_compact(self._compact)
+            return
+        self.schema_will_rebuild.emit()
+        self._clear_body()
         for control in caps.controls:
             self._add_control(control)
+        self._schema = schema
         self.set_compact(self._compact)
 
     def button(self, key: str) -> QToolButton | None:
-        found = None
-        for widget in self.findChildren(QToolButton):
-            if widget.property("formatKey") != key:
-                continue
-            if widget is self._more or widget.isHidden():
-                continue
-            found = widget
-        return found
+        widget = self._buttons_by_key.get(str(key))
+        if widget is None or widget is self._more or widget.isHidden():
+            return None
+        return widget
 
     def more_button(self) -> QToolButton:
         return self._more
@@ -1575,13 +1724,12 @@ class SelectionToolbar(QFrame):
                 widget.deleteLater()
         self._wide_buttons = []
         self._last_group = ""
+        self._buttons_by_key = {}
+        self._dividers = []
+        self._schema = None
 
     def group_dividers(self) -> tuple[QFrame, ...]:
-        return tuple(
-            widget
-            for widget in self._body.findChildren(QFrame)
-            if widget.property("role") == "selectionToolbarDivider"
-        )
+        return tuple(self._dividers)
 
     def set_shape_type(self, shape: str) -> None:
         """Hide corner control for shapes that do not have semantic corners."""
@@ -1633,6 +1781,7 @@ class SelectionToolbar(QFrame):
         divider.setFixedSize(1, 24)
         inner.addWidget(divider, 0, Qt.AlignVCenter)
         self._body_layout.addWidget(wrap)
+        self._dividers.append(divider)
 
     def _add_control(self, control: ToolbarControl) -> None:
         group = str(control.group or "")
@@ -1644,8 +1793,18 @@ class SelectionToolbar(QFrame):
         button.clicked.connect(self._emit_format)
         self._body_layout.addWidget(button)
         button.show()
+        self._buttons_by_key[control.key] = button
         if control.wide:
             self._wide_buttons.append(button)
+
+    def _update_controls(self, controls: Sequence[ToolbarControl]) -> None:
+        self._wide_buttons = []
+        for control in controls:
+            button = self._buttons_by_key.get(control.key)
+            if isinstance(button, _FormatButton):
+                button.apply_control(control)
+            if control.wide and button is not None:
+                self._wide_buttons.append(button)
 
     def _add_body_button(
         self,

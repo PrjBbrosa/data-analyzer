@@ -371,23 +371,23 @@ def shape_path(
     elif kind == "oval":
         path.addEllipse(rect)
     elif kind == "rhombus":
-        path.addPolygon(QPolygonF([
+        _close_polygon(path, (
             QPointF(rect.center().x(), rect.top()),
             QPointF(rect.right(), rect.center().y()),
             QPointF(rect.center().x(), rect.bottom()),
             QPointF(rect.left(), rect.center().y()),
-        ]))
+        ))
     elif kind == "triangle":
-        path.addPolygon(QPolygonF([
+        _close_polygon(path, (
             QPointF(rect.center().x(), rect.top()),
             QPointF(rect.right(), rect.bottom()),
             QPointF(rect.left(), rect.bottom()),
-        ]))
+        ))
     elif kind == "block_arrow":
         center_y = rect.center().y()
         shaft = max(1.0, rect.height() * 0.28)
         head_x = rect.left() + rect.width() * 0.62
-        path.addPolygon(QPolygonF([
+        _close_polygon(path, (
             QPointF(rect.left(), center_y - shaft),
             QPointF(head_x, center_y - shaft),
             QPointF(head_x, rect.top()),
@@ -395,8 +395,18 @@ def shape_path(
             QPointF(head_x, rect.bottom()),
             QPointF(head_x, center_y + shaft),
             QPointF(rect.left(), center_y + shaft),
-        ]))
+        ))
     return path
+
+
+def _close_polygon(path: QPainterPath, points: tuple[QPointF, ...]) -> None:
+    """Closed stroke figure. ``addPolygon`` leaves the last edge open."""
+    if not points:
+        return
+    path.moveTo(points[0])
+    for point in points[1:]:
+        path.lineTo(point)
+    path.closeSubpath()
 
 
 def _shape_path(shape: str, rect: QRectF, factor: float) -> QPainterPath:
@@ -496,4 +506,4 @@ def _resolved_font_family(role: object) -> str:
     return QFont().defaultFamily()
 
 
-__all__ = ["draw_author_objects"]
+__all__ = ["draw_author_objects", "shape_path"]

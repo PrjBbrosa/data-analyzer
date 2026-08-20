@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
+import pytest
+from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QHoverEvent, QImage, QPainter
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QMenu, QToolButton, QWidget
@@ -27,6 +28,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     AUTHOR_TOOLS,
     ConnectorPopover,
     DrawPopover,
+    OVERLAY_AUTHOR_FORMAT,
     PANEL_LAYOUT,
     PANEL_LIBRARY,
     RAIL_BUTTON_SIZE,
@@ -44,7 +46,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import SAFE_MARGIN
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
-from mf4_analyzer.ui.ultraview_state import BoardBox, StickyObject, default_board
+from mf4_analyzer.ui.ultraview_state import BoardBox, StickyObject, TextObject, default_board
 from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
 from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_TITANIUM
 
@@ -631,10 +633,12 @@ def test_shapes_catalog_is_one_column_with_visible_labels_and_shortcuts(qtbot):
     assert len(rows) == 8
     xs = {button.x() for button in rows}
     assert len(xs) == 1
-    labels = " ".join(button.text() for button in rows)
+    labels = " ".join(button.catalog_title() for button in rows)
     assert "直线" in labels
     assert "矩形" in labels
-    assert 220 <= shapes.width() <= 248
+    assert all(not button.text() for button in rows)
+    assert all(36 <= button.height() <= 38 for button in rows)
+    assert 224 <= shapes.width() <= 240
     assert any("L" in (getattr(row, "_shortcut", "") or "") for row in rows)
 
 
@@ -694,12 +698,12 @@ def test_font_and_size_pickers_are_single_column_content_driven_surfaces(qtbot):
     picker.show()
     QApplication.processEvents()
     assert picker.column_count() == 1
-    assert 150 <= picker.width() <= 200
+    assert 152 <= picker.width() <= 168
     picker.present_labels(tuple((size, str(size)) for size in ("auto", 12, 14, 18, 24)), current=14)
     picker.adjustSize()
     QApplication.processEvents()
     assert picker.column_count() == 1
-    assert 90 <= picker.width() <= 130
+    assert 104 <= picker.width() <= 120
 
 
 def test_format_picker_is_anchored_to_trigger_and_inside_safe_rect(qtbot, qapp):
@@ -750,3 +754,239 @@ def test_flyout_corner_pixels_are_transparent_without_rectangular_backing(qtbot,
         assert image.pixelColor(x, y).alpha() < 30
     center = image.pixelColor(image.width() // 2, 24)
     assert center.alpha() > 200
+
+
+def _visible_control_keys(toolbar: SelectionToolbar) -> tuple[str, ...]:
+    keys = []
+    for index in range(toolbar._body_layout.count()):
+        widget = toolbar._body_layout.itemAt(index).widget()
+        if isinstance(widget, QToolButton) and widget.isVisible():
+            key = widget.property("formatKey")
+            if key:
+                keys.append(str(key))
+    return tuple(keys)
+
+
+def _visible_choice_count(picker: FormatChoiceFlyout) -> int:
+    return sum(
+        1
+        for child in picker.findChildren(QToolButton)
+        if child.isVisible() and child.property("choiceValue") is not None
+    )
+
+
+def _author_session(page, key: str) -> dict:
+    toolbar = page.selection_toolbar()
+    picker = page.format_picker()
+    trigger = toolbar.button(key)
+    snapshot = {
+        "overlay": page.canvas_host().active_overlay(),
+        "picker_key": page._format_picker_key,
+        "toolbar": QRect(toolbar.geometry()),
+        "hint": QSize(toolbar.sizeHint()),
+        "keys": _visible_control_keys(toolbar),
+        "trigger": QRect(trigger.geometry()) if trigger is not None else QRect(),
+        "picker": QRect(picker.geometry()),
+        "content": QSize(picker.content_size()),
+        "choices": _visible_choice_count(picker),
+        "picker_visible": picker.isVisible(),
+    }
+    QApplication.processEvents()
+    after = {
+        "overlay": page.canvas_host().active_overlay(),
+        "picker_key": page._format_picker_key,
+        "toolbar": QRect(toolbar.geometry()),
+        "hint": QSize(toolbar.sizeHint()),
+        "keys": _visible_control_keys(toolbar),
+        "trigger": QRect(trigger.geometry()) if trigger is not None else QRect(),
+        "picker": QRect(picker.geometry()),
+        "content": QSize(picker.content_size()),
+        "choices": _visible_choice_count(picker),
+        "picker_visible": picker.isVisible(),
+    }
+    assert after == snapshot
+    return snapshot
+
+
+def _prepare_text_selection(qtbot, qapp, size, box=BoardBox(4.0, 8.0, 4.0, 2.0)):
+    from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
+
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.resize(*size)
+    QApplication.processEvents()
+    free, _cards = _prepare_free_grid(harness, qtbot, "txt-0")
+    text = TextObject("t1", "text", box=box, text="Hello")
+    harness.board.author_objects = [text]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("t1")
+    free.sync_selection_projection()
+    harness.page._refresh_author_toolbar()
+    QApplication.processEvents()
+    return harness
+
+
+def _open_format_key(page, key: str):
+    toolbar = page.selection_toolbar()
+    button = toolbar.button(key)
+    assert button is not None
+    QTest.mouseClick(button, Qt.LeftButton)
+    QApplication.processEvents()
+    return button
+
+
+def _assert_picker_open_inside_safe(
+    harness, key: str, expected_choices: int, *, require_gap: bool = True
+) -> dict:
+    page = harness.page
+    toolbar = page.selection_toolbar()
+    picker = page.format_picker()
+    host = page.canvas_host()
+    snapshot = _author_session(page, key)
+    assert snapshot["overlay"] == OVERLAY_AUTHOR_FORMAT
+    assert snapshot["picker_key"] == key
+    assert snapshot["picker_visible"] is True
+    assert snapshot["choices"] == expected_choices
+    safe = host.contentsRect().adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)
+    assert snapshot["picker"].left() >= safe.left()
+    assert snapshot["picker"].top() >= safe.top()
+    assert snapshot["picker"].right() <= safe.right()
+    assert snapshot["picker"].bottom() <= safe.bottom()
+    assert snapshot["toolbar"].left() >= safe.left()
+    assert snapshot["toolbar"].top() >= safe.top()
+    assert snapshot["toolbar"].right() <= safe.right()
+    assert snapshot["toolbar"].bottom() <= safe.bottom()
+    assert not snapshot["picker"].intersects(snapshot["toolbar"])
+    trigger = toolbar.button(key)
+    assert trigger is not None
+    origin = trigger.mapTo(host, QPoint(0, 0))
+    below_gap = snapshot["picker"].top() - (origin.y() + trigger.height())
+    above_gap = origin.y() - snapshot["picker"].bottom()
+    if require_gap:
+        assert 4 <= below_gap <= 8 or 4 <= above_gap <= 8
+    return snapshot
+
+
+def _assert_picker_closed(page, key: str, toolbar_rect: QRect, keys: tuple[str, ...]) -> None:
+    snapshot = _author_session(page, key)
+    assert snapshot["picker_visible"] is False
+    assert snapshot["overlay"] != OVERLAY_AUTHOR_FORMAT
+    assert snapshot["picker_key"] == ""
+    assert snapshot["toolbar"] == toolbar_rect
+    assert snapshot["keys"] == keys
+
+
+@pytest.mark.parametrize("size", [(1182, 768), (800, 560)])
+@pytest.mark.parametrize(
+    ("key", "expected_choices", "min_w", "max_w"),
+    [
+        ("font_role", 3, 152, 168),
+        ("font_size", 9, 104, 120),
+    ],
+)
+def test_font_and_size_pickers_open_close_open_keep_geometry(
+    qtbot, qapp, size, key, expected_choices, min_w, max_w
+):
+    harness = _prepare_text_selection(qtbot, qapp, size)
+    page = harness.page
+    toolbar = page.selection_toolbar()
+    picker = page.format_picker()
+    assert toolbar.isVisible()
+    toolbar_before = QRect(toolbar.geometry())
+    keys_before = _visible_control_keys(toolbar)
+
+    _open_format_key(page, key)
+    first = _assert_picker_open_inside_safe(
+        harness, key, expected_choices, require_gap=(key == "font_role" and size[1] >= 720)
+    )
+    assert min_w <= first["picker"].width() <= max_w
+    assert first["toolbar"] == toolbar_before
+    assert first["keys"] == keys_before
+
+    _open_format_key(page, key)
+    _assert_picker_closed(page, key, toolbar_before, keys_before)
+
+    _open_format_key(page, key)
+    third = _assert_picker_open_inside_safe(
+        harness, key, expected_choices, require_gap=(key == "font_role" and size[1] >= 720)
+    )
+    assert third["picker"] == first["picker"]
+    assert third["content"] == first["content"]
+    assert third["choices"] == first["choices"]
+    assert third["toolbar"] == toolbar_before
+    assert picker.isVisible() is True
+
+
+@pytest.mark.parametrize("size", [(1182, 768), (800, 560)])
+def test_font_role_then_size_then_role_does_not_inherit_geometry(qtbot, qapp, size):
+    harness = _prepare_text_selection(qtbot, qapp, size)
+    page = harness.page
+    toolbar = page.selection_toolbar()
+    toolbar_rect = QRect(toolbar.geometry())
+    keys = _visible_control_keys(toolbar)
+
+    _open_format_key(page, "font_role")
+    font = _assert_picker_open_inside_safe(
+        harness, "font_role", 3, require_gap=size[1] >= 720
+    )
+    assert 152 <= font["picker"].width() <= 168
+
+    _open_format_key(page, "font_size")
+    size_shot = _assert_picker_open_inside_safe(harness, "font_size", 9, require_gap=False)
+    assert 104 <= size_shot["picker"].width() <= 120
+    assert size_shot["picker"].width() != font["picker"].width()
+    assert size_shot["picker"].height() != font["picker"].height()
+    assert size_shot["toolbar"] == toolbar_rect
+    assert size_shot["keys"] == keys
+
+    _open_format_key(page, "font_role")
+    again = _assert_picker_open_inside_safe(
+        harness, "font_role", 3, require_gap=size[1] >= 720
+    )
+    assert again["picker"] == font["picker"]
+    assert again["content"] == font["content"]
+    assert again["choices"] == 3
+    assert again["toolbar"] == toolbar_rect
+
+
+@pytest.mark.parametrize("size", [(1182, 768), (800, 560)])
+def test_picker_open_same_schema_refresh_keeps_toolbar_and_picker(qtbot, qapp, size):
+    harness = _prepare_text_selection(qtbot, qapp, size)
+    page = harness.page
+    _open_format_key(page, "font_role")
+    before = _assert_picker_open_inside_safe(
+        harness, "font_role", 3, require_gap=size[1] >= 720
+    )
+    font_btn = page.selection_toolbar().button("font_role")
+    page._refresh_author_toolbar()
+    QApplication.processEvents()
+    after = _assert_picker_open_inside_safe(
+        harness, "font_role", 3, require_gap=size[1] >= 720
+    )
+    assert after["toolbar"] == before["toolbar"]
+    assert after["picker"] == before["picker"]
+    assert after["keys"] == before["keys"]
+    assert page.selection_toolbar().button("font_role") is font_btn
+    assert page.format_picker().isVisible() is True
+
+
+@pytest.mark.parametrize("size", [(1182, 768), (800, 560)])
+@pytest.mark.parametrize(
+    "box",
+    [
+        BoardBox(8.0, 1.0, 4.0, 2.0),
+        BoardBox(8.0, 24.0, 4.0, 2.0),
+        BoardBox(0.5, 10.0, 4.0, 2.0),
+        BoardBox(18.0, 10.0, 4.0, 2.0),
+    ],
+)
+def test_text_toolbar_and_picker_stay_inside_safe_edges(qtbot, qapp, size, box):
+    harness = _prepare_text_selection(qtbot, qapp, size, box=box)
+    page = harness.page
+    toolbar = page.selection_toolbar()
+    assert toolbar.isVisible()
+    _open_format_key(page, "font_size")
+    _assert_picker_open_inside_safe(harness, "font_size", 9, require_gap=False)
+    _open_format_key(page, "font_size")
+    _assert_picker_closed(page, "font_size", QRect(toolbar.geometry()), _visible_control_keys(toolbar))

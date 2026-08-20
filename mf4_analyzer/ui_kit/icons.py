@@ -519,6 +519,101 @@ class Icons:
         return _line_icon(draw, c, size=20)
 
     @classmethod
+    def ultraview_draw_pen(cls, color=None):
+        """Draw-popover pen: nib, shaft, and a short freehand curve."""
+        c = color or GRAY
+
+        with _painting(20) as (pix, p):
+            p.setPen(_pen(c, 1.9))
+            p.setBrush(Qt.NoBrush)
+            p.drawLine(QPointF(10.8, 5.6), QPointF(8.6, 10.8))
+            p.drawLine(QPointF(14.2, 7.2), QPointF(12.0, 12.4))
+            p.drawLine(QPointF(10.8, 5.6), QPointF(14.2, 7.2))
+            p.drawLine(QPointF(9.4, 9.2), QPointF(12.8, 10.8))
+            nib = QPainterPath()
+            nib.moveTo(8.6, 10.8)
+            nib.lineTo(6.6, 14.6)
+            nib.lineTo(12.0, 12.4)
+            nib.closeSubpath()
+            p.drawPath(nib)
+            p.drawLine(QPointF(10.3, 11.6), QPointF(6.6, 14.6))
+            stroke = QPainterPath()
+            stroke.moveTo(5.4, 13.0)
+            stroke.cubicTo(5.4, 14.8, 7.6, 15.4, 8.8, 14.2)
+            stroke.cubicTo(9.6, 13.4, 9.8, 15.2, 11.2, 14.6)
+            p.drawPath(stroke)
+        return QIcon(pix)
+
+    @classmethod
+    def ultraview_draw_highlighter(cls, color=None):
+        """Draw-popover highlighter: wide chisel head plus a thick mark."""
+        c = color or GRAY
+
+        with _painting(20) as (pix, p):
+            p.setPen(_pen(c, 1.9))
+            p.setBrush(Qt.NoBrush)
+            barrel = QPainterPath()
+            barrel.moveTo(8.8, 5.4)
+            barrel.lineTo(13.6, 5.4)
+            barrel.lineTo(13.2, 11.4)
+            barrel.lineTo(8.4, 11.4)
+            barrel.closeSubpath()
+            p.drawPath(barrel)
+            p.drawLine(QPointF(8.8, 6.8), QPointF(13.4, 6.8))
+            chisel = QPainterPath()
+            chisel.moveTo(7.2, 11.4)
+            chisel.lineTo(14.6, 11.4)
+            chisel.lineTo(15.0, 13.6)
+            chisel.lineTo(6.8, 13.6)
+            chisel.closeSubpath()
+            p.drawPath(chisel)
+            p.setPen(_pen(c, 3.0))
+            p.drawLine(QPointF(6.6, 15.2), QPointF(14.4, 15.2))
+        return QIcon(pix)
+
+    @classmethod
+    def ultraview_draw_eraser(cls, color=None):
+        """Draw-popover eraser: tilted rubber block with a divider band."""
+        c = color or GRAY
+
+        with _painting(20) as (pix, p):
+            p.setPen(_pen(c, 1.9))
+            p.setBrush(Qt.NoBrush)
+            body = QPainterPath()
+            body.moveTo(5.6, 11.0)
+            body.lineTo(10.2, 5.6)
+            body.lineTo(14.8, 7.6)
+            body.lineTo(10.2, 13.0)
+            body.closeSubpath()
+            p.drawPath(body)
+            p.drawLine(QPointF(7.44, 11.80), QPointF(12.04, 6.40))
+            p.drawLine(QPointF(8.08, 12.08), QPointF(12.68, 6.68))
+        return QIcon(pix)
+
+    @classmethod
+    def ultraview_draw_lasso(cls, color=None):
+        """Draw-popover lasso: dashed organic loop with a start handle."""
+        c = color or GRAY
+
+        with _painting(20) as (pix, p):
+            p.setBrush(Qt.NoBrush)
+            loop = QPainterPath()
+            loop.moveTo(8.0, 9.2)
+            loop.cubicTo(5.4, 6.8, 8.0, 5.0, 11.2, 5.4)
+            loop.cubicTo(14.6, 5.8, 15.2, 9.4, 13.8, 12.0)
+            loop.cubicTo(12.2, 14.8, 8.0, 15.2, 6.4, 13.0)
+            loop.cubicTo(5.4, 11.6, 5.8, 10.2, 7.4, 9.4)
+            dash = _pen(c, 1.9)
+            dash.setCapStyle(Qt.FlatCap)
+            dash.setStyle(Qt.CustomDashLine)
+            dash.setDashPattern([1.25, 1.2])
+            p.setPen(dash)
+            p.drawPath(loop)
+            p.setPen(_pen(c, 1.9))
+            p.drawLine(QPointF(8.0, 9.2), QPointF(10.0, 12.2))
+        return QIcon(pix)
+
+    @classmethod
     def ultraview_author_select(cls, color=None):
         """Outline pointer for isolated chrome tests that still show Select."""
         c = color or GRAY

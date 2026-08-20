@@ -4427,8 +4427,8 @@ QScrollArea#ultraViewBoardScrollArea QWidget#qt_scrollarea_viewport {
 }
 
 /* Fixed canvas chrome.  Only these small hosts may carry the elevated island
- * treatment; cards stay border-led so a 24-card Board has no shadow cost. */
-QFrame#ultraViewToolRail,
+ * treatment; cards stay border-led so a 24-card Board has no shadow cost.
+ * ToolRail is frost, not a solid island — see the dedicated rule below. */
 QFrame#ultraViewBoardIsland,
 QFrame#ultraViewGlobalIsland,
 QFrame#ultraViewNavigationIsland,
@@ -4500,9 +4500,24 @@ QFrame#ultraViewSignalSpine {
     border-radius: 2px;
 }
 QFrame#ultraViewToolRail {
+    color: #203347;
     border-radius: 14px;
-    background-color: {{UV_SURFACE_SOFT}};
-    border-color: {{UV_LINE_STRONG}};
+}
+/* paintEvent owns the rounded frost; an opaque QSS fill would hide canvas
+ * show-through and square the corners. Keep the selector split so the
+ * island cascade does not restyle this shell. */
+QFrame#ultraViewToolRail {
+    background-color: transparent;
+    border-width: 0;
+    border-style: none;
+    border-color: transparent;
+}
+QWidget#ultraViewToolRailGroup,
+QFrame#ultraViewToolRail QWidget[railLayer="passThrough"] {
+    background-color: transparent;
+    border-width: 0;
+    border-style: none;
+    border-color: transparent;
 }
 
 /* Every short-lived panel shares one quiet material.  Its translucent outer
