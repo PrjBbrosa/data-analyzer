@@ -4,7 +4,7 @@ from __future__ import annotations
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QInputMethodEvent, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QFrame, QLineEdit, QMenu
+from PyQt5.QtWidgets import QApplication, QFrame, QLineEdit, QMenu, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_chrome import ToolFlyoutSurface
 from mf4_analyzer.ui.chart_stack.ultraview.author_edits import (
@@ -175,13 +175,9 @@ class _ConnectorHarness(_Harness):
 
 
 def _arm_connector(page, kind: str = "arrow") -> None:
-    button = page.tool_rail().tool_button(AUTHOR_TOOL_CONNECTOR)
-    assert button is not None and button.isEnabled()
-    QTest.mouseClick(button, Qt.LeftButton)
+    page.tool_rail().set_creation_enabled(True)
+    page._on_connector_selected(kind)
     QApplication.processEvents()
-    if page.interaction().last_connector() != kind:
-        page.connector_popover().choose_connector(kind)
-        QApplication.processEvents()
     assert page.interaction().active_tool() == TOOL_CONNECTOR
     assert page.interaction().last_connector() == kind
 
@@ -370,6 +366,7 @@ def test_l_shortcut_arms_last_used_type_and_does_not_steal_from_editor(qtbot):
     assert harness.page.interaction().active_tool() == TOOL_SELECT
     harness.page._on_connector_tool_shortcut()
     QApplication.processEvents()
+    assert TOOL_CONNECTOR not in harness.page.visible_author_tools()
     assert harness.page.interaction().active_tool() == TOOL_CONNECTOR
     assert harness.page.interaction().last_connector() == "elbow_arrow"
 
@@ -612,16 +609,33 @@ def test_style_toolbar_route_heads_color_width_dash_label_lock(qtbot):
     assert toolbar.kind() == "connector"
     for key in ("route", "start_head", "end_head", "color", "width", "dash", "label", "lock"):
         assert toolbar.button(key) is not None
+    def _pick(value) -> None:
+        popup = QApplication.activePopupWidget()
+        assert popup is not None
+        chips = [
+            child
+            for child in popup.findChildren(QToolButton)
+            if child.property("choiceValue") == value
+        ]
+        assert chips, value
+        QTest.mouseClick(chips[0], Qt.LeftButton)
+        QApplication.processEvents()
+
     QTest.mouseClick(toolbar.button("route"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("elbow")
     QTest.mouseClick(toolbar.button("end_head"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("none")
     QTest.mouseClick(toolbar.button("color"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("red")
     QTest.mouseClick(toolbar.button("width"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick(4)
     QTest.mouseClick(toolbar.button("dash"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("dashed")
     item = _connector_item(harness.board)
     assert item.route in {"straight", "elbow"}
     assert item.stroke_width in {1, 2, 4, 8}

@@ -4764,3 +4764,65 @@ def test_board_context_menu_escape_closes_and_actions_emit(qtbot):
     undo_by_text = {action.text(): action for action in undo_menu.actions()}
     undo_by_text[BOARD_MENU_UNDO_ARRANGE].trigger()
     assert harness.grid_undo == 1
+
+
+def test_hidden_connector_and_stroke_still_render_and_delete(qtbot):
+    """Hiding Connector/Draw from the rail must not orphan persisted objects."""
+    from mf4_analyzer.ui.chart_stack.ultraview.author_edits import apply_author_delete
+    from mf4_analyzer.ui.chart_stack.ultraview.author_tools import AuthorDeleteIntent
+    from mf4_analyzer.ui.ultraview_state import (
+        BoardPoint,
+        ConnectorEndpoint,
+        ConnectorObject,
+        StrokeObject,
+    )
+
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "keep-0")
+    rail = harness.page.tool_rail()
+    assert rail.tool_button("connector") is None
+    assert rail.tool_button("draw") is not None
+    line = ConnectorObject(
+        "keep-line",
+        "connector",
+        start=ConnectorEndpoint(BoardPoint(1.0, 1.0)),
+        end=ConnectorEndpoint(BoardPoint(6.0, 1.0)),
+        route="straight",
+        end_head="arrow",
+    )
+    ink = StrokeObject(
+        "keep-ink",
+        "stroke",
+        points=(BoardPoint(2.0, 4.0), BoardPoint(5.0, 6.0)),
+        tool="pen",
+        palette="ink",
+        width_px_100=4,
+    )
+    harness.board.author_objects = [line, ink]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    ids = {getattr(item, "object_id", "") for item in harness.page._free_grid._author_objects}
+    assert {"keep-line", "keep-ink"} <= ids
+    layer = harness.page._free_grid.author_paint_layer()
+    painted = {getattr(item, "object_id", "") for item in layer.model().objects}
+    assert {"keep-line", "keep-ink"} <= painted
+    deleted: list[object] = []
+    harness.page.author_delete_requested.connect(deleted.append)
+
+    def _apply(intent) -> None:
+        apply_author_delete(harness.board, intent)
+        harness.page.set_board(harness.board)
+
+    harness.page.author_delete_requested.connect(_apply)
+    harness.page.interaction().select_only_author("keep-line")
+    harness.page._free_grid.sync_selection_projection()
+    harness.page._delete_selection()
+    QApplication.processEvents()
+    remaining = {getattr(item, "object_id", "") for item in harness.board.author_objects}
+    assert "keep-line" not in remaining
+    assert "keep-ink" in remaining
+    harness.page.interaction().select_only_author("keep-ink")
+    harness.page._free_grid.sync_selection_projection()
+    harness.page._delete_selection()
+    QApplication.processEvents()
+    assert harness.board.author_objects == []

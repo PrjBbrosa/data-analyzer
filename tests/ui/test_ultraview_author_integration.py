@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QPlainTextEdit, QTextEdit
 from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import board_box_to_pixels
 from mf4_analyzer.ui.chart_stack.ultraview.elastic_workspace import author_content_bounds
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
+    AUTHOR_TOOL_CONNECTOR,
     AUTHOR_TOOL_DRAW,
     AUTHOR_TOOL_SELECT,
     AUTHOR_TOOL_SHAPES,
@@ -140,12 +141,15 @@ def test_release_tool_rail_hides_unfinished_creation_tools(qtbot):
         AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
+        AUTHOR_TOOL_SHAPES,
+        AUTHOR_TOOL_DRAW,
     )
     assert rail.creation_section_visible() is True
     assert rail.tool_button(AUTHOR_TOOL_STICKY) is not None
     assert rail.tool_button(AUTHOR_TOOL_TEXT) is not None
-    assert rail.tool_button(AUTHOR_TOOL_SHAPES) is None
-    assert rail.tool_button(AUTHOR_TOOL_DRAW) is None
+    assert rail.tool_button(AUTHOR_TOOL_SHAPES) is not None
+    assert rail.tool_button(AUTHOR_TOOL_CONNECTOR) is None
+    assert rail.tool_button(AUTHOR_TOOL_DRAW) is not None
 
 
 def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
@@ -160,6 +164,8 @@ def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
         AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
+        AUTHOR_TOOL_SHAPES,
+        AUTHOR_TOOL_DRAW,
     )
     assert rail.tool_button(AUTHOR_TOOL_TEXT) is not None
 
@@ -170,6 +176,8 @@ def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
         AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
+        AUTHOR_TOOL_SHAPES,
+        AUTHOR_TOOL_DRAW,
     }
 
     page.show_overview()

@@ -4,7 +4,7 @@ from __future__ import annotations
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QInputMethodEvent, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QFrame, QLineEdit, QMenu
+from PyQt5.QtWidgets import QApplication, QFrame, QLineEdit, QMenu, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_chrome import ToolFlyoutSurface
 from mf4_analyzer.ui.chart_stack.ultraview.author_edits import (
@@ -273,8 +273,8 @@ def test_shape_flyout_is_frame_with_five_visual_cells(qtbot):
     assert not isinstance(flyout, QMenu)
     assert flyout.shape_types() == CLOSED_SHAPE_TYPES
     cells = flyout.cell_buttons()
-    assert len(cells) == 5
-    assert all(cell.width() >= 40 and cell.height() >= 40 for cell in cells)
+    assert len(cells) == 8
+    assert all(cell.height() >= 36 for cell in cells)
     chosen: list[str] = []
     flyout.shape_selected.connect(chosen.append)
     flyout.choose_shape("triangle")
@@ -474,16 +474,33 @@ def test_style_toolbar_fill_stroke_width_dash_corner_and_type_switch(qtbot):
     assert toolbar.button("width") is not None
     assert toolbar.button("dash") is not None
     assert toolbar.button("corner") is not None
+    def _pick(value) -> None:
+        popup = QApplication.activePopupWidget()
+        assert popup is not None
+        chips = [
+            child
+            for child in popup.findChildren(QToolButton)
+            if child.property("choiceValue") == value
+        ]
+        assert chips, value
+        QTest.mouseClick(chips[0], Qt.LeftButton)
+        QApplication.processEvents()
+
     QTest.mouseClick(toolbar.button("fill"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("yellow")
     QTest.mouseClick(toolbar.button("stroke"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("red")
     QTest.mouseClick(toolbar.button("width"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick(4)
     QTest.mouseClick(toolbar.button("dash"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("dashed")
     QTest.mouseClick(toolbar.button("corner"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick(8)
     item = _shape_item(harness.board)
     assert item.fill_palette is not None
     assert item.stroke_palette != "ink" or item.stroke_width != 1 or item.line_style != "solid"
@@ -492,6 +509,7 @@ def test_style_toolbar_fill_stroke_width_dash_corner_and_type_switch(qtbot):
     box = (item.box.x, item.box.y, item.box.width, item.box.height)
     QTest.mouseClick(toolbar.button("shape"), Qt.LeftButton)
     QApplication.processEvents()
+    _pick("rounded_rectangle")
     switched = _shape_item(harness.board)
     assert switched.shape == "rounded_rectangle"
     assert (switched.box.x, switched.box.y, switched.box.width, switched.box.height) == box

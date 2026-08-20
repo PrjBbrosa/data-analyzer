@@ -821,6 +821,22 @@ def stroke_hit_record(
     )
 
 
+def hit_stroke(record: StrokeHitRecord, probe: BoardPoint) -> bool:
+    """True when ``probe`` sits in the stroke corridor."""
+    point = _finite_point(probe)
+    if point is None:
+        return False
+    px, py = point
+    if px < record.min_x or px > record.max_x or py < record.min_y or py > record.max_y:
+        return False
+    radius_sq = record.radius * record.radius
+    points = record.points
+    for index in range(len(points) - 1):
+        if _segment_distance_sq(point, points[index], points[index + 1]) <= radius_sq:
+            return True
+    return False
+
+
 def strokes_hit_by_segment(
     records: Iterable[StrokeHitRecord],
     start: BoardPoint,
@@ -988,6 +1004,7 @@ __all__ = [
     "hit_connection_anchor",
     "hit_connector",
     "hit_connector_handle",
+    "hit_stroke",
     "lasso_is_usable",
     "pixels_to_board_box",
     "pixels_to_board_point",

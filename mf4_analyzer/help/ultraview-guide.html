@@ -15,7 +15,7 @@
       <div class="corner reveal d1">TraceLab v8.0.1<br>UltraView（总览）</div>
       <div class="cover-eyebrow reveal d1">操作指南 · <b>READ-ONLY BOARD</b></div>
       <h1 class="reveal d2">总<em>览</em></h1>
-      <p class="sub reveal d3">五个分析工作区之外的<b>只读对照板</b>：不计算、不改源 View，只摆已有预览；板上可加便签、文字、形状、连接线和画笔。</p>
+      <p class="sub reveal d3">五个分析工作区之外的<b>只读对照板</b>：不计算、不改源 View，只摆已有预览；板上可加便签、文字、形状。已有连接线和笔画仍会显示，选中后可删除。</p>
       <div class="turbo-band reveal d4"></div>
     </div>
   </section>
@@ -41,7 +41,7 @@
           <div class="blk reveal d3"><span class="k">布局</span><p>左右/上下双图、2×2、左主图+3 辅图、上主图+3 辅图、3×2 六宫格、3×3 九宫格、4×3 十二宫格。主图比例只作用于主图布局。九/十二图窗口不够时滚动，不把卡片压到不可读。</p></div>
           <div class="blk reveal d4"><span class="k">托盘</span><p>槽位满了再加入，多出来的卡片进<b>底部托盘</b>。托盘里的卡片仍属于这块板，可再放回空槽。</p></div>
           <div class="blk reveal d5"><span class="k">拖放</span><p>模板：拖到空槽是移动，拖到占用槽是交换。库或托盘拖到已有卡片上<b>停留约 0.6 秒</b>出现替换环，环内松手才替换。卡片右键「替换为…」走同一条意图。</p></div>
-          <div class="blk reveal d5"><span class="k">创作</span><p>自由网格左侧创作段：<b>Select / Sticky / Text / Shapes / Connector / Draw</b>（<b>V / N / T / S / L / P</b>）。便签、文字、形状、连接线<b>放置一次回选择</b>；双击按钮或 flyout「<b>固定连续创建</b>」才连续。画笔保持连续。详见下一页。</p></div>
+          <div class="blk reveal d5"><span class="k">创作</span><p>自由网格左侧创作段：<b>Select / Sticky / Text / Shapes / Draw</b>（<b>V / N / T / S / P</b>）。<b>N / S / P 单击即弹出贴着按钮的选项</b>。便签、文字、形状<b>放置一次回选择</b>；双击按钮或 Sticky 的 <b>Stack</b> 才连续。<b>S</b> 含连接线，<b>L</b> 直达最近直线；<b>P</b> 含钢笔、荧光笔、整笔擦除和套索。详见下一页。</p></div>
         </div>
         <div class="mock reveal d3">
           <div class="cap"><span>View 库</span><em>展开 / 概览</em></div>
@@ -57,23 +57,22 @@
   <section class="slide">
     <div class="frame">
       <div class="topbar reveal d1"><span class="eyebrow">03 · <b>创作工具</b></span><span class="turbo-rule"></span></div>
-      <div class="step-head reveal d2"><span class="big">V N T S L P</span><h2>选择、便签、文字、形状、连接线、画笔</h2></div>
+      <div class="step-head reveal d2"><span class="big">V N T S</span><h2>选择、便签、文字、形状</h2></div>
       <div class="step-grid">
         <div class="instr">
-          <div class="blk reveal d3"><span class="k">一次 / 固定</span><p>便签、文字、形状、连接线<b>放置一次回选择</b>；双击按钮或 flyout「<b>固定连续创建</b>」才连续。画笔保持连续，直到 V、Esc 或换工具。再点一次 Sticky / Shapes / Connector / Draw 打开 flyout，不取消工具。没有未上线的灰按钮。</p></div>
-          <div class="blk reveal d3"><span class="k">文字</span><p><b>T</b> 点空白加文字，拖动先定换行宽度。选中或编辑时顶栏<b>整框</b>改字体/字号/B/I/U/对齐/列表/颜色/底色/链接，不伪装局部富文本。空内容退出不保存。上限 6000 字。</p></div>
-          <div class="blk reveal d4"><span class="k">形状 / 线</span><p><b>S</b> 五个闭合形状：矩形、圆角矩形、椭圆、菱形、三角形。直线/箭头/折线走 <b>L</b> 连接线，不做自动避障、曲线或多折点。落到轮廓即锚定，目标删除后固化最后点。</p></div>
-          <div class="blk reveal d5"><span class="k">画笔</span><p><b>P</b> 打开非模态层：钢笔、荧光笔、橡皮擦、套索。橡皮擦为<b>整笔擦除</b>，碰到笔画即删整条。套索按对象中心选择，完成后回选择。板上注释<b>不计算、不改源 View</b>。</p></div>
+          <div class="blk reveal d3"><span class="k">一次 / 固定</span><p>便签、文字、形状<b>放置一次回选择</b>；双击按钮或 Sticky 的 <b>Stack</b> 才连续。<b>N / S / P 单击即弹出选项</b>，再点一次只开关 flyout，不取消工具。没有未上线的灰按钮。</p></div>
+          <div class="blk reveal d3"><span class="k">文字</span><p><b>T</b> 点空白加文字，拖动先定换行宽度。选中后贴着对象的图标栏<b>整框</b>改字体/字号/B/I/U/对齐/列表/颜色/底色/链接，不伪装局部富文本。空内容退出不保存。上限 6000 字。</p></div>
+          <div class="blk reveal d4"><span class="k">形状与连接线</span><p><b>S</b> 同层选择直线、箭头、折线和矩形/圆角矩形/椭圆/菱形/三角。<b>L</b> 直达最近连接线。<b>P</b> 选择钢笔、荧光笔、整笔擦除或套索。</p></div>
+          <div class="blk reveal d5"><span class="k">已有对象</span><p>打开旧项目时，板上的连接线和笔画<b>仍会渲染</b>。选中后可用图标属性栏或 Delete 删除，保存重开不丢对象。View/Card 只用悬停右上角图标，不进作者属性栏。板上注释<b>不计算、不改源 View</b>。</p></div>
         </div>
         <div class="mock reveal d3">
-          <div class="cap"><span>左侧创作段</span><em>混装 rail</em></div>
+          <div class="cap"><span>左侧创作段</span><em>release rail</em></div>
           <div class="row"><span>V</span><b>选择</b></div>
           <div class="row"><span>N</span><b>便签</b></div>
           <div class="row"><span>T</span><b>文字 · 整框格式</b></div>
-          <div class="row"><span>S</span><b>5 个闭合形状</b></div>
-          <div class="row"><span>L</span><b>直线 / 箭头 / 折线</b></div>
-          <div class="row"><span>P</span><b>笔 · 高亮 · 整笔擦 · 套索</b></div>
-          <p class="note">放置一次回选择；固定才连续。画笔保持连续。Eraser 是整笔擦除，不是局部切割。</p>
+          <div class="row"><span>S</span><b>形状与连接线</b></div>
+          <div class="row"><span>P</span><b>画笔 / 擦除 / 套索</b></div>
+          <p class="note">N/S/P 单击弹出选项。View 悬停显示右上角图标。</p>
         </div>
       </div>
     </div>
@@ -119,7 +118,7 @@
       <div class="topbar reveal d1"><span class="eyebrow">06 · <b>边界</b></span><span class="turbo-rule"></span></div>
       <div class="step-head reveal d2"><span class="big">只读</span><h2>总览不做的事</h2></div>
       <div class="paths">
-        <div class="path reveal d3"><div class="tagA">不计算</div><div class="ptxt">加入、筛选、演示、复制、导出、保存，以及板上便签、文字、形状、连接线和画笔，都不会调用分析入口。要新图，回到源 View 改完再捕获。</div></div>
+        <div class="path reveal d3"><div class="tagA">不计算</div><div class="ptxt">加入、筛选、演示、复制、导出、保存，以及板上便签、文字、形状、连接线和笔画，都不会调用分析入口。要新图，回到源 View 改完再捕获。</div></div>
         <div class="path reveal d4"><div class="tagA g">不猜测</div><div class="ptxt">身份是「分区 + 稳定 View id」。重名标签、缩短显示名、当前下标都不能当钥匙。</div></div>
         <div class="path reveal d3"><div class="tagA">不发明</div><div class="ptxt">没有现成预览就显示「缺」。关闭全部文件时，若板是从项目恢复来的，不会被空会话误清掉。</div></div>
       </div>

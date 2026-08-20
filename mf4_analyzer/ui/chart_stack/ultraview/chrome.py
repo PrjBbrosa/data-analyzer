@@ -56,6 +56,7 @@ from mf4_analyzer.ui.ultraview_state import LAYOUT_SLOTS, ULTRAVIEW_REF_MIME, pa
 from .author_chrome import (
     ConnectorPopover,
     DrawPopover,
+    FormatChoiceFlyout,
     SelectionToolbar,
     ShapePopover,
     StickyPopover,
@@ -69,6 +70,7 @@ from .floating_layout import (
     ISLAND_HEIGHT,
     RAIL_CONTENT_HEIGHT,
     RAIL_WIDTH,
+    RAIL_WIDTH_COMPACT,
     STATUS_ISLAND_WIDTH,
 )
 
@@ -92,18 +94,20 @@ AUTHOR_TOOLS = (
     AUTHOR_TOOL_CONNECTOR,
     AUTHOR_TOOL_DRAW,
 )
-# Mixed rail: Select + Sticky + Text + Shape + Connector + Draw.
-# Draw flyout owns Pen/Highlighter/Eraser/Lasso; rail entry stays one button.
+# Connector is chosen from the Shapes flyout. Draw is a first-class rail tool.
 RELEASE_AUTHOR_TOOLS: tuple[str, ...] = (
     AUTHOR_TOOL_SELECT,
     AUTHOR_TOOL_STICKY,
     AUTHOR_TOOL_TEXT,
     AUTHOR_TOOL_SHAPES,
-    AUTHOR_TOOL_CONNECTOR,
     AUTHOR_TOOL_DRAW,
 )
 RAIL_BUTTON_SIZE = 36
+RAIL_BUTTON_SIZE_AUTHOR = 46
+RAIL_BUTTON_SIZE_AUTHOR_COMPACT = 40
 RAIL_ICON_SIZE = 20
+RAIL_ICON_SIZE_AUTHOR = 22
+RAIL_ICON_SIZE_AUTHOR_COMPACT = 20
 BOARD_POPOVER_WIDTH = 260
 BOARD_ROW_HEIGHT = 36
 _BOARD_CURRENT_ROLE = Qt.UserRole + 1
@@ -701,200 +705,6 @@ class CanvasHost(QFrame):
             widget.setFocus(Qt.OtherFocusReason)
 
 
-class TextFormattingToolbar(QFrame):
-    """Small typed formatting surface for a selected/new Board text object.
-
-    The surface intentionally knows no ``QTextDocument``.  It emits compact
-    object-level changes, leaving editor selection semantics to the authoring
-    controller and keeping V1 honest about its whole-box formatting contract.
-    """
-
-    format_requested = pyqtSignal(str, object)
-    _FONT_ROLES = ("sans", "serif", "mono")
-    _ALIGNMENTS = ("left", "center", "right")
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("ultraViewTextFormattingToolbar")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setProperty("surface", "island")
-        self._format = {
-            "font_role": "sans", "font_size": 14, "bold": False, "italic": False,
-            "underline": False, "align": "left", "list_style": "none",
-            "text_palette": "ink", "fill_palette": None, "locked": False,
-        }
-        self._buttons: dict[str, QToolButton] = {}
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(2)
-        layout.addWidget(
-            self._menu_button(
-                "font_role", "Sans", "字体", (("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")),
-            )
-        )
-        layout.addWidget(
-            self._menu_button(
-                "font_size", "14", "字号", tuple((size, str(size)) for size in (8, 10, 12, 14, 18, 24, 32, 48)),
-            )
-        )
-        for key, label, tooltip in (
-            ("bold", "B", "加粗"), ("italic", "I", "斜体"), ("underline", "U", "下划线"),
-        ):
-            button = self._format_button(key, label, tooltip, checkable=True)
-            button.clicked.connect(self._on_toggle_format)
-            layout.addWidget(button)
-        divider = QFrame(self)
-        divider.setFrameShape(QFrame.VLine)
-        divider.setFixedWidth(1)
-        layout.addWidget(divider)
-        for alignment, label in (("left", "左"), ("center", "中"), ("right", "右")):
-            button = self._format_button(f"align:{alignment}", label, f"{label}对齐", checkable=True)
-            button.setProperty("alignment", alignment)
-            button.clicked.connect(self._on_alignment_clicked)
-            layout.addWidget(button)
-        layout.addWidget(
-            self._menu_button(
-                "list_style", "•", "列表", (("none", "无列表"), ("bullet", "项目符号"), ("number", "编号列表")),
-            )
-        )
-        layout.addWidget(
-            self._menu_button(
-                "text_palette", "A", "文字颜色", (("ink", "墨色"), ("blue", "蓝色"), ("red", "红色"), ("green", "绿色")),
-            )
-        )
-        layout.addWidget(
-            self._menu_button(
-                "fill_palette", "▨", "文字底色", ((None, "透明"), ("yellow", "黄色"), ("blue", "蓝色"), ("green", "绿色")),
-            )
-        )
-        lock = self._format_button("locked", "锁", "锁定", checkable=True)
-        lock.clicked.connect(self._on_toggle_format)
-        layout.addWidget(lock)
-
-    def button(self, key: str) -> QToolButton | None:
-        return self._buttons.get(str(key))
-
-    def formatting(self) -> dict[str, object]:
-        return dict(self._format)
-
-    def set_available(self, enabled: bool, reason: str = "") -> None:
-        text = str(reason or "文字格式")
-        for button in self._buttons.values():
-            button.setEnabled(bool(enabled))
-            button.setToolTip(text if not enabled else button.accessibleName())
-
-    def set_font_role(self, role: str) -> None:
-        checked = str(role)
-        if checked not in self._FONT_ROLES:
-            raise ValueError(f"unknown text font role: {checked}")
-        self._set_format("font_role", checked)
-
-    def set_font_size(self, size: int) -> None:
-        checked = int(size)
-        if not 8 <= checked <= 96:
-            raise ValueError("text font size must be 8..96")
-        self._set_format("font_size", checked)
-
-    def set_alignment(self, alignment: str) -> None:
-        checked = str(alignment)
-        if checked not in self._ALIGNMENTS:
-            raise ValueError(f"unknown text alignment: {checked}")
-        self._set_format("align", checked)
-        for candidate in self._ALIGNMENTS:
-            button = self._buttons[f"align:{candidate}"]
-            button.setChecked(candidate == checked)
-
-    def set_list_style(self, style: str) -> None:
-        checked = str(style)
-        if checked not in {"none", "bullet", "number"}:
-            raise ValueError(f"unknown text list style: {checked}")
-        self._set_format("list_style", checked)
-
-    def set_text_palette(self, palette: str) -> None:
-        self._set_format("text_palette", str(palette))
-
-    def set_fill_palette(self, palette: str | None) -> None:
-        self._set_format("fill_palette", None if palette is None else str(palette))
-
-    def set_locked(self, locked: bool) -> None:
-        self._set_format("locked", bool(locked))
-        self._buttons["locked"].setChecked(bool(locked))
-
-    def set_link(self, link: str | None) -> None:
-        self._set_format("link", None if link is None else str(link))
-
-    def _format_button(self, key: str, label: str, tooltip: str, *, checkable: bool) -> QToolButton:
-        button = _icon_button(
-            self,
-            object_name=f"ultraViewTextToolbar{key.replace(':', '').title()}Button",
-            icon=QIcon(),
-            tooltip=tooltip,
-            accessible_name=tooltip,
-            size=28,
-            icon_size=16,
-        )
-        button.setText(label)
-        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        button.setCheckable(checkable)
-        button.setProperty("formatKey", key)
-        self._buttons[key] = button
-        return button
-
-    def _menu_button(
-        self,
-        key: str,
-        label: str,
-        tooltip: str,
-        choices: tuple[tuple[object, str], ...],
-    ) -> QToolButton:
-        button = self._format_button(key, label, tooltip, checkable=False)
-        menu = QMenu(button)
-        apply_rounded_menu_chrome(menu)
-        for value, choice_label in choices:
-            action = menu.addAction(choice_label)
-            action.setProperty("formatMenuKey", key)
-            action.setProperty("formatMenuValue", value)
-            action.triggered.connect(self._on_menu_format_triggered)
-        button.setMenu(menu)
-        button.setPopupMode(QToolButton.InstantPopup)
-        return button
-
-    def _on_toggle_format(self) -> None:
-        sender = self.sender()
-        if isinstance(sender, QToolButton):
-            key = str(sender.property("formatKey") or "")
-            if key in {"bold", "italic", "underline", "locked"}:
-                self._set_format(key, sender.isChecked())
-
-    def _on_alignment_clicked(self) -> None:
-        sender = self.sender()
-        if isinstance(sender, QToolButton):
-            self.set_alignment(str(sender.property("alignment") or ""))
-
-    def _on_menu_format_triggered(self) -> None:
-        sender = self.sender()
-        if sender is None:
-            return
-        key = str(sender.property("formatMenuKey") or "")
-        value = sender.property("formatMenuValue")
-        if key == "font_role":
-            self.set_font_role(str(value))
-        elif key == "font_size":
-            self.set_font_size(int(value))
-        elif key == "list_style":
-            self.set_list_style(str(value))
-        elif key == "text_palette":
-            self.set_text_palette(str(value))
-        elif key == "fill_palette":
-            self.set_fill_palette(None if value is None else str(value))
-
-    def _set_format(self, key: str, value: object) -> None:
-        if self._format.get(key) == value:
-            return
-        self._format[key] = value
-        self.format_requested.emit(key, value)
-
-
 class ToolRail(QFrame):
     """The fixed left rail; Page owns which requested panel opens.
 
@@ -920,7 +730,7 @@ class ToolRail(QFrame):
         (AUTHOR_TOOL_SELECT, "Select", "选择对象 (V)"),
         (AUTHOR_TOOL_STICKY, "Sticky", "添加便签贴纸 (N)"),
         (AUTHOR_TOOL_TEXT, "Text", "添加文字 (T)"),
-        (AUTHOR_TOOL_SHAPES, "Shapes", "添加闭合形状 (S)"),
+        (AUTHOR_TOOL_SHAPES, "Shapes", "形状与连接线 (S)"),
         (AUTHOR_TOOL_CONNECTOR, "Connector", "添加连接线 (L)"),
         (AUTHOR_TOOL_DRAW, "Draw", "钢笔、荧光笔、橡皮擦或套索 (P)"),
     )
@@ -937,6 +747,7 @@ class ToolRail(QFrame):
         self.setAcceptDrops(True)
         self.setProperty("surface", "island")
         self.setFixedWidth(RAIL_WIDTH)
+        self._compact = False
         self._buttons: dict[str, QToolButton] = {}
         self._tool_buttons: dict[str, _AuthorToolButton] = {}
         self._icon_factories: dict[str, Callable[..., QIcon]] = {}
@@ -1265,12 +1076,12 @@ class ToolRail(QFrame):
             button.setIcon(
                 _author_tool_icon(tool, active=False, draw_subtool=self._draw_subtool)
             )
-            button.setIconSize(QSize(RAIL_ICON_SIZE, RAIL_ICON_SIZE))
+            button.setIconSize(QSize(RAIL_ICON_SIZE_AUTHOR, RAIL_ICON_SIZE_AUTHOR))
             button.setToolButtonStyle(Qt.ToolButtonIconOnly)
             button.setAutoRaise(True)
             button.setAutoFillBackground(False)
             button.setAttribute(Qt.WA_StyledBackground, True)
-            button.setFixedSize(RAIL_BUTTON_SIZE, RAIL_BUTTON_SIZE)
+            button.setFixedSize(RAIL_BUTTON_SIZE_AUTHOR, RAIL_BUTTON_SIZE_AUTHOR)
             button.setFocusPolicy(Qt.TabFocus)
             button.setToolTip(tooltip)
             button.setAccessibleName(tooltip)
@@ -1323,8 +1134,27 @@ class ToolRail(QFrame):
         super().resizeEvent(event)
         self._position_badges()
 
+    def set_compact(self, compact: bool) -> None:
+        """Switch author targets between desktop 46px and compact 40px."""
+        self._compact = bool(compact)
+        width = RAIL_WIDTH_COMPACT if self._compact else RAIL_WIDTH
+        self.setFixedWidth(width)
+        size = RAIL_BUTTON_SIZE_AUTHOR_COMPACT if self._compact else RAIL_BUTTON_SIZE_AUTHOR
+        icon = RAIL_ICON_SIZE_AUTHOR_COMPACT if self._compact else RAIL_ICON_SIZE_AUTHOR
+        margins = (6, 2, 6, 2) if self._compact else (9, 4, 9, 4)
+        layout = self.layout()
+        if layout is not None:
+            layout.setContentsMargins(*margins)
+        for button in self._tool_buttons.values():
+            button.setFixedSize(size, size)
+            button.setIconSize(QSize(icon, icon))
+
+    def is_compact(self) -> bool:
+        return self._compact
+
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(RAIL_WIDTH, max(RAIL_CONTENT_HEIGHT, super().sizeHint().height()))
+        width = RAIL_WIDTH_COMPACT if self._compact else RAIL_WIDTH
+        return QSize(width, max(RAIL_CONTENT_HEIGHT, super().sizeHint().height()))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()

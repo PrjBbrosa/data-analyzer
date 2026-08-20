@@ -67,13 +67,13 @@ def test_standard_stage_keeps_canvas_target_and_separates_chrome():
 
     fit_left = SAFE_MARGIN + RAIL_WIDTH + RAIL_TO_CANVAS_GAP
     assert SAFE_MARGIN == 12
-    assert RAIL_WIDTH == 56
+    assert RAIL_WIDTH == 64
     assert ISLAND_HEIGHT == 40
     assert layout.board == Rect(0, 0, 1280, 800)
-    assert layout.fit == Rect(fit_left, 64, 1182, 676)
+    assert layout.fit == Rect(fit_left, 64, 1174, 676)
     assert layout.board.width >= 1182
     assert layout.board.height >= 700
-    assert layout.fit.width >= 1182
+    assert layout.fit.width >= 1174
     assert layout.rail.height <= RAIL_CONTENT_HEIGHT + 8
     assert layout.content_inset_bottom > 0
     assert layout.board_island.left == safe.left
@@ -92,7 +92,8 @@ def test_compact_stage_keeps_canvas_target_without_forced_width():
     layout = calculate_floating_layout((800, 560))
 
     assert layout.board == Rect(0, 0, 800, 560)
-    assert layout.fit.x == SAFE_MARGIN + RAIL_WIDTH + RAIL_TO_CANVAS_GAP
+    assert layout.rail.width == 52
+    assert layout.fit.x == SAFE_MARGIN + layout.rail.width + RAIL_TO_CANVAS_GAP
     assert layout.fit.y == 64
     assert layout.fit.width >= 700
     assert layout.board.width >= 710

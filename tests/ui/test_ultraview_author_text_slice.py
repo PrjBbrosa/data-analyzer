@@ -487,7 +487,7 @@ def test_selection_toolbar_applies_whole_box_format(qtbot):
     toolbar = harness.page.selection_toolbar()
     assert toolbar.isVisible()
     assert toolbar.kind() == "text"
-    assert toolbar.height() == 40
+    assert toolbar.height() == 48
     bold = toolbar.button("bold")
     assert bold is not None
     assert "整个文本框" in bold.toolTip()

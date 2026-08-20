@@ -560,8 +560,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.sticky",
         "ultraview.text",
         "ultraview.shapes",
-        "ultraview.connector",
-        "ultraview.draw",
+        "ultraview.existing_markup",
         "ultraview.oneshot",
         "ultraview.multiselect",
     }
@@ -639,11 +638,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "工程" in display_hint
     assert "保存" in display_hint
     assert "整框" in by_id["ultraview.text"].text
-    assert "整笔" in by_id["ultraview.draw"].text
-    assert "避障" in by_id["ultraview.connector"].text
+    assert "选中删除" in by_id["ultraview.existing_markup"].text
     assert "回选择" in by_id["ultraview.oneshot"].text
     assert "固定" in by_id["ultraview.oneshot"].text
     assert "T " in by_id["ultraview.text"].text
     assert "S " in by_id["ultraview.shapes"].text
-    assert "L " in by_id["ultraview.connector"].text
-    assert "P " in by_id["ultraview.draw"].text

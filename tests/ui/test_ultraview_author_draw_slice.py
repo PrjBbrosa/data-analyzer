@@ -224,13 +224,9 @@ class _DrawHarness(_Harness):
 
 
 def _arm_draw(page, tool: str = "pen", preset: int = 0) -> None:
-    button = page.tool_rail().tool_button(AUTHOR_TOOL_DRAW)
-    assert button is not None and button.isEnabled()
-    QTest.mouseClick(button, Qt.LeftButton)
+    page.tool_rail().set_creation_enabled(True)
+    page._on_draw_tool_selected(tool, preset)
     QApplication.processEvents()
-    if page.interaction().last_draw_subtool() != tool or page.interaction().draw_preset_index() != preset:
-        page.draw_popover().choose_tool(tool, preset)
-        QApplication.processEvents()
     assert page.interaction().active_tool() == TOOL_DRAW
     assert page.interaction().last_draw_subtool() == tool
 

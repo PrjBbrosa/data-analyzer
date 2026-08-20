@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QLineEdit
+from PyQt5.QtWidgets import QApplication, QLineEdit, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_chrome import SelectionToolbar
 from mf4_analyzer.ui.chart_stack.ultraview.author_edits import (
@@ -279,7 +279,7 @@ def test_resolver_homogeneous_mixed_and_indeterminate():
     assert same.spine == "SHAPE"
     fill = next(control for control in same.controls if control.key == "fill")
     assert fill.mixed is True
-    assert fill.label == INDETERMINATE
+    assert fill.visible_text == ""
     assert same.can_align is True
     assert same.can_style is True
 
@@ -341,12 +341,12 @@ def test_resolver_locked_and_unknown_are_not_edited_or_dropped():
         item.raw.get("id") if isinstance(item, UnknownAuthorObject) else item.object_id
         for item in board.author_objects
     ] == ["free", "held", "ghost"]
-    mutation = apply_author_batch_style(board, ("free", "held", "ghost"), "palette", True)
+    mutation = apply_author_batch_style(board, ("free", "held", "ghost"), "palette", "teal")
     assert _item(board, "held").palette == "yellow"
     assert isinstance(_item(board, "ghost"), UnknownAuthorObject)
     assert _item(board, "ghost").raw.get("id") == "ghost"
     assert mutation.changed is True
-    assert _item(board, "free").palette != "yellow"
+    assert _item(board, "free").palette == "teal"
 
 
 def test_toolbar_applies_resolver_not_kind_scatter(qtbot):
@@ -360,7 +360,7 @@ def test_toolbar_applies_resolver_not_kind_scatter(qtbot):
     toolbar.apply_capabilities(caps)
     toolbar.show()
     assert toolbar.kind() == "mixed"
-    assert toolbar.height() == 40
+    assert toolbar.height() == 48
     assert toolbar.button("fill") is None
     assert toolbar.button("duplicate") is not None
     assert toolbar.button("lock") is not None
@@ -375,7 +375,7 @@ def test_batch_style_align_distribute_z_order_are_one_history_each():
         _shape("mid", x=6.0, y=1.0, fill="red"),
         _shape("right", x=12.0, y=7.0, fill="green"),
     ]
-    styled = apply_author_batch_style(board, ("left", "mid", "right"), "fill", True)
+    styled = apply_author_batch_style(board, ("left", "mid", "right"), "fill", "orange")
     assert styled.changed
     fills = {item.fill_palette for item in board.author_objects}
     assert len(fills) == 1
@@ -525,8 +525,19 @@ def test_page_toolbar_mixed_and_batch_style_one_history(qtbot):
     assert toolbar.kind() == "shape"
     fill = toolbar.button("fill")
     assert fill is not None
-    assert fill.text() == INDETERMINATE
+    assert fill.property("mixed") == "true"
+    assert fill.text() in {"", "—"}
     QTest.mouseClick(fill, Qt.LeftButton)
+    QApplication.processEvents()
+    popup = QApplication.activePopupWidget()
+    assert popup is not None
+    chips = [
+        child
+        for child in popup.findChildren(QToolButton)
+        if child.property("choiceValue") == "orange"
+    ]
+    assert chips
+    QTest.mouseClick(chips[0], Qt.LeftButton)
     QApplication.processEvents()
     assert len(sink.undo) == 1
     assert sink.undo[0].label == "author-style"

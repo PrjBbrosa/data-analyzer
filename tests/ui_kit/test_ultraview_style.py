@@ -11,6 +11,9 @@ def test_titanium_amber_core_roles_are_exact_and_separate_from_global_controls()
     assert titanium_color("amber") == "#E58F32"
     assert titanium_color("rail_active_start") == "#3C8495"
     assert titanium_color("rail_active_end") == "#F0A44C"
+    assert ULTRAVIEW_QSS_TOKENS["UV_RAIL_ACTIVE_START"] == "#3C8495"
+    assert ULTRAVIEW_QSS_TOKENS["UV_RAIL_ACTIVE_END"] == "#F0A44C"
+    assert ULTRAVIEW_QSS_TOKENS["UV_RAIL_ACTIVE_HOVER"] == "#2F7181"
     assert titanium_color("time_wash") == "#F5F8FF"
     assert titanium_color("time_line") == "#A6C0F5"
     assert titanium_color("danger") == "#C94F4A"
@@ -33,6 +36,8 @@ def test_every_ultraview_qss_token_is_renderable_and_uses_a_named_role():
         "UV_AMBER",
         "UV_RAIL_ACTIVE_START",
         "UV_RAIL_ACTIVE_END",
+        "UV_RAIL_ACTIVE_HOVER",
+        "UV_SURFACE_SOFT",
         "UV_DANGER",
         "UV_TIME",
         "UV_TIME_LINE",

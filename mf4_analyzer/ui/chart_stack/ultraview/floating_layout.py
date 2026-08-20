@@ -14,7 +14,11 @@ from typing import TypeAlias
 Size: TypeAlias = tuple[int, int]
 
 SAFE_MARGIN = 12
-RAIL_WIDTH = 56
+RAIL_WIDTH_DESKTOP = 64
+RAIL_WIDTH_COMPACT = 52
+RAIL_WIDTH = RAIL_WIDTH_DESKTOP
+COMPACT_STAGE_WIDTH = 900
+COMPACT_STAGE_HEIGHT = 640
 RAIL_TO_CANVAS_GAP = 18
 ISLAND_HEIGHT = 40
 ISLAND_GAP = 12
@@ -37,6 +41,17 @@ DEFAULT_NAVIGATION_ISLAND_SIZE: Size = (
 )
 OVERLAY_ANCHOR_RAIL = "rail"
 OVERLAY_ANCHOR_GLOBAL = "global"
+
+
+def is_compact_stage(stage_size: Size) -> bool:
+    """800×560 and other short/narrow stages use the compact rail."""
+    width = _integer(stage_size[0] if stage_size else 0)
+    height = _integer(stage_size[1] if stage_size and len(stage_size) > 1 else 0)
+    return width < COMPACT_STAGE_WIDTH or height < COMPACT_STAGE_HEIGHT
+
+
+def rail_width_for_stage(stage_size: Size) -> int:
+    return RAIL_WIDTH_COMPACT if is_compact_stage(stage_size) else RAIL_WIDTH_DESKTOP
 
 
 def _integer(value: object, *, default: int = 0) -> int:
@@ -211,11 +226,12 @@ def calculate_floating_layout(
     stage = stage_rect(stage_size)
     safe = stage.inset(SAFE_MARGIN)
     board = stage
+    rail_width = rail_width_for_stage(stage_size)
 
     # Cards still park to the rail's right so Fit keeps the canvas clear of
     # the tool strip.  Persistent left islands instead share the stage-safe
     # left axis; their vertical separation keeps them clear of that strip.
-    content_left = min(safe.right, safe.left + RAIL_WIDTH + RAIL_TO_CANVAS_GAP)
+    content_left = min(safe.right, safe.left + rail_width + RAIL_TO_CANVAS_GAP)
     content_top = min(safe.bottom, safe.top + ISLAND_HEIGHT + ISLAND_GAP)
 
     island_height = min(ISLAND_HEIGHT, safe.height)
@@ -281,7 +297,7 @@ def calculate_floating_layout(
     rail = Rect(
         safe.left,
         rail_top,
-        min(RAIL_WIDTH, safe.width),
+        min(rail_width, safe.width),
         rail_height,
     ).clamp_to(safe)
 
@@ -490,7 +506,11 @@ __all__ = [
     "OVERLAY_ANCHOR_RAIL",
     "RAIL_CONTENT_HEIGHT",
     "RAIL_WIDTH",
+    "RAIL_WIDTH_COMPACT",
+    "RAIL_WIDTH_DESKTOP",
     "SAFE_MARGIN",
+    "is_compact_stage",
+    "rail_width_for_stage",
     "STATUS_ISLAND_WIDTH",
     "CardContextPlacement",
     "FloatingLayout",

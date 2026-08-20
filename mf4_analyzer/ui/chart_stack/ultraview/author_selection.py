@@ -6,7 +6,7 @@ must not scatter kind if/else to decide which controls exist.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from mf4_analyzer.ui.ultraview_state import (
     ConnectorObject,
@@ -51,6 +51,28 @@ from .author_tools import (
 INDETERMINATE = "—"
 NUDGE_STEP = 1.0
 NUDGE_STEP_SHIFT = 4.0
+FORBIDDEN_TOOLBAR_WORDS = frozenset(
+    {
+        "TIME",
+        "FFT",
+        "SHAPE",
+        "INK",
+        "类型",
+        "填充",
+        "描边",
+        "线宽",
+        "线型",
+        "圆角",
+        "文字",
+        "复制",
+        "锁定",
+        "打开源",
+        "同步",
+        "聚焦",
+        "Card Fit",
+    }
+)
+_FONT_ROLE_LABELS = {"sans": "Sans", "serif": "Serif", "mono": "Mono"}
 
 _TEXT_FONT_ROLES = ("sans", "serif", "mono")
 _TEXT_FONT_SIZES = (8, 10, 12, 14, 18, 24, 32, 48, 72)
@@ -72,10 +94,19 @@ _SPINES = {
     "shape": "SHAPE",
     "connector": "LINE",
     "stroke": "INK",
-    "card": "FFT",
     "mixed": "MIXED",
     "card_author": "MIXED",
 }
+_AXIS_SPINE = {
+    "time": ("TIME", "time"),
+    "fft": ("FFT", "fft"),
+    "frequency": ("FFT", "fft"),
+    "fft_time": ("TF", "fft_time"),
+    "tf": ("TF", "fft_time"),
+    "frf": ("FRF", "frf"),
+    "order": ("ORDER", "order"),
+}
+SPINE_TOKEN_SELECTION = "selection"
 
 _KIND_TYPES = {
     StickyObject: "sticky",
@@ -88,7 +119,7 @@ _KIND_TYPES = {
 
 @dataclass(frozen=True)
 class ToolbarControl:
-    """One selection-toolbar control. ``mixed`` shows ``—``, never a fake default."""
+    """One selection-toolbar control. UI copy is tooltip-only except allowed values."""
 
     key: str
     label: str
@@ -98,6 +129,9 @@ class ToolbarControl:
     checked: bool = False
     wide: bool = False
     enabled: bool = True
+    icon_role: str = "icon"
+    value: object = None
+    visible_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,6 +140,7 @@ class SelectionCapabilities:
 
     kind: str
     spine: str
+    spine_token: str
     controls: tuple[ToolbarControl, ...]
     selection: tuple[BoardItemKey, ...]
     author_ids: tuple[str, ...]
@@ -146,6 +181,8 @@ def resolve_selection_capabilities(
     *,
     editor_kind: str = "",
     editor_object_id: str = "",
+    axis_kinds: Mapping[object, str] | None = None,
+    show_card_fit: bool = True,
 ) -> SelectionCapabilities:
     """Compute toolbar controls from identity keys. Display labels are ignored."""
     keys = tuple(selection)
@@ -184,11 +221,12 @@ def resolve_selection_capabilities(
     can_distribute = can_align
     can_lock = bool(known)
     can_delete = bool(movable) or has_cards
-    can_duplicate = bool(movable) or has_cards
+    can_duplicate = bool(movable)
     can_nudge = bool(movable) or has_cards
     can_z_order = bool(known) and not has_cards
     lock_values = {is_locked(item) for item in known}
     lock_state = None if len(lock_values) != 1 else next(iter(lock_values))
+    spine, spine_token = _spine_for(kind, card_refs, axis_kinds)
     controls = _controls_for(
         kind,
         known,
@@ -200,10 +238,13 @@ def resolve_selection_capabilities(
         can_style=can_style,
         can_z_order=can_z_order,
         can_delete=can_delete,
+        card_count=len(card_refs),
+        show_card_fit=bool(show_card_fit),
     )
     return SelectionCapabilities(
         kind=kind,
-        spine=_SPINES.get(kind, "MIXED"),
+        spine=spine,
+        spine_token=spine_token,
         controls=tuple(controls),
         selection=keys,
         author_ids=author_ids,
@@ -227,6 +268,7 @@ def _empty_caps(keys: tuple[BoardItemKey, ...]) -> SelectionCapabilities:
     return SelectionCapabilities(
         kind="empty",
         spine="",
+        spine_token=SPINE_TOKEN_SELECTION,
         controls=(),
         selection=keys,
         author_ids=(),
@@ -244,6 +286,32 @@ def _empty_caps(keys: tuple[BoardItemKey, ...]) -> SelectionCapabilities:
     )
 
 
+def _spine_for(
+    kind: str,
+    card_refs: Sequence[UltraViewRef],
+    axis_kinds: Mapping[object, str] | None,
+) -> tuple[str, str]:
+    if kind == "card":
+        labels: list[str | None] = []
+        tokens: list[str | None] = []
+        mapping = axis_kinds or {}
+        for ref in card_refs:
+            mapped = _AXIS_SPINE.get(str(mapping.get(ref) or ""))
+            if mapped is None:
+                labels.append(None)
+                tokens.append(None)
+            else:
+                labels.append(mapped[0])
+                tokens.append(mapped[1])
+        unique = {label for label in labels if label is not None}
+        if labels and None not in labels and len(unique) == 1:
+            return labels[0] or "CARD", tokens[0] or SPINE_TOKEN_SELECTION
+        return "CARD", SPINE_TOKEN_SELECTION
+    if kind in _SPINES:
+        return _SPINES[kind], SPINE_TOKEN_SELECTION
+    return "MIXED", SPINE_TOKEN_SELECTION
+
+
 def _controls_for(
     kind: str,
     items: Sequence[object],
@@ -256,7 +324,10 @@ def _controls_for(
     can_style: bool,
     can_z_order: bool,
     can_delete: bool,
+    card_count: int = 0,
+    show_card_fit: bool = True,
 ) -> list[ToolbarControl]:
+    del can_z_order, can_delete, card_count, show_card_fit
     controls: list[ToolbarControl] = []
     if kind == "sticky" and can_style:
         controls.extend(_sticky_controls(items))
@@ -268,19 +339,8 @@ def _controls_for(
         controls.extend(_connector_controls(items))
     elif kind == "stroke" and can_style:
         controls.extend(_stroke_controls(items))
-    elif kind == "card":
-        controls.extend(
-            (
-                ToolbarControl("open", "打开源", "打开源 View"),
-                ToolbarControl("sync", "同步", "同步", wide=True),
-                ToolbarControl("fit", "Card Fit", "按原图比例"),
-            )
-        )
-    elif kind == "mixed" and can_style is False:
-        if _all_have_fill(items):
-            controls.append(_mixed_style_control(items, "fill", "填充", "fill_palette"))
-        if _all_have_stroke(items):
-            controls.append(_mixed_style_control(items, "stroke", "描边", "stroke_palette"))
+    elif kind in {"card", "card_author"}:
+        pass
     if can_align:
         for key, label in (
             ("align_left", "左齐"),
@@ -299,7 +359,14 @@ def _controls_for(
     if can_lock:
         if lock_state is None:
             controls.append(
-                ToolbarControl("lock", INDETERMINATE, "锁定", mixed=True)
+                ToolbarControl(
+                    "lock",
+                    "锁定",
+                    "锁定",
+                    mixed=True,
+                    checkable=True,
+                    icon_role="icon",
+                )
             )
         else:
             controls.append(
@@ -309,74 +376,105 @@ def _controls_for(
                     "解锁" if lock_state else "锁定",
                     checkable=True,
                     checked=bool(lock_state),
+                    icon_role="icon",
+                    value=bool(lock_state),
                 )
             )
-    if can_z_order:
-        controls.append(ToolbarControl("z_front", "置前", "置于顶层", wide=True))
-        controls.append(ToolbarControl("z_back", "置后", "置于底层", wide=True))
-    if can_delete:
-        controls.append(ToolbarControl("delete", "删除", "删除", wide=True))
     return controls
 
 
 def _sticky_controls(items: Sequence[object]) -> list[ToolbarControl]:
     whole = "应用到整个便签"
     return [
-        _value_control(items, "palette", "色板", "palette", tooltip=whole),
-        _value_control(items, "shape", "方形", "shape", tooltip=whole),
-        _value_control(items, "font_size", "字号", "font_size", tooltip=whole, wide=True),
+        _value_control(items, "shape", "形状", "shape", tooltip=whole, icon_role="shape"),
+        _value_control(items, "palette", "色板", "palette", tooltip=whole, icon_role="swatch"),
+        _value_control(
+            items, "font_size", "字号", "font_size", tooltip=whole, wide=True, icon_role="value"
+        ),
     ]
 
 
 def _text_controls(items: Sequence[object]) -> list[ToolbarControl]:
     whole = "应用到整个文本框"
     return [
-        _value_control(items, "font_role", "Sans", "font_role", tooltip=f"字体 · {whole}"),
-        _value_control(items, "font_size", "14", "font_size", tooltip=f"字号 · {whole}"),
-        _bool_control(items, "bold", "B", f"加粗 · {whole}"),
-        _bool_control(items, "italic", "I", f"斜体 · {whole}"),
-        _bool_control(items, "underline", "U", f"下划线 · {whole}"),
-        _value_control(items, "align", "左", "align", tooltip=f"对齐 · {whole}"),
-        _value_control(items, "list_style", "列表", "list_style", tooltip=f"列表 · {whole}", wide=True),
-        _value_control(items, "text_palette", "A", "text_palette", tooltip=f"文字颜色 · {whole}", wide=True),
-        _value_control(items, "fill_palette", "底", "fill_palette", tooltip=f"底色 · {whole}", wide=True),
-        ToolbarControl("link", "链接", f"链接 · {whole}", wide=True),
+        _value_control(
+            items, "font_role", "字体", "font_role", tooltip=f"字体 · {whole}", icon_role="value"
+        ),
+        _value_control(
+            items, "font_size", "字号", "font_size", tooltip=f"字号 · {whole}", icon_role="value"
+        ),
+        _bool_control(items, "bold", "B", f"加粗 · {whole}", icon_role="glyph"),
+        _bool_control(items, "italic", "I", f"斜体 · {whole}", icon_role="glyph"),
+        _bool_control(items, "underline", "U", f"下划线 · {whole}", icon_role="glyph"),
+        _value_control(
+            items, "align", "对齐", "align", tooltip=f"对齐 · {whole}", icon_role="icon"
+        ),
+        _value_control(
+            items,
+            "list_style",
+            "列表",
+            "list_style",
+            tooltip=f"列表 · {whole}",
+            wide=True,
+            icon_role="icon",
+        ),
+        _value_control(
+            items,
+            "text_palette",
+            "文字颜色",
+            "text_palette",
+            tooltip=f"文字颜色 · {whole}",
+            wide=True,
+            icon_role="swatch",
+        ),
+        _value_control(
+            items,
+            "fill_palette",
+            "底色",
+            "fill_palette",
+            tooltip=f"底色 · {whole}",
+            wide=True,
+            icon_role="swatch",
+        ),
+        ToolbarControl("link", "链接", f"链接 · {whole}", wide=True, icon_role="icon"),
     ]
 
 
 def _shape_controls(items: Sequence[object]) -> list[ToolbarControl]:
     controls = [
-        _value_control(items, "shape", "类型", "shape", tooltip="切换形状，保留框/文字/样式"),
-        _value_control(items, "fill", "填充", "fill_palette", tooltip="填充色"),
-        _value_control(items, "stroke", "描边", "stroke_palette", tooltip="描边色"),
-        _value_control(items, "width", "线宽", "stroke_width", tooltip="描边宽度"),
-        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线"),
+        _value_control(items, "shape", "形状", "shape", tooltip="切换形状，保留框/文字/样式", icon_role="shape"),
+        _value_control(items, "fill", "填充色", "fill_palette", tooltip="填充色", icon_role="swatch"),
+        _value_control(items, "stroke", "描边色", "stroke_palette", tooltip="描边色", icon_role="swatch"),
+        _value_control(items, "width", "线宽", "stroke_width", tooltip="描边宽度", icon_role="line"),
+        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash"),
     ]
     if all(getattr(item, "shape", "") in SHAPE_CORNER_TYPES for item in items):
         controls.append(
-            _value_control(items, "corner", "圆角", "corner_radius", tooltip="圆角半径")
+            _value_control(
+                items, "corner", "圆角", "corner_radius", tooltip="圆角半径", icon_role="icon"
+            )
         )
-    controls.append(ToolbarControl("text", "文字", "编辑形状内文字", wide=True))
+    controls.append(ToolbarControl("text", "编辑形状内文字", "编辑形状内文字", wide=True, icon_role="icon"))
     return controls
 
 
 def _connector_controls(items: Sequence[object]) -> list[ToolbarControl]:
     return [
-        _value_control(items, "route", "路径", "route", tooltip="直线或正交折线"),
-        _value_control(items, "start_head", "起点", "start_head", tooltip="起点箭头"),
-        _value_control(items, "end_head", "终点", "end_head", tooltip="终点箭头"),
-        _value_control(items, "color", "颜色", "stroke_palette", tooltip="连接线颜色"),
-        _value_control(items, "width", "线宽", "stroke_width", tooltip="线宽"),
-        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线"),
-        ToolbarControl("label", "标签", "编辑整线文字", wide=True),
+        _value_control(items, "route", "路径", "route", tooltip="直线或正交折线", icon_role="icon"),
+        _value_control(items, "start_head", "起点", "start_head", tooltip="起点箭头", icon_role="icon"),
+        _value_control(items, "end_head", "终点", "end_head", tooltip="终点箭头", icon_role="icon"),
+        _value_control(items, "color", "颜色", "stroke_palette", tooltip="连接线颜色", icon_role="swatch"),
+        _value_control(items, "width", "线宽", "stroke_width", tooltip="线宽", icon_role="line"),
+        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash"),
+        ToolbarControl("label", "标签", "编辑整线文字", wide=True, icon_role="icon"),
     ]
 
 
 def _stroke_controls(items: Sequence[object]) -> list[ToolbarControl]:
     return [
-        _value_control(items, "tool", "钢笔", "tool", tooltip="钢笔或荧光笔"),
-        _value_control(items, "color", "颜色", "palette", tooltip="笔画颜色"),
-        _value_control(items, "width", "线宽", "width_px_100", tooltip="笔画宽度"),
+        _value_control(items, "tool", "笔种", "tool", tooltip="钢笔或荧光笔", icon_role="icon"),
+        _value_control(items, "color", "颜色", "palette", tooltip="笔画颜色", icon_role="swatch"),
+        _value_control(items, "width", "线宽", "width_px_100", tooltip="笔画宽度", icon_role="line"),
     ]
 
 
@@ -404,29 +502,50 @@ def _value_control(
     *,
     tooltip: str | None = None,
     wide: bool = False,
+    icon_role: str = "icon",
 ) -> ToolbarControl:
     values = {getattr(item, field, None) for item in items}
     mixed = len(values) > 1
+    value = next(iter(values)) if len(values) == 1 else None
+    visible = ""
+    if icon_role in {"value", "glyph"} and not mixed and value is not None:
+        if key == "font_role":
+            visible = _FONT_ROLE_LABELS.get(str(value), str(value).title())
+        else:
+            visible = str(value)
     return ToolbarControl(
         key,
-        INDETERMINATE if mixed else label,
+        label,
         tooltip or label,
         mixed=mixed,
         wide=wide,
+        icon_role=icon_role,
+        value=value,
+        visible_text=visible,
     )
 
 
-def _bool_control(items: Sequence[object], key: str, label: str, tooltip: str) -> ToolbarControl:
+def _bool_control(
+    items: Sequence[object],
+    key: str,
+    label: str,
+    tooltip: str,
+    *,
+    icon_role: str = "glyph",
+) -> ToolbarControl:
     values = {bool(getattr(item, key, False)) for item in items}
     mixed = len(values) > 1
     checked = next(iter(values)) if len(values) == 1 else False
     return ToolbarControl(
         key,
-        INDETERMINATE if mixed else label,
+        label,
         tooltip,
         mixed=mixed,
         checkable=True,
         checked=checked,
+        icon_role=icon_role,
+        value=checked,
+        visible_text="" if mixed else label,
     )
 
 
@@ -434,6 +553,15 @@ def _cycle(options: tuple, current: object):
     if current in options:
         return options[(options.index(current) + 1) % len(options)]
     return options[0]
+
+
+def _chosen(options: tuple, current: object, value: object):
+    """Apply an explicit picker value. True is a no-op, not a silent cycle."""
+    if value is True:
+        return current if current in options else options[0]
+    if value in options:
+        return value
+    return current if current in options else options[0]
 
 
 def next_style_changes(item: object, key: str, value: object) -> dict[str, object]:
@@ -453,9 +581,11 @@ def next_style_changes(item: object, key: str, value: object) -> dict[str, objec
 
 def _next_text_format(item: TextObject, key: str, value: object) -> dict[str, object]:
     if key == "font_role":
-        return {"font_role": _cycle(_TEXT_FONT_ROLES, item.font_role)}
+        chosen = _chosen(_TEXT_FONT_ROLES, item.font_role, value)
+        return {} if chosen == item.font_role and value is True else {"font_role": chosen}
     if key == "font_size":
-        return {"font_size": _cycle(_TEXT_FONT_SIZES, item.font_size)}
+        chosen = _chosen(_TEXT_FONT_SIZES, item.font_size, value)
+        return {} if chosen == item.font_size and value is True else {"font_size": chosen}
     if key == "bold":
         return {"bold": bool(value) if isinstance(value, bool) else not item.bold}
     if key == "italic":
@@ -463,13 +593,17 @@ def _next_text_format(item: TextObject, key: str, value: object) -> dict[str, ob
     if key == "underline":
         return {"underline": bool(value) if isinstance(value, bool) else not item.underline}
     if key == "align":
-        return {"align": _cycle(_TEXT_ALIGNS, item.align)}
+        chosen = _chosen(_TEXT_ALIGNS, item.align, value)
+        return {} if chosen == item.align and value is True else {"align": chosen}
     if key == "list_style":
-        return {"list_style": _cycle(_TEXT_LISTS, item.list_style)}
+        chosen = _chosen(_TEXT_LISTS, item.list_style, value)
+        return {} if chosen == item.list_style and value is True else {"list_style": chosen}
     if key == "text_palette":
-        return {"text_palette": _cycle(_TEXT_COLORS, item.text_palette)}
+        chosen = _chosen(_TEXT_COLORS, item.text_palette, value)
+        return {} if chosen == item.text_palette and value is True else {"text_palette": chosen}
     if key in {"fill_palette", "fill"}:
-        return {"fill_palette": _cycle(_TEXT_FILLS, item.fill_palette)}
+        chosen = _chosen(_TEXT_FILLS, item.fill_palette, value)
+        return {} if chosen == item.fill_palette and value is True else {"fill_palette": chosen}
     if key == "link":
         if isinstance(value, str):
             return {"link": value}
@@ -481,73 +615,107 @@ def _next_text_format(item: TextObject, key: str, value: object) -> dict[str, ob
 
 def _next_shape_format(item: ShapeObject, key: str, value: object) -> dict[str, object]:
     if key == "shape":
-        return {"shape": _cycle(CLOSED_SHAPE_TYPES, item.shape)}
+        if value is True:
+            return {}
+        chosen = _chosen(CLOSED_SHAPE_TYPES, item.shape, value)
+        return {} if chosen == item.shape and value is True else {"shape": chosen}
     if key == "fill":
-        nxt = _cycle(SHAPE_FILL_PALETTES, item.fill_palette)
-        if nxt is None:
+        if value is True:
+            return {}
+        chosen = _chosen(SHAPE_FILL_PALETTES, item.fill_palette, value)
+        if chosen is None:
             return {"clear_fill": True, "fill_palette": None}
-        return {"fill_palette": nxt}
+        return {"fill_palette": chosen}
     if key == "stroke":
-        return {"stroke_palette": _cycle(SHAPE_STROKE_PALETTES, item.stroke_palette)}
+        if value is True:
+            return {}
+        return {"stroke_palette": _chosen(SHAPE_STROKE_PALETTES, item.stroke_palette, value)}
     if key == "width":
-        return {"stroke_width": _cycle(SHAPE_STROKE_WIDTHS, item.stroke_width)}
+        if value is True:
+            return {}
+        return {"stroke_width": _chosen(SHAPE_STROKE_WIDTHS, item.stroke_width, value)}
     if key == "dash":
-        return {"line_style": _cycle(SHAPE_LINE_STYLES, item.line_style)}
+        if value is True:
+            return {}
+        return {"line_style": _chosen(SHAPE_LINE_STYLES, item.line_style, value)}
     if key == "corner":
         if item.shape not in SHAPE_CORNER_TYPES:
             return {}
-        return {"corner_radius": _cycle(SHAPE_CORNERS, item.corner_radius)}
+        if value is True:
+            return {}
+        return {"corner_radius": _chosen(SHAPE_CORNERS, item.corner_radius, value)}
     if key == "lock":
         return {"locked": not item.locked}
-    del value
     return {}
 
 
 def _next_connector_format(item: ConnectorObject, key: str, value: object) -> dict[str, object]:
     if key == "route":
-        return {"route": "elbow" if item.route == "straight" else "straight"}
+        if value is True:
+            return {}
+        chosen = _chosen(("straight", "elbow"), item.route, value)
+        return {"route": chosen}
     if key == "start_head":
-        return {"start_head": "arrow" if item.start_head == "none" else "none"}
+        if value is True:
+            return {}
+        return {"start_head": _chosen(("none", "arrow"), item.start_head, value)}
     if key == "end_head":
-        return {"end_head": "none" if item.end_head == "arrow" else "arrow"}
+        if value is True:
+            return {}
+        return {"end_head": _chosen(("none", "arrow"), item.end_head, value)}
     if key == "color":
-        return {"stroke_palette": _cycle(CONNECTOR_STROKE_PALETTES, item.stroke_palette)}
+        if value is True:
+            return {}
+        return {"stroke_palette": _chosen(CONNECTOR_STROKE_PALETTES, item.stroke_palette, value)}
     if key == "width":
-        return {"stroke_width": _cycle(CONNECTOR_STROKE_WIDTHS, item.stroke_width)}
+        if value is True:
+            return {}
+        return {"stroke_width": _chosen(CONNECTOR_STROKE_WIDTHS, item.stroke_width, value)}
     if key == "dash":
-        return {"line_style": _cycle(CONNECTOR_LINE_STYLES, item.line_style)}
+        if value is True:
+            return {}
+        return {"line_style": _chosen(CONNECTOR_LINE_STYLES, item.line_style, value)}
     if key == "lock":
         return {"locked": not item.locked}
-    del value
     return {}
 
 
 def _next_sticky_format(item: StickyObject, key: str, value: object) -> dict[str, object]:
     if key == "palette":
-        return {"palette": _cycle(STICKY_PALETTE_TOKENS, item.palette)}
+        if value is True:
+            return {}
+        return {"palette": _chosen(STICKY_PALETTE_TOKENS, item.palette, value)}
     if key == "shape":
-        return {"shape": _cycle(_STICKY_SHAPES, item.shape)}
+        if value is True:
+            return {}
+        return {"shape": _chosen(_STICKY_SHAPES, item.shape, value)}
     if key == "font_size":
-        return {"font_size": _cycle(_STICKY_FONT_SIZES, item.font_size)}
+        if value is True:
+            return {}
+        return {"font_size": _chosen(_STICKY_FONT_SIZES, item.font_size, value)}
     if key == "lock":
         return {"locked": not item.locked}
-    del value
     return {}
 
 
 def _next_stroke_format(item: StrokeObject, key: str, value: object) -> dict[str, object]:
     if key == "tool":
-        return {"tool": _cycle(DRAW_INK_SUBTOOLS, item.tool)}
+        if value is True:
+            return {}
+        return {"tool": _chosen(DRAW_INK_SUBTOOLS, item.tool, value)}
     if key in {"color", "palette"}:
-        return {"palette": _cycle(CONNECTOR_STROKE_PALETTES, item.palette)}
+        if value is True:
+            return {}
+        return {"palette": _chosen(CONNECTOR_STROKE_PALETTES, item.palette, value)}
     if key == "width":
+        if value is True:
+            return {}
         widths = tuple(
             width for width in _STROKE_WIDTHS if STROKE_WIDTH_MIN <= width <= STROKE_WIDTH_MAX
         )
-        return {"width_px_100": _cycle(widths, item.width_px_100)}
+        return {"width_px_100": _chosen(widths, item.width_px_100, value)}
     if key == "lock":
         return {"locked": not item.locked}
-    del value
     return {}
 
 

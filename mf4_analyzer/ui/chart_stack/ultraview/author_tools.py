@@ -800,6 +800,7 @@ def resolve_board_hit(
     editor_active: bool = False,
     viewport_pan: bool = False,
     resize_handle: str | None = None,
+    handle_item: BoardItemKey | None = None,
     author_hits_rev_z: Sequence[AuthorKey] = (),
     card: CardKey | None = None,
 ) -> HitTarget:
@@ -817,7 +818,11 @@ def resolve_board_hit(
     if viewport_pan:
         return HitTarget(HIT_VIEWPORT_PAN)
     if resize_handle:
-        return HitTarget(HIT_RESIZE_HANDLE, item=card, handle=str(resize_handle))
+        return HitTarget(
+            HIT_RESIZE_HANDLE,
+            item=handle_item if handle_item is not None else card,
+            handle=str(resize_handle),
+        )
     if author_hits_rev_z:
         return HitTarget(HIT_AUTHOR, item=author_hits_rev_z[0])
     if card is not None:
@@ -855,6 +860,11 @@ class BoardInteractionController:
         self._draw_preset_index = 0
         self._draw_style = StrokeCreateIntent(object_id="format", points=())
         self._clipboard: AuthorClipboardPayload | None = None
+        self._geometry_sessions: dict[str, dict[str, object] | None] = {
+            TOOL_TEXT: None,
+            TOOL_SHAPES: None,
+            TOOL_CONNECTOR: None,
+        }
 
     # -- tool -------------------------------------------------------------
 
@@ -1147,6 +1157,18 @@ class BoardInteractionController:
             return self._primary_card
         self._primary_card = min(cards)
         return self._primary_card
+
+    def geometry_session(self, tool: str) -> dict[str, object] | None:
+        return self._geometry_sessions.get(str(tool))
+
+    def set_geometry_session(self, tool: str, session: dict[str, object] | None) -> None:
+        checked = str(tool)
+        if checked in self._geometry_sessions:
+            self._geometry_sessions[checked] = session
+
+    def clear_geometry_sessions(self) -> None:
+        for tool in self._geometry_sessions:
+            self._geometry_sessions[tool] = None
 
     def hover_target(self) -> BoardItemKey | None:
         return self._hover_target

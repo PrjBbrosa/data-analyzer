@@ -330,7 +330,8 @@ def test_workspace_extent_remaps_runtime_geometry_without_mutating_placement(
     assert board.workspace_extent() == GridBounds(-4, -4, 24, 56)
     assert board._placements[ref].rect == GridRect(0, 0, 4, 3)
     assert card.geometry().x() > board.metrics().padding
-    assert board.width() > board.metrics().board_width
+    assert board.width() == board._workspace_size(board.metrics()).width()
+    assert board.workspace_extent() == GridBounds(-4, -4, 24, 56)
     assert board.grid_anchor_at(card.geometry().center()).column == pytest.approx(
         2.0, abs=0.02
     )

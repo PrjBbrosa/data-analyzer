@@ -4671,9 +4671,9 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
  * it needs the same immediate, unambiguous feedback as a mode toggle. */
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"] {
-    border-color: {{UV_BRAND}};
-    background-color: {{UV_SURFACE_TINT}};
-    color: {{UV_BRAND}};
+    border-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
+    color: #ffffff;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover {
@@ -4689,9 +4689,9 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeAc
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
-    border-color: {{UV_LINE_STRONG}};
-    background-color: {{UV_SURFACE_SOFT}};
-    color: {{UV_INK}};
+    border-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
+    color: #ffffff;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
@@ -4724,9 +4724,9 @@ QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][panelOp
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"] {
-    border-color: {{UV_BRAND}};
-    background-color: {{UV_SURFACE_TINT}};
-    color: {{UV_BRAND}};
+    border-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
+    color: #ffffff;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover {
@@ -4746,7 +4746,7 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeAc
  * Use border-color, not the border shorthand: Qt would zero border-radius. */
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"],
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"][panelOpen="true"] {
-    background-color: {{UV_BRAND}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_BRAND}}, stop: 1 {{UV_AMBER}});
     border-color: {{UV_BRAND}};
     color: #ffffff;
 }

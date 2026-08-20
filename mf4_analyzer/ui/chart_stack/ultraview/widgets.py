@@ -69,7 +69,11 @@ from mf4_analyzer.ui.ultraview_state import (
     GridBounds,
     GridRect,
     BoardBox,
+    ConnectorObject,
+    ShapeObject,
     StickyObject,
+    StrokeObject,
+    TextObject,
     UltraViewBoardState,
     safety_grid_bounds,
     UltraViewRef,
@@ -122,12 +126,29 @@ from .free_grid import (
     rect_to_pixels,
     screen_grid_metrics,
 )
-from .author_geometry import board_box_to_pixels, pixels_to_board_point
+from .author_geometry import (
+    board_box_to_pixels,
+    board_point_to_pixels,
+    connector_handle_points,
+    hit_box_handle,
+    hit_connector,
+    hit_connector_handle,
+    hit_stroke,
+    pixels_to_board_point,
+    stroke_hit_record,
+)
 from .author_layer import AuthorLayerModel, AuthorPaintLayer
 from .author_style import DEFAULT_STICKY_PALETTE, DEFAULT_THEME
 from .author_tools import (
     HIT_AUTHOR,
     HIT_BLANK,
+    HIT_RESIZE_HANDLE,
+    SHAPE_MIN_HEIGHT,
+    SHAPE_MIN_WIDTH,
+    STICKY_MIN_HEIGHT,
+    STICKY_MIN_WIDTH,
+    TEXT_MIN_HEIGHT,
+    TEXT_MIN_WIDTH,
     TOOL_STICKY,
     AuthorCreateIntent,
     AuthorDeleteIntent,
@@ -136,6 +157,8 @@ from .author_tools import (
     BoardInteractionController,
     CardKey,
     HitTarget,
+    ShapeUpdateIntent,
+    TextUpdateIntent,
     clamp_author_box,
     new_author_object_id,
     resolve_board_hit,
@@ -3132,6 +3155,7 @@ class FreeGridBoard(QWidget):
     author_create_requested = pyqtSignal(object)
     author_update_requested = pyqtSignal(object)
     author_delete_requested = pyqtSignal(object)
+    author_edit_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -4115,6 +4139,9 @@ class FreeGridBoard(QWidget):
         mapped = QPoint(*self._board_pos(card, event.pos()))
         self._close_sticky_editor_if_outside(mapped)
         hit = self.classify_press(mapped, modifiers=event.modifiers())
+        if hit.kind == HIT_RESIZE_HANDLE and isinstance(hit.item, AuthorKey):
+            self._begin_selected_author_handle(hit, event, mapped)
+            return True
         if hit.kind != HIT_AUTHOR:
             return False
         self._handle_author_press(hit, event, mapped)
@@ -4151,31 +4178,54 @@ class FreeGridBoard(QWidget):
         if item is not None and bool(getattr(item, "locked", False)):
             self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
             return
-        if event.type() == QEvent.MouseButtonDblClick:
-            self._begin_sticky_edit(item)
+        if item is None or not isinstance(item, (StickyObject, TextObject, ShapeObject)):
             return
-        if item is None or not isinstance(item, StickyObject):
+        self._begin_box_geometry(item, pos, handle=None)
+
+    def _begin_selected_author_handle(
+        self, hit: HitTarget, event: QMouseEvent, pos: QPoint
+    ) -> None:
+        if not isinstance(hit.item, AuthorKey):
             return
-        box = item.box
-        mapped = board_box_to_pixels(
-            (box.x, box.y, box.width, box.height),
-            self._metrics,
-            origin_offset=self._workspace_origin_offset(),
-        )
-        if mapped is None:
+        item = self._author_item(hit.item.object_id)
+        if item is None or bool(getattr(item, "locked", False)):
+            if item is not None:
+                self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
             return
-        handle = hit_handle(
-            (int(mapped[0]), int(mapped[1]), int(mapped[2]), int(mapped[3])),
-            (pos.x(), pos.y()),
-        )
+        handle = str(hit.handle or "")
+        if isinstance(item, ConnectorObject):
+            page = _page_of(self)
+            starter = getattr(page, "_begin_connector_geometry", None)
+            if callable(starter):
+                starter((handle, item.object_id), event, pos)
+            return
+        if isinstance(item, (StickyObject, TextObject, ShapeObject)):
+            self._begin_box_geometry(item, pos, handle=handle)
+
+    def _begin_box_geometry(self, item, pos: QPoint, *, handle: str | None) -> None:
+        box = getattr(item, "box", None)
+        if box is None:
+            return
         board_point = self._pixel_to_board_point(pos)
+        min_w, min_h = self._author_min_size(item)
         self._author_geometry_session = {
             "object_id": item.object_id,
             "kind": "resize" if handle else "move",
             "handle": handle,
             "origin": board_point,
             "box": (box.x, box.y, box.width, box.height),
+            "min_width": min_w,
+            "min_height": min_h,
         }
+        if QWidget.mouseGrabber() is None:
+            self.grabMouse()
+
+    def _author_min_size(self, item) -> tuple[float, float]:
+        if isinstance(item, TextObject):
+            return TEXT_MIN_WIDTH, TEXT_MIN_HEIGHT
+        if isinstance(item, ShapeObject):
+            return SHAPE_MIN_WIDTH, SHAPE_MIN_HEIGHT
+        return STICKY_MIN_WIDTH, STICKY_MIN_HEIGHT
 
     def _begin_sticky_draft(self, pos: QPoint) -> None:
         origin = self._pixel_to_board_point(pos)
@@ -4281,10 +4331,16 @@ class FreeGridBoard(QWidget):
         dx = current[0] - ox
         dy = current[1] - oy
         handle = session.get("handle")
+        min_w = float(session.get("min_width") or STICKY_MIN_WIDTH)
+        min_h = float(session.get("min_height") or STICKY_MIN_HEIGHT)
         if session.get("kind") == "move" or not handle:
-            box = clamp_author_box(x + dx, y + dy, width, height)  # type: ignore[name-defined]
+            box = clamp_author_box(
+                x + dx, y + dy, width, height, min_width=min_w, min_height=min_h
+            )
         else:
-            box = self._resize_author_box((x, y, width, height), str(handle), dx, dy)
+            box = self._resize_author_box(
+                (x, y, width, height), str(handle), dx, dy, min_width=min_w, min_height=min_h
+            )
         mapped = board_box_to_pixels(box, self._metrics, origin_offset=self._workspace_origin_offset())
         if mapped is not None:
             self._overlay.set_selection_rects((self._pixel_box(mapped),), handles=True)
@@ -4295,6 +4351,9 @@ class FreeGridBoard(QWidget):
         handle: str,
         dx: float,
         dy: float,
+        *,
+        min_width: float = STICKY_MIN_WIDTH,
+        min_height: float = STICKY_MIN_HEIGHT,
     ) -> tuple[float, float, float, float]:
         x, y, width, height = box
         x2, y2 = x + width, y + height
@@ -4306,7 +4365,14 @@ class FreeGridBoard(QWidget):
             y = y + dy
         if "s" in handle:
             y2 = y2 + dy
-        return clamp_author_box(min(x, x2), min(y, y2), abs(x2 - x), abs(y2 - y))
+        return clamp_author_box(
+            min(x, x2),
+            min(y, y2),
+            abs(x2 - x),
+            abs(y2 - y),
+            min_width=min_width,
+            min_height=min_height,
+        )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() != Qt.LeftButton:
@@ -4322,6 +4388,13 @@ class FreeGridBoard(QWidget):
             modifiers=event.modifiers(),
             viewport_pan=False,
         )
+        if hit.kind == HIT_RESIZE_HANDLE and isinstance(hit.item, AuthorKey):
+            page = _page_of(self)
+            if page is not None:
+                page.notify_canvas_click()
+            self._begin_selected_author_handle(hit, event, event.pos())
+            event.accept()
+            return
         if hit.kind == HIT_AUTHOR:
             page = _page_of(self)
             if page is not None:
@@ -4418,7 +4491,11 @@ class FreeGridBoard(QWidget):
             return
         hit = self.classify_press(event.pos(), modifiers=event.modifiers())
         if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
-            self._begin_sticky_edit(self._author_item(hit.item.object_id))
+            item = self._author_item(hit.item.object_id)
+            if isinstance(item, StickyObject):
+                self._begin_sticky_edit(item)
+            else:
+                self.author_edit_requested.emit(hit.item.object_id)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
@@ -4473,13 +4550,30 @@ class FreeGridBoard(QWidget):
         dy = current[1] - origin[1]
         handle = session.get("handle")
         x, y, width, height = box  # type: ignore[misc]
+        min_w = float(session.get("min_width") or STICKY_MIN_WIDTH)
+        min_h = float(session.get("min_height") or STICKY_MIN_HEIGHT)
         if session.get("kind") == "resize" and handle:
-            next_box = self._resize_author_box((x, y, width, height), str(handle), dx, dy)
+            next_box = self._resize_author_box(
+                (x, y, width, height),
+                str(handle),
+                dx,
+                dy,
+                min_width=min_w,
+                min_height=min_h,
+            )
         else:
-            next_box = clamp_author_box(x + dx, y + dy, width, height)
+            next_box = clamp_author_box(
+                x + dx, y + dy, width, height, min_width=min_w, min_height=min_h
+            )
         object_id = str(session.get("object_id") or "")
         if next_box != (x, y, width, height) and object_id:
-            self.author_update_requested.emit(AuthorUpdateIntent(object_id, box=next_box))
+            item = self._author_item(object_id)
+            if isinstance(item, TextObject):
+                self.author_update_requested.emit(TextUpdateIntent(object_id, box=next_box))
+            elif isinstance(item, ShapeObject):
+                self.author_update_requested.emit(ShapeUpdateIntent(object_id, box=next_box))
+            else:
+                self.author_update_requested.emit(AuthorUpdateIntent(object_id, box=next_box))
         self._sync_selection_handles()
 
     def _finish_marquee(self, session) -> None:
@@ -5130,9 +5224,13 @@ class FreeGridBoard(QWidget):
             self._author_text_editor.is_editing() or self._interaction.is_editor_active()
         )
         handle = None
+        handle_item = None
         card_key = None
+        author_handle = self._selected_author_handle_at(pos)
+        if author_handle is not None:
+            handle, handle_item = author_handle
         target = card if card is not None else self._card_at(pos)
-        if target is not None:
+        if handle is None and target is not None:
             ref = parse_ref_payload(
                 {"section": target.model().section, "view_id": target.model().view_id}
             )
@@ -5145,25 +5243,52 @@ class FreeGridBoard(QWidget):
                         (0, 0, target.width(), target.height()),
                         (local.x(), local.y()),
                     )
-        author_hits = self._author_keys_at(pos)
+        elif target is not None:
+            ref = parse_ref_payload(
+                {"section": target.model().section, "view_id": target.model().view_id}
+            )
+            if ref is not None:
+                card_key = CardKey(ref)
+        author_hits = () if handle is not None and handle_item is not None else self._author_keys_at(pos)
         hit = resolve_board_hit(
             editor_active=editor_active,
             viewport_pan=bool(viewport_pan),
             resize_handle=handle,
+            handle_item=handle_item,
             author_hits_rev_z=author_hits,
             card=card_key,
         )
         self._interaction.set_hover_target(hit.item)
         return hit
 
-    def _author_keys_at(self, pos: QPoint) -> tuple[AuthorKey, ...]:
-        """Reverse-z hit list. The paint layer itself remains mouse-transparent."""
-        hits: list[AuthorKey] = []
+    def _selected_author_handle_at(self, pos: QPoint) -> tuple[str, AuthorKey] | None:
+        """I3: selected author handles sit above body hits and cards."""
+        ids = self._interaction.author_selection_ids()
+        if not ids:
+            return None
         origin = self._workspace_origin_offset()
         for item in reversed(self._author_objects):
             object_id = str(getattr(item, "object_id", "") or "")
+            if object_id not in ids:
+                continue
+            if isinstance(item, ConnectorObject):
+                handles = connector_handle_points(
+                    (item.start.point.x, item.start.point.y),
+                    (item.end.point.x, item.end.point.y),
+                    route=item.route,
+                    elbow_bias=item.elbow_bias,
+                )
+                mapped = {}
+                for name, point in handles.items():
+                    pixel = board_point_to_pixels(point, self._metrics, origin_offset=origin)
+                    if pixel is not None:
+                        mapped[name] = pixel
+                hit = hit_connector_handle(mapped, (pos.x(), pos.y()))
+                if hit is not None:
+                    return (hit, AuthorKey(object_id))
+                continue
             box = getattr(item, "box", None)
-            if not object_id or box is None:
+            if box is None:
                 continue
             mapped = board_box_to_pixels(
                 (box.x, box.y, box.width, box.height),
@@ -5172,15 +5297,74 @@ class FreeGridBoard(QWidget):
             )
             if mapped is None:
                 continue
-            x, y, width, height = mapped
-            rect = QRect(
-                int(round(x)),
-                int(round(y)),
-                max(1, int(round(width))),
-                max(1, int(round(height))),
+            handle = hit_box_handle(
+                (
+                    int(round(mapped[0])),
+                    int(round(mapped[1])),
+                    int(round(mapped[2])),
+                    int(round(mapped[3])),
+                ),
+                (pos.x(), pos.y()),
             )
-            if rect.contains(pos):
-                hits.append(AuthorKey(object_id))
+            if handle is not None:
+                return (handle, AuthorKey(object_id))
+        return None
+
+    def _author_keys_at(self, pos: QPoint) -> tuple[AuthorKey, ...]:
+        """Reverse-z hit list. The paint layer itself remains mouse-transparent."""
+        hits: list[AuthorKey] = []
+        origin = self._workspace_origin_offset()
+        probe = pixels_to_board_point(
+            (float(pos.x()), float(pos.y())),
+            self._metrics,
+            origin_offset=origin,
+        )
+        for item in reversed(self._author_objects):
+            object_id = str(getattr(item, "object_id", "") or "")
+            if not object_id:
+                continue
+            box = getattr(item, "box", None)
+            if box is not None:
+                mapped = board_box_to_pixels(
+                    (box.x, box.y, box.width, box.height),
+                    self._metrics,
+                    origin_offset=origin,
+                )
+                if mapped is None:
+                    continue
+                x, y, width, height = mapped
+                rect = QRect(
+                    int(round(x)),
+                    int(round(y)),
+                    max(1, int(round(width))),
+                    max(1, int(round(height))),
+                )
+                if rect.contains(pos):
+                    hits.append(AuthorKey(object_id))
+                continue
+            if probe is None:
+                continue
+            if isinstance(item, ConnectorObject):
+                if hit_connector(
+                    (item.start.point.x, item.start.point.y),
+                    (item.end.point.x, item.end.point.y),
+                    probe,
+                    route=item.route,
+                    stroke_width=item.stroke_width,
+                    start_head=item.start_head,
+                    end_head=item.end_head,
+                    elbow_bias=item.elbow_bias,
+                ):
+                    hits.append(AuthorKey(object_id))
+                continue
+            if isinstance(item, StrokeObject):
+                record = stroke_hit_record(
+                    object_id,
+                    ((point.x, point.y) for point in item.points),
+                    item.width_px_100,
+                )
+                if record is not None and hit_stroke(record, probe):
+                    hits.append(AuthorKey(object_id))
         return tuple(hits)
 
     def _on_replace_armed(self, key: str) -> None:

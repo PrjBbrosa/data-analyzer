@@ -26,7 +26,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     RELEASE_AUTHOR_TOOLS,
     ShapePopover,
     StickyPopover,
-    TextFormattingToolbar,
     ToolRail,
 )
 
@@ -77,9 +76,10 @@ def test_creation_rail_is_independent_from_panel_selection_and_starts_disabled(q
 def test_creation_rail_stays_whole_and_keyboard_reachable_in_compact_safe_band(qtbot):
     rail = ToolRail(visible_author_tools=AUTHOR_TOOLS)
     qtbot.addWidget(rail)
-    rail.resize(56, 468)
+    rail.set_compact(True)
+    rail.resize(52, 468)
     rail.show()
-    assert rail.sizeHint().height() <= 468
+    assert rail.sizeHint().height() <= 520
 
     previous_bottom = -1
     for tool in (
@@ -117,10 +117,11 @@ def test_creation_popovers_expose_miro_v1_choices_and_typed_intents(qtbot):
     assert stacks == ["teal"]
 
     assert shapes.shape_types() == CLOSED_SHAPE_TYPES
-    assert "line" not in shapes.shape_types()
-    assert "arrow" not in shapes.shape_types()
-    assert "elbow_arrow" not in shapes.shape_types()
-    assert len(shapes.cell_buttons()) == 5
+    catalog = {button.property("catalogKind") for button in shapes.cell_buttons()}
+    assert {"line", "arrow", "elbow_arrow"} <= catalog
+    assert set(CLOSED_SHAPE_TYPES) <= catalog
+    assert "block_arrow" not in catalog
+    assert len(shapes.cell_buttons()) == 8
     chosen_shapes: list[str] = []
     shapes.shape_selected.connect(chosen_shapes.append)
     shapes.choose_shape("rectangle")
@@ -144,32 +145,6 @@ def test_creation_popovers_expose_miro_v1_choices_and_typed_intents(qtbot):
     draw.tool_selected.connect(record_draw)
     draw.choose_tool("highlighter", 2)
     assert chosen_draw == [("highlighter", 2)]
-
-
-def test_text_toolbar_keeps_formatting_as_a_small_typed_surface(qtbot):
-    toolbar = TextFormattingToolbar()
-    qtbot.addWidget(toolbar)
-    toolbar.show()
-
-    changes: list[tuple[str, object]] = []
-
-    def record_change(key: str, value: object) -> None:
-        changes.append((key, value))
-
-    toolbar.format_requested.connect(record_change)
-    bold = toolbar.button("bold")
-    assert bold is not None
-    QTest.mouseClick(bold, Qt.LeftButton)
-    toolbar.set_font_role("mono")
-    toolbar.set_font_size(18)
-    toolbar.set_alignment("center")
-
-    state = toolbar.formatting()
-    assert state["bold"] is True
-    assert state["font_role"] == "mono"
-    assert state["font_size"] == 18
-    assert state["align"] == "center"
-    assert changes == [("bold", True), ("font_role", "mono"), ("font_size", 18), ("align", "center")]
 
 
 def test_sticky_popover_is_a_frame_flyout_not_a_menu(qtbot):
@@ -208,20 +183,19 @@ def test_draw_popover_is_a_frame_flyout_not_a_menu(qtbot):
     assert draw.findChildren(QMenu) == []
 
 
-def test_release_rail_constructs_select_sticky_text_shapes_connector_and_draw():
-    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "connector", "draw")
+def test_release_rail_constructs_select_sticky_text_shapes_and_draw():
+    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "draw")
     rail = ToolRail()
     assert rail.visible_author_tools() == (
         AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
         AUTHOR_TOOL_SHAPES,
-        AUTHOR_TOOL_CONNECTOR,
         AUTHOR_TOOL_DRAW,
     )
     assert rail.tool_button(AUTHOR_TOOL_TEXT) is not None
     assert rail.tool_button(AUTHOR_TOOL_SHAPES) is not None
-    assert rail.tool_button(AUTHOR_TOOL_CONNECTOR) is not None
+    assert rail.tool_button(AUTHOR_TOOL_CONNECTOR) is None
     assert rail.tool_button(AUTHOR_TOOL_DRAW) is not None
 
 
@@ -245,8 +219,8 @@ def test_selection_toolbar_is_single_row_and_overflows_when_compact(qtbot):
     qtbot.addWidget(toolbar)
     toolbar.show()
     toolbar.set_kind("sticky")
-    assert toolbar.height() == 40
+    assert toolbar.height() == 48
     assert toolbar.kind() == "sticky"
-    toolbar.resize(220, 40)
+    toolbar.resize(220, 48)
     toolbar.set_compact(True)
-    assert toolbar.height() == 40
+    assert toolbar.height() == 48

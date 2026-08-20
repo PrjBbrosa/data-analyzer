@@ -434,21 +434,21 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     sticky = rows["便签 Sticky"]
     text = rows["文字 Text"]
     shape = rows["形状 Shape"]
-    connector = rows["连接线 Connector"]
-    draw = rows["画笔 Draw"]
+    existing = rows["已有连线与笔画"]
     assert sticky.keys == ("N",)
     assert text.keys == ("T",)
     assert shape.keys == ("S",)
-    assert connector.keys == ("L",)
-    assert draw.keys == ("P",)
-    assert "V / N / T / S / L / P" in sticky.sub
-    assert "固定连续创建" in sticky.sub
-    assert "整框" in text.sub
-    assert "固定连续创建" in text.sub
+    assert "连接线 Connector" not in rows
+    assert "画笔 Draw" not in rows
+    assert "V / N / T / S" in sticky.sub
+    assert "Stack" in sticky.sub
+    assert "固定连续创建" not in sticky.sub
+    assert "图标栏" in text.sub
+    assert "固定连续创建" not in text.sub
     assert "矩形" in shape.sub
-    assert "固定连续创建" in shape.sub
-    assert "不做自动避障" in connector.sub
-    assert "固定连续创建" in connector.sub
-    assert "整笔擦除" in draw.sub
-    assert "套索" in draw.sub
-    assert "保持连续" in draw.sub
+    assert "连接线" in shape.sub
+    assert "P 打开" in shape.sub
+    assert "固定连续创建" not in shape.sub
+    assert "仍会显示" in existing.sub
+    assert "删除" in existing.sub
+    assert "尚未提供" not in existing.sub
