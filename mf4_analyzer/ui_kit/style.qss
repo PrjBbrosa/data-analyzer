@@ -4433,12 +4433,59 @@ QFrame#ultraViewBoardIsland,
 QFrame#ultraViewGlobalIsland,
 QFrame#ultraViewNavigationIsland,
 QFrame#ultraViewStatusIsland,
-QFrame#ultraViewCardContextIsland,
-QFrame#ultraViewSelectionToolbar {
+QFrame#ultraViewCardContextIsland {
     background-color: {{UV_SURFACE_SOLID}};
     border: 1px solid {{UV_LINE}};
     border-radius: 11px;
     color: #203347;
+}
+QFrame#ultraViewSelectionToolbar {
+    background-color: transparent;
+    border: 0;
+    border-radius: 12px;
+    color: #203347;
+}
+QFrame#ultraViewSelectionToolbar QToolButton[role="selectionToolbarCell"],
+QFrame#ultraViewSelectionToolbar QToolButton#ultraViewSelectionToolbarMore {
+    padding: 0;
+    margin: 0;
+    min-height: 34px;
+    max-height: 36px;
+    border-width: 1px;
+    border-style: solid;
+    border-color: transparent;
+    border-radius: 8px;
+    background-color: transparent;
+    color: #183039;
+    font-weight: 500;
+}
+QFrame#ultraViewSelectionToolbar QToolButton[role="selectionToolbarCell"]:hover,
+QFrame#ultraViewSelectionToolbar QToolButton#ultraViewSelectionToolbarMore:hover {
+    background-color: rgba(66, 98, 255, 22);
+    border-color: transparent;
+}
+QFrame#ultraViewSelectionToolbar QToolButton[role="selectionToolbarCell"]:pressed,
+QFrame#ultraViewSelectionToolbar QToolButton#ultraViewSelectionToolbarMore:pressed {
+    background-color: rgba(66, 98, 255, 36);
+    border-color: transparent;
+}
+QFrame#ultraViewSelectionToolbar QToolButton[role="selectionToolbarCell"]:checked {
+    background-color: rgba(66, 98, 255, 36);
+    border-color: transparent;
+    color: #4262FF;
+}
+QFrame#ultraViewSelectionToolbar QToolButton[role="selectionToolbarCell"]:focus {
+    border-width: 2px;
+    border-style: solid;
+    border-color: #4262FF;
+}
+QFrame#ultraViewSelectionToolbar QFrame[role="selectionToolbarDivider"] {
+    background-color: rgba(50, 86, 97, 59);
+    border: 0;
+    min-width: 1px;
+    max-width: 1px;
+    min-height: 24px;
+    max-height: 24px;
 }
 QFrame#ultraViewToolFlyoutInner {
     background-color: transparent;
@@ -4577,19 +4624,26 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"] {
     color: {{UV_MUTED}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"] {
-    /* Content box = RAIL_BUTTON_SIZE (36) − 2×1px border. QSS min/max is
-     * content width; polish would otherwise grow the Python fixed 36px
-     * outer box to 38. */
-    min-width: 34px;
-    max-width: 34px;
-    min-height: 34px;
-    max-height: 34px;
+    /* Content box = RAIL_BUTTON_SIZE (40) − 2×1px border. QSS min/max is
+     * content width; polish would otherwise grow the Python fixed 40px
+     * outer box. All rail buttons share this box; compact is a rail
+     * property, not a per-button state. */
+    min-width: 38px;
+    max-width: 38px;
+    min-height: 38px;
+    max-height: 38px;
     padding: 0;
     margin: 0;
     border: 1px solid transparent;
     border-radius: 10px;
     background-color: transparent;
     color: {{UV_MUTED}};
+}
+QFrame#ultraViewToolRail[compact="true"] QToolButton[chrome="ultraview"][role="icon"] {
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 34px;
+    max-height: 34px;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"]:hover,
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"]:hover,
@@ -4620,11 +4674,12 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"]:f
     border-color: {{UV_BRAND}};
     background-color: {{UV_SURFACE_TINT}};
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"] {
-    border-left-width: 2px;
-    border-left-color: #4262FF;
-    background-color: #EEF1FF;
-    color: #4262FF;
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][primaryFill="true"] {
+    border-width: 1px;
+    border-style: solid;
+    border-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
+    color: #ffffff;
 }
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
@@ -4635,11 +4690,12 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
     background-color: {{UV_SURFACE_TINT}};
     color: {{UV_BRAND}};
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover {
-    border-left-width: 2px;
-    border-left-color: #4262FF;
-    background-color: #E4E9FF;
-    color: #4262FF;
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][primaryFill="true"]:hover {
+    border-width: 1px;
+    border-style: solid;
+    border-color: {{UV_BRAND_DEEP}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
+    color: #ffffff;
 }
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
@@ -4650,11 +4706,12 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
     background-color: {{UV_SURFACE_SOFT}};
     color: {{UV_BRAND_DEEP}};
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed {
-    border-left-width: 2px;
-    border-left-color: #4262FF;
-    background-color: #E4E9FF;
-    color: #4262FF;
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][primaryFill="true"]:pressed {
+    border-width: 1px;
+    border-style: solid;
+    border-color: {{UV_BRAND_DEEP}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_AMBER}});
+    color: #ffffff;
 }
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
@@ -4666,43 +4723,45 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
     color: {{UV_BRAND_DEEP}};
 }
 
-/* Persistent modes and open primary panels share one filled destination
- * treatment.  A left-rail or right-global action opens a visible surface, so
- * it needs the same immediate, unambiguous feedback as a mode toggle. */
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"],
+/* Persistent modes that lost the unique rail fill keep a quiet teal outline.
+ * Global island still uses the filled destination treatment. */
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][primaryFill="false"],
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"][primaryFill="false"],
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"][primaryFill="false"] {
+    border-width: 1px;
+    border-style: solid;
+    border-color: {{UV_BRAND}};
+    background-color: transparent;
+    color: {{UV_BRAND}};
+}
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"] {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
     background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
     color: #ffffff;
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
     color: #ffffff;
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_AMBER}});
     color: #ffffff;
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
     background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
     color: #ffffff;
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
     color: #ffffff;
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_AMBER}});
     color: #ffffff;
 }
 /* The Board selector is navigation chrome rather than a destination panel;
@@ -4722,50 +4781,19 @@ QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][panelOp
     background-color: {{UV_SURFACE_SOFT}};
     color: {{UV_BRAND_DEEP}};
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"] {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
     background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_START}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
     color: #ffffff;
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: {{UV_RAIL_ACTIVE_HOVER}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_RAIL_ACTIVE_END}});
     color: #ffffff;
 }
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:pressed,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:pressed {
     border-color: {{UV_RAIL_ACTIVE_HOVER}};
-    background-color: {{UV_RAIL_ACTIVE_HOVER}};
-    color: #ffffff;
-}
-
-/* Empty-board View 库 CTA: primary gradient.  Must follow panelOpen so an
- * open library on an empty canvas does not fall back to the outline wash.
- * Use border-color, not the border shorthand: Qt would zero border-radius. */
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"],
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"][panelOpen="true"] {
-    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_BRAND}}, stop: 1 {{UV_AMBER}});
-    border-color: {{UV_BRAND}};
-    color: #ffffff;
-}
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"]:hover,
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"][panelOpen="true"]:hover {
-    background-color: {{UV_BRAND_DEEP}};
-    border-color: {{UV_BRAND_DEEP}};
-    color: #ffffff;
-}
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"]:pressed,
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"][panelOpen="true"]:pressed {
-    background-color: {{UV_BRAND_DEEP}};
-    border-color: {{UV_BRAND_DEEP}};
-    color: #ffffff;
-}
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"]:focus,
-QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][emptyCta="true"][panelOpen="true"]:focus {
-    border-color: {{UV_INK}};
-    background-color: {{UV_BRAND_DEEP}};
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 {{UV_RAIL_ACTIVE_HOVER}}, stop: 1 {{UV_AMBER}});
     color: #ffffff;
 }
 

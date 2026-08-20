@@ -440,7 +440,8 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     assert shape.keys == ("S",)
     assert "连接线 Connector" not in rows
     assert "画笔 Draw" not in rows
-    assert "V / N / T / S" in sticky.sub
+    assert "N / T / S / P" in sticky.sub
+    assert "V 或 Esc" in sticky.sub
     assert "Stack" in sticky.sub
     assert "固定连续创建" not in sticky.sub
     assert "图标栏" in text.sub

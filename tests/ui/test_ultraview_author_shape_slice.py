@@ -475,11 +475,11 @@ def test_style_toolbar_fill_stroke_width_dash_corner_and_type_switch(qtbot):
     assert toolbar.button("dash") is not None
     assert toolbar.button("corner") is not None
     def _pick(value) -> None:
-        popup = QApplication.activePopupWidget()
-        assert popup is not None
+        picker = harness.page.format_picker()
+        assert picker.isVisible()
         chips = [
             child
-            for child in popup.findChildren(QToolButton)
+            for child in picker.findChildren(QToolButton)
             if child.property("choiceValue") == value
         ]
         assert chips, value

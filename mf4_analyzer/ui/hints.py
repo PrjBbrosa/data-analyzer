@@ -679,7 +679,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.existing_markup",
-        text="P 开画笔，连线和笔画可选中删除",
+        text="P 开画笔三笔触，V/Esc 回选择",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=84,
@@ -690,6 +690,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=82,
+    ),
+    Hint(
+        id="ultraview.select_keys",
+        text="V 或 Esc 回到选择",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=83,
     ),
     Hint(
         id="ultraview.multiselect",

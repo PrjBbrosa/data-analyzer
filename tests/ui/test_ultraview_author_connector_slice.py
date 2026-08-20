@@ -610,11 +610,11 @@ def test_style_toolbar_route_heads_color_width_dash_label_lock(qtbot):
     for key in ("route", "start_head", "end_head", "color", "width", "dash", "label", "lock"):
         assert toolbar.button(key) is not None
     def _pick(value) -> None:
-        popup = QApplication.activePopupWidget()
-        assert popup is not None
+        picker = harness.page.format_picker()
+        assert picker.isVisible()
         chips = [
             child
-            for child in popup.findChildren(QToolButton)
+            for child in picker.findChildren(QToolButton)
             if child.property("choiceValue") == value
         ]
         assert chips, value

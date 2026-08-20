@@ -472,7 +472,7 @@ def test_draw_flyout_is_frame_with_four_live_items_and_no_precision(qtbot):
     assert len(flyout.preset_buttons("pen")) == 3
     assert len(flyout.preset_buttons("highlighter")) == 3
     for button in (*flyout.preset_buttons("pen"), *flyout.preset_buttons("highlighter")):
-        assert button.width() >= 40 and button.height() >= 40
+        assert button.width() >= 32 and button.height() >= 32
     eraser = flyout.session_button("eraser")
     lasso = flyout.session_button("lasso")
     assert eraser is not None and lasso is not None

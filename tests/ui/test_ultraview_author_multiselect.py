@@ -529,11 +529,11 @@ def test_page_toolbar_mixed_and_batch_style_one_history(qtbot):
     assert fill.text() in {"", "—"}
     QTest.mouseClick(fill, Qt.LeftButton)
     QApplication.processEvents()
-    popup = QApplication.activePopupWidget()
-    assert popup is not None
+    picker = harness.page.format_picker()
+    assert picker.isVisible()
     chips = [
         child
-        for child in popup.findChildren(QToolButton)
+        for child in picker.findChildren(QToolButton)
         if child.property("choiceValue") == "orange"
     ]
     assert chips

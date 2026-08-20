@@ -300,7 +300,7 @@ def test_rail_and_sticky_popover_fit_800x560(qtbot):
     rail = page.tool_rail()
     select = rail.tool_button(AUTHOR_TOOL_SELECT)
     sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
-    assert select is not None and select.isVisible()
+    assert select is None
     assert sticky is not None and sticky.isVisible()
     popover = page.sticky_popover()
     popover.popup(sticky.mapToGlobal(sticky.rect().center()))
@@ -313,11 +313,17 @@ def test_rail_and_sticky_popover_fit_800x560(qtbot):
 def test_second_sticky_click_shows_palette_and_create_uses_it(qtbot):
     harness = _Harness(qtbot)
     sink = _AuthorSink(harness.page, harness.board)
-    _arm_sticky(harness.page)
     button = harness.page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
     QTest.mouseClick(button, Qt.LeftButton)
     QApplication.processEvents()
     popover = harness.page.sticky_popover()
+    assert popover.isVisible()
+    QTest.mouseClick(button, Qt.LeftButton)
+    QApplication.processEvents()
+    assert not popover.isVisible()
+    assert harness.page.interaction().active_tool() == TOOL_STICKY
+    QTest.mouseClick(button, Qt.LeftButton)
+    QApplication.processEvents()
     assert popover.isVisible()
     red = popover.palette_buttons()[3]
     QTest.mouseClick(red, Qt.LeftButton)

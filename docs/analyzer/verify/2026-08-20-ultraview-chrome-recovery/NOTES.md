@@ -1,7 +1,13 @@
 # Offscreen structure对照（非 Cocoa 验收）
 
+> **STALE / HISTORICAL.** This directory records the `ac5fef2b` chrome-recovery
+> snapshot. It is not current-tree evidence: release rail no longer shows Select,
+> author active uses the titanium-amber gradient, and flyouts are CanvasHost
+> overlays. Do not reuse these PNGs as acceptance for HEAD after 2026-08-20
+> rail/flyout interaction optimization.
+
 - 日期：2026-08-20
-- 状态：**CODE COMPLETE / FOREGROUND UNVERIFIED**
+- 状态：**HISTORICAL — superseded by 2026-08-20 rail/flyout interaction optimization**
 - 对照原型：`docs/analyzer/ui-prototypes/screenshots/2026-08-20-ultraview-miro-authoring/`
 - 本目录 PNG 由 `render_offscreen.py` 在 `QT_QPA_PLATFORM=offscreen` 下抓取。
   **不能**写成 Cocoa 视觉验收。

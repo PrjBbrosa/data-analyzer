@@ -132,6 +132,7 @@ class ToolbarControl:
     icon_role: str = "icon"
     value: object = None
     visible_text: str = ""
+    group: str = ""
 
 
 @dataclass(frozen=True)
@@ -350,12 +351,12 @@ def _controls_for(
             ("align_middle", "垂直居中"),
             ("align_bottom", "底齐"),
         ):
-            controls.append(ToolbarControl(key, label, label, wide=True))
+            controls.append(ToolbarControl(key, label, label, wide=True, group="arrange"))
     if can_distribute:
-        controls.append(ToolbarControl("distribute_h", "水平分布", "水平分布", wide=True))
-        controls.append(ToolbarControl("distribute_v", "垂直分布", "垂直分布", wide=True))
+        controls.append(ToolbarControl("distribute_h", "水平分布", "水平分布", wide=True, group="arrange"))
+        controls.append(ToolbarControl("distribute_v", "垂直分布", "垂直分布", wide=True, group="arrange"))
     if can_duplicate:
-        controls.append(ToolbarControl("duplicate", "复制", "复制 · Ctrl/Cmd+D"))
+        controls.append(ToolbarControl("duplicate", "复制", "复制 · Ctrl/Cmd+D", group="object"))
     if can_lock:
         if lock_state is None:
             controls.append(
@@ -366,6 +367,7 @@ def _controls_for(
                     mixed=True,
                     checkable=True,
                     icon_role="icon",
+                    group="object",
                 )
             )
         else:
@@ -378,6 +380,7 @@ def _controls_for(
                     checked=bool(lock_state),
                     icon_role="icon",
                     value=bool(lock_state),
+                    group="object",
                 )
             )
     return controls
@@ -386,10 +389,10 @@ def _controls_for(
 def _sticky_controls(items: Sequence[object]) -> list[ToolbarControl]:
     whole = "应用到整个便签"
     return [
-        _value_control(items, "shape", "形状", "shape", tooltip=whole, icon_role="shape"),
-        _value_control(items, "palette", "色板", "palette", tooltip=whole, icon_role="swatch"),
+        _value_control(items, "shape", "形状", "shape", tooltip=whole, icon_role="shape", group="style"),
+        _value_control(items, "palette", "色板", "palette", tooltip=whole, icon_role="swatch", group="style"),
         _value_control(
-            items, "font_size", "字号", "font_size", tooltip=whole, wide=True, icon_role="value"
+            items, "font_size", "字号", "font_size", tooltip=whole, icon_role="value", group="type"
         ),
     ]
 
@@ -398,16 +401,16 @@ def _text_controls(items: Sequence[object]) -> list[ToolbarControl]:
     whole = "应用到整个文本框"
     return [
         _value_control(
-            items, "font_role", "字体", "font_role", tooltip=f"字体 · {whole}", icon_role="value"
+            items, "font_role", "字体", "font_role", tooltip=f"字体 · {whole}", icon_role="value", group="font"
         ),
         _value_control(
-            items, "font_size", "字号", "font_size", tooltip=f"字号 · {whole}", icon_role="value"
+            items, "font_size", "字号", "font_size", tooltip=f"字号 · {whole}", icon_role="value", group="font"
         ),
-        _bool_control(items, "bold", "B", f"加粗 · {whole}", icon_role="glyph"),
-        _bool_control(items, "italic", "I", f"斜体 · {whole}", icon_role="glyph"),
-        _bool_control(items, "underline", "U", f"下划线 · {whole}", icon_role="glyph"),
+        _bool_control(items, "bold", "B", f"加粗 · {whole}", icon_role="glyph", group="format"),
+        _bool_control(items, "italic", "I", f"斜体 · {whole}", icon_role="glyph", wide=True, group="format"),
+        _bool_control(items, "underline", "U", f"下划线 · {whole}", icon_role="glyph", wide=True, group="format"),
         _value_control(
-            items, "align", "对齐", "align", tooltip=f"对齐 · {whole}", icon_role="icon"
+            items, "align", "对齐", "align", tooltip=f"对齐 · {whole}", icon_role="icon", group="para"
         ),
         _value_control(
             items,
@@ -417,6 +420,7 @@ def _text_controls(items: Sequence[object]) -> list[ToolbarControl]:
             tooltip=f"列表 · {whole}",
             wide=True,
             icon_role="icon",
+            group="para",
         ),
         _value_control(
             items,
@@ -424,8 +428,8 @@ def _text_controls(items: Sequence[object]) -> list[ToolbarControl]:
             "文字颜色",
             "text_palette",
             tooltip=f"文字颜色 · {whole}",
-            wide=True,
             icon_role="swatch",
+            group="color",
         ),
         _value_control(
             items,
@@ -435,46 +439,47 @@ def _text_controls(items: Sequence[object]) -> list[ToolbarControl]:
             tooltip=f"底色 · {whole}",
             wide=True,
             icon_role="swatch",
+            group="color",
         ),
-        ToolbarControl("link", "链接", f"链接 · {whole}", wide=True, icon_role="icon"),
+        ToolbarControl("link", "链接", f"链接 · {whole}", wide=True, icon_role="icon", group="color"),
     ]
 
 
 def _shape_controls(items: Sequence[object]) -> list[ToolbarControl]:
     controls = [
-        _value_control(items, "shape", "形状", "shape", tooltip="切换形状，保留框/文字/样式", icon_role="shape"),
-        _value_control(items, "fill", "填充色", "fill_palette", tooltip="填充色", icon_role="swatch"),
-        _value_control(items, "stroke", "描边色", "stroke_palette", tooltip="描边色", icon_role="swatch"),
-        _value_control(items, "width", "线宽", "stroke_width", tooltip="描边宽度", icon_role="line"),
-        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash"),
+        _value_control(items, "shape", "形状", "shape", tooltip="切换形状，保留框/文字/样式", icon_role="shape", group="style"),
+        _value_control(items, "fill", "填充色", "fill_palette", tooltip="填充色", icon_role="swatch", group="style"),
+        _value_control(items, "stroke", "描边色", "stroke_palette", tooltip="描边色", icon_role="swatch", group="style"),
+        _value_control(items, "width", "线宽", "stroke_width", tooltip="描边宽度", icon_role="line", group="style"),
+        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash", group="style"),
     ]
     if all(getattr(item, "shape", "") in SHAPE_CORNER_TYPES for item in items):
         controls.append(
             _value_control(
-                items, "corner", "圆角", "corner_radius", tooltip="圆角半径", icon_role="icon"
+                items, "corner", "圆角", "corner_radius", tooltip="圆角半径", icon_role="icon", group="style"
             )
         )
-    controls.append(ToolbarControl("text", "编辑形状内文字", "编辑形状内文字", wide=True, icon_role="icon"))
+    controls.append(ToolbarControl("text", "编辑形状内文字", "编辑形状内文字", wide=True, icon_role="icon", group="text"))
     return controls
 
 
 def _connector_controls(items: Sequence[object]) -> list[ToolbarControl]:
     return [
-        _value_control(items, "route", "路径", "route", tooltip="直线或正交折线", icon_role="icon"),
-        _value_control(items, "start_head", "起点", "start_head", tooltip="起点箭头", icon_role="icon"),
-        _value_control(items, "end_head", "终点", "end_head", tooltip="终点箭头", icon_role="icon"),
-        _value_control(items, "color", "颜色", "stroke_palette", tooltip="连接线颜色", icon_role="swatch"),
-        _value_control(items, "width", "线宽", "stroke_width", tooltip="线宽", icon_role="line"),
-        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash"),
-        ToolbarControl("label", "标签", "编辑整线文字", wide=True, icon_role="icon"),
+        _value_control(items, "route", "路径", "route", tooltip="直线或正交折线", icon_role="icon", group="ends"),
+        _value_control(items, "start_head", "起点", "start_head", tooltip="起点箭头", icon_role="icon", group="ends"),
+        _value_control(items, "end_head", "终点", "end_head", tooltip="终点箭头", icon_role="icon", group="ends"),
+        _value_control(items, "color", "颜色", "stroke_palette", tooltip="连接线颜色", icon_role="swatch", group="stroke"),
+        _value_control(items, "width", "线宽", "stroke_width", tooltip="线宽", icon_role="line", group="stroke"),
+        _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash", group="stroke"),
+        ToolbarControl("label", "标签", "编辑整线文字", wide=True, icon_role="icon", group="label"),
     ]
 
 
 def _stroke_controls(items: Sequence[object]) -> list[ToolbarControl]:
     return [
-        _value_control(items, "tool", "笔种", "tool", tooltip="钢笔或荧光笔", icon_role="icon"),
-        _value_control(items, "color", "颜色", "palette", tooltip="笔画颜色", icon_role="swatch"),
-        _value_control(items, "width", "线宽", "width_px_100", tooltip="笔画宽度", icon_role="line"),
+        _value_control(items, "tool", "笔种", "tool", tooltip="钢笔或荧光笔", icon_role="icon", group="tool"),
+        _value_control(items, "color", "颜色", "palette", tooltip="笔画颜色", icon_role="swatch", group="ink"),
+        _value_control(items, "width", "线宽", "width_px_100", tooltip="笔画宽度", icon_role="line", group="ink"),
     ]
 
 
@@ -503,6 +508,7 @@ def _value_control(
     tooltip: str | None = None,
     wide: bool = False,
     icon_role: str = "icon",
+    group: str = "",
 ) -> ToolbarControl:
     values = {getattr(item, field, None) for item in items}
     mixed = len(values) > 1
@@ -522,6 +528,7 @@ def _value_control(
         icon_role=icon_role,
         value=value,
         visible_text=visible,
+        group=group,
     )
 
 
@@ -532,6 +539,8 @@ def _bool_control(
     tooltip: str,
     *,
     icon_role: str = "glyph",
+    wide: bool = False,
+    group: str = "",
 ) -> ToolbarControl:
     values = {bool(getattr(item, key, False)) for item in items}
     mixed = len(values) > 1
@@ -543,9 +552,11 @@ def _bool_control(
         mixed=mixed,
         checkable=True,
         checked=checked,
+        wide=wide,
         icon_role=icon_role,
         value=checked,
         visible_text="" if mixed else label,
+        group=group,
     )
 
 

@@ -1,0 +1,981 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>UltraView × Miro 操作与 UI 对照审查</title>
+  <style>
+    :root {
+      --canvas: #edf2f1;
+      --paper: #ffffff;
+      --paper-warm: #fffefd;
+      --ink: #183039;
+      --muted: #61757c;
+      --quiet: #8a999e;
+      --line: #d6e1e2;
+      --line-strong: #b9cacc;
+      --titanium: #3c8495;
+      --titanium-deep: #246878;
+      --titanium-wash: #e6f1f3;
+      --amber: #f0a44c;
+      --amber-deep: #a75c12;
+      --amber-wash: #fff3df;
+      --miro: #4262ff;
+      --miro-wash: #eef1ff;
+      --pass: #087d61;
+      --pass-wash: #e8f7f2;
+      --fail: #b73847;
+      --fail-wash: #fff0f2;
+      --blocked: #7453b6;
+      --blocked-wash: #f2edff;
+      --shadow: 0 18px 55px rgba(25, 53, 60, .10), 0 2px 8px rgba(25, 53, 60, .05);
+      --display: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --body: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle, rgba(39, 103, 116, .13) 1px, transparent 1.2px) 0 0 / 22px 22px,
+        linear-gradient(135deg, rgba(60, 132, 149, .035), rgba(240, 164, 76, .025)),
+        var(--canvas);
+      font: 14px/1.66 var(--body);
+    }
+
+    a { color: inherit; }
+    button { font: inherit; }
+    h1, h2, h3, p, figure, blockquote { margin: 0; }
+    h1 { font: 760 clamp(32px, 4.4vw, 54px)/1.04 var(--display); letter-spacing: -.055em; }
+    h2 { font: 740 25px/1.2 var(--display); letter-spacing: -.032em; }
+    h3 { font: 720 17px/1.35 var(--display); letter-spacing: -.018em; }
+    code {
+      padding: 2px 6px;
+      border: 1px solid #d8e4e6;
+      border-radius: 5px;
+      color: #275d68;
+      background: #f3f8f8;
+      font: 12px/1.5 var(--mono);
+      white-space: nowrap;
+    }
+
+    .wrap { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 18px 0 76px; }
+    .snapshot-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 9px;
+      min-height: 44px;
+      padding: 8px 12px;
+      border: 1px solid #efc6cc;
+      border-radius: 10px;
+      color: #7d3540;
+      background: rgba(255, 244, 246, .94);
+      box-shadow: 0 1px 3px rgba(103, 36, 48, .05);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .snapshot-bar .flag {
+      padding: 3px 8px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--fail);
+      font: 800 10px/1.5 var(--mono);
+      letter-spacing: .07em;
+    }
+    .snapshot-bar .meta { margin-left: auto; color: #9a5962; font-family: var(--mono); font-weight: 600; }
+
+    .hero {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1.42fr) minmax(330px, .58fr);
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .hero-main, .hero-verdict {
+      position: relative;
+      min-height: 350px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+    .hero-main {
+      padding: 36px 38px 32px 44px;
+      background: rgba(255, 255, 255, .96);
+    }
+    .hero-main::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 7px;
+      background: linear-gradient(180deg, var(--titanium), var(--amber));
+    }
+    .hero-main::after {
+      content: "Δ UI";
+      position: absolute;
+      right: -18px;
+      bottom: -40px;
+      color: rgba(60, 132, 149, .055);
+      font: 850 126px/.8 var(--display);
+      letter-spacing: -.1em;
+      pointer-events: none;
+    }
+    .eyebrow {
+      margin-bottom: 15px;
+      color: var(--titanium-deep);
+      font: 800 11px/1 var(--mono);
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    .hero-main h1 { max-width: 870px; }
+    .hero-main .lede { max-width: 880px; margin-top: 20px; color: #4f666e; font-size: 16px; }
+    .hero-main .lede b { color: var(--ink); }
+    .hero-facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+    .fact {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 3px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #536a72;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 720;
+    }
+    .fact.fail { color: #9f3340; border-color: #efc7cd; background: var(--fail-wash); }
+    .fact.blue { color: #304bc2; border-color: #cdd4ff; background: var(--miro-wash); }
+    .fact.amber { color: #8c510f; border-color: #efd3ac; background: var(--amber-wash); }
+
+    .hero-verdict {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 30px;
+      color: #eef9fa;
+      background:
+        linear-gradient(150deg, rgba(60, 132, 149, .24), transparent 46%),
+        #153b46;
+    }
+    .hero-verdict .label { color: #9bd5df; font: 800 11px/1 var(--mono); letter-spacing: .13em; }
+    .hero-verdict blockquote { margin: 24px 0 20px; font: 680 25px/1.35 var(--display); letter-spacing: -.03em; }
+    .hero-verdict p { color: #b9d2d7; font-size: 13px; }
+    .verdict-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 22px; }
+    .verdict-stat { padding: 12px; border: 1px solid rgba(211, 240, 244, .16); border-radius: 9px; background: rgba(255,255,255,.045); }
+    .verdict-stat b { display: block; color: #fff; font: 780 22px/1 var(--mono); }
+    .verdict-stat span { display: block; margin-top: 6px; color: #a9c8ce; font-size: 11px; }
+    .verdict-foot { margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(211, 240, 244, .16); color: #cde1e5; font: 11px/1.55 var(--mono); }
+
+    .toc {
+      position: sticky;
+      top: 8px;
+      z-index: 30;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 16px 0 0;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(245, 249, 248, .92);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 6px 18px rgba(25, 53, 60, .06);
+    }
+    .toc a {
+      padding: 6px 10px;
+      border-radius: 7px;
+      color: #516970;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 730;
+    }
+    .toc a:hover, .toc a:focus-visible { color: #215c68; background: var(--titanium-wash); outline: none; }
+
+    .section { margin-top: 34px; scroll-margin-top: 76px; }
+    .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
+    .section-head p { max-width: 740px; color: var(--muted); font-size: 13px; text-align: right; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, .96);
+      box-shadow: 0 1px 3px rgba(25, 53, 60, .04);
+    }
+
+    .evidence-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 14px; }
+    .evidence-item { min-height: 132px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: #fbfdfd; }
+    .evidence-item .source { color: var(--titanium-deep); font: 800 10px/1 var(--mono); letter-spacing: .09em; }
+    .evidence-item h3 { margin-top: 10px; font-size: 15px; }
+    .evidence-item p { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .evidence-item.warning { border-color: #efcfaa; background: var(--amber-wash); }
+    .evidence-item.warning .source { color: var(--amber-deep); }
+
+    .filter-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .filter-bar button {
+      min-height: 31px;
+      padding: 0 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: #526970;
+      background: #fff;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 740;
+    }
+    .filter-bar button[aria-pressed="true"] { color: #fff; border-color: var(--titanium-deep); background: var(--titanium-deep); }
+    .matrix-wrap { overflow-x: auto; }
+    table { width: 100%; min-width: 1120px; border-collapse: collapse; }
+    th, td { padding: 13px 12px; border-bottom: 1px solid #e4ebec; vertical-align: top; text-align: left; }
+    th { position: sticky; top: 59px; z-index: 2; color: #405961; background: #f3f7f7; font-size: 11px; letter-spacing: .035em; }
+    td { color: #496169; font-size: 13px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr[hidden] { display: none; }
+    .op { min-width: 148px; color: var(--ink); font-weight: 780; }
+    .op small { display: block; margin-top: 4px; color: var(--quiet); font: 10px/1.4 var(--mono); }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 23px;
+      padding: 2px 8px;
+      border: 1px solid;
+      border-radius: 999px;
+      font: 780 10px/1.5 var(--mono);
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+    .status.pass { color: var(--pass); border-color: #b8dfd4; background: var(--pass-wash); }
+    .status.partial { color: #8a510f; border-color: #ebcfaa; background: var(--amber-wash); }
+    .status.fail { color: #9e3340; border-color: #efc4cb; background: var(--fail-wash); }
+    .status.blocked { color: #6745aa; border-color: #d9cdf5; background: var(--blocked-wash); }
+    .status.intentional { color: #304bc2; border-color: #cbd3ff; background: var(--miro-wash); }
+    .status.unverified { color: #64757a; border-color: #d4dfe1; background: #f3f6f6; }
+    .source-link { color: #285f6c; font-weight: 700; }
+
+    .compare-stack { display: grid; gap: 16px; }
+    .compare-card { overflow: hidden; }
+    .compare-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 58px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, #fbfdfd, #fff);
+    }
+    .compare-head .step {
+      display: grid;
+      place-items: center;
+      width: 33px;
+      height: 33px;
+      border-radius: 9px;
+      color: #fff;
+      background: var(--titanium-deep);
+      font: 800 11px/1 var(--mono);
+    }
+    .compare-head .title { flex: 1; }
+    .compare-head .title p { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .visual-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 340px; }
+    .visual-column, .delta-column { min-width: 0; padding: 16px; }
+    .visual-column + .visual-column, .delta-column { border-left: 1px solid var(--line); }
+    .visual-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 9px;
+      color: #506970;
+      font: 760 11px/1.3 var(--mono);
+      letter-spacing: .055em;
+      text-transform: uppercase;
+    }
+    .visual-label span { color: var(--quiet); font-size: 10px; letter-spacing: 0; text-transform: none; }
+    .image-button {
+      display: block;
+      width: 100%;
+      min-height: 260px;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background:
+        radial-gradient(circle, rgba(44, 94, 105, .12) 1px, transparent 1px) 0 0 / 18px 18px,
+        #f2f6f5;
+      cursor: zoom-in;
+    }
+    .image-button img { display: block; width: 100%; height: 390px; object-fit: contain; }
+    .image-button img.tall { height: 470px; }
+    .image-button:hover, .image-button:focus-visible { border-color: var(--titanium); outline: 2px solid rgba(60,132,149,.22); outline-offset: 2px; }
+    .image-note { margin-top: 9px; color: var(--muted); font-size: 11px; }
+    .live-thumb { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
+    .live-thumb button { min-height: 70px; }
+    .live-thumb img { height: 100px; }
+    .delta-column { background: #fbfdfd; }
+    .delta-column h3 { margin-bottom: 11px; }
+    .delta-list { display: grid; gap: 9px; }
+    .delta {
+      position: relative;
+      padding: 10px 10px 10px 13px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: #4e656d;
+      background: #fff;
+      font-size: 12px;
+    }
+    .delta::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--fail); }
+    .delta.good::before { background: var(--pass); }
+    .delta.warn::before { background: var(--amber); }
+    .delta b { color: var(--ink); }
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .flow span { padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; color: #526a72; background: #fff; font: 10px/1.4 var(--mono); }
+    .flow i { color: var(--quiet); font-style: normal; }
+
+    .toolbar-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 14px; }
+    .toolbar-card { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfd; }
+    .toolbar-card .image-button { min-height: 180px; margin-top: 10px; }
+    .toolbar-card .image-button img { height: 240px; }
+    .toolbar-card p { margin-top: 9px; color: var(--muted); font-size: 12px; }
+    .toolbar-card .verdict { margin-top: 10px; }
+
+    .rail-review { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; padding: 16px; }
+    .rail-review .image-button img { height: 600px; }
+    .rail-notes { display: grid; gap: 10px; align-content: start; }
+    .rail-note { padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: #fbfdfd; }
+    .rail-note h3 { font-size: 15px; }
+    .rail-note p { margin-top: 7px; color: var(--muted); font-size: 12px; }
+
+    .source-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px; }
+    .source-box { padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: #fbfdfd; }
+    .source-box h3 { margin-bottom: 9px; }
+    .source-box ul { margin: 0; padding-left: 19px; color: #4f666e; }
+    .source-box li + li { margin-top: 7px; }
+    .source-box pre {
+      margin: 10px 0 0;
+      padding: 12px;
+      overflow: auto;
+      border: 1px solid #dbe5e6;
+      border-radius: 8px;
+      color: #315963;
+      background: #f3f7f7;
+      font: 11px/1.6 var(--mono);
+    }
+
+    .gate-list { display: grid; gap: 9px; padding: 14px; }
+    .gate {
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 64px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fbfdfd;
+    }
+    .gate .n { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: #fff; background: var(--titanium-deep); font: 800 11px/1 var(--mono); }
+    .gate b { display: block; }
+    .gate p { margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+    .footnote { margin-top: 16px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; color: #566c73; background: rgba(255,255,255,.86); font-size: 12px; }
+    .footnote a { color: #285f6c; font-weight: 700; }
+    .footer { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--line-strong); color: #687b81; font: 11px/1.7 var(--mono); }
+
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(10, 25, 30, .86);
+      backdrop-filter: blur(8px);
+    }
+    .lightbox[hidden] { display: none; }
+    .lightbox img { max-width: min(94vw, 1600px); max-height: 88vh; border: 1px solid rgba(255,255,255,.3); border-radius: 10px; box-shadow: 0 24px 90px rgba(0,0,0,.42); }
+    .lightbox button { position: fixed; top: 16px; right: 16px; width: 40px; height: 40px; border: 1px solid rgba(255,255,255,.35); border-radius: 10px; color: #fff; background: rgba(255,255,255,.12); cursor: pointer; font-size: 20px; }
+
+    @media (max-width: 1120px) {
+      .hero { grid-template-columns: 1fr; }
+      .hero-main, .hero-verdict { min-height: auto; }
+      .evidence-grid { grid-template-columns: 1fr 1fr; }
+      .visual-grid { grid-template-columns: 1fr 1fr; }
+      .delta-column { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+      .toolbar-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 740px) {
+      .wrap { width: min(100% - 18px, 1440px); }
+      .snapshot-bar .meta { width: 100%; margin-left: 0; }
+      .hero-main { padding: 28px 24px 26px 30px; }
+      .hero-verdict { padding: 24px; }
+      .section-head { display: block; }
+      .section-head p { margin-top: 7px; text-align: left; }
+      .evidence-grid, .visual-grid, .toolbar-grid, .source-grid { grid-template-columns: 1fr; }
+      .visual-column + .visual-column { border-left: 0; border-top: 1px solid var(--line); }
+      .delta-column { grid-column: auto; }
+      .rail-review { grid-template-columns: 1fr; }
+      .rail-review .image-button img { height: 480px; }
+      .gate { grid-template-columns: 40px 1fr; }
+      .gate .status { grid-column: 2; width: max-content; }
+      .toc { position: static; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="snapshot-bar">
+      <span class="flag">PRE-EXECUTION SNAPSHOT</span>
+      <span>相关产品文件的修改时间早于 23:00 的整改 Plan；当前报告是 Grok 执行起点/中间态，不是最终落地验收。</span>
+      <span class="meta">Observed 2026-08-20 23:17–23:20 CST · HEAD ac5fef2b</span>
+    </div>
+
+    <section class="hero">
+      <div class="hero-main">
+        <div class="eyebrow">TraceLab UltraView / Miro operation parity review</div>
+        <h1>操作骨架已出现，<br>UI 语言还没有对齐。</h1>
+        <p class="lede">
+          当前 UltraView 已经具备 Sticky、Text、Shapes &amp; Lines、Draw 的入口、对象选择和上下文工具条，
+          但 <b>rail 强调、入口弹层、preset 组织、格式 picker、对象工具条</b> 仍明显偏离用户提供的 Miro 截图。
+          其中格式 picker 在先前 offscreen 图中能出现，但本次真实前台点击未打开，不能按“只是不好看”处理。
+        </p>
+        <div class="hero-facts">
+          <span class="fact fail">最终验收：NO-GO</span>
+          <span class="fact blue">14 条操作对照</span>
+          <span class="fact amber">8 个前台状态已截图</span>
+          <span class="fact">4 个 Miro 视觉基准</span>
+          <span class="fact">49 focused offscreen tests：仅结构证据</span>
+        </div>
+      </div>
+      <aside class="hero-verdict">
+        <div>
+          <div class="label">EXECUTIVE VERDICT</div>
+          <blockquote>不是“功能没做”，而是功能被放进了错误的 UI 结构里。</blockquote>
+          <p>Sticky、Shapes、Draw 都能在前台打开；V 能退出 Draw；三类对象工具条能跟随对象。真正阻断 Miro 体验的是信息密度、强调冲突、无标签选项和格式弹层生命周期。</p>
+          <div class="verdict-grid">
+            <div class="verdict-stat"><b>2</b><span>明确行为通过</span></div>
+            <div class="verdict-stat"><b>4</b><span>部分对齐</span></div>
+            <div class="verdict-stat"><b>5</b><span>视觉/结构失败</span></div>
+            <div class="verdict-stat"><b>3</b><span>阻断 / 偏离 / 未验证</span></div>
+          </div>
+        </div>
+        <div class="verdict-foot">FINAL POST-GROK ACCEPTANCE: NOT AVAILABLE<br>Reason: product files still predate the remediation plan.</div>
+      </aside>
+    </section>
+
+    <nav class="toc" aria-label="报告目录">
+      <a href="#evidence">证据边界</a>
+      <a href="#matrix">操作矩阵</a>
+      <a href="#sticky">Sticky</a>
+      <a href="#shapes">Shapes</a>
+      <a href="#draw">Draw</a>
+      <a href="#text">Text</a>
+      <a href="#toolbar">对象工具条</a>
+      <a href="#rail">Rail</a>
+      <a href="#source">源码根因</a>
+      <a href="#gate">Grok 验收门</a>
+    </nav>
+
+    <section class="section" id="evidence">
+      <div class="section-head">
+        <h2>证据边界</h2>
+        <p>视觉以用户给的 Miro 截图为准，操作语义由 Miro 官方文档校验；TraceLab 同时使用前台、用户截图、offscreen 和源码，四类证据不互相冒充。</p>
+      </div>
+      <div class="panel evidence-grid">
+        <article class="evidence-item">
+          <div class="source">MIRO VISUAL</div>
+          <h3>4 张用户提供的 Miro 截图</h3>
+          <p>Sticky 纵向色板、Shapes 纵向目录、Draw 纵向 subrail、Text 单一横向 context toolbar。</p>
+        </article>
+        <article class="evidence-item">
+          <div class="source">MIRO BEHAVIOR</div>
+          <h3>官方 Help Center</h3>
+          <p>校验 N/T/S/P、one-shot、Sticky Stack、3 个 Pen preset、Eraser/Lasso 与 Text formatting。</p>
+        </article>
+        <article class="evidence-item">
+          <div class="source">TRACELAB FOREGROUND</div>
+          <h3>真实运行中的 UltraView</h3>
+          <p>23:17–23:20 逐项点击 rail、打开三个 flyout、切换 V、选择 Text/Shape/Sticky 对象。</p>
+        </article>
+        <article class="evidence-item warning">
+          <div class="source">SNAPSHOT WARNING</div>
+          <h3>尚无 Plan 后源码</h3>
+          <p>相关源文件最后修改在 22:02–22:12；23:00 的新 Plan 尚未反映到工作树。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="matrix">
+      <div class="section-head">
+        <h2>逐操作对照矩阵</h2>
+        <p>“通过”只表示当前快照中该操作路径成立；不代表外观、Cocoa 手感或 Windows 冻结包已验收。</p>
+      </div>
+      <div class="filter-bar" role="toolbar" aria-label="筛选操作状态">
+        <button type="button" data-filter="all" aria-pressed="true">全部 14</button>
+        <button type="button" data-filter="pass" aria-pressed="false">通过</button>
+        <button type="button" data-filter="partial" aria-pressed="false">部分</button>
+        <button type="button" data-filter="fail" aria-pressed="false">失败</button>
+        <button type="button" data-filter="blocked" aria-pressed="false">阻断</button>
+        <button type="button" data-filter="intentional" aria-pressed="false">有意偏离</button>
+        <button type="button" data-filter="unverified" aria-pressed="false">未验证</button>
+      </div>
+      <div class="panel matrix-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>Miro 当前语义</th>
+              <th>TraceLab 当前前台</th>
+              <th>差异判断</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-status="intentional">
+              <td class="op">01 · Select / 退出<small>V / Esc</small></td>
+              <td>Miro Creation toolbar 固定 Select/Hand，Select 不能移除；V/H 切换。</td>
+              <td>release rail 不显示 Select；内部 Select、V/Esc、框选仍保留。本次 V 可退出 Draw。</td>
+              <td>与 Miro 不同，但符合用户明确决定；必须继续保证退出可发现。</td>
+              <td><span class="status intentional">INTENTIONAL</span></td>
+            </tr>
+            <tr data-status="fail">
+              <td class="op">02 · 激活工具<small>click rail</small></td>
+              <td>一个 creation tool 成为当前工具；工具、panel、mode 有清晰层级。</td>
+              <td>Free Grid 与作者工具可以同时大面积填充；打开 panel 时还可出现第三个强调。</td>
+              <td>行为可用，视觉焦点失败；用户无法一眼判断当前动作。</td>
+              <td><span class="status fail">FAIL</span></td>
+            </tr>
+            <tr data-status="fail">
+              <td class="op">03 · 打开 Sticky<small>N / rail click</small></td>
+              <td>打开贴邻 rail 的窄色板；16 色；用户截图为 2 列纵向。</td>
+              <td>真实前台一击可打开，但为 4×4 大色块 + 满宽 Stack，横向侵入画布。</td>
+              <td>功能存在，入口 UI 与 Miro 方向相反。</td>
+              <td><span class="status fail">FAIL</span></td>
+            </tr>
+            <tr data-status="partial">
+              <td class="op">04 · 放置 / Stack<small>one-shot / repeat</small></td>
+              <td>普通 Sticky 属于 one-time；Stack 在画布上放置空白便签堆。</td>
+              <td>16 色和 Stack 均存在；普通放置与连续放置合同已实现/有测试。</td>
+              <td>操作语义基本对齐；Generate 未做是产品边界，不是缺陷。</td>
+              <td><span class="status partial">PARTIAL</span></td>
+            </tr>
+            <tr data-status="pass">
+              <td class="op">05 · 创建 Text<small>T → click → type</small></td>
+              <td>T 或 toolbar → 点击画布 → 输入；选中/编辑时显示格式工具。</td>
+              <td>Text 入口直接进入创建，不先弹空菜单；已有文本框可选中、编辑。</td>
+              <td>核心操作模型对齐。</td>
+              <td><span class="status pass">PASS</span></td>
+            </tr>
+            <tr data-status="fail">
+              <td class="op">06 · Text context toolbar<small>select / edit</small></td>
+              <td>一个共享横向 shell，字体、字号、格式、段落、颜色、对象动作按组排列。</td>
+              <td>功能项完整，但每个 cell 都继承独立边框/渐变，font family 还被压成模糊小格。</td>
+              <td>覆盖度高，视觉语法未对齐。</td>
+              <td><span class="status fail">FAIL</span></td>
+            </tr>
+            <tr data-status="blocked">
+              <td class="op">07 · Font / Size picker<small>toolbar cell click</small></td>
+              <td>picker 锚定触发 cell；字体/字号改变整个 text object。</td>
+              <td>用户/offscreen 图显示 260 px 稀疏大白板；本次前台用坐标与 AX 点击均未打开。</td>
+              <td>同时存在视觉缺陷与前台生命周期疑点，必须先复现修通。</td>
+              <td><span class="status blocked">BLOCKED</span></td>
+            </tr>
+            <tr data-status="partial">
+              <td class="op">08 · 打开 Shapes &amp; Lines<small>S / rail click</small></td>
+              <td>新版 Miro 将 Shapes 与 Lines 合并；打开有图标和名称的目录。</td>
+              <td>TraceLab 也已合并 connector + closed shapes，真实前台可打开。</td>
+              <td>信息架构方向正确，视觉目录错误。</td>
+              <td><span class="status partial">PARTIAL</span></td>
+            </tr>
+            <tr data-status="fail">
+              <td class="op">09 · 选择 Shape / Line<small>choose → canvas</small></td>
+              <td>纵向行展示 icon + name；选择后点击/拖拽到画布。</td>
+              <td>3 个 connector 小图标 + 5 个无文字胶囊，最后一项换行；含义依赖猜测。</td>
+              <td>选项存在不等于可识别；Miro 可读性没有复现。</td>
+              <td><span class="status fail">FAIL</span></td>
+            </tr>
+            <tr data-status="partial">
+              <td class="op">10 · 选中 Shape<small>bounds + toolbar</small></td>
+              <td>selection handles + 贴近对象的 context toolbar。</td>
+              <td>真实前台工具条随 Shape bounds 移动，8 handles 可见；但工具条仍是药丸列车。</td>
+              <td>几何对齐，chrome 未对齐。</td>
+              <td><span class="status partial">PARTIAL</span></td>
+            </tr>
+            <tr data-status="fail">
+              <td class="op">11 · 打开 Draw<small>P / rail click</small></td>
+              <td>窄纵向 subrail；工具纵向；底部为 3 个 preset。</td>
+              <td>真实前台为 4 工具横排 + 3 线宽横排 + 8 色横排。</td>
+              <td>所有选项同时展开，扫描路径和 Miro 完全不同。</td>
+              <td><span class="status fail">FAIL</span></td>
+            </tr>
+            <tr data-status="partial">
+              <td class="op">12 · Pen preset<small>color + thickness</small></td>
+              <td>Pen/Highlighter/Smart drawing 各最多 3 preset；双击 preset 修改颜色和粗细。</td>
+              <td>已有 3 个 pen preset，但颜色另铺 8 枚，preset 编辑手势和视觉不清楚。</td>
+              <td>数据模型接近，presentation 未对齐。</td>
+              <td><span class="status partial">PARTIAL</span></td>
+            </tr>
+            <tr data-status="pass">
+              <td class="op">13 · Eraser / Lasso / 退出<small>continuous → V/Esc</small></td>
+              <td>Pen/Eraser/Lasso 非 one-shot；切到 Select/其他工具退出。</td>
+              <td>四个 subtool 在 AX 中可见；Draw 连续，Lasso/Eraser 有独立入口；V 实测退出。</td>
+              <td>核心状态机基本对齐。</td>
+              <td><span class="status pass">PASS</span></td>
+            </tr>
+            <tr data-status="unverified">
+              <td class="op">14 · Compact / safe rect<small>800×560 / edges</small></td>
+              <td>toolbar 单行、panel 锚定、选项不压住对象/画布主操作。</td>
+              <td>offscreen 有结构测试；本次没有真实 Cocoa 800×560 四边逐项前台截图。</td>
+              <td>不能用 focused green 代替前台接受。</td>
+              <td><span class="status unverified">UNVERIFIED</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="sticky">
+      <div class="section-head">
+        <h2>Sticky：行为接近，面板方向相反</h2>
+        <p>Miro 的关键不是“也有 16 色”，而是窄、纵向、贴邻入口，画布主任务始终留在视野里。</p>
+      </div>
+      <article class="panel compare-card">
+        <div class="compare-head">
+          <span class="step">N</span>
+          <div class="title"><h3>点击 Sticky → 选色 / Stack → 放置</h3><p>用户 Miro 截图 vs TraceLab 当前用户截图与真实前台</p></div>
+          <span class="status fail">VISUAL FAIL</span>
+        </div>
+        <div class="visual-grid">
+          <div class="visual-column">
+            <div class="visual-label">Miro reference <span>2 columns · rail-adjacent</span></div>
+            <button class="image-button" data-lightbox type="button"><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-sticky-palette.png" alt="Miro Sticky 纵向色板"></button>
+            <p class="image-note">视觉基准：2×8 色板，窄 panel，底部动作；Generate 属于 Miro AI，不纳入 TraceLab。</p>
+          </div>
+          <div class="visual-column">
+            <div class="visual-label">TraceLab current <span>4 × 4 · wide panel</span></div>
+            <button class="image-button" data-lightbox type="button"><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-user-sticky.png" alt="TraceLab 当前 Sticky 4乘4色板"></button>
+            <div class="live-thumb">
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-sticky.jpeg" alt="TraceLab 前台 Sticky"></button>
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-sticky-toolbar.jpeg" alt="TraceLab 前台 Sticky 工具条"></button>
+            </div>
+            <p class="image-note">前台实测：入口能打开；16 色与 Stack 可见；面板横向侵入画布。</p>
+          </div>
+          <aside class="delta-column">
+            <h3>关键差异</h3>
+            <div class="delta-list">
+              <div class="delta"><b>结构：</b>Miro 2×8；TraceLab 4×4。</div>
+              <div class="delta"><b>占地：</b>Miro 是 rail 邻接窄板；TraceLab 当前 natural width 约 260 px。</div>
+              <div class="delta"><b>动作层级：</b>Miro 的 Stack 是底部次级动作；TraceLab Stack 被拉成整面板宽，权重过高。</div>
+              <div class="delta good"><b>语义已对齐：</b>N、16 色、普通 Sticky、Stack 均已出现。</div>
+              <div class="delta warn"><b>有意省略：</b>不实现 Generate，不属于 TraceLab 当前能力边界。</div>
+            </div>
+            <div class="flow"><span>N / click</span><i>→</i><span>palette</span><i>→</i><span>color or Stack</span><i>→</i><span>canvas</span></div>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <section class="section" id="shapes">
+      <div class="section-head">
+        <h2>Shapes &amp; Lines：合并方向正确，目录可读性失败</h2>
+        <p>Miro 新版同样把 Shapes 与 Lines 合并；TraceLab 已做到这一点，但把清晰目录压缩成了无文字图标拼图。</p>
+      </div>
+      <article class="panel compare-card">
+        <div class="compare-head">
+          <span class="step">S</span>
+          <div class="title"><h3>点击 Shapes → 识别类型 → 选择 → 画布创建</h3><p>“有 8 个选项”不等于用户能看懂 8 个选项</p></div>
+          <span class="status fail">READABILITY FAIL</span>
+        </div>
+        <div class="visual-grid">
+          <div class="visual-column">
+            <div class="visual-label">Miro reference <span>icon + label + grouping</span></div>
+            <button class="image-button" data-lightbox type="button"><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-shapes-menu.png" alt="Miro Shapes 纵向菜单"></button>
+            <p class="image-note">连接线与闭合形状分组；每行有名称；More shapes/Diagram 属于 Miro 扩展能力。</p>
+          </div>
+          <div class="visual-column">
+            <div class="visual-label">TraceLab current <span>icon-only mixed grid</span></div>
+            <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-user-shapes.png" alt="TraceLab 当前 Shapes 图标网格"></button>
+            <div class="live-thumb">
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-shapes.jpeg" alt="TraceLab 前台 Shapes"></button>
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-shape-toolbar.jpeg" alt="TraceLab 前台 Shape 工具条"></button>
+            </div>
+            <p class="image-note">前台实测能打开；连接线与形状已合并；无文字、shape cell 像线型胶囊。</p>
+          </div>
+          <aside class="delta-column">
+            <h3>关键差异</h3>
+            <div class="delta-list">
+              <div class="delta good"><b>IA 对齐：</b>Shapes + Lines 已合并，符合 Miro simplified UI。</div>
+              <div class="delta"><b>识别失败：</b>直线、箭头、折线、菱形、三角形没有可见名称。</div>
+              <div class="delta"><b>控件隐喻错误：</b>闭合形状被画成胶囊边框，像 stroke/dash 选择。</div>
+              <div class="delta"><b>阅读路径：</b>Miro 一列自上而下；TraceLab 先横读 3 个，再横读 4+1，最后一项掉行。</div>
+              <div class="delta warn"><b>合理边界：</b>不做 Block arrow / More shapes / Diagram 可接受，但支持项必须可读。</div>
+            </div>
+            <div class="flow"><span>S</span><i>→</i><span>named row</span><i>→</i><span>choose type</span><i>→</i><span>one-shot create</span></div>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <section class="section" id="draw">
+      <div class="section-head">
+        <h2>Draw：状态机接近，preset 表达被摊平</h2>
+        <p>Miro 把复杂度封装进 3 个 preset；TraceLab 把工具、宽度、颜色同时展开，导致面板像调色板控件测试页。</p>
+      </div>
+      <article class="panel compare-card">
+        <div class="compare-head">
+          <span class="step">P</span>
+          <div class="title"><h3>点击 Draw → 选工具 / preset → 连续绘制 → V/Esc</h3><p>Pen / Highlighter / Eraser / Lasso 与 3 preset 的对照</p></div>
+          <span class="status fail">STRUCTURE FAIL</span>
+        </div>
+        <div class="visual-grid">
+          <div class="visual-column">
+            <div class="visual-label">Miro reference <span>vertical subrail · 3 presets</span></div>
+            <button class="image-button" data-lightbox type="button"><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-draw-panel.png" alt="Miro Draw 纵向面板"></button>
+            <p class="image-note">Miro 官方说明：Pen/Highlighter/Smart drawing 各最多 3 个 preset；双击 preset 编辑颜色和粗细。</p>
+          </div>
+          <div class="visual-column">
+            <div class="visual-label">TraceLab current <span>three horizontal rows</span></div>
+            <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-user-draw.png" alt="TraceLab 当前 Draw 三行面板"></button>
+            <div class="live-thumb">
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-draw.jpeg" alt="TraceLab 前台 Draw"></button>
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-board.jpeg" alt="TraceLab 前台整板"></button>
+            </div>
+            <p class="image-note">前台实测四 subtool、3 width preset、8 色都存在；V 可退出。</p>
+          </div>
+          <aside class="delta-column">
+            <h3>关键差异</h3>
+            <div class="delta-list">
+              <div class="delta good"><b>行为已对齐：</b>P、Pen、Highlighter、Eraser、Lasso、连续状态、V 退出。</div>
+              <div class="delta good"><b>模型接近：</b>已有 3 个 Pen preset，可复用而不必新建数据结构。</div>
+              <div class="delta"><b>Presentation 错误：</b>工具/宽度/颜色三条横轴同时出现，破坏 Miro 的纵向节奏。</div>
+              <div class="delta"><b>Preset 被拆散：</b>用户看见 3 条线 + 8 个颜色，而不是 3 个“颜色+粗细”的完整选择。</div>
+              <div class="delta"><b>图标光学不稳：</b>Eraser/Lasso 裁切感明显；rail glyph 还会随子工具变化。</div>
+            </div>
+            <div class="flow"><span>P</span><i>→</i><span>tool</span><i>→</i><span>preset</span><i>→</i><span>draw</span><i>→</i><span>V / Esc</span></div>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <section class="section" id="text">
+      <div class="section-head">
+        <h2>Text：功能覆盖度高，格式 UI 最不成熟</h2>
+        <p>Text 入口行为已经接近 Miro；真正的差距集中在选中后的 toolbar chrome 和 picker 生命周期。</p>
+      </div>
+      <article class="panel compare-card">
+        <div class="compare-head">
+          <span class="step">T</span>
+          <div class="title"><h3>T → 点击输入 → 选中文本 → Font / Size / Format</h3><p>共享 context toolbar vs 独立药丸按钮列</p></div>
+          <span class="status blocked">PICKER BLOCKED</span>
+        </div>
+        <div class="visual-grid">
+          <div class="visual-column">
+            <div class="visual-label">Miro reference <span>one shell · semantic groups</span></div>
+            <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-text-toolbar.png" alt="Miro Text 上下文工具条"></button>
+            <p class="image-note">Font、Size、format、paragraph、color、object actions 在一个 surface 内分组。</p>
+          </div>
+          <div class="visual-column">
+            <div class="visual-label">TraceLab current <span>global button chrome leaks in</span></div>
+            <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-user-text-toolbar.png" alt="TraceLab 当前 Text 工具条与字体面板"></button>
+            <div class="live-thumb">
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-text-toolbar.jpeg" alt="TraceLab 前台 Text 工具条"></button>
+              <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-user-sticky-size.png" alt="TraceLab offscreen 巨大字号面板"></button>
+            </div>
+            <p class="image-note">前台可见 font/size/B/I/U/align/list/colors/link/duplicate/lock/more；点击 picker 本次未打开。</p>
+          </div>
+          <aside class="delta-column">
+            <h3>关键差异</h3>
+            <div class="delta-list">
+              <div class="delta good"><b>覆盖度：</b>Text 常用格式基本齐全，入口也直接进入创建。</div>
+              <div class="delta"><b>双重 chrome：</b>toolbar 外层一个 shell，内部每枚 QToolButton 又有边框、圆角和渐变。</div>
+              <div class="delta"><b>字体不可读：</b>font family 被挤在 38 px cell，前台只剩模糊小块/省略感。</div>
+              <div class="delta"><b>Picker 过大：</b>offscreen 使用固定 260 px、2/4 列稀疏网格，遮住 toolbar 和对象。</div>
+              <div class="delta warn"><b>前台疑点：</b>23:18–23:20 通过 AX 与坐标点击 Text/Sticky 格式按钮均未打开 picker。</div>
+            </div>
+            <div class="flow"><span>T</span><i>→</i><span>click &amp; type</span><i>→</i><span>select</span><i>→</i><span>context toolbar</span><i>→</i><span>anchored picker</span></div>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <section class="section" id="toolbar">
+      <div class="section-head">
+        <h2>对象工具条：位置通过，视觉语法失败</h2>
+        <p>本次前台确认 Text、Shape、Sticky 的 toolbar 都跟随对象 bounds；因此下一步应只收敛 presentation，不要推翻选择 owner。</p>
+      </div>
+      <div class="panel toolbar-grid">
+        <article class="toolbar-card">
+          <h3>Text toolbar</h3>
+          <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-text-toolbar.jpeg" alt="Text 工具条前台截图"></button>
+          <p>功能覆盖完整，但每个 cell 都像独立按钮；Font/Size 失去宽度；无清晰组 divider。</p>
+          <div class="verdict"><span class="status fail">CHROME FAIL</span></div>
+        </article>
+        <article class="toolbar-card">
+          <h3>Shape toolbar</h3>
+          <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-shape-toolbar.jpeg" alt="Shape 工具条前台截图"></button>
+          <p>位置跟随选框且 handles 正常；Shape/Fill/Stroke/Width/Dash/Text/Object actions 没有分组。</p>
+          <div class="verdict"><span class="status partial">GEOMETRY PASS / UI FAIL</span></div>
+        </article>
+        <article class="toolbar-card">
+          <h3>Sticky toolbar</h3>
+          <button class="image-button" data-lightbox type="button"><img src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-live-sticky-toolbar.jpeg" alt="Sticky 工具条前台截图"></button>
+          <p>Shape/Color/Size/Duplicate/Lock/More 已出现；Size cell 不可读，本次点击没有打开 picker。</p>
+          <div class="verdict"><span class="status blocked">PICKER BLOCKED</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="rail">
+      <div class="section-head">
+        <h2>Rail：不是尺寸不够，是强调和节奏没有 owner</h2>
+        <p>用户要求拉开图标间距；当前真实布局的组内 gap 为 0 px，divider 仅 1 px。同时多个状态共用高强度渐变。</p>
+      </div>
+      <div class="panel rail-review">
+        <button class="image-button" data-lightbox type="button"><img class="tall" src="2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-user-rail.png" alt="TraceLab 当前 rail"></button>
+        <div class="rail-notes">
+          <article class="rail-note"><h3>01 · Select 是有意偏离</h3><p>Miro 官方说明 Select/Hand 不能从 Creation toolbar 移除；TraceLab 用户明确不要可见鼠标按钮，因此保留内部 Select + V/Esc 即可，不应重新加回。</p></article>
+          <article class="rail-note"><h3>02 · 0 px 组内间距</h3><p>1280×720 与 800×560 的 offscreen 实测均为按钮直接相接；divider 只产生 1 px。整改应增加 6/4 px，而不是继续放大按钮。</p></article>
+          <article class="rail-note"><h3>03 · 多枚 primary fill</h3><p>Free Grid、Layout panelOpen、Draw active 可以同时成立。Miro 的创建栏是当前工具焦点；TraceLab 需要把 persistent mode 降成 quiet marker。</p></article>
+          <article class="rail-note"><h3>04 · 点击后变纯青</h3><p>author active 本身是钛蓝—琥珀，但 active:hover/pressed 又改成纯色；鼠标不移开时用户看不到琥珀端。</p></article>
+          <article class="rail-note"><h3>05 · 光学尺寸仍跳</h3><p>按钮 outer rect 已稳定，但 Sticky/Text/Shapes/Draw 使用不同 Font Awesome Solid glyph；Draw 还随子工具换入口 glyph，视觉重量持续变化。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="source">
+      <div class="section-head">
+        <h2>源码与自动化根因</h2>
+        <p>以下行号对应本报告快照；Grok 写入后可能漂移，最终验收应重新取行号和截图。</p>
+      </div>
+      <div class="panel source-grid">
+        <article class="source-box">
+          <h3>Rail / icons / states</h3>
+          <ul>
+            <li><code>chrome.py:128–143</code>：四作者入口来自不一致的 Font Awesome Solid glyph。</li>
+            <li><code>chrome.py:782–805</code>：root spacing 为 0，divider 只有 1 px。</li>
+            <li><code>chrome.py:1012–1047</code>：modeActive / panelOpen 可与 author active 同时投影。</li>
+            <li><code>style.qss:4561+</code>：active:hover/pressed 用纯色覆盖渐变。</li>
+          </ul>
+        </article>
+        <article class="source-box">
+          <h3>Flyout / toolbar / picker</h3>
+          <ul>
+            <li><code>author_chrome.py:202–277</code>：Sticky 4 列色板。</li>
+            <li><code>author_chrome.py:516–559</code>：Shapes 混合横排/grid。</li>
+            <li><code>author_chrome.py:899–979</code>：Draw 三条横排。</li>
+            <li><code>author_chrome.py:1065–1145</code>：picker 固定最小宽 260，并用 2/4 列 label grid。</li>
+            <li><code>style.qss:668–700</code>：全局 QToolButton chrome 泄漏进 selection toolbar child。</li>
+          </ul>
+        </article>
+        <article class="source-box">
+          <h3>自动测试为什么会绿</h3>
+          <pre>49 passed in 5.36s
+
+but current tests still assert:
+  Sticky first swatch >= 48
+  Sticky flyout width >= 260
+  option exists / isVisible
+
+missing:
+  rail gap / single emphasis
+  active:hover gradient
+  Miro vertical IA
+  toolbar child chrome
+  foreground picker lifecycle</pre>
+        </article>
+        <article class="source-box">
+          <h3>当前执行快照</h3>
+          <pre>HEAD: ac5fef2bd2da1daa897b5614f147473e4ae90582
+Plan mtime: 23:00:35
+style.qss mtime: 22:02:55
+page.py mtime: 22:05:34
+chrome.py mtime: 22:08:54
+author_chrome.py mtime: 22:12:13
+
+Conclusion:
+  no post-plan product edit observed</pre>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="gate">
+      <div class="section-head">
+        <h2>Grok 执行后的复验门</h2>
+        <p>这份 HTML 已经固定了对照位置。Grok 完成后只需替换“TraceLab current”截图并重新跑同一条操作链；任何一项未过都不能称最终对齐。</p>
+      </div>
+      <div class="panel gate-list">
+        <article class="gate"><span class="n">G1</span><div><b>确认真的出现 Plan 后源码</b><p>相关 product/test 文件 mtime、diff 和 owned scope 必须晚于本 Plan，且工作树无并发写入。</p></div><span class="status blocked">CURRENTLY BLOCKED</span></article>
+        <article class="gate"><span class="n">G2</span><div><b>重复 8 个前台截图状态</b><p>Board / Sticky / Shapes / Draw / Text toolbar / Shape toolbar / Sticky toolbar / format picker。</p></div><span class="status unverified">PENDING</span></article>
+        <article class="gate"><span class="n">G3</span><div><b>四个 Miro 结构必须逐项对齐</b><p>Sticky 2×8；Shapes 单列有名称；Draw 纵向 + 3 preset；Text 一个 shell + 分组 cell。</p></div><span class="status unverified">PENDING</span></article>
+        <article class="gate"><span class="n">G4</span><div><b>格式 picker 前台必须能打开</b><p>Text font/size 与 Sticky size 均能通过真实点击打开、锚定、选择、关闭，不能只靠 offscreen。</p></div><span class="status blocked">P0</span></article>
+        <article class="gate"><span class="n">G5</span><div><b>Rail 只有一个 primary fill</b><p>点击后鼠标不移开仍有琥珀端；组内 6/4 px；badge 不压 divider；Draw glyph 不随子工具跳。</p></div><span class="status unverified">PENDING</span></article>
+        <article class="gate"><span class="n">G6</span><div><b>Cocoa 与 compact 双门</b><p>真实 macOS 1280×720 + 800×560；四边对象；V/Esc；one-shot / continuous；无 popup backing 闪烁。</p></div><span class="status unverified">UNVERIFIED</span></article>
+      </div>
+    </section>
+
+    <div class="footnote">
+      <b>Miro 操作来源：</b>
+      <a href="https://help.miro.com/hc/en-us/articles/360017730553-Toolbars">Toolbars</a> ·
+      <a href="https://help.miro.com/hc/en-us/articles/20967864443410-Miro-s-new-simplified-user-interface">Simplified UI</a> ·
+      <a href="https://help.miro.com/hc/en-us/articles/360017572054-Sticky-notes">Sticky notes</a> ·
+      <a href="https://help.miro.com/hc/en-us/articles/360017572094-Text">Text</a> ·
+      <a href="https://help.miro.com/hc/en-us/articles/360017730573-Pen">Pen</a>。
+      视觉结构以用户提供的四张 Miro 截图为最终基准；官方文档用于校验操作语义，不替代截图审美判断。
+    </div>
+
+    <footer class="footer">
+      Report artifact: docs/analyzer/reviews/2026-08-20-ultraview-miro-operation-ui-comparison.html<br>
+      Evidence classes: user Miro screenshots / user TraceLab screenshots / foreground Cocoa / focused offscreen / source inspection.<br>
+      Verdict vocabulary: PASS / PARTIAL / FAIL / BLOCKED / INTENTIONAL / UNVERIFIED.
+    </footer>
+  </main>
+
+  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="查看大图">
+    <button type="button" id="closeLightbox" aria-label="关闭大图">×</button>
+    <img id="lightboxImage" alt="">
+  </div>
+
+  <script>
+    const filterButtons = [...document.querySelectorAll('[data-filter]')];
+    const rows = [...document.querySelectorAll('tbody tr[data-status]')];
+    filterButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const filter = button.dataset.filter;
+        filterButtons.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+        rows.forEach((row) => { row.hidden = filter !== 'all' && row.dataset.status !== filter; });
+      });
+    });
+
+    const lightbox = document.querySelector('#lightbox');
+    const lightboxImage = document.querySelector('#lightboxImage');
+    const closeLightbox = () => {
+      lightbox.hidden = true;
+      lightboxImage.removeAttribute('src');
+    };
+    document.querySelectorAll('[data-lightbox]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const source = button.querySelector('img');
+        lightboxImage.src = source.src;
+        lightboxImage.alt = source.alt;
+        lightbox.hidden = false;
+        document.querySelector('#closeLightbox').focus();
+      });
+    });
+    document.querySelector('#closeLightbox').addEventListener('click', closeLightbox);
+    lightbox.addEventListener('click', (event) => { if (event.target === lightbox) closeLightbox(); });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !lightbox.hidden) closeLightbox(); });
+  </script>
+</body>
+</html>

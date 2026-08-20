@@ -562,6 +562,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.shapes",
         "ultraview.existing_markup",
         "ultraview.oneshot",
+        "ultraview.select_keys",
         "ultraview.multiselect",
     }
     assert required <= set(by_id)
@@ -638,7 +639,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "工程" in display_hint
     assert "保存" in display_hint
     assert "整框" in by_id["ultraview.text"].text
-    assert "选中删除" in by_id["ultraview.existing_markup"].text
+    assert "画笔" in by_id["ultraview.existing_markup"].text
+    assert "V/Esc" in by_id["ultraview.existing_markup"].text
     assert "回选择" in by_id["ultraview.oneshot"].text
     assert "固定" in by_id["ultraview.oneshot"].text
     assert "T " in by_id["ultraview.text"].text

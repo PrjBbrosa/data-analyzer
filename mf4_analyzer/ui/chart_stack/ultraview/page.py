@@ -231,6 +231,11 @@ from .widgets import (
 )
 from .chrome import (
     BOARD_POPOVER_WIDTH,
+    OVERLAY_AUTHOR_CONNECTOR,
+    OVERLAY_AUTHOR_DRAW,
+    OVERLAY_AUTHOR_FORMAT,
+    OVERLAY_AUTHOR_SHAPES,
+    OVERLAY_AUTHOR_STICKY,
     PANEL_BOARDS,
     PANEL_FILTER,
     PANEL_LAYOUT,
@@ -627,28 +632,35 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._tool_rail.ref_dropped.connect(self._on_tray_drop)
         self._tool_rail.tool_requested.connect(self._on_author_tool_requested)
         self._tool_rail.tool_pinned_changed.connect(self._on_author_tool_pinned)
-        self._sticky_popover = self._tool_rail.make_sticky_popover(self)
+        self._sticky_popover = self._tool_rail.make_sticky_popover(self._canvas_host)
         self._sticky_popover.palette_selected.connect(self._on_sticky_palette_selected)
         self._sticky_popover.pin_requested.connect(self._on_sticky_pin_requested)
         self._sticky_popover.stack_requested.connect(self._on_sticky_stack_requested)
-        self._shape_popover = self._tool_rail.make_shape_popover(self)
+        self._shape_popover = self._tool_rail.make_shape_popover(self._canvas_host)
         self._shape_popover.shape_selected.connect(self._on_shape_selected)
         self._shape_popover.connector_selected.connect(self._on_connector_selected)
         self._shape_popover.pin_requested.connect(self._on_shape_pin_requested)
-        self._connector_popover = self._tool_rail.make_connector_popover(self)
+        self._connector_popover = self._tool_rail.make_connector_popover(self._canvas_host)
         self._connector_popover.connector_selected.connect(self._on_connector_selected)
         self._connector_popover.pin_requested.connect(self._on_connector_pin_requested)
-        self._draw_popover = self._tool_rail.make_draw_popover(self)
+        self._draw_popover = self._tool_rail.make_draw_popover(self._canvas_host)
         self._draw_popover.tool_selected.connect(self._on_draw_tool_selected)
+        self._draw_popover.layoutChanged.connect(self._relayout_draw_popover)
+        self._register_author_flyouts()
         self._selection_toolbar = SelectionToolbar(self._canvas_host)
         self._selection_toolbar.hide()
         self._selection_toolbar.format_requested.connect(
             self._on_selection_format_requested
         )
         self._selection_toolbar.more_requested.connect(self._on_selection_more_requested)
-        self._format_picker = FormatChoiceFlyout(self)
+        self._format_picker = FormatChoiceFlyout(self._canvas_host)
         self._format_picker.choice_selected.connect(self._on_format_choice_selected)
         self._format_picker_key = ""
+        self._canvas_host.register_overlay(
+            OVERLAY_AUTHOR_FORMAT,
+            self._format_picker,
+            close_on_canvas_click=True,
+        )
         self._more_menu: QMenu | None = None
         self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
         self._board_island.board_menu_requested.connect(self._show_board_menu)
@@ -1331,6 +1343,11 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _open_panel(self, panel_id: str) -> bool:
         if self._presentation or self._canvas_host.overlay(panel_id) is None:
             return False
+        if self._interaction.active_tool() != TOOL_SELECT:
+            self._close_author_flyouts()
+            self._interaction.set_active_tool(TOOL_SELECT)
+            self._sync_tool_rail_from_controller()
+            self._sync_tool_cursor()
         if self._drag_kind is not None and self._active_panel is not None and panel_id != self._active_panel:
             self._deferred_panel_close = self._active_panel
             return False
@@ -1380,6 +1397,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return closed
 
     def _on_overlay_closed(self, panel_id: str) -> None:
+        if panel_id == OVERLAY_AUTHOR_FORMAT:
+            self._format_picker_key = ""
+            return
         if panel_id == PANEL_LIBRARY:
             self._library_visible = False
         if panel_id == PANEL_UNPLACED:
@@ -2473,6 +2493,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._toolbar.set_edit_visible(not self._presentation)
         if self._presentation:
             self._presentation_panel = self._active_panel
+            self._close_author_flyouts()
             self._canvas_host.close_active_overlay(restore_focus=False)
             self._library_visible = False
             self._board_island.hide()
@@ -2722,6 +2743,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def show_overview(self) -> None:
         """Show a scaled, read-only full Board projection without capture."""
+        self._close_author_flyouts()
         self._refresh_projection()
         self._overview.setGeometry(self._board_scroll.geometry())
         self._overview.raise_()
@@ -2751,6 +2773,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             widget.setFocus(Qt.OtherFocusReason)
 
     def _on_board_selected(self, board_id: str) -> None:
+        self._close_author_flyouts()
         self._close_active_panel(restore_focus=False)
         self._card_context.clear_ref()
         self.reset_sheet_session(emit_presentation=False)
@@ -3406,12 +3429,65 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._draw_popover,
         )
 
+    def _register_author_flyouts(self) -> None:
+        for overlay_id, widget, tool in (
+            (OVERLAY_AUTHOR_STICKY, self._sticky_popover, TOOL_STICKY),
+            (OVERLAY_AUTHOR_SHAPES, self._shape_popover, TOOL_SHAPES),
+            (OVERLAY_AUTHOR_DRAW, self._draw_popover, TOOL_DRAW),
+            (OVERLAY_AUTHOR_CONNECTOR, self._connector_popover, TOOL_CONNECTOR),
+        ):
+            self._canvas_host.register_overlay(
+                overlay_id,
+                widget,
+                trigger=self._tool_rail.tool_button(tool),
+                close_on_canvas_click=True,
+            )
+
+    def _author_flyout_safe_rect(self) -> QRect:
+        host = self._canvas_host.contentsRect()
+        rect = host.adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)
+        nav = getattr(self, "_navigation_island", None)
+        status = getattr(self, "_status_island", None)
+        bottoms = []
+        for island in (nav, status):
+            if island is not None and island.isVisible():
+                bottoms.append(island.geometry().top() - OVERLAY_GAP)
+        if bottoms:
+            rect.setBottom(min(rect.bottom(), min(bottoms)))
+        return rect
+
+    def _author_flyout_rect(self, button: QWidget | None, size: QSize) -> QRect:
+        safe = self._author_flyout_safe_rect()
+        width = min(max(1, size.width()), safe.width())
+        height = min(max(1, size.height()), safe.height())
+        rail = self._tool_rail.geometry()
+        x = rail.right() + OVERLAY_GAP
+        y = button.mapTo(self._canvas_host, QPoint(0, 0)).y() if button is not None else safe.top()
+        if y + height > safe.bottom():
+            y = safe.bottom() - height
+        x = min(max(safe.left(), x), safe.right() - width)
+        y = min(max(safe.top(), y), safe.bottom() - height)
+        return QRect(x, y, width, height)
+
+    def _open_author_flyout(self, overlay_id: str, flyout, button: QWidget | None) -> None:
+        size = flyout.content_size()
+        natural_h = size.height()
+        rect = self._author_flyout_rect(button, size)
+        if natural_h > rect.height():
+            flyout._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        else:
+            flyout._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._canvas_host.open_overlay(overlay_id, rect)
+
     def _close_author_flyouts(self, keep=None) -> None:
         for flyout in self._author_flyouts():
             if flyout is keep:
                 continue
-            if flyout.isVisible():
-                flyout.close()
+            key = flyout.property("overlayId")
+            if key and self._canvas_host.active_overlay() == str(key):
+                self._canvas_host.close_overlay(str(key), restore_focus=False)
+            elif flyout.isVisible():
+                flyout.hide()
 
     def _show_tool_flyout(self, tool: str) -> None:
         if tool == TOOL_STICKY:
@@ -3486,8 +3562,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._interaction.sticky_palette(), emit=False
         )
         self._sticky_popover.set_pinned(self._interaction.pinned_tool() == TOOL_STICKY)
-        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
-        self._sticky_popover.popup(anchor)
+        self._open_author_flyout(OVERLAY_AUTHOR_STICKY, self._sticky_popover, button)
 
     def sticky_popover(self) -> StickyPopover:
         return self._sticky_popover
@@ -3523,8 +3598,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if button is None:
             return
         self._shape_popover.set_pinned(self._interaction.pinned_tool() == TOOL_SHAPES)
-        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
-        self._shape_popover.popup(anchor)
+        self._open_author_flyout(OVERLAY_AUTHOR_SHAPES, self._shape_popover, button)
 
     def _sync_tool_rail_from_controller(self) -> None:
         if not self._tool_rail.visible_author_tools():
@@ -3578,8 +3652,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if button is None:
             return
         self._connector_popover.set_pinned(self._interaction.pinned_tool() == TOOL_CONNECTOR)
-        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
-        self._connector_popover.popup(anchor)
+        self._open_author_flyout(OVERLAY_AUTHOR_CONNECTOR, self._connector_popover, button)
 
     def _on_connector_tool_shortcut(self) -> None:
         if self._text_field_has_focus() or not self._free_grid.creation_allowed():
@@ -3619,8 +3692,16 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         subtool = self._interaction.last_draw_subtool()
         preset = 0 if not is_draw_ink_subtool(subtool) else self._interaction.draw_preset_index()
         self._draw_popover.choose_tool(subtool, preset)
-        anchor = button.mapToGlobal(QPoint(button.width() + 8, 0))
-        self._draw_popover.popup(anchor)
+        self._open_author_flyout(OVERLAY_AUTHOR_DRAW, self._draw_popover, button)
+
+    def _relayout_draw_popover(self) -> None:
+        if not self._draw_popover.isVisible():
+            return
+        self._open_author_flyout(
+            OVERLAY_AUTHOR_DRAW,
+            self._draw_popover,
+            self._tool_rail.tool_button(TOOL_DRAW),
+        )
 
     def _on_draw_tool_shortcut(self) -> None:
         if self._text_field_has_focus() or not self._free_grid.creation_allowed():
@@ -3705,11 +3786,31 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _on_more_action(self, key: str, _checked: bool = False) -> None:
         self._on_selection_format_requested(key, True)
 
+    def format_picker(self) -> FormatChoiceFlyout:
+        return self._format_picker
+
+    def _format_picker_rect(self, button: QWidget, size: QSize) -> QRect:
+        safe = self._author_flyout_safe_rect()
+        width = min(max(1, size.width()), safe.width())
+        height = min(max(1, size.height()), safe.height())
+        origin = button.mapTo(self._canvas_host, QPoint(0, 0))
+        x = origin.x()
+        y = origin.y() + button.height() + 6
+        if y + height > safe.bottom():
+            y = origin.y() - 6 - height
+        if x + width > safe.right():
+            x = origin.x() + button.width() - width
+        x = min(max(safe.left(), x), safe.right() - width)
+        y = min(max(safe.top(), y), safe.bottom() - height)
+        return QRect(x, y, width, height)
+
     def _on_format_choice_selected(self, value: object) -> None:
         key = self._format_picker_key
         if not key:
             return
         self._format_picker_key = ""
+        if self._canvas_host.active_overlay() == OVERLAY_AUTHOR_FORMAT:
+            self._canvas_host.close_overlay(OVERLAY_AUTHOR_FORMAT, restore_focus=False)
         self._on_selection_format_requested(key, value)
 
     def _popup_format_picker(self, key: str) -> None:
@@ -3777,7 +3878,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         else:
             self._format_picker_key = ""
             return
-        picker.popup(button.mapToGlobal(QPoint(0, button.height() + 4)))
+        size = picker.content_size()
+        rect = self._format_picker_rect(button, size)
+        self._canvas_host.open_overlay(OVERLAY_AUTHOR_FORMAT, rect)
 
     def _on_selection_format_requested(self, key: str, value: object) -> None:
         caps = self._selection_capabilities()
@@ -4308,20 +4411,25 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         toolbar.set_compact(self.width() < 900 or is_compact_stage((self.width(), self.height())))
         toolbar.adjustSize()
         hint = toolbar.sizeHint()
-        host = self._canvas_host.rect()
+        host = self._canvas_host.contentsRect()
+        safe = host.adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)
+        rail_right = self._tool_rail.geometry().right()
+        safe.setLeft(max(safe.left(), rail_right + OVERLAY_GAP))
         bar_h = max(48, hint.height())
         gap = 8
-        width = max(hint.width(), 1)
+        width = min(max(hint.width(), 1), max(1, safe.width()))
+        bar_h = min(bar_h, max(1, safe.height()))
         above = bounds.y() - gap - bar_h
-        if above >= gap:
+        below = bounds.bottom() + gap
+        if above >= safe.top():
             top = above
+        elif below + bar_h <= safe.bottom():
+            top = below
         else:
-            top = bounds.bottom() + gap
+            top = min(max(safe.top(), bounds.center().y() - bar_h // 2), safe.bottom() - bar_h)
         left = bounds.center().x() - width // 2
-        left = max(
-            RAIL_WIDTH + SAFE_MARGIN,
-            min(host.width() - width - SAFE_MARGIN, left),
-        )
+        left = min(max(safe.left(), left), safe.right() - width)
+        top = min(max(safe.top(), top), safe.bottom() - bar_h)
         toolbar.setGeometry(left, top, width, bar_h)
         toolbar.show()
         toolbar.raise_()

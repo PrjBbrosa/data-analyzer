@@ -154,7 +154,7 @@ def test_sticky_click_opens_anchored_large_swatch_flyout(qtbot):
     buttons = flyout.palette_buttons()
     assert len(buttons) == 16
     assert buttons[0].width() >= 48
-    assert flyout.width() >= 260
+    assert 128 <= flyout.width() <= 140
     texts = [child.text() for child in flyout.findChildren(QToolButton) if child.text()]
     assert "固定连续创建" not in texts
     assert any(text == "Stack" for text in texts)
@@ -199,7 +199,6 @@ def test_existing_panel_action_inventory_is_unchanged(qtbot):
     qtbot.addWidget(rail)
     assert tuple(rail._buttons) == (PANEL_LIBRARY, PANEL_LAYOUT, PANEL_FILTER, PANEL_UNPLACED)
     assert RELEASE_AUTHOR_TOOLS == (
-        AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         "text",
         AUTHOR_TOOL_SHAPES,
@@ -280,7 +279,7 @@ def test_sticky_and_shape_flyouts_shrink_to_content(qtbot):
         widget.show()
         widget.adjustSize()
     assert isinstance(sticky, ToolFlyoutSurface)
-    assert sticky.width() >= 260
+    assert 128 <= sticky.width() <= 140
     inner = shapes.findChild(QFrame, "ultraViewToolFlyoutInner")
     assert inner is not None
 
@@ -318,7 +317,7 @@ def test_mode_and_panel_buttons_render_start_and_end_pixels(qtbot, qapp):
     button = QToolButton(host)
     button.setProperty("chrome", "ultraview")
     button.setProperty("role", "icon")
-    button.setProperty("modeActive", "true")
+    button.setProperty("primaryFill", "true")
     button.setAttribute(Qt.WA_StyledBackground, True)
     button.setAutoFillBackground(True)
     button.setFixedSize(46, 46)

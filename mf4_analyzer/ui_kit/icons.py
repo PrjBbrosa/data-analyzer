@@ -448,6 +448,112 @@ class Icons:
         return _line_icon(draw, c)
 
     @classmethod
+    def ultraview_author_sticky(cls, color=None):
+        """Outline sticky note with a folded corner; not a solid square."""
+        c = color or GRAY
+
+        def draw(p):
+            note = QPainterPath()
+            note.moveTo(4.0, 4.0)
+            note.lineTo(16.0, 4.0)
+            note.lineTo(16.0, 12.2)
+            note.lineTo(12.0, 16.0)
+            note.lineTo(4.0, 16.0)
+            note.closeSubpath()
+            p.drawPath(note)
+            p.drawLine(QPointF(12.0, 16.0), QPointF(12.0, 12.2))
+            p.drawLine(QPointF(12.0, 12.2), QPointF(16.0, 12.2))
+
+        return _line_icon(draw, c, size=20)
+
+    @classmethod
+    def ultraview_author_text(cls, color=None):
+        """Compact sans-serif T; not a serif capital A."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawLine(QPointF(4.2, 4.4), QPointF(15.8, 4.4))
+            p.drawLine(QPointF(10.0, 4.4), QPointF(10.0, 16.0))
+            p.drawLine(QPointF(4.2, 4.4), QPointF(4.2, 6.4))
+            p.drawLine(QPointF(15.8, 4.4), QPointF(15.8, 6.4))
+
+        return _line_icon(draw, c, size=20)
+
+    @classmethod
+    def ultraview_author_shapes(cls, color=None):
+        """Outline square, circle, and triangle sharing one stroke."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(4.0, 9.2, 6.0, 6.4), 0.8, 0.8)
+            p.drawEllipse(QRectF(10.2, 4.0, 5.8, 5.8))
+            tri = QPainterPath()
+            tri.moveTo(13.4, 10.6)
+            tri.lineTo(16.0, 16.0)
+            tri.lineTo(10.6, 16.0)
+            tri.closeSubpath()
+            p.drawPath(tri)
+
+        return _line_icon(draw, c, size=20)
+
+    @classmethod
+    def ultraview_author_draw(cls, color=None):
+        """Canonical outline pen. Rail glyph does not follow the subtool."""
+        c = color or GRAY
+
+        def draw(p):
+            shaft = QPainterPath()
+            shaft.moveTo(5.8, 14.4)
+            shaft.lineTo(13.6, 6.6)
+            shaft.lineTo(15.4, 8.4)
+            shaft.lineTo(7.6, 16.2)
+            shaft.closeSubpath()
+            p.drawPath(shaft)
+            p.drawLine(QPointF(12.8, 5.8), QPointF(15.0, 8.0))
+            nib = QPainterPath()
+            nib.moveTo(5.8, 14.4)
+            nib.lineTo(4.2, 16.0)
+            nib.lineTo(7.6, 16.2)
+            p.drawPath(nib)
+
+        return _line_icon(draw, c, size=20)
+
+    @classmethod
+    def ultraview_author_select(cls, color=None):
+        """Outline pointer for isolated chrome tests that still show Select."""
+        c = color or GRAY
+
+        def draw(p):
+            path = QPainterPath()
+            path.moveTo(5.2, 3.6)
+            path.lineTo(5.2, 16.2)
+            path.lineTo(8.4, 13.2)
+            path.lineTo(11.2, 17.2)
+            path.lineTo(13.0, 16.2)
+            path.lineTo(10.2, 12.2)
+            path.lineTo(14.8, 12.2)
+            path.closeSubpath()
+            p.drawPath(path)
+
+        return _line_icon(draw, c, size=20)
+
+    @classmethod
+    def ultraview_author_connector(cls, color=None):
+        """Outline arrow used only when Connector is constructed on a test rail."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawLine(QPointF(3.6, 10.0), QPointF(14.4, 10.0))
+            head = QPainterPath()
+            head.moveTo(16.4, 10.0)
+            head.lineTo(12.2, 7.0)
+            head.lineTo(12.2, 13.0)
+            head.closeSubpath()
+            p.drawPath(head)
+
+        return _line_icon(draw, c, size=20)
+
+    @classmethod
     def ultraview_display(cls, color=None):
         """Eye with metadata lines for title/source display options."""
         c = color or GRAY

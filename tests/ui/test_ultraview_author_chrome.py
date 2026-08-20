@@ -1,15 +1,19 @@
 """Focused contracts for UltraView's authoring rail and creation popovers."""
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from pathlib import Path
+
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
+from PyQt5.QtGui import QColor, QHoverEvent, QImage, QPainter
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QFrame, QMenu, QToolButton
+from PyQt5.QtWidgets import QApplication, QFrame, QMenu, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_tools import CLOSED_SHAPE_TYPES
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_style import STICKY_PALETTE_TOKENS
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_chrome import (
+    FormatChoiceFlyout,
     SelectionToolbar,
     ToolFlyoutSurface,
 )
@@ -23,11 +27,26 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     AUTHOR_TOOLS,
     ConnectorPopover,
     DrawPopover,
+    PANEL_LAYOUT,
+    PANEL_LIBRARY,
+    RAIL_BUTTON_SIZE,
+    RAIL_BUTTON_SIZE_COMPACT,
+    RAIL_DIVIDER_CLEAR,
+    RAIL_DIVIDER_CLEAR_COMPACT,
+    RAIL_GROUP_GAP,
+    RAIL_GROUP_GAP_COMPACT,
+    RAIL_ICON_SIZE,
+    RAIL_ICON_SIZE_COMPACT,
     RELEASE_AUTHOR_TOOLS,
     ShapePopover,
     StickyPopover,
     ToolRail,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import SAFE_MARGIN
+from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
+from mf4_analyzer.ui.ultraview_state import BoardBox, StickyObject, default_board
+from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_TITANIUM
 
 
 def test_creation_rail_is_independent_from_panel_selection_and_starts_disabled(qtbot):
@@ -77,9 +96,11 @@ def test_creation_rail_stays_whole_and_keyboard_reachable_in_compact_safe_band(q
     rail = ToolRail(visible_author_tools=AUTHOR_TOOLS)
     qtbot.addWidget(rail)
     rail.set_compact(True)
-    rail.resize(52, 468)
     rail.show()
-    assert rail.sizeHint().height() <= 520
+    rail.adjustSize()
+    rail.resize(rail.sizeHint())
+    QApplication.processEvents()
+    assert rail.sizeHint().height() <= 560
 
     previous_bottom = -1
     for tool in (
@@ -92,10 +113,12 @@ def test_creation_rail_stays_whole_and_keyboard_reachable_in_compact_safe_band(q
     ):
         button = rail.tool_button(tool)
         assert button is not None
-        assert button.y() > previous_bottom
-        assert button.geometry().bottom() < rail.height()
+        top = button.mapTo(rail, button.rect().topLeft()).y()
+        bottom = button.mapTo(rail, button.rect().bottomRight()).y()
+        assert top > previous_bottom
+        assert bottom < rail.height()
         assert button.focusPolicy() == Qt.TabFocus
-        previous_bottom = button.geometry().bottom()
+        previous_bottom = bottom
 
 
 def test_creation_popovers_expose_miro_v1_choices_and_typed_intents(qtbot):
@@ -184,19 +207,25 @@ def test_draw_popover_is_a_frame_flyout_not_a_menu(qtbot):
 
 
 def test_release_rail_constructs_select_sticky_text_shapes_and_draw():
-    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "draw")
+    assert RELEASE_AUTHOR_TOOLS == ("sticky", "text", "shapes", "draw")
     rail = ToolRail()
     assert rail.visible_author_tools() == (
-        AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
         AUTHOR_TOOL_SHAPES,
         AUTHOR_TOOL_DRAW,
     )
+    assert rail.tool_button(AUTHOR_TOOL_SELECT) is None
     assert rail.tool_button(AUTHOR_TOOL_TEXT) is not None
     assert rail.tool_button(AUTHOR_TOOL_SHAPES) is not None
     assert rail.tool_button(AUTHOR_TOOL_CONNECTOR) is None
     assert rail.tool_button(AUTHOR_TOOL_DRAW) is not None
+    rail.set_creation_enabled(True)
+    rail.set_active_tool(AUTHOR_TOOL_SELECT)
+    assert rail.active_tool() == AUTHOR_TOOL_SELECT
+    sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
+    assert sticky is not None
+    assert sticky.property("active") != "true"
 
 
 def test_panel_and_tool_active_states_are_orthogonal(qtbot):
@@ -224,3 +253,500 @@ def test_selection_toolbar_is_single_row_and_overflows_when_compact(qtbot):
     toolbar.resize(220, 48)
     toolbar.set_compact(True)
     assert toolbar.height() == 48
+
+
+def _rail_icon_buttons(rail: ToolRail) -> list[QToolButton]:
+    return [
+        button
+        for button in rail.findChildren(QToolButton)
+        if button.property("chrome") == "ultraview" and button.property("role") == "icon"
+    ]
+
+
+def _button_image(button: QToolButton) -> QImage:
+    image = QImage(button.size(), QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    button.render(painter)
+    painter.end()
+    return image
+
+
+def _prepare_page(qtbot, qapp, size=(1280, 720)) -> UltraViewPage:
+    load_stylesheet(qapp)
+    page = UltraViewPage()
+    qtbot.addWidget(page)
+    page.resize(*size)
+    page.show()
+    page.set_board(default_board())
+    QApplication.processEvents()
+    page.tool_rail().set_creation_enabled(True)
+    QApplication.processEvents()
+    return page
+
+
+def test_release_rail_omits_visible_select_but_internal_select_remains_default(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.set_creation_enabled(True)
+    assert AUTHOR_TOOL_SELECT not in rail.visible_author_tools()
+    assert rail.tool_button(AUTHOR_TOOL_SELECT) is None
+    assert rail.active_tool() == AUTHOR_TOOL_SELECT
+    rail.set_active_tool(AUTHOR_TOOL_SELECT)
+    assert rail.active_tool() == AUTHOR_TOOL_SELECT
+    for tool in rail.visible_author_tools():
+        button = rail.tool_button(tool)
+        assert button is not None
+        assert button.property("active") != "true"
+
+
+def test_author_button_geometry_does_not_change_across_click_and_active_repolish(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    rail = page.tool_rail()
+    before = {button.objectName(): QRect(button.geometry()) for button in _rail_icon_buttons(rail)}
+    sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
+    assert sticky is not None
+    QTest.mouseClick(sticky, Qt.LeftButton)
+    QApplication.processEvents()
+    after = {button.objectName(): QRect(button.geometry()) for button in _rail_icon_buttons(rail)}
+    assert before == after
+    assert sticky.size().width() == RAIL_BUTTON_SIZE
+    assert sticky.size().height() == RAIL_BUTTON_SIZE
+
+
+def test_all_toolrail_buttons_share_one_outer_and_icon_size_per_breakpoint(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+    QApplication.processEvents()
+    desktop = _rail_icon_buttons(rail)
+    assert desktop
+    sizes = {(button.width(), button.height()) for button in desktop}
+    assert sizes == {(RAIL_BUTTON_SIZE, RAIL_BUTTON_SIZE)}
+    assert {button.iconSize().width() for button in desktop} == {RAIL_ICON_SIZE}
+    rail.set_compact(True)
+    QApplication.processEvents()
+    compact = _rail_icon_buttons(rail)
+    assert {button.size().width() for button in compact} == {RAIL_BUTTON_SIZE_COMPACT}
+    assert {button.iconSize().width() for button in compact} == {RAIL_ICON_SIZE_COMPACT}
+
+
+def test_author_active_button_renders_titanium_amber_start_and_end_pixels(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    sticky = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
+    assert sticky is not None
+    QTest.mouseClick(sticky, Qt.LeftButton)
+    QApplication.processEvents()
+    image = _button_image(sticky)
+    start = image.pixelColor(2, 2)
+    end = image.pixelColor(image.width() - 3, image.height() - 3)
+    assert start != end
+    wash = QColor("#EEF1FF")
+    assert abs(start.red() - wash.red()) + abs(start.green() - wash.green()) + abs(start.blue() - wash.blue()) > 40
+    expected_start = QColor(ULTRAVIEW_TITANIUM["rail_active_start"])
+    expected_end = QColor(ULTRAVIEW_TITANIUM["rail_active_end"])
+    assert start.red() < end.red() or start.blue() > end.blue()
+    assert abs(start.red() - expected_start.red()) < 80
+    assert abs(end.red() - expected_end.red()) < 80
+
+
+def test_author_active_icon_remains_visible_on_gradient(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    sticky = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
+    assert sticky is not None
+    QTest.mouseClick(sticky, Qt.LeftButton)
+    QApplication.processEvents()
+    image = _button_image(sticky)
+    whites = 0
+    samples = 0
+    for x in range(8, image.width() - 8):
+        for y in range(8, image.height() - 8):
+            color = image.pixelColor(x, y)
+            if color.alpha() < 20:
+                continue
+            samples += 1
+            if color.red() > 220 and color.green() > 220 and color.blue() > 220:
+                whites += 1
+    assert samples > 0
+    assert whites > 8
+
+
+def test_shape_flyout_contains_last_item_without_scroll_at_1280x720(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp, (1280, 720))
+    shapes = page.tool_rail().tool_button(AUTHOR_TOOL_SHAPES)
+    QTest.mouseClick(shapes, Qt.LeftButton)
+    QApplication.processEvents()
+    flyout = page.shape_popover()
+    assert flyout.isVisible()
+    last = flyout.cell_buttons()[-1]
+    content = flyout.content_widget()
+    assert last.geometry().bottom() <= content.height()
+    assert flyout._scroll.verticalScrollBar().maximum() == 0
+    assert last.isVisible()
+
+
+def test_shape_flyout_contains_last_item_without_scroll_at_800x560(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp, (800, 560))
+    shapes = page.tool_rail().tool_button(AUTHOR_TOOL_SHAPES)
+    QTest.mouseClick(shapes, Qt.LeftButton)
+    QApplication.processEvents()
+    flyout = page.shape_popover()
+    assert flyout.isVisible()
+    last = flyout.cell_buttons()[-1]
+    host = flyout.rect()
+    mapped = last.mapTo(flyout, last.rect().bottomRight())
+    assert mapped.y() <= host.height()
+    assert last.isVisible()
+
+
+def test_sticky_swatches_remain_square_after_popup_polish(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    sticky = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
+    QTest.mouseClick(sticky, Qt.LeftButton)
+    QApplication.processEvents()
+    flyout = page.sticky_popover()
+    for button in flyout.palette_buttons():
+        assert button.width() == button.height()
+        assert button.width() == 48
+
+
+def test_draw_color_swatches_remain_square_after_popup_polish(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    draw = page.tool_rail().tool_button(AUTHOR_TOOL_DRAW)
+    QTest.mouseClick(draw, Qt.LeftButton)
+    QApplication.processEvents()
+    flyout = page.draw_popover()
+    flyout.show_preset_editor(True)
+    QApplication.processEvents()
+    for token, button in flyout._color_buttons.items():
+        del token
+        assert button.isVisible()
+        assert button.width() == button.height()
+
+
+def test_draw_tool_width_and_color_changes_keep_flyout_open(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    draw = page.tool_rail().tool_button(AUTHOR_TOOL_DRAW)
+    QTest.mouseClick(draw, Qt.LeftButton)
+    QApplication.processEvents()
+    flyout = page.draw_popover()
+    assert flyout.isVisible()
+    highlighter = flyout._tool_buttons["highlighter"]
+    QTest.mouseClick(highlighter, Qt.LeftButton)
+    QApplication.processEvents()
+    assert flyout.isVisible()
+    width = flyout.preset_buttons("pen")[1]
+    QTest.mouseClick(width, Qt.LeftButton)
+    QApplication.processEvents()
+    assert flyout.isVisible()
+    flyout.show_preset_editor(True)
+    QApplication.processEvents()
+    color = flyout._color_buttons["red"]
+    QTest.mouseClick(color, Qt.LeftButton)
+    QApplication.processEvents()
+    assert flyout.isVisible()
+
+
+def test_active_sticky_click_closes_then_third_click_reopens_palette(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    button = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
+    flyout = page.sticky_popover()
+    QTest.mouseClick(button, Qt.LeftButton)
+    QApplication.processEvents()
+    assert flyout.isVisible()
+    QTest.mouseClick(button, Qt.LeftButton)
+    QApplication.processEvents()
+    assert not flyout.isVisible()
+    assert page.interaction().active_tool() == AUTHOR_TOOL_STICKY
+    QTest.mouseClick(button, Qt.LeftButton)
+    QApplication.processEvents()
+    assert flyout.isVisible()
+
+
+def test_selection_toolbar_is_clamped_inside_host_safe_rect_on_all_four_edges(qtbot, qapp):
+    from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
+
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.resize(1280, 720)
+    free, _cards = _prepare_free_grid(harness, qtbot, "edge-0")
+    note = StickyObject("edge-note", "sticky", box=BoardBox(2.0, 28.0, 3.0, 2.0), text="边")
+    harness.board.author_objects = [note]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("edge-note")
+    free.sync_selection_projection()
+    harness.page._refresh_author_toolbar()
+    QApplication.processEvents()
+    toolbar = harness.page.selection_toolbar()
+    host = harness.page.canvas_host()
+    assert toolbar.isVisible()
+    safe = host.contentsRect().adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)
+    geom = toolbar.geometry()
+    assert geom.left() >= safe.left()
+    assert geom.top() >= safe.top()
+    assert geom.right() <= safe.right()
+    assert geom.bottom() <= safe.bottom()
+
+
+def _map_top(widget, host) -> int:
+    return widget.mapTo(host, QPoint(0, 0)).y()
+
+
+def _map_bottom(widget, host) -> int:
+    return widget.mapTo(host, widget.rect().bottomLeft()).y()
+
+
+def _ink_bounds(image: QImage) -> QRect:
+    left, top, right, bottom = image.width(), image.height(), -1, -1
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if image.pixelColor(x, y).alpha() < 24:
+                continue
+            left = min(left, x)
+            right = max(right, x)
+            top = min(top, y)
+            bottom = max(bottom, y)
+    if right < 0:
+        return QRect()
+    return QRect(left, top, right - left + 1, bottom - top + 1)
+
+
+def test_release_rail_has_minimum_intragroup_gaps_and_divider_clear_space(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+    QApplication.processEvents()
+    library = rail.panel_button(PANEL_LIBRARY)
+    free = rail.free_grid_button()
+    layout = rail.panel_button(PANEL_LAYOUT)
+    filt = rail.panel_button("filter")
+    sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
+    text = rail.tool_button(AUTHOR_TOOL_TEXT)
+    assert None not in (library, free, layout, filt, sticky, text)
+    assert _map_top(free, rail) - _map_bottom(library, rail) - 1 == RAIL_GROUP_GAP
+    assert _map_top(text, rail) - _map_bottom(sticky, rail) - 1 == RAIL_GROUP_GAP
+    divider = rail.findChild(QFrame, "ultraViewToolRailCreationDivider")
+    assert divider is not None
+    assert _map_top(divider, rail) - _map_bottom(filt, rail) - 1 == RAIL_DIVIDER_CLEAR
+    rail.set_compact(True)
+    rail.adjustSize()
+    rail.resize(rail.sizeHint())
+    QApplication.processEvents()
+    assert _map_top(free, rail) - _map_bottom(library, rail) - 1 == RAIL_GROUP_GAP_COMPACT
+    assert _map_top(divider, rail) - _map_bottom(filt, rail) - 1 == RAIL_DIVIDER_CLEAR_COMPACT
+
+
+def test_only_one_rail_button_uses_primary_filled_state(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.set_creation_enabled(True)
+    rail.set_free_grid_enabled(True)
+    rail.set_active_panel(PANEL_LAYOUT)
+    rail.set_active_tool(AUTHOR_TOOL_DRAW)
+    filled = [
+        button.objectName()
+        for button in rail.findChildren(QToolButton)
+        if button.property("primaryFill") == "true"
+    ]
+    assert filled == ["ultraViewRailDrawButton"]
+    rail.set_active_tool(AUTHOR_TOOL_SELECT)
+    filled = [
+        button.objectName()
+        for button in rail.findChildren(QToolButton)
+        if button.property("primaryFill") == "true"
+    ]
+    assert filled == ["ultraViewRailLayoutButton"]
+
+
+def test_author_active_hover_and_pressed_keep_two_gradient_stops(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    sticky = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
+    assert sticky is not None
+    QTest.mouseClick(sticky, Qt.LeftButton)
+    QApplication.processEvents()
+    sticky.setAttribute(Qt.WA_Hover, True)
+    QApplication.sendEvent(
+        sticky,
+        QHoverEvent(QEvent.HoverEnter, QPoint(12, 12), QPoint(12, 12)),
+    )
+    sticky.update()
+    QApplication.processEvents()
+    hover = _button_image(sticky)
+    assert hover.pixelColor(2, 2) != hover.pixelColor(hover.width() - 3, hover.height() - 3)
+    sticky.setDown(True)
+    QApplication.processEvents()
+    pressed = _button_image(sticky)
+    assert pressed.pixelColor(2, 2) != pressed.pixelColor(pressed.width() - 3, pressed.height() - 3)
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    assert 'primaryFill="true"]:hover' in qss
+    assert qss.count("qlineargradient") >= 3
+
+
+def test_author_icons_share_rendered_ink_bounds_and_draw_icon_is_stable_across_subtools(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.set_creation_enabled(True)
+    rail.show()
+    QApplication.processEvents()
+    boxes = []
+    for tool in (AUTHOR_TOOL_STICKY, AUTHOR_TOOL_TEXT, AUTHOR_TOOL_SHAPES, AUTHOR_TOOL_DRAW):
+        button = rail.tool_button(tool)
+        pixmap = button.icon().pixmap(RAIL_ICON_SIZE, RAIL_ICON_SIZE)
+        boxes.append(_ink_bounds(pixmap.toImage()))
+    widths = {box.width() for box in boxes}
+    heights = {box.height() for box in boxes}
+    assert max(widths) - min(widths) <= 2
+    assert max(heights) - min(heights) <= 2
+    draw = rail.tool_button(AUTHOR_TOOL_DRAW)
+    before = draw.icon().pixmap(RAIL_ICON_SIZE, RAIL_ICON_SIZE).toImage()
+    rail.set_draw_subtool("eraser")
+    after = draw.icon().pixmap(RAIL_ICON_SIZE, RAIL_ICON_SIZE).toImage()
+    assert before == after
+
+
+def test_sticky_palette_is_two_columns_eight_rows_and_width_is_bounded(qtbot):
+    sticky = StickyPopover()
+    qtbot.addWidget(sticky)
+    sticky.show()
+    sticky.adjustSize()
+    buttons = sticky.palette_buttons()
+    assert len(buttons) == 16
+    columns = {button.x() for button in buttons}
+    rows = {button.y() for button in buttons}
+    assert len(columns) == 2
+    assert len(rows) == 8
+    assert 120 <= sticky.width() <= 160
+    stack = sticky.findChild(QToolButton, "ultraViewStickyStackButton")
+    assert stack is not None
+    assert stack.width() <= 120
+
+
+def test_shapes_catalog_is_one_column_with_visible_labels_and_shortcuts(qtbot):
+    shapes = ShapePopover()
+    qtbot.addWidget(shapes)
+    shapes.show()
+    shapes.adjustSize()
+    rows = shapes.cell_buttons()
+    assert len(rows) == 8
+    xs = {button.x() for button in rows}
+    assert len(xs) == 1
+    labels = " ".join(button.text() for button in rows)
+    assert "直线" in labels
+    assert "矩形" in labels
+    assert 220 <= shapes.width() <= 248
+    assert any("L" in (getattr(row, "_shortcut", "") or "") for row in rows)
+
+
+def test_draw_popover_is_vertical_and_exposes_three_presets_not_an_always_visible_color_matrix(qtbot):
+    draw = DrawPopover()
+    qtbot.addWidget(draw)
+    draw.show()
+    draw.adjustSize()
+    tools = [draw._tool_buttons[name] for name in ("pen", "highlighter", "eraser", "lasso")]
+    xs = {button.x() for button in tools}
+    assert max(xs) - min(xs) <= 2
+    assert tools[0].y() < tools[1].y() < tools[2].y() < tools[3].y()
+    presets = draw.preset_buttons("pen")
+    assert len(presets) == 3
+    assert not draw.preset_editor_visible()
+    for button in draw._color_buttons.values():
+        assert not button.isVisible()
+    assert 64 <= draw.width() <= 96
+    draw.show_preset_editor(True)
+    QApplication.processEvents()
+    assert any(button.isVisible() for button in draw._color_buttons.values())
+    assert draw.findChild(QWidget, "ultraViewDrawColorRow") is not None
+
+
+def test_selection_toolbar_cells_do_not_inherit_global_button_border_or_gradient(qtbot, qapp):
+    load_stylesheet(qapp)
+    toolbar = SelectionToolbar()
+    qtbot.addWidget(toolbar)
+    toolbar.show()
+    QApplication.processEvents()
+    button = toolbar.button("shape") or toolbar.button("font_role")
+    assert button is not None
+    assert button.property("role") == "selectionToolbarCell"
+    image = QImage(button.size(), QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    button.render(painter)
+    painter.end()
+    corner = image.pixelColor(1, 1)
+    assert corner.alpha() < 40
+
+
+def test_selection_toolbar_has_expected_group_dividers(qtbot):
+    toolbar = SelectionToolbar()
+    qtbot.addWidget(toolbar)
+    toolbar.set_kind("shape")
+    assert len(toolbar.group_dividers()) >= 1
+    toolbar.set_kind("text")
+    assert len(toolbar.group_dividers()) >= 2
+
+
+def test_font_and_size_pickers_are_single_column_content_driven_surfaces(qtbot):
+    picker = FormatChoiceFlyout()
+    qtbot.addWidget(picker)
+    picker.present_labels((("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")), current="sans")
+    picker.adjustSize()
+    picker.show()
+    QApplication.processEvents()
+    assert picker.column_count() == 1
+    assert 150 <= picker.width() <= 200
+    picker.present_labels(tuple((size, str(size)) for size in ("auto", 12, 14, 18, 24)), current=14)
+    picker.adjustSize()
+    QApplication.processEvents()
+    assert picker.column_count() == 1
+    assert 90 <= picker.width() <= 130
+
+
+def test_format_picker_is_anchored_to_trigger_and_inside_safe_rect(qtbot, qapp):
+    from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
+
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.resize(1280, 720)
+    free, _cards = _prepare_free_grid(harness, qtbot, "picker-0")
+    note = StickyObject("picker-note", "sticky", box=BoardBox(4.0, 8.0, 3.0, 2.0), text="字")
+    harness.board.author_objects = [note]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("picker-note")
+    free.sync_selection_projection()
+    harness.page._refresh_author_toolbar()
+    QApplication.processEvents()
+    toolbar = harness.page.selection_toolbar()
+    size_btn = toolbar.button("font_size")
+    assert size_btn is not None
+    QTest.mouseClick(size_btn, Qt.LeftButton)
+    QApplication.processEvents()
+    picker = harness.page.format_picker()
+    assert picker.isVisible()
+    host = harness.page.canvas_host()
+    trigger = size_btn.mapTo(host, QPoint(0, size_btn.height()))
+    gap = picker.y() - trigger.y()
+    assert 4 <= gap <= 8 or picker.y() + picker.height() <= size_btn.mapTo(host, QPoint(0, 0)).y()
+    safe = host.contentsRect().adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)
+    assert picker.geometry().left() >= safe.left()
+    assert picker.geometry().right() <= safe.right()
+    assert picker.column_count() == 1
+
+
+def test_flyout_corner_pixels_are_transparent_without_rectangular_backing(qtbot, qapp):
+    load_stylesheet(qapp)
+    sticky = StickyPopover()
+    qtbot.addWidget(sticky)
+    sticky.resize(128, 280)
+    sticky.show()
+    QApplication.processEvents()
+    image = QImage(sticky.size(), QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    sticky.render(painter)
+    painter.end()
+    for x, y in ((0, 0), (image.width() - 1, 0), (0, image.height() - 1), (image.width() - 1, image.height() - 1)):
+        assert image.pixelColor(x, y).alpha() < 30
+    center = image.pixelColor(image.width() // 2, 24)
+    assert center.alpha() > 200

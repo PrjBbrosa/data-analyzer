@@ -214,13 +214,13 @@ def test_compact_stages_keep_select_sticky_and_hide_undelivered_tools(qtbot, siz
     rail = page.tool_rail()
     select = rail.tool_button(AUTHOR_TOOL_SELECT)
     sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
-    assert select is not None and select.isVisible() and select.isEnabled()
-    assert sticky is not None and sticky.isVisible()
+    assert select is None
+    assert sticky is not None and sticky.isVisible() and sticky.isEnabled()
     for tool in RELEASE_AUTHOR_TOOLS:
         button = rail.tool_button(tool)
         assert button is not None and button.isVisible()
     assert rail.visible_author_tools() == RELEASE_AUTHOR_TOOLS
-    assert select.geometry().right() <= rail.width()
+    assert sticky.geometry().right() <= rail.width()
     assert sticky.geometry().bottom() <= rail.height()
 
 

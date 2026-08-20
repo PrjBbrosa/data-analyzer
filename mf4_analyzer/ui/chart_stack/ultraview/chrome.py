@@ -95,19 +95,36 @@ AUTHOR_TOOLS = (
     AUTHOR_TOOL_DRAW,
 )
 # Connector is chosen from the Shapes flyout. Draw is a first-class rail tool.
+# Select remains an internal default; the release rail does not show a button.
 RELEASE_AUTHOR_TOOLS: tuple[str, ...] = (
-    AUTHOR_TOOL_SELECT,
     AUTHOR_TOOL_STICKY,
     AUTHOR_TOOL_TEXT,
     AUTHOR_TOOL_SHAPES,
     AUTHOR_TOOL_DRAW,
 )
-RAIL_BUTTON_SIZE = 36
-RAIL_BUTTON_SIZE_AUTHOR = 46
-RAIL_BUTTON_SIZE_AUTHOR_COMPACT = 40
+RAIL_BUTTON_SIZE = 40
+RAIL_BUTTON_SIZE_COMPACT = 36
 RAIL_ICON_SIZE = 20
-RAIL_ICON_SIZE_AUTHOR = 22
-RAIL_ICON_SIZE_AUTHOR_COMPACT = 20
+RAIL_ICON_SIZE_COMPACT = 18
+RAIL_GROUP_GAP = 6
+RAIL_GROUP_GAP_COMPACT = 4
+RAIL_DIVIDER_CLEAR = 10
+RAIL_DIVIDER_CLEAR_COMPACT = 8
+RAIL_DIVIDER_INSET = 8
+RAIL_MARGINS = (10, 8, 10, 8)
+RAIL_MARGINS_COMPACT = (6, 4, 6, 4)
+RAIL_BADGE_MAX_HEIGHT = 18
+RAIL_BADGE_INSET = 2
+# Compatibility aliases: author buttons share the same rail box as panels.
+RAIL_BUTTON_SIZE_AUTHOR = RAIL_BUTTON_SIZE
+RAIL_BUTTON_SIZE_AUTHOR_COMPACT = RAIL_BUTTON_SIZE_COMPACT
+RAIL_ICON_SIZE_AUTHOR = RAIL_ICON_SIZE
+RAIL_ICON_SIZE_AUTHOR_COMPACT = RAIL_ICON_SIZE_COMPACT
+OVERLAY_AUTHOR_STICKY = "author_sticky"
+OVERLAY_AUTHOR_SHAPES = "author_shapes"
+OVERLAY_AUTHOR_DRAW = "author_draw"
+OVERLAY_AUTHOR_CONNECTOR = "author_connector"
+OVERLAY_AUTHOR_FORMAT = "author_format"
 BOARD_POPOVER_WIDTH = 260
 BOARD_ROW_HEIGHT = 36
 _BOARD_CURRENT_ROLE = Qt.UserRole + 1
@@ -119,21 +136,19 @@ _BOARD_LIST_BOTTOM_PAD = 6
 
 
 def _author_tool_icon(tool: str, *, active: bool, draw_subtool: str = "pen") -> QIcon:
-    """Return one compact, stable line icon for an authoring rail tool."""
-    draw_icons = {
-        "highlighter": "fa5s.highlighter",
-        "eraser": "fa5s.eraser",
-        "lasso": "mdi.lasso",
+    """Return one compact outline icon. Draw stays a canonical pen on the rail."""
+    del draw_subtool
+    color = UV_PRESENTATION_ICON if active else UV_MUTED
+    factories = {
+        AUTHOR_TOOL_SELECT: Icons.ultraview_author_select,
+        AUTHOR_TOOL_STICKY: Icons.ultraview_author_sticky,
+        AUTHOR_TOOL_TEXT: Icons.ultraview_author_text,
+        AUTHOR_TOOL_SHAPES: Icons.ultraview_author_shapes,
+        AUTHOR_TOOL_CONNECTOR: Icons.ultraview_author_connector,
+        AUTHOR_TOOL_DRAW: Icons.ultraview_author_draw,
     }
-    names = {
-        AUTHOR_TOOL_SELECT: "fa5s.mouse-pointer",
-        AUTHOR_TOOL_STICKY: "fa5s.sticky-note",
-        AUTHOR_TOOL_TEXT: "fa5s.font",
-        AUTHOR_TOOL_SHAPES: "fa5s.shapes",
-        AUTHOR_TOOL_CONNECTOR: "fa5s.long-arrow-alt-right",
-        AUTHOR_TOOL_DRAW: draw_icons.get(str(draw_subtool), "fa5s.pen"),
-    }
-    return qta.icon(names[str(tool)], color=UV_PRESENTATION_ICON if active else UV_MUTED)
+    factory = factories.get(str(tool), Icons.ultraview_author_select)
+    return factory(color)
 
 
 class _AuthorToolButton(QToolButton):
@@ -310,6 +325,7 @@ def _icon_button(
     button.setProperty("active", "false")
     button.setProperty("modeActive", "false")
     button.setProperty("panelOpen", "false")
+    button.setProperty("primaryFill", "false")
     return button
 
 
@@ -746,6 +762,7 @@ class ToolRail(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(True)
         self.setProperty("surface", "island")
+        self.setProperty("compact", "false")
         self.setFixedWidth(RAIL_WIDTH)
         self._compact = False
         self._buttons: dict[str, QToolButton] = {}
@@ -762,6 +779,9 @@ class ToolRail(QFrame):
         self._active_tool = AUTHOR_TOOL_SELECT
         self._pinned_tool: str | None = None
         self._draw_subtool = DEFAULT_DRAW_SUBTOOL
+        self._group_layouts: list[QVBoxLayout] = []
+        self._divider_spacers: list[QWidget] = []
+        self._syncing_rail = False
         # Release rail uses RELEASE_AUTHOR_TOOLS.  Isolated chrome tests pass
         # AUTHOR_TOOLS to exercise the still-present widget surface.
         if visible_author_tools is None:
@@ -772,13 +792,9 @@ class ToolRail(QFrame):
             tool for tool, _short, _tip in self._CREATION_SPECS if tool in allowed
         )
         root = QVBoxLayout(self)
-        # Twelve 36px targets must remain fully usable in the 800×560 compact
-        # stage.  Keep the Miro-like rail as one dense, accessible column
-        # instead of allowing Page's safe-band clamp to crop its last tools.
-        root.setContentsMargins(10, 4, 10, 4)
+        root.setContentsMargins(*RAIL_MARGINS)
         root.setSpacing(0)
-        # Visual order: Library, FreeGrid, Layout, Filter, divider, Unplaced,
-        # SyncAll.
+        nav_group, nav_layout = self._make_rail_group()
         for index, (panel_id, short_name, tooltip, icon_factory) in enumerate(self._PANEL_SPECS):
             if index == 1:
                 self._free_grid = _rail_button(
@@ -790,11 +806,17 @@ class ToolRail(QFrame):
                 )
                 self._free_grid.setCheckable(True)
                 self._free_grid.clicked.connect(self._on_free_grid_clicked)
-                root.addWidget(self._free_grid, 0, Qt.AlignHCenter)
-            if index == 3 and self._visible_author_tools:
-                self._add_rail_divider(root, "ultraViewToolRailCreationDivider")
-                self._add_creation_section(root)
-                self._add_rail_divider(root, "ultraViewToolRailPostCreationDivider")
+                nav_layout.addWidget(self._free_grid, 0, Qt.AlignHCenter)
+            if index == 3:
+                root.addWidget(nav_group, 0, Qt.AlignHCenter)
+                if self._visible_author_tools:
+                    self._add_rail_divider(root, "ultraViewToolRailCreationDivider")
+                    create_group, create_layout = self._make_rail_group()
+                    self._add_creation_section(create_layout)
+                    root.addWidget(create_group, 0, Qt.AlignHCenter)
+                    self._add_rail_divider(root, "ultraViewToolRailPostCreationDivider")
+                status_group, status_layout = self._make_rail_group()
+            parent_layout = nav_layout if index < 3 else status_layout
             button = _rail_button(
                 self,
                 object_name=f"ultraViewRail{short_name}Button",
@@ -807,12 +829,13 @@ class ToolRail(QFrame):
             button.clicked.connect(self._on_panel_clicked)
             self._buttons[panel_id] = button
             self._icon_factories[panel_id] = icon_factory
-            root.addWidget(button, 0, Qt.AlignHCenter)
+            parent_layout.addWidget(button, 0, Qt.AlignHCenter)
             badge = QLabel(self)
             badge.setObjectName(f"ultraViewRail{short_name}Badge")
             badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             badge.setAlignment(Qt.AlignCenter)
             badge.setMinimumSize(14, 14)
+            badge.setMaximumHeight(RAIL_BADGE_MAX_HEIGHT)
             badge.setProperty("role", "badge")
             badge.hide()
             self._badges[panel_id] = badge
@@ -832,12 +855,14 @@ class ToolRail(QFrame):
             accessible_name="一键更新全部已变化的预览",
         )
         self._sync_all.clicked.connect(self._on_sync_all_clicked)
-        root.addWidget(self._sync_all, 0, Qt.AlignHCenter)
+        status_layout.addWidget(self._sync_all, 0, Qt.AlignHCenter)
+        root.addWidget(status_group, 0, Qt.AlignHCenter)
         self._sync_all_badge = QLabel(self)
         self._sync_all_badge.setObjectName("ultraViewRailSyncAllBadge")
         self._sync_all_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._sync_all_badge.setAlignment(Qt.AlignCenter)
         self._sync_all_badge.setMinimumSize(14, 14)
+        self._sync_all_badge.setMaximumHeight(RAIL_BADGE_MAX_HEIGHT)
         self._sync_all_badge.setProperty("role", "badge")
         self._sync_all_badge.hide()
         self.set_stale_count(0)
@@ -855,7 +880,7 @@ class ToolRail(QFrame):
         return self._tool_buttons.get(str(tool))
 
     def visible_author_tools(self) -> tuple[str, ...]:
-        """Tools actually constructed on this rail; Select + Sticky in R4."""
+        """Tools actually constructed on this rail. Release omits Select."""
         return self._visible_author_tools
 
     def visible_enabled_author_tools(self) -> tuple[str, ...]:
@@ -894,6 +919,11 @@ class ToolRail(QFrame):
     def set_active_tool(self, tool: str, *, pinned: bool = False) -> None:
         checked = str(tool)
         if checked not in self._tool_buttons:
+            if checked == AUTHOR_TOOL_SELECT:
+                self._active_tool = AUTHOR_TOOL_SELECT
+                self._pinned_tool = None
+                self._sync_creation_states()
+                return
             raise ValueError(f"unknown authoring tool: {checked}")
         self._active_tool = checked
         self._pinned_tool = checked if pinned and checked != AUTHOR_TOOL_SELECT else None
@@ -940,7 +970,10 @@ class ToolRail(QFrame):
         if value > 0:
             badge.adjustSize()
             hint = badge.sizeHint()
-            badge.resize(max(14, hint.width()), max(14, hint.height()))
+            badge.resize(
+                max(14, min(hint.width(), 22)),
+                min(RAIL_BADGE_MAX_HEIGHT, max(14, hint.height())),
+            )
             badge.show()
         else:
             badge.hide()
@@ -996,7 +1029,44 @@ class ToolRail(QFrame):
         self._empty_board = wanted
         self._sync_button_states()
 
+    def _rail_icon_buttons(self) -> tuple[QToolButton, ...]:
+        buttons = [
+            *self._buttons.values(),
+            *self._tool_buttons.values(),
+            getattr(self, "_free_grid", None),
+            getattr(self, "_sync_all", None),
+        ]
+        return tuple(button for button in buttons if button is not None)
+
+    def _primary_fill_button(self) -> QToolButton | None:
+        """One rail tile may own the titanium-amber fill.
+
+        Priority: author active > open panel > empty-board CTA > persistent mode.
+        Filter persistence, warning dots, and count badges are never primary.
+        """
+        if self._creation_enabled and self._active_tool != AUTHOR_TOOL_SELECT:
+            return self._tool_buttons.get(self._active_tool)
+        if self._active_panel in self._buttons:
+            return self._buttons[self._active_panel]
+        if self._empty_board:
+            return self._buttons.get(PANEL_LIBRARY)
+        if self._free_grid_enabled:
+            return self._free_grid
+        return self._buttons.get(PANEL_LAYOUT)
+
+    def _sync_primary_fill(self) -> None:
+        owner = self._primary_fill_button()
+        for button in self._rail_icon_buttons():
+            _set_flag(button, "primaryFill", button is owner)
+
     def _sync_button_states(self) -> None:
+        self._syncing_rail = True
+        try:
+            self._sync_button_states_inner()
+        finally:
+            self._syncing_rail = False
+
+    def _sync_button_states_inner(self) -> None:
         for candidate, button in self._buttons.items():
             mode_active = (
                 candidate == PANEL_FILTER and self._filter_active
@@ -1012,10 +1082,8 @@ class ToolRail(QFrame):
             button.setChecked(panel_open)
             factory = self._icon_factories.get(candidate)
             if factory is not None:
-                # A panel that is open is the user's current navigation
-                # destination, just like a persistent mode: it receives the
-                # shared filled chrome and must therefore carry a light icon.
-                if empty_cta or mode_active or panel_open:
+                filled = button is self._primary_fill_button()
+                if filled:
                     button.setIcon(factory(UV_PRESENTATION_ICON))
                 else:
                     button.setIcon(
@@ -1027,9 +1095,12 @@ class ToolRail(QFrame):
         _set_flag(self._free_grid, "modeActive", self._free_grid_enabled)
         _set_flag(self._free_grid, "panelOpen", False)
         _set_flag(self._free_grid, "active", False)
+        filled_free = self._free_grid is self._primary_fill_button()
         self._free_grid.setIcon(
             Icons.ultraview_free_grid(
-                UV_PRESENTATION_ICON if self._free_grid_enabled else UV_MUTED
+                UV_PRESENTATION_ICON if filled_free else (
+                    UV_BRAND if self._free_grid_enabled else UV_MUTED
+                )
             )
         )
         sync_all = getattr(self, "_sync_all", None)
@@ -1039,6 +1110,7 @@ class ToolRail(QFrame):
                     _ultraview_icon_color(active=self._stale_count > 0)
                 )
             )
+        self._sync_primary_fill()
 
     def _sync_creation_states(self) -> None:
         for tool, button in self._tool_buttons.items():
@@ -1056,13 +1128,40 @@ class ToolRail(QFrame):
             button.setIcon(
                 _author_tool_icon(tool, active=is_active, draw_subtool=self._draw_subtool)
             )
+        if not self._syncing_rail:
+            self._sync_button_states()
+
+    def _group_gap(self) -> int:
+        return RAIL_GROUP_GAP_COMPACT if self._compact else RAIL_GROUP_GAP
+
+    def _divider_clear(self) -> int:
+        return RAIL_DIVIDER_CLEAR_COMPACT if self._compact else RAIL_DIVIDER_CLEAR
+
+    def _make_rail_group(self) -> tuple[QWidget, QVBoxLayout]:
+        host = QWidget(self)
+        host.setAttribute(Qt.WA_StyledBackground, False)
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(self._group_gap())
+        self._group_layouts.append(layout)
+        return host, layout
 
     def _add_rail_divider(self, layout: QVBoxLayout, object_name: str) -> None:
-        divider = QFrame(self)
+        wrap = QWidget(self)
+        wrap.setObjectName(f"{object_name}Wrap")
+        wrap.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        inner = QVBoxLayout(wrap)
+        clear = self._divider_clear()
+        inner.setContentsMargins(RAIL_DIVIDER_INSET, clear, RAIL_DIVIDER_INSET, clear)
+        inner.setSpacing(0)
+        divider = QFrame(wrap)
         divider.setObjectName(object_name)
-        divider.setFrameShape(QFrame.HLine)
+        divider.setFrameShape(QFrame.NoFrame)
         divider.setFixedHeight(1)
-        layout.addWidget(divider, 0)
+        divider.setStyleSheet("background-color: rgba(50, 86, 97, 59); border: 0;")
+        inner.addWidget(divider)
+        layout.addWidget(wrap, 0)
+        self._divider_spacers.append(wrap)
 
     def _add_creation_section(self, layout: QVBoxLayout) -> None:
         specs = {
@@ -1076,12 +1175,12 @@ class ToolRail(QFrame):
             button.setIcon(
                 _author_tool_icon(tool, active=False, draw_subtool=self._draw_subtool)
             )
-            button.setIconSize(QSize(RAIL_ICON_SIZE_AUTHOR, RAIL_ICON_SIZE_AUTHOR))
+            button.setIconSize(QSize(RAIL_ICON_SIZE, RAIL_ICON_SIZE))
             button.setToolButtonStyle(Qt.ToolButtonIconOnly)
             button.setAutoRaise(True)
             button.setAutoFillBackground(False)
             button.setAttribute(Qt.WA_StyledBackground, True)
-            button.setFixedSize(RAIL_BUTTON_SIZE_AUTHOR, RAIL_BUTTON_SIZE_AUTHOR)
+            button.setFixedSize(RAIL_BUTTON_SIZE, RAIL_BUTTON_SIZE)
             button.setFocusPolicy(Qt.TabFocus)
             button.setToolTip(tooltip)
             button.setAccessibleName(tooltip)
@@ -1092,6 +1191,7 @@ class ToolRail(QFrame):
             button.setProperty("pinned", "false")
             button.setProperty("modeActive", "false")
             button.setProperty("panelOpen", "false")
+            button.setProperty("primaryFill", "false")
             button.setCheckable(True)
             button.clicked.connect(self._on_tool_clicked)
             button.pin_requested.connect(self._on_tool_pin_requested)
@@ -1114,7 +1214,7 @@ class ToolRail(QFrame):
         if value > 0:
             badge.adjustSize()
             hint = badge.sizeHint()
-            badge.resize(max(14, hint.width()), max(14, hint.height()))
+            badge.resize(max(14, min(hint.width(), 22)), min(RAIL_BADGE_MAX_HEIGHT, max(14, hint.height())))
             badge.show()
         else:
             badge.hide()
@@ -1135,19 +1235,29 @@ class ToolRail(QFrame):
         self._position_badges()
 
     def set_compact(self, compact: bool) -> None:
-        """Switch author targets between desktop 46px and compact 40px."""
+        """Switch every rail icon between desktop 40px and compact 36px."""
         self._compact = bool(compact)
         width = RAIL_WIDTH_COMPACT if self._compact else RAIL_WIDTH
         self.setFixedWidth(width)
-        size = RAIL_BUTTON_SIZE_AUTHOR_COMPACT if self._compact else RAIL_BUTTON_SIZE_AUTHOR
-        icon = RAIL_ICON_SIZE_AUTHOR_COMPACT if self._compact else RAIL_ICON_SIZE_AUTHOR
-        margins = (6, 2, 6, 2) if self._compact else (9, 4, 9, 4)
+        size = RAIL_BUTTON_SIZE_COMPACT if self._compact else RAIL_BUTTON_SIZE
+        icon = RAIL_ICON_SIZE_COMPACT if self._compact else RAIL_ICON_SIZE
+        margins = RAIL_MARGINS_COMPACT if self._compact else RAIL_MARGINS
         layout = self.layout()
         if layout is not None:
             layout.setContentsMargins(*margins)
-        for button in self._tool_buttons.values():
+        gap = self._group_gap()
+        for group in self._group_layouts:
+            group.setSpacing(gap)
+        clear = self._divider_clear()
+        for wrap in self._divider_spacers:
+            inner = wrap.layout()
+            if inner is not None:
+                inner.setContentsMargins(RAIL_DIVIDER_INSET, clear, RAIL_DIVIDER_INSET, clear)
+        _set_flag(self, "compact", self._compact)
+        for button in self._rail_icon_buttons():
             button.setFixedSize(size, size)
             button.setIconSize(QSize(icon, icon))
+            _repolish(button)
 
     def is_compact(self) -> bool:
         return self._compact
@@ -1159,30 +1269,38 @@ class ToolRail(QFrame):
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
 
+    def _button_origin(self, button: QWidget) -> QPoint:
+        return button.mapTo(self, QPoint(0, 0))
+
+    def _position_badge_on_button(self, badge: QLabel, button: QToolButton) -> None:
+        origin = self._button_origin(button)
+        width = min(max(14, badge.width()), 22)
+        height = min(RAIL_BADGE_MAX_HEIGHT, max(14, badge.height()))
+        badge.resize(width, height)
+        x = origin.x() + button.width() - width - RAIL_BADGE_INSET
+        y = origin.y() + RAIL_BADGE_INSET
+        x = min(max(0, x), max(0, self.width() - width))
+        y = min(max(0, y), max(0, origin.y() + button.height() - height - RAIL_BADGE_INSET))
+        badge.move(x, y)
+        badge.raise_()
+
     def _position_badges(self) -> None:
         for panel_id, badge in self._badges.items():
             button = self._buttons[panel_id]
             if badge.isHidden():
                 continue
-            x = button.x() + button.width() - max(8, badge.width() // 2)
-            y = max(0, button.y() - 2)
-            x = min(max(0, x), max(0, self.width() - badge.width()))
-            badge.move(x, y)
-            badge.raise_()
+            self._position_badge_on_button(badge, button)
         button = self._buttons.get(PANEL_FILTER)
         if button is not None and not self._filter_dot.isHidden():
-            x = min(max(0, button.x() + button.width() - 6), max(0, self.width() - 8))
-            y = max(0, button.y() + 2)
+            origin = self._button_origin(button)
+            x = min(max(0, origin.x() + button.width() - 8 - RAIL_BADGE_INSET), max(0, self.width() - 8))
+            y = origin.y() + RAIL_BADGE_INSET
             self._filter_dot.move(x, y)
             self._filter_dot.raise_()
         badge = getattr(self, "_sync_all_badge", None)
         button = getattr(self, "_sync_all", None)
         if badge is not None and button is not None and not badge.isHidden():
-            x = button.x() + button.width() - max(8, badge.width() // 2)
-            y = max(0, button.y() - 2)
-            x = min(max(0, x), max(0, self.width() - badge.width()))
-            badge.move(x, y)
-            badge.raise_()
+            self._position_badge_on_button(badge, button)
 
     def _on_panel_clicked(self) -> None:
         button = self.sender()
