@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
     ESC_DRAFT,
+    ESC_LASER,
     ESC_SELECT,
     ESC_SELECTION,
     HIT_AUTHOR,
@@ -23,6 +24,8 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
     STICKY_DEFAULT_WIDTH,
     STICKY_MIN_HEIGHT,
     STICKY_MIN_WIDTH,
+    POINTER_MODE_LASER,
+    POINTER_MODE_MOUSE,
     TOOL_SELECT,
     TOOL_STICKY,
     AuthorKey,
@@ -183,6 +186,50 @@ def test_tool_draft_cancel_commit_do_not_mutate_payload():
     assert controller.transient_state()["draft"] is None
 
 
+def test_pointer_mode_defaults_to_mouse_and_laser_clears_selection_without_payload():
+    board = default_board()
+    before = board_to_payload(board)
+    controller = BoardInteractionController()
+    assert controller.pointer_mode() == POINTER_MODE_MOUSE
+    assert controller.is_laser_active() is False
+    controller.select_only_author("missing")
+    controller.set_pointer_mode("not-a-mode")
+    assert controller.pointer_mode() == POINTER_MODE_MOUSE
+    controller.set_pointer_mode(POINTER_MODE_LASER)
+    assert controller.pointer_mode() == POINTER_MODE_LASER
+    assert controller.active_tool() == TOOL_SELECT
+    assert controller.is_laser_active() is True
+    assert not controller.selection()
+    assert controller.transient_state()["pointer_mode"] == POINTER_MODE_LASER
+    assert board_to_payload(board) == before
+    assert controller.consume_escape() == ESC_LASER
+    assert controller.pointer_mode() == POINTER_MODE_MOUSE
+    assert controller.is_laser_active() is False
+    controller.reset_session()
+    assert controller.pointer_mode() == POINTER_MODE_MOUSE
+
+
+def test_laser_clicks_do_not_select_cards_or_write_payload(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "laser-0")
+    controller = harness.page.interaction()
+    before = board_to_payload(harness.board)
+    harness.page._apply_pointer_mode(POINTER_MODE_LASER)
+    QApplication.processEvents()
+    assert controller.is_laser_active() is True
+    QTest.mouseClick(card, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
+    QApplication.processEvents()
+    assert controller.is_laser_active() is True
+    assert not controller.selection()
+    assert board_to_payload(harness.board) == before
+    QTest.mouseClick(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    QApplication.processEvents()
+    assert not controller.selection()
+    assert board_to_payload(harness.board) == before
+    overlay = free._laser_overlay
+    assert overlay.isVisible()
+
+
 def test_sticky_palette_is_copied_into_the_next_draft():
     controller = BoardInteractionController()
     controller.set_sticky_palette("teal")
@@ -197,9 +244,9 @@ def test_sticky_palette_is_copied_into_the_next_draft():
 def test_page_and_gesture_share_one_controller(qtbot):
     harness = _Harness(qtbot)
     page = harness.page
-    assert page.visible_author_tools() == ("sticky", "text", "shapes", "draw")
-    assert page.tool_rail().visible_author_tools() == ("sticky", "text", "shapes", "draw")
-    assert RELEASE_AUTHOR_TOOLS == ("sticky", "text", "shapes", "draw")
+    assert page.visible_author_tools() == ("select", "sticky", "text", "shapes", "draw")
+    assert page.tool_rail().visible_author_tools() == ("select", "sticky", "text", "shapes", "draw")
+    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "draw")
     assert page.interaction() is page._free_grid.interaction()
     assert page._free_grid.gesture().interaction is page.interaction()
 
@@ -309,16 +356,16 @@ def test_release_page_shows_select_sticky_text_and_shapes(qtbot):
     page.show()
     page.set_board(default_board())
     QApplication.processEvents()
-    assert page.visible_author_tools() == ("sticky", "text", "shapes", "draw")
+    assert page.visible_author_tools() == ("select", "sticky", "text", "shapes", "draw")
     rail = page.tool_rail()
-    assert rail.visible_author_tools() == ("sticky", "text", "shapes", "draw")
+    assert rail.visible_author_tools() == ("select", "sticky", "text", "shapes", "draw")
     assert rail.creation_section_visible() is True
-    assert rail.tool_button("select") is None
+    assert rail.tool_button("select") is not None
     assert rail.tool_button("text") is not None
     assert rail.tool_button("shapes") is not None
     assert rail.tool_button("connector") is None
     assert rail.tool_button("draw") is not None
-    assert RELEASE_AUTHOR_TOOLS == ("sticky", "text", "shapes", "draw")
+    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "draw")
 
 
 def test_page_and_board_do_not_grow_parallel_selection_writes():

@@ -200,6 +200,7 @@ def test_existing_panel_action_inventory_is_unchanged(qtbot):
     qtbot.addWidget(rail)
     assert tuple(rail._buttons) == (PANEL_LIBRARY, PANEL_LAYOUT, PANEL_FILTER, PANEL_UNPLACED)
     assert RELEASE_AUTHOR_TOOLS == (
+        "select",
         AUTHOR_TOOL_STICKY,
         "text",
         AUTHOR_TOOL_SHAPES,
@@ -304,10 +305,10 @@ def test_format_picker_opens_instead_of_silent_cycle(qtbot):
     assert chosen == ["blue"]
 
 
-def test_panel_and_mode_states_keep_titanium_amber_gradient_tokens():
-    assert ULTRAVIEW_QSS_TOKENS["UV_RAIL_ACTIVE_START"] == "#3C8495"
-    assert ULTRAVIEW_QSS_TOKENS["UV_RAIL_ACTIVE_END"] == "#F0A44C"
-    assert ULTRAVIEW_QSS_TOKENS["UV_RAIL_ACTIVE_HOVER"] == "#2F7181"
+def test_panel_and_mode_states_keep_selected_blue_tokens():
+    assert ULTRAVIEW_QSS_TOKENS["UV_SELECTED"] == "#4262FF"
+    assert ULTRAVIEW_QSS_TOKENS["UV_SELECTED_WASH"] == "#E9EDFF"
+    assert ULTRAVIEW_QSS_TOKENS["UV_SELECTED_HOVER"] == "#DDE3FF"
 
 
 def test_mode_and_panel_buttons_render_start_and_end_pixels(qtbot, qapp):
@@ -340,10 +341,10 @@ def test_mode_and_panel_buttons_render_start_and_end_pixels(qtbot, qapp):
     painter.end()
     start = QColor(image.pixelColor(8, 8))
     end = QColor(image.pixelColor(button.width() - 9, button.height() - 9))
-    assert start != end
+    assert start.blue() >= start.red()
+    assert end.blue() >= end.red()
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    assert "UV_RAIL_ACTIVE_START" in qss
-    assert "qlineargradient" in qss
+    assert "UV_SELECTED_WASH" in qss
     del host
 
 

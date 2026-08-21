@@ -15,8 +15,13 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_style import STICKY_PALETTE_TO
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_chrome import (
     FormatChoiceFlyout,
+    PointerPopover,
     SelectionToolbar,
     ToolFlyoutSurface,
+)
+from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
+    POINTER_MODE_LASER,
+    POINTER_MODE_MOUSE,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     AUTHOR_TOOL_CONNECTOR,
@@ -209,15 +214,16 @@ def test_draw_popover_is_a_frame_flyout_not_a_menu(qtbot):
 
 
 def test_release_rail_constructs_select_sticky_text_shapes_and_draw():
-    assert RELEASE_AUTHOR_TOOLS == ("sticky", "text", "shapes", "draw")
+    assert RELEASE_AUTHOR_TOOLS == ("select", "sticky", "text", "shapes", "draw")
     rail = ToolRail()
     assert rail.visible_author_tools() == (
+        AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
         AUTHOR_TOOL_SHAPES,
         AUTHOR_TOOL_DRAW,
     )
-    assert rail.tool_button(AUTHOR_TOOL_SELECT) is None
+    assert rail.tool_button(AUTHOR_TOOL_SELECT) is not None
     assert rail.tool_button(AUTHOR_TOOL_TEXT) is not None
     assert rail.tool_button(AUTHOR_TOOL_SHAPES) is not None
     assert rail.tool_button(AUTHOR_TOOL_CONNECTOR) is None
@@ -225,7 +231,9 @@ def test_release_rail_constructs_select_sticky_text_shapes_and_draw():
     rail.set_creation_enabled(True)
     rail.set_active_tool(AUTHOR_TOOL_SELECT)
     assert rail.active_tool() == AUTHOR_TOOL_SELECT
+    pointer = rail.tool_button(AUTHOR_TOOL_SELECT)
     sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
+    assert pointer is not None and pointer.property("active") == "true"
     assert sticky is not None
     assert sticky.property("active") != "true"
 
@@ -287,16 +295,20 @@ def _prepare_page(qtbot, qapp, size=(1280, 720)) -> UltraViewPage:
     return page
 
 
-def test_release_rail_omits_visible_select_but_internal_select_remains_default(qtbot):
+def test_release_rail_shows_pointer_as_the_default_select_tool(qtbot):
     rail = ToolRail()
     qtbot.addWidget(rail)
     rail.set_creation_enabled(True)
-    assert AUTHOR_TOOL_SELECT not in rail.visible_author_tools()
-    assert rail.tool_button(AUTHOR_TOOL_SELECT) is None
+    assert AUTHOR_TOOL_SELECT in rail.visible_author_tools()
+    pointer = rail.tool_button(AUTHOR_TOOL_SELECT)
+    assert pointer is not None
+    assert pointer.objectName() == "ultraViewRailPointerButton"
     assert rail.active_tool() == AUTHOR_TOOL_SELECT
-    rail.set_active_tool(AUTHOR_TOOL_SELECT)
-    assert rail.active_tool() == AUTHOR_TOOL_SELECT
+    assert pointer.property("active") == "true"
+    assert pointer.property("primaryFill") == "true"
     for tool in rail.visible_author_tools():
+        if tool == AUTHOR_TOOL_SELECT:
+            continue
         button = rail.tool_button(tool)
         assert button is not None
         assert button.property("active") != "true"
@@ -333,7 +345,7 @@ def test_all_toolrail_buttons_share_one_outer_and_icon_size_per_breakpoint(qtbot
     assert {button.iconSize().width() for button in compact} == {RAIL_ICON_SIZE_COMPACT}
 
 
-def test_author_active_button_renders_titanium_amber_start_and_end_pixels(qtbot, qapp):
+def test_author_active_button_renders_selected_blue_wash(qtbot, qapp):
     page = _prepare_page(qtbot, qapp)
     sticky = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
     assert sticky is not None
@@ -342,24 +354,25 @@ def test_author_active_button_renders_titanium_amber_start_and_end_pixels(qtbot,
     image = _button_image(sticky)
     start = image.pixelColor(2, 2)
     end = image.pixelColor(image.width() - 3, image.height() - 3)
-    assert start != end
-    wash = QColor("#EEF1FF")
-    assert abs(start.red() - wash.red()) + abs(start.green() - wash.green()) + abs(start.blue() - wash.blue()) > 40
-    expected_start = QColor(ULTRAVIEW_TITANIUM["rail_active_start"])
-    expected_end = QColor(ULTRAVIEW_TITANIUM["rail_active_end"])
-    assert start.red() < end.red() or start.blue() > end.blue()
-    assert abs(start.red() - expected_start.red()) < 80
-    assert abs(end.red() - expected_end.red()) < 80
+    wash = QColor(ULTRAVIEW_TITANIUM["selected_wash"])
+    selected = QColor(ULTRAVIEW_TITANIUM["selected"])
+    assert start.blue() >= start.red()
+    assert end.blue() >= end.red()
+    assert abs(start.red() - wash.red()) < 48
+    assert abs(start.green() - wash.green()) < 48
+    assert abs(start.blue() - wash.blue()) < 48
+    assert abs(end.red() - start.red()) < 36
+    assert selected.red() != selected.green()
 
 
-def test_author_active_icon_remains_visible_on_gradient(qtbot, qapp):
+def test_author_active_icon_remains_visible_on_blue_wash(qtbot, qapp):
     page = _prepare_page(qtbot, qapp)
     sticky = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
     assert sticky is not None
     QTest.mouseClick(sticky, Qt.LeftButton)
     QApplication.processEvents()
     image = _button_image(sticky)
-    whites = 0
+    blue_ink = 0
     samples = 0
     for x in range(8, image.width() - 8):
         for y in range(8, image.height() - 8):
@@ -367,10 +380,10 @@ def test_author_active_icon_remains_visible_on_gradient(qtbot, qapp):
             if color.alpha() < 20:
                 continue
             samples += 1
-            if color.red() > 220 and color.green() > 220 and color.blue() > 220:
-                whites += 1
+            if color.blue() > color.red() + 20 and color.blue() > 120:
+                blue_ink += 1
     assert samples > 0
-    assert whites > 8
+    assert blue_ink > 8
 
 
 def test_shape_flyout_contains_last_item_without_scroll_at_1280x720(qtbot, qapp):
@@ -558,10 +571,10 @@ def test_only_one_rail_button_uses_primary_filled_state(qtbot):
         for button in rail.findChildren(QToolButton)
         if button.property("primaryFill") == "true"
     ]
-    assert filled == ["ultraViewRailLayoutButton"]
+    assert filled == ["ultraViewRailPointerButton"]
 
 
-def test_author_active_hover_and_pressed_keep_two_gradient_stops(qtbot, qapp):
+def test_author_active_hover_and_pressed_keep_blue_wash(qtbot, qapp):
     page = _prepare_page(qtbot, qapp)
     sticky = page.tool_rail().tool_button(AUTHOR_TOOL_STICKY)
     assert sticky is not None
@@ -575,14 +588,16 @@ def test_author_active_hover_and_pressed_keep_two_gradient_stops(qtbot, qapp):
     sticky.update()
     QApplication.processEvents()
     hover = _button_image(sticky)
-    assert hover.pixelColor(2, 2) != hover.pixelColor(hover.width() - 3, hover.height() - 3)
+    hover_color = hover.pixelColor(2, 2)
+    assert hover_color.blue() >= hover_color.red()
     sticky.setDown(True)
     QApplication.processEvents()
     pressed = _button_image(sticky)
-    assert pressed.pixelColor(2, 2) != pressed.pixelColor(pressed.width() - 3, pressed.height() - 3)
+    pressed_color = pressed.pixelColor(2, 2)
+    assert pressed_color.blue() >= pressed_color.red()
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
     assert 'primaryFill="true"]:hover' in qss
-    assert qss.count("qlineargradient") >= 3
+    assert "UV_SELECTED_WASH" in qss
 
 
 def test_author_icons_share_rendered_ink_bounds_and_draw_icon_is_stable_across_subtools(qtbot):
@@ -592,7 +607,12 @@ def test_author_icons_share_rendered_ink_bounds_and_draw_icon_is_stable_across_s
     rail.show()
     QApplication.processEvents()
     boxes = []
-    for tool in (AUTHOR_TOOL_STICKY, AUTHOR_TOOL_TEXT, AUTHOR_TOOL_SHAPES, AUTHOR_TOOL_DRAW):
+    for tool in (
+        AUTHOR_TOOL_STICKY,
+        AUTHOR_TOOL_TEXT,
+        AUTHOR_TOOL_SHAPES,
+        AUTHOR_TOOL_DRAW,
+    ):
         button = rail.tool_button(tool)
         pixmap = button.icon().pixmap(RAIL_ICON_SIZE, RAIL_ICON_SIZE)
         boxes.append(_ink_bounds(pixmap.toImage()))
@@ -640,6 +660,49 @@ def test_shapes_catalog_is_one_column_with_visible_labels_and_shortcuts(qtbot):
     assert all(36 <= button.height() <= 38 for button in rows)
     assert 224 <= shapes.width() <= 240
     assert any("L" in (getattr(row, "_shortcut", "") or "") for row in rows)
+
+
+def test_pointer_popover_has_two_36px_rows_and_blue_selected_mode(qtbot):
+    popover = PointerPopover()
+    qtbot.addWidget(popover)
+    popover.show()
+    popover.adjustSize()
+    mouse = popover.row_button(POINTER_MODE_MOUSE)
+    laser = popover.row_button(POINTER_MODE_LASER)
+    assert mouse is not None and laser is not None
+    assert mouse.height() == 36
+    assert laser.height() == 36
+    assert mouse.property("selected") == "true"
+    assert laser.property("selected") == "false"
+    chosen: list[str] = []
+    popover.mode_selected.connect(chosen.append)
+    QTest.mouseClick(laser, Qt.LeftButton)
+    assert chosen == [POINTER_MODE_LASER]
+    assert popover.current_mode() == POINTER_MODE_LASER
+    assert laser.property("selected") == "true"
+    assert mouse.property("selected") == "false"
+    size = popover.content_size()
+    assert size.width() >= 200
+    assert size.height() >= 80
+
+
+def test_pointer_tile_main_click_emits_select_and_caret_opens_menu(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.set_creation_enabled(True)
+    rail.show()
+    QApplication.processEvents()
+    pointer = rail.tool_button(AUTHOR_TOOL_SELECT)
+    assert pointer is not None
+    tools: list[str] = []
+    menus: list[int] = []
+    rail.tool_requested.connect(tools.append)
+    rail.pointer_menu_requested.connect(lambda: menus.append(1))
+    QTest.mouseClick(pointer, Qt.LeftButton, Qt.NoModifier, QPoint(12, 12))
+    assert tools == [AUTHOR_TOOL_SELECT]
+    QTest.mouseClick(pointer, Qt.LeftButton, Qt.NoModifier, QPoint(pointer.width() - 4, 12))
+    assert menus == [1]
+    assert tools == [AUTHOR_TOOL_SELECT]
 
 
 def test_draw_popover_is_vertical_and_exposes_three_presets_not_an_always_visible_color_matrix(qtbot):

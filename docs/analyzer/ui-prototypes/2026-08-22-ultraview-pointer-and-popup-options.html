@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UltraView · 指针模式与下拉层 · 交互方案</title>
+<style>
+  :root {
+    --canvas: #edf4f5;
+    --canvas-line: rgba(58, 88, 98, .13);
+    --surface: #ffffff;
+    --ink: #12323a;
+    --muted: #6c8288;
+    --line: #ccd9dc;
+    --blue: #4262ff;
+    --blue-wash: #e9edff;
+    --teal: #087b83;
+    --teal-wash: #e6f5f4;
+    --amber: #e5a53a;
+    --amber-wash: #fff4dc;
+    --pink: #ec87d9;
+    --pink-border: #d86cc6;
+    --shadow: 0 14px 36px rgba(17, 49, 58, .14), 0 2px 8px rgba(17, 49, 58, .08);
+    --font: "SF Pro Display", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { min-width: 1050px; background: #e4ecee; }
+  body { margin: 0; color: var(--ink); font: 14px/1.45 var(--font); }
+  button { font: inherit; color: inherit; }
+  button:focus-visible { outline: 3px solid rgba(66, 98, 255, .38); outline-offset: 2px; }
+
+  .review-head {
+    position: sticky; top: 0; z-index: 1000; display: flex; align-items: center; gap: 18px;
+    min-height: 60px; padding: 10px max(24px, calc((100vw - 1480px) / 2));
+    border-bottom: 1px solid #cbd8db; background: rgba(248, 251, 251, .94); backdrop-filter: blur(16px);
+  }
+  .mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: #fff; background: var(--ink); font: 800 13px/1 var(--mono); }
+  .head-copy { min-width: 330px; }
+  .head-copy b { display: block; font-size: 15px; letter-spacing: -.01em; }
+  .head-copy small { color: var(--muted); font-size: 12px; }
+  .choice-tabs { display: flex; gap: 6px; margin-left: auto; padding: 3px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+  .choice-tabs button { min-height: 30px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; }
+  .choice-tabs button[aria-pressed="true"] { color: var(--ink); background: var(--blue-wash); }
+
+  main { width: min(1480px, calc(100vw - 40px)); margin: 0 auto; padding: 22px 0 42px; }
+  .brief { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(350px, .7fr); gap: 20px; align-items: end; margin: 0 0 18px; }
+  h1 { margin: 0; font-size: 26px; line-height: 1.15; letter-spacing: -.045em; }
+  .brief p { max-width: 780px; margin: 8px 0 0; color: #587076; }
+  .key { margin: 0; padding: 11px 14px; border-left: 3px solid var(--amber); border-radius: 7px; background: #f9fcfc; color: #3f5a61; font-size: 12px; }
+  .key b { color: var(--ink); }
+
+  .stage-scroll { overflow: auto; padding: 6px 3px 22px; }
+  .stage {
+    position: relative; width: 1416px; height: 760px; overflow: hidden; border: 1px solid #b9cdd1; border-radius: 18px;
+    background-color: var(--canvas);
+    background-image: radial-gradient(circle, var(--canvas-line) 1.5px, transparent 1.6px), linear-gradient(var(--canvas-line) 1px, transparent 1px), linear-gradient(90deg, var(--canvas-line) 1px, transparent 1px);
+    background-size: 22px 22px, 220px 220px, 220px 220px;
+    box-shadow: 0 18px 50px rgba(24, 52, 59, .12);
+  }
+  .stage::before { content: "FREE GRID · 24 COL"; position: absolute; right: 18px; bottom: 14px; color: rgba(18, 50, 58, .38); font: 700 10px/1 var(--mono); letter-spacing: .1em; }
+  .board-bar { position: absolute; z-index: 20; top: 16px; left: 18px; display: flex; align-items: center; gap: 9px; height: 40px; padding: 4px 8px 4px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 5px 15px rgba(21, 52, 60, .08); }
+  .board-dot { width: 11px; height: 11px; border-radius: 4px; background: var(--blue); }
+  .board-bar b { font-size: 13px; }
+  .board-bar span { color: var(--muted); font-size: 12px; }
+  .chevron { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .zoom-bar { position: absolute; z-index: 20; right: 17px; bottom: 15px; display: flex; align-items: center; gap: 4px; height: 40px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 5px 15px rgba(21, 52, 60, .08); }
+  .zoom-bar b { min-width: 48px; text-align: center; font: 700 11px var(--mono); }
+
+  .rail {
+    position: absolute; z-index: 40; top: 82px; bottom: 76px; left: 18px; display: flex; flex-direction: column; align-items: center; width: 62px; padding: 8px 9px;
+    border: 1px solid #b9cbd0; border-radius: 18px; background: rgba(255,255,255,.97); box-shadow: var(--shadow);
+  }
+  .rail-core { display: grid; gap: 6px; }
+  .rail-bottom { display: grid; gap: 5px; margin-top: auto; }
+  .rule { width: 26px; height: 1px; margin: 5px 0; background: var(--line); }
+  .tool, .zoom-bar button, .pointer-caret { position: relative; display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid transparent; border-radius: 11px; background: transparent; cursor: pointer; }
+  .tool:hover, .zoom-bar button:hover, .pointer-caret:hover { background: #f0f5f6; }
+  .tool.active { border-color: #9fb4b9; background: var(--teal-wash); color: var(--teal); box-shadow: inset 0 0 0 1px rgba(8,123,131,.06); }
+  .tool.active::after { content: ""; position: absolute; left: 4px; top: 11px; bottom: 11px; width: 2px; border-radius: 2px; background: var(--teal); }
+  .tool svg, .pointer-caret svg, .zoom-bar svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .tool .solid { fill: currentColor; stroke: none; }
+  .tool .tip { position: absolute; z-index: 2; left: calc(100% + 9px); top: 50%; display: none; transform: translateY(-50%); padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; box-shadow: 0 5px 13px rgba(22,48,56,.12); color: var(--ink); white-space: nowrap; font-size: 12px; }
+  .tool:hover .tip { display: block; }
+  .tool kbd { color: var(--muted); font: 10px var(--mono); }
+  .pointer-wrap { display: flex; width: 42px; height: 42px; border: 1px solid #a9bfc4; border-radius: 11px; background: var(--teal-wash); color: var(--teal); overflow: hidden; box-shadow: inset 0 0 0 1px rgba(8,123,131,.05); }
+  .pointer-wrap .tool { width: 29px; height: 40px; border-radius: 0; }
+  .pointer-wrap .tool::after { content: ""; position: absolute; left: 4px; top: 10px; bottom: 10px; width: 2px; border-radius: 2px; background: var(--teal); }
+  .pointer-caret { width: 13px; height: 40px; border-radius: 0; border-left: 1px solid rgba(8,123,131,.18); }
+  .pointer-caret svg { width: 12px; height: 12px; }
+
+  .selection { position: absolute; z-index: 10; left: 286px; top: 255px; width: 566px; height: 312px; border: 3px solid var(--blue); background: var(--pink); }
+  .selection::before, .selection::after { content: ""; position: absolute; width: 10px; height: 10px; border: 2px solid var(--blue); background: #fff; }
+  .selection::before { left: -7px; top: -7px; } .selection::after { right: -7px; bottom: -7px; }
+  .handle { position: absolute; width: 10px; height: 10px; border: 2px solid var(--blue); background: #fff; }
+  .handle.top { top: -7px; left: calc(50% - 5px); } .handle.right { right: -7px; top: calc(50% - 5px); } .handle.bottom { bottom: -7px; left: calc(50% - 5px); } .handle.left { left: -7px; top: calc(50% - 5px); }
+  .selection .text-sample { position: absolute; left: 16px; top: 14px; font-size: 42px; font-weight: 400; letter-spacing: -.04em; }
+
+  .format-toolbar {
+    position: absolute; z-index: 30; left: 280px; top: 134px; display: flex; align-items: center; gap: 6px; height: 78px; padding: 10px 16px;
+    border: 1px solid #b9cbd0; border-radius: 23px; background: var(--surface); box-shadow: var(--shadow);
+  }
+  .format-toolbar::after { content: ""; position: absolute; left: 48%; bottom: -10px; width: 18px; height: 18px; border-right: 1px solid #b9cbd0; border-bottom: 1px solid #b9cbd0; background: var(--surface); transform: rotate(45deg); }
+  .format-tool { position: relative; z-index: 1; display: grid; place-items: center; width: 48px; height: 48px; padding: 0; border: 0; border-radius: 12px; background: transparent; cursor: pointer; }
+  .format-tool.selected { color: var(--blue); background: var(--blue-wash); }
+  .format-tool.swatch { width: 42px; }
+  .format-tool .fill-swatch { width: 34px; height: 34px; border: 2px solid var(--pink-border); border-radius: 11px; background: var(--pink); }
+  .format-tool svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; }
+  .font-choice { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; width: 118px; height: 48px; border: 0; border-radius: 13px; background: var(--blue-wash); color: #3f62f2; cursor: pointer; font-size: 23px; font-weight: 750; }
+  .toolbar-rule { position: relative; z-index: 1; width: 1px; height: 30px; margin: 0 6px; background: var(--line); }
+
+  .font-popover {
+    position: absolute; z-index: 90; left: 488px; top: 207px; width: 178px; padding: 7px; border: 1px solid #bdcdd1; border-radius: 13px; background: #fff; box-shadow: 0 18px 34px rgba(20, 52, 60, .20), 0 2px 8px rgba(20, 52, 60, .1);
+  }
+  .font-popover button { display: flex; align-items: center; width: 100%; height: 39px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent; cursor: pointer; color: var(--ink); font-size: 18px; font-weight: 650; }
+  .font-popover button:hover, .font-popover button.selected { color: var(--blue); background: var(--blue-wash); }
+  .font-popover button.selected { font-weight: 800; }
+  .menu-tag { position: absolute; z-index: 91; left: 673px; top: 215px; width: 177px; padding: 9px 10px; border: 1px dashed rgba(66,98,255,.5); border-radius: 9px; background: rgba(255,255,255,.78); color: #3f62f2; font: 700 10px/1.35 var(--mono); letter-spacing: .01em; }
+  .menu-tag b { display: block; margin-bottom: 3px; font-size: 11px; }
+
+  .pointer-popover {
+    position: absolute; z-index: 70; top: 90px; left: 92px; width: 272px; padding: 10px; border: 1px solid #b7cbd0; border-radius: 15px; background: #fff; box-shadow: var(--shadow);
+  }
+  .pointer-popover h2 { margin: 1px 4px 8px; color: var(--muted); font: 750 10px/1.2 var(--mono); letter-spacing: .1em; }
+  .mode-option { display: grid; grid-template-columns: 35px 1fr 18px; align-items: center; gap: 9px; width: 100%; min-height: 57px; padding: 8px; border: 1px solid transparent; border-radius: 11px; background: transparent; text-align: left; cursor: pointer; }
+  .mode-option:hover { background: #f1f6f7; }
+  .mode-option.selected { border-color: #a7c5c9; background: var(--teal-wash); }
+  .mode-icon { display: grid; place-items: center; width: 35px; height: 35px; border-radius: 9px; background: #edf3f4; color: var(--teal); }
+  .mode-icon svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .mode-option strong { display: block; font-size: 13px; }.mode-option small { display: block; margin-top: 1px; color: var(--muted); font-size: 11px; line-height: 1.28; }
+  .check { color: var(--teal); font-weight: 900; }
+  .mode-foot { margin: 7px 4px 1px; padding-top: 8px; border-top: 1px solid #e2eaeb; color: var(--muted); font-size: 11px; }
+  .laser-dot { display: inline-block; width: 9px; height: 9px; margin: 0 3px -1px 0; border: 2px solid #f55a59; border-radius: 50%; box-shadow: 0 0 0 4px rgba(245,90,89,.15); }
+
+  .laser-indicator { position: absolute; z-index: 16; left: 1020px; top: 438px; display: none; place-items: center; width: 24px; height: 24px; border: 2px solid #f15151; border-radius: 50%; background: rgba(255,255,255,.56); box-shadow: 0 0 0 8px rgba(241,81,81,.12), 0 0 20px rgba(241,81,81,.45); }
+  .laser-indicator::before, .laser-indicator::after { content: ""; position: absolute; background: #f15151; }.laser-indicator::before { width: 2px; height: 42px; }.laser-indicator::after { width: 42px; height: 2px; }
+  .status-chip { position: absolute; z-index: 20; left: 92px; bottom: 18px; display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--muted); box-shadow: 0 5px 15px rgba(21,52,60,.08); font-size: 11px; }
+  .status-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); }
+
+  .option-card { position: absolute; z-index: 15; right: 64px; top: 114px; width: 262px; padding: 15px; border: 1px solid rgba(111,139,146,.38); border-radius: 14px; background: rgba(255,255,255,.84); box-shadow: 0 10px 28px rgba(20,52,60,.08); }
+  .option-card .eyebrow { color: var(--teal); font: 750 10px/1 var(--mono); letter-spacing: .1em; }.option-card h2 { margin: 7px 0 5px; font-size: 17px; letter-spacing: -.025em; }.option-card p { margin: 0; color: var(--muted); font-size: 12px; }.option-card ul { display: grid; gap: 6px; margin: 11px 0 0; padding: 0; list-style: none; }.option-card li { display: flex; gap: 7px; align-items: flex-start; color: #405d64; font-size: 11px; }.option-card li::before { content: "✓"; color: var(--teal); font-weight: 900; }
+
+  /* B: two explicit buttons. Good discoverability, but makes the rail busier. */
+  .stage[data-scheme="b"] .pointer-wrap { display: none; }
+  .stage[data-scheme="b"] .rail-core::before { content: ""; height: 0; }
+  .stage[data-scheme="b"] .rail-core { gap: 5px; }
+  .stage[data-scheme="b"] .rail .tool.pointer-main { display: grid; border-color: #a9bfc4; background: var(--teal-wash); color: var(--teal); }
+  .stage[data-scheme="b"] .rail .tool.pointer-main::after { content: ""; position: absolute; left: 4px; top: 11px; bottom: 11px; width: 2px; background: var(--teal); border-radius: 2px; }
+  .stage[data-scheme="b"] .laser-rail { display: grid; color: #a94747; background: #fff2f2; }
+  .stage[data-scheme="b"] .pointer-popover { display: none; }
+  .stage[data-scheme="b"] .option-card h2::after { content: "B · 双入口"; display: block; margin-top: 4px; color: #9a7772; font: 700 10px var(--mono); letter-spacing: .08em; }
+
+  /* C: activated pointer exposes a small mode capsule; it is the most visual. */
+  .stage[data-scheme="c"] .pointer-popover { left: 92px; top: 147px; width: 206px; padding: 7px; display: flex; gap: 4px; }
+  .stage[data-scheme="c"] .pointer-popover h2, .stage[data-scheme="c"] .mode-foot { display: none; }
+  .stage[data-scheme="c"] .mode-option { grid-template-columns: 29px 1fr; min-height: 38px; padding: 4px; }.stage[data-scheme="c"] .mode-option small, .stage[data-scheme="c"] .mode-option .check { display: none; }.stage[data-scheme="c"] .mode-icon { width: 28px; height: 28px; }.stage[data-scheme="c"] .mode-icon svg { width: 16px; height: 16px; }.stage[data-scheme="c"] .mode-option strong { font-size: 11px; }.stage[data-scheme="c"] .option-card h2::after { content: "C · 模式胶囊"; display: block; margin-top: 4px; color: #9a7772; font: 700 10px var(--mono); letter-spacing: .08em; }
+  .stage[data-scheme="c"] .pointer-wrap { width: 42px; }.stage[data-scheme="c"] .laser-indicator { display: grid; }
+
+  .stage[data-scheme="b"] .pointer-caret { display: none; }
+  .stage[data-scheme="b"] .rail .tool.pointer-main { display: grid; }
+  .stage:not([data-scheme="b"]) .rail .tool.pointer-main, .stage:not([data-scheme="b"]) .laser-rail { display: none; }
+
+  .legend { display: grid; grid-template-columns: 1fr 1.12fr .9fr; gap: 14px; }
+  .panel { min-height: 184px; padding: 17px; border: 1px solid #c6d4d7; border-radius: 14px; background: rgba(255,255,255,.78); box-shadow: 0 8px 18px rgba(22,52,60,.05); }
+  .panel h2 { margin: 0 0 8px; font-size: 15px; letter-spacing: -.015em; }.panel p { margin: 0; color: var(--muted); font-size: 12px; }.panel p + p { margin-top: 8px; }
+  .icon-map { display: grid; grid-template-columns: 25px 1fr auto; gap: 7px 9px; align-items: center; margin-top: 11px; font-size: 11px; }.icon-map i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; color: var(--teal); background: var(--teal-wash); font-style: normal; }.icon-map code, .layer-list code { color: #455f65; font: 10px var(--mono); }.icon-map b { color: var(--ink); font-weight: 650; }
+  .layer-list { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }.layer-list li { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px; min-height: 22px; font-size: 11px; }.level { display: grid; place-items: center; height: 22px; border-radius: 6px; background: #e8eef0; color: #547078; font: 750 10px var(--mono); }.level.hot { color: #344ee4; background: var(--blue-wash); }.level.toast { color: #a44343; background: #fff0ed; }
+  .recommend { display: flex; align-items: start; gap: 9px; padding: 11px; border-radius: 10px; background: var(--amber-wash); color: #775117; font-size: 12px; }.recommend .star { display: grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; background: var(--amber); color: white; font-weight: 900; }.recommend b { color: #5e3f0d; }
+  .decisions { display: grid; gap: 6px; margin-top: 10px; padding-left: 17px; color: #466168; font-size: 11px; }.decisions strong { color: var(--ink); }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) { .laser-indicator { animation: pulse 1.2s ease-out infinite; } @keyframes pulse { 50% { box-shadow: 0 0 0 13px rgba(241,81,81,.04), 0 0 24px rgba(241,81,81,.42); } } }
+</style>
+</head>
+<body>
+  <header class="review-head">
+    <span class="mark">UV</span>
+    <div class="head-copy"><b>UltraView · 指针模式与下拉层</b><small>仅 UI HTML 原型 · 未改产品代码</small></div>
+    <nav class="choice-tabs" aria-label="方案选择">
+      <button type="button" data-scheme="a" aria-pressed="true">方案 A · 推荐</button>
+      <button type="button" data-scheme="b" aria-pressed="false">方案 B · 双入口</button>
+      <button type="button" data-scheme="c" aria-pressed="false">方案 C · 胶囊</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="brief">
+      <div>
+        <h1>把“纯鼠标”做成一个明确的工作模式，而不是另一个标注工具。</h1>
+        <p>鼠标模式会退出 Sticky / Text / Shape / Draw，回到选择、拖动、缩放与卡片操作；激光笔只做临时聚焦，不向 Board 写入笔迹。画布上的字体菜单被刻意放在选择框之上，作为所有下拉菜单的图层样板。</p>
+      </div>
+      <p class="key"><b>本页的判断：</b> 图 1 中的标准图标均可统一为 qtawesome；图标只保留单色轮廓，状态由底色、左侧标记和 tooltip 表达，不再用多枚渐变争夺焦点。</p>
+    </section>
+
+    <div class="stage-scroll">
+      <section class="stage" data-scheme="a" aria-label="UltraView 指针与下拉菜单原型">
+        <div class="board-bar"><i class="board-dot"></i><b>故障回放</b><span>自由画布</span><svg class="chevron" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></div>
+        <div class="rail" aria-label="创作工具栏">
+          <div class="rail-core">
+            <div class="pointer-wrap" title="鼠标模式">
+              <button type="button" class="tool" aria-label="鼠标模式"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg></button>
+              <button type="button" class="pointer-caret" aria-label="选择鼠标或激光笔模式"><svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
+            </div>
+            <button type="button" class="tool pointer-main" aria-label="鼠标模式"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg><span class="tip">鼠标 <kbd>V</kbd></span></button>
+            <button type="button" class="tool laser-rail" aria-label="激光笔模式"><svg viewBox="0 0 24 24"><path d="M9 15 5 19m5-4 6-6m-8.8-2.8 1.4-1.4 2.6 2.6-1.4 1.4M14 5l5 5M7 17l-2 2"/><circle class="solid" cx="18" cy="6" r="2.1"/></svg><span class="tip">激光笔 <kbd>L</kbd></span></button>
+            <span class="rule"></span>
+            <button type="button" class="tool"><svg viewBox="0 0 24 24"><path d="M4 4.5h15.5v12H12l-4 3.5v-3.5H4z"/></svg><span class="tip">便签 <kbd>N</kbd></span></button>
+            <button type="button" class="tool"><svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14"/></svg><span class="tip">文本 <kbd>T</kbd></span></button>
+            <button type="button" class="tool"><svg viewBox="0 0 24 24"><rect x="4.5" y="4.5" width="8" height="8" rx="1"/><circle cx="17" cy="16" r="3.2"/><path d="m6 19 4-4"/></svg><span class="tip">形状 <kbd>S</kbd></span></button>
+            <button type="button" class="tool active"><svg viewBox="0 0 24 24"><path d="m5 18 3.5-1 9.5-9.5-2.5-2.5L6 14.5zM14.5 6l2.5 2.5"/></svg><span class="tip">画笔 <kbd>P</kbd></span></button>
+            <button type="button" class="tool"><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.3"/><circle cx="18" cy="6" r="2.3"/><path d="m7.8 16.2 8.4-8.4"/></svg><span class="tip">连线 <kbd>C</kbd></span></button>
+          </div>
+          <div class="rail-bottom"><span class="rule"></span><button type="button" class="tool"><svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></svg><span class="tip">更多创建项</span></button></div>
+        </div>
+
+        <aside class="pointer-popover" aria-label="指针模式选择">
+          <h2>POINTER MODE</h2>
+          <button type="button" class="mode-option selected"><span class="mode-icon"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg></span><span><strong>鼠标</strong><small>选择、拖动、缩放；不创建标注</small></span><b class="check">✓</b></button>
+          <button type="button" class="mode-option"><span class="mode-icon"><svg viewBox="0 0 24 24"><path d="M9 15 5 19m5-4 6-6m-8.8-2.8 1.4-1.4 2.6 2.6-1.4 1.4M14 5l5 5M7 17l-2 2"/><circle cx="18" cy="6" r="2" fill="currentColor" stroke="none"/></svg></span><span><strong>激光笔</strong><small>临时聚焦，不落笔、不保存</small></span><b></b></button>
+          <div class="mode-foot">切换时：自动取消当前标注工具；<span class="laser-dot"></span>激光点仅显示于演示/聚焦期间。</div>
+        </aside>
+
+        <div class="format-toolbar" aria-label="已选文字对象的格式工具栏">
+          <button type="button" class="format-tool" aria-label="文本边框"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/></svg></button>
+          <button type="button" class="format-tool swatch" aria-label="填充颜色"><i class="fill-swatch"></i></button><span class="toolbar-rule"></span>
+          <button type="button" class="font-choice" aria-label="字体大小">auto</button><span class="toolbar-rule"></span>
+          <button type="button" class="format-tool" aria-label="复制"><svg viewBox="0 0 24 24"><rect x="8" y="4" width="12" height="12" rx="2"/><path d="M4 8v10a2 2 0 0 0 2 2h10"/></svg></button>
+          <button type="button" class="format-tool" aria-label="锁定"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></button>
+          <button type="button" class="format-tool" aria-label="更多"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" class="solid"/><circle cx="12" cy="12" r="1.4" class="solid"/><circle cx="19" cy="12" r="1.4" class="solid"/></svg></button>
+        </div>
+        <div class="font-popover" aria-label="字体大小菜单"><button type="button" class="selected">auto</button><button type="button">12</button><button type="button">14</button><button type="button">18</button><button type="button">24</button></div>
+        <div class="menu-tag"><b>POPUP LAYER · 60</b>菜单由 Canvas Overlay Host 承载；不放进卡片、选择框或 toolbar 的子树。</div>
+        <div class="selection"><span class="text-sample">22</span><i class="handle top"></i><i class="handle right"></i><i class="handle bottom"></i><i class="handle left"></i></div>
+        <span class="laser-indicator" aria-label="激光聚焦点"></span>
+        <div class="status-chip"><i></i><span><b>鼠标</b> · 标注工具已退出</span></div>
+        <aside class="option-card"><span class="eyebrow">CURRENT OPTION</span><h2 id="option-title">方案 A · 分裂式指针</h2><p id="option-copy">首位保留一个“鼠标”入口；右侧小箭头展开两种模式。识别度高，但不为激光笔长期占用一个栏位。</p><ul><li>鼠标为默认、稳定且无持久化副作用的模式</li><li>点击模式即取消 Sticky / Text / Shape / Draw</li><li>激光笔以临时指向效果呈现，不写入 author_objects</li></ul></aside>
+        <div class="zoom-bar"><button type="button" aria-label="缩小"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button><b>100%</b><button type="button" aria-label="放大"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button></div>
+      </section>
+    </div>
+
+    <section class="legend">
+      <article class="panel">
+        <h2>图 1 · 图标可以统一</h2>
+        <p>已在当前虚拟环境验证下列 qtawesome 名称可解析；因此这轮不建议手绘 SVG。唯一需要自绘的是“激光聚焦点”的动态光环，不是 rail 图标。</p>
+        <div class="icon-map"><i>↖</i><b>鼠标 / Select</b><code>mdi.cursor-default-outline</code><i>⌁</i><b>激光笔</b><code>mdi.laser-pointer</code><i>□</i><b>便签</b><code>mdi.note-outline</code><i>T</i><b>文本 / 形状 / 画笔</b><code>mdi.format-text · mdi.shape-outline · mdi.draw-pen</code></div>
+      </article>
+      <article class="panel">
+        <h2>图 2 · 菜单只属于一个悬浮层级</h2>
+        <p>把所有 Combo / picker / more menu 统一挂到页面级 Canvas Overlay Host，而不是 toolbar 或 card 子控件。这样菜单可以越过选择框、卡片和图表，且不被父控件裁剪。</p>
+        <ul class="layer-list"><li><span class="level">10</span><span>卡片、图表、选框</span><code>canvas content</code></li><li><span class="level">30</span><span>对象格式工具条</span><code>selection chrome</code></li><li><span class="level hot">60</span><span>所有下拉 / picker / more</span><code>overlay popup root</code></li><li><span class="level toast">90</span><span>toast / modal / help</span><code>global transient</code></li></ul>
+      </article>
+      <article class="panel">
+        <div class="recommend"><span class="star">★</span><span><b>推荐先落方案 A。</b><br>它和 Miro 的“选择工具 + 次级模式”最接近，rail 保持紧凑，激光笔也不会被误解成持久标注。</span></div>
+        <ul class="decisions"><li><strong>B</strong>：两个入口最直观，但纵向 rail 更密。</li><li><strong>C</strong>：选中后显露模式胶囊，氛围最好，但菜单常驻感偏强。</li><li>菜单层问题与视觉方案无关，应作为一个统一的 Overlay Host 修复。</li></ul>
+      </article>
+    </section>
+  </main>
+<script>
+  const stage = document.querySelector('.stage');
+  const buttons = [...document.querySelectorAll('.choice-tabs [data-scheme]')];
+  const optionTitle = document.querySelector('#option-title');
+  const optionCopy = document.querySelector('#option-copy');
+  const optionContent = {
+    a: ["方案 A · 分裂式指针", "首位保留一个“鼠标”入口；右侧小箭头展开两种模式。识别度高，但不为激光笔长期占用一个栏位。"],
+    b: ["方案 B · 两个独立入口", "鼠标和激光笔均为一键入口，扫一眼就能理解，但会把纵向 rail 再拉长一格。"],
+    c: ["方案 C · 模式胶囊", "点击鼠标入口后，紧贴 rail 展开两枚模式胶囊；状态更可见，但画面多一个常驻浮层。"],
+  };
+  buttons.forEach((button) => button.addEventListener('click', () => {
+    const scheme = button.dataset.scheme;
+    stage.dataset.scheme = scheme;
+    buttons.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+    [optionTitle.textContent, optionCopy.textContent] = optionContent[scheme];
+  }));
+</script>
+</body>
+</html>

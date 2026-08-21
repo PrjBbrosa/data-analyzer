@@ -45,6 +45,12 @@ def _alpha_mask(image, min_alpha=1):
 @pytest.mark.parametrize(
     "factory_name",
     (
+        "ultraview_author_select",
+        "ultraview_author_laser",
+        "ultraview_author_sticky",
+        "ultraview_author_text",
+        "ultraview_author_shapes",
+        "ultraview_author_draw",
         "ultraview_library",
         "ultraview_layout",
         "ultraview_free_grid",
@@ -126,6 +132,35 @@ def test_ultraview_draw_subtool_icons_have_distinct_alpha_masks(qapp):
         image, _scale = _icon_image(icon)
         masks.append(_alpha_mask(image))
     assert len(set(masks)) == 4
+
+
+@pytest.mark.parametrize("size", (18, 20))
+@pytest.mark.parametrize(
+    "factory_name",
+    (
+        "ultraview_author_select",
+        "ultraview_author_laser",
+        "ultraview_author_sticky",
+        "ultraview_author_text",
+        "ultraview_author_shapes",
+        "ultraview_author_draw",
+    ),
+)
+def test_ultraview_author_icons_share_optical_ink_box(qapp, factory_name, size):
+    icon = getattr(Icons, factory_name)()
+    pixmap = icon.pixmap(size, size)
+    image = pixmap.toImage()
+    scale = image.width() / float(size)
+    min_x, min_y, max_x, max_y = _ink_bbox(image)
+    inset = 2 * scale
+    assert min_x >= inset - 1, (factory_name, size, min_x, inset)
+    assert min_y >= inset - 1, (factory_name, size, min_y, inset)
+    assert max_x < image.width() - inset + 1, (factory_name, size, max_x, inset)
+    assert max_y < image.height() - inset + 1, (factory_name, size, max_y, inset)
+    width = (max_x - min_x + 1) / scale
+    height = (max_y - min_y + 1) / scale
+    assert 10 <= width <= 16.5, (factory_name, size, width)
+    assert 10 <= height <= 16.5, (factory_name, size, height)
 
 
 def test_ultraview_draw_subtool_ink_stays_inside_shared_safe_box(qapp):

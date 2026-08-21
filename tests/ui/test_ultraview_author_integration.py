@@ -138,13 +138,14 @@ def test_release_tool_rail_hides_unfinished_creation_tools(qtbot):
     qtbot.addWidget(rail)
     rail.show()
     assert rail.visible_author_tools() == (
+        AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
         AUTHOR_TOOL_SHAPES,
         AUTHOR_TOOL_DRAW,
     )
     assert rail.creation_section_visible() is True
-    assert rail.tool_button(AUTHOR_TOOL_SELECT) is None
+    assert rail.tool_button(AUTHOR_TOOL_SELECT) is not None
     assert rail.tool_button(AUTHOR_TOOL_STICKY) is not None
     assert rail.tool_button(AUTHOR_TOOL_TEXT) is not None
     assert rail.tool_button(AUTHOR_TOOL_SHAPES) is not None
@@ -161,6 +162,7 @@ def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
 
     rail = page.tool_rail()
     assert rail.visible_author_tools() == (
+        AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
         AUTHOR_TOOL_SHAPES,
@@ -172,6 +174,7 @@ def test_creation_rail_tracks_editable_free_grid_state(qapp, qtbot):
     qapp.processEvents()
     assert rail.creation_section_visible() is True
     assert set(rail.visible_enabled_author_tools()) == {
+        AUTHOR_TOOL_SELECT,
         AUTHOR_TOOL_STICKY,
         AUTHOR_TOOL_TEXT,
         AUTHOR_TOOL_SHAPES,

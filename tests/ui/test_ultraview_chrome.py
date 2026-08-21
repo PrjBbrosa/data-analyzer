@@ -374,6 +374,29 @@ def test_canvas_host_pinned_overlay_ignores_canvas_click(qtbot):
     assert not overlay.isVisible()
 
 
+def test_canvas_host_reassert_stacking_keeps_active_overlay_on_top(qtbot):
+    host = CanvasHost()
+    qtbot.addWidget(host)
+    host.resize(640, 420)
+    canvas = QFrame()
+    canvas.setObjectName("boardCanvas")
+    toolbar = QFrame(host)
+    toolbar.setGeometry(40, 40, 120, 40)
+    overlay = QFrame()
+    overlay.setMinimumSize(180, 120)
+    host.set_canvas_widget(canvas)
+    host.register_overlay("library", overlay)
+    host.show()
+    QTest.qWait(1)
+    assert host.open_overlay("library", QRect(80, 80, 200, 160))
+    canvas.raise_()
+    toolbar.raise_()
+    host.reassert_stacking((toolbar,))
+    children = [child for child in host.children() if isinstance(child, QWidget) and child.isVisible()]
+    assert children[-1] is overlay
+    assert canvas.geometry() == host.contentsRect()
+
+
 def test_tool_rail_accepts_a_real_view_ref_drop_for_unplaced(qtbot):
     rail = ToolRail()
     qtbot.addWidget(rail)
@@ -772,7 +795,7 @@ def test_overflow_menu_is_deleted_after_closing_instead_of_leaking_per_open(qtbo
     assert sip.isdeleted(third)
 
 
-_EXIT_FILL = QColor("#24697C")
+_EXIT_FILL = QColor("#E9EDFF")
 _QSS_PATH = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
 
 
@@ -875,10 +898,12 @@ def test_idle_presentation_button_is_not_exit_fill(qapp, qtbot):
         assert island.property("presentation") == "true"
         assert _accent_fill_hits(button) >= 6
         assert _white_padding_hits(island) == 0
-        # The titanium end of the gradient is deliberately darker than the
-        # former flat blue fill.  Verify the light glyph itself, not a fake
-        # all-bright centre region that would reject a legitimate gradient.
-        assert _center_luma_hits(button, min_luma=200) >= 4
+        # Presentation exit is a blue wash with a selected-blue glyph, not a
+        # white-on-gradient capsule.
+        image = button.grab().toImage()
+        cx, cy = image.width() // 2, image.height() // 2
+        glyph = QColor(image.pixel(cx, cy))
+        assert glyph.blue() >= glyph.red()
 
         island.set_presentation_checked(False)
         host.setProperty("presentation", "false")
@@ -940,7 +965,7 @@ def _color_distance(left: QColor, right: QColor) -> float:
     ) ** 0.5
 
 
-def test_canvas_host_paints_titanium_amber_field(qtbot):
+def test_canvas_host_paints_ultraview_canvas_field(qtbot):
     host = CanvasHost()
     qtbot.addWidget(host)
     host.resize(240, 160)
@@ -1026,28 +1051,24 @@ def test_tool_rail_icon_color_tracks_mode_and_panel_open(qtbot):
     free_rest = _icon_mean_color(free)
     assert _color_distance(layout_mode, library_rest) > 12
     assert layout_mode.blue() >= layout_mode.red()
-    # QIcon pixels are baked at creation time, so QSS ``color`` cannot rescue
-    # a dark glyph over the filled mode gradient.  Active rail glyphs must be
-    # explicitly rendered in the high-contrast light role.
-    assert min(layout_mode.red(), layout_mode.green(), layout_mode.blue()) >= 230
+    # Active glyphs are the selected-blue stroke, not a white-on-gradient fill.
+    assert layout_mode.blue() > 90
     rail.set_free_grid_enabled(True)
     layout_rest = _icon_mean_color(layout)
     free_mode = _icon_mean_color(free)
     assert _color_distance(layout_mode, layout_rest) > 12
     assert _color_distance(free_rest, free_mode) > 12
-    assert min(free_mode.red(), free_mode.green(), free_mode.blue()) >= 230
+    assert free_mode.blue() >= free_mode.red()
     rail.set_active_panel(PANEL_LIBRARY)
     library_open = _icon_mean_color(library)
     assert _color_distance(library_rest, library_open) > 12
-    assert min(library_open.red(), library_open.green(), library_open.blue()) >= 230
-    # Every rail destination carries the same explicit open feedback; the
-    # gradient is not reserved for the free-grid toggle alone.
+    assert library_open.blue() >= library_open.red()
     for panel_id in (PANEL_LAYOUT, PANEL_FILTER, PANEL_UNPLACED):
         rail.set_active_panel(panel_id)
         opened = rail.panel_button(panel_id)
         assert opened is not None
         color = _icon_mean_color(opened)
-        assert min(color.red(), color.green(), color.blue()) >= 230
+        assert color.blue() >= color.red()
     rail.set_active_panel(None)
     assert library.property("panelOpen") != "true"
     assert layout.property("modeActive") != "true"
@@ -1056,10 +1077,10 @@ def test_tool_rail_icon_color_tracks_mode_and_panel_open(qtbot):
     qtbot.addWidget(island)
     island.set_active_panel("display")
     display_open = _icon_mean_color(island.display_button())
-    assert min(display_open.red(), display_open.green(), display_open.blue()) >= 230
+    assert display_open.blue() >= display_open.red()
     island.set_active_panel("export")
     export_open = _icon_mean_color(island.export_button())
-    assert min(export_open.red(), export_open.green(), export_open.blue()) >= 230
+    assert export_open.blue() >= export_open.red()
     island.set_active_panel(None)
     rest_presentation = _icon_mean_color(island.presentation_button())
     island.set_presentation_checked(True)
@@ -1140,8 +1161,7 @@ class TestChromeGeometryUnderProductionQss:
 
 _PARENT_FILL = QColor("#3A6A74")
 _SURFACE_SOLID = QColor(ULTRAVIEW_TITANIUM["surface_solid"])
-_RAIL_ACTIVE_START = QColor(ULTRAVIEW_TITANIUM["rail_active_start"])
-_RAIL_ACTIVE_END = QColor(ULTRAVIEW_TITANIUM["rail_active_end"])
+_SELECTED_WASH = QColor(ULTRAVIEW_TITANIUM["selected_wash"])
 
 
 def _render_rail(rail: ToolRail, *, fill: QColor | None = None) -> QImage:
@@ -1270,10 +1290,11 @@ def test_tool_rail_renders_frost_shell_not_opaque_white_inner_fill(qapp, qtbot):
     end = image.pixelColor(
         origin.x() + sticky.width() - 9, origin.y() + sticky.height() - 9
     )
-    assert start != end
-    assert abs(start.red() - _RAIL_ACTIVE_START.red()) < 80
-    assert abs(end.red() - _RAIL_ACTIVE_END.red()) < 80
-    assert start.red() < end.red() or start.blue() > end.blue()
+    assert start.blue() >= start.red()
+    assert end.blue() >= end.red()
+    assert abs(start.red() - _SELECTED_WASH.red()) < 48
+    assert abs(start.blue() - _SELECTED_WASH.blue()) < 48
+    assert abs(end.red() - start.red()) < 36
 
 
 def test_tool_rail_compact_frost_shell_keeps_size_contract(qapp, qtbot):

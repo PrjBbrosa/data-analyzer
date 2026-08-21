@@ -208,6 +208,7 @@ lesson by default.
 | [UltraView Preview Paints Every Plan Rect](pyqt-ui/2026-08-20-ultraview-preview-paints-every-plan-rect.md) | Changing UltraView free-grid drag/resize preview, `GhostOverlay.set_move_previews`, pointer coalescing, or collision/safety paint. | See lesson |
 | [UltraView Selection Chrome Follows Bounds](ultraview-selection-chrome-follows-bounds.md) | Changing UltraView selection toolbar placement, Card hover chrome, author flyouts, or release-rail tool visibility. | See lesson |
 | [UltraView Feedback Reprojects Only On Change](pyqt-ui/2026-08-22-ultraview-feedback-reprojects-only-on-change.md) | Changing UltraView move/resize feedback, edge auto-pan, pointer coalescing, transparent overlays, or Cocoa backing-store recovery. | See lesson |
+| [UltraView Selected State Is Blue](pyqt-ui/2026-08-22-ultraview-selected-state-is-blue.md) | Changing UltraView rail, island, presentation, library selected-row, canvas glow, or CanvasHost flyout stacking. | See lesson |
 
 ## Selection Rules
 

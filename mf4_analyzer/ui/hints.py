@@ -692,8 +692,22 @@ _HINTS = (
         priority=82,
     ),
     Hint(
+        id="ultraview.pointer",
+        text="指针可切鼠标或激光笔",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=84,
+    ),
+    Hint(
+        id="ultraview.laser",
+        text="激光笔只聚焦，不改对象",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=83,
+    ),
+    Hint(
         id="ultraview.select_keys",
-        text="V 或 Esc 回到选择",
+        text="V 回鼠标，Esc 退出激光笔",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=83,

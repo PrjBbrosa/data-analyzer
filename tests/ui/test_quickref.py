@@ -431,10 +431,14 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     assert "尚未提供" not in haystack
     assert "Coming Soon" not in haystack
     rows = {row.desc: row for row in group.rows}
+    pointer = rows["指针"]
     sticky = rows["便签 Sticky"]
     text = rows["文字 Text"]
     shape = rows["形状 Shape"]
     existing = rows["已有连线与笔画"]
+    assert pointer.keys == ("V", "Esc")
+    assert "激光笔" in pointer.sub
+    assert "不选择" in pointer.sub
     assert sticky.keys == ("N",)
     assert text.keys == ("T",)
     assert shape.keys == ("S",)

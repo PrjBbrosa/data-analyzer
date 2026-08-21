@@ -698,7 +698,8 @@ def test_library_add_remove_and_selection_colors_are_distinct(qtbot, qapp):
     assert _hue_gap(plus, minus) > 40
 
     selected_fill = _sample_pixel(remove_row, 8, remove_row.height() // 2)
-    assert selected_fill.lightness() >= 247
+    assert selected_fill.lightness() >= 230
+    assert selected_fill.blue() >= selected_fill.red()
     assert isinstance(remove_row.graphicsEffect(), QGraphicsDropShadowEffect)
     assert add_row.graphicsEffect() is None
 
@@ -2171,11 +2172,11 @@ def test_free_grid_size_overflow_submenu_uses_rounded_popup_shell(qtbot, monkeyp
     _prepare_free_grid(harness, qtbot, "size-more")
     captured: list[QMenu] = []
 
-    def _fake_exec(self, *args, **kwargs):
+    def _fake_popup(self, *args, **kwargs):
         captured.append(self)
         return None
 
-    monkeypatch.setattr(QMenu, "exec_", _fake_exec)
+    monkeypatch.setattr(QMenu, "popup", _fake_popup)
     harness.page._show_card_more_menu("time", "size-more")
     assert captured
     _assert_rounded_menu_shell(captured[0])
@@ -3584,9 +3585,12 @@ def test_floating_chrome_projects_edge_rhythm_and_compact_tool_rail(qtbot, width
     )
     assert rail.x() == board_island.x() == status_island.x()
     assert global_island.x() + global_island.width() == navigation_island.x() + navigation_island.width()
-    assert rail.height() == rail.sizeHint().height()
+    assert rail.height() == layout.rail.height
+    assert rail.height() <= rail.sizeHint().height()
     assert rail.height() < host.height()
-    assert abs((2 * rail.y() + rail.height()) - host.height()) <= 1
+    if height >= 640:
+        assert rail.height() == rail.sizeHint().height()
+        assert abs((2 * rail.y() + rail.height()) - host.height()) <= 1
 
 
 def test_empty_board_library_cta_and_canvas_hint_retract_after_cards(qtbot):

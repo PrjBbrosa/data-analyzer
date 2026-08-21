@@ -562,6 +562,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.shapes",
         "ultraview.existing_markup",
         "ultraview.oneshot",
+        "ultraview.pointer",
+        "ultraview.laser",
         "ultraview.select_keys",
         "ultraview.multiselect",
     }

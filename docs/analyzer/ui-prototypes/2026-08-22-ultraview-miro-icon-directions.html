@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UltraView · Miro rail icon directions</title>
+<style>
+  :root {
+    --page: #eef2f2;
+    --board: #f8fafa;
+    --grid: #e6ebeb;
+    --ink: #24272b;
+    --soft-ink: #697078;
+    --line: #e1e5e6;
+    --blue: #4262ff;
+    --blue-wash: #e9edff;
+    --orange: #f07a2c;
+    --cyan: #0b8792;
+    --shadow: 0 14px 32px rgba(23, 29, 33, .13), 0 2px 6px rgba(23, 29, 33, .08);
+    --font: "SF Pro Display", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); min-width: 1100px; }
+  body { margin: 0; color: var(--ink); font: 14px/1.45 var(--font); }
+  button { color: inherit; font: inherit; }
+  button:focus-visible { outline: 3px solid rgba(66,98,255,.35); outline-offset: 3px; }
+  .head { position: sticky; z-index: 50; top: 0; display: flex; align-items: center; gap: 12px; min-height: 62px; padding: 10px max(26px, calc((100vw - 1500px) / 2)); border-bottom: 1px solid #d7dddd; background: rgba(255,255,255,.91); backdrop-filter: blur(16px); }
+  .brand { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--ink); color: white; font: 800 12px var(--mono); letter-spacing: -.08em; }
+  .head b { display: block; font-size: 15px; }.head small { display: block; color: var(--soft-ink); font-size: 12px; }.head .badge { margin-left: auto; padding: 6px 9px; border-radius: 8px; background: var(--blue-wash); color: #314ee8; font: 700 10px var(--mono); letter-spacing: .08em; }
+  main { width: min(1500px, calc(100vw - 44px)); margin: 0 auto; padding: 26px 0 42px; }
+  .hero { display: grid; grid-template-columns: 1.15fr .85fr; gap: 22px; margin-bottom: 22px; }.hero h1 { max-width: 780px; margin: 0; font-size: 31px; line-height: 1.1; letter-spacing: -.055em; }.hero p { max-width: 780px; margin: 11px 0 0; color: #617076; }.principle { padding: 15px 17px; border-left: 3px solid var(--blue); border-radius: 9px; background: rgba(255,255,255,.75); color: #45545b; font-size: 13px; }.principle strong { color: var(--ink); }
+  .reference { display: grid; grid-template-columns: 170px 1fr; align-items: center; gap: 12px; min-height: 104px; padding: 10px; border: 1px solid #dce2e3; border-radius: 14px; background: #fff; box-shadow: 0 8px 20px rgba(23,29,33,.05); }.reference img { width: 170px; height: 82px; border-radius: 9px; object-fit: cover; object-position: left top; }.reference b { display: block; margin-bottom: 4px; font-size: 12px; }.reference p { margin: 0; color: var(--soft-ink); font-size: 11px; }.reference code { color: #56666c; font: 10px var(--mono); }
+  .compare { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: stretch; }.direction { overflow: hidden; border: 1px solid #d9e0e1; border-radius: 16px; background: #fff; box-shadow: 0 9px 20px rgba(23,29,33,.055); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }.direction:hover { transform: translateY(-3px); box-shadow: 0 16px 26px rgba(23,29,33,.11); }.direction.chosen { border: 2px solid var(--blue); }.direction-head { min-height: 120px; padding: 17px 17px 12px; }.direction-head .tag { color: var(--soft-ink); font: 750 10px/1 var(--mono); letter-spacing: .09em; }.direction-head h2 { margin: 8px 0 5px; font-size: 18px; letter-spacing: -.035em; }.direction-head p { margin: 0; color: #66757a; font-size: 12px; }.direction.chosen .tag { color: var(--blue); }
+  .preview { position: relative; height: 470px; overflow: hidden; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background-color: var(--board); background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 24px 24px; }.preview::after { content: "100%"; position: absolute; right: 10px; bottom: 8px; color: #9aa4a7; font: 700 9px var(--mono); }
+  .rail { position: absolute; top: 13px; left: 13px; display: grid; justify-items: center; gap: 1px; width: 54px; padding: 5px 0 8px; border-radius: 12px; background: white; box-shadow: 0 4px 12px rgba(26,31,35,.10); }.r-btn { position: relative; display: grid; place-items: center; width: 48px; height: 47px; padding: 0; border: 0; border-radius: 8px; background: transparent; cursor: pointer; color: var(--ink); }.r-btn:hover { background: #f3f4f4; }.r-btn.active { color: var(--blue); background: var(--blue-wash); }.r-btn .glyph { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }.r-btn.active .glyph { stroke-width: 2.75; }.r-rule { width: 30px; height: 1px; margin: 5px 0; background: #e5e8e8; }.more { font-size: 35px; font-weight: 250; line-height: 1; }.ghost-card { position: absolute; top: 170px; left: 113px; width: 170px; height: 110px; border: 1px solid #d7dddd; border-radius: 9px; background: rgba(255,255,255,.94); box-shadow: 0 6px 14px rgba(23,29,33,.06); }.ghost-card::before { content: "FFT · Wheel speed"; position: absolute; top: 13px; left: 13px; color: #859094; font: 700 9px var(--mono); }.ghost-card::after { content: ""; position: absolute; right: 12px; bottom: 13px; left: 12px; height: 35px; background: linear-gradient(152deg, transparent 0 4%, #c7e9eb 4.5% 7%, transparent 7.5% 13%, #8bcdd1 13.5% 16%, transparent 16.5% 21%, #44a0a9 21.5% 25%, transparent 25.5% 100%); opacity: .9; }
+  .subrail { position: absolute; top: 227px; left: 76px; display: grid; gap: 3px; width: 52px; padding: 7px 5px; border-radius: 12px; background: white; box-shadow: var(--shadow); }.subrail .r-btn { width: 42px; height: 42px; }.subrail .r-btn.selected { color: var(--blue); background: var(--blue-wash); }.cursor-pill { position: absolute; z-index: 2; top: 14px; left: 72px; display: grid; grid-template-columns: 35px 1fr; align-items: center; gap: 5px; width: 135px; min-height: 42px; padding: 4px; border: 1px solid #d9e0e1; border-radius: 11px; background: #fff; box-shadow: 0 6px 13px rgba(23,29,33,.10); }.cursor-pill .r-btn { width: 34px; height: 32px; border-radius: 7px; color: var(--blue); background: var(--blue-wash); }.cursor-pill small { color: #606c70; font-size: 10px; line-height: 1.14; }.cursor-pill b { display: block; color: var(--ink); font-size: 11px; }.laser-point { position: absolute; top: 330px; left: 207px; width: 18px; height: 18px; border: 2px solid #fa5858; border-radius: 50%; background: rgba(255,255,255,.75); box-shadow: 0 0 0 7px rgba(250,88,88,.13), 0 0 14px rgba(250,88,88,.43); }.laser-point::before, .laser-point::after { content: ""; position: absolute; top: 50%; left: 50%; background: #fa5858; transform: translate(-50%,-50%); }.laser-point::before { width: 1px; height: 31px; }.laser-point::after { width: 31px; height: 1px; }
+  .direction-foot { padding: 13px 16px 15px; }.choice { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: var(--ink); font-size: 12px; font-weight: 750; }.choice::before { content: ""; width: 9px; height: 9px; border: 2px solid #c4ccce; border-radius: 50%; }.chosen .choice::before { border-color: var(--blue); box-shadow: inset 0 0 0 2px white; background: var(--blue); }.direction-foot p { min-height: 50px; margin: 0; color: #69767a; font-size: 11px; }.direction-foot code { display: block; margin-top: 8px; color: #879297; font: 10px var(--mono); }
+  /* A: the clean Miro-like skeleton. */
+  .mirorail .glyph { stroke-width: 2.75; }.mirorail .pointer { stroke-width: 2.85; }.mirorail .sticky { stroke-width: 2.65; }.mirorail .text { stroke-width: 2.8; }.mirorail .pen { stroke-width: 2.9; }.mirorail .shapes { stroke-width: 2.45; }
+  /* B: intentionally redrawn: fewer, bolder forms with recognisable cut-outs. */
+  .cutrail { border-radius: 14px; }.cutrail .r-btn { height: 48px; border-radius: 10px; }.cutrail .glyph { stroke-width: 3.25; }.cutrail .pointer { fill: currentColor; stroke: none; }.cutrail .sticky { stroke-width: 3.2; }.cutrail .shapes { stroke-width: 2.85; }.cutrail .pen { stroke-width: 3.25; }.cutrail .frame { stroke-width: 3.1; }.cutrail .r-btn.active { color: #144145; background: #dff4f3; }.cutrail .r-btn.active::before { content: ""; position: absolute; left: 4px; width: 3px; height: 21px; border-radius: 4px; background: #0a8b94; }.cutrail + .cursor-pill .r-btn { color: #144145; background: #dff4f3; }
+  /* C: a technical contour: more TraceLab, less Miro. */
+  .signalrail .r-btn { color: #215e66; }.signalrail .r-btn.active { color: var(--cyan); background: #e3f7f7; }.signalrail .glyph { stroke-width: 2.15; }.signalrail .pointer { stroke-width: 2.45; }.signalrail .shapes { stroke-width: 2.1; }.signalrail .pen { stroke-width: 2.35; }.signalrail .r-btn:not(.active)::after { content: ""; position: absolute; bottom: 7px; width: 17px; height: 1px; background: currentColor; opacity: .12; }
+  /* D: filled glyphs: deliberately included as the "do not take" control. */
+  .solidrail .r-btn { color: #33373b; }.solidrail .r-btn.active { color: #fff; background: #33373b; }.solidrail .glyph { stroke-width: 1; }.solidrail .solid-body { fill: currentColor; stroke: none; }.solidrail .r-btn.active .glyph { stroke: currentColor; }
+  /* B2 is constrained by the real ToolRail, not the previous 54px sketch. */
+  .b2 { margin-top: 20px; overflow: hidden; border: 2px solid var(--blue); border-radius: 17px; background: #fff; box-shadow: 0 14px 28px rgba(26,31,35,.08); }.b2-head { display: flex; align-items: end; gap: 16px; padding: 18px 20px; border-bottom: 1px solid #dce2e3; background: linear-gradient(90deg, #f9faff, #fff); }.b2-head .tag { color: var(--blue); font: 800 10px/1 var(--mono); letter-spacing: .1em; }.b2-head h2 { margin: 6px 0 0; font-size: 20px; letter-spacing: -.04em; }.b2-head p { max-width: 620px; margin: 0 0 2px auto; color: #647177; font-size: 12px; }.b2-content { display: grid; grid-template-columns: minmax(690px, 1.3fr) minmax(310px, .7fr); min-height: 510px; }
+  .actual-stage { position: relative; overflow: hidden; min-height: 510px; border-right: 1px solid #dce2e3; background-color: #f8fafa; background-image: linear-gradient(#e7ecec 1px, transparent 1px), linear-gradient(90deg, #e7ecec 1px, transparent 1px); background-size: 24px 24px; }.actual-stage::after { content: "DESKTOP / COMPACT · actual ToolRail contract"; position: absolute; right: 14px; bottom: 11px; color: #9aa5a7; font: 750 9px var(--mono); letter-spacing: .07em; }
+  .actual-rail { position: absolute; top: 24px; left: 24px; display: grid; justify-items: center; width: 64px; padding: 8px 10px; border: 1px solid rgba(50,86,97,.32); border-radius: 14px; background: rgba(255,255,255,.86); box-shadow: 0 8px 20px rgba(30,42,47,.10); backdrop-filter: blur(10px); }.actual-group { display: grid; justify-items: center; gap: 6px; }.actual-divider { position: relative; width: 44px; height: 21px; }.actual-divider::after { content: ""; position: absolute; top: 10px; right: 8px; left: 8px; height: 1px; background: rgba(50,86,97,.42); }.actual-tool { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #667f85; cursor: pointer; }.actual-tool:hover { border-color: #cbd9dc; background: #f0f5f5; color: #264f57; }.actual-tool.active { border-color: #bdc9ff; background: var(--blue-wash); color: var(--blue); }.actual-tool.quiet { border-color: #8dbcc0; background: transparent; color: #087b83; }.actual-glyph { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }.actual-glyph .filled { fill: currentColor; stroke: none; }.actual-group .actual-tool:first-child .actual-glyph { transform: translateY(-.2px); }.new-marker { position: absolute; top: 4px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 2px #fff; }.actual-rail.compact { top: 275px; width: 52px; padding: 4px 6px; border-radius: 12px; }.compact .actual-group { gap: 4px; }.compact .actual-tool { width: 36px; height: 36px; border-radius: 9px; }.compact .actual-glyph { width: 18px; height: 18px; }.compact .actual-divider { width: 40px; height: 17px; }.compact .actual-divider::after { top: 8px; right: 6px; left: 6px; }.callout { position: absolute; display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid #cbd5ff; border-radius: 7px; background: rgba(255,255,255,.95); box-shadow: 0 5px 12px rgba(32,45,58,.08); color: #4659cb; font: 750 10px/1.2 var(--mono); white-space: nowrap; }.callout::before { content: ""; width: 20px; height: 1px; background: #92a3ff; }.callout.a { top: 65px; left: 115px; }.callout.b { top: 180px; left: 115px; }.callout.c { top: 337px; left: 94px; }.callout.d { top: 419px; left: 94px; }.mouse-flyout { position: absolute; top: 98px; left: 114px; width: 192px; padding: 7px; border: 1px solid #d2dcdf; border-radius: 11px; background: #fff; box-shadow: var(--shadow); }.mouse-flyout small { display: block; margin: 2px 5px 5px; color: #7d898d; font: 750 9px var(--mono); letter-spacing: .09em; }.mouse-option { display: grid; grid-template-columns: 28px 1fr 14px; align-items: center; gap: 6px; width: 100%; min-height: 35px; padding: 3px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #50646a; font-size: 10px; text-align: left; }.mouse-option.active { border-color: #c5d0ff; background: var(--blue-wash); color: #3650e2; }.mouse-option .actual-tool { width: 28px; height: 28px; border-radius: 6px; }.mouse-option .actual-glyph { width: 17px; height: 17px; }.mouse-option b { font-size: 10px; }.mouse-option em { color: #758287; font-style: normal; font-size: 9px; }.mouse-option .tick { color: var(--blue); font-size: 12px; font-weight: 800; }
+  .b2-notes { padding: 19px; background: #fff; }.b2-notes h3 { margin: 0; font-size: 14px; letter-spacing: -.02em; }.b2-notes > p { margin: 5px 0 12px; color: #6d7a7e; font-size: 11px; }.metric-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }.metric-list li { display: grid; grid-template-columns: 51px 1fr; gap: 9px; align-items: center; min-height: 34px; padding-bottom: 7px; border-bottom: 1px solid #eef1f1; color: #55666b; font-size: 11px; }.metric-list b { display: grid; place-items: center; min-height: 24px; border-radius: 6px; background: #f0f3f4; color: #34464b; font: 800 10px var(--mono); }.metric-list li.hot b { background: var(--blue-wash); color: var(--blue); }.b2-rule { margin: 14px 0; border: 0; border-top: 1px solid #e6ebeb; }.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }.pair div { padding: 9px; border: 1px solid #e1e7e8; border-radius: 8px; color: #617176; font-size: 10px; }.pair b { display: block; margin-bottom: 3px; color: #30444a; font-size: 11px; }.pair .yes { border-color: #c7d1ff; background: #f4f6ff; }.pair .no { background: #fafafa; }
+  .before-after { margin: 20px 0; overflow: hidden; border: 1px solid #d5dfe1; border-radius: 17px; background: #fff; box-shadow: 0 12px 26px rgba(23,29,33,.06); }.before-after > header { display: flex; align-items: end; gap: 15px; padding: 17px 20px; border-bottom: 1px solid #e0e6e7; background: #fafcfc; }.before-after > header .tag { color: #5b6d72; font: 800 10px var(--mono); letter-spacing: .1em; }.before-after > header h2 { margin: 6px 0 0; font-size: 19px; letter-spacing: -.035em; }.before-after > header p { max-width: 565px; margin: 0 0 2px auto; color: #66757a; font-size: 12px; }.two-figures { display: grid; grid-template-columns: 1fr 1fr; }.figure { min-width: 0; margin: 0; }.figure + .figure { border-left: 1px solid #e0e6e7; }.figure-head { display: flex; align-items: center; gap: 8px; min-height: 47px; padding: 10px 15px; border-bottom: 1px solid #edf1f1; }.figure-head .num { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 7px; background: #edf1f1; color: #586970; font: 800 10px var(--mono); }.figure-head b { font-size: 13px; }.figure-head small { margin-left: auto; color: #77858a; font-size: 10px; }.figure-head.b2-title .num { background: var(--blue-wash); color: var(--blue); }.figure-head.b2-title small { color: #4259de; }.figure-canvas { position: relative; display: grid; place-items: start center; height: 740px; overflow: hidden; background-color: #f7fafa; background-image: linear-gradient(#e6ecec 1px, transparent 1px), linear-gradient(90deg, #e6ecec 1px, transparent 1px); background-size: 24px 24px; }.current-shot { display: block; width: auto; height: 740px; object-fit: contain; object-position: center top; }.b2-shot-rail { position: relative; top: 13px; left: auto; transform: scale(1.45); transform-origin: top center; }.b2-shot-rail .actual-divider { height: 21px; }.b2-shot-rail .actual-group:last-child { display: none; }.image-note { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid #e6ecec; }.image-note div { min-height: 80px; padding: 12px 15px; color: #66757a; font-size: 11px; }.image-note div + div { border-left: 1px solid #e6ecec; }.image-note b { display: block; margin-bottom: 4px; color: #33474d; font-size: 11px; }.image-note .b2-callout b { color: #3650e2; }.image-note code { color: #7b898d; font: 10px var(--mono); }
+  .next { display: grid; grid-template-columns: 1.1fr .9fr; gap: 16px; margin-top: 18px; }.panel { padding: 17px; border: 1px solid #d9e0e1; border-radius: 14px; background: rgba(255,255,255,.82); }.panel h2 { margin: 0 0 9px; font-size: 15px; letter-spacing: -.02em; }.panel p { margin: 0; color: #657278; font-size: 12px; }.stack { display: grid; gap: 8px; margin-top: 12px; }.stack div { display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: center; color: #58676c; font-size: 11px; }.stack b { display: grid; place-items: center; width: 24px; height: 21px; border-radius: 6px; background: #eef1f1; color: #5f6a6e; font: 750 9px var(--mono); }.stack .hot { background: var(--blue-wash); color: var(--blue); }.decision { display: flex; gap: 10px; align-items: start; padding: 12px; border-radius: 10px; background: var(--blue-wash); color: #4454a8; font-size: 12px; }.decision .d { display: grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; background: var(--blue); color: white; font-weight: 900; }.decision b { color: #2e42ba; }
+  @media (prefers-reduced-motion: reduce) { .direction { transition: none; } }
+</style>
+</head>
+<body>
+  <!-- B2: paths use the current 20px programmatic-icon coordinate system. -->
+  <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute;overflow:hidden">
+    <defs>
+      <symbol id="uv-library" viewBox="0 0 20 20"><rect x="3.2" y="3" width="13.6" height="14" rx="2"/><path d="M6 6.4h7M6 10h8.8M6 13.6h5.4"/><circle class="filled" cx="4.8" cy="6.4" r=".9"/><circle class="filled" cx="4.8" cy="10" r=".9"/><circle class="filled" cx="4.8" cy="13.6" r=".9"/></symbol>
+      <symbol id="uv-layout" viewBox="0 0 20 20"><rect x="2.8" y="3" width="14.4" height="14" rx="1.8"/><path d="M10 3.5v13M10.5 8h6.2M10.5 12.2h6.2"/></symbol>
+      <symbol id="uv-grid" viewBox="0 0 20 20"><rect x="2.8" y="3" width="14.4" height="14" rx="1.8"/><path d="M6.4 3.5v13M10 3.5v13M13.6 3.5v13M3.3 7.7h13.4M3.3 12.3h13.4"/></symbol>
+      <symbol id="uv-filter" viewBox="0 0 20 20"><path d="M3.5 4h13l-5 5.6v6.2l-3 1.2V9.6Z"/></symbol>
+      <symbol id="uv-unplaced" viewBox="0 0 20 20"><rect x="4" y="3" width="12" height="7.3" rx="1.4"/><path d="M10 10.8v3.4m-2.2-1.8 2.2 2.2 2.2-2.2M4 17h12"/></symbol>
+      <symbol id="uv-pointer" viewBox="0 0 20 20"><path d="M5.2 3.6v12.6l3.2-3 2.8 4 1.8-1-2.8-4h4.6Z"/></symbol>
+      <symbol id="uv-sticky" viewBox="0 0 20 20"><path d="M4 4h12v8.2L12 16H4Z"/><path d="M12 16v-3.8h4"/></symbol>
+      <symbol id="uv-text" viewBox="0 0 20 20"><path d="M4.2 4.4h11.6M10 4.4V16M4.2 4.4v2M15.8 4.4v2"/></symbol>
+      <symbol id="uv-shapes" viewBox="0 0 20 20"><rect x="4" y="9.2" width="6" height="6.4" rx=".8"/><circle cx="13.1" cy="6.9" r="2.9"/><path d="m13.4 10.6 2.6 5.4h-5.4Z"/></symbol>
+      <symbol id="uv-pen" viewBox="0 0 20 20"><path d="m5.8 14.4 7.8-7.8 1.8 1.8-7.8 7.8Z"/><path d="m12.8 5.8 2.2 2.2M5.8 14.4 4.2 16l3.4.2"/></symbol>
+      <symbol id="uv-laser" viewBox="0 0 20 20"><path d="M5.2 3.6v12.6l3.2-3 2.8 4 1.8-1-2.8-4h4.6Z"/><circle cx="15.5" cy="4.5" r="1.6" class="filled"/></symbol>
+    </defs>
+  </svg>
+  <header class="head"><span class="brand">UV</span><span><b>UltraView · Miro 图标方向重做</b><small>四套完整 rail 对照 · 仅 HTML，未动产品代码</small></span><span class="badge">ICON LANGUAGE STUDY</span></header>
+  <main>
+    <section class="hero">
+      <div><h1>不再把“功能名”换成一枚 Font Awesome 图标；从工具的<strong>手势</strong>重画它。</h1><p>面向要在数据画布上快速创建、又不能误触标注的工程师。Miro 的有效之处是：左 rail 的图形足够大、形状轮廓足够独特、只有当前工具显蓝；不是“细线 + 彩色渐变”。本页把鼠标和激光笔一起放进四种完整的图标语言中比较。</p></div>
+      <aside><div class="principle"><strong>这次的结论先说：</strong>qtawesome 只适合临时原型或通用二级动作。主 rail 的 Pointer / Sticky / Text / Shapes / Pen 应当拥有 24×24 自绘 SVG 或 QPainter 路径；图标和点击区域才会同时接近 Miro 的清晰度。</div><div class="reference"><img src="../reviews/2026-08-20-ultraview-miro-operation-ui-comparison-assets/miro-draw-panel.png" alt="既有 Miro Draw rail 参考截图"><span><b>观察到的 Miro 视觉锚点</b><p>黑色、轮廓明确、选中项只有一个淡蓝底；Draw 的子轨与主 rail 分离而紧邻。这里借鉴其<strong>图标节奏和状态语法</strong>，不复制其商标或具体资产。</p><code>source: existing local Miro reference</code></span></div></aside>
+    </section>
+
+    <!-- Every rail uses the same tool order: pointer, sticky, frame, note, text, shapes, pen, more. -->
+    <section class="compare" aria-label="四套工具栏图标方案对照">
+      <article class="direction mirorail">
+        <div class="direction-head"><span class="tag">A · REFERENCE SKELETON</span><h2>黑骨架</h2><p>最靠近 Miro：统一黑色轮廓、稳定 2.75px 笔画、只让当前工具呈蓝色。</p></div>
+        <div class="preview">
+          <div class="rail">
+            <button class="r-btn" aria-label="鼠标"><svg class="glyph pointer" viewBox="0 0 32 32"><path d="M5 4.5 25.8 12 17 15l5.5 10.4-4.1 2.1L13 17.2l-5.1 7Z"/></svg></button>
+            <span class="r-rule"></span><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M7 6h15v14H13l-6 6Z"/><path d="M13 20v6"/></svg></button>
+            <button class="r-btn"><svg class="glyph frame" viewBox="0 0 32 32"><rect x="5" y="5" width="22" height="22" rx="1"/><path d="M5 13h22M13 5v22"/></svg></button>
+            <button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M6 6h19v15a5 5 0 0 1-5 5H11a5 5 0 0 1-5-5Z"/><path d="M16 26V16h9"/></svg></button>
+            <button class="r-btn"><svg class="glyph text" viewBox="0 0 32 32"><path d="M7 7h18M16 7v19"/></svg></button>
+            <button class="r-btn active"><svg class="glyph shapes" viewBox="0 0 32 32"><rect x="5" y="5" width="9" height="9" rx="1"/><circle cx="23" cy="10" r="4.4"/><path d="m11 21 5 8H6Z"/><path d="m24 20 4 7h-8Z"/></svg></button>
+            <button class="r-btn"><svg class="glyph pen" viewBox="0 0 32 32"><path d="m7 25 4-10 10-10 3 3-10 10Z"/><path d="m11 15 6 6M6 27l3-2"/></svg></button><span class="r-rule"></span><button class="r-btn more">+</button>
+          </div>
+          <div class="cursor-pill"><button class="r-btn"><svg class="glyph pointer" viewBox="0 0 32 32"><path d="M5 4.5 25.8 12 17 15l5.5 10.4-4.1 2.1L13 17.2l-5.1 7Z"/></svg></button><small><b>鼠标</b>选择 · 不标注</small></div>
+          <div class="subrail"><button class="r-btn selected"><svg class="glyph shapes" viewBox="0 0 32 32"><rect x="7" y="6" width="14" height="14" rx="2"/><path d="m10 25 8-8 4 4"/></svg></button><button class="r-btn"><svg class="glyph pen" viewBox="0 0 32 32"><path d="m7 25 4-10 10-10 3 3-10 10Z"/><path d="m11 15 6 6"/></svg></button><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M7 8a9 9 0 0 1 15 7v3l3 3-3 3-2-2-3 3-4-4 3-3-3-3Z"/></svg></button></div>
+          <span class="ghost-card"></span>
+        </div>
+        <div class="direction-foot"><div class="choice">对照基线</div><p>最稳，但仍像“借来的白板”。如果不想复制 Miro，应在形状语义上再走一步。</p><code>custom SVG · 24dp · 2.75px</code></div>
+      </article>
+
+      <article class="direction cutrail">
+        <div class="direction-head"><span class="tag">B1 · BOLD EXPERIMENT</span><h2>折线刻面</h2><p>这是上一轮的大胆实验：有个性，但其尺寸与笔画偏离既有 ToolRail，因此保留为对照而不再推荐。</p></div>
+        <div class="preview">
+          <div class="rail">
+            <button class="r-btn" aria-label="鼠标"><svg class="glyph pointer" viewBox="0 0 32 32"><path d="M5 4 26 12 17.4 15.7 22.8 26l-5 2.2-5.1-10.4L7.3 25Z"/></svg></button>
+            <span class="r-rule"></span><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M6 5h17v16h-8l-7 6V5Z"/><path d="M15 21v6"/></svg></button>
+            <button class="r-btn"><svg class="glyph frame" viewBox="0 0 32 32"><path d="M5 5h22v22H5zM5 14h22M14 5v22"/></svg></button>
+            <button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M6 6h20v14a6 6 0 0 1-6 6H12a6 6 0 0 1-6-6Z"/><path d="M16 26v-9h10"/></svg></button>
+            <button class="r-btn"><svg class="glyph text" viewBox="0 0 32 32"><path d="M6 7h20M16 7v19"/></svg></button>
+            <button class="r-btn active"><svg class="glyph shapes" viewBox="0 0 32 32"><rect x="5" y="5" width="9" height="9" rx="1"/><circle cx="23" cy="10" r="4.5"/><path d="m11 20 5.2 8H5.8Z"/><path d="m24 20 4 7h-8Z"/></svg></button>
+            <button class="r-btn"><svg class="glyph pen" viewBox="0 0 32 32"><path d="m6 26 4-11 10-10 4 4-10 10Z"/><path d="m10 15 6 6M6 26l4-1"/></svg></button><span class="r-rule"></span><button class="r-btn more">+</button>
+          </div>
+          <div class="cursor-pill"><button class="r-btn"><svg class="glyph pointer" viewBox="0 0 32 32"><path d="M5 4 26 12 17.4 15.7 22.8 26l-5 2.2-5.1-10.4L7.3 25Z"/></svg></button><small><b>鼠标</b>选择 · 不标注</small></div>
+          <div class="subrail"><button class="r-btn selected"><svg class="glyph pen" viewBox="0 0 32 32"><path d="m6 26 4-11 10-10 4 4-10 10Z"/><path d="m10 15 6 6"/></svg></button><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M7 8a8 8 0 0 1 15 7v3l3 3-3 3-2-2-3 3-4-4 3-3-3-3Z"/></svg></button><button class="r-btn"><svg class="glyph frame" viewBox="0 0 32 32"><path d="m7 23 10-10 7 7M7 10l4-4 8 8"/></svg></button></div>
+          <span class="ghost-card"></span><span class="laser-point" title="激光笔聚焦点"></span>
+        </div>
+        <div class="direction-foot"><div class="choice">不采用</div><p>读起来是白板工具，但 54px rail / 粗笔画会使它从既有 icon family 中跳出来。</p><code>contrast only · superseded by B2</code></div>
+      </article>
+
+      <article class="direction signalrail">
+        <div class="direction-head"><span class="tag">C · TRACE INSTRUMENT</span><h2>信号标记</h2><p>从测量工具中提取一条弱基线与青色，工程感更强，但会离 Miro 更远。</p></div>
+        <div class="preview">
+          <div class="rail">
+            <button class="r-btn" aria-label="鼠标"><svg class="glyph pointer" viewBox="0 0 32 32"><path d="M5 4.5 25.8 12 17 15l5.5 10.4-4.1 2.1L13 17.2l-5.1 7Z"/></svg></button>
+            <span class="r-rule"></span><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M7 6h15v14H13l-6 6Z"/><path d="M13 20v6M10 11h8M10 15h5"/></svg></button>
+            <button class="r-btn"><svg class="glyph frame" viewBox="0 0 32 32"><rect x="5" y="5" width="22" height="22" rx="2"/><path d="M5 13h22M13 5v22"/></svg></button>
+            <button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M6 6h19v15a5 5 0 0 1-5 5H11a5 5 0 0 1-5-5Z"/><path d="M16 26V16h9"/></svg></button>
+            <button class="r-btn"><svg class="glyph text" viewBox="0 0 32 32"><path d="M7 7h18M16 7v19M10 25h12"/></svg></button>
+            <button class="r-btn active"><svg class="glyph shapes" viewBox="0 0 32 32"><rect x="5" y="5" width="9" height="9" rx="1"/><circle cx="23" cy="10" r="4.4"/><path d="m11 21 5 8H6Z"/></svg></button>
+            <button class="r-btn"><svg class="glyph pen" viewBox="0 0 32 32"><path d="m7 25 4-10 10-10 3 3-10 10Z"/><path d="M4 28c4-3 7 2 11-1s6-5 13-1"/></svg></button><span class="r-rule"></span><button class="r-btn more">+</button>
+          </div>
+          <div class="cursor-pill"><button class="r-btn"><svg class="glyph pointer" viewBox="0 0 32 32"><path d="M5 4.5 25.8 12 17 15l5.5 10.4-4.1 2.1L13 17.2l-5.1 7Z"/></svg></button><small><b>鼠标</b>选择 · 不标注</small></div>
+          <div class="subrail"><button class="r-btn selected"><svg class="glyph pen" viewBox="0 0 32 32"><path d="m7 25 4-10 10-10 3 3-10 10Z"/></svg></button><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path d="M7 8a9 9 0 0 1 15 7v3l3 3-3 3-2-2-3 3-4-4 3-3-3-3Z"/></svg></button><button class="r-btn"><svg class="glyph shapes" viewBox="0 0 32 32"><path d="m7 23 10-10 7 7"/></svg></button></div>
+          <span class="ghost-card"></span>
+        </div>
+        <div class="direction-foot"><div class="choice">有辨识，不够白板</div><p>可以作为二级面板或分析特有入口，不建议用作通用作者 rail 的主语。</p><code>custom SVG · 24dp · 2.2px + baseline</code></div>
+      </article>
+
+      <article class="direction solidrail">
+        <div class="direction-head"><span class="tag">D · SOLID GLYPH</span><h2>实心符号</h2><p>收缩到最少像素，接近软件工具箱；它清楚，但没有 Miro 那种手势感。</p></div>
+        <div class="preview">
+          <div class="rail">
+            <button class="r-btn" aria-label="鼠标"><svg class="glyph pointer" viewBox="0 0 32 32"><path class="solid-body" d="M5 4 27 12l-9.5 3.8 5.2 11-5.1 2.3-5-10.6L7 25Z"/></svg></button>
+            <span class="r-rule"></span><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path class="solid-body" d="M6 5h19v17H14l-8 6Z"/></svg></button>
+            <button class="r-btn"><svg class="glyph frame" viewBox="0 0 32 32"><path class="solid-body" d="M5 5h22v22H5zm4 4v6h6V9zm8 0v6h6V9zM9 17v6h6v-6zm8 0v6h6v-6z"/></svg></button>
+            <button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path class="solid-body" d="M5 5h22v15a7 7 0 0 1-7 7H12a7 7 0 0 1-7-7Z"/></svg></button>
+            <button class="r-btn"><svg class="glyph text" viewBox="0 0 32 32"><path class="solid-body" d="M5 6h22v4h-9v17h-4V10H5Z"/></svg></button>
+            <button class="r-btn active"><svg class="glyph shapes" viewBox="0 0 32 32"><path class="solid-body" d="M5 5h10v10H5zm14 1a6 6 0 1 1 0 12 6 6 0 0 1 0-12M9 20l7 9H5z"/></svg></button>
+            <button class="r-btn"><svg class="glyph pen" viewBox="0 0 32 32"><path class="solid-body" d="m6 26 4-12L21 3l8 8-11 11Zm6-10 4 4 8-8-4-4Z"/></svg></button><span class="r-rule"></span><button class="r-btn more">+</button>
+          </div>
+          <div class="cursor-pill"><button class="r-btn"><svg class="glyph pointer" viewBox="0 0 32 32"><path class="solid-body" d="M5 4 27 12l-9.5 3.8 5.2 11-5.1 2.3-5-10.6L7 25Z"/></svg></button><small><b>鼠标</b>选择 · 不标注</small></div>
+          <div class="subrail"><button class="r-btn selected"><svg class="glyph pen" viewBox="0 0 32 32"><path class="solid-body" d="m6 26 4-12L21 3l8 8-11 11Z"/></svg></button><button class="r-btn"><svg class="glyph sticky" viewBox="0 0 32 32"><path class="solid-body" d="M7 8a9 9 0 0 1 15 7v3l3 3-3 3-2-2-3 3-4-4 3-3-3-3Z"/></svg></button><button class="r-btn"><svg class="glyph shapes" viewBox="0 0 32 32"><path class="solid-body" d="M7 22 17 12l8 8-4 4-4-4-6 6Z"/></svg></button></div>
+          <span class="ghost-card"></span>
+        </div>
+        <div class="direction-foot"><div class="choice">排除项</div><p>会和现有软件里密集的小图标混在一起；不适合承担“可创作画布”的入口角色。</p><code>qtawesome can emulate · do not choose</code></div>
+      </article>
+    </section>
+
+    <section class="before-after" aria-label="当前 ToolRail 与 B2 对比">
+      <header><div><span class="tag">CURRENT VS B2</span><h2>两张同任务图：当前在用的 rail，和 B2 要替换的视觉状态。</h2></div><p>左图是已有真实前台截图；右图是 B2 的目标渲染。右图只改变鼠标入口、作者工具状态和 active 表达，原有导航类图标维持同一程序化路径。</p></header>
+      <div class="two-figures">
+        <figure class="figure"><figcaption class="figure-head"><span class="num">01</span><b>当前在用 · ToolRail</b><small>真实截图</small></figcaption><div class="figure-canvas"><img class="current-shot" src="../reviews/2026-08-20-ultraview-miro-operation-ui-comparison-assets/tracelab-user-rail.png" alt="当前 TraceLab UltraView 工具栏截图"></div><div class="image-note"><div><b>保留的基础</b>白色霜化 rail、Library / Grid / Layout / Filter 等程序化图标、分组 divider 都继续沿用。</div><div><b>需要收掉</b>多个青-琥珀渐变同时抢焦点；没有明确“纯鼠标”入口；作者图标与导航图标的视觉重量不稳定。</div></div></figure>
+        <figure class="figure"><figcaption class="figure-head b2-title"><span class="num">02</span><b>B2 · 目标 ToolRail</b><small>64px 逻辑尺寸 · 示意放大</small></figcaption><div class="figure-canvas"><div class="actual-rail b2-shot-rail" aria-label="B2 目标工具栏"><div class="actual-group"><button class="actual-tool" aria-label="View 库"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-library"/></svg></button><button class="actual-tool" aria-label="自由网格"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-grid"/></svg></button><button class="actual-tool" aria-label="布局"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-layout"/></svg></button><button class="actual-tool" aria-label="筛选"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-filter"/></svg></button></div><span class="actual-divider"></span><div class="actual-group"><button class="actual-tool active" aria-label="鼠标模式"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-pointer"/></svg><i class="new-marker"></i></button><button class="actual-tool" aria-label="便签"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-sticky"/></svg></button><button class="actual-tool" aria-label="文本"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-text"/></svg></button><button class="actual-tool" aria-label="形状"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-shapes"/></svg></button><button class="actual-tool" aria-label="绘制"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-pen"/></svg></button></div><span class="actual-divider"></span><div class="actual-group"><button class="actual-tool" aria-label="未放置 View"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-unplaced"/></svg></button></div></div></div><div class="image-note"><div class="b2-callout"><b>B2 的变化</b>鼠标成为作者组首项；它是唯一淡蓝 active。点击后只进入选择 / 拖动，不激活任何标注工具。</div><div><b>刻意不动</b>rail 宽度、按钮大小、原有导航 glyph 和 divider 节奏不变；Laser 只在鼠标 flyout 中出现。</div></div></figure>
+      </div>
+    </section>
+
+    <section class="b2" aria-label="方案 B 的实尺细化">
+      <header class="b2-head"><div><span class="tag">B2 · REAL-RAIL REFINEMENT</span><h2>方案 B 收敛：先对齐现有图标家族，再向 Miro 靠拢。</h2></div><p>前一版 B 的 54 px rail、48 px 按钮和 3.2 px 笔画都不属于当前产品，因此天然“另起炉灶”。这一版严格使用现有 <code>64 / 52、40 / 36、20 / 18</code> 的视觉契约。</p></header>
+      <div class="b2-content">
+        <div class="actual-stage">
+          <div class="actual-rail" aria-label="桌面 64px ToolRail">
+            <div class="actual-group">
+              <button class="actual-tool" aria-label="View 库"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-library"/></svg></button>
+              <button class="actual-tool" aria-label="自由网格"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-grid"/></svg></button>
+              <button class="actual-tool" aria-label="布局"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-layout"/></svg></button>
+              <button class="actual-tool" aria-label="筛选"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-filter"/></svg></button>
+            </div>
+            <span class="actual-divider"></span>
+            <div class="actual-group">
+              <button class="actual-tool active" aria-label="鼠标模式"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-pointer"/></svg><i class="new-marker"></i></button>
+              <button class="actual-tool" aria-label="便签"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-sticky"/></svg></button>
+              <button class="actual-tool" aria-label="文本"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-text"/></svg></button>
+              <button class="actual-tool" aria-label="形状"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-shapes"/></svg></button>
+              <button class="actual-tool" aria-label="绘制"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-pen"/></svg></button>
+            </div>
+            <span class="actual-divider"></span>
+            <div class="actual-group"><button class="actual-tool" aria-label="未放置 View"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-unplaced"/></svg></button></div>
+          </div>
+          <aside class="mouse-flyout" aria-label="鼠标模式选择"><small>POINTER MODE</small><button class="mouse-option active"><span class="actual-tool"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-pointer"/></svg></span><span><b>鼠标</b><em>选择 / 拖动 / 不标注</em></span><span class="tick">✓</span></button><button class="mouse-option"><span class="actual-tool"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-laser"/></svg></span><span><b>激光笔</b><em>只聚焦 / 不保存</em></span><span></span></button></aside>
+          <span class="callout a">64 px rail · 10 px side inset</span><span class="callout b">40 px hit target · 20 px glyph</span><span class="callout c">52 px compact rail</span><span class="callout d">36 px target · 18 px glyph</span>
+          <div class="actual-rail compact" aria-label="紧凑 52px ToolRail"><div class="actual-group"><button class="actual-tool"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-library"/></svg></button><button class="actual-tool active"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-pointer"/></svg></button><button class="actual-tool"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-sticky"/></svg></button></div><span class="actual-divider"></span><div class="actual-group"><button class="actual-tool"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-text"/></svg></button><button class="actual-tool"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-shapes"/></svg></button><button class="actual-tool"><svg class="actual-glyph" viewBox="0 0 20 20"><use href="#uv-pen"/></svg></button></div></div>
+        </div>
+        <aside class="b2-notes"><h3>这次具体收掉的视觉偏差</h3><p>所有主 rail 图标落在同一个 20 dp / 18 dp 坐标系；新加的 Pointer 不是另一枚 Font Awesome，而是和 Library / Grid 一样的 QPainter 线条语法。</p><ul class="metric-list"><li class="hot"><b>64 / 52</b><span>沿用现有 desktop / compact rail 宽度。</span></li><li class="hot"><b>40 / 36</b><span>沿用现有 desktop / compact hit target；每个图标的 X 中心完全重合。</span></li><li><b>20 / 18</b><span>沿用 icon size；既不把新图标放大成另一套，也不压小旧图标。</span></li><li><b>1.7 px</b><span>沿用当前 programmatic line icon 的圆端、圆角与笔画重量。</span></li><li><b>6 / 4 gap</b><span>沿用每组垂直节奏；divider 留白不再和按钮碰撞。</span></li></ul><hr class="b2-rule"><div class="pair"><div class="yes"><b>保留 Miro</b>单一淡蓝 active、邻接 flyout、图标只表达手势。</div><div class="no"><b>不再使用</b>主 rail 多枚渐变 active、不同字体库造成的光学跳动。</div></div></aside>
+      </div>
+    </section>
+
+    <section class="next">
+      <article class="panel"><h2>图标交付边界</h2><p>这一版不是“所有东西都推倒重绘”。既有 Library / Grid / Layout / Filter / Unplaced 的程序化图标保持不动；只新增 Pointer 与 Laser，并让作者工具重用同一条 20 dp 路径、颜色和圆角语法。</p><div class="stack"><div><b class="hot">PAINT</b><span>Pointer / Laser：新增 QPainter 路径，匹配既有 <code>_line_icon(..., size=20)</code> 机制。</span></div><div><b>KEEP</b><span>Sticky、Text、Shapes、Pen：保留已有程序化路径，调整的是状态与排列，不是另换一套字体图标。</span></div><div><b>QTA</b><span>复制、锁定、删除、更多、缩放：继续是次级动作，可保留 qtawesome。</span></div></div></article>
+      <article class="panel"><h2>下一步建议</h2><div class="decision"><span class="d">B2</span><span><b>若你认可这个对齐方向，产品实现只需先加 Pointer / Laser 两枚 programmatic icon。</b><br>然后新增鼠标 flyout，选鼠标即退出所有标注工具；选激光笔只挂载 transient focus overlay。其余已有 rail 图标与紧凑模式不动。</span></div></article>
+    </section>
+  </main>
+</body>
+</html>

@@ -3210,7 +3210,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._canvas_host.close_active_overlay(restore_focus=False)
         if trigger is not None:
             menu.aboutToHide.connect(partial(self._restore_menu_trigger, trigger))
-        menu.exec_(global_pos)
+        menu.popup(global_pos)
 
     def _restore_menu_trigger(self, trigger) -> None:
         if trigger is None:
