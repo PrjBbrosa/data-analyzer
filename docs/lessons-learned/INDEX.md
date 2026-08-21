@@ -203,6 +203,7 @@ lesson by default.
 | [UltraView Fit Fill Is Vertically Stage-Centered](pyqt-ui/2026-08-17-ultraview-fit-fill-vertical-center.md) | Changing UltraView `_content_fill_rect`, `zoom_fit`, `_apply_zoom_and_center` origin, or `SAFE_MARGIN` vs parking `fit.y`. | See lesson |
 | [UltraView Card Preview Uses Capture Aspect](pyqt-ui/2026-08-18-ultraview-preview-reading-gutter.md) | Changing UltraView card preview scaling, `QLabel#ultraViewCardImage` alignment, `_fit_card_image`, export `_draw_preview`, or `preview_reading_box`. | See lesson |
 | [Windows Sidecar Fsync Needs A Writable Handle](codex-windows-sidecar-fsync-writable-handle.md) | Changing UltraView sidecar archive persistence or its durable-write | See lesson |
+| [Windows A2L Config Paths Round Trip](windows-a2l-config-path-roundtrip.md) | Changing Acquisition config scalar encoding, parsing, or persisted A2L | See lesson |
 
 ## Selection Rules
 
