@@ -153,10 +153,19 @@ class FreeGridGesture:
         "_session",
         "_marquee",
         "_plan_fingerprint",
+        "_gesture_id",
     )
+    _next_gesture_id: ClassVar[int] = 0
     _session: GestureSession | None = field(default=None, init=False)
     _marquee: MarqueeSession | None = field(default=None, init=False)
     _plan_fingerprint: tuple | None = field(default=None, init=False)
+    _gesture_id: int = field(default=0, init=False)
+
+    def gesture_id(self) -> int:
+        return int(self._gesture_id)
+
+    def candidate_fingerprint(self) -> tuple | None:
+        return self._plan_fingerprint
 
     def session(self) -> GestureSession | None:
         return self._session
@@ -230,6 +239,8 @@ class FreeGridGesture:
         layout_revision: int = 0,
     ) -> None:
         origins = dict(group_origins) if group_origins else {ref: origin}
+        type(self)._next_gesture_id += 1
+        self._gesture_id = type(self)._next_gesture_id
         self._plan_fingerprint = None
         self._session = GestureSession(
             ref=ref,

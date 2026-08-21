@@ -2,7 +2,9 @@
 
 The persisted object renderer deliberately knows nothing about a widget tree.
 This small adapter is the on-screen counterpart: it projects injected author
-objects, draft guides, and selection chrome into a transparent sibling layer.
+objects, draft guides, and static ink into a transparent sibling layer.
+Card/author selection handles, move/resize targets, and other transient
+chrome paint on the viewport-sized ``ViewportFeedbackSurface``.
 It never handles mouse or keyboard input.  Interactive editors must instead
 be direct children of :class:`FreeGridBoard`, so IME, right-button pan, and
 the Page-level viewport router retain their normal Qt delivery path.

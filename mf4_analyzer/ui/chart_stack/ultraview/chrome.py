@@ -58,12 +58,20 @@ from .author_chrome import (
     ConnectorPopover,
     DrawPopover,
     FormatChoiceFlyout,
+    PointerPopover,
     SelectionToolbar,
     ShapePopover,
     StickyPopover,
     ToolFlyoutSurface,
 )
-from .author_tools import DrawPreset, DEFAULT_DRAW_SUBTOOL, normalize_draw_subtool
+from .author_tools import (
+    DEFAULT_DRAW_SUBTOOL,
+    DrawPreset,
+    POINTER_MODE_LASER,
+    POINTER_MODE_MOUSE,
+    normalize_draw_subtool,
+    normalize_pointer_mode,
+)
 from .floating_layout import (
     BOARD_ISLAND_MAX_WIDTH,
     DEFAULT_NAVIGATION_ISLAND_SIZE,
@@ -96,13 +104,15 @@ AUTHOR_TOOLS = (
     AUTHOR_TOOL_DRAW,
 )
 # Connector is chosen from the Shapes flyout. Draw is a first-class rail tool.
-# Select remains an internal default; the release rail does not show a button.
+# Pointer (internal owner: select) is a visible FreeGrid mode, not an author object.
 RELEASE_AUTHOR_TOOLS: tuple[str, ...] = (
+    AUTHOR_TOOL_SELECT,
     AUTHOR_TOOL_STICKY,
     AUTHOR_TOOL_TEXT,
     AUTHOR_TOOL_SHAPES,
     AUTHOR_TOOL_DRAW,
 )
+OVERLAY_AUTHOR_POINTER = "author_pointer"
 RAIL_BUTTON_SIZE = 40
 RAIL_BUTTON_SIZE_COMPACT = 36
 RAIL_ICON_SIZE = 20
@@ -137,10 +147,20 @@ _BOARD_CREATE_HEIGHT = 28
 _BOARD_LIST_BOTTOM_PAD = 6
 
 
-def _author_tool_icon(tool: str, *, active: bool, draw_subtool: str = "pen") -> QIcon:
+def _author_tool_icon(
+    tool: str,
+    *,
+    active: bool,
+    draw_subtool: str = "pen",
+    pointer_mode: str = POINTER_MODE_MOUSE,
+) -> QIcon:
     """Return one compact outline icon. Draw stays a canonical pen on the rail."""
     del draw_subtool
-    color = UV_PRESENTATION_ICON if active else UV_MUTED
+    color = UV_SELECTED if active else UV_MUTED
+    if str(tool) == AUTHOR_TOOL_SELECT and (
+        active and normalize_pointer_mode(pointer_mode) == POINTER_MODE_LASER
+    ):
+        return Icons.ultraview_author_laser(color)
     factories = {
         AUTHOR_TOOL_SELECT: Icons.ultraview_author_select,
         AUTHOR_TOOL_STICKY: Icons.ultraview_author_sticky,
@@ -166,33 +186,82 @@ class _AuthorToolButton(QToolButton):
         super().mouseDoubleClickEvent(event)
 
 
+class _PointerToolButton(_AuthorToolButton):
+    """One 40/36px tile: main area applies the last pointer mode, caret opens the popover."""
+
+    menu_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._caret_pressed = False
+
+    def _caret_rect(self) -> QRect:
+        width = 11 if self.width() >= 38 else 10
+        return QRect(max(0, self.width() - width), 0, width, self.height())
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self.isEnabled() and self._caret_rect().contains(event.pos()):
+            self._caret_pressed = True
+            event.accept()
+            return
+        self._caret_pressed = False
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._caret_pressed:
+            self._caret_pressed = False
+            if self.isEnabled() and self._caret_rect().contains(event.pos()):
+                self.menu_requested.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        caret = self._caret_rect()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        ink = QColor(self.palette().color(QPalette.ButtonText))
+        if not ink.isValid() or ink.alpha() == 0:
+            ink = UV_MUTED
+        painter.setPen(QPen(ink, 1.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        cx = float(caret.center().x())
+        cy = float(caret.center().y())
+        painter.drawLine(QPointF(cx - 2.4, cy - 1.2), QPointF(cx, cy + 1.4))
+        painter.drawLine(QPointF(cx + 2.4, cy - 1.2), QPointF(cx, cy + 1.4))
+        painter.end()
+
+
 def board_popover_height(rows: int) -> int:
     """Exact popover height for ``rows`` Board lines plus the create row."""
     count = max(1, int(rows))
     list_h = count * BOARD_ROW_HEIGHT + max(0, count - 1) + _BOARD_LIST_BOTTOM_PAD
     return _BOARD_POPOVER_MARGIN * 2 + list_h + _BOARD_POPOVER_GAP + _BOARD_CREATE_HEIGHT
 
-# UltraView-local Titanium Amber palette.  Keep this role mapping isolated
-# from CONTROL_COLORS: the rest of the Analyzer must not inherit this canvas.
+# UltraView-local visual contract. Keep this role mapping isolated from
+# CONTROL_COLORS: the rest of the Analyzer must not inherit this canvas.
 UV_CANVAS = QColor(titanium_color("canvas"))
 UV_CANVAS_DEEP = QColor(titanium_color("canvas_deep"))
 UV_DOT = QColor(44, 82, 93, 43)
 UV_GRID = QColor(38, 74, 86, 26)
-UV_GLOW_TEAL = QColor(31, 104, 128, 41)
-UV_GLOW_AMBER = QColor(238, 151, 58, 33)
-UV_GLOW_COPPER = QColor(197, 76, 64, 20)
+UV_GLOW_TEAL = QColor(31, 104, 128, 28)
+UV_GLOW_SELECTED = QColor(66, 98, 255, 22)
+UV_GLOW_MIST = QColor(36, 105, 124, 18)
 UV_PAPER = QColor(titanium_color("surface_solid"))
 UV_BRAND = QColor(titanium_color("brand"))
 UV_BRAND_DEEP = QColor(titanium_color("brand_deep"))
-UV_AMBER = QColor(titanium_color("amber"))
+UV_SELECTED = QColor(titanium_color("selected"))
+UV_SELECTED_INK = QColor(titanium_color("selected_ink"))
+UV_SELECTED_WASH = QColor(titanium_color("selected_wash"))
 UV_DANGER = QColor(titanium_color("danger"))
+UV_WARNING = QColor(titanium_color("warning"))
 UV_WASH = QColor(titanium_color("surface_tint"))
 UV_LINE = QColor(50, 86, 97, 59)
 UV_LINE_STRONG = QColor(42, 78, 89, 94)
 UV_FROST = QColor(255, 255, 254, 118)
 UV_INK = QColor(titanium_color("ink"))
 UV_MUTED = QColor(titanium_color("muted"))
-UV_PRESENTATION_ICON = QColor("#FFFFFF")
+UV_PRESENTATION_ICON = UV_SELECTED
 # Compatibility seam for the card module.  Keep only this import alias while
 # widgets moves to the role palette; all paint decisions above use ``UV_*``.
 ULTRAVIEW_MUTED = UV_MUTED
@@ -245,8 +314,8 @@ _LAYOUT_THUMB_SCHEMES: dict[str, tuple[tuple[float, float, float, float], ...]] 
 
 
 def _ultraview_icon_color(*, active: bool) -> QColor:
-    """Rest icons stay muted; mode/panel-open icons pick up titanium blue."""
-    return QColor(UV_BRAND if active else UV_MUTED)
+    """Rest icons stay muted; current-tool / open-panel icons pick up selected blue."""
+    return QColor(UV_SELECTED if active else UV_MUTED)
 
 
 def layout_thumbnail_icon(layout_id: str) -> QIcon:
@@ -566,8 +635,8 @@ class CanvasHost(QFrame):
             self.set_overlay_geometry(key, QRect(12, 12, hint.width(), hint.height()))
         self._active_overlay = key
         widget.show()
-        widget.raise_()
         _set_flag(widget, "active", True)
+        self.reassert_stacking()
         if focus:
             self._focus_first_control(widget)
         self.overlay_opened.emit(key)
@@ -608,6 +677,25 @@ class CanvasHost(QFrame):
         widget.setGeometry(clamped)
         return clamped
 
+    def reassert_stacking(self, extra: Sequence[QWidget] = ()) -> None:
+        """Restore the host z-order. The active overlay always finishes on top.
+
+        Board canvas stays at the bottom. Persistent chrome (rail, islands,
+        selection toolbar) sits above it. The one transient overlay is last
+        so cards, ghost paint, and selection chrome cannot cover a flyout.
+        """
+        if self._canvas is not None:
+            self._canvas.lower()
+        for widget in extra:
+            if widget is not None and widget.isVisible():
+                widget.raise_()
+        key = self._active_overlay
+        if key is None:
+            return
+        overlay = self._overlays.get(key)
+        if overlay is not None and overlay.isVisible():
+            overlay.raise_()
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         if self._canvas is not None:
@@ -615,9 +703,10 @@ class CanvasHost(QFrame):
         for key, overlay in self._overlays.items():
             if overlay.isVisible():
                 self.set_overlay_geometry(key, overlay.geometry())
+        self.reassert_stacking()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        """Paint the cached Titanium Amber canvas beneath all Qt children."""
+        """Paint the cached UltraView canvas beneath all Qt children."""
         painter = QPainter(self)
         size = self.size()
         dpr = self._canvas_dpr()
@@ -651,8 +740,8 @@ class CanvasHost(QFrame):
         painter.fillRect(rect, base)
         for center, radius, color in (
             (QPointF(width * 0.16, height * 0.04), max(width, height) * 0.46, UV_GLOW_TEAL),
-            (QPointF(width * 0.88, height * 0.09), max(width, height) * 0.42, UV_GLOW_AMBER),
-            (QPointF(width * 0.64, height * 1.04), max(width, height) * 0.48, UV_GLOW_COPPER),
+            (QPointF(width * 0.88, height * 0.09), max(width, height) * 0.42, UV_GLOW_SELECTED),
+            (QPointF(width * 0.64, height * 1.04), max(width, height) * 0.48, UV_GLOW_MIST),
         ):
             glow = QRadialGradient(center, radius)
             glow.setColorAt(0.0, color)
@@ -693,7 +782,7 @@ class CanvasHost(QFrame):
             width * 0.58, height * 0.08, width * 0.73, height * 0.20, float(width), height * 0.12
         )
         horizon_gradient = QLinearGradient(0.0, 0.0, float(width), 0.0)
-        for stop, color in ((0.0, UV_BRAND), (0.55, UV_AMBER), (1.0, QColor(titanium_color("copper")))):
+        for stop, color in ((0.0, UV_BRAND), (0.55, UV_SELECTED), (1.0, UV_BRAND_DEEP)):
             faint = QColor(color)
             faint.setAlpha(36)
             horizon_gradient.setColorAt(stop, faint)
@@ -756,6 +845,8 @@ class ToolRail(QFrame):
     panel_requested = pyqtSignal(str)
     tool_requested = pyqtSignal(str)
     tool_pinned_changed = pyqtSignal(str, bool)
+    pointer_mode_requested = pyqtSignal(str)
+    pointer_menu_requested = pyqtSignal()
     free_grid_toggled = pyqtSignal(bool)
     ref_dropped = pyqtSignal(str, str)
     sync_all_requested = pyqtSignal()
@@ -767,7 +858,7 @@ class ToolRail(QFrame):
         (PANEL_UNPLACED, "Unplaced", "查看未放置的 View", Icons.ultraview_unplaced),
     )
     _CREATION_SPECS: tuple[tuple[str, str, str], ...] = (
-        (AUTHOR_TOOL_SELECT, "Select", "选择对象 (V)"),
+        (AUTHOR_TOOL_SELECT, "Pointer", "指针 (V)"),
         (AUTHOR_TOOL_STICKY, "Sticky", "添加便签贴纸 (N)"),
         (AUTHOR_TOOL_TEXT, "Text", "添加文字 (T)"),
         (AUTHOR_TOOL_SHAPES, "Shapes", "形状与连接线 (S)"),
@@ -811,13 +902,13 @@ class ToolRail(QFrame):
         self._creation_enabled = False
         self._creation_disabled_reason = "创作工具将在自由网格中可用"
         self._active_tool = AUTHOR_TOOL_SELECT
+        self._pointer_mode = POINTER_MODE_MOUSE
         self._pinned_tool: str | None = None
         self._draw_subtool = DEFAULT_DRAW_SUBTOOL
         self._group_layouts: list[QVBoxLayout] = []
         self._divider_spacers: list[QWidget] = []
         self._syncing_rail = False
-        # Release rail uses RELEASE_AUTHOR_TOOLS.  Isolated chrome tests pass
-        # AUTHOR_TOOLS to exercise the still-present widget surface.
+        # Release rail uses RELEASE_AUTHOR_TOOLS, which now includes Pointer.
         if visible_author_tools is None:
             allowed = set(RELEASE_AUTHOR_TOOLS)
         else:
@@ -914,7 +1005,7 @@ class ToolRail(QFrame):
         return self._tool_buttons.get(str(tool))
 
     def visible_author_tools(self) -> tuple[str, ...]:
-        """Tools actually constructed on this rail. Release omits Select."""
+        """Tools actually constructed on this rail. Release includes Pointer."""
         return self._visible_author_tools
 
     def visible_enabled_author_tools(self) -> tuple[str, ...]:
@@ -963,6 +1054,17 @@ class ToolRail(QFrame):
         self._pinned_tool = checked if pinned and checked != AUTHOR_TOOL_SELECT else None
         self._sync_creation_states()
 
+    def pointer_mode(self) -> str:
+        return self._pointer_mode
+
+    def set_pointer_mode(self, mode: str) -> None:
+        """Project the interaction owner's pointer mode onto the Pointer tile."""
+        checked = normalize_pointer_mode(mode)
+        if self._pointer_mode == checked:
+            return
+        self._pointer_mode = checked
+        self._sync_creation_states()
+
     def set_draw_subtool(self, tool: str) -> None:
         checked = normalize_draw_subtool(tool)
         if self._draw_subtool == checked:
@@ -972,6 +1074,9 @@ class ToolRail(QFrame):
 
     def draw_subtool(self) -> str:
         return self._draw_subtool
+
+    def make_pointer_popover(self, parent: QWidget | None = None) -> PointerPopover:
+        return PointerPopover(parent or self)
 
     def make_sticky_popover(self, parent: QWidget | None = None) -> StickyPopover:
         return StickyPopover(parent or self)
@@ -1073,12 +1178,13 @@ class ToolRail(QFrame):
         return tuple(button for button in buttons if button is not None)
 
     def _primary_fill_button(self) -> QToolButton | None:
-        """One rail tile may own the titanium-amber fill.
+        """One rail tile may own the selected-blue wash.
 
-        Priority: author active > open panel > empty-board CTA > persistent mode.
-        Filter persistence, warning dots, and count badges are never primary.
+        Priority: author active (including Pointer) > open panel > empty-board
+        CTA > persistent mode. Filter persistence, warning dots, and count
+        badges are never primary.
         """
-        if self._creation_enabled and self._active_tool != AUTHOR_TOOL_SELECT:
+        if self._creation_enabled and self._active_tool in self._tool_buttons:
             return self._tool_buttons.get(self._active_tool)
         if self._active_panel in self._buttons:
             return self._buttons[self._active_panel]
@@ -1160,7 +1266,12 @@ class ToolRail(QFrame):
             _set_flag(button, "modeActive", False)
             _set_flag(button, "panelOpen", False)
             button.setIcon(
-                _author_tool_icon(tool, active=is_active, draw_subtool=self._draw_subtool)
+                _author_tool_icon(
+                    tool,
+                    active=is_active,
+                    draw_subtool=self._draw_subtool,
+                    pointer_mode=self._pointer_mode,
+                )
             )
         if not self._syncing_rail:
             self._sync_button_states()
@@ -1204,10 +1315,19 @@ class ToolRail(QFrame):
         }
         for tool in self._visible_author_tools:
             short_name, tooltip = specs[tool]
-            button = _AuthorToolButton(self)
+            if tool == AUTHOR_TOOL_SELECT:
+                button = _PointerToolButton(self)
+                button.menu_requested.connect(self._on_pointer_menu_requested)
+            else:
+                button = _AuthorToolButton(self)
             button.setObjectName(f"ultraViewRail{short_name}Button")
             button.setIcon(
-                _author_tool_icon(tool, active=False, draw_subtool=self._draw_subtool)
+                _author_tool_icon(
+                    tool,
+                    active=False,
+                    draw_subtool=self._draw_subtool,
+                    pointer_mode=self._pointer_mode,
+                )
             )
             button.setIconSize(QSize(RAIL_ICON_SIZE, RAIL_ICON_SIZE))
             button.setToolButtonStyle(Qt.ToolButtonIconOnly)
@@ -1368,6 +1488,11 @@ class ToolRail(QFrame):
         if tool != self._active_tool:
             self.set_active_tool(tool, pinned=False)
         self.tool_requested.emit(tool)
+
+    def _on_pointer_menu_requested(self) -> None:
+        if not self._creation_enabled:
+            return
+        self.pointer_menu_requested.emit()
 
     def _on_tool_pin_requested(self, tool: str) -> None:
         checked = str(tool)

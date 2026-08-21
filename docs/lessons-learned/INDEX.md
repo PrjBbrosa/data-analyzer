@@ -207,6 +207,7 @@ lesson by default.
 | [UltraView Card Fit Hugs Current Scale](pyqt-ui/2026-08-20-ultraview-card-fit-hugs-current-scale.md) | Changing UltraView Card Fit / 「按原图比例」, `solve_card_fit`, `fit_rect_for_aspect`, first-insert auto-aspect, or spec F3. | See lesson |
 | [UltraView Preview Paints Every Plan Rect](pyqt-ui/2026-08-20-ultraview-preview-paints-every-plan-rect.md) | Changing UltraView free-grid drag/resize preview, `GhostOverlay.set_move_previews`, pointer coalescing, or collision/safety paint. | See lesson |
 | [UltraView Selection Chrome Follows Bounds](ultraview-selection-chrome-follows-bounds.md) | Changing UltraView selection toolbar placement, Card hover chrome, author flyouts, or release-rail tool visibility. | See lesson |
+| [UltraView Feedback Reprojects Only On Change](pyqt-ui/2026-08-22-ultraview-feedback-reprojects-only-on-change.md) | Changing UltraView move/resize feedback, edge auto-pan, pointer coalescing, transparent overlays, or Cocoa backing-store recovery. | See lesson |
 
 ## Selection Rules
 

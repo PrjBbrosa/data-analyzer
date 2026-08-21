@@ -3351,13 +3351,13 @@ def test_card_drag_near_viewport_edge_starts_page_edge_timer(qtbot):
     viewport = page.board_scroll_area().viewport()
     start = QPoint(16, 16)
     QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
-    edge_global = viewport.mapToGlobal(QPoint(2, max(1, viewport.height() // 2)))
-    edge_local = card.mapFromGlobal(edge_global)
     overlay = page._free_grid.ghost_overlay()
     ghost_before = overlay._ghost_rect
     bar = page.board_scroll_area().horizontalScrollBar()
     bar.setValue(bar.maximum())
     before = bar.value()
+    edge_global = viewport.mapToGlobal(QPoint(2, max(1, viewport.height() // 2)))
+    edge_local = card.mapFromGlobal(edge_global)
     _send_mouse_move(card, edge_local)
     assert page._edge_pan_timer.isActive()
     assert page._edge_pan_active
@@ -3839,7 +3839,7 @@ def test_library_width_contract_and_selected_row_gutter_have_no_crossing_rule(qt
     assert spread < 18, [pixel.name() for pixel in pixels]
 
 
-def test_library_sections_use_selected_titanium_amber_category_materials(qtbot, qapp):
+def test_library_sections_use_selected_analysis_category_materials(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     harness = _Harness(qtbot)

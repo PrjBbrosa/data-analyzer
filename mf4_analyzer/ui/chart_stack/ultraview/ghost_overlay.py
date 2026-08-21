@@ -1,4 +1,9 @@
-"""Board-top overlay: ghost preview, highlight, handles, replace ring, marquee.
+"""Template ``BoardGrid`` overlay: ghost preview, highlight, replace ring.
+
+FreeGrid move/resize/selection chrome lives on the viewport-sized
+``ViewportFeedbackSurface``. Do not reattach this class to ``FreeGridBoard``:
+Cocoa cannot stably clip-update a translucent sibling as large as the elastic
+workspace. This overlay stays limited to the template grid widget.
 
 Transparent background: ``WA_TranslucentBackground`` disables QSS on this
 widget, so ``paintEvent`` always fills (Gotchas). Mouse events pass through;
@@ -43,7 +48,7 @@ _GhostItem = tuple[QImage | QPixmap | None, QRect, str]
 
 
 class GhostOverlay(QWidget):
-    """Single overlay owned by ``FreeGridBoard``."""
+    """Limited overlay owned by template ``BoardGrid``, not FreeGrid."""
 
     _owned_names = (
         "_ghosts",

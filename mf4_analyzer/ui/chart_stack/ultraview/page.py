@@ -110,6 +110,7 @@ from .feedback import (
     FeedbackThrottle,
     text_for_key,
 )
+from .viewport_feedback import BoardToViewportTransform
 from .free_grid import hit_handle, screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
 from .author_edits import copy_author_objects
@@ -148,6 +149,8 @@ from .author_tools import (
     TOOL_SHAPES,
     TOOL_CONNECTOR,
     TOOL_DRAW,
+    POINTER_MODE_LASER,
+    POINTER_MODE_MOUSE,
     DRAW_ERASER,
     DRAW_LASSO,
     HIT_AUTHOR,
@@ -234,6 +237,7 @@ from .chrome import (
     OVERLAY_AUTHOR_CONNECTOR,
     OVERLAY_AUTHOR_DRAW,
     OVERLAY_AUTHOR_FORMAT,
+    OVERLAY_AUTHOR_POINTER,
     OVERLAY_AUTHOR_SHAPES,
     OVERLAY_AUTHOR_STICKY,
     PANEL_BOARDS,
@@ -357,6 +361,7 @@ _BOARD_MENU_CHROME_NAMES = frozenset(
         "ultraViewEmptyBoardHint",
         "ultraViewCardContextIsland",
         "ultraViewGhostOverlay",
+        "ultraViewViewportFeedback",
         "ultraViewBoardPopover",
         "ultraViewLayoutPopover",
     }
@@ -478,6 +483,10 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._monotonic = time.monotonic
         self._edge_pan_reentrant = False
         self._edge_pan_global_pos: QPoint | None = None
+        self._edge_gesture_token = 0
+        self._diag_reproject_calls = 0
+        self._feedback_transform_token = None
+        self._feedback_transform_revision = 0
         self._smooth_timer = QTimer(self)
         self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
         self._smooth_timer.setSingleShot(True)
@@ -565,6 +574,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._overview.hide()
         self._minimap = FreeGridMinimap(self._board_scroll.viewport())
         self._minimap.hide()
+        self._free_grid.bind_feedback_surface(self._board_scroll.viewport())
 
         self._tool_rail = ToolRail(
             self._canvas_host, visible_author_tools=visible_author_tools
@@ -632,6 +642,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._tool_rail.ref_dropped.connect(self._on_tray_drop)
         self._tool_rail.tool_requested.connect(self._on_author_tool_requested)
         self._tool_rail.tool_pinned_changed.connect(self._on_author_tool_pinned)
+        self._tool_rail.pointer_menu_requested.connect(self._on_pointer_menu_requested)
+        self._pointer_popover = self._tool_rail.make_pointer_popover(self._canvas_host)
+        self._pointer_popover.mode_selected.connect(self._on_pointer_mode_requested)
         self._sticky_popover = self._tool_rail.make_sticky_popover(self._canvas_host)
         self._sticky_popover.palette_selected.connect(self._on_sticky_palette_selected)
         self._sticky_popover.pin_requested.connect(self._on_sticky_pin_requested)
@@ -776,6 +789,14 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         workspace_gesture = getattr(self._free_grid, "workspace_gesture_changed", None)
         if workspace_gesture is not None:
             workspace_gesture.connect(self._on_workspace_gesture_changed)
+        active_changed = getattr(
+            self._free_grid, "workspace_gesture_active_changed", None
+        )
+        if active_changed is not None:
+            active_changed.connect(self._on_workspace_gesture_active_changed)
+        pointer_changed = getattr(self._free_grid, "workspace_pointer_changed", None)
+        if pointer_changed is not None:
+            pointer_changed.connect(self._on_workspace_pointer_changed)
         self._free_grid.destroyed.connect(self._stop_edge_pan)
         self.resolve_insert_span = None
         self.can_undo_auto_arrange = None
@@ -1257,35 +1278,36 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._global_island.setGeometry(_qrect(layout.global_island))
         self._status_island.setGeometry(_qrect(layout.status_island))
         self._navigation_island.setGeometry(_qrect(layout.navigation_island))
-        for island in (
+        self._sync_empty_board_cue()
+        if self._active_panel == PANEL_BOARDS:
+            self._canvas_host.set_overlay_geometry(PANEL_BOARDS, self._board_popover_rect())
+            self._board_popover.relayout()
+        elif self._active_panel is not None and layout.overlay is not None:
+            self._canvas_host.set_overlay_geometry(self._active_panel, _qrect(layout.overlay))
+        if self._overview.isVisible():
+            self._overview.setGeometry(self._board_scroll.geometry())
+            self._card_context.hide()
+        self._sync_feedback_surface()
+        self._position_minimap(layout)
+        if not self._overview.isVisible():
+            self._position_card_context()
+            self._refresh_author_toolbar()
+        self._reassert_host_stacking()
+
+    def _reassert_host_stacking(self) -> None:
+        extra = [
             self._tool_rail,
             self._board_island,
             self._global_island,
             self._status_island,
             self._navigation_island,
-        ):
-            island.raise_()
-        self._sync_empty_board_cue()
-        if self._active_panel == PANEL_BOARDS:
-            self._canvas_host.set_overlay_geometry(PANEL_BOARDS, self._board_popover_rect())
-            overlay = self._canvas_host.overlay(PANEL_BOARDS)
-            if overlay is not None:
-                overlay.raise_()
-            self._board_popover.relayout()
-        elif self._active_panel is not None and layout.overlay is not None:
-            self._canvas_host.set_overlay_geometry(self._active_panel, _qrect(layout.overlay))
-            overlay = self._canvas_host.overlay(self._active_panel)
-            if overlay is not None:
-                overlay.raise_()
-        if self._overview.isVisible():
-            self._overview.setGeometry(self._board_scroll.geometry())
-            self._overview.raise_()
-            self._navigation_island.raise_()
-            self._card_context.hide()
-        self._position_minimap(layout)
-        if not self._overview.isVisible():
-            self._position_card_context()
-            self._refresh_author_toolbar()
+            getattr(self, "_empty_board_hint", None),
+            getattr(self, "_overview", None),
+            getattr(self, "_minimap", None),
+            getattr(self, "_selection_toolbar", None),
+            getattr(self, "_card_context", None),
+        ]
+        self._canvas_host.reassert_stacking(tuple(item for item in extra if item is not None))
 
     def _toggle_panel(self, panel_id: str) -> None:
         if self._active_panel == panel_id:
@@ -1329,7 +1351,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         x = self._tool_rail.geometry().right() + 14
         y = center.y() - hint.height() // 2
         hint.move(x, max(0, y))
-        hint.raise_()
+        self._reassert_host_stacking()
 
     def _board_popover_rect(self) -> QRect:
         island = self._board_island.geometry()
@@ -1474,7 +1496,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             origin = button.mapToGlobal(QPoint(0, button.height()))
         else:
             origin = card.mapToGlobal(QPoint(card.width(), 0))
-        menu.exec_(origin)
+        self._exec_native_menu(menu, origin, trigger=button)
 
     def _position_card_context(self) -> None:
         if self._presentation or self._overview.isVisible() or self._selected is None or not self._card_context.isVisible():
@@ -1499,7 +1521,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             ),
         )
         self._card_context.setGeometry(_qrect(placed.rect))
-        self._card_context.raise_()
+        self._reassert_host_stacking()
 
     def _extent_signature(self, board=None) -> tuple[int, int, int, int]:
         target = self._board if board is None else board
@@ -1660,8 +1682,19 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self.fit_on_open()
 
     def _on_workspace_gesture_changed(self, active: bool, global_pos=None) -> None:
-        """Widget contract: Page owns edge-pan lifetime and all timer work."""
+        """Compat lifetime+optional first pointer. Page does not replan here."""
+        if not bool(active):
+            self._on_workspace_gesture_active_changed(False, self._edge_gesture_token)
+            return
+        if global_pos is not None:
+            self._edge_pan_global_pos = QPoint(global_pos)
+        self._on_workspace_gesture_active_changed(True, self._edge_gesture_token)
+        if global_pos is not None:
+            self._on_workspace_pointer_changed(self._edge_gesture_token, global_pos)
+
+    def _on_workspace_gesture_active_changed(self, active: bool, gesture_id: int) -> None:
         wanted = bool(active)
+        self._edge_gesture_token = int(gesture_id or 0)
         if not wanted:
             self._stop_edge_pan()
             return
@@ -1671,14 +1704,17 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._edge_copy = ""
         self._edge_pan_active = True
         self._refresh_workspace_extent()
+        self._sync_feedback_surface()
+        self._sync_edge_timer_for_pointer()
+
+    def _on_workspace_pointer_changed(self, gesture_id: int, global_pos=None) -> None:
+        if not self._edge_pan_active:
+            return
+        if int(gesture_id or 0) not in (0, int(self._edge_gesture_token)):
+            return
         if global_pos is not None:
-            # Keep the last event position for timer ticks.  This is the
-            # authoritative location during a native drag and avoids a stale
-            # platform cursor clearing a replacement hover between events.
             self._edge_pan_global_pos = QPoint(global_pos)
-            self._edge_pan_tick_for_global(global_pos)
-        if not self._edge_pan_timer.isActive():
-            self._edge_pan_timer.start()
+        self._sync_edge_timer_for_pointer()
 
     def _now(self) -> float:
         clock = getattr(self, "_monotonic", None)
@@ -1710,7 +1746,74 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if not self._edge_pan_active or self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
             self._stop_edge_pan()
             return
-        self._edge_pan_tick_for_global(self._edge_pan_global_pos or QCursor.pos())
+        self._edge_pan_tick_for_global(self._edge_pan_global_pos)
+
+    def _workspace_transform_token(self) -> tuple:
+        extent = self._workspace_extent
+        extent_key = (
+            None
+            if extent is None
+            else (extent.column, extent.row, extent.column_span, extent.row_span)
+        )
+        return (
+            int(self._board_scroll.horizontalScrollBar().value()),
+            int(self._board_scroll.verticalScrollBar().value()),
+            extent_key,
+            float(self._viewport.zoom()),
+        )
+
+    def _pointer_edge_velocity(self, global_pos) -> tuple[float, float]:
+        if global_pos is None:
+            return (0.0, 0.0)
+        viewport = self._board_scroll.viewport()
+        local = viewport.mapFromGlobal(global_pos)
+        return edge_pan_velocity(
+            (float(local.x()), float(local.y())),
+            (float(viewport.width()), float(viewport.height())),
+        )
+
+    def _sync_edge_timer_for_pointer(self) -> None:
+        pos = self._edge_pan_global_pos
+        if pos is None or not self._edge_pan_active:
+            if self._edge_pan_timer.isActive():
+                self._edge_pan_timer.stop()
+            return
+        velocity = self._pointer_edge_velocity(pos)
+        self._sync_workspace_edge_hint(pos)
+        if velocity == (0.0, 0.0):
+            if self._edge_pan_timer.isActive():
+                self._edge_pan_timer.stop()
+            return
+        if not self._edge_pan_timer.isActive():
+            self._edge_pan_timer.start()
+
+    def _sync_feedback_surface(self) -> None:
+        free = getattr(self, "_free_grid", None)
+        if free is None:
+            return
+        overlay = getattr(free, "ghost_overlay", None)
+        surface = overlay() if callable(overlay) else None
+        if surface is None:
+            return
+        sync = getattr(surface, "sync_host_geometry", None)
+        if callable(sync):
+            sync()
+        apply_transform = getattr(surface, "apply_transform", None)
+        if callable(apply_transform):
+            viewport = self._board_scroll.viewport()
+            origin = free.mapFrom(viewport, QPoint(0, 0))
+            token = self._workspace_transform_token()
+            if token != self._feedback_transform_token:
+                self._feedback_transform_token = token
+                self._feedback_transform_revision += 1
+            apply_transform(
+                BoardToViewportTransform(
+                    revision=self._feedback_transform_revision,
+                    viewport_in_board=(int(origin.x()), int(origin.y())),
+                )
+            )
+        if self._minimap.isVisible():
+            self._minimap.raise_()
 
     def _edge_pan_tick_for_global(self, global_pos) -> None:
         if global_pos is None or self._edge_pan_reentrant:
@@ -1722,27 +1825,32 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._edge_pan_reentrant = False
 
     def _edge_pan_tick_for_global_unlocked(self, global_pos) -> None:
-        viewport = self._board_scroll.viewport()
-        local = viewport.mapFromGlobal(global_pos)
-        velocity = edge_pan_velocity(
-            (float(local.x()), float(local.y())),
-            (float(viewport.width()), float(viewport.height())),
-        )
-        if velocity != (0.0, 0.0):
-            # Expand before writing the bars so an edge drag never hits an
-            # invisible scrollbar wall.  The canvas re-layout remains runtime-only.
-            changed = self._refresh_workspace_extent()
-            if changed:
-                self._sync_board_stack_geometry(self._free_grid)
-            horizontal = self._board_scroll.horizontalScrollBar()
-            vertical = self._board_scroll.verticalScrollBar()
-            horizontal.setValue(int(round(horizontal.value() + velocity[0])))
-            vertical.setValue(int(round(vertical.value() + velocity[1])))
-            self._restart_smooth_timer()
-        refresh = getattr(self._free_grid, "refresh_workspace_gesture", None)
-        if callable(refresh):
-            refresh(global_pos)
+        velocity = self._pointer_edge_velocity(global_pos)
+        if velocity == (0.0, 0.0):
+            if self._edge_pan_timer.isActive():
+                self._edge_pan_timer.stop()
+            self._sync_workspace_edge_hint(global_pos)
+            self._sync_feedback_surface()
+            return
+        old_token = self._workspace_transform_token()
+        changed = self._refresh_workspace_extent()
+        if changed:
+            self._sync_board_stack_geometry(self._free_grid)
+        horizontal = self._board_scroll.horizontalScrollBar()
+        vertical = self._board_scroll.verticalScrollBar()
+        horizontal.setValue(int(round(horizontal.value() + velocity[0])))
+        vertical.setValue(int(round(vertical.value() + velocity[1])))
+        self._restart_smooth_timer()
+        if self._workspace_transform_token() == old_token:
+            self._sync_workspace_edge_hint(global_pos)
+            self._sync_feedback_surface()
+            return
+        reproject = getattr(self._free_grid, "reproject_after_viewport_change", None)
+        if callable(reproject):
+            self._diag_reproject_calls += 1
+            reproject(global_pos)
         self._sync_workspace_edge_hint(global_pos)
+        self._sync_feedback_surface()
 
     def _viewport_rect_in_board(self) -> QRect:
         viewport = self._board_scroll.viewport()
@@ -1823,6 +1931,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _on_board_scrolled(self, _value: int = 0) -> None:
         if self._restoring_viewport or self._rebasing_extent:
             return
+        self._sync_feedback_surface()
         self._persist_viewport_to_board()
 
     def set_board_zoom(self, zoom: float, cursor_in_viewport=None) -> None:
@@ -2280,6 +2389,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         # canvas's new logical size back to the stack so first paint shows the
         # cards instead of an empty dotted stage.
         self._sync_board_stack_geometry(self._active_canvas())
+        self._sync_feedback_surface()
         if self._pending_fit and self._board_scroll.viewport().width() > 1:
             self._pending_fit = False
             self._apply_initial_viewport()
@@ -2907,6 +3017,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if self._format_picker.isVisible() or self._format_picker_key:
             self._close_format_picker()
             return True
+        if self._interaction.is_laser_active():
+            self._apply_pointer_mode(POINTER_MODE_MOUSE)
+            return True
         if self._interaction.active_tool() != TOOL_SELECT:
             self._interaction.set_active_tool(TOOL_SELECT)
             self._sync_tool_rail_from_controller()
@@ -3087,10 +3200,27 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _popup_board_context_menu(self, global_pos: QPoint) -> None:
         self._close_board_context_menu()
+        self._canvas_host.close_active_overlay(restore_focus=False)
         menu = self.make_board_context_menu()
         menu.aboutToHide.connect(self._on_board_context_menu_hidden)
         self._board_context_menu = menu
         menu.popup(global_pos)
+
+    def _exec_native_menu(self, menu, global_pos: QPoint, *, trigger=None) -> None:
+        self._canvas_host.close_active_overlay(restore_focus=False)
+        if trigger is not None:
+            menu.aboutToHide.connect(partial(self._restore_menu_trigger, trigger))
+        menu.exec_(global_pos)
+
+    def _restore_menu_trigger(self, trigger) -> None:
+        if trigger is None:
+            return
+        try:
+            visible = trigger.isVisible() and trigger.isEnabled()
+        except RuntimeError:
+            return
+        if visible:
+            trigger.setFocus(Qt.OtherFocusReason)
 
     def _close_board_context_menu(self) -> None:
         menu = self._board_context_menu
@@ -3424,6 +3554,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _author_flyouts(self):
         return (
+            self._pointer_popover,
             self._sticky_popover,
             self._shape_popover,
             self._connector_popover,
@@ -3432,6 +3563,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _register_author_flyouts(self) -> None:
         for overlay_id, widget, tool in (
+            (OVERLAY_AUTHOR_POINTER, self._pointer_popover, TOOL_SELECT),
             (OVERLAY_AUTHOR_STICKY, self._sticky_popover, TOOL_STICKY),
             (OVERLAY_AUTHOR_SHAPES, self._shape_popover, TOOL_SHAPES),
             (OVERLAY_AUTHOR_DRAW, self._draw_popover, TOOL_DRAW),
@@ -3463,6 +3595,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         height = min(max(1, size.height()), safe.height())
         rail = self._tool_rail.geometry()
         x = rail.right() + OVERLAY_GAP
+        if x + width > safe.right():
+            x = rail.left() - OVERLAY_GAP - width
         y = button.mapTo(self._canvas_host, QPoint(0, 0)).y() if button is not None else safe.top()
         if y + height > safe.bottom():
             y = safe.bottom() - height
@@ -3531,9 +3665,44 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._toggle_tool_flyout(tool)
             return
         self._close_author_flyouts()
+        if tool == TOOL_SELECT:
+            self._apply_pointer_mode(self._interaction.pointer_mode())
+            return
         self._interaction.set_active_tool(tool)
         self._sync_tool_rail_from_controller()
         self._sync_tool_cursor()
+
+    def _on_pointer_menu_requested(self) -> None:
+        if not self._free_grid.creation_allowed():
+            return
+        if self._pointer_popover.isVisible():
+            self._pointer_popover.close()
+            return
+        self._show_pointer_popover()
+
+    def _on_pointer_mode_requested(self, mode: str) -> None:
+        self._apply_pointer_mode(mode)
+        if self._pointer_popover.isVisible():
+            self._pointer_popover.close()
+
+    def _apply_pointer_mode(self, mode: str) -> None:
+        self._close_author_flyouts(keep=self._pointer_popover)
+        self._interaction.set_pointer_mode(mode)
+        self._interaction.set_active_tool(TOOL_SELECT)
+        self._sync_tool_rail_from_controller()
+        self._sync_tool_cursor()
+        self._refresh_author_toolbar()
+        self._free_grid.sync_laser_overlay()
+
+    def _show_pointer_popover(self) -> None:
+        button = self._tool_rail.tool_button(TOOL_SELECT)
+        if button is None:
+            return
+        self._pointer_popover.set_mode(self._interaction.pointer_mode(), emit=False)
+        self._open_author_flyout(OVERLAY_AUTHOR_POINTER, self._pointer_popover, button)
+
+    def pointer_popover(self):
+        return self._pointer_popover
 
     def _on_author_tool_pinned(self, tool: str, pinned: bool) -> None:
         self._interaction.set_active_tool(tool, pinned=bool(pinned))
@@ -3609,6 +3778,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         pinned = self._interaction.pinned_tool() == tool and tool != TOOL_SELECT
         try:
             self._tool_rail.set_draw_subtool(self._interaction.last_draw_subtool())
+            self._tool_rail.set_pointer_mode(self._interaction.pointer_mode())
             self._tool_rail.set_active_tool(rail_tool, pinned=pinned)
         except ValueError:
             return
@@ -3616,7 +3786,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _on_select_tool_shortcut(self) -> None:
         if self._text_field_has_focus() or not self._tool_rail.visible_author_tools():
             return
-        self._on_author_tool_requested(TOOL_SELECT)
+        self._apply_pointer_mode(POINTER_MODE_MOUSE)
 
     def _on_sticky_tool_shortcut(self) -> None:
         if self._text_field_has_focus() or not self._free_grid.creation_allowed():
@@ -3713,6 +3883,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _sync_tool_cursor(self) -> None:
         self._free_grid.sync_tool_cursor()
+        self._free_grid.sync_laser_overlay()
         if (
             self._draw_create_armed()
             and not self._viewport.is_panning()
@@ -3782,7 +3953,11 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             action.triggered.connect(partial(self._on_more_action, key))
         if menu.actions():
             button = toolbar.more_button()
-            menu.popup(button.mapToGlobal(QPoint(0, button.height())))
+            self._exec_native_menu(
+                menu,
+                button.mapToGlobal(QPoint(0, button.height())),
+                trigger=button,
+            )
 
     def _on_more_action(self, key: str, _checked: bool = False) -> None:
         self._on_selection_format_requested(key, True)
@@ -4379,23 +4554,28 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _sync_authoring_availability(self) -> None:
         """Gate creation chrome; unfinished tools stay hidden on the release rail."""
         if not self._tool_rail.visible_author_tools():
-            self._tool_rail.set_creation_enabled(False, "创作工具尚未启用")
-            self._free_grid.set_creation_allowed(False)
+            self._disable_authoring("创作工具尚未启用")
             return
         if self._presentation:
-            self._tool_rail.set_creation_enabled(False, "演示模式中不能创建")
-            self._free_grid.set_creation_allowed(False)
+            self._disable_authoring("演示模式中不能创建")
             return
         if self._overview.isVisible():
-            self._tool_rail.set_creation_enabled(False, "整板概览中不能创建")
-            self._free_grid.set_creation_allowed(False)
+            self._disable_authoring("整板概览中不能创建")
             return
         if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
-            self._tool_rail.set_creation_enabled(False, "创作工具仅在自由网格中可用")
-            self._free_grid.set_creation_allowed(False)
+            self._disable_authoring("创作工具仅在自由网格中可用")
             return
         self._tool_rail.set_creation_enabled(True)
         self._free_grid.set_creation_allowed(True)
+        self._free_grid.sync_laser_overlay()
+
+    def _disable_authoring(self, reason: str) -> None:
+        if self._interaction.is_laser_active():
+            self._interaction.set_pointer_mode(POINTER_MODE_MOUSE)
+            self._sync_tool_rail_from_controller()
+        self._tool_rail.set_creation_enabled(False, reason)
+        self._free_grid.set_creation_allowed(False)
+        self._free_grid.sync_laser_overlay()
 
     def _refresh_card_context(self) -> None:
         """Card actions now live on each card; the floating island stays hidden."""
@@ -4467,7 +4647,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         top = min(max(safe.top(), top), safe.bottom() - bar_h)
         toolbar.setGeometry(left, top, width, bar_h)
         toolbar.show()
-        toolbar.raise_()
+        self._reassert_host_stacking()
 
     def _selection_bounds_in_host(self) -> QRect | None:
         caps = self._selection_capabilities()

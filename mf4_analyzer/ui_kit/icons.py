@@ -615,20 +615,42 @@ class Icons:
 
     @classmethod
     def ultraview_author_select(cls, color=None):
-        """Outline pointer for isolated chrome tests that still show Select."""
+        """B2 outline pointer: 14–16px ink box, rounded 1.7 stroke, upper-left."""
         c = color or GRAY
 
         def draw(p):
             path = QPainterPath()
-            path.moveTo(5.2, 3.6)
-            path.lineTo(5.2, 16.2)
+            path.moveTo(5.4, 3.8)
+            path.lineTo(5.4, 16.0)
             path.lineTo(8.4, 13.2)
-            path.lineTo(11.2, 17.2)
-            path.lineTo(13.0, 16.2)
-            path.lineTo(10.2, 12.2)
-            path.lineTo(14.8, 12.2)
+            path.lineTo(11.0, 16.6)
+            path.lineTo(12.6, 15.6)
+            path.lineTo(10.0, 12.2)
+            path.lineTo(14.6, 12.2)
             path.closeSubpath()
             p.drawPath(path)
+
+        return _line_icon(draw, c, size=20)
+
+    @classmethod
+    def ultraview_author_laser(cls, color=None):
+        """Pointer plus a small focus dot. Same stroke as the author rail set."""
+        c = color or GRAY
+
+        def draw(p):
+            path = QPainterPath()
+            path.moveTo(4.8, 4.4)
+            path.lineTo(4.8, 15.4)
+            path.lineTo(7.6, 12.8)
+            path.lineTo(10.0, 16.0)
+            path.lineTo(11.6, 15.0)
+            path.lineTo(9.2, 11.8)
+            path.lineTo(13.4, 11.8)
+            path.closeSubpath()
+            p.drawPath(path)
+            p.setBrush(c)
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QRectF(13.8, 3.6, 3.2, 3.2))
 
         return _line_icon(draw, c, size=20)
 

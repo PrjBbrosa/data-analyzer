@@ -46,8 +46,11 @@ from .author_tools import (
     DRAW_LASSO,
     DRAW_SUBTOOLS,
     DrawPreset,
+    POINTER_MODE_LASER,
+    POINTER_MODE_MOUSE,
     is_draw_ink_subtool,
     normalize_draw_subtool,
+    normalize_pointer_mode,
 )
 
 _FLYOUT_RADIUS = 16
@@ -240,6 +243,102 @@ class ToolFlyoutSurface(QFrame):
         painter.fillPath(path, _SURFACE)
         painter.setPen(_LINE)
         painter.drawPath(path)
+
+
+class PointerPopover(ToolFlyoutSurface):
+    """Mouse / Laser pointer mode rows. Does not create author objects."""
+
+    min_width = 232
+    mode_selected = pyqtSignal(str)
+
+    _ROWS: tuple[tuple[str, str, str], ...] = (
+        (POINTER_MODE_MOUSE, "鼠标", "选择、移动、缩放"),
+        (POINTER_MODE_LASER, "激光笔", "只聚焦，不编辑、不保存"),
+    )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent, windowed=False)
+        self.setObjectName("ultraViewPointerPopover")
+        self._mode = POINTER_MODE_MOUSE
+        self._rows: dict[str, QToolButton] = {}
+        body = self.inner_layout()
+        body.setContentsMargins(8, 8, 8, 8)
+        body.setSpacing(4)
+        for mode, title, hint in self._ROWS:
+            row = QToolButton(self._content)
+            row.setObjectName("ultraViewPointerModeRow")
+            row.setProperty("pointerMode", mode)
+            row.setProperty("selected", "false")
+            row.setCheckable(True)
+            row.setAutoRaise(True)
+            row.setFocusPolicy(Qt.TabFocus)
+            row.setCursor(Qt.PointingHandCursor)
+            row.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            row.setFixedHeight(36)
+            row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            glyph = (
+                Icons.ultraview_author_laser(QColor(_SELECTION_BLUE))
+                if mode == POINTER_MODE_LASER
+                else Icons.ultraview_author_select(QColor(_SELECTION_BLUE))
+            )
+            row.setIcon(glyph)
+            row.setIconSize(QSize(18, 18))
+            inner = QHBoxLayout(row)
+            inner.setContentsMargins(36, 2, 8, 2)
+            inner.setSpacing(8)
+            copy = QVBoxLayout()
+            copy.setContentsMargins(0, 0, 0, 0)
+            copy.setSpacing(0)
+            title_label = QLabel(title, row)
+            title_label.setObjectName("ultraViewPointerModeTitle")
+            title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            hint_label = QLabel(hint, row)
+            hint_label.setObjectName("ultraViewPointerModeHint")
+            hint_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            copy.addWidget(title_label)
+            copy.addWidget(hint_label)
+            inner.addLayout(copy, 1)
+            mark = QLabel("✓", row)
+            mark.setObjectName("ultraViewPointerModeCheck")
+            mark.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            mark.setFixedWidth(14)
+            mark.setAlignment(Qt.AlignCenter)
+            inner.addWidget(mark, 0)
+            row.clicked.connect(self._on_row_clicked)
+            body.addWidget(row)
+            self._rows[mode] = row
+        self.set_mode(POINTER_MODE_MOUSE, emit=False)
+
+    def current_mode(self) -> str:
+        return self._mode
+
+    def set_mode(self, mode: str, *, emit: bool = False) -> None:
+        checked = normalize_pointer_mode(mode)
+        self._mode = checked
+        for key, row in self._rows.items():
+            selected = key == checked
+            row.setChecked(selected)
+            row.setProperty("selected", "true" if selected else "false")
+            mark = row.findChild(QLabel, "ultraViewPointerModeCheck")
+            if mark is not None:
+                mark.setText("✓" if selected else "")
+                mark.setStyleSheet(
+                    f"color: {_SELECTION_BLUE}; font-weight: 800;" if selected else "color: transparent;"
+                )
+            row.style().unpolish(row)
+            row.style().polish(row)
+        if emit:
+            self.mode_selected.emit(checked)
+
+    def row_button(self, mode: str) -> QToolButton | None:
+        return self._rows.get(str(mode))
+
+    def _on_row_clicked(self) -> None:
+        button = self.sender()
+        if not isinstance(button, QToolButton):
+            return
+        mode = str(button.property("pointerMode") or POINTER_MODE_MOUSE)
+        self.set_mode(mode, emit=True)
 
 
 class StickyPopover(ToolFlyoutSurface):

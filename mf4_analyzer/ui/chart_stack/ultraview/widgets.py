@@ -24,6 +24,7 @@ from PyQt5.QtGui import (
     QKeyEvent,
     QMouseEvent,
     QPainter,
+    QPen,
     QPixmap,
 )
 from PyQt5.QtWidgets import (
@@ -174,6 +175,7 @@ from .ghost_overlay import (
     PREVIEW_MOVER_VALID,
     PREVIEW_SAFETY_WALL,
 )
+from .viewport_feedback import ViewportFeedbackSurface
 from .compositor import compose_board, composed_slot_rects
 from .viewport import (
     QUALITY_FAST,
@@ -2616,6 +2618,7 @@ class BoardGrid(QWidget):
         self._widgets: dict[str, QWidget] = {}
         self._viewport_size = QSize(0, 0)
         self._zoom = ZOOM_DEFAULT
+        # Template-only overlay. FreeGrid paints on ViewportFeedbackSurface.
         self._overlay = GhostOverlay(self)
         self._overlay.hide()
         self._replace = ReplaceHoverController(self)
@@ -3064,11 +3067,19 @@ class FreeGridCard(UltraViewCard):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
+            parent = self.parentWidget()
+            consume = getattr(parent, "_consume_laser_pointer", None)
+            board_pos = getattr(parent, "_board_pos", None)
+            if callable(consume) and callable(board_pos):
+                mapped = QPoint(*board_pos(self, event.pos()))
+                if consume(mapped):
+                    event.accept()
+                    return
             already_selected = bool(self._model.selected)
             shift = bool(event.modifiers() & Qt.ShiftModifier)
             if not shift and not already_selected:
                 self.selected.emit(self._model.section, self._model.view_id)
-            handler = getattr(self.parentWidget(), "handle_card_mouse_press", None)
+            handler = getattr(parent, "handle_card_mouse_press", None)
             if callable(handler):
                 handler(self, event, already_selected)
             event.accept()
@@ -3120,6 +3131,47 @@ class FreeGridCard(UltraViewCard):
         super().keyPressEvent(event)
 
 
+class LaserFocusOverlay(QWidget):
+    """Transient red focus halo. Not an author object and not a theme colour."""
+
+    SIZE = 48
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewLaserFocusOverlay")
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.hide()
+
+    def set_focus(self, pos: QPoint | None) -> None:
+        if pos is None:
+            self.hide()
+            return
+        half = self.SIZE // 2
+        self.move(int(pos.x()) - half, int(pos.y()) - half)
+        self.show()
+        self.raise_()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        center = self.rect().center()
+        ring = QColor(241, 81, 81, 36)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(ring)
+        painter.drawEllipse(center, 16, 16)
+        painter.setBrush(QColor(255, 255, 255, 140))
+        painter.setPen(QPen(QColor(241, 81, 81), 2.0))
+        painter.drawEllipse(center, 7, 7)
+        painter.setPen(QPen(QColor(241, 81, 81), 1.6, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(center.x(), center.y() - 14, center.x(), center.y() + 14)
+        painter.drawLine(center.x() - 14, center.y(), center.x() + 14, center.y())
+        painter.end()
+
+
 class FreeGridBoard(QWidget):
     """Visual projection of persisted free-grid state.
 
@@ -3148,10 +3200,11 @@ class FreeGridBoard(QWidget):
     drag_finished = pyqtSignal()
     feedback_requested = pyqtSignal(str)
     replace_requested = pyqtSignal(str, str, str, str)
-    # ``active`` begins for a live move/resize/marquee/external drop and ends
-    # on every finish/cancel path.  The Page owns the edge-pan timer and reads
-    # the current cursor itself, so this is only a lifetime/pointer handoff.
+    # Lifetime and latest pointer are separate contracts. The bool/object
+    # signal remains for existing board-only tests; Page uses the typed pair.
     workspace_gesture_changed = pyqtSignal(bool, object)
+    workspace_gesture_active_changed = pyqtSignal(bool, int)
+    workspace_pointer_changed = pyqtSignal(int, object)
     author_create_requested = pyqtSignal(object)
     author_update_requested = pyqtSignal(object)
     author_delete_requested = pyqtSignal(object)
@@ -3162,6 +3215,7 @@ class FreeGridBoard(QWidget):
         self.setObjectName("ultraViewFreeGrid")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(True)
+        self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMinimumSize(240, 160)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -3193,11 +3247,15 @@ class FreeGridBoard(QWidget):
         self._workspace_gesture_active = False
         self._interaction = BoardInteractionController()
         self._gesture = FreeGridGesture(self._interaction)
-        self._overlay = GhostOverlay(self)
+        self._overlay = ViewportFeedbackSurface(self)
         self._overlay.hide()
+        self._laser_overlay = LaserFocusOverlay(self)
         self._latest_pointer_sample: tuple[tuple[int, int], bool, QPoint | None] | None = None
         self._last_pointer_sample: tuple[tuple[int, int], bool, QPoint | None] | None = None
-        self._paint_fingerprint_seen: tuple | None = None
+        self._last_consumed_candidate_fingerprint: tuple | None = None
+        self._feedback_generation = 0
+        self._diag_planner_calls = 0
+        self._diag_frame_presents = 0
         self._pointer_coalesce_timer = QTimer(self)
         self._pointer_coalesce_timer.setSingleShot(True)
         self._pointer_coalesce_timer.setInterval(0)
@@ -3504,8 +3562,21 @@ class FreeGridBoard(QWidget):
     def gesture(self) -> FreeGridGesture:
         return self._gesture
 
-    def ghost_overlay(self) -> GhostOverlay:
+    def ghost_overlay(self) -> ViewportFeedbackSurface:
         return self._overlay
+
+    def bind_feedback_surface(self, viewport: QWidget) -> None:
+        """Reparent the FreeGrid feedback surface onto the scroll viewport."""
+        self._overlay.bind_transform_host(self, viewport)
+
+    def feedback_pipeline_counts(self) -> dict[str, int]:
+        overlay = self._overlay
+        return {
+            "planner": int(self._diag_planner_calls),
+            "presents": int(getattr(overlay, "present_count", self._diag_frame_presents)),
+            "paints": int(getattr(overlay, "paint_count", 0)),
+            "generation": int(getattr(overlay, "generation", self._feedback_generation)),
+        }
 
     def workspace_safety_blocked(self) -> bool:
         """True when the live candidate would leave ``safety_grid_bounds()``."""
@@ -3534,11 +3605,10 @@ class FreeGridBoard(QWidget):
         if not self.workspace_safety_blocked() and self.cursor().shape() == Qt.ForbiddenCursor:
             self.unsetCursor()
 
-    def refresh_workspace_gesture(self, global_pos: QPoint | None) -> None:
-        """Re-resolve ghost/insert/marquee from the current pointer.
+    def reproject_after_viewport_change(self, global_pos: QPoint | None) -> None:
+        """Re-resolve the live candidate after a real scroll/extent/origin change.
 
-        Edge-pan ticks move the board under a still pointer.  The commit path
-        and this refresh share ``_ingest_pointer_sample`` / ``_show_insert_preview``.
+        Ordinary mouse-move presentation does not come through this entry.
         """
         if global_pos is None:
             return
@@ -3592,7 +3662,7 @@ class FreeGridBoard(QWidget):
             marquee.origin = (marquee.origin[0] + dx, marquee.origin[1] + dy)
             marquee.current = (marquee.current[0] + dx, marquee.current[1] + dy)
             self._overlay.set_marquee(self._gesture.marquee_rect())
-        self._paint_fingerprint_seen = None
+        self._last_consumed_candidate_fingerprint = None
         self._reproject_live_preview()
 
     def _workspace_origin_offset(self) -> tuple[int, int]:
@@ -3652,19 +3722,29 @@ class FreeGridBoard(QWidget):
     def _emit_workspace_gesture(
         self, active: bool, global_pos: QPoint | None = None
     ) -> None:
-        """Publish gesture lifetime to the Page; pointer samples stay on the timer."""
+        """Publish gesture lifetime and, separately, the latest pointer."""
         wanted = bool(active)
+        gesture_id = int(self._gesture.gesture_id() or 0)
         if not wanted:
             if not self._workspace_gesture_active:
                 return
             self._workspace_gesture_active = False
+            self.workspace_gesture_active_changed.emit(False, gesture_id)
             self.workspace_gesture_changed.emit(False, None)
             return
         started = not self._workspace_gesture_active
         self._workspace_gesture_active = True
         if started:
+            if gesture_id <= 0:
+                gesture_id = int(self._gesture.gesture_id() or 1)
+            self.workspace_gesture_active_changed.emit(True, gesture_id)
             self.workspace_gesture_changed.emit(
                 True, QPoint(global_pos) if global_pos else None
+            )
+        if global_pos is not None:
+            self.workspace_pointer_changed.emit(
+                gesture_id or int(self._gesture.gesture_id() or 0),
+                QPoint(global_pos),
             )
 
     def _on_workspace_destroyed(self, _object=None) -> None:
@@ -3677,6 +3757,7 @@ class FreeGridBoard(QWidget):
             return
         self._workspace_gesture_active = False
         try:
+            self.workspace_gesture_active_changed.emit(False, int(self._gesture.gesture_id() or 0))
             self.workspace_gesture_changed.emit(False, None)
         except RuntimeError:
             # Qt may already have torn down this wrapper; no live receiver can
@@ -3714,7 +3795,7 @@ class FreeGridBoard(QWidget):
         self._last_legal_ghosts = ()
         self._last_legal_highlights = ()
         self._last_pointer_sample = None
-        self._paint_fingerprint_seen = None
+        self._last_consumed_candidate_fingerprint = None
         self._overlay.clear_edge_hint()
         self._emit_workspace_gesture(False)
         return cancelled
@@ -3801,15 +3882,29 @@ class FreeGridBoard(QWidget):
         geom = self.rect()
         if self._author_layer.geometry() != geom:
             self._author_layer.setGeometry(geom)
-        if self._overlay.geometry() != geom:
+        parent = self._overlay.parentWidget()
+        if parent is self and self._overlay.geometry() != geom:
             self._overlay.setGeometry(geom)
-        if not self._overlay.isVisible():
-            self._author_layer.raise_()
-            self._overlay.raise_()
+        elif parent is not None and parent is not self:
+            self._overlay.sync_host_geometry()
+        self._author_layer.raise_()
+        self._sync_editor_exclusion()
+        if parent is self:
+            self._overlay._raise_for_stack()
         if self._author_text_editor.is_editing():
             self._author_text_editor.raise_()
         if self._sticky_note.is_editing():
             self._sticky_note.raise_()
+        if self._laser_overlay.isVisible():
+            self._laser_overlay.raise_()
+
+    def _sync_editor_exclusion(self) -> None:
+        rect = None
+        if self._author_text_editor.is_editing():
+            rect = self._author_text_editor.geometry()
+        elif self._sticky_note.is_editing():
+            rect = self._sticky_note.geometry()
+        self._overlay.set_editor_exclusion(rect)
 
     def _sync_metrics(self) -> None:
         self._base_metrics = screen_grid_metrics(list(self._placements.values()))
@@ -3827,13 +3922,10 @@ class FreeGridBoard(QWidget):
             self._stop_pointer_coalesce(drop=True)
         super().resizeEvent(event)
         if armed:
-            geom = self.rect()
-            if self._overlay.geometry() != geom:
-                self._overlay.setGeometry(geom)
-            if self._author_layer.geometry() != geom:
-                self._author_layer.setGeometry(geom)
+            if self._author_layer.geometry() != self.rect():
+                self._author_layer.setGeometry(self.rect())
             self._raise_overlay()
-            self._paint_fingerprint_seen = None
+            self._last_consumed_candidate_fingerprint = None
             self._reproject_live_preview()
             return
         self._relayout()
@@ -3967,6 +4059,10 @@ class FreeGridBoard(QWidget):
     ) -> None:
         if event.button() != Qt.LeftButton:
             return
+        mapped = QPoint(*self._board_pos(card, event.pos()))
+        if self._consume_laser_pointer(mapped):
+            event.accept()
+            return
         ref = parse_ref_payload(
             {"section": card.model().section, "view_id": card.model().view_id}
         )
@@ -4035,6 +4131,11 @@ class FreeGridBoard(QWidget):
         self._apply_selection_flags()
 
     def handle_card_mouse_hover(self, card: FreeGridCard, event: QMouseEvent) -> None:
+        if self._laser_active():
+            mapped = QPoint(*self._board_pos(card, event.pos()))
+            self._laser_overlay.set_focus(mapped)
+            card.unsetCursor()
+            return
         if (
             not card.model().selected
             or len(self._gesture.selection()) != 1
@@ -4087,6 +4188,26 @@ class FreeGridBoard(QWidget):
     def sync_tool_cursor(self) -> None:
         self._sync_tool_cursor()
 
+    def _laser_active(self) -> bool:
+        return bool(self._creation_allowed and self._interaction.is_laser_active())
+
+    def sync_laser_overlay(self, pos: QPoint | None = None) -> None:
+        if not self._laser_active():
+            self._laser_overlay.set_focus(None)
+            return
+        if pos is not None:
+            self._laser_overlay.set_focus(pos)
+
+    def _consume_laser_pointer(self, pos: QPoint) -> bool:
+        if not self._laser_active():
+            return False
+        self._laser_overlay.set_focus(pos)
+        page = _page_of(self)
+        viewport = getattr(page, "_viewport", None) if page is not None else None
+        if viewport is not None and (viewport.is_panning() or viewport.space_down()):
+            return False
+        return True
+
     def _sticky_create_armed(self) -> bool:
         return (
             self._creation_allowed
@@ -4137,6 +4258,8 @@ class FreeGridBoard(QWidget):
     def route_card_press(self, card: FreeGridCard, event: QMouseEvent) -> bool:
         """I3: author objects above a card consume the press before card drag."""
         mapped = QPoint(*self._board_pos(card, event.pos()))
+        if self._consume_laser_pointer(mapped):
+            return True
         self._close_sticky_editor_if_outside(mapped)
         hit = self.classify_press(mapped, modifiers=event.modifiers())
         if hit.kind == HIT_RESIZE_HANDLE and isinstance(hit.item, AuthorKey):
@@ -4378,6 +4501,9 @@ class FreeGridBoard(QWidget):
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
             return
+        if self._consume_laser_pointer(event.pos()):
+            event.accept()
+            return
         was_editing = self._sticky_note.is_editing() or self._author_text_editor.is_editing()
         self._close_sticky_editor_if_outside(event.pos())
         if was_editing:
@@ -4425,6 +4551,11 @@ class FreeGridBoard(QWidget):
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._laser_active():
+            swallowed = self._consume_laser_pointer(event.pos())
+            if swallowed and not (event.buttons() & Qt.MiddleButton):
+                event.accept()
+                return
         grabbed = QWidget.mouseGrabber() is self
         if self._interaction.draft() is not None and (
             event.buttons() & Qt.LeftButton or grabbed
@@ -4489,6 +4620,9 @@ class FreeGridBoard(QWidget):
         if event.button() != Qt.LeftButton:
             super().mouseDoubleClickEvent(event)
             return
+        if self._consume_laser_pointer(event.pos()):
+            event.accept()
+            return
         hit = self.classify_press(event.pos(), modifiers=event.modifiers())
         if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
             item = self._author_item(hit.item.object_id)
@@ -4499,6 +4633,11 @@ class FreeGridBoard(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if self._laser_active():
+            self._laser_overlay.set_focus(None)
+        super().leaveEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if self.handle_selection_key(event):
@@ -4622,6 +4761,11 @@ class FreeGridBoard(QWidget):
         )
         self._latest_pointer_sample = sample
         self._last_pointer_sample = sample
+        if global_pos is not None and self._workspace_gesture_active:
+            self.workspace_pointer_changed.emit(
+                int(self._gesture.gesture_id() or 0),
+                QPoint(global_pos),
+            )
         session = self._gesture.session()
         if session is None or not session.active:
             # Crossing the drag threshold must paint this frame. Later
@@ -4729,24 +4873,6 @@ class FreeGridBoard(QWidget):
         self._ghost_buffers[ref] = scaled
         return scaled
 
-    def _paint_fingerprint(self, session, board_pos: tuple[int, int]) -> tuple:
-        origin = self._workspace_origin_offset()
-        size = self._overlay.size()
-        ghosts = tuple(
-            self._workspace_pixel_rect(rect)
-            for rect in session.group_ghost_pixels(self._metrics, board_pos)
-        )
-        return (
-            origin,
-            int(size.width()),
-            int(size.height()),
-            float(self._zoom),
-            bool(session.legal),
-            bool(self._session_hits_safety(session)),
-            session.badge(),
-            ghosts,
-        )
-
     def _update_gesture_at(
         self,
         board_pos: tuple[int, int],
@@ -4770,11 +4896,22 @@ class FreeGridBoard(QWidget):
         )
         if session is None or not session.active:
             return
-        paint_fp = self._paint_fingerprint(session, board_pos)
+        fingerprint = self._gesture.candidate_fingerprint()
+        if not session.plan_reused:
+            self._diag_planner_calls += 1
+        if (
+            session.plan_reused
+            and fingerprint is not None
+            and fingerprint == self._last_consumed_candidate_fingerprint
+            and self._overlay.is_showing()
+        ):
+            if global_pos is not None:
+                self._emit_workspace_gesture(True, global_pos)
+            return
         self._gesture_presenting = True
         try:
             self._present_live_gesture(session, board_pos, global_pos)
-            self._paint_fingerprint_seen = paint_fp
+            self._last_consumed_candidate_fingerprint = fingerprint
         finally:
             self._gesture_presenting = False
             if self._latest_pointer_sample is not None:
@@ -4857,6 +4994,9 @@ class FreeGridBoard(QWidget):
         displace_copy = (
             format_displace_preview(displaced_count) if displaced_count else ""
         )
+        self._feedback_generation += 1
+        self._diag_frame_presents += 1
+        self._sync_editor_exclusion()
         self._overlay.set_move_previews(
             ghosts,
             highlights,
@@ -4868,6 +5008,15 @@ class FreeGridBoard(QWidget):
             safety_sides=self._safety_sides_for(session.candidate) if safety else (),
             origin_masks=origin_masks,
             displace_copy=displace_copy,
+            gesture_id=int(self._gesture.gesture_id() or 0),
+            generation=self._feedback_generation,
+            layout_revision=int(session.layout_revision),
+            operation="resize" if session.handle is not None else "move",
+            candidate_fingerprint=(
+                self._workspace_origin_offset(),
+                float(self._zoom),
+                self._gesture.candidate_fingerprint(),
+            ),
         )
         if safety:
             self.setCursor(Qt.ForbiddenCursor)
@@ -4945,6 +5094,7 @@ class FreeGridBoard(QWidget):
 
     def _finish_gesture(self, *, commit: bool, global_pos: QPoint | None = None) -> None:
         self._stop_pointer_coalesce(drop=True)
+        gesture_id = int(self._gesture.gesture_id() or 0)
         session = self._gesture.take()
         self._release_mouse_if_grabbed()
         self._gesture_dimmed = False
@@ -4970,14 +5120,14 @@ class FreeGridBoard(QWidget):
                     card.set_drag_placeholder(False)
                     card.restore_dim()
                     card.unsetCursor()
-            self._overlay.clear()
+            self._overlay.clear(gesture_id or None)
             if self.cursor().shape() == Qt.ForbiddenCursor:
                 self.unsetCursor()
             self._sync_selection_handles()
             self._last_legal_ghosts = ()
             self._last_legal_highlights = ()
             self._last_pointer_sample = None
-            self._paint_fingerprint_seen = None
+            self._last_consumed_candidate_fingerprint = None
             self._emit_workspace_gesture(False)
             if session.active:
                 self.drag_finished.emit()

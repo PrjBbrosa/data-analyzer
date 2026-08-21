@@ -43,6 +43,9 @@ TOOL_DRAW = "draw"
 KNOWN_TOOLS = frozenset(
     {TOOL_SELECT, TOOL_STICKY, TOOL_TEXT, TOOL_SHAPES, TOOL_CONNECTOR, TOOL_DRAW}
 )
+POINTER_MODE_MOUSE = "mouse"
+POINTER_MODE_LASER = "laser"
+KNOWN_POINTER_MODES = frozenset({POINTER_MODE_MOUSE, POINTER_MODE_LASER})
 
 HIT_EDITOR = "editor"
 HIT_VIEWPORT_PAN = "viewport_pan"
@@ -54,7 +57,13 @@ HIT_BLANK = "blank"
 ESC_EDITOR = "editor"
 ESC_DRAFT = "draft"
 ESC_SELECT = "select"
+ESC_LASER = "laser"
 ESC_SELECTION = "selection"
+
+
+def normalize_pointer_mode(value: object) -> str:
+    checked = str(value or POINTER_MODE_MOUSE)
+    return checked if checked in KNOWN_POINTER_MODES else POINTER_MODE_MOUSE
 
 
 def _author_object_id(value: object) -> str:
@@ -840,6 +849,7 @@ class BoardInteractionController:
 
     def __init__(self) -> None:
         self._active_tool = TOOL_SELECT
+        self._pointer_mode = POINTER_MODE_MOUSE
         self._pinned_tool: str | None = None
         self._selection: frozenset[BoardItemKey] = frozenset()
         self._primary_card: UltraViewRef | None = None
@@ -885,6 +895,25 @@ class BoardInteractionController:
             if checked == TOOL_SELECT:
                 self._pinned_tool = None
         self._hover_target = None
+
+    def pointer_mode(self) -> str:
+        return self._pointer_mode
+
+    def set_pointer_mode(self, mode: str) -> str:
+        checked = normalize_pointer_mode(mode)
+        self._pointer_mode = checked
+        if checked == POINTER_MODE_LASER:
+            self.set_active_tool(TOOL_SELECT, pinned=False)
+            if self._draft is not None:
+                self.cancel_draft()
+            if self._editor_active:
+                self._editor_active = False
+            if self._selection:
+                self.clear_selection()
+        return self._pointer_mode
+
+    def is_laser_active(self) -> bool:
+        return self._active_tool == TOOL_SELECT and self._pointer_mode == POINTER_MODE_LASER
 
     def arm_tool(self, tool: str) -> None:
         self.set_active_tool(tool, pinned=False)
@@ -1385,6 +1414,9 @@ class BoardInteractionController:
         if self._active_tool != TOOL_SELECT:
             self.set_active_tool(TOOL_SELECT)
             return ESC_SELECT
+        if self._pointer_mode == POINTER_MODE_LASER:
+            self._pointer_mode = POINTER_MODE_MOUSE
+            return ESC_LASER
         if self._selection:
             self.clear_selection()
             return ESC_SELECTION
@@ -1400,6 +1432,7 @@ class BoardInteractionController:
         self._selection = frozenset()
         self._primary_card = None
         self._active_tool = TOOL_SELECT
+        self._pointer_mode = POINTER_MODE_MOUSE
         self._pinned_tool = None
         self._sticky_palette = DEFAULT_STICKY_PALETTE
         self._text_format = TextCreateIntent(object_id="format", box=(0.0, 0.0, 1.0, 1.0))
@@ -1415,6 +1448,7 @@ class BoardInteractionController:
         """Diagnostic snapshot. Must never be merged into a project payload."""
         return {
             "active_tool": self._active_tool,
+            "pointer_mode": self._pointer_mode,
             "pinned_tool": self._pinned_tool,
             "selection": tuple(sorted(_key_sort_tuple(item) for item in self._selection)),
             "draft": None if self._draft is None else self._draft.tool,
