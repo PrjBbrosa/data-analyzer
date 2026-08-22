@@ -6,6 +6,7 @@ import gc
 import json
 import logging
 from collections import OrderedDict
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2336,6 +2337,10 @@ def test_focus_residency_when_display_exceeds_preview(qapp):
     sizes = {ref: (400, 300)}
 
     class _Page:
+        def __init__(self):
+            self.reset_calls = []
+            self.cache_clears = []
+
         def card_display_sizes(self):
             return sizes
 
@@ -2354,7 +2359,23 @@ def test_focus_residency_when_display_exceeds_preview(qapp):
         def set_board(self, board):
             return None
 
-    window.chart_stack = SimpleNamespace(page_ultraview=_Page())
+        def reset_sheet_session(self, *, emit_presentation=True):
+            self.reset_calls.append(emit_presentation)
+
+        def clear_runtime_caches(self):
+            self.cache_clears.append(1)
+
+        def projection_batch(self):
+            return nullcontext()
+
+        def apply_preview_and_status(self, ref, record, status, exists):
+            return None
+
+        def focus_layer(self):
+            return SimpleNamespace(isVisible=lambda: False)
+
+    page = _Page()
+    window.chart_stack = SimpleNamespace(page_ultraview=page)
     coord.set_pinned_from_board(coord.board)
     request = coord.store.residency_request(ref)
     assert request is not None
@@ -2367,6 +2388,8 @@ def test_focus_residency_when_display_exceeds_preview(qapp):
     assert request is not None
     assert request.tier != RESIDENCY_TIER_FOCUS
     coord.clear()
+    assert page.reset_calls == [True]
+    assert page.cache_clears == [1]
     coord.deleteLater()
 
 
