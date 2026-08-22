@@ -115,12 +115,17 @@ RELEASE_AUTHOR_TOOLS: tuple[str, ...] = (
 OVERLAY_AUTHOR_POINTER = "author_pointer"
 RAIL_BUTTON_SIZE = 40
 RAIL_BUTTON_SIZE_COMPACT = 36
-RAIL_ICON_SIZE = 20
-RAIL_ICON_SIZE_COMPACT = 18
+# Keep the 40/36px hit targets stable while giving the icon-only rail enough
+# readable ink: desktop consumes the native 24px raster; compact consumes 20px.
+RAIL_ICON_SIZE = 24
+RAIL_ICON_SIZE_COMPACT = 20
 RAIL_GROUP_GAP = 6
-RAIL_GROUP_GAP_COMPACT = 4
+# Compact group/divider spacing is the only squeeze allowed so the full
+# release rail (Pointer included) fits the 800×560 available band (432px)
+# without clipping or shrinking the 36px hit targets.
+RAIL_GROUP_GAP_COMPACT = 2
 RAIL_DIVIDER_CLEAR = 10
-RAIL_DIVIDER_CLEAR_COMPACT = 8
+RAIL_DIVIDER_CLEAR_COMPACT = 2
 RAIL_DIVIDER_INSET = 8
 RAIL_MARGINS = (10, 8, 10, 8)
 RAIL_MARGINS_COMPACT = (6, 4, 6, 4)
@@ -187,49 +192,30 @@ class _AuthorToolButton(QToolButton):
 
 
 class _PointerToolButton(_AuthorToolButton):
-    """One 40/36px tile: main area applies the last pointer mode, caret opens the popover."""
+    """One 40/36px tile whose complete hit area opens the pointer popover."""
 
     menu_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._caret_pressed = False
+        # Mouse, QAbstractButton.click(), and macOS AXPress all emit clicked.
+        # Keyboard Space/Enter are handled below so they share this slot
+        # without QAbstractButton also synthesizing a second click().
+        self.clicked.connect(self._on_standard_activate)
 
-    def _caret_rect(self) -> QRect:
-        width = 11 if self.width() >= 38 else 10
-        return QRect(max(0, self.width() - width), 0, width, self.height())
+    def _on_standard_activate(self, _checked: bool = False) -> None:
+        self.menu_requested.emit()
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and self.isEnabled() and self._caret_rect().contains(event.pos()):
-            self._caret_pressed = True
+    def nextCheckState(self) -> None:  # noqa: N802
+        """Keep checked/active state owned by ToolRail, not by this click."""
+        return
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter) and self.isEnabled():
+            self._on_standard_activate()
             event.accept()
             return
-        self._caret_pressed = False
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and self._caret_pressed:
-            self._caret_pressed = False
-            if self.isEnabled() and self._caret_rect().contains(event.pos()):
-                self.menu_requested.emit()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
-        caret = self._caret_rect()
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        ink = QColor(self.palette().color(QPalette.ButtonText))
-        if not ink.isValid() or ink.alpha() == 0:
-            ink = UV_MUTED
-        painter.setPen(QPen(ink, 1.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        cx = float(caret.center().x())
-        cy = float(caret.center().y())
-        painter.drawLine(QPointF(cx - 2.4, cy - 1.2), QPointF(cx, cy + 1.4))
-        painter.drawLine(QPointF(cx + 2.4, cy - 1.2), QPointF(cx, cy + 1.4))
-        painter.end()
+        super().keyPressEvent(event)
 
 
 def board_popover_height(rows: int) -> int:
@@ -857,7 +843,7 @@ class ToolRail(QFrame):
         (PANEL_UNPLACED, "Unplaced", "查看未放置的 View", Icons.ultraview_unplaced),
     )
     _CREATION_SPECS: tuple[tuple[str, str, str], ...] = (
-        (AUTHOR_TOOL_SELECT, "Pointer", "指针 (V)"),
+        (AUTHOR_TOOL_SELECT, "Pointer", "选择鼠标或激光笔 (V)"),
         (AUTHOR_TOOL_STICKY, "Sticky", "添加便签贴纸 (N)"),
         (AUTHOR_TOOL_TEXT, "Text", "添加文字 (T)"),
         (AUTHOR_TOOL_SHAPES, "Shapes", "形状与连接线 (S)"),
@@ -902,6 +888,7 @@ class ToolRail(QFrame):
         self._creation_disabled_reason = "创作工具将在自由网格中可用"
         self._active_tool = AUTHOR_TOOL_SELECT
         self._pointer_mode = POINTER_MODE_MOUSE
+        self._pointer_menu_open = False
         self._pinned_tool: str | None = None
         self._draw_subtool = DEFAULT_DRAW_SUBTOOL
         self._group_layouts: list[QVBoxLayout] = []
@@ -1062,6 +1049,14 @@ class ToolRail(QFrame):
         if self._pointer_mode == checked:
             return
         self._pointer_mode = checked
+        self._sync_creation_states()
+
+    def set_pointer_menu_open(self, opened: bool) -> None:
+        """Mirror CanvasHost pointer-popup visibility onto the Pointer tile."""
+        wanted = bool(opened)
+        if self._pointer_menu_open == wanted:
+            return
+        self._pointer_menu_open = wanted
         self._sync_creation_states()
 
     def set_draw_subtool(self, tool: str) -> None:
@@ -1263,7 +1258,9 @@ class ToolRail(QFrame):
             _set_flag(button, "active", is_active)
             _set_flag(button, "pinned", is_pinned)
             _set_flag(button, "modeActive", False)
-            _set_flag(button, "panelOpen", False)
+            pointer_open = tool == AUTHOR_TOOL_SELECT and self._pointer_menu_open
+            _set_flag(button, "panelOpen", pointer_open)
+            _set_flag(button, "open", pointer_open)
             button.setIcon(
                 _author_tool_icon(
                     tool,
@@ -1346,8 +1343,17 @@ class ToolRail(QFrame):
             button.setProperty("panelOpen", "false")
             button.setProperty("primaryFill", "false")
             button.setCheckable(True)
-            button.clicked.connect(self._on_tool_clicked)
-            button.pin_requested.connect(self._on_tool_pin_requested)
+            if tool == AUTHOR_TOOL_SELECT:
+                button.setProperty("open", "false")
+                # Pointer deliberately does not apply its last mode on click:
+                # Mouse and Laser are explicit choices in the CanvasHost flyout.
+                # Do not connect clicked here — _PointerToolButton already
+                # routes clicked → menu_requested, and a second connection
+                # would double-fire.
+                pass
+            else:
+                button.clicked.connect(self._on_tool_clicked)
+                button.pin_requested.connect(self._on_tool_pin_requested)
             self._tool_buttons[tool] = button
             layout.addWidget(button, 0, Qt.AlignHCenter)
 

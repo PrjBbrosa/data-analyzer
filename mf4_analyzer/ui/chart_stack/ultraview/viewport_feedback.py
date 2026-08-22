@@ -157,6 +157,14 @@ class ViewportFeedbackSurface(QWidget):
         return self._generation
 
     @property
+    def gesture_id(self) -> int:
+        return int(self._gesture_id)
+
+    @property
+    def layout_revision(self) -> int:
+        return int(self._layout_revision)
+
+    @property
     def _ghost_rect(self) -> QRect | None:
         return self._ghosts[0][1] if self._ghosts else None
 

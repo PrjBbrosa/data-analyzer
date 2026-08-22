@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QRect, Qt
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QImage, QPainter
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QMenu, QToolButton, QWidget
@@ -15,6 +15,10 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_chrome import (
     ShapePopover,
     StickyPopover,
     ToolFlyoutSurface,
+)
+from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import (
+    board_box_to_pixels,
+    pixels_to_board_point,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.author_selection import (
     FORBIDDEN_TOOLBAR_WORDS,
@@ -35,20 +39,25 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
 )
 from mf4_analyzer.ui.ultraview_state import (
     BoardBox,
+    GridRect,
     ShapeObject,
     StickyObject,
     TextObject,
     default_board,
     make_ref,
+    set_free_grid_rect,
 )
 from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_QSS_TOKENS
 from tests.ui.test_ultraview_page import (
     FakePreview,
     _Harness,
+    _blank_board_point,
+    _drag_card,
     _image,
     _prepare_free_grid,
     _select_card,
+    _send_mouse_move,
 )
 
 
@@ -442,3 +451,122 @@ def test_picker_open_same_schema_refresh_does_not_rebuild_or_collapse(qtbot, qap
     assert picker.isVisible() is False
     assert harness.page._format_picker_key == ""
     assert QRect(toolbar.geometry()) == before_toolbar
+
+
+def _host_rect(page, widget) -> QRect:
+    origin = widget.mapTo(page._canvas_host, QPoint(0, 0))
+    return QRect(origin, widget.size())
+
+
+def _inflate(rect: QRect, margin: int) -> QRect:
+    return rect.adjusted(-margin, -margin, margin, margin)
+
+
+def test_minimap_avoids_bottom_right_card_selection_or_folds(qtbot):
+    harness = _Harness(qtbot)
+    harness.page.resize(1600, 900)
+    _prepare_free_grid(harness, qtbot, "mini-br")
+    ref = make_ref("time", "mini-br")
+    assert set_free_grid_rect(harness.board, ref, GridRect(16, 12, 8, 6)) == []
+    harness.page.set_board(harness.board)
+    harness.page.set_board_zoom(1.6)
+    QApplication.processEvents()
+    scroll = harness.page.board_scroll_area()
+    scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+    QApplication.processEvents()
+    card = harness.page.card_widget("time", "mini-br")
+    assert card is not None
+    _select_card(card)
+    _refresh(harness.page)
+    harness.page._refresh_minimap()
+    QApplication.processEvents()
+    minimap = harness.page.free_grid_minimap()
+    bounds = harness.page._selection_bounds_in_host()
+    assert bounds is not None
+    handles = _inflate(bounds, 18)
+    toolbar = harness.page.selection_toolbar()
+    if not minimap.isVisible():
+        return
+    mini = _host_rect(harness.page, minimap)
+    assert not mini.intersects(handles)
+    if toolbar.isVisible():
+        assert not mini.intersects(_host_rect(harness.page, toolbar))
+
+
+def test_minimap_hides_during_card_move_and_restores_after_release(qtbot):
+    harness = _Harness(qtbot)
+    harness.page.resize(1600, 900)
+    _free, (card,) = _prepare_free_grid(harness, qtbot, "mini-g")
+    harness.page.set_board_zoom(1.6)
+    QApplication.processEvents()
+    _select_card(card)
+    harness.page._refresh_minimap()
+    QApplication.processEvents()
+    minimap = harness.page.free_grid_minimap()
+    assert minimap.isVisible()
+    start = QPoint(40, 40)
+    end = QPoint(120, 90)
+    _drag_card(card, start, end, release=False)
+    QApplication.processEvents()
+    assert not minimap.isVisible()
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, end)
+    QApplication.processEvents()
+    harness.page._refresh_minimap()
+    QApplication.processEvents()
+    bounds = harness.page._selection_bounds_in_host()
+    if minimap.isVisible():
+        mini = _host_rect(harness.page, minimap)
+        if bounds is not None:
+            assert not mini.intersects(_inflate(bounds, 18))
+    else:
+        assert harness.page._minimap_geometry_gesture_active() is False
+
+
+def test_minimap_folds_during_author_geometry_gesture(qtbot):
+    harness = _Harness(qtbot)
+    harness.page.resize(1600, 900)
+    free, _cards = _prepare_free_grid(harness, qtbot, "mini-auth")
+    harness.page.set_board_zoom(1.0)
+    blank = _blank_board_point(free)
+    origin = pixels_to_board_point(
+        (float(blank.x()), float(blank.y())),
+        free.metrics(),
+        origin_offset=free._workspace_origin_offset(),
+    )
+    assert origin is not None
+    note = StickyObject(
+        "geo-note",
+        "sticky",
+        box=BoardBox(origin[0], origin[1], 3.0, 2.0),
+        text="便签",
+    )
+    harness.board.author_objects = [note]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page._refresh_minimap()
+    QApplication.processEvents()
+    facts = free.interaction_facts()
+    assert facts["author_geometry_active"] is False
+    mapped = board_box_to_pixels(
+        (note.box.x, note.box.y, note.box.width, note.box.height),
+        free.metrics(),
+        origin_offset=free._workspace_origin_offset(),
+    )
+    assert mapped is not None
+    start = QPoint(int(mapped[0] + mapped[2] / 2), int(mapped[1] + mapped[3] / 2))
+    end = QPoint(start.x() + 24, start.y())
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, start)
+    _send_mouse_move(free, end)
+    QApplication.processEvents()
+    assert free.interaction_facts()["author_geometry_active"] is True
+    assert harness.page._minimap_geometry_gesture_active() is True
+    harness.page._sync_minimap_placement()
+    QApplication.processEvents()
+    minimap = harness.page.free_grid_minimap()
+    assert not minimap.isVisible()
+    QTest.mouseRelease(free, Qt.LeftButton, Qt.NoModifier, end)
+    QApplication.processEvents()
+    harness.page._refresh_minimap()
+    QApplication.processEvents()
+    assert free.interaction_facts()["author_geometry_active"] is False

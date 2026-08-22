@@ -441,7 +441,9 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     existing = rows["已有连线与笔画"]
     assert pointer.keys == ("V", "Esc")
     assert "激光笔" in pointer.sub
-    assert "不选择" in pointer.sub
+    assert "整块单击" in pointer.sub
+    assert "仅替换光标形状" in pointer.sub
+    assert "不选择" not in pointer.sub
     assert sticky.keys == ("N",)
     assert text.keys == ("T",)
     assert shape.keys == ("S",)

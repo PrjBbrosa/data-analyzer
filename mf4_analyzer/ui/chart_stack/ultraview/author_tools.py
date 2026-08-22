@@ -57,7 +57,6 @@ HIT_BLANK = "blank"
 ESC_EDITOR = "editor"
 ESC_DRAFT = "draft"
 ESC_SELECT = "select"
-ESC_LASER = "laser"
 ESC_SELECTION = "selection"
 
 
@@ -900,16 +899,21 @@ class BoardInteractionController:
         return self._pointer_mode
 
     def set_pointer_mode(self, mode: str) -> str:
-        checked = normalize_pointer_mode(mode)
-        self._pointer_mode = checked
-        if checked == POINTER_MODE_LASER:
-            self.set_active_tool(TOOL_SELECT, pinned=False)
-            if self._draft is not None:
-                self.cancel_draft()
-            if self._editor_active:
-                self._editor_active = False
-            if self._selection:
-                self.clear_selection()
+        self._pointer_mode = normalize_pointer_mode(mode)
+        return self._pointer_mode
+
+    def activate_pointer_mode(self, mode: str) -> str:
+        """Enter Select with a cursor-only pointer appearance.
+
+        Mouse and Laser share one Select interaction state.  Leaving a
+        creation tool follows Select's existing draft-cancel rule, while a
+        Mouse/Laser appearance switch deliberately keeps selection and its
+        resize handles intact.
+        """
+        if self._active_tool != TOOL_SELECT and self._draft is not None:
+            self.cancel_draft()
+        self.set_pointer_mode(mode)
+        self.set_active_tool(TOOL_SELECT, pinned=False)
         return self._pointer_mode
 
     def is_laser_active(self) -> bool:
@@ -1414,9 +1418,6 @@ class BoardInteractionController:
         if self._active_tool != TOOL_SELECT:
             self.set_active_tool(TOOL_SELECT)
             return ESC_SELECT
-        if self._pointer_mode == POINTER_MODE_LASER:
-            self._pointer_mode = POINTER_MODE_MOUSE
-            return ESC_LASER
         if self._selection:
             self.clear_selection()
             return ESC_SELECTION

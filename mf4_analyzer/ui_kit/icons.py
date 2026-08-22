@@ -67,6 +67,53 @@ def _line_icon(draw, color=GRAY, size=20):
     return QIcon(pix)
 
 
+# UltraView's icon-only rails have two deliberately supported icon targets:
+# 20px in compact mode and 24px on the desktop.  A single 20px QIcon source
+# is otherwise upscaled by Qt at the desktop target, which softens the small
+# QPainter strokes on both Retina and 100%-scale displays.  Keep this helper
+# narrow: the rest of the app retains its established 20px icon contract.
+_ULTRAVIEW_ICON_LOGICAL_SIZES = (20, 24, 28)
+_ULTRAVIEW_ICON_DESIGN_SIZE = 20.0
+
+
+@contextmanager
+def _ultraview_painting(logical_size):
+    ratio = max(float(icon_device_pixel_ratio()), 2.0)
+    physical_size = max(1, int(round(logical_size * ratio)))
+    pix = QPixmap(physical_size, physical_size)
+    pix.setDevicePixelRatio(ratio)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    # The individual glyphs stay authored in the familiar 20-unit grid while
+    # each target gets a freshly rasterised, correctly proportioned path.
+    scale = float(logical_size) / _ULTRAVIEW_ICON_DESIGN_SIZE
+    painter.scale(scale, scale)
+    try:
+        yield pix, painter
+    finally:
+        painter.end()
+
+
+def _ultraview_icon(draw):
+    icon = QIcon()
+    for logical_size in _ULTRAVIEW_ICON_LOGICAL_SIZES:
+        with _ultraview_painting(logical_size) as (pix, painter):
+            draw(painter)
+        icon.addPixmap(pix, QIcon.Normal, QIcon.Off)
+    return icon
+
+
+def _ultraview_line_icon(draw, color=GRAY, pen_width=1.85):
+    def paint(painter):
+        painter.setPen(_pen(color, pen_width))
+        painter.setBrush(Qt.NoBrush)
+        draw(painter)
+
+    return _ultraview_icon(paint)
+
+
 def _padlock(p, color):
     """Draw a small padlock at ~(4..16, 6..16). Shared body for lock_x/lock_y."""
     p.setPen(_pen(color, 1.4))
@@ -372,7 +419,7 @@ class Icons:
             for y in (6.4, 10.0, 13.6):
                 p.drawEllipse(QPointF(4.8, y), 0.9, 0.9)
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_pin(cls, color=None):
@@ -384,7 +431,7 @@ class Icons:
             p.drawLine(QPointF(10.0, 9.8), QPointF(10.0, 16.8))
             p.drawLine(QPointF(7.2, 7.4), QPointF(12.8, 7.4))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_layout(cls, color=None):
@@ -397,7 +444,7 @@ class Icons:
             p.drawLine(QPointF(10.5, 8.0), QPointF(16.7, 8.0))
             p.drawLine(QPointF(10.5, 12.2), QPointF(16.7, 12.2))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_free_grid(cls, color=None):
@@ -413,7 +460,7 @@ class Icons:
                 y = 3.0 + 14.0 * j / 3.0
                 p.drawLine(QPointF(3.3, y), QPointF(16.7, y))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_filter(cls, color=None):
@@ -431,7 +478,7 @@ class Icons:
             path.closeSubpath()
             p.drawPath(path)
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_unplaced(cls, color=None):
@@ -445,7 +492,7 @@ class Icons:
             p.drawLine(QPointF(12.2, 12.4), QPointF(10.0, 14.6))
             p.drawLine(QPointF(4.0, 17.0), QPointF(16.0, 17.0))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_author_sticky(cls, color=None):
@@ -454,17 +501,17 @@ class Icons:
 
         def draw(p):
             note = QPainterPath()
-            note.moveTo(4.0, 4.0)
-            note.lineTo(16.0, 4.0)
-            note.lineTo(16.0, 12.2)
-            note.lineTo(12.0, 16.0)
-            note.lineTo(4.0, 16.0)
+            note.moveTo(3.5, 3.5)
+            note.lineTo(16.5, 3.5)
+            note.lineTo(16.5, 12.0)
+            note.lineTo(12.0, 16.5)
+            note.lineTo(3.5, 16.5)
             note.closeSubpath()
             p.drawPath(note)
-            p.drawLine(QPointF(12.0, 16.0), QPointF(12.0, 12.2))
-            p.drawLine(QPointF(12.0, 12.2), QPointF(16.0, 12.2))
+            p.drawLine(QPointF(12.0, 16.5), QPointF(12.0, 12.0))
+            p.drawLine(QPointF(12.0, 12.0), QPointF(16.5, 12.0))
 
-        return _line_icon(draw, c, size=20)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_author_text(cls, color=None):
@@ -472,12 +519,12 @@ class Icons:
         c = color or GRAY
 
         def draw(p):
-            p.drawLine(QPointF(4.2, 4.4), QPointF(15.8, 4.4))
-            p.drawLine(QPointF(10.0, 4.4), QPointF(10.0, 16.0))
-            p.drawLine(QPointF(4.2, 4.4), QPointF(4.2, 6.4))
-            p.drawLine(QPointF(15.8, 4.4), QPointF(15.8, 6.4))
+            p.drawLine(QPointF(3.6, 3.8), QPointF(16.4, 3.8))
+            p.drawLine(QPointF(10.0, 3.8), QPointF(10.0, 16.4))
+            p.drawLine(QPointF(3.6, 3.8), QPointF(3.6, 6.2))
+            p.drawLine(QPointF(16.4, 3.8), QPointF(16.4, 6.2))
 
-        return _line_icon(draw, c, size=20)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_author_shapes(cls, color=None):
@@ -485,16 +532,16 @@ class Icons:
         c = color or GRAY
 
         def draw(p):
-            p.drawRoundedRect(QRectF(4.0, 9.2, 6.0, 6.4), 0.8, 0.8)
-            p.drawEllipse(QRectF(10.2, 4.0, 5.8, 5.8))
+            p.drawRoundedRect(QRectF(3.5, 9.0, 6.8, 7.0), 0.9, 0.9)
+            p.drawEllipse(QRectF(10.0, 3.5, 6.5, 6.5))
             tri = QPainterPath()
-            tri.moveTo(13.4, 10.6)
-            tri.lineTo(16.0, 16.0)
-            tri.lineTo(10.6, 16.0)
+            tri.moveTo(13.3, 10.4)
+            tri.lineTo(16.5, 16.5)
+            tri.lineTo(10.2, 16.5)
             tri.closeSubpath()
             p.drawPath(tri)
 
-        return _line_icon(draw, c, size=20)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_author_draw(cls, color=None):
@@ -503,106 +550,104 @@ class Icons:
 
         def draw(p):
             shaft = QPainterPath()
-            shaft.moveTo(5.8, 14.4)
-            shaft.lineTo(13.6, 6.6)
-            shaft.lineTo(15.4, 8.4)
-            shaft.lineTo(7.6, 16.2)
+            shaft.moveTo(5.0, 14.6)
+            shaft.lineTo(13.6, 5.5)
+            shaft.lineTo(15.8, 7.7)
+            shaft.lineTo(7.2, 16.8)
             shaft.closeSubpath()
             p.drawPath(shaft)
-            p.drawLine(QPointF(12.8, 5.8), QPointF(15.0, 8.0))
+            p.drawLine(QPointF(12.7, 4.7), QPointF(15.1, 7.1))
             nib = QPainterPath()
-            nib.moveTo(5.8, 14.4)
-            nib.lineTo(4.2, 16.0)
-            nib.lineTo(7.6, 16.2)
+            nib.moveTo(5.0, 14.6)
+            nib.lineTo(3.6, 16.6)
+            nib.lineTo(7.2, 16.8)
             p.drawPath(nib)
 
-        return _line_icon(draw, c, size=20)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_draw_pen(cls, color=None):
-        """Draw-popover pen: nib, shaft, and a short freehand curve."""
+        """Draw-popover pen: enlarged nib, shaft, and baseline stroke."""
         c = color or GRAY
 
-        with _painting(20) as (pix, p):
+        def draw(p):
             p.setPen(_pen(c, 1.9))
             p.setBrush(Qt.NoBrush)
-            p.drawLine(QPointF(10.8, 5.6), QPointF(8.6, 10.8))
-            p.drawLine(QPointF(14.2, 7.2), QPointF(12.0, 12.4))
-            p.drawLine(QPointF(10.8, 5.6), QPointF(14.2, 7.2))
-            p.drawLine(QPointF(9.4, 9.2), QPointF(12.8, 10.8))
+            p.drawLine(QPointF(12.4, 4.2), QPointF(6.6, 12.4))
+            p.drawLine(QPointF(15.6, 6.5), QPointF(9.8, 14.7))
+            p.drawLine(QPointF(12.4, 4.2), QPointF(15.6, 6.5))
+            p.drawLine(QPointF(9.0, 9.0), QPointF(12.7, 11.7))
             nib = QPainterPath()
-            nib.moveTo(8.6, 10.8)
-            nib.lineTo(6.6, 14.6)
-            nib.lineTo(12.0, 12.4)
+            nib.moveTo(6.6, 12.4)
+            nib.lineTo(4.8, 15.7)
+            nib.lineTo(9.8, 14.7)
             nib.closeSubpath()
             p.drawPath(nib)
-            p.drawLine(QPointF(10.3, 11.6), QPointF(6.6, 14.6))
-            stroke = QPainterPath()
-            stroke.moveTo(5.4, 13.0)
-            stroke.cubicTo(5.4, 14.8, 7.6, 15.4, 8.8, 14.2)
-            stroke.cubicTo(9.6, 13.4, 9.8, 15.2, 11.2, 14.6)
-            p.drawPath(stroke)
-        return QIcon(pix)
+            p.drawLine(QPointF(7.1, 13.5), QPointF(4.8, 15.7))
+            p.drawLine(QPointF(4.5, 16.4), QPointF(16.0, 16.4))
+
+        return _ultraview_icon(draw)
 
     @classmethod
     def ultraview_draw_highlighter(cls, color=None):
-        """Draw-popover highlighter: wide chisel head plus a thick mark."""
+        """Draw-popover highlighter: enlarged chisel and a thick mark."""
         c = color or GRAY
 
-        with _painting(20) as (pix, p):
+        def draw(p):
             p.setPen(_pen(c, 1.9))
             p.setBrush(Qt.NoBrush)
             barrel = QPainterPath()
-            barrel.moveTo(8.8, 5.4)
-            barrel.lineTo(13.6, 5.4)
-            barrel.lineTo(13.2, 11.4)
-            barrel.lineTo(8.4, 11.4)
+            barrel.moveTo(7.6, 3.8)
+            barrel.lineTo(14.0, 3.8)
+            barrel.lineTo(13.5, 11.1)
+            barrel.lineTo(7.1, 11.1)
             barrel.closeSubpath()
             p.drawPath(barrel)
-            p.drawLine(QPointF(8.8, 6.8), QPointF(13.4, 6.8))
+            p.drawLine(QPointF(7.6, 5.5), QPointF(13.9, 5.5))
             chisel = QPainterPath()
-            chisel.moveTo(7.2, 11.4)
-            chisel.lineTo(14.6, 11.4)
-            chisel.lineTo(15.0, 13.6)
-            chisel.lineTo(6.8, 13.6)
+            chisel.moveTo(5.8, 11.1)
+            chisel.lineTo(14.8, 11.1)
+            chisel.lineTo(15.4, 13.8)
+            chisel.lineTo(5.2, 13.8)
             chisel.closeSubpath()
             p.drawPath(chisel)
             p.setPen(_pen(c, 3.0))
-            p.drawLine(QPointF(6.6, 15.2), QPointF(14.4, 15.2))
-        return QIcon(pix)
+            p.drawLine(QPointF(4.2, 16.5), QPointF(16.0, 16.5))
+
+        return _ultraview_icon(draw)
 
     @classmethod
     def ultraview_draw_eraser(cls, color=None):
-        """Draw-popover eraser: tilted rubber block with a divider band."""
+        """Draw-popover eraser: enlarged tilted rubber with a divider band."""
         c = color or GRAY
 
-        with _painting(20) as (pix, p):
+        def draw(p):
             p.setPen(_pen(c, 1.9))
             p.setBrush(Qt.NoBrush)
             body = QPainterPath()
-            body.moveTo(5.6, 11.0)
-            body.lineTo(10.2, 5.6)
-            body.lineTo(14.8, 7.6)
-            body.lineTo(10.2, 13.0)
+            body.moveTo(3.8, 12.0)
+            body.lineTo(10.2, 4.2)
+            body.lineTo(16.2, 7.4)
+            body.lineTo(9.8, 15.2)
             body.closeSubpath()
             p.drawPath(body)
-            p.drawLine(QPointF(7.44, 11.80), QPointF(12.04, 6.40))
-            p.drawLine(QPointF(8.08, 12.08), QPointF(12.68, 6.68))
-        return QIcon(pix)
+            p.drawLine(QPointF(6.4, 13.4), QPointF(12.8, 5.8))
+
+        return _ultraview_icon(draw)
 
     @classmethod
     def ultraview_draw_lasso(cls, color=None):
-        """Draw-popover lasso: dashed organic loop with a start handle."""
+        """Draw-popover lasso: enlarged dashed loop with a visible tail."""
         c = color or GRAY
 
-        with _painting(20) as (pix, p):
+        def draw(p):
             p.setBrush(Qt.NoBrush)
             loop = QPainterPath()
-            loop.moveTo(8.0, 9.2)
-            loop.cubicTo(5.4, 6.8, 8.0, 5.0, 11.2, 5.4)
-            loop.cubicTo(14.6, 5.8, 15.2, 9.4, 13.8, 12.0)
-            loop.cubicTo(12.2, 14.8, 8.0, 15.2, 6.4, 13.0)
-            loop.cubicTo(5.4, 11.6, 5.8, 10.2, 7.4, 9.4)
+            loop.moveTo(7.8, 9.0)
+            loop.cubicTo(4.6, 6.1, 7.4, 3.8, 11.2, 4.2)
+            loop.cubicTo(15.2, 4.7, 16.0, 9.1, 14.2, 12.2)
+            loop.cubicTo(12.3, 15.7, 7.2, 16.0, 5.4, 13.1)
+            loop.cubicTo(4.2, 11.1, 5.0, 9.8, 7.8, 9.0)
             dash = _pen(c, 1.9)
             dash.setCapStyle(Qt.FlatCap)
             dash.setStyle(Qt.CustomDashLine)
@@ -610,49 +655,53 @@ class Icons:
             p.setPen(dash)
             p.drawPath(loop)
             p.setPen(_pen(c, 1.9))
-            p.drawLine(QPointF(8.0, 9.2), QPointF(10.0, 12.2))
-        return QIcon(pix)
+            p.drawLine(QPointF(7.8, 9.0), QPointF(16.1, 16.5))
+            p.setBrush(QBrush(c))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QPointF(4.8, 10.5), 1.0, 1.0)
+
+        return _ultraview_icon(draw)
 
     @classmethod
     def ultraview_author_select(cls, color=None):
-        """B2 outline pointer: 14–16px ink box, rounded 1.7 stroke, upper-left."""
+        """B2 pointer: a larger, optically centred outline cursor."""
         c = color or GRAY
 
         def draw(p):
             path = QPainterPath()
-            path.moveTo(5.4, 3.8)
-            path.lineTo(5.4, 16.0)
-            path.lineTo(8.4, 13.2)
-            path.lineTo(11.0, 16.6)
-            path.lineTo(12.6, 15.6)
-            path.lineTo(10.0, 12.2)
-            path.lineTo(14.6, 12.2)
+            path.moveTo(4.2, 3.2)
+            path.lineTo(4.2, 16.8)
+            path.lineTo(7.8, 13.7)
+            path.lineTo(11.2, 17.0)
+            path.lineTo(13.0, 15.4)
+            path.lineTo(9.8, 12.0)
+            path.lineTo(16.4, 12.0)
             path.closeSubpath()
             p.drawPath(path)
 
-        return _line_icon(draw, c, size=20)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_author_laser(cls, color=None):
-        """Pointer plus a small focus dot. Same stroke as the author rail set."""
+        """Pointer plus short rays: an icon for the laser-shaped cursor mode."""
         c = color or GRAY
 
         def draw(p):
             path = QPainterPath()
-            path.moveTo(4.8, 4.4)
-            path.lineTo(4.8, 15.4)
-            path.lineTo(7.6, 12.8)
-            path.lineTo(10.0, 16.0)
-            path.lineTo(11.6, 15.0)
-            path.lineTo(9.2, 11.8)
-            path.lineTo(13.4, 11.8)
+            path.moveTo(4.0, 3.8)
+            path.lineTo(4.0, 16.5)
+            path.lineTo(7.4, 13.5)
+            path.lineTo(10.6, 16.8)
+            path.lineTo(12.4, 15.2)
+            path.lineTo(9.3, 11.9)
+            path.lineTo(15.4, 11.9)
             path.closeSubpath()
             p.drawPath(path)
-            p.setBrush(c)
-            p.setPen(Qt.NoPen)
-            p.drawEllipse(QRectF(13.8, 3.6, 3.2, 3.2))
+            p.setPen(_pen(c, 1.55))
+            p.drawLine(QPointF(14.8, 4.8), QPointF(16.7, 2.9))
+            p.drawLine(QPointF(15.7, 7.0), QPointF(17.6, 7.0))
 
-        return _line_icon(draw, c, size=20)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_author_connector(cls, color=None):
@@ -668,7 +717,7 @@ class Icons:
             head.closeSubpath()
             p.drawPath(head)
 
-        return _line_icon(draw, c, size=20)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_display(cls, color=None):
@@ -689,7 +738,7 @@ class Icons:
             p.drawLine(QPointF(4.0, 14.0), QPointF(16.0, 14.0))
             p.drawLine(QPointF(4.0, 17.0), QPointF(12.2, 17.0))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_presentation(cls, color=None):
@@ -709,7 +758,7 @@ class Icons:
             p.setBrush(QBrush(c))
             p.drawPath(play)
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_overview(cls, color=None):
@@ -721,7 +770,7 @@ class Icons:
                 for y in (3.0, 8.3, 13.6):
                     p.drawRoundedRect(QRectF(x, y, 3.4, 3.4), 0.65, 0.65)
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_fit(cls, color=None):
@@ -738,7 +787,7 @@ class Icons:
             p.drawLine(QPointF(17.0, 12.6), QPointF(17.0, 17.0))
             p.drawLine(QPointF(17.0, 17.0), QPointF(12.6, 17.0))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_fit_to_image(cls, color=None):
@@ -751,7 +800,7 @@ class Icons:
             p.drawLine(QPointF(7.5, 10.0), QPointF(12.5, 10.0))
             p.drawLine(QPointF(10.0, 7.5), QPointF(10.0, 12.5))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_reset_zoom(cls, color=None):
@@ -759,14 +808,14 @@ class Icons:
         c = color or GRAY
 
         def draw(p):
-            p.drawEllipse(QRectF(4.0, 4.0, 12.0, 12.0))
+            p.drawEllipse(QRectF(3.5, 3.5, 13.0, 13.0))
             p.drawLine(QPointF(10.0, 7.0), QPointF(10.0, 13.0))
             p.drawLine(QPointF(7.0, 10.0), QPointF(13.0, 10.0))
             p.setPen(Qt.NoPen)
             p.setBrush(QBrush(c))
             p.drawEllipse(QPointF(10.0, 10.0), 1.1, 1.1)
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_zoom_out(cls, color=None):
@@ -778,7 +827,7 @@ class Icons:
             p.drawLine(QPointF(10.6, 10.6), QPointF(16.8, 16.8))
             p.drawLine(QPointF(5.8, 8.0), QPointF(10.2, 8.0))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_zoom_in(cls, color=None):
@@ -791,14 +840,14 @@ class Icons:
             p.drawLine(QPointF(5.8, 8.0), QPointF(10.2, 8.0))
             p.drawLine(QPointF(8.0, 5.8), QPointF(8.0, 10.2))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_help(cls, color=None):
         """Question-mark-in-circle help affordance, drawn without a font glyph."""
         c = color or GRAY
 
-        with _painting() as (pix, p):
+        def draw(p):
             p.setPen(_pen(c, 1.55))
             p.setBrush(Qt.NoBrush)
             p.drawEllipse(QRectF(3.0, 3.0, 14.0, 14.0))
@@ -811,7 +860,8 @@ class Icons:
             p.setPen(Qt.NoPen)
             p.setBrush(QBrush(c))
             p.drawEllipse(QPointF(9.1, 14.6), 0.9, 0.9)
-        return QIcon(pix)
+
+        return _ultraview_icon(draw)
 
     @classmethod
     def ultraview_add(cls, color=None):
@@ -819,10 +869,10 @@ class Icons:
         c = color or GRAY
 
         def draw(p):
-            p.drawLine(QPointF(10.0, 4.0), QPointF(10.0, 16.0))
-            p.drawLine(QPointF(4.0, 10.0), QPointF(16.0, 10.0))
+            p.drawLine(QPointF(10.0, 3.5), QPointF(10.0, 16.5))
+            p.drawLine(QPointF(3.5, 10.0), QPointF(16.5, 10.0))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_open_source(cls, color=None):
@@ -835,7 +885,7 @@ class Icons:
             p.drawLine(QPointF(12.4, 3.0), QPointF(17.0, 3.0))
             p.drawLine(QPointF(17.0, 3.0), QPointF(17.0, 7.6))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_remove_from_board(cls, color=None):
@@ -846,7 +896,7 @@ class Icons:
             p.drawRoundedRect(QRectF(3.0, 5.5, 11.0, 11.0), 1.6, 1.6)
             p.drawLine(QPointF(10.2, 10.0), QPointF(17.0, 10.0))
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_sync(cls, color=None):
@@ -864,7 +914,7 @@ class Icons:
             path.closeSubpath()
             p.drawPath(path)
 
-        return _line_icon(draw, c)
+        return _ultraview_line_icon(draw, c)
 
     @classmethod
     def ultraview_move_to_tray(cls, color=None):

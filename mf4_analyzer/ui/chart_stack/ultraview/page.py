@@ -111,7 +111,7 @@ from .feedback import (
     text_for_key,
 )
 from .viewport_feedback import BoardToViewportTransform
-from .free_grid import hit_handle, screen_grid_metrics
+from .free_grid import HANDLE_HIT_PX as CARD_HANDLE_HIT_PX, hit_handle, screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
 from .author_edits import copy_author_objects
 from .author_selection import (
@@ -123,6 +123,7 @@ from .author_selection import (
 )
 from .author_style import DEFAULT_THEME, STICKY_PALETTE_TOKENS, sticky_colors
 from .author_geometry import (
+    HANDLE_HIT_PX as AUTHOR_HANDLE_HIT_PX,
     board_box_to_pixels,
     board_point_to_pixels,
     box_anchor_point,
@@ -279,7 +280,10 @@ from .floating_layout import (
     STATUS_ISLAND_WIDTH,
     Rect as FloatingRect,
     calculate_floating_layout,
+    minimap_placement_fingerprint,
     place_card_context,
+    place_minimap,
+    MinimapPlacementFacts,
 )
 
 _FEEDBACK_BOARD_FULL = "Board 已满：换布局或先移除"
@@ -574,6 +578,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._overview.hide()
         self._minimap = FreeGridMinimap(self._board_scroll.viewport())
         self._minimap.hide()
+        self._minimap_placement_key: tuple | None = None
         self._free_grid.bind_feedback_surface(self._board_scroll.viewport())
 
         self._tool_rail = ToolRail(
@@ -1422,7 +1427,10 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _on_overlay_closed(self, panel_id: str) -> None:
         if panel_id == OVERLAY_AUTHOR_FORMAT:
             self._format_picker_key = ""
+            self._sync_minimap_placement()
             return
+        if panel_id == OVERLAY_AUTHOR_POINTER:
+            self._tool_rail.set_pointer_menu_open(False)
         if panel_id == PANEL_LIBRARY:
             self._library_visible = False
         if panel_id == PANEL_UNPLACED:
@@ -1697,6 +1705,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._edge_gesture_token = int(gesture_id or 0)
         if not wanted:
             self._stop_edge_pan()
+            self._sync_minimap_placement()
             return
         if not self._edge_pan_active:
             self._edge_gesture_id += 1
@@ -1706,6 +1715,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._refresh_workspace_extent()
         self._sync_feedback_surface()
         self._sync_edge_timer_for_pointer()
+        self._sync_minimap_placement()
 
     def _on_workspace_pointer_changed(self, gesture_id: int, global_pos=None) -> None:
         if not self._edge_pan_active:
@@ -3017,9 +3027,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if self._format_picker.isVisible() or self._format_picker_key:
             self._close_format_picker()
             return True
-        if self._interaction.is_laser_active():
-            self._apply_pointer_mode(POINTER_MODE_MOUSE)
-            return True
         if self._interaction.active_tool() != TOOL_SELECT:
             self._interaction.set_active_tool(TOOL_SELECT)
             self._sync_tool_rail_from_controller()
@@ -3605,6 +3612,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return QRect(x, y, width, height)
 
     def _open_author_flyout(self, overlay_id: str, flyout, button: QWidget | None) -> None:
+        # Tool and selection flyouts share CanvasHost: never leave a stale
+        # format picker below a newly opened Shapes/Draw/Pointer surface.
+        self._close_format_picker()
         size = flyout.content_size()
         natural_h = size.height()
         rect = self._author_flyout_rect(button, size)
@@ -3613,6 +3623,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         else:
             flyout._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._canvas_host.open_overlay(overlay_id, rect)
+        self._tool_rail.set_pointer_menu_open(overlay_id == OVERLAY_AUTHOR_POINTER)
+        self._reassert_host_stacking()
+        self._sync_minimap_placement()
 
     def _close_author_flyouts(self, keep=None) -> None:
         for flyout in self._author_flyouts():
@@ -3623,6 +3636,13 @@ class UltraViewPage(BoardPointerMixin, QWidget):
                 self._canvas_host.close_overlay(str(key), restore_focus=False)
             elif flyout.isVisible():
                 flyout.hide()
+        if keep is not self._pointer_popover:
+            opened = (
+                self._canvas_host.active_overlay() == OVERLAY_AUTHOR_POINTER
+                and self._pointer_popover.isVisible()
+            )
+            self._tool_rail.set_pointer_menu_open(opened)
+        self._sync_minimap_placement()
 
     def _show_tool_flyout(self, tool: str) -> None:
         if tool == TOOL_STICKY:
@@ -3676,7 +3696,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if not self._free_grid.creation_allowed():
             return
         if self._pointer_popover.isVisible():
-            self._pointer_popover.close()
+            self._canvas_host.close_overlay(OVERLAY_AUTHOR_POINTER)
+            self._tool_rail.set_pointer_menu_open(False)
             return
         self._show_pointer_popover()
 
@@ -3687,12 +3708,10 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _apply_pointer_mode(self, mode: str) -> None:
         self._close_author_flyouts(keep=self._pointer_popover)
-        self._interaction.set_pointer_mode(mode)
-        self._interaction.set_active_tool(TOOL_SELECT)
+        self._interaction.activate_pointer_mode(mode)
         self._sync_tool_rail_from_controller()
         self._sync_tool_cursor()
         self._refresh_author_toolbar()
-        self._free_grid.sync_laser_overlay()
 
     def _show_pointer_popover(self) -> None:
         button = self._tool_rail.tool_button(TOOL_SELECT)
@@ -3786,7 +3805,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _on_select_tool_shortcut(self) -> None:
         if self._text_field_has_focus() or not self._tool_rail.visible_author_tools():
             return
-        self._apply_pointer_mode(POINTER_MODE_MOUSE)
+        self._apply_pointer_mode(self._interaction.pointer_mode())
 
     def _on_sticky_tool_shortcut(self) -> None:
         if self._text_field_has_focus() or not self._free_grid.creation_allowed():
@@ -3883,7 +3902,13 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _sync_tool_cursor(self) -> None:
         self._free_grid.sync_tool_cursor()
-        self._free_grid.sync_laser_overlay()
+        if not self._viewport.is_panning() and not self._viewport.space_down():
+            cursor = self._free_grid.pointer_cursor()
+            viewport = self._board_scroll.viewport()
+            if cursor is None:
+                viewport.unsetCursor()
+            else:
+                viewport.setCursor(cursor)
         if (
             self._draw_create_armed()
             and not self._viewport.is_panning()
@@ -3971,6 +3996,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         elif self._format_picker.isVisible():
             self._format_picker.hide()
         self._format_picker_key = ""
+        self._sync_minimap_placement()
 
     def _format_picker_rect(self, button: QWidget, size: QSize) -> QRect:
         safe = self._author_flyout_safe_rect()
@@ -3992,7 +4018,21 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             x = origin.x() + button.width() - width
         x = min(max(safe.left(), x), max(safe.left(), safe.right() - width))
         y = min(max(safe.top(), y), max(safe.top(), safe.bottom() - height))
-        return QRect(x, y, width, height)
+        rect = QRect(x, y, width, height)
+        # Keep a short format list usable without covering the object currently
+        # being edited whenever there is room beside it.  This is especially
+        # important for Shapes, whose outline otherwise looks like a clipping
+        # or z-order fault under the dropdown.
+        bounds = self._selection_bounds_in_host()
+        if bounds is not None and rect.intersects(bounds):
+            candidates = (
+                QRect(bounds.right() + 7, rect.y(), width, height),
+                QRect(bounds.left() - width - 7, rect.y(), width, height),
+            )
+            for candidate in candidates:
+                if safe.contains(candidate) and not candidate.intersects(bounds):
+                    return candidate
+        return rect
 
     def _on_format_choice_selected(self, value: object) -> None:
         key = self._format_picker_key
@@ -4014,6 +4054,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         ):
             self._close_format_picker()
             return
+        # A formatting dropdown and a creation flyout must not coexist or
+        # compete for the visual top layer.
+        self._close_author_flyouts()
         self._format_picker_key = key
         current = None
         ids = caps.author_ids
@@ -4081,6 +4124,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         else:
             picker._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._canvas_host.open_overlay(OVERLAY_AUTHOR_FORMAT, rect)
+        self._reassert_host_stacking()
+        self._sync_minimap_placement()
 
     def _on_selection_format_requested(self, key: str, value: object) -> None:
         caps = self._selection_capabilities()
@@ -4567,15 +4612,10 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             return
         self._tool_rail.set_creation_enabled(True)
         self._free_grid.set_creation_allowed(True)
-        self._free_grid.sync_laser_overlay()
 
     def _disable_authoring(self, reason: str) -> None:
-        if self._interaction.is_laser_active():
-            self._interaction.set_pointer_mode(POINTER_MODE_MOUSE)
-            self._sync_tool_rail_from_controller()
         self._tool_rail.set_creation_enabled(False, reason)
         self._free_grid.set_creation_allowed(False)
-        self._free_grid.sync_laser_overlay()
 
     def _refresh_card_context(self) -> None:
         """Card actions now live on each card; the floating island stays hidden."""
@@ -4590,6 +4630,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         def hide_toolbar() -> None:
             self._close_format_picker()
             toolbar.hide()
+            self._sync_minimap_placement()
 
         if self._presentation or self._overview.isVisible():
             hide_toolbar()
@@ -4605,7 +4646,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._text_geometry_session is not None
             or self._shape_geometry_session is not None
             or self._connector_geometry_session is not None
-            or getattr(self._free_grid, "_author_geometry_session", None) is not None
+            or self._free_grid.interaction_facts()["author_geometry_active"]
         ):
             hide_toolbar()
             return
@@ -4648,6 +4689,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         toolbar.setGeometry(left, top, width, bar_h)
         toolbar.show()
         self._reassert_host_stacking()
+        self._sync_minimap_placement()
 
     def _selection_bounds_in_host(self) -> QRect | None:
         caps = self._selection_capabilities()
@@ -4851,22 +4893,118 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             vertical.maximum()
         ) > int(vertical.minimum())
 
-    def _position_minimap(self, floating=None) -> None:
-        if not self._minimap.isVisible():
-            return
+    def _minimap_geometry_gesture_active(self) -> bool:
+        if self._drag_kind is not None:
+            return True
+        facts = self._free_grid.interaction_facts()
+        if (
+            facts["gesture_armed"]
+            or facts["gesture_active"]
+            or facts["marquee_active"]
+            or facts["author_geometry_active"]
+        ):
+            return True
+        if (
+            self._text_geometry_session is not None
+            or self._shape_geometry_session is not None
+            or self._connector_geometry_session is not None
+        ):
+            return True
+        return False
+
+    def _widget_rect_in_host(self, widget: QWidget | None) -> FloatingRect | None:
+        if widget is None:
+            return None
+        try:
+            if widget.isHidden() or widget.width() <= 0 or widget.height() <= 0:
+                return None
+            top_left = widget.mapTo(self._canvas_host, QPoint(0, 0))
+        except RuntimeError:
+            return None
+        return FloatingRect(top_left.x(), top_left.y(), widget.width(), widget.height())
+
+    def _minimap_avoid_rects(self) -> tuple[FloatingRect, ...]:
+        avoid: list[FloatingRect] = []
+        bounds = self._selection_bounds_in_host()
+        if bounds is not None and not bounds.isNull():
+            margin = max(AUTHOR_HANDLE_HIT_PX, CARD_HANDLE_HIT_PX)
+            inflated = bounds.adjusted(-margin, -margin, margin, margin)
+            avoid.append(
+                FloatingRect(
+                    inflated.x(), inflated.y(), inflated.width(), inflated.height()
+                )
+            )
+        for widget in (
+            getattr(self, "_selection_toolbar", None),
+            getattr(self, "_format_picker", None),
+            *self._author_flyouts(),
+        ):
+            rect = self._widget_rect_in_host(widget)
+            if rect is not None:
+                avoid.append(rect)
+        editor = self._free_grid.author_text_editor()
+        sticky = self._free_grid.sticky_note_widget()
+        for widget, editing in (
+            (editor, editor.is_editing()),
+            (sticky, sticky.is_editing()),
+        ):
+            if not editing:
+                continue
+            rect = self._widget_rect_in_host(widget)
+            if rect is not None:
+                avoid.append(rect)
+        return tuple(avoid)
+
+    def _minimap_placement_facts(self, floating=None) -> MinimapPlacementFacts:
         layout = floating if floating is not None else self._floating_layout()
-        if layout.minimap is None:
-            self._minimap.hide()
+        size: tuple[int, int] | None = None
+        if self._minimap_should_show():
+            width = int(self._minimap.width()) or DEFAULT_MINIMAP_SIZE[0]
+            height = int(self._minimap.height()) or DEFAULT_MINIMAP_SIZE[1]
+            size = (width, height)
+        return MinimapPlacementFacts(
+            stage=layout.stage,
+            board_island=layout.board_island,
+            global_island=layout.global_island,
+            status_island=layout.status_island,
+            navigation_island=layout.navigation_island,
+            rail=layout.rail,
+            avoid=self._minimap_avoid_rects(),
+            gesture_active=self._minimap_geometry_gesture_active(),
+            size=size,
+        )
+
+    def _sync_minimap_placement(self, floating=None) -> None:
+        minimap = getattr(self, "_minimap", None)
+        if minimap is None:
+            return
+        if not self._minimap_should_show():
+            minimap.hide()
+            self._minimap_placement_key = None
+            return
+        facts = self._minimap_placement_facts(floating)
+        key = minimap_placement_fingerprint(facts)
+        if key == self._minimap_placement_key:
+            return
+        self._minimap_placement_key = key
+        placed = place_minimap(facts)
+        if placed is None:
+            minimap.hide()
             return
         viewport = self._board_scroll.viewport()
-        global_point = self._canvas_host.mapToGlobal(QPoint(layout.minimap.x, layout.minimap.y))
+        global_point = self._canvas_host.mapToGlobal(QPoint(placed.x, placed.y))
         local_point = viewport.mapFromGlobal(global_point)
-        self._minimap.move(local_point)
-        self._minimap.raise_()
+        minimap.move(local_point)
+        minimap.show()
+        self._reassert_host_stacking()
+
+    def _position_minimap(self, floating=None) -> None:
+        self._sync_minimap_placement(floating)
 
     def _refresh_minimap(self, *_args) -> None:
         if not self._minimap_should_show():
             self._minimap.hide()
+            self._minimap_placement_key = None
             return
         viewport = self._board_scroll.viewport()
         origin = self._board_content_origin()
@@ -4881,8 +5019,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             ),
             workspace_extent=self._workspace_extent,
         )
-        self._minimap.show()
-        self._position_minimap()
+        self._sync_minimap_placement()
 
     def _on_minimap_viewport(self, rect: QRect) -> None:
         origin = self._board_content_origin()

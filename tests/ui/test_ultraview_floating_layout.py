@@ -15,9 +15,13 @@ from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     RAIL_WIDTH,
     SAFE_MARGIN,
     CardContextPlacement,
+    MinimapPlacementFacts,
     Rect,
     calculate_floating_layout,
+    minimap_placement_fingerprint,
+    overlay_anchor_facts,
     place_card_context,
+    place_minimap,
 )
 
 
@@ -179,6 +183,36 @@ def test_rail_anchored_overlay_stays_vertically_near_its_trigger_button():
     assert opened.overlay.top > default.overlay.top
 
 
+def test_tall_layout_overlay_uses_span_or_adjacency_instead_of_center_error():
+    """A 592px layout panel cannot center on its upper rail trigger at 1280×800."""
+    idle = calculate_floating_layout((1280, 800), rail_size=(64, 546))
+    # Layout sits near the top of the release rail, not the geometric middle.
+    trigger = Rect(idle.rail.left, idle.rail.top + 100, idle.rail.width, 40)
+    opened = calculate_floating_layout(
+        (1280, 800),
+        overlay_open=True,
+        overlay_size=(368, 592),
+        trigger_rect=trigger,
+        rail_size=(64, 546),
+    )
+    assert opened.overlay is not None
+    _assert_inside(opened.overlay, opened.stage)
+    assert opened.overlay.left >= opened.rail.right
+    assert not opened.overlay.intersects(opened.navigation_island)
+    facts = overlay_anchor_facts(
+        opened.overlay,
+        trigger,
+        opened.rail,
+        requested_height=592,
+        board_island=opened.board_island,
+        navigation_island=opened.navigation_island,
+    )
+    assert facts.trigger_center_in_span or facts.vertically_adjacent
+    assert facts.horizontally_right_of_rail is True
+    assert facts.center_error_y > 44
+    assert facts.clamp_reason == "safe_rect_vertical"
+
+
 def test_global_overlay_right_aligns_under_global_island():
     layout = calculate_floating_layout(
         (1280, 800),
@@ -265,3 +299,71 @@ def test_card_context_avoids_board_island():
     placement = place_card_context((1280, 800), card, size=(232, 40), avoid=(island,))
     assert not placement.rect.intersects(island)
     _assert_inside(placement.rect, Rect(0, 0, 1280, 800))
+
+
+def _minimap_facts(layout, **overrides) -> MinimapPlacementFacts:
+    payload = {
+        "stage": layout.stage,
+        "board_island": layout.board_island,
+        "global_island": layout.global_island,
+        "status_island": layout.status_island,
+        "navigation_island": layout.navigation_island,
+        "rail": layout.rail,
+    }
+    payload.update(overrides)
+    return MinimapPlacementFacts(**payload)
+
+
+def test_minimap_moves_off_bottom_right_selection_and_misses_handles_toolbar():
+    layout = calculate_floating_layout((1280, 800))
+    default = place_minimap(_minimap_facts(layout))
+    assert default is not None
+    assert default.width == 172
+    assert default.height == 112
+    selection = default.inflate(18)
+    handle = Rect(selection.left, selection.bottom - 18, 18, 18)
+    toolbar = Rect(selection.left, selection.top - 56, 220, 48)
+    placed = place_minimap(
+        _minimap_facts(layout, avoid=(selection, handle, toolbar))
+    )
+    assert placed is not None
+    assert placed != default
+    assert not placed.intersects(selection)
+    assert not placed.intersects(handle)
+    assert not placed.intersects(toolbar)
+    assert not placed.intersects(layout.board_island)
+    assert not placed.intersects(layout.navigation_island)
+
+
+def test_minimap_folds_when_every_candidate_collides():
+    layout = calculate_floating_layout((1280, 800))
+    wall = layout.stage
+    assert place_minimap(_minimap_facts(layout, avoid=(wall,))) is None
+
+
+def test_minimap_never_invades_board_island():
+    layout = calculate_floating_layout((1280, 800))
+    default = place_minimap(_minimap_facts(layout))
+    assert default is not None
+    placed = place_minimap(_minimap_facts(layout, avoid=(default,)))
+    if placed is not None:
+        assert not placed.intersects(layout.board_island)
+        assert placed.left >= layout.board_island.right or placed.top >= layout.board_island.bottom
+
+
+def test_minimap_hides_during_gesture_and_restores_without_pointer_samples():
+    layout = calculate_floating_layout((1280, 800))
+    resting = _minimap_facts(layout, gesture_active=False)
+    hidden = _minimap_facts(layout, gesture_active=True)
+    assert place_minimap(hidden) is None
+    active_key = minimap_placement_fingerprint(hidden)
+    # Pointer-move samples are not part of the fingerprint, so repeating the
+    # same stage/chrome/selection/gesture facts must not chatter.
+    assert minimap_placement_fingerprint(_minimap_facts(layout, gesture_active=True)) == active_key
+    restored = place_minimap(resting)
+    assert restored is not None
+    assert minimap_placement_fingerprint(resting) != active_key
+    assert minimap_placement_fingerprint(resting) == minimap_placement_fingerprint(
+        _minimap_facts(layout, gesture_active=False)
+    )
+

@@ -60,8 +60,8 @@ _LINE = QColor(32, 48, 56, 40)
 _SELECTION_BLUE = "#4262FF"
 _INK = QColor("#183039")
 _STICKY_FLYOUT_MIN_WIDTH = 128
-_SHAPE_FLYOUT_MIN_WIDTH = 232
-_DRAW_FLYOUT_MIN_WIDTH = 72
+_SHAPE_FLYOUT_MIN_WIDTH = 208
+_DRAW_FLYOUT_MIN_WIDTH = 104
 _DEFAULT_FLYOUT_MIN_WIDTH = 160
 _STICKY_SWATCH = 48
 _TOOLBAR_HEIGHT = 48
@@ -69,7 +69,7 @@ _CONTROL_SIZE = 36
 _FONT_CELL_WIDTH = 112
 _SIZE_CELL_WIDTH = 60
 _SHAPE_CELL = 42
-_DRAW_CELL = 40
+_DRAW_CELL = 48
 _DRAW_PRESET = 36
 _DRAW_COLOR = 24
 _CATALOG_ROW_HEIGHT = 36
@@ -84,7 +84,9 @@ _SIZE_PICKER_MIN_WIDTH = 104
 _SIZE_PICKER_MAX_WIDTH = 120
 _DRAW_TOOL_STYLE = (
     "QToolButton {"
-    "min-width: 0; min-height: 0; padding: 0; margin: 0;"
+    f"min-width: {_DRAW_CELL}px; max-width: {_DRAW_CELL}px; "
+    f"min-height: {_DRAW_CELL}px; max-height: {_DRAW_CELL}px; "
+    "padding: 0; margin: 0;"
     "background-color: transparent; border: 0; border-radius: 8px; }"
     "QToolButton:checked { background-color: #EEF1FF; }"
     "QToolButton:hover { background-color: #F3F5F6; }"
@@ -253,7 +255,7 @@ class PointerPopover(ToolFlyoutSurface):
 
     _ROWS: tuple[tuple[str, str, str], ...] = (
         (POINTER_MODE_MOUSE, "鼠标", "选择、移动、缩放"),
-        (POINTER_MODE_LASER, "激光笔", "只聚焦，不编辑、不保存"),
+        (POINTER_MODE_LASER, "激光笔", "选择、移动、缩放；仅替换光标形状"),
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -980,11 +982,14 @@ class _DrawSessionButton(QToolButton):
         self.setObjectName(f"ultraViewDraw{self._tool.title()}Button")
         self.setProperty("drawTool", self._tool)
         self.setCheckable(True)
-        self.setFixedSize(_DRAW_CELL, _DRAW_CELL)
         self.setAutoFillBackground(False)
         self.setStyleSheet(_DRAW_TOOL_STYLE)
+        # Apply fixed geometry after the local QSS: its min-width: 0 is a
+        # deliberate reset of the global button chrome, not permission for Qt
+        # to shrink this icon target back to its 31px size hint.
+        self.setFixedSize(_DRAW_CELL, _DRAW_CELL)
         self.setIcon(_draw_subtool_icon(self._tool))
-        self.setIconSize(QSize(20, 20))
+        self.setIconSize(QSize(28, 28))
         if self._tool == DRAW_ERASER:
             self.setToolTip(_ERASER_TOOLTIP)
             self.setAccessibleName("橡皮擦 整笔擦除")
@@ -1409,7 +1414,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         self._columns = 1
         self.min_width = _SHAPE_FLYOUT_MIN_WIDTH
         self.setMinimumWidth(_SHAPE_FLYOUT_MIN_WIDTH)
-        self.setMaximumWidth(240)
+        self.setMaximumWidth(216)
         catalog = {kind: (title, shortcut, family) for kind, title, shortcut, family in _SHAPE_CATALOG}
         for shape in shapes:
             title, shortcut, family = catalog.get(str(shape), (str(shape), "", "shape"))

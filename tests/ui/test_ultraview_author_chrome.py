@@ -7,7 +7,7 @@ import pytest
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QHoverEvent, QImage, QPainter
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QFrame, QMenu, QToolButton, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QMenu, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_tools import CLOSED_SHAPE_TYPES
 
@@ -34,6 +34,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     ConnectorPopover,
     DrawPopover,
     OVERLAY_AUTHOR_FORMAT,
+    OVERLAY_AUTHOR_POINTER,
     PANEL_LAYOUT,
     PANEL_LIBRARY,
     RAIL_BUTTON_SIZE,
@@ -49,11 +50,16 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     StickyPopover,
     ToolRail,
 )
-from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import SAFE_MARGIN
+from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
+    ISLAND_GAP,
+    SAFE_MARGIN,
+    calculate_floating_layout,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
-from mf4_analyzer.ui.ultraview_state import BoardBox, StickyObject, TextObject, default_board
+from mf4_analyzer.ui.ultraview_state import BoardBox, ShapeObject, StickyObject, TextObject, default_board, board_to_payload
 from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
 from mf4_analyzer.ui_kit.ultraview_style import ULTRAVIEW_TITANIUM
+from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
 
 
 def test_creation_rail_is_independent_from_panel_selection_and_starts_disabled(qtbot):
@@ -552,6 +558,24 @@ def test_release_rail_has_minimum_intragroup_gaps_and_divider_clear_space(qtbot)
     assert _map_top(divider, rail) - _map_bottom(filt, rail) - 1 == RAIL_DIVIDER_CLEAR_COMPACT
 
 
+def test_compact_release_rail_size_hint_fits_800x560_band(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.set_creation_enabled(True)
+    rail.set_compact(True)
+    rail.show()
+    rail.adjustSize()
+    QApplication.processEvents()
+    layout = calculate_floating_layout((800, 560))
+    band = layout.status_island.top - ISLAND_GAP - (layout.board_island.bottom + ISLAND_GAP)
+    assert rail.sizeHint().height() <= band
+    assert AUTHOR_TOOL_SELECT in RELEASE_AUTHOR_TOOLS
+    for tool in RELEASE_AUTHOR_TOOLS:
+        button = rail.tool_button(tool)
+        assert button is not None and button.isVisible()
+        assert button.size() == QSize(RAIL_BUTTON_SIZE_COMPACT, RAIL_BUTTON_SIZE_COMPACT)
+
+
 def test_only_one_rail_button_uses_primary_filled_state(qtbot):
     rail = ToolRail()
     qtbot.addWidget(rail)
@@ -658,7 +682,7 @@ def test_shapes_catalog_is_one_column_with_visible_labels_and_shortcuts(qtbot):
     assert "矩形" in labels
     assert all(not button.text() for button in rows)
     assert all(36 <= button.height() <= 38 for button in rows)
-    assert 224 <= shapes.width() <= 240
+    assert 200 <= shapes.width() <= 216
     assert any("L" in (getattr(row, "_shortcut", "") or "") for row in rows)
 
 
@@ -674,6 +698,9 @@ def test_pointer_popover_has_two_36px_rows_and_blue_selected_mode(qtbot):
     assert laser.height() == 36
     assert mouse.property("selected") == "true"
     assert laser.property("selected") == "false"
+    laser_hint = laser.findChild(QLabel, "ultraViewPointerModeHint")
+    assert laser_hint is not None
+    assert laser_hint.text() == "选择、移动、缩放；仅替换光标形状"
     chosen: list[str] = []
     popover.mode_selected.connect(chosen.append)
     QTest.mouseClick(laser, Qt.LeftButton)
@@ -686,10 +713,15 @@ def test_pointer_popover_has_two_36px_rows_and_blue_selected_mode(qtbot):
     assert size.height() >= 80
 
 
-def test_pointer_tile_main_click_emits_select_and_caret_opens_menu(qtbot):
+@pytest.mark.parametrize(
+    ("compact", "expected_size"),
+    ((False, RAIL_BUTTON_SIZE), (True, RAIL_BUTTON_SIZE_COMPACT)),
+)
+def test_pointer_tile_any_click_or_keyboard_activation_opens_menu_without_selecting(qtbot, compact, expected_size):
     rail = ToolRail()
     qtbot.addWidget(rail)
     rail.set_creation_enabled(True)
+    rail.set_compact(compact)
     rail.show()
     QApplication.processEvents()
     pointer = rail.tool_button(AUTHOR_TOOL_SELECT)
@@ -698,28 +730,101 @@ def test_pointer_tile_main_click_emits_select_and_caret_opens_menu(qtbot):
     menus: list[int] = []
     rail.tool_requested.connect(tools.append)
     rail.pointer_menu_requested.connect(lambda: menus.append(1))
-    QTest.mouseClick(pointer, Qt.LeftButton, Qt.NoModifier, QPoint(12, 12))
-    assert tools == [AUTHOR_TOOL_SELECT]
-    QTest.mouseClick(pointer, Qt.LeftButton, Qt.NoModifier, QPoint(pointer.width() - 4, 12))
+    assert pointer.size() == QSize(expected_size, expected_size)
+
+    QTest.mouseClick(pointer, Qt.LeftButton, Qt.NoModifier, QPoint(3, 3))
+    QTest.mouseClick(pointer, Qt.LeftButton, Qt.NoModifier, QPoint(pointer.width() - 3, 3))
+    pointer.setFocus(Qt.OtherFocusReason)
+    QTest.keyClick(pointer, Qt.Key_Space)
+
+    assert menus == [1, 1, 1]
+    assert tools == []
+
+
+def test_pointer_standard_click_emits_menu_requested_once(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.set_creation_enabled(True)
+    rail.show()
+    QApplication.processEvents()
+    pointer = rail.tool_button(AUTHOR_TOOL_SELECT)
+    assert pointer is not None
+    menus: list[int] = []
+    tools: list[str] = []
+    rail.pointer_menu_requested.connect(lambda: menus.append(1))
+    rail.tool_requested.connect(tools.append)
+    assert pointer.accessibleName() == "选择鼠标或激光笔 (V)"
+    assert pointer.property("role") == "icon"
+    assert pointer.property("open") == "false"
+    assert pointer.property("panelOpen") == "false"
+
+    pointer.click()
     assert menus == [1]
-    assert tools == [AUTHOR_TOOL_SELECT]
+    QTest.mouseClick(pointer, Qt.LeftButton)
+    assert menus == [1, 1]
+    pointer.setFocus(Qt.OtherFocusReason)
+    QTest.keyClick(pointer, Qt.Key_Return)
+    assert menus == [1, 1, 1]
+    assert tools == []
+
+
+def test_opening_pointer_popup_does_not_change_mode_selection_history_or_zoom(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "ptr-0")
+    page = harness.page
+    interaction = page.interaction()
+    before_mode = interaction.pointer_mode()
+    before_selection = tuple(interaction.selection())
+    before_zoom = page.board_zoom()
+    before_payload = board_to_payload(harness.board)
+    pointer = page.tool_rail().tool_button(AUTHOR_TOOL_SELECT)
+    assert pointer is not None
+    pointer.click()
+    QApplication.processEvents()
+    popover = page.pointer_popover()
+    assert popover.isVisible()
+    assert page.canvas_host().active_overlay() == OVERLAY_AUTHOR_POINTER
+    assert pointer.property("open") == "true"
+    assert pointer.property("panelOpen") == "true"
+    assert pointer.accessibleName() == "选择鼠标或激光笔 (V)"
+    assert interaction.pointer_mode() == before_mode
+    assert tuple(interaction.selection()) == before_selection
+    assert page.board_zoom() == before_zoom
+    assert board_to_payload(harness.board) == before_payload
+    pointer.click()
+    QApplication.processEvents()
+    assert not popover.isVisible()
+    assert pointer.property("open") == "false"
+    assert pointer.property("panelOpen") == "false"
+    assert interaction.pointer_mode() == before_mode
+    assert tuple(interaction.selection()) == before_selection
+    assert page.board_zoom() == before_zoom
+    assert board_to_payload(harness.board) == before_payload
+
+
+def test_author_rail_uses_native_desktop_and_compact_icon_targets():
+    """Readable tool glyphs use the 24/20px sources without widening hits."""
+    assert (RAIL_ICON_SIZE, RAIL_ICON_SIZE_COMPACT) == (24, 20)
 
 
 def test_draw_popover_is_vertical_and_exposes_three_presets_not_an_always_visible_color_matrix(qtbot):
     draw = DrawPopover()
     qtbot.addWidget(draw)
+    draw.resize(draw.content_size())
     draw.show()
-    draw.adjustSize()
+    QApplication.processEvents()
     tools = [draw._tool_buttons[name] for name in ("pen", "highlighter", "eraser", "lasso")]
     xs = {button.x() for button in tools}
     assert max(xs) - min(xs) <= 2
     assert tools[0].y() < tools[1].y() < tools[2].y() < tools[3].y()
+    assert {button.size().width() for button in tools} == {48}
+    assert {button.iconSize().width() for button in tools} == {28}
     presets = draw.preset_buttons("pen")
     assert len(presets) == 3
     assert not draw.preset_editor_visible()
     for button in draw._color_buttons.values():
         assert not button.isVisible()
-    assert 64 <= draw.width() <= 96
+    assert 76 <= draw.width() <= 104
     draw.show_preset_editor(True)
     QApplication.processEvents()
     assert any(button.isVisible() for button in draw._color_buttons.values())
@@ -799,6 +904,69 @@ def test_format_picker_is_anchored_to_trigger_and_inside_safe_rect(qtbot, qapp):
     assert picker.geometry().left() >= safe.left()
     assert picker.geometry().right() <= safe.right()
     assert picker.column_count() == 1
+
+
+def test_format_picker_stays_above_shapes_without_covering_selected_object(qtbot, qapp):
+    harness = _prepare_text_selection(
+        qtbot, qapp, (1182, 768), box=BoardBox(3.0, 8.0, 4.0, 2.0)
+    )
+    page = harness.page
+    shapes_button = page.tool_rail().tool_button(AUTHOR_TOOL_SHAPES)
+    assert shapes_button is not None
+    QTest.mouseClick(shapes_button, Qt.LeftButton)
+    QApplication.processEvents()
+    shapes = page.shape_popover()
+    assert shapes.isVisible()
+
+    list_button = page.selection_toolbar().button("list_style")
+    assert list_button is not None
+    QTest.mouseClick(list_button, Qt.LeftButton)
+    QApplication.processEvents()
+
+    picker = page.format_picker()
+    host = page.canvas_host()
+    bounds = page._selection_bounds_in_host()
+    assert bounds is not None
+    assert host.active_overlay() == OVERLAY_AUTHOR_FORMAT
+    assert picker.isVisible()
+    assert not shapes.isVisible()
+    assert not picker.geometry().intersects(bounds)
+    page._reassert_host_stacking()
+    children = [child for child in host.children() if isinstance(child, QWidget) and child.isVisible()]
+    assert children[-1] is picker
+
+
+def test_shape_picker_moves_beside_the_selected_shape_when_below_would_overlap(qtbot, qapp):
+    from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
+
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.resize(1182, 768)
+    free, _cards = _prepare_free_grid(harness, qtbot, "shape-picker-0")
+    shape = ShapeObject(
+        "shape-picker",
+        "shape",
+        box=BoardBox(2.0, 8.0, 4.0, 3.0),
+        shape="rectangle",
+    )
+    harness.board.author_objects = [shape]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("shape-picker")
+    free.sync_selection_projection()
+    harness.page._refresh_author_toolbar()
+    QApplication.processEvents()
+
+    button = harness.page.selection_toolbar().button("shape")
+    assert button is not None
+    QTest.mouseClick(button, Qt.LeftButton)
+    QApplication.processEvents()
+
+    picker = harness.page.format_picker()
+    bounds = harness.page._selection_bounds_in_host()
+    assert picker.isVisible()
+    assert bounds is not None
+    assert not picker.geometry().intersects(bounds)
 
 
 def test_flyout_corner_pixels_are_transparent_without_rectangular_backing(qtbot, qapp):

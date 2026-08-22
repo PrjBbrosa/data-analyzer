@@ -1,10 +1,10 @@
 """R4 Sticky vertical slice: QTest rail → canvas → CJK → undo → payload."""
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QPoint, Qt
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QLabel
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
     STICKY_DEFAULT_HEIGHT,
@@ -16,9 +16,15 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import pixels_to_board_point
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
+    AUTHOR_TOOL_DRAW,
     AUTHOR_TOOL_SELECT,
+    AUTHOR_TOOL_SHAPES,
     AUTHOR_TOOL_STICKY,
+    AUTHOR_TOOL_TEXT,
+    RAIL_BUTTON_SIZE_COMPACT,
+    RELEASE_AUTHOR_TOOLS,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import ISLAND_GAP
 from mf4_analyzer.ui.ultraview_state import (
     BoardBox,
     BoardEditEntry,
@@ -298,10 +304,72 @@ def test_rail_and_sticky_popover_fit_800x560(qtbot):
     page.resize(800, 560)
     QApplication.processEvents()
     rail = page.tool_rail()
-    select = rail.tool_button(AUTHOR_TOOL_SELECT)
+    assert rail.is_compact()
+    tools = (
+        AUTHOR_TOOL_SELECT,
+        AUTHOR_TOOL_STICKY,
+        AUTHOR_TOOL_TEXT,
+        AUTHOR_TOOL_SHAPES,
+        AUTHOR_TOOL_DRAW,
+    )
+    assert tools == RELEASE_AUTHOR_TOOLS
+    rail_rect = QRect(0, 0, rail.width(), rail.height())
+    hits: list[QRect] = []
+    for tool in tools:
+        button = rail.tool_button(tool)
+        assert button is not None and button.isVisible()
+        assert button.width() >= RAIL_BUTTON_SIZE_COMPACT
+        assert button.height() >= RAIL_BUTTON_SIZE_COMPACT
+        origin = button.mapTo(rail, QPoint(0, 0))
+        hit = QRect(origin, button.size())
+        assert rail_rect.contains(hit), f"{tool} clipped: {hit} rail={rail_rect}"
+        hits.append(hit)
+    for index, left in enumerate(hits):
+        for right in hits[index + 1 :]:
+            assert not left.intersects(right)
+    board_island = page.board_island()
+    status = page.status_island()
+    nav = page.navigation_island()
+    band_top = board_island.y() + board_island.height() + ISLAND_GAP
+    band_bottom = status.y() - ISLAND_GAP
+    available = max(0, band_bottom - band_top)
+    assert rail.height() <= available
+    assert status.y() >= rail.y() + rail.height()
+    rail_host = QRect(rail.x(), rail.y(), rail.width(), rail.height())
+    assert not rail_host.intersects(QRect(status.x(), status.y(), status.width(), status.height()))
+    assert not rail_host.intersects(QRect(nav.x(), nav.y(), nav.width(), nav.height()))
+    rail.set_badge("unplaced", 4)
+    rail.set_stale_count(2)
+    QApplication.processEvents()
+    host_buttons = [
+        rail.tool_button(tool)
+        for tool in tools
+        if rail.tool_button(tool) is not None
+    ]
+    host_buttons.extend(
+        button
+        for button in (
+            rail.panel_button("library"),
+            rail.free_grid_button(),
+            rail.panel_button("layout"),
+            rail.panel_button("filter"),
+            rail.panel_button("unplaced"),
+            rail.sync_all_button(),
+        )
+        if button is not None
+    )
+    for badge in rail.findChildren(QLabel):
+        if badge.isHidden() or badge.width() <= 0:
+            continue
+        badge_hit = QRect(badge.mapTo(rail, QPoint(0, 0)), badge.size())
+        assert rail_rect.contains(badge_hit)
+        owners = [
+            button
+            for button in host_buttons
+            if QRect(button.mapTo(rail, QPoint(0, 0)), button.size()).intersects(badge_hit)
+        ]
+        assert len(owners) <= 1, f"{badge.objectName()} covers multiple rail buttons"
     sticky = rail.tool_button(AUTHOR_TOOL_STICKY)
-    assert select is None
-    assert sticky is not None and sticky.isVisible()
     popover = page.sticky_popover()
     popover.popup(sticky.mapToGlobal(sticky.rect().center()))
     QApplication.processEvents()

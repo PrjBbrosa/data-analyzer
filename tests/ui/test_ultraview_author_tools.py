@@ -4,14 +4,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QPoint, Qt
+from PyQt5.QtCore import QEvent, QPoint, QSize, Qt
 from PyQt5.QtGui import QImage, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
     ESC_DRAFT,
-    ESC_LASER,
     ESC_SELECT,
     ESC_SELECTION,
     HIT_AUTHOR,
@@ -37,6 +36,14 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import RELEASE_AUTHOR_TOOLS
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
+from mf4_analyzer.ui.chart_stack.ultraview.laser_cursor import (
+    LASER_CURSOR_HOTSPOT,
+    LASER_CURSOR_LOGICAL_SIZE,
+    LASER_CURSOR_PALETTE_VERSION,
+    clear_laser_cursor_cache,
+    laser_cursor_cache_key,
+    laser_pointer_cursor,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import CardViewModel, FreeGridBoard
 from mf4_analyzer.ui.ultraview_state import (
@@ -53,8 +60,10 @@ from tests.ui.test_ultraview_page import (
     _Harness,
     _blank_board_point,
     _drag_card,
+    _east_handle_pos,
     _marquee,
     _prepare_free_grid,
+    _send_mouse_move,
     _select_card,
     _selection_view_ids,
 )
@@ -186,7 +195,7 @@ def test_tool_draft_cancel_commit_do_not_mutate_payload():
     assert controller.transient_state()["draft"] is None
 
 
-def test_pointer_mode_defaults_to_mouse_and_laser_clears_selection_without_payload():
+def test_pointer_mode_is_transient_and_laser_keeps_select_state_without_payload():
     board = default_board()
     before = board_to_payload(board)
     controller = BoardInteractionController()
@@ -195,39 +204,173 @@ def test_pointer_mode_defaults_to_mouse_and_laser_clears_selection_without_paylo
     controller.select_only_author("missing")
     controller.set_pointer_mode("not-a-mode")
     assert controller.pointer_mode() == POINTER_MODE_MOUSE
-    controller.set_pointer_mode(POINTER_MODE_LASER)
+    controller.set_active_tool(TOOL_STICKY)
+    controller.begin_draft(TOOL_STICKY, origin=(1.0, 1.0))
+    controller.activate_pointer_mode(POINTER_MODE_LASER)
     assert controller.pointer_mode() == POINTER_MODE_LASER
     assert controller.active_tool() == TOOL_SELECT
     assert controller.is_laser_active() is True
-    assert not controller.selection()
+    assert controller.selection() == frozenset({AuthorKey("missing")})
+    assert controller.draft() is None
     assert controller.transient_state()["pointer_mode"] == POINTER_MODE_LASER
     assert board_to_payload(board) == before
-    assert controller.consume_escape() == ESC_LASER
+    controller.set_pointer_mode(POINTER_MODE_MOUSE)
+    assert controller.active_tool() == TOOL_SELECT
+    assert controller.selection() == frozenset({AuthorKey("missing")})
+    assert controller.consume_escape() == ESC_SELECTION
     assert controller.pointer_mode() == POINTER_MODE_MOUSE
-    assert controller.is_laser_active() is False
     controller.reset_session()
     assert controller.pointer_mode() == POINTER_MODE_MOUSE
 
 
-def test_laser_clicks_do_not_select_cards_or_write_payload(qtbot):
+def test_laser_cursor_keeps_select_clicks_and_resize_handles(qtbot):
     harness = _Harness(qtbot)
-    free, (card,) = _prepare_free_grid(harness, qtbot, "laser-0")
+    free, (left, right) = _prepare_free_grid(harness, qtbot, "laser-0", "laser-1")
     controller = harness.page.interaction()
     before = board_to_payload(harness.board)
+    _select_card(left)
+    selected = controller.card_selection()
     harness.page._apply_pointer_mode(POINTER_MODE_LASER)
     QApplication.processEvents()
     assert controller.is_laser_active() is True
-    QTest.mouseClick(card, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
+    assert controller.active_tool() == TOOL_SELECT
+    assert controller.card_selection() == selected
+    assert free.cursor().shape() == Qt.BitmapCursor
+    laser_cursor = free.cursor()
+    assert laser_cursor.pixmap().size() == QSize(32, 32)
+    assert laser_cursor.hotSpot() == QPoint(25, 5)
+    assert laser_cursor.pixmap().toImage().pixelColor(25, 5).red() > 180
+    assert harness.page.board_scroll_area().viewport().cursor().shape() == Qt.BitmapCursor
+    QTest.mouseClick(right, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
     QApplication.processEvents()
     assert controller.is_laser_active() is True
-    assert not controller.selection()
+    assert controller.card_selection() == frozenset({make_ref("time", "laser-1")})
     assert board_to_payload(harness.board) == before
-    QTest.mouseClick(free, Qt.LeftButton, Qt.NoModifier, _blank_board_point(free))
+    _send_mouse_move(right, _east_handle_pos(right), buttons=Qt.NoButton)
+    assert right.cursor().shape() == Qt.SizeHorCursor
+    harness.page._apply_pointer_mode(POINTER_MODE_MOUSE)
+    assert controller.card_selection() == frozenset({make_ref("time", "laser-1")})
+    assert harness.page.board_scroll_area().viewport().cursor().shape() == Qt.ArrowCursor
+
+
+def _laser_dot_color(cursor):
+    pixmap = cursor.pixmap()
+    image = pixmap.toImage()
+    dpr = float(pixmap.devicePixelRatioF()) or 1.0
+    hot = cursor.hotSpot()
+    x = min(image.width() - 1, max(0, int(round(hot.x() * dpr))))
+    y = min(image.height() - 1, max(0, int(round(hot.y() * dpr))))
+    return image.pixelColor(x, y)
+
+
+def test_laser_cursor_pixmap_backing_and_hotspot_follow_dpr(qtbot):
+    del qtbot
+    clear_laser_cursor_cache()
+    one = laser_pointer_cursor(dpr=1.0)
+    two = laser_pointer_cursor(dpr=2.0)
+    hot_x, hot_y = LASER_CURSOR_HOTSPOT
+    hotspot = QPoint(hot_x, hot_y)
+
+    one_pixmap = one.pixmap()
+    assert abs(one_pixmap.devicePixelRatioF() - 1.0) < 1e-6
+    assert one_pixmap.width() == LASER_CURSOR_LOGICAL_SIZE
+    assert one_pixmap.height() == LASER_CURSOR_LOGICAL_SIZE
+    assert one_pixmap.width() / one_pixmap.devicePixelRatioF() == LASER_CURSOR_LOGICAL_SIZE
+    assert one.hotSpot() == hotspot
+    assert _laser_dot_color(one).red() > 180
+
+    two_pixmap = two.pixmap()
+    assert abs(two_pixmap.devicePixelRatioF() - 2.0) < 1e-6
+    assert two_pixmap.width() == LASER_CURSOR_LOGICAL_SIZE * 2
+    assert two_pixmap.height() == LASER_CURSOR_LOGICAL_SIZE * 2
+    assert two_pixmap.width() / two_pixmap.devicePixelRatioF() == LASER_CURSOR_LOGICAL_SIZE
+    assert two.hotSpot() == hotspot
+    assert _laser_dot_color(two).red() > 180
+
+
+def test_laser_cursor_cache_identity_uses_dpr_size_and_palette(qtbot):
+    del qtbot
+    clear_laser_cursor_cache()
+    one = laser_pointer_cursor(dpr=1.0)
+    assert one is laser_pointer_cursor(dpr=1.0)
+    two = laser_pointer_cursor(dpr=2.0)
+    sized = laser_pointer_cursor(dpr=1.0, logical_size=48)
+    paletted = laser_pointer_cursor(
+        dpr=1.0,
+        palette_version=LASER_CURSOR_PALETTE_VERSION + 1,
+    )
+    assert one is not two
+    assert one is not sized
+    assert one is not paletted
+    assert laser_cursor_cache_key(dpr=1.0) != laser_cursor_cache_key(dpr=2.0)
+    assert laser_cursor_cache_key(dpr=1.0, logical_size=32) != laser_cursor_cache_key(
+        dpr=1.0, logical_size=48
+    )
+    assert laser_cursor_cache_key(dpr=1.0, palette_version=1) != laser_cursor_cache_key(
+        dpr=1.0, palette_version=2
+    )
+    clear_laser_cursor_cache()
+    rebuilt = laser_pointer_cursor(dpr=1.0)
+    assert rebuilt is not one
+    assert rebuilt is laser_pointer_cursor(dpr=1.0)
+
+
+def test_laser_cursor_lifecycle_clears_cache_on_reset_screen_change_and_hide(qtbot):
+    clear_laser_cursor_cache()
+    board = FreeGridBoard()
+    qtbot.addWidget(board)
+    board.set_creation_allowed(True)
+    board.interaction().activate_pointer_mode(POINTER_MODE_LASER)
+    board.sync_tool_cursor()
+    first = board.pointer_cursor()
+    assert first is not None
+    assert first is laser_pointer_cursor(dpr=float(board.devicePixelRatioF()) or 1.0)
+    assert board.cursor().shape() == Qt.BitmapCursor
+
+    board.reset_transient_interaction()
+    assert board.interaction().is_laser_active() is False
+    assert board.pointer_cursor() is None
+    assert board.cursor().shape() != Qt.BitmapCursor
+
+    board.set_creation_allowed(True)
+    board.interaction().activate_pointer_mode(POINTER_MODE_LASER)
+    board.sync_tool_cursor()
+    after_reset = board.pointer_cursor()
+    assert after_reset is not None
+    assert after_reset is not first
+
+    screen_change = getattr(QEvent, "ScreenChangeInternal", None) or getattr(
+        QEvent, "DevicePixelRatioChange", None
+    )
+    if screen_change is not None:
+        QApplication.sendEvent(board, QEvent(screen_change))
+        after_screen = board.pointer_cursor()
+        assert after_screen is not None
+        assert after_screen is not after_reset
+
+    live = board.pointer_cursor()
+    # Page presentation / overview / leave-FreeGrid call set_creation_allowed(False).
+    board.set_creation_allowed(False)
+    assert board.pointer_cursor() is None
+    assert board.cursor().shape() != Qt.BitmapCursor
+    board.set_creation_allowed(True)
+    board.interaction().activate_pointer_mode(POINTER_MODE_LASER)
+    board.sync_tool_cursor()
+    after_gate = board.pointer_cursor()
+    assert after_gate is not None
+    assert after_gate is not live
+
+    board.show()
+    qtbot.waitExposed(board)
+    shown = board.pointer_cursor()
+    board.hide()
     QApplication.processEvents()
-    assert not controller.selection()
-    assert board_to_payload(harness.board) == before
-    overlay = free._laser_overlay
-    assert overlay.isVisible()
+    assert board.cursor().shape() != Qt.BitmapCursor
+    board.show()
+    qtbot.waitExposed(board)
+    restored = board.pointer_cursor()
+    assert restored is not None
+    assert restored is not shown
 
 
 def test_sticky_palette_is_copied_into_the_next_draft():

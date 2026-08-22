@@ -141,6 +141,18 @@ class Rect:
             and other.top < self.bottom
         )
 
+    def inflate(self, amount: int) -> "Rect":
+        """Expand on all sides. Negative amounts fall back to ``inset``."""
+        margin = _integer(amount)
+        if margin < 0:
+            return self.inset(-margin)
+        return Rect(
+            self.x - margin,
+            self.y - margin,
+            self.width + 2 * margin,
+            self.height + 2 * margin,
+        )
+
 
 @dataclass(frozen=True)
 class CardContextPlacement:
@@ -148,6 +160,26 @@ class CardContextPlacement:
 
     rect: Rect
     edge: str
+
+
+@dataclass(frozen=True)
+class MinimapPlacementFacts:
+    """Qt-free inputs for minimap candidate selection.
+
+    Selection/toolbar/editor rectangles are already in stage coordinates and,
+    for selection, already inflated by handle/hit margin.  This policy never
+    reads preview pixels, walks widgets, or persists a placement.
+    """
+
+    stage: Rect
+    board_island: Rect
+    global_island: Rect
+    status_island: Rect
+    navigation_island: Rect
+    rail: Rect
+    avoid: tuple[Rect, ...] = ()
+    gesture_active: bool = False
+    size: Size | None = DEFAULT_MINIMAP_SIZE
 
 
 @dataclass(frozen=True)
@@ -308,7 +340,17 @@ def calculate_floating_layout(
         max(0, safe.right - content_left),
         max(0, fit_bottom - content_top),
     )
-    minimap = _place_minimap(safe, navigation_island, minimap_size)
+    minimap = place_minimap(
+        MinimapPlacementFacts(
+            stage=stage,
+            board_island=board_island,
+            global_island=global_island,
+            status_island=status_island,
+            navigation_island=navigation_island,
+            rail=rail,
+            size=minimap_size,
+        )
+    )
     overlay = (
         _place_overlay(
             safe,
@@ -447,6 +489,84 @@ def _place_overlay(
     return Rect(x, y, width, height).clamp_to(safe)
 
 
+@dataclass(frozen=True)
+class OverlayAnchorFacts:
+    """Adjacency/clamp facts for a rail-anchored overlay.
+
+    A tall panel may be safe-rect clamped so its center cannot sit on the
+    trigger.  The satisfiable contract is: the trigger center lies in the
+    overlay's visible vertical span, or the nearest overlay edge stays
+    adjacent, and the overlay sits to the right of the rail.
+    """
+
+    trigger_center_in_span: bool
+    vertically_adjacent: bool
+    horizontally_right_of_rail: bool
+    clamp_reason: str | None
+    center_error_y: int
+    nearest_edge_gap_y: int
+    requested_height: int
+    placed_height: int
+
+
+def overlay_anchor_facts(
+    overlay: Rect,
+    trigger: Rect,
+    rail: Rect,
+    *,
+    requested_height: int | None = None,
+    board_island: Rect | None = None,
+    navigation_island: Rect | None = None,
+    adjacent_px: int = ISLAND_GAP,
+) -> OverlayAnchorFacts:
+    """Describe how a placed overlay relates to its rail trigger.
+
+    ``center_error_y`` is recorded for diagnostics; callers must not treat
+    it as a pass/fail budget when the panel was clamped.
+    """
+    requested = _length(requested_height if requested_height is not None else overlay.height)
+    trigger_cy = trigger.top + trigger.height // 2
+    overlay_cy = overlay.top + overlay.height // 2
+    in_span = overlay.height > 0 and overlay.top <= trigger_cy < overlay.bottom
+    if in_span:
+        nearest_gap = 0
+    elif trigger_cy < overlay.top:
+        nearest_gap = overlay.top - trigger.bottom
+    else:
+        nearest_gap = trigger.top - overlay.bottom
+    adjacency = max(0, _length(adjacent_px))
+    vertically_adjacent = in_span or nearest_gap <= adjacency
+    unconstrained_y = trigger.top + (trigger.height - requested) // 2
+    clamp_reason: str | None = None
+    if overlay.height < requested:
+        clamp_reason = "height_clamped_to_safe_band"
+    elif overlay.y != unconstrained_y:
+        nav_ceiling = (
+            navigation_island.top - OVERLAY_GAP - overlay.height
+            if navigation_island is not None
+            else None
+        )
+        board_floor = (
+            board_island.bottom + ISLAND_GAP if board_island is not None else None
+        )
+        if nav_ceiling is not None and overlay.y >= nav_ceiling:
+            clamp_reason = "navigation_ceiling"
+        elif board_floor is not None and overlay.y <= board_floor:
+            clamp_reason = "safe_rect_vertical"
+        else:
+            clamp_reason = "safe_rect_vertical"
+    return OverlayAnchorFacts(
+        trigger_center_in_span=in_span,
+        vertically_adjacent=vertically_adjacent,
+        horizontally_right_of_rail=overlay.left >= rail.right,
+        clamp_reason=clamp_reason,
+        center_error_y=abs(overlay_cy - trigger_cy),
+        nearest_edge_gap_y=nearest_gap,
+        requested_height=requested,
+        placed_height=overlay.height,
+    )
+
+
 def _place_global_overlay(
     safe: Rect,
     board_island: Rect,
@@ -472,25 +592,106 @@ def _place_global_overlay(
     return placed
 
 
-def _place_minimap(
-    safe: Rect, navigation_island: Rect, size: Size | None
-) -> Rect | None:
-    if size is None:
+def _rect_key(rect: Rect | None) -> tuple[int, int, int, int] | None:
+    if rect is None or rect.width <= 0 or rect.height <= 0:
         return None
-    width, height = _size(size)
-    max_height = max(0, navigation_island.top - OVERLAY_GAP - safe.top)
+    return (rect.x, rect.y, rect.width, rect.height)
+
+
+def minimap_placement_fingerprint(facts: MinimapPlacementFacts) -> tuple:
+    """Stable identity for stage/safe/chrome/selection/gesture — not pointer samples."""
+    size = None if facts.size is None else _size(facts.size)
+    avoid = tuple(_rect_key(item) for item in facts.avoid)
+    return (
+        _rect_key(facts.stage),
+        _rect_key(facts.board_island),
+        _rect_key(facts.global_island),
+        _rect_key(facts.status_island),
+        _rect_key(facts.navigation_island),
+        _rect_key(facts.rail),
+        avoid,
+        bool(facts.gesture_active),
+        size,
+    )
+
+
+def place_minimap(facts: MinimapPlacementFacts) -> Rect | None:
+    """Choose a safe minimap rect or ``None`` so the map folds into overview.
+
+    Candidates are tried in a stable order: bottom-right above Navigation,
+    then top-right below GlobalIsland.  The top-left Board Island is never a
+    candidate.  Geometry gestures hide the map entirely; pointer-move samples
+    are not an input, so they cannot chatter the result.
+    """
+    if facts.gesture_active or facts.size is None:
+        return None
+    width, height = _size(facts.size)
+    if width <= 0 or height <= 0:
+        return None
+    safe = facts.stage.inset(SAFE_MARGIN)
     width = min(width, safe.width)
-    height = min(height, max_height)
-    if width == 0 or height == 0:
-        # In short canvases minimap folds into the overview action instead of
-        # creating a zero-sized overlap target.
+    if width <= 0:
         return None
-    return Rect(
-        safe.right - width,
-        navigation_island.top - OVERLAY_GAP - height,
-        width,
-        height,
-    ).clamp_to(safe)
+    blockers = tuple(
+        item
+        for item in (
+            facts.board_island,
+            facts.global_island,
+            facts.status_island,
+            facts.navigation_island,
+            facts.rail,
+            *facts.avoid,
+        )
+        if item.width > 0 and item.height > 0
+    )
+
+    def _fits(rect: Rect | None) -> Rect | None:
+        if rect is None or rect.width <= 0 or rect.height <= 0:
+            return None
+        if (
+            rect.left < safe.left
+            or rect.top < safe.top
+            or rect.right > safe.right
+            or rect.bottom > safe.bottom
+        ):
+            return None
+        if rect.intersects(facts.board_island):
+            return None
+        if any(rect.intersects(item) for item in blockers):
+            return None
+        return rect
+
+    def _right_aligned(top: int, bottom: int) -> Rect | None:
+        band = max(0, bottom - top)
+        fitted_height = min(height, band)
+        if fitted_height <= 0:
+            return None
+        return Rect(
+            safe.right - width,
+            bottom - fitted_height,
+            width,
+            fitted_height,
+        ).clamp_to(safe)
+
+    nav_ceiling = facts.navigation_island.top - OVERLAY_GAP
+    bottom_right = _right_aligned(safe.top, nav_ceiling)
+    fitted = _fits(bottom_right)
+    if fitted is not None:
+        return fitted
+
+    top_right_top = max(safe.top, facts.global_island.bottom + OVERLAY_GAP)
+    # Sit just under GlobalIsland rather than sliding along the band.
+    top_band = max(0, nav_ceiling - top_right_top)
+    top_height = min(height, top_band)
+    top_right = None
+    if top_height > 0:
+        top_right = Rect(
+            safe.right - width,
+            top_right_top,
+            width,
+            top_height,
+        ).clamp_to(safe)
+    return _fits(top_right)
 
 
 __all__ = [
@@ -514,8 +715,13 @@ __all__ = [
     "STATUS_ISLAND_WIDTH",
     "CardContextPlacement",
     "FloatingLayout",
+    "MinimapPlacementFacts",
+    "OverlayAnchorFacts",
     "Rect",
     "calculate_floating_layout",
+    "minimap_placement_fingerprint",
+    "overlay_anchor_facts",
     "place_card_context",
+    "place_minimap",
     "stage_rect",
 ]

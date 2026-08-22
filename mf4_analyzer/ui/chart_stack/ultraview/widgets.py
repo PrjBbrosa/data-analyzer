@@ -18,6 +18,7 @@ from PyQt5.QtCore import QByteArray, QEvent, QMimeData, QObject, QPoint, QRect, 
 from PyQt5.QtGui import (
     QColor,
     QContextMenuEvent,
+    QCursor,
     QDrag,
     QFont,
     QImage,
@@ -88,6 +89,11 @@ from mf4_analyzer.ui_kit.ultraview_style import titanium_color
 from mf4_analyzer.ui_kit.widgets import SearchField
 
 from .chrome import ULTRAVIEW_MUTED
+from .laser_cursor import (
+    LASER_CURSOR_DPR_CHANGE_EVENTS,
+    clear_laser_cursor_cache,
+    laser_pointer_cursor,
+)
 from .layouts import (
     BASE_BOARD_SIZE,
     BOARD_PADDING,
@@ -3068,13 +3074,6 @@ class FreeGridCard(UltraViewCard):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
             parent = self.parentWidget()
-            consume = getattr(parent, "_consume_laser_pointer", None)
-            board_pos = getattr(parent, "_board_pos", None)
-            if callable(consume) and callable(board_pos):
-                mapped = QPoint(*board_pos(self, event.pos()))
-                if consume(mapped):
-                    event.accept()
-                    return
             already_selected = bool(self._model.selected)
             shift = bool(event.modifiers() & Qt.ShiftModifier)
             if not shift and not already_selected:
@@ -3129,47 +3128,6 @@ class FreeGridCard(UltraViewCard):
             event.accept()
             return
         super().keyPressEvent(event)
-
-
-class LaserFocusOverlay(QWidget):
-    """Transient red focus halo. Not an author object and not a theme colour."""
-
-    SIZE = 48
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("ultraViewLaserFocusOverlay")
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(self.SIZE, self.SIZE)
-        self.hide()
-
-    def set_focus(self, pos: QPoint | None) -> None:
-        if pos is None:
-            self.hide()
-            return
-        half = self.SIZE // 2
-        self.move(int(pos.x()) - half, int(pos.y()) - half)
-        self.show()
-        self.raise_()
-        self.update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        center = self.rect().center()
-        ring = QColor(241, 81, 81, 36)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(ring)
-        painter.drawEllipse(center, 16, 16)
-        painter.setBrush(QColor(255, 255, 255, 140))
-        painter.setPen(QPen(QColor(241, 81, 81), 2.0))
-        painter.drawEllipse(center, 7, 7)
-        painter.setPen(QPen(QColor(241, 81, 81), 1.6, Qt.SolidLine, Qt.RoundCap))
-        painter.drawLine(center.x(), center.y() - 14, center.x(), center.y() + 14)
-        painter.drawLine(center.x() - 14, center.y(), center.x() + 14, center.y())
-        painter.end()
 
 
 class FreeGridBoard(QWidget):
@@ -3249,7 +3207,6 @@ class FreeGridBoard(QWidget):
         self._gesture = FreeGridGesture(self._interaction)
         self._overlay = ViewportFeedbackSurface(self)
         self._overlay.hide()
-        self._laser_overlay = LaserFocusOverlay(self)
         self._latest_pointer_sample: tuple[tuple[int, int], bool, QPoint | None] | None = None
         self._last_pointer_sample: tuple[tuple[int, int], bool, QPoint | None] | None = None
         self._last_consumed_candidate_fingerprint: tuple | None = None
@@ -3369,14 +3326,13 @@ class FreeGridBoard(QWidget):
     def set_creation_allowed(self, allowed: bool) -> None:
         """Page gates Sticky create for presentation / overview / template."""
         self._creation_allowed = bool(allowed)
-        if self._creation_allowed:
-            self._sync_tool_cursor()
-            return
-        self.hide_author_editor()
-        if self._interaction.draft() is not None:
-            self._interaction.cancel_draft()
-            self._overlay.set_marquee(None)
-        self._sync_tool_cursor()
+        if not self._creation_allowed:
+            self.hide_author_editor()
+            if self._interaction.draft() is not None:
+                self._interaction.cancel_draft()
+                self._overlay.set_marquee(None)
+            clear_laser_cursor_cache()
+        self._reapply_pointer_cursor()
 
     def creation_allowed(self) -> bool:
         return self._creation_allowed
@@ -3432,6 +3388,8 @@ class FreeGridBoard(QWidget):
         self._interaction.reset_session()
         self._apply_selection_flags()
         self._sync_author_projection()
+        clear_laser_cursor_cache()
+        self._reapply_pointer_cursor()
 
     def _author_pixel_rect(
         self, metrics: GridMetrics
@@ -3576,6 +3534,18 @@ class FreeGridBoard(QWidget):
             "presents": int(getattr(overlay, "present_count", self._diag_frame_presents)),
             "paints": int(getattr(overlay, "paint_count", 0)),
             "generation": int(getattr(overlay, "generation", self._feedback_generation)),
+            "gesture_id": int(getattr(overlay, "gesture_id", 0)),
+            "layout_revision": int(self._layout_revision),
+        }
+
+    def interaction_facts(self) -> dict[str, bool]:
+        """Qt-free flags Page needs without reading private session dicts."""
+        gesture = self._gesture
+        return {
+            "author_geometry_active": self._author_geometry_session is not None,
+            "gesture_armed": bool(gesture.is_armed()),
+            "gesture_active": bool(gesture.is_active()),
+            "marquee_active": gesture.marquee() is not None,
         }
 
     def workspace_safety_blocked(self) -> bool:
@@ -3750,6 +3720,7 @@ class FreeGridBoard(QWidget):
     def _on_workspace_destroyed(self, _object=None) -> None:
         # QObject teardown can arrive after child deletion.  Emitting the
         # lifetime end is safe and lets Page stop an edge timer it owns.
+        clear_laser_cursor_cache()
         self._stop_pointer_coalesce(drop=True)
         self.hide_author_editor()
         self._interaction.reset_session()
@@ -3895,8 +3866,6 @@ class FreeGridBoard(QWidget):
             self._author_text_editor.raise_()
         if self._sticky_note.is_editing():
             self._sticky_note.raise_()
-        if self._laser_overlay.isVisible():
-            self._laser_overlay.raise_()
 
     def _sync_editor_exclusion(self) -> None:
         rect = None
@@ -4059,10 +4028,6 @@ class FreeGridBoard(QWidget):
     ) -> None:
         if event.button() != Qt.LeftButton:
             return
-        mapped = QPoint(*self._board_pos(card, event.pos()))
-        if self._consume_laser_pointer(mapped):
-            event.accept()
-            return
         ref = parse_ref_payload(
             {"section": card.model().section, "view_id": card.model().view_id}
         )
@@ -4131,11 +4096,6 @@ class FreeGridBoard(QWidget):
         self._apply_selection_flags()
 
     def handle_card_mouse_hover(self, card: FreeGridCard, event: QMouseEvent) -> None:
-        if self._laser_active():
-            mapped = QPoint(*self._board_pos(card, event.pos()))
-            self._laser_overlay.set_focus(mapped)
-            card.unsetCursor()
-            return
         if (
             not card.model().selected
             or len(self._gesture.selection()) != 1
@@ -4188,25 +4148,58 @@ class FreeGridBoard(QWidget):
     def sync_tool_cursor(self) -> None:
         self._sync_tool_cursor()
 
-    def _laser_active(self) -> bool:
-        return bool(self._creation_allowed and self._interaction.is_laser_active())
+    def pointer_cursor(self) -> QCursor | None:
+        """Cursor projected by Pointer mode onto the scroll viewport."""
+        if self._creation_allowed and self._interaction.is_laser_active():
+            return laser_pointer_cursor(dpr=_effective_device_pixel_ratio(self))
+        return None
 
-    def sync_laser_overlay(self, pos: QPoint | None = None) -> None:
-        if not self._laser_active():
-            self._laser_overlay.set_focus(None)
+    def _reapply_pointer_cursor(self) -> None:
+        """Rebuild or unset Laser on this Board and the Page viewport if present."""
+        if sip.isdeleted(self):
             return
-        if pos is not None:
-            self._laser_overlay.set_focus(pos)
-
-    def _consume_laser_pointer(self, pos: QPoint) -> bool:
-        if not self._laser_active():
-            return False
-        self._laser_overlay.set_focus(pos)
         page = _page_of(self)
-        viewport = getattr(page, "_viewport", None) if page is not None else None
-        if viewport is not None and (viewport.is_panning() or viewport.space_down()):
-            return False
-        return True
+        sync = getattr(page, "_sync_tool_cursor", None) if page is not None else None
+        if callable(sync):
+            try:
+                sync()
+                return
+            except RuntimeError:
+                pass
+        self._sync_tool_cursor()
+
+    def event(self, event) -> bool:  # noqa: N802
+        if event.type() in LASER_CURSOR_DPR_CHANGE_EVENTS:
+            clear_laser_cursor_cache()
+            self._reapply_pointer_cursor()
+        return super().event(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        clear_laser_cursor_cache()
+        self.unsetCursor()
+        self._unset_page_viewport_cursor()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._reapply_pointer_cursor()
+
+    def _unset_page_viewport_cursor(self) -> None:
+        try:
+            page = _page_of(self)
+        except RuntimeError:
+            return
+        getter = getattr(page, "board_scroll_area", None) if page is not None else None
+        try:
+            area = getter() if callable(getter) else None
+        except RuntimeError:
+            return
+        if area is None:
+            return
+        try:
+            area.viewport().unsetCursor()
+        except RuntimeError:
+            return
 
     def _sticky_create_armed(self) -> bool:
         return (
@@ -4218,6 +4211,8 @@ class FreeGridBoard(QWidget):
     def _sync_tool_cursor(self) -> None:
         if self._sticky_create_armed():
             self.setCursor(Qt.CrossCursor)
+        elif (cursor := self.pointer_cursor()) is not None:
+            self.setCursor(cursor)
         else:
             self.unsetCursor()
 
@@ -4258,8 +4253,6 @@ class FreeGridBoard(QWidget):
     def route_card_press(self, card: FreeGridCard, event: QMouseEvent) -> bool:
         """I3: author objects above a card consume the press before card drag."""
         mapped = QPoint(*self._board_pos(card, event.pos()))
-        if self._consume_laser_pointer(mapped):
-            return True
         self._close_sticky_editor_if_outside(mapped)
         hit = self.classify_press(mapped, modifiers=event.modifiers())
         if hit.kind == HIT_RESIZE_HANDLE and isinstance(hit.item, AuthorKey):
@@ -4501,9 +4494,6 @@ class FreeGridBoard(QWidget):
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
             return
-        if self._consume_laser_pointer(event.pos()):
-            event.accept()
-            return
         was_editing = self._sticky_note.is_editing() or self._author_text_editor.is_editing()
         self._close_sticky_editor_if_outside(event.pos())
         if was_editing:
@@ -4551,11 +4541,6 @@ class FreeGridBoard(QWidget):
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._laser_active():
-            swallowed = self._consume_laser_pointer(event.pos())
-            if swallowed and not (event.buttons() & Qt.MiddleButton):
-                event.accept()
-                return
         grabbed = QWidget.mouseGrabber() is self
         if self._interaction.draft() is not None and (
             event.buttons() & Qt.LeftButton or grabbed
@@ -4620,9 +4605,6 @@ class FreeGridBoard(QWidget):
         if event.button() != Qt.LeftButton:
             super().mouseDoubleClickEvent(event)
             return
-        if self._consume_laser_pointer(event.pos()):
-            event.accept()
-            return
         hit = self.classify_press(event.pos(), modifiers=event.modifiers())
         if hit.kind == HIT_AUTHOR and isinstance(hit.item, AuthorKey):
             item = self._author_item(hit.item.object_id)
@@ -4633,11 +4615,6 @@ class FreeGridBoard(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
-
-    def leaveEvent(self, event) -> None:  # noqa: N802
-        if self._laser_active():
-            self._laser_overlay.set_focus(None)
-        super().leaveEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if self.handle_selection_key(event):

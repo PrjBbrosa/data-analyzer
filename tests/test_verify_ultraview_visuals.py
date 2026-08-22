@@ -108,6 +108,14 @@ def test_required_shots_cover_the_single_grouped_library_path():
     assert "library_overview_stale_1280" not in REQUIRED_SHOTS
 
 
+def test_required_shots_cover_pointer_minimap_and_laser_facts():
+    assert "pointer_popup_800" in REQUIRED_SHOTS
+    assert "pointer_popup_1280" in REQUIRED_SHOTS
+    assert "selected_bottom_right_with_minimap" in REQUIRED_SHOTS
+    assert "selected_shape_format_picker" in REQUIRED_SHOTS
+    assert "laser_cursor" in REQUIRED_SHOTS
+
+
 def test_library_contract_accepts_the_single_grouped_path():
     errors = _library_errors(_library_manifest())
     assert _matching(errors, "is clipped") == []

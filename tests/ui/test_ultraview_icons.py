@@ -13,11 +13,49 @@ _DRAW_SUBTOOL_FACTORIES = (
 )
 
 
-def _icon_image(icon):
-    pixmap = icon.pixmap(20, 20)
+# Every icon-only UltraView surface can render at the compact 20px target or
+# the desktop 24px target.  These must be independently rasterised, rather
+# than relying on Qt to upscale the old 20px source.
+_ULTRAVIEW_ICON_FACTORIES = (
+    "ultraview_library",
+    "ultraview_pin",
+    "ultraview_layout",
+    "ultraview_free_grid",
+    "ultraview_filter",
+    "ultraview_unplaced",
+    "ultraview_author_select",
+    "ultraview_author_laser",
+    "ultraview_author_sticky",
+    "ultraview_author_text",
+    "ultraview_author_shapes",
+    "ultraview_author_draw",
+    "ultraview_author_connector",
+    "ultraview_draw_pen",
+    "ultraview_draw_highlighter",
+    "ultraview_draw_eraser",
+    "ultraview_draw_lasso",
+    "ultraview_display",
+    "ultraview_presentation",
+    "ultraview_overview",
+    "ultraview_fit",
+    "ultraview_fit_to_image",
+    "ultraview_reset_zoom",
+    "ultraview_zoom_out",
+    "ultraview_zoom_in",
+    "ultraview_help",
+    "ultraview_add",
+    "ultraview_open_source",
+    "ultraview_remove_from_board",
+    "ultraview_sync",
+    "ultraview_move_to_tray",
+)
+
+
+def _icon_image(icon, logical_size=20):
+    pixmap = icon.pixmap(logical_size, logical_size)
     assert not pixmap.isNull()
     image = pixmap.toImage()
-    scale = image.width() / 20.0
+    scale = image.width() / float(logical_size)
     return image, scale
 
 
@@ -39,6 +77,37 @@ def _alpha_mask(image, min_alpha=1):
         1 if image.pixelColor(x, y).alpha() >= min_alpha else 0
         for y in range(image.height())
         for x in range(image.width())
+    )
+
+
+@pytest.mark.parametrize("factory_name", _ULTRAVIEW_ICON_FACTORIES)
+def test_ultraview_icons_ship_native_compact_and_desktop_rasters(qapp, factory_name):
+    """24px rail targets must not scale the old 20px source bitmap."""
+    icon = getattr(Icons, factory_name)()
+    widths = {size.width() for size in icon.availableSizes()}
+
+    # UltraView sources always include 20px, 24px, and Draw's enlarged 28px
+    # logical variants at the helper's minimum 2x DPR.
+    assert {40, 48, 56} <= widths, (factory_name, widths)
+
+
+@pytest.mark.parametrize("factory_name", _ULTRAVIEW_ICON_FACTORIES)
+@pytest.mark.parametrize(("logical_size", "minimum_long_axis"), ((20, 15.0), (24, 17.0)))
+def test_ultraview_icons_use_a_readable_optical_ink_box(
+    qapp, factory_name, logical_size, minimum_long_axis
+):
+    """Icon-only controls need ~16px compact / ~18px desktop visible ink."""
+    icon = getattr(Icons, factory_name)()
+    image, scale = _icon_image(icon, logical_size)
+    min_x, min_y, max_x, max_y = _ink_bbox(image, min_alpha=24)
+    assert max_x >= min_x and max_y >= min_y, factory_name
+    width = (max_x - min_x + 1) / scale
+    height = (max_y - min_y + 1) / scale
+    assert max(width, height) >= minimum_long_axis, (
+        factory_name,
+        logical_size,
+        width,
+        height,
     )
 
 
@@ -164,12 +233,12 @@ def test_ultraview_author_icons_share_optical_ink_box(qapp, factory_name, size):
 
 
 def test_ultraview_draw_subtool_ink_stays_inside_shared_safe_box(qapp):
-    """Ink bounding boxes share a 3px logical inset on the 20px canvas."""
+    """Larger subtool glyphs keep the 2px outer ring clear on the 20px canvas."""
     for factory_name in _DRAW_SUBTOOL_FACTORIES:
         icon = getattr(Icons, factory_name)()
         image, scale = _icon_image(icon)
-        min_x, min_y, max_x, max_y = _ink_bbox(image)
-        inset = 3 * scale
+        min_x, min_y, max_x, max_y = _ink_bbox(image, min_alpha=24)
+        inset = 2 * scale
         assert min_x >= inset, (factory_name, min_x, inset)
         assert min_y >= inset, (factory_name, min_y, inset)
         assert max_x < image.width() - inset, (factory_name, max_x, inset)

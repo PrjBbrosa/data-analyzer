@@ -53,6 +53,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 ## pyqt-ui
 
+- [ultraview-qicon-native-target-raster](pyqt-ui/2026-08-22-ultraview-qicon-native-target-raster.md) [qicon] — Native sources avoid rail blur.
 - [action-button-natural-height-under-wrapped-label-pressure](pyqt-ui/2026-08-08-action-button-natural-height-under-wrapped-label-pressure.md) [qpushbutton][qsizepolicy][word-wrap][vertical-layout][screenshot] — In compact vertical forms, pin indispensable actions to their natural minimum height and Fixed vertical policy; wrapped neighbours can otherwise compress a valid button into an unreadable stripe in one captured state.
 
 - [windows-popup-pixel-probes-need-topmost-host-and-frame-geometry](pyqt-ui/2026-07-31-windows-popup-pixel-probes-need-topmost-host-and-frame-geometry.md) [popup][rounded-corners][qscreen][grabwindow][dpr][frame-geometry][windows][topmost] — For real Windows popup pixels, keep the high-contrast host topmost, verify its client reference, and sample `frameGeometry()` outer corners after DPR conversion; a client-origin capture can otherwise read another window/title bar and falsely report a rectangular backing.

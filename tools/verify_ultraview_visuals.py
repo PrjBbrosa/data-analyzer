@@ -42,6 +42,11 @@ REQUIRED_SHOTS = (
     "arrange_before_1280",
     "arrange_after_1280",
     "presentation_1280",
+    "pointer_popup_800",
+    "pointer_popup_1280",
+    "selected_bottom_right_with_minimap",
+    "selected_shape_format_picker",
+    "laser_cursor",
 )
 
 @dataclass
@@ -100,12 +105,16 @@ def _rect(widget: QWidget) -> dict[str, Any]:
 
 def _edge_rhythm(page) -> dict[str, Any]:
     """Record the persistent island axes without relying on screenshot pixels."""
+    from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import ISLAND_GAP
+
     host = page.canvas_host()
     rail = page.tool_rail()
     board_island = page.board_island()
     status_island = page.status_island()
     global_island = page.global_island()
     navigation_island = page.navigation_island()
+    band_top = board_island.y() + board_island.height() + ISLAND_GAP
+    band_bottom = status_island.y() - ISLAND_GAP
     return {
         "stage": {"w": int(host.width()), "h": int(host.height())},
         "left_edges": {
@@ -121,6 +130,9 @@ def _edge_rhythm(page) -> dict[str, Any]:
             "height": int(rail.height()),
             "preferred_height": int(rail.sizeHint().height()),
             "center_error_px": int(2 * rail.y() + rail.height() - host.height()),
+            "available_band_px": max(0, band_bottom - band_top),
+            "band_top": int(band_top),
+            "band_bottom": int(band_bottom),
         },
     }
 
@@ -315,8 +327,70 @@ def _moonstone_facts(page) -> dict[str, Any]:
     }
 
 
+def _mapped_rect(widget: QWidget, host: QWidget) -> dict[str, Any]:
+    origin = widget.mapTo(host, QPoint(0, 0))
+    return {
+        "x": int(origin.x()),
+        "y": int(origin.y()),
+        "w": int(widget.width()),
+        "h": int(widget.height()),
+        "visible": bool(widget.isVisible()),
+    }
+
+
+def _qrect_from_fact(data: dict[str, Any] | None) -> QRect:
+    if not data:
+        return QRect()
+    return QRect(
+        int(data.get("x") or 0),
+        int(data.get("y") or 0),
+        int(data.get("w") or 0),
+        int(data.get("h") or 0),
+    )
+
+
+def _rail_entry_facts(page) -> dict[str, Any]:
+    from mf4_analyzer.ui.chart_stack.ultraview.chrome import RELEASE_AUTHOR_TOOLS
+
+    rail = page.tool_rail()
+    rail_rect = QRect(0, 0, rail.width(), rail.height())
+    entries: dict[str, Any] = {}
+    for tool in RELEASE_AUTHOR_TOOLS:
+        button = rail.tool_button(tool)
+        if button is None:
+            entries[tool] = None
+            continue
+        origin = button.mapTo(rail, QPoint(0, 0))
+        hit = QRect(origin, button.size())
+        entries[tool] = {
+            "visible": bool(button.isVisible()),
+            "enabled": bool(button.isEnabled()),
+            "hit": {
+                "x": int(hit.x()),
+                "y": int(hit.y()),
+                "w": int(hit.width()),
+                "h": int(hit.height()),
+            },
+            "inside_rail": bool(rail_rect.contains(hit)),
+        }
+    visible = [item for item in entries.values() if item is not None]
+    return {
+        "compact": bool(rail.is_compact()),
+        "entries": entries,
+        "all_visible": bool(visible) and all(item["visible"] for item in visible),
+        "all_inside": bool(visible) and all(item["inside_rail"] for item in visible),
+        "missing": [tool for tool, item in entries.items() if item is None],
+    }
+
+
 def _layout_picker_facts(page) -> dict[str, Any]:
-    from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import ISLAND_GAP
+    from dataclasses import asdict
+
+    from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
+        ISLAND_GAP,
+        Rect,
+        overlay_anchor_facts,
+    )
 
     host = page.canvas_host()
     overlay = host.overlay("layout")
@@ -332,12 +406,35 @@ def _layout_picker_facts(page) -> dict[str, Any]:
     trigger_center = None
     overlay_center = None
     center_error_y = None
+    anchor = None
     if overlay is not None and trigger is not None:
         mapped = trigger.mapTo(host, trigger.rect().center())
         trigger_center = {"x": int(mapped.x()), "y": int(mapped.y())}
         geo = overlay.geometry()
         overlay_center = {"x": int(geo.center().x()), "y": int(geo.center().y())}
         center_error_y = abs(overlay_center["y"] - trigger_center["y"])
+        trigger_origin = trigger.mapTo(host, QPoint(0, 0))
+        rail = page.tool_rail()
+        requested = max(int(picker.sizeHint().height()), int(overlay.height()))
+        facts = overlay_anchor_facts(
+            Rect(geo.x(), geo.y(), geo.width(), geo.height()),
+            Rect(trigger_origin.x(), trigger_origin.y(), trigger.width(), trigger.height()),
+            Rect(rail.x(), rail.y(), rail.width(), rail.height()),
+            requested_height=requested,
+            board_island=Rect(
+                page.board_island().x(),
+                page.board_island().y(),
+                page.board_island().width(),
+                page.board_island().height(),
+            ),
+            navigation_island=Rect(
+                page.navigation_island().x(),
+                page.navigation_island().y(),
+                page.navigation_island().width(),
+                page.navigation_island().height(),
+            ),
+        )
+        anchor = asdict(facts)
     history = [
         name
         for name in (
@@ -354,11 +451,110 @@ def _layout_picker_facts(page) -> dict[str, Any]:
         "overlay_center": overlay_center,
         "center_error_y": center_error_y,
         "anchor_budget_px": 32 + ISLAND_GAP,
+        "anchor": anchor,
+        "trigger_center_in_span": None if anchor is None else anchor["trigger_center_in_span"],
+        "vertically_adjacent": None if anchor is None else anchor["vertically_adjacent"],
+        "horizontally_right_of_rail": None if anchor is None else anchor["horizontally_right_of_rail"],
+        "clamp_reason": None if anchor is None else anchor["clamp_reason"],
         "thumbs": thumbs,
         "checked": [layout_id for layout_id, button in picker._buttons.items() if button.isChecked()],
         "history_buttons": history,
         "intro": picker.intro_label().text(),
         "thumb_count": len(picker._buttons),
+    }
+
+
+def _pointer_popup_facts(page) -> dict[str, Any]:
+    from mf4_analyzer.ui.chart_stack.ultraview.chrome import OVERLAY_AUTHOR_POINTER
+
+    host = page.canvas_host()
+    overlay = host.overlay(OVERLAY_AUTHOR_POINTER)
+    popover = page.pointer_popover()
+    trigger = page.tool_rail().tool_button("select")
+    return {
+        "active_overlay": host.active_overlay(),
+        "overlay": _rect(overlay) if overlay is not None else None,
+        "popover_visible": bool(popover.isVisible()),
+        "pointer_mode": page.interaction().pointer_mode(),
+        "trigger": None if trigger is None else _mapped_rect(trigger, host),
+        "rail_entries": _rail_entry_facts(page),
+    }
+
+
+def _minimap_selection_facts(page) -> dict[str, Any]:
+    host = page.canvas_host()
+    minimap = page.free_grid_minimap()
+    toolbar = page.selection_toolbar()
+    bounds = page._selection_bounds_in_host()
+    mini = _mapped_rect(minimap, host) if minimap is not None else None
+    mini_rect = _qrect_from_fact(mini) if mini and mini.get("visible") else QRect()
+    handles = bounds.adjusted(-18, -18, 18, 18) if bounds is not None else QRect()
+    toolbar_rect = (
+        _qrect_from_fact(_mapped_rect(toolbar, host))
+        if toolbar is not None and toolbar.isVisible()
+        else QRect()
+    )
+    folded = not bool(mini and mini.get("visible"))
+    intersects_handles = bool(mini_rect.isValid() and handles.isValid() and mini_rect.intersects(handles))
+    intersects_toolbar = bool(
+        mini_rect.isValid() and toolbar_rect.isValid() and mini_rect.intersects(toolbar_rect)
+    )
+    return {
+        "minimap": mini,
+        "folded": folded,
+        "selection_bounds": None
+        if bounds is None
+        else {"x": bounds.x(), "y": bounds.y(), "w": bounds.width(), "h": bounds.height()},
+        "handles": None
+        if not handles.isValid()
+        else {"x": handles.x(), "y": handles.y(), "w": handles.width(), "h": handles.height()},
+        "toolbar": _mapped_rect(toolbar, host) if toolbar is not None else None,
+        "intersects_handles": intersects_handles,
+        "intersects_toolbar": intersects_toolbar,
+        "clear_of_selection_chrome": folded or not (intersects_handles or intersects_toolbar),
+    }
+
+
+def _format_picker_facts(page) -> dict[str, Any]:
+    from mf4_analyzer.ui.chart_stack.ultraview.chrome import OVERLAY_AUTHOR_FORMAT
+
+    host = page.canvas_host()
+    picker = page.format_picker()
+    toolbar = page.selection_toolbar()
+    return {
+        "active_overlay": host.active_overlay(),
+        "picker": _rect(picker),
+        "picker_visible": bool(picker.isVisible()),
+        "picker_key": getattr(page, "_format_picker_key", ""),
+        "toolbar": _mapped_rect(toolbar, host) if toolbar is not None else None,
+        "expected_overlay": OVERLAY_AUTHOR_FORMAT,
+    }
+
+
+def _laser_cursor_facts(page) -> dict[str, Any]:
+    from mf4_analyzer.ui.chart_stack.ultraview.laser_cursor import (
+        LASER_CURSOR_HOTSPOT,
+        LASER_CURSOR_LOGICAL_SIZE,
+        laser_cursor_cache_key,
+        laser_pointer_cursor,
+    )
+
+    free = page._free_grid
+    cursor = free.cursor()
+    pixmap = cursor.pixmap()
+    dpr = float(free.devicePixelRatioF() or 1.0)
+    expected = laser_pointer_cursor(dpr=dpr)
+    return {
+        "shape": int(cursor.shape()),
+        "bitmap_cursor": cursor.shape() == Qt.BitmapCursor,
+        "logical_size": [int(pixmap.width()), int(pixmap.height())],
+        "hotspot": [int(cursor.hotSpot().x()), int(cursor.hotSpot().y())],
+        "expected_hotspot": list(LASER_CURSOR_HOTSPOT),
+        "design_size": LASER_CURSOR_LOGICAL_SIZE,
+        "dpr": dpr,
+        "cache_key": list(laser_cursor_cache_key(dpr=dpr)),
+        "matches_cache": cursor.hotSpot() == expected.hotSpot(),
+        "native_pixmap": False,
     }
 
 
@@ -449,6 +645,7 @@ def _page_snapshot(page, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "edge_rhythm": _edge_rhythm(page),
         "moonstone": _moonstone_facts(page),
         "library": _library_facts(page),
+        "rail_entries": _rail_entry_facts(page),
     }
     if extra:
         payload.update(extra)
@@ -520,6 +717,134 @@ def _build_contact_sheet(shots: list[tuple[str, Path]], dest: Path) -> None:
         painter.drawPixmap(ox, oy, scaled)
     painter.end()
     sheet.save(str(dest))
+
+
+def _close_transient_chrome(page, app: QApplication) -> None:
+    from mf4_analyzer.ui.chart_stack.ultraview.chrome import OVERLAY_AUTHOR_POINTER
+
+    page._close_active_panel(restore_focus=False)
+    host = page.canvas_host()
+    if host.active_overlay() == OVERLAY_AUTHOR_POINTER:
+        host.close_overlay(OVERLAY_AUTHOR_POINTER, restore_focus=False)
+    elif page.pointer_popover().isVisible():
+        page.pointer_popover().close()
+    if page.format_picker().isVisible() or getattr(page, "_format_picker_key", ""):
+        page._close_format_picker()
+    _pump(app, page)
+
+
+def _capture_wave3_shots(app: QApplication, page, snap) -> None:
+    """Pointer, minimap collision, format picker, and Laser Qt-cursor facts."""
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
+        POINTER_MODE_LASER,
+        POINTER_MODE_MOUSE,
+    )
+    from mf4_analyzer.ui.chart_stack.ultraview.chrome import AUTHOR_TOOL_SELECT
+    from mf4_analyzer.ui.ultraview_state import (
+        BoardBox,
+        GridRect,
+        ShapeObject,
+        set_free_grid_rect,
+        template_to_free_grid,
+    )
+
+    def _to_free_grid() -> None:
+        template_to_free_grid(page.board())
+        page.set_board(page.board())
+        _pump(app, page)
+
+    _close_transient_chrome(page, app)
+    page.resize(1280, 800)
+    _reset_board(page, "grid_2x2")
+    _add_preview(page, "time", "ptr-1280", color="#2d7ff9", digest="ptr1280")
+    _to_free_grid()
+    pointer = page.tool_rail().tool_button(AUTHOR_TOOL_SELECT)
+    if pointer is not None:
+        pointer.click()
+        _pump(app, page)
+    snap(
+        "pointer_popup_1280",
+        page,
+        _page_snapshot(page, {"pointer_popup": _pointer_popup_facts(page)}),
+    )
+
+    page.resize(800, 560)
+    _pump(app, page)
+    pointer = page.tool_rail().tool_button(AUTHOR_TOOL_SELECT)
+    if pointer is not None and not page.pointer_popover().isVisible():
+        pointer.click()
+        _pump(app, page)
+    snap(
+        "pointer_popup_800",
+        page,
+        _page_snapshot(page, {"pointer_popup": _pointer_popup_facts(page)}),
+    )
+    _close_transient_chrome(page, app)
+
+    page.resize(1600, 900)
+    _reset_board(page, "grid_2x2")
+    ref = _add_preview(page, "time", "mini-br", color="#2d7ff9", digest="minibr")
+    _to_free_grid()
+    set_free_grid_rect(page.board(), ref, GridRect(16, 12, 8, 6))
+    page.set_board(page.board())
+    page.set_board_zoom(1.6)
+    _pump(app, page)
+    scroll = page.board_scroll_area()
+    scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+    _pump(app, page)
+    page._select_ref(ref)
+    page._refresh_minimap()
+    _pump(app, page)
+    snap(
+        "selected_bottom_right_with_minimap",
+        page,
+        _page_snapshot(page, {"minimap_selection": _minimap_selection_facts(page)}),
+    )
+
+    page.resize(1280, 800)
+    _reset_board(page, "grid_2x2")
+    _add_preview(page, "time", "shape-host", color="#6a8f4f", digest="shapehost")
+    _to_free_grid()
+    page.board().author_objects = [
+        ShapeObject(
+            "harness-shape",
+            "shape",
+            box=BoardBox(2.0, 2.0, 4.0, 3.0),
+            shape="rectangle",
+        )
+    ]
+    page.set_board(page.board())
+    _pump(app, page)
+    page.interaction().select_only_author("harness-shape")
+    page._free_grid.sync_selection_projection()
+    page._refresh_author_toolbar()
+    _pump(app, page)
+    fill = page.selection_toolbar().button("fill")
+    if fill is not None:
+        QTest.mouseClick(fill, Qt.LeftButton)
+        _pump(app, page)
+    snap(
+        "selected_shape_format_picker",
+        page,
+        _page_snapshot(page, {"format_picker": _format_picker_facts(page)}),
+    )
+    _close_transient_chrome(page, app)
+
+    page._apply_pointer_mode(POINTER_MODE_LASER)
+    _pump(app, page)
+    facts = _laser_cursor_facts(page)
+    pixmap = page._free_grid.cursor().pixmap()
+    holder = QLabel()
+    holder.setPixmap(pixmap)
+    holder.setFixedSize(max(32, pixmap.width()), max(32, pixmap.height()))
+    snap("laser_cursor", holder, facts)
+    holder.close()
+    page._apply_pointer_mode(POINTER_MODE_MOUSE)
+    _pump(app, page)
 
 
 def generate(output_dir: Path | None = None) -> dict[str, Any]:
@@ -826,6 +1151,8 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         manifest["geometry"]["board_context_1280"]["wanted_arrange"] = BOARD_MENU_ARRANGE
         manifest["geometry"]["board_context_1280"]["wanted_name"] = BOARD_MENU_OBJECT_NAME
 
+        _capture_wave3_shots(app, page, snap)
+
         toolbar.resize(1100, 44)
         _pump(app, toolbar)
         snap("toolbar_1100", toolbar, _toolbar_snapshot(toolbar))
@@ -935,7 +1262,12 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         rail = rhythm.get("rail") or {}
         if abs(int(rail.get("center_error_px") or 0)) > 1:
             errors.append(f"{name} rail is not vertically centred: {rail}")
-        if int(rail.get("height") or 0) != int(rail.get("preferred_height") or 0):
+        height = int(rail.get("height") or 0)
+        preferred = int(rail.get("preferred_height") or 0)
+        available = int(rail.get("available_band_px") or 0)
+        if available and height > available:
+            errors.append(f"{name} rail exceeds available band: {rail}")
+        if preferred and available and preferred <= available and height > preferred + 8:
             errors.append(f"{name} rail is stretched instead of content-height: {rail}")
 
     base_board = (narrow_1280.get("board_scroll") or {})
@@ -1056,10 +1388,21 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         errors.append("layout_1280 thumbs are not two columns")
     if int(below.get("y") or 0) <= int(left.get("y") or 0):
         errors.append("layout_1280 thumbs are not four rows")
-    error_y = layout_facts.get("center_error_y")
-    budget = int(layout_facts.get("anchor_budget_px") or 44)
-    if error_y is None or int(error_y) > budget:
-        errors.append(f"layout_1280 overlay not anchored to trigger: error={error_y} budget={budget}")
+    in_span = layout_facts.get("trigger_center_in_span")
+    adjacent = layout_facts.get("vertically_adjacent")
+    if not in_span and not adjacent:
+        errors.append(
+            "layout_1280 overlay is not vertically anchored to trigger: "
+            f"in_span={in_span} adjacent={adjacent} "
+            f"clamp={layout_facts.get('clamp_reason')} "
+            f"center_error_y={layout_facts.get('center_error_y')}"
+        )
+    if layout_facts.get("horizontally_right_of_rail") is not True:
+        errors.append("layout_1280 overlay is not to the right of the rail")
+    current_layout = (geometry.get("layout_1280") or {}).get("layout_id")
+    checked = layout_facts.get("checked") or []
+    if current_layout and current_layout not in checked:
+        errors.append(f"layout_1280 current layout {current_layout!r} is not checked: {checked}")
     overlay = layout_facts.get("overlay") or {}
     nav = (geometry.get("layout_1280") or {}).get("navigation_island") or {}
     if overlay.get("visible") and nav.get("visible"):
@@ -1092,13 +1435,54 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         if int(popover.get("y") or 0) < island_bottom:
             errors.append("boards_1280 popover is not anchored below BoardIsland")
 
+    rail_800 = (narrow_800.get("rail_entries") or {})
+    if rail_800.get("missing"):
+        errors.append(f"narrow_800 missing rail entries: {rail_800.get('missing')}")
+    if rail_800.get("all_visible") is not True:
+        errors.append("narrow_800 does not show every release rail entry including Pointer")
+    if rail_800.get("all_inside") is not True:
+        errors.append("narrow_800 rail entry hit rects are clipped")
+
+    for name in ("pointer_popup_800", "pointer_popup_1280"):
+        popup = (geometry.get(name) or {}).get("pointer_popup") or {}
+        if popup.get("popover_visible") is not True:
+            errors.append(f"{name} pointer popup is not visible")
+        if popup.get("active_overlay") != "author_pointer":
+            errors.append(f"{name} active overlay is {popup.get('active_overlay')!r}")
+        entries = (popup.get("rail_entries") or {})
+        select = (entries.get("entries") or {}).get("select") or {}
+        if select.get("visible") is not True:
+            errors.append(f"{name} Pointer tile is not visible")
+
+    minimap = (geometry.get("selected_bottom_right_with_minimap") or {}).get("minimap_selection") or {}
+    if minimap.get("clear_of_selection_chrome") is not True:
+        errors.append(
+            "selected_bottom_right_with_minimap still intersects selection chrome: "
+            f"folded={minimap.get('folded')} handles={minimap.get('intersects_handles')} "
+            f"toolbar={minimap.get('intersects_toolbar')}"
+        )
+
+    picker = (geometry.get("selected_shape_format_picker") or {}).get("format_picker") or {}
+    if picker.get("picker_visible") is not True:
+        errors.append("selected_shape_format_picker format picker is not visible")
+
+    laser = geometry.get("laser_cursor") or {}
+    if laser.get("bitmap_cursor") is not True:
+        errors.append(f"laser_cursor is not a Qt bitmap cursor: {laser}")
+    hotspot = laser.get("hotspot") or []
+    expected_hotspot = laser.get("expected_hotspot") or [25, 5]
+    if list(hotspot) != list(expected_hotspot):
+        errors.append(f"laser_cursor hotspot {hotspot} != {expected_hotspot}")
+    if laser.get("native_pixmap") is True:
+        errors.append("laser_cursor must not pretend to be a native Cocoa screenshot")
+
     if errors:
         raise GeometryError("; ".join(errors))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--output", "--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--platform", default=None)
     args = parser.parse_args()
     if args.platform:

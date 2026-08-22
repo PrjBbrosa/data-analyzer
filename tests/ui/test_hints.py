@@ -577,6 +577,9 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.multiselect",
     }
     assert required <= set(by_id)
+    assert by_id["ultraview.pointer"].text == "整块单击指针，弹出鼠标/激光笔"
+    assert by_id["ultraview.laser"].text == "激光笔仅换光标；选择、移动、缩放不变"
+    assert by_id["ultraview.select_keys"].text == "V 保持光标样式进入选择，Esc 清选择"
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
     rail_hint = by_id["ultraview.view_rail"]
     assert rail_hint.surface == "discovery"
