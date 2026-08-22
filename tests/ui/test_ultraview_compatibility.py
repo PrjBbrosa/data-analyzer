@@ -696,6 +696,14 @@ def test_ultraview_state_reexports_core_model_identity():
     assert state.derive_preview_status is presentation.derive_preview_status
     assert state.axis_consistency_facts is presentation.axis_consistency_facts
 
+    from mf4_analyzer.ultraview_core import serialization
+
+    assert state.normalize_board_payload is serialization.normalize_board_payload
+    assert state.presentation_digest is serialization.presentation_digest
+    assert state.board_to_payload is serialization.board_to_payload
+    assert state.workspace_to_payload is serialization.workspace_to_payload
+    assert state.ULTRAVIEW_SCHEMA is serialization.ULTRAVIEW_SCHEMA
+
 
 def test_hardening_reuse_names_are_the_live_seams():
     assert SelectionMutationPlan.__name__ == "SelectionMutationPlan"

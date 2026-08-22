@@ -2,8 +2,8 @@
 
 Wave 5 Task 5.3 family 4. Status/filter/axis facts are derived from already
 captured records; they do not write Board state. Presentation digest and
-canonical JSON hashing stay in ``mf4_analyzer.ui.ultraview_state`` until
-Task 5.4. This module must not import Qt, ``mf4_analyzer.ui``, chart_stack,
+canonical JSON hashing live in ``mf4_analyzer.ultraview_core.serialization``.
+This module must not import Qt, ``mf4_analyzer.ui``, chart_stack,
 MainWindow, compositor, or Card Fit.
 """
 from __future__ import annotations

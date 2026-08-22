@@ -1,10 +1,11 @@
 """Qt-free UltraView author mutation and mixed Board-edit apply.
 
 Wave 5 Task 5.3 family 2. Live author mutators write ``Board.author_objects``
-in memory. Payload legalize (``normalize_board_payload``) stays in
-``mf4_analyzer.ui.ultraview_state`` until Task 5.4. This module must not
-import Qt, ``mf4_analyzer.ui``, chart_stack, MainWindow, compositor, or
-Card Fit.
+in memory. Payload legalize (``normalize_board_payload``) lives in
+``mf4_analyzer.ultraview_core.serialization`` and imports
+``author_object_to_payload`` / ``_recognized_author_object_from_payload``
+from here. This module must not import Qt, ``mf4_analyzer.ui``, chart_stack,
+MainWindow, compositor, or Card Fit.
 """
 from __future__ import annotations
 

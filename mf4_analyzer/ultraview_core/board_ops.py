@@ -2,8 +2,8 @@
 
 Wave 5 Task 5.3 family 1. Mutators write Board/Workspace in memory. This
 module must not import Qt, ``mf4_analyzer.ui``, chart_stack, MainWindow,
-compositor, or Card Fit. Payload legalize/migration stays in
-``mf4_analyzer.ui.ultraview_state`` until Task 5.4.
+compositor, or Card Fit. Payload legalize/migration lives in
+``mf4_analyzer.ultraview_core.serialization``.
 """
 from __future__ import annotations
 

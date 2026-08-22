@@ -5,6 +5,9 @@ import ast
 import hashlib
 import json
 import math
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -42,6 +45,13 @@ PRESENTATION_PATH = (
     / "ultraview_core"
     / "presentation.py"
 )
+SERIALIZATION_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ultraview_core"
+    / "serialization.py"
+)
+CORE_DIR = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ultraview_core"
 
 
 def _imported_modules(path: Path) -> list[str]:
@@ -89,7 +99,14 @@ def test_module_has_no_qt_or_compute_imports():
         "signal",
         "batch_compute",
     }
-    for path in (STATE_PATH, MODEL_PATH, BOARD_OPS_PATH, AUTHOR_OPS_PATH, PRESENTATION_PATH):
+    for path in (
+        STATE_PATH,
+        MODEL_PATH,
+        BOARD_OPS_PATH,
+        AUTHOR_OPS_PATH,
+        PRESENTATION_PATH,
+        SERIALIZATION_PATH,
+    ):
         imported = _imported_modules(path)
         roots = {name.split(".")[0] for name in imported}
         assert forbidden_roots.isdisjoint(roots), path.name
@@ -98,12 +115,18 @@ def test_module_has_no_qt_or_compute_imports():
         name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
         for name in model_imported
     )
-    for path in (BOARD_OPS_PATH, AUTHOR_OPS_PATH, PRESENTATION_PATH):
+    for path in (BOARD_OPS_PATH, AUTHOR_OPS_PATH, PRESENTATION_PATH, SERIALIZATION_PATH):
         imported = _imported_modules(path)
         assert not any(
             name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
             for name in imported
         )
+    core_ui_imports: list[tuple[str, str]] = []
+    for src in CORE_DIR.glob("*.py"):
+        for name in _imported_modules(src):
+            if name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui."):
+                core_ui_imports.append((src.name, name))
+    assert core_ui_imports == []
 
 
 def test_ultraview_state_reexports_board_ops_identity():
@@ -136,6 +159,83 @@ def test_ultraview_state_reexports_presentation_facts_identity():
     assert uvs.card_matches_compare_filter is presentation.card_matches_compare_filter
     assert uvs.section_search_haystack is presentation.section_search_haystack
     assert uvs.RANGE_ABS_TOL is presentation.RANGE_ABS_TOL
+
+
+def test_ultraview_state_reexports_serialization_identity():
+    from mf4_analyzer.ultraview_core import serialization
+
+    assert uvs.normalize_board_payload is serialization.normalize_board_payload
+    assert uvs.board_to_payload is serialization.board_to_payload
+    assert uvs.workspace_to_payload is serialization.workspace_to_payload
+    assert uvs.normalize_workspace_payload is serialization.normalize_workspace_payload
+    assert uvs.presentation_digest is serialization.presentation_digest
+    assert uvs.board_identity_payload is serialization.board_identity_payload
+    assert uvs.ULTRAVIEW_SCHEMA is serialization.ULTRAVIEW_SCHEMA
+    assert uvs.DIGEST_SCHEMA is serialization.DIGEST_SCHEMA
+
+
+def test_ultraview_state_has_no_normalize_board_payload_body():
+    tree = ast.parse(STATE_PATH.read_text(encoding="utf-8"))
+    defined = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name
+        in {
+            "normalize_board_payload",
+            "board_to_payload",
+            "workspace_to_payload",
+            "normalize_workspace_payload",
+            "presentation_digest",
+            "board_identity_payload",
+            "_board_payload",
+            "_legacy_grid_rect",
+            "_normalize_author_objects",
+            "_reconcile_connector_targets",
+            "_canonical_json_value",
+        }
+    ]
+    assert defined == []
+    assigned = [
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+        and target.id in {"ULTRAVIEW_SCHEMA", "DIGEST_SCHEMA"}
+    ]
+    assert assigned == []
+
+
+def test_serialization_subprocess_import_does_not_load_qt_or_ui():
+    script = """
+import json
+import sys
+import mf4_analyzer.ultraview_core.serialization
+blocked = sorted(
+    name for name in sys.modules
+    if name == "PyQt5"
+    or name.startswith("PyQt5.")
+    or name == "mf4_analyzer.ui"
+    or name.startswith("mf4_analyzer.ui.")
+    or name == "mf4_analyzer.ui.main_window"
+    or name.startswith("mf4_analyzer.ui.main_window.")
+    or name.endswith(".compositor")
+)
+print(json.dumps(blocked))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(STATE_PATH.parents[2])
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(STATE_PATH.parents[2]),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == []
 
 
 def test_ref_accepts_only_gui_sections_and_stable_id():

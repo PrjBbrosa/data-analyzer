@@ -289,6 +289,21 @@ def test_ultraview_core_has_no_qt_or_ui_imports():
         name.endswith(".model") or name == "mf4_analyzer.ultraview_core.model"
         for name in presentation_imported
     )
+    serialization_src = core_dir / "serialization.py"
+    serialization_imported = _imported_module_names(serialization_src)
+    assert "mf4_analyzer.ui.ultraview_state" not in serialization_imported
+    assert any(
+        name.endswith(".model") or name == "mf4_analyzer.ultraview_core.model"
+        for name in serialization_imported
+    )
+    assert any(
+        name.endswith(".author_ops") or name == "mf4_analyzer.ultraview_core.author_ops"
+        for name in serialization_imported
+    )
+    assert any(
+        name.endswith(".board_ops") or name == "mf4_analyzer.ultraview_core.board_ops"
+        for name in serialization_imported
+    )
 
 
 def test_ultraview_free_grid_and_card_fit_have_no_cycle():
@@ -315,7 +330,7 @@ def test_ultraview_free_grid_and_card_fit_have_no_cycle():
 
 
 def test_ultraview_core_subprocess_import_does_not_load_qt():
-    """Core model, geometry, board ops, author ops, and presentation must stay importable without Qt."""
+    """Core model, geometry, ops, presentation, and serialization must stay importable without Qt."""
     script = """
 import json
 import sys
@@ -324,6 +339,7 @@ import mf4_analyzer.ultraview_core.grid_geometry
 import mf4_analyzer.ultraview_core.board_ops
 import mf4_analyzer.ultraview_core.author_ops
 import mf4_analyzer.ultraview_core.presentation
+import mf4_analyzer.ultraview_core.serialization
 blocked = sorted(
     name for name in sys.modules
     if name == "PyQt5"
