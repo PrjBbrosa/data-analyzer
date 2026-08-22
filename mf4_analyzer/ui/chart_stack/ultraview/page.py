@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 import math
 import time
 
-from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, QTimer, QVariantAnimation, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QContextMenuEvent,
     QCursor,
@@ -76,19 +76,8 @@ from mf4_analyzer.ui.ultraview_state import (
     slot_occupant,
 )
 from .viewport import (
-    QUALITY_FAST,
-    QUALITY_SMOOTH,
-    SMOOTH_DELAY_MS,
-    ZOOM_BUTTON_STEP,
     BoardViewport,
-    board_fit_zoom,
-    canvas_point_under,
-    center_from_scroll,
-    clamp_zoom,
-    scroll_for_anchor,
-    scroll_for_center,
     two_card_working_frame,
-    wheel_zoom_factor,
     zoom_percent,
     zoom_to_rect,
 )
@@ -96,7 +85,6 @@ from .elastic_workspace import (
     EDGE_PAN_BAND_PX,
     content_bounds,
     desired_extent,
-    edge_pan_velocity,
     expand_extent,
     safety_grid_bounds,
 )
@@ -111,6 +99,7 @@ from .feedback import (
 from .viewport_feedback import BoardToViewportTransform
 from .free_grid import hit_handle, screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
+from .viewport_controller import ViewportController
 from .author_edits import copy_author_objects
 from .author_selection import (
     NUDGE_STEP,
@@ -306,53 +295,6 @@ def _qrect(rect: FloatingRect) -> QRect:
     return QRect(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
 
 
-def _event_point(value) -> QPoint | None:
-    if value is None:
-        return None
-    if isinstance(value, QPoint):
-        return value
-    if hasattr(value, "toPoint"):
-        return value.toPoint()
-    return QPoint(int(value.x()), int(value.y()))
-
-
-def _event_global_point(event) -> QPoint:
-    if hasattr(event, "globalPosition"):
-        point = _event_point(event.globalPosition())
-        if point is not None:
-            return point
-    if hasattr(event, "globalPos"):
-        point = _event_point(event.globalPos())
-        if point is not None:
-            return point
-    if hasattr(event, "screenPos"):
-        point = _event_point(event.screenPos())
-        if point is not None:
-            return point
-    return QPoint(0, 0)
-
-
-def _event_local_point(event) -> QPoint | None:
-    if hasattr(event, "position"):
-        point = _event_point(event.position())
-        if point is not None:
-            return point
-    if hasattr(event, "pos"):
-        return _event_point(event.pos())
-    if hasattr(event, "localPos"):
-        return _event_point(event.localPos())
-    return None
-
-
-def _is_origin_point(point: QPoint | None) -> bool:
-    return point is None or (int(point.x()) == 0 and int(point.y()) == 0)
-
-
-def _event_global_xy(event) -> tuple[float, float]:
-    point = _event_global_point(event)
-    return (float(point.x()), float(point.y()))
-
-
 BOARD_MENU_OBJECT_NAME = "ultraViewBoardContextMenu"
 BOARD_MENU_FIT = "适应内容"
 BOARD_MENU_RESET = "100%"
@@ -468,51 +410,21 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._deferred_panel_close: str | None = None
         self._prev_unplaced_count: int | None = None
         self._prev_layout_fingerprint: tuple[str, str] | None = None
-        self._viewport = BoardViewport()
-        self._ignore_next_context_menu = False
-        self._right_gesture_widget: QWidget | None = None
-        self._session_camera: dict[
-            str,
-            tuple[float, tuple[float, float], tuple[int, int, int, int], tuple[float, float]],
-        ] = {}
-        self._restoring_viewport = False
+        self._viewport_ctrl: ViewportController | None = None
         self._rebasing_extent = False
         self._pending_viewport_restore: dict[str, float] | None = None
-        self._pending_fit = True
         # The extent is deliberately page-local session state.  Placements are
         # signed grid coordinates; the working halo, high-water mark and edge
         # timer must never become a project mutation or a viewport payload.
         self._workspace_extent = None
-        self._edge_pan_timer = QTimer(self)
-        self._edge_pan_timer.setObjectName("ultraViewWorkspaceEdgePanTimer")
-        self._edge_pan_timer.setInterval(16)
-        self._edge_pan_timer.timeout.connect(self._on_edge_pan_tick)
-        self._edge_pan_active = False
         self._edge_gesture_id = 0
         self._edge_hint_since: float | None = None
         self._edge_copy = ""
         self._feedback_gate = FeedbackThrottle()
         self._monotonic = time.monotonic
-        self._edge_pan_reentrant = False
-        self._edge_pan_global_pos: QPoint | None = None
-        self._edge_gesture_token = 0
         self._diag_reproject_calls = 0
         self._feedback_transform_token = None
         self._feedback_transform_revision = 0
-        self._smooth_timer = QTimer(self)
-        self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
-        self._smooth_timer.setSingleShot(True)
-        self._smooth_timer.setInterval(SMOOTH_DELAY_MS)
-        self._smooth_timer.timeout.connect(self._on_smooth_preview_timeout)
-        self._zoom_anim = QVariantAnimation(self)
-        self._zoom_anim.setObjectName("ultraViewZoomToCardAnimation")
-        self._zoom_anim.setDuration(180)
-        self._zoom_anim.valueChanged.connect(self._on_zoom_anim_tick)
-        self._anim_start_zoom = 1.0
-        self._anim_end_zoom = 1.0
-        self._anim_start_center = (0.0, 0.0)
-        self._anim_end_center = (0.0, 0.0)
-        self._filled_card: tuple[str, str] | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -524,20 +436,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         # which could steal a row/column from the Board.
         self._canvas_host = CanvasHost(self)
         self._canvas_host.installEventFilter(self)
-        self._viewport_router = ViewportGestureRouter(
-            canvas_host=self._canvas_host,
-            viewport=self._viewport,
-            begin_pan=self.begin_board_pan,
-            update_pan=self.update_board_pan,
-            end_pan=self.end_board_pan_for_event,
-            zoom_wheel=self.handle_zoom_wheel,
-            pinch=self.handle_pinch,
-            note_space=self.note_space,
-            text_field_has_focus=self._text_field_has_focus,
-            suppress_context_menu=self.suppress_board_context_menu_event,
-            is_active=self._viewport_router_is_active,
-            parent=self,
-        )
         self._canvas_stage = QFrame(self._canvas_host)
         self._canvas_stage.setObjectName("ultraViewCanvasStage")
         self._canvas_stage.setAttribute(Qt.WA_StyledBackground, True)
@@ -566,6 +464,54 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._board_scroll.viewport().installEventFilter(self)
         self._grid.installEventFilter(self)
         self._free_grid.installEventFilter(self)
+        self._viewport_ctrl = ViewportController(
+            board_scroll=self._board_scroll,
+            board_stack=self._board_stack,
+            board_host=self._board_host,
+            grid=self._grid,
+            free_grid=self._free_grid,
+            active_canvas=self._active_canvas,
+            is_free_grid=self._camera_is_free_grid,
+            has_board=self._camera_has_board,
+            board_id=self._camera_board_id,
+            extent_signature=self._extent_signature,
+            extent_key=self._camera_extent_key,
+            content_fill_rect=self._content_fill_rect,
+            fit_origin=self._fit_origin,
+            working_frame_center=self._working_frame_center,
+            card_rect_1x=self._card_rect_1x,
+            refresh_extent=self._camera_refresh_extent,
+            apply_lod_chrome=self._apply_lod_chrome,
+            set_zoom_percent=self._set_zoom_percent,
+            cancel_board_gestures=self.cancel_board_gestures,
+            pause_draw=self._interaction.pause_draw_samples,
+            resume_draw=self._interaction.resume_draw_samples,
+            sync_tool_cursor=self._sync_tool_cursor,
+            is_board_canvas_widget=self._is_board_canvas_widget,
+            deliver_right_click_menu=self._deliver_right_click_menu,
+            camera_settled=self.camera_settled.emit,
+            sync_feedback_surface=self._sync_feedback_surface,
+            sync_minimap_placement=self._sync_minimap_placement,
+            sync_workspace_edge_hint=self._sync_workspace_edge_hint,
+            reproject_after_viewport=self._reproject_after_viewport_change,
+            on_edge_pan_started=self._on_edge_pan_started,
+            on_edge_pan_stopped=self._on_edge_pan_stopped,
+            parent=self,
+        )
+        self._viewport_router = ViewportGestureRouter(
+            canvas_host=self._canvas_host,
+            viewport=self._viewport_ctrl.viewport(),
+            begin_pan=self.begin_board_pan,
+            update_pan=self.update_board_pan,
+            end_pan=self.end_board_pan_for_event,
+            zoom_wheel=self.handle_zoom_wheel,
+            pinch=self.handle_pinch,
+            note_space=self.note_space,
+            text_field_has_focus=self._text_field_has_focus,
+            suppress_context_menu=self.suppress_board_context_menu_event,
+            is_active=self._viewport_router_is_active,
+            parent=self,
+        )
         self._canvas_host.set_canvas_widget(self._canvas_stage)
         root.addWidget(self._canvas_host, 1)
 
@@ -939,7 +885,76 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return self._toolbar
 
     def board_viewport(self) -> BoardViewport:
-        return self._viewport
+        return self._viewport_ctrl.viewport()
+
+    @property
+    def _viewport(self) -> BoardViewport:
+        return self._viewport_ctrl.viewport()
+
+    @property
+    def _smooth_timer(self) -> QTimer:
+        return self._viewport_ctrl.smooth_timer()
+
+    @property
+    def _edge_pan_timer(self) -> QTimer:
+        return self._viewport_ctrl.edge_pan_timer()
+
+    @property
+    def _edge_pan_active(self) -> bool:
+        return self._viewport_ctrl._edge_pan_active
+
+    @_edge_pan_active.setter
+    def _edge_pan_active(self, value: bool) -> None:
+        self._viewport_ctrl._edge_pan_active = bool(value)
+
+    @property
+    def _edge_pan_global_pos(self) -> QPoint | None:
+        return self._viewport_ctrl._edge_pan_global_pos
+
+    @_edge_pan_global_pos.setter
+    def _edge_pan_global_pos(self, value) -> None:
+        self._viewport_ctrl._edge_pan_global_pos = (
+            None if value is None else QPoint(value)
+        )
+
+    @property
+    def _right_gesture_widget(self):
+        return self._viewport_ctrl._right_gesture_widget
+
+    @property
+    def _filled_card(self) -> tuple[str, str] | None:
+        return self._viewport_ctrl.filled_card()
+
+    @property
+    def _restoring_viewport(self) -> bool:
+        return self._viewport_ctrl.is_restoring()
+
+    @_restoring_viewport.setter
+    def _restoring_viewport(self, value: bool) -> None:
+        if value:
+            self._viewport_ctrl.begin_restore()
+        else:
+            self._viewport_ctrl.end_restore()
+
+    def _camera_is_free_grid(self) -> bool:
+        return self._board.layout_mode == LAYOUT_MODE_FREE_GRID
+
+    def _camera_has_board(self) -> bool:
+        return self._board is not None
+
+    def _camera_board_id(self) -> str | None:
+        if self._board is None:
+            return None
+        return str(self._board.board_id)
+
+    def _camera_extent_key(self) -> tuple | None:
+        extent = self._workspace_extent
+        if extent is None:
+            return None
+        return (extent.column, extent.row, extent.column_span, extent.row_span)
+
+    def _camera_refresh_extent(self, *args, **kwargs) -> bool:
+        return self._refresh_workspace_extent(*args, **kwargs)
 
     def workspace_extent(self):
         """Return the current free-grid runtime extent, never persisted.
@@ -1272,16 +1287,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return (float(fit.x), float(fit.y))
 
     def _board_content_origin(self) -> tuple[float, float]:
-        """Current board-canvas origin inside the scroll host.
-
-        After a cursor-anchored zoom this may include left/top pad so a
-        negative desired scroll stays representable.  Scroll math must use
-        this value, not ``_fit_origin``: recentering onto fit after
-        compensation is what pinned zoom to the chrome-safe corner.
-        """
-        if self._board_stack.width() <= 0 or self._board_stack.height() <= 0:
-            return self._fit_origin()
-        return (float(self._board_stack.x()), float(self._board_stack.y()))
+        """Current board-canvas origin inside the scroll host."""
+        return self._viewport_ctrl.board_content_origin()
 
     def _board_layout_viewport_size(self, size=None):
         """Viewport used for card layout: the chrome-safe fit rect, not the full-bleed scroll host."""
@@ -1556,18 +1563,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return (bounds.column, bounds.row, bounds.column_span, bounds.row_span)
 
     def _persist_viewport_to_board(self) -> None:
-        if self._restoring_viewport or self._board is None:
-            return
-        center = self._current_center()
-        origin = self._board_content_origin()
-        self._viewport.set_center(center)
-        self._session_camera[str(self._board.board_id)] = (
-            float(self._viewport.zoom()),
-            (float(center[0]), float(center[1])),
-            self._extent_signature(),
-            (float(origin[0]), float(origin[1])),
-        )
-        self.camera_settled.emit()
+        self._viewport_ctrl.persist()
 
     def _workspace_cell_pitch(self) -> tuple[float, float]:
         """Return the 1× free-grid pitch without asking a widget for state.
@@ -1697,67 +1693,45 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         content extent signature is unchanged. The camera never enters a
         project payload.
         """
-        fill = self._content_fill_rect()
-        if fill.width <= 1 or fill.height <= 1:
-            self._pending_fit = True
-            return
-        self._pending_fit = False
-        self.zoom_fit()
+        self._viewport_ctrl.fit_on_open()
 
     def _apply_initial_viewport(self) -> None:
         """First show / empty payload: same camera as a window open."""
-        self.fit_on_open()
+        self._viewport_ctrl.apply_initial_viewport()
 
     def _on_workspace_gesture_changed(self, active: bool, global_pos=None) -> None:
         """Compat lifetime+optional first pointer. Page does not replan here."""
-        if not bool(active):
-            self._on_workspace_gesture_active_changed(False, self._edge_gesture_token)
-            return
-        if global_pos is not None:
-            self._edge_pan_global_pos = QPoint(global_pos)
-        self._on_workspace_gesture_active_changed(True, self._edge_gesture_token)
-        if global_pos is not None:
-            self._on_workspace_pointer_changed(self._edge_gesture_token, global_pos)
+        self._viewport_ctrl.on_workspace_gesture_changed(active, global_pos)
 
     def _on_workspace_gesture_active_changed(self, active: bool, gesture_id: int) -> None:
-        wanted = bool(active)
-        self._edge_gesture_token = int(gesture_id or 0)
-        if not wanted:
-            self._stop_edge_pan()
-            self._sync_minimap_placement()
-            return
-        if not self._edge_pan_active:
-            self._edge_gesture_id += 1
-            self._edge_hint_since = None
-            self._edge_copy = ""
-        self._edge_pan_active = True
-        self._refresh_workspace_extent()
-        self._sync_feedback_surface()
-        self._sync_edge_timer_for_pointer()
-        self._sync_minimap_placement()
+        self._viewport_ctrl.on_workspace_gesture_active_changed(active, gesture_id)
 
     def _on_workspace_pointer_changed(self, gesture_id: int, global_pos=None) -> None:
-        if not self._edge_pan_active:
-            return
-        if int(gesture_id or 0) not in (0, int(self._edge_gesture_token)):
-            return
-        if global_pos is not None:
-            self._edge_pan_global_pos = QPoint(global_pos)
-        self._sync_edge_timer_for_pointer()
+        self._viewport_ctrl.on_workspace_pointer_changed(gesture_id, global_pos)
 
     def _now(self) -> float:
         clock = getattr(self, "_monotonic", None)
         return float(clock()) if callable(clock) else time.monotonic()
 
     def _stop_edge_pan(self, *_args) -> None:
-        self._edge_pan_active = False
-        if self._edge_pan_timer.isActive():
-            self._edge_pan_timer.stop()
+        self._viewport_ctrl.stop_edge_pan()
+
+    def _on_edge_pan_started(self) -> None:
+        self._edge_gesture_id += 1
         self._edge_hint_since = None
         self._edge_copy = ""
-        self._edge_pan_global_pos = None
+
+    def _on_edge_pan_stopped(self) -> None:
+        self._edge_hint_since = None
+        self._edge_copy = ""
         self._feedback_gate.end_gesture(self._edge_gesture_id)
         self._clear_workspace_edge_hint()
+
+    def _reproject_after_viewport_change(self, global_pos) -> None:
+        reproject = getattr(self._free_grid, "reproject_after_viewport_change", None)
+        if callable(reproject):
+            self._diag_reproject_calls += 1
+            reproject(global_pos)
 
     def _clear_workspace_edge_hint(self) -> None:
         free = getattr(self, "_free_grid", None)
@@ -1770,12 +1744,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         except RuntimeError:
             # The board may already be deleted on widget destroyed.
             return
-
-    def _on_edge_pan_tick(self) -> None:
-        if not self._edge_pan_active or self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
-            self._stop_edge_pan()
-            return
-        self._edge_pan_tick_for_global(self._edge_pan_global_pos)
 
     def _workspace_transform_token(self) -> tuple:
         extent = self._workspace_extent
@@ -1790,31 +1758,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             extent_key,
             float(self._viewport.zoom()),
         )
-
-    def _pointer_edge_velocity(self, global_pos) -> tuple[float, float]:
-        if global_pos is None:
-            return (0.0, 0.0)
-        viewport = self._board_scroll.viewport()
-        local = viewport.mapFromGlobal(global_pos)
-        return edge_pan_velocity(
-            (float(local.x()), float(local.y())),
-            (float(viewport.width()), float(viewport.height())),
-        )
-
-    def _sync_edge_timer_for_pointer(self) -> None:
-        pos = self._edge_pan_global_pos
-        if pos is None or not self._edge_pan_active:
-            if self._edge_pan_timer.isActive():
-                self._edge_pan_timer.stop()
-            return
-        velocity = self._pointer_edge_velocity(pos)
-        self._sync_workspace_edge_hint(pos)
-        if velocity == (0.0, 0.0):
-            if self._edge_pan_timer.isActive():
-                self._edge_pan_timer.stop()
-            return
-        if not self._edge_pan_timer.isActive():
-            self._edge_pan_timer.start()
 
     def _sync_feedback_surface(self) -> None:
         free = getattr(self, "_free_grid", None)
@@ -1845,41 +1788,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._minimap.raise_()
 
     def _edge_pan_tick_for_global(self, global_pos) -> None:
-        if global_pos is None or self._edge_pan_reentrant:
-            return
-        self._edge_pan_reentrant = True
-        try:
-            self._edge_pan_tick_for_global_unlocked(global_pos)
-        finally:
-            self._edge_pan_reentrant = False
-
-    def _edge_pan_tick_for_global_unlocked(self, global_pos) -> None:
-        velocity = self._pointer_edge_velocity(global_pos)
-        if velocity == (0.0, 0.0):
-            if self._edge_pan_timer.isActive():
-                self._edge_pan_timer.stop()
-            self._sync_workspace_edge_hint(global_pos)
-            self._sync_feedback_surface()
-            return
-        old_token = self._workspace_transform_token()
-        changed = self._refresh_workspace_extent()
-        if changed:
-            self._sync_board_stack_geometry(self._free_grid)
-        horizontal = self._board_scroll.horizontalScrollBar()
-        vertical = self._board_scroll.verticalScrollBar()
-        horizontal.setValue(int(round(horizontal.value() + velocity[0])))
-        vertical.setValue(int(round(vertical.value() + velocity[1])))
-        self._restart_smooth_timer()
-        if self._workspace_transform_token() == old_token:
-            self._sync_workspace_edge_hint(global_pos)
-            self._sync_feedback_surface()
-            return
-        reproject = getattr(self._free_grid, "reproject_after_viewport_change", None)
-        if callable(reproject):
-            self._diag_reproject_calls += 1
-            reproject(global_pos)
-        self._sync_workspace_edge_hint(global_pos)
-        self._sync_feedback_surface()
+        self._viewport_ctrl.edge_pan_tick_for_global(global_pos)
 
     def _viewport_rect_in_board(self) -> QRect:
         viewport = self._board_scroll.viewport()
@@ -1942,216 +1851,42 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _restore_viewport_from_board(self, board) -> None:
         """Replay the session camera when this Board's extent signature still matches."""
-        camera = self._session_camera.get(str(board.board_id))
-        signature = self._extent_signature(board)
-        if camera is None or camera[2] != signature:
-            self.fit_on_open()
-            return
-        zoom, center, _saved, *rest = camera
-        origin = rest[0] if rest else self._board_content_origin()
-        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
-            self._refresh_workspace_extent(reset=True, preserve_visible=False)
-        self._restoring_viewport = True
-        try:
-            self._apply_zoom_and_center(zoom, center, viewport_origin=origin)
-        finally:
-            self._restoring_viewport = False
+        self._viewport_ctrl.restore_from_board(board)
 
     def _on_board_scrolled(self, _value: int = 0) -> None:
         if self._restoring_viewport or self._rebasing_extent:
             return
         self._sync_feedback_surface()
-        self._persist_viewport_to_board()
+        self._viewport_ctrl.persist()
 
     def set_board_zoom(self, zoom: float, cursor_in_viewport=None) -> None:
-        viewport = self._board_scroll.viewport()
-        if cursor_in_viewport is None:
-            cursor_in_viewport = (viewport.width() / 2.0, viewport.height() / 2.0)
-        self._zoom_at(zoom, cursor_in_viewport)
+        self._viewport_ctrl.set_board_zoom(zoom, cursor_in_viewport)
 
     def zoom_in(self) -> None:
-        self.set_board_zoom(self._viewport.zoom() + ZOOM_BUTTON_STEP)
+        self._viewport_ctrl.zoom_in()
 
     def zoom_out(self) -> None:
-        self.set_board_zoom(self._viewport.zoom() - ZOOM_BUTTON_STEP)
+        self._viewport_ctrl.zoom_out()
 
     def zoom_reset(self) -> None:
-        # 100% is a scale reset, not a parking/fit command.  Preserve the
-        # world point currently at the viewport centre so users do not get
-        # teleported back to the base-frame origin on a wide monitor.
-        self._filled_card = None
-        self._apply_zoom_and_center(1.0, self._current_center())
+        self._viewport_ctrl.zoom_reset()
 
     def zoom_fit(self) -> None:
-        self._filled_card = None
-        canvas = self._active_canvas()
-        fill = self._content_fill_rect()
-        content = canvas.content_rect_1x()
-        if content is None:
-            if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
-                self._refresh_workspace_extent()
-                frame = two_card_working_frame(screen_grid_metrics(()))
-                self._apply_zoom_and_center(
-                    board_fit_zoom(frame, (float(fill.width), float(fill.height))),
-                    self._working_frame_center(),
-                    viewport_size=(float(fill.width), float(fill.height)),
-                )
-                return
-            size = canvas.unzoomed_size()
-            self._park_zoom(
-                board_fit_zoom(
-                    (size.width(), size.height()),
-                    (float(fill.width), float(fill.height)),
-                )
-            )
-            return
-        # Fit the placed-content box into the fill rect. zoom_to_card
-        # uses the raw viewport so a double-click can bleed under the toolbar;
-        # 适应 keeps the rail-clear left of ``fit`` and uses the stage-safe
-        # top and bottom so the cluster fills the dotted canvas.
-        zoom = board_fit_zoom(
-            (float(content[2]), float(content[3])),
-            (float(fill.width), float(fill.height)),
-        )
-        center = (float(content[0]) + float(content[2]) / 2.0,
-                  float(content[1]) + float(content[3]) / 2.0)
-        self._apply_zoom_and_center(
-            zoom, center, viewport_size=(float(fill.width), float(fill.height))
-        )
+        self._viewport_ctrl.zoom_fit()
 
     def _park_zoom(self, zoom: float) -> None:
-        """Zoom and leave the board in the chrome-safe fit rect."""
-        self.cancel_board_gestures()
-        self._filled_card = None
-        self._apply_preview_quality(QUALITY_FAST)
-        after = clamp_zoom(zoom)
-        self._broadcast_zoom(after)
-        origin = self._fit_origin()
-        self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
-        applied = self._place_canvas_for_scroll(self._active_canvas(), (0.0, 0.0))
-        self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
-        self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
-        self._set_zoom_percent(zoom_percent(after))
-        self._apply_lod_chrome()
-        self._restart_smooth_timer()
-        self._persist_viewport_to_board()
+        self._viewport_ctrl._park_zoom(zoom)
 
     def _set_zoom_percent(self, percent: int) -> None:
         """Keep the legacy façade and the visible navigation island aligned."""
         self._toolbar.set_zoom_percent(percent)
         self._navigation_island.set_zoom_percent(percent)
 
-    def _broadcast_zoom(self, zoom: float, *, viewport: bool = True) -> None:
-        """Keep the viewport model and both Board render surfaces in sync.
-
-        Do not refresh workspace extent here. The caller still has a pending
-        scroll transaction computed against the current origin; rebasing
-        first is what made cards flicker while zooming.
-        """
-        if viewport:
-            self._viewport.set_zoom(zoom)
-        self._grid.set_zoom(zoom)
-        self._free_grid.set_zoom(zoom)
-
-    def _settle_workspace_after_zoom(self) -> None:
-        """Grow halo after the gesture has stopped, keeping the view still."""
-        self._refresh_workspace_extent(preserve_visible=True)
-
     def zoom_to_card(self, section: str, view_id: str, *, animate: bool = True) -> None:
-        rect_1x = self._card_rect_1x(section, view_id)
-        if rect_1x is None:
-            return
-        self._filled_card = (str(section), str(view_id))
-        viewport = self._board_scroll.viewport()
-        zoom, center = zoom_to_rect(
-            rect_1x, (float(viewport.width()), float(viewport.height()))
-        )
-        if animate:
-            self._animate_viewport(zoom, center)
-            return
-        self._apply_zoom_and_center(zoom, center)
+        self._viewport_ctrl.zoom_to_card(section, view_id, animate=animate)
 
     def _current_center(self) -> tuple[float, float]:
-        viewport = self._board_scroll.viewport()
-        origin = self._board_content_origin()
-        return center_from_scroll(
-            (
-                float(self._board_scroll.horizontalScrollBar().value()) - origin[0],
-                float(self._board_scroll.verticalScrollBar().value()) - origin[1],
-            ),
-            (float(viewport.width()), float(viewport.height())),
-            self._viewport.zoom(),
-        )
-
-    def _animate_viewport(self, zoom: float, center: tuple[float, float]) -> None:
-        self._anim_start_zoom = self._viewport.zoom()
-        self._anim_end_zoom = clamp_zoom(zoom)
-        self._anim_start_center = self._current_center()
-        self._anim_end_center = (float(center[0]), float(center[1]))
-        self._zoom_anim.stop()
-        self._zoom_anim.setStartValue(0.0)
-        self._zoom_anim.setEndValue(1.0)
-        self._zoom_anim.start()
-
-    def _on_zoom_anim_tick(self, value) -> None:
-        t = float(value)
-        zoom = self._anim_start_zoom + (self._anim_end_zoom - self._anim_start_zoom) * t
-        center = (
-            self._anim_start_center[0]
-            + (self._anim_end_center[0] - self._anim_start_center[0]) * t,
-            self._anim_start_center[1]
-            + (self._anim_end_center[1] - self._anim_start_center[1]) * t,
-        )
-        self._apply_zoom_and_center(zoom, center)
-
-    def _apply_zoom_and_center(
-        self,
-        zoom: float,
-        center: tuple[float, float],
-        *,
-        viewport_size: tuple[float, float] | None = None,
-        viewport_origin: tuple[float, float] | None = None,
-    ) -> None:
-        self.cancel_board_gestures()
-        self._apply_preview_quality(QUALITY_FAST)
-        after = clamp_zoom(zoom)
-        self._broadcast_zoom(after)
-        self._viewport.set_center(center)
-        # zoom_fit passes the fill size; its origin must match that rect.
-        # Parking ``fit`` sits below the top islands. Using it here would
-        # leave the visual centre low after raising fill.y, and would also
-        # rewrite session-camera scrollbars by that island gap on restore.
-        if viewport_origin is not None:
-            origin = (float(viewport_origin[0]), float(viewport_origin[1]))
-        elif viewport_size is not None:
-            fill = self._content_fill_rect()
-            origin = (float(fill.x), float(fill.y))
-        else:
-            origin = self._board_content_origin()
-        self._board_stack.move(int(round(origin[0])), int(round(origin[1])))
-        if viewport_size is None:
-            viewport = self._board_scroll.viewport()
-            view = (float(viewport.width()), float(viewport.height()))
-            scroll = scroll_for_center(center, view, after)
-            desired = (scroll[0] + origin[0], scroll[1] + origin[1])
-        else:
-            view = (float(viewport_size[0]), float(viewport_size[1]))
-            live = self._active_canvas().content_rect()
-            if live is not None:
-                # Canvas is already at ``after``; use live pixels so metric
-                # rounding cannot drift the visual center off the safe zone.
-                cx = live[0] + live[2] / 2.0
-                cy = live[1] + live[3] / 2.0
-                desired = (cx - view[0] / 2.0, cy - view[1] / 2.0)
-            else:
-                desired = scroll_for_center(center, view, after)
-        applied = self._place_canvas_for_scroll(self._active_canvas(), desired)
-        self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
-        self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
-        self._set_zoom_percent(zoom_percent(after))
-        self._apply_lod_chrome()
-        self._restart_smooth_timer()
-        self._persist_viewport_to_board()
+        return self._viewport_ctrl.current_center()
 
     def _apply_lod_chrome(self) -> None:
         level = self._viewport.lod()
@@ -2168,94 +1903,22 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             )
 
     def note_space(self, down: bool) -> None:
-        self._viewport.set_space_down(down)
-        if down:
-            self._interaction.pause_draw_samples()
-            self._board_scroll.viewport().setCursor(Qt.OpenHandCursor)
-        else:
-            self._interaction.resume_draw_samples()
-            if not self._viewport.is_panning():
-                self._board_scroll.viewport().unsetCursor()
-                self._sync_tool_cursor()
+        self._viewport_ctrl.note_space(down)
 
     def begin_board_pan(self, event, widget=None) -> bool:
-        button = event.button()
-        is_right = button == Qt.RightButton
-        if button != Qt.MiddleButton and not (
-            button == Qt.LeftButton and self._viewport.space_down()
-        ) and not is_right:
-            return False
-        if widget is None and hasattr(event, "globalPos"):
-            widget = QApplication.widgetAt(event.globalPos())
-        if is_right and not self._is_board_canvas_widget(widget):
-            return False
-        if not is_right:
-            self.cancel_board_gestures()
-            self._interaction.pause_draw_samples()
-        global_pos = _event_global_xy(event)
-        self._viewport.begin_pan(global_pos, int(button), deferred=is_right)
-        self._right_gesture_widget = widget if is_right else None
-        if not is_right:
-            self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
-            self._apply_preview_quality(QUALITY_FAST)
-            self._restart_smooth_timer()
-        return True
+        return self._viewport_ctrl.begin_board_pan(event, widget)
 
     def update_board_pan(self, event) -> None:
-        if not self._viewport.is_panning():
-            return
-        threshold = 0.0
-        if self._viewport.pan_button() == int(Qt.RightButton):
-            threshold = float(QApplication.startDragDistance())
-        was_committed = self._viewport.pan_committed()
-        dx, dy = self._viewport.update_pan(_event_global_xy(event), threshold=threshold)
-        if self._viewport.pan_committed() and not was_committed:
-            self.cancel_board_gestures()
-            self._interaction.pause_draw_samples()
-            self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
-            self._apply_preview_quality(QUALITY_FAST)
-        if dx == 0.0 and dy == 0.0:
-            return
-        horizontal = self._board_scroll.horizontalScrollBar()
-        vertical = self._board_scroll.verticalScrollBar()
-        horizontal.setValue(int(horizontal.value() + dx))
-        vertical.setValue(int(vertical.value() + dy))
-        self._restart_smooth_timer()
+        self._viewport_ctrl.update_board_pan(event)
 
     def end_board_pan_for_event(self, event) -> bool:
-        pan_button = self._viewport.pan_button()
-        committed = self._viewport.pan_committed()
-        if not self._viewport.end_pan(int(event.button())):
-            return False
-        self._after_end_board_pan()
-        if pan_button == int(Qt.RightButton):
-            if not committed:
-                self._deliver_right_click_menu(event)
-            self._arm_context_menu_suppress()
-        self._right_gesture_widget = None
-        return True
+        return self._viewport_ctrl.end_board_pan_for_event(event)
 
     def end_board_pan(self) -> None:
-        if self._viewport.pan_button() == int(Qt.RightButton):
-            self._arm_context_menu_suppress()
-        if not self._viewport.end_pan(None):
-            self._right_gesture_widget = None
-            return
-        self._right_gesture_widget = None
-        self._after_end_board_pan()
+        self._viewport_ctrl.end_board_pan()
 
     def suppress_board_context_menu_event(self, _event) -> bool:
-        if self._ignore_next_context_menu:
-            self._ignore_next_context_menu = False
-            return True
-        return bool(self._viewport.is_panning())
-
-    def _arm_context_menu_suppress(self) -> None:
-        self._ignore_next_context_menu = True
-        QTimer.singleShot(0, self._expire_context_menu_suppress)
-
-    def _expire_context_menu_suppress(self) -> None:
-        self._ignore_next_context_menu = False
+        return self._viewport_ctrl.suppress_board_context_menu_event(_event)
 
     def _is_board_canvas_widget(self, widget) -> bool:
         current = widget if isinstance(widget, QWidget) else None
@@ -2301,34 +1964,15 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             target, QContextMenuEvent(QContextMenuEvent.Mouse, pos, global_pos)
         )
 
-    def _after_end_board_pan(self) -> None:
-        if self._viewport.space_down():
-            self._board_scroll.viewport().setCursor(Qt.OpenHandCursor)
-        else:
-            self._board_scroll.viewport().unsetCursor()
-            self._interaction.resume_draw_samples()
-            self._sync_tool_cursor()
-        self._persist_viewport_to_board()
-        self._restart_smooth_timer()
-
     def cancel_board_gestures(self) -> None:
         self._grid.cancel_gesture()
         self._free_grid.cancel_gesture()
 
     def handle_zoom_wheel(self, event: QWheelEvent, widget) -> bool:
-        factor = wheel_zoom_factor(event.angleDelta().y(), event.pixelDelta().y())
-        if factor == 1.0:
-            return False
-        cursor = self._cursor_in_scroll_viewport(event, widget)
-        self._zoom_at(self._viewport.zoom() * factor, cursor)
-        return True
+        return self._viewport_ctrl.handle_zoom_wheel(event, widget)
 
     def handle_pinch(self, event: QNativeGestureEvent, widget) -> bool:
-        if event.gestureType() != Qt.ZoomNativeGesture:
-            return False
-        cursor = self._cursor_in_scroll_viewport(event, widget)
-        self._zoom_at(self._viewport.zoom() * (1.0 + float(event.value())), cursor)
-        return True
+        return self._viewport_ctrl.handle_pinch(event, widget)
 
     def _active_canvas(self):
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
@@ -2336,77 +1980,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return self._grid
 
     def _zoom_at(self, zoom: float, cursor_in_viewport) -> None:
-        self.cancel_board_gestures()
-        self._filled_card = None
-        self._apply_preview_quality(QUALITY_FAST)
-        after = clamp_zoom(zoom)
-        cursor = (float(cursor_in_viewport[0]), float(cursor_in_viewport[1]))
-        scroll = (
-            float(self._board_scroll.horizontalScrollBar().value()),
-            float(self._board_scroll.verticalScrollBar().value()),
-        )
-        origin = self._board_content_origin()
-        canvas = self._active_canvas()
-        # Anchor through the canvas's own coordinate system instead of
-        # extrapolating ``logical * zoom``.  The free-grid pixel map rounds
-        # every metric before multiplying by a cell index, so a linear
-        # prediction carries an error proportional to that index -- and the
-        # signed elastic origin drives the index past 40, which is what made
-        # each wheel notch shove the board tens of pixels sideways.
-        anchor = canvas.zoom_anchor_at(canvas_point_under(cursor, scroll, origin))
-        self._broadcast_zoom(after)
-        new_scroll = scroll_for_anchor(
-            canvas.point_for_zoom_anchor(anchor), cursor, origin
-        )
-        applied = self._place_canvas_for_scroll(canvas, new_scroll)
-        self._board_scroll.horizontalScrollBar().setValue(int(round(applied[0])))
-        self._board_scroll.verticalScrollBar().setValue(int(round(applied[1])))
-        self._set_zoom_percent(zoom_percent(after))
-        self._apply_lod_chrome()
-        self._restart_smooth_timer()
-        self._persist_viewport_to_board()
-
-    def _cursor_in_scroll_viewport(self, event, widget) -> tuple[float, float]:
-        """Pick a viewport-local zoom anchor; never trust a degenerate (0, 0).
-
-        Cocoa pinch/wheel often reports ``globalPosition() == (0, 0)`` *and*
-        ``position() == (0, 0)``. Mapping that through the receiver lands on
-        the widget origin, ``QScrollBar.setValue`` clamps to 0, and the board
-        grows from the top-left. Prefer a non-zero global point, then a
-        non-zero local point via ``widget.mapToGlobal`` (never
-        ``viewport.mapFrom(descendant, …)``), then ``QCursor.pos()``.
-        """
-        viewport = self._board_scroll.viewport()
-        view_rect = viewport.rect()
-
-        def _if_inside(global_pos: QPoint) -> tuple[float, float] | None:
-            mapped = viewport.mapFromGlobal(global_pos)
-            if view_rect.contains(mapped):
-                return (float(mapped.x()), float(mapped.y()))
-            return None
-
-        global_pos = _event_global_point(event)
-        if not _is_origin_point(global_pos):
-            found = _if_inside(global_pos)
-            if found is not None:
-                return found
-        local = _event_local_point(event)
-        if local is not None and widget is not None and not _is_origin_point(local):
-            found = _if_inside(widget.mapToGlobal(local))
-            if found is not None:
-                return found
-        found = _if_inside(QCursor.pos())
-        if found is not None:
-            return found
-        return (viewport.width() / 2.0, viewport.height() / 2.0)
-
-    def _apply_preview_quality(self, quality: str) -> None:
-        self._viewport.set_quality(quality)
-        self._grid.set_preview_quality(quality)
-        self._free_grid.set_preview_quality(quality)
-
-    def _restart_smooth_timer(self) -> None:
-        self._smooth_timer.start(SMOOTH_DELAY_MS)
+        self._viewport_ctrl._zoom_at(zoom, cursor_in_viewport)
 
     def _on_viewport_resized(self, size) -> None:
         layout_size = self._board_layout_viewport_size(size)
@@ -2419,14 +1993,11 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         # cards instead of an empty dotted stage.
         self._sync_board_stack_geometry(self._active_canvas())
         self._sync_feedback_surface()
-        if self._pending_fit and self._board_scroll.viewport().width() > 1:
-            self._pending_fit = False
-            self._apply_initial_viewport()
+        self._viewport_ctrl.apply_initial_if_pending()
         self._refresh_card_context()
 
     def _on_smooth_preview_timeout(self) -> None:
-        self._apply_preview_quality(QUALITY_SMOOTH)
-        self._settle_workspace_after_zoom()
+        self._viewport_ctrl._on_smooth_preview_timeout()
 
     def focus_layer(self) -> FocusLayer:
         return self._focus
@@ -2951,7 +2522,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._close_active_panel()
         self.clear_card_selection()
         self.clear_replacement_arm()
-        self._session_camera.clear()
+        self._viewport_ctrl.reset()
         if self._presentation:
             self.set_presentation_active(False)
             if emit_presentation:
@@ -3297,9 +2868,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_DRAW:
             self._interaction.cancel_draft()
             self._clear_draw_draft_paint()
-        self._stop_edge_pan()
-        if self._viewport.is_panning():
-            self.end_board_pan()
+        self._viewport_ctrl.cancel()
         if self._grid.is_gesture_active():
             self._grid.cancel_gesture()
         if self._free_grid.gesture().is_active():
@@ -3325,7 +2894,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def changeEvent(self, event) -> None:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
             self._viewport_router.uninstall()
-            self.note_space(False)
+            self._viewport_ctrl.hide()
             self._cancel_board_gestures()
         elif event.type() == QEvent.WindowActivate:
             self._viewport_router.install()
@@ -3337,8 +2906,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def hideEvent(self, event) -> None:  # noqa: N802
         self._viewport_router.uninstall()
-        self._stop_edge_pan()
-        self.note_space(False)
+        self._viewport_ctrl.hide()
         self._cancel_board_gestures()
         super().hideEvent(event)
 
@@ -4784,40 +4352,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def _place_canvas_for_scroll(
         self, canvas: QWidget, desired_scroll: tuple[float, float]
     ) -> tuple[float, float]:
-        """Lay out the canvas so ``desired_scroll`` is a valid scrollbar value.
-
-        Negative desired scroll becomes left/top pad on the stack; a desired
-        value past the current max grows the host.  Must run after the canvas
-        has the new zoom, and must not be followed by a fit-center pass.
-        When the board still fits the viewport this is what keeps the cursor
-        anchor from collapsing onto the chrome-safe corner (the top-left of
-        ``fit``, which sits right of the rail — the "zooms toward the
-        top-right" report).
-        """
-        target = canvas.size()
-        if target.width() <= 0 or target.height() <= 0:
-            target = canvas.minimumSize()
-        origin_x, origin_y = self._board_content_origin()
-        viewport = self._board_scroll.viewport().size()
-        view_w = max(1, viewport.width())
-        view_h = max(1, viewport.height())
-        canvas_w = max(1, int(target.width()))
-        canvas_h = max(1, int(target.height()))
-        desired_x, desired_y = float(desired_scroll[0]), float(desired_scroll[1])
-        pad_x = max(0.0, -desired_x)
-        pad_y = max(0.0, -desired_y)
-        stack_x = int(round(origin_x + pad_x))
-        stack_y = int(round(origin_y + pad_y))
-        applied_x = desired_x + pad_x
-        applied_y = desired_y + pad_y
-        host_w = max(stack_x + canvas_w, view_w, int(math.ceil(applied_x + view_w)))
-        host_h = max(stack_y + canvas_h, view_h, int(math.ceil(applied_y + view_h)))
-        self._board_stack.setMinimumSize(target)
-        self._board_stack.resize(target)
-        self._board_stack.move(stack_x, stack_y)
-        self._board_host.setMinimumSize(host_w, host_h)
-        self._board_host.resize(host_w, host_h)
-        return (applied_x, applied_y)
+        """Lay out the canvas so ``desired_scroll`` is a valid scrollbar value."""
+        return self._viewport_ctrl.place_canvas_for_scroll(canvas, desired_scroll)
 
     def _sync_board_stack_geometry(self, canvas: QWidget) -> None:
         """Keep the scroll host sized to the current logical canvas.
@@ -4828,11 +4364,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         switch.  Preserve the current stack origin (including zoom pad); Fit
         and restore park explicitly before calling ``_place_canvas_for_scroll``.
         """
-        scroll = (
-            float(self._board_scroll.horizontalScrollBar().value()),
-            float(self._board_scroll.verticalScrollBar().value()),
-        )
-        self._place_canvas_for_scroll(canvas, scroll)
+        self._viewport_ctrl.sync_board_stack_geometry(canvas)
 
     def _minimap_should_show(self) -> bool:
         if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
@@ -4887,15 +4419,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._floating_chrome.sync_minimap_placement()
 
     def _on_minimap_viewport(self, rect: QRect) -> None:
-        origin = self._board_content_origin()
-        horizontal = self._board_scroll.horizontalScrollBar()
-        vertical = self._board_scroll.verticalScrollBar()
-        horizontal.setValue(
-            min(horizontal.maximum(), max(horizontal.minimum(), int(round(rect.x() + origin[0]))))
-        )
-        vertical.setValue(
-            min(vertical.maximum(), max(vertical.minimum(), int(round(rect.y() + origin[1]))))
-        )
+        self._viewport_ctrl.apply_minimap_viewport(rect)
 
 
 _FORMAT_PICKER_KEYS = frozenset(

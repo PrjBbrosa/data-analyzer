@@ -315,10 +315,10 @@ def test_coordinator_uses_page_public_api_only():
 
 
 def test_zoom_broadcast_single_site():
-    page = _parse(ULTRAVIEW_ROOT / "page.py")
+    controller = _parse(ULTRAVIEW_ROOT / "viewport_controller.py")
     calls = Counter(
         node.func.value.attr
-        for node in ast.walk(page)
+        for node in ast.walk(controller)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "set_zoom"
@@ -328,6 +328,9 @@ def test_zoom_broadcast_single_site():
         and node.func.value.attr in {"_grid", "_free_grid"}
     )
     assert calls == Counter({"_grid": 1, "_free_grid": 1})
+    page_source = (ULTRAVIEW_ROOT / "page.py").read_text(encoding="utf-8")
+    assert "self._grid.set_zoom" not in page_source
+    assert "self._free_grid.set_zoom" not in page_source
 
 
 def test_floating_geometry_literals_live_only_in_floating_layout():
@@ -335,8 +338,8 @@ def test_floating_geometry_literals_live_only_in_floating_layout():
 
 
 def test_zoom_at_does_not_refresh_workspace_extent():
-    page = _parse(ULTRAVIEW_ROOT / "page.py")
-    for node in ast.walk(page):
+    controller = _parse(ULTRAVIEW_ROOT / "viewport_controller.py")
+    for node in ast.walk(controller):
         if isinstance(node, ast.FunctionDef) and node.name == "_zoom_at":
             calls = {
                 _callee_name(item)
@@ -344,5 +347,6 @@ def test_zoom_at_does_not_refresh_workspace_extent():
                 if isinstance(item, ast.Call)
             }
             assert "_refresh_workspace_extent" not in calls
+            assert "refresh_extent" not in calls
             return
     raise AssertionError("_zoom_at not found")

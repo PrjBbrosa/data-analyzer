@@ -16,7 +16,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     screen_grid_metrics,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import preview_reading_box
-from mf4_analyzer.ui.chart_stack.ultraview import widgets as uv_widgets
+from mf4_analyzer.ui.chart_stack.ultraview import card_widgets as uv_cards
 from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     RAIL_TO_CANVAS_GAP,
     RAIL_WIDTH,
@@ -723,7 +723,7 @@ def test_zoom_does_not_compose_a_full_board_image(qtbot, monkeypatch):
         raise AssertionError("zoom must not allocate a full-board compose")
 
     monkeypatch.setattr(
-        "mf4_analyzer.ui.chart_stack.ultraview.widgets.compose_board",
+        "mf4_analyzer.ui.chart_stack.ultraview.compositor.compose_board",
         _forbidden,
     )
     harness.page.set_board_zoom(1.4)
@@ -752,7 +752,7 @@ def test_card_preview_buffer_uses_physical_target_and_dpr_metadata(qtbot, monkey
     card = cards[0]
     image = QImage(2000, 1500, QImage.Format_ARGB32)
     image.fill(Qt.blue)
-    monkeypatch.setattr(uv_widgets, "_effective_device_pixel_ratio", lambda _widget: 2.0)
+    monkeypatch.setattr(uv_cards, "_effective_device_pixel_ratio", lambda _widget: 2.0)
 
     card._raw_image = image
     card._source_pixmap = None
