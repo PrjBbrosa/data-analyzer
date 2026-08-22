@@ -162,9 +162,26 @@ def _model_field_writes() -> frozenset[tuple[str, str]]:
     return frozenset(result)
 
 
+_PAGE_OF_SCAN_FILES = (
+    "widgets.py",
+    "widgets_common.py",
+    "library_widgets.py",
+    "card_widgets.py",
+)
+
+
 def _page_of_surface() -> frozenset[str]:
     surface: set[str] = set()
-    tree = _parse(ULTRAVIEW_ROOT / "widgets.py")
+    for filename in _PAGE_OF_SCAN_FILES:
+        path = ULTRAVIEW_ROOT / filename
+        if not path.is_file():
+            continue
+        tree = _parse(path)
+        _collect_page_of_surface(tree, surface)
+    return frozenset(surface)
+
+
+def _collect_page_of_surface(tree: ast.AST, surface: set[str]) -> None:
     for function in (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)):
         page_names: set[str] = set()
         for node in ast.walk(function):
@@ -183,7 +200,6 @@ def _page_of_surface() -> frozenset[str]:
                 surface.add(node.attr)
             elif isinstance(node.value, ast.Call) and _callee_name(node.value) == "_page_of":
                 surface.add(node.attr)
-    return frozenset(surface)
 
 
 def _coordinator_methods() -> tuple[ast.FunctionDef, ...]:

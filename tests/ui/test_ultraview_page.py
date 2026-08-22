@@ -2923,7 +2923,7 @@ def test_make_layout_mime_has_no_product_references():
 
 def test_library_drop_on_occupied_card_requires_replace_ring(qtbot, monkeypatch):
     monkeypatch.setattr(
-        "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
+        "mf4_analyzer.ui.chart_stack.ultraview.card_widgets.REPLACE_HOVER_MS", 1
     )
     harness = _Harness(qtbot)
     set_layout(harness.board, "hero_left_4")
@@ -2945,7 +2945,7 @@ def test_library_drop_on_occupied_card_requires_replace_ring(qtbot, monkeypatch)
 
 def test_library_drop_outside_replace_ring_cancels(qtbot, monkeypatch):
     monkeypatch.setattr(
-        "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
+        "mf4_analyzer.ui.chart_stack.ultraview.card_widgets.REPLACE_HOVER_MS", 1
     )
     harness = _Harness(qtbot)
     add_ref(harness.board, make_ref("time", "time-1"))
@@ -2994,7 +2994,7 @@ def test_free_grid_add_without_pointer_uses_current_scroll_viewport_center(qtbot
 
 def test_free_grid_library_drop_on_ring_replaces(qtbot, monkeypatch):
     monkeypatch.setattr(
-        "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
+        "mf4_analyzer.ui.chart_stack.ultraview.card_widgets.REPLACE_HOVER_MS", 1
     )
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "ring-1")

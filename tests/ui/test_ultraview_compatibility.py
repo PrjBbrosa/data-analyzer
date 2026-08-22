@@ -27,6 +27,7 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QToolButton
 
+from mf4_analyzer.ui.chart_stack.ultraview import card_widgets as card_widgets_mod
 from mf4_analyzer.ui.chart_stack.ultraview import chrome as chrome_mod
 from mf4_analyzer.ui.chart_stack.ultraview import page as page_mod
 from mf4_analyzer.ui.chart_stack.ultraview import widgets as widgets_mod
@@ -103,7 +104,8 @@ COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 
 # Wave 1 flips this after chrome.py / widgets.py become re-export façades.
 WAVE1_FACADE_ACTIVE = False
-# Chrome-only landing: chrome.py is a façade while widgets.py still owns ClassDefs.
+# Chrome-only landing: chrome.py is a façade while widgets.py still owns
+# residual ClassDefs (library/card families already moved).
 WAVE1_CHROME_FACADE_ACTIVE = True
 
 WAVE1_CHROME_IMPL = (
@@ -114,16 +116,14 @@ WAVE1_CHROME_IMPL = (
     "chrome_popovers.py",
 )
 WAVE1_WIDGET_IMPL = (
+    "widgets_common.py",
     "library_widgets.py",
     "card_widgets.py",
-    "template_board.py",
-    "board_aux_widgets.py",
 )
 
-# AST ClassDef names not starting with ``_``.  Exact match: a later wave that
-# removes a public class from the façade must update this tuple; silent
-# additions fail until the freeze is updated.
-FROZEN_WIDGETS_PUBLIC_CLASSES = (
+# getattr surface on the widgets façade. Silent additions/removals of the
+# re-export list fail until this tuple is updated.
+FROZEN_WIDGETS_EXPORTED_CLASSES = (
     "ReplaceHoverController",
     "LibraryRow",
     "CardViewModel",
@@ -143,6 +143,22 @@ FROZEN_WIDGETS_PUBLIC_CLASSES = (
     "BoardOverview",
     "TrayItem",
     "UnplacedTray",
+    "FocusLayer",
+)
+
+# AST ClassDef names not starting with ``_`` that still live in widgets.py.
+# Exact match: a later wave that moves a residual class must shrink this tuple.
+FROZEN_WIDGETS_PUBLIC_CLASSES = (
+    "UltraViewHintBar",
+    "BoardSwitcher",
+    "BoardToolbar",
+    "CompareRail",
+    "EmptySlotWidget",
+    "BoardGrid",
+    "FreeGridBoard",
+    "FreeGridMinimap",
+    "BoardScrollArea",
+    "BoardOverview",
     "FocusLayer",
 )
 
@@ -574,9 +590,11 @@ def test_widgets_public_classes_import_and_match_page_identity():
         UnplacedTray,
         FocusLayer,
     )
-    assert imported == tuple(getattr(widgets_mod, name) for name in FROZEN_WIDGETS_PUBLIC_CLASSES)
+    assert imported == tuple(getattr(widgets_mod, name) for name in FROZEN_WIDGETS_EXPORTED_CLASSES)
     assert widgets_mod.UltraViewCard is page_mod.UltraViewCard
     assert widgets_mod.UltraViewCard is UltraViewCard
+    assert widgets_mod.UltraViewCard is card_widgets_mod.UltraViewCard
+    assert widgets_mod.FreeGridCard is card_widgets_mod.FreeGridCard
     assert widgets_mod.FreeGridBoard is FreeGridBoard
 
 
