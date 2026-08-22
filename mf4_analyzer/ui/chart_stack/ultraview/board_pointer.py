@@ -1,9 +1,13 @@
 """Pointer routing for UltraView author tools.
 
-Page remains the Qt host and signal emitter. This mixin owns draft/geometry
-pointer sessions so UltraViewPage stays a composition root.
+Page remains the Qt host and signal emitter. ``PointerRouter`` owns draft and
+geometry pointer sessions so UltraViewPage stays a composition root. Mouse and
+Laser share this dispatch; only the cursor provider differs.
 """
 from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from PyQt5.QtCore import QEvent, QPoint, QTimer, Qt
 from PyQt5.QtGui import QKeyEvent, QMouseEvent, QTabletEvent
@@ -61,6 +65,8 @@ from .author_tools import (
     AuthorDuplicateIntent,
     AuthorKey,
     AuthorLockIntent,
+    BoardItemKey,
+    CardKey,
     AuthorNudgeIntent,
     AuthorPasteIntent,
     AuthorUpdateIntent,
@@ -99,6 +105,7 @@ from .author_tools import (
     lasso_selection_keys,
     new_author_object_id,
     normalize_connector_type,
+    resolve_board_hit,
     resize_shape_box,
     resize_text_box,
     shape_box_from_points,
@@ -106,11 +113,129 @@ from .author_tools import (
 )
 from .author_widgets import is_text_input_widget
 from .feedback import AUTHOR_LOCKED, text_for_key
+from .free_grid import hit_handle
 from .widgets import FreeGridCard
 
 
-class BoardPointerMixin:
-    """Draft and geometry pointer sessions for the four author tools."""
+class _EmitPort:
+    """Signal-shaped emit callback so session methods keep ``.emit(...)``."""
+
+    __slots__ = ("emit",)
+
+    def __init__(self, emit: Callable[..., None]) -> None:
+        self.emit = emit
+
+
+@dataclass(frozen=True)
+class PointerHitFacts:
+    """Structured kwargs for ``resolve_board_hit``. Not a second priority table."""
+
+    editor_active: bool = False
+    viewport_pan: bool = False
+    resize_handle: str | None = None
+    handle_item: BoardItemKey | None = None
+    author_hits_rev_z: Sequence[AuthorKey] = ()
+    card: CardKey | None = None
+
+    def resolve(self):
+        return resolve_board_hit(
+            editor_active=self.editor_active,
+            viewport_pan=self.viewport_pan,
+            resize_handle=self.resize_handle,
+            handle_item=self.handle_item,
+            author_hits_rev_z=self.author_hits_rev_z,
+            card=self.card,
+        )
+
+
+class PointerRouter:
+    """Draft and geometry pointer sessions for the four author tools.
+
+    Constructed with the live ``FreeGridBoard`` and the same
+    ``BoardInteractionController`` instance Page already owns. Does not
+    install a QApplication event filter; Page.eventFilter delegates here.
+    """
+
+    def __init__(
+        self,
+        *,
+        free_grid,
+        interaction,
+        viewport,
+        board: Callable[[], object],
+        filter_host: QWidget,
+        emit_create: Callable[..., None],
+        emit_update: Callable[..., None],
+        emit_delete: Callable[..., None],
+        emit_feedback: Callable[[str], None],
+        sync_tool_cursor: Callable[[], None],
+        sync_tool_rail: Callable[[], None],
+        refresh_author_toolbar: Callable[[], None],
+        selection_toolbar,
+    ) -> None:
+        self._free_grid = free_grid
+        self._interaction = interaction
+        self._viewport = viewport
+        self._board_of = board
+        self._filter_host = filter_host
+        self.author_create_requested = _EmitPort(emit_create)
+        self.author_update_requested = _EmitPort(emit_update)
+        self.author_delete_requested = _EmitPort(emit_delete)
+        self._emit_feedback = emit_feedback
+        self._sync_tool_cursor = sync_tool_cursor
+        self._sync_tool_rail_from_controller = sync_tool_rail
+        self._refresh_author_toolbar = refresh_author_toolbar
+        self._selection_toolbar = selection_toolbar
+        self._filtered_cards: set[int] = set()
+        self._editor_kind = ""
+        self._text_limit_notified = False
+
+    @property
+    def _board(self):
+        return self._board_of()
+
+    @property
+    def _text_geometry_session(self):
+        return self._interaction.geometry_session(TOOL_TEXT)
+
+    @_text_geometry_session.setter
+    def _text_geometry_session(self, value) -> None:
+        self._interaction.set_geometry_session(TOOL_TEXT, value)
+
+    @property
+    def _shape_geometry_session(self):
+        return self._interaction.geometry_session(TOOL_SHAPES)
+
+    @_shape_geometry_session.setter
+    def _shape_geometry_session(self, value) -> None:
+        self._interaction.set_geometry_session(TOOL_SHAPES, value)
+
+    @property
+    def _connector_geometry_session(self):
+        return self._interaction.geometry_session(TOOL_CONNECTOR)
+
+    @_connector_geometry_session.setter
+    def _connector_geometry_session(self, value) -> None:
+        self._interaction.set_geometry_session(TOOL_CONNECTOR, value)
+
+    def handle_board_event(self, watched, event) -> bool:
+        """Dispatch an armed author-tool event. Mouse and Laser share this path."""
+        if watched is not self._free_grid and not isinstance(watched, FreeGridCard):
+            return False
+        if self._pointer_tool_armed(TOOL_DRAW):
+            if self._handle_draw_board_event(watched, event):
+                return True
+        if self._pointer_tool_armed(TOOL_CONNECTOR):
+            if self._handle_connector_board_event(watched, event):
+                return True
+        if watched is self._free_grid:
+            if self._pointer_tool_armed(TOOL_TEXT):
+                if self._handle_text_board_event(event):
+                    return True
+            if self._pointer_tool_armed(TOOL_SHAPES):
+                if self._handle_shape_board_event(event):
+                    return True
+        return False
 
     def _text_create_armed(self) -> bool:
         return (
@@ -1501,7 +1626,14 @@ class BoardPointerMixin:
             identity = id(card)
             seen.add(identity)
             if identity not in self._filtered_cards:
-                card.installEventFilter(self)
+                card.installEventFilter(self._filter_host)
                 self._filtered_cards.add(identity)
         self._filtered_cards.intersection_update(seen)
+
+
+PointerRouter.FORWARDED_METHODS = tuple(
+    name
+    for name, value in vars(PointerRouter).items()
+    if callable(value) and not name.startswith("__")
+)
 

@@ -151,6 +151,22 @@ def test_hit_priority_editor_pan_handle_author_card_blank():
     assert resolve_board_hit(author_hits_rev_z=(author,), card=card).kind == HIT_AUTHOR
     assert resolve_board_hit(card=card).kind == HIT_CARD
     assert resolve_board_hit().kind == HIT_BLANK
+    from mf4_analyzer.ui.chart_stack.ultraview.board_pointer import PointerHitFacts
+
+    facts = PointerHitFacts(
+        editor_active=True,
+        viewport_pan=True,
+        resize_handle="e",
+        author_hits_rev_z=(author,),
+        card=card,
+    )
+    assert facts.resolve() == resolve_board_hit(
+        editor_active=True,
+        viewport_pan=True,
+        resize_handle="e",
+        author_hits_rev_z=(author,),
+        card=card,
+    )
 
 
 def test_gesture_selection_is_controller_projection():

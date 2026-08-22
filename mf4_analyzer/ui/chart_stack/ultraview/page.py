@@ -199,7 +199,7 @@ from .author_tools import (
     text_box_from_points,
 )
 from .author_widgets import is_text_input_widget
-from .board_pointer import BoardPointerMixin
+from .board_pointer import PointerRouter
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
     LIBRARY_OVERLAY_MIN_HEIGHT,
@@ -299,7 +299,7 @@ def _qrect(rect: FloatingRect) -> QRect:
     return QRect(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
 
 
-class UltraViewPage(BoardPointerMixin, QWidget):
+class UltraViewPage(QWidget):
     add_ref_requested = pyqtSignal(str, str)
     replace_slot_requested = pyqtSignal(str, str, str)
     swap_slots_requested = pyqtSignal(str, str)
@@ -424,9 +424,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._grid = BoardGrid(self._canvas_stage)
         self._free_grid = FreeGridBoard(self._canvas_stage)
         self._interaction = self._free_grid.interaction()
-        self._filtered_cards: set[int] = set()
-        self._text_limit_notified = False
-        self._editor_kind = ""
         self._board_host = QWidget(self._canvas_stage)
         self._board_host.setObjectName("ultraViewBoardHost")
         self._board_host.setAttribute(Qt.WA_StyledBackground, True)
@@ -576,6 +573,22 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._selection_toolbar = SelectionToolbar(self._canvas_host)
         self._selection_toolbar.hide()
         self._format_picker = FormatChoiceFlyout(self._canvas_host)
+        self._pointer_router = PointerRouter(
+            free_grid=self._free_grid,
+            interaction=self._interaction,
+            viewport=self._viewport_ctrl.viewport(),
+            board=self._pointer_board,
+            filter_host=self,
+            emit_create=self.author_create_requested.emit,
+            emit_update=self.author_update_requested.emit,
+            emit_delete=self.author_delete_requested.emit,
+            emit_feedback=self._emit_feedback,
+            sync_tool_cursor=self._sync_tool_cursor,
+            sync_tool_rail=self._sync_tool_rail_from_controller,
+            refresh_author_toolbar=self._refresh_author_toolbar,
+            selection_toolbar=self._selection_toolbar,
+        )
+        self._bind_pointer_router()
         self._author_ui = AuthorUiController(
             interaction=self._interaction,
             canvas_host=self._canvas_host,
@@ -1106,6 +1119,52 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     def interaction(self):
         """Board interaction owner. Page selection is a projection of this."""
         return self._interaction
+
+    def pointer_router(self) -> PointerRouter:
+        """Author-tool pointer sessions. Page.eventFilter is the only Qt entry."""
+        return self._pointer_router
+
+    def _pointer_board(self):
+        return self._board
+
+    def _bind_pointer_router(self) -> None:
+        router = self._pointer_router
+        owned = set(UltraViewPage.__dict__)
+        for name in PointerRouter.FORWARDED_METHODS:
+            if name in owned:
+                continue
+            setattr(self, name, getattr(router, name))
+
+    def _pointer_tool_armed(self, tool: str) -> bool:
+        return self._pointer_router._pointer_tool_armed(tool)
+
+    @property
+    def _editor_kind(self) -> str:
+        router = getattr(self, "_pointer_router", None)
+        if router is None:
+            return ""
+        return str(router._editor_kind or "")
+
+    @_editor_kind.setter
+    def _editor_kind(self, value: str) -> None:
+        router = getattr(self, "_pointer_router", None)
+        if router is None:
+            return
+        router._editor_kind = str(value or "")
+
+    @property
+    def _text_limit_notified(self) -> bool:
+        router = getattr(self, "_pointer_router", None)
+        if router is None:
+            return False
+        return bool(router._text_limit_notified)
+
+    @_text_limit_notified.setter
+    def _text_limit_notified(self, value: bool) -> None:
+        router = getattr(self, "_pointer_router", None)
+        if router is None:
+            return
+        router._text_limit_notified = bool(value)
 
     @property
     def _text_geometry_session(self):
@@ -2801,27 +2860,11 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         elif getattr(self, "_free_grid", None) is not None and (
             watched is self._free_grid or isinstance(watched, FreeGridCard)
         ):
-            if self._pointer_tool_armed(TOOL_DRAW):
-                if self._handle_draw_board_event(watched, event):
-                    if event.type() in (QEvent.MouseButtonRelease, QEvent.TabletRelease):
-                        QTimer.singleShot(0, self._refresh_author_toolbar)
-                    return True
-            if self._pointer_tool_armed(TOOL_CONNECTOR):
-                if self._handle_connector_board_event(watched, event):
-                    if event.type() == QEvent.MouseButtonRelease:
-                        QTimer.singleShot(0, self._refresh_author_toolbar)
-                    return True
-            if watched is self._free_grid:
-                if self._pointer_tool_armed(TOOL_TEXT):
-                    if self._handle_text_board_event(event):
-                        if event.type() == QEvent.MouseButtonRelease:
-                            QTimer.singleShot(0, self._refresh_author_toolbar)
-                        return True
-                if self._pointer_tool_armed(TOOL_SHAPES):
-                    if self._handle_shape_board_event(event):
-                        if event.type() == QEvent.MouseButtonRelease:
-                            QTimer.singleShot(0, self._refresh_author_toolbar)
-                        return True
+            router = getattr(self, "_pointer_router", None)
+            if router is not None and router.handle_board_event(watched, event):
+                if event.type() in (QEvent.MouseButtonRelease, QEvent.TabletRelease):
+                    QTimer.singleShot(0, self._refresh_author_toolbar)
+                return True
             if event.type() == QEvent.KeyPress and self._handle_board_selection_key(event):
                 return True
             if event.type() == QEvent.MouseButtonRelease:

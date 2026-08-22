@@ -1,6 +1,9 @@
 """Select-tool hit routing: Connector/Stroke go through classify_press."""
 from __future__ import annotations
 
+from pathlib import Path
+import ast
+
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtTest import QTest
@@ -10,6 +13,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_edits import apply_author_upda
 from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import board_point_to_pixels
 from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
     HIT_RESIZE_HANDLE,
+    TOOL_DRAW,
     TOOL_SELECT,
     AuthorKey,
 )
@@ -172,3 +176,46 @@ def test_select_text_body_drag_moves_box(qtbot):
         obj for obj in harness.board.author_objects if getattr(obj, "object_id", "") == "text-h"
     )
     assert item.box.x > 2.0
+
+
+def _page_class_bases() -> list[str]:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "mf4_analyzer"
+        / "ui"
+        / "chart_stack"
+        / "ultraview"
+        / "page.py"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "UltraViewPage":
+            names = []
+            for base in node.bases:
+                if isinstance(base, ast.Name):
+                    names.append(base.id)
+                elif isinstance(base, ast.Attribute):
+                    names.append(base.attr)
+            return names
+    raise AssertionError("UltraViewPage class not found")
+
+
+def test_ultraview_page_does_not_inherit_board_pointer_mixin():
+    assert _page_class_bases() == ["QWidget"]
+    from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
+    from mf4_analyzer.ui.chart_stack.ultraview.board_pointer import PointerRouter
+
+    assert PointerRouter not in UltraViewPage.__mro__
+    assert UltraViewPage.__bases__[0].__name__ == "QWidget"
+
+
+def test_page_pointer_tool_armed_forwarder(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+    page.interaction().set_active_tool(TOOL_SELECT)
+    assert page._pointer_tool_armed(TOOL_SELECT)
+    assert not page._pointer_tool_armed(TOOL_DRAW)
+    page.interaction().set_active_tool(TOOL_DRAW)
+    assert page._pointer_tool_armed(TOOL_DRAW)
+    assert page.pointer_router() is page._pointer_router
+    assert page.pointer_router()._interaction is page.interaction()
