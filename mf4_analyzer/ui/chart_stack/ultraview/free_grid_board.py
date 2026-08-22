@@ -1,9 +1,10 @@
 """UltraView free-grid board host.
 
 Visual projection of persisted free-grid state. Live move/resize feedback
-(latest pointer, 0 ms coalescer, candidate fingerprint, present/clear) lives
-on ``FreeGridFeedbackController``. This widget remains the QWidget host for
-cards, ``FreeGridGesture``, planner commits, dimming, and ghost sources.
+lives on ``FreeGridFeedbackController``. Author hit/geometry/editor bridge
+lives on ``FreeGridAuthorController``. This widget remains the QWidget host
+for cards, child editors, ``FreeGridGesture``, planner commits, and the
+single ``BoardInteractionController`` session.
 """
 from __future__ import annotations
 
@@ -26,12 +27,7 @@ from mf4_analyzer.ui.ultraview_state import (
     GridAnchor,
     GridBounds,
     GridRect,
-    BoardBox,
-    ConnectorObject,
-    ShapeObject,
     StickyObject,
-    StrokeObject,
-    TextObject,
     UltraViewRef,
     parse_ref_payload,
     resolve_free_grid_insert_rect,
@@ -66,47 +62,25 @@ from .free_grid import (
     rect_to_pixels,
     screen_grid_metrics,
 )
-from .author_geometry import (
-    board_box_to_pixels,
-    board_point_to_pixels,
-    connector_handle_points,
-    hit_box_handle,
-    hit_connector,
-    hit_connector_handle,
-    hit_stroke,
-    pixels_to_board_point,
-    stroke_hit_record,
-)
-from .author_layer import AuthorLayerModel, AuthorPaintLayer
-from .author_style import DEFAULT_STICKY_PALETTE, DEFAULT_THEME
+from .author_geometry import board_box_to_pixels
+from .author_layer import AuthorPaintLayer
+from .author_style import DEFAULT_THEME
 from .author_tools import (
     HIT_AUTHOR,
     HIT_BLANK,
     HIT_RESIZE_HANDLE,
-    SHAPE_MIN_HEIGHT,
-    SHAPE_MIN_WIDTH,
     STICKY_MIN_HEIGHT,
     STICKY_MIN_WIDTH,
-    TEXT_MIN_HEIGHT,
-    TEXT_MIN_WIDTH,
-    TOOL_STICKY,
-    AuthorCreateIntent,
     AuthorDeleteIntent,
     AuthorKey,
-    AuthorUpdateIntent,
     BoardInteractionController,
     CardKey,
     HitTarget,
-    ShapeUpdateIntent,
-    TextUpdateIntent,
-    clamp_author_box,
-    new_author_object_id,
     resolve_board_hit,
-    sticky_box_from_points,
 )
 from .author_widgets import BoardTextEditor, StickyNoteWidget
-from .elastic_workspace import author_content_bounds
 from .gesture import FreeGridGesture
+from .free_grid_author_controller import FreeGridAuthorController, pixel_box
 from .free_grid_feedback import FreeGridFeedbackController
 from .viewport_feedback import ViewportFeedbackSurface
 from .viewport import (
@@ -231,8 +205,6 @@ class FreeGridBoard(QWidget):
         # but their renderer is deliberately a transparent sibling.  Do not
         # make it an event-filter owner: cards, marquee and Page right-pan
         # keep their existing Qt delivery paths.
-        self._author_objects: tuple[object, ...] = ()
-        self._author_theme = DEFAULT_THEME
         self._author_layer = AuthorPaintLayer(self)
         # Text editing needs a real widget for CJK IME.  It remains hidden
         # until the creation controller starts an edit transaction; painting
@@ -240,16 +212,19 @@ class FreeGridBoard(QWidget):
         self._author_text_editor = BoardTextEditor(self)
         self._sticky_note = StickyNoteWidget(self)
         self._sticky_note.hide()
-        self._sticky_note.text_committed.connect(self._on_sticky_text_committed)
-        self._sticky_note.edit_cancelled.connect(self._on_sticky_edit_cancelled)
         self._creation_allowed = False
-        self._author_geometry_session: dict[str, object] | None = None
         self._workspace_gesture_active = False
         self._interaction = BoardInteractionController()
         self._gesture = FreeGridGesture(self._interaction)
         self._overlay = ViewportFeedbackSurface(self)
         self._overlay.hide()
         self._feedback = FreeGridFeedbackController(self, self._overlay, self)
+        self._author = FreeGridAuthorController(
+            self,
+            paint_layer=self._author_layer,
+            text_editor=self._author_text_editor,
+            sticky_note=self._sticky_note,
+        )
         self._ghost_buffers: dict[UltraViewRef, QPixmap] = {}
         self._replace = ReplaceHoverController(self)
         self._replace.armed.connect(self._on_replace_armed)
@@ -371,6 +346,10 @@ class FreeGridBoard(QWidget):
         """Single Board interaction owner. Selection/tool/draft live here."""
         return self._interaction
 
+    def author_controller(self) -> FreeGridAuthorController:
+        """Author hit/geometry/editor bridge. Not a second session owner."""
+        return self._author
+
     def set_author_objects(
         self,
         objects: Sequence[object],
@@ -378,39 +357,18 @@ class FreeGridBoard(QWidget):
         theme: str = DEFAULT_THEME,
     ) -> None:
         """Project persisted author objects without taking mutation ownership."""
-        self._author_objects = tuple(objects)
-        self._author_theme = str(theme or DEFAULT_THEME)
-        self._interaction.restrict_authors(
-            {
-                str(getattr(item, "object_id", ""))
-                for item in self._author_objects
-                if getattr(item, "object_id", None)
-            }
-        )
-        self._sync_author_projection()
+        self._author.set_author_objects(objects, theme=theme)
 
     def clear_author_selection(self) -> bool:
         """Clear author keys through the shared controller."""
-        if not self._interaction.clear_author_keys():
-            return False
-        self._sync_author_projection()
-        return True
+        return self._author.clear_author_selection()
 
     def author_selection_ids(self) -> frozenset[str]:
-        return self._interaction.author_selection_ids()
+        return self._author.author_selection_ids()
 
     def hide_author_editor(self) -> bool:
         """Hide the IME editor without committing. Safe when nothing is editing."""
-        hidden = False
-        if self._sticky_note.is_editing():
-            self._sticky_note.hide_edit()
-            hidden = True
-        editor = self._author_text_editor
-        if editor.is_editing():
-            editor.cancel()
-            hidden = True
-        self._interaction.set_editor_active(False)
-        return hidden
+        return self._author.hide_author_editor()
 
     def reset_transient_interaction(self) -> None:
         """Board switch/clear: drop tool/selection/draft/hover; keep coalesce owner."""
@@ -424,55 +382,10 @@ class FreeGridBoard(QWidget):
     def _author_pixel_rect(
         self, metrics: GridMetrics
     ) -> tuple[tuple[float, float, float, float], ...]:
-        bounds = author_content_bounds(self._author_objects)
-        if bounds.empty():
-            return ()
-        mapped = board_box_to_pixels(
-            (
-                float(bounds.column),
-                float(bounds.row),
-                float(bounds.column_span),
-                float(bounds.row_span),
-            ),
-            metrics,
-            origin_offset=self._workspace_origin_offset(),
-        )
-        return () if mapped is None else (mapped,)
+        return self._author.pixel_rects(metrics)
 
     def _sync_author_projection(self) -> None:
-        boxes = []
-        selected = self._interaction.author_selection_ids()
-        if selected:
-            for item in self._author_objects:
-                if str(getattr(item, "object_id", "")) not in selected:
-                    continue
-                box = getattr(item, "box", None)
-                if box is not None:
-                    boxes.append((box.x, box.y, box.width, box.height))
-        self._author_layer.set_model(
-            AuthorLayerModel(
-                objects=self._author_objects,
-                metrics=self._metrics,
-                origin_offset=self._workspace_origin_offset(),
-                theme=self._author_theme,
-                selection_boxes=tuple(boxes),
-            )
-        )
-        self._author_layer.set_view_geometry(
-            self._metrics,
-            origin_offset=self._workspace_origin_offset(),
-            zoom=self._zoom,
-        )
-        if self._author_text_editor.is_editing():
-            self._author_text_editor.update_board_geometry(
-                self._metrics,
-                origin_offset=self._workspace_origin_offset(),
-            )
-        if self._sticky_note.is_editing():
-            self._sticky_note.update_board_geometry(
-                self._metrics,
-                origin_offset=self._workspace_origin_offset(),
-            )
+        self._author.sync_projection()
 
     def set_preview_quality(self, quality: str) -> None:
         for card in self._widgets.values():
@@ -607,6 +520,45 @@ class FreeGridBoard(QWidget):
     def safety_sides_for(self, rect: GridRect) -> tuple[str, ...]:
         return self._safety_sides_for(rect)
 
+    def map_card_to_board(self, card: FreeGridCard, local: QPoint) -> tuple[int, int]:
+        return self._board_pos(card, local)
+
+    def apply_selection_flags(self) -> None:
+        self._apply_selection_flags()
+
+    def sync_selection_handles(self) -> None:
+        self._sync_selection_handles()
+
+    def raise_overlay(self) -> None:
+        self._raise_overlay()
+
+    def release_mouse_if_grabbed(self) -> None:
+        self._release_mouse_if_grabbed()
+
+    def emit_author_feedback(self, text: str) -> None:
+        self.feedback_requested.emit(text)
+
+    def emit_author_create(self, intent: object) -> None:
+        self.author_create_requested.emit(intent)
+
+    def emit_author_update(self, intent: object) -> None:
+        self.author_update_requested.emit(intent)
+
+    def emit_author_edit(self, object_id: str) -> None:
+        self.author_edit_requested.emit(object_id)
+
+    def begin_connector_geometry(
+        self,
+        handle: str,
+        object_id: str,
+        event: QMouseEvent,
+        pos: QPoint,
+    ) -> None:
+        page = _page_of(self)
+        starter = getattr(page, "_begin_connector_geometry", None)
+        if callable(starter):
+            starter((handle, object_id), event, pos)
+
     def host_is_deleted(self) -> bool:
         try:
             return bool(sip.isdeleted(self))
@@ -693,6 +645,30 @@ class FreeGridBoard(QWidget):
     @_gesture_presenting.setter
     def _gesture_presenting(self, value: bool) -> None:
         self._feedback.gesture_presenting = bool(value)
+
+    @property
+    def _author_geometry_session(self) -> dict[str, object] | None:
+        return self._author.geometry_session
+
+    @_author_geometry_session.setter
+    def _author_geometry_session(self, value: dict[str, object] | None) -> None:
+        self._author.geometry_session = value
+
+    @property
+    def _author_objects(self) -> tuple[object, ...]:
+        return self._author.projected_objects()
+
+    @_author_objects.setter
+    def _author_objects(self, value: Sequence[object]) -> None:
+        self._author.set_projected_objects(value)
+
+    @property
+    def _author_theme(self) -> str:
+        return self._author.projected_theme()
+
+    @_author_theme.setter
+    def _author_theme(self, value: str) -> None:
+        self._author.set_projected_theme(value)
 
     def interaction_facts(self) -> dict[str, bool]:
         """Qt-free flags Page needs without reading private session dicts."""
@@ -1355,11 +1331,7 @@ class FreeGridBoard(QWidget):
             return
 
     def _sticky_create_armed(self) -> bool:
-        return (
-            self._creation_allowed
-            and self._interaction.active_tool() == TOOL_STICKY
-            and not self._interaction.is_editor_active()
-        )
+        return self._author.sticky_create_armed()
 
     def _sync_tool_cursor(self) -> None:
         if self._sticky_create_armed():
@@ -1370,249 +1342,59 @@ class FreeGridBoard(QWidget):
             self.unsetCursor()
 
     def _pixel_to_board_point(self, pos: QPoint) -> tuple[float, float] | None:
-        return pixels_to_board_point(
-            (float(pos.x()), float(pos.y())),
-            self._metrics,
-            origin_offset=self._workspace_origin_offset(),
-        )
+        return self._author.pixel_to_board_point(pos)
 
     def _author_item(self, object_id: str):
-        for item in self._author_objects:
-            if str(getattr(item, "object_id", "") or "") == object_id:
-                return item
-        return None
+        return self._author.author_item(object_id)
 
     def _draft_pixel_rect(self) -> tuple[int, int, int, int] | None:
-        draft = self._interaction.draft()
-        if draft is None or draft.origin is None:
-            return None
-        box = sticky_box_from_points(draft.origin, draft.current)
-        mapped = board_box_to_pixels(box, self._metrics, origin_offset=self._workspace_origin_offset())
-        if mapped is None:
-            return None
-        return self._pixel_box(mapped)
+        return self._author.draft_pixel_rect()
 
     def _pixel_box(
         self, mapped: tuple[float, float, float, float]
     ) -> tuple[int, int, int, int]:
-        x, y, width, height = mapped
-        return (
-            int(round(x)),
-            int(round(y)),
-            max(1, int(round(width))),
-            max(1, int(round(height))),
-        )
+        return pixel_box(mapped)
 
     def route_card_press(self, card: FreeGridCard, event: QMouseEvent) -> bool:
         """I3: author objects above a card consume the press before card drag."""
-        mapped = QPoint(*self._board_pos(card, event.pos()))
-        self._close_sticky_editor_if_outside(mapped)
-        hit = self.classify_press(mapped, modifiers=event.modifiers())
-        if hit.kind == HIT_RESIZE_HANDLE and isinstance(hit.item, AuthorKey):
-            self._begin_selected_author_handle(hit, event, mapped)
-            return True
-        if hit.kind != HIT_AUTHOR:
-            return False
-        self._handle_author_press(hit, event, mapped)
-        return True
+        return self._author.route_card_press(card, event)
 
     def _close_sticky_editor_if_outside(self, pos: QPoint) -> None:
-        if not self._sticky_note.is_editing():
-            return
-        if self._sticky_note.geometry().contains(pos):
-            return
-        self._commit_or_cancel_sticky_editor()
+        self._author.close_sticky_editor_if_outside(pos)
 
     def _commit_or_cancel_sticky_editor(self) -> None:
-        if not self._sticky_note.is_editing():
-            return
-        if not str(self._sticky_note.current_text() or "").strip():
-            self._sticky_note.cancel()
-            return
-        self._sticky_note.commit()
+        self._author.commit_or_cancel_sticky_editor()
 
     def _handle_author_press(
         self, hit: HitTarget, event: QMouseEvent, pos: QPoint
     ) -> None:
-        if not isinstance(hit.item, AuthorKey):
-            return
-        item = self._author_item(hit.item.object_id)
-        additive = bool(event.modifiers() & Qt.ShiftModifier)
-        if additive:
-            self._interaction.toggle(hit.item)
-            self._apply_selection_flags()
-            return
-        self._interaction.select_only(hit.item)
-        self._apply_selection_flags()
-        if item is not None and bool(getattr(item, "locked", False)):
-            self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
-            return
-        if item is None or not isinstance(item, (StickyObject, TextObject, ShapeObject)):
-            return
-        self._begin_box_geometry(item, pos, handle=None)
+        self._author.handle_author_press(hit, event, pos)
 
     def _begin_selected_author_handle(
         self, hit: HitTarget, event: QMouseEvent, pos: QPoint
     ) -> None:
-        if not isinstance(hit.item, AuthorKey):
-            return
-        item = self._author_item(hit.item.object_id)
-        if item is None or bool(getattr(item, "locked", False)):
-            if item is not None:
-                self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
-            return
-        handle = str(hit.handle or "")
-        if isinstance(item, ConnectorObject):
-            page = _page_of(self)
-            starter = getattr(page, "_begin_connector_geometry", None)
-            if callable(starter):
-                starter((handle, item.object_id), event, pos)
-            return
-        if isinstance(item, (StickyObject, TextObject, ShapeObject)):
-            self._begin_box_geometry(item, pos, handle=handle)
+        self._author.begin_selected_author_handle(hit, event, pos)
 
     def _begin_box_geometry(self, item, pos: QPoint, *, handle: str | None) -> None:
-        box = getattr(item, "box", None)
-        if box is None:
-            return
-        board_point = self._pixel_to_board_point(pos)
-        min_w, min_h = self._author_min_size(item)
-        self._author_geometry_session = {
-            "object_id": item.object_id,
-            "kind": "resize" if handle else "move",
-            "handle": handle,
-            "origin": board_point,
-            "box": (box.x, box.y, box.width, box.height),
-            "min_width": min_w,
-            "min_height": min_h,
-        }
-        if QWidget.mouseGrabber() is None:
-            self.grabMouse()
+        self._author.begin_box_geometry(item, pos, handle=handle)
 
     def _author_min_size(self, item) -> tuple[float, float]:
-        if isinstance(item, TextObject):
-            return TEXT_MIN_WIDTH, TEXT_MIN_HEIGHT
-        if isinstance(item, ShapeObject):
-            return SHAPE_MIN_WIDTH, SHAPE_MIN_HEIGHT
-        return STICKY_MIN_WIDTH, STICKY_MIN_HEIGHT
+        return self._author.author_min_size(item)
 
     def _begin_sticky_draft(self, pos: QPoint) -> None:
-        origin = self._pixel_to_board_point(pos)
-        if origin is None:
-            return
-        self._interaction.begin_draft(
-            TOOL_STICKY, origin=origin, object_id=new_author_object_id()
-        )
-        self._overlay.set_marquee(self._draft_pixel_rect())
-        self._emit_workspace_gesture(True)
+        self._author.begin_sticky_draft(pos)
 
     def _update_sticky_draft(self, pos: QPoint) -> None:
-        current = self._pixel_to_board_point(pos)
-        self._interaction.update_draft(current)
-        rect = self._draft_pixel_rect()
-        if rect is not None:
-            self._overlay.set_marquee(rect)
+        self._author.update_sticky_draft(pos)
 
     def _finish_sticky_draft(self) -> None:
-        draft = self._interaction.draft()
-        self._release_mouse_if_grabbed()
-        self._overlay.set_marquee(None)
-        self._emit_workspace_gesture(False)
-        if draft is None or draft.origin is None or draft.object_id is None:
-            self._interaction.cancel_draft()
-            return
-        box = sticky_box_from_points(draft.origin, draft.current)
-        item = StickyObject(
-            draft.object_id,
-            "sticky",
-            box=BoardBox(*box),
-            text="",
-            palette=str(draft.palette or DEFAULT_STICKY_PALETTE),
-        )
-        self._sticky_note.apply_object(
-            item,
-            self._metrics,
-            origin_offset=self._workspace_origin_offset(),
-            theme=self._author_theme,
-        )
-        self._interaction.set_editor_active(True)
-        self._sticky_note.begin_edit()
-        self._raise_overlay()
+        self._author.finish_sticky_draft()
 
     def _begin_sticky_edit(self, item) -> None:
-        if not isinstance(item, StickyObject):
-            return
-        if bool(getattr(item, "locked", False)):
-            self.feedback_requested.emit(text_for_key(AUTHOR_LOCKED))
-            return
-        self._sticky_note.apply_object(
-            item,
-            self._metrics,
-            origin_offset=self._workspace_origin_offset(),
-            theme=self._author_theme,
-        )
-        self._interaction.set_editor_active(True)
-        self._sticky_note.begin_edit()
-        self._raise_overlay()
-
-    def _on_sticky_text_committed(self, object_id: str, text: str) -> None:
-        draft = self._interaction.draft()
-        pending = draft is not None and draft.object_id == object_id
-        self._sticky_note.hide_edit()
-        self._interaction.set_editor_active(False)
-        cleaned = str(text or "")
-        if pending:
-            if not cleaned.strip():
-                self._interaction.cancel_draft()
-                self._sync_tool_cursor()
-                return
-            box = sticky_box_from_points(draft.origin or (0.0, 0.0), draft.current)
-            self._interaction.commit_draft()
-            self.author_create_requested.emit(
-                AuthorCreateIntent(
-                    TOOL_STICKY,
-                    object_id,
-                    box,
-                    cleaned,
-                    str(draft.palette or DEFAULT_STICKY_PALETTE),
-                )
-            )
-            self._sync_tool_cursor()
-            return
-        self.author_update_requested.emit(AuthorUpdateIntent(object_id, text=cleaned))
-
-    def _on_sticky_edit_cancelled(self, object_id: str) -> None:
-        draft = self._interaction.draft()
-        self._interaction.set_editor_active(False)
-        if draft is not None and draft.object_id == object_id:
-            self._interaction.cancel_draft()
-        self._sync_tool_cursor()
+        self._author.begin_sticky_edit(item)
 
     def _update_author_geometry(self, pos: QPoint) -> None:
-        session = self._author_geometry_session
-        if not session or session.get("origin") is None:
-            return
-        current = self._pixel_to_board_point(pos)
-        if current is None:
-            return
-        ox, oy = session["origin"]  # type: ignore[misc]
-        x, y, width, height = session["box"]  # type: ignore[misc]
-        dx = current[0] - ox
-        dy = current[1] - oy
-        handle = session.get("handle")
-        min_w = float(session.get("min_width") or STICKY_MIN_WIDTH)
-        min_h = float(session.get("min_height") or STICKY_MIN_HEIGHT)
-        if session.get("kind") == "move" or not handle:
-            box = clamp_author_box(
-                x + dx, y + dy, width, height, min_width=min_w, min_height=min_h
-            )
-        else:
-            box = self._resize_author_box(
-                (x, y, width, height), str(handle), dx, dy, min_width=min_w, min_height=min_h
-            )
-        mapped = board_box_to_pixels(box, self._metrics, origin_offset=self._workspace_origin_offset())
-        if mapped is not None:
-            self._overlay.set_selection_rects((self._pixel_box(mapped),), handles=True)
+        self._author.update_author_geometry(pos)
 
     def _resize_author_box(
         self,
@@ -1624,24 +1406,12 @@ class FreeGridBoard(QWidget):
         min_width: float = STICKY_MIN_WIDTH,
         min_height: float = STICKY_MIN_HEIGHT,
     ) -> tuple[float, float, float, float]:
-        x, y, width, height = box
-        x2, y2 = x + width, y + height
-        if "w" in handle:
-            x = x + dx
-        if "e" in handle:
-            x2 = x2 + dx
-        if "n" in handle:
-            y = y + dy
-        if "s" in handle:
-            y2 = y2 + dy
-        return clamp_author_box(
-            min(x, x2),
-            min(y, y2),
-            abs(x2 - x),
-            abs(y2 - y),
-            min_width=min_width,
-            min_height=min_height,
+        return self._author.resize_author_box(
+            box, handle, dx, dy, min_width=min_width, min_height=min_height
         )
+
+    def _finish_author_geometry(self, pos: QPoint) -> None:
+        self._author.finish_author_geometry(pos)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() != Qt.LeftButton:
@@ -1799,51 +1569,6 @@ class FreeGridBoard(QWidget):
             else:
                 self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
         return True
-
-    def _finish_author_geometry(self, pos: QPoint) -> None:
-        session = self._author_geometry_session
-        if not session or session.get("origin") is None:
-            self._author_geometry_session = None
-            self._release_mouse_if_grabbed()
-            self._sync_selection_handles()
-            return
-        current = self._pixel_to_board_point(pos)
-        origin = session["origin"]
-        box = session["box"]
-        self._author_geometry_session = None
-        self._release_mouse_if_grabbed()
-        if current is None:
-            self._sync_selection_handles()
-            return
-        dx = current[0] - origin[0]
-        dy = current[1] - origin[1]
-        handle = session.get("handle")
-        x, y, width, height = box  # type: ignore[misc]
-        min_w = float(session.get("min_width") or STICKY_MIN_WIDTH)
-        min_h = float(session.get("min_height") or STICKY_MIN_HEIGHT)
-        if session.get("kind") == "resize" and handle:
-            next_box = self._resize_author_box(
-                (x, y, width, height),
-                str(handle),
-                dx,
-                dy,
-                min_width=min_w,
-                min_height=min_h,
-            )
-        else:
-            next_box = clamp_author_box(
-                x + dx, y + dy, width, height, min_width=min_w, min_height=min_h
-            )
-        object_id = str(session.get("object_id") or "")
-        if next_box != (x, y, width, height) and object_id:
-            item = self._author_item(object_id)
-            if isinstance(item, TextObject):
-                self.author_update_requested.emit(TextUpdateIntent(object_id, box=next_box))
-            elif isinstance(item, ShapeObject):
-                self.author_update_requested.emit(ShapeUpdateIntent(object_id, box=next_box))
-            else:
-                self.author_update_requested.emit(AuthorUpdateIntent(object_id, box=next_box))
-        self._sync_selection_handles()
 
     def _finish_marquee(self, session) -> None:
         x, y, width, height = session.rect()
@@ -2266,109 +1991,11 @@ class FreeGridBoard(QWidget):
 
     def _selected_author_handle_at(self, pos: QPoint) -> tuple[str, AuthorKey] | None:
         """I3: selected author handles sit above body hits and cards."""
-        ids = self._interaction.author_selection_ids()
-        if not ids:
-            return None
-        origin = self._workspace_origin_offset()
-        for item in reversed(self._author_objects):
-            object_id = str(getattr(item, "object_id", "") or "")
-            if object_id not in ids:
-                continue
-            if isinstance(item, ConnectorObject):
-                handles = connector_handle_points(
-                    (item.start.point.x, item.start.point.y),
-                    (item.end.point.x, item.end.point.y),
-                    route=item.route,
-                    elbow_bias=item.elbow_bias,
-                )
-                mapped = {}
-                for name, point in handles.items():
-                    pixel = board_point_to_pixels(point, self._metrics, origin_offset=origin)
-                    if pixel is not None:
-                        mapped[name] = pixel
-                hit = hit_connector_handle(mapped, (pos.x(), pos.y()))
-                if hit is not None:
-                    return (hit, AuthorKey(object_id))
-                continue
-            box = getattr(item, "box", None)
-            if box is None:
-                continue
-            mapped = board_box_to_pixels(
-                (box.x, box.y, box.width, box.height),
-                self._metrics,
-                origin_offset=origin,
-            )
-            if mapped is None:
-                continue
-            handle = hit_box_handle(
-                (
-                    int(round(mapped[0])),
-                    int(round(mapped[1])),
-                    int(round(mapped[2])),
-                    int(round(mapped[3])),
-                ),
-                (pos.x(), pos.y()),
-            )
-            if handle is not None:
-                return (handle, AuthorKey(object_id))
-        return None
+        return self._author.selected_handle_at(pos)
 
     def _author_keys_at(self, pos: QPoint) -> tuple[AuthorKey, ...]:
         """Reverse-z hit list. The paint layer itself remains mouse-transparent."""
-        hits: list[AuthorKey] = []
-        origin = self._workspace_origin_offset()
-        probe = pixels_to_board_point(
-            (float(pos.x()), float(pos.y())),
-            self._metrics,
-            origin_offset=origin,
-        )
-        for item in reversed(self._author_objects):
-            object_id = str(getattr(item, "object_id", "") or "")
-            if not object_id:
-                continue
-            box = getattr(item, "box", None)
-            if box is not None:
-                mapped = board_box_to_pixels(
-                    (box.x, box.y, box.width, box.height),
-                    self._metrics,
-                    origin_offset=origin,
-                )
-                if mapped is None:
-                    continue
-                x, y, width, height = mapped
-                rect = QRect(
-                    int(round(x)),
-                    int(round(y)),
-                    max(1, int(round(width))),
-                    max(1, int(round(height))),
-                )
-                if rect.contains(pos):
-                    hits.append(AuthorKey(object_id))
-                continue
-            if probe is None:
-                continue
-            if isinstance(item, ConnectorObject):
-                if hit_connector(
-                    (item.start.point.x, item.start.point.y),
-                    (item.end.point.x, item.end.point.y),
-                    probe,
-                    route=item.route,
-                    stroke_width=item.stroke_width,
-                    start_head=item.start_head,
-                    end_head=item.end_head,
-                    elbow_bias=item.elbow_bias,
-                ):
-                    hits.append(AuthorKey(object_id))
-                continue
-            if isinstance(item, StrokeObject):
-                record = stroke_hit_record(
-                    object_id,
-                    ((point.x, point.y) for point in item.points),
-                    item.width_px_100,
-                )
-                if record is not None and hit_stroke(record, probe):
-                    hits.append(AuthorKey(object_id))
-        return tuple(hits)
+        return self._author.keys_at(pos)
 
     def _on_replace_armed(self, key: str) -> None:
         section, _, view_id = key.partition("/")

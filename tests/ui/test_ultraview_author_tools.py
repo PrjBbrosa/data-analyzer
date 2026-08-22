@@ -410,6 +410,33 @@ def test_page_and_gesture_share_one_controller(qtbot):
     assert page._free_grid.gesture().interaction is page.interaction()
 
 
+def test_author_controller_is_composed_bridge_not_second_session(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid_author_controller import (
+        FreeGridAuthorController,
+    )
+    from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
+
+    harness = _Harness(qtbot)
+    page = harness.page
+    board = page._free_grid
+    controller = board.author_controller()
+    assert isinstance(controller, FreeGridAuthorController)
+    assert board.interaction() is page.interaction()
+    assert board.interaction() is board._interaction
+    assert controller is not board.interaction()
+    assert isinstance(board.interaction(), BoardInteractionController)
+    assert board._author_geometry_session is controller.geometry_session
+    board._author_geometry_session = {"kind": "move"}
+    assert controller.geometry_session is board._author_geometry_session
+    assert controller.geometry_session == {"kind": "move"}
+    board._author_geometry_session = None
+    assert controller.geometry_session is None
+    page_source = (ULTRAVIEW_ROOT / "page.py").read_text(encoding="utf-8")
+    assert "_author_geometry_session" not in page_source
+    assert FreeGridAuthorController not in UltraViewPage.__mro__
+    assert not issubclass(UltraViewPage, FreeGridAuthorController)
+
+
 def test_card_only_select_shift_marquee_blank_esc_delete_use_one_owner(qtbot):
     harness = _Harness(qtbot)
     free, (left, right) = _prepare_free_grid(harness, qtbot, "own-0", "own-1")
