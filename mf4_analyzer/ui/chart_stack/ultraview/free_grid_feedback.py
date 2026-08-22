@@ -249,6 +249,24 @@ class FreeGridFeedbackController:
         self._last_legal_ghosts = ()
         self._last_legal_highlights = ()
 
+    def present_marquee(self) -> None:
+        """Project the live card-marquee rect onto the one viewport surface."""
+        self._overlay.set_marquee(self._host.gesture().marquee_rect())
+
+    def clear_marquee(self) -> None:
+        self._overlay.set_marquee(None)
+
+    def after_origin_shift(self) -> None:
+        """Re-present marquee/frame after the host remapped widget coordinates."""
+        if self._host.gesture().marquee() is not None:
+            self.present_marquee()
+        self.invalidate_candidate_fingerprint()
+        self.reproject_live_preview()
+
+    def reset_after_cancel(self) -> None:
+        self.reset_pointer_state()
+        self._overlay.clear_edge_hint()
+
     def clear_displayed_frame(self, gesture_id: int | None = None) -> None:
         self._overlay.clear(gesture_id)
 

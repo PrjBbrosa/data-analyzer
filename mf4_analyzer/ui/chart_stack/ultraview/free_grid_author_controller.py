@@ -219,6 +219,56 @@ class FreeGridAuthorController:
         self._host.interaction().set_editor_active(False)
         return hidden
 
+    def is_editor_open(self) -> bool:
+        return bool(self._sticky_note.is_editing() or self._text_editor.is_editing())
+
+    def is_draft_active(self) -> bool:
+        return self._host.interaction().draft() is not None
+
+    def has_geometry_session(self) -> bool:
+        return self._geometry_session is not None
+
+    def cancel_geometry_session(self) -> bool:
+        if self._geometry_session is None:
+            return False
+        self._geometry_session = None
+        return True
+
+    def cancel_draft_preview(self) -> bool:
+        if self._host.interaction().draft() is None:
+            return False
+        self._host.interaction().cancel_draft()
+        self._host.ghost_overlay().set_marquee(None)
+        self.hide_author_editor()
+        return True
+
+    def reset_transient(self) -> None:
+        """Board switch/clear: hide editors and drop the geometry session."""
+        self.hide_author_editor()
+        self._geometry_session = None
+
+    def projected_selection_rects(self) -> list[tuple[int, int, int, int]]:
+        """Pixel rects of selected author boxes. Overlay present stays on Board."""
+        rects: list[tuple[int, int, int, int]] = []
+        origin = self._host.workspace_origin_offset()
+        selected = self._host.interaction().author_selection_ids()
+        metrics = self._host.metrics()
+        for item in self._author_objects:
+            object_id = str(getattr(item, "object_id", "") or "")
+            if object_id not in selected:
+                continue
+            box = getattr(item, "box", None)
+            if box is None:
+                continue
+            mapped = board_box_to_pixels(
+                (box.x, box.y, box.width, box.height),
+                metrics,
+                origin_offset=origin,
+            )
+            if mapped is not None:
+                rects.append(pixel_box(mapped))
+        return rects
+
     def pixel_rects(
         self, metrics: GridMetrics
     ) -> tuple[tuple[float, float, float, float], ...]:

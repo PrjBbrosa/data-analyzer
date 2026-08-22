@@ -437,6 +437,41 @@ def test_author_controller_is_composed_bridge_not_second_session(qtbot):
     assert not issubclass(UltraViewPage, FreeGridAuthorController)
 
 
+def test_board_constructs_exactly_one_feedback_author_session_and_surface(qtbot):
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid_author_controller import (
+        FreeGridAuthorController,
+    )
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid_feedback import (
+        FreeGridFeedbackController,
+    )
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport_feedback import (
+        ViewportFeedbackSurface,
+    )
+
+    harness = _Harness(qtbot)
+    board = harness.page._free_grid
+    assert isinstance(board.interaction(), BoardInteractionController)
+    assert board.interaction() is board._interaction
+    assert isinstance(board._feedback, FreeGridFeedbackController)
+    assert isinstance(board.author_controller(), FreeGridAuthorController)
+    assert board.author_controller() is board._author
+    assert isinstance(board.ghost_overlay(), ViewportFeedbackSurface)
+    assert board.ghost_overlay() is board._overlay
+    assert board.ghost_overlay() is board._feedback.overlay
+    assert isinstance(board, QWidget)
+    assert FreeGridBoard.__bases__ == (QWidget,)
+    assert "mousePressEvent" in FreeGridBoard.__dict__
+    assert not any(
+        name.endswith("Mixin")
+        for name in (cls.__name__ for cls in FreeGridBoard.__mro__)
+    )
+    page_source = (ULTRAVIEW_ROOT / "page.py").read_text(encoding="utf-8")
+    assert "_author_geometry_session" not in page_source
+    assert "_body_layout" not in page_source
+
+
 def test_card_only_select_shift_marquee_blank_esc_delete_use_one_owner(qtbot):
     harness = _Harness(qtbot)
     free, (left, right) = _prepare_free_grid(harness, qtbot, "own-0", "own-1")

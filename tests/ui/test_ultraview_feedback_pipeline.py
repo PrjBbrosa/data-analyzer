@@ -388,3 +388,20 @@ def test_pointer_coalesce_timer_is_constructed_in_feedback_controller():
         isinstance(item, ast.FunctionDef) and item.name == "feedback_pipeline_counts"
         for item in class_node.body
     )
+    timer_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "QTimer")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "QTimer")
+        )
+    ]
+    assert timer_calls == []
+    assert "QTimer" not in board
+    assert "installEventFilter" not in board
+    assert any(
+        isinstance(item, ast.FunctionDef) and item.name == "mousePressEvent"
+        for item in class_node.body
+    )
+    assert [ast.unparse(base) for base in class_node.bases] == ["QWidget"]

@@ -350,3 +350,70 @@ def test_zoom_at_does_not_refresh_workspace_extent():
             assert "refresh_extent" not in calls
             return
     raise AssertionError("_zoom_at not found")
+
+
+def _free_grid_board_class() -> ast.ClassDef:
+    tree = _parse(ULTRAVIEW_ROOT / "free_grid_board.py")
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "FreeGridBoard":
+            return node
+    raise AssertionError("FreeGridBoard not found")
+
+
+def _init_constructor_counts(class_node: ast.ClassDef) -> Counter:
+    init = next(
+        item
+        for item in class_node.body
+        if isinstance(item, ast.FunctionDef) and item.name == "__init__"
+    )
+    counts: Counter[str] = Counter()
+    for node in ast.walk(init):
+        if isinstance(node, ast.Call):
+            counts[_callee_name(node)] += 1
+    return counts
+
+
+def test_free_grid_board_constructs_exactly_one_owner_of_each_controller():
+    class_node = _free_grid_board_class()
+    counts = _init_constructor_counts(class_node)
+    assert counts["BoardInteractionController"] == 1
+    assert counts["FreeGridFeedbackController"] == 1
+    assert counts["FreeGridAuthorController"] == 1
+    assert counts["ViewportFeedbackSurface"] == 1
+    assert counts["QTimer"] == 0
+    assert counts["GhostOverlay"] == 0
+    assert [ast.unparse(base) for base in class_node.bases] == ["QWidget"]
+    assert any(
+        isinstance(item, ast.FunctionDef) and item.name == "mousePressEvent"
+        for item in class_node.body
+    )
+    mixin_bases = [
+        ast.unparse(base)
+        for base in class_node.bases
+        if "Mixin" in ast.unparse(base)
+    ]
+    assert mixin_bases == []
+
+
+def test_free_grid_board_does_not_construct_timers_or_app_filters():
+    path = ULTRAVIEW_ROOT / "free_grid_board.py"
+    tree = _parse(path)
+    source = path.read_text(encoding="utf-8")
+    timer_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _callee_name(node) == "QTimer"
+    ]
+    filter_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _callee_name(node) == "installEventFilter"
+    ]
+    assert timer_calls == []
+    assert filter_calls == []
+    assert "QTimer" not in source
+    assert "edge_pan" not in source
+    assert "installEventFilter" not in source
+    page_source = (ULTRAVIEW_ROOT / "page.py").read_text(encoding="utf-8")
+    assert "_author_geometry_session" not in page_source
+    assert "_body_layout" not in page_source
