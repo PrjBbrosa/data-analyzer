@@ -19,6 +19,55 @@ STATE_PATH = UI_ROOT / "ultraview_state.py"
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_controller.py"
 CAPTURE_COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_capture_coordinator.py"
+WINDOW_PATH = UI_ROOT / "main_window" / "window.py"
+CAPTURE_PRIVATE_ATTRS = frozenset(
+    {
+        "_store",
+        "_runtime",
+        "_bindings",
+        "_queued",
+        "_idle_timer",
+        "_focus_timer",
+        "_sidecar_timer",
+        "_sidecar_pending",
+        "_hooked_ids",
+        "_destroy_watched",
+        "_presentation_revision",
+        "_unstable",
+        "_result_refs",
+        "_result_generation",
+        "_digest_retries",
+        "_hooks",
+        "_idle_pending",
+        "_sidecar_generation",
+    }
+)
+WORKSPACE_CONTROLLER_PRIVATE_ATTRS = frozenset(
+    {
+        "_grid_histories",
+        "_pending_auto_aspect",
+        "_layout_revision",
+        "_workspace_controller",
+    }
+)
+WORKSPACE_FORBIDDEN_IMPORTS = frozenset(
+    {
+        "UltraViewCaptureCoordinator",
+        "PreviewStore",
+        "QImage",
+        "PresentationCaptureFacts",
+        "collect_widget_capture_facts",
+        "PresentationRuntimeLedger",
+    }
+)
+CAPTURE_FORBIDDEN_IMPORTS = frozenset(
+    {
+        "UltraViewWorkspaceController",
+        "add_ref",
+        "set_free_grid_rects",
+        "apply_author_nudge",
+    }
+)
 MUTATION_OWNER_PATHS = (
     COORDINATOR_PATH,
     WORKSPACE_CONTROLLER_PATH,
@@ -615,3 +664,171 @@ def test_coordinator_constructs_exactly_one_capture_owner(qapp):
     coordinator.clear()
     coordinator.deleteLater()
     host.deleteLater()
+
+
+def _imported_names(path: Path) -> frozenset[str]:
+    names: set[str] = set()
+    for node in _parse(path).body:
+        if isinstance(node, ast.ImportFrom):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[-1] for alias in node.names)
+    return frozenset(names)
+
+
+def _attribute_names(path: Path) -> frozenset[str]:
+    return frozenset(
+        node.attr
+        for node in ast.walk(_parse(path))
+        if isinstance(node, ast.Attribute)
+    )
+
+
+def _getattr_constant_names(path: Path) -> frozenset[str]:
+    names: set[str] = set()
+    for node in ast.walk(_parse(path)):
+        if not isinstance(node, ast.Call) or _callee_name(node) != "getattr":
+            continue
+        if len(node.args) < 2:
+            continue
+        attr = node.args[1]
+        if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+            names.add(attr.value)
+    return frozenset(names)
+
+
+def _coordinator_method(name: str) -> ast.FunctionDef:
+    for item in _coordinator_methods():
+        if item.name == name:
+            return item
+    raise AssertionError(f"{name} not found on UltraViewCoordinator")
+
+
+def _effective_body(function: ast.FunctionDef) -> list[ast.stmt]:
+    body = list(function.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        return body[1:]
+    return body
+
+
+def _is_self_owner_call(call: ast.AST, owner_attr: str, method_name: str) -> bool:
+    if not isinstance(call, ast.Call):
+        return False
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.attr != method_name:
+        return False
+    owner = func.value
+    if not isinstance(owner, ast.Attribute) or owner.attr != owner_attr:
+        return False
+    return isinstance(owner.value, ast.Name) and owner.value.id == "self"
+
+
+def _is_thin_owner_forward(function: ast.FunctionDef, owner_attr: str) -> bool:
+    body = _effective_body(function)
+    if len(body) != 1:
+        return False
+    stmt = body[0]
+    if isinstance(stmt, ast.Return):
+        call = stmt.value
+    elif isinstance(stmt, ast.Expr):
+        call = stmt.value
+    else:
+        return False
+    return _is_self_owner_call(call, owner_attr, function.name)
+
+
+def _direct_callee_names(function: ast.FunctionDef) -> list[str]:
+    names: list[str] = []
+    for stmt in function.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Call):
+                names.append(_callee_name(node))
+    return names
+
+
+def test_workspace_and_capture_do_not_read_each_others_private_fields():
+    workspace_imported = _imported_names(WORKSPACE_CONTROLLER_PATH)
+    capture_imported = _imported_names(CAPTURE_COORDINATOR_PATH)
+    assert not (workspace_imported & WORKSPACE_FORBIDDEN_IMPORTS)
+    assert not (capture_imported & CAPTURE_FORBIDDEN_IMPORTS)
+    frozen_mutators = _state_mutators()
+    assert capture_imported & frozen_mutators == {"set_workspace_preview_sidecar"}
+
+    workspace_attrs = _attribute_names(WORKSPACE_CONTROLLER_PATH)
+    capture_attrs = _attribute_names(CAPTURE_COORDINATOR_PATH)
+    assert not (workspace_attrs & CAPTURE_PRIVATE_ATTRS)
+    assert not (capture_attrs & WORKSPACE_CONTROLLER_PRIVATE_ATTRS)
+    assert not (_getattr_constant_names(WORKSPACE_CONTROLLER_PATH) & CAPTURE_PRIVATE_ATTRS)
+    assert not (
+        _getattr_constant_names(CAPTURE_COORDINATOR_PATH)
+        & WORKSPACE_CONTROLLER_PRIVATE_ATTRS
+    )
+
+
+def test_coordinator_facade_is_stable_has_no_host_walk_body():
+    stable = _coordinator_method("_is_stable")
+    commit = _coordinator_method("_commit_grid_change")
+    grab = _coordinator_method("_grab_image")
+    assert _is_thin_owner_forward(stable, "_capture")
+    assert _is_thin_owner_forward(commit, "_workspace_controller")
+    assert _is_thin_owner_forward(grab, "_capture")
+    walked = {
+        node.attr
+        for node in ast.walk(stable)
+        if isinstance(node, ast.Attribute)
+    }
+    assert walked.isdisjoint(
+        {
+            "_cursor",
+            "_dense_raster",
+            "_interaction_state",
+            "_aa_idle_timer",
+            "_refresh_pending",
+        }
+    )
+    callees = {
+        _callee_name(node)
+        for node in ast.walk(stable)
+        if isinstance(node, ast.Call)
+    }
+    assert callees == {"_is_stable"}
+    assert "collect_widget_capture_facts" not in callees
+
+
+def test_coordinator_has_exactly_one_preview_store_and_no_second_capture_timer():
+    init = _coordinator_method("__init__")
+    counts = Counter(
+        _callee_name(node)
+        for node in ast.walk(init)
+        if isinstance(node, ast.Call)
+    )
+    assert counts["UltraViewWorkspaceController"] == 1
+    assert counts["UltraViewCaptureCoordinator"] == 1
+    assert counts.get("PreviewStore", 0) == 0
+    assert counts.get("QTimer", 0) == 0
+    assert counts.get("PresentationRuntimeLedger", 0) == 0
+    window_source = WINDOW_PATH.read_text(encoding="utf-8")
+    assert "self._ultraview = UltraViewCoordinator(" in window_source
+    assert "_ultraview_workspace" not in window_source
+    assert "_ultraview_capture" not in window_source
+
+
+def test_shutdown_reset_restore_stop_capture_then_workspace_then_page():
+    for name, capture_call in (
+        ("shutdown", "shutdown_capture"),
+        ("reset_project_state", "reset_capture_state"),
+        ("restore_project_state", "reset_capture_state"),
+    ):
+        calls = _direct_callee_names(_coordinator_method(name))
+        assert capture_call in calls, (name, calls)
+        assert "_clear_placement_runtime" in calls, (name, calls)
+        assert "_reset_page_runtime" in calls, (name, calls)
+        assert calls.index(capture_call) < calls.index("_clear_placement_runtime")
+        assert calls.index("_clear_placement_runtime") < calls.index("_reset_page_runtime")

@@ -1,9 +1,12 @@
-"""UltraView MainWindow façade: workspace + capture wiring and public delegates.
+"""UltraView MainWindow façade: wiring + delegates.
 
-UltraView never computes, restores-from-cache, or replots a source View to
-fill a preview. Capture lives on ``UltraViewCaptureCoordinator``; this class
-keeps MainWindow integration, workspace mutation forwards, and top-level
-shutdown/reset order.
+MainWindow keeps a single ``self._ultraview = UltraViewCoordinator(...)``.
+This class owns one-shot Page/manager wiring, public method/property
+delegates, and top-level shutdown/reset order (stop capture → reset
+workspace → reset page). Capture, PreviewStore, and timers live on
+``UltraViewCaptureCoordinator``; Board mutation lives on
+``UltraViewWorkspaceController``. This façade does not own a second
+store, timer, workspace, or runtime ledger.
 """
 from __future__ import annotations
 
@@ -70,7 +73,6 @@ from .ultraview_workspace_controller import (
 
 logger = logging.getLogger(__name__)
 
-
 def notify_ultraview_plot(window, section: str, reason: str = "plot") -> None:
     """Queue a visible-section capture after an actual plot/set_result."""
     coordinator = getattr(window, "_ultraview", None)
@@ -78,9 +80,8 @@ def notify_ultraview_plot(window, section: str, reason: str = "plot") -> None:
         return
     coordinator.request_visible_section_capture(section, reason)
 
-
 class UltraViewCoordinator(QObject):
-    """MainWindow façade for workspace mutation and capture commands."""
+    """Façade: wiring + delegates for workspace mutation and capture commands."""
 
     def __init__(self, window, parent=None) -> None:
         super().__init__(parent if parent is not None else window)
@@ -121,8 +122,312 @@ class UltraViewCoordinator(QObject):
         return self._workspace_controller.workspace
 
     @property
+    def is_shutdown(self) -> bool:
+        return bool(self._shutdown)
+
+    @property
     def store(self) -> PreviewStore:
         return self._capture.store
+
+    def note_source_mode(self, mode: str) -> None:
+        if mode in SOURCE_SECTIONS:
+            self.last_source_mode = mode
+
+    # -- capture façade delegates -------------------------------------
+
+    def bind_canvas(self, canvas, ref: UltraViewRef | None) -> None:
+        return self._capture.bind_canvas(canvas, ref)
+
+    def bound_ref_for(self, canvas) -> UltraViewRef | None:
+        return self._capture.bound_ref_for(canvas)
+
+    def offer_capture_bound_canvas(self, canvas, incoming_ref: UltraViewRef | None=None) -> None:
+        return self._capture.offer_capture_bound_canvas(canvas, incoming_ref)
+
+    def request_capture(self, ref, widget, reason: str) -> None:
+        return self._capture.request_capture(ref, widget, reason)
+
+    def request_visible_section_capture(self, section: str, reason: str='plot') -> None:
+        return self._capture.request_visible_section_capture(section, reason)
+
+    def notify_result_stored(self, section, view_id, pane_idx, key, result) -> None:
+        return self._capture.notify_result_stored(section, view_id, pane_idx, key, result)
+
+    def result_generation_for(self, section, view_id, pane_idx, key) -> int:
+        return self._capture.result_generation_for(section, view_id, pane_idx, key)
+
+    def presentation_payload_for(self, ref: UltraViewRef) -> dict | None:
+        return self._capture.presentation_payload_for(ref)
+
+    def current_digest_for(self, ref: UltraViewRef) -> str | None:
+        return self._capture.current_digest_for(ref)
+
+    def set_pinned_from_board(self, board) -> None:
+        return self._capture.set_pinned_from_board(board)
+
+    def project_source_mode(self) -> str:
+        if self.last_source_mode in SOURCE_SECTIONS:
+            return self.last_source_mode
+        return "time"
+
+    def to_project_payload(self) -> dict:
+        return workspace_to_payload(self._workspace)
+
+    def restore_project_state(self, payload, *, project_path=None) -> list[str]:
+        """Replace Board from a persisted payload. Store stays empty."""
+        if self._shutdown:
+            return []
+        self._clear_sync_work()
+        self._capture.reset_capture_state()
+        workspace, warnings = normalize_workspace_payload(payload)
+        self._workspace = workspace
+        self._clear_placement_runtime()
+        self._reset_page_runtime()
+        if project_path is not None and workspace.preview_sidecar is not None:
+            warnings.extend(
+                self._capture.load_preview_sidecar(
+                    project_path,
+                    workspace_to_payload(workspace),
+                    workspace.preview_sidecar,
+                )
+            )
+        self.refresh_page()
+        for item in warnings:
+            logger.warning("UltraView project restore: %s", item)
+        return list(warnings)
+
+    @property
+    def board(self) -> UltraViewBoardState:
+        return self._workspace_controller.board
+
+    @property
+    def workspace(self) -> UltraViewWorkspaceState:
+        return self._workspace_controller.workspace
+
+    def save_preview_sidecar(self, project_path) -> list[str]:
+        return self._capture.save_preview_sidecar(project_path)
+
+    def page(self):
+        window = self._window
+        if window is None:
+            return None
+        stack = getattr(window, "chart_stack", None)
+        return getattr(stack, "page_ultraview", None)
+
+    def attach(self) -> None:
+        if self._inactive():
+            return
+        window = self._window
+        if window is None:
+            return
+        # Page and stack hooks are independent: a late page() must still
+        # connect even if the stack add-to-ultraview hook is already live.
+        if not self._page_hooks:
+            page = self.page()
+            if page is not None:
+                page.set_workspace(self._workspace)
+                self._connect_page(page)
+        if not self._stack_hooks:
+            stack = getattr(window, "chart_stack", None)
+            if stack is not None:
+                signal = getattr(stack, "add_to_ultraview_requested", None)
+                if signal is not None:
+                    signal.connect(self.add_from_source_tab)
+                    self._stack_hooks.append(
+                        (stack, signal, self.add_from_source_tab)
+                    )
+        if not self._manager_hooks:
+            self._connect_managers()
+        self.refresh_page()
+
+    def capture_leaving_source(self, section: str) -> None:
+        return self._capture.capture_leaving_source(section)
+
+    def add_from_source_tab(self, section: str, view_id: str) -> None:
+        if self._inactive():
+            return
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        window = self._window
+        stack = getattr(window, "chart_stack", None) if window is not None else None
+        current_mode = getattr(stack, "current_mode", lambda: "")()
+        if current_mode == section:
+            if section == "time":
+                widget = self._time_canvas_for_ref(ref)
+                if widget is not None:
+                    reason = (
+                        "add-from-tab-split"
+                        if widget is not getattr(stack, "canvas_time", None)
+                        else "add-from-tab"
+                    )
+                    self.bind_canvas(widget, ref)
+                    self.request_capture(ref, widget, reason)
+            else:
+                current = self._active_ref(section)
+                if current == ref:
+                    widget = self._visible_widget_for(section)
+                    if widget is not None:
+                        self.bind_canvas(widget, ref)
+                        self.request_capture(ref, widget, "add-from-tab")
+        page = self.page()
+        anchor = (
+            page.current_free_grid_insert_anchor() if page is not None else None
+        )
+        self._apply_add_ref(ref, preferred_anchor=anchor)
+
+    def open_source(self, section: str, view_id: str) -> None:
+        if self._inactive():
+            return
+        if self._navigate_to_view(section, view_id, raise_window=True):
+            return
+        page = self.page()
+        if page is not None:
+            page.arm_replacement(section, view_id)
+
+    def sync_preview(self, section: str, view_id: str) -> None:
+        """Recapture one Board card from the live source View. Never recomputes.
+
+        Hidden sources navigate then grab. Multiple syncs in one turn are
+        serialized so the last ``navigate_to_view`` cannot steal an earlier
+        canvas before its grab runs. Sync navigation does not raise the
+        Analyzer; the Board stays in front and is raised only after the
+        queue drains.
+        """
+        if self._inactive():
+            return
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        if ref == self._sync_current_ref or ref in self._sync_work_queue:
+            return
+        self._sync_work_queue.append(ref)
+        self._pump_sync_work()
+
+    def refresh_page(self) -> None:
+        if self._inactive():
+            return
+        self._sync_entry_content_marker()
+        page = self.page()
+        if page is None:
+            return
+        board = active_board(self._workspace)
+        batch = getattr(page, "projection_batch", None)
+        with batch() if callable(batch) else nullcontext():
+            # Library chrome (name/color) must be current before set_board
+            # projects cards. Preview-record no-op must not freeze tab color.
+            self._refresh_library(page)
+            page.set_workspace(self._workspace)
+            self.set_pinned_from_board(board)
+            for ref in membership_set(board):
+                self._push_preview(ref)
+
+    def presentation_revision_for(self, ref: UltraViewRef) -> int:
+        return self._capture.presentation_revision_for(ref)
+
+    def bump_presentation_revision(self, ref: UltraViewRef) -> int:
+        return self._capture.bump_presentation_revision(ref)
+
+    def copy_board_to_clipboard(self) -> bool:
+        image = self._compose_or_toast(scale=1, action="复制整板图")
+        if image is None:
+            return False
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            self._export_failed("clipboard_failed", "无法访问剪贴板")
+            return False
+        clipboard.setImage(image)
+        self._toast("已复制整板图", "success")
+        return True
+
+    def copy_card_to_clipboard(self, ref: UltraViewRef) -> bool:
+        if self._inactive():
+            return False
+        record = self._store.get(ref)
+        image = getattr(record, "image", None) if record is not None else None
+        if not PreviewStore.image_valid(image):
+            self._export_failed("missing_preview", "该卡片尚无可用预览")
+            return False
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            self._export_failed("clipboard_failed", "无法访问剪贴板")
+            return False
+        clipboard.setImage(image)
+        self._store.touch(ref)
+        self._toast("已复制卡片图", "success")
+        return True
+
+    def choose_and_export_png(self, scale: int = 1) -> bool:
+        if self._inactive():
+            return False
+        factor = 1 if int(scale) <= 1 else 2
+        path, _filter = QFileDialog.getSaveFileName(
+            self._feedback_host(),
+            f"导出 PNG {factor}×",
+            "",
+            "PNG (*.png)",
+        )
+        if not path:
+            return False
+        if not str(path).lower().endswith(".png"):
+            path = str(path) + ".png"
+        return self.export_png_to_path(path, scale=factor)
+
+    def export_png_to_path(self, path, *, scale: int = 1) -> bool:
+        image = self._compose_or_toast(scale=scale, action="导出 PNG")
+        if image is None:
+            return False
+        try:
+            save_composed_png(image, path)
+        except ComposeError as exc:
+            self._export_failed(exc.code, exc.message)
+            return False
+        self._toast(f"已导出 PNG {1 if int(scale) <= 1 else 2}×", "success")
+        return True
+
+    def compose_board_image(self, scale: int = 1) -> QImage:
+        return self._compose_board(scale)
+
+    def shutdown(self) -> None:
+        """Final MainWindow close path: stop capture, reset workspace, reset page.
+
+        Idempotent. Project reset must call ``reset_project_state`` instead.
+        Queued callbacks no-op after the flag is set, even if a timer still
+        delivers.
+        """
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self._clear_sync_work()
+        self._capture.shutdown_capture()
+        self._workspace = default_workspace()
+        self._clear_placement_runtime()
+        self._reset_page_runtime()
+        self._disconnect_page_hooks()
+        self._disconnect_stack_hooks()
+        self._disconnect_manager_hooks()
+
+    def reset_project_state(self) -> None:
+        """Clear Board/Store/runtime for a new or replaced project.
+
+        Page and stack hooks stay connected so the same window remains
+        interactive. Does not run during shutdown.
+        """
+        if self._shutdown:
+            return
+        self._clear_sync_work()
+        self._capture.reset_capture_state()
+        self._workspace = default_workspace()
+        self._clear_placement_runtime()
+        self._reset_page_runtime()
+        self.refresh_page()
+
+    def clear(self) -> None:
+        """Compatibility shim. Product paths must call reset or shutdown."""
+        self.reset_project_state()
+
+    def schedule_idle_capture(self, ref, widget=None) -> None:
+        return self._capture.schedule_idle_capture(ref, widget)
 
     @property
     def _store(self) -> PreviewStore:
@@ -168,38 +473,6 @@ class UltraViewCoordinator(QObject):
     def _destroy_watched(self):
         return self._capture._destroy_watched
 
-    # -- capture façade delegates -------------------------------------
-
-    def bind_canvas(self, canvas, ref: UltraViewRef | None) -> None:
-        return self._capture.bind_canvas(canvas, ref)
-
-    def bound_ref_for(self, canvas) -> UltraViewRef | None:
-        return self._capture.bound_ref_for(canvas)
-
-    def offer_capture_bound_canvas(self, canvas, incoming_ref: UltraViewRef | None=None) -> None:
-        return self._capture.offer_capture_bound_canvas(canvas, incoming_ref)
-
-    def request_capture(self, ref, widget, reason: str) -> None:
-        return self._capture.request_capture(ref, widget, reason)
-
-    def request_visible_section_capture(self, section: str, reason: str='plot') -> None:
-        return self._capture.request_visible_section_capture(section, reason)
-
-    def notify_result_stored(self, section, view_id, pane_idx, key, result) -> None:
-        return self._capture.notify_result_stored(section, view_id, pane_idx, key, result)
-
-    def result_generation_for(self, section, view_id, pane_idx, key) -> int:
-        return self._capture.result_generation_for(section, view_id, pane_idx, key)
-
-    def presentation_payload_for(self, ref: UltraViewRef) -> dict | None:
-        return self._capture.presentation_payload_for(ref)
-
-    def current_digest_for(self, ref: UltraViewRef) -> str | None:
-        return self._capture.current_digest_for(ref)
-
-    def set_pinned_from_board(self, board) -> None:
-        return self._capture.set_pinned_from_board(board)
-
     def _active_card_visible(self, ref: UltraViewRef) -> bool:
         return self._capture._active_card_visible(ref)
 
@@ -230,12 +503,6 @@ class UltraViewCoordinator(QObject):
     def _on_sidecar_load_timeout(self) -> None:
         return self._capture._on_sidecar_load_timeout()
 
-    def save_preview_sidecar(self, project_path) -> list[str]:
-        return self._capture.save_preview_sidecar(project_path)
-
-    def capture_leaving_source(self, section: str) -> None:
-        return self._capture.capture_leaving_source(section)
-
     def _capture_visible_time_refs(self, reason: str) -> None:
         return self._capture._capture_visible_time_refs(reason)
 
@@ -244,12 +511,6 @@ class UltraViewCoordinator(QObject):
 
     def _ref_exists(self, ref: UltraViewRef) -> bool:
         return self._capture._ref_exists(ref)
-
-    def presentation_revision_for(self, ref: UltraViewRef) -> int:
-        return self._capture.presentation_revision_for(ref)
-
-    def bump_presentation_revision(self, ref: UltraViewRef) -> int:
-        return self._capture.bump_presentation_revision(ref)
 
     def _on_store_images_dropped(self, refs) -> None:
         return self._capture._on_store_images_dropped(refs)
@@ -391,9 +652,6 @@ class UltraViewCoordinator(QObject):
     def _binding_for_idle_sender(self, sender):
         return self._capture._binding_for_idle_sender(sender)
 
-    def schedule_idle_capture(self, ref, widget=None) -> None:
-        return self._capture.schedule_idle_capture(ref, widget)
-
     def _on_idle_presentation_signal(self, *_args) -> None:
         return self._capture._on_idle_presentation_signal(*_args)
 
@@ -413,58 +671,12 @@ class UltraViewCoordinator(QObject):
     def _disconnect_hooks(self) -> None:
         return self._capture._disconnect_hooks()
 
-    @property
-    def is_shutdown(self) -> bool:
-        return bool(self._shutdown)
-
     def _inactive(self) -> bool:
         return self._shutdown or not _alive(self)
-
 
     @property
     def _window(self):
         return self._window_ref()
-
-    def note_source_mode(self, mode: str) -> None:
-        if mode in SOURCE_SECTIONS:
-            self.last_source_mode = mode
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def project_source_mode(self) -> str:
-        if self.last_source_mode in SOURCE_SECTIONS:
-            return self.last_source_mode
-        return "time"
-
-    def to_project_payload(self) -> dict:
-        return workspace_to_payload(self._workspace)
-
-
-
-
-
-    @property
-    def board(self) -> UltraViewBoardState:
-        return self._workspace_controller.board
-
-    @property
-    def workspace(self) -> UltraViewWorkspaceState:
-        return self._workspace_controller.workspace
 
     @property
     def _workspace(self) -> UltraViewWorkspaceState:
@@ -485,97 +697,6 @@ class UltraViewCoordinator(QObject):
     @property
     def _layout_revision(self):
         return self._workspace_controller._layout_revision
-
-
-
-    def restore_project_state(self, payload, *, project_path=None) -> list[str]:
-        """Replace Board from a persisted payload. Store stays empty."""
-        if self._shutdown:
-            return []
-        self._reset_page_runtime()
-        self._capture.reset_capture_state()
-        workspace, warnings = normalize_workspace_payload(payload)
-        self._workspace = workspace
-        self._clear_placement_runtime()
-        if project_path is not None and workspace.preview_sidecar is not None:
-            warnings.extend(
-                self._capture.load_preview_sidecar(
-                    project_path,
-                    workspace_to_payload(workspace),
-                    workspace.preview_sidecar,
-                )
-            )
-        self.refresh_page()
-        for item in warnings:
-            logger.warning("UltraView project restore: %s", item)
-        return list(warnings)
-
-    def shutdown(self) -> None:
-        """Final MainWindow close path: stop work, drop hooks, then drop pixels.
-
-        Idempotent. Project reset must call ``reset_project_state`` instead.
-        Queued callbacks no-op after the flag is set, even if a timer still
-        delivers.
-        """
-        if self._shutdown:
-            return
-        self._shutdown = True
-        self._reset_page_runtime()
-        self._clear_sync_work()
-        self._capture.shutdown_capture()
-        self._disconnect_page_hooks()
-        self._disconnect_stack_hooks()
-        self._disconnect_manager_hooks()
-        self._workspace = default_workspace()
-        self._clear_placement_runtime()
-
-    def reset_project_state(self) -> None:
-        """Clear Board/Store/runtime for a new or replaced project.
-
-        Page and stack hooks stay connected so the same window remains
-        interactive. Does not run during shutdown.
-        """
-        if self._shutdown:
-            return
-        self._reset_page_runtime()
-        self._clear_sync_work()
-        self._capture.reset_capture_state()
-        self._workspace = default_workspace()
-        self._clear_placement_runtime()
-        self.refresh_page()
-
-    def page(self):
-        window = self._window
-        if window is None:
-            return None
-        stack = getattr(window, "chart_stack", None)
-        return getattr(stack, "page_ultraview", None)
-
-    def attach(self) -> None:
-        if self._inactive():
-            return
-        window = self._window
-        if window is None:
-            return
-        # Page and stack hooks are independent: a late page() must still
-        # connect even if the stack add-to-ultraview hook is already live.
-        if not self._page_hooks:
-            page = self.page()
-            if page is not None:
-                page.set_workspace(self._workspace)
-                self._connect_page(page)
-        if not self._stack_hooks:
-            stack = getattr(window, "chart_stack", None)
-            if stack is not None:
-                signal = getattr(stack, "add_to_ultraview_requested", None)
-                if signal is not None:
-                    signal.connect(self.add_from_source_tab)
-                    self._stack_hooks.append(
-                        (stack, signal, self.add_from_source_tab)
-                    )
-        if not self._manager_hooks:
-            self._connect_managers()
-        self.refresh_page()
 
     def _connect_page(self, page) -> None:
         pairs = (
@@ -646,43 +767,7 @@ class UltraViewCoordinator(QObject):
     def _on_manager_views_changed(self, *_args) -> None:
         if self._inactive():
             return
-        self.refresh_page(            )
-
-
-
-    def add_from_source_tab(self, section: str, view_id: str) -> None:
-        if self._inactive():
-            return
-        ref = parse_ref_payload({"section": section, "view_id": view_id})
-        if ref is None:
-            return
-        window = self._window
-        stack = getattr(window, "chart_stack", None) if window is not None else None
-        current_mode = getattr(stack, "current_mode", lambda: "")()
-        if current_mode == section:
-            if section == "time":
-                widget = self._time_canvas_for_ref(ref)
-                if widget is not None:
-                    reason = (
-                        "add-from-tab-split"
-                        if widget is not getattr(stack, "canvas_time", None)
-                        else "add-from-tab"
-                    )
-                    self.bind_canvas(widget, ref)
-                    self.request_capture(ref, widget, reason)
-            else:
-                current = self._active_ref(section)
-                if current == ref:
-                    widget = self._visible_widget_for(section)
-                    if widget is not None:
-                        self.bind_canvas(widget, ref)
-                        self.request_capture(ref, widget, "add-from-tab")
-        page = self.page()
-        anchor = (
-            page.current_free_grid_insert_anchor() if page is not None else None
-        )
-        self._apply_add_ref(ref, preferred_anchor=anchor)
-
+        self.refresh_page()
 
     def _navigate_to_view(
         self, section: str, view_id: str, *, raise_window: bool = True
@@ -696,34 +781,6 @@ class UltraViewCoordinator(QObject):
             return bool(navigate(section, view_id, raise_window=raise_window))
         except TypeError:
             return bool(navigate(section, view_id))
-
-    def open_source(self, section: str, view_id: str) -> None:
-        if self._inactive():
-            return
-        if self._navigate_to_view(section, view_id, raise_window=True):
-            return
-        page = self.page()
-        if page is not None:
-            page.arm_replacement(section, view_id)
-
-    def sync_preview(self, section: str, view_id: str) -> None:
-        """Recapture one Board card from the live source View. Never recomputes.
-
-        Hidden sources navigate then grab. Multiple syncs in one turn are
-        serialized so the last ``navigate_to_view`` cannot steal an earlier
-        canvas before its grab runs. Sync navigation does not raise the
-        Analyzer; the Board stays in front and is raised only after the
-        queue drains.
-        """
-        if self._inactive():
-            return
-        ref = parse_ref_payload({"section": section, "view_id": view_id})
-        if ref is None:
-            return
-        if ref == self._sync_current_ref or ref in self._sync_work_queue:
-            return
-        self._sync_work_queue.append(ref)
-        self._pump_sync_work()
 
     def _pump_sync_work(self) -> None:
         if self._inactive() or self._sync_nav_busy:
@@ -847,24 +904,6 @@ class UltraViewCoordinator(QObject):
         except RuntimeError:
             return
 
-    def refresh_page(self) -> None:
-        if self._inactive():
-            return
-        self._sync_entry_content_marker()
-        page = self.page()
-        if page is None:
-            return
-        board = active_board(self._workspace)
-        batch = getattr(page, "projection_batch", None)
-        with batch() if callable(batch) else nullcontext():
-            # Library chrome (name/color) must be current before set_board
-            # projects cards. Preview-record no-op must not freeze tab color.
-            self._refresh_library(page)
-            page.set_workspace(self._workspace)
-            self.set_pinned_from_board(board)
-            for ref in membership_set(board):
-                self._push_preview(ref)
-
     def _sync_entry_content_marker(self) -> None:
         """Keep each source-rail entry honest about configured Board cards."""
         window = self._window
@@ -927,7 +966,6 @@ class UltraViewCoordinator(QObject):
             text = f"{text} +{extra}"
         return text
 
-
     def _push_preview(self, ref: UltraViewRef, *, usable: bool = True) -> None:
         page = self.page()
         if page is None:
@@ -970,9 +1008,6 @@ class UltraViewCoordinator(QObject):
         page.set_focus_syncing(
             digest is None or not self._has_current_preview(ref, digest)
         )
-
-
-
 
     def _after_board_mutation(self) -> None:
         return self._workspace_controller._after_board_mutation()
@@ -1361,66 +1396,6 @@ class UltraViewCoordinator(QObject):
     def _on_select_board(self, board_id: str) -> None:
         return self._workspace_controller._on_select_board(board_id)
 
-    def copy_board_to_clipboard(self) -> bool:
-        image = self._compose_or_toast(scale=1, action="复制整板图")
-        if image is None:
-            return False
-        clipboard = QApplication.clipboard()
-        if clipboard is None:
-            self._export_failed("clipboard_failed", "无法访问剪贴板")
-            return False
-        clipboard.setImage(image)
-        self._toast("已复制整板图", "success")
-        return True
-
-    def copy_card_to_clipboard(self, ref: UltraViewRef) -> bool:
-        if self._inactive():
-            return False
-        record = self._store.get(ref)
-        image = getattr(record, "image", None) if record is not None else None
-        if not PreviewStore.image_valid(image):
-            self._export_failed("missing_preview", "该卡片尚无可用预览")
-            return False
-        clipboard = QApplication.clipboard()
-        if clipboard is None:
-            self._export_failed("clipboard_failed", "无法访问剪贴板")
-            return False
-        clipboard.setImage(image)
-        self._store.touch(ref)
-        self._toast("已复制卡片图", "success")
-        return True
-
-    def choose_and_export_png(self, scale: int = 1) -> bool:
-        if self._inactive():
-            return False
-        factor = 1 if int(scale) <= 1 else 2
-        path, _filter = QFileDialog.getSaveFileName(
-            self._feedback_host(),
-            f"导出 PNG {factor}×",
-            "",
-            "PNG (*.png)",
-        )
-        if not path:
-            return False
-        if not str(path).lower().endswith(".png"):
-            path = str(path) + ".png"
-        return self.export_png_to_path(path, scale=factor)
-
-    def export_png_to_path(self, path, *, scale: int = 1) -> bool:
-        image = self._compose_or_toast(scale=scale, action="导出 PNG")
-        if image is None:
-            return False
-        try:
-            save_composed_png(image, path)
-        except ComposeError as exc:
-            self._export_failed(exc.code, exc.message)
-            return False
-        self._toast(f"已导出 PNG {1 if int(scale) <= 1 else 2}×", "success")
-        return True
-
-    def compose_board_image(self, scale: int = 1) -> QImage:
-        return self._compose_board(scale)
-
     def _compose_board(self, scale: int) -> QImage:
         records = {}
         statuses = {}
@@ -1534,12 +1509,6 @@ class UltraViewCoordinator(QObject):
                 return idx
         return None
 
-
-
-    def clear(self) -> None:
-        """Compatibility shim. Product paths must call reset or shutdown."""
-        self.reset_project_state()
-
     def _reset_page_runtime(self) -> None:
         page = self.page()
         if page is None:
@@ -1580,48 +1549,6 @@ class UltraViewCoordinator(QObject):
             except (TypeError, RuntimeError):
                 continue
         self._manager_hooks.clear()
-
-    # -- payload ----------------------------------------------------------
-
-
-
-
-
-
-
-
-
-    # -- capture ----------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # -- identity / meta --------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
 
     def _sheet_visible(self) -> bool:
         window = self._window
