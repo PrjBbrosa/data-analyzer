@@ -366,3 +366,25 @@ def test_page_does_not_read_private_author_geometry_session():
     ).with_name("page.py").read_text(encoding="utf-8")
     assert "_author_geometry_session" not in page_source
     assert "interaction_facts" in page_source
+
+
+def test_pointer_coalesce_timer_is_constructed_in_feedback_controller():
+    root = Path(FreeGridBoard.__init__.__code__.co_filename).parent
+    controller = (root / "free_grid_feedback.py").read_text(encoding="utf-8")
+    board = (root / "free_grid_board.py").read_text(encoding="utf-8")
+    page = (root / "page.py").read_text(encoding="utf-8")
+    assign = "_pointer_coalesce_timer = QTimer("
+    assert assign in controller
+    assert controller.count(assign) == 1
+    assert assign not in board
+    assert "_pointer_coalesce_timer" not in page
+    tree = ast.parse(board, filename=str(root / "free_grid_board.py"))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "FreeGridBoard"
+    )
+    assert any(
+        isinstance(item, ast.FunctionDef) and item.name == "feedback_pipeline_counts"
+        for item in class_node.body
+    )
