@@ -13,9 +13,11 @@ from pathlib import Path
 from mf4_analyzer.ui.ultraview_state import ULTRAVIEW_PAGE_OBJECT_NAME
 
 
-UI_ROOT = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui"
+PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "mf4_analyzer"
+UI_ROOT = PACKAGE_ROOT / "ui"
 ULTRAVIEW_ROOT = UI_ROOT / "chart_stack" / "ultraview"
 STATE_PATH = UI_ROOT / "ultraview_state.py"
+MODEL_PATH = PACKAGE_ROOT / "ultraview_core" / "model.py"
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_controller.py"
 CAPTURE_COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_capture_coordinator.py"
@@ -199,7 +201,7 @@ def _assignment_targets(tree: ast.AST):
 def _model_field_names() -> frozenset[str]:
     names: set[str] = set()
     for cls_name in ("UltraViewBoardState", "UltraViewWorkspaceState"):
-        for node in _parse(STATE_PATH).body:
+        for node in _parse(MODEL_PATH).body:
             if not isinstance(node, ast.ClassDef) or node.name != cls_name:
                 continue
             for item in node.body:
@@ -373,11 +375,11 @@ def test_mutations_end_in_funnel():
 
 def test_page_object_name_is_shared_constant():
     literal_sites: list[tuple[str, int]] = []
-    for path in (*ULTRAVIEW_ROOT.rglob("*.py"), STATE_PATH):
+    for path in (*ULTRAVIEW_ROOT.rglob("*.py"), STATE_PATH, MODEL_PATH):
         for node in ast.walk(_parse(path)):
             if isinstance(node, ast.Constant) and node.value == "ultraViewPage":
                 literal_sites.append((path.name, node.lineno))
-    assert [path for path, _line in literal_sites] == ["ultraview_state.py"]
+    assert [path for path, _line in literal_sites] == ["model.py"]
     assert ULTRAVIEW_PAGE_OBJECT_NAME == "ultraViewPage"
     assert "setObjectName(ULTRAVIEW_PAGE_OBJECT_NAME)" in (ULTRAVIEW_ROOT / "page.py").read_text()
     assert "ULTRAVIEW_PAGE_OBJECT_NAME" in (ULTRAVIEW_ROOT / "widgets.py").read_text()

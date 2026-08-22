@@ -240,26 +240,34 @@ def _function_level_import_modules(source_path: Path) -> list[tuple[int, str]]:
     return found
 
 
-def test_ultraview_grid_geometry_has_no_qt_or_view_imports():
-    src = PACKAGE_ROOT / "ultraview_core" / "grid_geometry.py"
-    imported = _imported_module_names(src)
+def test_ultraview_core_has_no_qt_or_ui_imports():
+    """Qt-free core must not import ``mf4_analyzer.ui`` or Qt (Task 5.2)."""
+    core_dir = PACKAGE_ROOT / "ultraview_core"
     forbidden = (
         "PyQt5",
         "sip",
         "pyqtgraph",
-        "mf4_analyzer.ui.chart_stack",
-        "mf4_analyzer.ui.main_window",
+        "mf4_analyzer.ui",
         "mf4_analyzer.ui_kit",
-        "mf4_analyzer.ui.widgets",
+        "mf4_analyzer.acquisition_ui",
     )
-    violations = [
-        name
-        for name in imported
-        if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
-    ]
-    assert not violations, violations
-    assert not any("card_fit" in name for name in imported)
-    assert "mf4_analyzer.ui.ultraview_state" in imported
+    for src in _iter_py_files(core_dir):
+        imported = _imported_module_names(src)
+        violations = [
+            name
+            for name in imported
+            if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+        ]
+        assert not violations, (src.name, violations)
+        assert not any("card_fit" in name for name in imported)
+        assert not any("compositor" in name for name in imported)
+    geometry_src = core_dir / "grid_geometry.py"
+    geometry_imported = _imported_module_names(geometry_src)
+    assert "mf4_analyzer.ui.ultraview_state" not in geometry_imported
+    assert any(
+        name.endswith(".model") or name == "mf4_analyzer.ultraview_core.model"
+        for name in geometry_imported
+    )
 
 
 def test_ultraview_free_grid_and_card_fit_have_no_cycle():
@@ -285,15 +293,12 @@ def test_ultraview_free_grid_and_card_fit_have_no_cycle():
     )
 
 
-def test_ultraview_grid_geometry_subprocess_import_does_not_load_qt():
-    """``ultraview_core.grid_geometry`` must stay importable without Qt.
-
-    Task 5.1 still imports types from ``ui.ultraview_state``. That is allowed
-    only while ``ui/__init__.py`` does not eagerly import MainWindow.
-    """
+def test_ultraview_core_subprocess_import_does_not_load_qt():
+    """``ultraview_core.model`` and ``grid_geometry`` must stay importable without Qt."""
     script = """
 import json
 import sys
+import mf4_analyzer.ultraview_core.model
 import mf4_analyzer.ultraview_core.grid_geometry
 blocked = sorted(
     name for name in sys.modules
@@ -301,6 +306,8 @@ blocked = sorted(
     or name.startswith("PyQt5.")
     or name == "pyqtgraph"
     or name.startswith("pyqtgraph.")
+    or name == "mf4_analyzer.ui"
+    or name.startswith("mf4_analyzer.ui.")
     or name == "mf4_analyzer.ui.main_window"
     or name.startswith("mf4_analyzer.ui.main_window.")
     or name == "mf4_analyzer.ui.chart_stack.ultraview.compositor"

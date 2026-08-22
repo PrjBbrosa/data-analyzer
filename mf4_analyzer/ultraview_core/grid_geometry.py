@@ -3,12 +3,12 @@
 ``free_grid`` (layout planner, handle-hit UI) and ``card_fit`` (hug scoring)
 depend on this module one way. Do not import either from here.
 
-Task 5.1 temporarily imports ``GridRect`` / ``GRID_*`` / ``FreeGridPlacement``
-from ``mf4_analyzer.ui.ultraview_state``. Those types move in Task 5.2; this
-module must not import ``chart_stack``, widgets, Qt, or ``card_fit``.
+Task 5.2: ``GridRect`` / ``GRID_*`` / ``FreeGridPlacement`` / ``clamp_grid_rect``
+come from ``ultraview_core.model``. This module must not import
+``mf4_analyzer.ui``, ``chart_stack``, widgets, Qt, or ``card_fit``.
 
 Pitch chrome (``BOARD_PADDING`` / ``SLOT_GUTTER``) is numerically identical to
-``ui.chart_stack.ultraview.layouts``; 5.1 cannot import ``chart_stack``. A
+``ui.chart_stack.ultraview.layouts``; core cannot import ``chart_stack``. A
 focused test pins the identity. Do not drift.
 
 ``rect_to_pixels`` rounds the two edges, never the pitch. Rounding the pitch
@@ -20,7 +20,7 @@ import math
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from mf4_analyzer.ui.ultraview_state import (
+from .model import (
     GRID_COLUMNS,
     GRID_RESOLUTION,
     SAFETY_ROW_MAX,

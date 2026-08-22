@@ -1,10 +1,11 @@
 """UI subpackage: PyQt5 widgets, canvases, dialogs, and main window.
 
 ``MainWindow`` is loaded lazily so Qt-free modules under this package
-(``ultraview_state``, consumed by ``ultraview_core.grid_geometry`` in
-Wave 5 Task 5.1) can be imported without pulling Qt. ``from
-mf4_analyzer.ui import MainWindow`` and ``getattr(ui, "MainWindow")`` still
-work. Do not restore a module-level ``from .main_window import MainWindow``.
+(``ultraview_state``) can be imported without pulling Qt. Wave 5 Task 5.2
+closed the ``ultraview_core`` → ``ui.ultraview_state`` seam, but this
+lazy load remains required for ``from mf4_analyzer.ui.ultraview_state
+import ...`` and ``from mf4_analyzer.ui import MainWindow``. Do not restore
+a module-level ``from .main_window import MainWindow``.
 """
 
 from __future__ import annotations

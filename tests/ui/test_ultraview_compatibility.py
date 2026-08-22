@@ -668,6 +668,19 @@ def test_ultraview_state_supported_surface_resolves():
     assert unexpected == []
 
 
+def test_ultraview_state_reexports_core_model_identity():
+    import mf4_analyzer.ui.ultraview_state as state
+    from mf4_analyzer.ultraview_core import model
+
+    assert state.UltraViewRef is model.UltraViewRef
+    assert state.GridRect is model.GridRect
+    assert state.UltraViewBoardState is model.UltraViewBoardState
+    assert state.UltraViewWorkspaceState is model.UltraViewWorkspaceState
+    assert state.GRID_RESOLUTION == 2
+    assert state.GRID_RESOLUTION is model.GRID_RESOLUTION
+    assert state.clamp_grid_rect is model.clamp_grid_rect
+
+
 def test_hardening_reuse_names_are_the_live_seams():
     assert SelectionMutationPlan.__name__ == "SelectionMutationPlan"
     assert callable(plan_selection_nudge)

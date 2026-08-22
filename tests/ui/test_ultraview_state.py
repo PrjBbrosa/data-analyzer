@@ -18,6 +18,23 @@ STATE_PATH = (
     / "ui"
     / "ultraview_state.py"
 )
+MODEL_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ultraview_core"
+    / "model.py"
+)
+
+
+def _imported_modules(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module)
+    return imported
 
 
 def _ref(section="time", view_id="view-a") -> uvs.UltraViewRef:
@@ -45,14 +62,7 @@ def _filled(layout_id: str, count: int | None = None) -> uvs.UltraViewBoardState
 
 
 def test_module_has_no_qt_or_compute_imports():
-    tree = ast.parse(STATE_PATH.read_text(encoding="utf-8"))
-    imported = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.extend(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.append(node.module.split(".")[0])
-    forbidden = {
+    forbidden_roots = {
         "PyQt5",
         "sip",
         "MainWindow",
@@ -61,7 +71,15 @@ def test_module_has_no_qt_or_compute_imports():
         "signal",
         "batch_compute",
     }
-    assert forbidden.isdisjoint(imported)
+    for path in (STATE_PATH, MODEL_PATH):
+        imported = _imported_modules(path)
+        roots = {name.split(".")[0] for name in imported}
+        assert forbidden_roots.isdisjoint(roots), path.name
+    model_imported = _imported_modules(MODEL_PATH)
+    assert not any(
+        name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
+        for name in model_imported
+    )
 
 
 def test_ref_accepts_only_gui_sections_and_stable_id():
