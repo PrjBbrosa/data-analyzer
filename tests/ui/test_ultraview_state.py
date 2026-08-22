@@ -24,6 +24,12 @@ MODEL_PATH = (
     / "ultraview_core"
     / "model.py"
 )
+BOARD_OPS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ultraview_core"
+    / "board_ops.py"
+)
 
 
 def _imported_modules(path: Path) -> list[str]:
@@ -71,7 +77,7 @@ def test_module_has_no_qt_or_compute_imports():
         "signal",
         "batch_compute",
     }
-    for path in (STATE_PATH, MODEL_PATH):
+    for path in (STATE_PATH, MODEL_PATH, BOARD_OPS_PATH):
         imported = _imported_modules(path)
         roots = {name.split(".")[0] for name in imported}
         assert forbidden_roots.isdisjoint(roots), path.name
@@ -80,6 +86,23 @@ def test_module_has_no_qt_or_compute_imports():
         name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
         for name in model_imported
     )
+    board_ops_imported = _imported_modules(BOARD_OPS_PATH)
+    assert not any(
+        name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
+        for name in board_ops_imported
+    )
+
+
+def test_ultraview_state_reexports_board_ops_identity():
+    from mf4_analyzer.ultraview_core import board_ops
+
+    assert uvs.add_ref is board_ops.add_ref
+    assert uvs.create_board is board_ops.create_board
+    assert uvs.set_layout is board_ops.set_layout
+    assert uvs.set_free_grid_rects is board_ops.set_free_grid_rects
+    assert uvs.plan_free_grid_rects is board_ops.plan_free_grid_rects
+    assert uvs.duplicate_board is board_ops.duplicate_board
+    assert uvs.active_board is board_ops.active_board
 
 
 def test_ref_accepts_only_gui_sections_and_stable_id():

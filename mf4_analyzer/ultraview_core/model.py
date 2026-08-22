@@ -1,9 +1,10 @@
 """Qt-free UltraView identity, Board/Workspace, author DTOs, and constants.
 
 Wave 5 Task 5.2. This module must not import Qt, ``mf4_analyzer.ui``,
-chart_stack, MainWindow, compositor, or Card Fit. Board/workspace mutators,
-author operations, payload legalization, and presentation digest stay in
-``mf4_analyzer.ui.ultraview_state`` until Tasks 5.3 / 5.4.
+chart_stack, MainWindow, compositor, or Card Fit. Board/workspace mutators
+live in ``mf4_analyzer.ultraview_core.board_ops``. Author operations, payload
+legalization, and presentation digest stay in
+``mf4_analyzer.ui.ultraview_state`` until later Task 5.3 / 5.4 families.
 """
 from __future__ import annotations
 

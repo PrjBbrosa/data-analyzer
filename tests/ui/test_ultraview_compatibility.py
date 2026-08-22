@@ -680,6 +680,12 @@ def test_ultraview_state_reexports_core_model_identity():
     assert state.GRID_RESOLUTION is model.GRID_RESOLUTION
     assert state.clamp_grid_rect is model.clamp_grid_rect
 
+    from mf4_analyzer.ultraview_core import board_ops
+
+    assert state.add_ref is board_ops.add_ref
+    assert state.create_board is board_ops.create_board
+    assert state.set_free_grid_rects is board_ops.set_free_grid_rects
+
 
 def test_hardening_reuse_names_are_the_live_seams():
     assert SelectionMutationPlan.__name__ == "SelectionMutationPlan"

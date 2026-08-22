@@ -18,6 +18,10 @@ UI_ROOT = PACKAGE_ROOT / "ui"
 ULTRAVIEW_ROOT = UI_ROOT / "chart_stack" / "ultraview"
 STATE_PATH = UI_ROOT / "ultraview_state.py"
 MODEL_PATH = PACKAGE_ROOT / "ultraview_core" / "model.py"
+BOARD_OPS_PATH = PACKAGE_ROOT / "ultraview_core" / "board_ops.py"
+# Core ops own Board/Workspace field writes. They are the mutation owner,
+# not the view layer: do not add them to the write-forbidden scan.
+OPS_OWNER_PATHS = (BOARD_OPS_PATH,)
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_controller.py"
 CAPTURE_COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_capture_coordinator.py"
@@ -167,16 +171,19 @@ def _state_mutators() -> frozenset[str]:
         "set_active_board",
         "set_workspace_preview_sidecar",
     }
-    for node in _parse(STATE_PATH).body:
-        if not isinstance(node, ast.FunctionDef):
+    for path in (STATE_PATH, *OPS_OWNER_PATHS):
+        if not path.is_file():
             continue
-        if node.name in explicit:
-            names.add(node.name)
-            continue
-        args = {item.arg for item in node.args.args}
-        returns = ast.unparse(node.returns) if node.returns is not None else ""
-        if {"board", "workspace"} & args and returns == "list[str]" and node.name != "empty_slots":
-            names.add(node.name)
+        for node in _parse(path).body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.name in explicit:
+                names.add(node.name)
+                continue
+            args = {item.arg for item in node.args.args}
+            returns = ast.unparse(node.returns) if node.returns is not None else ""
+            if {"board", "workspace"} & args and returns == "list[str]" and node.name != "empty_slots":
+                names.add(node.name)
     return frozenset(names)
 
 
@@ -375,7 +382,7 @@ def test_mutations_end_in_funnel():
 
 def test_page_object_name_is_shared_constant():
     literal_sites: list[tuple[str, int]] = []
-    for path in (*ULTRAVIEW_ROOT.rglob("*.py"), STATE_PATH, MODEL_PATH):
+    for path in (*ULTRAVIEW_ROOT.rglob("*.py"), STATE_PATH, MODEL_PATH, BOARD_OPS_PATH):
         for node in ast.walk(_parse(path)):
             if isinstance(node, ast.Constant) and node.value == "ultraViewPage":
                 literal_sites.append((path.name, node.lineno))
