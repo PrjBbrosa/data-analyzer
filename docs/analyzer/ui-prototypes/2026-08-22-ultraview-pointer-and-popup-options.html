@@ -170,6 +170,15 @@
   .decisions { display: grid; gap: 6px; margin-top: 10px; padding-left: 17px; color: #466168; font-size: 11px; }.decisions strong { color: var(--ink); }
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: no-preference) { .laser-indicator { animation: pulse 1.2s ease-out infinite; } @keyframes pulse { 50% { box-shadow: 0 0 0 13px rgba(241,81,81,.04), 0 0 24px rgba(241,81,81,.42); } } }
+  /* V2 — user-confirmed final interaction.  Existing A/B/C sketches above stay as history only. */
+  .choice-tabs { display: none; }
+  .tool svg, .zoom-bar svg { width: 25px; height: 25px; stroke-width: 2; }
+  .pointer-wrap { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #bdc9ff; border-radius: 11px; background: var(--blue-wash); color: var(--blue); overflow: visible; box-shadow: none; }
+  .pointer-wrap .tool { width: 40px; height: 40px; border-radius: 10px; }.pointer-wrap .tool::after { display: none; }
+  .pointer-wrap .tool svg { width: 25px; height: 25px; }.pointer-caret, .laser-indicator, .laser-dot { display: none !important; }
+  .pointer-popover { border-color: #bdc9ff; }.mode-option.selected { border-color: #bdc9ff; background: var(--blue-wash); }.mode-icon, .check { color: var(--blue); }.mode-icon { background: #f0f3ff; }.mode-icon svg { width: 22px; height: 22px; stroke-width: 2; }
+  .mode-option[data-mode="laser"] small { font-size: 0; }.mode-option[data-mode="laser"] small::after { content: "选择、拖动、缩放；仅替换光标形状"; font-size: 11px; }
+  .revision-note { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; margin: 0 0 16px; padding: 12px 15px; border: 1px solid #cbd5ff; border-radius: 12px; background: #f4f6ff; color: #4b5bb6; font-size: 12px; }.revision-note b { display: grid; place-items: center; min-width: 86px; height: 26px; border-radius: 7px; background: var(--blue); color: #fff; font: 800 10px var(--mono); letter-spacing: .08em; }.revision-note strong { color: #3045bd; }
 </style>
 </head>
 <body>
@@ -186,20 +195,21 @@
   <main>
     <section class="brief">
       <div>
-        <h1>把“纯鼠标”做成一个明确的工作模式，而不是另一个标注工具。</h1>
-        <p>鼠标模式会退出 Sticky / Text / Shape / Draw，回到选择、拖动、缩放与卡片操作；激光笔只做临时聚焦，不向 Board 写入笔迹。画布上的字体菜单被刻意放在选择框之上，作为所有下拉菜单的图层样板。</p>
+        <h1>把 Pointer 做成单击弹出的选择工具，而不是另一个标注工具。</h1>
+        <p>从 Sticky / Text / Shape / Draw 进入 Pointer 会回到选择、拖动、缩放与卡片操作；Mouse 与 Laser 的功能完全一致，Laser 只替换鼠标指针形状。画布上的字体菜单被刻意放在选择框之上，作为所有下拉菜单的图层样板。</p>
       </div>
       <p class="key"><b>本页的判断：</b> 图 1 中的标准图标均可统一为 qtawesome；图标只保留单色轮廓，状态由底色、左侧标记和 tooltip 表达，不再用多枚渐变争夺焦点。</p>
     </section>
+
+    <section class="revision-note"><b>V2 · FINAL</b><span><strong>整块 Pointer 单击即弹出两个选项。</strong> Laser 不再有屏幕红点、halo 或手势拦截；它只是同一 Select 功能的光标皮肤。所有 rail 与 Draw 子工具 glyph 统一按更大的 24px optical grid 重绘。</span></section>
 
     <div class="stage-scroll">
       <section class="stage" data-scheme="a" aria-label="UltraView 指针与下拉菜单原型">
         <div class="board-bar"><i class="board-dot"></i><b>故障回放</b><span>自由画布</span><svg class="chevron" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></div>
         <div class="rail" aria-label="创作工具栏">
           <div class="rail-core">
-            <div class="pointer-wrap" title="鼠标模式">
-              <button type="button" class="tool" aria-label="鼠标模式"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg></button>
-              <button type="button" class="pointer-caret" aria-label="选择鼠标或激光笔模式"><svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
+            <div class="pointer-wrap" title="单击选择鼠标或激光笔">
+              <button type="button" id="pointer-trigger" class="tool" aria-label="选择鼠标或激光笔模式" aria-expanded="true"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg></button>
             </div>
             <button type="button" class="tool pointer-main" aria-label="鼠标模式"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg><span class="tip">鼠标 <kbd>V</kbd></span></button>
             <button type="button" class="tool laser-rail" aria-label="激光笔模式"><svg viewBox="0 0 24 24"><path d="M9 15 5 19m5-4 6-6m-8.8-2.8 1.4-1.4 2.6 2.6-1.4 1.4M14 5l5 5M7 17l-2 2"/><circle class="solid" cx="18" cy="6" r="2.1"/></svg><span class="tip">激光笔 <kbd>L</kbd></span></button>
@@ -213,11 +223,11 @@
           <div class="rail-bottom"><span class="rule"></span><button type="button" class="tool"><svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></svg><span class="tip">更多创建项</span></button></div>
         </div>
 
-        <aside class="pointer-popover" aria-label="指针模式选择">
+        <aside id="pointer-popover" class="pointer-popover" aria-label="指针模式选择">
           <h2>POINTER MODE</h2>
-          <button type="button" class="mode-option selected"><span class="mode-icon"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg></span><span><strong>鼠标</strong><small>选择、拖动、缩放；不创建标注</small></span><b class="check">✓</b></button>
-          <button type="button" class="mode-option"><span class="mode-icon"><svg viewBox="0 0 24 24"><path d="M9 15 5 19m5-4 6-6m-8.8-2.8 1.4-1.4 2.6 2.6-1.4 1.4M14 5l5 5M7 17l-2 2"/><circle cx="18" cy="6" r="2" fill="currentColor" stroke="none"/></svg></span><span><strong>激光笔</strong><small>临时聚焦，不落笔、不保存</small></span><b></b></button>
-          <div class="mode-foot">切换时：自动取消当前标注工具；<span class="laser-dot"></span>激光点仅显示于演示/聚焦期间。</div>
+          <button type="button" class="mode-option selected" data-mode="mouse"><span class="mode-icon"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/></svg></span><span><strong>鼠标</strong><small>选择、拖动、缩放；不创建标注</small></span><b class="check">✓</b></button>
+          <button type="button" class="mode-option" data-mode="laser"><span class="mode-icon"><svg viewBox="0 0 24 24"><path d="M5 3.8 18.1 12l-5.3 1.2 3.2 6.1-2.8 1.5-3.2-6.1-3.7 4.1Z"/><circle cx="18" cy="6" r="2" fill="currentColor" stroke="none"/></svg></span><span><strong>激光笔</strong><small>选择、拖动、缩放；仅替换光标形状</small></span><b></b></button>
+          <div class="mode-foot">选择 Pointer 时会退出当前标注工具；Mouse 与 Laser 的编辑功能完全一致。</div>
         </aside>
 
         <div class="format-toolbar" aria-label="已选文字对象的格式工具栏">
@@ -231,9 +241,8 @@
         <div class="font-popover" aria-label="字体大小菜单"><button type="button" class="selected">auto</button><button type="button">12</button><button type="button">14</button><button type="button">18</button><button type="button">24</button></div>
         <div class="menu-tag"><b>POPUP LAYER · 60</b>菜单由 Canvas Overlay Host 承载；不放进卡片、选择框或 toolbar 的子树。</div>
         <div class="selection"><span class="text-sample">22</span><i class="handle top"></i><i class="handle right"></i><i class="handle bottom"></i><i class="handle left"></i></div>
-        <span class="laser-indicator" aria-label="激光聚焦点"></span>
-        <div class="status-chip"><i></i><span><b>鼠标</b> · 标注工具已退出</span></div>
-        <aside class="option-card"><span class="eyebrow">CURRENT OPTION</span><h2 id="option-title">方案 A · 分裂式指针</h2><p id="option-copy">首位保留一个“鼠标”入口；右侧小箭头展开两种模式。识别度高，但不为激光笔长期占用一个栏位。</p><ul><li>鼠标为默认、稳定且无持久化副作用的模式</li><li>点击模式即取消 Sticky / Text / Shape / Draw</li><li>激光笔以临时指向效果呈现，不写入 author_objects</li></ul></aside>
+        <div class="status-chip"><i></i><span id="pointer-status"><b>鼠标</b> · 标注工具已退出</span></div>
+        <aside class="option-card"><span class="eyebrow">FINAL INTERACTION</span><h2 id="option-title">单击弹出 Pointer</h2><p id="option-copy">整块 Pointer 按钮打开两行选择，不分裂出难点的小箭头 hit area。</p><ul><li>Mouse 与 Laser 都是同一套选择、移动、缩放功能</li><li>从标注工具进入 Pointer 时，才取消 Sticky / Text / Shape / Draw</li><li>Laser 只替换 OS 光标形状，不显示屏幕聚焦点</li></ul></aside>
         <div class="zoom-bar"><button type="button" aria-label="缩小"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button><b>100%</b><button type="button" aria-label="放大"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button></div>
       </section>
     </div>
@@ -241,8 +250,8 @@
     <section class="legend">
       <article class="panel">
         <h2>图 1 · 图标可以统一</h2>
-        <p>已在当前虚拟环境验证下列 qtawesome 名称可解析；因此这轮不建议手绘 SVG。唯一需要自绘的是“激光聚焦点”的动态光环，不是 rail 图标。</p>
-        <div class="icon-map"><i>↖</i><b>鼠标 / Select</b><code>mdi.cursor-default-outline</code><i>⌁</i><b>激光笔</b><code>mdi.laser-pointer</code><i>□</i><b>便签</b><code>mdi.note-outline</code><i>T</i><b>文本 / 形状 / 画笔</b><code>mdi.format-text · mdi.shape-outline · mdi.draw-pen</code></div>
+        <p>这组 rail glyph 继续使用现有 QPainter 图标系统，统一提高 optical ink 面积；不要用 qtawesome 与自绘图标混搭。Laser 是 custom cursor，不是画布上的动态光环。</p>
+        <div class="icon-map"><i>↖</i><b>鼠标 / Select</b><code>QPainter cursor path</code><i>⌁</i><b>激光笔</b><code>custom QCursor pixmap</code><i>□</i><b>便签</b><code>larger optical ink box</code><i>T</i><b>文本 / 形状 / 画笔</b><code>24px desktop · 20px compact</code></div>
       </article>
       <article class="panel">
         <h2>图 2 · 菜单只属于一个悬浮层级</h2>
@@ -270,6 +279,27 @@
     stage.dataset.scheme = scheme;
     buttons.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
     [optionTitle.textContent, optionCopy.textContent] = optionContent[scheme];
+  }));
+  const pointerTrigger = document.querySelector('#pointer-trigger');
+  const pointerPopover = document.querySelector('#pointer-popover');
+  const pointerStatus = document.querySelector('#pointer-status');
+  const pointerOptions = [...document.querySelectorAll('.mode-option[data-mode]')];
+  pointerTrigger?.addEventListener('click', () => {
+    pointerPopover.hidden = !pointerPopover.hidden;
+    pointerTrigger.setAttribute('aria-expanded', String(!pointerPopover.hidden));
+  });
+  pointerOptions.forEach((option) => option.addEventListener('click', () => {
+    pointerOptions.forEach((item) => {
+      const selected = item === option;
+      item.classList.toggle('selected', selected);
+      item.querySelector('.check')?.replaceChildren(selected ? '✓' : '');
+    });
+    const isLaser = option.dataset.mode === 'laser';
+    pointerStatus.innerHTML = isLaser
+      ? '<b>激光笔</b> · 仅替换光标，选择功能不变'
+      : '<b>鼠标</b> · 标注工具已退出';
+    pointerPopover.hidden = true;
+    pointerTrigger.setAttribute('aria-expanded', 'false');
   }));
 </script>
 </body>

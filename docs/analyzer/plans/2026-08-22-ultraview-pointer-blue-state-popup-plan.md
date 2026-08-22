@@ -1,8 +1,21 @@
 # UltraView：指针/激光笔、蓝色状态与统一弹层计划
 
-**状态：PROPOSED（仅计划，尚未修改产品代码）**  
-**日期：2026-08-22**  
+**状态：REVISED — follow-up 计划（基线为 `1df1714d`，尚未执行本次修订的产品改动）**
+**日期：2026-08-22**
 **视觉基准：** [B2 图标对比原型](../ui-prototypes/2026-08-22-ultraview-miro-icon-directions.html)、[指针与弹层原型](../ui-prototypes/2026-08-22-ultraview-pointer-and-popup-options.html)
+
+## 0. 2026-08-22 最新修订（优先于下文旧描述）
+
+`1df1714d feat(ultraview): switch selected chrome to blue and document pointer`
+已经完成了本计划的首轮蓝色 chrome、Pointer 可见和基础 popup。本次不是重做该提交，而是只修正用户刚确认的三项行为与视觉细节：
+
+| 已有实现 | 本次修订目标 |
+| --- | --- |
+| Pointer tile 被切成主点击区 + 右侧窄 caret 区 | **整块 Pointer tile 单击就开 popup**；移除 split hit area、caret 绘制和“点击应用上次模式”分支。 |
+| Laser 清空选择、吞掉 card/author 点击，并绘制 `LaserFocusOverlay` 红色聚焦环 | Laser 只换 `TOOL_SELECT` 的 **QCursor 视觉**；选择、框选、移动、缩放、编辑、快捷键、undo/history 与 Mouse 完全一致。删除/停用 overlay 与事件吞噬路径。 |
+| 所有 rail 图标仍以 `20/18px` icon target 绘制 | 不改 `64/52px` rail 与 `40/36px` hit target；将全套 icon-only glyph target 提升为 desktop `24px`、compact `20px`，并重绘路径的 optical ink box。 |
+
+这一节覆盖本文中任何 “箭头区域”“Laser 只聚焦”“red halo”“20/18px 保持不变” 的旧说法。
 
 ## 1. 决策与范围
 
@@ -13,8 +26,8 @@
 | 主题 | 决定 |
 | --- | --- |
 | 指针入口 | 在 FreeGrid 创作 rail 中正式露出 Select（视觉名称为“指针”），排在 Sticky 前。它不是标注工具。 |
-| 两种指针模式 | 普通鼠标用于选择/移动/缩放；激光笔仅用于聚焦展示，二者都不创建标注对象。 |
-| 图标方向 | 采用原型 B2：和现有自绘线性图标同一笔触、留白和光学中心，不混用 qtawesome。 |
+| 两种指针模式 | 普通鼠标与激光笔均是 Select：两者都可选择/移动/缩放；区别只在 OS 光标的形状，不创建标注对象。 |
+| 图标方向 | 采用原型 B2-Readable：整套 icon-only rail 都按同一更大的 optical grid 重绘，保留现有自绘 QPainter 语法，不混用 qtawesome。 |
 | 常规状态色 | 选中、当前工具、已开面板、展示模式全部改为蓝色系统；不用琥珀渐变或铜色作装饰。 |
 | 琥珀色边界 | 只保留真正的注意/警告：未放置数量、数据不一致、需同步、风险提示。不能再表示“已选中”“当前模式”或背景装饰。 |
 | 弹层 | 所有 UltraView 内嵌菜单/下拉/工具 flyout 统一由 `CanvasHost` 承载、定位和抬升；不可被 Board、卡片、选择框或 GhostOverlay 遮盖。 |
@@ -30,10 +43,10 @@
 
 ## 2. 已核实的实现基线
 
-- `ToolRail` 的实际发布列表在 `mf4_analyzer/ui/chart_stack/ultraview/chrome.py:100`；`Select` 已存在于 `_CREATION_SPECS`（约 `769` 行）和 interaction controller，但默认未展示。
-- rail 几何是既有契约：桌面按钮 `40px`、紧凑按钮 `36px`、图标 `20px/18px`，以及既有 group gap、divider clear、外框半径。实现不改变这些值。
+- `1df1714d` 已在 `chrome.py:100` 将 Select 放进发布 rail，并新增 `_PointerToolButton`（split caret）和 `PointerPopover`；本 follow-up 将它收敛为整块单击 popup。
+- rail 几何是既有契约：桌面按钮 `40px`、紧凑按钮 `36px`、既有 group gap、divider clear、外框半径都不变。唯一尺寸变化是 icon target 从 `20/18px` 提至 `24/20px`。
 - `BoardInteractionController`（`author_tools.py:833`）是工具、选择、草稿的唯一会话 owner；其状态不会进入持久化 Board payload。
-- `UltraViewPage._on_author_tool_requested()`（`page.py:3521`）是 rail intent 的汇聚点，`_sync_tool_cursor()`（`3714` 附近）是光标投影入口。
+- `UltraViewPage._on_author_tool_requested()`（当前约 `3660` 行）是 rail intent 的汇聚点，`_sync_tool_cursor()`（当前约 `3884` 行）是光标投影入口。
 - `CanvasHost`（`chrome.py:451`）已经以“Board 置底、overlay 为直接子组件”的方式工作，并在 `open_overlay()` 中执行互斥关闭、边界夹取和 `raise_()`；`page.py` 已登记 Sticky、Shapes、Connector、Draw 与 Format picker。
 - 图标来自 `mf4_analyzer/ui_kit/icons.py` 的 QPainter 线性图标（`_line_icon()`，约 `62` 行，圆角 `1.7` 笔触），不是 qtawesome。
 - `mf4_analyzer/ui_kit/ultraview_style.py` 是 QSS token 与 QPainter 色彩的共同来源；当前琥珀色同时存在于 rail、canvas glow/horizon、Library 类别材质、presentation island 和测试契约中。
@@ -42,10 +55,10 @@
 
 ### 3.1 指针控件
 
-在 rail 创作分组首位放入 `Pointer` 控件，沿用现有 `40/36px` 轨道单元，不增加 rail 宽度或改变卡片区可用面积。
+在 rail 创作分组首位保留 `Pointer` 控件，沿用现有 `40/36px` 轨道单元，不增加 rail 宽度或改变卡片区可用面积。
 
-- 主点击：立即进入最近一次选择的 pointer mode；首次为 **Mouse**。
-- 箭头区域：打开 `PointerPopover`，只含两个 36px 高的行项目：`Mouse`、`Laser pointer`。每行都有 B2 对齐的图标、主标题和一行短说明；不要做彩虹色、渐变色或大面积装饰背景。
+- **每次单击整块 Pointer tile 都打开/关闭 `PointerPopover`**；不再切出箭头区域、没有 caret、也不因点击直接切换到“上一次 mode”。
+- popup 只含两个 36px 高的行项目：`Mouse`、`Laser pointer`。每行都有 B2-Readable 对齐的图标、主标题和一行短说明；不要做彩虹色、渐变色或大面积装饰背景。
 - `V`：始终回到 `Mouse + TOOL_SELECT`；不从快捷键直接进入激光笔。
 - `Esc`：先终止编辑/草稿/临时 flyout；若当前为 Laser，则退出 Laser 回到 Mouse；不会生成任何 author object。
 - rail 禁用时（非 FreeGrid、overview、template、presentation）Pointer 与其他创作工具一同禁用，不在不可编辑模式留下假的可编辑入口。
@@ -55,28 +68,29 @@
 | 维度 | Mouse | Laser pointer |
 | --- | --- | --- |
 | interaction owner | `TOOL_SELECT` + `pointer_mode="mouse"` | `TOOL_SELECT` + `pointer_mode="laser"` |
-| 点击卡片/作者对象 | 保持现有选择、拖动、缩放、框选和快捷键合同 | 不选择、不移动、不缩放、不框选、不启动文字编辑 |
-| 点击空白处 | 保持既有选择清除/视口操作规则 | 只更新聚焦位置；空间键/中键的既有视口平移可用 |
-| 光标呈现 | 标准 arrow / resize cursor，沿用现有 hit routing | 以屏幕坐标绘制红色聚焦点与柔和外环；点随指针移动、离开 board 隐藏 |
-| 数据与历史 | 不写 author object；选择为会话态 | 不写 author object、Board payload、undo history 或项目会话 |
+| 点击卡片/作者对象 | 现有选择、拖动、缩放、框选和快捷键合同 | 与 Mouse **完全相同** |
+| 点击空白处 | 既有选择清除/视口操作规则 | 与 Mouse **完全相同** |
+| 光标呈现 | 标准 arrow / resize cursor，沿用现有 hit routing | 自绘 laser-shaped `QCursor`，按现有 resize/hit cursor 优先级正常切换 |
+| 数据与历史 | 不写 author object；选择为会话态 | 与 Mouse **完全相同**，不新增 Board payload 或历史副作用 |
 
-Laser 的红点只在焦点表达中使用；它不是新的常规主题色，也不得出现在 rail 的 selected treatment 中。激光笔进入时应取消现有 creation draft、关闭 author flyout，并撤掉移动/缩放把手，避免“看起来在聚焦、实际仍会编辑”的隐患。
+Laser 不绘制红点、halo、屏幕聚焦 overlay，也不拦截输入。第一次从 Sticky/Text/Shapes/Draw 选择 Pointer 时仍按 Select 既有合同取消 creation draft；**在已经是 Select 时切换 Mouse ↔ Laser 必须保留 selection、handles、编辑合同和当前 board 状态。**
 
 ### 3.3 单一状态来源
 
-1. 在 `BoardInteractionController` 增加受校验、默认 `mouse` 的会话级 `pointer_mode`；不在 `ToolRail`、`UltraViewPage`、`FreeGridGesture` 各自缓存一份。
-2. `ToolRail` 只发出 typed intent：`pointer_mode_requested(mode)`；`UltraViewPage` 负责把它收敛到 interaction owner、取消 creation intent、同步 rail 与 cursor。
-3. `FreeGridGesture` / viewport router 从 interaction projection 读取 mode。Laser 先拦截 author/card edit 命中，再把允许的平移事件交回既有 viewport 路径。
+1. 保留已存在、受校验、默认 `mouse` 的 `BoardInteractionController.pointer_mode`；不在 `ToolRail`、`UltraViewPage`、`FreeGridGesture` 各自缓存一份。
+2. `ToolRail` 只发出 `pointer_menu_requested`，`PointerPopover` 只发出 `pointer_mode_requested(mode)`；`UltraViewPage` 收敛二者并同步 rail/cursor。
+3. `FreeGridGesture` / viewport router 不因 Laser 改变 hit routing；Laser 只在既有 Select cursor 投影中选择 custom cursor pixmap。删除 `_consume_laser_pointer()`、`LaserFocusOverlay` 及所有吞掉 card/author event 的分支。
 4. 现有 `TOOL_SELECT` 不重命名，防止持久化、快捷键、测试或兼容 import 受影响；“Pointer”仅是 rail 的用户可见名称。
 
 ## 4. B2 图标与状态视觉合同
 
 ### 4.1 图标实现
 
-- 复用并细修 `Icons.ultraview_author_select()`，使其符合 B2：14–16px 光学 ink box、圆角端点、同一 `1.7` stroke、上左指向而不过粗。
-- 新增 `Icons.ultraview_author_laser()`：小型 pointer/光点组合，仍使用同一 QPainter 抽象与 stroke。它只用于 popup 行项目和 Laser 的当前 rail glyph，不引入字体图标或 SVG 资源包。
-- Sticky、Text、Shapes、Draw 保持已有语义和图标来源，只做必要的 optical-bound 微调；禁止把四种图标改成不同笔触或改成填充块。
-- 新增/更新像素测试：所有作者图标在 `20px` 与 `18px` 下的 ink bounds 最大差不超过既有允许值；Mouse 与 Laser 也必须满足。
+- 所有 icon-only UltraView 控件共用 `24px desktop / 20px compact` target：Library、FreeGrid、Layout、Filter、Unplaced、Sync/Reset/Presentation、Pointer、Sticky、Text、Shapes、Draw，以及 DrawPopover 的 Pen/Highlighter/Eraser/Lasso。
+- 每枚自绘路径重心落在新的 24px 坐标网格中央；desktop 的可见 ink box 目标约 `18px`，compact 约 `16px`。通过重画 path 的留白，而不是仅将 20px pixmap 粗暴拉伸。
+- 复用并细修 `Icons.ultraview_author_select()` 与 `Icons.ultraview_author_laser()`：两者都是鼠标指针形态，Laser 只增加可识别的光标视觉细节，不能呈现红色 board dot。
+- 保持统一的圆端/圆角线性语言；必要时将局部笔画校准到约 `1.9px`，但不把任一图标改成实心块或字体图标。
+- 新增/更新像素测试：导航、作者、Draw 子工具与 Mouse/Laser 在 `24px`、`20px` 下均满足 optical bound、中心线与可识别性断言。
 
 ### 4.2 蓝色状态矩阵
 
@@ -138,10 +152,10 @@ Board canvas / author layer / GhostOverlay
 
 **文件所有者：** `ui_kit/icons.py`、`chart_stack/ultraview/chrome.py`、`chart_stack/ultraview/author_chrome.py`、对应 chrome/icon tests。
 
-1. 将 `TOOL_SELECT` 加进 `RELEASE_AUTHOR_TOOLS`，保持它在内部 owner 中仍叫 `select`，用户可见文字改为“指针”。
-2. 以现有 `ToolFlyoutSurface` 创建 `PointerPopover`，用两个明确选项呈现 Mouse / Laser，不新增独立 Qt popup window。
-3. 为 pointer rail tile 增加标准 QToolButton split/menu 行为（主区应用当前模式，箭头区开 popover），但维持已有外框、40/36px hit tile 和 compact 布局。
-4. 增加/优化 pointer 与 laser 自绘图标，通过同一 `_line_icon` 和 optical-bound 测试；不引入 qtawesome。
+1. 保持已经可见的 `TOOL_SELECT` /“指针”入口；将 `_PointerToolButton` 替换为普通 `_AuthorToolButton` 或等价的完整 tile，不再覆写 caret hit/paint。
+2. 保持现有 `ToolFlyoutSurface` 的 `PointerPopover` 与两行 Mouse / Laser；单击 tile 发出 `pointer_menu_requested`，再由页面打开/关闭 popup。
+3. 同时把 rail 所有 icon-only 图标 target 升为 `24/20px`，修订自绘 path，并保持外框、`40/36px` hit tile 和 compact 布局原样。
+4. 以同一 `_line_icon` / custom-cursor pixmap 抽象实现 Mouse/Laser；不引入 qtawesome。
 
 **完成条件：** B2 的 pointer、Sticky、Text、Shapes、Draw 在桌面和 compact rail 中垂直中心一致；Pointer popup 在两个目标尺寸内完整可见，当前 mode 只有一行被蓝色标出。
 
@@ -149,12 +163,12 @@ Board canvas / author layer / GhostOverlay
 
 **文件所有者：** `chart_stack/ultraview/author_tools.py`、`page.py`、`widgets.py` / FreeGrid gesture owner、必要时 `ghost_overlay.py`。
 
-1. 在 `BoardInteractionController` 实现 `pointer_mode` 和其校验、默认、projection；跟随 `TOOL_SELECT` 的取消和恢复语义。
-2. 接入 `UltraViewPage` 的 rail intent 与快捷键，单点处理 flyout 关闭、draft 取消、cursor 同步和 rail 重绘。
-3. Mouse 按当前 Select 合同运行；Laser 在 card/author edit 之前拦截，绘制 transient focus halo，且不执行 mutation/hit-selection 路径。
-4. 处理 presentation/FreeGrid 退出、board restore、clear/teardown，让 laser overlay、pointer mode、cursor 都无悬挂状态；不把它们写入 `author_objects`、undo 或项目 JSON。
+1. 保留 `pointer_mode` 的校验、默认和 session-only projection，但修正 `set_pointer_mode(laser)`：不得清 selection、不得撤销正在编辑的 Select state。
+2. 接入 `UltraViewPage` 的 rail intent 与快捷键，单点处理 popup 开闭、仅在从 creation tool 进入 Pointer 时取消 draft、以及 cursor/rail 同步。
+3. Mouse 与 Laser 都执行同一 Select hit routing。Laser 仅在 `_sync_tool_cursor()` / `FreeGrid.sync_tool_cursor()` 中投影 custom `QCursor`，并尊重 resize handle 的标准 cursor 优先级。
+4. 删除 `LaserFocusOverlay`、`sync_laser_overlay()`、`_consume_laser_pointer()` 及其 card/board press/move/leave special cases；在 presentation/FreeGrid 退出、board restore、clear/teardown 中只复位 cursor/style session state。
 
-**完成条件：** 切至 Mouse 后可选择/拖拽/缩放，切至 Laser 后同样手势绝不会改变选中项、几何、草稿或历史；离开/切换时 halo 消失。
+**完成条件：** Mouse 与 Laser 在同一组卡片/作者对象/空白画布手势下得到完全相同的 selection、几何与 history 结果；唯一可观察差异是箭头光标与激光笔光标的形状。
 
 ### 阶段 D：统一弹层归口与遮挡修复
 
@@ -171,7 +185,7 @@ Board canvas / author layer / GhostOverlay
 
 **文件所有者：** `mf4_analyzer/ui/hints.py`、`mf4_analyzer/ui/quickref.py`，必要时 UltraView 用户指南；测试与前台验收记录。
 
-1. 增加 Pointer、Mouse、Laser、`V`、`Esc` 的短帮助；强调 Laser 不会编辑或保存标注。
+1. 增加 Pointer、Mouse、Laser、`V`、`Esc` 的短帮助；明确 Laser“仅改变光标外观，仍可选择、移动和缩放”。
 2. 运行 focused owner tests，修复必要的 token/geometry/pixel assertions；不因为 UI 改动直接跑整套 `tests/ui`。
 3. 在真实 macOS 前台启动 TraceLab，按第 7 节脚本进行交互验证并截图。
 
@@ -203,9 +217,9 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest \
 要新增/更新的断言至少包括：
 
 - Release rail 可见 Pointer，且 rail 尺寸、group gap、divider gap 在 desktop/compact 不变；
-- Mouse/Laser 默认、切换、`V`/`Esc`、draft cancel、无 payload/undo 写入；
-- Laser 的点击/拖动不会触发 author create、card select、resize 或 history transaction；
-- pointer/mouse/laser/self绘 author icon 的 `18/20px` ink-bound 和颜色一致性；
+- Mouse/Laser 默认、单击整块 Pointer tile 开/关 popup、`V`/`Esc`、draft cancel、无 payload/undo 写入；
+- Mouse/Laser 对同一点击、框选、拖动、resize、文字编辑和 history transaction 的结果完全相同；只断言 cursor pixmap/style 不同；
+- 不存在 LaserFocusOverlay 或 Laser event swallowing，且 pointer/mouse/laser/导航/Draw 子工具在 `24/20px` 的 ink-bound 和颜色一致性；
 - 正常 selected/open/presentation 只含蓝色状态 token，warning 才含 `UV_WARNING`；
 - 每个 overlay 的 geometry、z-order、canvas-click close、Esc、焦点回归、边缘夹取、内部点击不穿透；
 - CanvasHost 的 overlay 开启后 board viewport 尺寸完全不变。
@@ -222,10 +236,10 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest \
 
 1. 打开 Pointer popup，切换 Mouse / Laser；确认 rail/菜单 B2 对齐、蓝色状态且无琥珀装饰。
 2. Mouse：选卡、框选、拖动、四边缩放；切入 Sticky/Draw 后再按 `V`，确认 creation 已取消且进入 Mouse。
-3. Laser：移动指针观察 halo；点击/拖动卡片、作者对象和空白处，确认没有对象、选择、尺寸、历史变化；空间键/中键仍可平移。
+3. Laser：确认只看到激光笔鼠标形状；与 Mouse 分别对卡片、作者对象和空白处执行点击、框选、拖动、四边缩放、文字编辑，确认 selection、尺寸、history 结果一致；空间键/中键仍可平移。
 4. 逐一打开第 5.2 节全部菜单，在 rail 右侧、底部和选择工具栏靠边的位置重复；确认末项完整、点击不穿透、卡片/ghost overlay 无法遮挡。
 5. 制造一个真实 unplaced/stale 状态，确认它仍是唯一琥珀 attention；消除风险后，所有常规 chrome 恢复中性/蓝色。
-6. 退出 FreeGrid、切换 Board、进入/退出 presentation、关闭页面再打开；确认没有残留 halo、flyout、cursor 或错误的选中状态。
+6. 退出 FreeGrid、切换 Board、进入/退出 presentation、关闭页面再打开；确认没有残留 popup、custom cursor 或错误的选中状态。
 
 将两种窗口尺寸的截图和结果放到 `.state/`，作为本次产品实现的前台证据；它们不是 Git 提交物，除非后续明确要求归档。
 
@@ -246,4 +260,3 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest \
 3. UltraView 无 warning 时不再有琥珀/铜色的渐变、glow、类别材质或 presentation 装饰；真正 warning 仍明确可见。
 4. 覆盖清单中的全部 dropdown/flyout 不被遮挡、不裁切、不穿透，且不挤压 Board。
 5. focused 自动化门禁通过，并有两种窗口尺寸下的真实前台交互证据。
-
