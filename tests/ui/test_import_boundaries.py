@@ -15,6 +15,10 @@ graph is reachable. They pin the three-way layering between
 from __future__ import annotations
 
 import ast
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -207,3 +211,112 @@ def test_resolver_handles_relative_imports_inside_ui_kit():
             assert resolved == "mf4_analyzer.ui_kit.icons"
             return
     pytest.fail("ImportFrom node not found by walk")
+
+
+def _function_level_import_modules(source_path: Path) -> list[tuple[int, str]]:
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+
+    def _in_function(node: ast.AST) -> bool:
+        cur: ast.AST | None = node
+        while cur in parents:
+            cur = parents[cur]
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return True
+        return False
+
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not _in_function(node):
+            continue
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found.append((node.lineno, alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            found.append((node.lineno, node.module or ""))
+    return found
+
+
+def test_ultraview_grid_geometry_has_no_qt_or_view_imports():
+    src = PACKAGE_ROOT / "ultraview_core" / "grid_geometry.py"
+    imported = _imported_module_names(src)
+    forbidden = (
+        "PyQt5",
+        "sip",
+        "pyqtgraph",
+        "mf4_analyzer.ui.chart_stack",
+        "mf4_analyzer.ui.main_window",
+        "mf4_analyzer.ui_kit",
+        "mf4_analyzer.ui.widgets",
+    )
+    violations = [
+        name
+        for name in imported
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+    ]
+    assert not violations, violations
+    assert not any("card_fit" in name for name in imported)
+    assert "mf4_analyzer.ui.ultraview_state" in imported
+
+
+def test_ultraview_free_grid_and_card_fit_have_no_cycle():
+    free_grid = PACKAGE_ROOT / "ui" / "chart_stack" / "ultraview" / "free_grid.py"
+    card_fit = PACKAGE_ROOT / "ui" / "chart_stack" / "ultraview" / "card_fit.py"
+    free_imported = _imported_module_names(free_grid)
+    card_imported = _imported_module_names(card_fit)
+    assert not any(name.endswith(".card_fit") or name == "card_fit" for name in free_imported)
+    assert not any(name.endswith(".free_grid") or name == "free_grid" for name in card_imported)
+    nested = [
+        (lineno, module)
+        for lineno, module in _function_level_import_modules(free_grid)
+        if module == "card_fit" or module.endswith(".card_fit")
+    ]
+    assert nested == []
+    assert any(
+        name.endswith(".grid_geometry") or name == "mf4_analyzer.ultraview_core.grid_geometry"
+        for name in free_imported
+    )
+    assert any(
+        name.endswith(".grid_geometry") or name == "mf4_analyzer.ultraview_core.grid_geometry"
+        for name in card_imported
+    )
+
+
+def test_ultraview_grid_geometry_subprocess_import_does_not_load_qt():
+    """``ultraview_core.grid_geometry`` must stay importable without Qt.
+
+    Task 5.1 still imports types from ``ui.ultraview_state``. That is allowed
+    only while ``ui/__init__.py`` does not eagerly import MainWindow.
+    """
+    script = """
+import json
+import sys
+import mf4_analyzer.ultraview_core.grid_geometry
+blocked = sorted(
+    name for name in sys.modules
+    if name == "PyQt5"
+    or name.startswith("PyQt5.")
+    or name == "pyqtgraph"
+    or name.startswith("pyqtgraph.")
+    or name == "mf4_analyzer.ui.main_window"
+    or name.startswith("mf4_analyzer.ui.main_window.")
+    or name == "mf4_analyzer.ui.chart_stack.ultraview.compositor"
+    or name.endswith(".compositor")
+)
+print(json.dumps(blocked))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == []

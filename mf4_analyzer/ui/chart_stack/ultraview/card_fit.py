@@ -25,7 +25,12 @@ from mf4_analyzer.ui.ultraview_state import (
     GridRect,
 )
 
-from .free_grid import GridMetrics, rect_to_pixels, rects_overlap
+from mf4_analyzer.ultraview_core.grid_geometry import (
+    GridMetrics,
+    rect_to_pixels,
+    rects_overlap,
+)
+
 from .layouts import (
     CARD_FIT_CHROME_HEIGHT,
     CARD_FOOTER_HEIGHT,
@@ -147,6 +152,31 @@ def unconstrained_card_fit_facts(
         image_margin_y=margin_y,
         occupied=tuple(occupied),
     )
+
+
+def fit_rect_for_aspect(
+    origin: GridRect,
+    image_size: tuple[int, int],
+    metrics: GridMetrics,
+    *,
+    chrome_height: int = CARD_FIT_CHROME_HEIGHT,
+) -> GridRect:
+    """Unconstrained Card Fit at the pinned origin.
+
+    Occupied neighbours are not considered here; the Card Fit command builds
+    full :class:`CardFitFacts`.
+    """
+    image_w = max(1, int(image_size[0]))
+    image_h = max(1, int(image_size[1]))
+    result = solve_card_fit(
+        unconstrained_card_fit_facts(
+            origin,
+            (image_w, image_h),
+            metrics,
+            chrome_height=chrome_height,
+        )
+    )
+    return result.candidate
 
 
 def card_fit_plot_size(

@@ -9,8 +9,8 @@ from mf4_analyzer.ui.chart_stack.ultraview.feedback import (
     REMOVED_FROM_BOARD,
     text_for_key,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.card_fit import fit_rect_for_aspect
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
-    fit_rect_for_aspect,
     screen_grid_metrics,
 )
 from mf4_analyzer.ui.main_window import MainWindow

@@ -5,6 +5,11 @@ from dataclasses import replace
 
 import pytest
 
+from mf4_analyzer.ui.chart_stack.ultraview.card_fit import (
+    card_fit_plot_size,
+    fit_rect_for_aspect,
+    unconstrained_card_fit_facts,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_COLUMN_WIDTH,
     GRID_MIN_VISIBLE_ROWS,
@@ -22,7 +27,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     candidate_resize_handle,
     clamp_rect,
     export_grid_metrics,
-    fit_rect_for_aspect,
     grid_metrics,
     group_translate_rects,
     hit_handle,
@@ -41,10 +45,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     snapped_resize_rect,
     translated_move_rect,
     union_grid_rect,
-)
-from mf4_analyzer.ui.chart_stack.ultraview.card_fit import (
-    card_fit_plot_size,
-    unconstrained_card_fit_facts,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BASE_BOARD_SIZE,
@@ -88,6 +88,21 @@ def GridRect(column: int, row: int, column_span: int, row_span: int) -> _GridRec
 
 def _placement(view_id: str, rect: GridRect) -> FreeGridPlacement:
     return FreeGridPlacement(make_ref("time", view_id), rect)
+
+
+def test_free_grid_reexports_core_grid_metrics_identity():
+    from mf4_analyzer.ui.chart_stack.ultraview import free_grid
+    from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
+        BOARD_PADDING,
+        SLOT_GUTTER,
+    )
+    from mf4_analyzer.ultraview_core import grid_geometry
+
+    assert free_grid.GridMetrics is grid_geometry.GridMetrics
+    assert free_grid.rect_to_pixels is grid_geometry.rect_to_pixels
+    assert free_grid.rects_overlap is grid_geometry.rects_overlap
+    assert grid_geometry.BOARD_PADDING == BOARD_PADDING
+    assert grid_geometry.SLOT_GUTTER == SLOT_GUTTER
 
 
 def test_grid_metrics_keeps_twelve_columns_chrome_readable_and_scrollable():

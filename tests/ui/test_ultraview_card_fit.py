@@ -14,13 +14,13 @@ from mf4_analyzer.ui.chart_stack.ultraview.card_fit import (
     CardFitFacts,
     aspect_contain_box,
     card_fit_plot_size,
+    fit_rect_for_aspect,
     iter_card_fit_search_rects,
     solve_card_fit,
     unconstrained_card_fit_facts,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_ROW_HEIGHT,
-    fit_rect_for_aspect,
     plan_auto_arrange,
     rect_to_pixels,
     rects_overlap,

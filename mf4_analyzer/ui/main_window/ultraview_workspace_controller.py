@@ -107,11 +107,11 @@ from ..chart_stack.ultraview.card_fit import (
     REASON_NO_PREVIEW,
     REASON_NO_SPACE,
     CardFitFacts,
+    fit_rect_for_aspect,
     solve_card_fit,
 )
 from ..chart_stack.ultraview.free_grid import (
     LAYOUT_ARRANGE,
-    fit_rect_for_aspect,
     plan_auto_arrange,
     screen_grid_metrics,
 )
