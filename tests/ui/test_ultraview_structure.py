@@ -118,14 +118,7 @@ FROZEN_STATE_MUTATORS = frozenset(
 
 FROZEN_MODEL_FIELD_WRITES = frozenset()
 
-FROZEN_PAGE_OF_SURFACE = frozenset(
-    {
-        "clear_card_selection",
-        "handle_card_double_click",
-        "notify_canvas_click",
-        "unplaced_tray",
-    }
-)
+FROZEN_PAGE_OF_SURFACE = frozenset()
 
 FROZEN_MUTATION_FUNNEL_EXCEPTIONS = frozenset(
     {
@@ -374,7 +367,22 @@ def test_page_has_no_back_reference():
 
 
 def test_page_of_surface_is_frozen():
-    assert _page_of_surface() == FROZEN_PAGE_OF_SURFACE
+    remaining = _page_of_surface()
+    assert remaining <= FROZEN_PAGE_OF_SURFACE
+    assert remaining == FROZEN_PAGE_OF_SURFACE
+
+
+def test_page_of_has_no_production_call_sites():
+    calls: list[tuple[str, int]] = []
+    for filename in _PAGE_OF_SCAN_FILES:
+        path = ULTRAVIEW_ROOT / filename
+        if not path.is_file():
+            continue
+        tree = _parse(path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and _callee_name(node) == "_page_of":
+                calls.append((filename, node.lineno))
+    assert calls == []
 
 
 def test_mutations_end_in_funnel():
@@ -395,6 +403,78 @@ def test_page_object_name_is_shared_constant():
 
 def test_coordinator_uses_page_public_api_only():
     assert _page_private_surface() == FROZEN_PAGE_PRIVATE_SURFACE
+
+
+def _page_getattr_names(path: Path) -> frozenset[str]:
+    names: set[str] = set()
+    tree = _parse(path)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _callee_name(node) != "getattr":
+            continue
+        if len(node.args) < 2:
+            continue
+        target = node.args[0]
+        attr = node.args[1]
+        if not (isinstance(attr, ast.Constant) and isinstance(attr.value, str)):
+            continue
+        if isinstance(target, ast.Name) and target.id == "page":
+            names.add(attr.value)
+        elif isinstance(target, ast.Call) and _callee_name(target) == "page":
+            names.add(attr.value)
+        elif isinstance(target, ast.Attribute) and target.attr in {"page", "_page"}:
+            names.add(attr.value)
+    return frozenset(names)
+
+
+def test_mutation_owners_do_not_getattr_private_page_names():
+    required_public = {
+        "projection_batch",
+        "apply_preview_and_status",
+        "reset_sheet_session",
+        "clear_runtime_caches",
+    }
+    coordinator_names = _page_getattr_names(COORDINATOR_PATH)
+    assert coordinator_names.isdisjoint(required_public)
+    for path in MUTATION_OWNER_PATHS:
+        names = _page_getattr_names(path)
+        private = {name for name in names if name.startswith("_")}
+        assert private == set(), (path.name, private)
+
+
+def test_bic_preview_store_and_coalesce_timer_remain_unique():
+    board_counts = _init_constructor_counts(_free_grid_board_class())
+    assert board_counts["BoardInteractionController"] == 1
+    assert board_counts.get("PreviewStore", 0) == 0
+    assert board_counts.get("QTimer", 0) == 0
+
+    feedback = _parse(ULTRAVIEW_ROOT / "free_grid_feedback.py")
+    coalesce_assigns = [
+        node
+        for node in ast.walk(feedback)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Attribute) and target.attr == "_pointer_coalesce_timer"
+            for target in node.targets
+        )
+    ]
+    assert len(coalesce_assigns) == 1
+    for filename in ("page.py", "free_grid_board.py"):
+        source = (ULTRAVIEW_ROOT / filename).read_text(encoding="utf-8")
+        assert "_pointer_coalesce_timer = QTimer(" not in source
+        assert "PreviewStore(" not in source
+
+    page_init = next(
+        item
+        for item in _class_methods(ULTRAVIEW_ROOT / "page.py", "UltraViewPage")
+        if item.name == "__init__"
+    )
+    page_counts = Counter(
+        _callee_name(node) for node in ast.walk(page_init) if isinstance(node, ast.Call)
+    )
+    assert page_counts["ViewportController"] == 1
+    assert page_counts["PointerRouter"] == 1
+    assert page_counts.get("PreviewStore", 0) == 0
+    assert page_counts.get("BoardInteractionController", 0) == 0
 
 
 def test_zoom_broadcast_single_site():

@@ -58,7 +58,6 @@ from .widgets_common import (
     _accept_ultraview_drag,
     _effective_device_pixel_ratio,
     _full_tooltip,
-    _page_of,
     _repolish,
     _run_ultraview_drag,
     _set_flag,
@@ -892,9 +891,10 @@ class UltraViewCard(QFrame):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None:
-            page.handle_card_double_click(self._model.section, self._model.view_id)
+        parent = self.parentWidget()
+        handler = getattr(parent, "handle_card_double_click", None)
+        if callable(handler):
+            handler(self._model.section, self._model.view_id)
             event.accept()
             return
         self.focus_requested.emit(self._model.section, self._model.view_id)

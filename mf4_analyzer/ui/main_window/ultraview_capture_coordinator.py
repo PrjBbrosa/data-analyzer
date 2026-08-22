@@ -524,7 +524,7 @@ class UltraViewCaptureCoordinator(QObject):
         if page is None:
             return False
         card = page.card_widget(ref.section, ref.view_id)
-        scroll = getattr(page, "board_scroll_area", lambda: None)()
+        scroll = page.board_scroll_area()
         if card is None or scroll is None:
             return False
         try:
@@ -536,11 +536,10 @@ class UltraViewCaptureCoordinator(QObject):
 
     def _card_display_sizes(self) -> dict:
         page = self.page()
-        getter = getattr(page, "card_display_sizes", None) if page is not None else None
-        if not callable(getter):
+        if page is None:
             return {}
         try:
-            return dict(getter())
+            return dict(page.card_display_sizes())
         except RuntimeError:
             return {}
 

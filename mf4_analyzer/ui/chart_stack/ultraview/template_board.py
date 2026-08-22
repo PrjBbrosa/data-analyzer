@@ -35,10 +35,8 @@ from .viewport import (
     zoomed_viewport_size,
 )
 from .widgets_common import (
+    BoardPagePorts,
     _accept_ultraview_drag,
-    _clear_page_card_selection,
-    _drop_on_unplaced_tray,
-    _page_of,
     _set_flag,
     _union_pixel_rect,
     extract_ref_strings,
@@ -151,6 +149,7 @@ class BoardGrid(QWidget):
         self._slot_source: str | None = None
         self._slot_press: QPoint | None = None
         self._slot_active = False
+        self._page_ports = BoardPagePorts()
 
     def layout_id(self) -> str:
         return self._layout_id
@@ -411,12 +410,28 @@ class BoardGrid(QWidget):
         for card in self.card_widgets():
             card.set_preview_quality(quality)
 
+    def bind_page_ports(self, **ports) -> None:
+        self._page_ports.bind(**ports)
+
+    def is_unplaced_drop_target(self, global_pos: QPoint) -> bool:
+        checker = self._page_ports.is_unplaced_drop_target
+        return bool(checker(global_pos)) if checker is not None else False
+
+    def handle_card_double_click(self, section: str, view_id: str) -> None:
+        handler = self._page_ports.handle_card_double_click
+        if handler is not None:
+            handler(section, view_id)
+            return
+        self.focus_requested.emit(section, view_id)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            page = _page_of(self)
-            if page is not None:
-                page.notify_canvas_click()
-            _clear_page_card_selection(self)
+            click = self._page_ports.notify_canvas_click
+            if click is not None:
+                click()
+            clearer = self._page_ports.clear_card_selection
+            if clearer is not None:
+                clearer()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -502,7 +517,7 @@ class BoardGrid(QWidget):
             self.drag_finished.emit()
         if not active or source is None:
             return
-        if global_pos is not None and _drop_on_unplaced_tray(self, global_pos):
+        if global_pos is not None and self.is_unplaced_drop_target(global_pos):
             if isinstance(card, UltraViewCard):
                 model = card.model()
                 self.move_to_unplaced_requested.emit(model.section, model.view_id)

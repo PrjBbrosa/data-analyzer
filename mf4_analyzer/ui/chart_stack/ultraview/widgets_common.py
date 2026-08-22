@@ -1,13 +1,14 @@
 """Shared UltraView widget presentation helpers.
 
-Polish/flag/elide widgets, mime drag bridge, and the temporary parent-chain
-page discovery used by more than one widget family. Library geometry, card
-copy strings, planner logging, and board hosts stay with their owners.
+Polish/flag/elide widgets and the mime drag bridge. Board hosts receive
+explicit Page ports instead of walking ``parentWidget()``. Library geometry,
+card copy strings, planner logging, and board hosts stay with their owners.
 """
 from __future__ import annotations
 
 import json
 import math
+from typing import Callable
 
 from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QMimeData, QPoint, Qt
@@ -19,7 +20,6 @@ from mf4_analyzer.ui.ultraview_state import (
     STATUS_MISSING,
     STATUS_ORPHANED,
     STATUS_STALE,
-    ULTRAVIEW_PAGE_OBJECT_NAME,
     ULTRAVIEW_REF_MIME,
     parse_ref_payload,
 )
@@ -31,13 +31,39 @@ STATUS_LABELS_ZH = {
     STATUS_ORPHANED: "源已删除",
 }
 
-def _page_of(widget: QWidget):
-    current = widget
-    while current is not None:
-        if current.objectName() == ULTRAVIEW_PAGE_OBJECT_NAME:
-            return current
-        current = current.parentWidget()
-    return None
+
+class BoardPagePorts:
+    """Explicit Page callbacks injected when Page constructs a Board.
+
+    Standalone Board tests leave every field ``None``; product Page binds the
+    live methods after tray, rail, and PointerRouter exist.
+    """
+
+    __slots__ = (
+        "notify_canvas_click",
+        "clear_card_selection",
+        "handle_card_double_click",
+        "is_unplaced_drop_target",
+        "begin_connector_geometry",
+        "sync_page_tool_cursor",
+        "unset_viewport_cursor",
+    )
+
+    def __init__(self) -> None:
+        self.notify_canvas_click: Callable[[], None] | None = None
+        self.clear_card_selection: Callable[[], bool] | None = None
+        self.handle_card_double_click: Callable[[str, str], None] | None = None
+        self.is_unplaced_drop_target: Callable[[QPoint], bool] | None = None
+        self.begin_connector_geometry: Callable[..., None] | None = None
+        self.sync_page_tool_cursor: Callable[[], None] | None = None
+        self.unset_viewport_cursor: Callable[[], None] | None = None
+
+    def bind(self, **ports) -> None:
+        for name, value in ports.items():
+            if name not in self.__slots__:
+                raise TypeError(f"unknown board page port: {name}")
+            setattr(self, name, value)
+
 
 def _effective_device_pixel_ratio(widget: QWidget) -> float:
     """Return a usable DPR without retaining a deleted Qt wrapper."""
@@ -58,30 +84,6 @@ def _union_pixel_rect(rects) -> tuple[float, float, float, float] | None:
     y1 = max(float(rect[1]) + float(rect[3]) for rect in boxes)
     return (x0, y0, x1 - x0, y1 - y0)
 
-
-def _clear_page_card_selection(widget: QWidget) -> None:
-    page = _page_of(widget)
-    if page is not None:
-        page.clear_card_selection()
-
-
-def _drop_on_unplaced_tray(widget: QWidget, global_pos: QPoint) -> bool:
-    page = _page_of(widget)
-    if page is None:
-        return False
-    # The narrow-rail workspace keeps the complete tray on demand.  During
-    # direct free-grid manipulation its rail badge is the stable visible drop
-    # target, so moving a card to unplaced does not require opening a large
-    # panel first.  Keep the expanded Tray body as the compatible second target.
-    tool_rail = getattr(page, "tool_rail", None)
-    if callable(tool_rail):
-        rail = tool_rail()
-        if rail is not None and rail.isVisible() and rail.rect().contains(rail.mapFromGlobal(global_pos)):
-            return True
-    tray = page.unplaced_tray()
-    if tray is None or not tray.isVisible():
-        return False
-    return tray.rect().contains(tray.mapFromGlobal(global_pos))
 
 def _run_ultraview_drag(source: QWidget, mime: QMimeData, action, finished) -> None:
     """Run QDrag without parenting it to a widget that drop handlers may destroy.

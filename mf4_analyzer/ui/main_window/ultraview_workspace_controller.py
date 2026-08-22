@@ -569,8 +569,9 @@ class UltraViewWorkspaceController:
             0,
         )
         page = self.page()
-        finder = getattr(page, "card_widget", None) if page is not None else None
-        card = finder(ref.section, ref.view_id) if callable(finder) else None
+        if page is None:
+            return defaults
+        card = page.card_widget(ref.section, ref.view_id)
         if card is None or not _alive(card):
             return defaults
         image = card.findChild(QWidget, "ultraViewCardImage")

@@ -589,6 +589,7 @@ class UltraViewPage(QWidget):
             selection_toolbar=self._selection_toolbar,
         )
         self._bind_pointer_router()
+        self._bind_board_page_ports()
         self._author_ui = AuthorUiController(
             interaction=self._interaction,
             canvas_host=self._canvas_host,
@@ -857,17 +858,11 @@ class UltraViewPage(QWidget):
         self._free_grid.author_delete_requested.connect(self._on_author_delete_requested)
         self._free_grid.author_edit_requested.connect(self._on_author_edit_requested)
         self._free_grid.replace_requested.connect(self.free_grid_replace_requested)
-        workspace_gesture = getattr(self._free_grid, "workspace_gesture_changed", None)
-        if workspace_gesture is not None:
-            workspace_gesture.connect(self._on_workspace_gesture_changed)
-        active_changed = getattr(
-            self._free_grid, "workspace_gesture_active_changed", None
+        self._free_grid.workspace_gesture_changed.connect(self._on_workspace_gesture_changed)
+        self._free_grid.workspace_gesture_active_changed.connect(
+            self._on_workspace_gesture_active_changed
         )
-        if active_changed is not None:
-            active_changed.connect(self._on_workspace_gesture_active_changed)
-        pointer_changed = getattr(self._free_grid, "workspace_pointer_changed", None)
-        if pointer_changed is not None:
-            pointer_changed.connect(self._on_workspace_pointer_changed)
+        self._free_grid.workspace_pointer_changed.connect(self._on_workspace_pointer_changed)
         self._free_grid.destroyed.connect(self._stop_edge_pan)
 
     def _connect_scroll_minimap(self) -> None:
@@ -982,6 +977,24 @@ class UltraViewPage(QWidget):
 
     def unplaced_tray(self) -> UnplacedTray:
         return self._tray
+
+    def is_unplaced_drop_target(self, global_pos: QPoint) -> bool:
+        """True when a card drop should land on the unplaced tray or rail badge.
+
+        The narrow-rail workspace keeps the complete tray on demand. During
+        direct free-grid manipulation its rail badge is the stable visible drop
+        target, so moving a card to unplaced does not require opening a large
+        panel first. Keep the expanded Tray body as the compatible second target.
+        """
+        rail = self.tool_rail()
+        if rail is not None and rail.isVisible() and rail.rect().contains(
+            rail.mapFromGlobal(global_pos)
+        ):
+            return True
+        tray = self.unplaced_tray()
+        if tray is None or not tray.isVisible():
+            return False
+        return tray.rect().contains(tray.mapFromGlobal(global_pos))
 
     def compare_rail(self) -> CompareRail:
         return self._rail
@@ -1134,6 +1147,21 @@ class UltraViewPage(QWidget):
             if name in owned:
                 continue
             setattr(self, name, getattr(router, name))
+
+    def _bind_board_page_ports(self) -> None:
+        shared = {
+            "notify_canvas_click": self.notify_canvas_click,
+            "clear_card_selection": self.clear_card_selection,
+            "handle_card_double_click": self.handle_card_double_click,
+            "is_unplaced_drop_target": self.is_unplaced_drop_target,
+        }
+        self._grid.bind_page_ports(**shared)
+        self._free_grid.bind_page_ports(
+            **shared,
+            begin_connector_geometry=self._pointer_router._begin_connector_geometry,
+            sync_page_tool_cursor=self._sync_tool_cursor,
+            unset_viewport_cursor=self._unset_board_viewport_cursor,
+        )
 
     def _pointer_tool_armed(self, tool: str) -> bool:
         return self._pointer_router._pointer_tool_armed(tool)
@@ -3396,6 +3424,12 @@ class UltraViewPage(QWidget):
             and not self._viewport.space_down()
         ):
             self._free_grid.setCursor(Qt.CrossCursor)
+
+    def _unset_board_viewport_cursor(self) -> None:
+        try:
+            self._board_scroll.viewport().unsetCursor()
+        except RuntimeError:
+            return
 
     def _on_author_edit_requested(self, object_id: str) -> None:
         item = self._author_item(object_id)

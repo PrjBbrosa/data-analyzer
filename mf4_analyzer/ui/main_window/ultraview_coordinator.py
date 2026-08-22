@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import weakref
-from contextlib import nullcontext
 from functools import partial
 from typing import Any
 
@@ -312,8 +311,7 @@ class UltraViewCoordinator(QObject):
         if page is None:
             return
         board = active_board(self._workspace)
-        batch = getattr(page, "projection_batch", None)
-        with batch() if callable(batch) else nullcontext():
+        with page.projection_batch():
             # Library chrome (name/color) must be current before set_board
             # projects cards. Preview-record no-op must not freeze tab color.
             self._refresh_library(page)
@@ -980,13 +978,7 @@ class UltraViewCoordinator(QObject):
         )
         captured = getattr(record, "captured_digest", None) if record else None
         status = derive_preview_status(exists, image_valid, captured, digest)
-        apply = getattr(page, "apply_preview_and_status", None)
-        if callable(apply):
-            apply(ref, record, status, exists)
-        else:
-            if record is not None:
-                page.set_preview(ref, record)
-            page.set_ref_status(ref, status, exists)
+        page.apply_preview_and_status(ref, record, status, exists)
         if image_valid and any(ref in placed_ref_set(board) for board in self._workspace.boards):
             self._store.touch(ref)
         self._refresh_open_focus(ref)
@@ -1513,12 +1505,8 @@ class UltraViewCoordinator(QObject):
         page = self.page()
         if page is None:
             return
-        reset = getattr(page, "reset_sheet_session", None)
-        if callable(reset):
-            reset()
-        clear = getattr(page, "clear_runtime_caches", None)
-        if callable(clear):
-            clear()
+        page.reset_sheet_session()
+        page.clear_runtime_caches()
 
     def _disconnect_page_hooks(self) -> None:
         for obj, signal, slot in self._page_hooks:

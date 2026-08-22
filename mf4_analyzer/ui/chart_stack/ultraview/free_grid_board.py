@@ -87,10 +87,9 @@ from .viewport import (
     scale_grid_metrics,
 )
 from .widgets_common import (
+    BoardPagePorts,
     _accept_ultraview_drag,
-    _drop_on_unplaced_tray,
     _effective_device_pixel_ratio,
-    _page_of,
     _union_pixel_rect,
     extract_ref_strings,
 )
@@ -231,6 +230,7 @@ class FreeGridBoard(QWidget):
         self._pending_shift_toggle: UltraViewRef | None = None
         self._layout_revision = 0
         self._gesture_dimmed = False
+        self._page_ports = BoardPagePorts()
         # This is replaced from ``free_grid_default_span`` when a Board is
         # installed.  Keep the standalone default in schema-5 micro-grid
         # units as well, so test/harness boards never create undersized cards.
@@ -544,6 +544,20 @@ class FreeGridBoard(QWidget):
     def emit_author_edit(self, object_id: str) -> None:
         self.author_edit_requested.emit(object_id)
 
+    def bind_page_ports(self, **ports) -> None:
+        self._page_ports.bind(**ports)
+
+    def is_unplaced_drop_target(self, global_pos: QPoint) -> bool:
+        checker = self._page_ports.is_unplaced_drop_target
+        return bool(checker(global_pos)) if checker is not None else False
+
+    def handle_card_double_click(self, section: str, view_id: str) -> None:
+        handler = self._page_ports.handle_card_double_click
+        if handler is not None:
+            handler(section, view_id)
+            return
+        self.focus_requested.emit(section, view_id)
+
     def begin_connector_geometry(
         self,
         handle: str,
@@ -551,9 +565,8 @@ class FreeGridBoard(QWidget):
         event: QMouseEvent,
         pos: QPoint,
     ) -> None:
-        page = _page_of(self)
-        starter = getattr(page, "_begin_connector_geometry", None)
-        if callable(starter):
+        starter = self._page_ports.begin_connector_geometry
+        if starter is not None:
             starter((handle, object_id), event, pos)
 
     def host_is_deleted(self) -> bool:
@@ -1263,9 +1276,8 @@ class FreeGridBoard(QWidget):
         """Rebuild or unset Laser on this Board and the Page viewport if present."""
         if sip.isdeleted(self):
             return
-        page = _page_of(self)
-        sync = getattr(page, "_sync_tool_cursor", None) if page is not None else None
-        if callable(sync):
+        sync = self._page_ports.sync_page_tool_cursor
+        if sync is not None:
             try:
                 sync()
                 return
@@ -1290,19 +1302,11 @@ class FreeGridBoard(QWidget):
         self._reapply_pointer_cursor()
 
     def _unset_page_viewport_cursor(self) -> None:
-        try:
-            page = _page_of(self)
-        except RuntimeError:
-            return
-        getter = getattr(page, "board_scroll_area", None) if page is not None else None
-        try:
-            area = getter() if callable(getter) else None
-        except RuntimeError:
-            return
-        if area is None:
+        unset = self._page_ports.unset_viewport_cursor
+        if unset is None:
             return
         try:
-            area.viewport().unsetCursor()
+            unset()
         except RuntimeError:
             return
 
@@ -1403,34 +1407,33 @@ class FreeGridBoard(QWidget):
             modifiers=event.modifiers(),
             viewport_pan=False,
         )
+        canvas_click = self._page_ports.notify_canvas_click
         if hit.kind == HIT_RESIZE_HANDLE and isinstance(hit.item, AuthorKey):
-            page = _page_of(self)
-            if page is not None:
-                page.notify_canvas_click()
+            if canvas_click is not None:
+                canvas_click()
             self._author.begin_selected_author_handle(hit, event, event.pos())
             event.accept()
             return
         if hit.kind == HIT_AUTHOR:
-            page = _page_of(self)
-            if page is not None:
-                page.notify_canvas_click()
+            if canvas_click is not None:
+                canvas_click()
             self._author.handle_author_press(hit, event, event.pos())
             event.accept()
             return
         if self._card_at(event.pos()) is not None:
             super().mousePressEvent(event)
             return
-        page = _page_of(self)
-        if page is not None:
-            page.notify_canvas_click()
+        if canvas_click is not None:
+            canvas_click()
         if self._sticky_create_armed() and hit.kind == HIT_BLANK:
             self._author.begin_sticky_draft(event.pos())
             event.accept()
             return
         additive = bool(event.modifiers() & Qt.ShiftModifier)
         if not additive:
-            if page is not None:
-                page.clear_card_selection()
+            clearer = self._page_ports.clear_card_selection
+            if clearer is not None:
+                clearer()
             elif self._interaction.selection():
                 self._interaction.clear_selection()
                 self._apply_selection_flags()
@@ -1690,7 +1693,7 @@ class FreeGridBoard(QWidget):
             if not commit or not session.active:
                 self._relayout()
                 return
-            if global_pos is not None and _drop_on_unplaced_tray(self, global_pos):
+            if global_pos is not None and self.is_unplaced_drop_target(global_pos):
                 for ref in members:
                     self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
                 return
