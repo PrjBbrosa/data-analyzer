@@ -100,6 +100,18 @@ from .viewport_feedback import BoardToViewportTransform
 from .free_grid import hit_handle, screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
 from .viewport_controller import ViewportController
+from .board_context_controller import (
+    BOARD_MENU_ARRANGE,
+    BOARD_MENU_COPY,
+    BOARD_MENU_EXPORT,
+    BOARD_MENU_FIT,
+    BOARD_MENU_OBJECT_NAME,
+    BOARD_MENU_OVERVIEW,
+    BOARD_MENU_RESET,
+    BOARD_MENU_UNDO_ARRANGE,
+    BoardContextController,
+)
+from .author_ui_controller import AuthorUiController, FORMAT_PICKER_KEYS as _FORMAT_PICKER_KEYS
 from .author_edits import copy_author_objects
 from .author_selection import (
     NUDGE_STEP,
@@ -108,7 +120,6 @@ from .author_selection import (
     object_bounds,
     resolve_selection_capabilities,
 )
-from .author_style import DEFAULT_THEME, STICKY_PALETTE_TOKENS, sticky_colors
 from .author_geometry import (
     board_box_to_pixels,
     board_point_to_pixels,
@@ -155,19 +166,13 @@ from .author_tools import (
     AuthorPasteIntent,
     AuthorUpdateIntent,
     AuthorZOrderIntent,
-    CLOSED_SHAPE_TYPES,
     CONNECTOR_CLICK_DRAG_THRESHOLD,
     CONNECTOR_HEADS,
     CONNECTOR_LINE_STYLES,
-    CONNECTOR_STROKE_PALETTES,
     CONNECTOR_STROKE_WIDTHS,
     CONNECTOR_TYPES,
     SHAPE_CORNER_TYPES,
-    SHAPE_CORNERS,
-    SHAPE_FILL_PALETTES,
     SHAPE_LINE_STYLES,
-    SHAPE_STROKE_PALETTES,
-    SHAPE_STROKE_WIDTHS,
     TEXT_DEFAULT_WIDTH,
     TEXT_MIN_HEIGHT,
     TEXT_MIN_WIDTH,
@@ -185,7 +190,6 @@ from .author_tools import (
     connector_style_from_type,
     connector_type_from_style,
     default_shape_corner,
-    is_draw_ink_subtool,
     lasso_selection_keys,
     new_author_object_id,
     normalize_connector_type,
@@ -295,32 +299,6 @@ def _qrect(rect: FloatingRect) -> QRect:
     return QRect(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
 
 
-BOARD_MENU_OBJECT_NAME = "ultraViewBoardContextMenu"
-BOARD_MENU_FIT = "适应内容"
-BOARD_MENU_RESET = "100%"
-BOARD_MENU_OVERVIEW = "概览"
-BOARD_MENU_ARRANGE = "自动排版"
-BOARD_MENU_UNDO_ARRANGE = "撤销排版"
-BOARD_MENU_COPY = "复制图片"
-BOARD_MENU_EXPORT = "导出 PNG"
-_BOARD_MENU_CHROME_NAMES = frozenset(
-    {
-        "ultraViewFreeGridMinimap",
-        "ultraViewToolRail",
-        "ultraViewBoardIsland",
-        "ultraViewStatusIsland",
-        "ultraViewGlobalIsland",
-        "ultraViewNavigationIsland",
-        "ultraViewEmptyBoardHint",
-        "ultraViewCardContextIsland",
-        "ultraViewGhostOverlay",
-        "ultraViewViewportFeedback",
-        "ultraViewBoardPopover",
-        "ultraViewLayoutPopover",
-    }
-)
-
-
 class UltraViewPage(BoardPointerMixin, QWidget):
     add_ref_requested = pyqtSignal(str, str)
     replace_slot_requested = pyqtSignal(str, str, str)
@@ -401,6 +379,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._projection_dirty = False
         self._presentation = False
         self._floating_chrome: FloatingChromeController | None = None
+        self._board_context: BoardContextController | None = None
+        self._author_ui: AuthorUiController | None = None
         # Floating chrome is transient view state: it is deliberately not
         # serialised with a Board or a project.  A fresh UltraView opens on a
         # continuous canvas; the library is available from the rail on demand.
@@ -626,7 +606,31 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._selection_toolbar.more_requested.connect(self._on_selection_more_requested)
         self._format_picker = FormatChoiceFlyout(self._canvas_host)
         self._format_picker.choice_selected.connect(self._on_format_choice_selected)
-        self._format_picker_key = ""
+        self._author_ui = AuthorUiController(
+            interaction=self._interaction,
+            canvas_host=self._canvas_host,
+            tool_rail=self._tool_rail,
+            pointer_popover=self._pointer_popover,
+            sticky_popover=self._sticky_popover,
+            shape_popover=self._shape_popover,
+            connector_popover=self._connector_popover,
+            draw_popover=self._draw_popover,
+            format_picker=self._format_picker,
+            selection_toolbar=self._selection_toolbar,
+            navigation_island=self._navigation_island,
+            status_island=self._status_island,
+            sync_tool_cursor=self._sync_tool_cursor,
+            sync_free_grid_cursor=self._free_grid.sync_tool_cursor,
+            refresh_author_toolbar=self._refresh_author_toolbar,
+            sync_minimap_placement=self._sync_minimap_placement,
+            reassert_host_stacking=self._reassert_host_stacking,
+            selection_capabilities=self._selection_capabilities,
+            selection_bounds=self._selection_bounds_in_host,
+            author_item=self._author_item,
+            apply_format=self._on_selection_format_requested,
+            text_field_has_focus=self._text_field_has_focus,
+            creation_allowed=self._free_grid.creation_allowed,
+        )
         self._canvas_host.register_overlay(
             OVERLAY_AUTHOR_FORMAT,
             self._format_picker,
@@ -793,7 +797,33 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._free_grid.destroyed.connect(self._stop_edge_pan)
         self.resolve_insert_span = None
         self.can_undo_auto_arrange = None
-        self._board_context_menu: QMenu | None = None
+        self._board_context = BoardContextController(
+            menu_parent=self,
+            board_scroll=self._board_scroll,
+            board_host=self._board_host,
+            free_grid=self._free_grid,
+            grid=self._grid,
+            card_context=self._card_context,
+            is_presentation=self.is_presentation_active,
+            overview_visible=self._overview.isVisible,
+            focus_visible=self._focus.isVisible,
+            drag_active=self._drag_is_active,
+            viewport_panning=self.is_board_panning,
+            grid_gesture_active=self._grid.is_gesture_active,
+            free_grid_gesture_active=self._free_grid_gesture_active,
+            layout_mode=self._board_layout_mode,
+            free_grid_count=self._board_free_grid_count,
+            can_undo_arrange=self._auto_arrange_undo_available,
+            close_active_overlay=self._canvas_host.close_active_overlay,
+            zoom_fit=self.zoom_fit,
+            zoom_reset=self.zoom_reset,
+            show_overview=self.show_overview,
+            auto_arrange=self.auto_arrange_requested.emit,
+            undo_arrange=self.free_grid_undo_requested.emit,
+            copy_board=self.copy_board_requested.emit,
+            export_png=self.export_png_requested.emit,
+            refresh_author_toolbar=self._refresh_author_toolbar,
+        )
         self._free_grid.set_insert_span_resolver(self._resolve_insert_span_for_drag)
 
         self._tray.place_requested.connect(self._on_tray_place)
@@ -994,6 +1024,18 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def tool_rail(self) -> ToolRail:
         return self._tool_rail
+
+    @property
+    def _format_picker_key(self) -> str:
+        if self._author_ui is None:
+            return ""
+        return self._author_ui.format_picker_key()
+
+    @_format_picker_key.setter
+    def _format_picker_key(self, value: str) -> None:
+        if self._author_ui is None:
+            return
+        self._author_ui.set_format_picker_key(str(value or ""))
 
     def visible_author_tools(self) -> tuple[str, ...]:
         """Release rail projection. Hidden tools stay implemented, not advertised."""
@@ -1451,12 +1493,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return closed
 
     def _on_overlay_closed(self, panel_id: str) -> None:
-        if panel_id == OVERLAY_AUTHOR_FORMAT:
-            self._format_picker_key = ""
-            self._sync_minimap_placement()
+        if self._author_ui is not None and self._author_ui.handle_overlay_closed(panel_id):
             return
-        if panel_id == OVERLAY_AUTHOR_POINTER:
-            self._tool_rail.set_pointer_menu_open(False)
         if panel_id == PANEL_LIBRARY:
             self._library_visible = False
         if panel_id == PANEL_UNPLACED:
@@ -2710,98 +2748,37 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return super().eventFilter(watched, event)
 
     def _is_board_context_menu_event(self, watched, event) -> bool:
-        if event.type() != QEvent.ContextMenu:
+        if self._board_context is None:
             return False
-        if getattr(self, "_board_scroll", None) is None:
-            return False
-        return watched in {
-            self._board_scroll.viewport(),
-            self._board_host,
-            self._free_grid,
-            self._grid,
-        }
+        return self._board_context.is_board_context_menu_event(watched, event)
 
     def _board_context_menu_blocked(self) -> bool:
-        return bool(
-            self._presentation
-            or self._overview.isVisible()
-            or self._focus.isVisible()
-            or self._drag_kind
-            or self._viewport.is_panning()
-            or self._grid.is_gesture_active()
-            or self._free_grid.gesture().is_active()
-        )
-
-    def _context_menu_hit_widget(self, watched, event) -> QWidget | None:
-        widget = QApplication.widgetAt(event.globalPos()) if hasattr(event, "globalPos") else None
-        if widget is not None:
-            return widget
-        pos = event.pos() if hasattr(event, "pos") else QPoint()
-        child = watched.childAt(pos) if watched is not None else None
-        return child if child is not None else watched
+        return self._board_context.board_context_menu_blocked()
 
     def _is_blank_board_context_hit(self, watched, event) -> bool:
-        widget = self._context_menu_hit_widget(watched, event)
-        current = widget
-        while current is not None:
-            if isinstance(current, (UltraViewCard, CardContextIsland)):
-                return False
-            name = current.objectName()
-            if name in _BOARD_MENU_CHROME_NAMES or name == "ultraViewCard":
-                return False
-            if current in (self._board_host, self._free_grid, self._grid, self._board_scroll.viewport()):
-                break
-            current = current.parentWidget()
-        return True
+        return self._board_context.is_blank_board_context_hit(watched, event)
 
     def _handle_board_context_menu(self, watched, event) -> bool:
-        if self._board_context_menu_blocked():
-            event.accept()
-            return True
-        if not self._is_blank_board_context_hit(watched, event):
-            return False
-        global_pos = event.globalPos() if isinstance(event, QContextMenuEvent) else QCursor.pos()
-        self._popup_board_context_menu(global_pos)
-        event.accept()
-        return True
+        return self._board_context.handle_board_context_menu(watched, event)
 
     def make_board_context_menu(self) -> QMenu:
-        menu = QMenu(self)
-        menu.setObjectName(BOARD_MENU_OBJECT_NAME)
-        apply_rounded_menu_chrome(menu)
-        fit = menu.addAction(BOARD_MENU_FIT)
-        fit.triggered.connect(self._on_board_menu_zoom_fit)
-        reset = menu.addAction(BOARD_MENU_RESET)
-        reset.triggered.connect(self._on_board_menu_zoom_reset)
-        overview = menu.addAction(BOARD_MENU_OVERVIEW)
-        overview.triggered.connect(self._on_board_menu_overview)
-        free_grid = self._board.layout_mode == LAYOUT_MODE_FREE_GRID
-        placed = len(self._board.free_grid) if free_grid else 0
-        if free_grid and placed >= 2:
-            menu.addSeparator()
-            arrange = menu.addAction(BOARD_MENU_ARRANGE)
-            arrange.triggered.connect(self._on_board_menu_auto_arrange)
-            if self._auto_arrange_undo_available():
-                undo = menu.addAction(BOARD_MENU_UNDO_ARRANGE)
-                undo.triggered.connect(self._on_board_menu_undo_arrange)
-        menu.addSeparator()
-        copy_act = menu.addAction(BOARD_MENU_COPY)
-        copy_act.triggered.connect(self._on_board_menu_copy)
-        export_act = menu.addAction(BOARD_MENU_EXPORT)
-        export_act.triggered.connect(self._on_board_menu_export)
-        return menu
+        return self._board_context.make_board_context_menu()
+
+    def _board_layout_mode(self) -> str:
+        return self._board.layout_mode
+
+    def _board_free_grid_count(self) -> int:
+        return len(self._board.free_grid)
+
+    def _free_grid_gesture_active(self) -> bool:
+        return self._free_grid.gesture().is_active()
 
     def _auto_arrange_undo_available(self) -> bool:
         resolver = getattr(self, "can_undo_auto_arrange", None)
         return bool(callable(resolver) and resolver())
 
     def _popup_board_context_menu(self, global_pos: QPoint) -> None:
-        self._close_board_context_menu()
-        self._canvas_host.close_active_overlay(restore_focus=False)
-        menu = self.make_board_context_menu()
-        menu.aboutToHide.connect(self._on_board_context_menu_hidden)
-        self._board_context_menu = menu
-        menu.popup(global_pos)
+        self._board_context.popup_board_context_menu(global_pos)
 
     def _exec_native_menu(self, menu, global_pos: QPoint, *, trigger=None) -> None:
         self._canvas_host.close_active_overlay(restore_focus=False)
@@ -2820,39 +2797,31 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             trigger.setFocus(Qt.OtherFocusReason)
 
     def _close_board_context_menu(self) -> None:
-        menu = self._board_context_menu
-        self._board_context_menu = None
-        if menu is None:
-            return
-        menu.close()
-        menu.deleteLater()
+        self._board_context.close_board_context_menu()
 
     def _on_board_context_menu_hidden(self) -> None:
-        menu = self._board_context_menu
-        self._board_context_menu = None
-        if menu is not None:
-            menu.deleteLater()
+        self._board_context._on_board_context_menu_hidden()
 
     def _on_board_menu_zoom_fit(self, _checked: bool = False) -> None:
-        self.zoom_fit()
+        self._board_context._on_board_menu_zoom_fit(_checked)
 
     def _on_board_menu_zoom_reset(self, _checked: bool = False) -> None:
-        self.zoom_reset()
+        self._board_context._on_board_menu_zoom_reset(_checked)
 
     def _on_board_menu_overview(self, _checked: bool = False) -> None:
-        self.show_overview()
+        self._board_context._on_board_menu_overview(_checked)
 
     def _on_board_menu_auto_arrange(self, _checked: bool = False) -> None:
-        self.auto_arrange_requested.emit()
+        self._board_context._on_board_menu_auto_arrange(_checked)
 
     def _on_board_menu_undo_arrange(self, _checked: bool = False) -> None:
-        self.free_grid_undo_requested.emit()
+        self._board_context._on_board_menu_undo_arrange(_checked)
 
     def _on_board_menu_copy(self, _checked: bool = False) -> None:
-        self.copy_board_requested.emit()
+        self._board_context._on_board_menu_copy(_checked)
 
     def _on_board_menu_export(self, _checked: bool = False) -> None:
-        self.export_png_requested.emit(1)
+        self._board_context._on_board_menu_export(_checked)
 
     def _cancel_board_gestures(self) -> None:
         self._commit_or_cancel_text_editor()
@@ -3171,174 +3140,54 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             )
 
     def _author_flyout_safe_rect(self) -> QRect:
-        host = self._canvas_host.contentsRect()
-        rect = host.adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)
-        nav = getattr(self, "_navigation_island", None)
-        status = getattr(self, "_status_island", None)
-        bottoms = []
-        for island in (nav, status):
-            if island is not None and island.isVisible():
-                bottoms.append(island.geometry().top() - OVERLAY_GAP)
-        if bottoms:
-            rect.setBottom(min(rect.bottom(), min(bottoms)))
-        return rect
+        return self._author_ui.author_flyout_safe_rect()
 
     def _author_flyout_rect(self, button: QWidget | None, size: QSize) -> QRect:
-        safe = self._author_flyout_safe_rect()
-        width = min(max(1, size.width()), safe.width())
-        height = min(max(1, size.height()), safe.height())
-        rail = self._tool_rail.geometry()
-        x = rail.right() + OVERLAY_GAP
-        if x + width > safe.right():
-            x = rail.left() - OVERLAY_GAP - width
-        y = button.mapTo(self._canvas_host, QPoint(0, 0)).y() if button is not None else safe.top()
-        if y + height > safe.bottom():
-            y = safe.bottom() - height
-        x = min(max(safe.left(), x), safe.right() - width)
-        y = min(max(safe.top(), y), safe.bottom() - height)
-        return QRect(x, y, width, height)
+        return self._author_ui.author_flyout_rect(button, size)
 
     def _open_author_flyout(self, overlay_id: str, flyout, button: QWidget | None) -> None:
-        # Tool and selection flyouts share CanvasHost: never leave a stale
-        # format picker below a newly opened Shapes/Draw/Pointer surface.
-        self._close_format_picker()
-        size = flyout.content_size()
-        natural_h = size.height()
-        rect = self._author_flyout_rect(button, size)
-        if natural_h > rect.height():
-            flyout._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        else:
-            flyout._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._canvas_host.open_overlay(overlay_id, rect)
-        self._tool_rail.set_pointer_menu_open(overlay_id == OVERLAY_AUTHOR_POINTER)
-        self._reassert_host_stacking()
-        self._sync_minimap_placement()
+        self._author_ui.open_author_flyout(overlay_id, flyout, button)
 
     def _close_author_flyouts(self, keep=None) -> None:
-        for flyout in self._author_flyouts():
-            if flyout is keep:
-                continue
-            key = flyout.property("overlayId")
-            if key and self._canvas_host.active_overlay() == str(key):
-                self._canvas_host.close_overlay(str(key), restore_focus=False)
-            elif flyout.isVisible():
-                flyout.hide()
-        if keep is not self._pointer_popover:
-            opened = (
-                self._canvas_host.active_overlay() == OVERLAY_AUTHOR_POINTER
-                and self._pointer_popover.isVisible()
-            )
-            self._tool_rail.set_pointer_menu_open(opened)
-        self._sync_minimap_placement()
+        if self._author_ui is None:
+            return
+        self._author_ui.close_author_flyouts(keep=keep)
 
     def _show_tool_flyout(self, tool: str) -> None:
-        if tool == TOOL_STICKY:
-            self._close_author_flyouts(keep=self._sticky_popover)
-            self._show_sticky_popover()
-        elif tool == TOOL_SHAPES:
-            self._close_author_flyouts(keep=self._shape_popover)
-            self._show_shape_popover()
-        elif tool == TOOL_DRAW:
-            self._close_author_flyouts(keep=self._draw_popover)
-            self._show_draw_popover()
-        elif tool == TOOL_CONNECTOR:
-            self._close_author_flyouts(keep=self._shape_popover)
-            self._show_shape_popover()
+        self._author_ui.show_tool_flyout(tool)
 
     def _toggle_tool_flyout(self, tool: str) -> None:
-        mapping = {
-            TOOL_STICKY: self._sticky_popover,
-            TOOL_SHAPES: self._shape_popover,
-            TOOL_DRAW: self._draw_popover,
-        }
-        flyout = mapping.get(tool)
-        if flyout is None:
-            return
-        if flyout.isVisible():
-            flyout.close()
-            return
-        self._show_tool_flyout(tool)
+        self._author_ui.toggle_tool_flyout(tool)
 
     def _on_author_tool_requested(self, tool: str) -> None:
-        flyout_tools = {TOOL_STICKY, TOOL_SHAPES, TOOL_DRAW}
-        if tool in flyout_tools:
-            already = self._interaction.active_tool() == tool
-            if not already:
-                self._interaction.set_active_tool(tool)
-                self._sync_tool_rail_from_controller()
-                self._sync_tool_cursor()
-                self._show_tool_flyout(tool)
-                return
-            self._toggle_tool_flyout(tool)
-            return
-        self._close_author_flyouts()
-        if tool == TOOL_SELECT:
-            self._apply_pointer_mode(self._interaction.pointer_mode())
-            return
-        self._interaction.set_active_tool(tool)
-        self._sync_tool_rail_from_controller()
-        self._sync_tool_cursor()
+        self._author_ui.on_author_tool_requested(tool)
 
     def _on_pointer_menu_requested(self) -> None:
-        if not self._free_grid.creation_allowed():
-            return
-        if self._pointer_popover.isVisible():
-            self._canvas_host.close_overlay(OVERLAY_AUTHOR_POINTER)
-            self._tool_rail.set_pointer_menu_open(False)
-            return
-        self._show_pointer_popover()
+        self._author_ui.on_pointer_menu_requested()
 
     def _on_pointer_mode_requested(self, mode: str) -> None:
-        self._apply_pointer_mode(mode)
-        if self._pointer_popover.isVisible():
-            self._pointer_popover.close()
+        self._author_ui.on_pointer_mode_requested(mode)
 
     def _apply_pointer_mode(self, mode: str) -> None:
-        self._close_author_flyouts(keep=self._pointer_popover)
-        self._interaction.activate_pointer_mode(mode)
-        self._sync_tool_rail_from_controller()
-        self._sync_tool_cursor()
-        self._refresh_author_toolbar()
+        self._author_ui.apply_pointer_mode(mode)
 
     def _show_pointer_popover(self) -> None:
-        button = self._tool_rail.tool_button(TOOL_SELECT)
-        if button is None:
-            return
-        self._pointer_popover.set_mode(self._interaction.pointer_mode(), emit=False)
-        self._open_author_flyout(OVERLAY_AUTHOR_POINTER, self._pointer_popover, button)
+        self._author_ui.show_pointer_popover()
 
     def pointer_popover(self):
         return self._pointer_popover
 
     def _on_author_tool_pinned(self, tool: str, pinned: bool) -> None:
-        self._interaction.set_active_tool(tool, pinned=bool(pinned))
-        self._sync_tool_rail_from_controller()
-        self._free_grid.sync_tool_cursor()
+        self._author_ui.on_author_tool_pinned(tool, pinned)
 
     def _on_sticky_palette_selected(self, token: str) -> None:
-        self._interaction.set_sticky_palette(token)
-        if self._interaction.pinned_tool() == TOOL_STICKY:
-            self._on_author_tool_pinned(TOOL_STICKY, False)
-        if self._interaction.active_tool() != TOOL_STICKY:
-            self._interaction.set_active_tool(TOOL_STICKY)
-            self._sync_tool_rail_from_controller()
-            self._free_grid.sync_tool_cursor()
+        self._author_ui.on_sticky_palette_selected(token)
 
     def _on_sticky_stack_requested(self, token: str) -> None:
-        self._interaction.set_sticky_palette(token)
-        self._on_author_tool_pinned(TOOL_STICKY, True)
-        self._sync_tool_rail_from_controller()
-        self._free_grid.sync_tool_cursor()
+        self._author_ui.on_sticky_stack_requested(token)
 
     def _show_sticky_popover(self) -> None:
-        button = self._tool_rail.tool_button(TOOL_STICKY)
-        if button is None:
-            return
-        self._sticky_popover.choose_palette(
-            self._interaction.sticky_palette(), emit=False
-        )
-        self._sticky_popover.set_pinned(self._interaction.pinned_tool() == TOOL_STICKY)
-        self._open_author_flyout(OVERLAY_AUTHOR_STICKY, self._sticky_popover, button)
+        self._author_ui.show_sticky_popover()
 
     def sticky_popover(self) -> StickyPopover:
         return self._sticky_popover
@@ -3356,136 +3205,57 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return self._selection_toolbar
 
     def _on_sticky_pin_requested(self, pinned: bool) -> None:
-        self._on_author_tool_pinned(TOOL_STICKY, bool(pinned))
+        self._author_ui.on_sticky_pin_requested(pinned)
 
     def _on_shape_selected(self, shape: str) -> None:
-        self._interaction.set_last_shape(shape)
-        self._interaction.set_shape_format(shape=shape)
-        if self._interaction.active_tool() != TOOL_SHAPES:
-            self._interaction.set_active_tool(TOOL_SHAPES)
-        self._sync_tool_rail_from_controller()
-        self._free_grid.sync_tool_cursor()
+        self._author_ui.on_shape_selected(shape)
 
     def _on_shape_pin_requested(self, pinned: bool) -> None:
-        self._on_author_tool_pinned(TOOL_SHAPES, bool(pinned))
+        self._author_ui.on_shape_pin_requested(pinned)
 
     def _show_shape_popover(self) -> None:
-        button = self._tool_rail.tool_button(TOOL_SHAPES)
-        if button is None:
-            return
-        self._shape_popover.set_pinned(self._interaction.pinned_tool() == TOOL_SHAPES)
-        self._open_author_flyout(OVERLAY_AUTHOR_SHAPES, self._shape_popover, button)
+        self._author_ui.show_shape_popover()
 
     def _sync_tool_rail_from_controller(self) -> None:
-        if not self._tool_rail.visible_author_tools():
+        if self._author_ui is None:
             return
-        tool = self._interaction.active_tool()
-        rail_tool = TOOL_SHAPES if tool == TOOL_CONNECTOR else tool
-        pinned = self._interaction.pinned_tool() == tool and tool != TOOL_SELECT
-        try:
-            self._tool_rail.set_draw_subtool(self._interaction.last_draw_subtool())
-            self._tool_rail.set_pointer_mode(self._interaction.pointer_mode())
-            self._tool_rail.set_active_tool(rail_tool, pinned=pinned)
-        except ValueError:
-            return
+        self._author_ui.sync_tool_rail_from_controller()
 
     def _on_select_tool_shortcut(self) -> None:
-        if self._text_field_has_focus() or not self._tool_rail.visible_author_tools():
-            return
-        self._apply_pointer_mode(self._interaction.pointer_mode())
+        self._author_ui.on_select_tool_shortcut()
 
     def _on_sticky_tool_shortcut(self) -> None:
-        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
-            return
-        self._on_author_tool_requested(TOOL_STICKY)
+        self._author_ui.on_sticky_tool_shortcut()
 
     def _on_text_tool_shortcut(self) -> None:
-        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
-            return
-        if TOOL_TEXT not in self._tool_rail.visible_author_tools():
-            return
-        self._on_author_tool_requested(TOOL_TEXT)
+        self._author_ui.on_text_tool_shortcut()
 
     def _on_shape_tool_shortcut(self) -> None:
-        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
-            return
-        if TOOL_SHAPES not in self._tool_rail.visible_author_tools():
-            return
-        self._on_author_tool_requested(TOOL_SHAPES)
+        self._author_ui.on_shape_tool_shortcut()
 
     def _on_connector_selected(self, kind: str) -> None:
-        self._interaction.set_last_connector(kind)
-        self._interaction.set_connector_format(connector_type=kind)
-        if self._interaction.active_tool() != TOOL_CONNECTOR:
-            self._interaction.set_active_tool(TOOL_CONNECTOR)
-        self._sync_tool_rail_from_controller()
-        self._free_grid.sync_tool_cursor()
+        self._author_ui.on_connector_selected(kind)
 
     def _on_connector_pin_requested(self, pinned: bool) -> None:
-        self._on_author_tool_pinned(TOOL_CONNECTOR, bool(pinned))
+        self._author_ui.on_connector_pin_requested(pinned)
 
     def _show_connector_popover(self) -> None:
-        button = self._tool_rail.tool_button(TOOL_CONNECTOR)
-        if button is None:
-            return
-        self._connector_popover.set_pinned(self._interaction.pinned_tool() == TOOL_CONNECTOR)
-        self._open_author_flyout(OVERLAY_AUTHOR_CONNECTOR, self._connector_popover, button)
+        self._author_ui.show_connector_popover()
 
     def _on_connector_tool_shortcut(self) -> None:
-        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
-            return
-        self._close_author_flyouts()
-        self._interaction.set_active_tool(TOOL_CONNECTOR)
-        self._sync_tool_rail_from_controller()
-        self._sync_tool_cursor()
+        self._author_ui.on_connector_tool_shortcut()
 
     def _on_draw_tool_selected(self, tool: str, preset_index: int) -> None:
-        if not is_draw_ink_subtool(tool):
-            self._interaction.set_draw_style(tool=tool, preset_index=0)
-            if self._interaction.active_tool() != TOOL_DRAW:
-                self._interaction.set_active_tool(TOOL_DRAW)
-            self._sync_tool_rail_from_controller()
-            self._sync_tool_cursor()
-            return
-        presets = self._draw_popover.presets(tool)
-        if not 0 <= int(preset_index) < len(presets):
-            return
-        preset = presets[int(preset_index)]
-        self._interaction.set_draw_style(
-            tool=tool,
-            palette=preset.palette,
-            width_px_100=preset.width_px_100,
-            preset_index=int(preset_index),
-        )
-        if self._interaction.active_tool() != TOOL_DRAW:
-            self._interaction.set_active_tool(TOOL_DRAW)
-        self._sync_tool_rail_from_controller()
-        self._sync_tool_cursor()
+        self._author_ui.on_draw_tool_selected(tool, preset_index)
 
     def _show_draw_popover(self) -> None:
-        button = self._tool_rail.tool_button(TOOL_DRAW)
-        if button is None:
-            return
-        subtool = self._interaction.last_draw_subtool()
-        preset = 0 if not is_draw_ink_subtool(subtool) else self._interaction.draw_preset_index()
-        self._draw_popover.choose_tool(subtool, preset)
-        self._open_author_flyout(OVERLAY_AUTHOR_DRAW, self._draw_popover, button)
+        self._author_ui.show_draw_popover()
 
     def _relayout_draw_popover(self) -> None:
-        if not self._draw_popover.isVisible():
-            return
-        self._open_author_flyout(
-            OVERLAY_AUTHOR_DRAW,
-            self._draw_popover,
-            self._tool_rail.tool_button(TOOL_DRAW),
-        )
+        self._author_ui.relayout_draw_popover()
 
     def _on_draw_tool_shortcut(self) -> None:
-        if self._text_field_has_focus() or not self._free_grid.creation_allowed():
-            return
-        if TOOL_DRAW not in self._tool_rail.visible_author_tools():
-            return
-        self._on_author_tool_requested(TOOL_DRAW)
+        self._author_ui.on_draw_tool_shortcut()
 
     def _sync_tool_cursor(self) -> None:
         self._free_grid.sync_tool_cursor()
@@ -3578,141 +3348,18 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         return self._format_picker
 
     def _close_format_picker(self) -> None:
-        if self._canvas_host.active_overlay() == OVERLAY_AUTHOR_FORMAT:
-            self._canvas_host.close_overlay(OVERLAY_AUTHOR_FORMAT, restore_focus=False)
-        elif self._format_picker.isVisible():
-            self._format_picker.hide()
-        self._format_picker_key = ""
-        self._sync_minimap_placement()
+        if self._author_ui is None:
+            return
+        self._author_ui.close_format_picker()
 
     def _format_picker_rect(self, button: QWidget, size: QSize) -> QRect:
-        safe = self._author_flyout_safe_rect()
-        width = min(max(1, size.width()), safe.width())
-        height = min(max(1, size.height()), safe.height())
-        origin = button.mapTo(self._canvas_host, QPoint(0, 0))
-        x = origin.x()
-        below = origin.y() + button.height() + 6
-        above = origin.y() - 6
-        below_room = safe.bottom() - below
-        above_room = above - safe.top()
-        if below_room >= height or below_room >= above_room:
-            y = below
-            height = min(height, max(1, below_room))
-        else:
-            height = min(height, max(1, above_room))
-            y = above - height
-        if x + width > safe.right():
-            x = origin.x() + button.width() - width
-        x = min(max(safe.left(), x), max(safe.left(), safe.right() - width))
-        y = min(max(safe.top(), y), max(safe.top(), safe.bottom() - height))
-        rect = QRect(x, y, width, height)
-        # Keep a short format list usable without covering the object currently
-        # being edited whenever there is room beside it.  This is especially
-        # important for Shapes, whose outline otherwise looks like a clipping
-        # or z-order fault under the dropdown.
-        bounds = self._selection_bounds_in_host()
-        if bounds is not None and rect.intersects(bounds):
-            candidates = (
-                QRect(bounds.right() + 7, rect.y(), width, height),
-                QRect(bounds.left() - width - 7, rect.y(), width, height),
-            )
-            for candidate in candidates:
-                if safe.contains(candidate) and not candidate.intersects(bounds):
-                    return candidate
-        return rect
+        return self._author_ui.format_picker_rect(button, size)
 
     def _on_format_choice_selected(self, value: object) -> None:
-        key = self._format_picker_key
-        if not key:
-            return
-        self._close_format_picker()
-        self._on_selection_format_requested(key, value)
+        self._author_ui.on_format_choice_selected(value)
 
     def _popup_format_picker(self, key: str) -> None:
-        caps = self._selection_capabilities()
-        button = self._selection_toolbar.button(key)
-        if button is None:
-            return
-        picker = self._format_picker
-        if (
-            self._format_picker_key == key
-            and self._canvas_host.active_overlay() == OVERLAY_AUTHOR_FORMAT
-            and picker.isVisible()
-        ):
-            self._close_format_picker()
-            return
-        # A formatting dropdown and a creation flyout must not coexist or
-        # compete for the visual top layer.
-        self._close_author_flyouts()
-        self._format_picker_key = key
-        current = None
-        ids = caps.author_ids
-        item = self._author_item(ids[0]) if len(ids) == 1 else None
-        if caps.kind == "sticky" and key == "palette":
-            colors = {}
-            for token in STICKY_PALETTE_TOKENS:
-                fill, _border, _fg = sticky_colors(token, DEFAULT_THEME)
-                colors[token] = fill
-            picker.present_palette(
-                STICKY_PALETTE_TOKENS,
-                current=getattr(item, "palette", None),
-                color_rgb=colors,
-            )
-        elif caps.kind == "sticky" and key == "shape":
-            picker.present_labels((("square", "方形"), ("wide", "宽形")), current=getattr(item, "shape", None))
-        elif caps.kind == "sticky" and key == "font_size":
-            picker.present_labels(
-                tuple((size, str(size)) for size in ("auto", 12, 14, 18, 24)),
-                current=getattr(item, "font_size", None),
-            )
-        elif caps.kind == "shape" and key == "shape":
-            picker.present_shapes(CLOSED_SHAPE_TYPES, current=getattr(item, "shape", None))
-        elif caps.kind == "shape" and key == "fill":
-            colors = {None: (255, 255, 255)}
-            picker.present_palette(SHAPE_FILL_PALETTES, current=getattr(item, "fill_palette", None), color_rgb=colors)
-        elif key in {"stroke", "color"}:
-            picker.present_palette(
-                SHAPE_STROKE_PALETTES if caps.kind != "stroke" else CONNECTOR_STROKE_PALETTES,
-                current=getattr(item, "stroke_palette", None) or getattr(item, "palette", None),
-            )
-        elif key == "width":
-            widths = SHAPE_STROKE_WIDTHS if caps.kind != "stroke" else (2, 4, 8, 16)
-            picker.present_labels(tuple((width, f"{width} px") for width in widths), current=getattr(item, "stroke_width", None) or getattr(item, "width_px_100", None))
-        elif key == "dash":
-            picker.present_labels((("solid", "实线"), ("dashed", "虚线")), current=getattr(item, "line_style", None))
-        elif key == "route":
-            picker.present_labels((("straight", "直线"), ("elbow", "折线")), current=getattr(item, "route", None))
-        elif key in {"start_head", "end_head"}:
-            picker.present_labels((("none", "无"), ("arrow", "箭头")), current=getattr(item, key, None))
-        elif key == "tool":
-            picker.present_labels((("pen", "钢笔"), ("highlighter", "荧光笔")), current=getattr(item, "tool", None))
-        elif key == "font_role":
-            picker.present_labels((("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")), current=getattr(item, "font_role", None))
-        elif key == "font_size" and caps.kind == "text":
-            picker.present_labels(tuple((size, str(size)) for size in (8, 10, 12, 14, 18, 24, 32, 48, 72)), current=getattr(item, "font_size", None))
-        elif key == "align":
-            picker.present_labels((("left", "左"), ("center", "中"), ("right", "右")), current=getattr(item, "align", None))
-        elif key == "list_style":
-            picker.present_labels((("none", "无"), ("bullet", "项目符号"), ("number", "编号")), current=getattr(item, "list_style", None))
-        elif key == "text_palette":
-            picker.present_labels((("ink", "墨色"), ("blue", "蓝"), ("red", "红"), ("green", "绿")), current=getattr(item, "text_palette", None))
-        elif key == "fill_palette":
-            picker.present_palette((None, "yellow", "blue", "green"), current=getattr(item, "fill_palette", None))
-        elif key == "corner":
-            picker.present_labels(tuple((value, str(value)) for value in SHAPE_CORNERS), current=getattr(item, "corner_radius", None))
-        else:
-            self._close_format_picker()
-            return
-        live_trigger = self._selection_toolbar.button(key) or button
-        size = picker.content_size()
-        rect = self._format_picker_rect(live_trigger, size)
-        if rect.height() < size.height():
-            picker._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        else:
-            picker._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._canvas_host.open_overlay(OVERLAY_AUTHOR_FORMAT, rect)
-        self._reassert_host_stacking()
-        self._sync_minimap_placement()
+        self._author_ui.popup_format_picker(key)
 
     def _on_selection_format_requested(self, key: str, value: object) -> None:
         caps = self._selection_capabilities()
@@ -4209,8 +3856,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _refresh_card_context(self) -> None:
         """Card actions now live on each card; the floating island stays hidden."""
-        self._card_context.clear_ref()
-        self._refresh_author_toolbar()
+        if self._board_context is None:
+            return
+        self._board_context.refresh_card_context()
 
     def _refresh_author_toolbar(self) -> None:
         if self._floating_chrome is None:
@@ -4420,30 +4068,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _on_minimap_viewport(self, rect: QRect) -> None:
         self._viewport_ctrl.apply_minimap_viewport(rect)
-
-
-_FORMAT_PICKER_KEYS = frozenset(
-    {
-        "palette",
-        "shape",
-        "font_size",
-        "font_role",
-        "align",
-        "list_style",
-        "text_palette",
-        "fill_palette",
-        "fill",
-        "stroke",
-        "width",
-        "dash",
-        "color",
-        "route",
-        "start_head",
-        "end_head",
-        "tool",
-        "corner",
-    }
-)
 
 
 def _replace_text_style(item: TextObject, changes: dict[str, object]) -> TextObject:
