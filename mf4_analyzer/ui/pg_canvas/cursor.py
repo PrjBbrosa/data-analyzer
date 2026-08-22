@@ -166,6 +166,16 @@ class CursorController(_CanvasBackref):
     def line_items(self):
         return self._cursor_line_items
 
+    def capture_dual_geometry(self):
+        """Armed dual A/B x only. Single-mode hover x is not a capture fact."""
+        if not self.dual:
+            return None
+        ax = _finite_float(self.ax)
+        bx = _finite_float(self.bx)
+        if ax is None and bx is None:
+            return None
+        return ("dual", ax, bx)
+
     @property
     def a_items(self):
         return self._cursor_a_items

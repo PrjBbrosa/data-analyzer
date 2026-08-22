@@ -89,6 +89,11 @@ from mf4_analyzer.ui.pg_canvas.remarks import (
     viewport_pos_to_scene,
 )
 from mf4_analyzer.ui.pg_canvas.overlay_intent import AnalysisRemarkStore
+from mf4_analyzer.ui.ultraview_capture_facts import (
+    build_capture_facts,
+    iter_axes_rubberband_items,
+    widget_visible_and_sized,
+)
 from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,
     _WheelDeltaGraphicsLayoutWidget,
@@ -857,6 +862,35 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def has_result(self) -> bool:
         return self._has_result
+
+    def has_plotted_result(self) -> bool:
+        return self.has_result()
+
+    def capture_quality_settled(self) -> bool:
+        # Heatmap has no quality_status traffic light; missing is explicit.
+        return True
+
+    def capture_interaction_idle(self) -> bool:
+        # Coordinator historically did not probe ``_slice_aa_idle_timer``.
+        return True
+
+    def capture_cursor_facts(self):
+        return False, None
+
+    def iter_transient_overlay_items(self, *, section: str = "unknown"):
+        yield from iter_axes_rubberband_items(self)
+
+    def presentation_capture_facts(self):
+        dual, geometry = self.capture_cursor_facts()
+        return build_capture_facts(
+            host_kind="fft_time" if self._with_slice else "order",
+            visible_and_sized=widget_visible_and_sized(self),
+            has_real_result=self.has_plotted_result(),
+            quality_settled=self.capture_quality_settled(),
+            interaction_idle=self.capture_interaction_idle(),
+            cursor_dual=dual,
+            cursor_geometry=geometry,
+        )
 
     def full_reset(self) -> None:
         """Clear the heatmap, colorbar, remarks and result state.

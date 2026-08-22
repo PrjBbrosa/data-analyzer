@@ -53,7 +53,27 @@ _COORDINATOR_PATH = (
     / "main_window"
     / "ultraview_coordinator.py"
 )
+_CAPTURE_FACTS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ui"
+    / "ultraview_capture_facts.py"
+)
 _COORDINATOR_LOGGER = "mf4_analyzer.ui.main_window.ultraview_coordinator"
+_HOST_PRIVATE_CAPTURE_ATTRS = frozenset(
+    {
+        "_interaction_state",
+        "_dense_raster",
+        "_aa_idle_timer",
+        "_refresh_pending",
+        "_cursor",
+        "_cursor_line_items",
+        "_cursor_lines",
+        "_channel_lines",
+        "_cursor_a_frequency",
+        "_cursor_b_frequency",
+    }
+)
 _FORBIDDEN_SOURCE_NAMES = (
     "do_fft",
     "do_fft_time",
@@ -173,6 +193,117 @@ class FakeCanvas(QWidget):
         # Closes the View-restore transaction on the real canvas; the double
         # only has to accept it (see canvas.settle_view_restore).
         self.settle_calls += 1
+
+    def has_plotted_result(self) -> bool:
+        from mf4_analyzer.ui.ultraview_capture_facts import (
+            mapping_has_items,
+            quality_plotted_from_status,
+        )
+
+        getter = getattr(self, "has_result", None)
+        if callable(getter):
+            return bool(getter())
+        if mapping_has_items(getattr(self, "_channel_lines", None)) or mapping_has_items(
+            getattr(self, "channel_data", None)
+        ):
+            return True
+        status = self.quality_status() if callable(getattr(self, "quality_status", None)) else {}
+        return quality_plotted_from_status(status or {})
+
+    def capture_quality_settled(self) -> bool:
+        from mf4_analyzer.ui.ultraview_capture_facts import quality_settled_from_status
+
+        status = self.quality_status() if callable(getattr(self, "quality_status", None)) else {}
+        if not quality_settled_from_status(status or {}):
+            return False
+        dense = getattr(self, "_dense_raster", None)
+        if dense is not None and callable(getattr(dense, "quality_status", None)):
+            dense_status = dense.quality_status() or {}
+            if dense_status.get("has_dense") and dense_status.get("state") == "yellow":
+                return False
+        return True
+
+    def capture_interaction_idle(self) -> bool:
+        from mf4_analyzer.ui.ultraview_capture_facts import analysis_idle_timer_is_busy
+
+        if getattr(self, "_interaction_state", "idle") != "idle":
+            return False
+        if bool(getattr(self, "_refresh_pending", False)):
+            return False
+        if analysis_idle_timer_is_busy(getattr(self, "_aa_idle_timer", None)):
+            return False
+        return True
+
+    def capture_cursor_facts(self):
+        from mf4_analyzer.ui.ultraview_capture_facts import dual_cursor_geometry
+
+        cursor = getattr(self, "_cursor", None)
+        dual = bool(getattr(cursor, "dual", False)) if cursor is not None else False
+        if not dual:
+            getter = getattr(self, "cursor_mode", None)
+            if callable(getter):
+                dual = getter() == "dual"
+        if cursor is not None:
+            geometry = dual_cursor_geometry(
+                dual=dual,
+                ax=getattr(cursor, "ax", None),
+                bx=getattr(cursor, "bx", None),
+            )
+        else:
+            geometry = dual_cursor_geometry(
+                dual=dual,
+                ax=getattr(self, "_cursor_a_frequency", None),
+                bx=getattr(self, "_cursor_b_frequency", None),
+            )
+        return dual, geometry
+
+    def _capture_expects_viewbox(self) -> bool:
+        if getattr(self, "axes_list", None) or getattr(self, "plots", None):
+            return True
+        return any(
+            name.startswith("_plot") and getattr(self, name, None) is not None
+            for name in dir(self)
+        )
+
+    def iter_transient_overlay_items(self, *, section: str = "unknown"):
+        from mf4_analyzer.ui.ultraview_capture_facts import (
+            iter_axes_rubberband_items,
+            warn_missing_viewbox,
+        )
+
+        cursor = getattr(self, "_cursor", None)
+        items = getattr(cursor, "_cursor_line_items", None) if cursor is not None else None
+        if items:
+            yield from items
+        yielded = False
+        for item in iter_axes_rubberband_items(self):
+            yielded = True
+            yield item
+        plot = getattr(self, "_plot", None)
+        vb = getattr(plot, "vb", None) if plot is not None else None
+        box = getattr(vb, "rbScaleBox", None) if vb is not None else None
+        if box is not None:
+            yielded = True
+            yield box
+        if not yielded and self._capture_expects_viewbox():
+            warn_missing_viewbox(self, section)
+
+    def presentation_capture_facts(self):
+        from mf4_analyzer.ui.ultraview_capture_facts import (
+            build_capture_facts,
+            widget_visible_and_sized,
+        )
+
+        dual, geometry = self.capture_cursor_facts()
+        return build_capture_facts(
+            host_kind="fake",
+            visible_and_sized=widget_visible_and_sized(self),
+            has_real_result=self.has_plotted_result(),
+            quality_settled=self.capture_quality_settled(),
+            interaction_idle=self.capture_interaction_idle(),
+            cursor_dual=dual,
+            cursor_geometry=geometry,
+        )
 
 
 class FakePage(QWidget):
@@ -2597,3 +2728,37 @@ def test_multi_source_pane_digest_is_stable_against_pin_set_order(qapp):
     window.pages["fft"].deleteLater()
     coord.clear()
     coord.deleteLater()
+
+
+def _getattr_host_private_probes(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id != "getattr":
+            continue
+        if len(node.args) < 2:
+            continue
+        target, attr = node.args[0], node.args[1]
+        if not isinstance(target, ast.Name) or target.id not in {
+            "host",
+            "owner",
+            "widget",
+        }:
+            continue
+        if not isinstance(attr, ast.Constant) or not isinstance(attr.value, str):
+            continue
+        if attr.value in _HOST_PRIVATE_CAPTURE_ATTRS:
+            found.add(attr.value)
+    return found
+
+
+def test_coordinator_and_collector_do_not_getattr_host_capture_privates():
+    assert _getattr_host_private_probes(_COORDINATOR_PATH) == set()
+    assert _getattr_host_private_probes(_CAPTURE_FACTS_PATH) == set()
+    coordinator_source = _COORDINATOR_PATH.read_text(encoding="utf-8")
+    assert "_HOVER_CURSOR_LISTS" not in coordinator_source
+    assert "_host_is_stable" not in coordinator_source
+    assert "_time_host_has_plotted_data" not in coordinator_source

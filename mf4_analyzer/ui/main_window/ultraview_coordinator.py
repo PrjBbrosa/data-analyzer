@@ -7,10 +7,9 @@ grabs canvases that already satisfy the stability contract.
 from __future__ import annotations
 
 import logging
-import math
 import re
 import weakref
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from time import monotonic
@@ -24,6 +23,14 @@ from PyQt5.QtWidgets import QApplication, QFileDialog, QWidget
 
 from ...diagnostics import throttled
 from ...render_profile import source_revision_for
+from ..ultraview_capture_facts import (
+    CAPABILITY_OK,
+    MIN_CAPTURE_EDGE as _MIN_CAPTURE_EDGE,
+    collect_widget_capture_facts,
+    hide_transient_overlays,
+    iter_overlay_hosts as _iter_overlay_hosts,
+    widget_visible_and_sized,
+)
 from ..ultraview_state import (
     COMPARE_FILTER_ALL,
     SECTION_AXIS_KIND,
@@ -95,7 +102,6 @@ from .ultraview_workspace_controller import (
 
 logger = logging.getLogger(__name__)
 
-_MIN_CAPTURE_EDGE = 8
 _IDLE_CAPTURE_MS = 120
 _SIDECAR_LOAD_BATCH = 2
 _DIGEST_RETRY_LIMIT = 3
@@ -109,7 +115,6 @@ _PIXEL_AFFECTING_SIGNALS = frozenset(
     }
 )
 _HTML_TAG = re.compile(r"<[^>]+>")
-_HOVER_CURSOR_LISTS = ("_cursor_line_items", "_cursor_lines")
 # Skip details that describe an expected state rather than a fault. A View the
 # user simply has not computed is not a defect, and the card already shows it
 # via ``_push_preview(usable=False)`` — the log does not need to shout too.
@@ -141,195 +146,10 @@ def _alive(obj) -> bool:
         return True
 
 
-def _iter_overlay_hosts(widget):
-    pane_count = getattr(widget, "pane_count", None)
-    pane_canvas = getattr(widget, "pane_canvas", None)
-    if callable(pane_count) and callable(pane_canvas):
-        for index in range(int(pane_count())):
-            canvas = pane_canvas(index)
-            if canvas is not None:
-                yield canvas
-        return
-    yield widget
-
-
-_PLOT_ATTR_NAMES = (
-    "_plot",
-    "_plot_amp",
-    "_plot_time",
-    "_plot_magnitude",
-    "_plot_phase",
-    "_plot_coherence",
-)
-
-
-def _iter_viewboxes(widget):
-    axes = getattr(widget, "axes_list", None) or ()
-    for handle in axes:
-        vb = getattr(handle, "view_box", None)
-        if vb is not None:
-            yield vb
-    for name in _PLOT_ATTR_NAMES:
-        plot = getattr(widget, name, None)
-        vb = getattr(plot, "vb", None) if plot is not None else None
-        if vb is not None:
-            yield vb
-    plots = getattr(widget, "plots", None) or ()
-    for plot in plots:
-        vb = getattr(plot, "vb", None)
-        if vb is not None:
-            yield vb
-
-
-def _host_expects_viewbox(host) -> bool:
-    """True when the host looks like a plot surface that should have a ViewBox.
-
-    An empty View (no axes, no ``_plot*`` attrs) is a legal capture target and
-    must not warn. A renamed fake such as ``_plotx`` still counts as a plot
-    surface, so a missing ViewBox stays a warning.
-    """
-    if getattr(host, "axes_list", None):
-        return True
-    if getattr(host, "plots", None):
-        return True
-    return any(
-        name.startswith("_plot") and getattr(host, name, None) is not None
-        for name in dir(host)
-    )
-
-
-def _host_is_dual_cursor(host) -> bool:
-    cursor = getattr(host, "_cursor", None)
-    if cursor is not None:
-        return bool(getattr(cursor, "dual", False))
-    getter = getattr(host, "cursor_mode", None)
-    if not callable(getter):
-        return False
-    try:
-        return getter() == "dual"
-    except (TypeError, RuntimeError):
-        return False
-
-
-def _iter_hover_cursor_items(owner):
-    if owner is None:
-        return
-    for name in _HOVER_CURSOR_LISTS:
-        items = getattr(owner, name, None)
-        if items:
-            yield from items
-
-
-def _iter_transient_overlay_items(widget, *, section: str = "unknown"):
-    seen = set()
-    for host in _iter_overlay_hosts(widget):
-        # Hover follow lines are always transient. Single mode has no armed
-        # cursor (the solid line is mouse-follow); dual mode's dotted hover
-        # is the same list. Armed dual A/B lines live on _cursor_a_items /
-        # _cursor_b_items and are not in _HOVER_CURSOR_LISTS.
-        for owner in (host, getattr(host, "_cursor", None)):
-            for item in _iter_hover_cursor_items(owner):
-                ident = id(item)
-                if ident in seen:
-                    continue
-                seen.add(ident)
-                yield item
-        viewboxes = tuple(_iter_viewboxes(host))
-        if not viewboxes and _host_expects_viewbox(host):
-            host_type = type(host).__name__
-            throttled(
-                logger,
-                f"ultraview:no-viewbox:{section}:{host_type}",
-                logging.WARNING,
-                "ultraview: no viewbox found on %s (%s)",
-                section,
-                host_type,
-            )
-        for vb in viewboxes:
-            box = getattr(vb, "rbScaleBox", None)
-            if box is not None and id(box) not in seen:
-                seen.add(id(box))
-                yield box
-
-
-def _finite_or_none(value):
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(number):
-        return None
-    return number
-
-
-def _cursor_geometry_from_host(host):
-    """Armed dual geometry only. Single-mode has no armed cursor."""
-    cursor = getattr(host, "_cursor", None)
-    if cursor is not None:
-        if bool(getattr(cursor, "dual", False)):
-            ax = _finite_or_none(getattr(cursor, "ax", None))
-            bx = _finite_or_none(getattr(cursor, "bx", None))
-            if ax is None and bx is None:
-                return None
-            return ["dual", ax, bx]
-        return None
-    getter = getattr(host, "cursor_mode", None)
-    if not callable(getter):
-        return None
-    try:
-        mode = getter()
-    except (TypeError, RuntimeError):
-        return None
-    if mode == "dual":
-        ax = _finite_or_none(getattr(host, "_cursor_a_frequency", None))
-        bx = _finite_or_none(getattr(host, "_cursor_b_frequency", None))
-        if ax is None and bx is None:
-            return None
-        return ["dual", ax, bx]
-    return None
-
-
 def _plain_text(value) -> str:
     if not value:
         return ""
     return _HTML_TAG.sub("", str(value)).strip()
-
-
-@contextmanager
-def hide_transient_overlays(widget, *, section: str = "unknown"):
-    """Hide hover/rubber-band items; restore in ``finally``.
-
-    Hover follow lines (single and dual) are transient. Dual armed A/B
-    lines and extreme markers stay visible so the snapshot matches
-    copy-as-image. Persistent remarks are not in the transient set.
-    """
-    hidden = []
-    try:
-        for item in _iter_transient_overlay_items(widget, section=section):
-            if not _alive(item):
-                continue
-            try:
-                visible = bool(item.isVisible())
-            except (RuntimeError, TypeError):
-                continue
-            if not visible:
-                continue
-            try:
-                item.hide()
-            except (RuntimeError, TypeError):
-                continue
-            hidden.append(item)
-        yield
-    finally:
-        for item in hidden:
-            if not _alive(item):
-                continue
-            try:
-                item.show()
-            except (RuntimeError, TypeError):
-                continue
 
 
 def read_markup_revision(widget) -> int:
@@ -547,7 +367,14 @@ class UltraViewCoordinator(QObject):
                 return
         except RuntimeError:
             return
-        if not self._widget_has_any_real_result(widget):
+        captured = collect_widget_capture_facts(widget)
+        if captured.capability != CAPABILITY_OK:
+            self._warn_capture(
+                ref, widget, reason, captured.degrade_reason or "unsupported-host"
+            )
+            self._push_preview(ref, usable=False)
+            return
+        if not captured.has_real_result:
             self._warn_capture(ref, widget, reason, "no-result")
             self._push_preview(ref, usable=False)
             return
@@ -564,7 +391,7 @@ class UltraViewCoordinator(QObject):
         if key in self._queued:
             return
         self._ensure_stability_hooks(widget)
-        if not self._is_stable(widget, ref.section):
+        if not self._is_stable(widget, ref.section, facts=captured):
             self._unstable[id(widget)] = (ref, digest, reason, weakref.ref(widget))
             return
         self._unstable.pop(id(widget), None)
@@ -2236,11 +2063,8 @@ class UltraViewCoordinator(QObject):
         stored = self._runtime.get(ref)
         dual = str(getattr(state, "cursor_mode", None) or "off") == "dual"
         if live:
-            geometry = []
-            for host in _iter_overlay_hosts(widget):
-                geom = _cursor_geometry_from_host(host)
-                if geom is not None:
-                    geometry.append(geom)
+            captured = collect_widget_capture_facts(widget)
+            geometry = [list(item) for item in captured.cursor_geometries]
             pill = self._pill_fingerprint(window, widget) if dual else None
         elif stored is not None:
             geometry = [
@@ -2306,7 +2130,14 @@ class UltraViewCoordinator(QObject):
     def _try_publish_now(self, ref, widget, reason: str) -> bool:
         if self._inactive():
             return False
-        if not self._widget_has_any_real_result(widget):
+        captured = collect_widget_capture_facts(widget)
+        if captured.capability != CAPABILITY_OK:
+            self._warn_capture(
+                ref, widget, reason, captured.degrade_reason or "unsupported-host"
+            )
+            self._push_preview(ref, usable=False)
+            return False
+        if not captured.has_real_result:
             self._warn_capture(ref, widget, reason, "no-result")
             self._push_preview(ref, usable=False)
             return False
@@ -2318,7 +2149,7 @@ class UltraViewCoordinator(QObject):
             ref
         ):
             return True
-        if not self._is_stable(widget, ref.section):
+        if not self._is_stable(widget, ref.section, facts=captured):
             self._warn_capture(ref, widget, reason, "unstable")
             return False
         return self._publish_grab(ref, widget, digest, reason)
@@ -2381,12 +2212,19 @@ class UltraViewCoordinator(QObject):
             return False
         if not self._widget_visible_and_sized(widget):
             return False
-        if not self._is_stable(widget, ref.section):
+        captured = collect_widget_capture_facts(widget)
+        if not self._is_stable(widget, ref.section, facts=captured):
             self._unstable[id(widget)] = (
                 ref, digest, reason, weakref.ref(widget)
             )
             return False
-        if not self._widget_has_any_real_result(widget):
+        if captured.capability != CAPABILITY_OK:
+            self._warn_capture(
+                ref, widget, reason, captured.degrade_reason or "unsupported-host"
+            )
+            self._push_preview(ref, usable=False)
+            return False
+        if not captured.has_real_result:
             self._warn_capture(ref, widget, reason, "no-result")
             self._push_preview(ref, usable=False)
             return False
@@ -2461,129 +2299,31 @@ class UltraViewCoordinator(QObject):
             return None
         return image
 
-    def _time_host_has_plotted_data(self, host) -> bool:
-        """True when a time canvas currently holds plotted channel ink.
-
-        ``quality_status()["curve_count"]`` counts native-AA PlotCurveItems
-        only. A ready dense-raster cache covers those items, so the count
-        is 0 while the user still sees a full plot. Channel tables are the
-        emptiness signal; AA color is not.
-        """
-        for name in ("_channel_lines", "channel_data"):
-            mapping = getattr(host, name, None)
-            if not mapping:
-                continue
-            try:
-                if len(mapping) > 0:
-                    return True
-            except TypeError:
-                continue
-        return False
-
-    def _quality_says_plotted(self, host) -> bool:
-        quality = getattr(host, "quality_status", None)
-        if not callable(quality):
-            return False
-        try:
-            status = quality() or {}
-        except (TypeError, RuntimeError):
-            return False
-        if status.get("render_path") == "dense-raster":
-            return True
-        count = status.get("curve_count")
-        if count is not None:
-            try:
-                if int(count) > 0:
-                    return True
-            except (TypeError, ValueError):
-                return False
-            try:
-                return int(status.get("high_raster_curve_count") or 0) > 0
-            except (TypeError, ValueError):
-                return False
-        return status.get("state") == "green"
-
-    def _host_has_real_result(self, host) -> bool:
-        """True when *host* currently shows a computed/plotted result.
-
-        Analysis canvases expose ``has_result()``. Time-domain canvases do
-        not; plotted channel tables (or a ready dense-raster path) are the
-        emptiness signal. AA color is a render-quality light — dense traces
-        often stay red, and raster-backed plots report ``curve_count == 0``.
-        """
-        has_result = getattr(host, "has_result", None)
-        if callable(has_result):
-            try:
-                return bool(has_result())
-            except (TypeError, RuntimeError):
-                return False
-        if self._time_host_has_plotted_data(host):
-            return True
-        return self._quality_says_plotted(host)
-
     def _widget_has_any_real_result(self, widget) -> bool:
-        """True if any overlay host (or the widget itself) has a real result.
+        """True if any overlay host currently shows a computed/plotted result.
 
         All-empty panes must not grab. A split analysis page with one live
-        pane is eligible; the composite grab is still one ref.
+        pane is eligible; the composite grab is still one ref. Unsupported
+        hosts are not treated as an empty-but-eligible View.
         """
-        hosts = list(_iter_overlay_hosts(widget))
-        if not hosts:
-            return False
-        return any(self._host_has_real_result(host) for host in hosts)
+        captured = collect_widget_capture_facts(widget)
+        return captured.capability == CAPABILITY_OK and captured.has_real_result
 
-    def _is_stable(self, widget, section: str) -> bool:
-        if not self._widget_visible_and_sized(widget):
+    def _is_stable(self, widget, section: str, *, facts=None) -> bool:
+        captured = facts if facts is not None else collect_widget_capture_facts(widget)
+        if captured.capability != CAPABILITY_OK:
+            return False
+        if not captured.is_stable:
             return False
         window = self._window
         jobs = getattr(window, "_analysis_jobs", None) if window is not None else None
         if jobs is not None and section in _HEATMAP_SECTIONS | {"frf"}:
             if jobs.is_running(section):
                 return False
-        for host in _iter_overlay_hosts(widget):
-            if not self._host_is_stable(host, section):
-                return False
-        return True
-
-    def _host_is_stable(self, host, section: str) -> bool:
-        if not self._widget_visible_and_sized(host):
-            return False
-        quality = getattr(host, "quality_status", None)
-        if callable(quality):
-            status = quality() or {}
-            state = status.get("state")
-            # Yellow = AA / raster still settling. Red with curves is the
-            # native non-AA plot the user already sees — grab that. Empty
-            # red is filtered by ``_host_has_real_result``, not here.
-            if state == "yellow":
-                return False
-        dense = getattr(host, "_dense_raster", None)
-        if dense is not None and callable(getattr(dense, "quality_status", None)):
-            dense_status = dense.quality_status() or {}
-            if dense_status.get("has_dense") and dense_status.get("state") == "yellow":
-                return False
-        if getattr(host, "_interaction_state", "idle") != "idle":
-            return False
-        if bool(getattr(host, "_refresh_pending", False)):
-            return False
-        timer = getattr(host, "_aa_idle_timer", None)
-        if timer is not None:
-            try:
-                if timer.isActive():
-                    return False
-            except RuntimeError:
-                return False
         return True
 
     def _widget_visible_and_sized(self, widget) -> bool:
-        if not _alive(widget):
-            return False
-        try:
-            if not widget.isVisible():
-                return False
-            return widget.width() >= _MIN_CAPTURE_EDGE and widget.height() >= _MIN_CAPTURE_EDGE
-        except RuntimeError:
-            return False
+        return widget_visible_and_sized(widget)
 
     def _hosts_heatmap(self, widget) -> bool:
         for host in _iter_overlay_hosts(widget):
@@ -2714,19 +2454,14 @@ class UltraViewCoordinator(QObject):
     def _facts_from_widget(self, widget) -> PresentationRuntimeFacts:
         pane_count = getattr(widget, "pane_count", None)
         visible = int(pane_count()) if callable(pane_count) else None
-        geometry = []
-        dual = False
-        for host in _iter_overlay_hosts(widget):
-            if _host_is_dual_cursor(host):
-                dual = True
-            geom = _cursor_geometry_from_host(host)
-            if geom is not None:
-                geometry.append(tuple(geom))
+        captured = collect_widget_capture_facts(widget)
+        geometry = tuple(captured.cursor_geometries)
+        dual = captured.cursor_dual
         pill = self._pill_fingerprint(self._window, widget) if dual else None
         return PresentationRuntimeFacts(
             markup_revision=read_markup_revision(widget),
             visible_pane_count=visible,
-            cursor_geometry=tuple(geometry),
+            cursor_geometry=geometry,
             pill_fingerprint=tuple(pill) if pill is not None else None,
         )
 

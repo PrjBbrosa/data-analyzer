@@ -92,6 +92,13 @@ from mf4_analyzer.ui._axis_handle import (
 from mf4_analyzer.ui.plot_helpers import _split_prefixed_label  # noqa: F401
 from mf4_analyzer.signal.envelope import build_envelope  # noqa: F401
 from mf4_analyzer.diagnostics import throttled
+from mf4_analyzer.ui.ultraview_capture_facts import (
+    build_capture_facts,
+    iter_axes_rubberband_items,
+    mapping_has_items,
+    quality_settled_from_status,
+    widget_visible_and_sized,
+)
 from mf4_analyzer.ui.pg_canvas.context_menu import (
     _localize_pg_context_actions,
     _localize_pg_context_menu,
@@ -4484,6 +4491,62 @@ class TimeDomainCanvasPG(QWidget):
 
     def quality_status(self):
         return self._quality.quality_status()
+
+    def has_plotted_result(self) -> bool:
+        """Time emptiness: plotted channel tables or a ready dense-raster path.
+
+        Native ``curve_count`` is not the gate — a ready raster covers
+        PlotCurveItems and reports 0 while ink is still on screen.
+        """
+        if mapping_has_items(self._channel_lines) or mapping_has_items(
+            self.channel_data
+        ):
+            return True
+        status = self.quality_status() or {}
+        return status.get("render_path") == "dense-raster"
+
+    def capture_quality_settled(self) -> bool:
+        if not quality_settled_from_status(self.quality_status() or {}):
+            return False
+        dense = self._dense_raster.quality_status() or {}
+        if dense.get("has_dense") and dense.get("state") == "yellow":
+            return False
+        return True
+
+    def capture_interaction_idle(self) -> bool:
+        if self._interaction_state != "idle":
+            return False
+        if bool(self._refresh_pending):
+            return False
+        return True
+
+    def capture_cursor_facts(self):
+        cursor = self._cursor
+        dual = bool(cursor.dual)
+        return dual, cursor.capture_dual_geometry()
+
+    def iter_transient_overlay_items(self, *, section: str = "unknown"):
+        yield from self._cursor.line_items or ()
+        yield from iter_axes_rubberband_items(self)
+
+    def presentation_capture_facts(self):
+        dual, geometry = self.capture_cursor_facts()
+        leaves = ()
+        composite = getattr(self._channel_lines, "composite_items", None)
+        if callable(composite):
+            leaves = tuple(sorted(str(ck) for ck, _name, _pair in composite()))
+        elif mapping_has_items(self._channel_lines):
+            leaves = tuple(sorted(str(key) for key in self._channel_lines))
+        return build_capture_facts(
+            host_kind="time",
+            visible_and_sized=widget_visible_and_sized(self),
+            has_real_result=self.has_plotted_result(),
+            quality_settled=self.capture_quality_settled(),
+            interaction_idle=self.capture_interaction_idle(),
+            cursor_dual=dual,
+            cursor_geometry=geometry,
+            digest_leaves=leaves,
+        )
 
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
         self._flush_pending_export_refresh()

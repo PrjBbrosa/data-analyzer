@@ -51,6 +51,14 @@ from .remarks import (
 )
 from .overlay_intent import AnalysisRemarkStore, snapshot_frequency_cursor
 from mf4_analyzer.ui.view_overlay_state import normalize_cursor_placement
+from mf4_analyzer.ui.ultraview_capture_facts import (
+    analysis_idle_timer_is_busy,
+    build_capture_facts,
+    dual_cursor_geometry,
+    iter_axes_rubberband_items,
+    quality_settled_from_status,
+    widget_visible_and_sized,
+)
 from .renderer import _quantize_y_span_key
 
 
@@ -1712,6 +1720,41 @@ class PgFrfCanvas(QWidget):
 
     def has_result(self) -> bool:
         return self._result is not None
+
+    def has_plotted_result(self) -> bool:
+        return self.has_result()
+
+    def capture_quality_settled(self) -> bool:
+        return quality_settled_from_status(self.quality_status() or {})
+
+    def capture_interaction_idle(self) -> bool:
+        timer = self._aa_timer_alive(getattr(self, "_aa_idle_timer", None))
+        return not analysis_idle_timer_is_busy(timer)
+
+    def capture_cursor_facts(self):
+        dual = self.cursor_mode() == "dual"
+        geometry = dual_cursor_geometry(
+            dual=dual,
+            ax=self._cursor_a_frequency,
+            bx=self._cursor_b_frequency,
+        )
+        return dual, geometry
+
+    def iter_transient_overlay_items(self, *, section: str = "unknown"):
+        yield from self._cursor_lines or ()
+        yield from iter_axes_rubberband_items(self)
+
+    def presentation_capture_facts(self):
+        dual, geometry = self.capture_cursor_facts()
+        return build_capture_facts(
+            host_kind="frf",
+            visible_and_sized=widget_visible_and_sized(self),
+            has_real_result=self.has_plotted_result(),
+            quality_settled=self.capture_quality_settled(),
+            interaction_idle=self.capture_interaction_idle(),
+            cursor_dual=dual,
+            cursor_geometry=geometry,
+        )
 
     def clear(self) -> None:
         self.clear_remarks()
