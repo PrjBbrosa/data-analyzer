@@ -57,8 +57,10 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
 )
 from mf4_analyzer.ui.ultraview_state import (
     FreeGridPlacement,
+    GRID_COLUMNS,
     GridRect,
     LAYOUT_MODE_FREE_GRID,
+    LEGACY_GRID_COLUMNS,
     STATUS_STALE,
     add_ref,
     board_to_payload,
@@ -476,12 +478,13 @@ def test_zoomed_pixel_map_error_does_not_grow_with_the_cell_index():
 
     ``scale_grid_metrics`` rounds each metric because chrome and card sizing
     read the integer fields. The grid → pixel map must still work from the
-    unrounded 1× geometry, or the rounding gets multiplied by the cell index
-    and the elastic origin (which reaches -48) turns it into tens of pixels.
-    This is the pure-function half of the guardrail above.
+    unrounded 1× micro-cell pitch, or the rounding gets multiplied by the
+    cell index and the elastic origin (which reaches -48) turns it into tens
+    of pixels. This is the pure-function half of the guardrail above.
     """
     base = screen_grid_metrics(())
-    pitch = base.column_width + base.gutter
+    resolution = max(1, int(base.resolution))
+    pitch = (base.column_width + base.gutter) / resolution
     rect = GridRect(0, 0, 4, 3)
     worst_by_index = {}
     for index in (0, 8, 16, 28, 40):
@@ -1288,7 +1291,13 @@ def test_legacy_board_viewport_is_ignored_by_payload_legalizer():
         {
             "schema": 3,
             "board": {
-                **board_to_payload(default_board())["board"],
+                "layout_mode": LAYOUT_MODE_FREE_GRID,
+                "layout_id": "hero_left_4",
+                "free_grid": {
+                    "columns": LEGACY_GRID_COLUMNS,
+                    "placements": [],
+                },
+                "unplaced": [],
                 "viewport": raw,
             },
         }
@@ -1298,6 +1307,27 @@ def test_legacy_board_viewport_is_ignored_by_payload_legalizer():
     assert board_warnings == []
     assert not hasattr(board, "viewport")
     assert "viewport" not in board_to_payload(board)["board"]
+
+
+def test_inconsistent_schema_payload_warns_grid_columns_normalized():
+    """Schema 3 expects 12 columns; a 24-column body is a real warning."""
+    serialized = board_to_payload(default_board())
+    assert serialized["board"]["free_grid"]["columns"] == GRID_COLUMNS
+    _board, serializer_warnings = normalize_board_payload(
+        {"schema": 3, "board": serialized["board"]}
+    )
+    assert "grid_columns_normalized" in serializer_warnings
+
+    _board, explicit_warnings = normalize_board_payload(
+        {
+            "schema": 3,
+            "board": {
+                "layout_mode": LAYOUT_MODE_FREE_GRID,
+                "free_grid": {"columns": GRID_COLUMNS, "placements": []},
+            },
+        }
+    )
+    assert "grid_columns_normalized" in explicit_warnings
 
 
 def test_switching_boards_restores_session_camera(qtbot):
