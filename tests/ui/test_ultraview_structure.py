@@ -78,7 +78,8 @@ FROZEN_FLOATING_GEOMETRY_LITERALS = Counter(
     {
         # Pre-C3 leaks that D2's setMinimum* scan newly sees. Do not add more.
         ("chrome_islands.py", "setMinimumWidth", (48,)): 1,  # BoardIsland name field
-        ("widgets.py", "setMinimumSize", (240,)): 2,  # focus layer + overview hosts
+        ("template_board.py", "setMinimumSize", (240,)): 1,  # BoardGrid
+        ("widgets.py", "setMinimumSize", (240,)): 1,  # FreeGridBoard remaining
     }
 )
 
@@ -167,6 +168,7 @@ _PAGE_OF_SCAN_FILES = (
     "widgets_common.py",
     "library_widgets.py",
     "card_widgets.py",
+    "template_board.py",
 )
 
 

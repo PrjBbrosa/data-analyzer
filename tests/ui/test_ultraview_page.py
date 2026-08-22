@@ -530,7 +530,15 @@ def _imported_names(path: Path) -> set[str]:
 
 
 def test_page_modules_do_not_import_main_window():
-    for name in ("page.py", "widgets.py", "layouts.py", "gesture.py", "ghost_overlay.py"):
+    for name in (
+        "page.py",
+        "widgets.py",
+        "template_board.py",
+        "board_aux_widgets.py",
+        "layouts.py",
+        "gesture.py",
+        "ghost_overlay.py",
+    ):
         imported = _imported_names(PAGE_DIR / name)
         assert "MainWindow" not in imported
         assert "main_window" not in imported

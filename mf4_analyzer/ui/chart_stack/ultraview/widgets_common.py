@@ -47,6 +47,18 @@ def _effective_device_pixel_ratio(widget: QWidget) -> float:
         return 1.0
     return value if math.isfinite(value) and value > 0.0 else 1.0
 
+
+def _union_pixel_rect(rects) -> tuple[float, float, float, float] | None:
+    boxes = [tuple(rect) for rect in rects if rect is not None]
+    if not boxes:
+        return None
+    x0 = min(float(rect[0]) for rect in boxes)
+    y0 = min(float(rect[1]) for rect in boxes)
+    x1 = max(float(rect[0]) + float(rect[2]) for rect in boxes)
+    y1 = max(float(rect[1]) + float(rect[3]) for rect in boxes)
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
 def _clear_page_card_selection(widget: QWidget) -> None:
     page = _page_of(widget)
     if page is not None:

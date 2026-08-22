@@ -27,9 +27,11 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QToolButton
 
+from mf4_analyzer.ui.chart_stack.ultraview import board_aux_widgets as board_aux_mod
 from mf4_analyzer.ui.chart_stack.ultraview import card_widgets as card_widgets_mod
 from mf4_analyzer.ui.chart_stack.ultraview import chrome as chrome_mod
 from mf4_analyzer.ui.chart_stack.ultraview import page as page_mod
+from mf4_analyzer.ui.chart_stack.ultraview import template_board as template_board_mod
 from mf4_analyzer.ui.chart_stack.ultraview import widgets as widgets_mod
 from mf4_analyzer.ui.chart_stack.ultraview import (
     BASE_BOARD_SIZE,
@@ -119,6 +121,8 @@ WAVE1_WIDGET_IMPL = (
     "widgets_common.py",
     "library_widgets.py",
     "card_widgets.py",
+    "template_board.py",
+    "board_aux_widgets.py",
 )
 
 # getattr surface on the widgets façade. Silent additions/removals of the
@@ -153,13 +157,7 @@ FROZEN_WIDGETS_PUBLIC_CLASSES = (
     "BoardSwitcher",
     "BoardToolbar",
     "CompareRail",
-    "EmptySlotWidget",
-    "BoardGrid",
     "FreeGridBoard",
-    "FreeGridMinimap",
-    "BoardScrollArea",
-    "BoardOverview",
-    "FocusLayer",
 )
 
 FROZEN_CHROME_PUBLIC_CLASSES = (
@@ -595,6 +593,12 @@ def test_widgets_public_classes_import_and_match_page_identity():
     assert widgets_mod.UltraViewCard is UltraViewCard
     assert widgets_mod.UltraViewCard is card_widgets_mod.UltraViewCard
     assert widgets_mod.FreeGridCard is card_widgets_mod.FreeGridCard
+    assert widgets_mod.BoardGrid is template_board_mod.BoardGrid
+    assert widgets_mod.EmptySlotWidget is template_board_mod.EmptySlotWidget
+    assert widgets_mod.BoardScrollArea is board_aux_mod.BoardScrollArea
+    assert widgets_mod.FreeGridMinimap is board_aux_mod.FreeGridMinimap
+    assert widgets_mod.BoardOverview is board_aux_mod.BoardOverview
+    assert widgets_mod.FocusLayer is board_aux_mod.FocusLayer
     assert widgets_mod.FreeGridBoard is FreeGridBoard
 
 

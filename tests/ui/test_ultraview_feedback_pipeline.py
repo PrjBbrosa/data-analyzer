@@ -1,6 +1,7 @@
 """UltraView move/resize feedback pipeline: Page edge-pan, frames, viewport surface."""
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from PyQt5.QtCore import QEvent, QPoint, Qt
@@ -297,12 +298,22 @@ def test_stale_clear_cannot_hide_newer_gesture_frame(qtbot):
 
 
 def test_free_grid_board_does_not_own_full_board_ghost_overlay():
-    source = open(FreeGridBoard.__init__.__code__.co_filename, encoding="utf-8").read()
+    path = Path(FreeGridBoard.__init__.__code__.co_filename)
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "FreeGridBoard"
+    )
+    class_source = ast.get_source_segment(source, class_node)
+    assert class_source is not None
     assert "self._overlay = ViewportFeedbackSurface(self)" in source
-    assert "self._overlay = GhostOverlay(self)" in source
-    free_init = source.split("class FreeGridBoard")[1].split("class BoardScrollArea")[0]
-    assert "ViewportFeedbackSurface(self)" in free_init
-    assert "GhostOverlay(self)" not in free_init
+    assert "self._overlay = GhostOverlay(self)" in path.with_name("template_board.py").read_text(
+        encoding="utf-8"
+    )
+    assert "ViewportFeedbackSurface(self)" in class_source
+    assert "GhostOverlay(self)" not in class_source
 
 
 def test_release_clears_timer_grab_frame_and_dimming(qtbot):
