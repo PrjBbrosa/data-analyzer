@@ -29,7 +29,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
     AuthorAlignIntent,
     AuthorBatchStyleIntent,
     AuthorClipboardPayload,
-    AuthorDeleteIntent,
     AuthorDistributeIntent,
     AuthorDuplicateIntent,
     AuthorKey,
@@ -43,12 +42,15 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
 )
 from mf4_analyzer.ui.main_window import ultraview_coordinator as coord_mod
 from mf4_analyzer.ui.ultraview_state import (
+    GRID_RESOLUTION,
+    SAFETY_COLUMN_MIN,
     AnchorTarget,
     BoardBox,
     BoardEditEntry,
     BoardPoint,
     ConnectorEndpoint,
     ConnectorObject,
+    GridRect,
     ShapeObject,
     StickyObject,
     StrokeObject,
@@ -56,11 +58,13 @@ from mf4_analyzer.ui.ultraview_state import (
     UnknownAuthorObject,
     apply_board_edit_entry,
     board_edit_entry_byte_cost,
+    board_to_payload,
     capture_board_placement,
     default_board,
     free_grid_placement_for,
     make_ref,
-    move_to_unplaced,
+    normalize_board_payload,
+    set_free_grid_rects,
 )
 from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
 
@@ -132,45 +136,26 @@ class _MultiSink:
         self._commit(apply_author_intent(self.board, intent), label)
 
     def _mixed_delete(self, intent: SelectionDeleteIntent) -> None:
-        placement_before = capture_board_placement(self.board)
-        for ref in intent.card_refs:
-            move_to_unplaced(self.board, ref)
-        if intent.author_ids:
-            mutation = apply_author_delete(
-                self.board, AuthorDeleteIntent(intent.author_ids)
-            )
-        else:
-            from mf4_analyzer.ui.ultraview_state import AuthorMutationResult
+        from mf4_analyzer.ui.ultraview_edits import commit_selection_delete
 
-            mutation = AuthorMutationResult()
-        self._commit(mutation, "mixed-delete", placement_before=placement_before)
+        self._commit_plan(commit_selection_delete(self.board, intent))
 
     def _mixed_nudge(self, intent: SelectionNudgeIntent) -> None:
-        from mf4_analyzer.ui.ultraview_state import GridRect, set_free_grid_rects
+        from mf4_analyzer.ui.ultraview_edits import commit_selection_nudge
 
-        placement_before = capture_board_placement(self.board)
-        parsed = []
-        for ref in intent.card_refs:
-            current = free_grid_placement_for(self.board, ref)
-            if current is None:
-                continue
-            parsed.append(
-                (
-                    ref,
-                    GridRect(
-                        int(current.rect.column + intent.dx),
-                        int(current.rect.row + intent.dy),
-                        current.rect.column_span,
-                        current.rect.row_span,
-                    ),
-                )
-            )
-        if parsed:
-            set_free_grid_rects(self.board, parsed)
-        mutation = apply_author_nudge(
-            self.board, intent.author_ids, intent.dx, intent.dy
-        )
-        self._commit(mutation, "mixed-nudge", placement_before=placement_before)
+        self._commit_plan(commit_selection_nudge(self.board, intent))
+
+    def _commit_plan(self, plan) -> None:
+        self.warnings.extend(plan.warnings)
+        if plan.rejected:
+            return
+        entry = plan.as_entry()
+        if entry is None:
+            return
+        self.undo.append(entry)
+        self.redo.clear()
+        self.dirty = True
+        self.page.set_board(self.board)
 
     def _on_undo(self) -> None:
         if not self.undo:
@@ -636,3 +621,194 @@ def test_keyboard_duplicate_copy_paste_nudge_and_editor_guard(qtbot):
     QApplication.processEvents()
     assert len(harness.board.author_objects) == count
     assert _item(harness.board, "a") is not None
+
+
+def _span() -> tuple[int, int]:
+    return 4 * GRID_RESOLUTION, 3 * GRID_RESOLUTION
+
+
+def _place_adjacent(board, first, second) -> None:
+    column_span, row_span = _span()
+    assert (
+        set_free_grid_rects(
+            board,
+            (
+                (first, GridRect(0, 0, column_span, row_span)),
+                (second, GridRect(column_span, 0, column_span, row_span)),
+            ),
+        )
+        == []
+    )
+
+
+def test_mixed_nudge_moves_card_and_author_as_one_history(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-ok")
+    ref = make_ref("time", "mix-ok")
+    harness.board.author_objects = [_sticky("note", x=10.0, y=20.0)]
+    harness.page.set_board(harness.board)
+    before_rect = free_grid_placement_for(harness.board, ref).rect
+    sink._mixed_nudge(SelectionNudgeIntent(("note",), (ref,), 1.0, 0.0))
+    after = free_grid_placement_for(harness.board, ref)
+    assert after is not None
+    assert after.rect.column == before_rect.column + 1
+    assert _item(harness.board, "note").box.x == 11.0
+    assert len(sink.undo) == 1
+    assert sink.undo[0].label == "mixed-nudge"
+    assert sink.dirty is True
+
+
+def test_mixed_nudge_collision_moves_neither_and_records_no_history(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-a", "mix-b")
+    ref_a = make_ref("time", "mix-a")
+    ref_b = make_ref("time", "mix-b")
+    _place_adjacent(harness.board, ref_a, ref_b)
+    harness.board.author_objects = [_sticky("note", x=10.0, y=10.0)]
+    harness.page.set_board(harness.board)
+    card_rect = free_grid_placement_for(harness.board, ref_a).rect
+    note_x = _item(harness.board, "note").box.x
+    sink._mixed_nudge(SelectionNudgeIntent(("note",), (ref_a,), 1.0, 0.0))
+    assert free_grid_placement_for(harness.board, ref_a).rect == card_rect
+    assert _item(harness.board, "note").box.x == note_x
+    assert sink.undo == []
+    assert sink.dirty is False
+    assert any(str(code).split(":", 1)[0] == "grid_collision" for code in sink.warnings)
+
+
+def test_mixed_nudge_past_safety_moves_neither(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-bound")
+    ref = make_ref("time", "mix-bound")
+    harness.board.author_objects = [_sticky("note", x=4.0, y=4.0)]
+    harness.page.set_board(harness.board)
+    card_rect = free_grid_placement_for(harness.board, ref).rect
+    note_x = _item(harness.board, "note").box.x
+    dx = float(SAFETY_COLUMN_MIN - card_rect.column - 4)
+    sink._mixed_nudge(SelectionNudgeIntent(("note",), (ref,), dx, 0.0))
+    assert free_grid_placement_for(harness.board, ref).rect == card_rect
+    assert _item(harness.board, "note").box.x == note_x
+    assert sink.undo == []
+    assert sink.dirty is False
+    assert any(str(code).split(":", 1)[0] == "invalid_grid_rect" for code in sink.warnings)
+
+
+def test_mixed_nudge_locked_and_movable_reports_affected_count(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-lock")
+    ref = make_ref("time", "mix-lock")
+    harness.board.author_objects = [
+        _sticky("free", x=2.0, y=2.0),
+        _sticky("held", x=8.0, y=2.0, locked=True),
+    ]
+    harness.page.set_board(harness.board)
+    before_rect = free_grid_placement_for(harness.board, ref).rect
+    sink._mixed_nudge(SelectionNudgeIntent(("free", "held"), (ref,), 1.0, 0.0))
+    assert free_grid_placement_for(harness.board, ref).rect.column == before_rect.column + 1
+    assert _item(harness.board, "free").box.x == 3.0
+    assert _item(harness.board, "held").box.x == 8.0
+    assert len(sink.undo) == 1
+    assert any(str(code).split(":", 1)[0] == "author_locked" for code in sink.warnings)
+    patches = sink.undo[0].object_patches
+    assert "free" in {patch.object_id for patch in patches}
+    assert "held" not in {patch.object_id for patch in patches}
+
+
+def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-ghost")
+    ref = make_ref("time", "mix-ghost")
+    harness.board.author_objects = [
+        _sticky("note", x=10.0, y=10.0),
+        _unknown("ghost"),
+        _connector("line", start_id="note", end_id="ghost"),
+    ]
+    harness.page.set_board(harness.board)
+    sink._mixed_nudge(
+        SelectionNudgeIntent(("note", "ghost", "line"), (ref,), 1.0, 0.0)
+    )
+    assert _item(harness.board, "note").box.x == 11.0
+    ghost = _item(harness.board, "ghost")
+    assert isinstance(ghost, UnknownAuthorObject)
+    assert ghost.raw.get("id") == "ghost"
+    line = _item(harness.board, "line")
+    assert isinstance(line, ConnectorObject)
+    assert line.start.target is not None
+    assert line.start.target.object_id == "note"
+    assert line.end.target is not None
+    assert line.end.target.object_id == "ghost"
+    assert len(sink.undo) == 1
+    assert any(str(code).split(":", 1)[0] == "unknown_author_object" for code in sink.warnings)
+
+
+def test_mixed_delete_undo_redo_and_save_reopen_restore_membership(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-save")
+    ref = make_ref("time", "mix-save")
+    harness.board.author_objects = [
+        _sticky("note", x=20.0, y=20.0),
+        _connector("line", start_id="note"),
+    ]
+    harness.page.set_board(harness.board)
+    before_payload = board_to_payload(harness.board)
+    sink._mixed_delete(SelectionDeleteIntent(("note",), (ref,)))
+    assert _item(harness.board, "note") is None
+    assert ref in harness.board.unplaced
+    assert free_grid_placement_for(harness.board, ref) is None
+    assert len(sink.undo) == 1
+    sink._on_undo()
+    assert _item(harness.board, "note") is not None
+    assert free_grid_placement_for(harness.board, ref) is not None
+    assert ref not in harness.board.unplaced
+    restored, warnings = normalize_board_payload(board_to_payload(harness.board))
+    assert warnings == []
+    assert restored.unplaced == harness.board.unplaced
+    assert [item.object_id for item in restored.author_objects if not isinstance(item, UnknownAuthorObject)] == [
+        item.object_id for item in harness.board.author_objects if not isinstance(item, UnknownAuthorObject)
+    ]
+    sink._on_redo()
+    assert _item(harness.board, "note") is None
+    assert ref in harness.board.unplaced
+    sink._on_undo()
+    reopened, reopen_warnings = normalize_board_payload(before_payload)
+    assert reopen_warnings == []
+    assert free_grid_placement_for(reopened, ref) is not None
+    assert _item(reopened, "note") is not None
+
+
+def test_repeated_key_nudge_records_only_accepted_intents(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-rep-a", "mix-rep-b")
+    ref_a = make_ref("time", "mix-rep-a")
+    ref_b = make_ref("time", "mix-rep-b")
+    column_span, row_span = _span()
+    assert (
+        set_free_grid_rects(
+            harness.board,
+            (
+                (ref_a, GridRect(0, 0, column_span, row_span)),
+                (ref_b, GridRect(column_span + 1, 0, column_span, row_span)),
+            ),
+        )
+        == []
+    )
+    harness.board.author_objects = [_sticky("note", x=1.0, y=1.0)]
+    harness.page.set_board(harness.board)
+    sink._mixed_nudge(SelectionNudgeIntent(("note",), (ref_a,), 1.0, 0.0))
+    assert len(sink.undo) == 1
+    assert free_grid_placement_for(harness.board, ref_a).rect.column == 1
+    assert _item(harness.board, "note").box.x == 2.0
+    card_rect = free_grid_placement_for(harness.board, ref_a).rect
+    note_x = _item(harness.board, "note").box.x
+    sink._mixed_nudge(SelectionNudgeIntent(("note",), (ref_a,), 1.0, 0.0))
+    assert free_grid_placement_for(harness.board, ref_a).rect == card_rect
+    assert _item(harness.board, "note").box.x == note_x
+    assert len(sink.undo) == 1
+    assert any(str(code).split(":", 1)[0] == "grid_collision" for code in sink.warnings)

@@ -88,11 +88,15 @@ from ..ultraview_state import (
     workspace_to_payload,
     DEFAULT_BOARD_NAME,
 )
+from ..ultraview_edits import (
+    SelectionMutationPlan,
+    plan_selection_delete,
+    plan_selection_nudge,
+)
 from ..chart_stack.ultraview.author_edits import (
     apply_author_create,
     apply_author_delete,
     apply_author_intent,
-    apply_author_nudge,
     apply_author_update,
     re_resolve_connector_endpoints,
     warning_copy,
@@ -100,7 +104,6 @@ from ..chart_stack.ultraview.author_edits import (
 from ..chart_stack.ultraview.author_tools import (
     AuthorAlignIntent,
     AuthorBatchStyleIntent,
-    AuthorDeleteIntent,
     AuthorDistributeIntent,
     AuthorDuplicateIntent,
     AuthorLockIntent,
@@ -1896,7 +1899,7 @@ class UltraViewCoordinator(QObject):
             return
         self._cancel_pending_for_board(board.board_id)
         self._bump_layout_revision(board.board_id)
-        self._record_grid_transition(board, before, kind=LAYOUT_ARRANGE)
+        self._commit_grid_change(board, before, [], kind=LAYOUT_ARRANGE)
         self._toast("已排版", "info")
 
     def _can_undo_auto_arrange(self) -> bool:
@@ -2038,65 +2041,32 @@ class UltraViewCoordinator(QObject):
         )
 
     def _on_selection_delete(self, board, intent: SelectionDeleteIntent) -> None:
-        placement_before = self._placement_snapshot(board)
-        for ref in intent.card_refs:
-            move_to_unplaced(board, ref)
-        if intent.author_ids:
-            mutation = apply_author_delete(
-                board,
-                AuthorDeleteIntent(intent.author_ids),
-                lost_card_refs=intent.card_refs,
-            )
-        else:
-            mutation = AuthorMutationResult()
-        placement_after = self._placement_snapshot(board)
-        for code in mutation.warnings:
-            self._toast(warning_copy(code), "warning")
-        if mutation.changed:
-            self._commit_author_mutation(
-                board,
-                mutation,
-                label="mixed-delete",
-                placement_before=placement_before
-                if placement_after != placement_before
-                else None,
-            )
-            return
-        if placement_after != placement_before:
-            self._record_grid_transition(board, placement_before)
+        self._commit_selection_mutation(
+            board, plan_selection_delete(board, intent.card_refs, intent.author_ids)
+        )
 
     def _on_selection_nudge(self, board, intent: SelectionNudgeIntent) -> None:
-        placement_before = self._placement_snapshot(board)
-        parsed = []
-        for ref in intent.card_refs:
-            current = free_grid_placement_for(board, ref)
-            if current is None:
-                continue
-            parsed.append(
-                (
-                    ref,
-                    GridRect(
-                        int(round(current.rect.column + intent.dx)),
-                        int(round(current.rect.row + intent.dy)),
-                        current.rect.column_span,
-                        current.rect.row_span,
-                    ),
-                )
-            )
-        if parsed:
-            set_free_grid_rects(board, parsed)
-        mutation = apply_author_nudge(board, intent.author_ids, intent.dx, intent.dy)
-        placement_after = self._placement_snapshot(board)
-        if mutation.changed:
-            self._commit_author_mutation(
-                board,
-                mutation,
-                label="mixed-nudge" if parsed else "author-nudge",
-                placement_before=placement_before if placement_after != placement_before else None,
-            )
+        self._commit_selection_mutation(
+            board,
+            plan_selection_nudge(
+                board, intent.card_refs, intent.author_ids, intent.dx, intent.dy
+            ),
+        )
+
+    def _commit_selection_mutation(
+        self, board, plan: SelectionMutationPlan
+    ) -> None:
+        if plan.rejected:
+            self._toast_grid_warnings(list(plan.warnings))
             return
-        if placement_after != placement_before:
-            self._record_grid_transition(board, placement_before)
+        for code in plan.warnings:
+            self._toast(warning_copy(str(code).split(":", 1)[0]), "warning")
+        entry = plan.as_entry()
+        if entry is None:
+            return
+        if not apply_board_edit_entry(board, entry, forward=True):
+            return
+        self._record_board_edit(board, entry)
 
     def _publish_author_mutation(
         self,
@@ -2164,6 +2134,7 @@ class UltraViewCoordinator(QObject):
         warnings: list[str],
         *,
         lost_cards=(),
+        kind: str = "",
     ) -> None:
         if warnings:
             self._toast_grid_warnings(warnings)
@@ -2175,16 +2146,19 @@ class UltraViewCoordinator(QObject):
             self._commit_author_mutation(
                 board,
                 mutation,
-                label="connector-retarget",
+                label=str(kind or "connector-retarget"),
                 placement_before=before,
             )
             return
-        self._record_grid_transition(board, before)
+        self._record_grid_transition(board, before, kind=kind)
 
     def _toast_grid_warnings(self, warnings: list[str]) -> None:
         codes = {item.split(":", 1)[0] for item in warnings}
         if "grid_collision" in codes:
             self._toast("目标位置与其他卡片重叠", "warning")
+            return
+        if "invalid_grid_rect" in codes:
+            self._toast("目标超出安全区", "warning")
             return
         if "grid_full" in codes:
             self._toast(text_for_key(PLACED_CAP_STILL_UNPLACED), "info")

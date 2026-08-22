@@ -338,3 +338,253 @@ def test_unknown_nested_author_objects_are_deeply_isolated_through_duplicate_and
     ]
     original_saved["future_extension"]["author_objects"][0]["style"]["fill"] = "black"
     assert original.passthrough["future_extension"]["author_objects"] == expected_author_objects
+
+
+def _sticky(object_id: str, *, x: float = 10.0, locked: bool = False):
+    return uvs.StickyObject(
+        object_id,
+        "sticky",
+        locked=locked,
+        box=uvs.BoardBox(x, 10.0, 4.0, 3.0),
+        text="便签",
+        palette="yellow",
+    )
+
+
+def _unknown(object_id: str = "ghost"):
+    return uvs.UnknownAuthorObject({"id": object_id, "kind": "widget", "label": "便签"})
+
+
+def _connector(object_id: str, *, start_id: str | None = None, end_id: str | None = None):
+    start_target = (
+        uvs.AnchorTarget("author", object_id=start_id, anchor="e") if start_id else None
+    )
+    end_target = uvs.AnchorTarget("author", object_id=end_id, anchor="w") if end_id else None
+    return uvs.ConnectorObject(
+        object_id,
+        "connector",
+        start=uvs.ConnectorEndpoint(uvs.BoardPoint(5.0, 2.5), start_target),
+        end=uvs.ConnectorEndpoint(uvs.BoardPoint(10.0, 2.5), end_target),
+        route="straight",
+        end_head="arrow",
+    )
+
+
+def _adjacent_cards():
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    first = uvs.make_ref("time", "a")
+    second = uvs.make_ref("time", "b")
+    uvs.add_ref(board, first)
+    uvs.add_ref(board, second)
+    span_c = 4 * uvs.GRID_RESOLUTION
+    span_r = 3 * uvs.GRID_RESOLUTION
+    assert (
+        uvs.set_free_grid_rects(
+            board,
+            (
+                (first, uvs.GridRect(0, 0, span_c, span_r)),
+                (second, uvs.GridRect(span_c, 0, span_c, span_r)),
+            ),
+        )
+        == []
+    )
+    return board, first, second
+
+
+def _item(board, object_id: str):
+    for item in board.author_objects:
+        if getattr(item, "object_id", "") == object_id:
+            return item
+        raw = getattr(item, "raw", None)
+        if isinstance(raw, dict) and raw.get("id") == object_id:
+            return item
+    return None
+
+
+def test_plan_selection_nudge_does_not_write_live_board_on_collision():
+    from mf4_analyzer.ui.ultraview_edits import plan_selection_nudge
+
+    board, first, second = _adjacent_cards()
+    board.author_objects = [_sticky("note", x=10.0)]
+    before = uvs.board_to_payload(board)
+    plan = plan_selection_nudge(board, (first,), ("note",), 1.0, 0.0)
+    assert plan.rejected
+    assert "grid_collision" in {code.split(":", 1)[0] for code in plan.warnings}
+    assert uvs.board_to_payload(board) == before
+    assert plan.as_entry() is None
+
+
+def test_mixed_nudge_success_moves_card_and_author_as_one_entry():
+    from mf4_analyzer.ui.ultraview_edits import (
+        commit_selection_plan,
+        plan_selection_nudge,
+    )
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    ref = uvs.make_ref("time", "ok")
+    uvs.add_ref(board, ref)
+    board.author_objects = [_sticky("note", x=10.0)]
+    before_rect = uvs.free_grid_placement_for(board, ref).rect
+    plan = plan_selection_nudge(board, (ref,), ("note",), 1.0, 0.0)
+    assert not plan.rejected
+    assert uvs.free_grid_placement_for(board, ref).rect == before_rect
+    assert _item(board, "note").box.x == 10.0
+    assert commit_selection_plan(board, plan) is True
+    assert uvs.free_grid_placement_for(board, ref).rect.column == before_rect.column + 1
+    assert _item(board, "note").box.x == 11.0
+    entry = plan.as_entry()
+    assert entry is not None
+    assert entry.label == "mixed-nudge"
+    assert uvs.apply_board_edit_entry(board, entry, forward=False) is True
+    assert uvs.free_grid_placement_for(board, ref).rect == before_rect
+    assert _item(board, "note").box.x == 10.0
+    assert uvs.apply_board_edit_entry(board, entry, forward=True) is True
+    assert uvs.free_grid_placement_for(board, ref).rect.column == before_rect.column + 1
+
+
+def test_mixed_nudge_collision_moves_neither_and_has_no_entry():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board, first, _second = _adjacent_cards()
+    board.author_objects = [_sticky("note", x=10.0)]
+    card_rect = uvs.free_grid_placement_for(board, first).rect
+    plan = plan_selection_nudge(board, (first,), ("note",), 1.0, 0.0)
+    assert plan.rejected
+    assert commit_selection_plan(board, plan) is False
+    assert uvs.free_grid_placement_for(board, first).rect == card_rect
+    assert _item(board, "note").box.x == 10.0
+    assert any(code.split(":", 1)[0] == "grid_collision" for code in plan.warnings)
+
+
+def test_mixed_nudge_past_safety_moves_neither():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    ref = uvs.make_ref("time", "bound")
+    uvs.add_ref(board, ref)
+    board.author_objects = [_sticky("note", x=4.0)]
+    card_rect = uvs.free_grid_placement_for(board, ref).rect
+    dx = float(uvs.SAFETY_COLUMN_MIN - card_rect.column - 4)
+    plan = plan_selection_nudge(board, (ref,), ("note",), dx, 0.0)
+    assert plan.rejected
+    assert commit_selection_plan(board, plan) is False
+    assert uvs.free_grid_placement_for(board, ref).rect == card_rect
+    assert _item(board, "note").box.x == 4.0
+    assert any(code.split(":", 1)[0] == "invalid_grid_rect" for code in plan.warnings)
+
+
+def test_mixed_nudge_locked_reports_affected_count_and_still_moves_legal_items():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    ref = uvs.make_ref("time", "lock")
+    uvs.add_ref(board, ref)
+    board.author_objects = [_sticky("free", x=2.0), _sticky("held", x=8.0, locked=True)]
+    before_rect = uvs.free_grid_placement_for(board, ref).rect
+    plan = plan_selection_nudge(board, (ref,), ("free", "held"), 1.0, 0.0)
+    assert not plan.rejected
+    assert plan.skipped_locked == ("held",)
+    assert plan.affected_author_ids == ("free",)
+    assert "author_locked" in plan.warnings
+    assert commit_selection_plan(board, plan) is True
+    assert uvs.free_grid_placement_for(board, ref).rect.column == before_rect.column + 1
+    assert _item(board, "free").box.x == 3.0
+    assert _item(board, "held").box.x == 8.0
+
+
+def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    ref = uvs.make_ref("time", "ghost")
+    uvs.add_ref(board, ref)
+    board.author_objects = [
+        _sticky("note", x=10.0),
+        _unknown("ghost"),
+        _connector("line", start_id="note", end_id="ghost"),
+    ]
+    plan = plan_selection_nudge(board, (ref,), ("note", "ghost", "line"), 1.0, 0.0)
+    assert not plan.rejected
+    assert plan.skipped_unknown == ("ghost",)
+    assert "unknown_author_object" in plan.warnings
+    assert commit_selection_plan(board, plan) is True
+    assert _item(board, "note").box.x == 11.0
+    ghost = _item(board, "ghost")
+    assert isinstance(ghost, uvs.UnknownAuthorObject)
+    assert ghost.raw.get("id") == "ghost"
+    line = _item(board, "line")
+    assert isinstance(line, uvs.ConnectorObject)
+    assert line.start.target is not None
+    assert line.start.target.object_id == "note"
+    assert line.end.target is not None
+    assert line.end.target.object_id == "ghost"
+
+
+def test_mixed_delete_undo_redo_and_save_reopen_restore_membership():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_delete
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    ref = uvs.make_ref("time", "save")
+    uvs.add_ref(board, ref)
+    board.author_objects = [_sticky("note", x=20.0), _connector("line", start_id="note")]
+    before_payload = uvs.board_to_payload(board)
+    plan = plan_selection_delete(board, (ref,), ("note",))
+    assert not plan.rejected
+    assert uvs.free_grid_placement_for(board, ref) is not None
+    assert commit_selection_plan(board, plan) is True
+    assert _item(board, "note") is None
+    assert ref in board.unplaced
+    assert uvs.free_grid_placement_for(board, ref) is None
+    entry = plan.as_entry()
+    assert entry is not None
+    assert uvs.apply_board_edit_entry(board, entry, forward=False) is True
+    assert _item(board, "note") is not None
+    assert uvs.free_grid_placement_for(board, ref) is not None
+    restored, warnings = uvs.normalize_board_payload(uvs.board_to_payload(board))
+    assert warnings == []
+    assert uvs.free_grid_placement_for(restored, ref) is not None
+    assert uvs.apply_board_edit_entry(board, entry, forward=True) is True
+    assert ref in board.unplaced
+    reopened, reopen_warnings = uvs.normalize_board_payload(before_payload)
+    assert reopen_warnings == []
+    assert uvs.free_grid_placement_for(reopened, ref) is not None
+    assert _item(reopened, "note") is not None
+
+
+def test_repeated_nudge_records_only_accepted_intents():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board, first, second = _adjacent_cards()
+    span_c = 4 * uvs.GRID_RESOLUTION
+    span_r = 3 * uvs.GRID_RESOLUTION
+    assert (
+        uvs.set_free_grid_rects(
+            board,
+            (
+                (first, uvs.GridRect(0, 0, span_c, span_r)),
+                (second, uvs.GridRect(span_c + 1, 0, span_c, span_r)),
+            ),
+        )
+        == []
+    )
+    board.author_objects = [_sticky("note", x=1.0)]
+    accepted = []
+    first_plan = plan_selection_nudge(board, (first,), ("note",), 1.0, 0.0)
+    assert not first_plan.rejected
+    assert commit_selection_plan(board, first_plan) is True
+    accepted.append(first_plan.as_entry())
+    card_rect = uvs.free_grid_placement_for(board, first).rect
+    note_x = _item(board, "note").box.x
+    rejected = plan_selection_nudge(board, (first,), ("note",), 1.0, 0.0)
+    assert rejected.rejected
+    assert commit_selection_plan(board, rejected) is False
+    assert uvs.free_grid_placement_for(board, first).rect == card_rect
+    assert _item(board, "note").box.x == note_x
+    assert len(accepted) == 1
+    assert any(code.split(":", 1)[0] == "grid_collision" for code in rejected.warnings)

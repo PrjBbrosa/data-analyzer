@@ -1719,23 +1719,37 @@ def set_free_grid_rect(board: UltraViewBoardState, ref: UltraViewRef, rect: Grid
     return [_warn("unknown_ref", f"{ref.section}/{ref.view_id}")]
 
 
-def set_free_grid_rects(
+@dataclass(frozen=True)
+class FreeGridRectPlan:
+    """Dry-run of ``set_free_grid_rects``. Never writes the live Board."""
+
+    proposed: tuple[tuple[UltraViewRef, GridRect], ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def accepted(self) -> bool:
+        return not self.warnings
+
+
+def plan_free_grid_rects(
     board: UltraViewBoardState,
     updates: Sequence[tuple[UltraViewRef, GridRect]],
-) -> list[str]:
-    """Apply several free-grid moves atomically. Overflow is not clamped."""
+) -> FreeGridRectPlan:
+    """Validate several free-grid moves without writing. Overflow is not clamped."""
     if board.layout_mode != LAYOUT_MODE_FREE_GRID:
-        return [_warn("not_free_grid")]
+        return FreeGridRectPlan((), (_warn("not_free_grid"),))
     if not updates:
-        return []
+        return FreeGridRectPlan()
     by_ref = {item.ref: item for item in board.free_grid}
     proposed: dict[UltraViewRef, GridRect] = {}
     for ref, rect in updates:
         if ref not in by_ref:
-            return [_warn("unknown_ref", f"{ref.section}/{ref.view_id}")]
+            return FreeGridRectPlan(
+                (), (_warn("unknown_ref", f"{ref.section}/{ref.view_id}"),)
+            )
         legal = _legal_grid_rect(rect)
         if legal is None or legal != rect:
-            return [_warn("invalid_grid_rect")]
+            return FreeGridRectPlan((), (_warn("invalid_grid_rect"),))
         proposed[ref] = legal
     new_rects = {
         item.ref: proposed.get(item.ref, item.rect) for item in board.free_grid
@@ -1744,7 +1758,19 @@ def set_free_grid_rects(
     for index, (_ref_a, rect_a) in enumerate(items):
         for _ref_b, rect_b in items[index + 1 :]:
             if _grid_overlaps(rect_a, rect_b):
-                return [_warn("grid_collision")]
+                return FreeGridRectPlan((), (_warn("grid_collision"),))
+    return FreeGridRectPlan(tuple(proposed.items()))
+
+
+def set_free_grid_rects(
+    board: UltraViewBoardState,
+    updates: Sequence[tuple[UltraViewRef, GridRect]],
+) -> list[str]:
+    """Apply several free-grid moves atomically. Overflow is not clamped."""
+    plan = plan_free_grid_rects(board, updates)
+    if plan.warnings:
+        return list(plan.warnings)
+    proposed = dict(plan.proposed)
     for item in board.free_grid:
         replacement = proposed.get(item.ref)
         if replacement is not None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
-from typing import Iterable
+from typing import Iterable, NamedTuple
 
 from mf4_analyzer.ui.ultraview_state import (
     MAX_AUTHOR_POINTS,
@@ -100,6 +100,7 @@ _WARNING_COPY = {
     "unsupported_author_kind": "该作者工具尚未接入",
     "author_object_missing": "找不到要修改的对象",
     "unknown_author_object": "未知作者对象未修改",
+    "author_locked": "已锁定对象未移动",
     "connector_target_lost": "连接目标已移除，端点已固定",
     "stroke_too_short": "笔画太短，未写入",
     "stroke_board_point_limit": "全板笔画点数已达 60000 上限",
@@ -149,8 +150,23 @@ def apply_author_delete(board, intent, *, lost_card_refs=()) -> AuthorMutationRe
     if not isinstance(intent, AuthorDeleteIntent):
         raise TypeError(f"unsupported delete intent {type(intent).__name__}")
     wanted = tuple(str(object_id) for object_id in intent.object_ids)
-    if not any(item_id(item) in wanted for item in board.author_objects):
+    if not any(item_id(item) in wanted for item in board.author_objects) and not lost_card_refs:
         return delete_author_objects(board, intent.object_ids)
+    return _apply_author_result(
+        board, plan_author_delete(board, wanted, lost_card_refs=lost_card_refs)
+    )
+
+
+def plan_author_delete(
+    board, object_ids: Iterable[str], *, lost_card_refs=()
+) -> AuthorMutationResult:
+    """Compute delete + connector patches without writing the live Board."""
+    wanted = tuple(str(object_id) for object_id in object_ids)
+    present = any(item_id(item) in wanted for item in _author_items(board))
+    if not present and not lost_card_refs:
+        if not wanted:
+            return AuthorMutationResult()
+        return AuthorMutationResult((), ("author_object_missing",))
     replacements, warnings = _planned_connector_replacements(
         board,
         lost_author_ids=set(wanted),
@@ -161,7 +177,7 @@ def apply_author_delete(board, intent, *, lost_card_refs=()) -> AuthorMutationRe
         for object_id, item in replacements.items()
         if object_id not in wanted
     }
-    return _apply_replacements_and_deletes(
+    return _planned_replacements_and_deletes(
         board,
         replacements=replacements,
         delete_ids=wanted,
@@ -400,7 +416,7 @@ def _update_shape(board, intent: ShapeUpdateIntent) -> AuthorMutationResult:
 
 def _find(board, object_id: str):
     wanted = str(object_id or "")
-    for item in board.author_objects:
+    for item in _author_items(board):
         if item_id(item) == wanted:
             return item
     return None
@@ -691,7 +707,7 @@ def _planned_connector_replacements(
     lost_authors = {str(item) for item in (lost_author_ids or ())}
     replacements: dict[str, ConnectorObject] = {}
     warnings: list[str] = []
-    for item in board.author_objects:
+    for item in _author_items(board):
         if not isinstance(item, ConnectorObject) or item.object_id in lost_authors:
             continue
         resolved, lost = _resolve_connector_pair(
@@ -765,7 +781,7 @@ def _target_box(board, target: AnchorTarget) -> tuple[float, float, float, float
         if box is None:
             return None
         return (float(box.x), float(box.y), float(box.width), float(box.height))
-    for placement in getattr(board, "free_grid", ()):
+    for placement in _card_items(board):
         if placement.ref == target.card:
             rect = placement.rect
             return (
@@ -784,20 +800,37 @@ def _apply_replacements_and_deletes(
     delete_ids: Iterable[str],
     extra_warnings: tuple[str, ...] = (),
 ) -> AuthorMutationResult:
+    return _apply_author_result(
+        board,
+        _planned_replacements_and_deletes(
+            board,
+            replacements=replacements,
+            delete_ids=delete_ids,
+            extra_warnings=extra_warnings,
+        ),
+    )
+
+
+def _planned_replacements_and_deletes(
+    board,
+    *,
+    replacements: dict[str, object],
+    delete_ids: Iterable[str],
+    extra_warnings: tuple[str, ...] = (),
+) -> AuthorMutationResult:
     delete_set = {str(object_id) for object_id in delete_ids}
+    original = list(_author_items(board))
     final: list[object] = []
-    for item in board.author_objects:
+    for item in original:
         object_id = str(getattr(item, "object_id", "") or "")
         if object_id in delete_set:
             continue
         final.append(replacements.get(object_id, item))
-    if final == list(board.author_objects):
+    if final == original:
         return AuthorMutationResult((), extra_warnings)
-    patches = _diff_author_objects(board.author_objects, final, delete_set)
+    patches = _diff_author_objects(original, final, delete_set)
     if not patches:
         return AuthorMutationResult((), extra_warnings)
-    if not apply_author_patches(board, patches, forward=True):
-        return AuthorMutationResult((), extra_warnings + ("illegal_author_object",))
     return AuthorMutationResult(patches, extra_warnings)
 
 
@@ -1078,16 +1111,44 @@ def apply_author_z_order(board, object_ids: Iterable[str], direction: str) -> Au
 
 
 def apply_author_nudge(board, object_ids: Iterable[str], dx: float, dy: float) -> AuthorMutationResult:
+    return _apply_author_result(board, plan_author_nudge(board, object_ids, dx, dy))
+
+
+def plan_author_nudge(
+    board,
+    object_ids: Iterable[str],
+    dx: float,
+    dy: float,
+    *,
+    placements=None,
+) -> AuthorMutationResult:
+    """Compute nudge patches without writing the live Board."""
     wanted = {str(object_id) for object_id in object_ids}
-    if dx == 0.0 and dy == 0.0:
+    if dx == 0.0 and dy == 0.0 and placements is None:
         return AuthorMutationResult()
-    staged = list(board.author_objects)
+    staged = list(_author_items(board))
+    skipped_locked: list[str] = []
+    skipped_unknown: list[str] = []
     for index, item in enumerate(staged):
-        if item_id(item) not in wanted or is_unknown(item) or is_locked(item):
+        oid = item_id(item)
+        if oid not in wanted:
+            continue
+        if is_unknown(item):
+            skipped_unknown.append(oid)
+            continue
+        if is_locked(item):
+            skipped_locked.append(oid)
+            continue
+        if dx == 0.0 and dy == 0.0:
             continue
         staged[index] = translate_object(item, dx, dy)
-    staged = _resolve_staged_connectors(board, staged)
-    return _commit_staged(board, staged)
+    staged = _resolve_staged_connectors(board, staged, placements=placements)
+    extra: list[str] = []
+    if skipped_locked:
+        extra.append("author_locked")
+    if skipped_unknown:
+        extra.append("unknown_author_object")
+    return _patches_from_staged(board, staged, tuple(extra))
 
 
 def copy_author_objects(
@@ -1199,27 +1260,51 @@ def _apply_style_fields(item, changes: dict[str, object]):
         return item
 
 
-class _BoardShim:
-    def __init__(self, board, objects) -> None:
-        self.author_objects = objects
-        self.free_grid = getattr(board, "free_grid", ())
+class _AuthorStage(NamedTuple):
+    """Neutral projection for staged connector resolve. Not Board field names."""
+
+    objects: tuple
+    cards: tuple
 
 
-def _resolve_staged_connectors(board, staged: list) -> list:
-    shim = _BoardShim(board, staged)
+def _author_items(board):
+    if isinstance(board, _AuthorStage):
+        return board.objects
+    return getattr(board, "author_objects", ())
+
+
+def _card_items(board):
+    if isinstance(board, _AuthorStage):
+        return board.cards
+    return getattr(board, "free_grid", ())
+
+
+def _resolve_staged_connectors(board, staged: list, *, placements=None) -> list:
+    cards = tuple(placements if placements is not None else _card_items(board))
+    stage = _AuthorStage(tuple(staged), cards)
     resolved = list(staged)
     for index, item in enumerate(resolved):
         if not isinstance(item, ConnectorObject):
             continue
         next_item, _lost = _resolve_connector_pair(
-            shim, item, lost_cards=set(), lost_authors=set()
+            stage, item, lost_cards=set(), lost_authors=set()
         )
         resolved[index] = next_item
     return resolved
 
 
-def _commit_staged(board, staged: list, extra_warnings: tuple[str, ...] = ()) -> AuthorMutationResult:
-    original = list(board.author_objects)
+def _apply_author_result(board, result: AuthorMutationResult) -> AuthorMutationResult:
+    if not result.patches:
+        return result
+    if not apply_author_patches(board, result.patches, forward=True):
+        return AuthorMutationResult((), result.warnings + ("illegal_author_object",))
+    return result
+
+
+def _patches_from_staged(
+    board, staged: list, extra_warnings: tuple[str, ...] = ()
+) -> AuthorMutationResult:
+    original = list(_author_items(board))
     if staged == original:
         return AuthorMutationResult((), extra_warnings)
     orig_ids = [item_id(item) for item in original]
@@ -1245,6 +1330,8 @@ def _commit_staged(board, staged: list, extra_warnings: tuple[str, ...] = ()) ->
         patches.append(ObjectPatch(oid, None, after, None, staged_index[oid]))
     if not patches:
         return AuthorMutationResult((), extra_warnings)
-    if not apply_author_patches(board, tuple(patches), forward=True):
-        return AuthorMutationResult((), extra_warnings + ("illegal_author_object",))
     return AuthorMutationResult(tuple(patches), extra_warnings)
+
+
+def _commit_staged(board, staged: list, extra_warnings: tuple[str, ...] = ()) -> AuthorMutationResult:
+    return _apply_author_result(board, _patches_from_staged(board, staged, extra_warnings))
