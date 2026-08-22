@@ -5,11 +5,12 @@ Task 5.2 moved identity, Board/Workspace, author DTOs, and stable constants
 into ``mf4_analyzer.ultraview_core.model``. Task 5.3 family 1 moved Board and
 workspace mutators into ``mf4_analyzer.ultraview_core.board_ops``. Family 2
 moved live author mutators into ``mf4_analyzer.ultraview_core.author_ops``.
-This module immediately re-exports every moved name so existing ``from
+Family 4 moved presentation/filter/axis facts into
+``mf4_analyzer.ultraview_core.presentation``. This module immediately
+re-exports every moved name so existing ``from
 mf4_analyzer.ui.ultraview_state import add_ref`` paths keep working, and
-remains the owner of payload legalization, presentation digest, and derived
-preview status. It must not import Qt, MainWindow,
-ChartStack, or analysis compute modules.
+remains the owner of payload legalization and presentation digest. It must
+not import Qt, MainWindow, ChartStack, or analysis compute modules.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import math
 import uuid
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from mf4_analyzer.ultraview_core.model import (
     AXIS_KIND_FREQUENCY,
@@ -200,6 +201,17 @@ from mf4_analyzer.ultraview_core.author_ops import (
     _shape_text_style_from_payload,
 )
 
+from mf4_analyzer.ultraview_core.presentation import (
+    RANGE_ABS_TOL,
+    RANGE_REL_TOL,
+    axis_consistency_facts,
+    card_matches_compare_filter,
+    derive_preview_status,
+    normalize_unit,
+    ranges_close,
+    section_search_haystack,
+)
+
 # The nested UltraView workspace schema is independent of the top-level
 # .tlproj document schema. Ordinary session fields (files, views,
 # channel_order) live on the document; this number only versions the
@@ -228,10 +240,6 @@ _BOARD_PAYLOAD_KEYS = frozenset(
 # ``viewport`` was a write-only camera dump through schema 4; ignore it on
 # read so old projects neither toast nor round-trip the unused field.
 _RETIRED_BOARD_PAYLOAD_KEYS = frozenset({"show_card_actions", "viewport"})
-
-RANGE_ABS_TOL = 1e-9
-RANGE_REL_TOL = 1e-6
-
 
 def _legacy_grid_rect(
     raw: Mapping[str, Any], *, warnings: list[str] | None = None
@@ -679,110 +687,3 @@ def presentation_digest(payload: Mapping[str, Any]) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def derive_preview_status(
-    ref_exists: bool,
-    image_valid: bool,
-    captured_digest: str | None,
-    current_digest: str | None,
-) -> str:
-    """Derive card status. A missing current digest must never be fresh."""
-    if not ref_exists:
-        return STATUS_ORPHANED
-    if not image_valid:
-        return STATUS_MISSING
-    if current_digest and captured_digest and current_digest == captured_digest:
-        return STATUS_FRESH
-    return STATUS_STALE
-
-
-def normalize_unit(unit: str | None) -> str:
-    if unit is None:
-        return ""
-    return str(unit).strip()
-
-
-def ranges_close(
-    left: Sequence[float] | None, right: Sequence[float] | None
-) -> bool:
-    if left is None or right is None:
-        return True
-    if len(left) != 2 or len(right) != 2:
-        return False
-    for a, b in zip(left, right):
-        try:
-            fa = float(a)
-            fb = float(b)
-        except (TypeError, ValueError):
-            return False
-        if not math.isfinite(fa) or not math.isfinite(fb):
-            return False
-        if abs(fa - fb) > RANGE_ABS_TOL + RANGE_REL_TOL * max(abs(fa), abs(fb)):
-            return False
-    return True
-
-
-def axis_consistency_facts(records: Iterable[Mapping[str, Any]]) -> AxisConsistencyFacts:
-    """Structured unit/range warnings. Never parse human title strings."""
-    by_kind: dict[str, list[Mapping[str, Any]]] = {}
-    for record in records:
-        kind = record.get("axis_kind")
-        if kind not in SECTION_AXIS_KIND.values():
-            continue
-        by_kind.setdefault(kind, []).append(record)
-
-    unit_inconsistent: list[str] = []
-    range_inconsistent: list[str] = []
-    for kind, group in by_kind.items():
-        units = []
-        for record in group:
-            unit = normalize_unit(record.get("x_unit"))
-            if unit:
-                units.append(unit)
-        unique_units = tuple(dict.fromkeys(units))
-        if len(unique_units) > 1:
-            unit_inconsistent.append(kind)
-            continue
-        if not unique_units:
-            continue
-        ranges = [
-            record.get("x_range")
-            for record in group
-            if record.get("x_range") is not None
-        ]
-        finite_ranges = []
-        for item in ranges:
-            if not isinstance(item, (list, tuple)) or len(item) != 2:
-                continue
-            try:
-                lo, hi = float(item[0]), float(item[1])
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(lo) and math.isfinite(hi):
-                finite_ranges.append((lo, hi))
-        if len(finite_ranges) >= 2:
-            first = finite_ranges[0]
-            if any(not ranges_close(first, other) for other in finite_ranges[1:]):
-                range_inconsistent.append(kind)
-    return AxisConsistencyFacts(
-        unit_inconsistent_kinds=tuple(unit_inconsistent),
-        range_inconsistent_kinds=tuple(range_inconsistent),
-    )
-
-
-def card_matches_compare_filter(axis_kind: str | None, filter_id: str) -> bool:
-    if filter_id == COMPARE_FILTER_ALL:
-        return True
-    return axis_kind == filter_id
-
-
-def section_search_haystack(section: str, name: str, source_summary: str) -> str:
-    parts = [
-        section,
-        SECTION_LABELS_ZH.get(section, ""),
-        SECTION_LABELS_EN.get(section, ""),
-        name,
-        source_summary,
-    ]
-    return " ".join(part for part in parts if part).lower()

@@ -691,6 +691,11 @@ def test_ultraview_state_reexports_core_model_identity():
     assert state.create_author_object is author_ops.create_author_object
     assert state.apply_board_edit_entry is author_ops.apply_board_edit_entry
 
+    from mf4_analyzer.ultraview_core import presentation
+
+    assert state.derive_preview_status is presentation.derive_preview_status
+    assert state.axis_consistency_facts is presentation.axis_consistency_facts
+
 
 def test_hardening_reuse_names_are_the_live_seams():
     assert SelectionMutationPlan.__name__ == "SelectionMutationPlan"

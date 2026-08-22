@@ -36,6 +36,12 @@ AUTHOR_OPS_PATH = (
     / "ultraview_core"
     / "author_ops.py"
 )
+PRESENTATION_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ultraview_core"
+    / "presentation.py"
+)
 
 
 def _imported_modules(path: Path) -> list[str]:
@@ -83,7 +89,7 @@ def test_module_has_no_qt_or_compute_imports():
         "signal",
         "batch_compute",
     }
-    for path in (STATE_PATH, MODEL_PATH, BOARD_OPS_PATH, AUTHOR_OPS_PATH):
+    for path in (STATE_PATH, MODEL_PATH, BOARD_OPS_PATH, AUTHOR_OPS_PATH, PRESENTATION_PATH):
         imported = _imported_modules(path)
         roots = {name.split(".")[0] for name in imported}
         assert forbidden_roots.isdisjoint(roots), path.name
@@ -92,7 +98,7 @@ def test_module_has_no_qt_or_compute_imports():
         name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
         for name in model_imported
     )
-    for path in (BOARD_OPS_PATH, AUTHOR_OPS_PATH):
+    for path in (BOARD_OPS_PATH, AUTHOR_OPS_PATH, PRESENTATION_PATH):
         imported = _imported_modules(path)
         assert not any(
             name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
@@ -120,6 +126,16 @@ def test_ultraview_state_reexports_author_ops_identity():
     assert uvs.apply_board_edit_entry is author_ops.apply_board_edit_entry
     assert uvs.author_object_to_payload is author_ops.author_object_to_payload
     assert uvs.board_edit_entry_byte_cost is author_ops.board_edit_entry_byte_cost
+
+
+def test_ultraview_state_reexports_presentation_facts_identity():
+    from mf4_analyzer.ultraview_core import presentation
+
+    assert uvs.derive_preview_status is presentation.derive_preview_status
+    assert uvs.axis_consistency_facts is presentation.axis_consistency_facts
+    assert uvs.card_matches_compare_filter is presentation.card_matches_compare_filter
+    assert uvs.section_search_haystack is presentation.section_search_haystack
+    assert uvs.RANGE_ABS_TOL is presentation.RANGE_ABS_TOL
 
 
 def test_ref_accepts_only_gui_sections_and_stable_id():
