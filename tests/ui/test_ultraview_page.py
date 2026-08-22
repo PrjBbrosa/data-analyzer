@@ -30,6 +30,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     slot_rects,
 )
 from mf4_analyzer.ui.chart_stack.ultraview import widgets as uv_widgets
+from mf4_analyzer.ui.chart_stack.ultraview import free_grid_board as uv_free_grid
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     LAYOUT_MOVE,
     LayoutPlan,
@@ -535,6 +536,7 @@ def test_page_modules_do_not_import_main_window():
         "widgets.py",
         "template_board.py",
         "board_aux_widgets.py",
+        "free_grid_board.py",
         "layouts.py",
         "gesture.py",
         "ghost_overlay.py",
@@ -2439,7 +2441,7 @@ def test_displacing_a_card_out_of_the_viewport_hints_and_logs(qtbot, caplog):
     assert not visible.isEmpty()
     toasts = []
     harness.page.feedback_requested.connect(toasts.append)
-    with caplog.at_level(logging.INFO, logger=uv_widgets.__name__):
+    with caplog.at_level(logging.INFO, logger=uv_free_grid.__name__):
         assert (
             free._request_geometry(
                 make_ref("time", "far-0"), GridRect(0, 8, 12, 8), "keyboard-move"
@@ -2495,13 +2497,13 @@ def test_search_budget_reject_has_its_own_copy_and_a_warning_trace(qtbot, monkey
         mover_ref=ref,
         search_visits=768,
     )
-    monkeypatch.setattr(uv_widgets, "plan_layout", lambda *args, **kwargs: starved)
+    monkeypatch.setattr(uv_free_grid, "plan_layout", lambda *args, **kwargs: starved)
     toasts = []
     requested = []
     harness.page.feedback_requested.connect(toasts.append)
     harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
-    monkeypatch.setattr(uv_widgets, "_PLANNER_LOG_MONO", 0.0, raising=False)
-    with caplog.at_level(logging.DEBUG, logger=uv_widgets.__name__):
+    monkeypatch.setattr(uv_free_grid, "_PLANNER_LOG_MONO", 0.0, raising=False)
+    with caplog.at_level(logging.DEBUG, logger=uv_free_grid.__name__):
         assert (
             free._request_geometry(ref, GridRect(6, 6, 2, 2), "keyboard-move") is False
         )

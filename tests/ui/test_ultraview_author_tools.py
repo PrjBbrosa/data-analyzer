@@ -513,11 +513,11 @@ def test_release_page_shows_select_sticky_text_and_shapes(qtbot):
 
 def test_page_and_board_do_not_grow_parallel_selection_writes():
     page_tree = ast.parse((ULTRAVIEW_ROOT / "page.py").read_text(encoding="utf-8"))
-    widgets_tree = ast.parse((ULTRAVIEW_ROOT / "widgets.py").read_text(encoding="utf-8"))
+    free_grid_tree = ast.parse((ULTRAVIEW_ROOT / "free_grid_board.py").read_text(encoding="utf-8"))
     gesture_tree = ast.parse((ULTRAVIEW_ROOT / "gesture.py").read_text(encoding="utf-8"))
     page_hits = _self_stores(_class(page_tree, "UltraViewPage"), {"_selected"})
     board_hits = _self_stores(
-        _class(widgets_tree, "FreeGridBoard"),
+        _class(free_grid_tree, "FreeGridBoard"),
         {"_author_selection_ids", "_card_selection", "_draft", "_selected"},
     )
     gesture_hits = _self_stores(

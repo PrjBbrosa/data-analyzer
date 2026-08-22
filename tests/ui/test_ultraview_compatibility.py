@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import QFrame, QToolButton
 from mf4_analyzer.ui.chart_stack.ultraview import board_aux_widgets as board_aux_mod
 from mf4_analyzer.ui.chart_stack.ultraview import card_widgets as card_widgets_mod
 from mf4_analyzer.ui.chart_stack.ultraview import chrome as chrome_mod
+from mf4_analyzer.ui.chart_stack.ultraview import free_grid_board as free_grid_board_mod
 from mf4_analyzer.ui.chart_stack.ultraview import page as page_mod
 from mf4_analyzer.ui.chart_stack.ultraview import template_board as template_board_mod
 from mf4_analyzer.ui.chart_stack.ultraview import widgets as widgets_mod
@@ -106,8 +107,8 @@ COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 
 # Wave 1 flips this after chrome.py / widgets.py become re-export façades.
 WAVE1_FACADE_ACTIVE = False
-# Chrome-only landing: chrome.py is a façade while widgets.py still owns
-# residual ClassDefs (library/card families already moved).
+# Chrome is a façade. widgets.py still owns residual ClassDefs (HintBar /
+# Switcher / Toolbar / CompareRail); library/card/template/aux/free-grid moved.
 WAVE1_CHROME_FACADE_ACTIVE = True
 
 WAVE1_CHROME_IMPL = (
@@ -123,6 +124,7 @@ WAVE1_WIDGET_IMPL = (
     "card_widgets.py",
     "template_board.py",
     "board_aux_widgets.py",
+    "free_grid_board.py",
 )
 
 # getattr surface on the widgets façade. Silent additions/removals of the
@@ -157,7 +159,6 @@ FROZEN_WIDGETS_PUBLIC_CLASSES = (
     "BoardSwitcher",
     "BoardToolbar",
     "CompareRail",
-    "FreeGridBoard",
 )
 
 FROZEN_CHROME_PUBLIC_CLASSES = (
@@ -600,6 +601,7 @@ def test_widgets_public_classes_import_and_match_page_identity():
     assert widgets_mod.BoardOverview is board_aux_mod.BoardOverview
     assert widgets_mod.FocusLayer is board_aux_mod.FocusLayer
     assert widgets_mod.FreeGridBoard is FreeGridBoard
+    assert widgets_mod.FreeGridBoard is free_grid_board_mod.FreeGridBoard
 
 
 def test_chrome_public_classes_import_and_match_page_identity():
@@ -779,12 +781,16 @@ def test_chrome_object_names_focus_and_activation_are_stable(qtbot):
 
 
 def test_feedback_pipeline_count_keys_are_frozen():
-    keys = _returned_dict_keys(WIDGETS_PATH, "FreeGridBoard", "feedback_pipeline_counts")
+    keys = _returned_dict_keys(
+        ULTRAVIEW_ROOT / "free_grid_board.py", "FreeGridBoard", "feedback_pipeline_counts"
+    )
     assert keys == FROZEN_FEEDBACK_PIPELINE_KEYS
 
 
 def test_interaction_facts_keys_are_frozen():
-    keys = _returned_dict_keys(WIDGETS_PATH, "FreeGridBoard", "interaction_facts")
+    keys = _returned_dict_keys(
+        ULTRAVIEW_ROOT / "free_grid_board.py", "FreeGridBoard", "interaction_facts"
+    )
     assert keys == FROZEN_INTERACTION_FACT_KEYS
 
 
