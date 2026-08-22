@@ -2,9 +2,10 @@
 
 Wave 5 Task 5.2. This module must not import Qt, ``mf4_analyzer.ui``,
 chart_stack, MainWindow, compositor, or Card Fit. Board/workspace mutators
-live in ``mf4_analyzer.ultraview_core.board_ops``. Author operations, payload
-legalization, and presentation digest stay in
-``mf4_analyzer.ui.ultraview_state`` until later Task 5.3 / 5.4 families.
+live in ``mf4_analyzer.ultraview_core.board_ops``. Live author mutators live
+in ``mf4_analyzer.ultraview_core.author_ops``. Payload legalization and
+presentation digest stay in ``mf4_analyzer.ui.ultraview_state`` until later
+Task 5.3 / 5.4 families.
 """
 from __future__ import annotations
 

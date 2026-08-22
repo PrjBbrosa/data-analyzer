@@ -275,6 +275,13 @@ def test_ultraview_core_has_no_qt_or_ui_imports():
         name.endswith(".model") or name == "mf4_analyzer.ultraview_core.model"
         for name in board_ops_imported
     )
+    author_ops_src = core_dir / "author_ops.py"
+    author_ops_imported = _imported_module_names(author_ops_src)
+    assert "mf4_analyzer.ui.ultraview_state" not in author_ops_imported
+    assert any(
+        name.endswith(".model") or name == "mf4_analyzer.ultraview_core.model"
+        for name in author_ops_imported
+    )
 
 
 def test_ultraview_free_grid_and_card_fit_have_no_cycle():
@@ -301,13 +308,14 @@ def test_ultraview_free_grid_and_card_fit_have_no_cycle():
 
 
 def test_ultraview_core_subprocess_import_does_not_load_qt():
-    """Core model, geometry, and board ops must stay importable without Qt."""
+    """Core model, geometry, board ops, and author ops must stay importable without Qt."""
     script = """
 import json
 import sys
 import mf4_analyzer.ultraview_core.model
 import mf4_analyzer.ultraview_core.grid_geometry
 import mf4_analyzer.ultraview_core.board_ops
+import mf4_analyzer.ultraview_core.author_ops
 blocked = sorted(
     name for name in sys.modules
     if name == "PyQt5"

@@ -19,9 +19,10 @@ ULTRAVIEW_ROOT = UI_ROOT / "chart_stack" / "ultraview"
 STATE_PATH = UI_ROOT / "ultraview_state.py"
 MODEL_PATH = PACKAGE_ROOT / "ultraview_core" / "model.py"
 BOARD_OPS_PATH = PACKAGE_ROOT / "ultraview_core" / "board_ops.py"
+AUTHOR_OPS_PATH = PACKAGE_ROOT / "ultraview_core" / "author_ops.py"
 # Core ops own Board/Workspace field writes. They are the mutation owner,
 # not the view layer: do not add them to the write-forbidden scan.
-OPS_OWNER_PATHS = (BOARD_OPS_PATH,)
+OPS_OWNER_PATHS = (BOARD_OPS_PATH, AUTHOR_OPS_PATH)
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_controller.py"
 CAPTURE_COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_capture_coordinator.py"
@@ -382,7 +383,7 @@ def test_mutations_end_in_funnel():
 
 def test_page_object_name_is_shared_constant():
     literal_sites: list[tuple[str, int]] = []
-    for path in (*ULTRAVIEW_ROOT.rglob("*.py"), STATE_PATH, MODEL_PATH, BOARD_OPS_PATH):
+    for path in (*ULTRAVIEW_ROOT.rglob("*.py"), STATE_PATH, MODEL_PATH, *OPS_OWNER_PATHS):
         for node in ast.walk(_parse(path)):
             if isinstance(node, ast.Constant) and node.value == "ultraViewPage":
                 literal_sites.append((path.name, node.lineno))

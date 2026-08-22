@@ -30,6 +30,12 @@ BOARD_OPS_PATH = (
     / "ultraview_core"
     / "board_ops.py"
 )
+AUTHOR_OPS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ultraview_core"
+    / "author_ops.py"
+)
 
 
 def _imported_modules(path: Path) -> list[str]:
@@ -77,7 +83,7 @@ def test_module_has_no_qt_or_compute_imports():
         "signal",
         "batch_compute",
     }
-    for path in (STATE_PATH, MODEL_PATH, BOARD_OPS_PATH):
+    for path in (STATE_PATH, MODEL_PATH, BOARD_OPS_PATH, AUTHOR_OPS_PATH):
         imported = _imported_modules(path)
         roots = {name.split(".")[0] for name in imported}
         assert forbidden_roots.isdisjoint(roots), path.name
@@ -86,11 +92,12 @@ def test_module_has_no_qt_or_compute_imports():
         name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
         for name in model_imported
     )
-    board_ops_imported = _imported_modules(BOARD_OPS_PATH)
-    assert not any(
-        name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
-        for name in board_ops_imported
-    )
+    for path in (BOARD_OPS_PATH, AUTHOR_OPS_PATH):
+        imported = _imported_modules(path)
+        assert not any(
+            name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.")
+            for name in imported
+        )
 
 
 def test_ultraview_state_reexports_board_ops_identity():
@@ -103,6 +110,16 @@ def test_ultraview_state_reexports_board_ops_identity():
     assert uvs.plan_free_grid_rects is board_ops.plan_free_grid_rects
     assert uvs.duplicate_board is board_ops.duplicate_board
     assert uvs.active_board is board_ops.active_board
+
+
+def test_ultraview_state_reexports_author_ops_identity():
+    from mf4_analyzer.ultraview_core import author_ops
+
+    assert uvs.create_author_object is author_ops.create_author_object
+    assert uvs.apply_author_patches is author_ops.apply_author_patches
+    assert uvs.apply_board_edit_entry is author_ops.apply_board_edit_entry
+    assert uvs.author_object_to_payload is author_ops.author_object_to_payload
+    assert uvs.board_edit_entry_byte_cost is author_ops.board_edit_entry_byte_cost
 
 
 def test_ref_accepts_only_gui_sections_and_stable_id():
