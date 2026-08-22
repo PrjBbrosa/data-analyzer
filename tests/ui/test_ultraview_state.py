@@ -207,6 +207,81 @@ def test_ultraview_state_has_no_normalize_board_payload_body():
     assert assigned == []
 
 
+def test_ultraview_state_is_compatibility_reexport_only():
+    tree = ast.parse(STATE_PATH.read_text(encoding="utf-8"))
+    bodies = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    assert bodies == []
+    imported = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+        elif isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+    assert imported
+    assert all(
+        module == "__future__" or module.startswith("mf4_analyzer.ultraview_core.")
+        for module in imported
+    )
+
+
+def test_moved_apis_have_a_single_implementation_body():
+    owners = {
+        "add_ref": "ultraview_core/board_ops.py",
+        "normalize_board_payload": "ultraview_core/serialization.py",
+        "GridMetrics": "ultraview_core/grid_geometry.py",
+    }
+    found: dict[str, list[str]] = {name: [] for name in owners}
+    package_root = STATE_PATH.parents[1]
+    for src in package_root.rglob("*.py"):
+        if "__pycache__" in src.parts:
+            continue
+        tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+        rel = src.relative_to(package_root).as_posix()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in {"add_ref", "normalize_board_payload"}:
+                found[node.name].append(rel)
+            elif isinstance(node, ast.ClassDef) and node.name == "GridMetrics":
+                found["GridMetrics"].append(rel)
+    for name, owner in owners.items():
+        assert sorted(found[name]) == [owner], (name, found[name])
+
+
+def test_ultraview_state_package_import_does_not_load_mainwindow():
+    """PEP 562 keeps ``mf4_analyzer.ui.MainWindow`` lazy for the façade path."""
+    script = """
+import json
+import sys
+from mf4_analyzer.ui import ultraview_state as state
+blocked = sorted(
+    name for name in sys.modules
+    if name == "PyQt5"
+    or name.startswith("PyQt5.")
+    or name == "mf4_analyzer.ui.main_window"
+    or name.startswith("mf4_analyzer.ui.main_window.")
+    or "MainWindow" in name
+)
+print(json.dumps({"blocked": blocked, "ref": state.UltraViewRef.__name__}))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(STATE_PATH.parents[2])
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(STATE_PATH.parents[2]),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["blocked"] == []
+    assert payload["ref"] == "UltraViewRef"
+
+
 def test_serialization_subprocess_import_does_not_load_qt_or_ui():
     script = """
 import json

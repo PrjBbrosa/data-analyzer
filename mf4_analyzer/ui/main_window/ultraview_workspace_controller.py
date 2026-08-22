@@ -14,25 +14,15 @@ from typing import Any
 from PyQt5 import sip
 from PyQt5.QtWidgets import QWidget
 
-from ..ultraview_state import (
-    DEFAULT_BOARD_NAME,
-    LAYOUT_MODE_FREE_GRID,
-    MAX_UI_BOARDS,
-    AuthorMutationResult,
-    BoardEditEntry,
-    BoardPlacementSnapshot,
-    GridAnchor,
-    GridRect,
-    UltraViewBoardState,
-    UltraViewRef,
-    UltraViewWorkspaceState,
+from ...ultraview_core.author_ops import (
+    apply_board_edit_entry,
+    board_edit_entry_byte_cost,
+)
+from ...ultraview_core.board_ops import (
     active_board,
     add_ref,
-    apply_board_edit_entry,
     apply_board_placement,
     apply_free_grid_preset,
-    best_template_for,
-    board_edit_entry_byte_cost,
     capture_board_placement,
     create_board,
     delete_board,
@@ -45,11 +35,9 @@ from ..ultraview_state import (
     move_to_unplaced,
     nudge_ratio,
     organize_free_grid,
-    parse_ref_payload,
     place_from_unplaced,
     place_free_grid_from_unplaced,
     placement_for,
-    layout_slots,
     rebind_ref,
     remove_ref,
     rename_board,
@@ -64,6 +52,22 @@ from ..ultraview_state import (
     set_workspace_show_card_actions,
     swap_slots,
     template_to_free_grid,
+)
+from ...ultraview_core.model import (
+    DEFAULT_BOARD_NAME,
+    LAYOUT_MODE_FREE_GRID,
+    MAX_UI_BOARDS,
+    AuthorMutationResult,
+    BoardEditEntry,
+    BoardPlacementSnapshot,
+    GridAnchor,
+    GridRect,
+    UltraViewBoardState,
+    UltraViewRef,
+    UltraViewWorkspaceState,
+    best_template_for,
+    layout_slots,
+    parse_ref_payload,
 )
 from ..ultraview_edits import (
     SelectionMutationPlan,

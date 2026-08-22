@@ -1,13 +1,21 @@
 """Qt-free UltraView domain core.
 
-Wave 5 Task 5.4 adds :mod:`mf4_analyzer.ultraview_core.serialization`
-(schema legalize/migration, opaque passthrough, payload codec). Family 4
-added :mod:`mf4_analyzer.ultraview_core.presentation`. Family 2 added
-:mod:`mf4_analyzer.ultraview_core.author_ops`. Family 1 added
-:mod:`mf4_analyzer.ultraview_core.board_ops`. Task 5.2 added
-:mod:`mf4_analyzer.ultraview_core.model`. Task 5.1 added
-:mod:`mf4_analyzer.ultraview_core.grid_geometry`.
+Layout:
 
-This package must not import Qt, ``mf4_analyzer.ui``, ``chart_stack``,
-MainWindow, compositor, or Card Fit.
+* :mod:`mf4_analyzer.ultraview_core.model` — identity, Board/Workspace,
+  author DTOs, and stable constants
+* :mod:`mf4_analyzer.ultraview_core.grid_geometry` — ``GridMetrics``,
+  rect↔pixel mapping, overlap/containment primitives
+* :mod:`mf4_analyzer.ultraview_core.board_ops` — Board/workspace CRUD and
+  placement mutators
+* :mod:`mf4_analyzer.ultraview_core.author_ops` — live author mutators and
+  Board-edit apply
+* :mod:`mf4_analyzer.ultraview_core.presentation` — status, filter, and
+  axis facts
+* :mod:`mf4_analyzer.ultraview_core.serialization` — schema legalize,
+  migration, opaque passthrough, and the Board-payload hasher
+
+New domain code imports these modules directly. ``ui.ultraview_state`` is
+the compatibility re-export façade. This package must not import Qt,
+``mf4_analyzer.ui``, ``chart_stack``, MainWindow, compositor, or Card Fit.
 """

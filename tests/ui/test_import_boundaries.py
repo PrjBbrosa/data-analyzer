@@ -319,6 +319,12 @@ def test_ultraview_free_grid_and_card_fit_have_no_cycle():
         if module == "card_fit" or module.endswith(".card_fit")
     ]
     assert nested == []
+    card_nested = [
+        (lineno, module)
+        for lineno, module in _function_level_import_modules(card_fit)
+        if module == "free_grid" or module.endswith(".free_grid")
+    ]
+    assert card_nested == []
     assert any(
         name.endswith(".grid_geometry") or name == "mf4_analyzer.ultraview_core.grid_geometry"
         for name in free_imported
@@ -329,11 +335,106 @@ def test_ultraview_free_grid_and_card_fit_have_no_cycle():
     )
 
 
+def _ultraview_core_module_name(source_path: Path) -> str:
+    rel = source_path.relative_to(REPO_ROOT)
+    parts = list(rel.with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _ultraview_core_import_graph() -> dict[str, set[str]]:
+    core_dir = PACKAGE_ROOT / "ultraview_core"
+    core_prefix = "mf4_analyzer.ultraview_core"
+    allowed_external = {
+        "mf4_analyzer.diagnostics",
+        "mf4_analyzer.render_profile",
+    }
+    graph: dict[str, set[str]] = {}
+    for src in _iter_py_files(core_dir):
+        module = _ultraview_core_module_name(src)
+        imported = set(_imported_module_names(src))
+        foreign = [
+            name
+            for name in imported
+            if name.startswith("mf4_analyzer.")
+            and name != core_prefix
+            and not name.startswith(core_prefix + ".")
+            and name not in allowed_external
+            and not any(name.startswith(prefix + ".") for prefix in allowed_external)
+        ]
+        assert not foreign, (src.name, foreign)
+        assert not any(name == "mf4_analyzer.ui" or name.startswith("mf4_analyzer.ui.") for name in imported)
+        graph[module] = {
+            name
+            for name in imported
+            if name == core_prefix or name.startswith(core_prefix + ".")
+        }
+    return graph
+
+
+def _import_cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
+    cycles: list[tuple[str, ...]] = []
+    visiting: set[str] = set()
+    seen: set[str] = set()
+    stack: list[str] = []
+
+    def visit(node: str) -> None:
+        if node in seen:
+            return
+        if node in visiting:
+            start = stack.index(node)
+            cycles.append(tuple(stack[start:] + [node]))
+            return
+        visiting.add(node)
+        stack.append(node)
+        for nxt in sorted(graph.get(node, ())):
+            visit(nxt)
+        stack.pop()
+        visiting.remove(node)
+        seen.add(node)
+
+    for node in sorted(graph):
+        visit(node)
+    return cycles
+
+
+def test_ultraview_core_import_graph_has_no_cycles():
+    graph = _ultraview_core_import_graph()
+    assert "mf4_analyzer.ultraview_core.model" in graph
+    assert "mf4_analyzer.ultraview_core.serialization" in graph
+    assert _import_cycles(graph) == []
+
+
+def test_ultraview_architecture_owners_import_core_directly():
+    workspace = PACKAGE_ROOT / "ui" / "main_window" / "ultraview_workspace_controller.py"
+    capture = PACKAGE_ROOT / "ui" / "main_window" / "ultraview_capture_coordinator.py"
+    facts = PACKAGE_ROOT / "ui" / "ultraview_capture_facts.py"
+    edits = PACKAGE_ROOT / "ui" / "ultraview_edits.py"
+    workspace_imported = _imported_module_names(workspace)
+    capture_imported = _imported_module_names(capture)
+    assert "mf4_analyzer.ui.ultraview_state" not in workspace_imported
+    assert "mf4_analyzer.ui.ultraview_state" not in capture_imported
+    assert "mf4_analyzer.ultraview_core.model" in workspace_imported
+    assert "mf4_analyzer.ultraview_core.board_ops" in workspace_imported
+    assert "mf4_analyzer.ultraview_core.author_ops" in workspace_imported
+    assert "mf4_analyzer.ultraview_core.model" in capture_imported
+    assert "mf4_analyzer.ultraview_core.board_ops" in capture_imported
+    assert "mf4_analyzer.ultraview_core.serialization" in capture_imported
+    facts_imported = _imported_module_names(facts)
+    assert "mf4_analyzer.ui.ultraview_state" not in facts_imported
+    assert not any(name.startswith("mf4_analyzer.ultraview_core") for name in facts_imported)
+    edits_imported = _imported_module_names(edits)
+    assert "mf4_analyzer.ui.ultraview_state" in edits_imported
+    assert not any(name.startswith("mf4_analyzer.ultraview_core") for name in edits_imported)
+
+
 def test_ultraview_core_subprocess_import_does_not_load_qt():
-    """Core model, geometry, ops, presentation, and serialization must stay importable without Qt."""
+    """Core package, model, geometry, ops, presentation, and serialization stay Qt-free."""
     script = """
 import json
 import sys
+import mf4_analyzer.ultraview_core
 import mf4_analyzer.ultraview_core.model
 import mf4_analyzer.ultraview_core.grid_geometry
 import mf4_analyzer.ultraview_core.board_ops

@@ -104,6 +104,8 @@ PAGE_PATH = ULTRAVIEW_ROOT / "page.py"
 INIT_PATH = ULTRAVIEW_ROOT / "__init__.py"
 STATE_PATH = UI_ROOT / "ultraview_state.py"
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
+WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_controller.py"
+CAPTURE_COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_capture_coordinator.py"
 
 # Wave 1 flips this after chrome.py / widgets.py become re-export façades.
 WAVE1_FACADE_ACTIVE = False
@@ -666,6 +668,10 @@ def test_ultraview_state_supported_surface_resolves():
     consumer_imports = _imported_ultraview_state_names(COORDINATOR_PATH, PAGE_PATH)
     unexpected = sorted(consumer_imports - set(FROZEN_ULTRAVIEW_STATE_IMPORTS))
     assert unexpected == []
+    workspace_imports = _imported_ultraview_state_names(WORKSPACE_CONTROLLER_PATH)
+    capture_imports = _imported_ultraview_state_names(CAPTURE_COORDINATOR_PATH)
+    assert workspace_imports == set()
+    assert capture_imports == set()
 
 
 def test_ultraview_state_reexports_core_model_identity():

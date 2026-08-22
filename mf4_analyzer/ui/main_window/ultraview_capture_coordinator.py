@@ -23,6 +23,23 @@ from PyQt5.QtWidgets import QWidget
 
 from ...diagnostics import throttled
 from ...render_profile import source_revision_for
+from ...ultraview_core.board_ops import (
+    active_board,
+    all_refs,
+    placed_ref_set,
+    set_workspace_preview_sidecar,
+)
+from ...ultraview_core.model import (
+    PreviewMeta,
+    SECTION_AXIS_KIND,
+    SOURCE_SECTIONS,
+    UltraViewRef,
+    UltraViewWorkspaceState,
+)
+from ...ultraview_core.serialization import (
+    presentation_digest,
+    workspace_to_payload,
+)
 from ..ultraview_capture_facts import (
     CAPABILITY_OK,
     MIN_CAPTURE_EDGE as _MIN_CAPTURE_EDGE,
@@ -30,19 +47,6 @@ from ..ultraview_capture_facts import (
     hide_transient_overlays,
     iter_overlay_hosts as _iter_overlay_hosts,
     widget_visible_and_sized,
-)
-from ..ultraview_state import (
-    PreviewMeta,
-    SECTION_AXIS_KIND,
-    SOURCE_SECTIONS,
-    UltraViewRef,
-    UltraViewWorkspaceState,
-    active_board,
-    all_refs,
-    placed_ref_set,
-    presentation_digest,
-    set_workspace_preview_sidecar,
-    workspace_to_payload,
 )
 from ..chart_stack.ultraview.preview_store import (
     MAX_PREVIEW_RAW_EDGE,
