@@ -1820,6 +1820,13 @@ class SelectionToolbar(QFrame):
             return ()
         return tuple(control.key for control in self._caps.controls if control.wide)
 
+    def prepare_layout(self) -> None:
+        """Activate outer and body layouts so sizeHint matches the schema."""
+        layout = self.layout()
+        if layout is not None:
+            layout.activate()
+        self._body_layout.activate()
+
     def _clear_body(self) -> None:
         while self._body_layout.count():
             item = self._body_layout.takeAt(0)

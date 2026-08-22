@@ -109,7 +109,7 @@ from .feedback import (
     text_for_key,
 )
 from .viewport_feedback import BoardToViewportTransform
-from .free_grid import HANDLE_HIT_PX as CARD_HANDLE_HIT_PX, hit_handle, screen_grid_metrics
+from .free_grid import hit_handle, screen_grid_metrics
 from .viewport_router import ViewportGestureRouter
 from .author_edits import copy_author_objects
 from .author_selection import (
@@ -121,7 +121,6 @@ from .author_selection import (
 )
 from .author_style import DEFAULT_THEME, STICKY_PALETTE_TOKENS, sticky_colors
 from .author_geometry import (
-    HANDLE_HIT_PX as AUTHOR_HANDLE_HIT_PX,
     board_box_to_pixels,
     board_point_to_pixels,
     box_anchor_point,
@@ -231,6 +230,7 @@ from .widgets import (
     coerce_library_row,
     preview_image,
 )
+from .floating_chrome_controller import FloatingChromeController
 from .page_projection import (
     LibraryChromeFacts,
     axis_kind_from_record,
@@ -286,16 +286,11 @@ from .floating_layout import (
     OVERLAY_GAP,
     RAIL_CONTENT_HEIGHT,
     RAIL_WIDTH,
-    RAIL_WIDTH_COMPACT,
     SAFE_MARGIN,
-    is_compact_stage,
     STATUS_ISLAND_WIDTH,
     Rect as FloatingRect,
     calculate_floating_layout,
-    minimap_placement_fingerprint,
     place_card_context,
-    place_minimap,
-    MinimapPlacementFacts,
 )
 
 _FEEDBACK_BOARD_FULL = "Board 已满：换布局或先移除"
@@ -463,6 +458,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._projection_batch_depth = 0
         self._projection_dirty = False
         self._presentation = False
+        self._floating_chrome: FloatingChromeController | None = None
         # Floating chrome is transient view state: it is deliberately not
         # serialised with a Board or a project.  A fresh UltraView opens on a
         # continuous canvas; the library is available from the rail on demand.
@@ -590,7 +586,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._overview.hide()
         self._minimap = FreeGridMinimap(self._board_scroll.viewport())
         self._minimap.hide()
-        self._minimap_placement_key: tuple | None = None
         self._free_grid.bind_feedback_surface(self._board_scroll.viewport())
 
         self._tool_rail = ToolRail(
@@ -692,6 +687,41 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             close_on_canvas_click=True,
         )
         self._selection_toolbar.schema_will_rebuild.connect(self._close_format_picker)
+        self._floating_chrome = FloatingChromeController(
+            canvas_host=self._canvas_host,
+            board_scroll=self._board_scroll,
+            tool_rail=self._tool_rail,
+            board_island=self._board_island,
+            global_island=self._global_island,
+            status_island=self._status_island,
+            navigation_island=self._navigation_island,
+            overview=self._overview,
+            minimap=self._minimap,
+            selection_toolbar=self._selection_toolbar,
+            empty_board_hint=self._empty_board_hint,
+            card_context=self._card_context,
+            format_picker=self._format_picker,
+            board_popover=self._board_popover,
+            author_flyouts=self._author_flyouts(),
+            text_editor=self._free_grid.author_text_editor(),
+            sticky_editor=self._free_grid.sticky_note_widget(),
+            layout_for=self._floating_layout,
+            active_panel=self.active_panel,
+            board_popover_rect=self._board_popover_rect,
+            minimap_should_show=self._minimap_should_show,
+            drag_active=self._drag_is_active,
+            interaction_facts=self._free_grid.interaction_facts,
+            page_geometry_active=self._page_geometry_session_active,
+            selection_bounds=self._selection_bounds_in_host,
+            selection_capabilities=self._selection_capabilities,
+            close_format_picker=self._close_format_picker,
+            is_presentation=self.is_presentation_active,
+            page_size=self._chrome_page_size,
+            draft_active=self._author_draft_active,
+            sync_empty_board_cue=self._sync_empty_board_cue,
+            sync_feedback_surface=self._sync_feedback_surface,
+            position_card_context=self._position_card_context,
+        )
         self._more_menu: QMenu | None = None
         self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
         self._board_island.board_menu_requested.connect(self._show_board_menu)
@@ -981,6 +1011,22 @@ class UltraViewPage(BoardPointerMixin, QWidget):
     @_connector_geometry_session.setter
     def _connector_geometry_session(self, value) -> None:
         self._interaction.set_geometry_session(TOOL_CONNECTOR, value)
+
+    def _drag_is_active(self) -> bool:
+        return self._drag_kind is not None
+
+    def _author_draft_active(self) -> bool:
+        return self._interaction.draft() is not None
+
+    def _page_geometry_session_active(self) -> bool:
+        return (
+            self._interaction.geometry_session(TOOL_TEXT) is not None
+            or self._interaction.geometry_session(TOOL_SHAPES) is not None
+            or self._interaction.geometry_session(TOOL_CONNECTOR) is not None
+        )
+
+    def _chrome_page_size(self) -> tuple[int, int]:
+        return (self.width(), self.height())
 
     @property
     def _selected(self) -> UltraViewRef | None:
@@ -1285,46 +1331,14 @@ class UltraViewPage(BoardPointerMixin, QWidget):
 
     def _apply_floating_layout(self) -> None:
         """Place the scroll viewport and all fixed chrome without reflow."""
-        if not hasattr(self, "_canvas_host"):
+        if self._floating_chrome is None:
             return
-        layout = self._floating_layout()
-        self._tool_rail.set_compact(layout.rail.width <= RAIL_WIDTH_COMPACT)
-        self._board_scroll.setGeometry(_qrect(layout.board))
-        self._tool_rail.setGeometry(_qrect(layout.rail))
-        self._board_island.setGeometry(_qrect(layout.board_island))
-        self._global_island.setGeometry(_qrect(layout.global_island))
-        self._status_island.setGeometry(_qrect(layout.status_island))
-        self._navigation_island.setGeometry(_qrect(layout.navigation_island))
-        self._sync_empty_board_cue()
-        if self._active_panel == PANEL_BOARDS:
-            self._canvas_host.set_overlay_geometry(PANEL_BOARDS, self._board_popover_rect())
-            self._board_popover.relayout()
-        elif self._active_panel is not None and layout.overlay is not None:
-            self._canvas_host.set_overlay_geometry(self._active_panel, _qrect(layout.overlay))
-        if self._overview.isVisible():
-            self._overview.setGeometry(self._board_scroll.geometry())
-            self._card_context.hide()
-        self._sync_feedback_surface()
-        self._position_minimap(layout)
-        if not self._overview.isVisible():
-            self._position_card_context()
-            self._refresh_author_toolbar()
-        self._reassert_host_stacking()
+        self._floating_chrome.apply()
 
     def _reassert_host_stacking(self) -> None:
-        extra = [
-            self._tool_rail,
-            self._board_island,
-            self._global_island,
-            self._status_island,
-            self._navigation_island,
-            getattr(self, "_empty_board_hint", None),
-            getattr(self, "_overview", None),
-            getattr(self, "_minimap", None),
-            getattr(self, "_selection_toolbar", None),
-            getattr(self, "_card_context", None),
-        ]
-        self._canvas_host.reassert_stacking(tuple(item for item in extra if item is not None))
+        if self._floating_chrome is None:
+            return
+        self._floating_chrome.reassert_stacking()
 
     def _toggle_panel(self, panel_id: str) -> None:
         if self._active_panel == panel_id:
@@ -1359,16 +1373,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._position_empty_board_hint()
 
     def _position_empty_board_hint(self) -> None:
-        button = self._tool_rail.panel_button(PANEL_LIBRARY)
-        hint = self._empty_board_hint
-        if button is None:
+        if self._floating_chrome is None:
             return
-        hint.adjustSize()
-        center = button.mapTo(self._canvas_host, button.rect().center())
-        x = self._tool_rail.geometry().right() + 14
-        y = center.y() - hint.height() // 2
-        hint.move(x, max(0, y))
-        self._reassert_host_stacking()
+        self._floating_chrome.position_empty_board_hint()
 
     def _board_popover_rect(self) -> QRect:
         island = self._board_island.geometry()
@@ -4638,73 +4645,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._refresh_author_toolbar()
 
     def _refresh_author_toolbar(self) -> None:
-        toolbar = getattr(self, "_selection_toolbar", None)
-        if toolbar is None:
+        if self._floating_chrome is None:
             return
-
-        def hide_toolbar() -> None:
-            self._close_format_picker()
-            toolbar.hide()
-            self._sync_minimap_placement()
-
-        if self._presentation or self._overview.isVisible():
-            hide_toolbar()
-            return
-        gesture = getattr(self._free_grid, "gesture", lambda: None)()
-        if self._drag_kind is not None or (gesture is not None and gesture.is_active()):
-            hide_toolbar()
-            return
-        if self._interaction.draft() is not None:
-            hide_toolbar()
-            return
-        if (
-            self._text_geometry_session is not None
-            or self._shape_geometry_session is not None
-            or self._connector_geometry_session is not None
-            or self._free_grid.interaction_facts()["author_geometry_active"]
-        ):
-            hide_toolbar()
-            return
-        caps = self._selection_capabilities()
-        if caps.kind in {"empty", "", "card", "card_author"}:
-            hide_toolbar()
-            return
-        bounds = self._selection_bounds_in_host()
-        if bounds is None or bounds.isNull():
-            hide_toolbar()
-            return
-        toolbar.apply_capabilities(caps)
-        toolbar.set_compact(self.width() < 900 or is_compact_stage((self.width(), self.height())))
-        layout = toolbar.layout()
-        if layout is not None:
-            layout.activate()
-        body_layout = getattr(toolbar, "_body_layout", None)
-        if body_layout is not None:
-            body_layout.activate()
-        hint = toolbar.sizeHint()
-        host = self._canvas_host.contentsRect()
-        safe = host.adjusted(SAFE_MARGIN, SAFE_MARGIN, -SAFE_MARGIN, -SAFE_MARGIN)
-        rail_right = self._tool_rail.geometry().right()
-        safe.setLeft(max(safe.left(), rail_right + OVERLAY_GAP))
-        bar_h = max(48, hint.height())
-        gap = 8
-        width = min(max(hint.width(), 1), max(1, safe.width()))
-        bar_h = min(bar_h, max(1, safe.height()))
-        above = bounds.y() - gap - bar_h
-        below = bounds.bottom() + gap
-        if above >= safe.top():
-            top = above
-        elif below + bar_h <= safe.bottom():
-            top = below
-        else:
-            top = min(max(safe.top(), bounds.center().y() - bar_h // 2), safe.bottom() - bar_h)
-        left = bounds.center().x() - width // 2
-        left = min(max(safe.left(), left), safe.right() - width)
-        top = min(max(safe.top(), top), safe.bottom() - bar_h)
-        toolbar.setGeometry(left, top, width, bar_h)
-        toolbar.show()
-        self._reassert_host_stacking()
-        self._sync_minimap_placement()
+        self._floating_chrome.refresh_author_toolbar()
 
     def _selection_bounds_in_host(self) -> QRect | None:
         caps = self._selection_capabilities()
@@ -4910,117 +4853,23 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         ) > int(vertical.minimum())
 
     def _minimap_geometry_gesture_active(self) -> bool:
-        if self._drag_kind is not None:
-            return True
-        facts = self._free_grid.interaction_facts()
-        if (
-            facts["gesture_armed"]
-            or facts["gesture_active"]
-            or facts["marquee_active"]
-            or facts["author_geometry_active"]
-        ):
-            return True
-        if (
-            self._text_geometry_session is not None
-            or self._shape_geometry_session is not None
-            or self._connector_geometry_session is not None
-        ):
-            return True
-        return False
-
-    def _widget_rect_in_host(self, widget: QWidget | None) -> FloatingRect | None:
-        if widget is None:
-            return None
-        try:
-            if widget.isHidden() or widget.width() <= 0 or widget.height() <= 0:
-                return None
-            top_left = widget.mapTo(self._canvas_host, QPoint(0, 0))
-        except RuntimeError:
-            return None
-        return FloatingRect(top_left.x(), top_left.y(), widget.width(), widget.height())
-
-    def _minimap_avoid_rects(self) -> tuple[FloatingRect, ...]:
-        avoid: list[FloatingRect] = []
-        bounds = self._selection_bounds_in_host()
-        if bounds is not None and not bounds.isNull():
-            margin = max(AUTHOR_HANDLE_HIT_PX, CARD_HANDLE_HIT_PX)
-            inflated = bounds.adjusted(-margin, -margin, margin, margin)
-            avoid.append(
-                FloatingRect(
-                    inflated.x(), inflated.y(), inflated.width(), inflated.height()
-                )
-            )
-        for widget in (
-            getattr(self, "_selection_toolbar", None),
-            getattr(self, "_format_picker", None),
-            *self._author_flyouts(),
-        ):
-            rect = self._widget_rect_in_host(widget)
-            if rect is not None:
-                avoid.append(rect)
-        editor = self._free_grid.author_text_editor()
-        sticky = self._free_grid.sticky_note_widget()
-        for widget, editing in (
-            (editor, editor.is_editing()),
-            (sticky, sticky.is_editing()),
-        ):
-            if not editing:
-                continue
-            rect = self._widget_rect_in_host(widget)
-            if rect is not None:
-                avoid.append(rect)
-        return tuple(avoid)
-
-    def _minimap_placement_facts(self, floating=None) -> MinimapPlacementFacts:
-        layout = floating if floating is not None else self._floating_layout()
-        size: tuple[int, int] | None = None
-        if self._minimap_should_show():
-            width = int(self._minimap.width()) or DEFAULT_MINIMAP_SIZE[0]
-            height = int(self._minimap.height()) or DEFAULT_MINIMAP_SIZE[1]
-            size = (width, height)
-        return MinimapPlacementFacts(
-            stage=layout.stage,
-            board_island=layout.board_island,
-            global_island=layout.global_island,
-            status_island=layout.status_island,
-            navigation_island=layout.navigation_island,
-            rail=layout.rail,
-            avoid=self._minimap_avoid_rects(),
-            gesture_active=self._minimap_geometry_gesture_active(),
-            size=size,
-        )
+        if self._floating_chrome is None:
+            return False
+        return self._floating_chrome.minimap_geometry_gesture_active()
 
     def _sync_minimap_placement(self, floating=None) -> None:
-        minimap = getattr(self, "_minimap", None)
-        if minimap is None:
+        if self._floating_chrome is None:
             return
-        if not self._minimap_should_show():
-            minimap.hide()
-            self._minimap_placement_key = None
-            return
-        facts = self._minimap_placement_facts(floating)
-        key = minimap_placement_fingerprint(facts)
-        if key == self._minimap_placement_key:
-            return
-        self._minimap_placement_key = key
-        placed = place_minimap(facts)
-        if placed is None:
-            minimap.hide()
-            return
-        viewport = self._board_scroll.viewport()
-        global_point = self._canvas_host.mapToGlobal(QPoint(placed.x, placed.y))
-        local_point = viewport.mapFromGlobal(global_point)
-        minimap.move(local_point)
-        minimap.show()
-        self._reassert_host_stacking()
+        self._floating_chrome.sync_minimap_placement(floating)
 
     def _position_minimap(self, floating=None) -> None:
         self._sync_minimap_placement(floating)
 
     def _refresh_minimap(self, *_args) -> None:
+        if self._floating_chrome is None:
+            return
         if not self._minimap_should_show():
-            self._minimap.hide()
-            self._minimap_placement_key = None
+            self._floating_chrome.hide_minimap()
             return
         viewport = self._board_scroll.viewport()
         origin = self._board_content_origin()
@@ -5035,7 +4884,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             ),
             workspace_extent=self._workspace_extent,
         )
-        self._sync_minimap_placement()
+        self._floating_chrome.sync_minimap_placement()
 
     def _on_minimap_viewport(self, rect: QRect) -> None:
         origin = self._board_content_origin()
