@@ -28,9 +28,13 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview import board_aux_widgets as board_aux_mod
+from mf4_analyzer.ui.chart_stack.ultraview import board_switcher as board_switcher_mod
+from mf4_analyzer.ui.chart_stack.ultraview import board_toolbar as board_toolbar_mod
 from mf4_analyzer.ui.chart_stack.ultraview import card_widgets as card_widgets_mod
 from mf4_analyzer.ui.chart_stack.ultraview import chrome as chrome_mod
+from mf4_analyzer.ui.chart_stack.ultraview import compare_rail as compare_rail_mod
 from mf4_analyzer.ui.chart_stack.ultraview import free_grid_board as free_grid_board_mod
+from mf4_analyzer.ui.chart_stack.ultraview import hint_bar as hint_bar_mod
 from mf4_analyzer.ui.chart_stack.ultraview import page as page_mod
 from mf4_analyzer.ui.chart_stack.ultraview import template_board as template_board_mod
 from mf4_analyzer.ui.chart_stack.ultraview import widgets as widgets_mod
@@ -108,9 +112,9 @@ WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_contr
 CAPTURE_COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_capture_coordinator.py"
 
 # Wave 1 flips this after chrome.py / widgets.py become re-export façades.
-WAVE1_FACADE_ACTIVE = False
-# Chrome is a façade. widgets.py still owns residual ClassDefs (HintBar /
-# Switcher / Toolbar / CompareRail); library/card/template/aux/free-grid moved.
+WAVE1_FACADE_ACTIVE = True
+# Chrome and widgets are both re-export façades. Class families live in
+# sibling modules; identity is the implementation class.
 WAVE1_CHROME_FACADE_ACTIVE = True
 
 WAVE1_CHROME_IMPL = (
@@ -127,6 +131,10 @@ WAVE1_WIDGET_IMPL = (
     "template_board.py",
     "board_aux_widgets.py",
     "free_grid_board.py",
+    "hint_bar.py",
+    "board_switcher.py",
+    "board_toolbar.py",
+    "compare_rail.py",
 )
 
 # getattr surface on the widgets façade. Silent additions/removals of the
@@ -156,12 +164,7 @@ FROZEN_WIDGETS_EXPORTED_CLASSES = (
 
 # AST ClassDef names not starting with ``_`` that still live in widgets.py.
 # Exact match: a later wave that moves a residual class must shrink this tuple.
-FROZEN_WIDGETS_PUBLIC_CLASSES = (
-    "UltraViewHintBar",
-    "BoardSwitcher",
-    "BoardToolbar",
-    "CompareRail",
-)
+FROZEN_WIDGETS_PUBLIC_CLASSES = ()
 
 FROZEN_CHROME_PUBLIC_CLASSES = (
     "CanvasHost",
@@ -602,8 +605,16 @@ def test_widgets_public_classes_import_and_match_page_identity():
     assert widgets_mod.FreeGridMinimap is board_aux_mod.FreeGridMinimap
     assert widgets_mod.BoardOverview is board_aux_mod.BoardOverview
     assert widgets_mod.FocusLayer is board_aux_mod.FocusLayer
-    assert widgets_mod.FreeGridBoard is FreeGridBoard
-    assert widgets_mod.FreeGridBoard is free_grid_board_mod.FreeGridBoard
+    assert widgets_mod.UltraViewHintBar is hint_bar_mod.UltraViewHintBar
+    assert widgets_mod.UltraViewHintBar is page_mod.UltraViewHintBar
+    assert widgets_mod.BoardSwitcher is board_switcher_mod.BoardSwitcher
+    assert widgets_mod.BoardSwitcher is page_mod.BoardSwitcher
+    assert widgets_mod.BoardToolbar is board_toolbar_mod.BoardToolbar
+    assert widgets_mod.BoardToolbar is page_mod.BoardToolbar
+    assert widgets_mod.CompareRail is compare_rail_mod.CompareRail
+    assert widgets_mod.CompareRail is page_mod.CompareRail
+    assert widgets_mod.LAYOUT_LABELS_ZH is board_toolbar_mod.LAYOUT_LABELS_ZH
+    assert widgets_mod.COMPARE_FILTER_LABELS_ZH is compare_rail_mod.COMPARE_FILTER_LABELS_ZH
 
 
 def test_chrome_public_classes_import_and_match_page_identity():
@@ -756,6 +767,10 @@ def test_wave1_facade_modules_are_reexports_only():
         path = ULTRAVIEW_ROOT / name
         assert path.is_file(), f"Wave 1 implementation module missing: {name}"
     assert "ToolRail" in _public_classdefs(ULTRAVIEW_ROOT / "tool_rail.py")
+    assert "UltraViewHintBar" in _public_classdefs(ULTRAVIEW_ROOT / "hint_bar.py")
+    assert "BoardSwitcher" in _public_classdefs(ULTRAVIEW_ROOT / "board_switcher.py")
+    assert "BoardToolbar" in _public_classdefs(ULTRAVIEW_ROOT / "board_toolbar.py")
+    assert "CompareRail" in _public_classdefs(ULTRAVIEW_ROOT / "compare_rail.py")
     assert widgets_mod.FreeGridBoard is not None
     assert chrome_mod.ToolRail is not None
 
