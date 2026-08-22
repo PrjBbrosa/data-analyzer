@@ -109,6 +109,20 @@ class FloatingChromeController:
         self._sync_feedback_surface = sync_feedback_surface
         self._position_card_context = position_card_context
         self._minimap_placement_key: tuple | None = None
+        self._connected = False
+
+    def connect(self) -> None:
+        if self._connected:
+            return
+        self._connected = True
+
+    def disconnect(self) -> None:
+        if not self._connected:
+            return
+        self._connected = False
+
+    def shutdown(self) -> None:
+        self.disconnect()
 
     def apply(self, layout=None) -> None:
         """Place the scroll viewport and all fixed chrome without reflow."""
@@ -243,7 +257,8 @@ class FloatingChromeController:
         self.hide_minimap()
 
     def reset(self) -> None:
-        self.hide_minimap()
+        # Fingerprint only. Page hide/reset historically did not hide minimap.
+        self._minimap_placement_key = None
 
     def sync_minimap_placement(self, floating=None) -> None:
         if not self._minimap_should_show():

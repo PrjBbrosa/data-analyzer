@@ -103,6 +103,24 @@ class BoardContextController:
         self._export_png = export_png
         self._refresh_author_toolbar = refresh_author_toolbar
         self._board_context_menu: QMenu | None = None
+        self._connected = False
+
+    def connect(self) -> None:
+        if self._connected:
+            return
+        self._connected = True
+
+    def disconnect(self) -> None:
+        if not self._connected:
+            return
+        self._connected = False
+
+    def reset(self) -> None:
+        self.close_board_context_menu()
+
+    def shutdown(self) -> None:
+        self.reset()
+        self.disconnect()
 
     def refresh_card_context(self) -> None:
         """Card actions now live on each card; the floating island stays hidden."""

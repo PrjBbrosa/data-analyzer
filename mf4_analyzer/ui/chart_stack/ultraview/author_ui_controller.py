@@ -42,6 +42,13 @@ from .tool_rail import (
 )
 
 
+def _disconnect(signal, slot) -> None:
+    try:
+        signal.disconnect(slot)
+    except (TypeError, RuntimeError):
+        return
+
+
 FORMAT_PICKER_KEYS = frozenset(
     {
         "palette",
@@ -120,6 +127,51 @@ class AuthorUiController:
         self._text_field_has_focus = text_field_has_focus
         self._creation_allowed = creation_allowed
         self._format_picker_key = ""
+        self._connected = False
+        self._slots: list[tuple[Any, Any]] = []
+
+    def connect(self) -> None:
+        if self._connected:
+            return
+        pairs = (
+            (self._tool_rail.tool_requested, self.on_author_tool_requested),
+            (self._tool_rail.tool_pinned_changed, self.on_author_tool_pinned),
+            (self._tool_rail.pointer_menu_requested, self.on_pointer_menu_requested),
+            (self._pointer_popover.mode_selected, self.on_pointer_mode_requested),
+            (self._sticky_popover.palette_selected, self.on_sticky_palette_selected),
+            (self._sticky_popover.pin_requested, self.on_sticky_pin_requested),
+            (self._sticky_popover.stack_requested, self.on_sticky_stack_requested),
+            (self._shape_popover.shape_selected, self.on_shape_selected),
+            (self._shape_popover.connector_selected, self.on_connector_selected),
+            (self._shape_popover.pin_requested, self.on_shape_pin_requested),
+            (self._connector_popover.connector_selected, self.on_connector_selected),
+            (self._connector_popover.pin_requested, self.on_connector_pin_requested),
+            (self._draw_popover.tool_selected, self.on_draw_tool_selected),
+            (self._draw_popover.layoutChanged, self.relayout_draw_popover),
+            (self._selection_toolbar.format_requested, self._apply_format),
+            (self._format_picker.choice_selected, self.on_format_choice_selected),
+            (self._selection_toolbar.schema_will_rebuild, self.close_format_picker),
+        )
+        for signal, slot in pairs:
+            signal.connect(slot)
+            self._slots.append((signal, slot))
+        self._connected = True
+
+    def disconnect(self) -> None:
+        if not self._connected:
+            return
+        for signal, slot in self._slots:
+            _disconnect(signal, slot)
+        self._slots.clear()
+        self._connected = False
+
+    def reset(self) -> None:
+        self.close_author_flyouts()
+        self.close_format_picker()
+
+    def shutdown(self) -> None:
+        self.reset()
+        self.disconnect()
 
     def format_picker_key(self) -> str:
         return self._format_picker_key

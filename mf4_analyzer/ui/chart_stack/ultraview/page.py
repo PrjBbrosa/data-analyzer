@@ -381,6 +381,7 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._floating_chrome: FloatingChromeController | None = None
         self._board_context: BoardContextController | None = None
         self._author_ui: AuthorUiController | None = None
+        self._wired_groups: set[str] = set()
         # Floating chrome is transient view state: it is deliberately not
         # serialised with a Board or a project.  A fresh UltraView opens on a
         # continuous canvas; the library is available from the rail on demand.
@@ -426,11 +427,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._filtered_cards: set[int] = set()
         self._text_limit_notified = False
         self._editor_kind = ""
-        editor = self._free_grid.author_text_editor()
-        editor.text_committed.connect(self._on_text_committed)
-        editor.edit_cancelled.connect(self._on_text_cancelled)
-        editor.focus_lost.connect(self._on_text_focus_lost)
-        editor.limit_reached.connect(self._on_text_limit_reached)
         self._board_host = QWidget(self._canvas_stage)
         self._board_host.setObjectName("ultraViewBoardHost")
         self._board_host.setAttribute(Qt.WA_StyledBackground, True)
@@ -528,7 +524,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._status_island = StatusIsland(self._canvas_host)
         self._card_context = CardContextIsland(self._canvas_host)
         self._layout_popover = LayoutPicker(LAYOUT_LABELS_ZH, self._canvas_host)
-        self._layout_popover.layout_id_chosen.connect(self._on_layout_id_chosen)
         self._board_popover = BoardPopover(self._canvas_host)
         self._display_popover = self._build_display_popover(self._canvas_host)
         self._export_popover = self._build_export_popover(self._canvas_host)
@@ -572,40 +567,15 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._focus = FocusLayer(self)
         self._focus.hide()
 
-        self._hint_bar.quickref_requested.connect(self.quickref_requested.emit)
-        self._status_island.quickref_requested.connect(self.quickref_requested.emit)
-        self._tool_rail.panel_requested.connect(self._toggle_panel)
-        self._tool_rail.free_grid_toggled.connect(self._on_free_grid_toggled)
-        self._tool_rail.sync_all_requested.connect(self._on_sync_all_requested)
-        self._tool_rail.ref_dropped.connect(self._on_tray_drop)
-        self._tool_rail.tool_requested.connect(self._on_author_tool_requested)
-        self._tool_rail.tool_pinned_changed.connect(self._on_author_tool_pinned)
-        self._tool_rail.pointer_menu_requested.connect(self._on_pointer_menu_requested)
         self._pointer_popover = self._tool_rail.make_pointer_popover(self._canvas_host)
-        self._pointer_popover.mode_selected.connect(self._on_pointer_mode_requested)
         self._sticky_popover = self._tool_rail.make_sticky_popover(self._canvas_host)
-        self._sticky_popover.palette_selected.connect(self._on_sticky_palette_selected)
-        self._sticky_popover.pin_requested.connect(self._on_sticky_pin_requested)
-        self._sticky_popover.stack_requested.connect(self._on_sticky_stack_requested)
         self._shape_popover = self._tool_rail.make_shape_popover(self._canvas_host)
-        self._shape_popover.shape_selected.connect(self._on_shape_selected)
-        self._shape_popover.connector_selected.connect(self._on_connector_selected)
-        self._shape_popover.pin_requested.connect(self._on_shape_pin_requested)
         self._connector_popover = self._tool_rail.make_connector_popover(self._canvas_host)
-        self._connector_popover.connector_selected.connect(self._on_connector_selected)
-        self._connector_popover.pin_requested.connect(self._on_connector_pin_requested)
         self._draw_popover = self._tool_rail.make_draw_popover(self._canvas_host)
-        self._draw_popover.tool_selected.connect(self._on_draw_tool_selected)
-        self._draw_popover.layoutChanged.connect(self._relayout_draw_popover)
         self._register_author_flyouts()
         self._selection_toolbar = SelectionToolbar(self._canvas_host)
         self._selection_toolbar.hide()
-        self._selection_toolbar.format_requested.connect(
-            self._on_selection_format_requested
-        )
-        self._selection_toolbar.more_requested.connect(self._on_selection_more_requested)
         self._format_picker = FormatChoiceFlyout(self._canvas_host)
-        self._format_picker.choice_selected.connect(self._on_format_choice_selected)
         self._author_ui = AuthorUiController(
             interaction=self._interaction,
             canvas_host=self._canvas_host,
@@ -636,7 +606,6 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._format_picker,
             close_on_canvas_click=True,
         )
-        self._selection_toolbar.schema_will_rebuild.connect(self._close_format_picker)
         self._floating_chrome = FloatingChromeController(
             canvas_host=self._canvas_host,
             board_scroll=self._board_scroll,
@@ -673,34 +642,82 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             position_card_context=self._position_card_context,
         )
         self._more_menu: QMenu | None = None
-        self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
-        self._board_island.board_menu_requested.connect(self._show_board_menu)
-        self._board_island.create_requested.connect(self.create_board_requested)
-        self._board_island.rename_requested.connect(self._rename_current_board)
-        self._board_popover.board_selected.connect(self._on_board_selected)
-        self._board_popover.duplicate_requested.connect(self.duplicate_board_requested)
-        self._board_popover.delete_requested.connect(self._confirm_delete_board)
-        self._board_popover.boards_reordered.connect(self._on_boards_reordered)
-        self._board_popover.create_requested.connect(self.create_board_requested)
-        self._board_popover.rename_requested.connect(self._rename_board)
-        self._global_island.display_requested.connect(self._on_display_panel_requested)
-        self._global_island.export_requested.connect(self._on_export_panel_requested)
-        self._global_island.presentation_toggled.connect(self._on_presentation_button)
-        self._navigation_island.overview_requested.connect(self.show_overview)
-        self._navigation_island.zoom_out_requested.connect(self.zoom_out)
-        self._navigation_island.zoom_in_requested.connect(self.zoom_in)
-        self._navigation_island.zoom_fit_requested.connect(self.zoom_fit)
-        self._navigation_island.zoom_reset_requested.connect(self.zoom_reset)
-        self._card_context.open_source_requested.connect(self.open_source_requested)
-        self._card_context.sync_requested.connect(self.sync_requested)
-        self._card_context.focus_requested.connect(self._on_focus)
-        self._card_context.copy_image_requested.connect(self.copy_card_image_requested)
-        self._card_context.move_to_unplaced_requested.connect(self.move_to_unplaced_requested)
-        self._card_context.more_requested.connect(self._show_card_more_menu)
-        self._card_context.rebind_requested.connect(self._on_rebind_arm)
-        self._card_context.remove_requested.connect(self.remove_ref_requested)
-        self._card_context.fit_requested.connect(self.free_grid_autofit_requested)
+        self.resolve_insert_span = None
+        self.can_undo_auto_arrange = None
+        self._board_context = BoardContextController(
+            menu_parent=self,
+            board_scroll=self._board_scroll,
+            board_host=self._board_host,
+            free_grid=self._free_grid,
+            grid=self._grid,
+            card_context=self._card_context,
+            is_presentation=self.is_presentation_active,
+            overview_visible=self._overview.isVisible,
+            focus_visible=self._focus.isVisible,
+            drag_active=self._drag_is_active,
+            viewport_panning=self.is_board_panning,
+            grid_gesture_active=self._grid.is_gesture_active,
+            free_grid_gesture_active=self._free_grid_gesture_active,
+            layout_mode=self._board_layout_mode,
+            free_grid_count=self._board_free_grid_count,
+            can_undo_arrange=self._auto_arrange_undo_available,
+            close_active_overlay=self._canvas_host.close_active_overlay,
+            zoom_fit=self.zoom_fit,
+            zoom_reset=self.zoom_reset,
+            show_overview=self.show_overview,
+            auto_arrange=self.auto_arrange_requested.emit,
+            undo_arrange=self.free_grid_undo_requested.emit,
+            copy_board=self.copy_board_requested.emit,
+            export_png=self.export_png_requested.emit,
+            refresh_author_toolbar=self._refresh_author_toolbar,
+        )
+        self._free_grid.set_insert_span_resolver(self._resolve_insert_span_for_drag)
 
+        self._esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._esc.setContext(Qt.WidgetWithChildrenShortcut)
+        self._grid_undo = QShortcut(QKeySequence.Undo, self)
+        self._grid_undo.setContext(Qt.WidgetWithChildrenShortcut)
+        self._grid_redo = QShortcut(QKeySequence.Redo, self)
+        self._grid_redo.setContext(Qt.WidgetWithChildrenShortcut)
+        self._select_tool_shortcut = QShortcut(QKeySequence(Qt.Key_V), self)
+        self._select_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._sticky_tool_shortcut = QShortcut(QKeySequence(Qt.Key_N), self)
+        self._sticky_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._text_tool_shortcut = QShortcut(QKeySequence(Qt.Key_T), self)
+        self._text_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._shape_tool_shortcut = QShortcut(QKeySequence(Qt.Key_S), self)
+        self._shape_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._connector_tool_shortcut = QShortcut(QKeySequence(Qt.Key_L), self)
+        self._connector_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._draw_tool_shortcut = QShortcut(QKeySequence(Qt.Key_P), self)
+        self._draw_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+
+        self._connect_library()
+        self._connect_toolbar()
+        self._connect_compare_rail()
+        self._connect_switcher()
+        self._connect_islands()
+        self._connect_canvas_host()
+        self._connect_grid()
+        self._connect_free_grid()
+        self._connect_scroll_minimap()
+        self._connect_author_ui()
+        self._connect_board_context()
+        self._connect_viewport_router()
+        self._connect_tray()
+        self._connect_shortcuts()
+        self.set_board(self._board)
+        QTimer.singleShot(0, self._apply_floating_layout)
+
+    def _already_wired(self, group: str) -> bool:
+        if group in self._wired_groups:
+            return True
+        self._wired_groups.add(group)
+        return False
+
+    def _connect_library(self) -> None:
+        if self._already_wired("library"):
+            return
         self._library.add_requested.connect(self.request_add)
         self._library.remove_requested.connect(self.remove_ref_requested)
         self._library.locate_requested.connect(self._on_locate)
@@ -708,6 +725,9 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._library.drag_started.connect(self._on_drag_started)
         self._library.drag_finished.connect(self._on_drag_finished)
 
+    def _connect_toolbar(self) -> None:
+        if self._already_wired("toolbar"):
+            return
         self._toolbar.layout_changed.connect(self.layout_changed)
         self._toolbar.ratio_nudge_requested.connect(self.ratio_nudge_requested)
         self._toolbar.copy_board_requested.connect(self.copy_board_requested)
@@ -725,27 +745,60 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._toolbar.zoom_fit_requested.connect(self.zoom_fit)
         self._toolbar.zoom_reset_requested.connect(self.zoom_reset)
 
+    def _connect_compare_rail(self) -> None:
+        if self._already_wired("compare_rail"):
+            return
         self._rail.compare_filter_changed.connect(self._on_compare_filter)
 
+    def _connect_switcher(self) -> None:
+        if self._already_wired("switcher"):
+            return
         self._switcher.create_requested.connect(self.create_board_requested)
         self._switcher.duplicate_requested.connect(self.duplicate_board_requested)
         self._switcher.rename_requested.connect(self.rename_board_requested)
         self._switcher.delete_requested.connect(self.delete_board_requested)
         self._switcher.reorder_requested.connect(self.reorder_board_requested)
         self._switcher.board_selected.connect(self._on_board_selected)
-        self._board_scroll.viewport_resized.connect(self._on_viewport_resized)
-        self._board_scroll.viewport_resized.connect(self._refresh_minimap)
-        self._board_scroll.horizontalScrollBar().valueChanged.connect(self._refresh_minimap)
-        self._board_scroll.verticalScrollBar().valueChanged.connect(self._refresh_minimap)
-        self._board_scroll.horizontalScrollBar().rangeChanged.connect(self._refresh_minimap)
-        self._board_scroll.verticalScrollBar().rangeChanged.connect(self._refresh_minimap)
-        self._board_scroll.horizontalScrollBar().valueChanged.connect(self._on_board_scrolled)
-        self._board_scroll.verticalScrollBar().valueChanged.connect(self._on_board_scrolled)
-        self._overview.slot_requested.connect(self._on_overview_slot)
-        self._overview.ref_requested.connect(self._on_overview_ref)
-        self._overview.close_requested.connect(self.hide_overview)
-        self._minimap.viewport_requested.connect(self._on_minimap_viewport)
 
+    def _connect_islands(self) -> None:
+        if self._already_wired("islands"):
+            return
+        self._hint_bar.quickref_requested.connect(self.quickref_requested.emit)
+        self._status_island.quickref_requested.connect(self.quickref_requested.emit)
+        self._tool_rail.panel_requested.connect(self._toggle_panel)
+        self._tool_rail.free_grid_toggled.connect(self._on_free_grid_toggled)
+        self._tool_rail.sync_all_requested.connect(self._on_sync_all_requested)
+        self._tool_rail.ref_dropped.connect(self._on_tray_drop)
+        self._layout_popover.layout_id_chosen.connect(self._on_layout_id_chosen)
+        self._board_island.board_menu_requested.connect(self._show_board_menu)
+        self._board_island.create_requested.connect(self.create_board_requested)
+        self._board_island.rename_requested.connect(self._rename_current_board)
+        self._board_popover.board_selected.connect(self._on_board_selected)
+        self._board_popover.duplicate_requested.connect(self.duplicate_board_requested)
+        self._board_popover.delete_requested.connect(self._confirm_delete_board)
+        self._board_popover.boards_reordered.connect(self._on_boards_reordered)
+        self._board_popover.create_requested.connect(self.create_board_requested)
+        self._board_popover.rename_requested.connect(self._rename_board)
+        self._global_island.display_requested.connect(self._on_display_panel_requested)
+        self._global_island.export_requested.connect(self._on_export_panel_requested)
+        self._global_island.presentation_toggled.connect(self._on_presentation_button)
+        self._navigation_island.overview_requested.connect(self.show_overview)
+        self._navigation_island.zoom_out_requested.connect(self.zoom_out)
+        self._navigation_island.zoom_in_requested.connect(self.zoom_in)
+        self._navigation_island.zoom_fit_requested.connect(self.zoom_fit)
+        self._navigation_island.zoom_reset_requested.connect(self.zoom_reset)
+        if self._floating_chrome is not None:
+            self._floating_chrome.connect()
+
+    def _connect_canvas_host(self) -> None:
+        if self._already_wired("canvas_host"):
+            return
+        self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
+        self._focus.open_source_requested.connect(self.open_source_requested)
+
+    def _connect_grid(self) -> None:
+        if self._already_wired("grid"):
+            return
         self._grid.add_clicked.connect(self._on_empty_slot)
         self._grid.ref_dropped.connect(self._on_ref_dropped)
         self._grid.open_source_requested.connect(self.open_source_requested)
@@ -760,6 +813,14 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._grid.drag_finished.connect(self._on_drag_finished)
         self._grid.slot_swap_requested.connect(self.swap_slots_requested)
 
+    def _connect_free_grid(self) -> None:
+        if self._already_wired("free_grid"):
+            return
+        editor = self._free_grid.author_text_editor()
+        editor.text_committed.connect(self._on_text_committed)
+        editor.edit_cancelled.connect(self._on_text_cancelled)
+        editor.focus_lost.connect(self._on_text_focus_lost)
+        editor.limit_reached.connect(self._on_text_limit_reached)
         self._free_grid.insert_requested.connect(self._on_free_grid_insert_requested)
         self._free_grid.geometry_requested.connect(self.free_grid_geometry_requested)
         self._free_grid.group_geometry_requested.connect(
@@ -795,37 +856,62 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if pointer_changed is not None:
             pointer_changed.connect(self._on_workspace_pointer_changed)
         self._free_grid.destroyed.connect(self._stop_edge_pan)
-        self.resolve_insert_span = None
-        self.can_undo_auto_arrange = None
-        self._board_context = BoardContextController(
-            menu_parent=self,
-            board_scroll=self._board_scroll,
-            board_host=self._board_host,
-            free_grid=self._free_grid,
-            grid=self._grid,
-            card_context=self._card_context,
-            is_presentation=self.is_presentation_active,
-            overview_visible=self._overview.isVisible,
-            focus_visible=self._focus.isVisible,
-            drag_active=self._drag_is_active,
-            viewport_panning=self.is_board_panning,
-            grid_gesture_active=self._grid.is_gesture_active,
-            free_grid_gesture_active=self._free_grid_gesture_active,
-            layout_mode=self._board_layout_mode,
-            free_grid_count=self._board_free_grid_count,
-            can_undo_arrange=self._auto_arrange_undo_available,
-            close_active_overlay=self._canvas_host.close_active_overlay,
-            zoom_fit=self.zoom_fit,
-            zoom_reset=self.zoom_reset,
-            show_overview=self.show_overview,
-            auto_arrange=self.auto_arrange_requested.emit,
-            undo_arrange=self.free_grid_undo_requested.emit,
-            copy_board=self.copy_board_requested.emit,
-            export_png=self.export_png_requested.emit,
-            refresh_author_toolbar=self._refresh_author_toolbar,
-        )
-        self._free_grid.set_insert_span_resolver(self._resolve_insert_span_for_drag)
 
+    def _connect_scroll_minimap(self) -> None:
+        if self._already_wired("scroll_minimap"):
+            return
+        self._board_scroll.viewport_resized.connect(self._on_viewport_resized)
+        self._board_scroll.viewport_resized.connect(self._refresh_minimap)
+        self._board_scroll.horizontalScrollBar().valueChanged.connect(self._refresh_minimap)
+        self._board_scroll.verticalScrollBar().valueChanged.connect(self._refresh_minimap)
+        self._board_scroll.horizontalScrollBar().rangeChanged.connect(self._refresh_minimap)
+        self._board_scroll.verticalScrollBar().rangeChanged.connect(self._refresh_minimap)
+        self._board_scroll.horizontalScrollBar().valueChanged.connect(self._on_board_scrolled)
+        self._board_scroll.verticalScrollBar().valueChanged.connect(self._on_board_scrolled)
+        self._overview.slot_requested.connect(self._on_overview_slot)
+        self._overview.ref_requested.connect(self._on_overview_ref)
+        self._overview.close_requested.connect(self.hide_overview)
+        self._minimap.viewport_requested.connect(self._on_minimap_viewport)
+
+    def _connect_author_ui(self) -> None:
+        if self._already_wired("author_ui"):
+            return
+        if self._author_ui is not None:
+            self._author_ui.connect()
+        self._selection_toolbar.more_requested.connect(self._on_selection_more_requested)
+        self._select_tool_shortcut.activated.connect(self._on_select_tool_shortcut)
+        self._sticky_tool_shortcut.activated.connect(self._on_sticky_tool_shortcut)
+        self._text_tool_shortcut.activated.connect(self._on_text_tool_shortcut)
+        self._shape_tool_shortcut.activated.connect(self._on_shape_tool_shortcut)
+        self._connector_tool_shortcut.activated.connect(self._on_connector_tool_shortcut)
+        self._draw_tool_shortcut.activated.connect(self._on_draw_tool_shortcut)
+
+    def _connect_board_context(self) -> None:
+        if self._already_wired("board_context"):
+            return
+        if self._board_context is not None:
+            self._board_context.connect()
+        self._card_context.open_source_requested.connect(self.open_source_requested)
+        self._card_context.sync_requested.connect(self.sync_requested)
+        self._card_context.focus_requested.connect(self._on_focus)
+        self._card_context.copy_image_requested.connect(self.copy_card_image_requested)
+        self._card_context.move_to_unplaced_requested.connect(self.move_to_unplaced_requested)
+        self._card_context.more_requested.connect(self._show_card_more_menu)
+        self._card_context.rebind_requested.connect(self._on_rebind_arm)
+        self._card_context.remove_requested.connect(self.remove_ref_requested)
+        self._card_context.fit_requested.connect(self.free_grid_autofit_requested)
+
+    def _connect_viewport_router(self) -> None:
+        if self._already_wired("viewport_router"):
+            return
+        # Single ViewportGestureRouter is constructed in __init__. Install /
+        # uninstall stay on showEvent / hideEvent / changeEvent.
+        if self._viewport_ctrl is not None:
+            self._viewport_ctrl.connect()
+
+    def _connect_tray(self) -> None:
+        if self._already_wired("tray"):
+            return
         self._tray.place_requested.connect(self._on_tray_place)
         self._tray.remove_requested.connect(self.remove_ref_requested)
         self._tray.locate_requested.connect(self._on_locate)
@@ -834,39 +920,15 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._tray.drag_started.connect(self._on_drag_started)
         self._tray.drag_finished.connect(self._on_drag_finished)
 
-        self._focus.open_source_requested.connect(self.open_source_requested)
-        self._esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
-        self._esc.setContext(Qt.WidgetWithChildrenShortcut)
+    def _connect_shortcuts(self) -> None:
+        if self._already_wired("shortcuts"):
+            return
         self._esc.activated.connect(self._on_escape_shortcut)
-        self._grid_undo = QShortcut(QKeySequence.Undo, self)
-        self._grid_undo.setContext(Qt.WidgetWithChildrenShortcut)
         self._grid_undo.activated.connect(self._on_grid_undo_shortcut)
-        self._grid_redo = QShortcut(QKeySequence.Redo, self)
-        self._grid_redo.setContext(Qt.WidgetWithChildrenShortcut)
         self._grid_redo.activated.connect(self._on_grid_redo_shortcut)
-        self._select_tool_shortcut = QShortcut(QKeySequence(Qt.Key_V), self)
-        self._select_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self._select_tool_shortcut.activated.connect(self._on_select_tool_shortcut)
-        self._sticky_tool_shortcut = QShortcut(QKeySequence(Qt.Key_N), self)
-        self._sticky_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self._sticky_tool_shortcut.activated.connect(self._on_sticky_tool_shortcut)
-        self._text_tool_shortcut = QShortcut(QKeySequence(Qt.Key_T), self)
-        self._text_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self._text_tool_shortcut.activated.connect(self._on_text_tool_shortcut)
-        self._shape_tool_shortcut = QShortcut(QKeySequence(Qt.Key_S), self)
-        self._shape_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self._shape_tool_shortcut.activated.connect(self._on_shape_tool_shortcut)
-        self._connector_tool_shortcut = QShortcut(QKeySequence(Qt.Key_L), self)
-        self._connector_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self._connector_tool_shortcut.activated.connect(self._on_connector_tool_shortcut)
-        self._draw_tool_shortcut = QShortcut(QKeySequence(Qt.Key_P), self)
-        self._draw_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-        self._draw_tool_shortcut.activated.connect(self._on_draw_tool_shortcut)
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
-        self.set_board(self._board)
-        QTimer.singleShot(0, self._apply_floating_layout)
 
     def board_switcher(self) -> BoardSwitcher:
         return self._switcher
@@ -2558,14 +2620,33 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         if self._focus.isVisible():
             self._focus.close_layer()
         self._close_active_panel()
+        if self._author_ui is not None:
+            self._author_ui.reset()
+        if self._board_context is not None:
+            self._board_context.reset()
         self.clear_card_selection()
         self.clear_replacement_arm()
         self._viewport_ctrl.reset()
+        if self._floating_chrome is not None:
+            self._floating_chrome.reset()
         if self._presentation:
             self.set_presentation_active(False)
             if emit_presentation:
                 self.presentation_toggled.emit(False)
         self.fit_on_open()
+
+    def shutdown(self) -> None:
+        """Stop owned timers and disconnect controller slots. Safe if never connected."""
+        if self._viewport_router is not None:
+            self._viewport_router.uninstall()
+        if self._viewport_ctrl is not None:
+            self._viewport_ctrl.shutdown()
+        if self._author_ui is not None:
+            self._author_ui.shutdown()
+        if self._board_context is not None:
+            self._board_context.shutdown()
+        if self._floating_chrome is not None:
+            self._floating_chrome.shutdown()
 
     def _on_escape_shortcut(self) -> None:
         if self._text_field_has_focus():

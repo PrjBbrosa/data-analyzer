@@ -39,6 +39,13 @@ from .viewport import (
 )
 
 
+def _disconnect(signal, slot) -> None:
+    try:
+        signal.disconnect(slot)
+    except (TypeError, RuntimeError):
+        return
+
+
 def _event_point(value) -> QPoint | None:
     if value is None:
         return None
@@ -172,7 +179,6 @@ class ViewportController(QObject):
         self._edge_pan_timer = QTimer(self)
         self._edge_pan_timer.setObjectName("ultraViewWorkspaceEdgePanTimer")
         self._edge_pan_timer.setInterval(16)
-        self._edge_pan_timer.timeout.connect(self._on_edge_pan_tick)
         self._edge_pan_active = False
         self._edge_pan_reentrant = False
         self._edge_pan_global_pos: QPoint | None = None
@@ -182,15 +188,41 @@ class ViewportController(QObject):
         self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
         self._smooth_timer.setSingleShot(True)
         self._smooth_timer.setInterval(SMOOTH_DELAY_MS)
-        self._smooth_timer.timeout.connect(self._on_smooth_preview_timeout)
         self._zoom_anim = QVariantAnimation(self)
         self._zoom_anim.setObjectName("ultraViewZoomToCardAnimation")
         self._zoom_anim.setDuration(180)
-        self._zoom_anim.valueChanged.connect(self._on_zoom_anim_tick)
         self._anim_start_zoom = 1.0
         self._anim_end_zoom = 1.0
         self._anim_start_center = (0.0, 0.0)
         self._anim_end_center = (0.0, 0.0)
+        self._connected = False
+        self._slots: list[tuple[Any, Any]] = []
+        self.connect()
+
+    def connect(self) -> None:
+        if self._connected:
+            return
+        pairs = (
+            (self._edge_pan_timer.timeout, self._on_edge_pan_tick),
+            (self._smooth_timer.timeout, self._on_smooth_preview_timeout),
+            (self._zoom_anim.valueChanged, self._on_zoom_anim_tick),
+        )
+        for signal, slot in pairs:
+            signal.connect(slot)
+            self._slots.append((signal, slot))
+        self._connected = True
+
+    def disconnect(self) -> None:
+        if not self._connected:
+            return
+        for signal, slot in self._slots:
+            _disconnect(signal, slot)
+        self._slots.clear()
+        self._connected = False
+
+    def shutdown(self) -> None:
+        self.hide()
+        self.disconnect()
 
     def viewport(self) -> BoardViewport:
         return self._viewport
