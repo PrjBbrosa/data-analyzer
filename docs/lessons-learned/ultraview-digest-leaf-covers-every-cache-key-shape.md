@@ -5,11 +5,12 @@ owners: [codex, claude]
 keywords: [ultraview, digest, cache-key, FrfCacheKey, dataclass, AnalysisPinBook, throttled, logging]
 paths:
   - mf4_analyzer/ui/main_window/ultraview_coordinator.py
+  - mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
   - mf4_analyzer/ui/analysis_cache.py
   - mf4_analyzer/ui/ultraview_state.py
   - tests/ui/test_ultraview_capture.py
 checks:
-  - rg -n "_digest_leaf|_digest_key|_pane_cache_keys" mf4_analyzer/ui/main_window/ultraview_coordinator.py
+  - rg -n "_digest_leaf|_digest_key|_pane_cache_keys" mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
   - rg -n "class .*CacheKey|def make_key" mf4_analyzer/ui/analysis_cache.py
 tests:
   - TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_ultraview_capture.py -q -k "dataclass or digest_failure or no_result_skip or pin_set_order"

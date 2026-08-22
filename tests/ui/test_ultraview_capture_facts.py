@@ -32,7 +32,7 @@ from tests.ui.test_ultraview_capture import (
 )
 
 _FACTS_LOGGER = "mf4_analyzer.ui.ultraview_capture_facts"
-_COORDINATOR_LOGGER = "mf4_analyzer.ui.main_window.ultraview_coordinator"
+_CAPTURE_LOGGER = "mf4_analyzer.ui.main_window.ultraview_capture_coordinator"
 _FACTS_FIELD_NAMES = {item.name for item in fields(PresentationCaptureFacts)}
 
 
@@ -132,7 +132,7 @@ def test_plotted_host_without_facts_api_is_not_silent_no_result(
     window.view_manager.get(0).view_id = "view-a"
     ref = _ref("view-a")
     coord.bind_canvas(host, ref)
-    with caplog.at_level(logging.DEBUG, logger=_COORDINATOR_LOGGER):
+    with caplog.at_level(logging.DEBUG, logger=_CAPTURE_LOGGER):
         coord.request_capture(ref, host, "no-facts-api")
     _flush()
     skipped = [

@@ -264,7 +264,7 @@ def test_failed_sidecar_save_as_drops_old_project_relative_descriptor(qapp, qtbo
     assert uv.workspace.preview_sidecar is not None
 
     monkeypatch.setattr(
-        "mf4_analyzer.ui.main_window.ultraview_coordinator.save_preview_sidecar",
+        "mf4_analyzer.ui.main_window.ultraview_capture_coordinator.save_preview_sidecar",
         lambda *_args, **_kwargs: type("Result", (), {"ok": False, "warnings": ()})(),
     )
     assert win.save_project(target_project)

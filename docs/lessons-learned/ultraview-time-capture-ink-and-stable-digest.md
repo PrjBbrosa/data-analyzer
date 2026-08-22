@@ -5,11 +5,12 @@ owners: [codex]
 keywords: [ultraview, capture, preview, dense-raster, curve_count, digest, source_revision]
 paths:
   - mf4_analyzer/ui/main_window/ultraview_coordinator.py
+  - mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
   - tests/ui/test_ultraview_capture.py
   - tests/ui/test_ultraview_mode_integration.py
 checks:
-  - rg -n "curve_count" mf4_analyzer/ui/main_window/ultraview_coordinator.py
-  - rg -n "_stable_source_revision|_channel_lines|dense-raster" mf4_analyzer/ui/main_window/ultraview_coordinator.py
+  - rg -n "curve_count" mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
+  - rg -n "_stable_source_revision|_channel_lines|dense-raster" mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
 tests:
   - TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_ultraview_capture.py::test_time_canvas_dense_raster_captures_when_native_curve_count_is_zero tests/ui/test_ultraview_capture.py::test_time_digest_stable_when_numpy_wrappers_churn tests/ui/test_ultraview_mode_integration.py::test_open_ultraview_captures_plotted_time_view -q
 ---

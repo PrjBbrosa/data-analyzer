@@ -2,8 +2,8 @@
 
 MainWindow still talks to ``UltraViewCoordinator``. This controller is the
 single workspace/history/funnel owner; the coordinator constructs one instance
-and keeps façade delegates. Capture, PreviewStore, and sidecar stay on the
-coordinator.
+and keeps façade delegates. Capture, PreviewStore, and sidecar live on
+``UltraViewCaptureCoordinator``.
 """
 from __future__ import annotations
 

@@ -18,7 +18,12 @@ ULTRAVIEW_ROOT = UI_ROOT / "chart_stack" / "ultraview"
 STATE_PATH = UI_ROOT / "ultraview_state.py"
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_controller.py"
-MUTATION_OWNER_PATHS = (COORDINATOR_PATH, WORKSPACE_CONTROLLER_PATH)
+CAPTURE_COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_capture_coordinator.py"
+MUTATION_OWNER_PATHS = (
+    COORDINATOR_PATH,
+    WORKSPACE_CONTROLLER_PATH,
+    CAPTURE_COORDINATOR_PATH,
+)
 VIEW_LAYER_PATHS = tuple(sorted(ULTRAVIEW_ROOT.glob("*.py")))
 
 # Measured in Task 0.  ``empty_slots`` is deliberately excluded: despite its
@@ -223,11 +228,19 @@ def _workspace_controller_methods() -> tuple[ast.FunctionDef, ...]:
     return _class_methods(WORKSPACE_CONTROLLER_PATH, "UltraViewWorkspaceController")
 
 
+def _capture_coordinator_methods() -> tuple[ast.FunctionDef, ...]:
+    return _class_methods(CAPTURE_COORDINATOR_PATH, "UltraViewCaptureCoordinator")
+
+
 def _mutation_funnel_exceptions() -> frozenset[str]:
     mutators = _state_mutators()
     expected_funnels = {"_after_board_mutation", "_commit_grid_change", "_apply_grid_snapshot"}
     exceptions: set[str] = set()
-    for function in (*_coordinator_methods(), *_workspace_controller_methods()):
+    for function in (
+        *_coordinator_methods(),
+        *_workspace_controller_methods(),
+        *_capture_coordinator_methods(),
+    ):
         calls = {
             _callee_name(node)
             for node in ast.walk(function)
@@ -439,6 +452,16 @@ def test_free_grid_board_does_not_construct_timers_or_app_filters():
     }
     assert "QImage" not in imported
     assert "PreviewStore" not in imported
+    capture_imported = {
+        alias.name
+        for node in _parse(CAPTURE_COORDINATOR_PATH).body
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "UltraViewWorkspaceController" not in capture_imported
+    assert "add_ref" not in capture_imported
+    assert "set_free_grid_rects" not in capture_imported
+    assert "apply_author_nudge" not in capture_imported
 
 
 def test_coordinator_constructs_exactly_one_workspace_controller():
@@ -453,7 +476,11 @@ def test_coordinator_constructs_exactly_one_workspace_controller():
         if isinstance(node, ast.Call)
     )
     assert counts["UltraViewWorkspaceController"] == 1
+    assert counts["UltraViewCaptureCoordinator"] == 1
     assert counts["default_workspace"] == 1
+    assert counts.get("PreviewStore", 0) == 0
+    assert counts.get("QTimer", 0) == 0
+    assert counts.get("PresentationRuntimeLedger", 0) == 0
 
 
 def test_workspace_mixed_nudge_uses_one_selection_plan():
@@ -513,3 +540,78 @@ def test_coordinator_workspace_identity_is_the_controller_object(qapp):
     assert coordinator.workspace is controller.workspace
     assert len(coordinator.workspace.boards) == len(controller.workspace.boards)
     assert coordinator.workspace.boards is controller.workspace.boards
+
+
+def test_coordinator_constructs_exactly_one_capture_owner(qapp):
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.chart_stack.ultraview.preview_store import PreviewStore
+    from mf4_analyzer.ui.main_window.ultraview_capture_coordinator import (
+        UltraViewCaptureCoordinator,
+    )
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import UltraViewCoordinator
+    from mf4_analyzer.ui.main_window.ultraview_runtime import PresentationRuntimeLedger
+
+    capture_init = next(
+        item for item in _capture_coordinator_methods() if item.name == "__init__"
+    )
+    capture_counts = Counter(
+        _callee_name(node)
+        for node in ast.walk(capture_init)
+        if isinstance(node, ast.Call)
+    )
+    assert capture_counts["PreviewStore"] == 1
+    assert capture_counts["QTimer"] == 3
+    assert capture_counts["PresentationRuntimeLedger"] == 1
+
+    funnel_names = {"_after_board_mutation", "_commit_grid_change", "_apply_grid_snapshot"}
+    mutators = _state_mutators()
+    for function in _capture_coordinator_methods():
+        calls = {
+            _callee_name(node)
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+        }
+        assert not (calls & funnel_names)
+        if function.name != "save_preview_sidecar":
+            assert not (calls & mutators)
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    captures = [
+        value
+        for value in vars(coordinator).values()
+        if isinstance(value, UltraViewCaptureCoordinator)
+    ]
+    stores = [
+        value
+        for value in vars(captures[0]).values()
+        if isinstance(value, PreviewStore)
+    ]
+    ledgers = [
+        value
+        for value in vars(captures[0]).values()
+        if isinstance(value, PresentationRuntimeLedger)
+    ]
+    named_timers = {
+        name: value
+        for name, value in vars(captures[0]).items()
+        if isinstance(value, QTimer)
+    }
+    assert len(captures) == 1
+    assert coordinator._capture is captures[0]
+    assert len(stores) == 1
+    assert coordinator.store is stores[0]
+    assert coordinator._store is stores[0]
+    assert len(ledgers) == 1
+    assert coordinator._runtime is ledgers[0]
+    assert named_timers.keys() >= {"_idle_timer", "_focus_timer", "_sidecar_timer"}
+    assert coordinator._idle_timer is named_timers["_idle_timer"]
+    assert coordinator._focus_timer is named_timers["_focus_timer"]
+    assert coordinator._sidecar_timer is named_timers["_sidecar_timer"]
+    assert not any(isinstance(value, QTimer) for value in vars(coordinator).values())
+    assert not any(isinstance(value, PreviewStore) for value in vars(coordinator).values())
+    coordinator.clear()
+    coordinator.deleteLater()
+    host.deleteLater()

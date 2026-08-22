@@ -53,6 +53,13 @@ _COORDINATOR_PATH = (
     / "main_window"
     / "ultraview_coordinator.py"
 )
+_CAPTURE_COORDINATOR_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ui"
+    / "main_window"
+    / "ultraview_capture_coordinator.py"
+)
 _CAPTURE_FACTS_PATH = (
     Path(__file__).resolve().parents[2]
     / "mf4_analyzer"
@@ -60,6 +67,7 @@ _CAPTURE_FACTS_PATH = (
     / "ultraview_capture_facts.py"
 )
 _COORDINATOR_LOGGER = "mf4_analyzer.ui.main_window.ultraview_coordinator"
+_CAPTURE_LOGGER = "mf4_analyzer.ui.main_window.ultraview_capture_coordinator"
 _HOST_PRIVATE_CAPTURE_ATTRS = frozenset(
     {
         "_interaction_state",
@@ -1069,9 +1077,10 @@ def test_refresh_page_pushes_previews_only_for_active_board(qapp):
 
 
 def test_preview_path_never_calls_restore_or_source_replot(qapp):
-    source = _COORDINATOR_PATH.read_text(encoding="utf-8")
-    for name in _FORBIDDEN_SOURCE_NAMES:
-        assert name not in source
+    for path in (_COORDINATOR_PATH, _CAPTURE_COORDINATOR_PATH):
+        source = path.read_text(encoding="utf-8")
+        for name in _FORBIDDEN_SOURCE_NAMES:
+            assert name not in source, f"{name} in {path.name}"
 
     window, coord = _make_coord()
     window.view_manager.get(0).view_id = "view-a"
@@ -1128,10 +1137,11 @@ def test_markup_revision_add_move_remove_clear(qapp, monkeypatch):
 
 
 def _payload_fn_dump(name: str) -> str:
-    tree = ast.parse(_COORDINATOR_PATH.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return ast.dump(node)
+    for path in (_CAPTURE_COORDINATOR_PATH, _COORDINATOR_PATH):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return ast.dump(node)
     raise AssertionError(f"missing function {name}")
 
 
@@ -2012,20 +2022,20 @@ def test_digest_changed_retry_is_capped(qapp):
     _flush()
 
     details = []
-    orig_warn = coord._warn_capture
+    orig_warn = coord._capture._warn_capture
 
     def spy_warn(target, widget, reason, detail):
         details.append(detail)
         return orig_warn(target, widget, reason, detail)
 
-    coord._warn_capture = spy_warn
+    coord._capture._warn_capture = spy_warn
     n = {"i": 0}
 
     def moving(_target):
         n["i"] += 1
         return f"moving-{n['i']}"
 
-    coord.current_digest_for = moving
+    coord._capture.current_digest_for = moving
     coord.request_capture(ref, canvas, "oscillate")
     _flush(24)
     assert details.count("digest-changed") == _DIGEST_RETRY_LIMIT + 1
@@ -2288,14 +2298,18 @@ def test_destroyed_canvas_drops_binding_and_allows_rehook(qapp):
 
 
 def test_repeated_project_reset_does_not_stack_destroyed_receivers(qapp, monkeypatch):
+    from mf4_analyzer.ui.main_window.ultraview_capture_coordinator import (
+        UltraViewCaptureCoordinator,
+    )
+
     calls = {"n": 0}
-    original = UltraViewCoordinator._on_canvas_destroyed
+    original = UltraViewCaptureCoordinator._on_canvas_destroyed
 
     def wrapped(self, *args, **kwargs):
         calls["n"] += 1
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(UltraViewCoordinator, "_on_canvas_destroyed", wrapped)
+    monkeypatch.setattr(UltraViewCaptureCoordinator, "_on_canvas_destroyed", wrapped)
     window, coord = _make_coord()
     canvas = FakeCanvas()
     ref = _ref("view-a")
@@ -2549,7 +2563,7 @@ def test_frf_dataclass_cache_key_still_yields_a_digest(qapp, monkeypatch, caplog
     )
     window._analysis_pins.add("frf", "frf-a", 0, key)
 
-    with caplog.at_level(logging.WARNING, logger=_COORDINATOR_LOGGER):
+    with caplog.at_level(logging.WARNING, logger=_CAPTURE_LOGGER):
         pinned = coord.current_digest_for(ref)
     assert pinned is not None
     assert "digest failed" not in caplog.text
@@ -2582,7 +2596,7 @@ def test_frf_dataclass_cache_key_still_yields_a_digest(qapp, monkeypatch, caplog
     # than inferring it from the digest being computable.
     canvas = window.pages["frf"].pane_canvas(0)
     coord.bind_canvas(canvas, ref)
-    with caplog.at_level(logging.WARNING, logger=_COORDINATOR_LOGGER):
+    with caplog.at_level(logging.WARNING, logger=_CAPTURE_LOGGER):
         coord.request_capture(ref, canvas, "frf-plot")
         _flush()
     assert canvas.grab_calls == 1
@@ -2632,12 +2646,8 @@ def test_digest_failure_names_the_offending_value(qapp, monkeypatch, caplog):
     class _Unserializable:
         pass
 
-    monkeypatch.setattr(
-        coord,
-        "presentation_payload_for",
-        lambda _ref: {"leaf": _Unserializable()},
-    )
-    with caplog.at_level(logging.WARNING, logger=_COORDINATOR_LOGGER):
+    monkeypatch.setattr(coord._capture, "presentation_payload_for", lambda _ref: {"leaf": _Unserializable()})
+    with caplog.at_level(logging.WARNING, logger=_CAPTURE_LOGGER):
         assert coord.current_digest_for(ref) is None
     assert "digest failed" in caplog.text
     assert "_Unserializable" in caplog.text
@@ -2659,7 +2669,7 @@ def test_no_result_skip_is_not_logged_as_a_warning(qapp, monkeypatch, caplog):
     ref = _ref("view-a")
     coord.bind_canvas(canvas, ref)
 
-    with caplog.at_level(logging.DEBUG, logger=_COORDINATOR_LOGGER):
+    with caplog.at_level(logging.DEBUG, logger=_CAPTURE_LOGGER):
         coord.request_capture(ref, canvas, "probe-empty")
     records = [r for r in caplog.records if "capture skipped" in r.getMessage()]
     assert records, "the skip must still be observable at DEBUG"
@@ -2668,8 +2678,8 @@ def test_no_result_skip_is_not_logged_as_a_warning(qapp, monkeypatch, caplog):
 
     caplog.clear()
     canvas._has_result = True
-    monkeypatch.setattr(coord, "current_digest_for", lambda _ref: None)
-    with caplog.at_level(logging.DEBUG, logger=_COORDINATOR_LOGGER):
+    monkeypatch.setattr(coord._capture, "current_digest_for", lambda _ref: None)
+    with caplog.at_level(logging.DEBUG, logger=_CAPTURE_LOGGER):
         coord.request_capture(ref, canvas, "probe-fault")
     faults = [r for r in caplog.records if "digest-unavailable" in r.getMessage()]
     assert [r.levelno for r in faults] == [logging.WARNING]
@@ -2757,8 +2767,20 @@ def _getattr_host_private_probes(path: Path) -> set[str]:
 
 def test_coordinator_and_collector_do_not_getattr_host_capture_privates():
     assert _getattr_host_private_probes(_COORDINATOR_PATH) == set()
+    assert _getattr_host_private_probes(_CAPTURE_COORDINATOR_PATH) == set()
     assert _getattr_host_private_probes(_CAPTURE_FACTS_PATH) == set()
-    coordinator_source = _COORDINATOR_PATH.read_text(encoding="utf-8")
-    assert "_HOVER_CURSOR_LISTS" not in coordinator_source
-    assert "_host_is_stable" not in coordinator_source
-    assert "_time_host_has_plotted_data" not in coordinator_source
+    for path in (_COORDINATOR_PATH, _CAPTURE_COORDINATOR_PATH):
+        source = path.read_text(encoding="utf-8")
+        assert "_HOVER_CURSOR_LISTS" not in source
+        assert "_host_is_stable" not in source
+        assert "_time_host_has_plotted_data" not in source
+        for name in (
+            "_interaction_state",
+            "_dense_raster",
+            "_aa_idle_timer",
+            "_refresh_pending",
+        ):
+            assert f'getattr(host, "{name}"' not in source
+            assert f"getattr(host, '{name}'" not in source
+            assert f'getattr(widget, "{name}"' not in source
+            assert f"getattr(widget, '{name}'" not in source

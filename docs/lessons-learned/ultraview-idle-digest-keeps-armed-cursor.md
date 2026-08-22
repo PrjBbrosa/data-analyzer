@@ -5,13 +5,14 @@ owners: [codex]
 keywords: [ultraview, idle, capture, cursor, digest, pill, hide_transient]
 paths:
   - mf4_analyzer/ui/main_window/ultraview_coordinator.py
+  - mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
   - mf4_analyzer/ui/chart_stack/stack.py
   - tests/ui/test_ultraview_capture.py
   - tests/ui/test_ultraview_mode_integration.py
 checks:
-  - rg -n "cursor_mode|cursor_geometry|_pill_fingerprint" mf4_analyzer/ui/main_window/ultraview_coordinator.py
-  - rg -n "_HOVER_CURSOR_LISTS|_host_is_dual_cursor" mf4_analyzer/ui/main_window/ultraview_coordinator.py
-  - rg -n "grab_presentation_pixmap|_IDLE_CAPTURE_MS" mf4_analyzer/ui/chart_stack/stack.py mf4_analyzer/ui/main_window/ultraview_coordinator.py
+  - rg -n "cursor_mode|cursor_geometry|_pill_fingerprint" mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
+  - rg -n "_HOVER_CURSOR_LISTS|_host_is_dual_cursor" mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
+  - rg -n "grab_presentation_pixmap|_IDLE_CAPTURE_MS" mf4_analyzer/ui/chart_stack/stack.py mf4_analyzer/ui/main_window/ultraview_capture_coordinator.py
 tests:
   - TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ui/test_ultraview_capture.py::test_transient_overlays_hidden_but_markup_revision_is_captured tests/ui/test_ultraview_capture.py::test_idle_capture_coalesces_range_signals tests/ui/test_ultraview_capture.py::test_idle_cursor_info_does_not_project_each_signal tests/ui/test_ultraview_capture.py::test_digest_changed_requeues_and_publishes tests/ui/test_ultraview_capture.py::test_idle_pending_per_ref_not_starved_by_other_canvas tests/ui/test_ultraview_capture.py::test_presentation_digest_pixel_affecting_field_matrix tests/ui/test_ultraview_mode_integration.py::test_idle_pan_and_markup_recaptures_time_preview -q
 ---
