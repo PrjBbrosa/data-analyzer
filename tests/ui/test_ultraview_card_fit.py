@@ -64,6 +64,13 @@ COORDINATOR_PATH = (
     / "main_window"
     / "ultraview_coordinator.py"
 )
+WORKSPACE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mf4_analyzer"
+    / "ui"
+    / "main_window"
+    / "ultraview_workspace_controller.py"
+)
 
 # Retired shrink-then-one-axis-grow cap. Kept only to prove the old helper
 # disagrees with the F3 oracle on two-axis growth.
@@ -495,15 +502,19 @@ def test_fit_rect_for_aspect_wrapper_matches_unconstrained_solver():
 
 
 def test_existing_auto_arrange_is_not_a_loop_of_card_fit():
-    tree = ast.parse(COORDINATOR_PATH.read_text(encoding="utf-8"))
-    autofit_calls = _call_names(tree, "UltraViewCoordinator", "_on_free_grid_autofit")
-    arrange_calls = _call_names(tree, "UltraViewCoordinator", "_on_auto_arrange_free_grid")
-    organize_calls = _call_names(tree, "UltraViewCoordinator", "_on_organize_free_grid")
+    tree = ast.parse(WORKSPACE_CONTROLLER_PATH.read_text(encoding="utf-8"))
+    autofit_calls = _call_names(tree, "UltraViewWorkspaceController", "_on_free_grid_autofit")
+    arrange_calls = _call_names(tree, "UltraViewWorkspaceController", "_on_auto_arrange_free_grid")
+    organize_calls = _call_names(tree, "UltraViewWorkspaceController", "_on_organize_free_grid")
     assert "solve_card_fit" in autofit_calls
     assert "plan_layout" not in autofit_calls
     assert "plan_auto_arrange" in arrange_calls
     assert "solve_card_fit" not in arrange_calls
     assert "solve_card_fit" not in organize_calls
+    facade = ast.parse(COORDINATOR_PATH.read_text(encoding="utf-8"))
+    assert "solve_card_fit" not in _call_names(
+        facade, "UltraViewCoordinator", "_on_auto_arrange_free_grid"
+    )
 
     first = FreeGridPlacement(make_ref("time", "a"), GridRect(0, 8, 8, 6))
     second = FreeGridPlacement(make_ref("fft", "b"), GridRect(8, 8, 8, 6))

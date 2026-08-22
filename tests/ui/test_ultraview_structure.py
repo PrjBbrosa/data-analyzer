@@ -17,6 +17,8 @@ UI_ROOT = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui"
 ULTRAVIEW_ROOT = UI_ROOT / "chart_stack" / "ultraview"
 STATE_PATH = UI_ROOT / "ultraview_state.py"
 COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
+WORKSPACE_CONTROLLER_PATH = UI_ROOT / "main_window" / "ultraview_workspace_controller.py"
+MUTATION_OWNER_PATHS = (COORDINATOR_PATH, WORKSPACE_CONTROLLER_PATH)
 VIEW_LAYER_PATHS = tuple(sorted(ULTRAVIEW_ROOT.glob("*.py")))
 
 # Measured in Task 0.  ``empty_slots`` is deliberately excluded: despite its
@@ -155,7 +157,7 @@ def _model_field_names() -> frozenset[str]:
 def _model_field_writes() -> frozenset[tuple[str, str]]:
     fields = _model_field_names()
     result: set[tuple[str, str]] = set()
-    paths = (*VIEW_LAYER_PATHS, COORDINATOR_PATH)
+    paths = (*VIEW_LAYER_PATHS, *MUTATION_OWNER_PATHS)
     for path in paths:
         for target in _assignment_targets(_parse(path)):
             if isinstance(target, ast.Attribute) and target.attr in fields:
@@ -205,19 +207,27 @@ def _collect_page_of_surface(tree: ast.AST, surface: set[str]) -> None:
                 surface.add(node.attr)
 
 
-def _coordinator_methods() -> tuple[ast.FunctionDef, ...]:
-    tree = _parse(COORDINATOR_PATH)
+def _class_methods(path: Path, class_name: str) -> tuple[ast.FunctionDef, ...]:
+    tree = _parse(path)
     for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == "UltraViewCoordinator":
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
             return tuple(item for item in node.body if isinstance(item, ast.FunctionDef))
-    raise AssertionError("UltraViewCoordinator not found")
+    raise AssertionError(f"{class_name} not found in {path.name}")
+
+
+def _coordinator_methods() -> tuple[ast.FunctionDef, ...]:
+    return _class_methods(COORDINATOR_PATH, "UltraViewCoordinator")
+
+
+def _workspace_controller_methods() -> tuple[ast.FunctionDef, ...]:
+    return _class_methods(WORKSPACE_CONTROLLER_PATH, "UltraViewWorkspaceController")
 
 
 def _mutation_funnel_exceptions() -> frozenset[str]:
     mutators = _state_mutators()
     expected_funnels = {"_after_board_mutation", "_commit_grid_change", "_apply_grid_snapshot"}
     exceptions: set[str] = set()
-    for function in _coordinator_methods():
+    for function in (*_coordinator_methods(), *_workspace_controller_methods()):
         calls = {
             _callee_name(node)
             for node in ast.walk(function)
@@ -230,16 +240,17 @@ def _mutation_funnel_exceptions() -> frozenset[str]:
 
 def _page_private_surface() -> frozenset[str]:
     surface: set[str] = set()
-    for node in ast.walk(_parse(COORDINATOR_PATH)):
-        if not isinstance(node, ast.Attribute) or not node.attr.startswith("_"):
-            continue
-        value = node.value
-        if isinstance(value, ast.Name) and value.id == "page":
-            surface.add(node.attr)
-        elif isinstance(value, ast.Attribute) and value.attr in {"page", "_page"}:
-            surface.add(node.attr)
-        elif isinstance(value, ast.Call) and _callee_name(value) in {"page", "_page"}:
-            surface.add(node.attr)
+    for path in MUTATION_OWNER_PATHS:
+        for node in ast.walk(_parse(path)):
+            if not isinstance(node, ast.Attribute) or not node.attr.startswith("_"):
+                continue
+            value = node.value
+            if isinstance(value, ast.Name) and value.id == "page":
+                surface.add(node.attr)
+            elif isinstance(value, ast.Attribute) and value.attr in {"page", "_page"}:
+                surface.add(node.attr)
+            elif isinstance(value, ast.Call) and _callee_name(value) in {"page", "_page"}:
+                surface.add(node.attr)
     return frozenset(surface)
 
 
@@ -417,3 +428,88 @@ def test_free_grid_board_does_not_construct_timers_or_app_filters():
     page_source = (ULTRAVIEW_ROOT / "page.py").read_text(encoding="utf-8")
     assert "_author_geometry_session" not in page_source
     assert "_body_layout" not in page_source
+    workspace_source = WORKSPACE_CONTROLLER_PATH.read_text(encoding="utf-8")
+    assert "_author_geometry_session" not in workspace_source
+    assert "_body_layout" not in workspace_source
+    imported = {
+        alias.name
+        for node in _parse(WORKSPACE_CONTROLLER_PATH).body
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "QImage" not in imported
+    assert "PreviewStore" not in imported
+
+
+def test_coordinator_constructs_exactly_one_workspace_controller():
+    init = next(
+        item
+        for item in _coordinator_methods()
+        if item.name == "__init__"
+    )
+    counts = Counter(
+        _callee_name(node)
+        for node in ast.walk(init)
+        if isinstance(node, ast.Call)
+    )
+    assert counts["UltraViewWorkspaceController"] == 1
+    assert counts["default_workspace"] == 1
+
+
+def test_workspace_mixed_nudge_uses_one_selection_plan():
+    nudge = next(
+        item
+        for item in _workspace_controller_methods()
+        if item.name == "_on_selection_nudge"
+    )
+    commit = next(
+        item
+        for item in _workspace_controller_methods()
+        if item.name == "_commit_selection_mutation"
+    )
+    nudge_calls = {
+        _callee_name(node) for node in ast.walk(nudge) if isinstance(node, ast.Call)
+    }
+    commit_calls = {
+        _callee_name(node) for node in ast.walk(commit) if isinstance(node, ast.Call)
+    }
+    assert "plan_selection_nudge" in nudge_calls
+    assert "_commit_selection_mutation" in nudge_calls
+    assert "set_free_grid_rects" not in nudge_calls
+    assert "apply_author_nudge" not in nudge_calls
+    assert "as_entry" in commit_calls
+    assert "apply_board_edit_entry" in commit_calls
+    assert "_record_board_edit" in commit_calls
+    assert "set_free_grid_rects" not in commit_calls
+    assert "apply_author_nudge" not in commit_calls
+    coordinator_source = COORDINATOR_PATH.read_text(encoding="utf-8")
+    workspace_source = WORKSPACE_CONTROLLER_PATH.read_text(encoding="utf-8")
+    assert "SelectionMutationService" not in coordinator_source
+    assert "SelectionMutationService" not in workspace_source
+
+
+def test_coordinator_workspace_identity_is_the_controller_object(qapp):
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import UltraViewCoordinator
+    from mf4_analyzer.ui.main_window.ultraview_workspace_controller import (
+        UltraViewWorkspaceController,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controllers = [
+        value
+        for value in vars(coordinator).values()
+        if isinstance(value, UltraViewWorkspaceController)
+    ]
+    assert len(controllers) == 1
+    controller = coordinator._workspace_controller
+    assert controller is controllers[0]
+    assert coordinator.workspace is controller.workspace
+    assert coordinator.board is controller.board
+    assert coordinator._workspace is controller.workspace
+    coordinator._on_create_board()
+    assert coordinator.workspace is controller.workspace
+    assert len(coordinator.workspace.boards) == len(controller.workspace.boards)
+    assert coordinator.workspace.boards is controller.workspace.boards
