@@ -51,9 +51,7 @@ from mf4_analyzer.ui.ultraview_state import (
     all_refs,
     best_template_for,
     board_to_payload,
-    card_matches_compare_filter,
     default_board,
-    derive_preview_status,
     first_empty_slot,
     free_grid_placement_for,
     free_grid_default_span,
@@ -232,6 +230,20 @@ from .widgets import (
     ViewLibraryPanel,
     coerce_library_row,
     preview_image,
+)
+from .page_projection import (
+    LibraryChromeFacts,
+    axis_kind_from_record,
+    axis_records_from_models,
+    card_models_for_slots,
+    card_view_model,
+    chrome_value,
+    color_for,
+    replacement_armed_for,
+    source_for,
+    status_for,
+    title_for,
+    tray_chrome_maps,
 )
 from .chrome import (
     BOARD_POPOVER_WIDTH,
@@ -4433,13 +4445,8 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._select_ref(ref)
 
     def _status_for(self, ref: UltraViewRef) -> str:
-        if ref in self._statuses:
-            return self._statuses[ref]
-        exists = self._ref_exists.get(ref, True)
-        record = self._previews.get(ref)
-        image_valid = preview_image(record) is not None
-        captured = getattr(record, "captured_digest", None) if record is not None else None
-        return derive_preview_status(exists, image_valid, captured, None)
+        explicit = self._statuses[ref] if ref in self._statuses else None
+        return status_for(explicit, self._ref_exists.get(ref, True), self._previews.get(ref))
 
     def _library_row_for(self, ref: UltraViewRef):
         for row in self._library.row_widgets():
@@ -4447,6 +4454,34 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             if item.section == ref.section and item.view_id == ref.view_id:
                 return item
         return None
+
+    def _chrome_facts_for(self, ref: UltraViewRef) -> LibraryChromeFacts | None:
+        item = self._library_row_for(ref)
+        if item is None:
+            return None
+        return LibraryChromeFacts(
+            section=item.section,
+            view_id=item.view_id,
+            name=item.name,
+            tab_color=item.tab_color,
+            source_summary=item.source_summary,
+        )
+
+    def _library_chrome_map(self) -> dict[tuple[str, str], LibraryChromeFacts]:
+        facts: dict[tuple[str, str], LibraryChromeFacts] = {}
+        for row in self._library.row_widgets():
+            item = row.row()
+            key = (item.section, item.view_id)
+            if key in facts:
+                continue
+            facts[key] = LibraryChromeFacts(
+                section=item.section,
+                view_id=item.view_id,
+                name=item.name,
+                tab_color=item.tab_color,
+                source_summary=item.source_summary,
+            )
+        return facts
 
     def _chrome_value(
         self,
@@ -4457,35 +4492,40 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         default: str = "",
     ) -> str:
         live = self._ref_exists.get(ref, True)
-        lib = self._library_row_for(ref)
+        chrome = self._chrome_facts_for(ref)
         record = self._previews.get(ref)
-        lib_val = str(getattr(lib, lib_attr, "") or "") if lib is not None else ""
+        lib_val = str(getattr(chrome, lib_attr, "") or "") if chrome is not None else ""
         rec_val = (
             str(getattr(record, record_attr, "") or "") if record is not None else ""
         )
-        if live:
-            return lib_val or rec_val or default
-        return rec_val or lib_val or default
+        return chrome_value(live, lib_val, rec_val, default)
 
     def _title_for(self, ref: UltraViewRef) -> str:
-        return self._chrome_value(
-            ref, lib_attr="name", record_attr="title", default=ref.view_id
+        return title_for(
+            ref,
+            self._ref_exists.get(ref, True),
+            self._chrome_facts_for(ref),
+            self._previews.get(ref),
         )
 
     def _color_for(self, ref: UltraViewRef) -> str:
-        return self._chrome_value(ref, lib_attr="tab_color", record_attr="tab_color")
+        return color_for(
+            ref,
+            self._ref_exists.get(ref, True),
+            self._chrome_facts_for(ref),
+            self._previews.get(ref),
+        )
 
     def _source_for(self, ref: UltraViewRef) -> str:
-        return self._chrome_value(
-            ref, lib_attr="source_summary", record_attr="source_summary"
+        return source_for(
+            ref,
+            self._ref_exists.get(ref, True),
+            self._chrome_facts_for(ref),
+            self._previews.get(ref),
         )
 
     def _axis_for(self, ref: UltraViewRef) -> str | None:
-        record = self._previews.get(ref)
-        if record is None:
-            return None
-        kind = getattr(record, "axis_kind", None)
-        return str(kind) if kind else None
+        return axis_kind_from_record(self._previews.get(ref))
 
     def _sync_overview(self) -> None:
         records = {}
@@ -4511,62 +4551,37 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         self._free_grid.set_author_objects(())
         self._minimap.hide()
         self._board_stack.setCurrentWidget(self._grid)
-        models: dict[str, CardViewModel | None] = {}
-        axis_records = []
-        for slot_id in layout_slots(self._board.layout_id):
-            ref = slot_occupant(self._board, slot_id)
-            if ref is None:
-                models[slot_id] = None
-                continue
-            record = self._previews.get(ref)
-            status = self._status_for(ref)
-            axis_kind = self._axis_for(ref)
-            x_unit = str(getattr(record, "x_unit", "") or "") if record is not None else ""
-            raw_range = getattr(record, "x_range", None) if record is not None else None
-            x_range = None
-            if isinstance(raw_range, (list, tuple)) and len(raw_range) == 2:
-                try:
-                    x_range = (float(raw_range[0]), float(raw_range[1]))
-                except (TypeError, ValueError):
-                    x_range = None
-            if axis_kind:
-                axis_records.append(
-                    {"axis_kind": axis_kind, "x_unit": x_unit, "x_range": x_range}
-                )
-            models[slot_id] = CardViewModel(
-                slot_id=slot_id,
-                section=ref.section,
-                view_id=ref.view_id,
-                title=self._title_for(ref),
-                tab_color=self._color_for(ref),
-                status=status,
-                source_summary=self._source_for(ref),
-                axis_kind=axis_kind,
-                x_unit=x_unit,
-                x_range=x_range,
-                image=preview_image(record),
-                selected=ref in self._interaction.card_selection(),
-                dimmed=not card_matches_compare_filter(axis_kind, self._compare_filter),
-                replacement_armed=(
-                    self._replacement_ref == ref
-                    or self._replacement_slot == slot_id
-                ),
-                show_title=bool(self._board.show_titles),
-                show_source=bool(self._board.show_sources),
-                show_card_actions=self._show_card_actions,
-            )
+        chrome_by_key = self._library_chrome_map()
+        slot_refs = {
+            slot_id: slot_occupant(self._board, slot_id)
+            for slot_id in layout_slots(self._board.layout_id)
+        }
+        models = card_models_for_slots(
+            slot_refs,
+            chrome_by_key=chrome_by_key,
+            records=self._previews,
+            statuses=self._statuses,
+            exists=self._ref_exists,
+            selected=self._interaction.card_selection(),
+            compare_filter=self._compare_filter,
+            replacement_ref=self._replacement_ref,
+            replacement_slot=self._replacement_slot,
+            show_title=bool(self._board.show_titles),
+            show_source=bool(self._board.show_sources),
+            show_card_actions=self._show_card_actions,
+        )
+        axis_records = axis_records_from_models(models.values())
         self._grid.set_grid(self._board.layout_id, self._board.primary_ratio, models)
         self._sync_board_stack_geometry(self._grid)
         self._apply_lod_chrome()
         self._sync_overview()
-        titles = {}
-        colors = {}
-        statuses = {}
-        for ref in self._board.unplaced:
-            key = (ref.section, ref.view_id)
-            titles[key] = self._title_for(ref)
-            colors[key] = self._color_for(ref)
-            statuses[key] = self._status_for(ref)
+        titles, colors, statuses = tray_chrome_maps(
+            self._board.unplaced,
+            chrome_by_key=chrome_by_key,
+            records=self._previews,
+            statuses=self._statuses,
+            exists=self._ref_exists,
+        )
         self._tray.set_refs(
             self._board.unplaced,
             titles=titles,
@@ -4749,42 +4764,49 @@ class UltraViewPage(BoardPointerMixin, QWidget):
         )
 
     def _card_model(self, ref: UltraViewRef, *, slot_id: str) -> CardViewModel:
-        record = self._previews.get(ref)
-        status = self._status_for(ref)
-        axis_kind = self._axis_for(ref)
-        x_unit = str(getattr(record, "x_unit", "") or "") if record is not None else ""
-        raw_range = getattr(record, "x_range", None) if record is not None else None
-        x_range = None
-        if isinstance(raw_range, (list, tuple)) and len(raw_range) == 2:
-            try:
-                x_range = (float(raw_range[0]), float(raw_range[1]))
-            except (TypeError, ValueError):
-                x_range = None
-        return CardViewModel(
+        return card_view_model(
             slot_id=slot_id,
-            section=ref.section,
-            view_id=ref.view_id,
-            title=self._title_for(ref),
-            tab_color=self._color_for(ref),
-            status=status,
-            source_summary=self._source_for(ref),
-            axis_kind=axis_kind,
-            x_unit=x_unit,
-            x_range=x_range,
-            image=preview_image(record),
+            ref=ref,
+            live=self._ref_exists.get(ref, True),
+            chrome=self._chrome_facts_for(ref),
+            record=self._previews.get(ref),
+            explicit_status=self._statuses[ref] if ref in self._statuses else None,
             selected=ref in self._interaction.card_selection(),
-            dimmed=not card_matches_compare_filter(axis_kind, self._compare_filter),
-            replacement_armed=self._replacement_ref == ref,
+            compare_filter=self._compare_filter,
+            replacement_armed=replacement_armed_for(
+                ref, slot_id, self._replacement_ref, self._replacement_slot
+            ),
             show_title=bool(self._board.show_titles),
             show_source=bool(self._board.show_sources),
             show_card_actions=self._show_card_actions,
         )
 
     def _refresh_free_grid_projection(self) -> None:
-        models = {
-            item.ref: self._card_model(item.ref, slot_id=f"grid:{item.ref.section}:{item.ref.view_id}")
+        chrome_by_key = self._library_chrome_map()
+        slot_refs = {
+            f"grid:{item.ref.section}:{item.ref.view_id}": item.ref
             for item in self._board.free_grid
         }
+        slot_models = card_models_for_slots(
+            slot_refs,
+            chrome_by_key=chrome_by_key,
+            records=self._previews,
+            statuses=self._statuses,
+            exists=self._ref_exists,
+            selected=self._interaction.card_selection(),
+            compare_filter=self._compare_filter,
+            replacement_ref=self._replacement_ref,
+            replacement_slot=self._replacement_slot,
+            show_title=bool(self._board.show_titles),
+            show_source=bool(self._board.show_sources),
+            show_card_actions=self._show_card_actions,
+        )
+        models: dict[UltraViewRef, CardViewModel] = {}
+        for item in self._board.free_grid:
+            model = slot_models[f"grid:{item.ref.section}:{item.ref.view_id}"]
+            if model is None:
+                continue
+            models[item.ref] = model
         self._board_stack.setCurrentWidget(self._free_grid)
         self._free_grid.set_free_grid(self._board.free_grid, models)
         self._free_grid.set_author_objects(self._board.author_objects)
@@ -4796,20 +4818,14 @@ class UltraViewPage(BoardPointerMixin, QWidget):
             self._refresh_workspace_extent()
         self._sync_board_stack_geometry(self._free_grid)
         self._apply_lod_chrome()
-        titles = {}
-        colors = {}
-        statuses = {}
-        axis_records = []
-        for item in self._board.free_grid:
-            ref = item.ref
-            model = models[ref]
-            if model.axis_kind:
-                axis_records.append({"axis_kind": model.axis_kind, "x_unit": model.x_unit, "x_range": model.x_range})
-        for ref in self._board.unplaced:
-            key = (ref.section, ref.view_id)
-            titles[key] = self._title_for(ref)
-            colors[key] = self._color_for(ref)
-            statuses[key] = self._status_for(ref)
+        titles, colors, statuses = tray_chrome_maps(
+            self._board.unplaced,
+            chrome_by_key=chrome_by_key,
+            records=self._previews,
+            statuses=self._statuses,
+            exists=self._ref_exists,
+        )
+        axis_records = axis_records_from_models(models.values())
         self._tray.set_refs(self._board.unplaced, titles=titles, colors=colors, statuses=statuses, armed=self._replacement_ref)
         facts = axis_consistency_facts(axis_records)
         warnings = []
