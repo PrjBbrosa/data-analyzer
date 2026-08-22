@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import qtawesome as qta
-from PyQt5.QtCore import QSize, Qt, QSettings
+from PyQt5.QtCore import QEvent, QSize, Qt, QSettings
 from PyQt5.QtWidgets import (
     QAction,
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -365,6 +368,16 @@ def _route_view_all_action(menu, handler):
     action.triggered.connect(_trigger)
 
 
+def _is_tab_key(event):
+    return event.key() in (Qt.Key_Tab, Qt.Key_Backtab)
+
+
+def _is_reverse_tab(event):
+    return event.key() == Qt.Key_Backtab or bool(
+        event.modifiers() & Qt.ShiftModifier
+    )
+
+
 def _format_range_value(value):
     """Format ViewBox range values for compact inline editing.
 
@@ -407,6 +420,43 @@ def _axis_grid_enabled(plot_item, side):
         return False
 
 
+class _RangeLineEdit(QLineEdit):
+    """Start/end range field that Tab-cycles inside the inline panel.
+
+    QMenu consumes Tab for action navigation, so a plain QLineEdit inside a
+    QWidgetAction cannot move to its sibling without a second click. This
+    widget accepts Tab/Backtab (including ShortcutOverride) and asks the
+    panel to focus the adjacent range field.
+    """
+
+    def __init__(self, panel, parent=None):
+        super().__init__(parent)
+        self._range_panel = panel
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def event(self, event):
+        if event.type() == QEvent.ShortcutOverride and _is_tab_key(event):
+            event.accept()
+            return True
+        if event.type() == QEvent.KeyPress and _is_tab_key(event):
+            if self._range_panel._focus_adjacent_range(
+                self, reverse=_is_reverse_tab(event)
+            ):
+                event.accept()
+                return True
+        return super().event(event)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.selectAll()
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if not self.hasFocus():
+            self.setFocus(Qt.MouseFocusReason)
+        self.selectAll()
+
+
 class _PgContextInlinePanel(QWidget):
     """First-level context-menu controls for pyqtgraph plot navigation."""
 
@@ -447,6 +497,7 @@ class _PgContextInlinePanel(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
         self.setStyleSheet(_INLINE_PANEL_QSS)
+        self._range_edits = []
 
         layout = QGridLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -465,6 +516,11 @@ class _PgContextInlinePanel(QWidget):
         self._build_range_row(layout, 2, "x")
         self._build_range_row(layout, 3, "y")
         self._build_grid_row(layout, 4)
+        for first, second in zip(self._range_edits, self._range_edits[1:]):
+            QWidget.setTabOrder(first, second)
+        if self._menu is not None:
+            self._menu.installEventFilter(self)
+            self.destroyed.connect(self._remove_menu_filter)
 
     def _add_label(self, layout, row, text):
         label = QLabel(text, self)
@@ -593,11 +649,12 @@ class _PgContextInlinePanel(QWidget):
         self._add_label(layout, row, "查看")
 
     def _make_range_edit(self, object_name):
-        edit = QLineEdit(self)
+        edit = _RangeLineEdit(self, self)
         edit.setObjectName(object_name)
         edit.setAlignment(Qt.AlignCenter)
         edit.setFixedSize(_INLINE_TRACK_WIDTH, _INLINE_CONTROL_HEIGHT)
         edit.setToolTip("")
+        self._range_edits.append(edit)
         return edit
 
     def _build_range_row(self, layout, row, axis):
@@ -612,22 +669,70 @@ class _PgContextInlinePanel(QWidget):
 
         self._refresh_range_edits(axis, min_edit, max_edit)
         min_edit.editingFinished.connect(
-            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+            partial(self._on_range_editing_finished, axis, min_edit, max_edit)
         )
         max_edit.editingFinished.connect(
-            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+            partial(self._on_range_editing_finished, axis, min_edit, max_edit)
         )
         min_edit.returnPressed.connect(
-            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+            partial(self._apply_range, axis, min_edit, max_edit)
         )
         max_edit.returnPressed.connect(
-            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+            partial(self._apply_range, axis, min_edit, max_edit)
         )
 
         layout.addWidget(min_edit, row, 0)
         layout.addWidget(dash, row, 1)
         layout.addWidget(max_edit, row, 2)
         self._add_label(layout, row, label)
+
+    def _focus_adjacent_range(self, current, *, reverse=False):
+        edits = list(self._range_edits)
+        if current not in edits:
+            return False
+        step = -1 if reverse else 1
+        nxt = edits[(edits.index(current) + step) % len(edits)]
+        nxt.setFocus(Qt.TabFocusReason)
+        nxt.selectAll()
+        try:
+            from mf4_analyzer.ui import hints
+            hints.mark_discovered(QSettings(), "chart.range_tab")
+        except Exception:
+            pass
+        return True
+
+    def _on_range_editing_finished(self, axis, min_edit, max_edit):
+        focused = QApplication.focusWidget()
+        if focused is min_edit or focused is max_edit:
+            return
+        self._apply_range(axis, min_edit, max_edit)
+
+    def eventFilter(self, obj, event):
+        # QMenu may still deliver events while QWidgetAction tears this panel
+        # down; the Python wrapper can already have lost ``_menu``.
+        menu = getattr(self, "_menu", None)
+        if menu is None or obj is not menu:
+            return False
+        try:
+            if event.type() == QEvent.KeyPress and _is_tab_key(event):
+                focused = QApplication.focusWidget()
+                if focused in getattr(self, "_range_edits", ()):
+                    self._focus_adjacent_range(
+                        focused, reverse=_is_reverse_tab(event)
+                    )
+                    return True
+        except RuntimeError:
+            return False
+        return False
+
+    def _remove_menu_filter(self, *_args):
+        menu = getattr(self, "_menu", None)
+        if menu is None:
+            return
+        try:
+            menu.removeEventFilter(self)
+        except RuntimeError:
+            pass
 
     def _refresh_range_edits(self, axis, min_edit, max_edit):
         if self._view_box is None:

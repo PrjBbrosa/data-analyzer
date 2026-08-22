@@ -4973,6 +4973,102 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         assert vb.viewRange()[1] == pytest.approx([-3.0, 4.0])
         assert (y_min.text(), y_max.text()) == ("-3", "4")
 
+    def test_inline_range_edits_tab_from_start_to_end_without_second_click(
+        self, qapp, qtbot, monkeypatch
+    ):
+        """X/Y 起点 Tab 到终点；同一面板覆盖时域 / 频谱 / 时频 / 频响。"""
+        from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+        from PyQt5.QtGui import QKeyEvent
+        from PyQt5.QtWidgets import QApplication, QLineEdit, QWidget
+
+        from mf4_analyzer.ui.pg_canvas.context_menu import _RangeLineEdit
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        panel = _inline_panel(menu)
+        names = (
+            "pgContextXMinEdit",
+            "pgContextXMaxEdit",
+            "pgContextYMinEdit",
+            "pgContextYMaxEdit",
+        )
+        edits = [_panel_edit(panel, name) for name in names]
+        assert all(isinstance(edit, _RangeLineEdit) for edit in edits)
+        assert all(isinstance(edit, QLineEdit) for edit in edits)
+
+        host = QWidget()
+        qtbot.addWidget(host)
+        panel.setParent(host)
+        host.show()
+        QCoreApplication.processEvents()
+        edits[0].setFocus(Qt.TabFocusReason)
+        QCoreApplication.processEvents()
+        assert QApplication.focusWidget() is edits[0]
+
+        def _tab(*, reverse=False):
+            focused = QApplication.focusWidget()
+            key = Qt.Key_Backtab if reverse else Qt.Key_Tab
+            mods = Qt.ShiftModifier if reverse else Qt.NoModifier
+            press = QKeyEvent(QEvent.KeyPress, key, mods)
+            assert focused.event(press) is True
+
+        _tab()
+        QCoreApplication.processEvents()
+        assert QApplication.focusWidget() is edits[1]
+        assert edits[1].selectedText() == edits[1].text()
+
+        _tab()
+        QCoreApplication.processEvents()
+        assert QApplication.focusWidget() is edits[2]
+        _tab()
+        QCoreApplication.processEvents()
+        assert QApplication.focusWidget() is edits[3]
+        _tab(reverse=True)
+        QCoreApplication.processEvents()
+        assert QApplication.focusWidget() is edits[2]
+
+    def test_inline_range_edits_tab_inside_pair_does_not_apply_partial_range(
+        self, qapp, qtbot, monkeypatch
+    ):
+        """Tab from min to max keeps both drafts; apply only after leaving the pair."""
+        from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+        from PyQt5.QtGui import QKeyEvent
+        from PyQt5.QtWidgets import QApplication, QWidget
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+        vb.setXRange(1.0, 2.0, padding=0)
+        QCoreApplication.processEvents()
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        panel = _inline_panel(menu)
+        x_min = _panel_edit(panel, "pgContextXMinEdit")
+        x_max = _panel_edit(panel, "pgContextXMaxEdit")
+        y_min = _panel_edit(panel, "pgContextYMinEdit")
+        host = QWidget()
+        qtbot.addWidget(host)
+        panel.setParent(host)
+        host.show()
+        QCoreApplication.processEvents()
+
+        x_min.setFocus(Qt.OtherFocusReason)
+        x_min.setText("5")
+        press = QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier)
+        assert x_min.event(press) is True
+        QCoreApplication.processEvents()
+
+        assert QApplication.focusWidget() is x_max
+        assert x_min.text() == "5"
+        assert vb.viewRange()[0] == pytest.approx([1.0, 2.0])
+
+        x_max.setText("8")
+        y_min.setFocus(Qt.OtherFocusReason)
+        QCoreApplication.processEvents()
+        assert vb.viewRange()[0] == pytest.approx([5.0, 8.0])
+
     def test_inline_y_range_edits_target_triggered_overlay_viewbox(
         self, qapp, monkeypatch
     ):

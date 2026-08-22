@@ -162,6 +162,9 @@ def test_order_mode_names_eps_motor_speed():
 
 def test_quickref_context_menu_covers_add_to_overview():
     group = next(g for g in quickref.QUICKREF if g.title == "右键菜单")
+    range_row = next(r for r in group.rows if r.desc == "轴范围起止")
+    assert "Tab" in (range_row.gesture or "")
+    assert "起点" in (range_row.sub or "") and "终点" in (range_row.sub or "")
     tab_row = next(r for r in group.rows if r.desc == "View 标签右键")
     assert "加入总览" in tab_row.sub
     assert "不重新计算" in tab_row.sub

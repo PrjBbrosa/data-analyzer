@@ -198,6 +198,13 @@ _HINTS = (
         priority=50,
     ),
     Hint(
+        id="chart.range_tab",
+        text="轴范围 Tab 切换起止",
+        surface="discovery",
+        retire_on="range_tab",
+        priority=49,
+    ),
+    Hint(
         id="batch.export_options",
         text="切片≤4仅FFT-时间/阶次 · 完成后开输出目录会记住",
         surface="discovery",

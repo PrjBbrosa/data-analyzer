@@ -757,10 +757,16 @@ def test_heatmap_context_menu_range_edits_apply_valid_and_restore_invalid(
     qapp.processEvents()
 
     panel = _inline_panel(_open_context_menu(canvas._plot.vb, monkeypatch))
+    from mf4_analyzer.ui.pg_canvas.context_menu import _RangeLineEdit
+
     x_min = _panel_edit(panel, "pgContextXMinEdit")
     x_max = _panel_edit(panel, "pgContextXMaxEdit")
     y_min = _panel_edit(panel, "pgContextYMinEdit")
     y_max = _panel_edit(panel, "pgContextYMaxEdit")
+    assert all(
+        isinstance(edit, _RangeLineEdit)
+        for edit in (x_min, x_max, y_min, y_max)
+    )
 
     x_min.setText("1.5")
     x_max.setText("6.5")

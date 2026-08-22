@@ -355,6 +355,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "ultraview.view_rail",
         "ultraview.add_from_tab",
         "chart.custom_action_slot",
+        "chart.range_tab",
         "batch.export_options",
         "toolbar.save_as_menu",
     ]

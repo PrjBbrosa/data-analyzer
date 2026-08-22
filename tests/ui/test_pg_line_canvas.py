@@ -1865,6 +1865,17 @@ def test_fft_context_menu_includes_y_autofit(canvas, monkeypatch):
     assert y_fit is not None
     assert y_fit.text() == "Y适应"
     assert y_fit.isEnabled()
+    from mf4_analyzer.ui.pg_canvas.context_menu import _RangeLineEdit
+    from PyQt5.QtWidgets import QLineEdit
+
+    for name in (
+        "pgContextXMinEdit",
+        "pgContextXMaxEdit",
+        "pgContextYMinEdit",
+        "pgContextYMaxEdit",
+    ):
+        edit = panel.findChild(QLineEdit, name)
+        assert isinstance(edit, _RangeLineEdit)
 
 
 def test_fft_y_autofit_fits_to_visible_x_window(canvas, qapp):

@@ -188,6 +188,15 @@ def test_wwt_export_storage_is_a_shipped_discovery_hint():
     assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
 
 
+def test_range_tab_discovery_mentions_tab_and_stays_in_budget():
+    hint = next(h for h in hints.all_hints() if h.id == "chart.range_tab")
+    assert hint.surface == "discovery"
+    assert hint.ship == "now"
+    assert "Tab" in hint.text
+    assert "起止" in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
 def test_custom_action_slot_discovery_surfaces_and_retires():
     # After the higher-priority discoveries are seen, the custom-action-slot
     # tip surfaces; rebinding (marking the id) retires it.
