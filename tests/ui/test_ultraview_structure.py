@@ -77,7 +77,7 @@ FROZEN_PAGE_PRIVATE_SURFACE = frozenset()
 FROZEN_FLOATING_GEOMETRY_LITERALS = Counter(
     {
         # Pre-C3 leaks that D2's setMinimum* scan newly sees. Do not add more.
-        ("chrome.py", "setMinimumWidth", (48,)): 1,  # BoardIsland name field
+        ("chrome_islands.py", "setMinimumWidth", (48,)): 1,  # BoardIsland name field
         ("widgets.py", "setMinimumSize", (240,)): 2,  # focus layer + overview hosts
     }
 )

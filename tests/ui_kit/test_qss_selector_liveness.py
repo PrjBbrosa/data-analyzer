@@ -62,9 +62,9 @@ DYNAMIC_OBJECT_NAMES: frozenset[str] = frozenset(
         # (call sites :195 / :198). Spec inventory cited :479; unchanged here.
         "frfInputDot",
         "frfOutputDot",
-        # ultraview/chrome.py:494 ``f"ultraViewRail{short_name}Button"``
-        # and :506 ``f"ultraViewRail{short_name}Badge"``, short_name ``Unplaced``
-        # from ``_PANEL_SPECS`` (:452). SyncAll is a literal objectName, not
+        # ultraview/tool_rail.py ``f"ultraViewRail{short_name}Button"``
+        # and ``f"ultraViewRail{short_name}Badge"``, short_name ``Unplaced``
+        # from ``_PANEL_SPECS``. SyncAll is a literal objectName, not
         # this f-string path.
         "ultraViewRailUnplacedButton",
         "ultraViewRailUnplacedBadge",
@@ -159,13 +159,13 @@ def test_dynamic_construction_sites_are_still_present():
         / "inspector_sections"
         / "contextual_frf.py"
     ).read_text(encoding="utf-8")
-    chrome = (
+    rail = (
         REPO_ROOT
         / "mf4_analyzer"
         / "ui"
         / "chart_stack"
         / "ultraview"
-        / "chrome.py"
+        / "tool_rail.py"
     ).read_text(encoding="utf-8")
     for needle in (
         'dot.setObjectName(f"{role}Dot")',
@@ -178,7 +178,7 @@ def test_dynamic_construction_sites_are_still_present():
         'badge.setObjectName(f"ultraViewRail{short_name}Badge")',
         '"Unplaced"',
     ):
-        assert needle in chrome, f"retired UltraView chrome site: {needle}"
+        assert needle in rail, f"retired UltraView chrome site: {needle}"
 
 
 def test_extract_does_not_swallow_prefixes():

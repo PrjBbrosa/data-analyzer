@@ -103,8 +103,12 @@ COORDINATOR_PATH = UI_ROOT / "main_window" / "ultraview_coordinator.py"
 
 # Wave 1 flips this after chrome.py / widgets.py become re-export façades.
 WAVE1_FACADE_ACTIVE = False
+# Chrome-only landing: chrome.py is a façade while widgets.py still owns ClassDefs.
+WAVE1_CHROME_FACADE_ACTIVE = True
 
 WAVE1_CHROME_IMPL = (
+    "chrome_common.py",
+    "canvas_host.py",
     "tool_rail.py",
     "chrome_islands.py",
     "chrome_popovers.py",
@@ -657,6 +661,20 @@ def test_widgets_and_chrome_public_classdefs_are_frozen():
         assert chrome_classes == ()
         return
     assert widgets_classes == FROZEN_WIDGETS_PUBLIC_CLASSES
+    if WAVE1_CHROME_FACADE_ACTIVE:
+        assert chrome_classes == ()
+        assert tuple(getattr(chrome_mod, name) for name in FROZEN_CHROME_PUBLIC_CLASSES) == (
+            CanvasHost,
+            ToolRail,
+            BoardIsland,
+            BoardPopover,
+            GlobalIsland,
+            NavigationIsland,
+            StatusIsland,
+            CardContextIsland,
+            LayoutPicker,
+        )
+        return
     assert chrome_classes == FROZEN_CHROME_PUBLIC_CLASSES
 
 
