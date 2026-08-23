@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.0.1. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.1.0. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -90,6 +90,8 @@ eagerly materializing one dense shared table.
 8.0.1 refines UltraView exports to fit their populated free-grid content,
 centres fit cards vertically while preserving the captured preview ratio, and
 uses right-drag for canvas panning while left-drag continues to box-select.
+8.1.0 establishes the current product release baseline and synchronizes the
+application title, published guides, and Windows Full/Analyzer package defaults.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

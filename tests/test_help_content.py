@@ -24,16 +24,16 @@ def _deck_data() -> dict:
 
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
-    assert d["meta"]["version"] == "v8.0.1"
-    assert d["meta"]["updated"] == "2026-08-18"
+    assert d["meta"]["version"] == "v8.1.0"
+    assert d["meta"]["updated"] == "2026-08-23"
     assert d["meta"]["docVersion"] == "3.0"
     assert [c["v"] for c in d["changelog"]][:5] == [
-        "v8.0.1", "v8.0.0", "v7.9.9", "v7.9.8", "v7.9.7",
+        "v8.1.0", "v8.0.1", "v8.0.0", "v7.9.9", "v7.9.8",
     ]
     current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
         '  "changelog": [', 1,
     )
-    assert "TraceLab v8.0.1" in current_manual
+    assert "TraceLab v8.1.0" in current_manual
     assert "v8.0.0" not in current_manual.lower()
 
 
@@ -46,6 +46,15 @@ def test_v800_changelog_covers_ultraview_workspace_and_restore():
         "UltraView", "多个 Board", "12 列自由网格", "minimap", "PNG",
         "不会静默补算", "工程保存", "所有带来源的分析 View", "BLF / ASC",
     ):
+        assert keyword in description
+
+
+def test_v810_changelog_covers_release_surface_alignment():
+    entry = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v8.1.0"
+    )
+    description = " ".join(entry["items"])
+    for keyword in ("TraceLab v8.1.0", "应用标题", "帮助说明", "Windows", "完整版", "分析版"):
         assert keyword in description
 
 
@@ -207,9 +216,9 @@ def test_manual_uses_current_real_ui_assets():
         assert f"assets/{name}" in html
 
 
-def test_published_guide_tracks_v801_and_real_ui_assets():
+def test_published_guide_tracks_v810_and_real_ui_assets():
     html = PUBLISHED_GUIDE.read_text(encoding="utf-8")
-    assert "TraceLab v8.0.1" in html
+    assert "TraceLab v8.1.0" in html
     for name in ("WWT", "ZFD", "MAT", "time-panel.png", "imports-panel.png"):
         assert name in html
     assert "matplotlib" not in html
@@ -236,7 +245,7 @@ def test_panel_guides_cover_new_topics():
     }
     for fname, kws in checks.items():
         text = (HELP / fname).read_text(encoding="utf-8")
-        assert "TraceLab v8.0.1" in text
+        assert "TraceLab v8.1.0" in text
         for kw in kws:
             assert kw in text, f"{fname} missing: {kw}"
 
@@ -271,7 +280,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
     assert guide_path("ultraview") == path
     assert path.is_file()
     text = path.read_text(encoding="utf-8")
-    assert "TraceLab v8.0.1" in text
+    assert "TraceLab v8.1.0" in text
     for keyword in (
         "只读", "不计算", "View 库", "托盘", "加入总览",
         "打开原 View", "PNG", "缺", "孤儿", ".tlproj",

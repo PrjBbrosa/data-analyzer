@@ -5,8 +5,8 @@ from mf4_analyzer import app_meta
 
 
 def test_app_meta_constants():
-    assert app_meta.APP_VERSION == "v8.0.1"
-    assert app_meta.WINDOW_TITLE == "TraceLab v8.0.1"
+    assert app_meta.APP_VERSION == "v8.1.0"
+    assert app_meta.WINDOW_TITLE == "TraceLab v8.1.0"
     assert app_meta.RELEASE_URL.startswith("https://")
 
 
@@ -1423,4 +1423,3 @@ def test_project_roundtrip_restores_fft_remarks_and_frequency_cursor(
     assert canvas2._cursor_a_frequency == pytest.approx(placement["ax"])
     assert canvas2._cursor_b_frequency == pytest.approx(placement["bx"])
     assert all(line.isVisible() for line in canvas2._cursor_a_lines)
-
