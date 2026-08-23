@@ -204,6 +204,21 @@ class UltraViewWorkspaceController:
     def workspace(self) -> UltraViewWorkspaceState:
         return self._workspace
 
+    @property
+    def grid_histories(self):
+        """Compatibility view owned by this controller."""
+        return self._grid_histories
+
+    @property
+    def pending_auto_aspect(self):
+        """Compatibility view owned by this controller."""
+        return self._pending_auto_aspect
+
+    @property
+    def layout_revision(self):
+        """Compatibility view owned by this controller."""
+        return self._layout_revision
+
     def replace_workspace(self, workspace: UltraViewWorkspaceState) -> None:
         """Swap the live workspace object. Does not copy history or Board state."""
         self._workspace = workspace

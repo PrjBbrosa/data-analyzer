@@ -624,3 +624,22 @@ TMPDIR=/tmp MPLCONFIGDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
 
 完成前状态保持 **PARTIAL / IN PROGRESS**，不得仅因大文件行数下降就宣称架构稳定。
 
+---
+
+## Addendum — 2026-08-23 follow-up execution (do not rewrite history above)
+
+This document keeps its original `PROPOSED / BLOCKED BY HARDENING COMPLETION` proposal text. Execution after the local architecture merge lives in:
+
+`docs/analyzer/plans/2026-08-22-ultraview-architecture-and-quality-followup-plan.md`
+
+Four states that must not be collapsed:
+
+| State | Meaning | 2026-08-23 |
+|---|---|---|
+| Local merge | Architecture split landed on local `main` | Yes (`2feddfa17e2494d2551b6dd755aa5240e64c36da` plus follow-up working tree) |
+| Remote publish | `origin/main` contains the work | No; local `main` was already ahead 36, no push without explicit authorization |
+| Offscreen green | Focused/boundary/full automated gates on a stable snapshot | Functional follow-up and owner-state seam implemented; compatibility method façade remains partial; see the follow-up Plan for candidate gate results |
+| Cocoa acceptance | Real macOS foreground gesture/pixel/lifecycle matrix | `UNVERIFIED` on this candidate |
+| Windows frozen | Full/Lite frozen executables | `UNVERIFIED` |
+
+The historical checklist above is not retroactively ticked. Use the follow-up Plan §5 as the current remaining-work source of truth.

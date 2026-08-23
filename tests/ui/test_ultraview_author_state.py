@@ -476,7 +476,7 @@ def test_mixed_nudge_past_safety_moves_neither():
     assert any(code.split(":", 1)[0] == "invalid_grid_rect" for code in plan.warnings)
 
 
-def test_mixed_nudge_locked_reports_affected_count_and_still_moves_legal_items():
+def test_mixed_nudge_locked_author_rejects_and_moves_neither():
     from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
 
     board = uvs.default_board()
@@ -484,19 +484,23 @@ def test_mixed_nudge_locked_reports_affected_count_and_still_moves_legal_items()
     ref = uvs.make_ref("time", "lock")
     uvs.add_ref(board, ref)
     board.author_objects = [_sticky("free", x=2.0), _sticky("held", x=8.0, locked=True)]
+    before = uvs.board_to_payload(board)
     before_rect = uvs.free_grid_placement_for(board, ref).rect
     plan = plan_selection_nudge(board, (ref,), ("free", "held"), 1.0, 0.0)
-    assert not plan.rejected
+    assert plan.rejected
     assert plan.skipped_locked == ("held",)
-    assert plan.affected_author_ids == ("free",)
-    assert "author_locked" in plan.warnings
-    assert commit_selection_plan(board, plan) is True
-    assert uvs.free_grid_placement_for(board, ref).rect.column == before_rect.column + 1
-    assert _item(board, "free").box.x == 3.0
+    assert plan.affected_card_refs == ()
+    assert plan.affected_author_ids == ()
+    assert plan.as_entry() is None
+    assert any(code.split(":", 1)[0] == "author_locked" for code in plan.warnings)
+    assert commit_selection_plan(board, plan) is False
+    assert uvs.board_to_payload(board) == before
+    assert uvs.free_grid_placement_for(board, ref).rect == before_rect
+    assert _item(board, "free").box.x == 2.0
     assert _item(board, "held").box.x == 8.0
 
 
-def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector():
+def test_mixed_nudge_unknown_author_rejects_and_does_not_dangle_connector():
     from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
 
     board = uvs.default_board()
@@ -508,12 +512,15 @@ def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector():
         _unknown("ghost"),
         _connector("line", start_id="note", end_id="ghost"),
     ]
+    before = uvs.board_to_payload(board)
     plan = plan_selection_nudge(board, (ref,), ("note", "ghost", "line"), 1.0, 0.0)
-    assert not plan.rejected
+    assert plan.rejected
     assert plan.skipped_unknown == ("ghost",)
-    assert "unknown_author_object" in plan.warnings
-    assert commit_selection_plan(board, plan) is True
-    assert _item(board, "note").box.x == 11.0
+    assert plan.as_entry() is None
+    assert any(code.split(":", 1)[0] == "unknown_author_object" for code in plan.warnings)
+    assert commit_selection_plan(board, plan) is False
+    assert uvs.board_to_payload(board) == before
+    assert _item(board, "note").box.x == 10.0
     ghost = _item(board, "ghost")
     assert isinstance(ghost, uvs.UnknownAuthorObject)
     assert ghost.raw.get("id") == "ghost"
@@ -523,6 +530,87 @@ def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector():
     assert line.start.target.object_id == "note"
     assert line.end.target is not None
     assert line.end.target.object_id == "ghost"
+
+
+def test_mixed_nudge_missing_card_ref_rejects_without_author_commit():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    placed = uvs.make_ref("time", "ok")
+    missing = uvs.make_ref("time", "gone")
+    uvs.add_ref(board, placed)
+    board.author_objects = [_sticky("note", x=10.0)]
+    before = uvs.board_to_payload(board)
+    plan = plan_selection_nudge(board, (placed, missing), ("note",), 1.0, 0.0)
+    assert plan.rejected
+    assert plan.label == "mixed-nudge"
+    assert plan.as_entry() is None
+    assert any(code.split(":", 1)[0] == "missing_card_ref" for code in plan.warnings)
+    assert commit_selection_plan(board, plan) is False
+    assert uvs.board_to_payload(board) == before
+    assert _item(board, "note").box.x == 10.0
+
+
+def test_mixed_nudge_unplaced_card_rejects_whole_intent():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    placed = uvs.make_ref("time", "grid")
+    tray = uvs.make_ref("time", "tray")
+    uvs.add_ref(board, placed)
+    uvs.add_ref(board, tray)
+    assert uvs.move_to_unplaced(board, tray) == []
+    board.author_objects = [_sticky("note", x=10.0)]
+    before = uvs.board_to_payload(board)
+    plan = plan_selection_nudge(board, (placed, tray), ("note",), 1.0, 0.0)
+    assert plan.rejected
+    assert any(code.split(":", 1)[0] == "unplaced_card" for code in plan.warnings)
+    assert commit_selection_plan(board, plan) is False
+    assert uvs.board_to_payload(board) == before
+
+
+def test_mixed_nudge_stale_selection_rejects_without_history_entry():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_nudge
+
+    board = uvs.default_board()
+    board.layout_mode = uvs.LAYOUT_MODE_TEMPLATE
+    live = uvs.make_ref("time", "live")
+    stale = uvs.make_ref("time", "stale")
+    uvs.add_ref(board, live)
+    uvs.add_ref(board, stale)
+    board.author_objects = [_sticky("note", x=4.0)]
+    before = uvs.board_to_payload(board)
+    plan = plan_selection_nudge(board, (live, stale), ("note",), 1.0, 0.0)
+    assert plan.rejected
+    assert any(code.split(":", 1)[0] == "stale_card_ref" for code in plan.warnings)
+    assert plan.as_entry() is None
+    assert commit_selection_plan(board, plan) is False
+    assert uvs.board_to_payload(board) == before
+
+
+def test_mixed_delete_missing_or_locked_target_rejects_and_keeps_board():
+    from mf4_analyzer.ui.ultraview_edits import commit_selection_plan, plan_selection_delete
+
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    placed = uvs.make_ref("time", "keep")
+    missing = uvs.make_ref("time", "absent")
+    uvs.add_ref(board, placed)
+    board.author_objects = [_sticky("note", x=20.0, locked=True)]
+    before = uvs.board_to_payload(board)
+    missing_plan = plan_selection_delete(board, (placed, missing), ("note",))
+    assert missing_plan.rejected
+    assert any(code.split(":", 1)[0] == "missing_card_ref" for code in missing_plan.warnings)
+    assert commit_selection_plan(board, missing_plan) is False
+    locked_plan = plan_selection_delete(board, (placed,), ("note",))
+    assert locked_plan.rejected
+    assert any(code.split(":", 1)[0] == "author_locked" for code in locked_plan.warnings)
+    assert commit_selection_plan(board, locked_plan) is False
+    assert uvs.board_to_payload(board) == before
+    assert uvs.free_grid_placement_for(board, placed) is not None
+    assert _item(board, "note") is not None
 
 
 def test_mixed_delete_undo_redo_and_save_reopen_restore_membership():

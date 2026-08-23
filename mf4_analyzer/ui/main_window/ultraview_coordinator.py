@@ -341,7 +341,7 @@ class UltraViewCoordinator(QObject):
     def copy_card_to_clipboard(self, ref: UltraViewRef) -> bool:
         if self._inactive():
             return False
-        record = self._store.get(ref)
+        record = self.store.get(ref)
         image = getattr(record, "image", None) if record is not None else None
         if not PreviewStore.image_valid(image):
             self._export_failed("missing_preview", "该卡片尚无可用预览")
@@ -351,7 +351,7 @@ class UltraViewCoordinator(QObject):
             self._export_failed("clipboard_failed", "无法访问剪贴板")
             return False
         clipboard.setImage(image)
-        self._store.touch(ref)
+        self.store.touch(ref)
         self._toast("已复制卡片图", "success")
         return True
 
@@ -426,50 +426,6 @@ class UltraViewCoordinator(QObject):
 
     def schedule_idle_capture(self, ref, widget=None) -> None:
         return self._capture.schedule_idle_capture(ref, widget)
-
-    @property
-    def _store(self) -> PreviewStore:
-        return self._capture._store
-
-    @property
-    def _runtime(self):
-        return self._capture._runtime
-
-    @property
-    def _bindings(self):
-        return self._capture._bindings
-
-    @property
-    def _queued(self):
-        return self._capture._queued
-
-    @property
-    def _sidecar_timer(self):
-        return self._capture._sidecar_timer
-
-    @property
-    def _sidecar_pending(self):
-        return self._capture._sidecar_pending
-
-    @property
-    def _idle_timer(self):
-        return self._capture._idle_timer
-
-    @property
-    def _focus_timer(self):
-        return self._capture._focus_timer
-
-    @property
-    def _presentation_revision(self):
-        return self._capture._presentation_revision
-
-    @property
-    def _hooked_ids(self):
-        return self._capture._hooked_ids
-
-    @property
-    def _destroy_watched(self):
-        return self._capture._destroy_watched
 
     def _active_card_visible(self, ref: UltraViewRef) -> bool:
         return self._capture._active_card_visible(ref)
@@ -686,15 +642,15 @@ class UltraViewCoordinator(QObject):
 
     @property
     def _grid_histories(self):
-        return self._workspace_controller._grid_histories
+        return self._workspace_controller.grid_histories
 
     @property
     def _pending_auto_aspect(self):
-        return self._workspace_controller._pending_auto_aspect
+        return self._workspace_controller.pending_auto_aspect
 
     @property
     def _layout_revision(self):
-        return self._workspace_controller._layout_revision
+        return self._workspace_controller.layout_revision
 
     def _connect_page(self, page) -> None:
         pairs = (
@@ -832,7 +788,7 @@ class UltraViewCoordinator(QObject):
             coord = coord_ref()
             if coord is None or coord._inactive():
                 return
-            if wait_capture and any(key[0] == ref for key in coord._queued):
+            if wait_capture and coord._capture.has_pending_capture(ref):
                 QTimer.singleShot(0, _advance)
                 return
             if coord._sync_current_ref == ref:
@@ -915,7 +871,7 @@ class UltraViewCoordinator(QObject):
         for section, manager in self._iter_managers():
             for state in list(manager.views):
                 ref = UltraViewRef(section, str(state.view_id))
-                record = self._store.get(ref)
+                record = self.store.get(ref)
                 exists = True
                 digest = self.current_digest_for(ref)
                 image_valid = record is not None and PreviewStore.image_valid(
@@ -968,7 +924,7 @@ class UltraViewCoordinator(QObject):
         page = self.page()
         if page is None:
             return
-        record = self._store.get(ref)
+        record = self.store.get(ref)
         exists = self._ref_exists(ref)
         digest = (
             self.current_digest_for(ref) if exists and usable else None
@@ -980,7 +936,7 @@ class UltraViewCoordinator(QObject):
         status = derive_preview_status(exists, image_valid, captured, digest)
         page.apply_preview_and_status(ref, record, status, exists)
         if image_valid and any(ref in placed_ref_set(board) for board in self._workspace.boards):
-            self._store.touch(ref)
+            self.store.touch(ref)
         self._refresh_open_focus(ref)
         if image_valid and usable:
             self._maybe_apply_pending_auto_aspect(ref)
@@ -1230,7 +1186,7 @@ class UltraViewCoordinator(QObject):
         return self._workspace_controller._on_free_grid_redo()
 
     def _preview_image_size(self, ref: UltraViewRef) -> tuple[int, int] | None:
-        record = self._store.get(ref)
+        record = self.store.get(ref)
         image = getattr(record, "image", None) if record is not None else None
         if not PreviewStore.image_valid(image):
             return None
@@ -1332,7 +1288,7 @@ class UltraViewCoordinator(QObject):
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        self._store.touch(ref)
+        self.store.touch(ref)
         page = self.page()
         digest = self.current_digest_for(ref)
         stale = digest is None or not self._has_current_preview(ref, digest)
@@ -1393,11 +1349,11 @@ class UltraViewCoordinator(QObject):
         statuses = {}
         board = active_board(self._workspace)
         for ref in all_refs(board):
-            record = self._store.get(ref)
+            record = self.store.get(ref)
             records[ref] = record
             if record is not None and PreviewStore.image_valid(getattr(record, "image", None)):
                 if ref in placed_ref_set(board):
-                    self._store.touch(ref)
+                    self.store.touch(ref)
             exists = self._ref_exists(ref)
             digest = self.current_digest_for(ref) if exists else None
             image_valid = record is not None and PreviewStore.image_valid(

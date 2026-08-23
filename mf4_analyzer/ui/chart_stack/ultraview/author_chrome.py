@@ -170,6 +170,16 @@ class ToolFlyoutSurface(QFrame):
         height = max(int(hint.height()), 1)
         return QSize(width, height)
 
+    def sync_vertical_scroll_for_height(self, available_height: int) -> None:
+        """Keep every hosted/resized flyout's full content reachable."""
+        needed = self.content_size().height() > max(1, int(available_height))
+        self._scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded if needed else Qt.ScrollBarAlwaysOff
+        )
+
+    def vertical_scroll_enabled(self) -> bool:
+        return self._scroll.verticalScrollBarPolicy() != Qt.ScrollBarAlwaysOff
+
     def sizeHint(self) -> QSize:  # noqa: N802
         return self.content_size()
 

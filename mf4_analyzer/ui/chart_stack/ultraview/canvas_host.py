@@ -140,6 +140,9 @@ class CanvasHost(QFrame):
     def overlay(self, overlay_id: str) -> QWidget | None:
         return self._overlays.get(str(overlay_id))
 
+    def overlay_trigger(self, overlay_id: str) -> QWidget | None:
+        return self._overlay_triggers.get(str(overlay_id))
+
     def active_overlay(self) -> str | None:
         return self._active_overlay
 

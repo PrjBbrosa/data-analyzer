@@ -363,3 +363,20 @@ MainWindow integration
 11. Windows frozen 未执行时明确标记 `UNVERIFIED`，不得由 source/offscreen/Cocoa 代替；
 12. 每个 wave 都存在独立提交和可验证回退点，没有依赖最终清理才能运行的临时双实现。
 
+---
+
+## Addendum — 2026-08-23 follow-up execution (do not rewrite history above)
+
+This Spec keeps its original `PROPOSED / BLOCKED BY HARDENING COMPLETION` proposal semantics. It is not re-labeled `IMPLEMENTED`.
+
+Current execution source of truth:
+
+`docs/analyzer/plans/2026-08-22-ultraview-architecture-and-quality-followup-plan.md`
+
+Status classes (must stay distinct):
+
+- **Local merge**: architecture owners already landed locally; functional follow-up and owner-state containment are complete, while the compatibility method façade remains a shrink-only partial seam.
+- **Remote publish**: not implied by local merge; requires an explicit push authorization.
+- **Offscreen green**: automated Qt-offscreen evidence only.
+- **Cocoa acceptance**: real macOS foreground matrix; remains `UNVERIFIED` until recorded against the same candidate snapshot.
+- **Windows frozen**: remains `UNVERIFIED` until a frozen Full/Lite run exists.

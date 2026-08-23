@@ -588,7 +588,6 @@ class UltraViewPage(QWidget):
             refresh_author_toolbar=self._refresh_author_toolbar,
             selection_toolbar=self._selection_toolbar,
         )
-        self._bind_pointer_router()
         self._bind_board_page_ports()
         self._author_ui = AuthorUiController(
             interaction=self._interaction,
@@ -610,7 +609,7 @@ class UltraViewPage(QWidget):
             reassert_host_stacking=self._reassert_host_stacking,
             selection_capabilities=self._selection_capabilities,
             selection_bounds=self._selection_bounds_in_host,
-            author_item=self._author_item,
+            author_item=self._pointer_router.author_item,
             apply_format=self._on_selection_format_requested,
             text_field_has_focus=self._text_field_has_focus,
             creation_allowed=self._free_grid.creation_allowed,
@@ -654,6 +653,7 @@ class UltraViewPage(QWidget):
             sync_empty_board_cue=self._sync_empty_board_cue,
             sync_feedback_surface=self._sync_feedback_surface,
             position_card_context=self._position_card_context,
+            reanchor_open_transient=self._author_ui.reanchor_open_transient,
         )
         self._more_menu: QMenu | None = None
         self.resolve_insert_span = None
@@ -831,10 +831,10 @@ class UltraViewPage(QWidget):
         if self._already_wired("free_grid"):
             return
         editor = self._free_grid.author_text_editor()
-        editor.text_committed.connect(self._on_text_committed)
-        editor.edit_cancelled.connect(self._on_text_cancelled)
-        editor.focus_lost.connect(self._on_text_focus_lost)
-        editor.limit_reached.connect(self._on_text_limit_reached)
+        editor.text_committed.connect(self._pointer_router.on_text_committed)
+        editor.edit_cancelled.connect(self._pointer_router.on_text_cancelled)
+        editor.focus_lost.connect(self._pointer_router.on_text_focus_lost)
+        editor.limit_reached.connect(self._pointer_router.on_text_limit_reached)
         self._free_grid.insert_requested.connect(self._on_free_grid_insert_requested)
         self._free_grid.geometry_requested.connect(self.free_grid_geometry_requested)
         self._free_grid.group_geometry_requested.connect(
@@ -1019,25 +1019,23 @@ class UltraViewPage(QWidget):
 
     @property
     def _edge_pan_active(self) -> bool:
-        return self._viewport_ctrl._edge_pan_active
+        return self._viewport_ctrl.edge_pan_active
 
     @_edge_pan_active.setter
     def _edge_pan_active(self, value: bool) -> None:
-        self._viewport_ctrl._edge_pan_active = bool(value)
+        self._viewport_ctrl.edge_pan_active = bool(value)
 
     @property
     def _edge_pan_global_pos(self) -> QPoint | None:
-        return self._viewport_ctrl._edge_pan_global_pos
+        return self._viewport_ctrl.edge_pan_global_pos
 
     @_edge_pan_global_pos.setter
     def _edge_pan_global_pos(self, value) -> None:
-        self._viewport_ctrl._edge_pan_global_pos = (
-            None if value is None else QPoint(value)
-        )
+        self._viewport_ctrl.edge_pan_global_pos = value
 
     @property
     def _right_gesture_widget(self):
-        return self._viewport_ctrl._right_gesture_widget
+        return self._viewport_ctrl.right_gesture_widget
 
     @property
     def _filled_card(self) -> tuple[str, str] | None:
@@ -1140,14 +1138,6 @@ class UltraViewPage(QWidget):
     def _pointer_board(self):
         return self._board
 
-    def _bind_pointer_router(self) -> None:
-        router = self._pointer_router
-        owned = set(UltraViewPage.__dict__)
-        for name in PointerRouter.FORWARDED_METHODS:
-            if name in owned:
-                continue
-            setattr(self, name, getattr(router, name))
-
     def _bind_board_page_ports(self) -> None:
         shared = {
             "notify_canvas_click": self.notify_canvas_click,
@@ -1158,41 +1148,41 @@ class UltraViewPage(QWidget):
         self._grid.bind_page_ports(**shared)
         self._free_grid.bind_page_ports(
             **shared,
-            begin_connector_geometry=self._pointer_router._begin_connector_geometry,
+            begin_connector_geometry=self._pointer_router.begin_connector_geometry,
             sync_page_tool_cursor=self._sync_tool_cursor,
             unset_viewport_cursor=self._unset_board_viewport_cursor,
         )
 
     def _pointer_tool_armed(self, tool: str) -> bool:
-        return self._pointer_router._pointer_tool_armed(tool)
+        return self._pointer_router.pointer_tool_armed(tool)
 
     @property
     def _editor_kind(self) -> str:
         router = getattr(self, "_pointer_router", None)
         if router is None:
             return ""
-        return str(router._editor_kind or "")
+        return str(router.editor_kind or "")
 
     @_editor_kind.setter
     def _editor_kind(self, value: str) -> None:
         router = getattr(self, "_pointer_router", None)
         if router is None:
             return
-        router._editor_kind = str(value or "")
+        router.editor_kind = str(value or "")
 
     @property
     def _text_limit_notified(self) -> bool:
         router = getattr(self, "_pointer_router", None)
         if router is None:
             return False
-        return bool(router._text_limit_notified)
+        return bool(router.text_limit_notified)
 
     @_text_limit_notified.setter
     def _text_limit_notified(self, value: bool) -> None:
         router = getattr(self, "_pointer_router", None)
         if router is None:
             return
-        router._text_limit_notified = bool(value)
+        router.text_limit_notified = bool(value)
 
     @property
     def _text_geometry_session(self):
@@ -2062,7 +2052,7 @@ class UltraViewPage(QWidget):
         self._viewport_ctrl.zoom_fit()
 
     def _park_zoom(self, zoom: float) -> None:
-        self._viewport_ctrl._park_zoom(zoom)
+        self._viewport_ctrl.park_zoom(zoom)
 
     def _set_zoom_percent(self, percent: int) -> None:
         """Keep the legacy façade and the visible navigation island aligned."""
@@ -2167,7 +2157,7 @@ class UltraViewPage(QWidget):
         return self._grid
 
     def _zoom_at(self, zoom: float, cursor_in_viewport) -> None:
-        self._viewport_ctrl._zoom_at(zoom, cursor_in_viewport)
+        self._viewport_ctrl.zoom_at(zoom, cursor_in_viewport)
 
     def _on_viewport_resized(self, size) -> None:
         layout_size = self._board_layout_viewport_size(size)
@@ -2184,7 +2174,7 @@ class UltraViewPage(QWidget):
         self._refresh_card_context()
 
     def _on_smooth_preview_timeout(self) -> None:
-        self._viewport_ctrl._on_smooth_preview_timeout()
+        self._viewport_ctrl.on_smooth_preview_timeout()
 
     def focus_layer(self) -> FocusLayer:
         return self._focus
@@ -2554,7 +2544,7 @@ class UltraViewPage(QWidget):
             self._workspace_extent = None
             self._free_grid.cancel_gesture()
             self._free_grid.reset_transient_interaction()
-            self._clear_draw_draft_paint()
+            self._pointer_router.clear_draw_draft_paint()
         if not keep_overview:
             self.hide_overview()
         if self._workspace is None and self._switcher.isVisible():
@@ -2802,11 +2792,11 @@ class UltraViewPage(QWidget):
             tool = self._interaction.draft().tool
             self._interaction.cancel_draft()
             if tool == TOOL_SHAPES:
-                self._clear_shape_draft_paint()
+                self._pointer_router.clear_shape_draft_paint()
             if tool == TOOL_CONNECTOR:
-                self._clear_connector_draft_paint()
+                self._pointer_router.clear_connector_draft_paint()
             if tool == TOOL_DRAW:
-                self._clear_draw_draft_paint()
+                self._pointer_router.clear_draw_draft_paint()
             self._sync_tool_rail_from_controller()
             self._sync_tool_cursor()
             return True
@@ -2952,43 +2942,43 @@ class UltraViewPage(QWidget):
         self._board_context.close_board_context_menu()
 
     def _on_board_context_menu_hidden(self) -> None:
-        self._board_context._on_board_context_menu_hidden()
+        self._board_context.on_board_context_menu_hidden()
 
     def _on_board_menu_zoom_fit(self, _checked: bool = False) -> None:
-        self._board_context._on_board_menu_zoom_fit(_checked)
+        self._board_context.on_board_menu_zoom_fit(_checked)
 
     def _on_board_menu_zoom_reset(self, _checked: bool = False) -> None:
-        self._board_context._on_board_menu_zoom_reset(_checked)
+        self._board_context.on_board_menu_zoom_reset(_checked)
 
     def _on_board_menu_overview(self, _checked: bool = False) -> None:
-        self._board_context._on_board_menu_overview(_checked)
+        self._board_context.on_board_menu_overview(_checked)
 
     def _on_board_menu_auto_arrange(self, _checked: bool = False) -> None:
-        self._board_context._on_board_menu_auto_arrange(_checked)
+        self._board_context.on_board_menu_auto_arrange(_checked)
 
     def _on_board_menu_undo_arrange(self, _checked: bool = False) -> None:
-        self._board_context._on_board_menu_undo_arrange(_checked)
+        self._board_context.on_board_menu_undo_arrange(_checked)
 
     def _on_board_menu_copy(self, _checked: bool = False) -> None:
-        self._board_context._on_board_menu_copy(_checked)
+        self._board_context.on_board_menu_copy(_checked)
 
     def _on_board_menu_export(self, _checked: bool = False) -> None:
-        self._board_context._on_board_menu_export(_checked)
+        self._board_context.on_board_menu_export(_checked)
 
     def _cancel_board_gestures(self) -> None:
-        self._commit_or_cancel_text_editor()
+        self._pointer_router.commit_or_cancel_text_editor()
         self._text_geometry_session = None
         self._shape_geometry_session = None
         self._connector_geometry_session = None
         if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_SHAPES:
             self._interaction.cancel_draft()
-            self._clear_shape_draft_paint()
+            self._pointer_router.clear_shape_draft_paint()
         if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_CONNECTOR:
             self._interaction.cancel_draft()
-            self._clear_connector_draft_paint()
+            self._pointer_router.clear_connector_draft_paint()
         if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_DRAW:
             self._interaction.cancel_draft()
-            self._clear_draw_draft_paint()
+            self._pointer_router.clear_draw_draft_paint()
         self._viewport_ctrl.cancel()
         if self._grid.is_gesture_active():
             self._grid.cancel_gesture()
@@ -2997,19 +2987,19 @@ class UltraViewPage(QWidget):
 
     def event(self, event) -> bool:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
-            self._commit_or_cancel_text_editor()
+            self._pointer_router.commit_or_cancel_text_editor()
             self._text_geometry_session = None
             self._shape_geometry_session = None
             self._connector_geometry_session = None
             if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_SHAPES:
                 self._interaction.cancel_draft()
-                self._clear_shape_draft_paint()
+                self._pointer_router.clear_shape_draft_paint()
             if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_CONNECTOR:
                 self._interaction.cancel_draft()
-                self._clear_connector_draft_paint()
+                self._pointer_router.clear_connector_draft_paint()
             if self._interaction.draft() is not None and self._interaction.draft().tool == TOOL_DRAW:
                 self._interaction.cancel_draft()
-                self._clear_draw_draft_paint()
+                self._pointer_router.clear_draw_draft_paint()
         return super().event(event)
 
     def changeEvent(self, event) -> None:  # noqa: N802
@@ -3419,7 +3409,7 @@ class UltraViewPage(QWidget):
             else:
                 viewport.setCursor(cursor)
         if (
-            self._draw_create_armed()
+            self._pointer_router.draw_create_armed()
             and not self._viewport.is_panning()
             and not self._viewport.space_down()
         ):
@@ -3432,15 +3422,15 @@ class UltraViewPage(QWidget):
             return
 
     def _on_author_edit_requested(self, object_id: str) -> None:
-        item = self._author_item(object_id)
+        item = self._pointer_router.author_item(object_id)
         if isinstance(item, TextObject):
-            self._begin_text_edit(item, replace=False)
+            self._pointer_router.begin_text_edit(item, replace=False)
             return
         if isinstance(item, ShapeObject):
-            self._begin_shape_label_edit(item, replace=False)
+            self._pointer_router.begin_shape_label_edit(item, replace=False)
             return
         if isinstance(item, ConnectorObject):
-            self._begin_connector_label_edit(item)
+            self._pointer_router.begin_connector_label_edit(item)
 
     def _on_selection_more_requested(self) -> None:
         toolbar = self._selection_toolbar
@@ -3596,10 +3586,10 @@ class UltraViewPage(QWidget):
             QTimer.singleShot(0, self._refresh_author_toolbar)
             return
         if caps.kind == "shape" or self._selection_toolbar.kind() == "shape":
-            self._on_shape_format_requested(key, value)
+            self._pointer_router.on_shape_format_requested(key, value)
             return
         if caps.kind == "connector" or self._selection_toolbar.kind() == "connector":
-            self._on_connector_format_requested(key, value)
+            self._pointer_router.on_connector_format_requested(key, value)
             return
         if caps.kind == "sticky":
             self._on_sticky_format_requested(key, value)
@@ -3616,7 +3606,7 @@ class UltraViewPage(QWidget):
             if len(ids) != 1:
                 return
             object_id = next(iter(ids))
-        item = self._author_item(object_id)
+        item = self._pointer_router.author_item(object_id)
         current = item if isinstance(item, TextObject) else None
         if current is None and editor.is_editing():
             fmt = self._interaction.text_format()
@@ -3667,7 +3657,7 @@ class UltraViewPage(QWidget):
 
     def _on_sticky_format_requested(self, key: str, value: object) -> None:
         ids = tuple(self._interaction.author_selection_ids())
-        item = self._author_item(ids[0]) if len(ids) == 1 else None
+        item = self._pointer_router.author_item(ids[0]) if len(ids) == 1 else None
         if not isinstance(item, StickyObject):
             return
         changes = next_style_changes(item, key, value)
@@ -3688,7 +3678,7 @@ class UltraViewPage(QWidget):
 
     def _on_stroke_format_requested(self, key: str, value: object) -> None:
         ids = tuple(self._interaction.author_selection_ids())
-        item = self._author_item(ids[0]) if len(ids) == 1 else None
+        item = self._pointer_router.author_item(ids[0]) if len(ids) == 1 else None
         if not isinstance(item, StrokeObject):
             return
         changes = next_style_changes(item, key, value)
@@ -4040,7 +4030,7 @@ class UltraViewPage(QWidget):
         origin = self._free_grid.author_paint_layer().model().origin_offset
         metrics = self._free_grid.metrics()
         for object_id in caps.author_ids:
-            item = self._author_item(object_id)
+            item = self._pointer_router.author_item(object_id)
             bounds = object_bounds(item)
             if bounds is None:
                 continue
@@ -4127,7 +4117,7 @@ class UltraViewPage(QWidget):
         self._board_stack.setCurrentWidget(self._free_grid)
         self._free_grid.set_free_grid(self._board.free_grid, models)
         self._free_grid.set_author_objects(self._board.author_objects)
-        self._install_card_connector_filters()
+        self._pointer_router.install_card_connector_filters()
         # Selection/preview refreshes run through this projection too.  Do
         # not rebase the runtime coordinate plane for those view-only events;
         # board mutation, resize, zoom and edge-pan own extent growth.

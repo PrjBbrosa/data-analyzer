@@ -1740,6 +1740,9 @@ class PgFrfCanvas(QWidget):
         )
         return dual, geometry
 
+    def capture_markup_revision(self) -> int:
+        return int(self.markup_revision or 0)
+
     def iter_transient_overlay_items(self, *, section: str = "unknown"):
         yield from self._cursor_lines or ()
         yield from iter_axes_rubberband_items(self)
@@ -1754,6 +1757,7 @@ class PgFrfCanvas(QWidget):
             interaction_idle=self.capture_interaction_idle(),
             cursor_dual=dual,
             cursor_geometry=geometry,
+            markup_revision=self.capture_markup_revision(),
         )
 
     def clear(self) -> None:

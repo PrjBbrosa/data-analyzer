@@ -738,17 +738,33 @@ def test_coordinator_constructs_exactly_one_capture_owner(qapp):
         for name, value in vars(captures[0]).items()
         if isinstance(value, QTimer)
     }
+    leaked_owner_attrs = frozenset(
+        {
+            "_store",
+            "_runtime",
+            "_bindings",
+            "_queued",
+            "_idle_timer",
+            "_focus_timer",
+            "_sidecar_timer",
+            "_sidecar_pending",
+            "_presentation_revision",
+            "_hooked_ids",
+            "_destroy_watched",
+        }
+    )
     assert len(captures) == 1
     assert coordinator._capture is captures[0]
     assert len(stores) == 1
     assert coordinator.store is stores[0]
-    assert coordinator._store is stores[0]
+    assert captures[0].store is stores[0]
     assert len(ledgers) == 1
-    assert coordinator._runtime is ledgers[0]
     assert named_timers.keys() >= {"_idle_timer", "_focus_timer", "_sidecar_timer"}
-    assert coordinator._idle_timer is named_timers["_idle_timer"]
-    assert coordinator._focus_timer is named_timers["_focus_timer"]
-    assert coordinator._sidecar_timer is named_timers["_sidecar_timer"]
+    defined = {item.name for item in _coordinator_methods()}
+    assert not (defined & leaked_owner_attrs)
+    for name in leaked_owner_attrs:
+        assert not hasattr(type(coordinator), name), name
+        assert getattr(coordinator, name, None) is not getattr(captures[0], name)
     assert not any(isinstance(value, QTimer) for value in vars(coordinator).values())
     assert not any(isinstance(value, PreviewStore) for value in vars(coordinator).values())
     coordinator.clear()
@@ -784,6 +800,19 @@ def _getattr_constant_names(path: Path) -> frozenset[str]:
         attr = node.args[1]
         if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
             names.add(attr.value)
+    return frozenset(names)
+
+
+def _direct_owner_attribute_names(path: Path, owner_attr: str) -> frozenset[str]:
+    names: set[str] = set()
+    for node in ast.walk(_parse(path)):
+        if not isinstance(node, ast.Attribute):
+            continue
+        owner = node.value
+        if not isinstance(owner, ast.Attribute) or owner.attr != owner_attr:
+            continue
+        if isinstance(owner.value, ast.Name) and owner.value.id in {"self", "coord"}:
+            names.add(node.attr)
     return frozenset(names)
 
 
@@ -859,6 +888,17 @@ def test_workspace_and_capture_do_not_read_each_others_private_fields():
     assert not (
         _getattr_constant_names(CAPTURE_COORDINATOR_PATH)
         & WORKSPACE_CONTROLLER_PRIVATE_ATTRS
+    )
+
+
+def test_coordinator_does_not_read_owner_private_state_containers():
+    capture_reads = _direct_owner_attribute_names(COORDINATOR_PATH, "_capture")
+    workspace_reads = _direct_owner_attribute_names(
+        COORDINATOR_PATH, "_workspace_controller"
+    )
+    assert not (capture_reads & CAPTURE_PRIVATE_ATTRS)
+    assert not (
+        workspace_reads & (WORKSPACE_CONTROLLER_PRIVATE_ATTRS - {"_workspace_controller"})
     )
 
 

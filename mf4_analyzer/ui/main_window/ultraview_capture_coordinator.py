@@ -10,7 +10,7 @@ import logging
 import re
 import weakref
 from collections.abc import Callable
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from functools import partial
 from pathlib import Path
 from time import monotonic
@@ -95,6 +95,23 @@ _SECTION_X_UNIT = {
     "frf": "Hz",
     "order": "s",
 }
+
+
+@dataclass(frozen=True)
+class CaptureRuntimeCounts:
+    """Read-only lifecycle facts for diagnostics and teardown gates."""
+
+    bindings: int
+    queued_grabs: int
+    unstable_widgets: int
+    hook_connections: int
+    hooked_widgets: int
+    destroy_watches: int
+    idle_pending: int
+    sidecar_pending: int
+    active_timers: int
+
+
 def _alive(obj) -> bool:
     if obj is None:
         return False
@@ -107,19 +124,9 @@ def _plain_text(value) -> str:
         return ""
     return _HTML_TAG.sub("", str(value)).strip()
 def read_markup_revision(widget) -> int:
-    if widget is None:
+    if widget is None or not _alive(widget):
         return 0
-    annotations = getattr(widget, "_annotations", None)
-    if annotations is not None and hasattr(annotations, "markup_revision"):
-        return int(annotations.markup_revision or 0)
-    pane_count = getattr(widget, "pane_count", None)
-    pane_canvas = getattr(widget, "pane_canvas", None)
-    if callable(pane_count) and callable(pane_canvas):
-        revisions = []
-        for index in range(int(pane_count())):
-            revisions.append(read_markup_revision(pane_canvas(index)))
-        return tuple(revisions) if revisions else 0
-    return int(getattr(widget, "markup_revision", 0) or 0)
+    return collect_widget_capture_facts(widget).markup_revision
 def _channel_pair(key):
     if key is None:
         return None
@@ -276,6 +283,30 @@ class UltraViewCaptureCoordinator(QObject):
     @property
     def store(self) -> PreviewStore:
         return self._store
+
+    def has_pending_capture(self, ref: UltraViewRef) -> bool:
+        """Return whether ``ref`` still owns a queued grab."""
+        return any(key and key[0] == ref for key in self._queued)
+
+    def runtime_counts(self) -> CaptureRuntimeCounts:
+        """Expose immutable lifecycle counts without leaking owner containers."""
+        timers = (
+            self._idle_timer,
+            self._focus_timer,
+            self._sidecar_timer,
+            *self._queued.values(),
+        )
+        return CaptureRuntimeCounts(
+            bindings=len(self._bindings),
+            queued_grabs=len(self._queued),
+            unstable_widgets=len(self._unstable),
+            hook_connections=len(self._hooks),
+            hooked_widgets=len(self._hooked_ids),
+            destroy_watches=len(self._destroy_watched),
+            idle_pending=len(self._idle_pending),
+            sidecar_pending=len(self._sidecar_pending),
+            active_timers=sum(int(timer.isActive()) for timer in timers),
+        )
 
     @property
     def _window(self):
@@ -918,7 +949,13 @@ class UltraViewCaptureCoordinator(QObject):
         if live:
             captured = collect_widget_capture_facts(widget)
             geometry = [list(item) for item in captured.cursor_geometries]
-            pill = self._pill_fingerprint(window, widget) if dual else None
+            pill = None
+            if dual:
+                pill = captured.pill_fingerprint
+                if pill is None:
+                    pill = self._pill_fingerprint(window, widget)
+                elif not isinstance(pill, list):
+                    pill = list(pill)
         elif stored is not None:
             geometry = [
                 list(item) if isinstance(item, tuple) else item
@@ -942,31 +979,24 @@ class UltraViewCaptureCoordinator(QObject):
         stack = getattr(window, "chart_stack", None) if window is not None else None
         if stack is None:
             return None
-        pill = getattr(stack, "_pill", None)
-        getter = getattr(stack, "_pill_for_canvas", None)
-        if callable(getter) and widget is not None:
-            hosts = list(_iter_overlay_hosts(widget))
-            canvas = hosts[0] if hosts else widget
-            try:
-                pill = getter(canvas)
-            except (TypeError, RuntimeError):
-                pass
-        if pill is None:
+        fingerprint = getattr(stack, "cursor_pill_fingerprint", None)
+        if not callable(fingerprint):
+            return None
+        hosts = list(_iter_overlay_hosts(widget))
+        canvas = hosts[0] if hosts else widget
+        try:
+            value = fingerprint(canvas)
+        except (TypeError, RuntimeError):
+            return None
+        if value is None:
             return None
         try:
-            if not pill.isVisible():
-                return None
-            primary = ""
-            if callable(getattr(pill, "primary_text", None)):
-                primary = _plain_text(pill.primary_text())
-            detail = ""
-            if callable(getattr(pill, "has_detail", None)) and pill.has_detail():
-                detail_widget = getattr(pill, "_detail", None)
-                if detail_widget is not None:
-                    detail = _plain_text(detail_widget.text())
-            return [primary, detail]
-        except RuntimeError:
+            items = list(value)
+        except TypeError:
             return None
+        primary = _plain_text(items[0] if items else "")
+        detail = _plain_text(items[1] if len(items) > 1 else "")
+        return [primary, detail]
 
     def _has_current_preview(self, ref, digest: str) -> bool:
         record = self._store.get(ref)
@@ -1306,12 +1336,16 @@ class UltraViewCaptureCoordinator(QObject):
         captured = collect_widget_capture_facts(widget)
         geometry = tuple(captured.cursor_geometries)
         dual = captured.cursor_dual
-        pill = self._pill_fingerprint(self._window, widget) if dual else None
+        pill = captured.pill_fingerprint if dual else None
+        if pill is None and dual:
+            pill = self._pill_fingerprint(self._window, widget)
+        if pill is not None and not isinstance(pill, tuple):
+            pill = tuple(pill)
         return PresentationRuntimeFacts(
-            markup_revision=read_markup_revision(widget),
+            markup_revision=captured.markup_revision,
             visible_pane_count=visible,
             cursor_geometry=geometry,
-            pill_fingerprint=tuple(pill) if pill is not None else None,
+            pill_fingerprint=pill,
         )
 
     def _runtime_facts_for(self, ref: UltraViewRef) -> PresentationRuntimeFacts:
@@ -1615,4 +1649,3 @@ class UltraViewCaptureCoordinator(QObject):
                 continue
         self._hooks.clear()
         self._hooked_ids.clear()
-

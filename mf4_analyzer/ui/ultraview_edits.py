@@ -35,6 +35,7 @@ from mf4_analyzer.ui.ultraview_state import (
     apply_board_edit_entry,
     capture_board_placement,
     free_grid_placement_for,
+    membership_set,
     move_to_unplaced,
     plan_free_grid_rects,
     set_free_grid_rects,
@@ -80,11 +81,16 @@ def plan_selection_nudge(
     refs = tuple(card_refs)
     ids = tuple(str(object_id) for object_id in author_ids)
     before = capture_board_placement(board)
+    skipped_locked, skipped_unknown = _skipped_authors(board, ids)
+    illegal = _illegal_target_warnings(board, refs, ids, skipped_locked, skipped_unknown)
+    label = "mixed-nudge" if refs else "author-nudge"
+    if illegal:
+        return _rejected_nudge(
+            label, before, tuple(illegal), skipped_locked, skipped_unknown
+        )
     parsed: list[tuple[UltraViewRef, GridRect]] = []
     for ref in refs:
         current = free_grid_placement_for(board, ref)
-        if current is None:
-            continue
         parsed.append(
             (
                 ref,
@@ -96,8 +102,6 @@ def plan_selection_nudge(
                 ),
             )
         )
-    label = "mixed-nudge" if parsed else "author-nudge"
-    skipped_locked, skipped_unknown = _skipped_authors(board, ids)
     if parsed:
         rect_plan = plan_free_grid_rects(board, parsed)
         if not rect_plan.accepted:
@@ -134,6 +138,22 @@ def plan_selection_delete(
     refs = tuple(card_refs)
     ids = tuple(str(object_id) for object_id in author_ids)
     before = capture_board_placement(board)
+    skipped_locked, skipped_unknown = _skipped_authors(board, ids)
+    illegal = _illegal_target_warnings(board, refs, ids, skipped_locked, skipped_unknown)
+    if illegal:
+        return SelectionMutationPlan(
+            operation="delete",
+            label="mixed-delete" if refs else "author-delete",
+            placement_before=before,
+            placement_after=before,
+            author_patches=(),
+            warnings=tuple(illegal),
+            affected_card_refs=(),
+            affected_author_ids=(),
+            skipped_locked=skipped_locked,
+            skipped_unknown=skipped_unknown,
+            rejected=True,
+        )
     staged = _placement_clone(board)
     card_warnings: list[str] = []
     for ref in refs:
@@ -148,8 +168,8 @@ def plan_selection_delete(
             warnings=tuple(card_warnings),
             affected_card_refs=(),
             affected_author_ids=(),
-            skipped_locked=(),
-            skipped_unknown=(),
+            skipped_locked=skipped_locked,
+            skipped_unknown=skipped_unknown,
             rejected=True,
         )
     after = capture_board_placement(staged)
@@ -215,6 +235,39 @@ def _rejected_nudge(
         skipped_unknown=skipped_unknown,
         rejected=True,
     )
+
+
+def _ref_code(code: str, ref: UltraViewRef) -> str:
+    return f"{code}: {ref.section}/{ref.view_id}"
+
+
+def _illegal_target_warnings(
+    board: UltraViewBoardState,
+    refs: tuple[UltraViewRef, ...],
+    author_ids: tuple[str, ...],
+    skipped_locked: tuple[str, ...],
+    skipped_unknown: tuple[str, ...],
+) -> list[str]:
+    """Any missing, unplaced, stale, locked, or unknown target rejects the plan."""
+    warnings: list[str] = []
+    members = membership_set(board)
+    unplaced = set(board.unplaced)
+    for ref in refs:
+        if ref not in members:
+            warnings.append(_ref_code("missing_card_ref", ref))
+            continue
+        if ref in unplaced:
+            warnings.append(_ref_code("unplaced_card", ref))
+            continue
+        if free_grid_placement_for(board, ref) is None:
+            warnings.append(_ref_code("stale_card_ref", ref))
+    present_ids = {item_id(item) for item in board.author_objects}
+    for object_id in author_ids:
+        if object_id not in present_ids:
+            warnings.append(f"unknown_author_object: {object_id}")
+    warnings.extend(f"author_locked: {object_id}" for object_id in skipped_locked)
+    warnings.extend(f"unknown_author_object: {object_id}" for object_id in skipped_unknown)
+    return warnings
 
 
 def _skipped_authors(board, author_ids: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...]]:

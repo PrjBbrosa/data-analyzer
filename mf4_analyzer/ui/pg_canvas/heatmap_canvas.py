@@ -877,6 +877,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def capture_cursor_facts(self):
         return False, None
 
+    def capture_markup_revision(self) -> int:
+        return int(self.markup_revision or 0)
+
     def iter_transient_overlay_items(self, *, section: str = "unknown"):
         yield from iter_axes_rubberband_items(self)
 
@@ -890,6 +893,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             interaction_idle=self.capture_interaction_idle(),
             cursor_dual=dual,
             cursor_geometry=geometry,
+            markup_revision=self.capture_markup_revision(),
         )
 
     def full_reset(self) -> None:

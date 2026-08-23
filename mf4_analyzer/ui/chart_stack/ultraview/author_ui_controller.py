@@ -7,6 +7,7 @@ flyout signals back into ``_interaction.*`` calls.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt
@@ -47,6 +48,36 @@ def _disconnect(signal, slot) -> None:
         signal.disconnect(slot)
     except (TypeError, RuntimeError):
         return
+
+
+AUTHOR_TRANSIENT_OVERLAYS = frozenset(
+    {
+        OVERLAY_AUTHOR_POINTER,
+        OVERLAY_AUTHOR_STICKY,
+        OVERLAY_AUTHOR_SHAPES,
+        OVERLAY_AUTHOR_CONNECTOR,
+        OVERLAY_AUTHOR_DRAW,
+        OVERLAY_AUTHOR_FORMAT,
+    }
+)
+_FLYOUT_TRIGGER_TOOLS = {
+    OVERLAY_AUTHOR_POINTER: TOOL_SELECT,
+    OVERLAY_AUTHOR_STICKY: TOOL_STICKY,
+    OVERLAY_AUTHOR_SHAPES: TOOL_SHAPES,
+    OVERLAY_AUTHOR_CONNECTOR: TOOL_CONNECTOR,
+    OVERLAY_AUTHOR_DRAW: TOOL_DRAW,
+}
+
+
+@dataclass(frozen=True)
+class ActiveTransientFacts:
+    """Immutable facts for the currently open author flyout or format picker."""
+
+    overlay_id: str
+    kind: str
+    visible: bool
+    trigger_tool: str | None = None
+    format_key: str = ""
 
 
 FORMAT_PICKER_KEYS = frozenset(
@@ -394,11 +425,7 @@ class AuthorUiController:
     def relayout_draw_popover(self) -> None:
         if not self._draw_popover.isVisible():
             return
-        self.open_author_flyout(
-            OVERLAY_AUTHOR_DRAW,
-            self._draw_popover,
-            self._tool_rail.tool_button(TOOL_DRAW),
-        )
+        self.reanchor_open_transient()
 
     def on_draw_tool_shortcut(self) -> None:
         if self._text_field_has_focus() or not self._creation_allowed():
@@ -406,6 +433,73 @@ class AuthorUiController:
         if TOOL_DRAW not in self._tool_rail.visible_author_tools():
             return
         self.on_author_tool_requested(TOOL_DRAW)
+
+    def active_transient_facts(self) -> ActiveTransientFacts | None:
+        """Public snapshot of the live author overlay. No widget internals."""
+        overlay_id = self._canvas_host.active_overlay()
+        if overlay_id not in AUTHOR_TRANSIENT_OVERLAYS:
+            return None
+        widget = self._canvas_host.overlay(overlay_id)
+        visible = bool(widget is not None and widget.isVisible())
+        if not visible:
+            return None
+        if overlay_id == OVERLAY_AUTHOR_FORMAT:
+            return ActiveTransientFacts(
+                overlay_id=overlay_id,
+                kind="format",
+                visible=True,
+                format_key=str(self._format_picker_key or ""),
+            )
+        return ActiveTransientFacts(
+            overlay_id=overlay_id,
+            kind="flyout",
+            visible=True,
+            trigger_tool=_FLYOUT_TRIGGER_TOOLS.get(overlay_id),
+        )
+
+    def reanchor_open_transient(self) -> None:
+        """Recompute the open author overlay against the live trigger and safe area.
+
+        Closed transients stay closed. Active tool, selection, pointer mode,
+        and focus owner are not changed.
+        """
+        facts = self.active_transient_facts()
+        if facts is None:
+            return
+        widget = self._canvas_host.overlay(facts.overlay_id)
+        if widget is None or not widget.isVisible():
+            return
+        if facts.kind == "format":
+            key = facts.format_key
+            button = self._selection_toolbar.button(key) if key else None
+            if button is None:
+                return
+            size = widget.content_size() if callable(getattr(widget, "content_size", None)) else widget.size()
+            rect = self.format_picker_rect(button, size)
+        else:
+            button = self._live_flyout_trigger(facts.overlay_id)
+            if button is None:
+                return
+            size = widget.content_size() if callable(getattr(widget, "content_size", None)) else widget.size()
+            rect = self.author_flyout_rect(button, size)
+        self._sync_transient_scroll(widget, rect.height())
+        self._canvas_host.set_overlay_geometry(facts.overlay_id, rect)
+        self._reassert_host_stacking()
+        self._sync_minimap_placement()
+
+    def _live_flyout_trigger(self, overlay_id: str) -> QWidget | None:
+        tool = _FLYOUT_TRIGGER_TOOLS.get(overlay_id)
+        if tool is not None:
+            button = self._tool_rail.tool_button(tool)
+            if button is not None:
+                return button
+        return self._canvas_host.overlay_trigger(overlay_id)
+
+    @staticmethod
+    def _sync_transient_scroll(widget: QWidget, available_height: int) -> None:
+        sync = getattr(widget, "sync_vertical_scroll_for_height", None)
+        if callable(sync):
+            sync(available_height)
 
     def author_flyout_safe_rect(self) -> QRect:
         host = self._canvas_host.contentsRect()
@@ -438,12 +532,8 @@ class AuthorUiController:
         # format picker below a newly opened Shapes/Draw/Pointer surface.
         self.close_format_picker()
         size = flyout.content_size()
-        natural_h = size.height()
         rect = self.author_flyout_rect(button, size)
-        if natural_h > rect.height():
-            flyout._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        else:
-            flyout._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._sync_transient_scroll(flyout, rect.height())
         self._canvas_host.open_overlay(overlay_id, rect)
         self._tool_rail.set_pointer_menu_open(overlay_id == OVERLAY_AUTHOR_POINTER)
         self._reassert_host_stacking()
@@ -622,10 +712,7 @@ class AuthorUiController:
         live_trigger = self._selection_toolbar.button(key) or button
         size = picker.content_size()
         rect = self.format_picker_rect(live_trigger, size)
-        if rect.height() < size.height():
-            picker._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        else:
-            picker._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._sync_transient_scroll(picker, rect.height())
         self._canvas_host.open_overlay(OVERLAY_AUTHOR_FORMAT, rect)
         self._reassert_host_stacking()
         self._sync_minimap_placement()

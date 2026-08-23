@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QWidget
@@ -109,7 +110,10 @@ def _start_center_move(page, card, *, unit: int) -> QPoint:
     return end
 
 
-def test_full_page_stationary_center_move_does_not_represent(qtbot, monkeypatch):
+@pytest.mark.parametrize("hold_ms", [500, 2000])
+def test_full_page_stationary_center_move_does_not_represent(
+    qtbot, monkeypatch, hold_ms
+):
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "hold-move")
     page = harness.page
@@ -128,7 +132,7 @@ def test_full_page_stationary_center_move_does_not_represent(qtbot, monkeypatch)
     )
     assert after_settle[3] > 0
     assert after_settle[3] == int(free.gesture().gesture_id())
-    _hold_ms(qtbot, 500)
+    _hold_ms(qtbot, hold_ms)
     assert not page._edge_pan_timer.isActive()
     assert len(plan_calls) == after_settle[0]
     assert free.feedback_pipeline_counts()["presents"] == after_settle[1]
@@ -138,7 +142,10 @@ def test_full_page_stationary_center_move_does_not_represent(qtbot, monkeypatch)
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, end)
 
 
-def test_full_page_stationary_center_resize_does_not_represent(qtbot, monkeypatch):
+@pytest.mark.parametrize("hold_ms", [500, 2000])
+def test_full_page_stationary_center_resize_does_not_represent(
+    qtbot, monkeypatch, hold_ms
+):
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "hold-resize")
     page = harness.page
@@ -165,7 +172,7 @@ def test_full_page_stationary_center_resize_does_not_represent(qtbot, monkeypatc
         free.feedback_pipeline_counts()["layout_revision"],
     )
     assert after_settle[3] > 0
-    _hold_ms(qtbot, 500)
+    _hold_ms(qtbot, hold_ms)
     assert len(plan_calls) == after_settle[0]
     assert free.feedback_pipeline_counts()["presents"] == after_settle[1]
     assert free.feedback_pipeline_counts()["gesture_id"] == after_settle[3]

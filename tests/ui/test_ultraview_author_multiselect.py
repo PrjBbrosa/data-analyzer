@@ -696,7 +696,7 @@ def test_mixed_nudge_past_safety_moves_neither(qtbot):
     assert any(str(code).split(":", 1)[0] == "invalid_grid_rect" for code in sink.warnings)
 
 
-def test_mixed_nudge_locked_and_movable_reports_affected_count(qtbot):
+def test_mixed_nudge_locked_and_movable_rejects_without_history(qtbot):
     harness = _Harness(qtbot)
     sink = _MultiSink(harness.page, harness.board)
     _prepare_free_grid(harness, qtbot, "mix-lock")
@@ -708,17 +708,15 @@ def test_mixed_nudge_locked_and_movable_reports_affected_count(qtbot):
     harness.page.set_board(harness.board)
     before_rect = free_grid_placement_for(harness.board, ref).rect
     sink._mixed_nudge(SelectionNudgeIntent(("free", "held"), (ref,), 1.0, 0.0))
-    assert free_grid_placement_for(harness.board, ref).rect.column == before_rect.column + 1
-    assert _item(harness.board, "free").box.x == 3.0
+    assert free_grid_placement_for(harness.board, ref).rect == before_rect
+    assert _item(harness.board, "free").box.x == 2.0
     assert _item(harness.board, "held").box.x == 8.0
-    assert len(sink.undo) == 1
+    assert sink.undo == []
+    assert sink.dirty is False
     assert any(str(code).split(":", 1)[0] == "author_locked" for code in sink.warnings)
-    patches = sink.undo[0].object_patches
-    assert "free" in {patch.object_id for patch in patches}
-    assert "held" not in {patch.object_id for patch in patches}
 
 
-def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector(qtbot):
+def test_mixed_nudge_unknown_author_rejects_and_does_not_dangle_connector(qtbot):
     harness = _Harness(qtbot)
     sink = _MultiSink(harness.page, harness.board)
     _prepare_free_grid(harness, qtbot, "mix-ghost")
@@ -732,7 +730,7 @@ def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector(qtbot):
     sink._mixed_nudge(
         SelectionNudgeIntent(("note", "ghost", "line"), (ref,), 1.0, 0.0)
     )
-    assert _item(harness.board, "note").box.x == 11.0
+    assert _item(harness.board, "note").box.x == 10.0
     ghost = _item(harness.board, "ghost")
     assert isinstance(ghost, UnknownAuthorObject)
     assert ghost.raw.get("id") == "ghost"
@@ -742,8 +740,26 @@ def test_mixed_nudge_keeps_unknown_and_does_not_dangle_connector(qtbot):
     assert line.start.target.object_id == "note"
     assert line.end.target is not None
     assert line.end.target.object_id == "ghost"
-    assert len(sink.undo) == 1
+    assert sink.undo == []
+    assert sink.dirty is False
     assert any(str(code).split(":", 1)[0] == "unknown_author_object" for code in sink.warnings)
+
+
+def test_mixed_nudge_missing_card_ref_rejects_without_history_or_dirty(qtbot):
+    harness = _Harness(qtbot)
+    sink = _MultiSink(harness.page, harness.board)
+    _prepare_free_grid(harness, qtbot, "mix-present")
+    present = make_ref("time", "mix-present")
+    missing = make_ref("time", "mix-missing")
+    harness.board.author_objects = [_sticky("note", x=10.0, y=10.0)]
+    harness.page.set_board(harness.board)
+    before_rect = free_grid_placement_for(harness.board, present).rect
+    sink._mixed_nudge(SelectionNudgeIntent(("note",), (present, missing), 1.0, 0.0))
+    assert free_grid_placement_for(harness.board, present).rect == before_rect
+    assert _item(harness.board, "note").box.x == 10.0
+    assert sink.undo == []
+    assert sink.dirty is False
+    assert any(str(code).split(":", 1)[0] == "missing_card_ref" for code in sink.warnings)
 
 
 def test_mixed_delete_undo_redo_and_save_reopen_restore_membership(qtbot):

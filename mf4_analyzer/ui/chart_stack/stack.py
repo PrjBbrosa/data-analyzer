@@ -1676,7 +1676,7 @@ class ChartStack(QWidget):
         snapshot.update({
             'visible': self._pill.isVisible(),
             'primary': self._pill.primary_text(),
-            'detail': self._pill._detail.text(),
+            'detail': self._pill.detail_text(),
             'detail_visible': self._pill.has_detail(),
             'user_placed': self._pill.is_user_placed(),
             'pos': (self._pill.x(), self._pill.y()),
@@ -1703,3 +1703,31 @@ class ChartStack(QWidget):
 
     def cursor_pill_visible(self):
         return self._pill.isVisible()
+
+    def cursor_pill_fingerprint(self, canvas=None):
+        """Stable dual-cursor readout fingerprint, or ``None`` if hidden.
+
+        ``canvas`` selects the primary or split-secondary pill. Hidden pills
+        are not a source change.
+        """
+        try:
+            pill = self._pill_for_canvas(canvas)
+        except (TypeError, RuntimeError):
+            return None
+        if pill is None:
+            return None
+        try:
+            if not pill.isVisible():
+                return None
+            primary = ""
+            getter = getattr(pill, "primary_text", None)
+            if callable(getter):
+                primary = getter() or ""
+            detail = ""
+            has_detail = getattr(pill, "has_detail", None)
+            detail_text = getattr(pill, "detail_text", None)
+            if callable(has_detail) and has_detail() and callable(detail_text):
+                detail = detail_text() or ""
+            return (primary, detail)
+        except RuntimeError:
+            return None

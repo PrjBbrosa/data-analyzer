@@ -74,6 +74,7 @@ class FloatingChromeController:
         sync_empty_board_cue: Callable[[], None],
         sync_feedback_surface: Callable[[], None],
         position_card_context: Callable[[], None],
+        reanchor_open_transient: Callable[[], None] | None = None,
     ) -> None:
         self._canvas_host = canvas_host
         self._board_scroll = board_scroll
@@ -108,6 +109,7 @@ class FloatingChromeController:
         self._sync_empty_board_cue = sync_empty_board_cue
         self._sync_feedback_surface = sync_feedback_surface
         self._position_card_context = position_card_context
+        self._reanchor_open_transient = reanchor_open_transient
         self._minimap_placement_key: tuple | None = None
         self._connected = False
 
@@ -150,6 +152,8 @@ class FloatingChromeController:
             self._position_card_context()
             self.refresh_author_toolbar()
         self.reassert_stacking()
+        if self._reanchor_open_transient is not None:
+            self._reanchor_open_transient()
 
     def reassert_stacking(self) -> None:
         extra = (

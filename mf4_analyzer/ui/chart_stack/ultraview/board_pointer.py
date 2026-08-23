@@ -1630,10 +1630,74 @@ class PointerRouter:
                 self._filtered_cards.add(identity)
         self._filtered_cards.intersection_update(seen)
 
+    @property
+    def editor_kind(self) -> str:
+        return str(self._editor_kind or "")
 
-PointerRouter.FORWARDED_METHODS = tuple(
-    name
-    for name, value in vars(PointerRouter).items()
-    if callable(value) and not name.startswith("__")
-)
+    @editor_kind.setter
+    def editor_kind(self, value: str) -> None:
+        self._editor_kind = str(value or "")
 
+    @property
+    def text_limit_notified(self) -> bool:
+        return bool(self._text_limit_notified)
+
+    @text_limit_notified.setter
+    def text_limit_notified(self, value: bool) -> None:
+        self._text_limit_notified = bool(value)
+
+    def pointer_tool_armed(self, tool: str) -> bool:
+        return self._pointer_tool_armed(tool)
+
+    def begin_connector_geometry(
+        self, handle: tuple[str, str], event: QMouseEvent, pos: QPoint
+    ) -> None:
+        self._begin_connector_geometry(handle, event, pos)
+
+    def author_item(self, object_id: str):
+        return self._author_item(object_id)
+
+    def draw_create_armed(self) -> bool:
+        return self._draw_create_armed()
+
+    def clear_draw_draft_paint(self) -> None:
+        self._clear_draw_draft_paint()
+
+    def clear_shape_draft_paint(self) -> None:
+        self._clear_shape_draft_paint()
+
+    def clear_connector_draft_paint(self) -> None:
+        self._clear_connector_draft_paint()
+
+    def commit_or_cancel_text_editor(self) -> None:
+        self._commit_or_cancel_text_editor()
+
+    def begin_text_edit(self, item: TextObject, *, replace: bool) -> None:
+        self._begin_text_edit(item, replace=replace)
+
+    def begin_shape_label_edit(self, item: ShapeObject, *, replace: bool) -> None:
+        self._begin_shape_label_edit(item, replace=replace)
+
+    def begin_connector_label_edit(self, item: ConnectorObject) -> None:
+        self._begin_connector_label_edit(item)
+
+    def on_text_committed(self, object_id: str, text: str) -> None:
+        self._on_text_committed(object_id, text)
+
+    def on_text_cancelled(self, object_id: str) -> None:
+        self._on_text_cancelled(object_id)
+
+    def on_text_focus_lost(self) -> None:
+        self._on_text_focus_lost()
+
+    def on_text_limit_reached(self) -> None:
+        self._on_text_limit_reached()
+
+    def on_shape_format_requested(self, key: str, value: object) -> None:
+        self._on_shape_format_requested(key, value)
+
+    def on_connector_format_requested(self, key: str, value: object) -> None:
+        self._on_connector_format_requested(key, value)
+
+    def install_card_connector_filters(self) -> None:
+        self._install_card_connector_filters()

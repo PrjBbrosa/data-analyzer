@@ -240,10 +240,11 @@ def test_sidecar_lazy_load_decodes_after_restore_returns(qapp, qtbot, tmp_path):
     qtbot.addWidget(restored)
     restored_uv = restored._ultraview
     restored_uv.restore_project_state(payload, project_path=str(proj))
-    restored_uv._sidecar_timer.stop()
+    capture = restored_uv._capture
+    capture._sidecar_timer.stop()
     assert restored_uv.store.get(ref) is None
-    assert restored_uv._sidecar_pending
-    restored_uv._on_sidecar_load_timeout()
+    assert capture._sidecar_pending
+    capture._on_sidecar_load_timeout()
     assert restored_uv.store.get(ref) is not None
 
 

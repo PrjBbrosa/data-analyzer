@@ -4525,6 +4525,9 @@ class TimeDomainCanvasPG(QWidget):
         dual = bool(cursor.dual)
         return dual, cursor.capture_dual_geometry()
 
+    def capture_markup_revision(self) -> int:
+        return int(self._annotations.markup_revision or 0)
+
     def iter_transient_overlay_items(self, *, section: str = "unknown"):
         yield from self._cursor.line_items or ()
         yield from iter_axes_rubberband_items(self)
@@ -4546,6 +4549,7 @@ class TimeDomainCanvasPG(QWidget):
             cursor_dual=dual,
             cursor_geometry=geometry,
             digest_leaves=leaves,
+            markup_revision=self.capture_markup_revision(),
         )
 
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:

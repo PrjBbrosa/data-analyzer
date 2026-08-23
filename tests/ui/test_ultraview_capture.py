@@ -81,6 +81,10 @@ _HOST_PRIVATE_CAPTURE_ATTRS = frozenset(
         "_channel_lines",
         "_cursor_a_frequency",
         "_cursor_b_frequency",
+        "_annotations",
+        "_pill",
+        "_pill_for_canvas",
+        "_detail",
     }
 )
 _FORBIDDEN_SOURCE_NAMES = (
@@ -312,6 +316,7 @@ class FakeCanvas(QWidget):
             interaction_idle=self.capture_interaction_idle(),
             cursor_dual=dual,
             cursor_geometry=geometry,
+            markup_revision=int(self.markup_revision or 0),
         )
 
 
@@ -832,13 +837,15 @@ class _FakeReadoutPill:
         self._visible = True
         self._primary = "A 12.0"
         self._detail_text = "B 24.0"
-        self._detail = SimpleNamespace(text=lambda: self._detail_text)
 
     def isVisible(self) -> bool:
         return self._visible
 
     def primary_text(self) -> str:
         return self._primary
+
+    def detail_text(self) -> str:
+        return self._detail_text
 
     def has_detail(self) -> bool:
         return True
@@ -848,8 +855,12 @@ class _PillStack:
     def __init__(self) -> None:
         self._pill = _FakeReadoutPill()
 
-    def _pill_for_canvas(self, _canvas):
-        return self._pill
+    def cursor_pill_fingerprint(self, canvas=None):
+        pill = self._pill
+        if pill is None or not pill.isVisible():
+            return None
+        detail = pill.detail_text() if pill.has_detail() else ""
+        return (pill.primary_text(), detail)
 
 
 def test_dual_cursor_geometry_survives_canvas_rebind(qapp):
@@ -1329,22 +1340,62 @@ def test_reset_restore_shutdown_clear_runtime_ledger(qapp):
     coord.bind_canvas(canvas, ref)
     canvas.markup_revision = 4
     changed = coord.current_digest_for(ref)
-    assert coord._runtime.get(ref) is not None
+    runtime = coord._capture._runtime
+    assert runtime.get(ref) is not None
     coord.reset_project_state()
-    assert coord._runtime.get(ref) is None
+    assert runtime.get(ref) is None
     coord.bind_canvas(canvas, ref)
     canvas.markup_revision = 5
     coord.current_digest_for(ref)
-    assert coord._runtime.get(ref) is not None
+    assert runtime.get(ref) is not None
     coord.restore_project_state(None)
-    assert coord._runtime.get(ref) is None
+    assert runtime.get(ref) is None
     coord.bind_canvas(canvas, ref)
     coord.current_digest_for(ref)
     coord.shutdown()
-    assert coord._runtime.get(ref) is None
+    assert runtime.get(ref) is None
     canvas.deleteLater()
     coord.deleteLater()
     assert changed is not None
+
+
+def test_capture_runtime_counts_are_read_only_and_clear_symmetrically(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    capture = coord._capture
+
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "lifecycle-counts")
+    armed = capture.runtime_counts()
+    assert armed.bindings == 1
+    assert armed.queued_grabs == 1
+    assert armed.hooked_widgets == 1
+    assert armed.hook_connections >= 1
+    assert armed.destroy_watches == 1
+    assert armed.active_timers >= 1
+    assert capture.has_pending_capture(ref) is True
+
+    capture.reset_capture_state()
+    reset = capture.runtime_counts()
+    assert reset.bindings == 0
+    assert reset.queued_grabs == 0
+    assert reset.unstable_widgets == 0
+    assert reset.hook_connections == 0
+    assert reset.hooked_widgets == 0
+    assert reset.idle_pending == 0
+    assert reset.sidecar_pending == 0
+    assert reset.active_timers == 0
+    # A destroy watch is retained across project reset so the same live Qt
+    # wrapper cannot be watched twice; final shutdown owns its release.
+    assert reset.destroy_watches == 1
+    assert capture.has_pending_capture(ref) is False
+
+    capture.shutdown_capture()
+    assert capture.runtime_counts().destroy_watches == 0
+    canvas.deleteLater()
+    coord.deleteLater()
 
 
 def test_digest_unavailable_keeps_old_image_stale(qapp):
@@ -2282,16 +2333,17 @@ def test_destroyed_canvas_drops_binding_and_allows_rehook(qapp):
     ref = _ref("view-a")
     coord.bind_canvas(canvas, ref)
     ident = id(canvas)
-    assert ident in coord._bindings
-    assert ident in coord._hooked_ids
+    capture = coord._capture
+    assert ident in capture._bindings
+    assert ident in capture._hooked_ids
     sip.delete(canvas)
     _flush()
-    assert ident not in coord._bindings
-    assert ident not in coord._hooked_ids
-    assert ident not in coord._destroy_watched
+    assert ident not in capture._bindings
+    assert ident not in capture._hooked_ids
+    assert ident not in capture._destroy_watched
     replacement = FakeCanvas()
     coord.bind_canvas(replacement, ref)
-    assert id(replacement) in coord._hooked_ids
+    assert id(replacement) in capture._hooked_ids
     replacement.cursor_info.emit("t=0")
     replacement.deleteLater()
     coord.clear()
@@ -2788,10 +2840,34 @@ def _getattr_host_private_probes(path: Path) -> set[str]:
     return found
 
 
+def _getattr_private_attr_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id != "getattr":
+            continue
+        if len(node.args) < 2:
+            continue
+        attr = node.args[1]
+        if not isinstance(attr, ast.Constant) or not isinstance(attr.value, str):
+            continue
+        if attr.value in _HOST_PRIVATE_CAPTURE_ATTRS:
+            found.add(attr.value)
+    return found
+
+
 def test_coordinator_and_collector_do_not_getattr_host_capture_privates():
     assert _getattr_host_private_probes(_COORDINATOR_PATH) == set()
     assert _getattr_host_private_probes(_CAPTURE_COORDINATOR_PATH) == set()
     assert _getattr_host_private_probes(_CAPTURE_FACTS_PATH) == set()
+    assert _getattr_private_attr_names(_CAPTURE_COORDINATOR_PATH) == set()
+    capture_source = _CAPTURE_COORDINATOR_PATH.read_text(encoding="utf-8")
+    assert "_annotations" not in capture_source
+    assert "_pill_for_canvas" not in capture_source
+    assert "pill._detail" not in capture_source
     for path in (_COORDINATOR_PATH, _CAPTURE_COORDINATOR_PATH):
         source = path.read_text(encoding="utf-8")
         assert "_HOVER_CURSOR_LISTS" not in source
@@ -2802,8 +2878,16 @@ def test_coordinator_and_collector_do_not_getattr_host_capture_privates():
             "_dense_raster",
             "_aa_idle_timer",
             "_refresh_pending",
+            "_annotations",
+            "_pill",
+            "_pill_for_canvas",
+            "_detail",
         ):
             assert f'getattr(host, "{name}"' not in source
             assert f"getattr(host, '{name}'" not in source
             assert f'getattr(widget, "{name}"' not in source
             assert f"getattr(widget, '{name}'" not in source
+            assert f'getattr(stack, "{name}"' not in source
+            assert f"getattr(stack, '{name}'" not in source
+            assert f'getattr(pill, "{name}"' not in source
+            assert f"getattr(pill, '{name}'" not in source

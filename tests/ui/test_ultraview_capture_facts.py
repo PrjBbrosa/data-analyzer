@@ -17,6 +17,7 @@ from mf4_analyzer.ui.ultraview_capture_facts import (
     CAPABILITY_OK,
     CAPABILITY_UNSUPPORTED,
     PresentationCaptureFacts,
+    build_capture_facts,
     collect_host_capture_facts,
     collect_widget_capture_facts,
 )
@@ -26,6 +27,7 @@ from mf4_analyzer.ui.ultraview_state import (
 )
 from tests.ui.test_ultraview_capture import (
     FakeCanvas,
+    FakePage,
     _flush,
     _make_coord,
     _ref,
@@ -103,6 +105,8 @@ def test_fake_host_reports_ok_facts(qapp):
     assert facts.capability == CAPABILITY_OK
     assert facts.has_real_result is True
     assert facts.is_stable is True
+    assert facts.markup_revision == 0
+    assert facts.pill_fingerprint is None
     canvas.deleteLater()
 
 
@@ -181,6 +185,55 @@ def test_widget_facts_aggregate_fake_page_panes(qapp):
         pane.deleteLater()
 
 
+def test_build_capture_facts_defaults_markup_and_pill():
+    facts = build_capture_facts(
+        host_kind="x",
+        visible_and_sized=True,
+        has_real_result=True,
+        quality_settled=True,
+        interaction_idle=True,
+    )
+    assert facts.markup_revision == 0
+    assert facts.pill_fingerprint is None
+
+
+def test_canvas_facts_include_markup_revision_and_empty_pill(qapp):
+    canvases = [
+        _show(TimeDomainCanvasPG()),
+        _show(PgLineCanvas()),
+        _show(PgHeatmapCanvas(with_slice=True)),
+        _show(PgHeatmapCanvas(with_slice=False)),
+        _show(PgFrfCanvas()),
+    ]
+    try:
+        for canvas in canvases:
+            facts = canvas.presentation_capture_facts()
+            assert facts.markup_revision == 0
+            assert facts.pill_fingerprint is None
+            assert canvas.capture_markup_revision() == 0
+        time_canvas, line_canvas = canvases[0], canvases[1]
+        time_canvas._annotations.markup_revision = 5
+        assert time_canvas.presentation_capture_facts().markup_revision == 5
+        line_canvas.markup_revision = 3
+        assert line_canvas.presentation_capture_facts().markup_revision == 3
+    finally:
+        for canvas in canvases:
+            canvas.deleteLater()
+
+
+def test_paged_widget_facts_aggregate_markup_revisions(qapp):
+    panes = [FakeCanvas(), FakeCanvas()]
+    panes[0].markup_revision = 1
+    panes[1].markup_revision = 2
+    page = FakePage(panes)
+    facts = collect_widget_capture_facts(page)
+    assert facts.markup_revision == (1, 2)
+    assert facts.pill_fingerprint is None
+    page.deleteLater()
+    for pane in panes:
+        pane.deleteLater()
+
+
 def test_capture_facts_are_not_written_onto_board_or_project_payload(qapp):
     board_names = {item.name for item in fields(UltraViewBoardState)}
     workspace_names = {item.name for item in fields(UltraViewWorkspaceState)}
@@ -201,6 +254,7 @@ def test_capture_facts_are_not_written_onto_board_or_project_payload(qapp):
         "interaction_idle",
         "PresentationCaptureFacts",
         "degrade_reason",
+        "pill_fingerprint",
     ):
         assert name not in blob
     canvas.deleteLater()

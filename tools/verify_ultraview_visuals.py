@@ -49,6 +49,21 @@ REQUIRED_SHOTS = (
     "laser_cursor",
 )
 
+#: Fail-closed visual-facts schema. Missing or mismatched versions must not
+#: validate as if chrome were proven on-stage.
+MANIFEST_SCHEMA_VERSION = 2
+HOST_COORD_SPACE = "host"
+_SELECTION_CHROME_KEYS = (
+    "stage",
+    "target",
+    "selection_bounds",
+    "handles",
+    "toolbar",
+    "picker",
+    "minimap",
+)
+
+
 @dataclass
 class _Preview:
     ref: Any
@@ -335,6 +350,7 @@ def _mapped_rect(widget: QWidget, host: QWidget) -> dict[str, Any]:
         "w": int(widget.width()),
         "h": int(widget.height()),
         "visible": bool(widget.isVisible()),
+        "space": HOST_COORD_SPACE,
     }
 
 
@@ -347,6 +363,80 @@ def _qrect_from_fact(data: dict[str, Any] | None) -> QRect:
         int(data.get("w") or 0),
         int(data.get("h") or 0),
     )
+
+
+def _host_space_rect(rect: QRect | None, *, visible: bool) -> dict[str, Any] | None:
+    if rect is None or not rect.isValid():
+        return None
+    return {
+        "x": int(rect.x()),
+        "y": int(rect.y()),
+        "w": int(rect.width()),
+        "h": int(rect.height()),
+        "visible": bool(visible),
+        "space": HOST_COORD_SPACE,
+    }
+
+
+def _hidden_host_rect() -> dict[str, Any]:
+    return {
+        "x": 0,
+        "y": 0,
+        "w": 0,
+        "h": 0,
+        "visible": False,
+        "space": HOST_COORD_SPACE,
+    }
+
+
+def _stage_fact(host: QWidget) -> dict[str, Any]:
+    rect = host.contentsRect()
+    return {
+        "x": int(rect.x()),
+        "y": int(rect.y()),
+        "w": int(rect.width()),
+        "h": int(rect.height()),
+        "visible": bool(host.isVisible()),
+        "space": HOST_COORD_SPACE,
+    }
+
+
+def _fact_visible(data: dict[str, Any] | None) -> bool:
+    if not data:
+        return False
+    return (
+        bool(data.get("visible"))
+        and int(data.get("w") or 0) > 0
+        and int(data.get("h") or 0) > 0
+    )
+
+
+def _facts_intersect(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bool:
+    left_rect = _qrect_from_fact(left)
+    right_rect = _qrect_from_fact(right)
+    return (
+        not left_rect.isEmpty()
+        and not right_rect.isEmpty()
+        and left_rect.intersects(right_rect)
+    )
+
+
+def _fact_contained_by(
+    child: dict[str, Any] | None, parent: dict[str, Any] | None
+) -> bool:
+    child_rect = _qrect_from_fact(child)
+    parent_rect = _qrect_from_fact(parent)
+    return (
+        not child_rect.isEmpty()
+        and not parent_rect.isEmpty()
+        and parent_rect.contains(child_rect)
+    )
+
+
+def _widget_host_fact(widget: QWidget | None, host: QWidget) -> dict[str, Any]:
+    if widget is None:
+        return _hidden_host_rect()
+    return _mapped_rect(widget, host)
 
 
 def _rail_entry_facts(page) -> dict[str, Any]:
@@ -481,54 +571,204 @@ def _pointer_popup_facts(page) -> dict[str, Any]:
     }
 
 
-def _minimap_selection_facts(page) -> dict[str, Any]:
-    host = page.canvas_host()
-    minimap = page.free_grid_minimap()
-    toolbar = page.selection_toolbar()
+def _selected_target_fact(page, host: QWidget) -> dict[str, Any] | None:
+    """Selected card widget, or painted author bounds, in host coordinates."""
+    caps = page._selection_capabilities()
+    for ref in getattr(caps, "card_refs", ()) or ():
+        card = page.card_widget(ref.section, ref.view_id)
+        if card is None:
+            continue
+        return _mapped_rect(card, host)
     bounds = page._selection_bounds_in_host()
-    mini = _mapped_rect(minimap, host) if minimap is not None else None
-    mini_rect = _qrect_from_fact(mini) if mini and mini.get("visible") else QRect()
+    if bounds is None or not bounds.isValid() or bounds.isEmpty():
+        return None
+    return _host_space_rect(bounds, visible=True)
+
+
+def _selection_chrome_facts(page) -> dict[str, Any]:
+    """Stage, target, and selection chrome in one host coordinate space."""
+    host = page.canvas_host()
+    bounds = page._selection_bounds_in_host()
     handles = bounds.adjusted(-18, -18, 18, 18) if bounds is not None else QRect()
-    toolbar_rect = (
-        _qrect_from_fact(_mapped_rect(toolbar, host))
-        if toolbar is not None and toolbar.isVisible()
-        else QRect()
+    target = _selected_target_fact(page, host)
+    toolbar = _widget_host_fact(page.selection_toolbar(), host)
+    picker = _widget_host_fact(page.format_picker(), host)
+    minimap = _widget_host_fact(page.free_grid_minimap(), host)
+    selection_bounds = _host_space_rect(
+        bounds,
+        visible=bool(bounds is not None and bounds.isValid() and not bounds.isEmpty()),
     )
-    folded = not bool(mini and mini.get("visible"))
-    intersects_handles = bool(mini_rect.isValid() and handles.isValid() and mini_rect.intersects(handles))
-    intersects_toolbar = bool(
-        mini_rect.isValid() and toolbar_rect.isValid() and mini_rect.intersects(toolbar_rect)
-    )
+    handle_facts = _host_space_rect(handles, visible=bool(handles.isValid() and not handles.isEmpty()))
     return {
-        "minimap": mini,
-        "folded": folded,
-        "selection_bounds": None
-        if bounds is None
-        else {"x": bounds.x(), "y": bounds.y(), "w": bounds.width(), "h": bounds.height()},
-        "handles": None
-        if not handles.isValid()
-        else {"x": handles.x(), "y": handles.y(), "w": handles.width(), "h": handles.height()},
-        "toolbar": _mapped_rect(toolbar, host) if toolbar is not None else None,
-        "intersects_handles": intersects_handles,
-        "intersects_toolbar": intersects_toolbar,
-        "clear_of_selection_chrome": folded or not (intersects_handles or intersects_toolbar),
+        "space": HOST_COORD_SPACE,
+        "stage": _stage_fact(host),
+        "target": target,
+        "selection_bounds": selection_bounds,
+        "handles": handle_facts,
+        "toolbar": toolbar,
+        "picker": picker,
+        "minimap": minimap,
     }
+
+
+def _minimap_selection_facts(page) -> dict[str, Any]:
+    facts = _selection_chrome_facts(page)
+    mini = facts.get("minimap")
+    folded = not _fact_visible(mini)
+    intersects_target = _fact_visible(mini) and _facts_intersect(mini, facts.get("target"))
+    intersects_handles = _fact_visible(mini) and _facts_intersect(mini, facts.get("handles"))
+    intersects_toolbar = (
+        _fact_visible(mini)
+        and _fact_visible(facts.get("toolbar"))
+        and _facts_intersect(mini, facts.get("toolbar"))
+    )
+    intersects_picker = (
+        _fact_visible(mini)
+        and _fact_visible(facts.get("picker"))
+        and _facts_intersect(mini, facts.get("picker"))
+    )
+    facts.update(
+        {
+            "folded": folded,
+            "intersects_target": intersects_target,
+            "intersects_handles": intersects_handles,
+            "intersects_toolbar": intersects_toolbar,
+            "intersects_picker": intersects_picker,
+            "clear_of_selection_chrome": folded
+            or not (
+                intersects_target
+                or intersects_handles
+                or intersects_toolbar
+                or intersects_picker
+            ),
+        }
+    )
+    return facts
 
 
 def _format_picker_facts(page) -> dict[str, Any]:
     from mf4_analyzer.ui.chart_stack.ultraview.chrome import OVERLAY_AUTHOR_FORMAT
 
+    facts = _selection_chrome_facts(page)
     host = page.canvas_host()
-    picker = page.format_picker()
-    toolbar = page.selection_toolbar()
-    return {
-        "active_overlay": host.active_overlay(),
-        "picker": _rect(picker),
-        "picker_visible": bool(picker.isVisible()),
-        "picker_key": getattr(page, "_format_picker_key", ""),
-        "toolbar": _mapped_rect(toolbar, host) if toolbar is not None else None,
-        "expected_overlay": OVERLAY_AUTHOR_FORMAT,
-    }
+    picker = facts.get("picker")
+    picker_key = getattr(page, "_format_picker_key", "")
+    trigger = page.selection_toolbar().button(picker_key) if picker_key else None
+    facts.update(
+        {
+            "active_overlay": host.active_overlay(),
+            "picker_visible": _fact_visible(picker),
+            "picker_key": picker_key,
+            "trigger": _widget_host_fact(trigger, host),
+            "expected_overlay": OVERLAY_AUTHOR_FORMAT,
+            "intersects_target": _fact_visible(picker)
+            and _facts_intersect(picker, facts.get("target")),
+            "intersects_handles": _fact_visible(picker)
+            and _facts_intersect(picker, facts.get("handles")),
+            "intersects_toolbar": _fact_visible(picker)
+            and _fact_visible(facts.get("toolbar"))
+            and _facts_intersect(picker, facts.get("toolbar")),
+        }
+    )
+    return facts
+
+
+def _ensure_widget_on_stage(page, widget: QWidget) -> None:
+    """Scroll just enough that ``widget`` intersects the host stage.
+
+    Do not jump to scrollbar maximum: that can hide a still-selected card
+    that is not at the workspace far corner.
+    """
+    host = page.canvas_host()
+    stage = host.contentsRect()
+    if stage.isEmpty():
+        stage = QRect(0, 0, max(1, host.width()), max(1, host.height()))
+    safe = stage.adjusted(20, 20, -20, -20)
+    mapped = QRect(widget.mapTo(host, QPoint(0, 0)), widget.size())
+    if safe.contains(mapped) and not mapped.isEmpty():
+        return
+    scroll = page.board_scroll_area()
+    horizontal = scroll.horizontalScrollBar()
+    vertical = scroll.verticalScrollBar()
+    dx = mapped.left() - safe.left() if mapped.left() < safe.left() else 0
+    if mapped.right() > safe.right():
+        dx = mapped.right() - safe.right()
+    dy = mapped.top() - safe.top() if mapped.top() < safe.top() else 0
+    if mapped.bottom() > safe.bottom():
+        dy = mapped.bottom() - safe.bottom()
+    horizontal.setValue(int(horizontal.value() + dx))
+    vertical.setValue(int(vertical.value() + dy))
+
+
+def _scroll_target_off_stage(page) -> None:
+    scroll = page.board_scroll_area()
+    scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+
+
+def _reset_viewport(app: QApplication, page, *, zoom: float = 1.0) -> None:
+    """Drop leftover camera from a previous harness scene."""
+    page.set_board_zoom(zoom)
+    scroll = page.board_scroll_area()
+    scroll.horizontalScrollBar().setValue(0)
+    scroll.verticalScrollBar().setValue(0)
+    _pump(app, page)
+
+
+def _ensure_selection_on_stage(page) -> None:
+    host = page.canvas_host()
+    stage = host.contentsRect()
+    if stage.isEmpty():
+        stage = QRect(0, 0, max(1, host.width()), max(1, host.height()))
+    safe = stage.adjusted(20, 20, -20, -20)
+    bounds = page._selection_bounds_in_host()
+    if bounds is None or bounds.isEmpty() or safe.contains(bounds):
+        return
+    scroll = page.board_scroll_area()
+    horizontal = scroll.horizontalScrollBar()
+    vertical = scroll.verticalScrollBar()
+    dx = bounds.left() - safe.left() if bounds.left() < safe.left() else 0
+    if bounds.right() > safe.right():
+        dx = bounds.right() - safe.right()
+    dy = bounds.top() - safe.top() if bounds.top() < safe.top() else 0
+    if bounds.bottom() > safe.bottom():
+        dy = bounds.bottom() - safe.bottom()
+    horizontal.setValue(int(horizontal.value() + dx))
+    vertical.setValue(int(vertical.value() + dy))
+
+
+def _to_free_grid(app: QApplication, page) -> None:
+    from mf4_analyzer.ui.ultraview_state import template_to_free_grid
+
+    template_to_free_grid(page.board())
+    page.set_board(page.board())
+    _pump(app, page)
+
+
+def _setup_selected_bottom_right_scene(
+    app: QApplication, page, *, scroll_off_stage: bool = False
+):
+    """Place a selected card; keep it on stage unless the negative path is requested."""
+    from mf4_analyzer.ui.ultraview_state import GridRect, set_free_grid_rect
+
+    page.resize(1600, 900)
+    _reset_board(page, "grid_2x2")
+    ref = _add_preview(page, "time", "mini-br", color="#2d7ff9", digest="minibr")
+    _to_free_grid(app, page)
+    set_free_grid_rect(page.board(), ref, GridRect(16, 12, 8, 6))
+    page.set_board(page.board())
+    page.set_board_zoom(1.6)
+    _pump(app, page)
+    card = page.card_widget(ref.section, ref.view_id)
+    if scroll_off_stage:
+        _scroll_target_off_stage(page)
+    elif card is not None:
+        _ensure_widget_on_stage(page, card)
+    _pump(app, page)
+    page._select_ref(ref)
+    page._refresh_minimap()
+    _pump(app, page)
+    return ref
 
 
 def _laser_cursor_facts(page) -> dict[str, Any]:
@@ -745,22 +985,14 @@ def _capture_wave3_shots(app: QApplication, page, snap) -> None:
     from mf4_analyzer.ui.chart_stack.ultraview.chrome import AUTHOR_TOOL_SELECT
     from mf4_analyzer.ui.ultraview_state import (
         BoardBox,
-        GridRect,
         ShapeObject,
-        set_free_grid_rect,
-        template_to_free_grid,
     )
-
-    def _to_free_grid() -> None:
-        template_to_free_grid(page.board())
-        page.set_board(page.board())
-        _pump(app, page)
 
     _close_transient_chrome(page, app)
     page.resize(1280, 800)
     _reset_board(page, "grid_2x2")
     _add_preview(page, "time", "ptr-1280", color="#2d7ff9", digest="ptr1280")
-    _to_free_grid()
+    _to_free_grid(app, page)
     pointer = page.tool_rail().tool_button(AUTHOR_TOOL_SELECT)
     if pointer is not None:
         pointer.click()
@@ -784,21 +1016,7 @@ def _capture_wave3_shots(app: QApplication, page, snap) -> None:
     )
     _close_transient_chrome(page, app)
 
-    page.resize(1600, 900)
-    _reset_board(page, "grid_2x2")
-    ref = _add_preview(page, "time", "mini-br", color="#2d7ff9", digest="minibr")
-    _to_free_grid()
-    set_free_grid_rect(page.board(), ref, GridRect(16, 12, 8, 6))
-    page.set_board(page.board())
-    page.set_board_zoom(1.6)
-    _pump(app, page)
-    scroll = page.board_scroll_area()
-    scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
-    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
-    _pump(app, page)
-    page._select_ref(ref)
-    page._refresh_minimap()
-    _pump(app, page)
+    _setup_selected_bottom_right_scene(app, page, scroll_off_stage=False)
     snap(
         "selected_bottom_right_with_minimap",
         page,
@@ -808,7 +1026,7 @@ def _capture_wave3_shots(app: QApplication, page, snap) -> None:
     page.resize(1280, 800)
     _reset_board(page, "grid_2x2")
     _add_preview(page, "time", "shape-host", color="#6a8f4f", digest="shapehost")
-    _to_free_grid()
+    _to_free_grid(app, page)
     page.board().author_objects = [
         ShapeObject(
             "harness-shape",
@@ -818,9 +1036,10 @@ def _capture_wave3_shots(app: QApplication, page, snap) -> None:
         )
     ]
     page.set_board(page.board())
-    _pump(app, page)
+    _reset_viewport(app, page, zoom=1.0)
     page.interaction().select_only_author("harness-shape")
     page._free_grid.sync_selection_projection()
+    _ensure_selection_on_stage(page)
     page._refresh_author_toolbar()
     _pump(app, page)
     fill = page.selection_toolbar().button("fill")
@@ -868,6 +1087,7 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
     page = UltraViewPage()
     toolbar = Toolbar()
     manifest: dict[str, Any] = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "output_dir": str(dest),
         "evidence_class": "offscreen",
@@ -1220,9 +1440,124 @@ def _library_errors(manifest: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _coord_space_errors(name: str, facts: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if facts.get("space") != HOST_COORD_SPACE:
+        errors.append(
+            f"{name} coordinate space is {facts.get('space')!r}, expected {HOST_COORD_SPACE!r}"
+        )
+    for key in _SELECTION_CHROME_KEYS:
+        if key not in facts:
+            errors.append(f"{name} missing {key} facts")
+            continue
+        item = facts.get(key)
+        if item is None:
+            if key in {"stage", "target"}:
+                errors.append(f"{name} missing {key} facts")
+            continue
+        if not isinstance(item, dict):
+            errors.append(f"{name} {key} is not a host-space rect")
+            continue
+        if item.get("space") != HOST_COORD_SPACE:
+            errors.append(f"{name} {key} is not in host coordinates")
+    trigger = facts.get("trigger")
+    if trigger is not None and (
+        not isinstance(trigger, dict) or trigger.get("space") != HOST_COORD_SPACE
+    ):
+        errors.append(f"{name} trigger is not in host coordinates")
+    return errors
+
+
+def _selection_chrome_errors(
+    name: str,
+    facts: dict[str, Any] | None,
+    *,
+    require_minimap: bool = False,
+    require_picker: bool = False,
+    require_toolbar: bool = False,
+) -> list[str]:
+    """Fail closed: target on stage first, then chrome containment/overlap."""
+    if not isinstance(facts, dict) or not facts:
+        return [f"{name} missing selection chrome facts"]
+    errors = _coord_space_errors(name, facts)
+    stage = facts.get("stage")
+    target = facts.get("target")
+    if not _fact_visible(target):
+        errors.append(f"{name} target is not visible: {target}")
+        return errors
+    if not _facts_intersect(target, stage):
+        errors.append(
+            f"{name} target does not intersect stage: target={target} stage={stage}"
+        )
+        return errors
+
+    handles = facts.get("handles")
+    if not _fact_visible(handles):
+        errors.append(f"{name} selection handles are not visible")
+    elif not _fact_contained_by(handles, stage):
+        errors.append(f"{name} selection handles are not contained by stage")
+
+    toolbar = facts.get("toolbar")
+    picker = facts.get("picker")
+    minimap = facts.get("minimap")
+    if require_toolbar and not _fact_visible(toolbar):
+        errors.append(f"{name} selection toolbar is not visible")
+    elif require_toolbar and not _fact_contained_by(toolbar, stage):
+        errors.append(f"{name} selection toolbar is not contained by stage")
+    if require_picker:
+        trigger = facts.get("trigger")
+        if not _fact_visible(picker):
+            errors.append(f"{name} format picker is not visible")
+        else:
+            if not _fact_contained_by(picker, stage):
+                errors.append(f"{name} format picker is not contained by stage")
+            if _facts_intersect(picker, target) or _facts_intersect(picker, handles):
+                errors.append(
+                    f"{name} format picker overlaps selected object or handles"
+                )
+        if not _fact_visible(trigger):
+            errors.append(f"{name} format picker trigger is not visible")
+        else:
+            if not _fact_contained_by(trigger, stage):
+                errors.append(f"{name} format picker trigger is not contained by stage")
+            picker_rect = _qrect_from_fact(picker)
+            trigger_rect = _qrect_from_fact(trigger)
+            below_gap = picker_rect.top() - trigger_rect.bottom()
+            above_gap = trigger_rect.top() - picker_rect.bottom()
+            if not (0 <= below_gap <= 12 or 0 <= above_gap <= 12):
+                errors.append(
+                    f"{name} format picker is not anchored to its trigger"
+                )
+    if require_minimap:
+        if not _fact_visible(minimap):
+            errors.append(f"{name} minimap is not visible")
+        else:
+            if not _fact_contained_by(minimap, stage):
+                errors.append(f"{name} minimap is not contained by stage")
+            overlaps = []
+            if _facts_intersect(minimap, target):
+                overlaps.append("target")
+            if _facts_intersect(minimap, handles):
+                overlaps.append("handles")
+            if _fact_visible(toolbar) and _facts_intersect(minimap, toolbar):
+                overlaps.append("toolbar")
+            if _fact_visible(picker) and _facts_intersect(minimap, picker):
+                overlaps.append("picker")
+            if overlaps:
+                errors.append(
+                    f"{name} minimap overlaps selection chrome: {', '.join(overlaps)}"
+                )
+    return errors
+
+
 def assert_geometry(manifest: dict[str, Any]) -> None:
     """Raise GeometryError if the harness contract is broken."""
     errors: list[str] = []
+    version = manifest.get("schema_version")
+    if version != MANIFEST_SCHEMA_VERSION:
+        errors.append(
+            f"manifest schema_version={version!r}, expected {MANIFEST_SCHEMA_VERSION}"
+        )
     shots = manifest.get("shots") or {}
     geometry = manifest.get("geometry") or {}
     for name in REQUIRED_SHOTS:
@@ -1454,17 +1789,35 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         if select.get("visible") is not True:
             errors.append(f"{name} Pointer tile is not visible")
 
-    minimap = (geometry.get("selected_bottom_right_with_minimap") or {}).get("minimap_selection") or {}
-    if minimap.get("clear_of_selection_chrome") is not True:
-        errors.append(
-            "selected_bottom_right_with_minimap still intersects selection chrome: "
-            f"folded={minimap.get('folded')} handles={minimap.get('intersects_handles')} "
-            f"toolbar={minimap.get('intersects_toolbar')}"
+    minimap = (geometry.get("selected_bottom_right_with_minimap") or {}).get(
+        "minimap_selection"
+    )
+    errors.extend(
+        _selection_chrome_errors(
+            "selected_bottom_right_with_minimap",
+            minimap,
+            require_minimap=True,
         )
+    )
 
-    picker = (geometry.get("selected_shape_format_picker") or {}).get("format_picker") or {}
-    if picker.get("picker_visible") is not True:
-        errors.append("selected_shape_format_picker format picker is not visible")
+    picker = (geometry.get("selected_shape_format_picker") or {}).get("format_picker")
+    errors.extend(
+        _selection_chrome_errors(
+            "selected_shape_format_picker",
+            picker,
+            require_picker=True,
+            require_toolbar=True,
+        )
+    )
+    if isinstance(picker, dict):
+        if picker.get("picker_visible") is not True and _fact_visible(picker.get("picker")):
+            errors.append("selected_shape_format_picker picker_visible flag is false")
+        expected_overlay = picker.get("expected_overlay")
+        if expected_overlay and picker.get("active_overlay") != expected_overlay:
+            errors.append(
+                "selected_shape_format_picker active overlay is "
+                f"{picker.get('active_overlay')!r}"
+            )
 
     laser = geometry.get("laser_cursor") or {}
     if laser.get("bitmap_cursor") is not True:

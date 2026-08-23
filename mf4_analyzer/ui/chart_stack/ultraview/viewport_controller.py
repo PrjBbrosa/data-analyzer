@@ -233,6 +233,36 @@ class ViewportController(QObject):
     def edge_pan_timer(self) -> QTimer:
         return self._edge_pan_timer
 
+    @property
+    def edge_pan_active(self) -> bool:
+        return self._edge_pan_active
+
+    @edge_pan_active.setter
+    def edge_pan_active(self, value: bool) -> None:
+        self._edge_pan_active = bool(value)
+
+    @property
+    def edge_pan_global_pos(self) -> QPoint | None:
+        return self._edge_pan_global_pos
+
+    @edge_pan_global_pos.setter
+    def edge_pan_global_pos(self, value) -> None:
+        self._edge_pan_global_pos = None if value is None else QPoint(value)
+
+    @property
+    def right_gesture_widget(self) -> QWidget | None:
+        return self._right_gesture_widget
+
+    def park_zoom(self, zoom: float) -> None:
+        """Zoom and leave the board in the chrome-safe fit rect."""
+        self._park_zoom(zoom)
+
+    def zoom_at(self, zoom: float, cursor_in_viewport) -> None:
+        self._zoom_at(zoom, cursor_in_viewport)
+
+    def on_smooth_preview_timeout(self) -> None:
+        self._on_smooth_preview_timeout()
+
     def filled_card(self) -> tuple[str, str] | None:
         return self._filled_card
 

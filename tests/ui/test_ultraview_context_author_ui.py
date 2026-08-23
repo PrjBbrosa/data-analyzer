@@ -67,3 +67,86 @@ def test_author_ui_controller_uses_page_interaction_session(qtbot):
     rail = page.tool_rail()
     assert rail.receivers(rail.tool_requested) > 0
     assert rail.receivers(rail.tool_pinned_changed) > 0
+
+
+def _wait_layout(qtbot, page) -> None:
+    qtbot.wait(40)
+    page._apply_floating_layout()
+
+
+def _popup_tracks_trigger(page, trigger, popup) -> None:
+    host = page.canvas_host()
+    size = popup.content_size() if callable(getattr(popup, "content_size", None)) else popup.size()
+    expected = page._author_ui.author_flyout_rect(trigger, size)
+    popup_rect = popup.geometry()
+    assert popup.isVisible()
+    assert popup_rect == expected, (popup_rect, expected, trigger.geometry())
+    assert host.contentsRect().intersects(popup_rect)
+    assert popup.vertical_scroll_enabled() is (
+        popup.content_size().height() > popup_rect.height()
+    )
+
+
+def test_open_author_flyouts_reanchor_on_resize_and_stay_closed_when_closed(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
+        POINTER_MODE_LASER,
+        POINTER_MODE_MOUSE,
+        TOOL_DRAW,
+        TOOL_SELECT,
+        TOOL_SHAPES,
+        TOOL_STICKY,
+    )
+    from mf4_analyzer.ui.chart_stack.ultraview.author_ui_controller import ActiveTransientFacts
+
+    page = UltraViewPage()
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.waitExposed(page)
+    sizes = ((1280, 800), (800, 560), (1440, 900), (1280, 800))
+    openers = (
+        (TOOL_SELECT, page._author_ui.show_pointer_popover, page.pointer_popover),
+        (TOOL_STICKY, page._author_ui.show_sticky_popover, page.sticky_popover),
+        (TOOL_SHAPES, page._author_ui.show_shape_popover, page.shape_popover),
+        (TOOL_DRAW, page._author_ui.show_draw_popover, page.draw_popover),
+    )
+    interaction = page.interaction()
+    for tool, opener, popup_getter in openers:
+        page.resize(1280, 800)
+        _wait_layout(qtbot, page)
+        opener()
+        _wait_layout(qtbot, page)
+        popup = popup_getter()
+        assert popup.isVisible(), tool
+        before_tool = interaction.active_tool()
+        before_mode = interaction.pointer_mode()
+        facts = page._author_ui.active_transient_facts()
+        assert isinstance(facts, ActiveTransientFacts)
+        assert facts.visible is True
+        for width, height in sizes:
+            page.resize(width, height)
+            _wait_layout(qtbot, page)
+            trigger = page.tool_rail().tool_button(tool)
+            assert trigger is not None, tool
+            _popup_tracks_trigger(page, trigger, popup)
+            assert interaction.active_tool() == before_tool
+            assert interaction.pointer_mode() == before_mode
+            assert page._author_ui.active_transient_facts() is not None
+        popup.close()
+        page.canvas_host().close_active_overlay(restore_focus=False)
+        _wait_layout(qtbot, page)
+        assert not popup.isVisible()
+        assert page._author_ui.active_transient_facts() is None
+        page.resize(800, 560)
+        _wait_layout(qtbot, page)
+        page.resize(1440, 900)
+        _wait_layout(qtbot, page)
+        assert not popup.isVisible()
+        assert page._author_ui.active_transient_facts() is None
+    page._author_ui.apply_pointer_mode(POINTER_MODE_LASER)
+    page._author_ui.show_pointer_popover()
+    _wait_layout(qtbot, page)
+    page.resize(800, 560)
+    _wait_layout(qtbot, page)
+    assert page.interaction().pointer_mode() == POINTER_MODE_LASER
+    page._author_ui.apply_pointer_mode(POINTER_MODE_MOUSE)
+    page.canvas_host().close_active_overlay(restore_focus=False)

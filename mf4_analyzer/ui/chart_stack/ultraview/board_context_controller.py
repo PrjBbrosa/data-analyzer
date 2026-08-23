@@ -185,32 +185,32 @@ class BoardContextController:
         menu.setObjectName(BOARD_MENU_OBJECT_NAME)
         apply_rounded_menu_chrome(menu)
         fit = menu.addAction(BOARD_MENU_FIT)
-        fit.triggered.connect(self._on_board_menu_zoom_fit)
+        fit.triggered.connect(self.on_board_menu_zoom_fit)
         reset = menu.addAction(BOARD_MENU_RESET)
-        reset.triggered.connect(self._on_board_menu_zoom_reset)
+        reset.triggered.connect(self.on_board_menu_zoom_reset)
         overview = menu.addAction(BOARD_MENU_OVERVIEW)
-        overview.triggered.connect(self._on_board_menu_overview)
+        overview.triggered.connect(self.on_board_menu_overview)
         free_grid = self._layout_mode() == LAYOUT_MODE_FREE_GRID
         placed = self._free_grid_count() if free_grid else 0
         if free_grid and placed >= 2:
             menu.addSeparator()
             arrange = menu.addAction(BOARD_MENU_ARRANGE)
-            arrange.triggered.connect(self._on_board_menu_auto_arrange)
+            arrange.triggered.connect(self.on_board_menu_auto_arrange)
             if self._can_undo_arrange():
                 undo = menu.addAction(BOARD_MENU_UNDO_ARRANGE)
-                undo.triggered.connect(self._on_board_menu_undo_arrange)
+                undo.triggered.connect(self.on_board_menu_undo_arrange)
         menu.addSeparator()
         copy_act = menu.addAction(BOARD_MENU_COPY)
-        copy_act.triggered.connect(self._on_board_menu_copy)
+        copy_act.triggered.connect(self.on_board_menu_copy)
         export_act = menu.addAction(BOARD_MENU_EXPORT)
-        export_act.triggered.connect(self._on_board_menu_export)
+        export_act.triggered.connect(self.on_board_menu_export)
         return menu
 
     def popup_board_context_menu(self, global_pos: QPoint) -> None:
         self.close_board_context_menu()
         self._close_active_overlay(restore_focus=False)
         menu = self.make_board_context_menu()
-        menu.aboutToHide.connect(self._on_board_context_menu_hidden)
+        menu.aboutToHide.connect(self.on_board_context_menu_hidden)
         self._board_context_menu = menu
         menu.popup(global_pos)
 
@@ -230,29 +230,29 @@ class BoardContextController:
         child = watched.childAt(pos) if watched is not None else None
         return child if child is not None else watched
 
-    def _on_board_context_menu_hidden(self) -> None:
+    def on_board_context_menu_hidden(self) -> None:
         menu = self._board_context_menu
         self._board_context_menu = None
         if menu is not None:
             menu.deleteLater()
 
-    def _on_board_menu_zoom_fit(self, _checked: bool = False) -> None:
+    def on_board_menu_zoom_fit(self, _checked: bool = False) -> None:
         self._zoom_fit()
 
-    def _on_board_menu_zoom_reset(self, _checked: bool = False) -> None:
+    def on_board_menu_zoom_reset(self, _checked: bool = False) -> None:
         self._zoom_reset()
 
-    def _on_board_menu_overview(self, _checked: bool = False) -> None:
+    def on_board_menu_overview(self, _checked: bool = False) -> None:
         self._show_overview()
 
-    def _on_board_menu_auto_arrange(self, _checked: bool = False) -> None:
+    def on_board_menu_auto_arrange(self, _checked: bool = False) -> None:
         self._auto_arrange()
 
-    def _on_board_menu_undo_arrange(self, _checked: bool = False) -> None:
+    def on_board_menu_undo_arrange(self, _checked: bool = False) -> None:
         self._undo_arrange()
 
-    def _on_board_menu_copy(self, _checked: bool = False) -> None:
+    def on_board_menu_copy(self, _checked: bool = False) -> None:
         self._copy_board()
 
-    def _on_board_menu_export(self, _checked: bool = False) -> None:
+    def on_board_menu_export(self, _checked: bool = False) -> None:
         self._export_png(1)

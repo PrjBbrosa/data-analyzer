@@ -51,6 +51,8 @@ class PresentationCaptureFacts:
     cursor_geometries: tuple = ()
     source_revision: Any = None
     digest_leaves: tuple = ()
+    markup_revision: int | tuple = 0
+    pill_fingerprint: tuple | None = None
 
     @property
     def is_stable(self) -> bool:
@@ -126,6 +128,51 @@ def quality_plotted_from_status(status) -> bool:
     return status.get("state") == "green"
 
 
+def _coerce_markup_revision(value) -> int | tuple:
+    if isinstance(value, tuple):
+        return tuple(_coerce_markup_revision(item) for item in value)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_pill_fingerprint(value) -> tuple | None:
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        return value
+    try:
+        return tuple(value)
+    except TypeError:
+        return None
+
+
+def _is_paged_widget(widget) -> bool:
+    pane_count = getattr(widget, "pane_count", None)
+    pane_canvas = getattr(widget, "pane_canvas", None)
+    return callable(pane_count) and callable(pane_canvas)
+
+
+def _aggregate_markup_revision(widget, items: list[PresentationCaptureFacts]):
+    if not items:
+        return 0
+    if _is_paged_widget(widget) or len(items) != 1:
+        return tuple(item.markup_revision for item in items)
+    return items[0].markup_revision
+
+
+def _aggregate_pill_fingerprint(items: list[PresentationCaptureFacts]):
+    if not items:
+        return None
+    pills = tuple(item.pill_fingerprint for item in items)
+    if not any(item is not None for item in pills):
+        return None
+    if len(pills) == 1:
+        return pills[0]
+    return pills
+
+
 def build_capture_facts(
     *,
     host_kind: str,
@@ -139,6 +186,8 @@ def build_capture_facts(
     digest_leaves: tuple | Iterable = (),
     capability: str = CAPABILITY_OK,
     degrade_reason: str | None = None,
+    markup_revision: Any = 0,
+    pill_fingerprint: tuple | None = None,
 ) -> PresentationCaptureFacts:
     geometries = (cursor_geometry,) if cursor_geometry is not None else ()
     return PresentationCaptureFacts(
@@ -154,6 +203,8 @@ def build_capture_facts(
         cursor_geometries=geometries,
         source_revision=source_revision,
         digest_leaves=tuple(digest_leaves),
+        markup_revision=_coerce_markup_revision(markup_revision),
+        pill_fingerprint=_coerce_pill_fingerprint(pill_fingerprint),
     )
 
 
@@ -314,6 +365,8 @@ def collect_widget_capture_facts(widget) -> PresentationCaptureFacts:
         cursor_geometries=geometries,
         source_revision=revision,
         digest_leaves=leaves,
+        markup_revision=_aggregate_markup_revision(widget, ok),
+        pill_fingerprint=_aggregate_pill_fingerprint(ok),
     )
 
 

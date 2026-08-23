@@ -6,13 +6,24 @@ import contextlib
 import json
 from pathlib import Path
 
+import pytest
+
 from tools.verify_ultraview_visuals import (
     DEFAULT_OUTPUT,
+    HOST_COORD_SPACE,
+    MANIFEST_SCHEMA_VERSION,
     REQUIRED_SHOTS,
     GeometryError,
+    _facts_intersect,
+    _fact_contained_by,
+    _hidden_host_rect,
     _library_constants,
     _library_errors,
+    _minimap_selection_facts,
     _Preview,
+    _selection_chrome_errors,
+    _setup_selected_bottom_right_scene,
+    assert_geometry,
     generate,
 )
 
@@ -80,6 +91,7 @@ def test_harness_does_not_import_main_window():
 
 def test_ultraview_visual_harness_geometry_and_contact_sheet(qapp, tmp_path):
     manifest = generate(tmp_path)
+    assert manifest["schema_version"] == MANIFEST_SCHEMA_VERSION
     for name in REQUIRED_SHOTS:
         info = manifest["shots"][name]
         path = tmp_path / info["path"]
@@ -99,6 +111,19 @@ def test_ultraview_visual_harness_geometry_and_contact_sheet(qapp, tmp_path):
     assert manifest["geometry"]["toolbar_1100"]["overlap_pairs"] == []
     assert manifest["geometry"]["show_flags_1440"]["show_titles"] is False
     assert manifest["geometry"]["presentation_1280"]["library_visible"] is False
+    mini = manifest["geometry"]["selected_bottom_right_with_minimap"]["minimap_selection"]
+    assert mini["space"] == HOST_COORD_SPACE
+    assert mini["target"]["visible"] is True
+    assert mini["minimap"]["visible"] is True
+    assert _facts_intersect(mini["target"], mini["stage"])
+    assert not _facts_intersect(mini["minimap"], mini["target"])
+    picker = manifest["geometry"]["selected_shape_format_picker"]["format_picker"]
+    assert picker["space"] == HOST_COORD_SPACE
+    assert picker["picker"]["visible"] is True
+    assert picker["target"]["visible"] is True
+    assert picker["toolbar"]["visible"] is True
+    assert _facts_intersect(picker["target"], picker["stage"])
+    assert not _facts_intersect(picker["picker"], picker["target"])
 
 
 def test_required_shots_cover_the_single_grouped_library_path():
@@ -216,3 +241,206 @@ def test_lod_zoom_matrix_exposes_type_and_hides_title_only_preview(qapp, qtbot):
                 assert not card._image.isVisible() or card._image.height() == 0
             assert card._title.full_text() == "View 1"
             assert getattr(page._previews[ref], "captured_digest", None) == "keep"
+
+
+def _on_stage_host_rect(*, x: int, y: int, w: int, h: int, visible: bool = True) -> dict:
+    return {
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+        "visible": visible,
+        "space": HOST_COORD_SPACE,
+    }
+
+
+def _valid_chrome_facts(**overrides) -> dict:
+    stage = _on_stage_host_rect(x=0, y=0, w=1600, h=900)
+    target = _on_stage_host_rect(x=200, y=180, w=240, h=160)
+    handles = _on_stage_host_rect(x=182, y=162, w=276, h=196)
+    toolbar = _on_stage_host_rect(x=220, y=120, w=200, h=48)
+    picker = _on_stage_host_rect(x=220, y=360, w=160, h=120)
+    trigger = _on_stage_host_rect(x=220, y=340, w=40, h=14)
+    minimap = _on_stage_host_rect(x=1420, y=728, w=168, h=112)
+    facts = {
+        "space": HOST_COORD_SPACE,
+        "stage": stage,
+        "target": target,
+        "selection_bounds": dict(target),
+        "handles": handles,
+        "toolbar": toolbar,
+        "picker": picker,
+        "trigger": trigger,
+        "minimap": minimap,
+    }
+    facts.update(overrides)
+    return facts
+
+
+def _shot_stub_manifest(*, minimap=None, picker=None, schema_version=MANIFEST_SCHEMA_VERSION):
+    return {
+        "schema_version": schema_version,
+        "shots": {name: {"width": 20, "height": 20} for name in REQUIRED_SHOTS},
+        "contact_sheet": "contact-sheet.png",
+        "geometry": {
+            "selected_bottom_right_with_minimap": {
+                "minimap_selection": minimap,
+            },
+            "selected_shape_format_picker": {
+                "format_picker": picker,
+            },
+        },
+    }
+
+
+def test_missing_schema_version_fails_closed():
+    missing = _shot_stub_manifest()
+    del missing["schema_version"]
+    with pytest.raises(GeometryError) as exc:
+        assert_geometry(missing)
+    assert "schema_version" in str(exc.value)
+    with pytest.raises(GeometryError) as exc:
+        assert_geometry(_shot_stub_manifest(schema_version=None))
+    assert "schema_version" in str(exc.value)
+
+
+def test_wrong_schema_version_fails_closed():
+    with pytest.raises(GeometryError) as exc:
+        assert_geometry(_shot_stub_manifest(schema_version=1))
+    assert "schema_version" in str(exc.value)
+
+
+def test_vacuous_minimap_manifest_without_target_visibility_fails():
+    old = {
+        "minimap": {"x": 1420, "y": 728, "w": 168, "h": 112, "visible": True},
+        "selection_bounds": {"x": -930, "y": -7114, "w": 819, "h": 460},
+        "handles": {"x": -948, "y": -7132, "w": 855, "h": 496},
+        "toolbar_visible": False,
+        "clear_of_selection_chrome": True,
+    }
+    errors = _selection_chrome_errors(
+        "selected_bottom_right_with_minimap", old, require_minimap=True
+    )
+    assert errors
+    assert any("target" in error or "missing" in error for error in errors)
+    with pytest.raises(GeometryError) as exc:
+        assert_geometry(_shot_stub_manifest(minimap=old, picker=_valid_chrome_facts()))
+    assert "selected_bottom_right_with_minimap" in str(exc.value)
+
+
+def test_offstage_target_facts_fail_even_when_minimap_is_clear():
+    facts = _valid_chrome_facts(
+        target=_on_stage_host_rect(x=-930, y=-7114, w=819, h=460),
+        selection_bounds=_on_stage_host_rect(x=-930, y=-7114, w=819, h=460),
+        handles=_on_stage_host_rect(x=-948, y=-7132, w=855, h=496),
+        toolbar=_hidden_host_rect(),
+        picker=_hidden_host_rect(),
+        clear_of_selection_chrome=True,
+        folded=False,
+        intersects_handles=False,
+        intersects_toolbar=False,
+    )
+    errors = _selection_chrome_errors(
+        "selected_bottom_right_with_minimap", facts, require_minimap=True
+    )
+    assert any("does not intersect stage" in error for error in errors)
+
+
+def test_inconsistent_coordinate_space_fails():
+    facts = _valid_chrome_facts(
+        target=_on_stage_host_rect(x=200, y=180, w=240, h=160),
+    )
+    facts["target"] = {**facts["target"], "space": "page"}
+    errors = _selection_chrome_errors(
+        "selected_bottom_right_with_minimap", facts, require_minimap=True
+    )
+    assert any("host coordinates" in error for error in errors)
+
+
+def test_format_picker_requires_visible_target_and_rejects_overlap():
+    overlapping = _valid_chrome_facts(
+        picker=_on_stage_host_rect(x=210, y=190, w=160, h=120),
+        picker_visible=True,
+    )
+    errors = _selection_chrome_errors(
+        "selected_shape_format_picker",
+        overlapping,
+        require_picker=True,
+        require_toolbar=True,
+    )
+    assert any("overlaps" in error for error in errors)
+
+    hidden_target = _valid_chrome_facts(target=_hidden_host_rect(), picker_visible=True)
+    errors = _selection_chrome_errors(
+        "selected_shape_format_picker",
+        hidden_target,
+        require_picker=True,
+        require_toolbar=True,
+    )
+    assert any("target is not visible" in error for error in errors)
+
+
+def test_required_chrome_must_stay_on_stage_and_picker_must_anchor():
+    picker_offstage = _valid_chrome_facts(
+        picker=_on_stage_host_rect(x=2000, y=2000, w=160, h=120),
+    )
+    errors = _selection_chrome_errors(
+        "selected_shape_format_picker",
+        picker_offstage,
+        require_picker=True,
+        require_toolbar=True,
+    )
+    assert any("picker is not contained by stage" in error for error in errors)
+
+    minimap_offstage = _valid_chrome_facts(
+        picker=_hidden_host_rect(),
+        minimap=_on_stage_host_rect(x=2000, y=2000, w=168, h=112),
+    )
+    errors = _selection_chrome_errors(
+        "selected_bottom_right_with_minimap",
+        minimap_offstage,
+        require_minimap=True,
+    )
+    assert any("minimap is not contained by stage" in error for error in errors)
+
+    picker_unanchored = _valid_chrome_facts(
+        picker=_on_stage_host_rect(x=800, y=600, w=160, h=120),
+    )
+    errors = _selection_chrome_errors(
+        "selected_shape_format_picker",
+        picker_unanchored,
+        require_picker=True,
+        require_toolbar=True,
+    )
+    assert any("not anchored" in error for error in errors)
+
+
+def test_valid_required_chrome_is_contained_by_stage():
+    facts = _valid_chrome_facts()
+    assert _fact_contained_by(facts["picker"], facts["stage"])
+    assert _fact_contained_by(facts["minimap"], facts["stage"])
+
+
+def test_scrolling_selected_object_off_stage_fails_assert_geometry(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    load_stylesheet(qapp)
+    page = UltraViewPage()
+    qtbot.addWidget(page)
+    _setup_selected_bottom_right_scene(qapp, page, scroll_off_stage=True)
+    facts = _minimap_selection_facts(page)
+    assert not _facts_intersect(facts.get("target"), facts.get("stage"))
+    errors = _selection_chrome_errors(
+        "selected_bottom_right_with_minimap", facts, require_minimap=True
+    )
+    assert errors
+    assert any(
+        "intersect" in error or "visible" in error or "missing" in error
+        for error in errors
+    )
+    with pytest.raises(GeometryError) as exc:
+        assert_geometry(
+            _shot_stub_manifest(minimap=facts, picker=_valid_chrome_facts())
+        )
+    assert "selected_bottom_right_with_minimap" in str(exc.value)

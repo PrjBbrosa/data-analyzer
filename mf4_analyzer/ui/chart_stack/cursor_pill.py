@@ -316,6 +316,9 @@ class CursorPill(QFrame):
     def primary_text(self):
         return self._primary.text()
 
+    def detail_text(self):
+        return self._detail.text()
+
     def set_primary(self, text):
         self._primary.setText(text)
         self.adjustSize()
@@ -348,7 +351,7 @@ class CursorPill(QFrame):
     def snapshot(self):
         return {
             "primary": self._primary.text(),
-            "detail": self._detail.text(),
+            "detail": self.detail_text(),
             "detail_visible": self.has_detail(),
             "detail_tooltip": self._detail.toolTip(),
             "mode": self._mode,
