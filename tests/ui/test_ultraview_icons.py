@@ -232,6 +232,20 @@ def test_ultraview_author_icons_share_optical_ink_box(qapp, factory_name, size):
     assert 10 <= height <= 16.5, (factory_name, size, height)
 
 
+def test_ultraview_author_laser_icon_is_a_centered_glowing_dot(qapp):
+    from mf4_analyzer.ui_kit.icons import LASER_DOT_CORE_DIAMETER, LASER_DOT_HALO_DIAMETER
+
+    assert LASER_DOT_CORE_DIAMETER / LASER_DOT_HALO_DIAMETER == 8.0 / 20.0
+    icon = Icons.ultraview_author_laser()
+    image, scale = _icon_image(icon, 20)
+    cx, cy = image.width() // 2, image.height() // 2
+    center = image.pixelColor(cx, cy)
+    assert center.red() > 180
+    assert center.alpha() > 160
+    corner = image.pixelColor(1, 1)
+    assert corner.alpha() < 20
+
+
 def test_ultraview_draw_subtool_ink_stays_inside_shared_safe_box(qapp):
     """Larger subtool glyphs keep the 2px outer ring clear on the 20px canvas."""
     for factory_name in _DRAW_SUBTOOL_FACTORIES:

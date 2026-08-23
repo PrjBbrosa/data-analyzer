@@ -5,7 +5,17 @@ from collections.abc import Sequence
 
 import qtawesome as qta
 from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPolygonF, QRegion
+from PyQt5.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QRegion,
+)
 from PyQt5.QtWidgets import (
     QAbstractScrollArea,
     QApplication,
@@ -27,8 +37,11 @@ from .author_render import shape_path
 from .author_style import (
     DEFAULT_THEME,
     STICKY_PALETTE_TOKENS,
+    SwatchAppearance,
+    font_candidates,
     ink_color,
     pen_color,
+    resolve_swatch,
     sticky_colors,
 )
 from .author_selection import (
@@ -78,10 +91,44 @@ _PEN_WIDTHS = (2, 4, 8)
 _HIGHLIGHTER_WIDTHS = (8, 12, 16)
 _PICKER_GAP = 6
 _QWIDGETSIZE_MAX = 16777215
-_FONT_PICKER_MIN_WIDTH = 160
-_FONT_PICKER_MAX_WIDTH = 168
+_FONT_PICKER_MIN_WIDTH = 112
+_FONT_PICKER_MAX_WIDTH = 120
 _SIZE_PICKER_MIN_WIDTH = 104
 _SIZE_PICKER_MAX_WIDTH = 120
+_PICKER_WIDTHS = {
+    "font": (112, 120),
+    "font_size": (104, 120),
+    "line_width": (120, 144),
+    "dash": (120, 144),
+    "route": (120, 144),
+    "head": (120, 144),
+    "align": (120, 144),
+    "list": (136, 168),
+    "tool": (136, 168),
+    "corner": (120, 144),
+    "shape": (208, 216),
+    "label": (120, 168),
+}
+def paint_swatch_appearance(
+    painter: QPainter, box: QRectF, appearance: SwatchAppearance, *, radius: float = 6.0
+) -> None:
+    """Draw one resolved swatch. Toolbar and picker share this path."""
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    if appearance.transparent or appearance.hatch:
+        painter.setBrush(QColor(*appearance.rgb))
+        painter.setPen(QPen(QColor(*appearance.border), 1.2))
+        painter.drawRoundedRect(box, radius, radius)
+        hatch = QPen(QColor(*appearance.foreground), 1.6)
+        hatch.setCapStyle(Qt.RoundCap)
+        painter.setPen(hatch)
+        inset = box.adjusted(2.0, 2.0, -2.0, -2.0)
+        painter.drawLine(inset.topLeft(), inset.bottomRight())
+        return
+    painter.setPen(QPen(QColor(*appearance.border), 1.0))
+    painter.setBrush(QColor(*appearance.rgb))
+    painter.drawRoundedRect(box, radius, radius)
+
+
 _DRAW_TOOL_STYLE = (
     "QToolButton {"
     f"min-width: {_DRAW_CELL}px; max-width: {_DRAW_CELL}px; "
@@ -265,7 +312,7 @@ class PointerPopover(ToolFlyoutSurface):
 
     _ROWS: tuple[tuple[str, str, str], ...] = (
         (POINTER_MODE_MOUSE, "鼠标", "选择、移动、缩放"),
-        (POINTER_MODE_LASER, "激光笔", "选择、移动、缩放；仅替换光标形状"),
+        (POINTER_MODE_LASER, "激光笔", "选择、移动、缩放；仅换成发光圆点光标"),
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -1312,6 +1359,193 @@ class DrawPopover(ToolFlyoutSurface):
             settings.endGroup()
 
 
+class _PreviewChoiceButton(QToolButton):
+    """One picker row with an explicit presentation role and accessible text."""
+
+    def __init__(
+        self,
+        value: object,
+        label: str,
+        presentation: str,
+        parent: QWidget | None = None,
+        *,
+        swatch_role: str = "",
+    ) -> None:
+        super().__init__(parent)
+        self._value = value
+        self._label = str(label)
+        self._presentation = str(presentation or "label")
+        self._swatch_role = str(swatch_role or "")
+        self.setProperty("choiceValue", value)
+        self.setProperty("presentationRole", self._presentation)
+        self.setCheckable(True)
+        self.setAutoRaise(True)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setFixedHeight(32 if self._presentation == "font_size" else 34)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip(self._label)
+        self.setAccessibleName(self._label)
+        self.setText("")
+        self.setIcon(QIcon())
+        self.setStyleSheet(
+            "QToolButton { background-color: transparent; border: 0; border-radius: 8px; }"
+        )
+
+    def presentation_role(self) -> str:
+        return self._presentation
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        rect = QRectF(self.rect())
+        fill = QPainterPath()
+        fill.addRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0)
+        if self.isChecked():
+            painter.fillPath(fill, QColor("#EEF1FF"))
+        elif self.underMouse():
+            painter.fillPath(fill, QColor("#F3F5F6"))
+        text_color = QColor("#4262FF") if self.isChecked() else _INK
+        preview = QRectF(10.0, 7.0, 28.0, 20.0)
+        text_left = 12.0
+        if self._presentation != "font":
+            self._paint_preview(painter, preview)
+            text_left = 44.0
+        painter.setPen(text_color)
+        font = self.font()
+        if self._presentation == "font":
+            families = font_candidates(self._value)
+            font = QFont(families[0] if families else "sans-serif", 12)
+        elif self._presentation == "font_size":
+            raw = str(self._value)
+            try:
+                size = 11 if raw == "auto" else max(10, min(16, int(raw)))
+            except (TypeError, ValueError):
+                size = 12
+            font = QFont(font)
+            font.setPixelSize(size)
+        painter.setFont(font)
+        text_box = QRectF(text_left, 0.0, max(8.0, rect.width() - text_left - 22.0), rect.height())
+        metrics = QFontMetrics(font)
+        elided = metrics.elidedText(self._label, Qt.ElideRight, int(text_box.width()))
+        painter.drawText(text_box, int(Qt.AlignVCenter | Qt.AlignLeft), elided)
+        if self.isChecked():
+            painter.setPen(QPen(QColor(_SELECTION_BLUE), 1.6))
+            painter.drawText(
+                QRectF(rect.right() - 20.0, 0.0, 16.0, rect.height()),
+                int(Qt.AlignCenter),
+                "✓",
+            )
+
+    def _paint_preview(self, painter: QPainter, box: QRectF) -> None:
+        painter.save()
+        painter.setPen(QPen(_INK, 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setBrush(Qt.NoBrush)
+        value = self._value
+        role = self._presentation
+        if role == "font_size":
+            baseline = box.bottom() - 4.0
+            painter.drawLine(QPointF(box.left(), baseline), QPointF(box.right(), baseline))
+        elif role == "line_width":
+            try:
+                width = max(1.0, float(value or 2))
+            except (TypeError, ValueError):
+                width = 2.0
+            painter.setPen(QPen(_INK, width, Qt.SolidLine, Qt.RoundCap))
+            mid = box.center().y()
+            painter.drawLine(QPointF(box.left(), mid), QPointF(box.right(), mid))
+        elif role == "dash":
+            pen = QPen(_INK, 2.0, Qt.DashLine if value == "dashed" else Qt.SolidLine, Qt.RoundCap)
+            if value == "dotted":
+                pen.setStyle(Qt.DotLine)
+            painter.setPen(pen)
+            mid = box.center().y()
+            painter.drawLine(QPointF(box.left(), mid), QPointF(box.right(), mid))
+        elif role == "route":
+            path = QPainterPath()
+            if value == "elbow":
+                path.moveTo(box.left(), box.bottom() - 4)
+                path.lineTo(box.center().x(), box.bottom() - 4)
+                path.lineTo(box.center().x(), box.top() + 4)
+                path.lineTo(box.right(), box.top() + 4)
+            else:
+                path.moveTo(box.left(), box.center().y())
+                path.lineTo(box.right(), box.center().y())
+            painter.drawPath(path)
+        elif role == "head":
+            mid = box.center().y()
+            painter.drawLine(QPointF(box.left(), mid), QPointF(box.right() - 6, mid))
+            if value == "arrow":
+                head = QPainterPath()
+                head.moveTo(box.right(), mid)
+                head.lineTo(box.right() - 8, mid - 4)
+                head.lineTo(box.right() - 8, mid + 4)
+                head.closeSubpath()
+                painter.setBrush(_INK)
+                painter.drawPath(head)
+        elif role == "align":
+            y0 = box.top() + 4
+            widths = {"left": (0.0, 0.7), "center": (0.15, 0.7), "right": (0.3, 0.7)}
+            left_frac, span = widths.get(str(value), (0.0, 1.0))
+            for index in range(3):
+                y = y0 + index * 5
+                x0 = box.left() + box.width() * left_frac
+                painter.drawLine(QPointF(x0, y), QPointF(x0 + box.width() * span, y))
+        elif role == "list":
+            y = box.center().y()
+            if value == "number":
+                painter.drawText(box, int(Qt.AlignVCenter | Qt.AlignLeft), "1.")
+            elif value == "bullet":
+                painter.setBrush(_INK)
+                painter.drawEllipse(QPointF(box.left() + 6, y), 2.2, 2.2)
+            else:
+                painter.drawLine(QPointF(box.left(), y), QPointF(box.right(), y))
+        elif role == "tool":
+            painter.drawLine(box.bottomLeft() + QPointF(4, -4), box.topRight() + QPointF(-4, 4))
+        elif role == "corner":
+            try:
+                radius = max(0.0, float(value or 0) / 3.0)
+            except (TypeError, ValueError):
+                radius = 0.0
+            painter.drawRoundedRect(box.adjusted(1, 1, -1, -1), radius, radius)
+        elif role == "swatch" and self._swatch_role:
+            appearance = resolve_swatch(self._swatch_role, value, DEFAULT_THEME)
+            paint_swatch_appearance(painter, box, appearance, radius=4.0)
+        painter.restore()
+
+
+class _SwatchChip(QToolButton):
+    """Palette cell that always uses the shared swatch resolver."""
+
+    def __init__(
+        self, token: object, appearance: SwatchAppearance, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._appearance = appearance
+        self.setFixedSize(28, 28)
+        self.setProperty("choiceValue", token)
+        self.setProperty("presentationRole", "swatch")
+        self.setCheckable(True)
+        self.setToolTip(appearance.tooltip)
+        self.setAccessibleName(appearance.tooltip)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet(
+            "QToolButton { background-color: transparent; border: 0; border-radius: 4px; }"
+        )
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        box = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
+        paint_swatch_appearance(painter, box, self._appearance, radius=4.0)
+        if self.isChecked():
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(_SELECTION_BLUE), 2.0))
+            painter.drawRoundedRect(box, 4.0, 4.0)
+
+
 class FormatChoiceFlyout(ToolFlyoutSurface):
     """Anchored picker reused by the selection toolbar. Height follows content."""
 
@@ -1322,8 +1556,19 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         super().__init__(parent, windowed=False)
         self.setObjectName("ultraViewFormatChoiceFlyout")
         self._columns = 1
+        self._presentation = "label"
 
-    def present_labels(self, choices: Sequence[tuple[object, str]], *, current=None) -> None:
+    def presentation_role(self) -> str:
+        return self._presentation
+
+    def present_labels(
+        self,
+        choices: Sequence[tuple[object, str]],
+        *,
+        current=None,
+        presentation: str = "label",
+        swatch_role: str = "",
+    ) -> None:
         self._begin_present()
         host = QWidget(self._content)
         host.setObjectName("ultraViewFormatChoiceList")
@@ -1331,45 +1576,19 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(2)
         self._columns = 1
-        labels = []
+        self._presentation = str(presentation or "label")
         for value, label in choices:
-            labels.append(str(label))
-        named = {item.lower() for item in labels}
-        is_font = bool(named & {"sans", "serif", "mono"})
-        is_size = bool(labels) and all(
-            item == "auto" or item.replace(" px", "").replace(".", "", 1).isdigit()
-            for item in labels
-        )
-        row_h = 32 if is_size else 34
-        for value, label in choices:
-            button = QToolButton(host)
-            button.setText(str(label))
-            button.setProperty("choiceValue", value)
-            button.setCheckable(True)
-            button.setChecked(value == current)
-            button.setFixedHeight(row_h)
-            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            button.setStyleSheet(
-                "QToolButton {"
-                "background-color: transparent; border: 0; border-radius: 8px;"
-                "padding: 0 12px; text-align: left; color: #183039; }"
-                "QToolButton:checked { background-color: #EEF1FF; color: #4262FF; }"
-                "QToolButton:hover { background-color: #F3F5F6; }"
+            button = _PreviewChoiceButton(
+                value,
+                str(label),
+                self._presentation,
+                host,
+                swatch_role=swatch_role,
             )
+            button.setChecked(value == current)
             button.clicked.connect(self._on_clicked)
             column.addWidget(button)
-        if is_font:
-            self.min_width = _FONT_PICKER_MIN_WIDTH
-            self.setMinimumWidth(_FONT_PICKER_MIN_WIDTH)
-            self.setMaximumWidth(_FONT_PICKER_MAX_WIDTH)
-        elif is_size:
-            self.min_width = _SIZE_PICKER_MIN_WIDTH
-            self.setMinimumWidth(_SIZE_PICKER_MIN_WIDTH)
-            self.setMaximumWidth(_SIZE_PICKER_MAX_WIDTH)
-        else:
-            self.min_width = 120
-            self.setMinimumWidth(120)
-            self.setMaximumWidth(168)
+        self._apply_presentation_width(self._presentation)
         self.inner_layout().addWidget(host)
 
     def present_palette(
@@ -1378,7 +1597,9 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         *,
         current=None,
         color_rgb: dict[object, tuple[int, int, int]] | None = None,
+        swatch_role: str = "fill",
     ) -> None:
+        del color_rgb
         self._begin_present()
         host = QWidget(self._content)
         grid = QGridLayout(host)
@@ -1386,34 +1607,23 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
         self._columns = 4
+        self._presentation = "swatch"
         self.min_width = 0
         self.setMinimumWidth(0)
         self.setMaximumWidth(_QWIDGETSIZE_MAX)
         for index, token in enumerate(tokens):
-            button = QToolButton(host)
-            button.setFixedSize(28, 28)
-            button.setProperty("choiceValue", token)
-            button.setCheckable(True)
+            appearance = resolve_swatch(swatch_role, token, DEFAULT_THEME)
+            button = _SwatchChip(token, appearance, host)
             button.setChecked(token == current)
-            label = "透明" if token is None else str(token)
-            button.setToolTip(label)
-            button.setAccessibleName(label)
-            rgb = (color_rgb or {}).get(token)
-            if rgb is None and token is None:
-                rgb = (255, 255, 255)
-            if rgb is not None:
-                button.setStyleSheet(
-                    "QToolButton {"
-                    f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});"
-                    "border-width: 1px; border-style: solid; border-color: rgba(32, 48, 56, 40);"
-                    "border-radius: 4px; }"
-                    "QToolButton:checked { border-width: 2px; border-color: #4262FF; }"
-                )
-            else:
-                button.setText(label)
             button.clicked.connect(self._on_clicked)
             grid.addWidget(button, index // 4, index % 4)
         self.inner_layout().addWidget(host)
+
+    def _apply_presentation_width(self, presentation: str) -> None:
+        lo, hi = _PICKER_WIDTHS.get(str(presentation), (120, 168))
+        self.min_width = lo
+        self.setMinimumWidth(lo)
+        self.setMaximumWidth(hi)
 
     def present_shapes(self, shapes: Sequence[str], *, current: str | None = None) -> None:
         self._begin_present()
@@ -1422,6 +1632,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         self._columns = 1
+        self._presentation = "shape"
         self.min_width = _SHAPE_FLYOUT_MIN_WIDTH
         self.setMinimumWidth(_SHAPE_FLYOUT_MIN_WIDTH)
         self.setMaximumWidth(216)
@@ -1575,6 +1786,10 @@ class _FormatButton(QToolButton):
         self.setChecked(control.checked)
         self.setEnabled(control.enabled)
         tip = control.tooltip or control.label
+        if control.icon_role == "swatch" and control.swatch_role:
+            appearance = resolve_swatch(control.swatch_role, control.value, DEFAULT_THEME)
+            if appearance.transparent:
+                tip = "透明"
         self.setToolTip(tip)
         self.setAccessibleName(tip)
         if control.icon_role in {"value", "glyph"} and control.visible_text and not control.mixed:
@@ -1610,20 +1825,11 @@ class _FormatButton(QToolButton):
             return
         value = self._control.value
         if role == "swatch":
-            if value is None:
-                painter.setPen(QPen(_LINE, 1.0))
-                painter.setBrush(QColor("#FFFFFF"))
-            else:
-                try:
-                    rgb = sticky_colors(value, DEFAULT_THEME)[0]
-                except (KeyError, ValueError, TypeError):
-                    try:
-                        rgb = ink_color(value, DEFAULT_THEME)
-                    except (KeyError, ValueError, TypeError):
-                        rgb = (66, 98, 255)
-                painter.setPen(QPen(QColor(32, 48, 56, 50), 1.0))
-                painter.setBrush(QColor(*rgb[:3]))
-            painter.drawRoundedRect(box, 6.0, 6.0)
+            swatch_role = str(self._control.swatch_role or "")
+            if not swatch_role:
+                swatch_role = "fill" if value is None else "ink"
+            appearance = resolve_swatch(swatch_role, value, DEFAULT_THEME)
+            paint_swatch_appearance(painter, box, appearance, radius=6.0)
             return
         if role in {"line", "dash"}:
             color = QColor("#183039")
@@ -1654,7 +1860,16 @@ class _FormatButton(QToolButton):
 def _controls_schema(kind: str, controls: Sequence[ToolbarControl]) -> tuple:
     return (
         str(kind),
-        tuple((control.key, str(control.group or ""), bool(control.wide), str(control.icon_role)) for control in controls),
+        tuple(
+            (
+                control.key,
+                str(control.group or ""),
+                bool(control.wide),
+                str(control.icon_role),
+                str(control.swatch_role or ""),
+            )
+            for control in controls
+        ),
     )
 
 
@@ -1744,8 +1959,15 @@ class SelectionToolbar(QFrame):
             return
         placeholders = {
             "sticky": (
-                ToolbarControl("shape", "形状", "形状", icon_role="shape", value="square", group="style"),
-                ToolbarControl("palette", "色板", "色板", icon_role="swatch", value="yellow", group="style"),
+                ToolbarControl(
+                    "palette",
+                    "色板",
+                    "色板",
+                    icon_role="swatch",
+                    value="yellow",
+                    group="style",
+                    swatch_role="sticky",
+                ),
                 ToolbarControl("font_size", "字号", "字号", icon_role="value", visible_text="14", group="type"),
                 ToolbarControl("lock", "锁定", "锁定", checkable=True, icon_role="icon", group="object"),
             ),
@@ -1759,26 +1981,57 @@ class SelectionToolbar(QFrame):
             ),
             "shape": (
                 ToolbarControl("shape", "形状", "形状", icon_role="shape", value="rectangle", group="style"),
-                ToolbarControl("fill", "填充色", "填充色", icon_role="swatch", value="blue", group="style"),
-                ToolbarControl("stroke", "描边色", "描边色", icon_role="swatch", value="ink", group="style"),
+                ToolbarControl(
+                    "fill",
+                    "填充色",
+                    "填充色",
+                    icon_role="swatch",
+                    value="blue",
+                    group="style",
+                    swatch_role="fill",
+                ),
+                ToolbarControl(
+                    "stroke",
+                    "描边色",
+                    "描边色",
+                    icon_role="swatch",
+                    value="ink",
+                    group="style",
+                    swatch_role="stroke",
+                ),
                 ToolbarControl("width", "线宽", "线宽", icon_role="line", value=2, group="style"),
                 ToolbarControl("dash", "线型", "线型", icon_role="dash", value="solid", group="style"),
                 ToolbarControl("lock", "锁定", "锁定", checkable=True, icon_role="icon", wide=True, group="object"),
             ),
             "connector": (
                 ToolbarControl("route", "路径", "路径", icon_role="icon", value="straight", group="ends"),
-                ToolbarControl("color", "颜色", "颜色", icon_role="swatch", value="ink", group="stroke"),
+                ToolbarControl(
+                    "color",
+                    "颜色",
+                    "颜色",
+                    icon_role="swatch",
+                    value="ink",
+                    group="stroke",
+                    swatch_role="stroke",
+                ),
                 ToolbarControl("width", "线宽", "线宽", icon_role="line", value=2, group="stroke"),
                 ToolbarControl("lock", "锁定", "锁定", checkable=True, icon_role="icon", wide=True, group="object"),
             ),
             "stroke": (
                 ToolbarControl("tool", "笔种", "笔种", icon_role="icon", value="pen", group="tool"),
-                ToolbarControl("color", "颜色", "颜色", icon_role="swatch", value="ink", group="ink"),
+                ToolbarControl(
+                    "color",
+                    "颜色",
+                    "颜色",
+                    icon_role="swatch",
+                    value="ink",
+                    group="ink",
+                    swatch_role="ink",
+                ),
                 ToolbarControl("width", "线宽", "线宽", icon_role="line", value=4, group="ink"),
                 ToolbarControl("lock", "锁定", "锁定", checkable=True, icon_role="icon", wide=True, group="object"),
             ),
             "mixed": (
-                ToolbarControl("duplicate", "复制", "复制 · Ctrl/Cmd+D", icon_role="icon", group="object"),
                 ToolbarControl("lock", "锁定", "锁定", checkable=True, icon_role="icon", group="object"),
             ),
         }

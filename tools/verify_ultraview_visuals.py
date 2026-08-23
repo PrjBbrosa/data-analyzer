@@ -1823,7 +1823,7 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
     if laser.get("bitmap_cursor") is not True:
         errors.append(f"laser_cursor is not a Qt bitmap cursor: {laser}")
     hotspot = laser.get("hotspot") or []
-    expected_hotspot = laser.get("expected_hotspot") or [25, 5]
+    expected_hotspot = laser.get("expected_hotspot") or [16, 16]
     if list(hotspot) != list(expected_hotspot):
         errors.append(f"laser_cursor hotspot {hotspot} != {expected_hotspot}")
     if laser.get("native_pixmap") is True:

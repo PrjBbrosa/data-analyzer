@@ -1,21 +1,34 @@
 """DPR-aware Laser pointer cursor. Appearance only; not an author object.
 
-UV-HARD-06: cache key is (DPR, logical size, palette version). The backing
+Option B (2026-08-23): glowing disc, core 8 px, halo 20 px, hotspot at the
+visual centre. Cache key is (DPR, logical size, palette version). The backing
 pixmap is rasterized at native pixels, then tagged with ``setDevicePixelRatio``
-so ``QCursor`` hotspots stay in the 32×32 design's logical coordinates.
+so ``QCursor`` hotspots stay in the design's logical coordinates.
 """
 from __future__ import annotations
 
 import math
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
-from PyQt5.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtGui import QCursor, QPainter, QPixmap
+
+from mf4_analyzer.ui_kit.icons import (
+    LASER_DOT_CORE_DIAMETER,
+    LASER_DOT_HALO_DIAMETER,
+    paint_laser_glow,
+)
 
 
 LASER_CURSOR_DESIGN_SIZE = 32
 LASER_CURSOR_LOGICAL_SIZE = LASER_CURSOR_DESIGN_SIZE
-LASER_CURSOR_HOTSPOT = (25, 5)
-LASER_CURSOR_PALETTE_VERSION = 1
+LASER_CURSOR_CORE_DIAMETER = LASER_DOT_CORE_DIAMETER
+LASER_CURSOR_HALO_DIAMETER = LASER_DOT_HALO_DIAMETER
+LASER_CURSOR_HOTSPOT = (
+    LASER_CURSOR_DESIGN_SIZE // 2,
+    LASER_CURSOR_DESIGN_SIZE // 2,
+)
+LASER_CURSOR_PALETTE_VERSION = 2
+LASER_CURSOR_OPTION = "B"
 LASER_CURSOR_DPR_CHANGE_EVENTS = frozenset(
     value
     for value in (
@@ -62,7 +75,7 @@ def laser_pointer_cursor(
     logical_size: int = LASER_CURSOR_LOGICAL_SIZE,
     palette_version: int = LASER_CURSOR_PALETTE_VERSION,
 ) -> QCursor:
-    """Return a cached laser-pen cursor; it has no board overlay."""
+    """Return a cached glowing-dot cursor; it has no board overlay."""
     key = laser_cursor_cache_key(
         dpr=dpr,
         logical_size=logical_size,
@@ -92,27 +105,16 @@ def _build_laser_cursor(*, dpr: float, logical_size: int) -> QCursor:
         dpr * float(logical_size) / float(LASER_CURSOR_DESIGN_SIZE),
         dpr * float(logical_size) / float(LASER_CURSOR_DESIGN_SIZE),
     )
-    beam = QPen(QColor(230, 54, 77, 145), 1.35, Qt.SolidLine, Qt.RoundCap)
-    painter.setPen(beam)
-    painter.drawLine(QPointF(17.0, 12.0), QPointF(25.0, 5.0))
-    body = QPainterPath()
-    body.moveTo(4.2, 23.0)
-    body.lineTo(13.9, 11.1)
-    body.quadTo(15.3, 9.5, 16.9, 10.9)
-    body.lineTo(20.7, 14.0)
-    body.quadTo(22.1, 15.3, 20.8, 16.9)
-    body.lineTo(11.1, 28.7)
-    body.closeSubpath()
-    painter.setPen(QPen(QColor("#163746"), 1.35, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-    painter.setBrush(QColor("#EAF3FF"))
-    painter.drawPath(body)
-    painter.setPen(QPen(QColor("#4262FF"), 2.1, Qt.SolidLine, Qt.RoundCap))
-    painter.drawLine(QPointF(8.0, 22.3), QPointF(15.7, 13.0))
-    painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor("#E6364D"))
-    painter.drawEllipse(QPointF(25.0, 5.0), 2.6, 2.6)
-    painter.setBrush(QColor(230, 54, 77, 50))
-    painter.drawEllipse(QPointF(25.0, 5.0), 5.0, 5.0)
+    center = QPointF(
+        LASER_CURSOR_DESIGN_SIZE / 2.0,
+        LASER_CURSOR_DESIGN_SIZE / 2.0,
+    )
+    paint_laser_glow(
+        painter,
+        center,
+        core_diameter=LASER_CURSOR_CORE_DIAMETER,
+        halo_diameter=LASER_CURSOR_HALO_DIAMETER,
+    )
     painter.end()
     pixmap.setDevicePixelRatio(dpr)
     hotspot = _logical_hotspot(logical_size)

@@ -708,7 +708,7 @@ class LayoutPicker(QFrame):
         root.addWidget(self._intro, 0)
         grid_host = QWidget(self)
         grid = QGridLayout(grid_host)
-        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setContentsMargins(0, 0, 8, 0)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
         self._group = QButtonGroup(self)
@@ -737,8 +737,10 @@ class LayoutPicker(QFrame):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         scroll.setWidget(grid_host)
+        self._scroll = scroll
         root.addWidget(scroll, 1)
 
     def thumb_button(self, layout_id: str) -> QToolButton | None:
@@ -747,13 +749,19 @@ class LayoutPicker(QFrame):
     def intro_label(self) -> QLabel:
         return self._intro
 
+    def _scrollbar_extent(self) -> int:
+        return max(0, int(self.style().pixelMetric(QStyle.PM_ScrollBarExtent)))
+
     def sizeHint(self) -> QSize:  # noqa: N802
         cell_w, cell_h = _LAYOUT_THUMB_CELL.width(), _LAYOUT_THUMB_CELL.height()
-        return QSize(12 + cell_w * 2 + 8 + 12, 10 + 22 + 8 + 36 + 8 + cell_h * 4 + 8 * 3 + 12)
+        # 12 outer + two cells + gap + 8 content-to-viewport + scrollbar + 12 outer
+        width = 12 + cell_w * 2 + 8 + 8 + self._scrollbar_extent() + 12
+        return QSize(width, 10 + 22 + 8 + 36 + 8 + cell_h * 4 + 8 * 3 + 12)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         cell_w = _LAYOUT_THUMB_CELL.width()
-        return QSize(12 + cell_w * 2 + 8 + 12, 160)
+        width = 12 + cell_w * 2 + 8 + 8 + self._scrollbar_extent() + 12
+        return QSize(width, 160)
 
     def set_current(self, layout_id: str, *, free_grid: bool, view_count: int | None = None) -> None:
         if view_count is not None:

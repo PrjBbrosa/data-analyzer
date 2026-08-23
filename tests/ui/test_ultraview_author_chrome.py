@@ -700,7 +700,7 @@ def test_pointer_popover_has_two_36px_rows_and_blue_selected_mode(qtbot):
     assert laser.property("selected") == "false"
     laser_hint = laser.findChild(QLabel, "ultraViewPointerModeHint")
     assert laser_hint is not None
-    assert laser_hint.text() == "选择、移动、缩放；仅替换光标形状"
+    assert laser_hint.text() == "选择、移动、缩放；仅换成发光圆点光标"
     chosen: list[str] = []
     popover.mode_selected.connect(chosen.append)
     QTest.mouseClick(laser, Qt.LeftButton)
@@ -837,7 +837,7 @@ def test_selection_toolbar_cells_do_not_inherit_global_button_border_or_gradient
     qtbot.addWidget(toolbar)
     toolbar.show()
     QApplication.processEvents()
-    button = toolbar.button("shape") or toolbar.button("font_role")
+    button = toolbar.button("palette") or toolbar.button("font_role") or toolbar.button("font_size")
     assert button is not None
     assert button.property("role") == "selectionToolbarCell"
     image = QImage(button.size(), QImage.Format_ARGB32)
@@ -861,13 +861,21 @@ def test_selection_toolbar_has_expected_group_dividers(qtbot):
 def test_font_and_size_pickers_are_single_column_content_driven_surfaces(qtbot):
     picker = FormatChoiceFlyout()
     qtbot.addWidget(picker)
-    picker.present_labels((("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")), current="sans")
+    picker.present_labels(
+        (("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")),
+        current="sans",
+        presentation="font",
+    )
     picker.adjustSize()
     picker.show()
     QApplication.processEvents()
     assert picker.column_count() == 1
-    assert 152 <= picker.width() <= 168
-    picker.present_labels(tuple((size, str(size)) for size in ("auto", 12, 14, 18, 24)), current=14)
+    assert 112 <= picker.width() <= 120
+    picker.present_labels(
+        tuple((size, str(size)) for size in ("auto", 12, 14, 18, 24)),
+        current=14,
+        presentation="font_size",
+    )
     picker.adjustSize()
     QApplication.processEvents()
     assert picker.column_count() == 1
@@ -1112,7 +1120,7 @@ def _assert_picker_closed(page, key: str, toolbar_rect: QRect, keys: tuple[str, 
 @pytest.mark.parametrize(
     ("key", "expected_choices", "min_w", "max_w"),
     [
-        ("font_role", 3, 152, 168),
+        ("font_role", 3, 112, 120),
         ("font_size", 9, 104, 120),
     ],
 )
@@ -1161,7 +1169,7 @@ def test_font_role_then_size_then_role_does_not_inherit_geometry(qtbot, qapp, si
     font = _assert_picker_open_inside_safe(
         harness, "font_role", 3, require_gap=size[1] >= 720
     )
-    assert 152 <= font["picker"].width() <= 168
+    assert 112 <= font["picker"].width() <= 120
 
     _open_format_key(page, "font_size")
     size_shot = _assert_picker_open_inside_safe(harness, "font_size", 9, require_gap=False)
@@ -1221,3 +1229,174 @@ def test_text_toolbar_and_picker_stay_inside_safe_edges(qtbot, qapp, size, box):
     _assert_picker_open_inside_safe(harness, "font_size", 9, require_gap=False)
     _open_format_key(page, "font_size")
     _assert_picker_closed(page, "font_size", QRect(toolbar.geometry()), _visible_control_keys(toolbar))
+
+
+def test_ink_swatch_is_not_sticky_yellow(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.author_selection import ToolbarControl
+    from mf4_analyzer.ui.chart_stack.ultraview.author_style import ink_color, sticky_colors
+
+    toolbar = SelectionToolbar()
+    qtbot.addWidget(toolbar)
+    ink = ToolbarControl(
+        "color", "颜色", "颜色", icon_role="swatch", value="ink", swatch_role="ink", group="ink"
+    )
+    sticky = ToolbarControl(
+        "palette", "色板", "色板", icon_role="swatch", value="yellow", swatch_role="sticky", group="style"
+    )
+    toolbar._clear_body()
+    toolbar._add_control(ink)
+    image = QImage(toolbar.button("color").size(), QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    toolbar.button("color").render(painter)
+    painter.end()
+    center = image.pixelColor(image.width() // 2, image.height() // 2)
+    expected = QColor(*ink_color("ink"))
+    yellow = QColor(*sticky_colors("yellow")[0])
+    assert abs(center.red() - expected.red()) < 40
+    assert abs(center.red() - yellow.red()) > 40
+    toolbar._clear_body()
+    toolbar._add_control(sticky)
+    sticky_img = QImage(toolbar.button("palette").size(), QImage.Format_ARGB32)
+    sticky_img.fill(Qt.transparent)
+    painter = QPainter(sticky_img)
+    toolbar.button("palette").render(painter)
+    painter.end()
+    sticky_px = sticky_img.pixelColor(sticky_img.width() // 2, sticky_img.height() // 2)
+    assert abs(sticky_px.red() - yellow.red()) < 40
+
+
+def test_transparent_swatch_draws_white_fill_and_red_hatch(qtbot):
+    picker = FormatChoiceFlyout()
+    qtbot.addWidget(picker)
+    picker.present_palette((None, "yellow"), current=None, swatch_role="fill")
+    picker.adjustSize()
+    picker.show()
+    QApplication.processEvents()
+    chip = next(
+        child
+        for child in picker.findChildren(QToolButton)
+        if child.property("choiceValue") is None
+    )
+    assert chip.toolTip() == "透明"
+    image = QImage(chip.size(), QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    chip.render(painter)
+    painter.end()
+    whiteish = 0
+    redish = 0
+    for x in range(image.width()):
+        for y in range(image.height()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() < 40:
+                continue
+            if pixel.red() > 230 and pixel.green() > 230 and pixel.blue() > 230:
+                whiteish += 1
+            if pixel.red() > 180 and pixel.green() < 90 and pixel.blue() < 90:
+                redish += 1
+    assert whiteish > 20
+    assert redish > 5
+
+
+@pytest.mark.parametrize(
+    ("presentation", "choices", "min_w", "max_w"),
+    [
+        ("font", (("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")), 112, 120),
+        ("font_size", tuple((n, str(n)) for n in (8, 12, 24)), 104, 120),
+        ("line_width", ((1, "1 px"), (2, "2 px"), (8, "8 px")), 120, 144),
+        ("dash", (("solid", "实线"), ("dashed", "虚线")), 120, 144),
+        ("route", (("straight", "直线"), ("elbow", "折线")), 120, 144),
+        ("head", (("none", "无"), ("arrow", "箭头")), 120, 144),
+        ("align", (("left", "左"), ("center", "中"), ("right", "右")), 120, 144),
+        ("list", (("none", "无"), ("bullet", "项目符号"), ("number", "编号")), 136, 168),
+        ("tool", (("pen", "钢笔"), ("highlighter", "荧光笔")), 136, 168),
+        ("corner", ((0, "0"), (8, "8"), (24, "24")), 120, 144),
+    ],
+)
+def test_picker_presentation_roles_own_width_and_payload(qtbot, presentation, choices, min_w, max_w):
+    picker = FormatChoiceFlyout()
+    qtbot.addWidget(picker)
+    received = []
+    picker.choice_selected.connect(received.append)
+    picker.present_labels(choices, current=choices[0][0], presentation=presentation)
+    picker.adjustSize()
+    picker.show()
+    QApplication.processEvents()
+    assert picker.presentation_role() == presentation
+    assert min_w <= picker.width() <= max_w
+    buttons = [
+        child
+        for child in picker.findChildren(QToolButton)
+        if child.property("choiceValue") is not None
+    ]
+    assert buttons
+    assert buttons[0].property("presentationRole") == presentation
+    QTest.mouseClick(buttons[-1], Qt.LeftButton)
+    QApplication.processEvents()
+    assert received == [choices[-1][0]]
+
+
+def test_long_choice_label_does_not_cover_checked_mark(qtbot):
+    picker = FormatChoiceFlyout()
+    qtbot.addWidget(picker)
+    picker.present_labels(
+        (("left", "左对齐并且这是一段很长的中文和 English mixed label"),),
+        current="left",
+        presentation="align",
+    )
+    picker.adjustSize()
+    picker.show()
+    QApplication.processEvents()
+    button = next(
+        child
+        for child in picker.findChildren(QToolButton)
+        if child.property("choiceValue") == "left"
+    )
+    image = QImage(button.size(), QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    button.render(painter)
+    painter.end()
+    found_check = False
+    for x in range(image.width() - 18, image.width()):
+        for y in range(image.height()):
+            pixel = image.pixelColor(x, y)
+            if pixel.blue() > 180 and pixel.red() < 120:
+                found_check = True
+    assert found_check
+
+
+def test_sticky_toolbar_hides_shape_and_text_hides_link(qtbot, qapp):
+    load_stylesheet(qapp)
+    sticky = SelectionToolbar()
+    qtbot.addWidget(sticky)
+    sticky.set_kind("sticky")
+    sticky.show()
+    QApplication.processEvents()
+    assert sticky.button("shape") is None
+    assert sticky.button("palette") is not None
+    text = SelectionToolbar()
+    qtbot.addWidget(text)
+    text.set_kind("text")
+    assert text.button("link") is None
+    mixed = SelectionToolbar()
+    qtbot.addWidget(mixed)
+    mixed.set_kind("mixed")
+    assert mixed.button("duplicate") is None
+    assert mixed.button("lock") is not None
+
+
+def test_format_picker_visible_gap_is_at_least_six_px(qtbot, qapp):
+    harness = _prepare_text_selection(qtbot, qapp, (1280, 800))
+    page = harness.page
+    _open_format_key(page, "font_role")
+    toolbar = page.selection_toolbar()
+    picker = page.format_picker()
+    host = page.canvas_host()
+    trigger = toolbar.button("font_role")
+    origin = trigger.mapTo(host, QPoint(0, 0))
+    below = picker.y() - (origin.y() + trigger.height())
+    above = origin.y() - (picker.y() + picker.height())
+    assert below >= 6 or above >= 6
+    assert not picker.geometry().intersects(toolbar.geometry())

@@ -442,7 +442,7 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     assert pointer.keys == ("V", "Esc")
     assert "激光笔" in pointer.sub
     assert "整块单击" in pointer.sub
-    assert "仅替换光标形状" in pointer.sub
+    assert "发光圆点" in pointer.sub
     assert "不选择" not in pointer.sub
     assert sticky.keys == ("N",)
     assert text.keys == ("T",)

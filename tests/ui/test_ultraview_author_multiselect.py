@@ -277,7 +277,8 @@ def test_resolver_homogeneous_mixed_and_indeterminate():
     assert "fill" not in keys
     assert "align_left" in keys
     assert "distribute_h" in keys
-    assert "duplicate" in keys
+    assert "duplicate" not in keys
+    assert mixed.can_duplicate is True
     assert mixed.can_style is False
     assert mixed.can_align is True
 
@@ -302,7 +303,9 @@ def test_resolver_card_author_mixed_is_safe_actions_only():
     assert "fill" not in keys
     assert "palette" not in keys
     assert "align_left" not in keys
-    assert {"duplicate", "lock"} <= keys
+    assert "lock" in keys
+    assert "duplicate" not in keys
+    assert caps.can_duplicate is True
     assert caps.can_style is False
     assert caps.can_align is False
     assert caps.can_duplicate is True
@@ -347,7 +350,7 @@ def test_toolbar_applies_resolver_not_kind_scatter(qtbot):
     assert toolbar.kind() == "mixed"
     assert toolbar.height() == 48
     assert toolbar.button("fill") is None
-    assert toolbar.button("duplicate") is not None
+    assert toolbar.button("duplicate") is None
     assert toolbar.button("lock") is not None
     assert toolbar.button("align_left") is not None
     assert toolbar.button("distribute_v") is not None
@@ -545,7 +548,9 @@ def test_page_align_duplicate_lock_are_one_history(qtbot):
     QApplication.processEvents()
     assert len(sink.undo) == 1
     assert {item.box.x for item in harness.board.author_objects} == {_item(harness.board, "a").box.x}
-    QTest.mouseClick(toolbar.button("duplicate"), Qt.LeftButton)
+    free = harness.page._free_grid
+    free.setFocus(Qt.OtherFocusReason)
+    QTest.keyClick(free, Qt.Key_D, Qt.ControlModifier)
     QApplication.processEvents()
     assert len(sink.undo) == 2
     assert len(harness.board.author_objects) == 4

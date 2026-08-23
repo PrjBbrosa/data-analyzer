@@ -473,6 +473,9 @@ HANDLE_HIT_PX = 18
 HANDLE_VISUAL_PX = 10
 HANDLE_NAMES = ("nw", "n", "ne", "w", "e", "sw", "s", "se")
 _HANDLE_CORNERS = ("nw", "ne", "sw", "se")
+CORNER_HANDLES = frozenset(_HANDLE_CORNERS)
+SQUARE_SNAP_ENTER_PX = 8.0
+SQUARE_SNAP_EXIT_PX = 12.0
 
 
 def handle_hit_rects(
@@ -515,6 +518,99 @@ def hit_box_handle(
         if x <= px < x + width and y <= py < y + height:
             return name
     return None
+
+
+def _box_anchor(box: BoardBox, handle: str) -> BoardPoint:
+    x, y, width, height = box
+    ax = x + width if "w" in handle else x
+    ay = y + height if "n" in handle else y
+    return (ax, ay)
+
+
+def _box_from_anchor(anchor: BoardPoint, handle: str, width: float, height: float) -> BoardBox:
+    ax, ay = anchor
+    x = ax - width if "w" in handle else ax
+    y = ay - height if "n" in handle else ay
+    return (x, y, width, height)
+
+
+def resize_box_unclamped(
+    box: BoardBox, handle: str, dx: float, dy: float
+) -> BoardBox:
+    """Move the named edges; width and height stay non-negative."""
+    x, y, width, height = box
+    x2, y2 = x + width, y + height
+    if "w" in handle:
+        x = x + dx
+    if "e" in handle:
+        x2 = x2 + dx
+    if "n" in handle:
+        y = y + dy
+    if "s" in handle:
+        y2 = y2 + dy
+    return (min(x, x2), min(y, y2), abs(x2 - x), abs(y2 - y))
+
+
+def apply_square_snap(
+    original: BoardBox,
+    candidate: BoardBox,
+    handle: str,
+    *,
+    pitch_x: float,
+    pitch_y: float,
+    snapped: bool,
+    bypass: bool,
+) -> tuple[BoardBox, bool]:
+    """Snap a corner resize to a visually square rect using screen-logical pixels.
+
+    Edge midpoints never snap. Enter at ``SQUARE_SNAP_ENTER_PX``, leave at
+    ``SQUARE_SNAP_EXIT_PX``. The fixed opposite corner stays the anchor.
+    """
+    if bypass or handle not in CORNER_HANDLES:
+        return candidate, False
+    px = float(pitch_x) if math.isfinite(float(pitch_x)) and float(pitch_x) > 0.0 else 1.0
+    py = float(pitch_y) if math.isfinite(float(pitch_y)) and float(pitch_y) > 0.0 else 1.0
+    _cx, _cy, cand_w, cand_h = candidate
+    width_px = abs(float(cand_w)) * px
+    height_px = abs(float(cand_h)) * py
+    delta = abs(width_px - height_px)
+    if snapped:
+        still = delta <= SQUARE_SNAP_EXIT_PX + 1e-9
+    else:
+        still = delta <= SQUARE_SNAP_ENTER_PX + 1e-9
+    if not still:
+        return candidate, False
+    side_px = max(width_px, height_px)
+    new_w = side_px / px
+    new_h = side_px / py
+    return _box_from_anchor(_box_anchor(original, handle), handle, new_w, new_h), True
+
+
+def resize_box_candidate(
+    box: BoardBox,
+    handle: str,
+    dx: float,
+    dy: float,
+    *,
+    pitch_x: float = 1.0,
+    pitch_y: float = 1.0,
+    square_snap: bool = False,
+    snapped: bool = False,
+    bypass: bool = False,
+) -> tuple[BoardBox, bool]:
+    """Shared preview/commit candidate. Caller applies min-size and board clamp."""
+    candidate = resize_box_unclamped(box, handle, dx, dy)
+    if not square_snap:
+        return candidate, False
+    return apply_square_snap(
+        box,
+        candidate,
+        handle,
+        pitch_x=pitch_x,
+        pitch_y=pitch_y,
+        snapped=snapped,
+        bypass=bypass,
+    )
 
 
 CONNECTOR_ANCHORS = ("n", "e", "s", "w")
@@ -981,10 +1077,14 @@ __all__ = [
     "BoardBox",
     "BoardPoint",
     "CONNECTOR_ANCHORS",
+    "CORNER_HANDLES",
     "HANDLE_HIT_PX",
     "HANDLE_NAMES",
     "HANDLE_VISUAL_PX",
+    "SQUARE_SNAP_ENTER_PX",
+    "SQUARE_SNAP_EXIT_PX",
     "LATTICE_STEP",
+    "apply_square_snap",
     "auto_box_side",
     "board_box_to_pixels",
     "board_point_to_pixels",
@@ -1011,6 +1111,8 @@ __all__ = [
     "point_in_lasso",
     "point_on_box_outline",
     "polyline_center",
+    "resize_box_candidate",
+    "resize_box_unclamped",
     "screen_px_tolerance_to_board",
     "simplify_stroke",
     "snap_board_point",

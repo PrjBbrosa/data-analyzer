@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>UltraView Laser 光标方案 A / B / C</title>
+  <style>
+    :root {
+      --ink: #183039;
+      --muted: #5b6b71;
+      --line: rgba(32, 48, 56, 0.18);
+      --brand: #4262ff;
+      --paper: #f6f7f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.45 "Noto Sans CJK SC", "PingFang SC", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    header {
+      padding: 20px 28px 8px;
+    }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    .lede { color: var(--muted); max-width: 720px; }
+    .decision {
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      background: #fff;
+      max-width: 720px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(240px, 1fr));
+      gap: 16px;
+      padding: 16px 28px 28px;
+    }
+    .card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card.recommended { outline: 2px solid var(--brand); }
+    .tag { font-size: 12px; color: var(--brand); font-weight: 700; }
+    h2 { margin: 0; font-size: 16px; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .stage {
+      position: relative;
+      height: 132px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .stage.light { background: #eef3f6; }
+    .stage.dark { background: #163746; }
+    .stage.grid {
+      background:
+        linear-gradient(to right, rgba(66,98,255,.16) 1px, transparent 1px) 0 0 / 16px 16px,
+        linear-gradient(to bottom, rgba(66,98,255,.16) 1px, transparent 1px) 0 0 / 16px 16px,
+        #f3f5f8;
+      display: block;
+    }
+    .dot {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      pointer-events: none;
+    }
+    .halo { filter: blur(0.2px); }
+    .core { box-shadow: 0 0 0 1px rgba(255,255,255,.35) inset; }
+    .hotspot {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 18px;
+      height: 18px;
+      transform: translate(-50%, -50%);
+    }
+    .hotspot:before, .hotspot:after {
+      content: "";
+      position: absolute;
+      background: #e6364d;
+    }
+    .hotspot:before { left: 8px; top: 0; width: 2px; height: 18px; }
+    .hotspot:after { left: 0; top: 8px; width: 18px; height: 2px; }
+    .scale {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+    .scale-box {
+      width: 72px;
+      height: 72px;
+      border-radius: 10px;
+      border: 1px dashed var(--line);
+      position: relative;
+      background: #fff;
+    }
+    .menu {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 36px;
+      padding: 0 10px;
+      border-radius: 8px;
+    }
+    .row.hover { background: #f3f5f6; }
+    .row.selected { background: #eef1ff; color: var(--brand); font-weight: 700; }
+    .glyph {
+      width: 18px;
+      height: 18px;
+      position: relative;
+      flex: 0 0 18px;
+    }
+    button.choose {
+      border: 0;
+      background: var(--brand);
+      color: #fff;
+      border-radius: 10px;
+      height: 36px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.choose.secondary { background: #183039; }
+    .note { font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Laser 菜单图标与真实光标 — 产品选型</h1>
+    <p class="lede">三个方案都是发光圆点，禁止箭头、钢笔或斜向光束。hotspot 在视觉中心。请点选 A / B / C；未选择前 W6 不得实施。</p>
+    <div class="decision" id="decision">已选定：B（2026-08-23）。用户原话：「就B吧。」核心 8 px · 光晕 20 px · hotspot 在中心。</div>
+  </header>
+  <section class="grid">
+    <article class="card" data-option="A">
+      <div class="tag">方案 A</div>
+      <h2>克制、精确</h2>
+      <div class="meta">核心 6 px · 光晕 14 px</div>
+      <div class="stage light"><span class="dot halo" style="width:14px;height:14px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:6px;height:6px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="stage dark"><span class="dot halo" style="width:14px;height:14px;background:rgba(230,54,77,.38)"></span><span class="dot core" style="width:6px;height:6px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="stage grid"><span class="dot halo" style="width:14px;height:14px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:6px;height:6px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="scale">
+        <div>1×<div class="scale-box"><span class="dot halo" style="width:14px;height:14px;left:50%;top:50%;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:6px;height:6px;left:50%;top:50%;background:#e6364d"></span></div></div>
+        <div>2×<div class="scale-box"><span class="dot halo" style="width:28px;height:28px;left:50%;top:50%;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:12px;height:12px;left:50%;top:50%;background:#e6364d"></span></div></div>
+      </div>
+      <div class="menu">
+        <div class="row">鼠标</div>
+        <div class="row hover"><span class="glyph"><span class="dot halo" style="width:14px;height:14px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:6px;height:6px;background:#e6364d"></span></span>激光笔</div>
+        <div class="row selected"><span class="glyph"><span class="dot halo" style="width:14px;height:14px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:6px;height:6px;background:#e6364d"></span></span>激光笔 ✓</div>
+      </div>
+      <button class="choose" type="button">选择 A</button>
+    </article>
+    <article class="card recommended" data-option="B">
+      <div class="tag">方案 B · 推荐</div>
+      <h2>平衡</h2>
+      <div class="meta">核心 8 px · 光晕 20 px</div>
+      <div class="stage light"><span class="dot halo" style="width:20px;height:20px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:8px;height:8px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="stage dark"><span class="dot halo" style="width:20px;height:20px;background:rgba(230,54,77,.38)"></span><span class="dot core" style="width:8px;height:8px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="stage grid"><span class="dot halo" style="width:20px;height:20px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:8px;height:8px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="scale">
+        <div>1×<div class="scale-box"><span class="dot halo" style="width:20px;height:20px;left:50%;top:50%;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:8px;height:8px;left:50%;top:50%;background:#e6364d"></span></div></div>
+        <div>2×<div class="scale-box"><span class="dot halo" style="width:40px;height:40px;left:50%;top:50%;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:16px;height:16px;left:50%;top:50%;background:#e6364d"></span></div></div>
+      </div>
+      <div class="menu">
+        <div class="row">鼠标</div>
+        <div class="row hover"><span class="glyph"><span class="dot halo" style="width:20px;height:20px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:8px;height:8px;background:#e6364d"></span></span>激光笔</div>
+        <div class="row selected"><span class="glyph"><span class="dot halo" style="width:20px;height:20px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:8px;height:8px;background:#e6364d"></span></span>激光笔 ✓</div>
+      </div>
+      <button class="choose secondary" type="button">选择 B</button>
+    </article>
+    <article class="card" data-option="C">
+      <div class="tag">方案 C</div>
+      <h2>强可见性</h2>
+      <div class="meta">核心 10 px · 光晕 26 px</div>
+      <div class="stage light"><span class="dot halo" style="width:26px;height:26px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:10px;height:10px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="stage dark"><span class="dot halo" style="width:26px;height:26px;background:rgba(230,54,77,.38)"></span><span class="dot core" style="width:10px;height:10px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="stage grid"><span class="dot halo" style="width:26px;height:26px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:10px;height:10px;background:#e6364d"></span><span class="hotspot"></span></div>
+      <div class="scale">
+        <div>1×<div class="scale-box"><span class="dot halo" style="width:26px;height:26px;left:50%;top:50%;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:10px;height:10px;left:50%;top:50%;background:#e6364d"></span></div></div>
+        <div>2×<div class="scale-box"><span class="dot halo" style="width:52px;height:52px;left:50%;top:50%;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:20px;height:20px;left:50%;top:50%;background:#e6364d"></span></div></div>
+      </div>
+      <div class="menu">
+        <div class="row">鼠标</div>
+        <div class="row hover"><span class="glyph"><span class="dot halo" style="width:26px;height:26px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:10px;height:10px;background:#e6364d"></span></span>激光笔</div>
+        <div class="row selected"><span class="glyph"><span class="dot halo" style="width:26px;height:26px;background:rgba(230,54,77,.28)"></span><span class="dot core" style="width:10px;height:10px;background:#e6364d"></span></span>激光笔 ✓</div>
+      </div>
+      <button class="choose" type="button">选择 C</button>
+    </article>
+  </section>
+  <p class="note" style="padding:0 28px 28px">交互语义不变：Laser 只换光标外观。页面左上区域和 rail 布局不在本次改动范围。</p>
+  <script>
+    const decision = document.getElementById("decision");
+    document.querySelectorAll("button.choose").forEach((button) => {
+      button.addEventListener("click", () => {
+        const option = button.closest(".card").dataset.option;
+        decision.textContent = "当前状态：页面演示选择了 " + option + "。最终以对话里的明确回复为准。";
+      });
+    });
+  </script>
+</body>
+</html>

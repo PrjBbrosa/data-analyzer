@@ -39,6 +39,7 @@ from .laser_cursor import (
     clear_laser_cursor_cache,
     laser_pointer_cursor,
 )
+from .resize_cursors import HANDLE_CURSORS, cursor_for_handle
 from .feedback import (
     AUTHOR_LOCKED,
     FEEDBACK_DISPLACED_OFFSCREEN,
@@ -98,17 +99,6 @@ from .card_widgets import (
     FreeGridCard,
     ReplaceHoverController,
 )
-
-HANDLE_CURSORS = {
-    "n": Qt.SizeVerCursor,
-    "s": Qt.SizeVerCursor,
-    "e": Qt.SizeHorCursor,
-    "w": Qt.SizeHorCursor,
-    "nw": Qt.SizeFDiagCursor,
-    "se": Qt.SizeFDiagCursor,
-    "ne": Qt.SizeBDiagCursor,
-    "sw": Qt.SizeBDiagCursor,
-}
 
 _PLANNER_LOG = logging.getLogger(__name__)
 _PLANNER_LOG_MONO = 0.0
@@ -211,6 +201,8 @@ class FreeGridBoard(QWidget):
         self._sticky_note = StickyNoteWidget(self)
         self._sticky_note.hide()
         self._creation_allowed = False
+        self._locked_resize_handle: str | None = None
+        self._hover_pos: QPoint | None = None
         self._workspace_gesture_active = False
         self._interaction = BoardInteractionController()
         self._gesture = FreeGridGesture(self._interaction)
@@ -371,6 +363,8 @@ class FreeGridBoard(QWidget):
         """Board switch/clear: drop tool/selection/draft/hover; keep coalesce owner."""
         self._author.reset_transient()
         self._interaction.reset_session()
+        self._locked_resize_handle = None
+        self._hover_pos = None
         self._apply_selection_flags()
         self._sync_author_projection()
         clear_laser_cursor_cache()
@@ -1194,6 +1188,7 @@ class FreeGridBoard(QWidget):
                 if item in self._placements
             }
         if handle is not None:
+            self.lock_resize_cursor(handle)
             self._gesture.press_resize(
                 ref,
                 placement.rect,
@@ -1214,12 +1209,28 @@ class FreeGridBoard(QWidget):
         self._apply_selection_flags()
 
     def handle_card_mouse_hover(self, card: FreeGridCard, event: QMouseEvent) -> None:
+        board_pos = card.mapTo(self, event.pos())
+        self._hover_pos = QPoint(board_pos)
+        if self._locked_resize_handle:
+            cursor = cursor_for_handle(self._locked_resize_handle)
+            if cursor is not None:
+                card.setCursor(cursor)
+                self.setCursor(cursor)
+            return
+        author_handle = self._selected_author_handle_at(board_pos)
+        if author_handle is not None:
+            cursor = cursor_for_handle(author_handle[0])
+            if cursor is not None:
+                card.setCursor(cursor)
+                self.setCursor(cursor)
+                return
         if (
             not card.model().selected
             or len(self._gesture.selection()) != 1
             or self._gesture.is_armed()
         ):
             card.unsetCursor()
+            self._apply_resolved_cursor(board_pos)
             return
         handle = hit_handle(
             (0, 0, card.width(), card.height()),
@@ -1228,8 +1239,10 @@ class FreeGridBoard(QWidget):
         cursor = HANDLE_CURSORS.get(handle) if handle is not None else None
         if cursor is None:
             card.unsetCursor()
+            self._apply_resolved_cursor(board_pos)
         else:
             card.setCursor(cursor)
+            self.setCursor(cursor)
 
     def handle_card_mouse_move(self, card: FreeGridCard, event: QMouseEvent) -> None:
         if not self._gesture.is_armed():
@@ -1253,6 +1266,8 @@ class FreeGridBoard(QWidget):
             )
             self._flush_pointer_sample()
         self._finish_gesture(commit=True, global_pos=event.globalPos())
+        self.unlock_resize_cursor()
+        self._apply_resolved_cursor(card.mapTo(self, event.pos()))
 
     def _finish_pending_shift_toggle(self) -> bool:
         ref = self._pending_shift_toggle
@@ -1266,8 +1281,21 @@ class FreeGridBoard(QWidget):
     def sync_tool_cursor(self) -> None:
         self._sync_tool_cursor()
 
+    def lock_resize_cursor(self, handle: str) -> None:
+        self._locked_resize_handle = str(handle)
+
+    def unlock_resize_cursor(self) -> None:
+        self._locked_resize_handle = None
+
+    def resize_cursor_locked(self) -> bool:
+        return self._locked_resize_handle is not None
+
+    def resolved_board_cursor(self, pos: QPoint | None = None) -> QCursor | None:
+        """Highest-priority non-pan cursor for the board or scroll viewport."""
+        return self._resolved_cursor(pos if pos is not None else self._hover_pos)
+
     def pointer_cursor(self) -> QCursor | None:
-        """Cursor projected by Pointer mode onto the scroll viewport."""
+        """Laser appearance for the scroll viewport. Resize cursors stay on the board."""
         if self._creation_allowed and self._interaction.is_laser_active():
             return laser_pointer_cursor(dpr=_effective_device_pixel_ratio(self))
         return None
@@ -1291,8 +1319,16 @@ class FreeGridBoard(QWidget):
             self._reapply_pointer_cursor()
         return super().event(event)
 
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if not self._locked_resize_handle and not self._author.has_geometry_session():
+            self._hover_pos = None
+            self._apply_resolved_cursor(None)
+        super().leaveEvent(event)
+
     def hideEvent(self, event) -> None:  # noqa: N802
         clear_laser_cursor_cache()
+        self._locked_resize_handle = None
+        self._hover_pos = None
         self.unsetCursor()
         self._unset_page_viewport_cursor()
         super().hideEvent(event)
@@ -1313,13 +1349,54 @@ class FreeGridBoard(QWidget):
     def _sticky_create_armed(self) -> bool:
         return self._author.sticky_create_armed()
 
-    def _sync_tool_cursor(self) -> None:
-        if self._sticky_create_armed():
-            self.setCursor(Qt.CrossCursor)
-        elif (cursor := self.pointer_cursor()) is not None:
-            self.setCursor(cursor)
-        else:
+    def _port_flag(self, name: str) -> bool:
+        getter = getattr(self._page_ports, name, None)
+        if not callable(getter):
+            return False
+        try:
+            return bool(getter())
+        except RuntimeError:
+            return False
+
+    def _resolved_cursor(self, pos: QPoint | None) -> QCursor | None:
+        if self._port_flag("is_panning") or self._port_flag("space_down"):
+            return None
+        if self.cursor().shape() == Qt.ForbiddenCursor and self._gesture.is_armed():
+            return QCursor(Qt.ForbiddenCursor)
+        if self.workspace_safety_blocked() and (
+            self._gesture.is_armed() or self._author.has_geometry_session()
+        ):
+            return QCursor(Qt.ForbiddenCursor)
+        if self._sticky_create_armed() or self._port_flag("draw_create_armed"):
+            return QCursor(Qt.CrossCursor)
+        handle = self._locked_resize_handle
+        if handle is None and pos is not None:
+            hit = self.classify_press(pos)
+            if hit.kind == HIT_RESIZE_HANDLE:
+                handle = hit.handle
+        if handle:
+            cursor = cursor_for_handle(handle)
+            if cursor is not None:
+                return cursor
+        if self._creation_allowed and self._interaction.is_laser_active():
+            return laser_pointer_cursor(dpr=_effective_device_pixel_ratio(self))
+        return None
+
+    def _apply_resolved_cursor(self, pos: QPoint | None) -> None:
+        if self._port_flag("is_panning") or self._port_flag("space_down"):
+            return
+        if pos is not None:
+            self._hover_pos = QPoint(pos)
+        cursor = self._resolved_cursor(self._hover_pos)
+        if cursor is None:
             self.unsetCursor()
+        else:
+            self.setCursor(cursor)
+
+    def _sync_tool_cursor(self) -> None:
+        if self._port_flag("is_panning") or self._port_flag("space_down"):
+            return
+        self._apply_resolved_cursor(self._hover_pos)
 
     def _pixel_to_board_point(self, pos: QPoint) -> tuple[float, float] | None:
         return self._author.pixel_to_board_point(pos)
@@ -1452,7 +1529,18 @@ class FreeGridBoard(QWidget):
         if self._author.has_geometry_session() and (
             event.buttons() & Qt.LeftButton or grabbed
         ):
-            self._author.update_author_geometry(event.pos())
+            self._author.update_author_geometry(
+                event.pos(), modifiers=int(event.modifiers())
+            )
+            handle = None
+            session = self._author.geometry_session
+            if session is not None:
+                handle = session.get("handle")
+            if handle:
+                self.lock_resize_cursor(str(handle))
+                cursor = cursor_for_handle(str(handle))
+                if cursor is not None:
+                    self.setCursor(cursor)
             return
         if self._gesture.marquee() is not None and (
             event.buttons() & Qt.LeftButton or grabbed
@@ -1469,7 +1557,12 @@ class FreeGridBoard(QWidget):
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
                 global_pos=event.globalPos(),
             )
+            if self._locked_resize_handle:
+                cursor = cursor_for_handle(self._locked_resize_handle)
+                if cursor is not None:
+                    self.setCursor(cursor)
             return
+        self._apply_resolved_cursor(event.pos())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -1478,8 +1571,14 @@ class FreeGridBoard(QWidget):
             self._author.finish_sticky_draft()
             return
         if event.button() == Qt.LeftButton and self._author.has_geometry_session():
-            self._author.update_author_geometry(event.pos())
-            self._author.finish_author_geometry(event.pos())
+            self._author.update_author_geometry(
+                event.pos(), modifiers=int(event.modifiers())
+            )
+            self._author.finish_author_geometry(
+                event.pos(), modifiers=int(event.modifiers())
+            )
+            self.unlock_resize_cursor()
+            self._apply_resolved_cursor(event.pos())
             return
         if event.button() == Qt.LeftButton and self._gesture.marquee() is not None:
             session = self._gesture.take_marquee()
@@ -1500,6 +1599,8 @@ class FreeGridBoard(QWidget):
             )
             self._flush_pointer_sample()
             self._finish_gesture(commit=True, global_pos=event.globalPos())
+            self.unlock_resize_cursor()
+            self._apply_resolved_cursor(event.pos())
             return
         super().mouseReleaseEvent(event)
 

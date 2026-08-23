@@ -18,6 +18,8 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
+    QStyle,
     QToolButton,
     QWidget,
 )
@@ -287,6 +289,26 @@ def test_layout_picker_omits_free_grid_entry_and_keeps_template_thumbs(qtbot):
     assert not picker.thumb_button("hero_left_4").isChecked()
     assert "选择模板" in picker.intro_label().text()
     assert "3 个 View" in picker.intro_label().text()
+
+
+def test_layout_picker_reserves_scrollbar_extent_without_narrowing_thumbs(qtbot):
+    picker = LayoutPicker(LAYOUT_LABELS_ZH)
+    qtbot.addWidget(picker)
+    picker.resize(picker.sizeHint())
+    picker.show()
+    QApplication.processEvents()
+    sb = picker.style().pixelMetric(QStyle.PM_ScrollBarExtent)
+    hint = picker.sizeHint()
+    assert hint.width() >= 12 + 168 * 2 + 8 + 8 + sb + 12
+    scroll = picker.findChild(QScrollArea, "ultraViewLayoutPopoverScroll")
+    assert scroll is not None
+    assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    left = picker.thumb_button("split_horizontal")
+    right = picker.thumb_button("split_vertical")
+    assert left is not None and right is not None
+    assert left.minimumWidth() >= 168
+    assert right.minimumWidth() >= 168
+    assert right.x() - (left.x() + left.width()) >= 8
     picker.set_current("grid_2x2", free_grid=True)
     assert not any(button.isChecked() for button in picker._buttons.values())
     assert "自由网格" in picker.intro_label().text()

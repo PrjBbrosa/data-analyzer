@@ -1151,6 +1151,9 @@ class UltraViewPage(QWidget):
             begin_connector_geometry=self._pointer_router.begin_connector_geometry,
             sync_page_tool_cursor=self._sync_tool_cursor,
             unset_viewport_cursor=self._unset_board_viewport_cursor,
+            is_panning=self._viewport.is_panning,
+            space_down=self._viewport.space_down,
+            draw_create_armed=self._pointer_router.draw_create_armed,
         )
 
     def _pointer_tool_armed(self, tool: str) -> bool:
@@ -3401,19 +3404,16 @@ class UltraViewPage(QWidget):
 
     def _sync_tool_cursor(self) -> None:
         self._free_grid.sync_tool_cursor()
-        if not self._viewport.is_panning() and not self._viewport.space_down():
-            cursor = self._free_grid.pointer_cursor()
-            viewport = self._board_scroll.viewport()
-            if cursor is None:
-                viewport.unsetCursor()
-            else:
-                viewport.setCursor(cursor)
-        if (
-            self._pointer_router.draw_create_armed()
-            and not self._viewport.is_panning()
-            and not self._viewport.space_down()
-        ):
-            self._free_grid.setCursor(Qt.CrossCursor)
+        if self._viewport.is_panning() or self._viewport.space_down():
+            return
+        if self._free_grid.resize_cursor_locked():
+            return
+        cursor = self._free_grid.pointer_cursor()
+        viewport = self._board_scroll.viewport()
+        if cursor is None:
+            viewport.unsetCursor()
+        else:
+            viewport.setCursor(cursor)
 
     def _unset_board_viewport_cursor(self) -> None:
         try:

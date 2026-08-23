@@ -47,6 +47,9 @@ class BoardPagePorts:
         "begin_connector_geometry",
         "sync_page_tool_cursor",
         "unset_viewport_cursor",
+        "is_panning",
+        "space_down",
+        "draw_create_armed",
     )
 
     def __init__(self) -> None:
@@ -57,6 +60,9 @@ class BoardPagePorts:
         self.begin_connector_geometry: Callable[..., None] | None = None
         self.sync_page_tool_cursor: Callable[[], None] | None = None
         self.unset_viewport_cursor: Callable[[], None] | None = None
+        self.is_panning: Callable[[], bool] | None = None
+        self.space_down: Callable[[], bool] | None = None
+        self.draw_create_armed: Callable[[], bool] | None = None
 
     def bind(self, **ports) -> None:
         for name, value in ports.items():

@@ -37,8 +37,11 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_tools import (
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import RELEASE_AUTHOR_TOOLS
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.chart_stack.ultraview.laser_cursor import (
+    LASER_CURSOR_CORE_DIAMETER,
+    LASER_CURSOR_HALO_DIAMETER,
     LASER_CURSOR_HOTSPOT,
     LASER_CURSOR_LOGICAL_SIZE,
+    LASER_CURSOR_OPTION,
     LASER_CURSOR_PALETTE_VERSION,
     clear_laser_cursor_cache,
     laser_cursor_cache_key,
@@ -253,9 +256,11 @@ def test_laser_cursor_keeps_select_clicks_and_resize_handles(qtbot):
     assert controller.card_selection() == selected
     assert free.cursor().shape() == Qt.BitmapCursor
     laser_cursor = free.cursor()
-    assert laser_cursor.pixmap().size() == QSize(32, 32)
-    assert laser_cursor.hotSpot() == QPoint(25, 5)
-    assert laser_cursor.pixmap().toImage().pixelColor(25, 5).red() > 180
+    assert laser_cursor.pixmap().size() == QSize(
+        LASER_CURSOR_LOGICAL_SIZE, LASER_CURSOR_LOGICAL_SIZE
+    )
+    assert laser_cursor.hotSpot() == QPoint(*LASER_CURSOR_HOTSPOT)
+    assert _laser_dot_color(laser_cursor).red() > 180
     assert harness.page.board_scroll_area().viewport().cursor().shape() == Qt.BitmapCursor
     QTest.mouseClick(right, Qt.LeftButton, Qt.NoModifier, QPoint(40, 40))
     QApplication.processEvents()
@@ -269,6 +274,71 @@ def test_laser_cursor_keeps_select_clicks_and_resize_handles(qtbot):
     assert harness.page.board_scroll_area().viewport().cursor().shape() == Qt.ArrowCursor
 
 
+def _sticky_handle_pos(free, object_id: str, handle: str) -> QPoint:
+    from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import handle_hit_rects, board_box_to_pixels
+
+    item = free.author_controller().author_item(object_id)
+    mapped = board_box_to_pixels(
+        (item.box.x, item.box.y, item.box.width, item.box.height),
+        free.metrics(),
+        origin_offset=free.workspace_origin_offset(),
+    )
+    zone = handle_hit_rects(
+        (
+            int(round(mapped[0])),
+            int(round(mapped[1])),
+            int(round(mapped[2])),
+            int(round(mapped[3])),
+        )
+    )[handle]
+    return QPoint(zone[0] + zone[2] // 2, zone[1] + zone[3] // 2)
+
+
+def test_author_object_eight_way_resize_cursors_in_pointer_and_laser(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "author-cur-0")
+    note = StickyObject("cur-note", "sticky", box=BoardBox(6.0, 8.0, 4.0, 3.0), text="hi")
+    harness.board.author_objects = [note]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("cur-note")
+    free.sync_selection_projection()
+    QApplication.processEvents()
+    expected = {
+        "n": Qt.SizeVerCursor,
+        "s": Qt.SizeVerCursor,
+        "e": Qt.SizeHorCursor,
+        "w": Qt.SizeHorCursor,
+        "nw": Qt.SizeFDiagCursor,
+        "se": Qt.SizeFDiagCursor,
+        "ne": Qt.SizeBDiagCursor,
+        "sw": Qt.SizeBDiagCursor,
+    }
+    for handle, shape in expected.items():
+        pos = _sticky_handle_pos(free, "cur-note", handle)
+        _send_mouse_move(free, pos, buttons=Qt.NoButton)
+        QApplication.processEvents()
+        assert free.cursor().shape() == shape, handle
+    se = _sticky_handle_pos(free, "cur-note", "se")
+    QTest.mousePress(free, Qt.LeftButton, Qt.NoModifier, se)
+    QApplication.processEvents()
+    _send_mouse_move(free, se + QPoint(40, 40), buttons=Qt.LeftButton)
+    QApplication.processEvents()
+    assert free.cursor().shape() == Qt.SizeFDiagCursor
+    QTest.mouseRelease(free, Qt.LeftButton, Qt.NoModifier, se + QPoint(40, 40))
+    QApplication.processEvents()
+    harness.page._apply_pointer_mode(POINTER_MODE_LASER)
+    QApplication.processEvents()
+    pos = _sticky_handle_pos(free, "cur-note", "e")
+    _send_mouse_move(free, pos, buttons=Qt.NoButton)
+    QApplication.processEvents()
+    assert free.cursor().shape() == Qt.SizeHorCursor
+    blank = QPoint(8, 8)
+    _send_mouse_move(free, blank, buttons=Qt.NoButton)
+    QApplication.processEvents()
+    assert free.cursor().shape() == Qt.BitmapCursor
+
+
 def _laser_dot_color(cursor):
     pixmap = cursor.pixmap()
     image = pixmap.toImage()
@@ -277,6 +347,28 @@ def _laser_dot_color(cursor):
     x = min(image.width() - 1, max(0, int(round(hot.x() * dpr))))
     y = min(image.height() - 1, max(0, int(round(hot.y() * dpr))))
     return image.pixelColor(x, y)
+
+
+def test_laser_cursor_option_b_is_centered_glowing_dot():
+    assert LASER_CURSOR_OPTION == "B"
+    assert LASER_CURSOR_CORE_DIAMETER == 8.0
+    assert LASER_CURSOR_HALO_DIAMETER == 20.0
+    assert LASER_CURSOR_HOTSPOT == (16, 16)
+    assert LASER_CURSOR_HOTSPOT == (
+        LASER_CURSOR_LOGICAL_SIZE // 2,
+        LASER_CURSOR_LOGICAL_SIZE // 2,
+    )
+    clear_laser_cursor_cache()
+    cursor = laser_pointer_cursor(dpr=1.0)
+    image = cursor.pixmap().toImage()
+    assert cursor.hotSpot() == QPoint(16, 16)
+    center = image.pixelColor(16, 16)
+    assert center.red() > 180
+    assert center.alpha() > 200
+    corner = image.pixelColor(1, 1)
+    assert corner.alpha() < 20
+    far = image.pixelColor(30, 2)
+    assert far.alpha() < 20
 
 
 def test_laser_cursor_pixmap_backing_and_hotspot_follow_dpr(qtbot):
@@ -329,6 +421,22 @@ def test_laser_cursor_cache_identity_uses_dpr_size_and_palette(qtbot):
     rebuilt = laser_pointer_cursor(dpr=1.0)
     assert rebuilt is not one
     assert rebuilt is laser_pointer_cursor(dpr=1.0)
+
+
+def test_hidden_sticky_shape_and_text_link_still_round_trip():
+    from mf4_analyzer.ui.ultraview_state import TextObject, normalize_board_payload
+
+    board = default_board()
+    board.author_objects = [
+        StickyObject("s1", "sticky", box=BoardBox(1.0, 1.0, 3.0, 2.0), text="n", shape="wide"),
+        TextObject("t1", "text", box=BoardBox(5.0, 1.0, 4.0, 2.0), text="x", link="https://example.com"),
+    ]
+    restored, warnings = normalize_board_payload(board_to_payload(board))
+    assert warnings == [] or isinstance(warnings, (list, tuple))
+    sticky = next(item for item in restored.author_objects if item.object_id == "s1")
+    text = next(item for item in restored.author_objects if item.object_id == "t1")
+    assert sticky.shape == "wide"
+    assert text.link == "https://example.com"
 
 
 def test_laser_cursor_lifecycle_clears_cache_on_reset_screen_change_and_hide(qtbot):

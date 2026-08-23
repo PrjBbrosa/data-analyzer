@@ -19,7 +19,14 @@ from mf4_analyzer.ui.ultraview_state import (
 )
 
 from .author_geometry import clamp_stroke_point
-from .author_style import STICKY_PALETTE_TOKENS
+from .author_style import (
+    SWATCH_ROLE_FILL,
+    SWATCH_ROLE_INK,
+    SWATCH_ROLE_STICKY,
+    SWATCH_ROLE_STROKE,
+    SWATCH_ROLE_TEXT,
+    STICKY_PALETTE_TOKENS,
+)
 from .author_tools import (
     AuthorKey,
     BoardItemKey,
@@ -133,6 +140,7 @@ class ToolbarControl:
     value: object = None
     visible_text: str = ""
     group: str = ""
+    swatch_role: str = ""
 
 
 @dataclass(frozen=True)
@@ -328,7 +336,7 @@ def _controls_for(
     card_count: int = 0,
     show_card_fit: bool = True,
 ) -> list[ToolbarControl]:
-    del can_z_order, can_delete, card_count, show_card_fit
+    del can_duplicate, can_z_order, can_delete, card_count, show_card_fit
     controls: list[ToolbarControl] = []
     if kind == "sticky" and can_style:
         controls.extend(_sticky_controls(items))
@@ -355,8 +363,6 @@ def _controls_for(
     if can_distribute:
         controls.append(ToolbarControl("distribute_h", "水平分布", "水平分布", wide=True, group="arrange"))
         controls.append(ToolbarControl("distribute_v", "垂直分布", "垂直分布", wide=True, group="arrange"))
-    if can_duplicate:
-        controls.append(ToolbarControl("duplicate", "复制", "复制 · Ctrl/Cmd+D", group="object"))
     if can_lock:
         if lock_state is None:
             controls.append(
@@ -386,11 +392,61 @@ def _controls_for(
     return controls
 
 
+def swatch_role_for(kind: str, key: str) -> str:
+    """Explicit colour-swatch role for a toolbar/picker key. Never inferred from the token."""
+    if key == "palette" and kind == "sticky":
+        return SWATCH_ROLE_STICKY
+    if key in {"fill", "fill_palette"}:
+        return SWATCH_ROLE_FILL
+    if key == "stroke":
+        return SWATCH_ROLE_STROKE
+    if key == "color" and kind == "connector":
+        return SWATCH_ROLE_STROKE
+    if key in {"color", "palette"} and kind == "stroke":
+        return SWATCH_ROLE_INK
+    if key == "text_palette":
+        return SWATCH_ROLE_TEXT
+    return ""
+
+
+def picker_presentation_role(key: str) -> str:
+    """Explicit picker drawing role. Never inferred from the visible label."""
+    mapping = {
+        "font_role": "font",
+        "font_size": "font_size",
+        "width": "line_width",
+        "dash": "dash",
+        "route": "route",
+        "start_head": "head",
+        "end_head": "head",
+        "align": "align",
+        "list_style": "list",
+        "tool": "tool",
+        "corner": "corner",
+        "shape": "shape",
+        "palette": "swatch",
+        "fill": "swatch",
+        "stroke": "swatch",
+        "color": "swatch",
+        "text_palette": "swatch",
+        "fill_palette": "swatch",
+    }
+    return mapping.get(str(key), "label")
+
+
 def _sticky_controls(items: Sequence[object]) -> list[ToolbarControl]:
     whole = "应用到整个便签"
     return [
-        _value_control(items, "shape", "形状", "shape", tooltip=whole, icon_role="shape", group="style"),
-        _value_control(items, "palette", "色板", "palette", tooltip=whole, icon_role="swatch", group="style"),
+        _value_control(
+            items,
+            "palette",
+            "色板",
+            "palette",
+            tooltip=whole,
+            icon_role="swatch",
+            group="style",
+            swatch_role=SWATCH_ROLE_STICKY,
+        ),
         _value_control(
             items, "font_size", "字号", "font_size", tooltip=whole, icon_role="value", group="type"
         ),
@@ -430,6 +486,7 @@ def _text_controls(items: Sequence[object]) -> list[ToolbarControl]:
             tooltip=f"文字颜色 · {whole}",
             icon_role="swatch",
             group="color",
+            swatch_role=SWATCH_ROLE_TEXT,
         ),
         _value_control(
             items,
@@ -440,16 +497,34 @@ def _text_controls(items: Sequence[object]) -> list[ToolbarControl]:
             wide=True,
             icon_role="swatch",
             group="color",
+            swatch_role=SWATCH_ROLE_FILL,
         ),
-        ToolbarControl("link", "链接", f"链接 · {whole}", wide=True, icon_role="icon", group="color"),
     ]
 
 
 def _shape_controls(items: Sequence[object]) -> list[ToolbarControl]:
     controls = [
         _value_control(items, "shape", "形状", "shape", tooltip="切换形状，保留框/文字/样式", icon_role="shape", group="style"),
-        _value_control(items, "fill", "填充色", "fill_palette", tooltip="填充色", icon_role="swatch", group="style"),
-        _value_control(items, "stroke", "描边色", "stroke_palette", tooltip="描边色", icon_role="swatch", group="style"),
+        _value_control(
+            items,
+            "fill",
+            "填充色",
+            "fill_palette",
+            tooltip="填充色",
+            icon_role="swatch",
+            group="style",
+            swatch_role=SWATCH_ROLE_FILL,
+        ),
+        _value_control(
+            items,
+            "stroke",
+            "描边色",
+            "stroke_palette",
+            tooltip="描边色",
+            icon_role="swatch",
+            group="style",
+            swatch_role=SWATCH_ROLE_STROKE,
+        ),
         _value_control(items, "width", "线宽", "stroke_width", tooltip="描边宽度", icon_role="line", group="style"),
         _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash", group="style"),
     ]
@@ -468,7 +543,16 @@ def _connector_controls(items: Sequence[object]) -> list[ToolbarControl]:
         _value_control(items, "route", "路径", "route", tooltip="直线或正交折线", icon_role="icon", group="ends"),
         _value_control(items, "start_head", "起点", "start_head", tooltip="起点箭头", icon_role="icon", group="ends"),
         _value_control(items, "end_head", "终点", "end_head", tooltip="终点箭头", icon_role="icon", group="ends"),
-        _value_control(items, "color", "颜色", "stroke_palette", tooltip="连接线颜色", icon_role="swatch", group="stroke"),
+        _value_control(
+            items,
+            "color",
+            "颜色",
+            "stroke_palette",
+            tooltip="连接线颜色",
+            icon_role="swatch",
+            group="stroke",
+            swatch_role=SWATCH_ROLE_STROKE,
+        ),
         _value_control(items, "width", "线宽", "stroke_width", tooltip="线宽", icon_role="line", group="stroke"),
         _value_control(items, "dash", "线型", "line_style", tooltip="实线或虚线", icon_role="dash", group="stroke"),
         ToolbarControl("label", "标签", "编辑整线文字", wide=True, icon_role="icon", group="label"),
@@ -478,7 +562,16 @@ def _connector_controls(items: Sequence[object]) -> list[ToolbarControl]:
 def _stroke_controls(items: Sequence[object]) -> list[ToolbarControl]:
     return [
         _value_control(items, "tool", "笔种", "tool", tooltip="钢笔或荧光笔", icon_role="icon", group="tool"),
-        _value_control(items, "color", "颜色", "palette", tooltip="笔画颜色", icon_role="swatch", group="ink"),
+        _value_control(
+            items,
+            "color",
+            "颜色",
+            "palette",
+            tooltip="笔画颜色",
+            icon_role="swatch",
+            group="ink",
+            swatch_role=SWATCH_ROLE_INK,
+        ),
         _value_control(items, "width", "线宽", "width_px_100", tooltip="笔画宽度", icon_role="line", group="ink"),
     ]
 
@@ -509,6 +602,7 @@ def _value_control(
     wide: bool = False,
     icon_role: str = "icon",
     group: str = "",
+    swatch_role: str = "",
 ) -> ToolbarControl:
     values = {getattr(item, field, None) for item in items}
     mixed = len(values) > 1
@@ -529,6 +623,7 @@ def _value_control(
         value=value,
         visible_text=visible,
         group=group,
+        swatch_role=swatch_role,
     )
 
 

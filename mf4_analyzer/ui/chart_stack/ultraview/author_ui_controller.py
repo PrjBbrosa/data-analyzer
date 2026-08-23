@@ -13,7 +13,8 @@ from typing import Any
 from PyQt5.QtCore import QPoint, QRect, QSize, Qt
 from PyQt5.QtWidgets import QWidget
 
-from .author_style import DEFAULT_THEME, STICKY_PALETTE_TOKENS, sticky_colors
+from .author_selection import picker_presentation_role, swatch_role_for
+from .author_style import STICKY_PALETTE_TOKENS
 from .author_tools import (
     CLOSED_SHAPE_TYPES,
     CONNECTOR_STROKE_PALETTES,
@@ -654,58 +655,107 @@ class AuthorUiController:
         self._format_picker_key = key
         ids = caps.author_ids
         item = self._author_item(ids[0]) if len(ids) == 1 else None
+        presentation = picker_presentation_role(key)
+        role = swatch_role_for(caps.kind, key)
         if caps.kind == "sticky" and key == "palette":
-            colors = {}
-            for token in STICKY_PALETTE_TOKENS:
-                fill, _border, _fg = sticky_colors(token, DEFAULT_THEME)
-                colors[token] = fill
             picker.present_palette(
                 STICKY_PALETTE_TOKENS,
                 current=getattr(item, "palette", None),
-                color_rgb=colors,
+                swatch_role=role or "sticky",
             )
-        elif caps.kind == "sticky" and key == "shape":
-            picker.present_labels((("square", "方形"), ("wide", "宽形")), current=getattr(item, "shape", None))
         elif caps.kind == "sticky" and key == "font_size":
             picker.present_labels(
                 tuple((size, str(size)) for size in ("auto", 12, 14, 18, 24)),
                 current=getattr(item, "font_size", None),
+                presentation=presentation,
             )
         elif caps.kind == "shape" and key == "shape":
             picker.present_shapes(CLOSED_SHAPE_TYPES, current=getattr(item, "shape", None))
         elif caps.kind == "shape" and key == "fill":
-            colors = {None: (255, 255, 255)}
-            picker.present_palette(SHAPE_FILL_PALETTES, current=getattr(item, "fill_palette", None), color_rgb=colors)
+            picker.present_palette(
+                SHAPE_FILL_PALETTES,
+                current=getattr(item, "fill_palette", None),
+                swatch_role=role or "fill",
+            )
         elif key in {"stroke", "color"}:
             picker.present_palette(
                 SHAPE_STROKE_PALETTES if caps.kind != "stroke" else CONNECTOR_STROKE_PALETTES,
                 current=getattr(item, "stroke_palette", None) or getattr(item, "palette", None),
+                swatch_role=role or ("ink" if caps.kind == "stroke" else "stroke"),
             )
         elif key == "width":
             widths = SHAPE_STROKE_WIDTHS if caps.kind != "stroke" else (2, 4, 8, 16)
-            picker.present_labels(tuple((width, f"{width} px") for width in widths), current=getattr(item, "stroke_width", None) or getattr(item, "width_px_100", None))
+            picker.present_labels(
+                tuple((width, f"{width} px") for width in widths),
+                current=getattr(item, "stroke_width", None) or getattr(item, "width_px_100", None),
+                presentation=presentation,
+            )
         elif key == "dash":
-            picker.present_labels((("solid", "实线"), ("dashed", "虚线")), current=getattr(item, "line_style", None))
+            picker.present_labels(
+                (("solid", "实线"), ("dashed", "虚线")),
+                current=getattr(item, "line_style", None),
+                presentation=presentation,
+            )
         elif key == "route":
-            picker.present_labels((("straight", "直线"), ("elbow", "折线")), current=getattr(item, "route", None))
+            picker.present_labels(
+                (("straight", "直线"), ("elbow", "折线")),
+                current=getattr(item, "route", None),
+                presentation=presentation,
+            )
         elif key in {"start_head", "end_head"}:
-            picker.present_labels((("none", "无"), ("arrow", "箭头")), current=getattr(item, key, None))
+            picker.present_labels(
+                (("none", "无"), ("arrow", "箭头")),
+                current=getattr(item, key, None),
+                presentation=presentation,
+            )
         elif key == "tool":
-            picker.present_labels((("pen", "钢笔"), ("highlighter", "荧光笔")), current=getattr(item, "tool", None))
+            picker.present_labels(
+                (("pen", "钢笔"), ("highlighter", "荧光笔")),
+                current=getattr(item, "tool", None),
+                presentation=presentation,
+            )
         elif key == "font_role":
-            picker.present_labels((("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")), current=getattr(item, "font_role", None))
+            picker.present_labels(
+                (("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")),
+                current=getattr(item, "font_role", None),
+                presentation=presentation,
+            )
         elif key == "font_size" and caps.kind == "text":
-            picker.present_labels(tuple((size, str(size)) for size in (8, 10, 12, 14, 18, 24, 32, 48, 72)), current=getattr(item, "font_size", None))
+            picker.present_labels(
+                tuple((size, str(size)) for size in (8, 10, 12, 14, 18, 24, 32, 48, 72)),
+                current=getattr(item, "font_size", None),
+                presentation=presentation,
+            )
         elif key == "align":
-            picker.present_labels((("left", "左"), ("center", "中"), ("right", "右")), current=getattr(item, "align", None))
+            picker.present_labels(
+                (("left", "左"), ("center", "中"), ("right", "右")),
+                current=getattr(item, "align", None),
+                presentation=presentation,
+            )
         elif key == "list_style":
-            picker.present_labels((("none", "无"), ("bullet", "项目符号"), ("number", "编号")), current=getattr(item, "list_style", None))
+            picker.present_labels(
+                (("none", "无"), ("bullet", "项目符号"), ("number", "编号")),
+                current=getattr(item, "list_style", None),
+                presentation=presentation,
+            )
         elif key == "text_palette":
-            picker.present_labels((("ink", "墨色"), ("blue", "蓝"), ("red", "红"), ("green", "绿")), current=getattr(item, "text_palette", None))
+            picker.present_palette(
+                ("ink", "blue", "red", "green"),
+                current=getattr(item, "text_palette", None),
+                swatch_role=role or "text",
+            )
         elif key == "fill_palette":
-            picker.present_palette((None, "yellow", "blue", "green"), current=getattr(item, "fill_palette", None))
+            picker.present_palette(
+                (None, "yellow", "blue", "green"),
+                current=getattr(item, "fill_palette", None),
+                swatch_role=role or "fill",
+            )
         elif key == "corner":
-            picker.present_labels(tuple((value, str(value)) for value in SHAPE_CORNERS), current=getattr(item, "corner_radius", None))
+            picker.present_labels(
+                tuple((value, str(value)) for value in SHAPE_CORNERS),
+                current=getattr(item, "corner_radius", None),
+                presentation=presentation,
+            )
         else:
             self.close_format_picker()
             return

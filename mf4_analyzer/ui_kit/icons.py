@@ -31,6 +31,45 @@ RED = QColor('#DC2626')
 GREEN = QColor('#059669')
 AMBER = QColor('#D97706')
 CHEVRON = QColor('#7B8798')
+LASER_DOT_COLOR = QColor('#E6364D')
+LASER_DOT_CORE_DIAMETER = 8.0
+LASER_DOT_HALO_DIAMETER = 20.0
+LASER_DOT_OPTION = "B"
+
+
+def paint_laser_glow(
+    painter,
+    center,
+    *,
+    core_diameter=LASER_DOT_CORE_DIAMETER,
+    halo_diameter=LASER_DOT_HALO_DIAMETER,
+    color=None,
+):
+    """Draw option-B glowing disc. Core/halo stay in the same 8/20 ratio."""
+    fill = QColor(color or LASER_DOT_COLOR)
+    core_r = max(0.5, float(core_diameter) / 2.0)
+    halo_r = max(core_r, float(halo_diameter) / 2.0)
+    painter.save()
+    painter.setPen(Qt.NoPen)
+    outer = QColor(fill)
+    outer.setAlpha(55)
+    painter.setBrush(outer)
+    painter.drawEllipse(center, halo_r, halo_r)
+    mid = QColor(fill)
+    mid.setAlpha(115)
+    mid_r = (halo_r + core_r) * 0.5
+    painter.setBrush(mid)
+    painter.drawEllipse(center, mid_r, mid_r)
+    painter.setBrush(fill)
+    painter.drawEllipse(center, core_r, core_r)
+    highlight = QColor(255, 255, 255, 210)
+    painter.setBrush(highlight)
+    painter.drawEllipse(
+        QPointF(center.x() - core_r * 0.28, center.y() - core_r * 0.28),
+        core_r * 0.32,
+        core_r * 0.32,
+    )
+    painter.restore()
 
 
 def _canvas(size=20):
@@ -683,25 +722,22 @@ class Icons:
 
     @classmethod
     def ultraview_author_laser(cls, color=None):
-        """Pointer plus short rays: an icon for the laser-shaped cursor mode."""
-        c = color or GRAY
+        """Option B glowing disc. Same 8/20 core/halo ratio as the real cursor."""
+        del color
+        # 20px design grid, 2px inset: halo 16, core 6.4 (= 16 * 8/20).
+        halo = 16.0
+        core = halo * (LASER_DOT_CORE_DIAMETER / LASER_DOT_HALO_DIAMETER)
 
         def draw(p):
-            path = QPainterPath()
-            path.moveTo(4.0, 3.8)
-            path.lineTo(4.0, 16.5)
-            path.lineTo(7.4, 13.5)
-            path.lineTo(10.6, 16.8)
-            path.lineTo(12.4, 15.2)
-            path.lineTo(9.3, 11.9)
-            path.lineTo(15.4, 11.9)
-            path.closeSubpath()
-            p.drawPath(path)
-            p.setPen(_pen(c, 1.55))
-            p.drawLine(QPointF(14.8, 4.8), QPointF(16.7, 2.9))
-            p.drawLine(QPointF(15.7, 7.0), QPointF(17.6, 7.0))
+            paint_laser_glow(
+                p,
+                QPointF(10.0, 10.0),
+                core_diameter=core,
+                halo_diameter=halo,
+                color=LASER_DOT_COLOR,
+            )
 
-        return _ultraview_line_icon(draw, c)
+        return _ultraview_icon(draw)
 
     @classmethod
     def ultraview_author_connector(cls, color=None):

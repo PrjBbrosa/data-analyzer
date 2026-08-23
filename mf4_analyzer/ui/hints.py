@@ -735,7 +735,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.resize",
-        text="选中后拖边角改尺寸，Shift 保持比例",
+        text="选中后拖边角改尺寸，便签可成正方形",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=87,

@@ -8,12 +8,17 @@ from pathlib import Path
 import pytest
 
 from mf4_analyzer.ui.chart_stack.ultraview.author_geometry import (
+    CORNER_HANDLES,
     LATTICE_STEP,
+    SQUARE_SNAP_ENTER_PX,
+    SQUARE_SNAP_EXIT_PX,
+    apply_square_snap,
     board_box_to_pixels,
     board_point_to_pixels,
     geometry_grid_bounds,
     pixels_to_board_box,
     pixels_to_board_point,
+    resize_box_candidate,
     screen_px_tolerance_to_board,
     simplify_stroke,
     snap_board_point,
@@ -137,6 +142,83 @@ def test_rdp_is_deterministic_preserves_endpoints_and_drops_bad_samples():
     assert simplify_stroke(iter(source), tolerance=0.05) == first
     assert simplify_stroke([], tolerance=1.0) == ()
     assert simplify_stroke([(2.0, 3.0)], tolerance=1.0) == ((2.0, 3.0),)
+
+
+def test_square_snap_corners_quadrants_hysteresis_and_bypass():
+    box = (10.0, 20.0, 4.0, 3.0)
+    pitch = 10.0
+    # 4x3 at 10 px/unit = 40x30. SE dy=0.4 -> 40x34, delta=6 <= 8 enter.
+    entered, snapped = resize_box_candidate(
+        box, "se", 0.0, 0.4, pitch_x=pitch, pitch_y=pitch, square_snap=True
+    )
+    assert snapped is True
+    assert entered[2] == pytest.approx(entered[3])
+    assert entered[0] == pytest.approx(10.0)
+    assert entered[1] == pytest.approx(20.0)
+
+    # dy=0.1 -> 40x31, delta=9 > 8 stay free
+    open_box, open_snapped = resize_box_candidate(
+        box, "se", 0.0, 0.1, pitch_x=pitch, pitch_y=pitch, square_snap=True
+    )
+    assert open_snapped is False
+    assert open_box[3] == pytest.approx(3.1)
+
+    held, still = apply_square_snap(
+        box,
+        (10.0, 20.0, 4.0, 3.0 + 1.1),
+        "se",
+        pitch_x=pitch,
+        pitch_y=pitch,
+        snapped=True,
+        bypass=False,
+    )
+    # delta = |40 - 41| wait 3+1.1=4.1 -> 41px vs 40px = 1 <= 12, still snapped
+    assert still is True
+    assert held[2] == pytest.approx(held[3])
+
+    released, left = apply_square_snap(
+        box,
+        (10.0, 20.0, 4.0, 5.4),
+        "se",
+        pitch_x=pitch,
+        pitch_y=pitch,
+        snapped=True,
+        bypass=False,
+    )
+    # 54 vs 40 px, delta=14 > 12 leave
+    assert left is False
+    assert released[3] == pytest.approx(5.4)
+
+    bypassed, flag = resize_box_candidate(
+        box, "se", 0.0, 0.4, pitch_x=pitch, pitch_y=pitch, square_snap=True, bypass=True
+    )
+    assert flag is False
+    assert bypassed[3] == pytest.approx(3.4)
+
+    near = (10.0, 20.0, 4.0, 3.9)
+    for handle in CORNER_HANDLES:
+        candidate, snapped = resize_box_candidate(
+            near, handle, 0.0, 0.0, pitch_x=pitch, pitch_y=pitch, square_snap=True
+        )
+        assert snapped is True
+        assert candidate[2] == pytest.approx(candidate[3])
+
+    edge, edge_snap = resize_box_candidate(
+        box, "e", 0.4, 0.4, pitch_x=pitch, pitch_y=pitch, square_snap=True
+    )
+    assert edge_snap is False
+    assert edge[2] != pytest.approx(edge[3])
+
+
+def test_square_snap_keeps_fixed_opposite_corner():
+    box = (8.0, 6.0, 5.0, 2.0)
+    pitch = 8.0
+    nw, snapped = resize_box_candidate(
+        box, "nw", 0.0, -2.9, pitch_x=pitch, pitch_y=pitch, square_snap=True
+    )
+    assert snapped is True
+    assert nw[0] + nw[2] == pytest.approx(13.0)
+    assert nw[1] + nw[3] == pytest.approx(8.0)
     assert simplify_stroke([(2.0, 3.0), (2.0, 3.0)], tolerance=1.0) == ((2.0, 3.0),)
 
 

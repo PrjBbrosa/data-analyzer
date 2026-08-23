@@ -63,3 +63,44 @@ def test_author_style_contract_remains_qt_free():
     text = open(source, encoding="utf-8").read()
     assert "PyQt" not in text
     assert "QColor" not in text
+
+
+def test_resolve_swatch_uses_explicit_role_not_token_guessing():
+    ink = author_style.resolve_swatch("ink", "ink")
+    sticky = author_style.resolve_swatch("sticky", "yellow")
+    assert ink.rgb == author_style.ink_color("ink")
+    assert sticky.rgb == author_style.sticky_colors("yellow")[0]
+    assert ink.rgb != sticky.rgb
+    guessed = author_style.resolve_swatch("ink", "not-a-token")
+    assert guessed.fallback is True
+    assert guessed.rgb == author_style.ink_color("ink")
+    assert guessed.rgb != author_style.sticky_colors("yellow")[0]
+
+
+def test_resolve_swatch_roles_cover_legal_unknown_and_transparent():
+    for role in author_style.SWATCH_ROLES:
+        appearance = author_style.resolve_swatch(role, "unknown-token")
+        assert appearance.role == role
+        assert appearance.fallback is True
+        assert appearance.transparent is False
+    fill = author_style.resolve_swatch("fill", None)
+    assert fill.transparent is True
+    assert fill.hatch is True
+    assert fill.checker is True
+    assert fill.tooltip == "透明"
+    assert fill.rgb == author_style.TRANSPARENT_SWATCH_RGB
+    named = author_style.resolve_swatch("fill", "transparent")
+    assert named.transparent is True
+    text = author_style.resolve_swatch("text", "blue")
+    stroke = author_style.resolve_swatch("stroke", "blue")
+    assert text.rgb == author_style.ink_color("blue")
+    assert stroke.rgb == text.rgb
+
+
+def test_unknown_swatch_role_is_not_guessed():
+    try:
+        author_style.resolve_swatch("palette", "ink")
+    except ValueError as exc:
+        assert "swatch_role" in str(exc)
+    else:
+        raise AssertionError("unknown swatch_role must not silently succeed")

@@ -23,6 +23,7 @@ from mf4_analyzer.ui.ultraview_state import (
 )
 
 from .author_geometry import (
+    CORNER_HANDLES,
     board_box_to_pixels,
     board_point_to_pixels,
     connector_handle_points,
@@ -31,6 +32,7 @@ from .author_geometry import (
     hit_connector_handle,
     hit_stroke,
     pixels_to_board_point,
+    resize_box_candidate,
     stroke_hit_record,
 )
 from .author_layer import AuthorLayerModel, AuthorPaintLayer
@@ -232,6 +234,9 @@ class FreeGridAuthorController:
         if self._geometry_session is None:
             return False
         self._geometry_session = None
+        unlock = getattr(self._host, "unlock_resize_cursor", None)
+        if callable(unlock):
+            unlock()
         return True
 
     def cancel_draft_preview(self) -> bool:
@@ -438,8 +443,14 @@ class FreeGridAuthorController:
             "box": (box.x, box.y, box.width, box.height),
             "min_width": min_w,
             "min_height": min_h,
+            "square_snap": isinstance(item, StickyObject) and str(handle or "") in CORNER_HANDLES,
+            "square_snapped": False,
+            "preview_box": (box.x, box.y, box.width, box.height),
         }
         self._host.grab_mouse_for_feedback()
+        lock = getattr(self._host, "lock_resize_cursor", None)
+        if callable(lock) and handle:
+            lock(str(handle))
 
     def author_min_size(self, item) -> tuple[float, float]:
         if isinstance(item, TextObject):
@@ -540,28 +551,14 @@ class FreeGridAuthorController:
             self._host.interaction().cancel_draft()
         self._host.sync_tool_cursor()
 
-    def update_author_geometry(self, pos: QPoint) -> None:
+    def update_author_geometry(self, pos: QPoint, *, modifiers: int = 0) -> None:
         session = self._geometry_session
         if not session or session.get("origin") is None:
             return
-        current = self.pixel_to_board_point(pos)
-        if current is None:
+        box = self._candidate_from_session(session, pos, modifiers=modifiers)
+        if box is None:
             return
-        ox, oy = session["origin"]  # type: ignore[misc]
-        x, y, width, height = session["box"]  # type: ignore[misc]
-        dx = current[0] - ox
-        dy = current[1] - oy
-        handle = session.get("handle")
-        min_w = float(session.get("min_width") or STICKY_MIN_WIDTH)
-        min_h = float(session.get("min_height") or STICKY_MIN_HEIGHT)
-        if session.get("kind") == "move" or not handle:
-            box = clamp_author_box(
-                x + dx, y + dy, width, height, min_width=min_w, min_height=min_h
-            )
-        else:
-            box = self.resize_author_box(
-                (x, y, width, height), str(handle), dx, dy, min_width=min_w, min_height=min_h
-            )
+        session["preview_box"] = box
         mapped = board_box_to_pixels(
             box,
             self._host.metrics(),
@@ -572,6 +569,59 @@ class FreeGridAuthorController:
                 (pixel_box(mapped),), handles=True
             )
 
+    def _pitch(self) -> tuple[float, float]:
+        try:
+            pitch = self._host.metrics().exact_pitch()
+            return float(pitch[0]), float(pitch[1])
+        except (AttributeError, TypeError, ValueError):
+            return (1.0, 1.0)
+
+    def _bypass_square_snap(self, modifiers: int) -> bool:
+        return bool(int(modifiers) & int(Qt.ControlModifier))
+
+    def _candidate_from_session(
+        self,
+        session: dict[str, object],
+        pos: QPoint,
+        *,
+        modifiers: int = 0,
+    ) -> tuple[float, float, float, float] | None:
+        current = self.pixel_to_board_point(pos)
+        if current is None:
+            return None
+        ox, oy = session["origin"]  # type: ignore[misc]
+        x, y, width, height = session["box"]  # type: ignore[misc]
+        dx = current[0] - ox
+        dy = current[1] - oy
+        handle = session.get("handle")
+        min_w = float(session.get("min_width") or STICKY_MIN_WIDTH)
+        min_h = float(session.get("min_height") or STICKY_MIN_HEIGHT)
+        if session.get("kind") == "move" or not handle:
+            return clamp_author_box(
+                x + dx, y + dy, width, height, min_width=min_w, min_height=min_h
+            )
+        pitch_x, pitch_y = self._pitch()
+        candidate, snapped = resize_box_candidate(
+            (x, y, width, height),
+            str(handle),
+            dx,
+            dy,
+            pitch_x=pitch_x,
+            pitch_y=pitch_y,
+            square_snap=bool(session.get("square_snap")),
+            snapped=bool(session.get("square_snapped")),
+            bypass=self._bypass_square_snap(modifiers),
+        )
+        session["square_snapped"] = snapped
+        return clamp_author_box(
+            candidate[0],
+            candidate[1],
+            candidate[2],
+            candidate[3],
+            min_width=min_w,
+            min_height=min_h,
+        )
+
     def resize_author_box(
         self,
         box: tuple[float, float, float, float],
@@ -581,61 +631,59 @@ class FreeGridAuthorController:
         *,
         min_width: float = STICKY_MIN_WIDTH,
         min_height: float = STICKY_MIN_HEIGHT,
+        square_snap: bool = False,
+        snapped: bool = False,
+        bypass: bool = False,
+        pitch_x: float | None = None,
+        pitch_y: float | None = None,
     ) -> tuple[float, float, float, float]:
-        x, y, width, height = box
-        x2, y2 = x + width, y + height
-        if "w" in handle:
-            x = x + dx
-        if "e" in handle:
-            x2 = x2 + dx
-        if "n" in handle:
-            y = y + dy
-        if "s" in handle:
-            y2 = y2 + dy
+        if pitch_x is None or pitch_y is None:
+            pitch_x, pitch_y = self._pitch()
+        candidate, _snapped = resize_box_candidate(
+            box,
+            handle,
+            dx,
+            dy,
+            pitch_x=float(pitch_x),
+            pitch_y=float(pitch_y),
+            square_snap=square_snap,
+            snapped=snapped,
+            bypass=bypass,
+        )
         return clamp_author_box(
-            min(x, x2),
-            min(y, y2),
-            abs(x2 - x),
-            abs(y2 - y),
+            candidate[0],
+            candidate[1],
+            candidate[2],
+            candidate[3],
             min_width=min_width,
             min_height=min_height,
         )
 
-    def finish_author_geometry(self, pos: QPoint) -> None:
+    def finish_author_geometry(self, pos: QPoint, *, modifiers: int = 0) -> None:
         session = self._geometry_session
         if not session or session.get("origin") is None:
             self._geometry_session = None
             self._host.release_mouse_if_grabbed()
+            unlock = getattr(self._host, "unlock_resize_cursor", None)
+            if callable(unlock):
+                unlock()
             self._host.sync_selection_handles()
             return
-        current = self.pixel_to_board_point(pos)
-        origin = session["origin"]
-        box = session["box"]
+        next_box = self._candidate_from_session(session, pos, modifiers=modifiers)
+        preview = session.get("preview_box")
+        if next_box is None and isinstance(preview, tuple) and len(preview) == 4:
+            next_box = preview  # type: ignore[assignment]
+        origin_box = session["box"]
+        object_id = str(session.get("object_id") or "")
         self._geometry_session = None
         self._host.release_mouse_if_grabbed()
-        if current is None:
+        unlock = getattr(self._host, "unlock_resize_cursor", None)
+        if callable(unlock):
+            unlock()
+        if next_box is None:
             self._host.sync_selection_handles()
             return
-        dx = current[0] - origin[0]
-        dy = current[1] - origin[1]
-        handle = session.get("handle")
-        x, y, width, height = box  # type: ignore[misc]
-        min_w = float(session.get("min_width") or STICKY_MIN_WIDTH)
-        min_h = float(session.get("min_height") or STICKY_MIN_HEIGHT)
-        if session.get("kind") == "resize" and handle:
-            next_box = self.resize_author_box(
-                (x, y, width, height),
-                str(handle),
-                dx,
-                dy,
-                min_width=min_w,
-                min_height=min_h,
-            )
-        else:
-            next_box = clamp_author_box(
-                x + dx, y + dy, width, height, min_width=min_w, min_height=min_h
-            )
-        object_id = str(session.get("object_id") or "")
+        x, y, width, height = origin_box  # type: ignore[misc]
         if next_box != (x, y, width, height) and object_id:
             item = self.author_item(object_id)
             if isinstance(item, TextObject):
