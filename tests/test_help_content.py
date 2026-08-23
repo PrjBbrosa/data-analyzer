@@ -58,12 +58,15 @@ def test_v810_changelog_covers_release_surface_alignment():
         assert keyword in description
 
 
-def test_v801_changelog_covers_ultraview_export_fit_and_panning():
+def test_v801_changelog_covers_ultraview_and_time_domain_workflow():
     entry = next(
         entry for entry in _deck_data()["changelog"] if entry["v"] == "v8.0.1"
     )
     description = " ".join(entry["items"])
-    for keyword in ("自由网格导出", "竖直居中", "抓图比例", "右键拖动", "左键拖动", "框选"):
+    for keyword in (
+        "自由网格导出", "竖直居中", "抓图比例", "右键拖动", "左键拖动", "框选",
+        "拖到绘图区", "X 带", "拖动文件或通道", "分屏", "叠加", "顺序排列",
+    ):
         assert keyword in description
 
 

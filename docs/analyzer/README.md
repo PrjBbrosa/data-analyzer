@@ -89,7 +89,10 @@ Views are recomputed across inactive tabs, and large BLF/ASC imports avoid
 eagerly materializing one dense shared table.
 8.0.1 refines UltraView exports to fit their populated free-grid content,
 centres fit cards vertically while preserving the captured preview ratio, and
-uses right-drag for canvas panning while left-drag continues to box-select.
+uses right-drag for canvas panning while left-drag continues to box-select. In
+the Time workspace, channels can be dragged into the current View or its X band,
+and the left-side file/channel order now determines both subplot and overlay
+ordering.
 8.1.0 establishes the current product release baseline and synchronizes the
 application title, published guides, and Windows Full/Analyzer package defaults.
 Update the published guides when these behaviours change; preserve each loader's

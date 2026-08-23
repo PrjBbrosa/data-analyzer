@@ -387,7 +387,10 @@ def save_preview_sidecar(
             archive.writestr(MANIFEST_NAME, manifest_bytes)
             for name, png in images.items():
                 archive.writestr(name, png)
-        with temp_path.open("rb") as handle:
+        # Windows FlushFileBuffers (used by ``os.fsync``) rejects a read-only
+        # handle with ``EBADF``.  Reopen without truncating so the completed
+        # archive is durably synced before its atomic publish.
+        with temp_path.open("rb+") as handle:
             os.fsync(handle.fileno())
         if temp_path.stat().st_size > MAX_SIDECAR_ARCHIVE_BYTES:
             raise OSError("archive exceeds sidecar limit")
