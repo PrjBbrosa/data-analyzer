@@ -260,6 +260,7 @@ class BoardTextEditor(_BoundedPlainTextEdit):
     edit_cancelled = pyqtSignal(str)
     ime_text_committed = pyqtSignal(str, str)
     focus_lost = pyqtSignal()
+    editing_state_changed = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(MAX_TEXT_TEXT, parent)
@@ -313,6 +314,7 @@ class BoardTextEditor(_BoundedPlainTextEdit):
         self.show()
         self.raise_()
         self.setFocus(Qt.OtherFocusReason)
+        self.editing_state_changed.emit()
 
     def apply_live_style(self, style: TextObject | None) -> None:
         """Update whole-box editor chrome without restarting the IME session."""
@@ -338,6 +340,7 @@ class BoardTextEditor(_BoundedPlainTextEdit):
         )
         if mapped is None:
             self.hide()
+            self.editing_state_changed.emit()
             return
         x, y, width, height = mapped
         self.setGeometry(round(x), round(y), max(1, round(width)), max(1, round(height)))
@@ -376,6 +379,7 @@ class BoardTextEditor(_BoundedPlainTextEdit):
         self._style = None
         self.clearFocus()
         self.hide()
+        self.editing_state_changed.emit()
 
     def _apply_style(self, style: TextObject | None) -> None:
         item = style if isinstance(style, TextObject) else None

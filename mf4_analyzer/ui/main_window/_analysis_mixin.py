@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtCore import QTimer
 
 from .ultraview_coordinator import notify_ultraview_plot
+from . import view_activation
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
@@ -161,10 +162,53 @@ class AnalysisMixin:
                 template_name = section_state.name
             elif time_resolved is not None:
                 template_name = time_resolved[1].name
-        idx = self.analysis_managers[section].new_view()
+        manager = self.analysis_managers[section]
+        defer_activation = view_activation.defer_new_view_activation_after_pointer_release()
+        idx = manager.new_view(activate=not defer_activation)
         if idx < 0:
             return
+        if defer_activation:
+            view_id = manager.get(idx).view_id
+            QTimer.singleShot(
+                0,
+                partial(
+                    self._activate_new_analysis_view_after_pointer_release,
+                    section,
+                    view_id,
+                    tuple(template_fids),
+                    template_name,
+                ),
+            )
+            return
         if inherit and template_fids:
+            added = self._attach_files_to_active_analysis_view(
+                section, template_fids
+            )
+            if added:
+                self.toast(
+                    f"已继承 {len(added)} 个文件 · 来自 {template_name}",
+                    "success",
+                )
+
+    def _activate_new_analysis_view_after_pointer_release(
+        self, section, view_id, template_fids, template_name,
+    ):
+        """Finish a frozen-Windows analysis-View action after pointer release."""
+        manager = self.analysis_managers.get(section)
+        if manager is None:
+            return
+        idx = next(
+            (
+                index
+                for index, state in enumerate(manager.views)
+                if state.view_id == view_id
+            ),
+            None,
+        )
+        if idx is None:
+            return
+        manager.set_active(idx)
+        if template_fids:
             added = self._attach_files_to_active_analysis_view(
                 section, template_fids
             )

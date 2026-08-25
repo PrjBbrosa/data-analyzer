@@ -122,7 +122,12 @@ def test_author_direct_text_editor_is_not_a_canvas_shortcut_target(qapp, qtbot):
     assert editor.parentWidget() is grid
     assert isinstance(qapp.focusWidget(), QPlainTextEdit)
     assert page._text_field_has_focus() is True
+    assert grid.author_paint_layer().model().hidden_text_object_ids == frozenset(
+        (text.object_id,)
+    )
     editor.cancel()
+    qapp.processEvents()
+    assert grid.author_paint_layer().model().hidden_text_object_ids == frozenset()
 
     # The guard is deliberately future-proof for rich-text shape labels too;
     # a QTextEdit must not let Escape/undo leak to the canvas router.

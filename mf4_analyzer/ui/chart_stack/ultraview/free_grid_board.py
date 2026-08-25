@@ -215,6 +215,9 @@ class FreeGridBoard(QWidget):
             text_editor=self._author_text_editor,
             sticky_note=self._sticky_note,
         )
+        self._author_text_editor.editing_state_changed.connect(
+            self._sync_author_projection
+        )
         self._ghost_buffers: dict[UltraViewRef, QPixmap] = {}
         self._replace = ReplaceHoverController(self)
         self._replace.armed.connect(self._on_replace_armed)

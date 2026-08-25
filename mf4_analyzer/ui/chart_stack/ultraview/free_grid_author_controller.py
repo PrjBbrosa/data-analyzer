@@ -304,12 +304,18 @@ class FreeGridAuthorController:
                     boxes.append((box.x, box.y, box.width, box.height))
         origin = self._host.workspace_origin_offset()
         metrics = self._host.metrics()
+        editor_object_id = (
+            self._text_editor.object_id() if self._text_editor.is_editing() else ""
+        )
         self._paint_layer.set_model(
             AuthorLayerModel(
                 objects=self._author_objects,
                 metrics=metrics,
                 origin_offset=origin,
                 theme=self._author_theme,
+                hidden_text_object_ids=frozenset(
+                    (editor_object_id,) if editor_object_id else ()
+                ),
                 selection_boxes=tuple(boxes),
             )
         )

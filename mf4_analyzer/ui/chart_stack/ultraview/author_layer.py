@@ -50,6 +50,9 @@ class AuthorLayerModel:
     metrics: GridMetrics | None = None
     origin_offset: BoardPoint = (0.0, 0.0)
     theme: str = DEFAULT_THEME
+    # A real Qt editor paints the active text itself.  Keep its persisted
+    # counterpart out of this transparent paint layer until editing ends.
+    hidden_text_object_ids: frozenset[str] = frozenset()
     selection_boxes: tuple[BoardBox, ...] = ()
     guide_lines: tuple[GuideLine, ...] = ()
     draft_points: tuple[BoardPoint, ...] = ()
@@ -98,6 +101,11 @@ class AuthorPaintLayer(QWidget):
             metrics=model.metrics,
             origin_offset=_point_or_origin(model.origin_offset),
             theme=str(model.theme or DEFAULT_THEME),
+            hidden_text_object_ids=frozenset(
+                str(object_id)
+                for object_id in model.hidden_text_object_ids
+                if str(object_id)
+            ),
             selection_boxes=tuple(model.selection_boxes),
             guide_lines=tuple(model.guide_lines),
             draft_points=tuple(model.draft_points),
@@ -123,6 +131,7 @@ class AuthorPaintLayer(QWidget):
             metrics=metrics,
             origin_offset=_point_or_origin(origin_offset),
             theme=model.theme,
+            hidden_text_object_ids=model.hidden_text_object_ids,
             selection_boxes=model.selection_boxes,
             guide_lines=model.guide_lines,
             draft_points=model.draft_points,
@@ -141,6 +150,7 @@ class AuthorPaintLayer(QWidget):
             metrics=model.metrics,
             origin_offset=model.origin_offset,
             theme=model.theme,
+            hidden_text_object_ids=model.hidden_text_object_ids,
             selection_boxes=model.selection_boxes,
             guide_lines=model.guide_lines,
             draft_points=model.draft_points,
@@ -252,6 +262,7 @@ class AuthorPaintLayer(QWidget):
                 metrics,
                 origin_offset=model.origin_offset,
                 theme=model.theme,
+                hidden_text_object_ids=model.hidden_text_object_ids,
             )
             if model.lod != _LOD_MINIMAL:
                 self._draw_guides(painter, model, metrics)
@@ -416,6 +427,7 @@ def _replace_model(model: AuthorLayerModel, **changes) -> AuthorLayerModel:
         "metrics": model.metrics,
         "origin_offset": model.origin_offset,
         "theme": model.theme,
+        "hidden_text_object_ids": model.hidden_text_object_ids,
         "selection_boxes": model.selection_boxes,
         "guide_lines": model.guide_lines,
         "draft_points": model.draft_points,

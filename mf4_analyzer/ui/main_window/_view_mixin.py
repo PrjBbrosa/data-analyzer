@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import replace
+from functools import partial
 
 from PyQt5 import sip
 from PyQt5.QtCore import QTimer
@@ -15,6 +16,7 @@ from ..time_xaxis import (
     selection_payload,
 )
 from ..chart_stack.toolbar import DEFAULT_CHART_TICK_DENSITY
+from . import view_activation
 
 
 class ViewMixin:
@@ -593,10 +595,46 @@ class ViewMixin:
             template_fids = resolve_new_view_template(
                 section_att, section_att, self.files
             )
-        idx = self.view_manager.new_view()
+        defer_activation = view_activation.defer_new_view_activation_after_pointer_release()
+        idx = self.view_manager.new_view(activate=not defer_activation)
         if idx < 0:
             return
+        if defer_activation:
+            view_id = self.view_manager.get(idx).view_id
+            QTimer.singleShot(
+                0,
+                partial(
+                    self._activate_new_time_view_after_pointer_release,
+                    view_id,
+                    tuple(template_fids),
+                    template_name,
+                ),
+            )
+            return
         if inherit and template_fids:
+            added = self._attach_files_to_focused_view(template_fids)
+            if added:
+                self.toast(
+                    f"已继承 {len(added)} 个文件 · 来自 {template_name}",
+                    "success",
+                )
+
+    def _activate_new_time_view_after_pointer_release(
+        self, view_id, template_fids, template_name,
+    ):
+        """Finish a frozen-Windows new-View action after the button release."""
+        idx = next(
+            (
+                index
+                for index, state in enumerate(self.view_manager.views)
+                if state.view_id == view_id
+            ),
+            None,
+        )
+        if idx is None:
+            return
+        self.view_manager.set_active(idx)
+        if template_fids:
             added = self._attach_files_to_focused_view(template_fids)
             if added:
                 self.toast(

@@ -39,6 +39,23 @@ def test_new_view_respects_cap(qtbot):
     assert active_events == []
 
 
+def test_new_view_can_append_before_activation(qtbot):
+    manager = make()
+    active_events = []
+    manager.active_changed.connect(active_events.append)
+
+    with qtbot.waitSignal(manager.views_changed, timeout=100):
+        assert manager.new_view(activate=False) == 1
+
+    assert len(manager.views) == 2
+    assert manager.active == 0
+    assert active_events == []
+
+    with qtbot.waitSignal(manager.active_changed, timeout=100):
+        manager.set_active(1)
+    assert manager.active == 1
+
+
 def test_delete_cannot_empty(qtbot):
     m = make()
     m.new_view()

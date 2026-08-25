@@ -15,7 +15,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.author_widgets import (
     StickyNoteWidget,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import GridMetrics
-from mf4_analyzer.ui.ultraview_state import BoardBox, StickyObject
+from mf4_analyzer.ui.ultraview_state import BoardBox, StickyObject, TextObject
 
 
 def _metrics() -> GridMetrics:
@@ -68,6 +68,50 @@ def test_author_paint_layer_is_transparent_sibling_and_reprojects_selection(qapp
     assert layer.model().lod == "minimal"
     layer.set_zoom(1.0)
     assert layer.model().lod == "full"
+
+
+def test_author_paint_layer_omits_only_the_text_owned_by_a_live_editor(qapp):
+    host = QWidget()
+    host.resize(700, 500)
+    layer = AuthorPaintLayer(host)
+    layer.setGeometry(host.rect())
+    text = TextObject(
+        "text-editing",
+        "text",
+        box=BoardBox(0.0, 0.0, 3.0, 1.0),
+        text="123",
+        font_size=24,
+    )
+    layer.set_model(AuthorLayerModel(objects=(text,), metrics=_metrics()))
+
+    visible = QImage(700, 500, QImage.Format_ARGB32)
+    visible.fill(Qt.transparent)
+    painter = QPainter(visible)
+    layer.render(painter)
+    painter.end()
+    assert any(
+        visible.pixelColor(x, y).alpha() > 0
+        for x in range(20, 190)
+        for y in range(20, 90)
+    )
+
+    layer.set_model(
+        AuthorLayerModel(
+            objects=(text,),
+            metrics=_metrics(),
+            hidden_text_object_ids=frozenset((text.object_id,)),
+        )
+    )
+    hidden = QImage(700, 500, QImage.Format_ARGB32)
+    hidden.fill(Qt.transparent)
+    painter = QPainter(hidden)
+    layer.render(painter)
+    painter.end()
+    assert all(
+        hidden.pixelColor(x, y).alpha() == 0
+        for x in range(20, 190)
+        for y in range(20, 90)
+    )
 
 
 def test_sticky_widget_bounds_text_projects_geometry_and_emits_ime_commit(qapp):

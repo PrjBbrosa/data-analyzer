@@ -47,6 +47,7 @@ def draw_author_objects(
     origin_offset: tuple[float, float] = (0.0, 0.0),
     theme: object = DEFAULT_THEME,
     scale: float = 1.0,
+    hidden_text_object_ids: Iterable[str] = (),
 ) -> None:
     """Paint typed author objects in persisted input order.
 
@@ -55,25 +56,37 @@ def draw_author_objects(
     an optional output-raster factor for callers which paint a 2x PNG without
     already scaling their metrics.  The function deliberately draws no
     selection handles, hover affordances, link/lock chrome, or draft paths.
+    ``hidden_text_object_ids`` is a live-only projection override for text
+    currently painted by a direct Qt editor; it never affects persistence or
+    the export compositor.
     Unknown/future DTOs are skipped so passthrough persistence never makes a
     compositor fail.
     """
     if not isinstance(painter, QPainter) or not painter.isActive():
         return
     factor = _positive_scale(scale)
+    hidden_text_ids = frozenset(
+        str(object_id) for object_id in hidden_text_object_ids if str(object_id)
+    )
     for item in objects:
         painter.save()
         try:
+            hide_text = str(getattr(item, "object_id", "") or "") in hidden_text_ids
             if isinstance(item, StickyObject):
                 _draw_sticky(painter, item, metrics, origin_offset, theme, factor)
             elif isinstance(item, TextObject):
-                _draw_text_object(painter, item, metrics, origin_offset, theme, factor)
+                if not hide_text:
+                    _draw_text_object(painter, item, metrics, origin_offset, theme, factor)
             elif isinstance(item, ShapeObject):
-                _draw_shape(painter, item, metrics, origin_offset, theme, factor)
+                _draw_shape(
+                    painter, item, metrics, origin_offset, theme, factor, draw_text=not hide_text
+                )
             elif isinstance(item, StrokeObject):
                 _draw_stroke(painter, item, metrics, origin_offset, theme, factor)
             elif isinstance(item, ConnectorObject):
-                _draw_connector(painter, item, metrics, origin_offset, theme, factor)
+                _draw_connector(
+                    painter, item, metrics, origin_offset, theme, factor, draw_text=not hide_text
+                )
         finally:
             painter.restore()
 
@@ -155,6 +168,8 @@ def _draw_shape(
     origin: tuple[float, float],
     theme: object,
     factor: float,
+    *,
+    draw_text: bool = True,
 ) -> None:
     rect = _pixel_rect(item.box, metrics, origin, factor)
     if rect is None:
@@ -170,7 +185,7 @@ def _draw_shape(
         fill, _border, _foreground = sticky_colors(item.fill_palette, theme)
         painter.setBrush(QColor(*fill))
     painter.drawPath(path)
-    if item.text:
+    if draw_text and item.text:
         style = item.text_style
         _draw_plain_text(
             painter,
@@ -216,6 +231,8 @@ def _draw_connector(
     origin: tuple[float, float],
     theme: object,
     factor: float,
+    *,
+    draw_text: bool = True,
 ) -> None:
     board_points = _connector_board_points(item)
     points = _pixel_points(board_points, metrics, origin, factor)
@@ -242,7 +259,7 @@ def _draw_connector(
         head = _arrow_head(points[-1], points[-2], head_size)
         if not head.isEmpty():
             painter.drawPolygon(head)
-    if item.text:
+    if draw_text and item.text:
         style = item.text_style
         mid = points[len(points) // 2]
         label = QRectF(mid.x() - 48.0 * factor, mid.y() - 12.0 * factor, 96.0 * factor, 24.0 * factor)

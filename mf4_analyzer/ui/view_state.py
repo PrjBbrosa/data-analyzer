@@ -195,13 +195,21 @@ class ViewManager(QObject):
             raise IndexError(idx)
         return self.views[idx]
 
-    def new_view(self) -> int:
+    def new_view(self, *, activate: bool = True) -> int:
+        """Append a fresh View and, normally, make it active.
+
+        The UI may defer activation by one event-loop turn on a frozen Windows
+        build so a native canvas rebuild never runs inside the ``+`` button's
+        mouse-release handling.  State-only callers retain the historical
+        immediate-activation behaviour by default.
+        """
         if len(self.views) >= self.max_views:
             return -1
         idx = len(self.views)
         self.views.append(self._make(idx))
         self.views_changed.emit()
-        self.set_active(idx)
+        if activate:
+            self.set_active(idx)
         return idx
 
     def delete_view(self, idx: int) -> None:
