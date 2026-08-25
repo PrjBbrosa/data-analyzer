@@ -201,6 +201,15 @@ class AuthorUiController:
         self.close_author_flyouts()
         self.close_format_picker()
 
+    def dismiss_open_transients(self) -> None:
+        """Close author flyouts and the format picker without changing tools.
+
+        Zoom/pan camera moves leave translucent overlays ghosted against the
+        rail; dismissing is cleaner than re-anchoring a half-erased surface.
+        """
+        self.close_author_flyouts()
+        self.close_format_picker()
+
     def shutdown(self) -> None:
         self.reset()
         self.disconnect()
@@ -521,7 +530,13 @@ class AuthorUiController:
         x = rail.right() + OVERLAY_GAP
         if x + width > safe.right():
             x = rail.left() - OVERLAY_GAP - width
-        y = button.mapTo(self._canvas_host, QPoint(0, 0)).y() if button is not None else safe.top()
+        if button is not None:
+            origin = button.mapTo(self._canvas_host, QPoint(0, 0))
+            # Vertically center on the rail trigger so tall Draw flyouts do not
+            # look pinned to a crooked top edge.
+            y = origin.y() + (button.height() - height) // 2
+        else:
+            y = safe.top()
         if y + height > safe.bottom():
             y = safe.bottom() - height
         x = min(max(safe.left(), x), safe.right() - width)
@@ -598,7 +613,9 @@ class AuthorUiController:
         width = min(max(1, size.width()), safe.width())
         height = min(max(1, size.height()), safe.height())
         origin = button.mapTo(self._canvas_host, QPoint(0, 0))
-        x = origin.x()
+        # Prefer centering under the trigger; left-align looked skewed for
+        # wide color palettes and narrow toolbar chips.
+        x = origin.x() + (button.width() - width) // 2
         below = origin.y() + button.height() + 6
         above = origin.y() - 6
         below_room = safe.bottom() - below
@@ -609,8 +626,6 @@ class AuthorUiController:
         else:
             height = min(height, max(1, above_room))
             y = above - height
-        if x + width > safe.right():
-            x = origin.x() + button.width() - width
         x = min(max(safe.left(), x), max(safe.left(), safe.right() - width))
         y = min(max(safe.top(), y), max(safe.top(), safe.bottom() - height))
         rect = QRect(x, y, width, height)
@@ -650,8 +665,12 @@ class AuthorUiController:
             self.close_format_picker()
             return
         # A formatting dropdown and a creation flyout must not coexist or
-        # compete for the visual top layer.
+        # compete for the visual top layer. Tear the format overlay down before
+        # presenting a different body so width/dash rows cannot ghost under a
+        # color grid on the same translucent surface.
         self.close_author_flyouts()
+        if self._canvas_host.active_overlay() == OVERLAY_AUTHOR_FORMAT or picker.isVisible():
+            self.close_format_picker()
         self._format_picker_key = key
         ids = caps.author_ids
         item = self._author_item(ids[0]) if len(ids) == 1 else None
@@ -764,5 +783,6 @@ class AuthorUiController:
         rect = self.format_picker_rect(live_trigger, size)
         self._sync_transient_scroll(picker, rect.height())
         self._canvas_host.open_overlay(OVERLAY_AUTHOR_FORMAT, rect)
+        picker.update()
         self._reassert_host_stacking()
         self._sync_minimap_placement()

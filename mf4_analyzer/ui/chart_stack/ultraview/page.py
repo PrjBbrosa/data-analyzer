@@ -469,6 +469,7 @@ class UltraViewPage(QWidget):
             reproject_after_viewport=self._reproject_after_viewport_change,
             on_edge_pan_started=self._on_edge_pan_started,
             on_edge_pan_stopped=self._on_edge_pan_stopped,
+            dismiss_author_transients=self._dismiss_author_transients_for_zoom,
             parent=self,
         )
         self._viewport_router = ViewportGestureRouter(
@@ -3499,6 +3500,11 @@ class UltraViewPage(QWidget):
         if self._author_ui is None:
             return
         self._author_ui.close_format_picker()
+
+    def _dismiss_author_transients_for_zoom(self) -> None:
+        if self._author_ui is None:
+            return
+        self._author_ui.dismiss_open_transients()
 
     def _format_picker_rect(self, button: QWidget, size: QSize) -> QRect:
         return self._author_ui.format_picker_rect(button, size)

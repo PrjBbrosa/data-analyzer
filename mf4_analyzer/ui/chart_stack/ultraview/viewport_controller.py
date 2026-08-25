@@ -130,6 +130,7 @@ class ViewportController(QObject):
         reproject_after_viewport: Callable[[object], None],
         on_edge_pan_started: Callable[[], None],
         on_edge_pan_stopped: Callable[[], None],
+        dismiss_author_transients: Callable[[], None] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -164,6 +165,7 @@ class ViewportController(QObject):
         self._reproject_after_viewport = reproject_after_viewport
         self._on_edge_pan_started = on_edge_pan_started
         self._on_edge_pan_stopped = on_edge_pan_stopped
+        self._dismiss_author_transients = dismiss_author_transients
 
         self._viewport = BoardViewport()
         self._session_camera: dict[
@@ -650,10 +652,16 @@ class ViewportController(QObject):
         if self._smooth_timer.isActive():
             self._smooth_timer.stop()
 
+    def _dismiss_transients_for_zoom(self) -> None:
+        dismiss = self._dismiss_author_transients
+        if callable(dismiss):
+            dismiss()
+
     def _park_zoom(self, zoom: float) -> None:
         """Zoom and leave the board in the chrome-safe fit rect."""
         self._cancel_board_gestures()
         self._filled_card = None
+        self._dismiss_transients_for_zoom()
         self._apply_preview_quality(QUALITY_FAST)
         after = clamp_zoom(zoom)
         self._broadcast_zoom(after)
@@ -713,6 +721,7 @@ class ViewportController(QObject):
         viewport_origin: tuple[float, float] | None = None,
     ) -> None:
         self._cancel_board_gestures()
+        self._dismiss_transients_for_zoom()
         self._apply_preview_quality(QUALITY_FAST)
         after = clamp_zoom(zoom)
         self._broadcast_zoom(after)
@@ -756,6 +765,7 @@ class ViewportController(QObject):
     def _zoom_at(self, zoom: float, cursor_in_viewport) -> None:
         self._cancel_board_gestures()
         self._filled_card = None
+        self._dismiss_transients_for_zoom()
         self._apply_preview_quality(QUALITY_FAST)
         after = clamp_zoom(zoom)
         cursor = (float(cursor_in_viewport[0]), float(cursor_in_viewport[1]))

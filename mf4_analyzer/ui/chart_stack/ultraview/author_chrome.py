@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import qtawesome as qta
+from PyQt5 import sip
 from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
@@ -74,7 +75,7 @@ _SELECTION_BLUE = "#4262FF"
 _INK = QColor("#183039")
 _STICKY_FLYOUT_MIN_WIDTH = 128
 _SHAPE_FLYOUT_MIN_WIDTH = 208
-_DRAW_FLYOUT_MIN_WIDTH = 104
+_DRAW_FLYOUT_MIN_WIDTH = 72
 _DEFAULT_FLYOUT_MIN_WIDTH = 160
 _STICKY_SWATCH = 48
 _TOOLBAR_HEIGHT = 48
@@ -82,8 +83,8 @@ _CONTROL_SIZE = 36
 _FONT_CELL_WIDTH = 112
 _SIZE_CELL_WIDTH = 60
 _SHAPE_CELL = 42
-_DRAW_CELL = 48
-_DRAW_PRESET = 36
+_DRAW_CELL = 40
+_DRAW_PRESET = 30
 _DRAW_COLOR = 24
 _CATALOG_ROW_HEIGHT = 36
 _DRAW_COLORS = ("ink", "blue", "red", "yellow", "green", "pink", "teal", "purple")
@@ -93,11 +94,11 @@ _PICKER_GAP = 6
 _QWIDGETSIZE_MAX = 16777215
 _FONT_PICKER_MIN_WIDTH = 112
 _FONT_PICKER_MAX_WIDTH = 120
-_SIZE_PICKER_MIN_WIDTH = 104
-_SIZE_PICKER_MAX_WIDTH = 120
+_SIZE_PICKER_MIN_WIDTH = 72
+_SIZE_PICKER_MAX_WIDTH = 96
 _PICKER_WIDTHS = {
     "font": (112, 120),
-    "font_size": (104, 120),
+    "font_size": (72, 96),
     "line_width": (120, 144),
     "dash": (120, 144),
     "route": (120, 144),
@@ -109,6 +110,9 @@ _PICKER_WIDTHS = {
     "shape": (208, 216),
     "label": (120, 168),
 }
+_PALETTE_BODY_MARGINS = (16, 16, 16, 16)
+_LABEL_BODY_MARGINS = (10, 8, 10, 8)
+_DEFAULT_BODY_MARGINS = (12, 12, 12, 12)
 def paint_swatch_appearance(
     painter: QPainter, box: QRectF, appearance: SwatchAppearance, *, radius: float = 6.0
 ) -> None:
@@ -193,7 +197,7 @@ class ToolFlyoutSurface(QFrame):
         self._content.setAttribute(Qt.WA_TranslucentBackground, True)
         self._content.setAutoFillBackground(False)
         self._body = QVBoxLayout(self._content)
-        self._body.setContentsMargins(12, 12, 12, 12)
+        self._body.setContentsMargins(*_DEFAULT_BODY_MARGINS)
         self._body.setSpacing(8)
         self._scroll.setWidget(self._content)
         inner_root.addWidget(self._scroll)
@@ -203,6 +207,9 @@ class ToolFlyoutSurface(QFrame):
 
     def content_widget(self) -> QWidget:
         return self._content
+
+    def set_body_margins(self, left: int, top: int, right: int, bottom: int) -> None:
+        self._body.setContentsMargins(int(left), int(top), int(right), int(bottom))
 
     def content_size(self) -> QSize:
         """Natural size of the inner content after polish, ignoring scroll defaults."""
@@ -1046,7 +1053,7 @@ class _DrawSessionButton(QToolButton):
         # to shrink this icon target back to its 31px size hint.
         self.setFixedSize(_DRAW_CELL, _DRAW_CELL)
         self.setIcon(_draw_subtool_icon(self._tool))
-        self.setIconSize(QSize(28, 28))
+        self.setIconSize(QSize(22, 22))
         if self._tool == DRAW_ERASER:
             self.setToolTip(_ERASER_TOOLTIP)
             self.setAccessibleName("橡皮擦 整笔擦除")
@@ -1062,7 +1069,7 @@ class _DrawSessionButton(QToolButton):
 
 
 class DrawPopover(ToolFlyoutSurface):
-    """Vertical Draw subrail: four tools, then three presets. Editor is opt-in."""
+    """Vertical Draw subrail: pen / highlighter / eraser, then three presets."""
 
     min_width = _DRAW_FLYOUT_MIN_WIDTH
     tool_selected = pyqtSignal(str, int)
@@ -1409,8 +1416,10 @@ class _PreviewChoiceButton(QToolButton):
             painter.fillPath(fill, QColor("#F3F5F6"))
         text_color = QColor("#4262FF") if self.isChecked() else _INK
         preview = QRectF(10.0, 7.0, 28.0, 20.0)
+        # Font-size rows are numbers only — a baseline preview made them look
+        # like line-width and squeezed larger digits off the narrow column.
         text_left = 12.0
-        if self._presentation != "font":
+        if self._presentation not in ("font", "font_size"):
             self._paint_preview(painter, preview)
             text_left = 44.0
         painter.setPen(text_color)
@@ -1419,13 +1428,8 @@ class _PreviewChoiceButton(QToolButton):
             families = font_candidates(self._value)
             font = QFont(families[0] if families else "sans-serif", 12)
         elif self._presentation == "font_size":
-            raw = str(self._value)
-            try:
-                size = 11 if raw == "auto" else max(10, min(16, int(raw)))
-            except (TypeError, ValueError):
-                size = 12
             font = QFont(font)
-            font.setPixelSize(size)
+            font.setPixelSize(13)
         painter.setFont(font)
         text_box = QRectF(text_left, 0.0, max(8.0, rect.width() - text_left - 22.0), rect.height())
         metrics = QFontMetrics(font)
@@ -1445,10 +1449,7 @@ class _PreviewChoiceButton(QToolButton):
         painter.setBrush(Qt.NoBrush)
         value = self._value
         role = self._presentation
-        if role == "font_size":
-            baseline = box.bottom() - 4.0
-            painter.drawLine(QPointF(box.left(), baseline), QPointF(box.right(), baseline))
-        elif role == "line_width":
+        if role == "line_width":
             try:
                 width = max(1.0, float(value or 2))
             except (TypeError, ValueError):
@@ -1570,6 +1571,8 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         swatch_role: str = "",
     ) -> None:
         self._begin_present()
+        self.set_body_margins(*_LABEL_BODY_MARGINS)
+        self._body.setSpacing(2)
         host = QWidget(self._content)
         host.setObjectName("ultraViewFormatChoiceList")
         column = QVBoxLayout(host)
@@ -1601,11 +1604,13 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
     ) -> None:
         del color_rgb
         self._begin_present()
+        self.set_body_margins(*_PALETTE_BODY_MARGINS)
+        self._body.setSpacing(10)
         host = QWidget(self._content)
         grid = QGridLayout(host)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
         self._columns = 4
         self._presentation = "swatch"
         self.min_width = 0
@@ -1710,15 +1715,20 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         if old is not None:
             old.hide()
             old.setParent(None)
-            old.deleteLater()
+            # Synchronous destroy: deleteLater leaves translucent pixels from the
+            # previous width/dash rows ghosted under the next palette body.
+            if not sip.isdeleted(old):
+                sip.delete(old)
         self._content = QWidget()
         self._content.setObjectName("ultraViewToolFlyoutContent")
         self._content.setAttribute(Qt.WA_TranslucentBackground, True)
         self._content.setAutoFillBackground(False)
         self._body = QVBoxLayout(self._content)
-        self._body.setContentsMargins(12, 12, 12, 12)
+        self._body.setContentsMargins(*_DEFAULT_BODY_MARGINS)
         self._body.setSpacing(8)
         self._scroll.setWidget(self._content)
+        self._apply_round_clip()
+        self.update()
 
     def _clear_body(self) -> None:
         self._begin_present()

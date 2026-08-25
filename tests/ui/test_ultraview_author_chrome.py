@@ -33,6 +33,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     AUTHOR_TOOLS,
     ConnectorPopover,
     DrawPopover,
+    OVERLAY_AUTHOR_DRAW,
     OVERLAY_AUTHOR_FORMAT,
     OVERLAY_AUTHOR_POINTER,
     PANEL_LAYOUT,
@@ -163,12 +164,12 @@ def test_creation_popovers_expose_miro_v1_choices_and_typed_intents(qtbot):
     shapes.choose_shape("rectangle")
     assert chosen_shapes == ["rectangle"]
 
-    assert draw.subtools() == ("pen", "highlighter", "eraser", "lasso")
+    assert draw.subtools() == ("pen", "highlighter", "eraser")
     assert len(draw.presets("pen")) == 3
     assert len(draw.presets("highlighter")) == 3
     names = " ".join(child.objectName() for child in draw.findChildren(QToolButton)).lower()
     assert "eraser" in names
-    assert "lasso" in names
+    assert "lasso" not in names
     assert "precision" not in names
     eraser = draw.session_button("eraser")
     assert eraser is not None
@@ -215,7 +216,7 @@ def test_draw_popover_is_a_frame_flyout_not_a_menu(qtbot):
     assert isinstance(draw, ToolFlyoutSurface)
     assert isinstance(draw, QFrame)
     assert not isinstance(draw, QMenu)
-    assert draw.subtools() == ("pen", "highlighter", "eraser", "lasso")
+    assert draw.subtools() == ("pen", "highlighter", "eraser")
     assert draw.findChildren(QMenu) == []
 
 
@@ -813,18 +814,18 @@ def test_draw_popover_is_vertical_and_exposes_three_presets_not_an_always_visibl
     draw.resize(draw.content_size())
     draw.show()
     QApplication.processEvents()
-    tools = [draw._tool_buttons[name] for name in ("pen", "highlighter", "eraser", "lasso")]
+    tools = [draw._tool_buttons[name] for name in ("pen", "highlighter", "eraser")]
     xs = {button.x() for button in tools}
     assert max(xs) - min(xs) <= 2
-    assert tools[0].y() < tools[1].y() < tools[2].y() < tools[3].y()
-    assert {button.size().width() for button in tools} == {48}
-    assert {button.iconSize().width() for button in tools} == {28}
+    assert tools[0].y() < tools[1].y() < tools[2].y()
+    assert {button.size().width() for button in tools} == {40}
+    assert {button.iconSize().width() for button in tools} == {22}
     presets = draw.preset_buttons("pen")
     assert len(presets) == 3
     assert not draw.preset_editor_visible()
     for button in draw._color_buttons.values():
         assert not button.isVisible()
-    assert 76 <= draw.width() <= 104
+    assert 64 <= draw.width() <= 88
     draw.show_preset_editor(True)
     QApplication.processEvents()
     assert any(button.isVisible() for button in draw._color_buttons.values())
@@ -879,7 +880,13 @@ def test_font_and_size_pickers_are_single_column_content_driven_surfaces(qtbot):
     picker.adjustSize()
     QApplication.processEvents()
     assert picker.column_count() == 1
-    assert 104 <= picker.width() <= 120
+    assert 72 <= picker.width() <= 96
+    labels = [
+        button.accessibleName()
+        for button in picker.findChildren(QToolButton)
+        if button.property("presentationRole") == "font_size"
+    ]
+    assert labels == ["auto", "12", "14", "18", "24"]
 
 
 def test_format_picker_is_anchored_to_trigger_and_inside_safe_rect(qtbot, qapp):
@@ -1121,7 +1128,7 @@ def _assert_picker_closed(page, key: str, toolbar_rect: QRect, keys: tuple[str, 
     ("key", "expected_choices", "min_w", "max_w"),
     [
         ("font_role", 3, 112, 120),
-        ("font_size", 9, 104, 120),
+        ("font_size", 9, 72, 96),
     ],
 )
 def test_font_and_size_pickers_open_close_open_keep_geometry(
@@ -1173,7 +1180,7 @@ def test_font_role_then_size_then_role_does_not_inherit_geometry(qtbot, qapp, si
 
     _open_format_key(page, "font_size")
     size_shot = _assert_picker_open_inside_safe(harness, "font_size", 9, require_gap=False)
-    assert 104 <= size_shot["picker"].width() <= 120
+    assert 72 <= size_shot["picker"].width() <= 96
     assert size_shot["picker"].width() != font["picker"].width()
     assert size_shot["picker"].height() != font["picker"].height()
     assert size_shot["toolbar"] == toolbar_rect
@@ -1303,7 +1310,7 @@ def test_transparent_swatch_draws_white_fill_and_red_hatch(qtbot):
     ("presentation", "choices", "min_w", "max_w"),
     [
         ("font", (("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono")), 112, 120),
-        ("font_size", tuple((n, str(n)) for n in (8, 12, 24)), 104, 120),
+        ("font_size", tuple((n, str(n)) for n in (8, 12, 24)), 72, 96),
         ("line_width", ((1, "1 px"), (2, "2 px"), (8, "8 px")), 120, 144),
         ("dash", (("solid", "实线"), ("dashed", "虚线")), 120, 144),
         ("route", (("straight", "直线"), ("elbow", "折线")), 120, 144),
@@ -1400,3 +1407,64 @@ def test_format_picker_visible_gap_is_at_least_six_px(qtbot, qapp):
     above = origin.y() - (picker.y() + picker.height())
     assert below >= 6 or above >= 6
     assert not picker.geometry().intersects(toolbar.geometry())
+
+
+def test_shape_width_then_color_clears_width_choice_rows(qtbot, qapp):
+    """Switching format keys must not leave width labels like '8 px' under the palette."""
+    from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid
+
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.resize(1182, 768)
+    free, _cards = _prepare_free_grid(harness, qtbot, "shape-width-color")
+    shape = ShapeObject(
+        "shape-wc",
+        "shape",
+        box=BoardBox(2.0, 8.0, 4.0, 3.0),
+        shape="rectangle",
+        stroke_width=8,
+    )
+    harness.board.author_objects = [shape]
+    harness.page.set_board(harness.board)
+    QApplication.processEvents()
+    harness.page.interaction().select_only_author("shape-wc")
+    free.sync_selection_projection()
+    harness.page._refresh_author_toolbar()
+    QApplication.processEvents()
+
+    page = harness.page
+    _open_format_key(page, "width")
+    width_shot = _assert_picker_open_inside_safe(harness, "width", 4, require_gap=False)
+    assert width_shot["choices"] == 4
+    labels = [
+        str(child.toolTip())
+        for child in page.format_picker().findChildren(QToolButton)
+        if child.isVisible() and child.property("choiceValue") is not None
+    ]
+    assert any("px" in label for label in labels)
+
+    _open_format_key(page, "stroke")
+    color_shot = _assert_picker_open_inside_safe(harness, "stroke", 9, require_gap=False)
+    assert color_shot["choices"] >= 8
+    leftover = [
+        child
+        for child in page.format_picker().findChildren(QToolButton)
+        if child.isVisible()
+        and child.property("choiceValue") is not None
+        and "px" in str(child.toolTip())
+    ]
+    assert leftover == []
+    assert page.format_picker().presentation_role() == "swatch"
+
+
+def test_zoom_dismisses_open_author_flyout(qtbot, qapp):
+    page = _prepare_page(qtbot, qapp)
+    draw = page.tool_rail().tool_button(AUTHOR_TOOL_DRAW)
+    QTest.mouseClick(draw, Qt.LeftButton)
+    QApplication.processEvents()
+    flyout = page.draw_popover()
+    assert flyout.isVisible()
+    page.zoom_in()
+    QApplication.processEvents()
+    assert flyout.isVisible() is False
+    assert page.canvas_host().active_overlay() != OVERLAY_AUTHOR_DRAW

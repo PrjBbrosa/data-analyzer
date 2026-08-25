@@ -10,7 +10,15 @@ from __future__ import annotations
 from functools import lru_cache
 
 from PyQt5.QtCore import QRect, Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QFontDatabase, QInputMethodEvent, QTextOption
+from PyQt5.QtGui import (
+    QFont,
+    QFontDatabase,
+    QInputMethodEvent,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+    QTextOption,
+)
 from PyQt5.QtWidgets import QFrame, QLineEdit, QPlainTextEdit, QTextEdit, QWidget
 
 from mf4_analyzer.ui.ultraview_state import (
@@ -219,6 +227,10 @@ class StickyNoteWidget(QFrame):
 
     def _apply_palette(self, item: StickyObject) -> None:
         fill, border, foreground = sticky_colors(item.palette, self._theme)
+        size = 11 if item.font_size == "auto" else int(item.font_size)
+        scale = float(getattr(self._metrics, "scale", 1.0) or 1.0) if self._metrics else 1.0
+        size_px = max(1, int(round(size * scale)))
+        family = _font_family("sans")
         self.setStyleSheet(
             "QFrame#ultraViewStickyNote {"
             f"background: rgb({fill[0]}, {fill[1]}, {fill[2]});"
@@ -228,11 +240,13 @@ class StickyNoteWidget(QFrame):
             "QPlainTextEdit#ultraViewStickyNoteEditor {"
             "background: transparent; border: none;"
             f"color: rgb({foreground[0]}, {foreground[1]}, {foreground[2]});"
+            f"font-family: '{family}';"
+            f"font-size: {size_px}px;"
             "}"
         )
-        font = QFont(_font_family("sans"))
-        font.setPointSize(11 if item.font_size == "auto" else int(item.font_size))
-        self._editor.setFont(font)
+        font = QFont(family)
+        font.setPixelSize(size_px)
+        _apply_editor_font(self._editor, font)
 
     def _on_ime_committed(self, text: str) -> None:
         if self._object_id:
@@ -327,6 +341,12 @@ class BoardTextEditor(_BoundedPlainTextEdit):
             return
         x, y, width, height = mapped
         self.setGeometry(round(x), round(y), max(1, round(width)), max(1, round(height)))
+        new_scale = float(getattr(self._metrics, "scale", 1.0) or 1.0)
+        if (
+            self._style is not None
+            and abs(new_scale - getattr(self, "_applied_font_scale", new_scale)) > 1e-6
+        ):
+            self._apply_style(self._style)
 
     def commit(self) -> None:
         if not self.is_editing():
@@ -359,25 +379,41 @@ class BoardTextEditor(_BoundedPlainTextEdit):
 
     def _apply_style(self, style: TextObject | None) -> None:
         item = style if isinstance(style, TextObject) else None
-        font = QFont(_font_family(item.font_role if item else "sans"))
-        font.setPointSize(item.font_size if item else 14)
-        font.setBold(bool(item.bold) if item else False)
-        font.setItalic(bool(item.italic) if item else False)
-        font.setUnderline(bool(item.underline) if item else False)
-        self.setFont(font)
         foreground = ink_color(item.text_palette if item else "ink", self._theme)
         fill = "transparent"
         if item is not None and item.fill_palette:
             fill_rgb, _border, _foreground = sticky_colors(item.fill_palette, self._theme)
             fill = f"rgb({fill_rgb[0]}, {fill_rgb[1]}, {fill_rgb[2]})"
+        family = _font_family(item.font_role if item else "sans")
+        size = int(item.font_size) if item is not None else 14
+        scale = float(getattr(self._metrics, "scale", 1.0) or 1.0) if self._metrics else 1.0
+        size_px = max(1, int(round(size * scale)))
+        bold = bool(item.bold) if item else False
+        italic = bool(item.italic) if item else False
+        underline = bool(item.underline) if item else False
+        # Pin font-* in the stylesheet so polish cannot restore the app default
+        # (that mismatch yields near-zero glyph advance and stacked letters).
+        # Then mirror the same metrics onto the document with FontPixelSize.
         self.setStyleSheet(
             "QPlainTextEdit#ultraViewBoardTextEditor {"
             f"color: rgb({foreground[0]}, {foreground[1]}, {foreground[2]});"
             f"background: {fill};"
             "border: 1px solid rgb(53, 99, 232); border-radius: 4px;"
             "padding: 6px;"
+            f"font-family: '{family}';"
+            f"font-size: {size_px}px;"
+            f"font-weight: {700 if bold else 400};"
+            f"font-style: {'italic' if italic else 'normal'};"
+            f"text-decoration: {'underline' if underline else 'none'};"
             "}"
         )
+        font = QFont(family)
+        font.setPixelSize(size_px)
+        font.setBold(bold)
+        font.setItalic(italic)
+        font.setUnderline(underline)
+        _apply_editor_font(self, font)
+        self._applied_font_scale = scale
 
     def _on_ime_committed(self, text: str) -> None:
         if self.is_editing():
@@ -390,6 +426,38 @@ def _origin(value: object) -> tuple[float, float]:
         return float(x), float(y)
     except (TypeError, ValueError):
         return 0.0, 0.0
+
+
+def _apply_editor_font(editor: QPlainTextEdit, font: QFont) -> None:
+    """Apply *font* to widget, document default, and existing runs.
+
+    ``QTextCharFormat.setFont`` does not reliably copy pixel size on Qt5, so
+    ``FontPixelSize`` is set explicitly and the selection uses ``setCharFormat``
+    (replace) instead of merge.
+    """
+    caret = editor.textCursor()
+    position = caret.position()
+    anchor = caret.anchor()
+    editor.setFont(font)
+    document = editor.document()
+    document.setDefaultFont(font)
+    fmt = QTextCharFormat()
+    fmt.setFontFamily(font.family())
+    fmt.setFontWeight(font.weight())
+    fmt.setFontItalic(font.italic())
+    fmt.setFontUnderline(font.underline())
+    fmt.setProperty(QTextFormat.FontPixelSize, int(font.pixelSize()))
+    cursor = QTextCursor(document)
+    cursor.select(QTextCursor.Document)
+    cursor.setCharFormat(fmt)
+    limit = max(0, document.characterCount() - 1)
+    restored = QTextCursor(document)
+    restored.setPosition(min(max(0, anchor), limit))
+    if anchor != position:
+        restored.setPosition(min(max(0, position), limit), QTextCursor.KeepAnchor)
+    else:
+        restored.setPosition(min(max(0, position), limit))
+    editor.setTextCursor(restored)
 
 
 @lru_cache(maxsize=3)

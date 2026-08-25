@@ -199,7 +199,7 @@ def test_draw_click_opens_icon_preset_flyout(qtbot):
     flyout = harness.page.draw_popover()
     assert flyout.isVisible()
     assert flyout.session_button("eraser") is not None
-    assert flyout.session_button("lasso") is not None
+    assert flyout.session_button("lasso") is None
     body = " ".join(child.text() for child in flyout.findChildren(QWidget) if hasattr(child, "text"))
     assert "不做像素擦除" not in body
 

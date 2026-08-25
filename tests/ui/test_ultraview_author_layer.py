@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QCoreApplication, Qt
-from PyQt5.QtGui import QImage, QInputMethodEvent, QPainter
+from PyQt5.QtGui import QFontMetrics, QImage, QInputMethodEvent, QPainter, QTextFormat
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QWidget
 
@@ -148,3 +148,90 @@ def test_temporary_text_editor_is_sibling_and_supports_ime_commit_cancel(qapp):
     assert len(commit_spy) == 1
     assert commit_spy[0] == ["text-1", "要提交"]
     assert not editor.is_editing()
+
+
+def test_board_text_editor_live_font_size_updates_document_pixels(qapp):
+    from mf4_analyzer.ui.ultraview_state import TextObject
+
+    host = QWidget()
+    host.resize(700, 500)
+    host.show()
+    editor = BoardTextEditor(host)
+    style = TextObject(
+        "text-1",
+        "text",
+        box=BoardBox(0.0, 0.0, 3.0, 1.5),
+        text="的他",
+        font_size=14,
+    )
+    editor.begin_edit(
+        object_id="text-1",
+        box=style.box,
+        text=style.text,
+        metrics=_metrics(),
+        style=style,
+    )
+    qapp.processEvents()
+    assert editor.font().pixelSize() == 14
+    assert editor.document().defaultFont().pixelSize() == 14
+
+    larger = TextObject(
+        "text-1",
+        "text",
+        box=style.box,
+        text="的他",
+        font_size=24,
+    )
+    editor.apply_live_style(larger)
+    qapp.processEvents()
+    assert editor.font().pixelSize() == 24
+    assert editor.document().defaultFont().pixelSize() == 24
+    cursor = editor.textCursor()
+    cursor.select(cursor.Document)
+    assert cursor.charFormat().font().pixelSize() == 24
+    assert cursor.charFormat().property(QTextFormat.FontPixelSize) == 24
+
+
+def test_board_text_editor_bold_large_size_keeps_positive_glyph_advance(qapp):
+    """Regression: stylesheet polish + Bold used to collapse advance to ~0 (stacking)."""
+    from mf4_analyzer.ui.ultraview_state import TextObject
+
+    host = QWidget()
+    host.resize(700, 500)
+    host.show()
+    editor = BoardTextEditor(host)
+    style = TextObject(
+        "text-1",
+        "text",
+        box=BoardBox(0.0, 0.0, 4.0, 2.0),
+        text="mw,",
+        font_size=14,
+        bold=True,
+    )
+    editor.begin_edit(
+        object_id="text-1",
+        box=style.box,
+        text=style.text,
+        metrics=_metrics(),
+        style=style,
+    )
+    qapp.processEvents()
+    large = TextObject(
+        "text-1",
+        "text",
+        box=style.box,
+        text="mw,",
+        font_size=32,
+        bold=True,
+    )
+    editor.apply_live_style(large)
+    qapp.processEvents()
+    font = editor.document().defaultFont()
+    assert font.pixelSize() == 32
+    assert font.bold() is True
+    metrics = QFontMetrics(font)
+    advance = metrics.horizontalAdvance("mw,")
+    assert advance >= metrics.horizontalAdvance("m") * 2
+    cursor = editor.textCursor()
+    cursor.select(cursor.Document)
+    assert cursor.charFormat().property(QTextFormat.FontPixelSize) == 32

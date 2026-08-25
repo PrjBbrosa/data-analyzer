@@ -183,7 +183,10 @@ CONNECTOR_CLICK_DRAG_THRESHOLD = 0.35
 DRAW_INK_SUBTOOLS = ("pen", "highlighter")
 DRAW_ERASER = "eraser"
 DRAW_LASSO = "lasso"
-DRAW_SUBTOOLS = (*DRAW_INK_SUBTOOLS, DRAW_ERASER, DRAW_LASSO)
+# Flyout order: pen / highlighter / eraser. Lasso stays API-compatible for
+# tests and board_pointer, but is no longer offered in the Draw subrail.
+DRAW_SUBTOOLS = (*DRAW_INK_SUBTOOLS, DRAW_ERASER)
+DRAW_ALLOWED_SUBTOOLS = frozenset((*DRAW_SUBTOOLS, DRAW_LASSO))
 DEFAULT_DRAW_SUBTOOL = "pen"
 STROKE_LIVE_MAX_SAMPLES = 8_192
 STROKE_WIDTH_MIN = 1
@@ -1462,7 +1465,7 @@ class BoardInteractionController:
 
 def normalize_draw_subtool(value: object) -> str:
     checked = str(value or "")
-    return checked if checked in DRAW_SUBTOOLS else DEFAULT_DRAW_SUBTOOL
+    return checked if checked in DRAW_ALLOWED_SUBTOOLS else DEFAULT_DRAW_SUBTOOL
 
 
 def is_draw_ink_subtool(value: object) -> bool:

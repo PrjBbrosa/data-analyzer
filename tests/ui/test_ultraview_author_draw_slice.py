@@ -456,14 +456,14 @@ def test_tablet_and_mouse_normalize_to_plain_pointer_samples():
     assert QTabletEvent is not None
 
 
-def test_draw_flyout_is_frame_with_four_live_items_and_no_precision(qtbot):
+def test_draw_flyout_is_frame_with_three_live_items_and_no_lasso(qtbot):
     flyout = DrawPopover()
     qtbot.addWidget(flyout)
     assert isinstance(flyout, ToolFlyoutSurface)
     assert isinstance(flyout, QFrame)
     assert not isinstance(flyout, QMenu)
-    assert flyout.subtools() == ("pen", "highlighter", "eraser", "lasso")
-    assert DRAW_SUBTOOLS == ("pen", "highlighter", "eraser", "lasso")
+    assert flyout.subtools() == ("pen", "highlighter", "eraser")
+    assert DRAW_SUBTOOLS == ("pen", "highlighter", "eraser")
     assert DRAW_INK_SUBTOOLS == ("pen", "highlighter")
     assert len(flyout.presets("pen")) == 3
     assert len(flyout.presets("highlighter")) == 3
@@ -472,12 +472,11 @@ def test_draw_flyout_is_frame_with_four_live_items_and_no_precision(qtbot):
     assert len(flyout.preset_buttons("pen")) == 3
     assert len(flyout.preset_buttons("highlighter")) == 3
     for button in (*flyout.preset_buttons("pen"), *flyout.preset_buttons("highlighter")):
-        assert button.width() >= 32 and button.height() >= 32
+        assert button.width() >= 28 and button.height() >= 28
     eraser = flyout.session_button("eraser")
-    lasso = flyout.session_button("lasso")
-    assert eraser is not None and lasso is not None
-    assert eraser.width() >= 40 and eraser.height() >= 40
-    assert lasso.width() >= 40 and lasso.height() >= 40
+    assert eraser is not None
+    assert flyout.session_button("lasso") is None
+    assert eraser.width() >= 36 and eraser.height() >= 36
     assert "整笔擦除" in eraser.toolTip()
     assert "精密" not in eraser.toolTip()
     assert "precision" not in eraser.toolTip().lower()
@@ -486,7 +485,7 @@ def test_draw_flyout_is_frame_with_four_live_items_and_no_precision(qtbot):
     names = " ".join(child.objectName() for child in flyout.findChildren(QToolButton)).lower()
     tips = " ".join(child.toolTip() for child in flyout.findChildren(QToolButton)).lower()
     assert "eraser" in names
-    assert "lasso" in names
+    assert "lasso" not in names
     assert "precision" not in names
     assert "precision" not in tips
     chosen: list[tuple[str, int]] = []
@@ -788,7 +787,7 @@ def _seed_stroke(sink, object_id: str, points, *, locked: bool = False, palette:
 
 def test_slice_can_construct_draw_without_assuming_release_rail():
     assert AUTHOR_TOOL_DRAW in AUTHOR_TOOLS
-    assert DRAW_SUBTOOLS == ("pen", "highlighter", "eraser", "lasso")
+    assert DRAW_SUBTOOLS == ("pen", "highlighter", "eraser")
     assert DRAW_INK_SUBTOOLS == ("pen", "highlighter")
     assert TOOL_SELECT == "select"
 
@@ -1076,11 +1075,11 @@ def test_draw_tools_render_distinct_icons_without_clipping_or_white_backing(qtbo
     flyout.adjustSize()
     QApplication.processEvents()
     images = {}
-    for name in ("pen", "highlighter", "eraser", "lasso"):
+    for name in ("pen", "highlighter", "eraser"):
         button = flyout._tool_buttons[name]
         button.setChecked(False)
     QApplication.processEvents()
-    for name in ("pen", "highlighter", "eraser", "lasso"):
+    for name in ("pen", "highlighter", "eraser"):
         button = flyout._tool_buttons[name]
         image = _render_widget(button)
         images[name] = image
@@ -1088,10 +1087,10 @@ def test_draw_tools_render_distinct_icons_without_clipping_or_white_backing(qtbo
         assert not _has_solid_white_backing(image)
         assert image.pixelColor(1, 1).alpha() < 40
     masks = {_alpha_mask(image) for image in images.values()}
-    assert len(masks) == 4
+    assert len(masks) == 3
     eraser = flyout.session_button("eraser")
-    lasso = flyout.session_button("lasso")
-    assert eraser is not None and lasso is not None
+    assert eraser is not None
+    assert flyout.session_button("lasso") is None
     assert "整笔擦除" in eraser.toolTip()
 
 
