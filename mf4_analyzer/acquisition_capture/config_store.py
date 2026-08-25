@@ -380,8 +380,9 @@ def _format_yaml_scalar(value: Any) -> str:
     if isinstance(value, int | float):
         return str(value)
     text = str(value)
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    # YAML single-quoted scalars preserve Windows path separators literally.
+    # Doubling apostrophes is the YAML escape convention for this form.
+    return "'" + text.replace("'", "''") + "'"
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +525,14 @@ def _preprocess_lines(text: str) -> list[tuple[int, int, str]]:
 def _strip_comment(line: str) -> str:
     in_double = False
     in_single = False
+    escaped_double = False
     for i, ch in enumerate(line):
+        if in_double and escaped_double:
+            escaped_double = False
+            continue
+        if in_double and ch == "\\":
+            escaped_double = True
+            continue
         if ch == '"' and not in_single:
             in_double = not in_double
         elif ch == "'" and not in_double:
@@ -642,12 +650,29 @@ def _parse_scalar(text: str) -> Any:
         return True
     if text == "false":
         return False
-    if (text.startswith('"') and text.endswith('"')) or (
-        text.startswith("'") and text.endswith("'")
-    ):
-        return text[1:-1]
+    if text.startswith('"') and text.endswith('"'):
+        return _unescape_legacy_double_quoted_scalar(text[1:-1])
+    if text.startswith("'") and text.endswith("'"):
+        return text[1:-1].replace("''", "'")
     if _SCALAR_INT.match(text):
         return int(text)
     if _SCALAR_FLOAT.match(text):
         return float(text)
     return text
+
+
+def _unescape_legacy_double_quoted_scalar(text: str) -> str:
+    """Decode only the escape sequences emitted by older config writers."""
+    decoded: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            escaped = text[index + 1]
+            if escaped in {'\\', '"'}:
+                decoded.append(escaped)
+                index += 2
+                continue
+        decoded.append(char)
+        index += 1
+    return "".join(decoded)

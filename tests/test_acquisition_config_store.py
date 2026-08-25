@@ -283,6 +283,50 @@ def test_save_a2l_path_round_trip(tmp_path):
     assert store.pinned is True
 
 
+def test_save_a2l_path_round_trips_windows_backslashes_without_doubling(tmp_path):
+    cfg = tmp_path / "acquisition_config.yaml"
+    expected = r"C:\measurements\demo.a2l"
+
+    save_a2l_path(expected, config_path=cfg)
+
+    store = load_or_default(project_root=tmp_path, cli_config_path=cfg)
+    assert store.a2l_path == expected
+
+
+def test_save_a2l_path_round_trips_windows_path_with_apostrophe(tmp_path):
+    cfg = tmp_path / "acquisition_config.yaml"
+    expected = r"C:\O'Brien\demo.a2l"
+
+    save_a2l_path(expected, config_path=cfg)
+
+    store = load_or_default(project_root=tmp_path, cli_config_path=cfg)
+    assert store.a2l_path == expected
+
+
+def test_load_config_decodes_legacy_escaped_windows_a2l_path(tmp_path):
+    cfg = tmp_path / "acquisition_config.yaml"
+    cfg.write_text(
+        'version: 2\n'
+        'a2l_path: "C:\\\\measurements\\\\demo.a2l"\n',
+        encoding="utf-8",
+    )
+
+    store = load_or_default(project_root=tmp_path, cli_config_path=cfg)
+    assert store.a2l_path == r"C:\measurements\demo.a2l"
+
+
+def test_load_config_keeps_hash_after_legacy_escaped_quote(tmp_path):
+    cfg = tmp_path / "acquisition_config.yaml"
+    cfg.write_text(
+        'version: 2\n'
+        'a2l_path: "C:\\\\measurements\\\\tag\\"#2.a2l"\n',
+        encoding="utf-8",
+    )
+
+    store = load_or_default(project_root=tmp_path, cli_config_path=cfg)
+    assert store.a2l_path == r'C:\measurements\tag"#2.a2l'
+
+
 def test_save_a2l_path_preserves_existing_transport(tmp_path):
     from mf4_analyzer.acquisition_capture.config_store import save_transport
     from mf4_analyzer.acquisition_capture.transport_config import TransportConfig

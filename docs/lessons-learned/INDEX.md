@@ -211,6 +211,7 @@ lesson by default.
 | [UltraView Selected State Is Blue](pyqt-ui/2026-08-22-ultraview-selected-state-is-blue.md) | Changing UltraView rail, island, presentation, library selected-row, canvas glow, or CanvasHost flyout stacking. | See lesson |
 | [UltraView Mixed Selection Is One Plan](pyqt-ui/2026-08-22-ultraview-mixed-selection-is-one-plan.md) | Changing UltraView mixed card+author nudge/delete, `set_free_grid_rects`, `apply_author_nudge`, or Board history funnels. | See lesson |
 | [Windows Sidecar Fsync Needs A Writable Handle](codex-windows-sidecar-fsync-writable-handle.md) | Changing UltraView sidecar archive persistence or its durable-write | See lesson |
+| [Windows A2L Config Paths Round Trip](windows-a2l-config-path-roundtrip.md) | Changing Acquisition config scalar encoding, parsing, or persisted A2L | See lesson |
 
 ## Selection Rules
 
