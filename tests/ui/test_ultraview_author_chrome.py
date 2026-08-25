@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
-from PyQt5.QtGui import QColor, QHoverEvent, QImage, QPainter
+from PyQt5.QtGui import QColor, QFontMetrics, QHoverEvent, QImage, QPainter
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QMenu, QToolButton, QWidget
 
@@ -683,8 +683,17 @@ def test_shapes_catalog_is_one_column_with_visible_labels_and_shortcuts(qtbot):
     assert "矩形" in labels
     assert all(not button.text() for button in rows)
     assert all(36 <= button.height() <= 38 for button in rows)
-    assert 200 <= shapes.width() <= 216
+    assert 160 <= shapes.width() <= 176
     assert any("L" in (getattr(row, "_shortcut", "") or "") for row in rows)
+    for row in rows:
+        shortcut = getattr(row, "_shortcut", "") or ""
+        if not shortcut:
+            continue
+        metrics = QFontMetrics(row.font())
+        title_end = 46 + metrics.horizontalAdvance(row.catalog_title())
+        shortcut_start = row.width() - 12 - metrics.horizontalAdvance(shortcut)
+        gap = shortcut_start - title_end
+        assert 24 <= gap <= 72, (row.catalog_title(), shortcut, gap)
 
 
 def test_pointer_popover_has_two_36px_rows_and_blue_selected_mode(qtbot):

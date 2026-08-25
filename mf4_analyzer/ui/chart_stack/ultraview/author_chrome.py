@@ -74,7 +74,8 @@ _LINE = QColor(32, 48, 56, 40)
 _SELECTION_BLUE = "#4262FF"
 _INK = QColor("#183039")
 _STICKY_FLYOUT_MIN_WIDTH = 128
-_SHAPE_FLYOUT_MIN_WIDTH = 208
+_SHAPE_FLYOUT_MIN_WIDTH = 168
+_SHAPE_FLYOUT_MAX_WIDTH = 176
 _DRAW_FLYOUT_MIN_WIDTH = 72
 _DEFAULT_FLYOUT_MIN_WIDTH = 160
 _STICKY_SWATCH = 48
@@ -107,7 +108,7 @@ _PICKER_WIDTHS = {
     "list": (136, 168),
     "tool": (136, 168),
     "corner": (120, 144),
-    "shape": (208, 216),
+    "shape": (_SHAPE_FLYOUT_MIN_WIDTH, _SHAPE_FLYOUT_MAX_WIDTH),
     "label": (120, 168),
 }
 _PALETTE_BODY_MARGINS = (16, 16, 16, 16)
@@ -692,7 +693,8 @@ class _CatalogRow(QToolButton):
                 ]))
         title_color = QColor("#4262FF") if self.isChecked() else _INK
         title_left = 46.0
-        shortcut_reserve = 36.0 if self._shortcut else 12.0
+        shortcut_inset = 12.0
+        shortcut_reserve = 28.0 if self._shortcut else shortcut_inset
         title_rect = QRectF(
             title_left,
             0.0,
@@ -704,7 +706,7 @@ class _CatalogRow(QToolButton):
         if self._shortcut:
             painter.setPen(QColor("#66787E"))
             painter.drawText(
-                rect.toRect().adjusted(0, 0, -12, 0),
+                rect.toRect().adjusted(0, 0, -int(shortcut_inset), 0),
                 int(Qt.AlignVCenter | Qt.AlignRight),
                 self._shortcut,
             )
@@ -1640,7 +1642,7 @@ class FormatChoiceFlyout(ToolFlyoutSurface):
         self._presentation = "shape"
         self.min_width = _SHAPE_FLYOUT_MIN_WIDTH
         self.setMinimumWidth(_SHAPE_FLYOUT_MIN_WIDTH)
-        self.setMaximumWidth(216)
+        self.setMaximumWidth(_SHAPE_FLYOUT_MAX_WIDTH)
         catalog = {kind: (title, shortcut, family) for kind, title, shortcut, family in _SHAPE_CATALOG}
         for shape in shapes:
             title, shortcut, family = catalog.get(str(shape), (str(shape), "", "shape"))
