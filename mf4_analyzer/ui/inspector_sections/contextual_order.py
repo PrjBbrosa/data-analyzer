@@ -399,20 +399,12 @@ class OrderContextual(QWidget):
         if i >= 0:
             self.combo_weighting.setCurrentIndex(i)
 
-    def _sync_source_weighting_defaults(self):
-        target = self._source_weighting_default
-        bar = getattr(self, 'preset_bar', None)
-        default_params = getattr(bar, '_default_params', None)
-        if isinstance(default_params, dict):
-            default_params['weighting'] = target
-
     def set_weighting_default(self, mode):
         if self._applying_preset:
             return
         self._source_weighting_default = (
             'A' if str(mode).upper() == 'A' else 'None'
         )
-        self._sync_source_weighting_defaults()
         self._apply_weighting_value(self._source_weighting_default)
 
     # ---- 2026-04-28: axis settings group helpers (Wave 3 introduced; row-
@@ -541,7 +533,6 @@ class OrderContextual(QWidget):
                 'Amplitude dB' if self.combo_amp_unit.currentText() == 'dB'
                 else 'Amplitude'
             ),
-            weighting=self.combo_weighting.currentText(),
             **db_reference_params(self.db_reference_control),
             samples_per_rev=int(self.spin_samples_per_rev.value()),
             x_auto=bool(self.chk_x_auto.isChecked()),
@@ -603,8 +594,8 @@ class OrderContextual(QWidget):
             except (TypeError, ValueError):
                 pass
         apply_db_reference_preset(self.db_reference_control, d)
-        if 'weighting' in d:
-            self._apply_weighting_value(d['weighting'])
+        # Weighting is live consumer state. Inspector presets — builtin and
+        # custom — never apply it, including leftover keys in older snapshots.
         # ---- Wave 3 (2026-04-28 plan): legacy + new axis-key compat ----
         # Legacy 'dynamic' key compat — translate to z_floor/ceiling/auto.
         # Preferred path: explicit z_floor/ceiling/auto keys override the

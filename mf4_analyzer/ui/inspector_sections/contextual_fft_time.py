@@ -375,20 +375,12 @@ class FFTTimeContextual(QWidget):
         if i >= 0:
             self.combo_weighting.setCurrentIndex(i)
 
-    def _sync_source_weighting_defaults(self):
-        target = self._source_weighting_default
-        bar = getattr(self, 'preset_bar', None)
-        default_params = getattr(bar, '_default_params', None)
-        if isinstance(default_params, dict):
-            default_params['weighting'] = target
-
     def set_weighting_default(self, mode):
         if self._applying_preset:
             return
         self._source_weighting_default = (
             'A' if str(mode).upper() == 'A' else 'None'
         )
-        self._sync_source_weighting_defaults()
         self._apply_weighting_value(self._source_weighting_default)
 
     def _sync_axis_enabled(self):
@@ -791,7 +783,8 @@ class FFTTimeContextual(QWidget):
     def _collect_preset(self):
         """Snapshot the current time-frequency params for PresetBar save.
 
-        Wave 4: combo_amp_mode + combo_dynamic dropped. ``amplitude_mode``
+        Weighting is live consumer state and is omitted, matching builtin
+        patches. Wave 4: combo_amp_mode + combo_dynamic dropped. ``amplitude_mode``
         is now derived from ``combo_amp_unit`` (mirroring step 3.4 for
         OrderContextual); ``dynamic`` is synthesised from
         ``spin_z_floor`` so the persisted preset shape stays
@@ -815,7 +808,6 @@ class FFTTimeContextual(QWidget):
             ),
             t_win_s=float(self._t_win_s),
             overlap=self.spin_overlap.value(),
-            weighting=self.combo_weighting.currentText(),
             amplitude_mode=amp_mode,
             remove_mean=True,
             **db_reference_params(self.db_reference_control),
@@ -886,8 +878,8 @@ class FFTTimeContextual(QWidget):
             except (TypeError, ValueError):
                 pass
         apply_db_reference_preset(self.db_reference_control, d)
-        if 'weighting' in d:
-            self._apply_weighting_value(d['weighting'])
+        # Weighting is live consumer state. Inspector presets — builtin and
+        # custom — never apply it, including leftover keys in older snapshots.
         # Inspector 不应用预设里的 cmap；实时选择属于图表选项。
 
         # ---- Wave 4 axis-key migration (legacy + new) ----

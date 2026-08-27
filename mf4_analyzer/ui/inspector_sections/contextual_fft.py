@@ -463,20 +463,12 @@ class FFTContextual(QWidget):
         if i >= 0:
             self.combo_weighting.setCurrentIndex(i)
 
-    def _sync_source_weighting_defaults(self):
-        target = self._source_weighting_default
-        bar = getattr(self, 'preset_bar', None)
-        default_params = getattr(bar, '_default_params', None)
-        if isinstance(default_params, dict):
-            default_params['weighting'] = target
-
     def set_weighting_default(self, mode):
         if self._applying_preset:
             return
         self._source_weighting_default = (
             'A' if str(mode).upper() == 'A' else 'None'
         )
-        self._sync_source_weighting_defaults()
         self._apply_weighting_value(self._source_weighting_default)
 
     def _sync_axis_enabled(self):
@@ -602,7 +594,6 @@ class FFTContextual(QWidget):
             avg_mode=self.combo_avg_mode.currentText(),
             avg_overlap=self.spin_avg_overlap.value(),
             amp_y=self.combo_amp_y.currentText(),
-            weighting=self.combo_weighting.currentText(),
             **db_reference_params(self.db_reference_control),
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=self.chk_x_auto.isChecked(),
@@ -667,8 +658,8 @@ class FFTContextual(QWidget):
         # ``amp_y`` is applied inside _apply_axis_params (above), ahead of the
         # y range it qualifies — do NOT re-apply it here.
         apply_db_reference_preset(self.db_reference_control, d)
-        if 'weighting' in d:
-            self._apply_weighting_value(d['weighting'])
+        # Weighting is live consumer state. Inspector presets — builtin and
+        # custom — never apply it, including leftover keys in older snapshots.
 
     def _on_sig_index_changed(self):
         self.signal_changed.emit('fft', self.combo_sig.currentData())

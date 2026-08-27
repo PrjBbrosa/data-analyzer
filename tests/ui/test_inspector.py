@@ -3427,6 +3427,7 @@ def test_fft_preset_collects_extended_analysis_params(qapp):
     assert p['avg_overlap'] == 75
     assert p['amp_y'] == 'dB'
     assert 'psd_y' not in p
+    assert 'weighting' not in p
 
 
 def test_fft_preset_applies_extended_analysis_params(qapp):

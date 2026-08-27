@@ -1,9 +1,8 @@
 """Task 6 TDD: preset guard for weighting in _apply_preset_values + Order invariant.
 
-TDD flow:
-- Problem ⑤ tests: RED before guard added, GREEN after.
-- Order display-only invariant: RED before (or immediately GREEN if
-  _render_order_on already doesn't bake window into _matrix_disp), GREEN after.
+Inspector presets (builtin and custom) never own weighting: a missing key
+must not reset it, and a leftover key in an older snapshot must be ignored.
+View restore still applies weighting through ``apply_params``.
 """
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -60,12 +59,14 @@ def test_apply_preset_values_preserves_weighting_when_key_absent(
     ('FFTTimeContextual', 'fft_time'),
     ('OrderContextual', 'order'),
 ])
-def test_apply_preset_values_does_update_weighting_when_key_present(
+def test_apply_preset_values_ignores_weighting_when_key_present(
         qapp, factory_spec):
-    """When 'weighting' IS in the preset dict, _apply_preset_values must
-    apply it (so full presets that include weighting still work).
+    """Inspector presets never own weighting, even if an older snapshot
+    still carries the key.
 
-    This is the non-regression counterpart to the guard test above.
+    Builtin patches omit it; custom slots now omit it too. A leftover
+    ``weighting`` key must not flip the live combo on preset load.
+    View restore still goes through ``apply_params``, which does apply it.
     """
     class_name, _id = factory_spec
     mod = __import__(
@@ -74,18 +75,16 @@ def test_apply_preset_values_does_update_weighting_when_key_present(
     )
     ctx = getattr(mod, class_name)()
 
-    # Set weighting to 'A' first.
     ctx._apply_weighting_value('A')
     assert ctx.get_params()['weighting'] == 'A'
 
-    # A preset that explicitly contains weighting='None' must reset it.
     preset_with_key = dict(ctx._collect_preset())
     preset_with_key['weighting'] = 'None'
     ctx._apply_preset_values(preset_with_key)
 
-    assert ctx.get_params()['weighting'] == 'None', (
-        f"[{class_name}] _apply_preset_values failed to apply weighting "
-        f"when the key is present."
+    assert ctx.get_params()['weighting'] == 'A', (
+        f"[{class_name}] _apply_preset_values applied leftover weighting="
+        f"{ctx.get_params()['weighting']!r}; Inspector presets must ignore it."
     )
 
 

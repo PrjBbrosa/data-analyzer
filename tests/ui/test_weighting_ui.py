@@ -46,7 +46,7 @@ def test_contextual_weighting_defaults_tooltip_and_params(qapp, factory):
     assert ctx.combo_weighting.toolTip() == WEIGHTING_TOOLTIP
     assert ctx.get_params()["weighting"] == "None"
     assert ctx.current_params()["weighting"] == "None"
-    assert ctx._collect_preset()["weighting"] == "None"
+    assert "weighting" not in ctx._collect_preset()
 
 
 @pytest.mark.parametrize(
@@ -81,25 +81,74 @@ def test_contextual_weighting_roundtrip_and_legacy_defaults_none(qapp, factory):
     ctx.set_weighting_default("A")
     assert _weighting(ctx) == "A"
     saved = ctx._collect_preset()
+    assert "weighting" not in saved
 
     ctx.set_weighting_default("None")
     ctx._apply_preset_values(saved)
-    assert _weighting(ctx) == "A"
+    # Preset snapshots do not own weighting, so loading one must leave
+    # the live combo untouched.
+    assert _weighting(ctx) == "None"
 
+    ctx.apply_params({"weighting": "A"})
+    assert _weighting(ctx) == "A"
     ctx.apply_params({"weighting": "None"})
     assert _weighting(ctx) == "None"
 
     ctx.set_weighting_default("A")
-    legacy = {k: v for k, v in saved.items() if k != "weighting"}
-    ctx._apply_preset_values(legacy)
-    # After the Task-6 fix: a preset dict without 'weighting' key must NOT
-    # reset the current weighting (mirrors apply_params guard behaviour).
-    # Old behaviour was `d.get('weighting', 'None')` which reset A → None;
-    # the guard `if 'weighting' in d:` preserves the current selection.
+    leftover = dict(saved, weighting="None")
+    ctx._apply_preset_values(leftover)
+    # Older custom slots may still carry a weighting key; preset apply
+    # ignores it so A does not flip with 频率/均衡/时间/自定义.
     assert _weighting(ctx) == "A"
 
     ctx.set_weighting_default("A")
     ctx.apply_params({})
+    assert _weighting(ctx) == "A"
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(
+            lambda: __import__(
+                "mf4_analyzer.ui.inspector_sections",
+                fromlist=["FFTContextual"],
+            ).FFTContextual(),
+            id="fft",
+        ),
+        pytest.param(
+            lambda: __import__(
+                "mf4_analyzer.ui.inspector_sections",
+                fromlist=["FFTTimeContextual"],
+            ).FFTTimeContextual(),
+            id="fft_time",
+        ),
+        pytest.param(
+            lambda: __import__(
+                "mf4_analyzer.ui.inspector_sections",
+                fromlist=["OrderContextual"],
+            ).OrderContextual(),
+            id="order",
+        ),
+    ],
+)
+def test_custom_preset_slot_does_not_own_weighting(qapp, factory):
+    ctx = factory()
+    ctx.set_weighting_default("A")
+    assert "weighting" not in (ctx.preset_bar._default_params or {})
+
+    ctx.preset_bar._save(4)
+    saved = ctx.preset_bar._read(4)
+    assert saved is not None
+    name, params = saved
+    assert "weighting" not in params
+
+    ctx.set_weighting_default("None")
+    ctx.preset_bar._write(4, name, dict(params, weighting="A"))
+    ctx.preset_bar._load(4)
+    assert _weighting(ctx) == "None"
+
+    ctx.apply_params({"weighting": "A"})
     assert _weighting(ctx) == "A"
 
 
