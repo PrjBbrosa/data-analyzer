@@ -1,0 +1,336 @@
+"""Translate WinWert display windows into ordinary time-domain View proposals.
+
+Qt-free except for constructing ``ViewState`` (no widgets). Record identity
+comes from ``channel_metadata['record_index']``, never from display labels.
+"""
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from typing import Mapping, Sequence
+
+from mf4_analyzer.io.wwt_display import WwtCurveDisplay, WwtWindowRectMm
+from mf4_analyzer.io.wwt_document import WwtDocument, WwtRecord
+from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
+from mf4_analyzer.ui.view_state import ViewState
+
+_UNIT_SUFFIX = re.compile(r"\s*\[[^\]]*\]\s*$")
+_MAX_RECORD_WARN = "duplicate_record_index"
+
+
+@dataclass(frozen=True)
+class RegisteredWwtSources:
+    owner_fid: str
+    fids: tuple[str, ...]
+    record_channels: Mapping[int, tuple[str, str]]
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WwtViewProposal:
+    window_index: int
+    rect_mm: WwtWindowRectMm
+    state: ViewState
+    warnings: tuple[str, ...]
+    line_width_mm: float = 0.2
+
+
+def register_groups_for_test(
+    groups: Sequence[Mapping], *, owner_fid: str = "f1"
+) -> RegisteredWwtSources:
+    """Assign deterministic f1, f2, ... in group order (no Qt widgets)."""
+    digits = "".join(ch for ch in owner_fid if ch.isdigit())
+    prefix = owner_fid[: len(owner_fid) - len(digits)] or "f"
+    start = int(digits or "1")
+    fids: list[str] = []
+    record_channels: dict[int, tuple[str, str]] = {}
+    warnings: list[str] = []
+    for offset, group in enumerate(groups):
+        fid = f"{prefix}{start + offset}"
+        fids.append(fid)
+        metadata = group.get("channel_metadata") or {}
+        for column, meta in metadata.items():
+            if not isinstance(meta, Mapping) or "record_index" not in meta:
+                continue
+            record_index = int(meta["record_index"])
+            if record_index in record_channels:
+                warnings.append(
+                    f"{_MAX_RECORD_WARN}: {record_index}"
+                )
+                continue
+            record_channels[record_index] = (fid, str(column))
+    return RegisteredWwtSources(
+        owner_fid=fids[0] if fids else owner_fid,
+        fids=tuple(fids),
+        record_channels=record_channels,
+        warnings=tuple(warnings),
+    )
+
+
+def build_registered_record_map(
+    groups: Sequence[Mapping], fids: Sequence[str]
+) -> RegisteredWwtSources:
+    if not fids:
+        raise ValueError("registered WWT sources require at least one fid")
+    record_channels: dict[int, tuple[str, str]] = {}
+    warnings: list[str] = []
+    for fid, group in zip(fids, groups):
+        metadata = group.get("channel_metadata") or {}
+        for column, meta in metadata.items():
+            if not isinstance(meta, Mapping) or "record_index" not in meta:
+                continue
+            record_index = int(meta["record_index"])
+            if record_index in record_channels:
+                warnings.append(f"{_MAX_RECORD_WARN}: {record_index}")
+                continue
+            record_channels[record_index] = (str(fid), str(column))
+    return RegisteredWwtSources(
+        owner_fid=str(fids[0]),
+        fids=tuple(str(fid) for fid in fids),
+        record_channels=record_channels,
+        warnings=tuple(warnings),
+    )
+
+
+def attach_wwt_record_store(
+    groups: Sequence[dict], document: WwtDocument
+) -> None:
+    """Share the immutable record tuple on every logical source."""
+    for group in groups:
+        metadata = dict(group.get("source_metadata") or {})
+        metadata["wwt_record_store"] = document.records
+        group["source_metadata"] = metadata
+
+
+def _label_without_unit(label: str) -> str:
+    return _UNIT_SUFFIX.sub("", label or "").strip()
+
+
+def _ylim_key(key: tuple[str, str]) -> str:
+    return json.dumps([key[0], key[1]], ensure_ascii=False, separators=(",", ":"))
+
+
+def _rgb_hex(rgb: tuple[int, int, int]) -> str:
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+
+def _curve_unit(curve: WwtCurveDisplay, records: Sequence[WwtRecord]) -> str:
+    if 0 <= curve.record_index < len(records):
+        unit = (records[curve.record_index].unit or "").strip()
+        if unit:
+            return unit
+    match = re.search(r"\[([^\]]+)\]\s*$", curve.label or "")
+    return (match.group(1) if match else "").strip()
+
+
+def _norm_unit(unit: str) -> str:
+    return (unit or "").strip().casefold()
+
+
+def _range_ok(lo: float, hi: float) -> bool:
+    return (
+        lo == lo and hi == hi  # not NaN
+        and abs(lo) != float("inf") and abs(hi) != float("inf")
+        and hi > lo
+    )
+
+
+def _data_ref(
+    record_index: int,
+    registered: RegisteredWwtSources,
+) -> TimeDataRef:
+    mapped = registered.record_channels.get(record_index)
+    if mapped is not None:
+        fid, channel = mapped
+        return TimeDataRef(kind="channel", fid=fid, channel=channel)
+    return TimeDataRef(
+        kind="wwt_record",
+        fid=registered.owner_fid,
+        record_index=record_index,
+    )
+
+
+def _compatible_axis(curve: WwtCurveDisplay, owner: WwtCurveDisplay, unit: str, owner_unit: str) -> bool:
+    if _norm_unit(unit) != _norm_unit(owner_unit):
+        return False
+    if curve.lo != owner.lo or curve.hi != owner.hi:
+        return False
+    if curve.tick_interval == 0.0 and curve.grid_interval == 0.0:
+        return True
+    return (
+        curve.tick_interval == owner.tick_interval
+        and curve.grid_interval == owner.grid_interval
+    )
+
+
+def _plan_axes(
+    visible: Sequence[WwtCurveDisplay],
+    records: Sequence[WwtRecord],
+    window_index: int,
+) -> tuple[dict[int, str], tuple[str, ...]]:
+    """Map visible Y record_index → axis_id."""
+    selected = [row for row in visible if row.selected]
+    axis_of: dict[int, str] = {}
+    warnings: list[str] = []
+    owners: list[WwtCurveDisplay] = []
+    for row in selected:
+        axis_id = f"window-{window_index}-axis-{row.record_index}"
+        axis_of[row.record_index] = axis_id
+        owners.append(row)
+    for row in visible:
+        if row.record_index in axis_of:
+            continue
+        match = None
+        for owner in owners:
+            if _compatible_axis(
+                row,
+                owner,
+                _curve_unit(row, records),
+                _curve_unit(owner, records),
+            ):
+                match = owner
+                break
+        if match is not None:
+            axis_of[row.record_index] = axis_of[match.record_index]
+        else:
+            axis_id = f"window-{window_index}-axis-{row.record_index}"
+            axis_of[row.record_index] = axis_id
+            warnings.append(
+                f"hidden_axis: window {window_index + 1} record {row.record_index}"
+            )
+    return axis_of, tuple(warnings)
+
+
+def _y_visible_rows(window) -> list[WwtCurveDisplay]:
+    rows = list(window.curves)
+    y_rows = rows[1:] if rows else []
+    return [row for row in y_rows if row.visible]
+
+
+def build_wwt_view_proposals(
+    document: WwtDocument,
+    registered: RegisteredWwtSources,
+) -> list[WwtViewProposal]:
+    records = document.records
+    proposals: list[WwtViewProposal] = []
+    shared_warnings = list(registered.warnings)
+    for window in document.windows:
+        warnings = list(shared_warnings)
+        visible = []
+        for row in _y_visible_rows(window):
+            if row.record_index >= len(records):
+                warnings.append(
+                    f"unknown_record: window {window.index + 1} "
+                    f"record {row.record_index}"
+                )
+                continue
+            if row.factor != 1.0 or row.move != 0.0 or row.log_scale:
+                warnings.append(
+                    f"unsupported_display: window {window.index + 1} "
+                    f"record {row.record_index}"
+                )
+            if row.representation != 0:
+                warnings.append(
+                    f"unsupported_representation: window {window.index + 1} "
+                    f"record {row.record_index}"
+                )
+            visible.append(row)
+        if not visible:
+            continue
+        axis_of, axis_warnings = _plan_axes(visible, records, window.index)
+        warnings.extend(axis_warnings)
+        x_row = window.curves[0] if window.curves else None
+        x_label = x_row.label if x_row is not None else ""
+        name = f"WinWert {window.index + 1} · {_label_without_unit(x_label)}"
+        xlim = None
+        if x_row is not None and _range_ok(x_row.lo, x_row.hi):
+            xlim = (float(x_row.lo), float(x_row.hi))
+        bindings: list[TimeCurveBinding] = []
+        checked: list[tuple[str, str]] = []
+        colors: dict[tuple[str, str], str] = {}
+        ylims: dict[str, tuple[float, float]] = {}
+        native_y: dict[str, dict] = {}
+        for row in visible:
+            y_ref = _data_ref(row.record_index, registered)
+            x_ref = _data_ref(row.x_record_index, registered)
+            color = _rgb_hex(row.color_rgb)
+            axis_id = axis_of[row.record_index]
+            y_range = (float(row.lo), float(row.hi)) if _range_ok(row.lo, row.hi) else (0.0, 1.0)
+            if not _range_ok(row.lo, row.hi):
+                warnings.append(
+                    f"auto_range: window {window.index + 1} record {row.record_index}"
+                )
+            bindings.append(
+                TimeCurveBinding(
+                    binding_id=f"window-{window.index}-record-{row.record_index}",
+                    y_ref=y_ref,
+                    x_ref=x_ref,
+                    display_name=row.label,
+                    unit=_curve_unit(row, records),
+                    color=color,
+                    axis_id=axis_id,
+                    y_range=y_range,
+                    y_tick_interval=row.tick_interval or None,
+                    y_grid_interval=row.grid_interval or None,
+                    line_width_mm=float(window.line_width_mm),
+                    line_style="line",
+                )
+            )
+            if y_ref.kind == "channel" and y_ref.channel:
+                key = (y_ref.fid, y_ref.channel)
+                if key not in checked:
+                    checked.append(key)
+                colors[key] = color
+                if row.selected and _range_ok(row.lo, row.hi):
+                    ylims[_ylim_key(key)] = (float(row.lo), float(row.hi))
+            if axis_id not in native_y and row.selected:
+                native_y[axis_id] = {
+                    "major": row.tick_interval,
+                    "grid": row.grid_interval,
+                    "lo": row.lo,
+                    "hi": row.hi,
+                }
+            elif axis_id not in native_y:
+                native_y[axis_id] = {
+                    "major": row.tick_interval,
+                    "grid": row.grid_interval,
+                    "lo": row.lo,
+                    "hi": row.hi,
+                }
+        native_ticks = {
+            "x": {
+                "major": x_row.tick_interval if x_row is not None else 0.0,
+                "grid": x_row.grid_interval if x_row is not None else 0.0,
+                "label": x_label,
+            },
+            "y": native_y,
+        }
+        state = ViewState(
+            name=name,
+            tab_color="#2d7ff9",
+            attached_file_ids=list(registered.fids),
+            checked=checked,
+            colors=colors,
+            plot_mode="overlay",
+            xlim=xlim,
+            ylims=ylims,
+            axis_opts={
+                "x_axis": {
+                    "mode": "time",
+                    "label": x_label,
+                },
+                "native_ticks": native_ticks,
+            },
+            curve_bindings=bindings,
+        )
+        proposals.append(
+            WwtViewProposal(
+                window_index=window.index,
+                rect_mm=window.rect_mm,
+                state=state,
+                warnings=tuple(dict.fromkeys(warnings)),
+                line_width_mm=float(window.line_width_mm),
+            )
+        )
+    return proposals
