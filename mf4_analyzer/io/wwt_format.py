@@ -3,7 +3,8 @@
 文件布局（全部小端）：0x211 字节文件头（魔数 ``WinWert<版本号>`` + 标题/注释
 char[256] + u16 记录总数），随后是「156 字节记录头 + 内联数据」连续排列。
 ``Zeit`` 记录定义时间轴（无数据区），其后的数据通道从属于最近的 ``Zeit``；
-``DatenFenste2`` 尾块是显示配置，忽略。
+``DatenFenste2`` 尾块是显示配置；正文分组在本模块，完整文档（含全部显示块）
+由 ``wwt_document.parse_wwt_document`` 一次解析。
 
 版本策略：不做版本白名单——实测 200401 版的记录布局与 091293 完全相同，
 硬拒绝会误伤。魔数前缀是 ``WinWert`` 即尝试解析，靠记录级结构验证把关：
@@ -21,10 +22,8 @@ char[256] + u16 记录总数），随后是「156 字节记录头 + 内联数据
 """
 from __future__ import annotations
 import struct
-from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 _MAGIC_PREFIX = b"WinWert"
 _TRAILER_PREFIX = b"DatenFenste"
@@ -96,161 +95,5 @@ def load_wwt_groups(fp):
     ``_MIN_TIMESERIES_SAMPLES``）与 Pars 计算通道跳过并记入
     ``source_metadata['skipped_channels']``。
     """
-    name = Path(fp).name
-    data = Path(fp).read_bytes()
-    size = len(data)
-
-    if size < 15 or not data.startswith(_MAGIC_PREFIX):
-        raise ValueError(f"不是有效的 WWT 文件（缺少 WinWert 魔数）: {name}")
-    version = _cstr(data[:15])[len(_MAGIC_PREFIX):]
-    if size < _HEADER_SIZE:
-        raise ValueError(f"WWT 文件截断/损坏（文件头不完整）: {name}")
-
-    title = _cstr(data[0x00F:0x10F])
-    comment = _cstr(data[0x10F:0x20F])
-    (count,) = struct.unpack_from("<H", data, 0x20F)
-
-    blocks = []          # 每个 Zeit 块: {axis 参数, curve_def, channels: [...]}
-    skipped = []
-    pos = _HEADER_SIZE
-    records_parsed = 0
-    while records_parsed < count:
-        # count 声明数不可靠：尾块提前出现即收尾（记录数可少于 count）
-        if data[pos:pos + len(_TRAILER_PREFIX)] == _TRAILER_PREFIX:
-            break
-        if pos + _REC_HEADER_SIZE > size:
-            raise ValueError(
-                f"WWT 文件截断/损坏: 第 {records_parsed + 1} 条记录头越过文件"
-                f"末尾（偏移 0x{pos:x}）: {name}")
-        tag = _cstr(data[pos:pos + 5])
-        n, _u2 = struct.unpack_from("<IH", data, pos + 5)
-        ch_name = _cstr(data[pos + 0x1b:pos + 0x1b + 40])
-        unit = _cstr(data[pos + 0x43:pos + 0x43 + 17])
-        src_fname = _cstr(data[pos + 0x54:pos + 0x54 + 48])
-        a, b, c = struct.unpack_from("<ddd", data, pos + 0x84)
-        data_pos = pos + _REC_HEADER_SIZE
-
-        if tag not in _TAG_DTYPES:
-            # Pars（计算通道）/ 未知标签：头里没有数据长度字段，逐字节向前
-            # 扫描下一条合法记录头或尾块标记来重同步。扫不到就只能硬错——
-            # 猜大小继续走会让后续所有记录错位。
-            scan = data_pos
-            while scan < size:
-                if (data[scan:scan + len(_TRAILER_PREFIX)] == _TRAILER_PREFIX
-                        or _looks_like_record_header(data, scan)):
-                    break
-                scan += 1
-            else:
-                raise ValueError(
-                    f"WWT 记录解析失败: 偏移 0x{pos:x} 处标签"
-                    f" {data[pos:pos + 5]!r} 未知且无法重同步"
-                    f"（版本 {version}，可能布局不兼容）: {name}")
-            if tag == "Pars":
-                # 数据区开头是 NUL 结尾的公式串，附在名字后便于识别
-                formula = _cstr(data[data_pos:min(scan, data_pos + 256)])
-                skipped.append(
-                    f"{ch_name} (公式: {formula})" if formula else ch_name)
-            else:
-                skipped.append(ch_name or f"<{tag}>")
-            pos = scan
-            records_parsed += 1
-            continue
-
-        dtype = _TAG_DTYPES[tag]
-        dlen = 0 if dtype is None else n * dtype.itemsize
-        if data_pos + dlen > size:
-            raise ValueError(
-                f"WWT 文件截断/损坏: 通道 {ch_name!r} 数据区越过文件末尾"
-                f"（偏移 0x{data_pos:x} + {dlen}B > {size}B）: {name}")
-
-        if tag == "Zeit":
-            blocks.append({"n": n, "dt": b, "t0": c, "channels": [],
-                           "curve_def": n < _MIN_TIMESERIES_SAMPLES})
-        else:
-            if not blocks:
-                raise ValueError(
-                    f"WWT 结构异常: 通道 {ch_name!r} 出现在首个 Zeit 记录之前"
-                    f"（偏移 0x{pos:x}）: {name}")
-            blk = blocks[-1]
-            if blk["curve_def"] or n != blk["n"]:
-                # 短块整块是限值/评价曲线；n 不匹配的是公差带/曲线定义
-                skipped.append(ch_name)
-            else:
-                raw = np.frombuffer(data, dtype=dtype, count=n, offset=data_pos)
-                blk["channels"].append({
-                    "name": ch_name, "unit": unit, "tag": tag,
-                    "a": a, "c": c, "source_filename": src_fname,
-                    "rec_idx": records_parsed + 1,
-                    # 物理值 = raw*a + c（Real 存的已是物理值，此时 a=1 c=0，
-                    # 公式同样成立；a 可为负）
-                    "values": raw.astype(np.float64) * a + c,
-                })
-        pos = data_pos + dlen
-        records_parsed += 1
-
-    # 按时间轴参数合并 Zeit 块（同文件内 double 位级一致，可直接比较）。
-    merged = {}          # (n, dt, t0) -> {"n","dt","t0","channels"}
-    order = []
-    for blk in blocks:
-        if not blk["channels"]:
-            continue     # 曲线定义块 / 没有任何时域通道的块 → 不产出组
-        key = (blk["n"], blk["dt"], blk["t0"])
-        if key not in merged:
-            merged[key] = {"n": blk["n"], "dt": blk["dt"], "t0": blk["t0"],
-                           "channels": []}
-            order.append(key)
-        merged[key]["channels"].extend(blk["channels"])
-
-    smeta_base = {
-        "source_kind": "wwt", "title": title, "comment": comment,
-        "winwert_version": version,
-        "records_declared": count, "records_parsed": records_parsed,
-        "skipped_channels": skipped, "source_filename": name,
-    }
-    groups = []
-    for key in order:
-        blk = merged[key]
-        t = blk["t0"] + np.arange(blk["n"], dtype=np.float64) * blk["dt"]
-        frame = {"Time": t}
-        units = {}
-        cmeta = {}
-        renamed = []
-        for ch in blk["channels"]:
-            # 组内同名消歧：追加文件内记录序号（同 load_hdf 的做法），
-            # 避免后者静默覆盖前者。
-            preferred = ch["name"]
-            col = preferred
-            if col in frame:
-                col = f"{ch['name']} [{ch['rec_idx']}]"
-                while col in frame:
-                    col = f"{col}_"
-                renamed.append({"original": preferred, "renamed": col})
-            frame[col] = ch["values"]
-            units[col] = ch["unit"]
-            cmeta[col] = {
-                "tag": ch["tag"], "unit": ch["unit"],
-                "scale_a": ch["a"], "offset_c": ch["c"],
-                "source_filename": ch["source_filename"],
-                "record_index": ch["rec_idx"],
-            }
-        smeta = dict(smeta_base)
-        smeta["renamed_channels"] = renamed
-        groups.append({
-            "data": pd.DataFrame(frame), "channels": list(frame.keys()),
-            "units": units, "channel_metadata": cmeta,
-            "source_metadata": smeta,
-            "axis_key": key,
-        })
-
-    if not groups:
-        raise ValueError(f"WWT: 没有可导入的时域通道: {name}")
-
-    # 只有一组时不加后缀；多组时用「采样率·点数」区分（如 1000Hz·9182）。
-    for g in groups:
-        n, dt, _t0 = g.pop("axis_key")
-        if len(groups) == 1:
-            g["label_suffix"] = ""
-        else:
-            fs = (1.0 / dt) if dt > 0 else 0.0
-            g["label_suffix"] = f"{fs:.0f}Hz·{n}"
-    return groups
+    from .wwt_document import parse_wwt_document
+    return list(parse_wwt_document(fp).groups)

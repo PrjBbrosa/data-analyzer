@@ -64,9 +64,14 @@ TRAILER_PREFIX = _TRAILER_PREFIX
 
 RECORD_COUNT_OFF = 27
 GLOBAL_X_OFF = 69
+LINE_WIDTH_OFF = 13
+WINDOW_RECT_OFF = 31
+WINDOW_UNIT_SCALE = 20.0
+MAX_RECORD_COUNT = 4096
 
 CURVE_BASE = 171
 CURVE_STRIDE = 283
+CURVE_REPRESENTATION = 24
 CURVE_FROM = 0
 CURVE_TO = 8
 CURVE_X = 18
@@ -113,9 +118,148 @@ class WwtDisplayError(ValueError):
     """显示块结构不符合预期（尾块截断、曲线表越界等）。"""
 
 
+@dataclass(frozen=True)
+class WwtWindowRectMm:
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
+class WwtCurveDisplay:
+    record_index: int
+    x_record_index: int
+    selected: bool
+    visible: bool
+    label: str
+    lo: float
+    hi: float
+    tick_interval: float
+    grid_interval: float
+    color_rgb: tuple[int, int, int]
+    factor: float = 1.0
+    move: float = 0.0
+    log_scale: bool = False
+    representation: int = 0
+
+
+@dataclass(frozen=True)
+class WwtDisplayWindow:
+    index: int
+    rect_mm: WwtWindowRectMm
+    line_width_mm: float
+    curves: tuple[WwtCurveDisplay, ...]
+
+
 def find_trailer(data: bytes) -> int:
     """尾块起点；没有尾块返回 -1。"""
     return data.find(TRAILER_PREFIX)
+
+
+def iter_trailer_offsets(data: bytes) -> list[int]:
+    """文件中全部 ``DatenFenste`` 标记，按出现顺序，不做结构校验。"""
+    offsets: list[int] = []
+    start = 0
+    while True:
+        found = data.find(TRAILER_PREFIX, start)
+        if found < 0:
+            return offsets
+        offsets.append(found)
+        start = found + 1
+
+
+def _table_end(data: bytes, trailer: int) -> int | None:
+    if trailer + RECORD_COUNT_OFF + 4 > len(data):
+        return None
+    count = declared_record_count(data, trailer)
+    if not 0 < count <= MAX_RECORD_COUNT:
+        return None
+    return trailer + CURVE_BASE + count * CURVE_STRIDE
+
+
+def trailer_is_structurally_valid(
+    data: bytes, trailer: int, limit: int
+) -> bool:
+    """曲线表必须完整落在 ``[trailer, limit)`` 内。"""
+    if trailer < 0 or trailer + MIN_TRAILER_LEN > len(data):
+        return False
+    if trailer + WINDOW_RECT_OFF + 8 > limit:
+        return False
+    if trailer + LINE_WIDTH_OFF + 8 > limit:
+        return False
+    table_end = _table_end(data, trailer)
+    return table_end is not None and table_end <= limit
+
+
+def find_trailers(data: bytes) -> list[int]:
+    """全部结构合法的显示块起点，保持文件顺序。"""
+    offsets = iter_trailer_offsets(data)
+    valid: list[int] = []
+    for index, marker in enumerate(offsets):
+        limit = offsets[index + 1] if index + 1 < len(offsets) else len(data)
+        if trailer_is_structurally_valid(data, marker, limit):
+            valid.append(marker)
+    return valid
+
+
+def decode_window_rect(data: bytes, trailer: int) -> WwtWindowRectMm:
+    left, top, right, bottom = struct.unpack_from(
+        "<hhhh", data, trailer + WINDOW_RECT_OFF
+    )
+    return WwtWindowRectMm(
+        left / WINDOW_UNIT_SCALE,
+        -bottom / WINDOW_UNIT_SCALE,
+        (right - left) / WINDOW_UNIT_SCALE,
+        (top - bottom) / WINDOW_UNIT_SCALE,
+    )
+
+
+def decode_line_width_mm(data: bytes, trailer: int) -> float:
+    (width,) = struct.unpack_from("<d", data, trailer + LINE_WIDTH_OFF)
+    return float(width)
+
+
+def decode_display_window(
+    data: bytes, trailer: int, index: int
+) -> WwtDisplayWindow | None:
+    """把一个结构合法的 ``DatenFenste2`` 译成显示窗口 DTO。"""
+    limit = len(data)
+    if not trailer_is_structurally_valid(data, trailer, limit):
+        return None
+    count = declared_record_count(data, trailer)
+    global_x = struct.unpack_from("<H", data, trailer + GLOBAL_X_OFF)[0]
+    curves: list[WwtCurveDisplay] = []
+    for curve in range(count):
+        row = read_curve(data, trailer, curve)
+        if row is None:
+            return None
+        x_ref = row["x_curve"] if row["x_curve"] != 0 else int(global_x)
+        rgb = bytes(row["color_rgb"])
+        representation = struct.unpack_from(
+            "<H", data, curve_offset(trailer, curve) + CURVE_REPRESENTATION
+        )[0]
+        curves.append(
+            WwtCurveDisplay(
+                record_index=curve,
+                x_record_index=int(x_ref),
+                selected=bool(row["selected"]),
+                visible=bool(row["visible"]),
+                label=row["label"],
+                lo=float(row["lo"]),
+                hi=float(row["hi"]),
+                tick_interval=float(row["ticks"]),
+                grid_interval=float(row["grid"]),
+                color_rgb=(int(rgb[0]), int(rgb[1]), int(rgb[2])),
+                representation=int(representation),
+            )
+        )
+    return WwtDisplayWindow(
+        index=index,
+        rect_mm=decode_window_rect(data, trailer),
+        line_width_mm=decode_line_width_mm(data, trailer),
+        curves=tuple(curves),
+    )
 
 
 def curve_offset(trailer: int, curve: int) -> int:

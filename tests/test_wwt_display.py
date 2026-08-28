@@ -221,3 +221,47 @@ def test_bundled_trailer_asset_carries_no_session_text(trailer_asset):
     assert text["title"] == "" and text["comment"] == ""
     assert text["editor"] == "TraceLab"
     assert disp.declared_record_count(trailer_asset, 0) >= 2
+
+
+def test_find_trailers_returns_all_ucan_windows_in_file_order():
+    path = _ROOT / "testdoc" / "WWT" / "UCAN-b6_P779_0007.wwt"
+    if not path.is_file():
+        pytest.fail(f"required sample missing: {path}")
+    data = path.read_bytes()
+    offsets = disp.find_trailers(data)
+    assert len(offsets) == 7
+    assert offsets == sorted(set(offsets))
+    assert [b - a for a, b in zip(offsets, offsets[1:])] == [6114] * 6
+    first = disp.find_trailer(data)
+    assert first == offsets[0]
+    rects = [disp.decode_window_rect(data, offset) for offset in offsets]
+    assert [(r.x, r.y, r.width, r.height) for r in rects] == [
+        (25.0, 65.0, 100.0, 60.0),
+        (41.0, 138.2, 90.0, 60.0),
+        (147.5, 62.5, 50.0, 60.0),
+        (215.5, 62.5, 50.0, 60.0),
+        (147.5, 138.0, 50.0, 60.0),
+        (214.5, 138.0, 50.0, 60.0),
+        (214.5, 138.0, 50.0, 60.0),
+    ]
+    assert [disp.decode_line_width_mm(data, offset) for offset in offsets] == [
+        0.2
+    ] * 7
+
+
+def test_find_trailers_skips_truncated_block_without_hiding_later_valid_one():
+    path = _ROOT / "testdoc" / "WWT" / "UCAN-b6_P779_0007.wwt"
+    if not path.is_file():
+        pytest.fail(f"required sample missing: {path}")
+    src = path.read_bytes()
+    offsets = disp.find_trailers(src)
+    first, second = offsets[0], offsets[1]
+    # Keep the first valid trailer, then plant a truncated marker that cannot
+    # hold its curve table, then keep the remainder of the second trailer.
+    damaged = bytearray(src[:second])
+    damaged.extend(b"DatenFenste2\0" + b"\0" * 40)
+    damaged.extend(src[second:])
+    found = disp.find_trailers(bytes(damaged))
+    assert found[0] == first
+    assert second + (len(damaged) - len(src)) in found
+    assert all(offset != len(src[:second]) for offset in found)
