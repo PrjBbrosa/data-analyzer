@@ -342,6 +342,52 @@ def test_legacy_exact_source_axis_is_cleared_when_its_channel_is_removed():
     }
 
 
+def test_file_and_channel_removal_filters_curve_bindings():
+    from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
+    from mf4_analyzer.ui.view_state import ViewState
+
+    record_binding = TimeCurveBinding(
+        binding_id="r",
+        y_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=18),
+        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=17),
+        display_name="aux",
+        unit="",
+        color="#000000",
+        axis_id="a",
+        y_range=(0.0, 1.0),
+        y_tick_interval=None,
+        y_grid_interval=None,
+        line_width_mm=0.2,
+        line_style="line",
+    )
+    channel_binding = TimeCurveBinding(
+        binding_id="c",
+        y_ref=TimeDataRef(kind="channel", fid="f2", channel="speed"),
+        x_ref=TimeDataRef(kind="channel", fid="f2", channel="Time"),
+        display_name="speed",
+        unit="",
+        color="#000000",
+        axis_id="b",
+        y_range=(0.0, 1.0),
+        y_tick_interval=None,
+        y_grid_interval=None,
+        line_width_mm=0.2,
+        line_style="line",
+    )
+    state = ViewState(
+        name="Native",
+        tab_color="#2d7ff9",
+        attached_file_ids=["f1", "f2"],
+        curve_bindings=[record_binding, channel_binding],
+    )
+    MainWindow._filter_time_view_state_for_removed_channels(
+        state, {("f2", "speed")}
+    )
+    assert state.curve_bindings == [record_binding]
+    MainWindow._filter_time_view_state_for_removed_fids(state, {"f1"})
+    assert state.curve_bindings == []
+
+
 def test_config_combo_selection_does_not_change_checked_or_replot(
     qtbot, qapp, loaded_csv, monkeypatch
 ):

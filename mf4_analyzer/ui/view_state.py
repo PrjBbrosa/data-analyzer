@@ -20,6 +20,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
+from .time_curve_bindings import TimeCurveBinding, parse_curve_bindings
 from .view_overlay_state import normalize_cursor_placement, normalize_remarks
 
 # Default per-manager View cap. The real cap is per ViewManager instance
@@ -61,6 +62,7 @@ class ViewState:
     view_id: str = field(default_factory=lambda: str(uuid4()))
     remarks: list = field(default_factory=list)
     cursor_placement: dict | None = None
+    curve_bindings: list[TimeCurveBinding] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -79,6 +81,9 @@ class ViewState:
         data["cursor_placement"] = normalize_cursor_placement(
             self.cursor_placement, cursor_mode=self.cursor_mode
         )
+        data["curve_bindings"] = [
+            binding.to_dict() for binding in self.curve_bindings
+        ]
         return data
 
     @classmethod
@@ -114,6 +119,7 @@ class ViewState:
                 data.get("cursor_placement"),
                 cursor_mode=data.get("cursor_mode", "off"),
             ),
+            curve_bindings=parse_curve_bindings(data.get("curve_bindings")),
         )
 
 

@@ -22,7 +22,7 @@ class SourceUse:
     view_id: str
     view_name: str
     pane_idx: int | None
-    role: str  # attachment | checked | signal | rpm | input | output | overlay_primary | x_axis
+    role: str  # attachment | checked | signal | rpm | input | output | overlay_primary | x_axis | curve_x | curve_y
     fid: str
     channel: str | None = None
 
@@ -71,6 +71,30 @@ def _append_time_persisted_uses(
             fid=target,
             channel=str(overlay[1]),
         ))
+
+    for binding in getattr(state, "curve_bindings", None) or ():
+        x_ref = getattr(binding, "x_ref", None)
+        y_ref = getattr(binding, "y_ref", None)
+        if x_ref is not None and str(getattr(x_ref, "fid", "")) == target:
+            uses.append(SourceUse(
+                domain="time",
+                view_id=view_id,
+                view_name=view_name,
+                pane_idx=None,
+                role="curve_x",
+                fid=target,
+                channel=getattr(x_ref, "channel", None),
+            ))
+        if y_ref is not None and str(getattr(y_ref, "fid", "")) == target:
+            uses.append(SourceUse(
+                domain="time",
+                view_id=view_id,
+                view_name=view_name,
+                pane_idx=None,
+                role="curve_y",
+                fid=target,
+                channel=getattr(y_ref, "channel", None),
+            ))
 
     axis_opts = getattr(state, "axis_opts", None) or {}
     if not isinstance(axis_opts, Mapping):

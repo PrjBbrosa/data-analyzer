@@ -72,6 +72,7 @@ def test_viewstate_defaults_are_empty():
     assert st.axis_opts == {}
     assert st.remarks == []
     assert st.cursor_placement is None
+    assert st.curve_bindings == []
     assert isinstance(st.view_id, str) and st.view_id
 
 

@@ -342,6 +342,14 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
         v["remarks"] = remap_remarks(view.get("remarks"), fid_map)
         # cursor_placement has no fid; keep the payload as copied above.
 
+        from .time_curve_bindings import remap_curve_bindings
+        v["curve_bindings"] = [
+            binding.to_dict()
+            for binding in remap_curve_bindings(
+                view.get("curve_bindings") or [], fid_map
+            )
+        ]
+
         out.append(v)
     return out
 
@@ -452,4 +460,10 @@ def collect_dropped_time_refs(views: list, fid_map: dict) -> list[tuple]:
             fid, channel = item[0], item[1]
             if fid not in fid_map:
                 dropped.append((view_id, fid, channel))
+        from .time_curve_bindings import collect_dropped_binding_refs
+        dropped.extend(
+            collect_dropped_binding_refs(
+                view.get("curve_bindings") or [], fid_map, view_id=view_id
+            )
+        )
     return dropped
