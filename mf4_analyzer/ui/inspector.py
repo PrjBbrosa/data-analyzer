@@ -110,6 +110,7 @@ class Inspector(QWidget):
     frf_view_in_time_requested = pyqtSignal()
     order_time_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
+    xaxis_drop_hint_dismissed = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order'|'fft_time')
     tick_density_changed = pyqtSignal(int, int)
     remark_toggled = pyqtSignal(bool)
@@ -277,6 +278,7 @@ class Inspector(QWidget):
 
     def _wire(self):
         self.top.xaxis_apply_requested.connect(self.xaxis_apply_requested)
+        self.top.xaxis_drop_hint_dismissed.connect(self.xaxis_drop_hint_dismissed)
         self.top.tick_density_changed.connect(self.tick_density_changed)
         self.time_ctx.plot_time_requested.connect(self.plot_time_requested)
         self.fft_ctx.fft_requested.connect(self.fft_requested)

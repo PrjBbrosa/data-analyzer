@@ -25,6 +25,12 @@ ROTATION_START_KEY = "chartHints/rotationStart"
 # left slot simply elides — see chart_stack's bottom hint bar.)
 HINT_MAX_WIDTH = 18
 
+# Longer Inspector copy of ``time.drop_set_xaxis``. The footer discovery
+# slot stays short (HINT_MAX_WIDTH); this sentence sits under the 横坐标
+# 「应用」 button and can be dismissed into that footer.
+XAXIS_DROP_PANEL_HINT = "可直接把通道拖到图底横坐标带，替换当前横坐标"
+XAXIS_DROP_PANEL_DISMISSED_TOAST = "已收藏到左下角帮助提示"
+
 
 def hint_display_width(text):
     """Full-width-glyph count of ``text`` (the bottom-bar length budget).
@@ -972,6 +978,14 @@ _FLASH_TIPS = {
 def flash_tip(tip_id):
     """Return the curated flash-tip text for ``tip_id`` (or None)."""
     return _FLASH_TIPS.get(tip_id)
+
+
+def hint_text(hint_id):
+    """Return the registry text for ``hint_id``, or ``None`` if unknown."""
+    for hint in _HINTS:
+        if hint.id == hint_id:
+            return hint.text
+    return None
 
 
 def all_hints():

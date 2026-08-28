@@ -51,6 +51,7 @@ from ..time_xaxis import (
     spec_from_selection,
 )
 from ..navigator_order import NavigatorOrderState
+from .. import hints
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -1227,6 +1228,9 @@ class MainWindow(
                 lambda _v, s=_drc_section: self._stamp_db_reference_nudge_facts(s)
             )
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
+        self.inspector.xaxis_drop_hint_dismissed.connect(
+            self._on_xaxis_drop_hint_dismissed
+        )
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
         self.chart_stack.tick_density_changed.connect(self._update_all_tick_density_pair)
@@ -2924,6 +2928,15 @@ class MainWindow(
         self._update_combos()
         if self.inspector.top.xaxis_mode() == 'channel':
             self._refresh_xaxis_candidates()
+
+    def _on_xaxis_drop_hint_dismissed(self):
+        """Keep the drag-to-X tip in the footer after the Inspector banner closes."""
+        self.toast(hints.XAXIS_DROP_PANEL_DISMISSED_TOAST, "info")
+        card = self.chart_stack.focused_card()
+        text = hints.hint_text("time.drop_set_xaxis")
+        flash = getattr(card, "flash_hint", None)
+        if callable(flash) and text:
+            flash(text)
 
     def _apply_xaxis(self):
         """应用横坐标设置"""

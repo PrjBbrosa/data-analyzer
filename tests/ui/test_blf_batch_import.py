@@ -21,6 +21,32 @@ def _prepare_batch(tmp_path):
     return dbc, first, second
 
 
+def _capture_message_box_button_layout(qapp, captured):
+    """Measure a dialog's styled button geometry without showing it.
+
+    The Windows Qt ``offscreen`` plugin can access-violate when a
+    ``QMessageBox`` is shown and its event loop is pumped.  Polishing and
+    sizing still exercise the real QSS and button-box layout without entering
+    that native presentation path.
+    """
+
+    def capture(box):
+        box.ensurePolished()
+        box.adjustSize()
+        qapp.processEvents()
+        captured.update({
+            button.text(): (
+                button.fontMetrics().horizontalAdvance(button.text()),
+                button.width(),
+            )
+            for button in box.buttons()
+            if isinstance(button, QPushButton)
+        })
+        return 0
+
+    return capture
+
+
 def test_batch_dbc_is_confirmed_once_and_each_blf_is_read_once(
     qapp, qtbot, tmp_path, monkeypatch,
 ):
@@ -112,24 +138,17 @@ def test_batch_dbc_dialog_actions_fit_without_text_elision(qapp, qtbot, monkeypa
     load_stylesheet(qapp)
     window = MainWindow()
     qtbot.addWidget(window)
-    captured = []
+    captured = {}
 
-    def show_and_capture(box):
-        box.show()
-        qapp.processEvents()
-        captured.extend(box.findChildren(QPushButton))
-        box.hide()
-        return 0
-
-    monkeypatch.setattr(QMessageBox, "exec_", show_and_capture)
+    monkeypatch.setattr(
+        QMessageBox, "exec_", _capture_message_box_button_layout(qapp, captured),
+    )
 
     assert window._ask_blf_batch_dbc_action(["a.blf", "b.blf"]) == "cancel"
-    labels = {button.text(): button for button in captured}
-    assert set(labels) == {"统一选择 DBC", "逐个选择", "取消"}
+    assert set(captured) == {"统一选择 DBC", "逐个选择", "取消"}
     assert all(
-        button.fontMetrics().horizontalAdvance(button.text()) + 28
-        <= button.width()
-        for button in labels.values()
+        text_width + 28 <= button_width
+        for text_width, button_width in captured.values()
     )
 
 
@@ -139,26 +158,19 @@ def test_batch_dbc_mismatch_actions_fit_without_text_elision(qapp, qtbot, monkey
     load_stylesheet(qapp)
     window = MainWindow()
     qtbot.addWidget(window)
-    captured = []
+    captured = {}
 
-    def show_and_capture(box):
-        box.show()
-        qapp.processEvents()
-        captured.extend(box.findChildren(QPushButton))
-        box.hide()
-        return 0
-
-    monkeypatch.setattr(QMessageBox, "exec_", show_and_capture)
+    monkeypatch.setattr(
+        QMessageBox, "exec_", _capture_message_box_button_layout(qapp, captured),
+    )
 
     assert window._ask_blf_batch_mismatch_action(
         Path("unmatched.blf"), ["bus.dbc"], 2,
     ) == "cancel"
-    labels = {button.text(): button for button in captured}
-    assert set(labels) == {"重选当前及后续 DBC", "跳过此文件", "停止剩余导入"}
+    assert set(captured) == {"重选当前及后续 DBC", "跳过此文件", "停止剩余导入"}
     assert all(
-        button.fontMetrics().horizontalAdvance(button.text()) + 28
-        <= button.width()
-        for button in labels.values()
+        text_width + 28 <= button_width
+        for text_width, button_width in captured.values()
     )
 
 
@@ -169,17 +181,18 @@ def test_last_batch_mismatch_mentions_only_current_file(qapp, qtbot, monkeypatch
     qtbot.addWidget(window)
     captured = {}
 
-    def show_and_capture(box):
-        box.show()
+    def capture(box):
+        box.ensurePolished()
+        box.adjustSize()
         qapp.processEvents()
         captured["informative"] = box.informativeText()
         captured["buttons"] = {
-            button.text() for button in box.findChildren(QPushButton)
+            button.text() for button in box.buttons()
+            if isinstance(button, QPushButton)
         }
-        box.hide()
         return 0
 
-    monkeypatch.setattr(QMessageBox, "exec_", show_and_capture)
+    monkeypatch.setattr(QMessageBox, "exec_", capture)
 
     assert window._ask_blf_batch_mismatch_action(
         Path("last.blf"), ["bus.dbc"], 0,
@@ -241,8 +254,9 @@ def test_import_transaction_deduplicates_normalized_paths_with_feedback(
 
     original = tmp_path / "source.csv"
     original.touch()
-    alias = tmp_path / "source-alias.csv"
-    alias.symlink_to(original)
+    # ``realpath`` must collapse a lexical alias without requiring Windows
+    # symlink-creation privilege (often unavailable in CI and user sessions).
+    alias = tmp_path / "normalization-probe" / ".." / original.name
     window = MainWindow()
     qtbot.addWidget(window)
     loaded = []

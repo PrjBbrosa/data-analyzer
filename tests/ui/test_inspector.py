@@ -742,6 +742,69 @@ def test_persistent_top_apply_emits(qapp, qtbot):
         pt.btn_apply_xaxis.click()
 
 
+def test_persistent_top_xaxis_drop_hint_dismisses_and_persists(qapp, qtbot):
+    from PyQt5.QtWidgets import QToolButton
+
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    pt = PersistentTop()
+    qtbot.addWidget(pt)
+    pt.show()
+    qapp.processEvents()
+
+    assert pt._xaxis_drop_hint.isVisible() is True
+    assert pt._xaxis_drop_hint_label.text() == hints.XAXIS_DROP_PANEL_HINT
+    hint_top = pt._xaxis_drop_hint.mapTo(pt, pt._xaxis_drop_hint.rect().topLeft()).y()
+    apply_bottom = pt.btn_apply_xaxis.mapTo(
+        pt, pt.btn_apply_xaxis.rect().bottomLeft()
+    ).y()
+    assert hint_top >= apply_bottom
+    close = pt.findChild(QToolButton, "xaxisDropHintClose")
+    assert close is not None
+
+    with qtbot.waitSignal(pt.xaxis_drop_hint_dismissed, timeout=200):
+        close.click()
+    assert pt._xaxis_drop_hint.isHidden() is True
+
+    again = PersistentTop()
+    qtbot.addWidget(again)
+    again.show()
+    qapp.processEvents()
+    assert again._xaxis_drop_hint.isHidden() is True
+
+
+def test_inspector_relays_xaxis_drop_hint_dismissed(qapp, qtbot):
+    from mf4_analyzer.ui.inspector import Inspector
+
+    inspector = Inspector()
+    qtbot.addWidget(inspector)
+    with qtbot.waitSignal(inspector.xaxis_drop_hint_dismissed, timeout=200):
+        inspector.top.btn_xaxis_drop_hint_close.click()
+    assert inspector.top._xaxis_drop_hint.isHidden() is True
+
+
+def test_dismissing_xaxis_drop_hint_toasts_and_flashes_footer(qapp, qtbot):
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    toast_calls = []
+    flashed = []
+    window.toast = lambda message, level="info": toast_calls.append(
+        (message, level)
+    )
+    window.chart_stack.focused_card().flash_hint = flashed.append
+
+    window.inspector.top.btn_xaxis_drop_hint_close.click()
+    qapp.processEvents()
+
+    assert toast_calls == [(hints.XAXIS_DROP_PANEL_DISMISSED_TOAST, "info")]
+    assert flashed == [hints.hint_text("time.drop_set_xaxis")]
+    assert window.inspector.top._xaxis_drop_hint.isHidden() is True
+
+
 # ---- Task 2.4: TimeContextual ----
 
 def test_time_contextual_plot_button_emits(qapp, qtbot):
@@ -3058,6 +3121,14 @@ def test_time_domain_settings_card_qss_matches_contextual_cards():
     assert "background-color: #ffffff" in text
     assert "border: 1px solid #dbe2eb" in text
     assert "border-radius: 6px" in text
+
+    hint = re.search(
+        r"Inspector\s+QFrame#xaxisDropHint\s*\{([^}]*)\}",
+        qss,
+        flags=re.DOTALL,
+    )
+    assert hint, "xaxisDropHint QSS block missing"
+    assert "background-color: #eff6ff" in hint.group(1)
 
 
 def test_analysis_modes_embed_time_range_in_input_card(qapp, qtbot):

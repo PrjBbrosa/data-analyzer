@@ -1993,6 +1993,33 @@ Inspector QFrame#timeRangeFilterCard {
     padding: 0;
 }
 
+Inspector QFrame#xaxisDropHint {
+    background-color: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 4px;
+}
+
+Inspector QLabel#xaxisDropHintText {
+    color: #1e3a8a;
+    font-size: 11px;
+    background-color: transparent;
+}
+
+Inspector QToolButton#xaxisDropHintClose {
+    background-color: transparent;
+    border: none;
+    border-radius: 3px;
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 0;
+}
+
+Inspector QToolButton#xaxisDropHintClose:hover {
+    background-color: #dbeafe;
+    color: #1e3a8a;
+}
+
 Inspector QWidget#timeRangeToggleRow,
 Inspector QWidget#inspectorPairField {
     background-color: transparent;

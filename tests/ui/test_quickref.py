@@ -23,6 +23,7 @@ def test_quickref_documents_channel_drop_and_navigator_order():
     assert "绘图区" in (join.gesture or "")
     xaxis = next(r for r in gestures.rows if r.desc == "拖通道设为横坐标")
     assert "X 带" in (xaxis.gesture or "")
+    assert "替换" in (xaxis.sub or "")
     assert "占位" in (xaxis.sub or "") or "跳过" in (xaxis.sub or "")
     tree = next(g for g in quickref.QUICKREF if g.title == "通道树（左侧）")
     order = next(r for r in tree.rows if "顺序" in r.desc)

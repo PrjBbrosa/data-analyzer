@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -17,6 +18,7 @@ from PyQt5.QtWidgets import (
 
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
+from .. import hints
 from ..chart_stack.toolbar import DEFAULT_CHART_TICK_DENSITY
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ._helpers import (
@@ -28,6 +30,7 @@ from ._helpers import (
     _pair_field,
     _preset_settings,
     _set_form_row_visible,
+    _settings_bool,
     _AxisRangeHost,
 )
 
@@ -46,8 +49,12 @@ class PersistentTop(QWidget):
     """
 
     _SETTINGS_KEY = "inspector/persistent_top/expanded_v2"
+    _DROP_HINT_DISMISSED_KEY = (
+        "inspector/persistent_top/xaxis_drop_hint_dismissed"
+    )
 
     xaxis_apply_requested = pyqtSignal()
+    xaxis_drop_hint_dismissed = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
     # 「全部」按钮：查看全部（复位到已绘制通道最长全程）；不勾选「使用选定时间范围」。
     # 控件只负责发信号，由 MainWindow 按当前模式复位视口。
@@ -142,6 +149,8 @@ class PersistentTop(QWidget):
         self.btn_apply_xaxis = QPushButton("应用")
         self.btn_apply_xaxis.setProperty("role", "primary")
         fl.addRow(self.btn_apply_xaxis)
+        self._xaxis_drop_hint = self._build_xaxis_drop_hint()
+        fl.addRow(self._xaxis_drop_hint)
         xaxis_card_lay.addWidget(g)
         body_lay.addWidget(self._xaxis_card)
 
@@ -253,6 +262,10 @@ class PersistentTop(QWidget):
         # is wired (so a programmatic reset before show() also lands).
         self._update_xaxis_channel_row_visible(self.combo_xaxis.currentIndex())
         self._update_range_rows_visible()
+        if _settings_bool(
+            _preset_settings(), self._DROP_HINT_DISMISSED_KEY, False,
+        ):
+            self._set_xaxis_drop_hint_visible(False)
 
         # 2026-04-26 R3 紧凑化 fix-3: cap the short numeric fields so toggling
         # 时间范围 / 通道 visibility no longer makes the pane look wider.
@@ -276,6 +289,9 @@ class PersistentTop(QWidget):
         # 「全部」只转发信号；MainWindow 负责按当前模式复位视口。
         self.btn_range_max.clicked.connect(self.max_range_requested)
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
+        self.btn_xaxis_drop_hint_close.clicked.connect(
+            self._dismiss_xaxis_drop_hint
+        )
         self.spin_xt.valueChanged.connect(self._emit_ticks)
         self.spin_yt.valueChanged.connect(self._emit_ticks)
         # Sync label field when user changes channel selection interactively.
@@ -288,6 +304,43 @@ class PersistentTop(QWidget):
         # R3 #6: collapser toggle reveals/hides the inner three groups
         # and persists the choice via QSettings.
         self.btn_collapser.toggled.connect(self._sync_collapser)
+
+    def _build_xaxis_drop_hint(self):
+        """Dismissible tip under 「应用」: drag a channel onto the X band."""
+        frame = QFrame()
+        frame.setObjectName("xaxisDropHint")
+        frame.setAttribute(Qt.WA_StyledBackground, True)
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(8, 6, 4, 6)
+        lay.setSpacing(4)
+        label = QLabel(hints.XAXIS_DROP_PANEL_HINT)
+        label.setObjectName("xaxisDropHintText")
+        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._xaxis_drop_hint_label = label
+        close_btn = QToolButton()
+        close_btn.setObjectName("xaxisDropHintClose")
+        close_btn.setAutoRaise(True)
+        close_btn.setText("×")
+        close_btn.setFixedSize(18, 18)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setFocusPolicy(Qt.NoFocus)
+        close_btn.setToolTip("关闭此提示")
+        close_btn.setAccessibleName("关闭横坐标拖放提示")
+        self.btn_xaxis_drop_hint_close = close_btn
+        lay.addWidget(label, 1)
+        lay.addWidget(close_btn, 0, Qt.AlignTop)
+        return frame
+
+    def _dismiss_xaxis_drop_hint(self):
+        self._set_xaxis_drop_hint_visible(False)
+        _preset_settings().setValue(self._DROP_HINT_DISMISSED_KEY, True)
+        self.xaxis_drop_hint_dismissed.emit()
+
+    def _set_xaxis_drop_hint_visible(self, visible):
+        _set_form_row_visible(
+            self._xaxis_form, self._xaxis_drop_hint, bool(visible),
+        )
 
     def _sync_collapser(self, expanded):
         """Apply the collapser state to the body widget and arrow icon,

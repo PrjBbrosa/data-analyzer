@@ -256,6 +256,11 @@ def test_time_drop_hints_stay_in_budget_and_time_scoped():
         assert "拖" in hint.text
     assert "通道树" in found["time.nav_reorder"].text
     assert "画布内不能拖行" in found["time.nav_reorder"].text
+    assert "横坐标" in hints.XAXIS_DROP_PANEL_HINT
+    assert "拖" in hints.XAXIS_DROP_PANEL_HINT
+    assert hints.hint_text("time.drop_set_xaxis") == found["time.drop_set_xaxis"].text
+    assert hints.hint_text("missing.id") is None
+    assert "帮助提示" in hints.XAXIS_DROP_PANEL_DISMISSED_TOAST
 
 
 def test_chart_discovery_queue_excludes_markup_scope():
