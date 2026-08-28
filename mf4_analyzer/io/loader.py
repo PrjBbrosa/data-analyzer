@@ -18,6 +18,7 @@ from .blf_format import (
 )
 from .head_hdf import full_channel_name as head_full_channel_name, parse_head_hdf
 from .wwt_format import load_wwt_groups
+from .wwt_document import load_wwt_document as _load_wwt_document
 from .zfd_format import load_zfd_groups
 from .mat_format import load_mat_groups
 
@@ -787,6 +788,11 @@ class DataLoader:
     def load_wwt(fp):
         """WinWert .wwt：返回与 load_hdf 同形状的 groups 列表。"""
         return load_wwt_groups(fp)
+
+    @staticmethod
+    def load_wwt_document(fp):
+        """WinWert .wwt：正文分组 + 显示块/公式文档，只读一次文件。"""
+        return _load_wwt_document(fp)
 
     @staticmethod
     def load_zfd(fp):

@@ -1,17 +1,22 @@
 """Literal contracts for WWT record catalogs and all DatenFenste2 windows."""
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from mf4_analyzer.io import wwt_formula
 from mf4_analyzer.io.wwt_display import find_trailers
 from mf4_analyzer.io.wwt_document import (
+    WwtRecord,
     WwtWindowRectMm,
+    load_wwt_document,
     parse_wwt_document,
 )
 from mf4_analyzer.io.wwt_format import load_wwt_groups
+from mf4_analyzer.io.wwt_formula import WwtFormulaError, evaluate_wwt_formulas
 
 _ROOT = Path(__file__).resolve().parent.parent
 UCAN = _ROOT / "testdoc" / "WWT" / "UCAN-b6_P779_0007.wwt"
@@ -135,3 +140,139 @@ def test_truncated_display_block_is_diagnosed_without_dropping_groups(tmp_path):
     assert any("display" in item.lower() or "window" in item.lower()
                or "trailer" in item.lower() or "截断" in item
                for item in doc.diagnostics)
+
+
+def test_ucan_pars_formulas_materialize_on_operand_axis():
+    loaded = load_wwt_document(_require(UCAN))
+    records = {record.index: record for record in loaded.document.records}
+    expected = {
+        4: -(records[7].values - (-records[13].values)),
+        5: -(records[7].values - (-records[15].values)),
+        11: np.abs(records[8].values),
+        12: records[14].values + records[16].values,
+    }
+    assert all(records[index].tag == "Pars" for index in expected)
+    assert records[4].formula == "-(k7-(-k13))"
+    assert records[5].formula == "-(k7-(-k15))"
+    assert records[11].formula == "abs(k8)"
+    assert records[12].formula == "k14+k16"
+    for record_index, values in expected.items():
+        got = records[record_index].values
+        assert got is not None
+        assert got.shape == (15274,)
+        np.testing.assert_allclose(got, values, rtol=0.0, atol=0.0)
+    assert records[4].declared_n == 50000
+
+    main = next(group for group in loaded.groups if len(group["data"]) == 15274)
+    for name, rec_index, formula in (
+        ("Diff.Moment A", 4, "-(k7-(-k13))"),
+        ("Diff.Moment B", 5, "-(k7-(-k15))"),
+        ("Spurstangenkraft", 11, "abs(k8)"),
+        ("Motor torque A+B", 12, "k14+k16"),
+    ):
+        assert name in main["channels"]
+        meta = main["channel_metadata"][name]
+        assert meta["derived"] is True
+        assert meta["record_index"] == rec_index
+        assert meta["formula"] == formula
+        assert meta["formula_refs"]
+    assert main["channels"] == [
+        "Time",
+        "Diff.Moment A",
+        "Diff.Moment B",
+        "Wheel input torque",
+        "Rack Force",
+        "Battary Current",
+        "Wheel input angle",
+        "Spurstangenkraft",
+        "Motor torque A+B",
+        "Sensor torque A",
+        "Motor torque A",
+        "Sensor torque B",
+        "Motor torque B",
+    ]
+
+
+def _synthetic_records(*items: WwtRecord) -> tuple[WwtRecord, ...]:
+    return items
+
+
+@pytest.mark.parametrize(("formula", "code"), [
+    ("__import__('os')", "unsupported_formula"),
+    ("k1.attr", "unsupported_formula"),
+    ("k999 + 1", "missing_formula_ref"),
+])
+def test_formula_rejects_unsafe_or_missing_refs(formula, code):
+    records = _synthetic_records(
+        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None),
+        WwtRecord(1, "Real", 3, "A", "", 1.0, 0.0, 0, np.ones(3), None),
+        WwtRecord(2, "Pars", 3, "Derived", "", 1.0, 0.0, None, None, formula),
+    )
+    with pytest.raises(WwtFormulaError) as exc:
+        evaluate_wwt_formulas(records, strict=True)
+    assert exc.value.code == code
+
+
+def test_formula_cycle_is_rejected():
+    records = _synthetic_records(
+        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None),
+        WwtRecord(1, "Real", 3, "A", "", 1.0, 0.0, 0, np.ones(3), None),
+        WwtRecord(2, "Pars", 3, "A2", "", 1.0, 0.0, None, None, "k3+1"),
+        WwtRecord(3, "Pars", 3, "B2", "", 1.0, 0.0, None, None, "k2+1"),
+    )
+    with pytest.raises(WwtFormulaError) as exc:
+        evaluate_wwt_formulas(records, strict=True)
+    assert exc.value.code == "formula_cycle"
+
+
+def test_formula_axis_mismatch_is_rejected():
+    records = _synthetic_records(
+        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None),
+        WwtRecord(1, "Real", 3, "A", "", 1.0, 0.0, 0, np.ones(3), None),
+        WwtRecord(2, "Zeit", 3, "Time2", "s", 1.0, 0.0, 2, np.arange(3.0), None),
+        WwtRecord(3, "Real", 3, "B", "", 1.0, 0.0, 2, np.ones(3), None),
+        WwtRecord(4, "Pars", 3, "Derived", "", 1.0, 0.0, None, None, "k1+k3"),
+    )
+    with pytest.raises(WwtFormulaError) as exc:
+        evaluate_wwt_formulas(records, strict=True)
+    assert exc.value.code == "formula_axis_mismatch"
+
+
+def test_formula_shape_mismatch_does_not_truncate():
+    left = np.arange(3.0)
+    right = np.arange(4.0)
+    records = _synthetic_records(
+        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None),
+        WwtRecord(1, "Real", 3, "A", "", 1.0, 0.0, 0, left, None),
+        WwtRecord(2, "Real", 4, "B", "", 1.0, 0.0, 0, right, None),
+        WwtRecord(3, "Pars", 3, "Derived", "", 1.0, 0.0, None, None, "k1+k2"),
+    )
+    with pytest.raises(WwtFormulaError) as exc:
+        evaluate_wwt_formulas(records, strict=True)
+    assert exc.value.code == "formula_shape_mismatch"
+    assert "3" in exc.value.detail and "4" in exc.value.detail
+    updated, _ = evaluate_wwt_formulas(records, strict=False)
+    assert updated[3].values is None
+    np.testing.assert_array_equal(left, np.arange(3.0))
+    np.testing.assert_array_equal(right, np.arange(4.0))
+
+
+def test_formula_no_finite_values_is_rejected():
+    records = _synthetic_records(
+        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None),
+        WwtRecord(1, "Real", 3, "A", "", 1.0, 0.0, 0, np.zeros(3), None),
+        WwtRecord(2, "Pars", 3, "Derived", "", 1.0, 0.0, None, None, "k1/0"),
+    )
+    with pytest.raises(WwtFormulaError) as exc:
+        evaluate_wwt_formulas(records, strict=True)
+    assert exc.value.code == "formula_no_finite_values"
+
+
+def test_wwt_formula_module_never_uses_eval_or_exec():
+    tree = ast.parse(Path(wwt_formula.__file__).read_text(encoding="utf-8"))
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert not ({"eval", "exec", "compile"} & called)

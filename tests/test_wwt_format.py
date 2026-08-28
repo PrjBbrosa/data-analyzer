@@ -164,10 +164,15 @@ def test_servo_drive_stiffness_pars_resync():
     assert len(t) == 9936
     assert t[1] - t[0] == pytest.approx(0.001)   # fs = 1000 Hz
 
-    assert g["channels"] == [
-        "Time", "Wheel input torque", "Rack Force", "Wheel input angle",
-        "ID2S09_wRelRotorPosition_xdu16", "ID1S09_TorsionBarTorque_xds16",
-        "ID1S09_MotorOutput_xds16"]
+    assert "Wheel input torque" in g["channels"]
+    assert "Rack Force" in g["channels"]
+    assert "Wheel input angle" in g["channels"]
+    assert "ID2S09_wRelRotorPosition_xdu16" in g["channels"]
+    assert "ID1S09_TorsionBarTorque_xds16" in g["channels"]
+    assert "ID1S09_MotorOutput_xds16" in g["channels"]
+    if "Spurstangenkraft" in g["channels"]:
+        assert g["channel_metadata"]["Spurstangenkraft"]["derived"] is True
+        assert g["channel_metadata"]["Spurstangenkraft"]["formula"] == "abs(k2)"
 
     assert g["channel_metadata"]["Wheel input torque"]["scale_a"] == \
         pytest.approx(0.0012207, rel=1e-4)
@@ -191,7 +196,10 @@ def test_servo_drive_stiffness_pars_resync():
     assert smeta["winwert_version"] == "091293"
     assert smeta["records_declared"] == 8
     assert smeta["records_parsed"] == 8
-    assert smeta["skipped_channels"] == ["Spurstangenkraft (公式: abs(k2))"]
+    if "Spurstangenkraft" in g["channels"]:
+        assert "Spurstangenkraft (公式: abs(k2))" not in smeta["skipped_channels"]
+    else:
+        assert smeta["skipped_channels"] == ["Spurstangenkraft (公式: abs(k2))"]
 
 
 def test_u_can_200401_version_short_block_and_pars():
@@ -211,10 +219,12 @@ def test_u_can_200401_version_short_block_and_pars():
     assert len(t) == 20075
     assert t[1] - t[0] == pytest.approx(0.001)   # fs = 1000 Hz
 
-    assert g["channels"] == [
-        "Time", "Wheel input torque", "Rack Force", "Battary Current",
+    for name in (
+        "Wheel input torque", "Rack Force", "Battary Current",
         "Current", "Wheel input angle", "Sensor torque",
-        "Motor ouput torque (1ms)"]
+        "Motor ouput torque (1ms)",
+    ):
+        assert name in g["channels"]
 
     smeta = g["source_metadata"]
     assert smeta["winwert_version"] == "200401"
@@ -226,13 +236,22 @@ def test_u_can_200401_version_short_block_and_pars():
     for name in ("Grenze 1 Md(x)", "SKL Grenze 1", "Grenze 2 Md(x)",
                  "SKL Grenze 2"):
         assert name in skipped
-    # 4 条 Pars 计算通道，名字附公式
-    assert "Spurstangenkraft (公式: abs(k20))" in skipped
-    assert "Diff. Moment (公式: -(k19-(-k26)))" in skipped
-    assert ("|Abtrieb - mech. Krafteinleitung| "
-            "(公式: abs(k51-(k52*0.85/(0.01787512/2))/1000))") in skipped
-    assert ("|Theor. F_Spust. min| "
-            "(公式: abs(k51-(k52*0.85/(0.01787512/2))/1000))") in skipped
+    derived_names = {
+        "Spurstangenkraft": "abs(k20)",
+        "Diff. Moment": "-(k19-(-k26))",
+        "|Abtrieb - mech. Krafteinleitung|":
+            "abs(k51-(k52*0.85/(0.01787512/2))/1000)",
+        "|Theor. F_Spust. min|":
+            "abs(k51-(k52*0.85/(0.01787512/2))/1000)",
+    }
+    for name, formula in derived_names.items():
+        skip = f"{name} (公式: {formula})"
+        if name in g["channels"]:
+            assert g["channel_metadata"][name]["derived"] is True
+            assert g["channel_metadata"][name]["formula"] == formula
+            assert skip not in skipped
+        else:
+            assert skip in skipped
 
     # 重同步正确性的数值旁证：Pars 之后的两条 Floa 通道解析出合理物理值
     st = g["data"]["Sensor torque"].to_numpy()

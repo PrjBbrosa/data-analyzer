@@ -95,5 +95,5 @@ def load_wwt_groups(fp):
     ``_MIN_TIMESERIES_SAMPLES``）与 Pars 计算通道跳过并记入
     ``source_metadata['skipped_channels']``。
     """
-    from .wwt_document import parse_wwt_document
-    return list(parse_wwt_document(fp).groups)
+    from .wwt_document import load_wwt_document
+    return list(load_wwt_document(fp).groups)

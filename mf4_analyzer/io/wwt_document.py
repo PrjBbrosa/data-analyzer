@@ -31,8 +31,10 @@ __all__ = [
     "WwtCurveDisplay",
     "WwtDisplayWindow",
     "WwtDocument",
+    "WwtLoadResult",
     "WwtRecord",
     "WwtWindowRectMm",
+    "load_wwt_document",
     "parse_wwt_document",
 ]
 
@@ -62,6 +64,12 @@ class WwtDocument:
     diagnostics: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class WwtLoadResult:
+    groups: tuple[dict, ...]
+    document: WwtDocument
+
+
 def _freeze_array(values: np.ndarray) -> np.ndarray:
     out = np.asarray(values, dtype=np.float64)
     if out.ndim != 1:
@@ -82,13 +90,16 @@ def _scan_next_boundary(data: bytes, data_pos: int, size: int) -> int:
     return -1
 
 
-def _append_zeit_block(blocks: list[dict], n: int, dt: float, t0: float) -> None:
+def _append_zeit_block(
+    blocks: list[dict], n: int, dt: float, t0: float, zeit_index: int
+) -> None:
     blocks.append({
         "n": n,
         "dt": dt,
         "t0": t0,
         "channels": [],
         "curve_def": n < _MIN_TIMESERIES_SAMPLES,
+        "zeit_index": zeit_index,
     })
 
 
@@ -111,10 +122,12 @@ def _materialize_groups(
         key = (blk["n"], blk["dt"], blk["t0"])
         if key not in merged:
             merged[key] = {
-                "n": blk["n"], "dt": blk["dt"], "t0": blk["t0"], "channels": [],
+                "n": blk["n"], "dt": blk["dt"], "t0": blk["t0"],
+                "channels": [], "zeit_indices": [],
             }
             order.append(key)
         merged[key]["channels"].extend(blk["channels"])
+        merged[key]["zeit_indices"].append(blk["zeit_index"])
 
     smeta_base = {
         "source_kind": "wwt", "title": title, "comment": comment,
@@ -148,6 +161,7 @@ def _materialize_groups(
             }
         smeta = dict(smeta_base)
         smeta["renamed_channels"] = renamed
+        smeta["zeit_record_indices"] = tuple(blk["zeit_indices"])
         groups.append({
             "data": pd.DataFrame(frame), "channels": list(frame.keys()),
             "units": units, "channel_metadata": cmeta,
@@ -256,7 +270,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                 np.asarray(c, dtype=np.float64)
                 + np.arange(n, dtype=np.float64) * b
             )
-            _append_zeit_block(blocks, n, float(b), float(c))
+            _append_zeit_block(blocks, n, float(b), float(c), rec_index)
         else:
             if not blocks:
                 raise ValueError(
@@ -279,7 +293,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                 blk["channels"].append({
                     "name": ch_name, "unit": unit, "tag": tag,
                     "a": a, "c": c, "source_filename": src_fname,
-                    "rec_idx": rec_index + 1,
+                    "rec_idx": rec_index,
                     "values": physical,
                 })
         records.append(WwtRecord(
@@ -351,3 +365,110 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
         windows=tuple(windows),
         diagnostics=tuple(diagnostics),
     )
+
+
+def _copy_groups(groups: tuple[dict, ...] | list[dict]) -> list[dict]:
+    copied: list[dict] = []
+    for group in groups:
+        smeta = dict(group["source_metadata"])
+        smeta["skipped_channels"] = list(smeta.get("skipped_channels") or [])
+        smeta["renamed_channels"] = list(smeta.get("renamed_channels") or [])
+        copied.append({
+            "data": group["data"].copy(),
+            "channels": list(group["channels"]),
+            "units": dict(group["units"]),
+            "channel_metadata": {
+                key: dict(value)
+                for key, value in group["channel_metadata"].items()
+            },
+            "source_metadata": smeta,
+            "label_suffix": group.get("label_suffix", ""),
+        })
+    return copied
+
+
+def _formula_skip_text(record: WwtRecord) -> str:
+    if record.formula:
+        return f"{record.name} (公式: {record.formula})"
+    return record.name
+
+
+def _unique_column(frame_cols: set[str], name: str, record_index: int) -> str:
+    col = name
+    if col not in frame_cols:
+        return col
+    col = f"{name} [{record_index}]"
+    while col in frame_cols:
+        col = f"{col}_"
+    return col
+
+
+def _inject_derived_channels(
+    groups: list[dict], records: tuple[WwtRecord, ...]
+) -> list[dict]:
+    from .wwt_formula import formula_channel_metadata, formula_references
+
+    derived = [
+        rec for rec in records
+        if rec.tag == "Pars" and rec.values is not None
+    ]
+    materialized_skip = {_formula_skip_text(rec) for rec in derived}
+    for group in groups:
+        skipped = group["source_metadata"]["skipped_channels"]
+        group["source_metadata"]["skipped_channels"] = [
+            item for item in skipped if item not in materialized_skip
+        ]
+
+    zeit_to_group: dict[int, dict] = {}
+    for group in groups:
+        for zeit_index in group["source_metadata"].get("zeit_record_indices", ()):
+            zeit_to_group[int(zeit_index)] = group
+
+    for rec in derived:
+        group = zeit_to_group.get(rec.axis_record) if rec.axis_record is not None else None
+        if group is None or rec.values is None:
+            continue
+        if int(rec.values.shape[0]) != len(group["data"]):
+            continue
+        col = _unique_column(
+            set(group["data"].columns), rec.name, rec.index
+        )
+        if col != rec.name:
+            group["source_metadata"]["renamed_channels"].append(
+                {"original": rec.name, "renamed": col}
+            )
+        group["data"][col] = rec.values
+        group["units"][col] = rec.unit
+        group["channel_metadata"][col] = formula_channel_metadata(
+            rec, formula_references(rec)
+        )
+
+    for group in groups:
+        others = [name for name in group["data"].columns if name != "Time"]
+        others.sort(
+            key=lambda name: group["channel_metadata"][name]["record_index"]
+        )
+        ordered = ["Time"] + others if "Time" in group["data"].columns else others
+        group["channels"] = ordered
+        group["data"] = group["data"][ordered]
+    return groups
+
+
+def load_wwt_document(fp: str | Path) -> WwtLoadResult:
+    """Parse a WWT file and materialize supported ``Pars`` channels."""
+    from .wwt_formula import evaluate_wwt_formulas
+
+    parsed = parse_wwt_document(fp)
+    records, formula_diagnostics = evaluate_wwt_formulas(
+        parsed.records, strict=False
+    )
+    groups = _inject_derived_channels(_copy_groups(parsed.groups), records)
+    document = WwtDocument(
+        path=parsed.path,
+        version=parsed.version,
+        records=records,
+        groups=tuple(groups),
+        windows=parsed.windows,
+        diagnostics=parsed.diagnostics + formula_diagnostics,
+    )
+    return WwtLoadResult(groups=tuple(groups), document=document)
