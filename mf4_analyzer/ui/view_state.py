@@ -43,6 +43,25 @@ _PALETTE = [
 ChannelKey = tuple[str, str]
 
 
+def is_reusable_blank_view(state: "ViewState") -> bool:
+    """True for an untouched initial time View that import may replace."""
+    if state.attached_file_ids or state.checked or state.hidden_channels:
+        return False
+    if state.curve_bindings or state.remarks or state.cursor_placement:
+        return False
+    if state.xlim is not None or state.ylims:
+        return False
+    if state.cursor_mode != "off" or state.plot_mode != "subplot":
+        return False
+    if state.overlay_primary is not None:
+        return False
+    axis_opts = state.axis_opts or {}
+    return not any(
+        key not in {"tick_density"} and bool(axis_opts.get(key))
+        for key in axis_opts
+    )
+
+
 @dataclass
 class ViewState:
     name: str
@@ -200,6 +219,44 @@ class ViewManager(QObject):
         if not self._is_valid_index(idx):
             raise IndexError(idx)
         return self.views[idx]
+
+    def insert_states(
+        self,
+        states: list[ViewState],
+        *,
+        reuse_blank: bool,
+        active_offset: int = 0,
+    ) -> list[int]:
+        """Insert ``states`` in one mutation and emit ``views_changed`` once.
+
+        Capacity is checked before any mutation. ``-1`` is never returned for
+        a partial insert: either every kept state is committed, or nothing is.
+        """
+        incoming = list(states or [])
+        if not incoming:
+            return []
+        reusable = 1 if reuse_blank and self.views else 0
+        available = self.max_views - len(self.views) + reusable
+        if available <= 0:
+            return []
+        incoming = incoming[:available]
+        indexes: list[int] = []
+        start = 0
+        if reusable:
+            self.views[0] = incoming[0]
+            indexes.append(0)
+            start = 1
+        for state in incoming[start:]:
+            self.views.append(state)
+            indexes.append(len(self.views) - 1)
+        self.views_changed.emit()
+        if indexes:
+            target = indexes[max(0, min(int(active_offset), len(indexes) - 1))]
+            if target == self.active:
+                self.active_changed.emit(target)
+            else:
+                self.set_active(target)
+        return indexes
 
     def new_view(self, *, activate: bool = True) -> int:
         """Append a fresh View and, normally, make it active.

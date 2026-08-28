@@ -16,6 +16,13 @@ _AXIS_GROUP_COLORS = (
 
 def axis_group_color(group_id):
     """返回 ``group_id``（1 基）对应的组色，循环使用。非正数回退首色。"""
-    if not group_id or int(group_id) < 1:
+    try:
+        index = int(group_id)
+    except (TypeError, ValueError):
+        digest = 0
+        for char in str(group_id):
+            digest = (digest * 33 + ord(char)) & 0xFFFFFFFF
+        index = (digest % len(_AXIS_GROUP_COLORS)) + 1
+    if not group_id or index < 1:
         return _AXIS_GROUP_COLORS[0]
-    return _AXIS_GROUP_COLORS[(int(group_id) - 1) % len(_AXIS_GROUP_COLORS)]
+    return _AXIS_GROUP_COLORS[(index - 1) % len(_AXIS_GROUP_COLORS)]

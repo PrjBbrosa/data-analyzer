@@ -321,6 +321,8 @@ class MainWindow(
         )
         from .ultraview_coordinator import UltraViewCoordinator
         self._ultraview = UltraViewCoordinator(self, parent=self)
+        from .wwt_import_coordinator import WwtImportCoordinator
+        self._wwt_import = WwtImportCoordinator(self)
         self._init_drop_import()
         self._connect()
 

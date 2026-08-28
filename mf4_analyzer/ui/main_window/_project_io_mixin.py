@@ -798,13 +798,21 @@ class ProjectIOMixin:
                 return
             elif ext == '.wwt':
                 report(-1.0, "读取 WWT")
-                groups = DataLoader.load_wwt(fp)
+                from ..view_state import is_reusable_blank_view
+                reuse_blank = bool(
+                    self.view_manager.views
+                    and is_reusable_blank_view(self.view_manager.get(0))
+                )
+                loaded = DataLoader.load_wwt_document(fp)
+                groups = list(loaded.groups)
+                before = set(self.files)
                 for g in groups:
                     self._register_file_data(
                         fp, g["data"], g["channels"], g["units"],
                         source_metadata=g["source_metadata"],
                         channel_metadata=g["channel_metadata"],
                         label_suffix=g["label_suffix"])
+                new_fids = [fid for fid in self.files if fid not in before]
                 self._update_info()
                 announce_loaded(
                     f"✅ 已加载 WWT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
@@ -812,6 +820,10 @@ class ProjectIOMixin:
                 )
                 self._toast_io_load_diagnostics(
                     *(g.get("source_metadata") for g in groups))
+                coordinator = getattr(self, "_wwt_import", None)
+                offer = getattr(coordinator, "offer_layout", None)
+                if callable(offer) and not getattr(self, "_restoring_project", False):
+                    offer(loaded.document, new_fids, reuse_blank=reuse_blank)
                 return
             elif ext == '.zfd':
                 report(-1.0, "读取 ZFD")
