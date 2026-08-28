@@ -2455,6 +2455,7 @@ class MainWindow(
             self._view_bridge.capture_controls_into(state, self, canvas)
             axis_opts = dict(state.axis_opts or {})
             axis_opts['tick_density'] = {'x': int(xt), 'y': int(yt)}
+            axis_opts.pop('native_ticks', None)
             state.axis_opts = axis_opts
         # M5/M11: canvas_fft (PgLineCanvas) and canvas_order
         # (PgHeatmapCanvas) are pyqtgraph widgets — no ``fig``/``draw_idle``.
@@ -4150,8 +4151,40 @@ class MainWindow(
 
         eff_groups = self.channel_list.checked_axis_groups()
         result = TimePlotBuildResult()
+        binding_consumed: set[tuple[str, str]] = set()
+        active_state = None
+        if hasattr(self, "view_manager"):
+            try:
+                active_state = self.view_manager.get(self.view_manager.active)
+            except Exception:
+                active_state = None
+        bindings = list(getattr(active_state, "curve_bindings", None) or [])
+        if bindings:
+            from ..time_curve_bindings import bound_time_plot_rows
+            from ..time_xaxis import TimePlotIssue as PayloadIssue
+            bind_rows, bind_issues, binding_consumed = bound_time_plot_rows(
+                bindings,
+                getattr(self, "files", {}) or {},
+                range_lo=range_lo if range_enabled else None,
+                range_hi=range_hi if range_enabled else None,
+            )
+            result.rows.extend(bind_rows)
+            for issue in bind_issues:
+                result.issues.append(PayloadIssue(
+                    code=issue.code,
+                    source_fid=str(issue.binding_id or ""),
+                    source_label=str(issue.binding_id or ""),
+                    target_channel=str(issue.binding_id or ""),
+                    x_channel="",
+                    detail=issue.detail,
+                ))
+            for key in binding_consumed:
+                result.attempted_channel_keys.add(key)
+                result.successful_channel_keys.add(key)
         channel_work = {}
         for fid, ch, _color in checked:
+            if (fid, ch) in binding_consumed:
+                continue
             result.attempted_channel_keys.add((fid, ch))
             fd = self.channel_list.get_file_data(fid)
             if fd is None or ch not in fd.data.columns:
@@ -4230,6 +4263,8 @@ class MainWindow(
 
         report_progress()
         for fid, ch, color in checked:
+            if (fid, ch) in binding_consumed:
+                continue
             fd = self.channel_list.get_file_data(fid)
             source_label = str(
                 getattr(fd, 'short_name', '') or fid

@@ -75,6 +75,7 @@ class OverlayAxisManager(_CanvasBackref):
         "_overlay_view_sync_conns",
         "_overlay_divisions",
         "_overlay_grid_lines",
+        "_native_line_width_px",
     })
 
     _delegate_names = frozenset({
@@ -127,6 +128,7 @@ class OverlayAxisManager(_CanvasBackref):
         self._overlay_de_emphasised_alpha = 0.42
         self._overlay_pick_radius_px = 12.0
         self._overlay_axis_column_spacing = 12
+        self._native_line_width_px = {}
         self._overlay_y_drag_start = None
         self._overlay_dragging = False
         self._snap_anim = None
@@ -346,7 +348,10 @@ class OverlayAxisManager(_CanvasBackref):
                 pixel_width=initial_width,
                 is_monotonic=is_monotonic,
             )
-        pen = pg.mkPen(color=color, width=self._overlay_default_lw)
+        width = float(
+            (self._native_line_width_px or {}).get(ck, self._overlay_default_lw)
+        )
+        pen = pg.mkPen(color=color, width=width)
         primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
         target_vb = axis_handle.view_box
         if target_vb is not None and target_vb is not primary_vb:

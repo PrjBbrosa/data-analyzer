@@ -321,3 +321,75 @@ def resolve_time_curve_binding(
             binding.binding_id,
         )
     return x_values, y_values, None
+
+
+def _apply_acquisition_mask(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    owner: Any,
+    range_lo: float | None,
+    range_hi: float | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if range_lo is None or range_hi is None:
+        return x_values, y_values
+    time_axis = getattr(owner, "time_array", None)
+    if time_axis is None:
+        return x_values, y_values
+    time_axis = np.asarray(time_axis)
+    if time_axis.shape != y_values.shape:
+        return x_values, y_values
+    mask = (time_axis >= range_lo) & (time_axis <= range_hi)
+    return x_values[mask], y_values[mask]
+
+
+def bound_time_plot_rows(
+    bindings: Sequence[TimeCurveBinding],
+    files: Mapping[str, Any],
+    *,
+    range_lo: float | None = None,
+    range_hi: float | None = None,
+) -> tuple[list, list[TimePlotIssue], set[tuple[str, str]]]:
+    """Resolve bindings to TimeDomain row tuples in binding order."""
+    rows: list = []
+    issues: list[TimePlotIssue] = []
+    consumed: set[tuple[str, str]] = set()
+    for binding in bindings or ():
+        x_values, y_values, issue = resolve_time_curve_binding(binding, files)
+        if issue is not None:
+            issues.append(issue)
+            continue
+        assert x_values is not None and y_values is not None
+        native_xy = (
+            binding.x_ref.kind == _WWT_RECORD
+            or binding.y_ref.kind == _WWT_RECORD
+        )
+        owner_fid = binding.y_ref.fid
+        owner = files.get(owner_fid)
+        if not native_xy and owner is not None:
+            x_values, y_values = _apply_acquisition_mask(
+                x_values, y_values, owner, range_lo, range_hi
+            )
+        meta = {
+            "axis_group": binding.axis_id,
+            "native_axis": {
+                "range": binding.y_range,
+                "major": binding.y_tick_interval,
+                "grid": binding.y_grid_interval,
+            },
+            "line_width_mm": binding.line_width_mm,
+        }
+        if native_xy:
+            meta["native_xy_full_range"] = True
+        if binding.y_ref.kind == _CHANNEL and binding.y_ref.channel:
+            consumed.add((binding.y_ref.fid, binding.y_ref.channel))
+        rows.append((
+            binding.display_name,
+            True,
+            x_values,
+            y_values,
+            binding.color,
+            binding.unit,
+            owner_fid,
+            meta,
+        ))
+    return rows, issues, consumed

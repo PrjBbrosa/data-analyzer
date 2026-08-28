@@ -548,6 +548,44 @@ class ViewMixin:
                 int(tick_opts.get('x', default_x)),
                 int(tick_opts.get('y', default_y)),
             )
+            native_ticks = (state.axis_opts or {}).get("native_ticks")
+            if native_ticks:
+                from ..pg_canvas.native_axes import (
+                    apply_native_ticks,
+                    native_tick_levels,
+                )
+                x_spec = native_ticks.get("x") or {}
+                if state.xlim is not None:
+                    x_levels = native_tick_levels(
+                        state.xlim[0], state.xlim[1],
+                        x_spec.get("major"), x_spec.get("grid"),
+                    )
+                    if not x_levels.adaptive:
+                        handles = []
+                        getter = getattr(canvas, "_x_tick_axis_handles", None)
+                        if callable(getter):
+                            handles = list(getter())
+                        else:
+                            handles = list(getattr(canvas, "axes_list", []) or [])
+                        for handle in handles:
+                            axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
+                            if axis is not None:
+                                apply_native_ticks(axis, x_levels)
+                y_specs = list((native_ticks.get("y") or {}).values())
+                y_axes = []
+                for handle in getattr(canvas, "axes_list", []) or []:
+                    axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
+                    if axis is not None:
+                        y_axes.append(axis)
+                for aux in getattr(canvas, "_overlay_aux_axes", []) or []:
+                    y_axes.append(aux)
+                for axis, spec in zip(y_axes, y_specs):
+                    y_levels = native_tick_levels(
+                        spec.get("lo"), spec.get("hi"),
+                        spec.get("major"), spec.get("grid"),
+                    )
+                    if not y_levels.adaptive:
+                        apply_native_ticks(axis, y_levels)
             canvas.settle_view_restore()
             restore_placement = getattr(canvas, "restore_cursor_placement", None)
             if callable(restore_placement):

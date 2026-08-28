@@ -781,6 +781,7 @@ class TimeDomainCanvasPG(QWidget):
         report_progress(0)
         self.disable_interactive_quality()
         self.clear()
+        self._native_line_width_px = {}
 
         # Split primary channels from display companions. A companion row
         # carries an 8th ``meta`` dict with ``companion_of`` set to the
@@ -833,6 +834,19 @@ class TimeDomainCanvasPG(QWidget):
                     companion_visible_by_source[companion_of] = True
                 continue
             axis_group = meta.get("axis_group") if meta else None
+            if meta and meta.get("line_width_mm"):
+                from .native_axes import line_width_px
+                dpi = 96.0
+                logical = getattr(self, "logicalDpiX", None)
+                if callable(logical):
+                    try:
+                        dpi = float(logical()) or 96.0
+                    except Exception:
+                        dpi = 96.0
+                ck = _view_state_channel_key(data_id, name)
+                self._native_line_width_px[ck] = line_width_px(
+                    float(meta["line_width_mm"]), dpi
+                )
             primary = (
                 name, bool(visible), t, sig, color, unit, data_id, axis_group
             )
