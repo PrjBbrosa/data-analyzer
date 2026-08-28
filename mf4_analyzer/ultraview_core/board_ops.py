@@ -931,6 +931,48 @@ def organize_free_grid(board: UltraViewBoardState) -> list[str]:
     return []
 
 
+def apply_native_layout(board: UltraViewBoardState, plan) -> list[str]:
+    """Apply a native layout plan in one Board mutation. No dirty/refresh."""
+    from .native_layout import NativeLayoutPlan
+
+    if not isinstance(plan, NativeLayoutPlan):
+        return [_warn("invalid_native_plan")]
+    warnings = list(plan.warnings)
+    members = membership_set(board)
+    remaining_membership = MAX_BOARD_MEMBERSHIP - len(members)
+    remaining_placed = MAX_PLACED_CARDS - len(board.free_grid)
+    if board.layout_mode != LAYOUT_MODE_FREE_GRID:
+        board.layout_mode = LAYOUT_MODE_FREE_GRID
+    for ref, rect in plan.placed:
+        if ref in members:
+            warnings.append("duplicate_ref")
+            continue
+        if remaining_membership <= 0:
+            warnings.append("membership_limit")
+            _append_unplaced(board, ref)
+            continue
+        if remaining_placed <= 0:
+            warnings.append("placed_limit")
+            _append_unplaced(board, ref)
+            remaining_membership -= 1
+            members.add(ref)
+            continue
+        board.free_grid.append(FreeGridPlacement(ref, rect))
+        members.add(ref)
+        remaining_membership -= 1
+        remaining_placed -= 1
+    for ref in plan.unplaced:
+        if ref in members:
+            continue
+        if remaining_membership <= 0:
+            warnings.append("membership_limit")
+            continue
+        _append_unplaced(board, ref)
+        members.add(ref)
+        remaining_membership -= 1
+    return warnings
+
+
 def _template_grid_rects(layout_id: str) -> list[GridRect]:
     """Frozen conversion map from P0/P1 templates to schema-5 micro-grid."""
     maps: dict[str, list[GridRect]] = {

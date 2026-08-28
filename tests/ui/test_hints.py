@@ -209,6 +209,7 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
         # 58030e4d: landed WWT lossless/compact export; same default-mode
         # discovery pool as custom_action_slot (priority 70 > 50).
         "channel.export_wwt_storage",
+        "file.wwt_native_layout",
         "view.history",
     }
     state = HintState(discovered=frozenset(seen))
@@ -664,3 +665,14 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "固定" in by_id["ultraview.oneshot"].text
     assert "T " in by_id["ultraview.text"].text
     assert "S " in by_id["ultraview.shapes"].text
+
+
+def test_wwt_native_layout_hint_mentions_views_without_pixel_claims():
+    hint = next(
+        item for item in hints.all_hints() if item.id == "file.wwt_native_layout"
+    )
+    joined = hint.text
+    for token in ("WWT", "WinWert", "View"):
+        assert token in joined
+    assert "像素级一致" not in joined
+    assert "全部公式" not in joined

@@ -97,6 +97,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "支持格式",
                 sub="MF4 · MDF · BLF · ASCII · TDMS · WWT · ZFD · MAT · 表格 · HDF · 音视频",
             ),
+            QuickRow(
+                "WWT WinWert 排版",
+                sub="打开后可恢复原生窗口 View、计算通道与 UltraView 布局；不支持的公式或显示选项会警告，不是像素级复刻",
+            ),
             QuickRow("BLF / CANoe ASC 报文解码", sub="需配 DBC；界面写「完整匹配」和/或「抽样解码」，不以估算帧数充精确计数。ASC 回退进度只升不降，100% 只在帧交付后"),
             QuickRow(
                 "把文件加入当前 View",

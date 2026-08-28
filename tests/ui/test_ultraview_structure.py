@@ -88,6 +88,7 @@ FROZEN_STATE_MUTATORS = frozenset(
     {
         "add_ref",
         "apply_free_grid_preset",
+        "apply_native_layout",
         "create_board",
         "delete_board",
         "duplicate_board",

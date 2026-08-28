@@ -22,6 +22,7 @@ from ...ultraview_core.board_ops import (
     active_board,
     add_ref,
     apply_board_placement,
+    apply_native_layout,
     apply_free_grid_preset,
     capture_board_placement,
     create_board,
@@ -283,6 +284,20 @@ class UltraViewWorkspaceController:
             item = free_grid_placement_for(board, ref)
             if item is not None:
                 self._register_pending_auto_aspect(board, ref, item.rect)
+
+    def apply_native_layout_plan(self, plan) -> tuple[str, ...]:
+        """Commit a native layout plan through the single mutation funnel."""
+        if self._inactive():
+            return ()
+        board = active_board(self._workspace)
+        before = self._placement_snapshot(board)
+        warnings = apply_native_layout(board, plan)
+        self._commit_grid_change(board, before, warnings)
+        return tuple(
+            item.ref.view_id
+            for item in board.free_grid
+            if item.ref.section == "time"
+        )
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
         if self._inactive():

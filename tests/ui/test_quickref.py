@@ -463,3 +463,13 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     assert "仍会显示" in existing.sub
     assert "删除" in existing.sub
     assert "尚未提供" not in existing.sub
+
+
+def test_wwt_winwert_layout_row_covers_views_and_ultraview():
+    start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
+    row = next(r for r in start.rows if "WinWert" in r.desc)
+    joined = f"{row.desc} {row.sub}"
+    for token in ("WWT", "WinWert", "View", "UltraView"):
+        assert token in joined
+    assert "像素级一致" not in joined
+    assert "全部公式" not in joined

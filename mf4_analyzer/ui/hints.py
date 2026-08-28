@@ -190,6 +190,13 @@ _HINTS = (
         priority=70,
     ),
     Hint(
+        id="file.wwt_native_layout",
+        text="WWT 可按 WinWert 排版生成 View",
+        surface="discovery",
+        retire_on="wwt_native_layout",
+        priority=65,
+    ),
+    Hint(
         id="chart.right_click_menu",
         text="右键图表 → 查看全部 · 轴范围 · 网格",
         surface="discovery",

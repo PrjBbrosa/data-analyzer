@@ -86,6 +86,9 @@ def test_accept_creates_seven_views_and_reject_keeps_data_only(qapp, tmp_path, m
         return True
 
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
+    monkeypatch.setattr(
+        mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
+    )
     plots = []
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: plots.append("plot"))
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: plots.append("apply"))
@@ -107,6 +110,9 @@ def test_accept_creates_seven_views_and_reject_keeps_data_only(qapp, tmp_path, m
     mw2.show()
     qapp.processEvents()
     monkeypatch.setattr(mw2._wwt_import, "_ask_layout", lambda *a, **k: False)
+    monkeypatch.setattr(
+        mw2._ultraview, "add_time_views_from_native_layout", lambda items: ()
+    )
     before_views = len(mw2.view_manager.views)
     mw2._load_one(str(UCAN))
     qapp.processEvents()
