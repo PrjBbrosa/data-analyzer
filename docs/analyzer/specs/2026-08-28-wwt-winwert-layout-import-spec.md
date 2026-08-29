@@ -7,6 +7,8 @@
   [`2026-08-28-wwt-winwert-layout-import-implementation.md`](../plans/2026-08-28-wwt-winwert-layout-import-implementation.md)
 - 正确性加固计划：
   [`2026-08-28-wwt-import-correctness-followup-plan.md`](../plans/2026-08-28-wwt-import-correctness-followup-plan.md)
+- 第二轮加固（2026-08-29 保真回归与投影边界，已实施，见配套规格）：
+  [`2026-08-29-wwt-import-fidelity-and-projection-hardening-spec.md`](2026-08-29-wwt-import-fidelity-and-projection-hardening-spec.md)
 - 产品范围：TraceLab WWT 导入、时域 View、UltraView、项目保存与恢复
 - 既有相关规格：
   [`2026-08-11-wwt-export-dual-compat-spec.md`](2026-08-11-wwt-export-dual-compat-spec.md)
