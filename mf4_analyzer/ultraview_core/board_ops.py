@@ -938,21 +938,26 @@ def apply_native_layout(board: UltraViewBoardState, plan) -> list[str]:
     if not isinstance(plan, NativeLayoutPlan):
         return [_warn("invalid_native_plan")]
     warnings = list(plan.warnings)
+    if board.layout_mode != LAYOUT_MODE_FREE_GRID:
+        template_to_free_grid(board)
     members = membership_set(board)
     remaining_membership = MAX_BOARD_MEMBERSHIP - len(members)
     remaining_placed = MAX_PLACED_CARDS - len(board.free_grid)
-    if board.layout_mode != LAYOUT_MODE_FREE_GRID:
-        board.layout_mode = LAYOUT_MODE_FREE_GRID
     for ref, rect in plan.placed:
         if ref in members:
             warnings.append("duplicate_ref")
             continue
         if remaining_membership <= 0:
             warnings.append("membership_limit")
-            _append_unplaced(board, ref)
             continue
         if remaining_placed <= 0:
             warnings.append("placed_limit")
+            _append_unplaced(board, ref)
+            remaining_membership -= 1
+            members.add(ref)
+            continue
+        if any(_grid_overlaps(rect, item.rect) for item in board.free_grid):
+            warnings.append(_warn("grid_collision"))
             _append_unplaced(board, ref)
             remaining_membership -= 1
             members.add(ref)

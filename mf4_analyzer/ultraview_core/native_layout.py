@@ -62,15 +62,20 @@ def _grid_overlap(left: GridRect, right: GridRect) -> bool:
 def plan_native_layout(
     items: Sequence[tuple[UltraViewRef, NativeLayoutRect]],
 ) -> NativeLayoutPlan:
-    valid = [
-        (ref, rect) for ref, rect in items
-        if _valid_rect(rect)
-    ]
-    placed: list[tuple[UltraViewRef, GridRect]] = []
+    valid: list[tuple[UltraViewRef, NativeLayoutRect]] = []
     unplaced: list[UltraViewRef] = []
     warnings: list[str] = []
+    invalid_count = 0
+    for ref, rect in items:
+        if _valid_rect(rect):
+            valid.append((ref, rect))
+            continue
+        unplaced.append(ref)
+        invalid_count += 1
+    if invalid_count:
+        warnings.append(f"invalid_rect: {invalid_count}")
     if not valid:
-        return NativeLayoutPlan((), tuple(ref for ref, _ in items), ())
+        return NativeLayoutPlan((), tuple(unplaced), tuple(warnings))
 
     seen_rects: list[NativeLayoutRect] = []
     unique: list[tuple[UltraViewRef, NativeLayoutRect]] = []

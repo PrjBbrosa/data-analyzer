@@ -324,6 +324,8 @@ FROZEN_COORDINATOR_PUBLIC_METHODS = (
     "page",
     "attach",
     "capture_leaving_source",
+    # Returns (placed_view_ids_this_call, warnings), not every time card
+    # already on the Board.
     "add_time_views_from_native_layout",
     "add_from_source_tab",
     "open_source",
