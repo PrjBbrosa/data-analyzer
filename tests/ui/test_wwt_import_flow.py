@@ -435,7 +435,8 @@ def test_record_only_overlap_is_reported_without_raw_code_toast(
     board = mw._ultraview.board
     history = mw._ultraview._workspace_controller.grid_histories[board.board_id]
     assert len(history.undo) == 1
-    assert len(board.free_grid) + len(board.unplaced) == wwt.MULTI_WINDOW_COUNT
+    assert len(board.free_grid) == wwt.MULTI_WINDOW_COUNT
+    assert board.unplaced == []
 
 
 def test_optional_customer_wwt_import_smoke_when_present(qapp, tmp_path, monkeypatch):
