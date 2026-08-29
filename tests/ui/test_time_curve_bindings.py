@@ -339,14 +339,14 @@ def test_unchecking_channel_backed_y_hides_binding(qapp, tmp_path, monkeypatch):
     assert y_key in shown.successful_channel_keys
     bind_rows = [
         row for row in shown.rows
-        if len(row) > 7 and (row[7] or {}).get("native_axis")
+        if len(row) > 7 and (row[7] or {}).get("line_width_mm") is not None
     ]
     assert any(row[6] == y_key[0] for row in bind_rows)
     fd = mw.files[y_key[0]]
     prefixed = fd.get_prefixed_channel(y_key[1])
     matching = [row for row in shown.rows if row[0] == prefixed]
     assert len(matching) == 1
-    assert (matching[0][7] or {}).get("native_axis")
+    assert (matching[0][7] or {}).get("axis_group")
 
 
 def test_missing_record_x_claims_channel_y_without_row():
@@ -417,7 +417,9 @@ def test_record_only_y_plots_without_checked_identity():
     assert result.successful_channel_keys == set()
     np.testing.assert_array_equal(result.rows[0][2], x)
     np.testing.assert_array_equal(result.rows[0][3], y)
-    assert result.rows[0][7]["native_xy_full_range"] is True
+    assert result.rows[0][7]["axis_group"] == binding.axis_id
+    assert "native_xy_full_range" not in result.rows[0][7]
+    assert binding.y_ref.kind == "wwt_record"
 
 
 def test_unclaimed_checked_channel_appends_time_y(qapp, tmp_path, monkeypatch):
@@ -447,7 +449,7 @@ def test_unclaimed_checked_channel_appends_time_y(qapp, tmp_path, monkeypatch):
     )
     bind_rows = [
         row for row in result.rows
-        if len(row) > 7 and (row[7] or {}).get("native_axis")
+        if len(row) > 7 and (row[7] or {}).get("line_width_mm") is not None
     ]
     assert any(row[6] == y_fid for row in bind_rows)
     prefixed_extra = fd.get_prefixed_channel(extra)
@@ -479,6 +481,7 @@ def test_acquisition_mask_aligns_channel_backed_xy():
     np.testing.assert_array_equal(result.rows[0][2], np.array([20.0, 30.0, 40.0]))
     np.testing.assert_array_equal(result.rows[0][3], np.array([2.0, 3.0, 4.0]))
     assert result.rows[0][2].shape == result.rows[0][3].shape
+    assert binding.y_ref.kind == "channel"
     assert "native_xy_full_range" not in result.rows[0][7]
 
 

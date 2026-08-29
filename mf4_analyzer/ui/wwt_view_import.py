@@ -358,14 +358,7 @@ def build_wwt_view_proposals(
                     ylims[_ylim_key((key[0], display_name))] = (
                         float(row.lo), float(row.hi)
                     )
-            if axis_id not in native_y and row.selected:
-                native_y[axis_id] = {
-                    "major": row.tick_interval,
-                    "grid": row.grid_interval,
-                    "lo": row.lo,
-                    "hi": row.hi,
-                }
-            elif axis_id not in native_y:
+            if row.selected and axis_id not in native_y:
                 native_y[axis_id] = {
                     "major": row.tick_interval,
                     "grid": row.grid_interval,

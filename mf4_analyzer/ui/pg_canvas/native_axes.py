@@ -131,3 +131,60 @@ def apply_native_ticks(axis, levels: NativeTickLevels) -> None:
         return
     axis.setStyle(maxTickLevel=1)
     axis.setTicks([list(levels.major), list(levels.grid)])
+
+
+def tag_axis_group(handle, axis_id) -> None:
+    """Stamp ``axis_id`` on a handle and its Y AxisItem for restore lookup."""
+    handle.axis_group = axis_id
+    getter = getattr(handle, "y_axis_item", None)
+    axis = getter() if callable(getter) else None
+    if axis is not None:
+        axis.axis_group = axis_id
+
+
+def y_axis_items_by_id(canvas) -> dict:
+    """Map axis_id → AxisItem from ``axes_list`` handles and overlay aux axes.
+
+    Overlay slots already carry ``axis_group`` as the WWT axis_id. A missing
+    id on either the canvas or the native_y table stays adaptive.
+    """
+    by_id: dict = {}
+    for handle in getattr(canvas, "axes_list", None) or ():
+        axis_id = getattr(handle, "axis_group", None)
+        if axis_id is None:
+            continue
+        getter = getattr(handle, "y_axis_item", None)
+        axis = getter() if callable(getter) else None
+        if axis is not None:
+            by_id[axis_id] = axis
+    overlay = getattr(canvas, "_overlay_axes", None)
+    aux_axes = ()
+    if overlay is not None:
+        aux_axes = (
+            getattr(overlay, "aux_axes", None)
+            or getattr(overlay, "_overlay_aux_axes", None)
+            or ()
+        )
+    if not aux_axes:
+        aux_axes = getattr(canvas, "_overlay_aux_axes", None) or ()
+    for aux in aux_axes:
+        axis_id = getattr(aux, "axis_group", None)
+        if axis_id is None or axis_id in by_id:
+            continue
+        by_id[axis_id] = aux
+    return by_id
+
+
+def apply_native_y_ticks(canvas, native_y) -> None:
+    """Apply owner tick facts by axis_id. Unmatched axes stay adaptive."""
+    axes_by_id = y_axis_items_by_id(canvas)
+    for axis_id, spec in (native_y or {}).items():
+        axis = axes_by_id.get(axis_id)
+        if axis is None or not isinstance(spec, dict):
+            continue
+        y_levels = native_tick_levels(
+            spec.get("lo"), spec.get("hi"),
+            spec.get("major"), spec.get("grid"),
+        )
+        if not y_levels.adaptive:
+            apply_native_ticks(axis, y_levels)

@@ -10,9 +10,14 @@ import pytest
 
 from mf4_analyzer.io.wwt_document import load_wwt_document
 from mf4_analyzer.ui.pg_canvas import native_axes as native_axes_mod
-from mf4_analyzer.ui.pg_canvas.native_axes import line_width_px, native_tick_levels
+from mf4_analyzer.ui.pg_canvas.native_axes import (
+    apply_native_y_ticks,
+    line_width_px,
+    native_tick_levels,
+)
 from mf4_analyzer.ui.time_curve_bindings import bound_time_plot_rows
 from mf4_analyzer.ui.wwt_view_import import (
+    RegisteredWwtSources,
     build_wwt_view_proposals,
     register_groups_for_test,
 )
@@ -280,3 +285,101 @@ def test_yp_bindings_plot_tol_oben_and_measurement_when_customer_sample_present(
     assert str(tol_row[4]).lower() in {"#ff0000", "#f00"}
     assert all(int(row[2].shape[0]) == int(row[3].shape[0]) for row in rows)
     assert ("f1", "Druckstückspiel") in consumed
+    meas = next(
+        binding for binding in view.curve_bindings
+        if "Druckstückspiel" in binding.display_name
+    )
+    assert tol.axis_id == meas.axis_id
+    facts = view.axis_opts["native_ticks"]["y"][meas.axis_id]
+    assert (facts["lo"], facts["hi"]) == (0.0, 0.2)
+    assert facts["major"] == 0.05
+
+
+def _two_axis_proposal(tmp_path):
+    from dataclasses import replace
+
+    from tests._helpers import wwt_factory as wwt
+
+    loaded = load_wwt_document(
+        wwt.measurement_plus_record_only_tolerance(path=tmp_path / "pair.wwt")
+    )
+    window = loaded.document.windows[0]
+    tolerance = next(row for row in window.curves if row.record_index == 5)
+    auxiliary = replace(
+        tolerance,
+        record_index=4,
+        x_record_index=4,
+        label="Aux guide [mm]",
+        selected=False,
+    )
+    second_channel = replace(tolerance, selected=True, lo=0.0, hi=100.0)
+    changed_window = replace(
+        window,
+        curves=tuple(
+            second_channel if row.record_index == 5 else row
+            for row in window.curves
+        ) + (auxiliary,),
+    )
+    document = replace(loaded.document, windows=(changed_window,))
+    registered = RegisteredWwtSources(
+        owner_fid="f1",
+        fids=("f1",),
+        record_channels={
+            1: ("f1", wwt.CHAN_X),
+            2: ("f1", wwt.MEAS_Y),
+            5: ("f1", wwt.TOL_Y),
+        },
+    )
+    proposals = build_wwt_view_proposals(document, registered)
+    assert len(proposals) == 1
+    return proposals[0].state
+
+
+def _major_tick_values(axis):
+    levels = getattr(axis, "_tickLevels", None) or ()
+    if not levels:
+        return ()
+    return tuple(value for value, _label in levels[0])
+
+
+def test_native_y_ticks_pair_by_axis_id_when_leading_binding_is_omitted(qapp, tmp_path):
+    """Omitting the first channel-backed row must not zip-shift owner ticks."""
+    from PyQt5.QtCore import QCoreApplication
+
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    view = _two_axis_proposal(tmp_path)
+    axis_ids = list(view.axis_opts["native_ticks"]["y"])
+    assert len(axis_ids) == 2
+    first_id, second_id = axis_ids
+    # Distinct owner facts that stay under the native tick cap. The
+    # proposal's 0..100 / 0.05 grid would overflow and fall back adaptive.
+    first_spec = {"major": 0.25, "grid": 0.05, "lo": 0.0, "hi": 1.0}
+    second_spec = {"major": 20.0, "grid": 10.0, "lo": 0.0, "hi": 100.0}
+    native_y = {first_id: first_spec, second_id: second_spec}
+
+    t = np.linspace(0.0, 1.0, 32, dtype=np.float64)
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(800, 400)
+    canvas.show()
+    QCoreApplication.processEvents()
+    canvas.plot_channels(
+        [("kept", True, t, t, "#0a0", "N", "f1", {"axis_group": second_id})],
+        mode="overlay",
+    )
+    apply_native_y_ticks(canvas, native_y)
+
+    assert len(canvas.axes_list) == 1
+    assert canvas.axes_list[0].axis_group == second_id
+    got = _major_tick_values(canvas.axes_list[0].y_axis_item())
+    kept = native_tick_levels(
+        second_spec["lo"], second_spec["hi"],
+        second_spec["major"], second_spec["grid"],
+    )
+    shifted = native_tick_levels(
+        first_spec["lo"], first_spec["hi"],
+        first_spec["major"], first_spec["grid"],
+    )
+    assert got == tuple(value for value, _ in kept.major)
+    assert got != tuple(value for value, _ in shifted.major)
+    assert got[-1] == pytest.approx(second_spec["hi"])

@@ -413,15 +413,8 @@ def bound_time_plot_rows(
             )
         meta = {
             "axis_group": binding.axis_id,
-            "native_axis": {
-                "range": binding.y_range,
-                "major": binding.y_tick_interval,
-                "grid": binding.y_grid_interval,
-            },
             "line_width_mm": binding.line_width_mm,
         }
-        if native_xy:
-            meta["native_xy_full_range"] = True
         if y_key is not None:
             successful.add(y_key)
         color = binding.color

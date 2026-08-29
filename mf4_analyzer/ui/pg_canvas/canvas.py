@@ -124,6 +124,7 @@ from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui_kit.axis_metrics import pin_left_axes_to_common_width
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
+from mf4_analyzer.ui.pg_canvas.native_axes import tag_axis_group
 from mf4_analyzer.ui.pg_canvas.quality import (
     QualityManager,
     _FRAME_TIMER_INSTALLED_ATTR,
@@ -949,6 +950,7 @@ class TimeDomainCanvasPG(QWidget):
                     continue
                 pi = self._add_plot_item(row=slot_idx, col=0)
                 handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
+                tag_axis_group(handle, slot["gid"])
                 self.axes_list.append(handle)
                 members = slot["members"]
                 if slot["gid"] is None:
@@ -1032,6 +1034,7 @@ class TimeDomainCanvasPG(QWidget):
 
             for slot_idx, slot in enumerate(slots):
                 handle = self._overlay_axes._add_overlay_axis_handle(pi, slot_idx)
+                tag_axis_group(handle, slot["gid"])
                 self.axes_list.append(handle)
                 members = slot["members"]
                 gid = slot["gid"]
@@ -1077,6 +1080,7 @@ class TimeDomainCanvasPG(QWidget):
             # Single channel.
             pi = self._add_plot_item(row=0, col=0)
             handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
+            tag_axis_group(handle, vis[0][7])
             self.axes_list.append(handle)
             name, t, sig, color, unit, data_id, p_visible, _axis_group = vis[0]
             self._overlay_axes._bind_channel(

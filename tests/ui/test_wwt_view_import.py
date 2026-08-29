@@ -162,11 +162,17 @@ def test_two_registered_y_axes_are_not_joined_by_record_only_aux_axis(tmp_path):
 
     assert len(proposals) == 1
     view = proposals[0].state
-    assert len(view.curve_bindings) == 2
-    assert {binding.y_ref.channel for binding in view.curve_bindings} == {
-        wwt.MEAS_Y,
-        wwt.TOL_Y,
+    assert len(view.curve_bindings) == 3
+    channel_ys = {
+        binding.y_ref.channel
+        for binding in view.curve_bindings
+        if binding.y_ref.kind == "channel"
     }
+    assert channel_ys == {wwt.MEAS_Y, wwt.TOL_Y}
+    assert any(
+        binding.y_ref.kind == "wwt_record" and binding.y_ref.record_index == 4
+        for binding in view.curve_bindings
+    )
     assert len(view.axis_opts["native_ticks"]["y"]) == 2
     assert all("record-4" not in axis for axis in view.axis_opts["native_ticks"]["y"])
 
@@ -276,7 +282,15 @@ def test_yp_ss_customer_sample_has_one_view_and_two_curves():
         if "Tol_oben" in binding.display_name
     )
     assert tol.y_ref.kind == "wwt_record"
-    assert kinds[next(name for name in kinds if "Druckstückspiel" in name)] == "channel"
+    meas = next(
+        binding for binding in proposals[0].state.curve_bindings
+        if "Druckstückspiel" in binding.display_name
+    )
+    assert kinds[meas.display_name] == "channel"
+    assert tol.axis_id == meas.axis_id
+    facts = proposals[0].state.axis_opts["native_ticks"]["y"][meas.axis_id]
+    assert (facts["lo"], facts["hi"]) == (0.0, 0.2)
+    assert facts["major"] == 0.05
 
 
 def test_ucan_d6_cser_customer_sample_has_seven_proposals():
