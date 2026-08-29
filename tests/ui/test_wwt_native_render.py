@@ -280,15 +280,18 @@ def test_yp_bindings_plot_tol_oben_and_measurement_when_customer_sample_present(
         binding for binding in view.curve_bindings
         if "Tol_oben" in binding.display_name
     )
-    assert tol.y_ref.kind == "wwt_record"
-    tol_row = next(row for row in rows if "Tol_oben" in str(row[0]))
-    assert str(tol_row[4]).lower() in {"#ff0000", "#f00"}
-    assert all(int(row[2].shape[0]) == int(row[3].shape[0]) for row in rows)
-    assert ("f1", "Druckstückspiel") in consumed
     meas = next(
         binding for binding in view.curve_bindings
         if "Druckstückspiel" in binding.display_name
     )
+    assert tol.y_ref.kind == "wwt_record"
+    tol_row = next(row for row in rows if "Tol_oben" in str(row[0]))
+    assert str(tol_row[4]).lower() in {"#ff0000", "#f00"}
+    meas_row = next(row for row in rows if "Druckstückspiel" in str(row[0]))
+    assert str(meas_row[4]).lower() == "#000080"
+    assert meas.color == "#000080"
+    assert all(int(row[2].shape[0]) == int(row[3].shape[0]) for row in rows)
+    assert ("f1", "Druckstückspiel") in consumed
     assert tol.axis_id == meas.axis_id
     facts = view.axis_opts["native_ticks"]["y"][meas.axis_id]
     assert (facts["lo"], facts["hi"]) == (0.0, 0.2)

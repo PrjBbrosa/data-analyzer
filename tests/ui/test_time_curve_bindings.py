@@ -554,6 +554,20 @@ def test_channel_backed_binding_prefers_tracelab_channel_color():
     assert result.rows[0][0] == "ChanY"
 
 
+def test_channel_backed_binding_uses_winwert_color_without_navigator_override():
+    binding = _channel_binding(display_name="ChanY [N]")
+    key = (binding.y_ref.fid, binding.y_ref.channel)
+
+    result = bound_time_plot_rows(
+        [binding],
+        {"f1": _owner()},
+        checked_channel_keys={key},
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0][4] == "#000080"
+
+
 def test_record_only_binding_keeps_compatibility_color():
     binding = _record_binding()
     x = np.linspace(-10.0, 10.0, 16)
@@ -566,4 +580,5 @@ def test_record_only_binding_keeps_compatibility_color():
     )
 
     assert len(result.rows) == 1
+    assert result.rows[0][4] == "#ff0000"
     assert result.rows[0][4] == binding.color

@@ -313,6 +313,79 @@ def test_channel_removal_preserves_per_source_name_axis_spec():
     }
 
 
+def test_wwt_view_color_seed_does_not_pollute_other_views(
+    qtbot, qapp, loaded_csv, tmp_path, monkeypatch,
+):
+    """Seeding WinWert RGB onto the imported View does not rewrite other views.
+
+    ``apply_controls_from_state`` overlays ``ViewState.colors`` onto the shared
+    navigator; that is the existing per-view mechanism, not a global swatch
+    rewrite. CSV-only channels and the other View's stored colors stay put.
+    """
+    from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
+    from tests._helpers import wwt_factory as wwt
+
+    window = _loaded_window(qtbot, qapp, loaded_csv)
+    csv_fid = _fid(window)
+    csv_speed = "#aa1122"
+    csv_torque = "#22aa33"
+    window.navigator.set_checked_channels([(csv_fid, "speed"), (csv_fid, "torque")])
+    window.navigator.set_channel_colors({
+        (csv_fid, "speed"): csv_speed,
+        (csv_fid, "torque"): csv_torque,
+    })
+    window._capture_focused_view()
+    other = window.view_manager.get(0)
+    other_colors = dict(other.colors)
+    assert other_colors[(csv_fid, "speed")] == csv_speed
+    assert other_colors[(csv_fid, "torque")] == csv_torque
+
+    window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
+    monkeypatch.setattr(window._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        window._ultraview, "add_time_views_from_native_layout", lambda items: ()
+    )
+    monkeypatch.setattr(window, "plot_time", lambda *_a, **_k: None)
+    monkeypatch.setattr(window, "_apply_active_view", lambda *_a, **_k: None)
+    monkeypatch.setattr(window, "_plot_time_on_canvas", lambda *_a, **_k: None)
+
+    window._load_one(str(wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")))
+    qapp.processEvents()
+
+    wwt_idx, wwt_state = next(
+        (idx, state)
+        for idx, state in enumerate(window.view_manager.views)
+        if state.curve_bindings
+    )
+    assert wwt_idx != 0
+    y_key = next(
+        (binding.y_ref.fid, binding.y_ref.channel)
+        for binding in wwt_state.curve_bindings
+        if binding.y_ref.kind == "channel"
+    )
+    winwert = wwt.palette_hex(wwt.CHAN_Y_COLOR)
+    assert wwt_state.colors == {y_key: winwert}
+    assert dict(window.view_manager.get(0).colors) == other_colors
+
+    window._project_view_controls(wwt_idx)
+    qapp.processEvents()
+
+    assert dict(window.view_manager.get(0).colors) == other_colors
+    nav = window.navigator.get_channel_colors()
+    assert nav.get((csv_fid, "torque")) == csv_torque
+    assert nav.get((csv_fid, "speed")) == csv_speed
+    assert nav.get(y_key) == winwert
+
+    window._project_view_controls(0)
+    qapp.processEvents()
+
+    assert dict(window.view_manager.get(0).colors) == other_colors
+    assert dict(wwt_state.colors) == {y_key: winwert}
+    nav = window.navigator.get_channel_colors()
+    assert nav.get((csv_fid, "torque")) == csv_torque
+    assert nav.get((csv_fid, "speed")) == csv_speed
+
+
 def test_legacy_exact_source_axis_is_cleared_when_its_channel_is_removed():
     from mf4_analyzer.ui.view_state import ViewState
 

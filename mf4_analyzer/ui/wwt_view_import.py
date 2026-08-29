@@ -10,7 +10,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
-from mf4_analyzer._palette import FILE_PALETTES
 from mf4_analyzer.io.wwt_display import WwtCurveDisplay, WwtWindowRectMm
 from mf4_analyzer.io.wwt_document import WwtDocument, WwtRecord
 from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
@@ -316,17 +315,13 @@ def build_wwt_view_proposals(
             xlim = (float(x_row.lo), float(x_row.hi))
         bindings: list[TimeCurveBinding] = []
         checked: list[tuple[str, str]] = []
+        colors: dict[tuple[str, str], str] = {}
         ylims: dict[str, tuple[float, float]] = {}
         native_y: dict[str, dict] = {}
         for row in visible:
             y_ref = _data_ref(row.record_index, registered)
             x_ref = _data_ref(row.x_record_index, registered)
-            # Record-only rows render from WinWert RGB. Channel-backed rows
-            # keep the TraceLab file palette so Navigator swatches stay put.
-            if y_ref.kind == "channel":
-                color = FILE_PALETTES[0][len(bindings) % len(FILE_PALETTES[0])]
-            else:
-                color = _rgb_hex(row.color_rgb)
+            color = _rgb_hex(row.color_rgb)
             axis_id = axis_of[row.record_index]
             y_range = (float(row.lo), float(row.hi)) if _range_ok(row.lo, row.hi) else (0.0, 1.0)
             if not _range_ok(row.lo, row.hi):
@@ -353,6 +348,7 @@ def build_wwt_view_proposals(
                 key = (y_ref.fid, y_ref.channel)
                 if key not in checked:
                     checked.append(key)
+                colors[key] = color
                 if row.selected and _range_ok(row.lo, row.hi):
                     display_name = registered.display_channels.get(key, key[1])
                     ylims[_ylim_key((key[0], display_name))] = (
@@ -378,7 +374,7 @@ def build_wwt_view_proposals(
             tab_color="#2d7ff9",
             attached_file_ids=list(registered.fids),
             checked=checked,
-            colors={},
+            colors=colors,
             plot_mode="overlay",
             xlim=xlim,
             ylims=ylims,

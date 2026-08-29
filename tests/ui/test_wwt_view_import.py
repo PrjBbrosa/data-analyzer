@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from mf4_analyzer._palette import FILE_PALETTES
 from mf4_analyzer.io.wwt_document import load_wwt_document
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
@@ -29,7 +28,7 @@ def _proposals(path):
     return build_wwt_view_proposals(loaded.document, registered), registered, loaded
 
 
-def test_channel_xy_proposal_uses_only_registered_y_and_tracelab_color(tmp_path):
+def test_channel_xy_proposal_uses_only_registered_y_and_winwert_color(tmp_path):
     proposals, registered, _loaded = _proposals(
         wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")
     )
@@ -49,8 +48,9 @@ def test_channel_xy_proposal_uses_only_registered_y_and_tracelab_color(tmp_path)
     by_name = {binding.display_name: binding for binding in view.curve_bindings}
     assert set(by_name) == {f"{wwt.CHAN_Y} [{wwt.CHAN_Y_UNIT}]"}
     force = by_name[f"{wwt.CHAN_Y} [{wwt.CHAN_Y_UNIT}]"]
-    assert force.color == FILE_PALETTES[0][0]
-    assert force.color != "#000080"
+    winwert = wwt.palette_hex(wwt.CHAN_Y_COLOR)
+    assert force.color == winwert
+    assert force.color == "#000080"
     assert force.y_range == (wwt.CHAN_Y_LO, wwt.CHAN_Y_HI)
     assert force.y_tick_interval == wwt.CHAN_Y_TICK
     assert force.y_grid_interval == wwt.CHAN_Y_GRID
@@ -59,7 +59,7 @@ def test_channel_xy_proposal_uses_only_registered_y_and_tracelab_color(tmp_path)
     assert force.y_ref.kind == "channel"
     assert force.y_ref.channel == wwt.CHAN_Y
     assert ("f1", wwt.CHAN_Y) in view.checked
-    assert view.colors == {}
+    assert view.colors == {("f1", wwt.CHAN_Y): winwert}
     assert wwt.LIMIT_HI not in registered.record_channels.values()
     assert all(channel != wwt.LIMIT_HI for _fid, channel in registered.record_channels.values())
 
@@ -84,11 +84,13 @@ def test_measurement_proposal_binds_record_only_tolerance_y(tmp_path):
     assert meas.y_ref.kind == "channel"
     assert meas.y_ref.channel == wwt.MEAS_Y
     assert meas.y_range == (wwt.MEAS_Y_LO, wwt.MEAS_Y_HI)
+    assert meas.color == wwt.palette_hex(wwt.CHAN_Y_COLOR)
     assert tol.y_ref.kind == "wwt_record"
     assert tol.x_ref.kind == "wwt_record"
     assert tol.color == wwt.palette_hex(wwt.TOL_Y_COLOR)
     assert ("f1", wwt.MEAS_Y) in view.checked
     assert ("f1", wwt.TOL_Y) not in view.checked
+    assert view.colors == {("f1", wwt.MEAS_Y): wwt.palette_hex(wwt.CHAN_Y_COLOR)}
     assert all(wwt.TOL_Y not in key for key in view.ylims)
     assert wwt.TOL_Y not in {ch for _fid, ch in registered.record_channels.values()}
     assert meas.axis_id in view.axis_opts["native_ticks"]["y"]
@@ -258,6 +260,7 @@ def test_whole_window_record_only_gap_curves_generate_a_view(tmp_path):
     assert any(wwt.GAP_Y_POS in name for name in names)
     assert any(wwt.GAP_Y_SPEED in name for name in names)
     assert proposals[0].state.checked == []
+    assert proposals[0].state.colors == {}
     assert proposals[0].state.ylims == {}
 
 
@@ -287,6 +290,11 @@ def test_yp_ss_customer_sample_has_one_view_and_two_curves():
         if "Druckstückspiel" in binding.display_name
     )
     assert kinds[meas.display_name] == "channel"
+    assert tol.color == "#ff0000"
+    assert meas.color == "#000080"
+    view = proposals[0].state
+    assert view.colors.get(("f1", "Druckstückspiel")) == "#000080"
+    assert all("Tol_oben" not in str(key) for key in view.colors)
     assert tol.axis_id == meas.axis_id
     facts = proposals[0].state.axis_opts["native_ticks"]["y"][meas.axis_id]
     assert (facts["lo"], facts["hi"]) == (0.0, 0.2)
