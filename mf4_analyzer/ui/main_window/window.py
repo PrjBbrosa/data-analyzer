@@ -4158,7 +4158,7 @@ class MainWindow(
         if hasattr(self, "view_manager"):
             try:
                 active_state = self.view_manager.get(self.view_manager.active)
-            except Exception:
+            except (IndexError, TypeError):
                 active_state = None
         bindings = list(getattr(active_state, "curve_bindings", None) or [])
         if bindings:

@@ -842,7 +842,8 @@ class TimeDomainCanvasPG(QWidget):
                 if callable(logical):
                     try:
                         dpi = float(logical()) or 96.0
-                    except Exception:
+                    except (TypeError, ValueError, RuntimeError):
+                        # Widget may be mid-teardown; 96 dpi is a safe mm→px default.
                         dpi = 96.0
                 ck = _view_state_channel_key(data_id, name)
                 self._native_line_width_px[ck] = line_width_px(
