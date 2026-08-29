@@ -1,4 +1,4 @@
-"""Literal UCAN GridRects and exact-overlap unplaced membership."""
+"""Compact native WWT layout: topology, width ranks, and overlap relocation."""
 from __future__ import annotations
 
 import pytest
@@ -43,19 +43,83 @@ UCAN_MM = (
 )
 
 
-def test_ucan_plan_has_literal_gridrects_and_seventh_unplaced():
+def _grid_overlap(left: GridRect, right: GridRect) -> bool:
+    return not (
+        left.column + left.column_span <= right.column
+        or right.column + right.column_span <= left.column
+        or left.row + left.row_span <= right.row
+        or right.row + right.row_span <= left.row
+    )
+
+
+def _assert_no_overlaps(placed) -> None:
+    rects = [grid for _ref, grid in placed]
+    for index, left in enumerate(rects):
+        for right in rects[index + 1 :]:
+            assert not _grid_overlap(left, right), (left, right)
+
+
+def _row_bands(rects: list[GridRect]):
+    ordered = sorted(rects, key=lambda rect: (rect.row, rect.column))
+    bands: list[list[GridRect]] = []
+    bounds: list[list[int]] = []
+    for rect in ordered:
+        top = rect.row
+        bottom = rect.row + rect.row_span
+        matched = None
+        for index, band in enumerate(bounds):
+            if top < band[1] and bottom > band[0]:
+                matched = index
+                break
+        if matched is None:
+            bands.append([rect])
+            bounds.append([top, bottom])
+            continue
+        bands[matched].append(rect)
+        bounds[matched][0] = min(bounds[matched][0], top)
+        bounds[matched][1] = max(bounds[matched][1], bottom)
+    order = sorted(range(len(bands)), key=lambda index: bounds[index][0])
+    return [bands[index] for index in order], [bounds[index] for index in order]
+
+
+def _assert_compact_packing(placed) -> None:
+    rects = [grid for _ref, grid in placed]
+    if not rects:
+        return
+    _assert_no_overlaps(placed)
+    bands, bounds = _row_bands(rects)
+    for band in bands:
+        ordered = sorted(band, key=lambda rect: rect.column)
+        for left, right in zip(ordered, ordered[1:]):
+            assert right.column == left.column + left.column_span, (left, right)
+    for previous, nxt in zip(bounds, bounds[1:]):
+        assert nxt[0] == previous[1], (previous, nxt)
+
+
+def test_ucan_plan_places_all_seven_compact_and_relocates_overlap():
     refs = tuple(UltraViewRef("time", f"v{i}") for i in range(7))
     plan = plan_native_layout(list(zip(refs, UCAN_MM)))
-    assert plan.placed == (
-        (refs[0], GridRect(0, 0, 10, 7)),
-        (refs[1], GridRect(2, 8, 9, 7)),
-        (refs[2], GridRect(12, 0, 5, 6)),
-        (refs[3], GridRect(19, 0, 5, 6)),
-        (refs[4], GridRect(12, 8, 5, 7)),
-        (refs[5], GridRect(19, 8, 5, 7)),
-    )
-    assert plan.unplaced == (refs[6],)
-    assert plan.warnings == ("exact_overlap: 7 -> 6",)
+    assert len(plan.placed) == 7
+    assert plan.unplaced == ()
+    assert tuple(ref for ref, _grid in plan.placed) == refs
+    assert refs[6] in plan.relocated
+    assert refs[6] not in plan.unplaced
+    assert any("exact_overlap_relocated: 7 -> 6" in warning for warning in plan.warnings)
+    assert not any(warning.startswith("exact_overlap:") for warning in plan.warnings)
+    _assert_compact_packing(plan.placed)
+    _assert_placed_aspects(list(zip(refs, UCAN_MM)), plan, _canonical_metrics())
+    by_ref = dict(plan.placed)
+    wide = (by_ref[refs[0]].column_span, by_ref[refs[1]].column_span)
+    narrow = [
+        by_ref[refs[index]].column_span
+        for index in (2, 3, 4, 5, 6)
+    ]
+    narrow_span = min(narrow)
+    for span in wide:
+        assert abs(span - 2 * narrow_span) <= 1
+    assert by_ref[refs[0]].column < by_ref[refs[2]].column < by_ref[refs[3]].column
+    assert by_ref[refs[1]].column < by_ref[refs[4]].column < by_ref[refs[5]].column
+    assert by_ref[refs[6]] != by_ref[refs[5]]
 
 
 def test_apply_native_layout_is_one_board_mutation():
@@ -63,16 +127,11 @@ def test_apply_native_layout_is_one_board_mutation():
     plan = plan_native_layout(list(zip(refs, UCAN_MM)))
     board = default_board()
     warnings = apply_native_layout(board, plan)
-    assert [item.rect for item in board.free_grid] == [
-        GridRect(0, 0, 10, 7),
-        GridRect(2, 8, 9, 7),
-        GridRect(12, 0, 5, 6),
-        GridRect(19, 0, 5, 6),
-        GridRect(12, 8, 5, 7),
-        GridRect(19, 8, 5, 7),
-    ]
-    assert board.unplaced == [refs[6]]
-    assert "exact_overlap: 7 -> 6" in warnings
+    assert len(board.free_grid) == 7
+    assert board.unplaced == []
+    assert [item.ref for item in board.free_grid] == list(refs)
+    assert "exact_overlap_relocated: 7 -> 6" in warnings
+    _assert_compact_packing([(item.ref, item.rect) for item in board.free_grid])
 
 
 def test_coordinator_commits_native_layout_to_its_owned_workspace(qapp):
@@ -98,8 +157,8 @@ def test_coordinator_commits_native_layout_to_its_owned_workspace(qapp):
         assert coordinator.board is board
         assert placed_ids == ("view-left", "view-right")
         assert [(item.ref, item.rect) for item in board.free_grid] == [
-            (UltraViewRef("time", "view-left"), GridRect(0, 0, 11, 7)),
-            (UltraViewRef("time", "view-right"), GridRect(13, 0, 11, 7)),
+            (UltraViewRef("time", "view-left"), GridRect(0, 0, 12, 8)),
+            (UltraViewRef("time", "view-right"), GridRect(12, 0, 12, 8)),
         ]
         assert board.unplaced == []
         history = controller.grid_histories[board.board_id]
@@ -138,11 +197,11 @@ def test_workspace_controller_commits_native_layout_with_overlap_warning(qapp):
     try:
         placed_ids, _warnings = controller.apply_native_layout_plan(plan)
 
-        assert placed_ids == ("view-front",)
-        assert [(item.ref, item.rect) for item in board.free_grid] == [
-            (refs[0], GridRect(0, 0, 24, 16)),
-        ]
-        assert board.unplaced == [refs[1]]
+        assert placed_ids == ("view-front", "view-overlap")
+        assert {item.ref for item in board.free_grid} == {refs[0], refs[1]}
+        assert board.unplaced == []
+        _assert_compact_packing([(item.ref, item.rect) for item in board.free_grid])
+        assert any("exact_overlap_relocated" in item for item in _warnings)
         history = controller.grid_histories[board.board_id]
         assert len(history.undo) == 1
         assert history.redo == []
@@ -348,7 +407,12 @@ def test_plan_stacked_top_bottom_preserves_source_order_and_aspect():
     plan = plan_native_layout(items, metrics=metrics)
     assert tuple(item[0] for item in plan.placed) == (first, second)
     assert plan.placed[0][1].row > plan.placed[1][1].row
+    assert (
+        plan.placed[0][1].row
+        == plan.placed[1][1].row + plan.placed[1][1].row_span
+    )
     _assert_placed_aspects(items, plan, metrics)
+    _assert_compact_packing(plan.placed)
 
 
 def test_plan_side_by_side_preserves_source_order_and_aspect():
@@ -362,10 +426,15 @@ def test_plan_side_by_side_preserves_source_order_and_aspect():
     plan = plan_native_layout(items, metrics=metrics)
     assert tuple(item[0] for item in plan.placed) == (left, right)
     assert plan.placed[0][1].column < plan.placed[1][1].column
+    assert (
+        plan.placed[1][1].column
+        == plan.placed[0][1].column + plan.placed[0][1].column_span
+    )
     _assert_placed_aspects(items, plan, metrics)
+    _assert_compact_packing(plan.placed)
 
 
-def test_plan_exact_overlap_stays_unplaced_and_keeps_source_order():
+def test_plan_exact_overlap_relocates_and_keeps_source_order():
     metrics = _canonical_metrics()
     front = UltraViewRef("time", "front")
     overlap = UltraViewRef("time", "overlap")
@@ -376,9 +445,11 @@ def test_plan_exact_overlap_stays_unplaced_and_keeps_source_order():
         (unique, NativeLayoutRect(120.0, 60.0, 80.0, 60.0)),
     ]
     plan = plan_native_layout(items, metrics=metrics)
-    assert tuple(item[0] for item in plan.placed) == (front, unique)
-    assert plan.unplaced == (overlap,)
-    assert plan.warnings == ("exact_overlap: 2 -> 1",)
+    assert tuple(item[0] for item in plan.placed) == (front, overlap, unique)
+    assert plan.unplaced == ()
+    assert plan.relocated == (overlap,)
+    assert plan.warnings == ("exact_overlap_relocated: 2 -> 1",)
+    _assert_compact_packing(plan.placed)
     _assert_placed_aspects(items, plan, metrics)
 
 
@@ -395,33 +466,30 @@ def test_plan_nonsquare_pitch_divides_y_by_pitch_y():
     plan = plan_native_layout(items, metrics=metrics)
     assert tuple(item[0] for item in plan.placed) == (left, right)
     for _ref, grid in plan.placed:
-        assert grid.row_span == 12
+        assert grid.row_span == 13
         assert grid.row_span != 7
     _assert_placed_aspects(items, plan, metrics)
+    _assert_compact_packing(plan.placed)
 
 
-def test_apply_native_layout_collision_with_existing_goes_unplaced():
+def test_apply_native_layout_collision_with_existing_relocates():
     existing = UltraViewRef("time", "keep-me")
     incoming = UltraViewRef("time", "incoming")
     occupied = GridRect(0, 0, 10, 6)
     board = default_board()
     board.free_grid.append(FreeGridPlacement(existing, occupied))
-    before = list(board.free_grid)
     plan = NativeLayoutPlan(
         placed=((incoming, occupied),),
         unplaced=(),
         warnings=(),
     )
-    warnings = apply_native_layout(board, plan)
-    assert [(item.ref, item.rect) for item in board.free_grid] == [
-        (item.ref, item.rect) for item in before
-    ]
-    assert incoming in board.unplaced
+    apply_native_layout(board, plan)
+    placed_refs = {item.ref for item in board.free_grid}
+    assert existing in placed_refs
+    assert incoming in placed_refs
+    assert incoming not in board.unplaced
     assert existing not in board.unplaced
-    assert any(
-        "grid_collision" in warning or "overlap" in warning
-        for warning in warnings
-    )
+    _assert_no_overlaps([(item.ref, item.rect) for item in board.free_grid])
     assert incoming in membership_set(board)
     assert existing in membership_set(board)
 
@@ -549,12 +617,66 @@ def test_apply_native_layout_plan_commits_collision_with_existing_cards(qapp):
         )
         assert captured
         assert captured[-1][0][0] == "view-collide"
-        assert [(item.ref, item.rect) for item in board.free_grid] == existing
-        assert UltraViewRef("time", "view-collide") in board.unplaced
+        assert first_ids == ("view-left",)
+        collide = UltraViewRef("time", "view-collide")
+        assert "view-collide" in second_ids
+        assert collide not in board.unplaced
+        placed_now = [(item.ref, item.rect) for item in board.free_grid]
+        assert existing[0] in placed_now
+        _assert_no_overlaps(placed_now)
         history = controller.grid_histories[board.board_id]
         assert len(history.undo) == 2
         assert history.redo == []
-        assert "view-collide" not in second_ids
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_ucan_import_preview_reflow_is_one_undo(qapp):
+    from PyQt5.QtGui import QColor, QImage
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+    from mf4_analyzer.ui.ultraview_state import PreviewMeta
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    items = tuple((f"v{index}", rect) for index, rect in enumerate(UCAN_MM))
+    try:
+        placed, warnings = coordinator.add_time_views_from_native_layout(items)
+        assert placed == tuple(f"v{index}" for index in range(7))
+        assert coordinator.board.unplaced == []
+        assert any("exact_overlap_relocated" in item for item in warnings)
+        history = controller.grid_histories[coordinator.board.board_id]
+        assert len(history.undo) == 1
+        _assert_compact_packing(
+            [(item.ref, item.rect) for item in coordinator.board.free_grid]
+        )
+        for index in range(7):
+            ref = UltraViewRef("time", f"v{index}")
+            image = QImage(400, 240, QImage.Format_ARGB32)
+            image.fill(QColor("#336699"))
+            coordinator.store.publish(
+                ref,
+                image,
+                digest=f"v{index}",
+                meta=PreviewMeta(ref=ref, title=f"v{index}"),
+            )
+        coordinator._maybe_apply_pending_auto_aspect(UltraViewRef("time", "v0"))
+        assert len(history.undo) == 1
+        assert len(coordinator.board.free_grid) == 7
+        _assert_no_overlaps(
+            [(item.ref, item.rect) for item in coordinator.board.free_grid]
+        )
+        coordinator._on_free_grid_undo()
+        assert coordinator.board.free_grid == []
+        assert coordinator.board.unplaced == []
+        assert history.undo == []
+        assert history.redo
     finally:
         coordinator.shutdown()
         host.deleteLater()

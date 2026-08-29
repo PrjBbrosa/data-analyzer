@@ -1026,11 +1026,18 @@ def apply_native_layout(board: UltraViewBoardState, plan) -> list[str]:
             members.add(ref)
             continue
         if any(_grid_overlaps(rect, item.rect) for item in board.free_grid):
-            warnings.append(_warn("grid_collision"))
-            _append_unplaced(board, ref)
-            remaining_membership -= 1
-            members.add(ref)
-            continue
+            moved = nearest_unoccupied_origin(
+                tuple(item.rect for item in board.free_grid),
+                (rect.column_span, rect.row_span),
+                rect,
+            )
+            if moved is None:
+                warnings.append(_warn("grid_collision"))
+                _append_unplaced(board, ref)
+                remaining_membership -= 1
+                members.add(ref)
+                continue
+            rect = moved
         board.free_grid.append(FreeGridPlacement(ref, rect))
         members.add(ref)
         remaining_membership -= 1

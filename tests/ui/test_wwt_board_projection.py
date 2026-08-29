@@ -1,8 +1,6 @@
 """Owner-level WWT → UltraView Board projection and delayed Card Fit."""
 from __future__ import annotations
 
-from dataclasses import replace
-
 from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtWidgets import QWidget
 
@@ -10,7 +8,6 @@ from mf4_analyzer.ultraview_core.board_ops import (
     add_ref,
     board_is_empty,
     create_board,
-    free_grid_placement_for,
     nearest_unoccupied_origin,
     unique_board_name,
 )
@@ -22,7 +19,6 @@ from mf4_analyzer.ultraview_core.model import (
     default_workspace,
 )
 from mf4_analyzer.ultraview_core.native_layout import NativeLayoutRect
-from mf4_analyzer.ui.chart_stack.ultraview.card_fit import solve_card_fit
 from mf4_analyzer.ui.ultraview_state import PreviewMeta
 from mf4_analyzer.ui.view_state import default_view_tab_color
 from tests._helpers import wwt_factory as wwt
@@ -339,7 +335,7 @@ def test_wwt_views_use_slot_palette_and_keep_winwert_curve_colors(
         qapp.processEvents()
 
 
-def test_exact_overlap_still_unplaced_on_dedicated_board(
+def test_exact_overlap_relocated_on_dedicated_board(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -352,9 +348,19 @@ def test_exact_overlap_still_unplaced_on_dedicated_board(
     try:
         board = mw._ultraview.board
         assert board.name == "overlap"
-        assert len(board.free_grid) + len(board.unplaced) == wwt.MULTI_WINDOW_COUNT
-        assert board.unplaced
-        assert len(board.free_grid) == wwt.MULTI_WINDOW_COUNT - 1
+        assert len(board.free_grid) == wwt.MULTI_WINDOW_COUNT
+        assert board.unplaced == []
+        rects = [(item.ref, item.rect) for item in board.free_grid]
+        for index, left in enumerate(rects):
+            for right in rects[index + 1 :]:
+                a, b = left[1], right[1]
+                overlap = not (
+                    a.column + a.column_span <= b.column
+                    or b.column + b.column_span <= a.column
+                    or a.row + a.row_span <= b.row
+                    or b.row + b.row_span <= a.row
+                )
+                assert not overlap, (left, right)
     finally:
         mw.close()
         mw.deleteLater()
@@ -394,7 +400,14 @@ def _native_pair_items():
     )
 
 
-def test_fit_after_preview_uses_card_fit_and_manhattan_on_collision(qapp):
+def _native_stacked_items():
+    return (
+        ("fit-top", NativeLayoutRect(0.0, 70.0, 100.0, 60.0)),
+        ("fit-bottom", NativeLayoutRect(0.0, 200.0, 100.0, 60.0)),
+    )
+
+
+def test_fit_after_preview_reflows_whole_group(qapp):
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
@@ -404,7 +417,7 @@ def test_fit_after_preview_uses_card_fit_and_manhattan_on_collision(qapp):
     controller = coordinator._workspace_controller
     try:
         coordinator.add_time_views_from_native_layout(
-            _native_pair_items(),
+            _native_stacked_items(),
             dedicated_board=True,
             board_name="fit-demo",
         )
@@ -417,66 +430,21 @@ def test_fit_after_preview_uses_card_fit_and_manhattan_on_collision(qapp):
         ]
         assert len(tokens) == 2
         inserted = {token.ref: token.inserted_rect for token in tokens}
-        first = UltraViewRef("time", "fit-left")
-        second = UltraViewRef("time", "fit-right")
-        _publish(coordinator, first, 1600, 400)
-        _publish(coordinator, second, 1600, 400)
-        image = coordinator._preview_fit_image_size(first)
-        expected_first = solve_card_fit(
-            replace(
-                controller._card_fit_facts_for(
-                    board, free_grid_placement_for(board, first), image
-                ),
-                occupied=(),
-            )
-        ).candidate
-        expected_second_span = solve_card_fit(
-            replace(
-                controller._card_fit_facts_for(
-                    board, free_grid_placement_for(board, second), image
-                ),
-                occupied=(),
-            )
-        ).candidate
-        coordinator._maybe_apply_pending_auto_aspect(first)
+        top = UltraViewRef("time", "fit-top")
+        bottom = UltraViewRef("time", "fit-bottom")
+        _publish(coordinator, top, 1600, 400)
+        _publish(coordinator, bottom, 1600, 400)
+        coordinator._maybe_apply_pending_auto_aspect(top)
         after = _placed_map(board)
-        assert after[first].column == inserted[first].column
-        assert after[first].row == inserted[first].row
-        assert (after[first].column_span, after[first].row_span) == (
-            expected_first.column_span,
-            expected_first.row_span,
+        assert after[bottom].row == after[top].row + after[top].row_span
+        assert after[bottom].row < inserted[bottom].row
+        overlap = (
+            after[top].column < after[bottom].column + after[bottom].column_span
+            and after[bottom].column < after[top].column + after[top].column_span
+            and after[top].row < after[bottom].row + after[bottom].row_span
+            and after[bottom].row < after[top].row + after[top].row_span
         )
-        assert not (
-            after[first].column < after[second].column + after[second].column_span
-            and after[second].column < after[first].column + after[first].column_span
-            and after[first].row < after[second].row + after[second].row_span
-            and after[second].row < after[first].row + after[first].row_span
-        )
-        origin_pinned = GridRect(
-            inserted[second].column,
-            inserted[second].row,
-            expected_second_span.column_span,
-            expected_second_span.row_span,
-        )
-        overlaps = (
-            after[first].column < origin_pinned.column + origin_pinned.column_span
-            and origin_pinned.column < after[first].column + after[first].column_span
-            and after[first].row < origin_pinned.row + origin_pinned.row_span
-            and origin_pinned.row < after[first].row + after[first].row_span
-        )
-        if overlaps:
-            moved = nearest_unoccupied_origin(
-                (after[first],),
-                (origin_pinned.column_span, origin_pinned.row_span),
-                origin_pinned,
-            )
-            assert after[second] == moved
-            assert (
-                after[second].column != inserted[second].column
-                or after[second].row != inserted[second].row
-            )
-        else:
-            assert after[second] == origin_pinned
+        assert not overlap
         history = controller.grid_histories[board.board_id]
         assert len(history.undo) == 1
         assert controller.pending_auto_aspect == {}
@@ -502,41 +470,15 @@ def test_fit_after_preview_dpr_uses_logical_size(qapp, monkeypatch):
         )
         left = UltraViewRef("time", "fit-left")
         right = UltraViewRef("time", "fit-right")
+        before = _placed_map(coordinator.board)
         _publish(coordinator, left, 800, 200)
         _publish(coordinator, right, 800, 200)
         assert coordinator._preview_fit_image_size(left) == (400, 100)
-        board = coordinator.board
-        item = free_grid_placement_for(board, left)
-        logical_fit = solve_card_fit(
-            replace(
-                coordinator._workspace_controller._card_fit_facts_for(
-                    board, item, (400, 100)
-                ),
-                occupied=(),
-            )
-        ).candidate
-        raw_fit = solve_card_fit(
-            replace(
-                coordinator._workspace_controller._card_fit_facts_for(
-                    board, item, (800, 200)
-                ),
-                occupied=(),
-            )
-        ).candidate
         coordinator._maybe_apply_pending_auto_aspect(left)
-        placed = _placed_map(board)[left]
-        assert (placed.column_span, placed.row_span) == (
-            logical_fit.column_span,
-            logical_fit.row_span,
-        )
-        if (raw_fit.column_span, raw_fit.row_span) != (
-            logical_fit.column_span,
-            logical_fit.row_span,
-        ):
-            assert (placed.column_span, placed.row_span) != (
-                raw_fit.column_span,
-                raw_fit.row_span,
-            )
+        placed = _placed_map(coordinator.board)
+        assert placed[left].column_span == before[left].column_span
+        assert placed[right].column_span == before[right].column_span
+        assert placed[left].row_span <= before[left].row_span
     finally:
         coordinator.shutdown()
         host.deleteLater()
@@ -582,11 +524,11 @@ def test_delayed_preview_tokens_survive_until_preview_or_user_mutation(qapp):
             "drag-move",
         )
         assert (coordinator.board.board_id, left) not in controller.pending_auto_aspect
+        assert (coordinator.board.board_id, right) not in controller.pending_auto_aspect
         _publish(coordinator, left, 1600, 400)
         coordinator._maybe_apply_pending_auto_aspect(left)
         assert _placed_map(coordinator.board)[left] == moved
 
-        controller._bump_layout_revision(coordinator.board.board_id)
         right_native = _placed_map(coordinator.board)[right]
         _publish(coordinator, right, 1600, 400)
         coordinator._maybe_apply_pending_auto_aspect(right)

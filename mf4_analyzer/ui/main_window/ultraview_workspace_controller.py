@@ -75,6 +75,7 @@ from ...ultraview_core.model import (
     layout_slots,
     parse_ref_payload,
 )
+from ...ultraview_core.native_layout import NativeLayoutRect, plan_native_layout
 from ..ultraview_edits import (
     SelectionMutationPlan,
     plan_selection_delete,
@@ -138,6 +139,7 @@ logger = logging.getLogger(__name__)
 # (or not user-facing). ``_toast_grid_warnings`` must not dump them raw.
 _NATIVE_LAYOUT_SILENT_CODES = frozenset({
     "exact_overlap",
+    "exact_overlap_relocated",
     "quantized_collision",
     "duplicate_ref",
     "invalid_rect",
@@ -191,6 +193,7 @@ class _PendingAutoAspect:
     group_id: str = ""
     sequence: int = 0
     group_refs: tuple[UltraViewRef, ...] = ()
+    source_rect: NativeLayoutRect | None = None
 
 
 def _visible_widget_height(widget) -> int:
@@ -377,11 +380,11 @@ class UltraViewWorkspaceController:
                 if item.ref.section == "time"
             }
         warnings = apply_native_layout(target, plan)
-        # ``apply_native_layout`` can intentionally place the usable cards and
-        # return warnings for the remainder (for example an exact overlap goes
-        # to the unplaced tray).  Commit that complete Board result before
-        # reporting the warnings; routing them through ``_commit_grid_change``
-        # would return early after the mutation and skip history/dirty/refresh.
+        # ``apply_native_layout`` can place every usable card and still return
+        # diagnostics (exact-overlap relocation, invalid rects).  Commit that
+        # complete Board result before reporting the warnings; routing them
+        # through ``_commit_grid_change`` would return early after the mutation
+        # and skip history/dirty/refresh.
         self._commit_grid_change(target, before, [])
         if warnings:
             self._toast_grid_warnings(warnings)
@@ -1167,6 +1170,9 @@ class UltraViewWorkspaceController:
         self, board: UltraViewBoardState, plan, placed_view_ids: tuple[str, ...]
     ) -> None:
         placed_ids = set(placed_view_ids)
+        source_by_ref = {
+            ref: rect for ref, rect in getattr(plan, "sources", ()) or ()
+        }
         items = []
         for ref, _rect in getattr(plan, "placed", ()) or ():
             if ref.view_id not in placed_ids:
@@ -1190,6 +1196,7 @@ class UltraViewWorkspaceController:
                 group_id=group_id,
                 sequence=sequence,
                 group_refs=group_refs,
+                source_rect=source_by_ref.get(item.ref),
             )
         for item in items:
             if self._preview_fit_image_size(item.ref) is not None:
@@ -1209,12 +1216,30 @@ class UltraViewWorkspaceController:
             return
         if token.kind == _PENDING_NATIVE_CARD_FIT:
             if new_rect != token.inserted_rect:
-                self._cancel_pending_for_ref(board_id, ref)
+                self._cancel_pending_native_group(token)
             return
         if span_changed:
             self._cancel_pending_for_ref(board_id, ref)
 
+    def _cancel_pending_native_group(self, token: _PendingAutoAspect) -> None:
+        group_id = str(token.group_id or "")
+        if not group_id:
+            self._pending_auto_aspect.pop((token.board_id, token.ref), None)
+            return
+        self._pending_auto_aspect = {
+            key: other
+            for key, other in self._pending_auto_aspect.items()
+            if not (
+                other.kind == _PENDING_NATIVE_CARD_FIT
+                and other.group_id == group_id
+            )
+        }
+
     def _cancel_pending_for_ref(self, board_id: str, ref: UltraViewRef) -> None:
+        token = self._pending_auto_aspect.get((str(board_id), ref))
+        if token is not None and token.kind == _PENDING_NATIVE_CARD_FIT:
+            self._cancel_pending_native_group(token)
+            return
         self._pending_auto_aspect.pop((str(board_id), ref), None)
 
     def _cancel_pending_for_board(self, board_id: str) -> None:
@@ -1282,59 +1307,71 @@ class UltraViewWorkspaceController:
             None,
         )
         if board is None or board.layout_mode != LAYOUT_MODE_FREE_GRID:
-            for token in tokens:
-                self._cancel_pending_for_ref(token.board_id, token.ref)
+            self._cancel_pending_native_group(tokens[0])
             return
-        group_refs = set(tokens[0].group_refs) if tokens[0].group_refs else {
-            token.ref for token in tokens
-        }
         live = {item.ref: item.rect for item in board.free_grid}
-        updates: list[tuple[UltraViewRef, GridRect]] = []
-        drop: list[_PendingAutoAspect] = []
-        merge_add = False
         for token in tokens:
             if token.layout_revision != self._current_layout_revision(board.board_id):
-                self._cancel_pending_for_ref(token.board_id, token.ref)
-                continue
+                self._cancel_pending_native_group(token)
+                return
             current = live.get(token.ref)
             if current is None or current != token.inserted_rect:
-                self._cancel_pending_for_ref(token.board_id, token.ref)
+                self._cancel_pending_native_group(token)
+                return
+        items: list[tuple[UltraViewRef, NativeLayoutRect]] = []
+        aspects: dict[UltraViewRef, tuple[float, float]] = {}
+        for token in tokens:
+            if token.source_rect is None:
                 continue
+            items.append((token.ref, token.source_rect))
             image_size = self._preview_fit_image_size(token.ref)
             if image_size is None:
                 continue
-            item = free_grid_placement_for(board, token.ref)
-            if item is None:
-                self._cancel_pending_for_ref(token.board_id, token.ref)
-                continue
-            occupied_for_span = tuple(
-                rect
-                for ref, rect in live.items()
-                if ref != token.ref and ref not in group_refs
+            aspects[token.ref] = (float(image_size[0]), float(image_size[1]))
+        if not items or not aspects:
+            return
+        plan = plan_native_layout(items, aspects=aspects)
+        if not plan.placed:
+            return
+        group_set = {token.ref for token in tokens}
+        current_rects = [live[ref] for ref in group_set if ref in live]
+        packed_rects = [grid for _ref, grid in plan.placed]
+        if not current_rects or not packed_rects:
+            return
+        dx = min(rect.column for rect in current_rects) - min(
+            grid.column for grid in packed_rects
+        )
+        dy = min(rect.row for rect in current_rects) - min(
+            grid.row for grid in packed_rects
+        )
+        occupied = [
+            rect for ref, rect in live.items() if ref not in group_set
+        ]
+        proposed: dict[UltraViewRef, GridRect] = {}
+        for ref, grid in plan.placed:
+            moved = GridRect(
+                grid.column + dx,
+                grid.row + dy,
+                grid.column_span,
+                grid.row_span,
             )
-            facts = replace(
-                self._card_fit_facts_for(board, item, image_size),
-                occupied=occupied_for_span,
-            )
-            fitted = solve_card_fit(facts).candidate
-            occupied_for_move = tuple(
-                rect for ref, rect in live.items() if ref != token.ref
-            )
-            if any(rects_overlap(fitted, other) for other in occupied_for_move):
-                moved = nearest_unoccupied_origin(
-                    occupied_for_move,
-                    (fitted.column_span, fitted.row_span),
-                    fitted,
+            if any(rects_overlap(moved, other) for other in occupied):
+                found = nearest_unoccupied_origin(
+                    occupied,
+                    (moved.column_span, moved.row_span),
+                    moved,
                 )
-                if moved is None:
-                    drop.append(token)
+                if found is None:
                     continue
-                fitted = moved
-            live[token.ref] = fitted
-            if fitted != token.inserted_rect:
-                updates.append((token.ref, fitted))
-            drop.append(token)
-            merge_add = merge_add or token.merge_add
+                moved = found
+            proposed[ref] = moved
+            occupied.append(moved)
+        updates = [
+            (ref, grid)
+            for ref, grid in proposed.items()
+            if live.get(ref) != grid
+        ]
+        merge_add = any(token.merge_add for token in tokens)
         if updates:
             warnings = set_free_grid_rects(board, updates)
             if warnings:
@@ -1357,10 +1394,16 @@ class UltraViewWorkspaceController:
                         - self._history_entry_byte_cost(last)
                     )
                     self._clear_history_redo(history)
-        for token in drop:
-            self._pending_auto_aspect.pop((token.board_id, token.ref), None)
-        if updates:
             self._after_board_mutation()
+            live = {item.ref: item.rect for item in board.free_grid}
+        if all(self._preview_fit_image_size(token.ref) is not None for token in tokens):
+            self._cancel_pending_native_group(tokens[0])
+            return
+        for token in tokens:
+            new_rect = live.get(token.ref, token.inserted_rect)
+            self._pending_auto_aspect[(token.board_id, token.ref)] = replace(
+                token, inserted_rect=new_rect
+            )
 
     def _apply_one_pending_auto_aspect(self, token: _PendingAutoAspect) -> None:
         self._pending_auto_aspect.pop((token.board_id, token.ref), None)
