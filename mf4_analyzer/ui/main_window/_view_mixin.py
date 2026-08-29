@@ -541,14 +541,19 @@ class ViewMixin:
             # on both its verbatim-restore and reframe-to-data branches (see
             # its docstring) — settle_view_restore() below is what flushes.
             self._restore_view_xlim(canvas, state.xlim)
-            canvas.restore_visible_ylims(state.ylims)
-            tick_opts = (state.axis_opts or {}).get('tick_density') or {}
+            axis_opts = state.axis_opts or {}
+            native_ticks = axis_opts.get("native_ticks") or {}
+            native_y = native_ticks.get("y") if isinstance(native_ticks, dict) else None
+            canvas.restore_visible_ylims(
+                state.ylims,
+                native_axis_ranges=native_y or None,
+            )
+            tick_opts = axis_opts.get('tick_density') or {}
             default_x, default_y = DEFAULT_CHART_TICK_DENSITY
             canvas.set_tick_density(
                 int(tick_opts.get('x', default_x)),
                 int(tick_opts.get('y', default_y)),
             )
-            native_ticks = (state.axis_opts or {}).get("native_ticks")
             if native_ticks:
                 from ..pg_canvas.native_axes import (
                     apply_native_ticks,
