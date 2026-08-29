@@ -55,6 +55,8 @@ def is_reusable_blank_view(state: "ViewState") -> bool:
         return False
     if state.curve_bindings or state.remarks or state.cursor_placement:
         return False
+    if getattr(state, "hidden_curve_binding_ids", None):
+        return False
     if state.xlim is not None or state.ylims:
         return False
     if state.cursor_mode != "off" or state.plot_mode != "subplot":
@@ -88,6 +90,7 @@ class ViewState:
     remarks: list = field(default_factory=list)
     cursor_placement: dict | None = None
     curve_bindings: list[TimeCurveBinding] = field(default_factory=list)
+    hidden_curve_binding_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -145,6 +148,9 @@ class ViewState:
                 cursor_mode=data.get("cursor_mode", "off"),
             ),
             curve_bindings=parse_curve_bindings(data.get("curve_bindings")),
+            hidden_curve_binding_ids=_coerce_id_list(
+                data.get("hidden_curve_binding_ids")
+            ),
         )
 
 
@@ -166,6 +172,25 @@ def _coerce_optional_channel_key(value: Any) -> ChannelKey | None:
     if value is None:
         return None
     return _coerce_channel_key(value)
+
+
+def _coerce_id_list(value: Any) -> list[str]:
+    """Preserve first-seen hidden binding ids; ignore non-iterables and blanks."""
+    if value is None or isinstance(value, (str, bytes)):
+        return []
+    try:
+        items = list(value)
+    except TypeError:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
 
 
 def _coerce_pair(value: Any) -> tuple[float, float] | None:

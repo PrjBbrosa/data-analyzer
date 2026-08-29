@@ -11,6 +11,8 @@ import pytest
 from mf4_analyzer.ui.main_window.wwt_import_coordinator import (
     ACCEPT_TEXT,
     REJECT_TEXT,
+    WwtImportOutcome,
+    format_wwt_placement_summary,
     layout_dialog_text,
 )
 from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager, ViewState, is_reusable_blank_view
@@ -437,6 +439,83 @@ def test_record_only_overlap_is_reported_without_raw_code_toast(
     assert len(history.undo) == 1
     assert len(board.free_grid) == wwt.MULTI_WINDOW_COUNT
     assert board.unplaced == []
+    info = [msg for msg, level in toasts if level == "info"]
+    assert any("已生成 3 个 WinWert View" in msg and "已放置" in msg for msg in info)
+
+
+def test_format_wwt_placement_summary_reports_counts_and_stub_fallback():
+    full = format_wwt_placement_summary(
+        WwtImportOutcome(
+            detected=7,
+            created=7,
+            view_ids=tuple(f"v{i}" for i in range(7)),
+            warnings=(),
+            accepted=True,
+            placed_count=7,
+            unplaced_count=0,
+        )
+    )
+    assert full == "已生成 7 个 WinWert View：7 个已放置，0 个在未放置区"
+    mixed = format_wwt_placement_summary(
+        WwtImportOutcome(
+            detected=7,
+            created=7,
+            view_ids=tuple(f"v{i}" for i in range(7)),
+            warnings=(),
+            accepted=True,
+            placed_count=6,
+            unplaced_count=1,
+        )
+    )
+    assert mixed == "已生成 7 个 WinWert View：6 个已放置，1 个在未放置区"
+    stub = format_wwt_placement_summary(
+        WwtImportOutcome(
+            detected=3,
+            created=3,
+            view_ids=("a", "b", "c"),
+            warnings=(),
+            accepted=True,
+        )
+    )
+    assert stub == "已生成 3 个 WinWert View"
+
+
+def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.inspector_sections.contextual_time import TimeContextual
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    panel = TimeContextual()
+    panel.set_record_curves([])
+    assert panel._record_curves._row_widgets == []
+    panel.set_record_curves([{
+        "binding_id": "a",
+        "name": "TolY",
+        "color": "#ff0000",
+        "visible": True,
+    }])
+    assert len(panel._record_curves._row_widgets) == 1
+
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    mw = MainWindow()
+    _stub_wwt_ui(mw, monkeypatch, accept=True)
+    mw._load_one(str(path))
+    state = mw.view_manager.get(mw.view_manager.active)
+    record_ids = [
+        binding.binding_id
+        for binding in state.curve_bindings
+        if binding.y_ref.kind == "wwt_record"
+    ]
+    assert len(record_ids) == 1
+    checked_before = mw.navigator.get_checked_channels()
+    bindings_before = list(state.curve_bindings)
+    mw._on_record_curve_visibility_toggled(record_ids[0], False)
+    assert record_ids[0] in state.hidden_curve_binding_ids
+    assert mw.navigator.get_checked_channels() == checked_before
+    assert state.curve_bindings == bindings_before
+    mw._refresh_record_curve_inspector(state)
+    assert len(mw.inspector.time_ctx._record_curves._row_widgets) == 1
 
 
 def test_optional_customer_wwt_import_smoke_when_present(qapp, tmp_path, monkeypatch):

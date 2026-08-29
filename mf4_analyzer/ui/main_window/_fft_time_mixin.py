@@ -266,6 +266,7 @@ class FFTTimeMixin:
         self._fft_time_outcome = None
         mgr = self.analysis_managers['fft_time']
         state = mgr.get(mgr.active)
+        self._clear_analysis_view_viewports(state)
         page = self._analysis_page('fft_time')
         ctx = self.inspector.fft_time_ctx
         compute_getter = getattr(ctx, 'compute_params', None)
@@ -630,6 +631,7 @@ class FFTTimeMixin:
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
         notify_ultraview_plot(self, "fft_time", "fft-time-plot")
+        self._restore_analysis_canvas_viewport("fft_time", canvas)
 
     # ---- FFT vs Time coordinator events --------------------------------
     def _on_fft_time_render_requested(self, ctx, result, cache_hit):

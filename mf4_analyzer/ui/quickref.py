@@ -99,7 +99,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "WWT WinWert 排版",
-                sub="多窗口同步到以文件名命名的独立 Board；单窗口只生成时域 View，不自动加入 UltraView。不支持的公式或显示选项会警告，不是像素级复刻",
+                sub="多窗口同步到以文件名命名的独立 Board；单窗口只生成时域 View，不自动加入 UltraView。导入完成会报告已放置/未放置数量。不支持的公式或显示选项会警告，不是像素级复刻",
             ),
             QuickRow("BLF / CANoe ASC 报文解码", sub="需配 DBC；界面写「完整匹配」和/或「抽样解码」，不以估算帧数充精确计数。ASC 回退进度只升不降，100% 只在帧交付后"),
             QuickRow(
@@ -158,7 +158,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "总览",
-                sub="独立面板，只读对照已有预览：不计算；左上 Board 弹层管理多个 Board，左侧窄轨打开 View 库、自由网格、布局、筛选和未放置；View 库可钉住以免点画布时收起；右上浮岛开关标题/来源、当前工程所有 Board 的卡片操作常驻（保存项目后保留）、复制导出和演示；取消卡片操作常驻后，悬停或键盘聚焦卡片才显示操作；右下浮岛控制概览与缩放；停手后跟上图面，含游标读数与标注",
+                sub="独立面板，只读对照已有预览：不计算；左上 Board 弹层管理多个 Board，左侧窄轨打开 View 库、自由网格、布局、筛选和未放置；View 栏角标直达未放置托盘；View 库可钉住以免点画布时收起；右上浮岛开关标题/来源、当前工程所有 Board 的卡片操作常驻（保存项目后保留）、复制导出和演示；取消卡片操作常驻后，悬停或键盘聚焦卡片才显示操作；右下浮岛控制概览与缩放；停手后跟上图面，含游标读数与标注",
                 gesture="各工作区 View 栏最右侧 UltraView",
                 accent=_MODE_ULTRAVIEW,
             ),
@@ -207,6 +207,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="回到图面已绘通道范围，不是已加载文件里最长的那条",
             ),
             QuickRow(
+                "分析图缩放保持",
+                sub="频谱 / 时频 / 阶次的平移、滚轮、框选和查看全部会随 View 保存；点计算才按 Inspector 重成图",
+            ),
+            QuickRow(
                 "时间范围「全部」",
                 sub="X 轴回到图面已绘通道的最长全程，不是全局最长文件；不勾选过滤",
                 gesture="Inspector「全部」",
@@ -253,6 +257,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         title="通道树（左侧）",
         rows=(
             QuickRow("绘制 / 取消通道", gesture="勾选复选框"),
+            QuickRow(
+                "WinWert 原始辅助线",
+                sub="时域 Inspector 列出 WinWert 原始记录；眼睛只隐藏当前 View 的辅助线，不改 Navigator 也不改源文件",
+                gesture="Inspector 眼睛",
+            ),
             QuickRow(
                 "调整文件 / 通道顺序",
                 sub="拖文件卡片或通道树文件根节点移动整个文件块；拖通道只改同一来源内顺序。分屏与叠加都跟左侧顺序，画布内不能拖行",

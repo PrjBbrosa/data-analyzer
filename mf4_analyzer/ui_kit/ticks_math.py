@@ -42,6 +42,40 @@ def _snap_y_to_divisions(y: float, n: int) -> float:
 # sit around 1e-5..1e-3 relative and are untouched.
 _DEGENERATE_SPAN_RATIO = 1e-9
 
+
+def finite_non_degenerate_range(lo, hi):
+    """Return a finite, non-degenerate ``(lo, hi)`` window, else ``None``.
+
+    Reuses ``_DEGENERATE_SPAN_RATIO`` so analysis viewport capture, ViewState
+    restore, and tick framing cannot invent a second emptiness threshold.
+    """
+    try:
+        lo_f = float(lo)
+        hi_f = float(hi)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(lo_f) and math.isfinite(hi_f)):
+        return None
+    span = hi_f - lo_f
+    magnitude = max(abs(lo_f), abs(hi_f))
+    if not (span > magnitude * _DEGENERATE_SPAN_RATIO and span > 0.0):
+        return None
+    return (lo_f, hi_f)
+
+
+def ranges_overlap(left, right) -> bool:
+    """True when two axis windows share a finite, non-degenerate intersection."""
+    if left is None or right is None:
+        return False
+    try:
+        a = finite_non_degenerate_range(left[0], left[1])
+        b = finite_non_degenerate_range(right[0], right[1])
+    except (TypeError, ValueError, IndexError):
+        return False
+    if a is None or b is None:
+        return False
+    return finite_non_degenerate_range(max(a[0], b[0]), min(a[1], b[1])) is not None
+
 # Cap on the significant digits a tick label may print. Beyond this the digits
 # describe rounding noise rather than measurement: sensor payloads in MF4/HDF
 # are float32 (7 decimal digits) and even float64-derived computed channels

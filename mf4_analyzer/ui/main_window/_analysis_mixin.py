@@ -279,6 +279,9 @@ class AnalysisMixin:
         self.chart_stack._connect_analysis_card_signals(page._cards[1])
         if section == 'fft':
             self._connect_fft_preview_range_signal(page.pane_canvas(1), 1)
+        if section in {'fft', 'fft_time', 'order'}:
+            self._wire_analysis_viewport_intent(page.pane_canvas(0), section, 0)
+            self._wire_analysis_viewport_intent(page.pane_canvas(1), section, 1)
         # V8: pane 1's colorbar-drag → inspector Z echo (heatmap sections).
         # Guarded against double-wiring across repeated splits via a marker on
         # the canvas (enter_split builds a fresh card each time, so a stale
@@ -304,6 +307,125 @@ class AnalysisMixin:
             restored.connect(echo)
         canvas._levels_echo_wired = True
 
+    def _analysis_xy_fingerprint(self, params):
+        params = params or {}
+        return (
+            bool(params.get("x_auto", params.get("autoscale", True))),
+            params.get("x_min"),
+            params.get("x_max"),
+            bool(params.get("y_auto", True)),
+            params.get("y_min"),
+            params.get("y_max"),
+        )
+
+    def _clear_analysis_view_viewports(self, state):
+        for pane in getattr(state, "panes", ()) or ():
+            pane.xlim = None
+            pane.ylim = None
+
+    def _wire_analysis_viewport_intent(self, canvas, section, pane_idx):
+        """Connect canvas user-viewport intent once (partial, not lambda)."""
+        signal = getattr(canvas, "viewport_intent_committed", None)
+        if signal is None or getattr(canvas, "_viewport_intent_wired", False):
+            return
+        signal.connect(
+            partial(self._on_analysis_viewport_intent, section, pane_idx)
+        )
+        canvas._viewport_intent_wired = True
+
+    def _on_analysis_viewport_intent(self, section, pane_idx):
+        if getattr(self, "_applying_analysis_view", False):
+            return
+        if self.chart_stack.current_mode() != section:
+            return
+        managers = getattr(self, "analysis_managers", None) or {}
+        mgr = managers.get(section)
+        if mgr is None or not mgr.views:
+            return
+        state = mgr.get(mgr.active)
+        self._commit_analysis_pane_viewport(section, state, pane_idx)
+        if not bool(state.compare.get("x_linked", True)):
+            return
+        sibling = 1 - int(pane_idx)
+        page = self._analysis_page(section)
+        if sibling < page.pane_count() and sibling < len(state.panes):
+            self._commit_analysis_pane_viewport(section, state, sibling)
+
+    def _commit_analysis_pane_viewport(self, section, state, pane_idx):
+        page = self._analysis_page(section)
+        if pane_idx >= page.pane_count() or pane_idx >= len(state.panes):
+            return
+        canvas = page.pane_canvas(pane_idx)
+        capture = getattr(canvas, "capture_xy_viewport", None)
+        if not callable(capture):
+            return
+        captured = capture()
+        if captured is None:
+            return
+        xlim, ylim = captured
+        pane = state.panes[pane_idx]
+        pane.xlim = xlim
+        pane.ylim = ylim
+
+    def _capture_analysis_xy_viewports(self, section, state):
+        if section not in {"fft", "fft_time", "order"}:
+            return
+        page = self._analysis_page(section)
+        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            self._commit_analysis_pane_viewport(section, state, pane_idx)
+
+    def _restore_analysis_pane_viewport(self, section, state, pane_idx, canvas):
+        from ...ui_kit.ticks_math import finite_non_degenerate_range, ranges_overlap
+
+        if section not in {"fft", "fft_time", "order"} or canvas is None:
+            return
+        if pane_idx >= len(state.panes):
+            return
+        pane = state.panes[pane_idx]
+        restore = getattr(canvas, "restore_xy_viewport", None)
+        extents_fn = getattr(canvas, "data_xy_extents", None)
+        capture = getattr(canvas, "capture_xy_viewport", None)
+        if not callable(restore):
+            return
+        data = extents_fn() if callable(extents_fn) else None
+        data_x = data[0] if data else None
+        data_y = data[1] if data else None
+        saved_x = pane.xlim
+        saved_y = pane.ylim
+        try:
+            x_ok = (
+                saved_x is not None
+                and finite_non_degenerate_range(saved_x[0], saved_x[1]) is not None
+                and (data_x is None or ranges_overlap(saved_x, data_x))
+            )
+            y_ok = (
+                saved_y is not None
+                and finite_non_degenerate_range(saved_y[0], saved_y[1]) is not None
+                and (data_y is None or ranges_overlap(saved_y, data_y))
+            )
+        except (TypeError, ValueError, IndexError):
+            x_ok = y_ok = False
+        if x_ok and y_ok and restore(saved_x, saved_y):
+            return
+        if callable(capture):
+            captured = capture()
+            if captured is not None:
+                pane.xlim, pane.ylim = captured
+
+    def _restore_analysis_canvas_viewport(self, section, canvas):
+        managers = getattr(self, "analysis_managers", None) or {}
+        mgr = managers.get(section)
+        if mgr is None or not mgr.views or canvas is None:
+            return
+        page = self._analysis_page(section)
+        state = mgr.get(mgr.active)
+        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            if page.pane_canvas(pane_idx) is canvas:
+                self._restore_analysis_pane_viewport(
+                    section, state, pane_idx, canvas
+                )
+                return
+
     def _connect_fft_preview_range_signal(self, canvas, pane_idx):
         signal = getattr(canvas, 'time_preview_range_changed', None)
         if signal is None or getattr(canvas, '_fft_preview_range_wired', False):
@@ -321,6 +443,8 @@ class AnalysisMixin:
         capture_params_to_state(self._analysis_ctx(section), state)
         if section == 'frf':
             self._capture_frf_canvas_ranges(state)
+        elif section in {'fft', 'fft_time', 'order'}:
+            self._capture_analysis_xy_viewports(section, state)
         # The shared range widgets only represent the visible section.  Saving
         # a project flushes every analysis section, so reading them for an
         # inactive section would overwrite that section's retained range with
@@ -393,7 +517,21 @@ class AnalysisMixin:
 
     def _on_analysis_display_params_changed(self, section, _params):
         """Record a display edit and redraw only the visible active View."""
+        xy_changed = False
+        if (
+            section in {'fft', 'fft_time', 'order'}
+            and not getattr(self, '_applying_analysis_view', False)
+            and self.chart_stack.current_mode() == section
+        ):
+            mgr = (getattr(self, 'analysis_managers', None) or {}).get(section)
+            if mgr is not None and mgr.views:
+                xy_changed = (
+                    self._analysis_xy_fingerprint(mgr.get(mgr.active).params)
+                    != self._analysis_xy_fingerprint(_params)
+                )
         state = self._sync_active_analysis_params(section)
+        if state is not None and xy_changed:
+            self._clear_analysis_view_viewports(state)
         if state is not None and self.chart_stack.current_mode() == section:
             self._render_analysis_view_from_cache(section, state)
 

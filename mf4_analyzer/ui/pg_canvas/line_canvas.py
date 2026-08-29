@@ -92,6 +92,7 @@ from .ticks_math import (
     _fmt_tick,
     _frame_to_nice,
     _nice_per_div,
+    finite_non_degenerate_range,
 )
 from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
 from mf4_analyzer.ui.plot_helpers import _middle_ellipsis
@@ -289,6 +290,19 @@ class _HistoryHandle:
             self._vb.setYRange(lo, hi, padding=0)
 
 
+def _xy_from_viewbox(view_box):
+    """Finite non-degenerate ``((x0, x1), (y0, y1))`` from a ViewBox, else None."""
+    try:
+        (x0, x1), (y0, y1) = view_box.viewRange()
+    except Exception:
+        return None
+    xr = finite_non_degenerate_range(x0, x1)
+    yr = finite_non_degenerate_range(y0, y1)
+    if xr is None or yr is None:
+        return None
+    return xr, yr
+
+
 class PgLineCanvas(_StackedSplitMixin, QWidget):
     cursor_info = pyqtSignal(str)
     dual_cursor_info = pyqtSignal(str)
@@ -301,6 +315,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     layout_geometry_changed = pyqtSignal()
     time_preview_range_changed = pyqtSignal(float, float)
     manual_zoom_changed = pyqtSignal(bool)
+    # User pan/box/modifier-wheel/View-All on the spectrum row only.
+    # plot_spectra / empty preview View-All / full_reset must not emit this.
+    viewport_intent_committed = pyqtSignal()
     # Hidden-gesture discovery: emitted when the user clicks a spectrum curve to
     # pick the time-preview source. The chart card retires the "click a curve to
     # choose the source" tip once this fires.
@@ -1218,6 +1235,55 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._emit_time_preview_range()
         elif plot is self._plot_amp:
             self.manual_zoom_changed.emit(True)
+            self._emit_viewport_intent()
+
+    def _emit_viewport_intent(self) -> None:
+        if not self._amp_curves:
+            return
+        self.viewport_intent_committed.emit()
+
+    def capture_xy_viewport(self):
+        """Return the spectrum row's finite X/Y window, else ``None``.
+
+        Does not read the time-preview ViewBox. Empty / stale-preview state
+        has no spectrum curves and therefore no viewport to persist.
+        """
+        if not self._amp_curves:
+            return None
+        return _xy_from_viewbox(self._plot_amp.vb)
+
+    def data_xy_extents(self):
+        """Plotted spectrum extents (Inspector/result), not the live zoom."""
+        if self._last_xlim is None:
+            return None
+        xr = finite_non_degenerate_range(self._last_xlim[0], self._last_xlim[1])
+        if xr is None:
+            return None
+        if self._last_yrange is not None:
+            yr = finite_non_degenerate_range(
+                self._last_yrange[0], self._last_yrange[1]
+            )
+        else:
+            captured = self.capture_xy_viewport()
+            yr = captured[1] if captured is not None else None
+        if yr is None:
+            return None
+        return xr, yr
+
+    def restore_xy_viewport(self, xlim, ylim) -> bool:
+        """Apply a saved spectrum X/Y window. Does not touch the time preview."""
+        if not self._amp_curves:
+            return False
+        try:
+            xr = finite_non_degenerate_range(xlim[0], xlim[1])
+            yr = finite_non_degenerate_range(ylim[0], ylim[1])
+        except (TypeError, ValueError, IndexError):
+            return False
+        if xr is None or yr is None:
+            return False
+        self._plot_amp.setXRange(xr[0], xr[1], padding=0)
+        self._plot_amp.setYRange(yr[0], yr[1], padding=0)
+        return True
 
     def get_time_preview_xlim(self):
         """Return the time-preview ViewBox visible X as ``(lo, hi)`` or None."""
@@ -1490,6 +1556,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     self._emit_time_preview_range()
                 elif view_box is self._plot_amp.vb:
                     self.manual_zoom_changed.emit(True)
+                    self._emit_viewport_intent()
             elif on_time:
                 pairs = self._time_axis_pairs()
                 if axis == 1:
@@ -1556,6 +1623,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 )
                 if view_box is self._plot_amp.vb:
                     self.manual_zoom_changed.emit(True)
+                    self._emit_viewport_intent()
             else:
                 return True
         except Exception:
@@ -1810,6 +1878,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # aux right axes stay aligned on the same horizontal grid lines.
         self._reframe_time_y_to_grid()
         self.manual_zoom_changed.emit(False)
+        self._emit_viewport_intent()
 
     def _reset_time_preview_to_extents(self) -> None:
         bounds = self._combined_time_bounds()

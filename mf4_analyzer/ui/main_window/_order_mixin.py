@@ -348,6 +348,7 @@ class OrderMixin:
         self._order_outcome = None
         mgr = self.analysis_managers['order']
         state = mgr.get(mgr.active)
+        self._clear_analysis_view_viewports(state)
         page = self._analysis_page('order')
         cache = self.analysis_caches['order']
 
@@ -697,6 +698,7 @@ class OrderMixin:
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
         notify_ultraview_plot(self, "order", "order-plot")
+        self._restore_analysis_canvas_viewport("order", canvas)
 
     def _render_order_time(self, result, *, emit_feedback=True, source=None):
         # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the

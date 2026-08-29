@@ -84,6 +84,60 @@ def _channel_tip(channel, fd):
     return f"{channel} [{unit}]" if unit else str(channel)
 
 
+def _zeit_record_indices(fd) -> tuple[int, ...]:
+    smeta = getattr(fd, "source_metadata", None) or {}
+    raw = smeta.get("zeit_record_indices") or ()
+    out = []
+    for item in raw:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return tuple(out)
+
+
+def grouped_source_raster_label(fd) -> str:
+    """Grouped-source raster text. WWT rows include a stable Zeit id."""
+    rate = _fmt_rate(getattr(fd, "fs", 0.0) or 0.0)
+    smeta = getattr(fd, "source_metadata", None) or {}
+    if str(smeta.get("source_kind") or "") != "wwt":
+        return rate
+    zeit = _zeit_record_indices(fd)
+    if not zeit:
+        return rate
+    if len(zeit) == 1:
+        return f"{rate} · Zeit {zeit[0]}"
+    if len(zeit) == 2:
+        return f"{rate} · Zeit {zeit[0]}/{zeit[1]}"
+    return f"{rate} · Zeit {zeit[0]}–{zeit[-1]}"
+
+
+def grouped_source_raster_tooltip(fd) -> str:
+    data = getattr(fd, "data", None)
+    n_rows = 0 if data is None else len(data)
+    smeta = getattr(fd, "source_metadata", None) or {}
+    if str(smeta.get("source_kind") or "") != "wwt":
+        return f"{n_rows} 行"
+    channels = []
+    getter = getattr(fd, "get_signal_channels", None)
+    if callable(getter):
+        channels = list(getter() or [])
+    cmeta = getattr(fd, "channel_metadata", None) or {}
+    n_formula = sum(
+        1
+        for meta in cmeta.values()
+        if isinstance(meta, dict) and meta.get("derived")
+    )
+    zeit = _zeit_record_indices(fd)
+    zeit_text = ", ".join(str(i) for i in zeit) if zeit else "—"
+    return (
+        f"Zeit 记录: {zeit_text}\n"
+        f"样本数: {n_rows}\n"
+        f"通道数: {len(channels)}\n"
+        f"已注入 Pars 公式通道: {n_formula}"
+    )
+
+
 class _ChannelLeafDelegate(QStyledItemDelegate):
     """Paint channel leaves with one invariant three-column geometry.
 
@@ -925,13 +979,13 @@ class MultiFileChannelWidget(QWidget):
 
             # Create raster subgroup node
             n_rows = len(fd.data)
-            raster_item = QTreeWidgetItem([_fmt_rate(fd.fs), str(n_rows)])
+            raster_item = QTreeWidgetItem([grouped_source_raster_label(fd), str(n_rows)])
             raster_item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
             raster_item.setFlags(raster_item.flags() | Qt.ItemIsUserCheckable)
             raster_item.setCheckState(0, Qt.Unchecked)
             raster_item.setData(0, Qt.UserRole, ('raster', fid))
             raster_item.setExpanded(True)
-            raster_item.setToolTip(0, f"{n_rows} 行")
+            raster_item.setToolTip(0, grouped_source_raster_tooltip(fd))
             font2 = raster_item.font(0)
             font2.setBold(True)
             raster_item.setFont(0, font2)

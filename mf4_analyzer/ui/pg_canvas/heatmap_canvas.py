@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 )
 
 from mf4_analyzer.ui._axis_handle import PgAxisHandle
+from mf4_analyzer.ui_kit.ticks_math import finite_non_degenerate_range
 
 # The shared analysis axis/tick/dB layer used to live in this file. It now
 # lives in analysis_axes.py, but every name is re-exported here so the old
@@ -242,12 +243,28 @@ _EMPTY_X_RANGE = (0.0, 30.0)
 _EMPTY_Y_RANGE = (0.0, 1000.0)
 
 
+def _heatmap_xy_from_viewbox(view_box):
+    """Finite non-degenerate ``((x0, x1), (y0, y1))`` from a ViewBox, else None."""
+    try:
+        (x0, x1), (y0, y1) = view_box.viewRange()
+    except Exception:
+        return None
+    xr = finite_non_degenerate_range(x0, x1)
+    yr = finite_non_degenerate_range(y0, y1)
+    if xr is None or yr is None:
+        return None
+    return xr, yr
+
+
 class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
     # Emitted when the user drags the interactive colorbar (lo, hi).
     levels_changed = pyqtSignal(float, float)
     manual_zoom_changed = pyqtSignal(bool)
+    # User pan/box/modifier-wheel/View-All on the heatmap (not the slice).
+    # plot_or_update_heatmap / empty View-All / full_reset must not emit this.
+    viewport_intent_committed = pyqtSignal()
     # Emitted after labels/ticks/title/colorbar changes that can resize the
     # pyqtgraph layout. Analysis split pages coalesce this and align panes.
     layout_geometry_changed = pyqtSignal()
@@ -652,6 +669,52 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def _on_main_manual_zoom(self, *_args) -> None:
         self.manual_zoom_changed.emit(True)
+        self._emit_viewport_intent()
+
+    def _emit_viewport_intent(self) -> None:
+        if not self._has_result:
+            return
+        self.viewport_intent_committed.emit()
+
+    def capture_xy_viewport(self):
+        """Return the heatmap's finite X/Y window, else ``None``.
+
+        Slice subplot and Z/colorbar levels are not part of this viewport.
+        """
+        if not self._has_result:
+            return None
+        return _heatmap_xy_from_viewbox(self._plot.vb)
+
+    def data_xy_extents(self):
+        """Raw image extents (flush-edge), independent of the live zoom."""
+        if self._extents is None:
+            return None
+        x0, x1, y0, y1 = self._extents
+        xr = finite_non_degenerate_range(x0, x1)
+        yr = finite_non_degenerate_range(y0, y1)
+        if xr is None or yr is None:
+            return None
+        return xr, yr
+
+    def restore_xy_viewport(self, xlim, ylim) -> bool:
+        """Apply a saved heatmap X/Y window and resync the 1D slice."""
+        if not self._has_result:
+            return False
+        try:
+            xr = finite_non_degenerate_range(xlim[0], xlim[1])
+            yr = finite_non_degenerate_range(ylim[0], ylim[1])
+        except (TypeError, ValueError, IndexError):
+            return False
+        if xr is None or yr is None:
+            return False
+        self._heatmap_range_updating = True
+        try:
+            self._plot.setXRange(xr[0], xr[1], padding=0)
+            self._plot.setYRange(yr[0], yr[1], padding=0)
+        finally:
+            self._heatmap_range_updating = False
+        self._sync_slice_to_heatmap_view()
+        return True
 
     def _sync_slice_to_heatmap_view(self, *_args) -> None:
         """Re-clip the 1D slice to the heatmap's current view.
@@ -1071,6 +1134,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.schedule_idle_quality()
         if view_box is self._plot.vb:
             self.manual_zoom_changed.emit(True)
+            self._emit_viewport_intent()
         self.layout_geometry_changed.emit()
         return True
 
@@ -1185,6 +1249,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._heatmap_range_updating = False
         self._sync_slice_to_heatmap_view()
         self.manual_zoom_changed.emit(False)
+        self._emit_viewport_intent()
 
     # ------------------------------------------------------------------
     # FFT-vs-Time: spectrogram render + frequency slice (with_slice=True)

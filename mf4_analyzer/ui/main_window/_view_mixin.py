@@ -582,6 +582,8 @@ class ViewMixin:
             restore_placement = getattr(canvas, "restore_cursor_placement", None)
             if callable(restore_placement):
                 restore_placement(state.cursor_placement)
+            if update_primary_ui:
+                self._refresh_record_curve_inspector(state)
         finally:
             self._applying_view = old_applying_view
             # F8: secondary-pane restore must not project time controls while
@@ -600,6 +602,53 @@ class ViewMixin:
             coord.bind_canvas(canvas, new_ref)
             coord.request_capture(new_ref, canvas, "time-render")
         return rendered
+
+    def _refresh_record_curve_inspector(self, state=None):
+        panel = getattr(getattr(self, "inspector", None), "time_ctx", None)
+        setter = getattr(panel, "set_record_curves", None)
+        if not callable(setter):
+            return
+        if state is None:
+            try:
+                state = self.view_manager.get(self.view_manager.active)
+            except Exception:
+                setter(())
+                return
+        hidden = {
+            str(item) for item in (getattr(state, "hidden_curve_binding_ids", None) or ())
+        }
+        rows = []
+        for binding in getattr(state, "curve_bindings", None) or ():
+            y_ref = getattr(binding, "y_ref", None)
+            if getattr(y_ref, "kind", None) != "wwt_record":
+                continue
+            binding_id = str(getattr(binding, "binding_id", "") or "")
+            if not binding_id:
+                continue
+            rows.append({
+                "binding_id": binding_id,
+                "name": str(getattr(binding, "display_name", "") or binding_id),
+                "color": str(getattr(binding, "color", "") or "#64748b"),
+                "visible": binding_id not in hidden,
+            })
+        setter(rows)
+
+    def _on_record_curve_visibility_toggled(self, binding_id, visible):
+        if not getattr(self, "view_manager", None) or not self.view_manager.views:
+            return
+        state = self.view_manager.get(self.view_manager.active)
+        hidden = [
+            str(item) for item in (getattr(state, "hidden_curve_binding_ids", None) or [])
+        ]
+        bid = str(binding_id)
+        if visible:
+            hidden = [item for item in hidden if item != bid]
+        elif bid not in hidden:
+            hidden.append(bid)
+        state.hidden_curve_binding_ids = hidden
+        self._replot_canvas_for_view(
+            self.view_manager.active, self.canvas_time, preserve_xlim=True
+        )
 
     # -- view tab-bar intent handlers (time section) --------------------
     def _on_view_new(self):

@@ -1085,6 +1085,9 @@ class MainWindow(
         self.toolbar.save_project_as_requested.connect(self.save_project_as_via_dialog)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.chart_stack.open_ultraview_requested.connect(self.open_ultraview)
+        self.chart_stack.open_ultraview_unplaced_requested.connect(
+            self.open_ultraview_unplaced
+        )
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.chart_stack.image_captured.connect(
@@ -1146,6 +1149,9 @@ class MainWindow(
         # minimal additions rather than rewrites.
         self.inspector.plot_time_requested.connect(
             lambda: self.plot_time(user_initiated=True)
+        )
+        self.inspector.record_curve_visibility_toggled.connect(
+            self._on_record_curve_visibility_toggled
         )
         # Live display toggles for the filter overlay: 显示原始 / 显示滤波后
         # flip the visibility of the EXISTING curves on the focused time canvas
@@ -1337,6 +1343,8 @@ class MainWindow(
                 self._wire_heatmap_levels_echo(page.pane_canvas(0), sec, 0)
             else:
                 self._connect_fft_preview_range_signal(page.pane_canvas(0), 0)
+            if sec in {'fft', 'fft_time', 'order'}:
+                self._wire_analysis_viewport_intent(page.pane_canvas(0), sec, 0)
 
         # FFT vs Time primary compute.
         self.inspector.fft_time_requested.connect(
@@ -1732,6 +1740,7 @@ class MainWindow(
         )
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
+        self._restore_analysis_canvas_viewport('fft', canvas)
 
     def _render_cached_heatmap(self, section, canvas, result, source=None):
         """Render a cached heatmap result on ``canvas`` using the current
@@ -4196,6 +4205,11 @@ class MainWindow(
                 range_hi=range_hi if range_enabled else None,
                 checked_channel_keys=checked_keys,
                 channel_colors=checked_colors,
+                hidden_binding_ids=getattr(
+                    self.view_manager.get(self.view_manager.active),
+                    "hidden_curve_binding_ids",
+                    None,
+                ) if getattr(self, "view_manager", None) and self.view_manager.views else None,
             )
             bind_rows, bind_issues, binding_claimed = bind_result
             result.rows.extend(bind_rows)
@@ -4802,6 +4816,14 @@ class MainWindow(
             dlg, "_ultraview_sheet", self._on_ultraview_sheet_destroyed,
         )
         self._fit_ultraview_on_open()
+
+    def open_ultraview_unplaced(self):
+        """Open UltraView and focus the active Board's unplaced tray."""
+        self.open_ultraview()
+        coord = getattr(self, "_ultraview", None)
+        opener = getattr(coord, "open_unplaced_tray", None)
+        if callable(opener):
+            QTimer.singleShot(0, opener)
 
     def _fit_ultraview_on_open(self) -> None:
         """Every UltraView open parks on 适应, not leftover pan/zoom."""

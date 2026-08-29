@@ -647,8 +647,15 @@ def test_ucan_import_preview_reflow_is_one_undo(qapp):
     controller = coordinator._workspace_controller
     items = tuple((f"v{index}", rect) for index, rect in enumerate(UCAN_MM))
     try:
-        placed, warnings = coordinator.add_time_views_from_native_layout(items)
+        result = coordinator.add_time_views_from_native_layout(items)
+        placed, warnings = result
         assert placed == tuple(f"v{index}" for index in range(7))
+        assert set(result.generated_ids) == set(placed)
+        assert result.unplaced_ids == ()
+        assert (
+            len(result.placed_view_ids) + len(result.unplaced_ids)
+            == len(result.generated_ids)
+        )
         assert coordinator.board.unplaced == []
         assert any("exact_overlap_relocated" in item for item in warnings)
         history = controller.grid_histories[coordinator.board.board_id]

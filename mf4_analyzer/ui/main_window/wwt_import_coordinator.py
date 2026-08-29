@@ -70,6 +70,11 @@ class WwtImportOutcome:
     issues: tuple[WwtIssue, ...] = field(default_factory=tuple)
     summary: str = ""
     accepted: bool = False
+    placed_count: int = 0
+    unplaced_count: int = 0
+    board_id: str = ""
+    unprojected_count: int = 0
+    generated_ids: tuple[str, ...] = ()
 
 
 def _wwt_stem_for_fids(window, fids) -> str:
@@ -314,6 +319,27 @@ def format_wwt_import_summary(
     return "；".join(dict.fromkeys(part for part in parts if part))
 
 
+def format_wwt_placement_summary(outcome) -> str:
+    """Accepted-import completion line. Empty when nothing was created."""
+    if not getattr(outcome, "accepted", False):
+        return ""
+    created = int(getattr(outcome, "created", 0) or 0)
+    if created <= 0:
+        return ""
+    placed = int(getattr(outcome, "placed_count", 0) or 0)
+    unplaced = int(getattr(outcome, "unplaced_count", 0) or 0)
+    unprojected = int(getattr(outcome, "unprojected_count", 0) or 0)
+    if created < 2 or (placed == 0 and unplaced == 0 and unprojected == 0):
+        return f"已生成 {created} 个 WinWert View"
+    text = (
+        f"已生成 {created} 个 WinWert View："
+        f"{placed} 个已放置，{unplaced} 个在未放置区"
+    )
+    if unprojected:
+        text += f"，{unprojected} 个未投影"
+    return text
+
+
 class WwtImportCoordinator:
     def __init__(self, window):
         self._window = window
@@ -365,6 +391,11 @@ class WwtImportCoordinator:
             accepted: bool = False,
             overlap_count: int = 0,
             extra_warnings: tuple[str, ...] = (),
+            placed_count: int = 0,
+            unplaced_count: int = 0,
+            board_id: str = "",
+            unprojected_count: int = 0,
+            generated_ids: tuple[str, ...] = (),
         ) -> WwtImportOutcome:
             issues = list(collect_wwt_import_issues(
                 document,
@@ -392,6 +423,11 @@ class WwtImportCoordinator:
                 issues=issues,
                 summary=summary,
                 accepted=accepted,
+                placed_count=placed_count,
+                unplaced_count=unplaced_count,
+                board_id=board_id,
+                unprojected_count=unprojected_count,
+                generated_ids=generated_ids,
             )
 
         if not proposals:
@@ -430,6 +466,11 @@ class WwtImportCoordinator:
             extra.extend(item.warnings)
         overlaps = _exact_overlap_pairs(keep)
         created = len(indexes)
+        placed_count = 0
+        unplaced_count = 0
+        unprojected_count = 0
+        board_id = ""
+        generated_ids: tuple[str, ...] = ()
         if created >= 2:
             ultra = getattr(window, "_ultraview", None)
             adder = (
@@ -441,16 +482,35 @@ class WwtImportCoordinator:
                     (manager.views[idx].view_id, proposal.rect_mm)
                     for idx, proposal in zip(indexes, keep)
                 ]
-                extra.extend(_projection_warnings(adder(
+                result = adder(
                     items,
                     board_name=_wwt_stem_for_fids(window, fids),
                     dedicated_board=True,
                     reuse_empty_board=True,
-                )))
+                )
+                extra.extend(_projection_warnings(result))
+                placed_ids = getattr(result, "placed_view_ids", None)
+                if placed_ids is None:
+                    placed_ids = result[0] if isinstance(result, tuple) and result else ()
+                unplaced_ids = tuple(getattr(result, "unplaced_ids", ()) or ())
+                generated_ids = tuple(getattr(result, "generated_ids", None) or ())
+                if not generated_ids:
+                    generated_ids = tuple(placed_ids or ()) + unplaced_ids
+                board_id = str(getattr(result, "board_id", "") or "")
+                placed_count = len(tuple(placed_ids or ()))
+                unplaced_count = len(unplaced_ids)
+                unprojected_count = max(
+                    0, len(generated_ids) - placed_count - unplaced_count
+                )
         return _outcome(
             created=created,
             view_ids=view_ids,
             accepted=True,
             overlap_count=len(overlaps),
             extra_warnings=tuple(extra),
+            placed_count=placed_count,
+            unplaced_count=unplaced_count,
+            board_id=board_id,
+            unprojected_count=unprojected_count,
+            generated_ids=generated_ids,
         )

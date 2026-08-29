@@ -64,6 +64,7 @@ class ChartStack(QWidget):
     quickref_requested = pyqtSignal()
     add_to_ultraview_requested = pyqtSignal(str, str)
     open_ultraview_requested = pyqtSignal()
+    open_ultraview_unplaced_requested = pyqtSignal()
     # Time-domain channel MIME drop. ``zone`` is ``plot`` or ``xaxis``.
     # Carries (canvas, (fid, channel), zone); MainWindow owns View writes.
     channel_drop_requested = pyqtSignal(object, object, str)
@@ -1001,6 +1002,9 @@ class ChartStack(QWidget):
     def _emit_open_ultraview(self, _checked=False):
         self.open_ultraview_requested.emit()
 
+    def _emit_open_ultraview_unplaced(self):
+        self.open_ultraview_unplaced_requested.emit()
+
     def set_ultraview_has_content(self, has_content: bool) -> None:
         """Project the workspace-content marker onto every source View rail."""
         entries = (
@@ -1015,6 +1019,20 @@ class ChartStack(QWidget):
             if callable(setter):
                 setter(has_content)
 
+    def set_ultraview_unplaced_count(self, count: int) -> None:
+        """Project the active Board's unplaced count onto every View rail."""
+        entries = (
+            getattr(self, "ultraview_entry", None),
+            getattr(getattr(self, "page_fft", None), "ultraview_entry", None),
+            getattr(getattr(self, "page_fft_time", None), "ultraview_entry", None),
+            getattr(getattr(self, "page_frf", None), "ultraview_entry", None),
+            getattr(getattr(self, "page_order", None), "ultraview_entry", None),
+        )
+        for entry in entries:
+            setter = getattr(entry, "set_unplaced_count", None)
+            if callable(setter):
+                setter(count)
+
     def _wire_ultraview_entry(self, button):
         """Connect a View-rail Dock click once; repeat calls are no-ops."""
         if button is None:
@@ -1026,6 +1044,9 @@ class ChartStack(QWidget):
         if token in wired:
             return
         button.clicked.connect(self._emit_open_ultraview)
+        badge = getattr(button, "badge_clicked", None)
+        if badge is not None:
+            badge.connect(self._emit_open_ultraview_unplaced)
         wired.add(token)
 
     def attach_view_tabbar(self, manager):

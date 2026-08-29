@@ -4050,3 +4050,54 @@ def test_heatmap_context_menu_custom_slot_item_availability(canvas, monkeypatch)
     assert panel.findChild(QToolButton, "pgContextActionItem_copy_image").isEnabled()
     assert not panel.findChild(QToolButton, "pgContextActionItem_export").isEnabled()
     settings.clear()
+
+
+def test_heatmap_plot_does_not_emit_viewport_intent(canvas, qapp):
+    from PyQt5.QtTest import QSignalSpy
+
+    spy = QSignalSpy(canvas.viewport_intent_committed)
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode="amplitude", z_auto=True,
+    )
+    qapp.processEvents()
+    assert len(spy) == 0
+    captured = canvas.capture_xy_viewport()
+    (x0, x1), (y0, y1) = canvas._plot.vb.viewRange()
+    assert captured[0][0] == pytest.approx(x0)
+    assert captured[0][1] == pytest.approx(x1)
+    assert captured[1][0] == pytest.approx(y0)
+    assert captured[1][1] == pytest.approx(y1)
+
+
+def test_heatmap_view_all_emits_intent_and_keeps_flush_extents(canvas, qapp):
+    from PyQt5.QtTest import QSignalSpy
+
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode="amplitude", z_auto=True, z_floor=-5.0, z_ceiling=5.0,
+    )
+    qapp.processEvents()
+    levels_before = tuple(canvas._img.getLevels())
+    canvas._plot.setXRange(2.0, 4.0, padding=0)
+    canvas._plot.setYRange(1.0, 3.0, padding=0)
+    spy = QSignalSpy(canvas.viewport_intent_committed)
+    canvas.reset_view_to_data_extents()
+    qapp.processEvents()
+    assert len(spy) == 1
+    captured = canvas.capture_xy_viewport()
+    assert captured[0][0] == pytest.approx(0.0)
+    assert captured[0][1] == pytest.approx(10.0)
+    assert captured[1][0] == pytest.approx(0.0)
+    assert captured[1][1] == pytest.approx(8.0)
+    assert canvas.restore_xy_viewport((1.0, 4.0), (2.0, 6.0)) is True
+    (x0, x1), (y0, y1) = canvas._plot.vb.viewRange()
+    assert x0 == pytest.approx(1.0)
+    assert x1 == pytest.approx(4.0)
+    assert y0 == pytest.approx(2.0)
+    assert y1 == pytest.approx(6.0)
+    after_levels = canvas._img.getLevels()
+    assert np.allclose(after_levels, levels_before)
+    extents = canvas.data_xy_extents()
+    assert extents[0] == pytest.approx((0.0, 10.0))
+    assert extents[1] == pytest.approx((0.0, 8.0))

@@ -20,7 +20,9 @@ from mf4_analyzer.ui_kit.ticks_math import (  # noqa: F401 re-export
     _fmt_tick,
     _frame_to_nice,
     bounded_tick_strings,
+    finite_non_degenerate_range,
     pad_y_extent,
+    ranges_overlap,
 )
 
 

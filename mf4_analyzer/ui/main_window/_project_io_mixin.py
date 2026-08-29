@@ -568,9 +568,14 @@ class ProjectIOMixin:
                 self.toast(notice, "warning")
 
     def _consume_wwt_import_outcome(self, outcome):
-        """Surface the coordinator's one degraded-import summary. Restore is silent."""
+        """Surface placement completion plus any degraded-import warning."""
         if outcome is None or getattr(self, "_restoring_project", False):
             return
+        from .wwt_import_coordinator import format_wwt_placement_summary
+
+        info = format_wwt_placement_summary(outcome)
+        if info:
+            self.toast(info, "info")
         summary = getattr(outcome, "summary", "") or ""
         if summary:
             self.toast(summary, "warning")

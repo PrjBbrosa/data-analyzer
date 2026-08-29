@@ -3728,3 +3728,65 @@ def test_fft_line_context_menu_has_custom_action_slot(canvas, monkeypatch):
     main = custom.findChild(QToolButton, "pgContextCustomActionMain")
     assert main.isEnabled()  # copy handler injected -> usable
     settings.clear()
+
+
+def test_plot_spectra_does_not_emit_viewport_intent(canvas, qapp):
+    from PyQt5.QtTest import QSignalSpy
+
+    spy = QSignalSpy(canvas.viewport_intent_committed)
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label="Amplitude", title="FFT",
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    qapp.processEvents()
+    assert len(spy) == 0
+    captured = canvas.capture_xy_viewport()
+    assert captured is not None
+    (x0, x1), (y0, y1) = canvas._plot_amp.vb.viewRange()
+    assert captured[0][0] == pytest.approx(x0)
+    assert captured[0][1] == pytest.approx(x1)
+    assert captured[1][0] == pytest.approx(y0)
+    assert captured[1][1] == pytest.approx(y1)
+
+
+def test_view_all_emits_intent_and_capture_matches_padded_view(canvas, qapp):
+    from PyQt5.QtTest import QSignalSpy
+
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label="Amplitude", title="FFT",
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    qapp.processEvents()
+    canvas._plot_amp.setXRange(100.0, 200.0, padding=0)
+    spy = QSignalSpy(canvas.viewport_intent_committed)
+    canvas.reset_view_to_data_extents()
+    qapp.processEvents()
+    assert len(spy) == 1
+    captured = canvas.capture_xy_viewport()
+    (x0, x1), (y0, y1) = canvas._plot_amp.vb.viewRange()
+    assert captured[0][0] == pytest.approx(x0)
+    assert captured[0][1] == pytest.approx(x1)
+    assert captured[1][0] == pytest.approx(y0)
+    assert captured[1][1] == pytest.approx(y1)
+    assert x0 < 0.0
+    assert x1 > 500.0
+    preview = canvas.get_time_preview_xlim()
+    assert canvas.restore_xy_viewport((50.0, 150.0), captured[1]) is True
+    assert canvas.get_time_preview_xlim() == preview
+    (rx0, rx1), _ = canvas._plot_amp.vb.viewRange()
+    assert rx0 == pytest.approx(50.0)
+    assert rx1 == pytest.approx(150.0)
+
+
+def test_preview_only_view_all_does_not_emit_viewport_intent(canvas, qapp):
+    from PyQt5.QtTest import QSignalSpy
+
+    canvas.plot_time_preview([_entry()], title="时域预览")
+    spy = QSignalSpy(canvas.viewport_intent_committed)
+    canvas.reset_view_to_data_extents()
+    qapp.processEvents()
+    assert len(spy) == 0
+    assert canvas.capture_xy_viewport() is None
+    assert canvas.restore_xy_viewport((0.0, 1.0), (0.0, 1.0)) is False

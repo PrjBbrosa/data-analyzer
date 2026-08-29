@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QObject, QRectF, QSize, Qt, QTimer
+from PyQt5.QtCore import QEvent, QObject, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QFont,
@@ -71,6 +71,10 @@ _PORTAL_SHADOW = QColor(91, 83, 205, 43)
 _EDITED_DOT = QColor("#18A861")
 _EDITED_DOT_RING = QColor("#FFFFFF")
 _EDITED_DOT_SIZE = 7.0
+_UNPLACED_BADGE = QColor("#E8590C")
+_UNPLACED_BADGE_TEXT = QColor("#FFFFFF")
+_UNPLACED_BADGE_RING = QColor("#FFFFFF")
+UNPLACED_BADGE_TOOLTIP = "未放置 View，点击角标打开托盘"
 _DISABLED_FILL = QColor("#F4F6F9")
 _DISABLED_BORDER = QColor("#C5CDD8")
 _DISABLED_INK = QColor("#8A97A8")
@@ -204,6 +208,8 @@ class _UltraViewSeparator(QFrame):
 class UltraViewEntryButton(QAbstractButton):
     """View-rail UltraView mark: Prism Portal + Electric Spectrum wordmark."""
 
+    badge_clicked = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ultraViewEntry")
@@ -222,6 +228,8 @@ class UltraViewEntryButton(QAbstractButton):
         self._compact = False
         self._keyboard_focus = False
         self._has_content = False
+        self._unplaced_count = 0
+        self._badge_press = False
 
     def set_compact(self, compact: bool) -> None:
         compact = bool(compact)
@@ -240,11 +248,37 @@ class UltraViewEntryButton(QAbstractButton):
         if has_content == self._has_content:
             return
         self._has_content = has_content
-        self.setToolTip(EDITED_TOOLTIP if has_content else TOOLTIP)
+        self._sync_chrome()
         self.update()
 
     def has_content(self) -> bool:
         return self._has_content
+
+    def set_unplaced_count(self, count: int) -> None:
+        try:
+            count = max(0, int(count))
+        except (TypeError, ValueError):
+            count = 0
+        if count == self._unplaced_count:
+            return
+        self._unplaced_count = count
+        self._sync_chrome()
+        self.update()
+
+    def unplaced_count(self) -> int:
+        return self._unplaced_count
+
+    def _sync_chrome(self) -> None:
+        if self._unplaced_count > 0:
+            n = self._unplaced_count
+            self.setAccessibleName(f"打开 UltraView 未放置（{n}）")
+            self.setToolTip(f"未放置 {n} 个 View，点击角标打开托盘")
+        elif self._has_content:
+            self.setAccessibleName(ACCESSIBLE_NAME)
+            self.setToolTip(EDITED_TOOLTIP)
+        else:
+            self.setAccessibleName(ACCESSIBLE_NAME)
+            self.setToolTip(TOOLTIP)
 
     def sizeHint(self):  # noqa: N802 - Qt override
         return self._size_hint_for(self._compact)
@@ -507,12 +541,67 @@ class UltraViewEntryButton(QAbstractButton):
             size,
         )
 
+    def _badge_rect(self, portal: QRectF | None = None) -> QRectF:
+        portal = portal if portal is not None else self._portal_rect()
+        size = 14.0 if self._unplaced_count > 9 else 12.0
+        return QRectF(
+            portal.right() - size + 3.0,
+            portal.top() - 3.0,
+            size,
+            size,
+        )
+
+    def _badge_hit_rect(self) -> QRectF:
+        rect = self._badge_rect()
+        return rect.adjusted(-2.0, -2.0, 2.0, 2.0)
+
     def _paint_edited_dot(self, painter: QPainter, portal: QRectF) -> None:
+        if self._unplaced_count > 0:
+            self._paint_unplaced_badge(painter, portal)
+            return
         if not self._has_content:
             return
         painter.setBrush(_EDITED_DOT)
         painter.setPen(QPen(_EDITED_DOT_RING, 1.2))
         painter.drawEllipse(self._edited_dot_rect(portal))
+
+    def _paint_unplaced_badge(self, painter: QPainter, portal: QRectF) -> None:
+        rect = self._badge_rect(portal)
+        painter.setBrush(_UNPLACED_BADGE)
+        painter.setPen(QPen(_UNPLACED_BADGE_RING, 1.0))
+        painter.drawEllipse(rect)
+        font = QFont(self.font())
+        font.setPixelSize(8 if self._unplaced_count > 9 else 9)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(_UNPLACED_BADGE_TEXT)
+        label = "9+" if self._unplaced_count > 9 else str(self._unplaced_count)
+        painter.drawText(rect, Qt.AlignCenter, label)
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt override
+        pos = event.localPos() if hasattr(event, "localPos") else event.pos()
+        self._badge_press = (
+            event.button() == Qt.LeftButton
+            and self.isEnabled()
+            and self._unplaced_count > 0
+            and self._badge_hit_rect().contains(pos)
+        )
+        if self._badge_press:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        pos = event.localPos() if hasattr(event, "localPos") else event.pos()
+        if self._badge_press and event.button() == Qt.LeftButton:
+            hit = self._badge_hit_rect().contains(pos)
+            self._badge_press = False
+            if hit and self.isEnabled():
+                self.badge_clicked.emit()
+            event.accept()
+            return
+        self._badge_press = False
+        super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):  # noqa: N802 - Qt override
         del event

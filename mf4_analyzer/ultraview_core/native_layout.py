@@ -64,6 +64,49 @@ class _Slot:
     duplicate_of: int | None = None
 
 
+@dataclass(frozen=True)
+class NativeLayoutProjection:
+    """Board-final placement counts for one native-layout apply.
+
+    Unpacks as ``(placed_view_ids, warnings)`` so existing tests and the
+    WWT import seam keep working. ``unplaced_ids`` are generated Views that
+    landed in the tray; ids in ``generated_ids`` that are in neither placed
+    nor unplaced are unprojected (cap), not unplaced.
+    """
+
+    placed_view_ids: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    board_id: str = ""
+    generated_ids: tuple[str, ...] = ()
+    unplaced_ids: tuple[str, ...] = ()
+
+    def __iter__(self):
+        yield self.placed_view_ids
+        yield self.warnings
+
+    def __getitem__(self, index):
+        return (self.placed_view_ids, self.warnings)[index]
+
+    def __len__(self):
+        return 2
+
+
+def generated_ids_from_plan(plan) -> tuple[str, ...]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for ref, _rect in getattr(plan, "placed", ()) or ():
+        vid = str(getattr(ref, "view_id", "") or "")
+        if vid and vid not in seen:
+            seen.add(vid)
+            ids.append(vid)
+    for ref in getattr(plan, "unplaced", ()) or ():
+        vid = str(getattr(ref, "view_id", "") or "")
+        if vid and vid not in seen:
+            seen.add(vid)
+            ids.append(vid)
+    return tuple(ids)
+
+
 def _edges_equal(left: NativeLayoutRect, right: NativeLayoutRect) -> bool:
     return (
         abs(left.x - right.x) <= _OVERLAP_EPS

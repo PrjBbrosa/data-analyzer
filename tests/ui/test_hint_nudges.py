@@ -355,9 +355,11 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "file.wwt_native_layout",
         "view.compact_tabs",
         "ultraview.view_rail",
+        "ultraview.unplaced_badge",
         "ultraview.add_from_tab",
         "chart.custom_action_slot",
         "chart.range_tab",
+        "time.record_curve_eye",
         "batch.export_options",
         "toolbar.save_as_menu",
     ]

@@ -249,22 +249,24 @@ class UltraViewCoordinator(QObject):
         board_name: str | None = None,
         dedicated_board: bool = False,
         reuse_empty_board: bool = True,
-    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    ) -> "NativeLayoutProjection":
         """Add stable time view ids to a Board in one mutation.
 
         The items-only call writes the current active Board. Dedicated WWT
         projection may reuse an empty Board or create one named ``board_name``.
 
-        Returns ``(placed_view_ids_this_call, warnings)``.
+        Returns a ``NativeLayoutProjection`` that unpacks as
+        ``(placed_view_ids_this_call, warnings)``.
         """
         from ...ultraview_core.model import UltraViewRef
         from ...ultraview_core.native_layout import (
+            NativeLayoutProjection,
             NativeLayoutRect,
             plan_native_layout,
         )
 
         if self._inactive():
-            return (), ()
+            return NativeLayoutProjection()
         planned = []
         for view_id, rect in items:
             planned.append((
@@ -283,6 +285,13 @@ class UltraViewCoordinator(QObject):
             dedicated_board=dedicated_board,
             reuse_empty_board=reuse_empty_board,
         )
+
+    def open_unplaced_tray(self) -> None:
+        """Open the active Board's unplaced tray and focus the first item."""
+        page = self.page()
+        opener = getattr(page, "open_unplaced_tray", None)
+        if callable(opener):
+            opener()
 
     def add_from_source_tab(self, section: str, view_id: str) -> None:
         if self._inactive():
@@ -907,6 +916,11 @@ class UltraViewCoordinator(QObject):
         sync = getattr(chart_stack, "set_ultraview_has_content", None)
         if callable(sync):
             sync(any(all_refs(board) for board in self._workspace.boards))
+        unplaced_sync = getattr(chart_stack, "set_ultraview_unplaced_count", None)
+        if callable(unplaced_sync):
+            board = active_board(self._workspace)
+            n = len(getattr(board, "unplaced", ()) or ()) if board is not None else 0
+            unplaced_sync(n)
 
     def _refresh_library(self, page) -> None:
         rows = []

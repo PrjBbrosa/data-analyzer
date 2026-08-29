@@ -6,7 +6,7 @@ import inspect
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QEvent, QSize, Qt
+from PyQt5.QtCore import QEvent, QPoint, QSize, Qt
 from PyQt5.QtGui import QColor, QImage, QPainter, QPalette
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import (
@@ -199,6 +199,34 @@ def test_mouse_space_and_enter_each_emit_clicked_once(qtbot) -> None:
     button.setFocus()
     qtbot.keyClick(button, Qt.Key_Enter)
     assert len(spy) == 4
+
+
+def test_unplaced_badge_click_opens_tray_without_emitting_clicked(qtbot) -> None:
+    button = _make_button(qtbot)
+    button.set_unplaced_count(3)
+    QApplication.processEvents()
+    click_spy = QSignalSpy(button.clicked)
+    badge_spy = QSignalSpy(button.badge_clicked)
+    center = button._badge_hit_rect().center()
+    qtbot.mouseClick(
+        button,
+        Qt.LeftButton,
+        Qt.NoModifier,
+        QPoint(int(center.x()), int(center.y())),
+    )
+    assert len(badge_spy) == 1
+    assert len(click_spy) == 0
+    portal = button._portal_rect()
+    safe = QPoint(int(portal.left() + 3), int(portal.bottom() - 3))
+    assert not button._badge_hit_rect().contains(safe)
+    qtbot.mouseClick(
+        button,
+        Qt.LeftButton,
+        Qt.NoModifier,
+        safe,
+    )
+    assert len(click_spy) == 1
+    assert button.toolTip().startswith("未放置")
 
 
 @pytest.mark.parametrize("stop", SPECTRUM_STOPS)

@@ -952,7 +952,7 @@
     </figure>
     <figure class="real-ui-figure">
       <img src="../../../mf4_analyzer/help/assets/imports-panel.png" alt="TraceLab v8.1.0 载入 WWT、ZFD、MAT 的真机截图">
-      <figcaption>使用仓库内真实样本同时载入 WWT、ZFD、MAT；文件卡片和 WWT 曲线均为实际渲染。含多个窗口的 WWT 会同步到以文件名命名的独立 Board；单窗口只生成时域 View，不自动加入 UltraView。</figcaption>
+      <figcaption>使用仓库内真实样本同时载入 WWT、ZFD、MAT；文件卡片和 WWT 曲线均为实际渲染。含多个窗口的 WWT 会同步到以文件名命名的独立 Board，导入完成会报告已放置 / 未放置数量；单窗口只生成时域 View，不自动加入 UltraView。时域 Inspector 可用眼睛单独隐藏 WinWert 原始辅助线。</figcaption>
     </figure>
   </section>
 
@@ -1530,7 +1530,7 @@ steps.forEach(s => {
 const chartDescs = {
   zoom:     {t:'缩放',          d:'拖框选择缩放区域。再点一次本按钮关闭缩放模式。',                                                                meta:'快捷键 Ctrl+B'},
   pan:      {t:'平移',          d:'按住左键拖动视图。和缩放互斥。',                                                                                meta:'快捷键 Ctrl+G'},
-  home:     {t:'还原视图',      d:'回到自动范围（取消所有手动缩放/平移）。',                                                                       meta:'快捷键 Ctrl+R'},
+  home:     {t:'还原视图',      d:'回到自动范围（取消所有手动缩放/平移）。分析图（FFT / FFT vs Time / 阶次）的缩放会随当前 View 保存；只有点「计算/重新计算」才按 Inspector 重新成图。', meta:'快捷键 Ctrl+R'},
   subplot:  {t:'分屏',          d:'多通道时，把每个通道画到独立子图。和"叠加"互斥。',                                                              meta:'仅在多通道时有意义'},
   overlay:  {t:'叠加',          d:'多通道画在同一坐标系上，便于对比。默认选项。',                                                                  meta:'仅在多通道时有意义'},
   annotate: {t:'标注 · 开启/关闭', d:'开启后：左键单击图上任意点，添加一个带读数的标注；右键单击删除最近一个标注。',                            meta:'状态按钮 · 文案会变'},

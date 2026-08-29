@@ -265,8 +265,8 @@ def test_help_has_no_developer_jargon():
 
 def test_panel_guides_cover_new_topics():
     checks = {
-        "time-domain-guide.html": ["滤波", "框选", "Shift"],
-        "fft-guide.html": ["A 计权"],
+        "time-domain-guide.html": ["滤波", "框选", "Shift", "原始辅助线"],
+        "fft-guide.html": ["A 计权", "查看全部"],
         "ffttime-guide.html": ["A 计权"],
         "order-analysis-guide.html": ["加权", "采样率"],
     }

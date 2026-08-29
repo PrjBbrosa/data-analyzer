@@ -79,6 +79,7 @@ def test_viewstate_defaults_are_empty():
     assert st.remarks == []
     assert st.cursor_placement is None
     assert st.curve_bindings == []
+    assert st.hidden_curve_binding_ids == []
     assert isinstance(st.view_id, str) and st.view_id
 
 
@@ -227,3 +228,41 @@ def test_default_view_tab_color_matches_make_and_cycles_every_twelve():
     assert len(set(first_twelve)) == 12
     for idx in range(TIME_DOMAIN_MAX_VIEWS):
         assert default_view_tab_color(idx) == manager._make(idx).tab_color
+
+
+def test_hidden_curve_binding_ids_roundtrip_and_block_blank_reuse():
+    from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
+    from mf4_analyzer.ui.view_state import is_reusable_blank_view
+
+    binding = TimeCurveBinding(
+        binding_id="window-1-record-2",
+        y_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=2),
+        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=1),
+        display_name="TolY",
+        unit="mm",
+        color="#ff0000",
+        axis_id="axis-1",
+        y_range=(0.0, 1.0),
+        y_tick_interval=0.2,
+        y_grid_interval=None,
+        line_width_mm=0.2,
+        line_style="line",
+    )
+    st = ViewState(
+        name="WinWert 1",
+        tab_color="#2d7ff9",
+        curve_bindings=[binding],
+        hidden_curve_binding_ids=["window-1-record-2"],
+    )
+    again = ViewState.from_dict(st.to_dict())
+    assert again.hidden_curve_binding_ids == ["window-1-record-2"]
+    copied = ViewState.from_dict(st.to_dict())
+    copied.hidden_curve_binding_ids.append("other")
+    assert st.hidden_curve_binding_ids == ["window-1-record-2"]
+    assert is_reusable_blank_view(ViewState(name="View 1", tab_color="#2d7ff9"))
+    hidden_only = ViewState(
+        name="View 1",
+        tab_color="#2d7ff9",
+        hidden_curve_binding_ids=["window-1-record-2"],
+    )
+    assert is_reusable_blank_view(hidden_only) is False

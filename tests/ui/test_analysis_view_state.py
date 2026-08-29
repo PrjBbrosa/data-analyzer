@@ -247,3 +247,19 @@ def test_duplicate_copies_attached_file_ids_independently(qapp):
     assert copied.attached_file_ids == ["f1", "f2"]
     copied.attached_file_ids.append("f3")
     assert manager.get(0).attached_file_ids == ["f1", "f2"]
+
+
+def test_pane_xlim_ylim_roundtrip_as_primary_analysis_viewport():
+    pane = PaneState(
+        sources=[("f1", "speed")],
+        xlim=(20.0, 180.0),
+        ylim=(-40.0, 5.0),
+    )
+    payload = pane.to_dict()
+    again = PaneState.from_dict(payload)
+    assert again.xlim == (20.0, 180.0)
+    assert again.ylim == (-40.0, 5.0)
+    view = AnalysisViewState(name="FFT 1", tab_color="#2d7ff9", panes=[pane])
+    restored = AnalysisViewState.from_dict(view.to_dict())
+    assert restored.panes[0].xlim == (20.0, 180.0)
+    assert restored.panes[0].ylim == (-40.0, 5.0)

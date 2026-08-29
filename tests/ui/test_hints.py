@@ -538,6 +538,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     by_id = {hint.id: hint for hint in hints.all_hints() if hint.id.startswith("ultraview.")}
     required = {
         "ultraview.view_rail",
+        "ultraview.unplaced_badge",
         "ultraview.add_from_tab",
         "ultraview.card_menu",
         "ultraview.sync",

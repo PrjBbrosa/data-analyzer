@@ -1002,11 +1002,14 @@ def organize_free_grid(board: UltraViewBoardState) -> list[str]:
 
 def apply_native_layout(board: UltraViewBoardState, plan) -> list[str]:
     """Apply a native layout plan in one Board mutation. No dirty/refresh."""
-    from .native_layout import NativeLayoutPlan
-
-    if not isinstance(plan, NativeLayoutPlan):
+    # Duck-type the plan so this module does not import native_layout.
+    # native_layout already lazy-imports nearest_unoccupied_origin from here;
+    # a reverse import would be an AST cycle (test_ultraview_core_import_graph).
+    placed = getattr(plan, "placed", None)
+    plan_warnings = getattr(plan, "warnings", None)
+    if not isinstance(placed, tuple) or not isinstance(plan_warnings, tuple):
         return [_warn("invalid_native_plan")]
-    warnings = list(plan.warnings)
+    warnings = list(plan_warnings)
     if board.layout_mode != LAYOUT_MODE_FREE_GRID:
         template_to_free_grid(board)
     members = membership_set(board)

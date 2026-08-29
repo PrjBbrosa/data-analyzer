@@ -3520,6 +3520,20 @@ def test_locate_unplaced_view_opens_tray_body(qtbot):
     assert tray.item_widgets()[0].ref() == ("time", "time-1")
 
 
+def test_open_unplaced_tray_focuses_first_item(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    move_to_unplaced(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    assert harness.page.active_panel() is None
+    harness.page.open_unplaced_tray()
+    assert harness.page.active_panel() == PANEL_UNPLACED
+    tray = harness.page.unplaced_tray()
+    assert tray.isVisible()
+    assert tray.body().isVisible()
+    assert tray.item_widgets()[0].ref() == ("time", "time-1")
+
+
 def test_empty_slot_without_selection_opens_library(qtbot):
     harness = _Harness(qtbot)
     feedback = []

@@ -224,6 +224,23 @@ def filter_curve_bindings(
     return out
 
 
+def prune_hidden_curve_binding_ids(
+    hidden_ids: Iterable[str] | None,
+    bindings: Sequence[TimeCurveBinding] | None,
+) -> list[str]:
+    """Drop hidden ids whose bindings no longer exist; keep first-seen order."""
+    live = {str(binding.binding_id) for binding in bindings or ()}
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in hidden_ids or ():
+        text = str(item)
+        if not text or text not in live or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 def _channel_removed(ref: TimeDataRef, removed: set[tuple[str, str]]) -> bool:
     if ref.kind != _CHANNEL or not ref.channel:
         return False
@@ -376,6 +393,7 @@ def bound_time_plot_rows(
     range_hi: float | None = None,
     checked_channel_keys: AbstractSet[tuple[str, str]] | None = None,
     channel_colors: Mapping[tuple[str, str], str] | None = None,
+    hidden_binding_ids: AbstractSet[str] | Iterable[str] | None = None,
 ) -> BoundTimePlotResult:
     """Resolve bindings to TimeDomain row tuples in binding order.
 
@@ -387,7 +405,13 @@ def bound_time_plot_rows(
     issues: list[TimePlotIssue] = []
     claimed: set[tuple[str, str]] = set()
     successful: set[tuple[str, str]] = set()
+    hidden = {str(item) for item in (hidden_binding_ids or ())}
     for binding in bindings or ():
+        if (
+            binding.y_ref.kind == _WWT_RECORD
+            and str(binding.binding_id) in hidden
+        ):
+            continue
         y_key = _channel_key(binding.y_ref)
         if y_key is not None:
             claimed.add(y_key)

@@ -14,6 +14,7 @@ from mf4_analyzer.ui.time_curve_bindings import (
     TimeDataRef,
     bound_time_plot_rows,
     filter_curve_bindings,
+    prune_hidden_curve_binding_ids,
     remap_curve_bindings,
     resolve_time_curve_binding,
     resolve_time_data_ref,
@@ -582,3 +583,30 @@ def test_record_only_binding_keeps_compatibility_color():
     assert len(result.rows) == 1
     assert result.rows[0][4] == "#ff0000"
     assert result.rows[0][4] == binding.color
+
+
+def test_hidden_record_only_binding_is_skipped_without_issue_or_claim():
+    hidden = _record_binding(binding_id="hide-me", display_name="TolY")
+    channel = _channel_binding()
+    files = {"f1": _owner()}
+    shown = bound_time_plot_rows(
+        [hidden, channel],
+        files,
+        checked_channel_keys={("f1", "ChanY")},
+    )
+    assert any(issue.binding_id == "hide-me" for issue in shown.issues)
+
+    skipped = bound_time_plot_rows(
+        [hidden, channel],
+        files,
+        checked_channel_keys={("f1", "ChanY")},
+        hidden_binding_ids={"hide-me"},
+    )
+    assert skipped.issues == []
+    assert len(skipped.rows) == 1
+    assert skipped.rows[0][0] == "ChanY"
+    assert skipped.claimed_channel_keys == {("f1", "ChanY")}
+    assert prune_hidden_curve_binding_ids(
+        ["hide-me", "gone", "hide-me"],
+        [hidden, channel],
+    ) == ["hide-me"]

@@ -620,10 +620,14 @@ class ChannelScopeMixin:
             and str(spec.source_fid) in removed
         ):
             axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
-        from ..time_curve_bindings import filter_curve_bindings
+        from ..time_curve_bindings import filter_curve_bindings, prune_hidden_curve_binding_ids
         state.curve_bindings = filter_curve_bindings(
             getattr(state, "curve_bindings", None) or [],
             removed_fids=removed,
+        )
+        state.hidden_curve_binding_ids = prune_hidden_curve_binding_ids(
+            getattr(state, "hidden_curve_binding_ids", None),
+            state.curve_bindings,
         )
         signature = axis_opts.get("frf_source_signature")
         if isinstance(signature, dict):
@@ -665,10 +669,14 @@ class ChannelScopeMixin:
             and (str(spec.source_fid), str(spec.channel)) in removed
         ):
             axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
-        from ..time_curve_bindings import filter_curve_bindings
+        from ..time_curve_bindings import filter_curve_bindings, prune_hidden_curve_binding_ids
         state.curve_bindings = filter_curve_bindings(
             getattr(state, "curve_bindings", None) or [],
             removed_channels=removed,
+        )
+        state.hidden_curve_binding_ids = prune_hidden_curve_binding_ids(
+            getattr(state, "hidden_curve_binding_ids", None),
+            state.curve_bindings,
         )
         signature = axis_opts.get("frf_source_signature")
         if isinstance(signature, dict):

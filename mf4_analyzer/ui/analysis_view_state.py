@@ -104,6 +104,9 @@ class PaneState:
     input_source: ChannelKey | None = None   # FRF only
     output_source: ChannelKey | None = None  # FRF only
     time_range: tuple[float, float] | None = None
+    # Primary analysis X/Y viewport (FFT spectrum, FFT-vs-Time / Order heatmap).
+    # FRF still stores per-panel ranges in ``ylims`` and copies magnitude into
+    # ``ylim``. Capture/restore never mix Z levels or the FFT time preview.
     xlim: tuple[float, float] | None = None
     ylim: tuple[float, float] | None = None
     ylims: dict[str, tuple[float, float]] = field(default_factory=dict)

@@ -2707,3 +2707,113 @@ def test_heatmap_reference_change_rerenders_cached_result_without_worker(
     assert label_after != label_before
     assert not win._analysis_jobs.is_running("order"), "a catalog save must never dispatch a compute worker"
     assert canvas.has_result()
+
+
+def test_fft_viewport_survives_view_switch_and_resets_on_recompute(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.do_fft()
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert canvas._amp_curves
+    canvas._plot_amp.setXRange(40.0, 120.0, padding=0)
+    canvas._emit_viewport_intent()
+    zoomed = canvas.capture_xy_viewport()
+    assert zoomed is not None
+    assert zoomed[0][0] == pytest.approx(40.0)
+    assert zoomed[0][1] == pytest.approx(120.0)
+
+    win._on_analysis_new("fft")
+    win._on_analysis_switch("fft", 0)
+    restored = canvas.capture_xy_viewport()
+    assert restored[0][0] == pytest.approx(zoomed[0][0], abs=1e-3)
+    assert restored[0][1] == pytest.approx(zoomed[0][1], abs=1e-3)
+
+    win.do_fft()
+    after_recompute = canvas.capture_xy_viewport()
+    assert after_recompute is not None
+    assert not (
+        after_recompute[0][0] == pytest.approx(40.0, abs=1.0)
+        and after_recompute[0][1] == pytest.approx(120.0, abs=1.0)
+    )
+
+    canvas._plot_amp.setXRange(50.0, 90.0, padding=0)
+    canvas._emit_viewport_intent()
+    ctx = win.inspector.fft_ctx
+    win._sync_active_analysis_params("fft")
+    ctx.chk_x_auto.setChecked(False)
+    ctx.spin_x_min.setValue(10.0)
+    ctx.spin_x_max.setValue(60.0)
+    win._on_analysis_display_params_changed("fft", ctx.display_params())
+    applied = canvas.capture_xy_viewport()
+    assert applied[0][0] == pytest.approx(10.0, abs=0.5)
+    assert applied[0][1] == pytest.approx(60.0, abs=0.5)
+
+
+def test_fft_split_link_off_does_not_copy_sibling_viewport(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
+    fids = list(win.files.keys())
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    win._on_analysis_split("fft", True)
+    win._echo_combo_signal(win.inspector.fft_ctx.combo_sig, (fids[0], "speed"))
+    state.panes[1].sources = [(fids[1], "speed")]
+    win.do_fft()
+    page = win.chart_stack.page_fft
+    c1 = page.pane_canvas(1)
+    before = c1.capture_xy_viewport()
+    win._on_analysis_compare_toggled("fft", "x_linked", False)
+    page.pane_canvas(0)._plot_amp.setXRange(15.0, 45.0, padding=0)
+    page.pane_canvas(0)._emit_viewport_intent()
+    assert state.panes[0].xlim[0] == pytest.approx(15.0)
+    assert state.panes[1].xlim[0] == pytest.approx(before[0][0], abs=1e-3)
+    assert state.panes[1].xlim[1] == pytest.approx(before[0][1], abs=1e-3)
+
+
+def test_fft_time_and_order_viewport_roundtrip(two_file_win, qtbot, qapp):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
+    fids = list(win.files.keys())
+    win._echo_combo_signal(win.inspector.fft_time_ctx.combo_sig, (fids[0], "speed"))
+    ctx = win.inspector.fft_time_ctx
+    i = ctx.combo_nfft.findText("512")
+    if i >= 0:
+        ctx.combo_nfft.setCurrentIndex(i)
+    win.do_fft_time()
+    _drain_fft_time_jobs(win, qtbot)
+    canvas = win.chart_stack.page_fft_time.pane_canvas(0)
+    assert canvas.has_result()
+    levels = tuple(float(v) for v in canvas._img.getLevels())
+    canvas._plot.setXRange(0.2, 0.6, padding=0)
+    canvas._emit_viewport_intent()
+    zoomed = canvas.capture_xy_viewport()
+    win._on_analysis_new("fft_time")
+    win._on_analysis_switch("fft_time", 0)
+    restored = canvas.capture_xy_viewport()
+    assert restored[0][0] == pytest.approx(zoomed[0][0], abs=1e-3)
+    assert restored[0][1] == pytest.approx(zoomed[0][1], abs=1e-3)
+    assert np.allclose(canvas._img.getLevels(), levels)
+
+    win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
+    win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
+    win.do_order_time()
+    _drain_order_jobs(win, qtbot)
+    order_canvas = win.chart_stack.page_order.pane_canvas(0)
+    assert order_canvas.has_result()
+    current = order_canvas.capture_xy_viewport()
+    x0, x1 = current[0]
+    order_canvas._plot.setXRange(x0, (x0 + x1) / 2.0, padding=0)
+    order_canvas._emit_viewport_intent()
+    order_zoomed = order_canvas.capture_xy_viewport()
+    assert order_zoomed[0][1] < x1
+    win._on_analysis_new("order")
+    win._on_analysis_switch("order", 0)
+    order_restored = order_canvas.capture_xy_viewport()
+    assert order_restored[0][0] == pytest.approx(order_zoomed[0][0], abs=1e-3)
+    assert order_restored[0][1] == pytest.approx(order_zoomed[0][1], abs=1e-3)

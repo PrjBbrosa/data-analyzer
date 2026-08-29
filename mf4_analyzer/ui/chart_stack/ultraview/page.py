@@ -2627,6 +2627,14 @@ class UltraViewPage(QWidget):
         self._set_zoom_percent(zoom_percent(self._viewport.zoom()))
         self._apply_floating_layout()
 
+    def open_unplaced_tray(self) -> None:
+        """Public entry: open the unplaced tray and focus the first card."""
+        if self._presentation or not self._board.unplaced:
+            self._open_panel(PANEL_UNPLACED)
+            return
+        self._open_panel(PANEL_UNPLACED)
+        self._tray.focus_first_item()
+
     def _open_unplaced_after_layout_overflow(self) -> None:
         if self._presentation or not self._board.unplaced:
             return

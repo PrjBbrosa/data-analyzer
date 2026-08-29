@@ -295,6 +295,7 @@ class FFTMixin:
         self._capture_active_analysis_view('fft')
         mgr = self.analysis_managers['fft']
         state = mgr.get(mgr.active)
+        self._clear_analysis_view_viewports(state)
         page = self.chart_stack.page_fft
         fft_params = self.inspector.fft_ctx.compute_params()
         cache = self.analysis_caches['fft']

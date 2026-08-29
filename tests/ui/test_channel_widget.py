@@ -174,6 +174,26 @@ class _GroupedFileData(_MultiChannelFileData):
         self.label_suffix = label_suffix
 
 
+class _WwtGroupedFileData:
+    def __init__(self, zeit, channels, channel_metadata=None):
+        self.data = list(range(100))
+        self.fs = 1000.0
+        self.filepath = Path("/tmp/same-physical.wwt")
+        self.label_suffix = "1.0 kHz"
+        self.source_metadata = {
+            "source_kind": "wwt",
+            "zeit_record_indices": (zeit,),
+        }
+        self.channel_metadata = channel_metadata or {}
+        self._channels = list(channels)
+
+    def get_signal_channels(self):
+        return list(self._channels)
+
+    def get_color_palette(self):
+        return ["#1769e0"] * max(1, len(self._channels))
+
+
 class _ReplaceableFileData:
     data = [1, 2, 3]
 
@@ -1403,3 +1423,54 @@ def test_refresh_file_keeps_saved_order_and_appends_new(qapp, qtbot):
         "speed",
         "power",
     ]
+
+
+def test_grouped_source_raster_tooltip_accepts_dataframe():
+    """HDF/CSV FileData.data is a DataFrame; ``value or []`` is ambiguous."""
+    import pandas as pd
+
+    from mf4_analyzer.ui.widgets.channel_tree import grouped_source_raster_tooltip
+
+    class _HdfFile:
+        data = pd.DataFrame({"Accel": [0.0, 1.0, 2.0]})
+        source_metadata = {"source_kind": "hdf"}
+
+    assert grouped_source_raster_tooltip(_HdfFile()) == "3 行"
+
+
+def test_wwt_grouped_sources_use_zeit_labels_and_search_hits_pars(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(520, 360)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(
+        widget,
+        "f0",
+        _WwtGroupedFileData(
+            0,
+            ["ChanY", "SumAB"],
+            {"SumAB": {"derived": True}},
+        ),
+    )
+    _add_attached_file(
+        widget,
+        "f1",
+        _WwtGroupedFileData(2, ["RackForce"]),
+    )
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+    assert widget._raster_items["f0"].text(0) == "1.0 kHz · Zeit 0"
+    assert widget._raster_items["f1"].text(0) == "1.0 kHz · Zeit 2"
+    tip = widget._raster_items["f0"].toolTip(0)
+    assert "Zeit 记录: 0" in tip
+    assert "已注入 Pars 公式通道: 1" in tip
+    widget.search.setText("sum")
+    QCoreApplication.processEvents()
+    raster = widget._raster_items["f0"]
+    visible = [
+        (raster.child(i).text(0), not raster.child(i).isHidden())
+        for i in range(raster.childCount())
+    ]
+    assert visible == [("ChanY", False), ("SumAB", True)]
+    assert ("f0", "SumAB") in widget._colors

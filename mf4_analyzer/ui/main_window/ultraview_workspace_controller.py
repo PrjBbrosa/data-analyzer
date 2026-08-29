@@ -322,19 +322,26 @@ class UltraViewWorkspaceController:
         board_name: str | None = None,
         dedicated_board: bool = False,
         reuse_empty_board: bool = True,
-    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    ) -> "NativeLayoutProjection":
         """Commit a native layout plan through the single mutation funnel.
 
-        Returns ``(placed_view_ids_this_call, warnings)``.  Ids are the time
-        refs actually landed on the free-grid this call, not every time card
+        Returns a ``NativeLayoutProjection`` that still unpacks as
+        ``(placed_view_ids_this_call, warnings)``.  Ids are the time refs
+        actually landed on the free-grid this call, not every time card
         already on the Board.
 
         ``dedicated_board=True`` resolves the target Board once from a
         workspace snapshot: reuse the current empty Board or ``create_board``.
         A 20-Board cap returns ``board_limit`` and mutates nothing.
         """
+        from ...ultraview_core.native_layout import (
+            NativeLayoutProjection,
+            generated_ids_from_plan,
+        )
+
+        generated_ids = generated_ids_from_plan(plan)
         if self._inactive():
-            return (), ()
+            return NativeLayoutProjection(generated_ids=generated_ids)
         workspace = self._workspace
         current = next(
             (
@@ -363,7 +370,10 @@ class UltraViewWorkspaceController:
                 created = create_board(workspace, name=unique)
                 if created is None:
                     self._toast(_BOARD_LIMIT_TOAST, "warning")
-                    return (), ("board_limit",)
+                    return NativeLayoutProjection(
+                        warnings=("board_limit",),
+                        generated_ids=generated_ids,
+                    )
                 target = created
             set_active_board(workspace, target.board_id)
         before = self._placement_snapshot(target)
@@ -394,7 +404,23 @@ class UltraViewWorkspaceController:
             if item.ref.section == "time" and item.ref.view_id not in already_placed
         )
         self._register_pending_native_card_fits(target, plan, placed_this_call)
-        return placed_this_call, tuple(warnings)
+        placed_ids = set(placed_this_call)
+        unplaced_now = {
+            ref.view_id
+            for ref in target.unplaced
+            if getattr(ref, "section", "") == "time"
+        }
+        unplaced_ids = tuple(
+            vid for vid in generated_ids
+            if vid not in placed_ids and vid in unplaced_now
+        )
+        return NativeLayoutProjection(
+            placed_view_ids=placed_this_call,
+            warnings=tuple(warnings),
+            board_id=str(target.board_id),
+            generated_ids=generated_ids,
+            unplaced_ids=unplaced_ids,
+        )
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
         if self._inactive():
