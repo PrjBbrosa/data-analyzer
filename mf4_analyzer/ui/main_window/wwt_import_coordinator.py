@@ -20,6 +20,7 @@ from mf4_analyzer.ui.view_state import MAX_VIEWS, is_reusable_blank_view
 from mf4_analyzer.ui.wwt_view_import import (
     build_registered_record_map,
     build_wwt_view_proposals,
+    visible_y_windows,
 )
 from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
@@ -46,43 +47,77 @@ class WwtImportOutcome:
     accepted: bool = False
 
 
-def _exact_overlap_pairs(proposals) -> list[tuple[int, int]]:
+def _layout_index(item) -> int:
+    if hasattr(item, "window_index"):
+        return int(item.window_index)
+    return int(item.index)
+
+
+def _exact_overlap_pairs(items) -> list[tuple[int, int]]:
     pairs = []
     seen = []
-    for proposal in proposals:
-        rect = proposal.rect_mm
+    for item in items:
+        rect = item.rect_mm
+        idx = _layout_index(item)
         for previous in seen:
+            prev = previous.rect_mm
             if (
-                abs(rect.x - previous.rect_mm.x) <= 1e-6
-                and abs(rect.y - previous.rect_mm.y) <= 1e-6
-                and abs(rect.width - previous.rect_mm.width) <= 1e-6
-                and abs(rect.height - previous.rect_mm.height) <= 1e-6
+                abs(rect.x - prev.x) <= 1e-6
+                and abs(rect.y - prev.y) <= 1e-6
+                and abs(rect.width - prev.width) <= 1e-6
+                and abs(rect.height - prev.height) <= 1e-6
             ):
-                pairs.append((proposal.window_index, previous.window_index))
+                pairs.append((idx, _layout_index(previous)))
                 break
-        seen.append(proposal)
+        seen.append(item)
     return pairs
 
 
+def _classify_unkept_windows(document, proposals) -> str:
+    """Short reason label when kept proposals are fewer than file-real windows."""
+    codes: list[str] = []
+    kept = {getattr(item, "window_index", None) for item in proposals or ()}
+    if any(window.index not in kept for window in visible_y_windows(document)):
+        codes.append("dropped_window")
+    for proposal in proposals or ():
+        for text in getattr(proposal, "warnings", ()) or ():
+            code = parse_wwt_issue(text).code
+            if code in {"dropped_curve", "unknown_record", "dropped_window"}:
+                codes.append(code)
+    unique = list(dict.fromkeys(codes))
+    labels = []
+    if "unknown_record" in unique or "dropped_curve" in unique:
+        labels.append("曲线无法解析")
+    if "dropped_window" in unique:
+        labels.append("窗口未生成")
+    return "、".join(labels) if labels else "可见曲线无法绑定"
+
+
 def layout_dialog_text(document, proposals, *, available: int) -> tuple[str, str]:
-    detected = len(proposals)
+    file_windows = visible_y_windows(document)
+    detected = len(file_windows)
+    kept = len(proposals or ())
     formulas = sum(
         1
         for record in document.records
         if record.tag == "Pars" and record.values is not None
     )
-    create = min(detected, available)
+    create = min(kept, available)
     body = (
         f"检测到 {detected} 个 WinWert 数据窗口和 {formulas} 个可用计算通道。\n"
         f"可按原排版生成 {create} 个时域 View，并同步加入 UltraView。"
     )
-    overlaps = _exact_overlap_pairs(proposals)
+    if kept < detected:
+        dropped = detected - kept
+        reason = _classify_unkept_windows(document, proposals)
+        body += f"\n其中 {dropped} 个窗口未生成 View（{reason}）。"
+    overlaps = _exact_overlap_pairs(file_windows)
     if overlaps:
-        later, earlier = overlaps[0]
-        body += (
-            f"\n第 {later + 1} 个窗口与第 {earlier + 1} 个位置重叠，"
-            "将放入 UltraView 未放置区。"
-        )
+        parts = [
+            f"第 {later + 1} 个窗口与第 {earlier + 1} 个位置重叠"
+            for later, earlier in overlaps
+        ]
+        body += "\n" + "，".join(parts) + "，将放入 UltraView 未放置区。"
     informative = ""
     if create < detected:
         informative = f"检测到 {detected} 个，可创建 {create} 个"
@@ -150,6 +185,27 @@ def collect_wwt_import_issues(
         for text in getattr(proposal, "warnings", ()) or ():
             issues.append(parse_wwt_issue(text))
 
+    records = getattr(document, "records", ()) or ()
+    n_records = len(records)
+    kept_indexes = {
+        getattr(proposal, "window_index", None) for proposal in proposals or ()
+    }
+    for window in visible_y_windows(document):
+        y_rows = window.curves[1:] if window.curves else ()
+        visible_rows = [row for row in y_rows if getattr(row, "visible", False)]
+        if window.index not in kept_indexes:
+            issues.append(WwtIssue(
+                "dropped_window",
+                f"window {window.index + 1}",
+            ))
+        for row in visible_rows:
+            record_index = getattr(row, "record_index", -1)
+            if record_index < 0 or record_index >= n_records:
+                issues.append(WwtIssue(
+                    "dropped_curve",
+                    f"window {window.index + 1} record {record_index}",
+                ))
+
     total = len(proposals) if detected is None else int(detected)
     if 0 <= created < total:
         issues.append(WwtIssue(
@@ -159,7 +215,7 @@ def collect_wwt_import_issues(
     if overlap_count:
         issues.append(WwtIssue(
             CODE_EXACT_OVERLAP,
-            "1 个重叠窗口已放入未放置区",
+            f"{overlap_count} 个重叠窗口已放入未放置区",
         ))
     return _unique_issues(issues)
 

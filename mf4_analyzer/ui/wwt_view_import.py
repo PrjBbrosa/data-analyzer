@@ -131,6 +131,10 @@ def _ylim_key(key: tuple[str, str]) -> str:
     return json.dumps([key[0], key[1]], ensure_ascii=False, separators=(",", ":"))
 
 
+def _rgb_hex(rgb: tuple[int, int, int]) -> str:
+    return f"#{int(rgb[0]) & 0xFF:02x}{int(rgb[1]) & 0xFF:02x}{int(rgb[2]) & 0xFF:02x}"
+
+
 def _curve_unit(curve: WwtCurveDisplay, records: Sequence[WwtRecord]) -> str:
     if 0 <= curve.record_index < len(records):
         unit = (records[curve.record_index].unit or "").strip()
@@ -224,6 +228,12 @@ def _y_visible_rows(window) -> list[WwtCurveDisplay]:
     return [row for row in y_rows if row.visible]
 
 
+def visible_y_windows(document) -> list:
+    """Structurally valid display windows that contain at least one visible Y."""
+    windows = getattr(document, "windows", ()) or ()
+    return [window for window in windows if _y_visible_rows(window)]
+
+
 def _x_axis_opts(
     bindings: Sequence[TimeCurveBinding], x_label: str,
 ) -> dict:
@@ -261,18 +271,17 @@ def build_wwt_view_proposals(
     for window in document.windows:
         warnings = list(shared_warnings)
         visible = []
-        for row in _y_visible_rows(window):
-            if row.record_index >= len(records):
+        source_visible = _y_visible_rows(window)
+        for row in source_visible:
+            if row.record_index < 0 or row.record_index >= len(records):
                 warnings.append(
                     f"unknown_record: window {window.index + 1} "
                     f"record {row.record_index}"
                 )
-                continue
-            # A WinWert display block may contain tolerance/limit/guide
-            # records that are not TraceLab Navigator channels.  They remain
-            # available in the read-only record store for X resolution, but
-            # are never promoted into an extra plotted Y series.
-            if _data_ref(row.record_index, registered).kind != "channel":
+                warnings.append(
+                    f"dropped_curve: window {window.index + 1} "
+                    f"record {row.record_index}"
+                )
                 continue
             if row.factor != 1.0 or row.move != 0.0 or row.log_scale:
                 warnings.append(
@@ -286,6 +295,16 @@ def build_wwt_view_proposals(
                 )
             visible.append(row)
         if not visible:
+            # Empty windows (no visible Y) generate nothing and are not
+            # dropped_window.  A window whose visible Y rows all failed to
+            # bind is a real degradation.
+            if source_visible:
+                warnings.append(
+                    f"dropped_window: window {window.index + 1}"
+                )
+                for text in warnings:
+                    if text not in shared_warnings:
+                        shared_warnings.append(text)
             continue
         axis_of, axis_warnings = _plan_axes(visible, records, window.index)
         warnings.extend(axis_warnings)
@@ -302,10 +321,12 @@ def build_wwt_view_proposals(
         for row in visible:
             y_ref = _data_ref(row.record_index, registered)
             x_ref = _data_ref(row.x_record_index, registered)
-            # The runtime payload replaces this compatibility fallback with
-            # the registered Navigator color.  Never persist WinWert RGB: it
-            # would overwrite TraceLab swatches when the View is projected.
-            color = FILE_PALETTES[0][len(bindings) % len(FILE_PALETTES[0])]
+            # Record-only rows render from WinWert RGB. Channel-backed rows
+            # keep the TraceLab file palette so Navigator swatches stay put.
+            if y_ref.kind == "channel":
+                color = FILE_PALETTES[0][len(bindings) % len(FILE_PALETTES[0])]
+            else:
+                color = _rgb_hex(row.color_rgb)
             axis_id = axis_of[row.record_index]
             y_range = (float(row.lo), float(row.hi)) if _range_ok(row.lo, row.hi) else (0.0, 1.0)
             if not _range_ok(row.lo, row.hi):
