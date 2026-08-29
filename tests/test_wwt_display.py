@@ -272,6 +272,23 @@ def test_find_trailers_skips_truncated_block_without_hiding_later_valid_one():
     assert all(offset != len(src[:second]) for offset in found)
 
 
+def _trailer_with_declared_count(count: int, slots: int = 1) -> bytes:
+    data = bytearray(disp.CURVE_BASE + slots * disp.CURVE_STRIDE)
+    data[0:13] = b"DatenFenste2\x00"
+    struct.pack_into("<I", data, disp.RECORD_COUNT_OFF, count)
+    return bytes(data)
+
+
+def test_trailer_count_zero_is_structurally_invalid():
+    data = _trailer_with_declared_count(0)
+    assert disp.trailer_is_structurally_valid(data, 0, len(data)) is False
+
+
+def test_trailer_count_over_max_is_structurally_invalid():
+    data = _trailer_with_declared_count(disp.MAX_RECORD_COUNT + 1)
+    assert disp.trailer_is_structurally_valid(data, 0, len(data)) is False
+
+
 def test_optional_customer_wwt_trailer_scan_when_present():
     folder = _ROOT / "testdoc" / "WWT"
     samples = sorted(folder.glob("*.wwt")) if folder.is_dir() else []

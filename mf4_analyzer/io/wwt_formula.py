@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from .wwt_document import WwtRecord
+from .wwt_document import WwtRecord, format_wwt_issue
 
 _BIN_OPS = {
     ast.Add: np.add,
@@ -113,13 +113,29 @@ def _eval_node(node: ast.AST, owner: int, resolve) -> np.ndarray | float:
     raise WwtFormulaError("unsupported_formula", owner, type(node).__name__)
 
 
-def _as_1d(values: np.ndarray | float) -> np.ndarray:
+def _as_1d(values: np.ndarray | float, owner: int = 0) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
     if array.ndim == 0:
         return array
     if array.ndim != 1:
-        raise ValueError("ndim")
+        raise WwtFormulaError("formula_shape_mismatch", owner, "ndim")
     return array
+
+
+def _cohort_key(
+    catalog: list[WwtRecord], leaf: WwtRecord
+) -> tuple[int, float | None, float] | None:
+    """Grouping key ``(declared_n, dt, t0)`` of the leaf's Zeit cohort."""
+    axis = leaf
+    if leaf.tag != "Zeit":
+        if leaf.axis_record is None:
+            return None
+        if not 0 <= leaf.axis_record < len(catalog):
+            return None
+        axis = catalog[leaf.axis_record]
+        if axis.tag != "Zeit":
+            return None
+    return (int(axis.declared_n), axis.dt, float(axis.offset_c))
 
 
 def _freeze(values: np.ndarray) -> np.ndarray:
@@ -166,7 +182,7 @@ def evaluate_wwt_formulas(
             raise WwtFormulaError(
                 "missing_formula_ref", owner, f"k{index}"
             )
-        values = _as_1d(rec.values)
+        values = _as_1d(rec.values, owner)
         memo[index] = values
         return values
 
@@ -177,7 +193,7 @@ def evaluate_wwt_formulas(
             raise WwtFormulaError("formula_cycle", index, f"k{index}")
         rec = catalog[index]
         if rec.values is not None:
-            values = _as_1d(rec.values)
+            values = _as_1d(rec.values, index)
             memo[index] = values
             return values
         if not rec.formula:
@@ -191,8 +207,16 @@ def evaluate_wwt_formulas(
                 resolve_values(ref, index)
                 leaves.append(catalog[ref])
             array_leaves = [leaf for leaf in leaves if leaf.values is not None]
-            axes = {leaf.axis_record for leaf in array_leaves}
-            if None in axes or len(axes) != 1:
+            keys: list[tuple[int, float | None, float] | None] = []
+            axis_ids: list[int] = []
+            for leaf in array_leaves:
+                keys.append(_cohort_key(catalog, leaf))
+                if leaf.tag == "Zeit":
+                    axis_ids.append(leaf.index)
+                elif leaf.axis_record is not None:
+                    axis_ids.append(leaf.axis_record)
+            unique_keys = set(keys)
+            if None in unique_keys or len(unique_keys) != 1 or not axis_ids:
                 raise WwtFormulaError(
                     "formula_axis_mismatch",
                     index,
@@ -211,7 +235,7 @@ def evaluate_wwt_formulas(
                     ",".join(str(item) for item in length_list),
                 )
             expected_len = next(iter(lengths))
-            axis = next(iter(axes))
+            axis = axis_ids[0]
 
             def resolve(ref: int) -> np.ndarray:
                 return resolve_values(ref, index)
@@ -225,10 +249,16 @@ def evaluate_wwt_formulas(
                     index,
                     f"{expected_len},{out.shape}",
                 )
-            if not np.any(np.isfinite(out)):
+            finite = int(np.count_nonzero(np.isfinite(out)))
+            if finite == 0:
                 raise WwtFormulaError(
                     "formula_no_finite_values", index, rec.formula
                 )
+            if finite < int(out.shape[0]):
+                diagnostics.append(format_wwt_issue(
+                    "formula_nonfinite_values",
+                    f"record {index}: {finite}/{int(out.shape[0])}",
+                ))
             frozen = _freeze(out)
             memo[index] = frozen
             catalog[index] = replace(
