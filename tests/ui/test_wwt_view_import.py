@@ -341,3 +341,68 @@ def test_nltnp_customer_sample_has_four_visible_curves():
     proposals, _registered, _loaded = _proposals(_customer_wwt("NLTNP_000089.wwt"))
     assert len(proposals) == 1
     assert len(proposals[0].state.curve_bindings) == 4
+    assert len({binding.axis_id for binding in proposals[0].state.curve_bindings}) == 2
+
+
+def _alias_bindings(view):
+    by_name = {binding.display_name: binding for binding in view.curve_bindings}
+    deg = by_name[f"{wwt.SPEED_ALIAS_Y} [{wwt.SPEED_ALIAS_UNIT_DEG}]"]
+    degree = by_name[f"{wwt.SPEED_ALIAS_STEER} [{wwt.SPEED_ALIAS_UNIT_DEGREE}]"]
+    torque = by_name[f"{wwt.SPEED_ALIAS_TORQUE} [{wwt.SPEED_ALIAS_UNIT_TORQUE}]"]
+    return deg, degree, torque
+
+
+def test_deg_per_second_and_degree_sign_share_axis_id(tmp_path):
+    proposals, _registered, _loaded = _proposals(
+        wwt.speed_unit_alias_shared_axis(path=tmp_path / "alias.wwt")
+    )
+    assert len(proposals) == 1
+    view = proposals[0].state
+    deg, degree, torque = _alias_bindings(view)
+    assert deg.axis_id == degree.axis_id
+    assert deg.axis_id != torque.axis_id
+    assert len({binding.axis_id for binding in view.curve_bindings}) == 2
+
+
+def test_aliased_speed_units_keep_independent_axes_when_ranges_differ(tmp_path):
+    loaded = load_wwt_document(
+        wwt.speed_unit_alias_shared_axis(path=tmp_path / "alias-range.wwt")
+    )
+    window = loaded.document.windows[0]
+    y_speed = next(row for row in window.curves if row.record_index == 6)
+    changed_window = replace(
+        window,
+        curves=tuple(
+            replace(y_speed, hi=wwt.SPEED_ALIAS_MISMATCH_HI)
+            if row.record_index == 6
+            else row
+            for row in window.curves
+        ),
+    )
+    document = replace(loaded.document, windows=(changed_window,))
+    registered = register_groups_for_test(loaded.groups, owner_fid="f1")
+    proposals = build_wwt_view_proposals(document, registered)
+    assert len(proposals) == 1
+    deg, degree, _torque = _alias_bindings(proposals[0].state)
+    assert deg.axis_id != degree.axis_id
+
+
+def test_nm_and_deg_per_second_keep_independent_axes(tmp_path):
+    proposals, _registered, _loaded = _proposals(
+        wwt.speed_unit_alias_shared_axis(path=tmp_path / "alias-nm.wwt")
+    )
+    deg, _degree, torque = _alias_bindings(proposals[0].state)
+    assert torque.unit == wwt.SPEED_ALIAS_UNIT_TORQUE
+    assert deg.unit == wwt.SPEED_ALIAS_UNIT_DEG
+    assert torque.axis_id != deg.axis_id
+
+
+def test_speed_unit_alias_preserves_original_binding_units(tmp_path):
+    proposals, _registered, _loaded = _proposals(
+        wwt.speed_unit_alias_shared_axis(path=tmp_path / "alias-units.wwt")
+    )
+    deg, degree, torque = _alias_bindings(proposals[0].state)
+    assert deg.unit == wwt.SPEED_ALIAS_UNIT_DEG
+    assert degree.unit == wwt.SPEED_ALIAS_UNIT_DEGREE
+    assert torque.unit == wwt.SPEED_ALIAS_UNIT_TORQUE
+    assert deg.unit != degree.unit

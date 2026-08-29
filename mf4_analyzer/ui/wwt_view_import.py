@@ -143,8 +143,14 @@ def _curve_unit(curve: WwtCurveDisplay, records: Sequence[WwtRecord]) -> str:
     return (match.group(1) if match else "").strip()
 
 
+# Axis-compatibility only. Degree sign ≡ ``deg`` as a unit token so
+# ``°/s`` shares a slot with ``deg/s``. Display strings stay original.
+_DEGREE_SIGN = "\u00b0"
+
+
 def _norm_unit(unit: str) -> str:
-    return (unit or "").strip().casefold()
+    text = (unit or "").strip().casefold()
+    return text.replace(_DEGREE_SIGN, "deg")
 
 
 def _range_ok(lo: float, hi: float) -> bool:

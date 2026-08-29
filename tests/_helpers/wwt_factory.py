@@ -58,6 +58,10 @@ FORM_Y = "FormY"
 GAP_X = "GapX"
 GAP_Y_POS = "y_pos"
 GAP_Y_SPEED = "y_speed"
+SPEED_ALIAS_Y = "y_speed"
+SPEED_ALIAS_POS = "y_pos"
+SPEED_ALIAS_STEER = "Steering speed"
+SPEED_ALIAS_TORQUE = "Steering torque"
 WIN_A = "WinA"
 WIN_B = "WinB"
 TIME_NAME = "Time"
@@ -97,6 +101,14 @@ MULTI_WINDOW_COUNT = 3
 MULTI_FORMULA_COUNT = 1
 SHARED_AXIS_OWNER_TICK = 0.05
 SHARED_AXIS_OWNER_GRID = 0.05
+SPEED_ALIAS_UNIT_DEG = "deg/s"
+SPEED_ALIAS_UNIT_DEGREE = "\u00b0/s"
+SPEED_ALIAS_UNIT_TORQUE = "Nm"
+SPEED_ALIAS_LO, SPEED_ALIAS_HI = 0.0, 460.0
+SPEED_ALIAS_TICK, SPEED_ALIAS_GRID = 20.0, 10.0
+SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI = -10.0, 10.0
+SPEED_ALIAS_TORQUE_TICK, SPEED_ALIAS_TORQUE_GRID = 1.0, 0.5
+SPEED_ALIAS_MISMATCH_HI = 100.0
 HUGE_ZEIT_N = 2_000_000_000
 SENTINEL_RAW = -1e300
 SENTINEL_SCALE = 2.0
@@ -668,6 +680,85 @@ def shared_axis_evaluation_before_owner(
                     x_record_index=1,
                     tick=SHARED_AXIS_OWNER_TICK, grid=SHARED_AXIS_OWNER_GRID,
                     color=CHAN_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
+def speed_unit_alias_shared_axis(path=None) -> Path | bytes:
+    """NLTNP-like window: ``deg/s`` auxiliary joins selected ``°/s`` owner.
+
+    Channel-backed torque (Nm) and steering speed stay independent owners.
+    Record-only ``y_pos`` / ``y_speed`` use the same lo/hi/ticks as those
+    owners so only the unit glyph should decide whether speed shares a slot.
+    """
+    n = CHANNEL_N
+    aux = AUX_N
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_TORQUE, SPEED_ALIAS_UNIT_TORQUE, n=n,
+            values=_linspace(SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_STEER, SPEED_ALIAS_UNIT_DEGREE, n=n,
+            values=_linspace(SPEED_ALIAS_LO, SPEED_ALIAS_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", LINE_X, LINE_X_UNIT, n=aux,
+            values=_linspace(LINE_X_LO, LINE_X_HI, aux),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_POS, SPEED_ALIAS_UNIT_TORQUE, n=aux,
+            values=_linspace(SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI, aux),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_Y, SPEED_ALIAS_UNIT_DEG, n=aux,
+            values=_linspace(SPEED_ALIAS_LO, SPEED_ALIAS_HI, aux),
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+                x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+            ),
+            curves=(
+                _y_curve(
+                    2, f"{SPEED_ALIAS_TORQUE} [{SPEED_ALIAS_UNIT_TORQUE}]",
+                    SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI,
+                    x_record_index=1,
+                    tick=SPEED_ALIAS_TORQUE_TICK, grid=SPEED_ALIAS_TORQUE_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+                _y_curve(
+                    3, f"{SPEED_ALIAS_STEER} [{SPEED_ALIAS_UNIT_DEGREE}]",
+                    SPEED_ALIAS_LO, SPEED_ALIAS_HI,
+                    x_record_index=1,
+                    tick=SPEED_ALIAS_TICK, grid=SPEED_ALIAS_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+                _y_curve(
+                    5, f"{SPEED_ALIAS_POS} [{SPEED_ALIAS_UNIT_TORQUE}]",
+                    SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI,
+                    x_record_index=4,
+                    tick=SPEED_ALIAS_TORQUE_TICK, grid=SPEED_ALIAS_TORQUE_GRID,
+                    selected=False, color=TOL_Y_COLOR,
+                ),
+                _y_curve(
+                    6, f"{SPEED_ALIAS_Y} [{SPEED_ALIAS_UNIT_DEG}]",
+                    SPEED_ALIAS_LO, SPEED_ALIAS_HI,
+                    x_record_index=4,
+                    tick=SPEED_ALIAS_TICK, grid=SPEED_ALIAS_GRID,
+                    selected=False, color=TOL_Y_COLOR,
                 ),
             ),
         ),
