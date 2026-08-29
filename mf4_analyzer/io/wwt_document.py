@@ -58,6 +58,11 @@ CODE_SKIPPED_CHANNEL = "skipped_channel"
 # comparison exact: nearby large engineering values are still valid data.
 _WWT_MISSING_SENTINEL = -1e300
 
+# Zeit has no sample payload, so the file-size check cannot bound n. Reuse the
+# record-header resync limit from wwt_format._looks_like_record_header.
+_MAX_ZEIT_SAMPLES = 50_000_000
+_PARS_FORMULA_WINDOW = 256
+
 
 @dataclass(frozen=True)
 class WwtRecord:
@@ -149,14 +154,29 @@ def _freeze_array(values: np.ndarray) -> np.ndarray:
     return frozen
 
 
-def _freeze_record_array(values: np.ndarray) -> np.ndarray:
-    frozen = _freeze_array(values)
-    if not np.any(frozen == _WWT_MISSING_SENTINEL):
-        return frozen
-    with_gaps = np.array(frozen, dtype=np.float64, copy=True)
-    with_gaps[with_gaps == _WWT_MISSING_SENTINEL] = np.nan
-    with_gaps.setflags(write=False)
-    return with_gaps
+def _physical_from_raw(raw: np.ndarray, scale: float, offset: float) -> np.ndarray:
+    """Map raw samples to physical units; replace the pen-up sentinel first.
+
+    Detection must happen in the raw domain: a non-unit scale would turn
+    ``-1e300`` into another finite value and leak it into the plotted range.
+    """
+    work = np.array(np.asarray(raw, dtype=np.float64), dtype=np.float64, copy=True)
+    if work.ndim != 1:
+        work = np.ravel(work)
+        work = np.array(work, dtype=np.float64, copy=True)
+    missing = work == _WWT_MISSING_SENTINEL
+    if np.any(missing):
+        work[missing] = np.nan
+    return _freeze_array(work * scale + offset)
+
+
+def _read_pars_formula(payload: bytes) -> str | None:
+    """Return the formula only when a NUL terminator sits in the 256-byte window."""
+    window = payload[:_PARS_FORMULA_WINDOW]
+    if b"\0" not in window:
+        return None
+    text = _cstr(window)
+    return text or None
 
 
 def _scan_next_boundary(data: bytes, data_pos: int, size: int) -> int:
@@ -284,6 +304,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
     skipped: list[str] = []
     auxiliary: list[dict] = []
     records: list[WwtRecord] = []
+    diagnostics: list[str] = []
     pos = _HEADER_SIZE
     records_parsed = 0
     current_zeit: int | None = None
@@ -312,7 +333,13 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                     f"（版本 {version}，可能布局不兼容）: {name}")
             formula = None
             if tag == "Pars":
-                formula = _cstr(data[data_pos:min(scan, data_pos + 256)])
+                window = data[data_pos:min(scan, data_pos + _PARS_FORMULA_WINDOW)]
+                formula = _read_pars_formula(window)
+                if formula is None:
+                    diagnostics.append(format_wwt_issue(
+                        CODE_UNSUPPORTED_FORMULA,
+                        f"record {rec_index}",
+                    ))
                 skipped.append(
                     f"{ch_name} (公式: {formula})" if formula else ch_name)
             else:
@@ -345,6 +372,10 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
         values: np.ndarray | None
         dt: float | None = None
         if tag == "Zeit":
+            if not 0 < n < _MAX_ZEIT_SAMPLES:
+                raise ValueError(
+                    f"WWT 文件截断/损坏: 通道 {ch_name!r} 声明点数 {n} 超出范围"
+                    f"（偏移 0x{pos:x}）: {name}")
             dt = float(b)
             axis_record = rec_index
             current_zeit = rec_index
@@ -360,7 +391,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                     f"（偏移 0x{pos:x}）: {name}")
             blk = blocks[-1]
             raw = np.frombuffer(data, dtype=dtype, count=n, offset=data_pos)
-            physical = _freeze_record_array(raw.astype(np.float64) * a + c)
+            physical = _physical_from_raw(raw, a, c)
             values = physical
             if (
                 current_zeit is not None
@@ -411,7 +442,6 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
         auxiliary=auxiliary,
     )
 
-    diagnostics: list[str] = []
     windows: list[WwtDisplayWindow] = []
     markers = iter_trailer_offsets(data)
     window_index = 0
@@ -521,6 +551,7 @@ def _inject_derived_channels(
         for zeit_index in group["source_metadata"].get("zeit_record_indices", ()):
             zeit_to_group[int(zeit_index)] = group
 
+    injected: set[int] = set()
     for rec in derived:
         group = zeit_to_group.get(rec.axis_record) if rec.axis_record is not None else None
         if group is None or rec.values is None:
@@ -539,6 +570,26 @@ def _inject_derived_channels(
         group["channel_metadata"][col] = formula_channel_metadata(
             rec, formula_references(rec)
         )
+        injected.add(rec.index)
+
+    for rec in derived:
+        if rec.index in injected or rec.values is None:
+            continue
+        aux_item = {
+            "name": rec.name,
+            "record_index": rec.index,
+            "tag": rec.tag,
+            "n": int(rec.declared_n),
+        }
+        for group in groups:
+            aux = group["source_metadata"]["wwt_auxiliary_records"]
+            seen = {
+                item.get("record_index")
+                for item in aux
+                if isinstance(item, dict)
+            }
+            if rec.index not in seen:
+                aux.append(dict(aux_item))
 
     for group in groups:
         others = [name for name in group["data"].columns if name != "Time"]

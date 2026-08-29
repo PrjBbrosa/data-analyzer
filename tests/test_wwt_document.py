@@ -265,9 +265,9 @@ def test_formula_cycle_is_rejected():
 
 def test_formula_axis_mismatch_is_rejected():
     records = _synthetic_records(
-        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None),
+        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None, 1.0),
         WwtRecord(1, "Real", 3, "A", "", 1.0, 0.0, 0, np.ones(3), None),
-        WwtRecord(2, "Zeit", 3, "Time2", "s", 1.0, 0.0, 2, np.arange(3.0), None),
+        WwtRecord(2, "Zeit", 3, "Time2", "s", 1.0, 5.0, 2, np.arange(3.0), None, 0.5),
         WwtRecord(3, "Real", 3, "B", "", 1.0, 0.0, 2, np.ones(3), None),
         WwtRecord(4, "Pars", 3, "Derived", "", 1.0, 0.0, None, None, "k1+k3"),
     )
@@ -470,3 +470,125 @@ def test_formula_cohort_matches_merged_zeit_n_dt_t0(tmp_path):
     np.testing.assert_allclose(derived.values, chan_a.values + chan_b.values)
     assert "SumAB" in loaded.groups[0]["channels"]
     assert not any("formula_axis_mismatch" in item for item in loaded.document.diagnostics)
+
+
+@pytest.mark.parametrize("formula", [
+    "k1[0]",
+    "(lambda x: x)(k1)",
+    "abs(k1, x=1)",
+    "k1 ** 2",
+    "[k1 for _ in k1]",
+    "'x'",
+])
+def test_formula_ast_whitelist_rejects_disallowed_nodes(formula):
+    records = _synthetic_records(
+        WwtRecord(0, "Zeit", 3, "Time", "s", 1.0, 0.0, 0, np.arange(3.0), None),
+        WwtRecord(1, "Real", 3, "A", "", 1.0, 0.0, 0, np.ones(3), None),
+        WwtRecord(2, "Pars", 3, "Derived", "", 1.0, 0.0, None, None, formula),
+    )
+    with pytest.raises(WwtFormulaError) as exc:
+        evaluate_wwt_formulas(records, strict=True)
+    assert exc.value.code == "unsupported_formula"
+
+
+def test_parse_attaches_record_store_to_every_group(tmp_path):
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "store.wwt")
+    doc = parse_wwt_document(path)
+    assert doc.groups
+    for group in doc.groups:
+        assert group["source_metadata"]["wwt_record_store"] is doc.records
+
+
+def test_parse_unknown_record_curve_is_diagnosed(tmp_path):
+    from mf4_analyzer.io.wwt_display import CURVE_STRIDE, RECORD_COUNT_OFF
+
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "unknown.wwt")
+    data = bytearray(path.read_bytes())
+    trailer = find_trailers(data)[0]
+    count = struct.unpack_from("<I", data, trailer + RECORD_COUNT_OFF)[0]
+    data.extend(b"\0" * CURVE_STRIDE)
+    struct.pack_into("<I", data, trailer + RECORD_COUNT_OFF, count + 1)
+    path.write_bytes(data)
+    doc = parse_wwt_document(path)
+    assert doc.groups
+    assert any(item.startswith("unknown_record:") for item in doc.diagnostics)
+
+
+def test_load_path_formula_failure_keeps_source_channels(tmp_path):
+    n = wwt.CHANNEL_N
+    path = wwt.write_wwt_file(
+        tmp_path / "bad-form.wwt",
+        (
+            wwt.WwtRecordSpec("Zeit", wwt.TIME_NAME, "s", n=n, dt=wwt.DT, t0=0.0),
+            wwt.WwtRecordSpec(
+                "Real", wwt.CHAN_Y, wwt.CHAN_Y_UNIT, n=n,
+                values=np.linspace(0.0, 1.0, n),
+            ),
+            wwt.WwtRecordSpec(
+                "Pars", wwt.FORM_Y, wwt.FORM_Y_UNIT, n=n, formula="k1[0]",
+            ),
+        ),
+        (wwt._single_channel_window(1, wwt.CHAN_Y, wwt.CHAN_Y_UNIT),),
+    )
+    loaded = load_wwt_document(path)
+    form = next(record for record in loaded.document.records if record.tag == "Pars")
+    assert form.values is None
+    assert wwt.CHAN_Y in loaded.groups[0]["channels"]
+    assert wwt.FORM_Y not in loaded.groups[0]["channels"]
+    assert any("unsupported_formula" in item for item in loaded.document.diagnostics)
+
+
+def test_pars_rename_on_channel_name_collision(tmp_path):
+    n = wwt.CHANNEL_N
+    path = wwt.write_wwt_file(
+        tmp_path / "rename.wwt",
+        (
+            wwt.WwtRecordSpec("Zeit", wwt.TIME_NAME, "s", n=n, dt=wwt.DT, t0=0.0),
+            wwt.WwtRecordSpec(
+                "Real", wwt.CHAN_Y, wwt.CHAN_Y_UNIT, n=n,
+                values=np.linspace(0.0, 1.0, n),
+            ),
+            wwt.WwtRecordSpec(
+                "Pars", wwt.CHAN_Y, wwt.CHAN_Y_UNIT, n=n, formula="abs(k1)",
+            ),
+        ),
+        (wwt._single_channel_window(1, wwt.CHAN_Y, wwt.CHAN_Y_UNIT),),
+    )
+    loaded = load_wwt_document(path)
+    channels = loaded.groups[0]["channels"]
+    assert wwt.CHAN_Y in channels
+    renamed = loaded.groups[0]["source_metadata"]["renamed_channels"]
+    assert renamed
+    assert renamed[0]["original"] == wwt.CHAN_Y
+    assert renamed[0]["renamed"] in channels
+    assert renamed[0]["renamed"] != wwt.CHAN_Y
+    derived = loaded.groups[0]["channel_metadata"][renamed[0]["renamed"]]
+    assert derived["derived"] is True
+
+
+def test_trailer_count_zero_is_truncated_window(tmp_path):
+    from mf4_analyzer.io.wwt_display import RECORD_COUNT_OFF
+
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "count0.wwt")
+    data = bytearray(path.read_bytes())
+    trailer = find_trailers(data)[0]
+    struct.pack_into("<I", data, trailer + RECORD_COUNT_OFF, 0)
+    path.write_bytes(data)
+    doc = parse_wwt_document(path)
+    assert doc.groups
+    assert doc.windows == ()
+    assert any(item.startswith("truncated_window:") for item in doc.diagnostics)
+
+
+def test_trailer_count_over_max_is_truncated_window(tmp_path):
+    from mf4_analyzer.io.wwt_display import RECORD_COUNT_OFF
+
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "count4097.wwt")
+    data = bytearray(path.read_bytes())
+    trailer = find_trailers(data)[0]
+    struct.pack_into("<I", data, trailer + RECORD_COUNT_OFF, 4097)
+    path.write_bytes(data)
+    doc = parse_wwt_document(path)
+    assert doc.groups
+    assert doc.windows == ()
+    assert any(item.startswith("truncated_window:") for item in doc.diagnostics)
