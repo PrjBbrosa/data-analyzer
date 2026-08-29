@@ -18,7 +18,7 @@ from mf4_analyzer.ui.wwt_view_import import (
 )
 
 _ROOT = Path(__file__).resolve().parents[2]
-_YP_SAMPLE = _ROOT / "testdoc" / "WWT" / "YP_SS_P779_0007.wwt"
+_YP_SAMPLE = _ROOT / "testdoc" / "WWT" / "YP_SS_000089.wwt"
 _TICK_CAP = 2000
 
 
@@ -193,7 +193,7 @@ def test_record_length_mismatch_is_unaligned_without_testdoc():
     assert issue.detail == "6,5"
 
 
-def test_native_rows_use_navigator_color_and_exclude_record_only_y(tmp_path):
+def test_native_rows_plot_record_only_y_with_winwert_color(tmp_path):
     from tests._helpers import wwt_factory as wwt
 
     loaded = load_wwt_document(
@@ -203,8 +203,12 @@ def test_native_rows_use_navigator_color_and_exclude_record_only_y(tmp_path):
     proposals = build_wwt_view_proposals(loaded.document, registered)
     assert len(proposals) == 1
     view = proposals[0].state
-    assert [binding.y_ref.kind for binding in view.curve_bindings] == ["channel"]
-    assert len(view.axis_opts["native_ticks"]["y"]) == 1
+    kinds = [binding.y_ref.kind for binding in view.curve_bindings]
+    assert kinds == ["channel", "wwt_record"]
+    tol = next(
+        binding for binding in view.curve_bindings if binding.y_ref.kind == "wwt_record"
+    )
+    assert tol.color == wwt.palette_hex(wwt.TOL_Y_COLOR)
 
     group = loaded.groups[0]
     files = {
@@ -223,19 +227,36 @@ def test_native_rows_use_navigator_color_and_exclude_record_only_y(tmp_path):
     )
 
     assert not result.issues
-    assert len(result.rows) == 1
-    assert result.rows[0][0] == wwt.MEAS_Y
-    assert result.rows[0][4] == "#13a36b"
+    assert len(result.rows) == 2
+    by_name = {row[0]: row for row in result.rows}
+    assert wwt.MEAS_Y in by_name
+    assert by_name[wwt.MEAS_Y][4] == "#13a36b"
+    tol_row = next(row for row in result.rows if wwt.TOL_Y in str(row[0]))
+    assert tol_row[4] == wwt.palette_hex(wwt.TOL_Y_COLOR)
     assert result.claimed_channel_keys == {channel_key}
     assert result.successful_channel_keys == {channel_key}
 
+    hidden = bound_time_plot_rows(
+        view.curve_bindings,
+        files,
+        checked_channel_keys=set(),
+        channel_colors={channel_key: "#13a36b"},
+    )
+    assert not hidden.issues
+    assert len(hidden.rows) == 1
+    assert wwt.TOL_Y in str(hidden.rows[0][0])
+    assert hidden.rows[0][4] == wwt.palette_hex(wwt.TOL_Y_COLOR)
+    assert channel_key in hidden.claimed_channel_keys
+    assert channel_key not in hidden.successful_channel_keys
 
-def test_yp_bindings_plot_only_registered_y_when_customer_sample_present():
+
+def test_yp_bindings_plot_tol_oben_and_measurement_when_customer_sample_present():
     if not _YP_SAMPLE.is_file():
         pytest.skip(f"optional customer WWT sample missing: {_YP_SAMPLE}")
     loaded = load_wwt_document(_YP_SAMPLE)
     registered = register_groups_for_test(loaded.groups, owner_fid="f1")
     proposals = build_wwt_view_proposals(loaded.document, registered)
+    assert len(proposals) == 1
     view = proposals[0].state
     files = {
         "f1": SimpleNamespace(
@@ -246,7 +267,16 @@ def test_yp_bindings_plot_only_registered_y_when_customer_sample_present():
     }
     rows, issues, consumed = bound_time_plot_rows(view.curve_bindings, files)
     assert not issues
-    assert rows
-    assert all(binding.y_ref.kind == "channel" for binding in view.curve_bindings)
+    assert len(rows) == 2
+    names = [row[0] for row in rows]
+    assert any("Tol_oben" in str(name) for name in names)
+    assert any("Druckstückspiel" in str(name) for name in names)
+    tol = next(
+        binding for binding in view.curve_bindings
+        if "Tol_oben" in binding.display_name
+    )
+    assert tol.y_ref.kind == "wwt_record"
+    tol_row = next(row for row in rows if "Tol_oben" in str(row[0]))
+    assert str(tol_row[4]).lower() in {"#ff0000", "#f00"}
     assert all(int(row[2].shape[0]) == int(row[3].shape[0]) for row in rows)
     assert ("f1", "Druckstückspiel") in consumed

@@ -91,9 +91,22 @@ FORMULA = "abs(k2)"
 
 RECT_WIN_A = WwtWindowRectMm(20.0, 40.0, 90.0, 50.0)
 RECT_WIN_B = WwtWindowRectMm(120.0, 40.0, 70.0, 50.0)
+RECT_ZERO_WIDTH = WwtWindowRectMm(20.0, 40.0, 0.0, 50.0)
 
 MULTI_WINDOW_COUNT = 3
 MULTI_FORMULA_COUNT = 1
+SHARED_AXIS_OWNER_TICK = 0.05
+SHARED_AXIS_OWNER_GRID = 0.05
+HUGE_ZEIT_N = 2_000_000_000
+SENTINEL_RAW = -1e300
+SENTINEL_SCALE = 2.0
+SENTINEL_INDEX = 10
+
+
+def palette_hex(color: tuple[int, bytes]) -> str:
+    """WinWert palette entry ``(index, rgb)`` → ``#rrggbb``."""
+    rgb = bytes(color[1])
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
 _PLOT_K_X = 4200.0
 _PLOT_K_Y = 2400.0
@@ -110,6 +123,10 @@ class WwtRecordSpec:
     dt: float | None = None
     t0: float | None = None
     formula: str | None = None
+    scale: float = 1.0
+    offset: float = 0.0
+    pack_raw: bool = False
+    formula_nul_terminated: bool = True
 
 
 @dataclass(frozen=True)
@@ -177,7 +194,9 @@ def _pack_one_record(spec: WwtRecordSpec, *, source_filename: str) -> bytes:
         )
     if tag == "Pars":
         formula = spec.formula or ""
-        payload = formula.encode("latin-1") + b"\x00"
+        payload = formula.encode("latin-1")
+        if spec.formula_nul_terminated:
+            payload += b"\x00"
         return _pack_record(
             b"Pars",
             int(spec.n or 1),
@@ -195,17 +214,22 @@ def _pack_one_record(spec: WwtRecordSpec, *, source_filename: str) -> bytes:
         raise ValueError(f"record {spec.name!r} needs values")
     values = np.asarray(spec.values, dtype=np.float64)
     n = int(spec.n or values.size)
+    scale = float(spec.scale)
+    offset = float(spec.offset)
     lo, hi = _finite_minmax(values)
-    payload = physical_to_raw(values, tag, scale=1.0, offset=0.0, n=n)
+    if spec.pack_raw:
+        payload = np.ascontiguousarray(values.astype("<f8", copy=False)).tobytes()
+    else:
+        payload = physical_to_raw(values, tag, scale=scale, offset=offset, n=n)
     return _pack_record(
         tag.encode("ascii"),
         n,
         name=spec.name,
         unit=spec.unit,
         source_filename=source_filename,
-        a=1.0,
+        a=scale,
         b=1.0,
-        c=0.0,
+        c=offset,
         min_v=lo,
         max_v=hi,
         xkanalnr=0,
@@ -583,3 +607,218 @@ def record_only_gap_curves(path=None) -> Path | bytes:
         ),
     )
     return _emit(write_wwt_bytes(records, windows), path)
+
+
+def shared_axis_evaluation_before_owner(
+    *, meas_n: int = CHANNEL_N, tol_n: int = AUX_N, path=None,
+) -> Path | bytes:
+    """YP scene: unselected Tol (tick=0/grid=0) is listed before the owner.
+
+    Same unit+range so D6 joins them onto the owner's axis. Record index of
+    the evaluation line is lower than the selected measurement so native_y
+    currently records the evaluation line's 0/0 ticks.
+    """
+    if meas_n < _MIN_TIMESERIES_SAMPLES:
+        raise ValueError(
+            f"meas_n must be >= {_MIN_TIMESERIES_SAMPLES} so the measurement "
+            "Zeit group becomes Navigator channels"
+        )
+    if tol_n >= _MIN_TIMESERIES_SAMPLES:
+        raise ValueError(
+            f"tol_n must be < {_MIN_TIMESERIES_SAMPLES} so the tolerance "
+            "stays a record-only curve"
+        )
+    if tol_n < 2:
+        raise ValueError("tol_n must be at least 2")
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=meas_n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=meas_n,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, meas_n),
+        ),
+        WwtRecordSpec(
+            "Real", LINE_X, LINE_X_UNIT, n=tol_n,
+            values=_linspace(LINE_X_LO, LINE_X_HI, tol_n),
+        ),
+        WwtRecordSpec(
+            "Real", TOL_Y, TOL_Y_UNIT, n=tol_n,
+            values=_linspace(0.2, 0.8, tol_n),
+        ),
+        WwtRecordSpec(
+            "Real", MEAS_Y, MEAS_Y_UNIT, n=meas_n,
+            values=_linspace(MEAS_Y_LO, MEAS_Y_HI, meas_n),
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+                x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+            ),
+            curves=(
+                _y_curve(
+                    3, f"{TOL_Y} [{TOL_Y_UNIT}]", MEAS_Y_LO, MEAS_Y_HI,
+                    x_record_index=2, tick=0.0, grid=0.0,
+                    selected=False, color=TOL_Y_COLOR,
+                ),
+                _y_curve(
+                    4, f"{MEAS_Y} [{MEAS_Y_UNIT}]", MEAS_Y_LO, MEAS_Y_HI,
+                    x_record_index=1,
+                    tick=SHARED_AXIS_OWNER_TICK, grid=SHARED_AXIS_OWNER_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
+def valid_and_zero_width_windows(path=None) -> Path | bytes:
+    """One usable window plus a structurally valid ``right == left`` block."""
+    n = CHANNEL_N
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n),
+        ),
+    )
+    chan_y = _y_curve(
+        2, f"{CHAN_Y} [{CHAN_Y_UNIT}]", CHAN_Y_LO, CHAN_Y_HI,
+        x_record_index=1, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+        color=CHAN_Y_COLOR,
+    )
+    axis = _axis_curve(
+        f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+        x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A, global_x=1, x_axis=axis, curves=(chan_y,),
+        ),
+        WwtWindowSpec(
+            rect_mm=RECT_ZERO_WIDTH, global_x=1, x_axis=axis, curves=(chan_y,),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
+def huge_zeit_n_header_only(path=None) -> Path | bytes:
+    """Header-only Zeit declaring ``HUGE_ZEIT_N`` points with no sample payload."""
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=HUGE_ZEIT_N, dt=DT, t0=T0),
+    )
+    return _emit(write_wwt_bytes(records), path)
+
+
+def sentinel_non_unit_scale_real(
+    *, n: int = CHANNEL_N, index: int = SENTINEL_INDEX, path=None,
+) -> Path | bytes:
+    """Real record whose raw payload is ``-1e300`` with scale != 1.0."""
+    if n < _MIN_TIMESERIES_SAMPLES:
+        raise ValueError(
+            f"n must be >= {_MIN_TIMESERIES_SAMPLES} so the Zeit group "
+            "becomes a Navigator source"
+        )
+    if not 0 <= index < n:
+        raise ValueError("sentinel index must fall inside the record")
+    raw = _linspace(0.0, 1.0, n)
+    raw[index] = SENTINEL_RAW
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n, values=raw,
+            scale=SENTINEL_SCALE, offset=0.0, pack_raw=True,
+        ),
+    )
+    return _emit(write_wwt_bytes(records), path)
+
+
+def _single_channel_window(y_index: int, y_name: str, y_unit: str) -> WwtWindowSpec:
+    return WwtWindowSpec(
+        rect_mm=RECT_WIN_A,
+        global_x=0,
+        x_axis=_axis_curve(
+            f"{TIME_NAME} [s]", 0.0, 1.0,
+            x_record_index=0, tick=0.1, grid=0.05,
+        ),
+        curves=(
+            _y_curve(
+                y_index, f"{y_name} [{y_unit}]", CHAN_Y_LO, CHAN_Y_HI,
+                x_record_index=0, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+                color=CHAN_Y_COLOR,
+            ),
+        ),
+    )
+
+
+def unterminated_pars_formula(path=None) -> Path | bytes:
+    """Pars payload is a 256-byte ``k1`` pad with no NUL terminator."""
+    n = CHANNEL_N
+    formula = "k1" + (" " * 254)
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n),
+        ),
+        WwtRecordSpec(
+            "Pars", FORM_Y, FORM_Y_UNIT, n=n, formula=formula,
+            formula_nul_terminated=False,
+        ),
+    )
+    return _emit(
+        write_wwt_bytes(records, (_single_channel_window(1, CHAN_Y, CHAN_Y_UNIT),)),
+        path,
+    )
+
+
+def aux_cohort_materialized_pars(path=None) -> Path | bytes:
+    """Pars that evaluates on an auxiliary short Zeit block, not a source group."""
+    n = CHANNEL_N
+    aux = AUX_N
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n),
+        ),
+        WwtRecordSpec("Zeit", "TimeAux", "s", n=aux, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", "AuxY", CHAN_Y_UNIT, n=aux,
+            values=_linspace(1.0, 2.0, aux),
+        ),
+        WwtRecordSpec("Pars", "AuxForm", CHAN_Y_UNIT, n=aux, formula="abs(k3)"),
+    )
+    return _emit(
+        write_wwt_bytes(records, (_single_channel_window(1, CHAN_Y, CHAN_Y_UNIT),)),
+        path,
+    )
+
+
+def merged_zeit_formula_cohort(path=None) -> Path | bytes:
+    """Two Zeit blocks share ``(n, dt, t0)``; formula refs both channel cohorts."""
+    n = CHANNEL_N
+    records = (
+        WwtRecordSpec("Zeit", "TimeA", "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", "ChanA", CHAN_Y_UNIT, n=n,
+            values=_linspace(0.0, 1.0, n),
+        ),
+        WwtRecordSpec("Zeit", "TimeB", "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", "ChanB", CHAN_Y_UNIT, n=n,
+            values=_linspace(2.0, 3.0, n),
+        ),
+        WwtRecordSpec("Pars", "SumAB", CHAN_Y_UNIT, n=n, formula="k1+k3"),
+    )
+    return _emit(
+        write_wwt_bytes(records, (_single_channel_window(1, "ChanA", CHAN_Y_UNIT),)),
+        path,
+    )

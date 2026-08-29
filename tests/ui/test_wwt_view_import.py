@@ -64,7 +64,7 @@ def test_channel_xy_proposal_uses_only_registered_y_and_tracelab_color(tmp_path)
     assert all(channel != wwt.LIMIT_HI for _fid, channel in registered.record_channels.values())
 
 
-def test_measurement_proposal_drops_record_only_tolerance_y(tmp_path):
+def test_measurement_proposal_binds_record_only_tolerance_y(tmp_path):
     proposals, registered, _loaded = _proposals(
         wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
     )
@@ -73,18 +73,25 @@ def test_measurement_proposal_drops_record_only_tolerance_y(tmp_path):
     assert view.xlim == (wwt.CHAN_X_LO, wwt.CHAN_X_HI)
     assert view.plot_mode == "overlay"
     by_name = {binding.display_name: binding for binding in view.curve_bindings}
-    assert set(by_name) == {f"{wwt.MEAS_Y} [{wwt.MEAS_Y_UNIT}]"}
+    assert set(by_name) == {
+        f"{wwt.MEAS_Y} [{wwt.MEAS_Y_UNIT}]",
+        f"{wwt.TOL_Y} [{wwt.TOL_Y_UNIT}]",
+    }
     meas = by_name[f"{wwt.MEAS_Y} [{wwt.MEAS_Y_UNIT}]"]
+    tol = by_name[f"{wwt.TOL_Y} [{wwt.TOL_Y_UNIT}]"]
     assert meas.x_ref.kind == "channel"
     assert meas.x_ref.channel == wwt.CHAN_X
     assert meas.y_ref.kind == "channel"
     assert meas.y_ref.channel == wwt.MEAS_Y
-    assert meas.color == FILE_PALETTES[0][0]
     assert meas.y_range == (wwt.MEAS_Y_LO, wwt.MEAS_Y_HI)
+    assert tol.y_ref.kind == "wwt_record"
+    assert tol.x_ref.kind == "wwt_record"
+    assert tol.color == wwt.palette_hex(wwt.TOL_Y_COLOR)
     assert ("f1", wwt.MEAS_Y) in view.checked
     assert ("f1", wwt.TOL_Y) not in view.checked
+    assert all(wwt.TOL_Y not in key for key in view.ylims)
     assert wwt.TOL_Y not in {ch for _fid, ch in registered.record_channels.values()}
-    assert set(view.axis_opts["native_ticks"]["y"]) == {meas.axis_id}
+    assert meas.axis_id in view.axis_opts["native_ticks"]["y"]
 
 
 def test_registered_y_may_keep_record_only_x_without_promoting_auxiliary_y(tmp_path):
@@ -164,18 +171,18 @@ def test_two_registered_y_axes_are_not_joined_by_record_only_aux_axis(tmp_path):
     assert all("record-4" not in axis for axis in view.axis_opts["native_ticks"]["y"])
 
 
-def test_multi_window_proposals_omit_record_only_y_window(tmp_path):
+def test_multi_window_proposals_include_record_only_y_window(tmp_path):
     proposals, registered, loaded = _proposals(
         wwt.multi_window_overlap_and_formula(tmp_path / "multi.wwt")
     )
-    assert len(proposals) == wwt.MULTI_WINDOW_COUNT - 1
+    assert len(proposals) == wwt.MULTI_WINDOW_COUNT
     assert [p.state.name.split(" · ")[0] for p in proposals] == [
-        "WinWert 1", "WinWert 2",
+        "WinWert 1", "WinWert 2", "WinWert 3",
     ]
     assert [p.rect_mm for p in proposals] == [
-        wwt.RECT_WIN_A, wwt.RECT_WIN_B,
+        wwt.RECT_WIN_A, wwt.RECT_WIN_B, wwt.RECT_WIN_B,
     ]
-    assert [p.line_width_mm for p in proposals] == [wwt.LINE_WIDTH_MM] * 2
+    assert [p.line_width_mm for p in proposals] == [wwt.LINE_WIDTH_MM] * 3
 
     form_index = next(
         record.index for record in loaded.document.records if record.name == wwt.FORM_Y
@@ -185,15 +192,18 @@ def test_multi_window_proposals_omit_record_only_y_window(tmp_path):
 
     win0 = {b.display_name: b for b in proposals[0].state.curve_bindings}
     win1 = {b.display_name: b for b in proposals[1].state.curve_bindings}
+    win2 = {b.display_name: b for b in proposals[2].state.curve_bindings}
     chan_y = win0[f"{wwt.CHAN_Y} [{wwt.CHAN_Y_UNIT}]"]
     form_y = win1[f"{wwt.FORM_Y} [{wwt.FORM_Y_UNIT}]"]
+    tol_y = win2[f"{wwt.TOL_Y} [{wwt.TOL_Y_UNIT}]"]
     assert chan_y.y_ref.kind == "channel" and chan_y.x_ref.kind == "channel"
     assert form_y.y_ref.kind == "channel" and form_y.y_ref.channel == wwt.FORM_Y
     assert form_y.x_ref.kind == "channel" and form_y.x_ref.channel == wwt.CHAN_X
+    assert tol_y.y_ref.kind == "wwt_record"
+    assert tol_y.color == wwt.palette_hex(wwt.TOL_Y_COLOR)
     assert all(
         binding.y_ref.kind == "channel"
-        for proposal in proposals
-        for binding in proposal.state.curve_bindings
+        for binding in (*proposals[0].state.curve_bindings, *proposals[1].state.curve_bindings)
     )
 
 
@@ -206,3 +216,97 @@ def test_optional_customer_wwt_proposal_smoke_when_present():
     assert loaded.document.records
     assert registered.fids
     assert isinstance(proposals, list)
+
+
+def test_shared_axis_native_y_uses_selected_owner_tick_grid(tmp_path):
+    proposals, _registered, _loaded = _proposals(
+        wwt.shared_axis_evaluation_before_owner(path=tmp_path / "yp-axis.wwt")
+    )
+    assert len(proposals) == 1
+    view = proposals[0].state
+    by_kind = {}
+    for binding in view.curve_bindings:
+        by_kind.setdefault(binding.y_ref.kind, []).append(binding)
+    assert len(by_kind.get("wwt_record", ())) == 1
+    assert len(by_kind.get("channel", ())) == 1
+    tol = by_kind["wwt_record"][0]
+    meas = by_kind["channel"][0]
+    assert tol.display_name.startswith(wwt.TOL_Y)
+    assert meas.display_name.startswith(wwt.MEAS_Y)
+    assert tol.axis_id == meas.axis_id
+    facts = view.axis_opts["native_ticks"]["y"][meas.axis_id]
+    assert facts["major"] == wwt.SHARED_AXIS_OWNER_TICK
+    assert facts["grid"] == wwt.SHARED_AXIS_OWNER_GRID
+    assert facts["major"] != 0.0
+    assert facts["grid"] != 0.0
+
+
+def test_whole_window_record_only_gap_curves_generate_a_view(tmp_path):
+    proposals, _registered, _loaded = _proposals(
+        wwt.record_only_gap_curves(tmp_path / "gap.wwt")
+    )
+    assert len(proposals) == 1
+    kinds = [binding.y_ref.kind for binding in proposals[0].state.curve_bindings]
+    assert kinds == ["wwt_record", "wwt_record"]
+    names = [binding.display_name for binding in proposals[0].state.curve_bindings]
+    assert any(wwt.GAP_Y_POS in name for name in names)
+    assert any(wwt.GAP_Y_SPEED in name for name in names)
+    assert proposals[0].state.checked == []
+    assert proposals[0].state.ylims == {}
+
+
+def _customer_wwt(name: str) -> Path:
+    path = _ROOT / "testdoc" / "WWT" / name
+    if not path.is_file():
+        pytest.skip(f"optional customer WWT sample missing: {path}")
+    return path
+
+
+def test_yp_ss_customer_sample_has_one_view_and_two_curves():
+    proposals, _registered, loaded = _proposals(_customer_wwt("YP_SS_000089.wwt"))
+    assert len(loaded.document.windows) >= 1
+    assert len(proposals) == 1
+    names = [binding.display_name for binding in proposals[0].state.curve_bindings]
+    assert any("Tol_oben" in name for name in names)
+    assert any("Druckstückspiel" in name for name in names)
+    assert len(proposals[0].state.curve_bindings) == 2
+    kinds = {binding.display_name: binding.y_ref.kind for binding in proposals[0].state.curve_bindings}
+    tol = next(
+        binding for binding in proposals[0].state.curve_bindings
+        if "Tol_oben" in binding.display_name
+    )
+    assert tol.y_ref.kind == "wwt_record"
+    assert kinds[next(name for name in kinds if "Druckstückspiel" in name)] == "channel"
+
+
+def test_ucan_d6_cser_customer_sample_has_seven_proposals():
+    proposals, _registered, loaded = _proposals(
+        _customer_wwt("U-Can_D6-CSER double_00479.wwt")
+    )
+    visible_windows = sum(
+        1
+        for window in loaded.document.windows
+        if any(row.visible for row in window.curves[1:])
+    )
+    assert visible_windows == 7
+    assert len(proposals) == 7
+
+
+def test_ucan_eo3_customer_sample_has_seven_proposals_after_empty_windows():
+    proposals, _registered, loaded = _proposals(_customer_wwt("U-Can_EO3_000089.wwt"))
+    visible_windows = sum(
+        1
+        for window in loaded.document.windows
+        if any(row.visible for row in window.curves[1:])
+    )
+    empty_windows = len(loaded.document.windows) - visible_windows
+    assert len(loaded.document.windows) == 9
+    assert empty_windows == 2
+    assert visible_windows == 7
+    assert len(proposals) == 7
+
+
+def test_nltnp_customer_sample_has_four_visible_curves():
+    proposals, _registered, _loaded = _proposals(_customer_wwt("NLTNP_000089.wwt"))
+    assert len(proposals) == 1
+    assert len(proposals[0].state.curve_bindings) == 4

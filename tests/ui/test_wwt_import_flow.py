@@ -19,7 +19,7 @@ from tests._helpers import wwt_factory as wwt
 _ROOT = Path(__file__).resolve().parents[2]
 
 
-def _stub_wwt_ui(mw, monkeypatch, accept=True):
+def _stub_wwt_ui(mw, monkeypatch, accept=True, *, projected=None):
     asked = []
 
     def fake_ask(body, informative=""):
@@ -27,9 +27,22 @@ def _stub_wwt_ui(mw, monkeypatch, accept=True):
         return accept
 
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
-    monkeypatch.setattr(
-        mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
-    )
+    if projected is None:
+        monkeypatch.setattr(
+            mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
+        )
+    else:
+        real = mw._ultraview.add_time_views_from_native_layout
+
+        def _capture(items):
+            projected.append(tuple(
+                (str(view_id), rect) for view_id, rect in items
+            ))
+            return real(items)
+
+        monkeypatch.setattr(
+            mw._ultraview, "add_time_views_from_native_layout", _capture
+        )
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     return asked
@@ -70,20 +83,46 @@ def test_layout_dialog_text_matches_multi_window_copy(tmp_path):
     body, informative = layout_dialog_text(
         loaded.document, proposals, available=MAX_VIEWS
     )
+    visible_y_windows = sum(
+        1
+        for window in loaded.document.windows
+        if any(row.visible for row in window.curves[1:])
+    )
+    assert visible_y_windows == wwt.MULTI_WINDOW_COUNT
     assert (
-        f"检测到 {wwt.MULTI_WINDOW_COUNT - 1} 个 WinWert 数据窗口和 "
+        f"检测到 {wwt.MULTI_WINDOW_COUNT} 个 WinWert 数据窗口和 "
         f"{wwt.MULTI_FORMULA_COUNT} 个可用计算通道。"
     ) in body
     assert (
-        f"可按原排版生成 {wwt.MULTI_WINDOW_COUNT - 1} 个时域 View，并同步加入 UltraView。"
+        f"可按原排版生成 {wwt.MULTI_WINDOW_COUNT} 个时域 View，并同步加入 UltraView。"
     ) in body
-    assert "重叠" not in body
+    assert "重叠" in body
+    assert "第 3 个窗口与第 2 个" in body
     assert informative == ""
     capped, info = layout_dialog_text(
         loaded.document, proposals, available=1
     )
     assert "可按原排版生成 1 个时域 View" in capped
-    assert info == f"检测到 {wwt.MULTI_WINDOW_COUNT - 1} 个，可创建 1 个"
+    assert info == f"检测到 {wwt.MULTI_WINDOW_COUNT} 个，可创建 1 个"
+
+
+def test_layout_dialog_text_counts_visible_y_windows_not_kept_proposals(tmp_path):
+    from mf4_analyzer.io.wwt_document import load_wwt_document
+    from mf4_analyzer.ui.wwt_view_import import (
+        build_wwt_view_proposals,
+        register_groups_for_test,
+    )
+
+    loaded = load_wwt_document(
+        wwt.multi_window_overlap_and_formula(tmp_path / "multi.wwt")
+    )
+    proposals = build_wwt_view_proposals(
+        loaded.document, register_groups_for_test(loaded.groups, owner_fid="f1")
+    )
+    body, _info = layout_dialog_text(
+        loaded.document, proposals[:1], available=MAX_VIEWS
+    )
+    assert f"检测到 {wwt.MULTI_WINDOW_COUNT} 个 WinWert 数据窗口" in body
 
 
 def test_insert_states_reuses_blank_and_emits_once():
@@ -131,10 +170,10 @@ def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeyp
     qapp.processEvents()
     assert asked
     assert (
-        f"检测到 {wwt.MULTI_WINDOW_COUNT - 1} 个 WinWert 数据窗口和 "
+        f"检测到 {wwt.MULTI_WINDOW_COUNT} 个 WinWert 数据窗口和 "
         f"{wwt.MULTI_FORMULA_COUNT} 个可用计算通道。"
     ) in asked[0][0]
-    assert len(mw.view_manager.views) == wwt.MULTI_WINDOW_COUNT - 1
+    assert len(mw.view_manager.views) == wwt.MULTI_WINDOW_COUNT
     assert mw.files
     derived = any(wwt.FORM_Y in fd.data.columns for fd in mw.files.values())
     assert derived
@@ -203,13 +242,13 @@ def test_cap_truncates_with_visible_copy(tmp_path):
         loaded.document, register_groups_for_test(loaded.groups)
     )
     _body, info = layout_dialog_text(loaded.document, proposals, available=1)
-    assert info == f"检测到 {wwt.MULTI_WINDOW_COUNT - 1} 个，可创建 1 个"
+    assert info == f"检测到 {wwt.MULTI_WINDOW_COUNT} 个，可创建 1 个"
     assert ACCEPT_TEXT == "按 WinWert 排版并绘图"
     assert REJECT_TEXT == "仅加载数据"
 
 
-def test_save_reopen_keeps_only_channel_backed_y_bindings(qapp, tmp_path, monkeypatch):
-    """Restore skips offer_layout and never revives record-only Y curves."""
+def test_save_reopen_keeps_record_only_y_bindings(qapp, tmp_path, monkeypatch):
+    """Restore skips offer_layout and keeps record-only Y bindings."""
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui.time_curve_bindings import resolve_time_curve_binding
 
@@ -224,9 +263,12 @@ def test_save_reopen_keeps_only_channel_backed_y_bindings(qapp, tmp_path, monkey
     bindings = [
         item for view in mw.view_manager.views for item in view.curve_bindings
     ]
-    assert bindings and all(item.y_ref.kind == "channel" for item in bindings)
-    binding = bindings[0]
-    x, y, issue = resolve_time_curve_binding(binding, mw.files)
+    assert bindings
+    assert any(item.y_ref.kind == "wwt_record" for item in bindings)
+    record_binding = next(
+        item for item in bindings if item.y_ref.kind == "wwt_record"
+    )
+    x, y, issue = resolve_time_curve_binding(record_binding, mw.files)
     assert issue is None and y is not None and x is not None
     original = (_array_sig(x), _array_sig(y), None if issue is None else issue.code)
 
@@ -280,8 +322,10 @@ def test_save_reopen_keeps_only_channel_backed_y_bindings(qapp, tmp_path, monkey
         for item in view.curve_bindings
     ]
     assert restored_bindings
-    assert all(item.y_ref.kind == "channel" for item in restored_bindings)
-    restored_binding = restored_bindings[0]
+    assert any(item.y_ref.kind == "wwt_record" for item in restored_bindings)
+    restored_binding = next(
+        item for item in restored_bindings if item.y_ref.kind == "wwt_record"
+    )
     x, y, issue = resolve_time_curve_binding(restored_binding, restored.files)
     assert issue is None, issue
     assert y is not None
@@ -330,7 +374,7 @@ def test_reject_and_no_display_still_attach_record_store(
     _assert_store_on_every_file(mw2)
 
 
-def test_aux_only_overlap_is_omitted_without_yellow_toast(
+def test_record_only_overlap_is_reported_without_raw_code_toast(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -341,13 +385,27 @@ def test_aux_only_overlap_is_omitted_without_yellow_toast(
     monkeypatch.setattr(
         mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
     )
-    asked = _stub_wwt_ui(mw, monkeypatch, accept=True)
+    projected = []
+    asked = _stub_wwt_ui(mw, monkeypatch, accept=True, projected=projected)
     mw._load_one(str(path))
     assert asked
-    assert "重叠" not in asked[0][0]
+    assert "重叠" in asked[0][0]
+    assert "第 3 个窗口与第 2 个" in asked[0][0]
+    assert projected
+    assert len(projected[0]) == wwt.MULTI_WINDOW_COUNT
     warn = [(m, lv) for m, lv in toasts if lv in {"warning", "warn"}]
-    leaked = [msg for msg, _lv in warn if "重叠" in msg or "未放置" in msg]
+    leaked = [
+        msg for msg, _lv in warn
+        if "exact_overlap" in str(msg)
+        or "quantized_collision" in str(msg)
+        or "placed_limit" in str(msg)
+        or "duplicate_ref" in str(msg)
+    ]
     assert leaked == [], warn
+    board = mw._ultraview.board
+    history = mw._ultraview._workspace_controller.grid_histories[board.board_id]
+    assert len(history.undo) == 1
+    assert len(board.free_grid) + len(board.unplaced) == wwt.MULTI_WINDOW_COUNT
 
 
 def test_optional_customer_wwt_import_smoke_when_present(qapp, tmp_path, monkeypatch):

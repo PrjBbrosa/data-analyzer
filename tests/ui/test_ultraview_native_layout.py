@@ -4,15 +4,22 @@ from __future__ import annotations
 import pytest
 
 from mf4_analyzer.ultraview_core.model import (
+    MAX_BOARD_MEMBERSHIP,
+    MAX_PLACED_CARDS,
+    FreeGridPlacement,
     GridRect,
     UltraViewRef,
     default_board,
 )
 from mf4_analyzer.ultraview_core.native_layout import (
+    NativeLayoutPlan,
     NativeLayoutRect,
     plan_native_layout,
 )
-from mf4_analyzer.ultraview_core.board_ops import apply_native_layout
+from mf4_analyzer.ultraview_core.board_ops import (
+    apply_native_layout,
+    membership_set,
+)
 
 
 UCAN_MM = (
@@ -160,6 +167,187 @@ def test_coordinator_rejects_incomplete_native_layout_before_mutating(qapp):
         assert board.free_grid == []
         assert board.unplaced == []
         assert board.board_id not in controller.grid_histories
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_plan_invalid_rect_goes_to_unplaced_with_warning():
+    valid = UltraViewRef("time", "valid")
+    zero = UltraViewRef("time", "zero-width")
+    nan_ref = UltraViewRef("time", "nan-width")
+    plan = plan_native_layout(
+        (
+            (valid, NativeLayoutRect(0.0, 60.0, 100.0, 60.0)),
+            (zero, NativeLayoutRect(20.0, 40.0, 0.0, 50.0)),
+            (nan_ref, NativeLayoutRect(0.0, 60.0, float("nan"), 60.0)),
+        )
+    )
+    placed_refs = {ref for ref, _rect in plan.placed}
+    assert valid in placed_refs
+    assert zero in plan.unplaced
+    assert nan_ref in plan.unplaced
+    assert zero not in placed_refs
+    assert nan_ref not in placed_refs
+    assert any("invalid_rect" in warning for warning in plan.warnings)
+
+
+def test_apply_native_layout_collision_with_existing_goes_unplaced():
+    existing = UltraViewRef("time", "keep-me")
+    incoming = UltraViewRef("time", "incoming")
+    occupied = GridRect(0, 0, 10, 6)
+    board = default_board()
+    board.free_grid.append(FreeGridPlacement(existing, occupied))
+    before = list(board.free_grid)
+    plan = NativeLayoutPlan(
+        placed=((incoming, occupied),),
+        unplaced=(),
+        warnings=(),
+    )
+    warnings = apply_native_layout(board, plan)
+    assert [(item.ref, item.rect) for item in board.free_grid] == [
+        (item.ref, item.rect) for item in before
+    ]
+    assert incoming in board.unplaced
+    assert existing not in board.unplaced
+    assert any(
+        "grid_collision" in warning or "overlap" in warning
+        for warning in warnings
+    )
+    assert incoming in membership_set(board)
+    assert existing in membership_set(board)
+
+
+def test_apply_native_layout_migrates_template_cards_before_projection():
+    from mf4_analyzer.ultraview_core.model import (
+        LAYOUT_MODE_FREE_GRID,
+        LAYOUT_MODE_TEMPLATE,
+        CardPlacement,
+    )
+
+    kept_a = UltraViewRef("time", "existing-a")
+    kept_b = UltraViewRef("time", "existing-b")
+    incoming = UltraViewRef("time", "native")
+    board = default_board()
+    board.layout_mode = LAYOUT_MODE_TEMPLATE
+    board.layout_id = "split_horizontal"
+    board.placements = [
+        CardPlacement("left", kept_a),
+        CardPlacement("right", kept_b),
+    ]
+    plan = NativeLayoutPlan(
+        placed=((incoming, GridRect(12, 8, 5, 6)),),
+        unplaced=(),
+        warnings=(),
+    )
+    apply_native_layout(board, plan)
+    members = membership_set(board)
+    assert kept_a in members
+    assert kept_b in members
+    assert incoming in members
+    assert board.layout_mode == LAYOUT_MODE_FREE_GRID
+    assert board.placements == []
+    placed_refs = {item.ref for item in board.free_grid}
+    assert kept_a in placed_refs
+    assert kept_b in placed_refs
+
+
+def test_apply_native_layout_membership_cap_refuses_extras():
+    board = default_board()
+    board.unplaced = [
+        UltraViewRef("time", f"u{index}")
+        for index in range(MAX_BOARD_MEMBERSHIP)
+    ]
+    extras = (
+        UltraViewRef("time", "extra-0"),
+        UltraViewRef("time", "extra-1"),
+    )
+    plan = NativeLayoutPlan(
+        placed=(
+            (extras[0], GridRect(0, 0, 4, 4)),
+            (extras[1], GridRect(8, 0, 4, 4)),
+        ),
+        unplaced=(),
+        warnings=(),
+    )
+    warnings = apply_native_layout(board, plan)
+    assert len(membership_set(board)) <= MAX_BOARD_MEMBERSHIP
+    assert extras[0] not in membership_set(board)
+    assert extras[1] not in membership_set(board)
+    assert any("membership_limit" in warning for warning in warnings)
+
+
+def test_apply_native_layout_placed_cap_refuses_overflow():
+    board = default_board()
+    for index in range(MAX_PLACED_CARDS):
+        board.free_grid.append(
+            FreeGridPlacement(
+                UltraViewRef("time", f"p{index}"),
+                GridRect(0, index * 4, 4, 4),
+            )
+        )
+    extras = (
+        UltraViewRef("time", "grid-extra-0"),
+        UltraViewRef("time", "grid-extra-1"),
+    )
+    plan = NativeLayoutPlan(
+        placed=(
+            (extras[0], GridRect(12, 0, 4, 4)),
+            (extras[1], GridRect(16, 0, 4, 4)),
+        ),
+        unplaced=(),
+        warnings=(),
+    )
+    warnings = apply_native_layout(board, plan)
+    assert len(board.free_grid) == MAX_PLACED_CARDS
+    assert extras[0] not in {item.ref for item in board.free_grid}
+    assert extras[1] not in {item.ref for item in board.free_grid}
+    assert extras[0] in board.unplaced
+    assert extras[1] in board.unplaced
+    assert any(
+        "placed_limit" in warning or "grid_full" in warning
+        for warning in warnings
+    )
+    assert len(membership_set(board)) == MAX_PLACED_CARDS + 2
+
+
+def test_apply_native_layout_plan_commits_collision_with_existing_cards(qapp):
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    board = coordinator.board
+    captured = []
+    real = coordinator.add_time_views_from_native_layout
+
+    def _capture(items):
+        captured.append(tuple((str(view_id), rect) for view_id, rect in items))
+        return real(items)
+
+    coordinator.add_time_views_from_native_layout = _capture
+    try:
+        first = real(
+            (("view-left", NativeLayoutRect(0.0, 60.0, 100.0, 60.0)),)
+        )
+        existing = [(item.ref, item.rect) for item in board.free_grid]
+        assert first == ("view-left",)
+        second = coordinator.add_time_views_from_native_layout(
+            (("view-collide", NativeLayoutRect(0.0, 60.0, 100.0, 60.0)),)
+        )
+        assert captured
+        assert captured[-1][0][0] == "view-collide"
+        assert [(item.ref, item.rect) for item in board.free_grid] == existing
+        assert UltraViewRef("time", "view-collide") in board.unplaced
+        history = controller.grid_histories[board.board_id]
+        assert len(history.undo) == 2
+        assert history.redo == []
+        assert second == ("view-left",) or "view-collide" not in second
     finally:
         coordinator.shutdown()
         host.deleteLater()
