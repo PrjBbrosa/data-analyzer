@@ -386,3 +386,89 @@ def test_native_y_ticks_pair_by_axis_id_when_leading_binding_is_omitted(qapp, tm
     assert got == tuple(value for value, _ in kept.major)
     assert got != tuple(value for value, _ in shifted.major)
     assert got[-1] == pytest.approx(second_spec["hi"])
+
+
+def _plot_wwt_view(qapp, view, files, checked_channel_keys):
+    from PyQt5.QtCore import QCoreApplication
+
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    result = bound_time_plot_rows(
+        view.curve_bindings,
+        files,
+        checked_channel_keys=checked_channel_keys,
+    )
+    assert not result.issues
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(800, 400)
+    canvas.show()
+    QCoreApplication.processEvents()
+    canvas.plot_channels(
+        result.rows,
+        mode="overlay",
+        defer_first_frame=True,
+    )
+    canvas.restore_visible_xlim(view.xlim, flush=False)
+    native_y = ((view.axis_opts or {}).get("native_ticks") or {}).get("y")
+    canvas.restore_visible_ylims(view.ylims, native_axis_ranges=native_y)
+    canvas.settle_view_restore()
+    QCoreApplication.processEvents()
+    return canvas, result
+
+
+def test_shared_axis_restore_keeps_owner_ylim_not_sibling_fit(qapp, tmp_path):
+    from tests._helpers import wwt_factory as wwt
+
+    loaded = load_wwt_document(
+        wwt.shared_axis_evaluation_before_owner(path=tmp_path / "yp-axis.wwt")
+    )
+    registered = register_groups_for_test(loaded.groups, owner_fid="f1")
+    proposals = build_wwt_view_proposals(loaded.document, registered)
+    assert len(proposals) == 1
+    view = proposals[0].state
+    group = loaded.groups[0]
+    files = {
+        "f1": SimpleNamespace(
+            data=group["data"],
+            source_metadata=group["source_metadata"],
+            time_array=group["data"]["Time"].to_numpy(),
+        )
+    }
+    canvas, result = _plot_wwt_view(
+        qapp, view, files, checked_channel_keys={("f1", wwt.MEAS_Y)},
+    )
+    assert len(result.rows) == 2
+    assert len(canvas.axes_list) == 1
+    lo, hi = canvas.axes_list[0].get_ylim()
+    assert (lo, hi) == pytest.approx((wwt.MEAS_Y_LO, wwt.MEAS_Y_HI))
+    assert hi - lo > 0.5
+
+
+def test_yp_shared_axis_restore_keeps_0_to_0_2_when_customer_sample_present(qapp):
+    if not _YP_SAMPLE.is_file():
+        pytest.skip(f"optional customer WWT sample missing: {_YP_SAMPLE}")
+    loaded = load_wwt_document(_YP_SAMPLE)
+    registered = register_groups_for_test(loaded.groups, owner_fid="f1")
+    proposals = build_wwt_view_proposals(loaded.document, registered)
+    assert len(proposals) == 1
+    view = proposals[0].state
+    files = {
+        "f1": SimpleNamespace(
+            data=loaded.groups[0]["data"],
+            source_metadata={"wwt_record_store": loaded.document.records},
+            time_array=loaded.groups[0]["data"]["Time"].to_numpy(),
+        )
+    }
+    meas = next(
+        binding for binding in view.curve_bindings
+        if "Druckstückspiel" in binding.display_name
+    )
+    checked = set()
+    if meas.y_ref.kind == "channel" and meas.y_ref.channel:
+        checked.add((meas.y_ref.fid, meas.y_ref.channel))
+    canvas, result = _plot_wwt_view(qapp, view, files, checked_channel_keys=checked)
+    assert len(result.rows) == 2
+    assert len(canvas.axes_list) == 1
+    assert canvas.axes_list[0].get_ylim() == pytest.approx((0.0, 0.2))
+    facts = view.axis_opts["native_ticks"]["y"][meas.axis_id]
+    assert (facts["lo"], facts["hi"]) == (0.0, 0.2)

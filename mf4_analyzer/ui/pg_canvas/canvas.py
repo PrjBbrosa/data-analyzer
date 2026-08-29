@@ -214,6 +214,48 @@ _AMP_DISPARITY_RATIO = 10.0     # max/min range ratio that reads as "dwarfed"
 _CLIP_FRACTION = 0.03           # share of samples pinned to an extreme = clipped
 
 
+def _finite_y_range(spec, *, require_span=False):
+    """Return ``(lo, hi)`` when both ends are finite; else ``None``.
+
+    Native WWT facts require ``hi > lo``. Persisted ylims may be collapsed
+    (``hi == lo``); callers pass ``require_span=True`` only for native facts.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, dict):
+        lo, hi = spec.get("lo"), spec.get("hi")
+    else:
+        try:
+            lo, hi = spec[0], spec[1]
+        except (TypeError, IndexError, ValueError, KeyError):
+            return None
+    try:
+        lo_f = float(lo)
+        hi_f = float(hi)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(lo_f) and np.isfinite(hi_f)):
+        return None
+    if hi_f < lo_f:
+        lo_f, hi_f = hi_f, lo_f
+    if require_span and not (hi_f > lo_f):
+        return None
+    return lo_f, hi_f
+
+
+def _union_y_ranges(ranges):
+    lo = hi = None
+    for rng in ranges:
+        if rng is None:
+            continue
+        a, b = rng
+        lo = a if lo is None else min(lo, a)
+        hi = b if hi is None else max(hi, b)
+    if lo is None:
+        return None
+    return lo, hi
+
+
 def _subsampled(sig):
     arr = np.asarray(sig, dtype=float)
     if arr.size == 0:
@@ -2325,43 +2367,137 @@ class TimeDomainCanvasPG(QWidget):
                 continue
         return out
 
-    def restore_visible_ylims(self, ylims):
-        """Restore per-channel Y ranges; fit newly-added channels once."""
+    def restore_visible_ylims(self, ylims, *, native_axis_ranges=None):
+        """Restore Y ranges once per shared axis handle.
+
+        Priority for each unique handle: any persisted member ylim (finite
+        union when they disagree), then WWT ``native_ticks['y'][axis_id]``
+        ``lo``/``hi``, then the union of visible raw samples inside the
+        current X window (full finite samples if that window is empty).
+
+        Independent handles still fit a newly plotted channel that has no
+        saved ylim. A sibling on a *shared* handle must not overwrite a
+        persisted or native range already applied to that handle.
+        """
         view_state_lines = getattr(self, "_channel_view_state_lines", None) or {}
         legacy_lines = getattr(self, "_channel_lines", None) or {}
-        changed = False
-        restored_keys = set()
-        for name, ylim in (ylims or {}).items():
-            pair = view_state_lines.get(name) or legacy_lines.get(name)
+        ylims = ylims or {}
+        native_table = native_axis_ranges or {}
+
+        def _pair_for_key(key):
+            pair = view_state_lines.get(key)
+            if pair is None:
+                getter = getattr(legacy_lines, "get", None)
+                if callable(getter):
+                    pair = getter(key)
+            return pair
+
+        handle_members = {}
+        seen_keys = set()
+
+        def _register(key, pair):
+            if pair is None or key in seen_keys:
+                return
+            handle = pair[0]
+            if handle is None or getattr(handle, "placeholder", False):
+                return
+            seen_keys.add(key)
+            slot = handle_members.get(id(handle))
+            if slot is None:
+                handle_members[id(handle)] = (handle, [key])
+            else:
+                slot[1].append(key)
+
+        for key, pair in view_state_lines.items():
+            _register(key, pair)
+        composite = getattr(legacy_lines, "composite_items", None)
+        if callable(composite):
+            for ck, _name, pair in composite():
+                _register(ck, pair)
+        elif isinstance(legacy_lines, dict):
+            for key, pair in legacy_lines.items():
+                _register(key, pair)
+
+        persisted_by_handle = {}
+        for name, ylim in ylims.items():
+            pair = _pair_for_key(name)
             if pair is None:
                 continue
+            _register(name, pair)
+            rng = _finite_y_range(ylim)
+            if rng is None:
+                continue
+            hid = id(pair[0])
+            persisted_by_handle.setdefault(hid, []).append((name, rng))
+
+        def _apply_ylim(handle, lo, hi, keys):
             try:
-                pair[0].set_ylim(*ylim)
-                if name in view_state_lines:
-                    restored_keys.add(name)
-                changed = True
+                handle.set_ylim(lo, hi)
+                return True
             except Exception as exc:
                 throttled(
                     _LOG,
                     f"canvas:restore_visible_ylims:set_ylim:{type(exc).__name__}",
                     logging.WARNING,
                     "Failed to restore Y range for channel_key=%r",
-                    name,
+                    keys[0] if keys else None,
                     exc_info=True,
                 )
+                return False
+
+        def _fit_handle_from_data(handle, keys, n_y):
+            visible_extent = getattr(self, "_visible_raw_y_extent", None)
+            frame_y = getattr(self, "_frame_handle_y", None)
+            overlay = bool(getattr(self, "_overlay_mode", False))
+            if callable(visible_extent) and callable(frame_y):
+                try:
+                    xlim = handle.get_xlim()
+                except Exception:
+                    xlim = None
+                extent = visible_extent(keys, xlim=xlim)
+                if extent is None:
+                    return False
+                return bool(frame_y(handle, extent, n_y, frame_to_nice=overlay))
+            fitter = getattr(self, "_fit_channel_y_to_visible_x", None)
+            if not callable(fitter):
+                return False
+            fitted = False
+            for key in keys:
+                if fitter(key, handle, n_y, frame_to_nice=overlay):
+                    fitted = True
+            return fitted
+
+        ctrl = getattr(self, "_tick_density_controller", None)
+        density = getattr(ctrl, "density", (10, 10)) if ctrl is not None else (10, 10)
+        try:
+            n_y = max(3, min(20, density[1]))
+        except (TypeError, IndexError):
+            n_y = 10
+
+        changed = False
+        any_persisted_applied = False
+        pending_fit = []
+        for hid, (handle, keys) in handle_members.items():
+            persisted = persisted_by_handle.get(hid) or ()
+            union = _union_y_ranges(rng for _key, rng in persisted)
+            if union is not None and _apply_ylim(handle, union[0], union[1], keys):
+                any_persisted_applied = True
+                changed = True
                 continue
-        if restored_keys and len(restored_keys) < len(view_state_lines):
-            n_y = max(3, min(20, self._tick_density_controller.density[1]))
-            for key, (handle, _line) in view_state_lines.items():
-                if key in restored_keys:
-                    continue
-                if self._fit_channel_y_to_visible_x(
-                    key,
-                    handle,
-                    n_y,
-                    frame_to_nice=self._overlay_mode,
-                ):
+            native = _finite_y_range(
+                native_table.get(getattr(handle, "axis_group", None)),
+                require_span=True,
+            )
+            if native is not None and _apply_ylim(handle, native[0], native[1], keys):
+                changed = True
+                continue
+            pending_fit.append((handle, keys))
+
+        if (not ylims) or any_persisted_applied:
+            for handle, keys in pending_fit:
+                if _fit_handle_from_data(handle, keys, n_y):
                     changed = True
+
         if changed:
             self._dense_raster.schedule_rebuild(
                 "y-range-restored", delay_ms=self._INTERACTION_SETTLE_MS,

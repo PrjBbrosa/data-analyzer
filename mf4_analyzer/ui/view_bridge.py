@@ -206,7 +206,16 @@ def restore_axes(state: ViewState, window) -> None:
     """Restore post-replot visible ranges through canvas contract methods."""
     canvas = window.chart_stack.canvas_time
     canvas.restore_visible_xlim(state.xlim)
-    canvas.restore_visible_ylims(state.ylims)
+    native_ranges = None
+    axis_opts = getattr(state, "axis_opts", None) or {}
+    native_ticks = axis_opts.get("native_ticks") if isinstance(axis_opts, dict) else None
+    if isinstance(native_ticks, dict):
+        native_ranges = native_ticks.get("y")
+    restore_y = canvas.restore_visible_ylims
+    try:
+        restore_y(state.ylims, native_axis_ranges=native_ranges)
+    except TypeError:
+        restore_y(state.ylims)
 
 
 def _capture_colors(navigator, checked_rows: Iterable[Any]) -> dict[ChannelKey, str]:

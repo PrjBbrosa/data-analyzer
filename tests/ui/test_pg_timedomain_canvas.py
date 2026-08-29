@@ -3430,6 +3430,89 @@ class TestTimeDomainCanvasPGSubplotMode:
         assert pressure_ylim[1] >= float(visible.max())
         assert pressure_ylim[1] < 200.0
 
+    def test_restore_visible_ylims_shared_handle_keeps_persisted_range(self, qapp):
+        """A missing-ylim sibling must not overwrite a shared overlay handle.
+
+        YP: measurement keeps WWT 0..0.2; the red tolerance line has no saved
+        ylim and would otherwise fit ~0.0944..0.1064 over the shared axis.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 1001, dtype=np.float64)
+        meas = np.linspace(0.0, 0.2, t.size, dtype=np.float64)
+        tol = np.linspace(0.0944, 0.1064, t.size, dtype=np.float64)
+        gid = "window-0-axis-yp"
+        rows = [
+            ("meas", True, t, meas, "#000080", "mm", "fid-1", {"axis_group": gid}),
+            ("tol", True, t, tol, "#ff0000", "mm", "fid-1", {"axis_group": gid}),
+        ]
+        canvas.plot_channels(rows, mode="overlay", defer_first_frame=True)
+        canvas.restore_visible_xlim((0.0, 10.0), flush=False)
+        meas_key = _view_state_key("fid-1", "meas")
+        canvas.restore_visible_ylims({meas_key: (0.0, 0.2)})
+        QCoreApplication.processEvents()
+
+        assert len(canvas.axes_list) == 1
+        handle = canvas.axes_list[0]
+        assert handle.get_ylim() == pytest.approx((0.0, 0.2))
+        captured = canvas.get_visible_ylims()
+        assert captured[meas_key] == pytest.approx((0.0, 0.2))
+        assert captured[_view_state_key("fid-1", "tol")] == pytest.approx((0.0, 0.2))
+
+    def test_restore_visible_ylims_empty_fits_each_handle_from_data(self, qapp):
+        """A view with no saved ylims must not stay on the 0..1 placeholder."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        low = 10.0 + t
+        high = 100.0 + 5.0 * t
+        rows = [
+            ("low", True, t, low, "#1769e0", "u", "fid-1"),
+            ("high", True, t, high, "#ef4444", "u", "fid-1"),
+        ]
+        canvas.plot_channels(rows, mode="overlay", defer_first_frame=True)
+        canvas.restore_visible_xlim((0.0, 1.0), flush=False)
+        canvas.restore_visible_ylims({})
+        QCoreApplication.processEvents()
+
+        assert len(canvas.axes_list) == 2
+        low_ylim = canvas.get_visible_ylims()[_view_state_key("fid-1", "low")]
+        high_ylim = canvas.get_visible_ylims()[_view_state_key("fid-1", "high")]
+        assert low_ylim[0] <= float(low.min())
+        assert low_ylim[1] >= float(low.max())
+        assert high_ylim[0] <= float(high.min())
+        assert high_ylim[1] >= float(high.max())
+        assert low_ylim != pytest.approx((0.0, 1.0))
+        assert high_ylim != pytest.approx((0.0, 1.0))
+        assert high_ylim[0] > 50.0
+        assert low_ylim[1] < 50.0
+
+    def test_restore_visible_ylims_native_range_wins_over_sibling_fit(self, qapp):
+        """Empty ylims still apply WWT native lo/hi to the shared handle."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 1001, dtype=np.float64)
+        meas = np.linspace(0.0944, 0.1064, t.size, dtype=np.float64)
+        tol = np.linspace(0.095, 0.105, t.size, dtype=np.float64)
+        gid = "window-0-axis-yp"
+        rows = [
+            ("meas", True, t, meas, "#000080", "mm", "fid-1", {"axis_group": gid}),
+            ("tol", True, t, tol, "#ff0000", "mm", "fid-1", {"axis_group": gid}),
+        ]
+        canvas.plot_channels(rows, mode="overlay", defer_first_frame=True)
+        canvas.restore_visible_xlim((0.0, 10.0), flush=False)
+        canvas.restore_visible_ylims(
+            {},
+            native_axis_ranges={gid: {"lo": 0.0, "hi": 0.2}},
+        )
+        QCoreApplication.processEvents()
+
+        assert len(canvas.axes_list) == 1
+        assert canvas.axes_list[0].get_ylim() == pytest.approx((0.0, 0.2))
+
     def test_visible_ylims_distinguish_duplicate_display_names(self, qapp):
         from PyQt5.QtCore import QCoreApplication
 
