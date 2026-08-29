@@ -3718,6 +3718,28 @@ class MainWindow(
             out.insert(0, out.pop(primary_idx))
         return out
 
+    def _active_time_curve_bindings(self):
+        """Return ``curve_bindings`` for the active TimeDomain View.
+
+        Record-only Y (``y_ref.kind == "wwt_record"``) has no Navigator
+        identity. Callers must parse these before treating an empty
+        checked set as "nothing to plot".
+        """
+        if not hasattr(self, "view_manager"):
+            return []
+        try:
+            active_state = self.view_manager.get(self.view_manager.active)
+        except (IndexError, TypeError):
+            return []
+        return list(getattr(active_state, "curve_bindings", None) or [])
+
+    @staticmethod
+    def _bindings_include_record_only(bindings) -> bool:
+        return any(
+            getattr(getattr(binding, "y_ref", None), "kind", "") == "wwt_record"
+            for binding in bindings or ()
+        )
+
     def _plot_time_on_canvas(
         self,
         canvas,
@@ -3738,7 +3760,12 @@ class MainWindow(
         order = getattr(self, "navigator_order", None)
         if order is not None:
             all_checked = order.order_checked(all_checked)
-        if not all_checked:
+        # U-Can View 6/7 (and synthetic record-only fixtures) are valid XY
+        # with checked=[]. Parse bindings before the Navigator empty-checked
+        # early return so those rows still reach _build_time_plot_data.
+        curve_bindings = self._active_time_curve_bindings()
+        has_record_only = self._bindings_include_record_only(curve_bindings)
+        if not all_checked and not has_record_only:
             self._set_time_plot_diagnostics(canvas)
             mode = self.chart_stack.plot_mode_for_canvas(canvas)
             delta = getattr(canvas, "try_apply_selection_delta", None)
@@ -3863,7 +3890,7 @@ class MainWindow(
             else {}
         )
 
-        if not checked:
+        if not checked and not has_record_only:
             self._set_time_plot_diagnostics(canvas)
             count = len(all_checked)
             render_context_key = getattr(
@@ -4154,13 +4181,7 @@ class MainWindow(
         eff_groups = self.channel_list.checked_axis_groups()
         result = TimePlotBuildResult()
         binding_claimed: set[tuple[str, str]] = set()
-        active_state = None
-        if hasattr(self, "view_manager"):
-            try:
-                active_state = self.view_manager.get(self.view_manager.active)
-            except (IndexError, TypeError):
-                active_state = None
-        bindings = list(getattr(active_state, "curve_bindings", None) or [])
+        bindings = self._active_time_curve_bindings()
         if bindings:
             from ..time_curve_bindings import bound_time_plot_rows
             from ..time_xaxis import TimePlotIssue as PayloadIssue
