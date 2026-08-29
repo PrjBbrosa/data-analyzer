@@ -1,13 +1,20 @@
 # WWT WinWert 原生排版导入 Spec
 
 - 日期：2026-08-28
-- 状态：设计已确认，待实施
-- 基线：`main@8445d909`
+- 状态：原规格已实施（`1cb54ca..676e96a3`）；2026-08-28 正确性加固补充合同见 §17
+- 基线：`main@8445d909`（原设计基线，不随 follow-up 改写）
 - 配套计划：
   [`2026-08-28-wwt-winwert-layout-import-implementation.md`](../plans/2026-08-28-wwt-winwert-layout-import-implementation.md)
+- 正确性加固计划：
+  [`2026-08-28-wwt-import-correctness-followup-plan.md`](../plans/2026-08-28-wwt-import-correctness-followup-plan.md)
 - 产品范围：TraceLab WWT 导入、时域 View、UltraView、项目保存与恢复
 - 既有相关规格：
   [`2026-08-11-wwt-export-dual-compat-spec.md`](2026-08-11-wwt-export-dual-compat-spec.md)
+
+> §2 的三份客户样例仍是原设计的外部字面证据，不是仓库夹具。`.gitignore` 忽略
+> `testdoc/`。原实施波次之后的正确性合同（加载层 record store、claimed binding、
+> 诊断分级、tick 预检）写在 §17，不回溯改写 §2–§16 的历史证据，也不假装原实现
+> 已经满足这些加固项。
 
 ## 1. 一句话结论
 
@@ -601,3 +608,105 @@ rect，再通过 WorkspaceController 的单一 mutation funnel 提交。禁止 i
 5. `git diff --check` 通过，spec/plan/hints/quickref 与运行行为一致；
 6. full suite 只在稳定集成快照运行一次；若测试期间相关文件变化，结果标记 `UNVERIFIED`；
 7. 未运行的真实前台、macOS Cocoa 或 Windows frozen 验收逐项报告，不能用 offscreen 代替。
+
+## 17. 2026-08-28 正确性加固补充合同
+
+本节是原规格落地（`1cb54ca..676e96a3`）之后的加固，不是原实现的既有行为。
+对应计划：
+[`2026-08-28-wwt-import-correctness-followup-plan.md`](../plans/2026-08-28-wwt-import-correctness-followup-plan.md)。
+产品代码合入 `wwt-followup-integration`：`9efb35d8` … `5e46059a`。
+
+### 17.1 Record store 由加载层拥有
+
+`load_wwt_document()` / `parse_wwt_document()` 通过 `attach_wwt_record_store()`
+把**同一份**不可变 `tuple[WwtRecord, ...]` 写入该物理文件展开的每个
+`LoadedSource` / group `source_metadata["wwt_record_store"]`。多 group 共享这一
+tuple，不按 group 复制 ndarray。
+
+这条路径覆盖 Accept、Reject（只保留数据）、无可用 display/window、以及项目恢复。
+`WwtImportCoordinator` 只消费 proposal 与 placement，不再回写 record store。
+项目恢复期间不弹排版确认框；store 随 WWT 重新加载附着，不依赖协调器。
+
+`.tlproj` / session JSON 只保存 source 路径和 View 身份（`TimeDataRef` /
+`TimeCurveBinding` 的 `kind` / `fid` / `channel` / `record_index` 与显示事实）。
+禁止把 record store 或 ndarray 样本展开进 JSON。运行时 store 在再次打开 WWT
+时由加载层重新附着。
+
+### 17.2 Claimed binding 不得 Time-Y fallback
+
+`bound_time_plot_rows()` 返回 UI-neutral `BoundTimePlotResult`：
+
+```text
+rows, issues, claimed_channel_keys, successful_channel_keys
+```
+
+三值解包是 `(rows, issues, claimed_channel_keys)`，因此 MainWindow 普通 Time-Y
+循环跳过的是 **claimed** 键，而不是只跳过成功解析的键。
+
+- 一条 active binding 一旦声明 channel-backed Y，复合键 `(fid, raw_channel_name)`
+  立即进入 `claimed_channel_keys`，发生在 X/Y 解析之前。
+- 解析、长度与时间对齐成功后，该键才进入 `successful_channel_keys` 并产生 row。
+- 失败 binding 留下结构化 `TimePlotIssue` / placeholder；不得把同一个 Y 再画成
+  普通 Time-Y 曲线。
+- 身份键是复合 source/channel identity，不是显示名。不得用 `dict(...)` 或
+  `{**mapping}` 把 `_ChannelKeyDict` 压成显示名键。
+
+### 17.3 Channel-backed Y 服从当前 View 勾选
+
+`bound_time_plot_rows(..., checked_channel_keys=...)` 把当前 View 的 checked
+复合键当作 channel-backed Y 的可见性条件：
+
+- Y 为 channel-kind 且不在 checked 集合中：仍 claimed（挡住 Time-Y fallback），
+  但不产生 row。
+- 重新勾选后按持久化 X/Y 绑定恢复，不丢 binding。
+- record-only Y 没有 Navigator channel 身份，不走这套勾选门；可见性仍由导入时
+  的 binding 决定。
+- `checked_channel_keys=None` 只用于跳过 Navigator 门控的纯解析测试。
+- 当前 View 新勾选、但没有被任何 binding 声明的通道，仍追加为普通 Time-Y。
+
+### 17.4 诊断按事实分层
+
+`WwtIssue` 使用稳定 code（展示文案由 code + 上下文生成，不以中文字符串去重）：
+`truncated_window`、`unknown_record`、`unsupported_display`、
+`unsupported_formula`、`unsupported_representation`、`view_cap`、
+`exact_overlap`。
+
+三类结果不得混用出口：
+
+| 类 | 事实 | 用户可见 |
+| --- | --- | --- |
+| retained auxiliary | 已进入 record store，仅未成为 Navigator source channel；metadata `wwt_auxiliary_records` | 无黄色“通道未导入” |
+| degraded import | 不支持的 display/formula/representation、未知 record、不对齐、窗口截断、view cap 等 | 一次聚合 warning/issue，code 稳定 |
+| placement outcome | exact overlap、append/new view 等用户已在确认框接受的布局结果 | 确认框即为说明；接受后不再发第二个黄色 toast |
+
+`WwtImportCoordinator` 聚合成一次 import summary。`_project_io_mixin._consume_wwt_import_outcome()`
+是黄色摘要的唯一消费点；项目恢复不弹 toast，但 View issue 必须持久。plot-time
+`missing_record` / `unaligned` 继续挂在对应 View。
+
+### 17.5 Native tick 先计数再枚举
+
+`native_axes._bounded_index_range()` 在分配 tick 列表之前，用有限的 lo/hi/step
+商证明候选数。major 与 unlabeled grid **共用**产品上限 `max_grid=2000`
+（`_GRID_CAP`）。候选超限、非有限、零/负 step 或无效 range 时整轴退回现有
+adaptive 路径，warning 为 `tick_cap`（或 `invalid_range`），不得出现“一侧
+native、一侧静默失败”的半应用轴。禁止先构造完整列表再检查长度。
+
+View restore 顺序不变：`restore_visible_xlim(flush=False)` →
+`restore_visible_ylims` → `settle_view_restore()`。本加固不改 ink、AA、raster
+或 150 ms idle timer。
+
+### 17.6 可移植夹具与未完成门禁
+
+核心 owner 测试使用仓库内合成字节 `tests/_helpers/wwt_factory.py`，profile：
+
+- `channel_xy_with_auxiliaries`：单窗口 channel X/Y + 不可见 limit/line 辅助 record
+- `measurement_plus_record_only_tolerance`：channel 测量 + 独立长度的 record-only 评价线
+- `multi_window_overlap_and_formula`：多窗口、独立 X/Y、公式、exact overlap
+
+通道 Zeit `n=128`；辅助/评价数组 4–32 点。名称与数值完全合成，不复制客户数据。
+`testdoc/WWT` 仅作可选 skip-guarded smoke / 前台证据；缺失时 `pytest.skip`，
+不得 `pytest.fail`。
+
+Task 5 聚焦与边界门禁已通过。下列门禁仍为 `UNVERIFIED`，证据见
+`.state/wwt-followup-task5-report.md`：两段全套（主套 segfault）、真实前台六项、
+Windows frozen。offscreen 不能代替前台。

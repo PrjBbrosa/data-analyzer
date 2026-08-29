@@ -11,123 +11,144 @@ from mf4_analyzer.io import wwt_formula
 from mf4_analyzer.io.wwt_display import find_trailers
 from mf4_analyzer.io.wwt_document import (
     WwtRecord,
-    WwtWindowRectMm,
     load_wwt_document,
     parse_wwt_document,
 )
 from mf4_analyzer.io.wwt_format import load_wwt_groups
 from mf4_analyzer.io.wwt_formula import WwtFormulaError, evaluate_wwt_formulas
+from tests._helpers import wwt_factory as wwt
 
 _ROOT = Path(__file__).resolve().parent.parent
-UCAN = _ROOT / "testdoc" / "WWT" / "UCAN-b6_P779_0007.wwt"
-SFNS = _ROOT / "testdoc" / "WWT" / "SFNS_10_P779_0007.wwt"
-YP = _ROOT / "testdoc" / "WWT" / "YP_SS_P779_0007.wwt"
 
 
-def _require(path: Path) -> Path:
-    if not path.is_file():
-        pytest.fail(f"required sample missing: {path}")
-    return path
+def test_channel_xy_with_auxiliaries_roundtrip(tmp_path):
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")
+    doc = parse_wwt_document(path)
+    by_name = {record.name: record for record in doc.records}
+    assert set(by_name) >= {
+        wwt.TIME_NAME, wwt.CHAN_X, wwt.CHAN_Y,
+        wwt.LIMIT_HI, wwt.LIMIT_LO, wwt.LINE_X,
+    }
+    assert by_name[wwt.CHAN_X].declared_n == wwt.CHANNEL_N
+    assert by_name[wwt.LIMIT_HI].declared_n == wwt.AUX_N
+    assert by_name[wwt.LIMIT_HI].values is not None
+    assert by_name[wwt.LIMIT_HI].values.shape == (wwt.AUX_N,)
+    assert not by_name[wwt.LIMIT_HI].values.flags.writeable
 
-
-def test_ucan_record_catalog_and_all_display_windows():
-    doc = parse_wwt_document(_require(UCAN))
-    assert len(doc.records) == 21
-    assert [record.index for record in doc.records] == list(range(21))
-    assert len(doc.windows) == 7
-    assert [window.rect_mm for window in doc.windows] == [
-        WwtWindowRectMm(25.0, 65.0, 100.0, 60.0),
-        WwtWindowRectMm(41.0, 138.2, 90.0, 60.0),
-        WwtWindowRectMm(147.5, 62.5, 50.0, 60.0),
-        WwtWindowRectMm(215.5, 62.5, 50.0, 60.0),
-        WwtWindowRectMm(147.5, 138.0, 50.0, 60.0),
-        WwtWindowRectMm(214.5, 138.0, 50.0, 60.0),
-        WwtWindowRectMm(214.5, 138.0, 50.0, 60.0),
+    assert len(doc.groups) == 1
+    channels = list(doc.groups[0]["channels"])
+    assert wwt.CHAN_X in channels and wwt.CHAN_Y in channels
+    assert wwt.LIMIT_HI not in channels
+    assert wwt.LIMIT_LO not in channels
+    assert wwt.LINE_X not in channels
+    skipped = doc.groups[0]["source_metadata"]["skipped_channels"]
+    aux_names = [
+        item["name"] if isinstance(item, dict) else item
+        for item in doc.groups[0]["source_metadata"].get("wwt_auxiliary_records") or []
     ]
-    assert [window.line_width_mm for window in doc.windows] == [0.2] * 7
+    assert aux_names == [wwt.LIMIT_HI, wwt.LIMIT_LO, wwt.LINE_X]
+    assert wwt.LIMIT_HI not in skipped
+    assert wwt.LIMIT_LO not in skipped
+    assert wwt.LINE_X not in skipped
 
-    names = [record.name for record in doc.records]
-    assert names[0] == "Time"
-    assert names[4] == "Diff.Moment A"
-    assert names[5] == "Diff.Moment B"
-    assert names[11] == "Spurstangenkraft"
-    assert names[12] == "Motor torque A+B"
-    assert names[17] == "Wheel input torque Symmetry"
-    assert names[20] == "Wheel input torque Hysteresis"
+    assert len(doc.windows) == 1
+    window = doc.windows[0]
+    assert window.rect_mm == wwt.RECT_WIN_A
+    assert window.line_width_mm == wwt.LINE_WIDTH_MM
+    x_row = window.curves[0]
+    assert x_row.label == f"{wwt.CHAN_X} [{wwt.CHAN_X_UNIT}]"
+    assert (x_row.lo, x_row.hi) == (wwt.CHAN_X_LO, wwt.CHAN_X_HI)
+    assert x_row.tick_interval == wwt.CHAN_X_TICK
+    assert x_row.grid_interval == wwt.CHAN_X_GRID
+    chan_y = next(c for c in window.curves if c.record_index == by_name[wwt.CHAN_Y].index)
+    assert chan_y.visible is True and chan_y.selected is True
+    assert chan_y.x_record_index == by_name[wwt.CHAN_X].index
+    assert chan_y.color_rgb == (0, 0, 128)
+    for name in (wwt.LIMIT_HI, wwt.LIMIT_LO, wwt.LINE_X):
+        curve = next(c for c in window.curves if c.record_index == by_name[name].index)
+        assert curve.visible is False
 
-    assert doc.records[0].tag == "Zeit"
-    assert doc.records[0].declared_n == 1988
-    assert doc.records[4].tag == "Pars"
-    assert doc.records[4].declared_n == 50000
-    assert doc.records[4].formula == "-(k7-(-k13))"
-    assert doc.records[4].values is None
-    assert doc.records[5].formula == "-(k7-(-k15))"
-    assert doc.records[11].formula == "abs(k8)"
-    assert doc.records[12].formula == "k14+k16"
-    assert doc.records[7].declared_n == 15274
-    assert doc.records[7].values is not None
-    assert doc.records[7].values.shape == (15274,)
-    assert not doc.records[7].values.flags.writeable
-    assert doc.records[17].declared_n == 72
-    assert doc.records[17].values is not None
-    assert doc.records[17].values.shape == (72,)
-    assert doc.records[19].declared_n == 151
-    assert doc.records[19].values is not None
-    assert doc.records[19].values.shape == (151,)
-
-
-def test_ucan_find_trailers_are_strictly_increasing_6114_apart():
-    data = _require(UCAN).read_bytes()
-    offsets = find_trailers(data)
-    assert len(offsets) == 7
-    assert offsets == sorted(offsets)
-    assert len(set(offsets)) == 7
-    diffs = [b - a for a, b in zip(offsets, offsets[1:])]
-    assert diffs == [6114] * 6
-
-
-def test_sfns_and_yp_keep_one_display_window_and_existing_groups():
-    sfns = parse_wwt_document(_require(SFNS))
-    assert len(sfns.windows) == 1
-    assert sfns.windows[0].line_width_mm == 0.2
-    x_row = sfns.windows[0].curves[0]
-    assert x_row.label.startswith("Rack travel")
-    assert (x_row.lo, x_row.hi) == (-100.0, 100.0)
-    assert x_row.tick_interval == 10.0
-    force = next(c for c in sfns.windows[0].curves if "Rack Force" in c.label)
-    assert force.visible is True
-    assert (force.lo, force.hi) == (-1500.0, 1500.0)
-    assert force.tick_interval == 500.0
-    assert force.grid_interval == 100.0
-    assert force.color_rgb == (0, 0, 128)
-
-    yp = parse_wwt_document(_require(YP))
-    assert len(yp.windows) == 1
-    x_row = yp.windows[0].curves[0]
-    assert "Steering Angle" in x_row.label
-    assert (x_row.lo, x_row.hi) == (-720.0, 720.0)
-    assert x_row.tick_interval == 120.0
-    assert x_row.grid_interval == 60.0
-    by_label = {c.label: c for c in yp.windows[0].curves}
-    assert by_label["Tol_oben [mm]"].visible is True
-    assert by_label["Tol_oben [mm]"].selected is False
-    assert by_label["Tol_oben [mm]"].color_rgb == (255, 0, 0)
-    assert by_label["Tol_oben [mm]"].x_record_index == 3
-    druck = by_label["Druckstückspiel [mm]"]
-    assert druck.visible is True and druck.selected is True
-    assert druck.color_rgb == (0, 0, 128)
-    assert (druck.lo, druck.hi) == (0.0, 0.2)
-    assert druck.tick_interval == 0.05
-    assert druck.grid_interval == 0.01
-
-    loaded = load_wwt_groups(SFNS)
+    loaded = load_wwt_groups(path)
     assert [list(g["channels"]) for g in loaded] == [
-        list(g["channels"]) for g in sfns.groups
+        list(g["channels"]) for g in doc.groups
     ]
+    store = loaded[0]["source_metadata"]["wwt_record_store"]
+    assert store is not None
+    store_names = [getattr(item, "name", None) for item in store]
+    assert wwt.LIMIT_HI in store_names
+    assert wwt.LIMIT_HI not in loaded[0]["source_metadata"]["skipped_channels"]
+
+
+def test_measurement_plus_record_only_tolerance_roundtrip(tmp_path):
+    meas_n, tol_n = 120, 8
+    path = wwt.measurement_plus_record_only_tolerance(
+        meas_n=meas_n, tol_n=tol_n, path=tmp_path / "tol.wwt",
+    )
+    doc = parse_wwt_document(path)
+    by_name = {record.name: record for record in doc.records}
+    assert by_name[wwt.MEAS_Y].declared_n == meas_n
+    assert by_name[wwt.TOL_Y].declared_n == tol_n
+    assert by_name[wwt.LINE_X].declared_n == tol_n
+    assert wwt.MEAS_Y in doc.groups[0]["channels"]
+    assert wwt.CHAN_X in doc.groups[0]["channels"]
+    assert wwt.TOL_Y not in doc.groups[0]["channels"]
+    assert wwt.LINE_X not in doc.groups[0]["channels"]
+
+    window = doc.windows[0]
+    meas = next(c for c in window.curves if c.record_index == by_name[wwt.MEAS_Y].index)
+    tol = next(c for c in window.curves if c.record_index == by_name[wwt.TOL_Y].index)
+    assert meas.visible is True and meas.selected is True
+    assert meas.x_record_index == by_name[wwt.CHAN_X].index
+    assert tol.visible is True and tol.selected is False
+    assert tol.x_record_index == by_name[wwt.LINE_X].index
+    assert meas.x_record_index != tol.x_record_index
+
+
+def test_multi_window_overlap_and_formula_roundtrip(tmp_path):
+    path = wwt.multi_window_overlap_and_formula(tmp_path / "multi.wwt")
+    parsed = parse_wwt_document(path)
+    assert len(parsed.windows) == wwt.MULTI_WINDOW_COUNT
+    assert parsed.windows[1].rect_mm == parsed.windows[2].rect_mm == wwt.RECT_WIN_B
+    assert parsed.windows[0].rect_mm == wwt.RECT_WIN_A
+    assert parsed.windows[1].rect_mm != parsed.windows[0].rect_mm
+    by_name = {record.name: record for record in parsed.records}
+    assert by_name[wwt.FORM_Y].tag == "Pars"
+    assert by_name[wwt.FORM_Y].formula == wwt.FORMULA
+    assert by_name[wwt.FORM_Y].values is None
+
+    win0_y = [c for c in parsed.windows[0].curves if c.visible]
+    win1_y = [c for c in parsed.windows[1].curves if c.visible]
+    win2_y = [c for c in parsed.windows[2].curves if c.visible]
+    assert win0_y[0].record_index == by_name[wwt.CHAN_Y].index
+    assert win0_y[0].x_record_index == by_name[wwt.CHAN_X].index
+    assert win1_y[0].record_index == by_name[wwt.FORM_Y].index
+    assert win1_y[0].x_record_index == by_name[wwt.CHAN_X].index
+    assert win2_y[0].record_index == by_name[wwt.TOL_Y].index
+    assert win2_y[0].x_record_index == by_name[wwt.LINE_X].index
+    assert win2_y[0].x_record_index != win0_y[0].x_record_index
+
+    loaded = load_wwt_document(path)
+    form = next(r for r in loaded.document.records if r.name == wwt.FORM_Y)
+    chan_y = next(r for r in loaded.document.records if r.name == wwt.CHAN_Y)
+    assert form.values is not None
+    np.testing.assert_allclose(form.values, np.abs(chan_y.values), rtol=0.0, atol=0.0)
+    assert wwt.FORM_Y in loaded.groups[0]["channels"]
+    meta = loaded.groups[0]["channel_metadata"][wwt.FORM_Y]
+    assert meta["derived"] is True
+    assert meta["formula"] == wwt.FORMULA
+    assert meta["formula_refs"]
+
+
+def test_multi_window_trailers_are_strictly_increasing(tmp_path):
+    path = wwt.multi_window_overlap_and_formula(tmp_path / "multi.wwt")
+    offsets = find_trailers(path.read_bytes())
+    assert len(offsets) == wwt.MULTI_WINDOW_COUNT
+    assert offsets == sorted(offsets)
+    assert len(set(offsets)) == wwt.MULTI_WINDOW_COUNT
 
 
 def test_truncated_display_block_is_diagnosed_without_dropping_groups(tmp_path):
-    src = _require(UCAN).read_bytes()
+    src = wwt.multi_window_overlap_and_formula()
     offsets = find_trailers(src)
     assert len(offsets) >= 2
     truncated = bytearray(src[: offsets[1] + 40])
@@ -137,60 +158,76 @@ def test_truncated_display_block_is_diagnosed_without_dropping_groups(tmp_path):
     doc = parse_wwt_document(path)
     assert doc.groups
     assert len(doc.windows) == 1
-    assert any("display" in item.lower() or "window" in item.lower()
-               or "trailer" in item.lower() or "截断" in item
-               for item in doc.diagnostics)
+    assert any(
+        item.startswith("truncated_window:")
+        or "display" in item.lower() or "window" in item.lower()
+        or "trailer" in item.lower() or "截断" in item
+        for item in doc.diagnostics
+    )
+    assert any(item.startswith("truncated_window:") for item in doc.diagnostics)
 
 
-def test_ucan_pars_formulas_materialize_on_operand_axis():
-    loaded = load_wwt_document(_require(UCAN))
-    records = {record.index: record for record in loaded.document.records}
-    expected = {
-        4: -(records[7].values - (-records[13].values)),
-        5: -(records[7].values - (-records[15].values)),
-        11: np.abs(records[8].values),
-        12: records[14].values + records[16].values,
-    }
-    assert all(records[index].tag == "Pars" for index in expected)
-    assert records[4].formula == "-(k7-(-k13))"
-    assert records[5].formula == "-(k7-(-k15))"
-    assert records[11].formula == "abs(k8)"
-    assert records[12].formula == "k14+k16"
-    for record_index, values in expected.items():
-        got = records[record_index].values
-        assert got is not None
-        assert got.shape == (15274,)
-        np.testing.assert_allclose(got, values, rtol=0.0, atol=0.0)
-    assert records[4].declared_n == 50000
-
-    main = next(group for group in loaded.groups if len(group["data"]) == 15274)
-    for name, rec_index, formula in (
-        ("Diff.Moment A", 4, "-(k7-(-k13))"),
-        ("Diff.Moment B", 5, "-(k7-(-k15))"),
-        ("Spurstangenkraft", 11, "abs(k8)"),
-        ("Motor torque A+B", 12, "k14+k16"),
-    ):
-        assert name in main["channels"]
-        meta = main["channel_metadata"][name]
-        assert meta["derived"] is True
-        assert meta["record_index"] == rec_index
-        assert meta["formula"] == formula
-        assert meta["formula_refs"]
-    assert main["channels"] == [
-        "Time",
-        "Diff.Moment A",
-        "Diff.Moment B",
-        "Wheel input torque",
-        "Rack Force",
-        "Battary Current",
-        "Wheel input angle",
-        "Spurstangenkraft",
-        "Motor torque A+B",
-        "Sensor torque A",
-        "Motor torque A",
-        "Sensor torque B",
-        "Motor torque B",
+def test_load_attaches_one_record_store_to_every_group(tmp_path):
+    n = wwt.CHANNEL_N
+    records = (
+        wwt.WwtRecordSpec("Zeit", "TimeA", "s", n=n, dt=wwt.DT, t0=0.0),
+        wwt.WwtRecordSpec(
+            "Real", "ChanA", "N", n=n, values=np.linspace(0.0, 1.0, n),
+        ),
+        wwt.WwtRecordSpec("Zeit", "TimeB", "s", n=n, dt=wwt.DT, t0=1.0),
+        wwt.WwtRecordSpec(
+            "Real", "ChanB", "N", n=n, values=np.linspace(0.0, 1.0, n),
+        ),
+        wwt.WwtRecordSpec(
+            "Real", wwt.LIMIT_HI, "N", n=wwt.AUX_N,
+            values=np.full(wwt.AUX_N, 40.0),
+        ),
+    )
+    path = wwt.write_wwt_file(tmp_path / "groups.wwt", records)
+    loaded = load_wwt_document(path)
+    assert len(loaded.groups) == 2
+    stores = [
+        group["source_metadata"]["wwt_record_store"]
+        for group in loaded.groups
     ]
+    assert stores[0] is stores[1]
+    assert stores[0] is loaded.document.records
+    aux_names = [
+        item["name"] if isinstance(item, dict) else item
+        for item in loaded.groups[0]["source_metadata"]["wwt_auxiliary_records"]
+    ]
+    assert wwt.LIMIT_HI in aux_names
+    assert wwt.LIMIT_HI not in loaded.groups[0]["source_metadata"]["skipped_channels"]
+
+
+def test_optional_customer_wwt_sample_parses_when_present():
+    folder = _ROOT / "testdoc" / "WWT"
+    samples = sorted(folder.glob("*.wwt")) if folder.is_dir() else []
+    if not samples:
+        pytest.skip(f"optional customer WWT sample missing: {folder}")
+    doc = parse_wwt_document(samples[0])
+    assert doc.records and doc.groups
+
+
+def test_exact_winwert_gap_sentinel_becomes_nan_without_dropping_points(tmp_path):
+    path = wwt.record_only_gap_curves(tmp_path / "gap.wwt")
+    loaded = load_wwt_document(path)
+    records = {record.name: record for record in loaded.document.records}
+
+    y_pos = records[wwt.GAP_Y_POS].values
+    y_speed = records[wwt.GAP_Y_SPEED].values
+    assert y_pos is not None and y_speed is not None
+    assert y_pos.shape == (7,)
+    assert y_speed.shape == (7,)
+    assert np.isnan(y_pos[2])
+    assert np.isnan(y_speed[[2, 5]]).all()
+    assert y_pos[3] == -9e299
+    assert not y_pos.flags.writeable
+    assert not y_speed.flags.writeable
+
+    store = loaded.groups[0]["source_metadata"]["wwt_record_store"]
+    assert store[records[wwt.GAP_Y_POS].index].values is y_pos
+    assert store[records[wwt.GAP_Y_SPEED].index].values is y_speed
 
 
 def _synthetic_records(*items: WwtRecord) -> tuple[WwtRecord, ...]:

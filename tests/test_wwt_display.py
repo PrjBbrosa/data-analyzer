@@ -43,6 +43,18 @@ def test_curve_table_decodes_real_template(template_bytes):
     assert ys and max(ys) - min(ys) < 1e-6 * max(ys)
 
 
+def test_curve_label_normalizes_winwert_gbk_degree_symbol():
+    data = bytearray(disp.CURVE_BASE + disp.CURVE_STRIDE)
+    off = disp.curve_offset(0, 0) + disp.CURVE_LABEL
+    raw = b"Steering angle [\xa1\xe3]\0"
+    data[off:off + len(raw)] = raw
+
+    row = disp.read_curve(bytes(data), 0, 0)
+
+    assert row is not None
+    assert row["label"] == "Steering angle [°]"
+
+
 def test_layout_constants_hold_across_every_curve(template_bytes):
     """版式常量在文件内恒定——这是「照抄模板的 +44 会错位」的根据。"""
     trailer = disp.find_trailer(template_bytes)
@@ -223,37 +235,30 @@ def test_bundled_trailer_asset_carries_no_session_text(trailer_asset):
     assert disp.declared_record_count(trailer_asset, 0) >= 2
 
 
-def test_find_trailers_returns_all_ucan_windows_in_file_order():
-    path = _ROOT / "testdoc" / "WWT" / "UCAN-b6_P779_0007.wwt"
-    if not path.is_file():
-        pytest.fail(f"required sample missing: {path}")
-    data = path.read_bytes()
+def test_find_trailers_returns_all_synthetic_windows_in_file_order():
+    from tests._helpers import wwt_factory as wwt
+
+    data = wwt.multi_window_overlap_and_formula()
     offsets = disp.find_trailers(data)
-    assert len(offsets) == 7
+    assert len(offsets) == wwt.MULTI_WINDOW_COUNT
     assert offsets == sorted(set(offsets))
-    assert [b - a for a, b in zip(offsets, offsets[1:])] == [6114] * 6
     first = disp.find_trailer(data)
     assert first == offsets[0]
     rects = [disp.decode_window_rect(data, offset) for offset in offsets]
     assert [(r.x, r.y, r.width, r.height) for r in rects] == [
-        (25.0, 65.0, 100.0, 60.0),
-        (41.0, 138.2, 90.0, 60.0),
-        (147.5, 62.5, 50.0, 60.0),
-        (215.5, 62.5, 50.0, 60.0),
-        (147.5, 138.0, 50.0, 60.0),
-        (214.5, 138.0, 50.0, 60.0),
-        (214.5, 138.0, 50.0, 60.0),
+        (wwt.RECT_WIN_A.x, wwt.RECT_WIN_A.y, wwt.RECT_WIN_A.width, wwt.RECT_WIN_A.height),
+        (wwt.RECT_WIN_B.x, wwt.RECT_WIN_B.y, wwt.RECT_WIN_B.width, wwt.RECT_WIN_B.height),
+        (wwt.RECT_WIN_B.x, wwt.RECT_WIN_B.y, wwt.RECT_WIN_B.width, wwt.RECT_WIN_B.height),
     ]
     assert [disp.decode_line_width_mm(data, offset) for offset in offsets] == [
-        0.2
-    ] * 7
+        wwt.LINE_WIDTH_MM
+    ] * wwt.MULTI_WINDOW_COUNT
 
 
 def test_find_trailers_skips_truncated_block_without_hiding_later_valid_one():
-    path = _ROOT / "testdoc" / "WWT" / "UCAN-b6_P779_0007.wwt"
-    if not path.is_file():
-        pytest.fail(f"required sample missing: {path}")
-    src = path.read_bytes()
+    from tests._helpers import wwt_factory as wwt
+
+    src = wwt.multi_window_overlap_and_formula()
     offsets = disp.find_trailers(src)
     first, second = offsets[0], offsets[1]
     # Keep the first valid trailer, then plant a truncated marker that cannot
@@ -265,3 +270,15 @@ def test_find_trailers_skips_truncated_block_without_hiding_later_valid_one():
     assert found[0] == first
     assert second + (len(damaged) - len(src)) in found
     assert all(offset != len(src[:second]) for offset in found)
+
+
+def test_optional_customer_wwt_trailer_scan_when_present():
+    folder = _ROOT / "testdoc" / "WWT"
+    samples = sorted(folder.glob("*.wwt")) if folder.is_dir() else []
+    if not samples:
+        pytest.skip(f"optional customer WWT sample missing: {folder}")
+    data = samples[0].read_bytes()
+    offsets = disp.find_trailers(data)
+    assert offsets == sorted(set(offsets))
+    if offsets:
+        assert disp.find_trailer(data) == offsets[0]

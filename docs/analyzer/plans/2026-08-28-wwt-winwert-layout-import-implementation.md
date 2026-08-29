@@ -10,6 +10,25 @@
 
 **Spec:** `docs/analyzer/specs/2026-08-28-wwt-winwert-layout-import-spec.md`
 
+> **Delivery note (do not rewrite the historical task steps below).**
+> Original wave landed as `1cb54ca..676e96a3` on the then-current main line.
+> The 2026-08-28 correctness follow-up
+> ([`2026-08-28-wwt-import-correctness-followup-plan.md`](2026-08-28-wwt-import-correctness-followup-plan.md),
+> spec supplement §17) landed on `wwt-followup-integration` as
+> `9efb35d8` (synthetic factory + failing restore/binding contracts),
+> `7dcf64f5` (load-owned record store + graded diagnostics),
+> `8810844a` (claimed bindings + Navigator checked keys),
+> `5a43782b` (tick preflight before allocation),
+> merged at `5e46059a`. Historical commit messages and checkbox state in this
+> file are not backdated.
+>
+> **Fixture correction:** several steps below treat `testdoc/WWT/*.wwt` as
+> required repository fixtures (including “the repository contains this file”).
+> That assumption was wrong. `.gitignore` ignores `testdoc/`; those customer
+> files are local-only. After the follow-up, core owner tests use in-repo
+> synthetic bytes from `tests/_helpers/wwt_factory.py`. Optional customer
+> samples may `pytest.skip`, never `pytest.fail`, on a clean checkout.
+
 ## Global Constraints
 
 - 图形语义一致：View 数量、可见曲线、逐曲线 X/Y、轴范围/标签/刻度、网格、颜色、Line 和线宽一致；TraceLab chrome、字体与抗锯齿不仿制 WinWert。
@@ -121,6 +140,13 @@ Also assert `find_trailers()` returns 7 strictly increasing offsets and the firs
 ```
 
 Expected: FAIL during import because `parse_wwt_document`, DTOs, or `find_trailers` do not exist. A pass caused by skipping the real sample is not a valid red gate; the repository contains this file.
+
+> **Correction (2026-08-28 follow-up):** the repository does **not** contain
+> `testdoc/WWT` customer files. That path is gitignored. A skip caused by a
+> missing local sample is not a red gate for owner tests; requiring it as a
+> fixture made the original focused suite non-portable. Use
+> `tests/_helpers/wwt_factory.py` for core contracts. Keep the UCAN/SFNS/YP
+> paths above as historical design evidence and optional operator smoke.
 
 - [ ] **Step 4: Implement immutable record/display DTOs and one-pass record scanning**
 
@@ -1008,6 +1034,29 @@ Open the three real WWT files in the normal TraceLab app and verify the running 
 git add mf4_analyzer/ui/hints.py mf4_analyzer/ui/quickref.py tests/ui/test_hints.py tests/ui/test_quickref.py scripts/probe_wwt_native_import.py tests/test_probe_wwt_native_import.py docs/analyzer/specs/2026-08-28-wwt-winwert-layout-import-spec.md docs/analyzer/plans/2026-08-28-wwt-winwert-layout-import-implementation.md
 git commit -m "docs(wwt): publish native layout import guidance"
 ```
+
+---
+
+## Follow-up delivery (2026-08-28 correctness wave)
+
+This original plan's Task 1–8 product work shipped in `1cb54ca..676e96a3`.
+The later correctness wave did **not** redo WinWert syntax or UltraView
+layout; it closed restore, binding, diagnostic, tick, and fixture holes:
+
+| Follow-up task | Landed as | Owner files |
+| --- | --- | --- |
+| Portable synthetic fixtures | `9efb35d8` | `tests/_helpers/wwt_factory.py`; WWT owner tests moved off required `testdoc/WWT` |
+| Load-owned record store + graded diagnostics | `7dcf64f5` | `mf4_analyzer/io/wwt_document.py` `attach_wwt_record_store`; coordinator no longer backfills; mixin `_consume_wwt_import_outcome` |
+| Claimed vs successful bindings + Navigator checked keys | `8810844a` | `BoundTimePlotResult` in `time_curve_bindings.py`; 3-tuple unpack is claimed keys |
+| Native tick preflight | `5a43782b` | `native_axes._bounded_index_range`; major and grid share the 2000 cap; warning `tick_cap` |
+
+Task 5 focused + boundary gates passed. Still **UNVERIFIED** (see
+`.state/wwt-followup-task5-report.md`): two-process full suite (main-suite
+segfault ~89% at UltraView page-drag, unrelated to this wave) and the
+foreground six-item TraceLab checklist / Windows frozen executable.
+Offscreen pytest is not Cocoa proof. Historical Task 8 Step 9 remains the
+foreground gate; it was not re-run in the follow-up worktree because
+customer WWT data was not copied.
 
 ---
 

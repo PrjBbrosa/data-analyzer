@@ -292,7 +292,14 @@ class UltraViewWorkspaceController:
         board = active_board(self._workspace)
         before = self._placement_snapshot(board)
         warnings = apply_native_layout(board, plan)
-        self._commit_grid_change(board, before, warnings)
+        # ``apply_native_layout`` can intentionally place the usable cards and
+        # return warnings for the remainder (for example an exact overlap goes
+        # to the unplaced tray).  Commit that complete Board result before
+        # reporting the warnings; routing them through ``_commit_grid_change``
+        # would return early after the mutation and skip history/dirty/refresh.
+        self._commit_grid_change(board, before, [])
+        if warnings:
+            self._toast_grid_warnings(warnings)
         return tuple(
             item.ref.view_id
             for item in board.free_grid

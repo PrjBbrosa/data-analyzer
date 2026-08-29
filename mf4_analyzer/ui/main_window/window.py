@@ -4153,7 +4153,7 @@ class MainWindow(
 
         eff_groups = self.channel_list.checked_axis_groups()
         result = TimePlotBuildResult()
-        binding_consumed: set[tuple[str, str]] = set()
+        binding_claimed: set[tuple[str, str]] = set()
         active_state = None
         if hasattr(self, "view_manager"):
             try:
@@ -4164,12 +4164,19 @@ class MainWindow(
         if bindings:
             from ..time_curve_bindings import bound_time_plot_rows
             from ..time_xaxis import TimePlotIssue as PayloadIssue
-            bind_rows, bind_issues, binding_consumed = bound_time_plot_rows(
+            checked_keys = {(fid, ch) for fid, ch, _color in checked}
+            checked_colors = {
+                (fid, ch): color for fid, ch, color in checked
+            }
+            bind_result = bound_time_plot_rows(
                 bindings,
                 getattr(self, "files", {}) or {},
                 range_lo=range_lo if range_enabled else None,
                 range_hi=range_hi if range_enabled else None,
+                checked_channel_keys=checked_keys,
+                channel_colors=checked_colors,
             )
+            bind_rows, bind_issues, binding_claimed = bind_result
             result.rows.extend(bind_rows)
             for issue in bind_issues:
                 result.issues.append(PayloadIssue(
@@ -4180,12 +4187,14 @@ class MainWindow(
                     x_channel="",
                     detail=issue.detail,
                 ))
-            for key in binding_consumed:
-                result.attempted_channel_keys.add(key)
+            for key in bind_result.successful_channel_keys:
                 result.successful_channel_keys.add(key)
+            for key in binding_claimed:
+                if key in checked_keys:
+                    result.attempted_channel_keys.add(key)
         channel_work = {}
         for fid, ch, _color in checked:
-            if (fid, ch) in binding_consumed:
+            if (fid, ch) in binding_claimed:
                 continue
             result.attempted_channel_keys.add((fid, ch))
             fd = self.channel_list.get_file_data(fid)
@@ -4265,7 +4274,7 @@ class MainWindow(
 
         report_progress()
         for fid, ch, color in checked:
-            if (fid, ch) in binding_consumed:
+            if (fid, ch) in binding_claimed:
                 continue
             fd = self.channel_list.get_file_data(fid)
             source_label = str(

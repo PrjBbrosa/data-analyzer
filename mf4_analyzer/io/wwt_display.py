@@ -285,7 +285,8 @@ def read_curve(data: bytes, trailer: int, curve: int) -> dict | None:
     (scale,) = struct.unpack_from("<d", data, off + CURVE_SCALE)
     raw = bytes(data[off + CURVE_LABEL:off + CURVE_LABEL + CURVE_LABEL_LEN])
     i = raw.find(b"\0")
-    label = (raw[:i] if i >= 0 else raw).decode("latin-1", "replace").strip()
+    raw = (raw[:i] if i >= 0 else raw).replace(b"\xa1\xe3", b"\xb0")
+    label = raw.decode("latin-1", "replace").strip()
     return {
         "curve": curve,
         "label": label,

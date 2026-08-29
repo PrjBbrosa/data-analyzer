@@ -34,15 +34,51 @@ def _format_tick(value: float) -> str:
     return text
 
 
-def _values_for_step(lo: float, hi: float, step: float) -> list[float]:
-    start = math.ceil(lo / step - _EDGE_EPS)
-    end = math.floor(hi / step + _EDGE_EPS)
+def _bounded_index_range(
+    lo: float, hi: float, step: float, max_count: int
+) -> tuple[int, int] | None:
+    """Inclusive index bounds when the candidate count is within max_count.
+
+    Count is proven from finite lo/step and hi/step quotients without
+    allocating a tick list. math.ceil/floor convert inf to int and raise
+    OverflowError, so non-finite quotients are rejected first. Returns
+    None when the count exceeds max_count or cannot be proven bounded.
+    An empty but safe range is (0, -1).
+    """
+    if not math.isfinite(lo) or not math.isfinite(hi) or not math.isfinite(step):
+        return None
+    if step <= 0.0 or hi <= lo or max_count < 0:
+        return None
+    ratio_lo = lo / step
+    ratio_hi = hi / step
+    if not math.isfinite(ratio_lo) or not math.isfinite(ratio_hi):
+        return None
+    start = math.ceil(ratio_lo - _EDGE_EPS)
+    end = math.floor(ratio_hi + _EDGE_EPS)
+    if start > end:
+        return (0, -1)
+    if end - start + 1 > max_count:
+        return None
+    return (start, end)
+
+
+def _values_for_step(
+    lo: float, hi: float, step: float, *, max_count: int = _GRID_CAP
+) -> list[float]:
+    bounds = _bounded_index_range(lo, hi, step, max_count)
+    if bounds is None:
+        return []
+    start, end = bounds
     out: list[float] = []
-    for index in range(int(start), int(end) + 1):
+    for index in range(start, end + 1):
         value = index * step
         if lo - _EDGE_EPS <= value <= hi + _EDGE_EPS:
             out.append(float(value))
     return out
+
+
+def _adaptive_cap() -> NativeTickLevels:
+    return NativeTickLevels((), (), adaptive=True, warning="tick_cap")
 
 
 def native_tick_levels(
@@ -61,22 +97,27 @@ def native_tick_levels(
     if not major_ok and not grid_ok:
         return NativeTickLevels((), (), adaptive=True, warning=None)
 
+    cap = int(max_grid)
+    major_step = float(major) if major_ok else None
+    grid_step = float(grid) if grid_ok else None
+    # Preflight every requested level before enumerating any. A native
+    # axis is all-or-nothing: unsafe major or grid falls back together.
+    if major_step is not None and _bounded_index_range(lo, hi, major_step, cap) is None:
+        return _adaptive_cap()
+    if grid_step is not None and _bounded_index_range(lo, hi, grid_step, cap) is None:
+        return _adaptive_cap()
+
     majors: list[tuple[float, str]] = []
-    if major_ok:
+    if major_step is not None:
         majors = [
             (value, _format_tick(value))
-            for value in _values_for_step(lo, hi, float(major))
+            for value in _values_for_step(lo, hi, major_step, max_count=cap)
         ]
 
     grids: list[tuple[float, str]] = []
-    if grid_ok:
-        raw = _values_for_step(lo, hi, float(grid))
-        if len(raw) > max_grid:
-            return NativeTickLevels(
-                (), (), adaptive=True, warning="grid_cap"
-            )
+    if grid_step is not None:
         major_set = {round(value, 12) for value, _ in majors}
-        for value in raw:
+        for value in _values_for_step(lo, hi, grid_step, max_count=cap):
             if round(value, 12) in major_set:
                 continue
             grids.append((value, ""))

@@ -9,8 +9,10 @@ import pytest
 
 from mf4_analyzer.ui.project_io import collect_dropped_time_refs, remap_view_fids
 from mf4_analyzer.ui.time_curve_bindings import (
+    BoundTimePlotResult,
     TimeCurveBinding,
     TimeDataRef,
+    bound_time_plot_rows,
     filter_curve_bindings,
     remap_curve_bindings,
     resolve_time_curve_binding,
@@ -167,3 +169,398 @@ def test_viewstate_json_roundtrip_and_project_remap_keep_bindings():
         item[2] == "binding:x" for item in dropped
     )
     assert any(item[2] == "binding:y" for item in dropped)
+
+
+def _channel_binding(
+    *,
+    fid="f1",
+    y_channel="ChanY",
+    x_channel="ChanX",
+    binding_id="bind-y",
+    display_name="ChanY",
+) -> TimeCurveBinding:
+    return TimeCurveBinding(
+        binding_id=binding_id,
+        y_ref=TimeDataRef(kind="channel", fid=fid, channel=y_channel),
+        x_ref=TimeDataRef(kind="channel", fid=fid, channel=x_channel),
+        display_name=display_name,
+        unit="N",
+        color="#000080",
+        axis_id="axis-y",
+        y_range=(-1.0, 1.0),
+        y_tick_interval=1.0,
+        y_grid_interval=None,
+        line_width_mm=0.2,
+        line_style="line",
+    )
+
+
+def _record_binding(
+    *,
+    fid="f1",
+    y_index=2,
+    x_index=1,
+    binding_id="bind-rec",
+    display_name="TolY",
+) -> TimeCurveBinding:
+    return TimeCurveBinding(
+        binding_id=binding_id,
+        y_ref=TimeDataRef(kind="wwt_record", fid=fid, record_index=y_index),
+        x_ref=TimeDataRef(kind="wwt_record", fid=fid, record_index=x_index),
+        display_name=display_name,
+        unit="mm",
+        color="#ff0000",
+        axis_id="axis-rec",
+        y_range=(0.0, 1.0),
+        y_tick_interval=0.2,
+        y_grid_interval=None,
+        line_width_mm=0.2,
+        line_style="line",
+    )
+
+
+def _owner(
+    *,
+    n=8,
+    y_name="ChanY",
+    x_name="ChanX",
+    records=None,
+    y_values=None,
+    x_values=None,
+    extra=None,
+    time_array=None,
+):
+    y_values = np.arange(n, dtype=np.float64) if y_values is None else np.asarray(y_values)
+    x_values = (
+        np.linspace(-1.0, 1.0, n, dtype=np.float64)
+        if x_values is None else np.asarray(x_values)
+    )
+    data = {x_name: x_values, y_name: y_values}
+    if extra:
+        data.update(extra)
+    return SimpleNamespace(
+        data=pd.DataFrame(data),
+        source_metadata={"wwt_record_store": records or {}},
+        time_array=(
+            np.arange(n, dtype=np.float64) if time_array is None
+            else np.asarray(time_array)
+        ),
+    )
+
+
+def _stub_wwt_ui(mw, monkeypatch, accept=True):
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: accept)
+    monkeypatch.setattr(
+        mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
+    )
+    monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
+
+
+def _load_synthetic_wwt(mw, monkeypatch, path):
+    _stub_wwt_ui(mw, monkeypatch, accept=True)
+    mw._load_one(str(path))
+
+
+def test_missing_record_x_does_not_fallback_to_time_y(qapp, tmp_path, monkeypatch):
+    """RED: a failed record X must not be replaced by a normal Time-Y row."""
+    from dataclasses import replace
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")
+    mw = MainWindow()
+    _load_synthetic_wwt(mw, monkeypatch, path)
+    qapp.processEvents()
+
+    view = mw.view_manager.get(mw.view_manager.active)
+    binding = next(item for item in view.curve_bindings if item.y_ref.kind == "channel")
+    broken = replace(
+        binding,
+        x_ref=TimeDataRef(
+            kind="wwt_record", fid=binding.y_ref.fid, record_index=999,
+        ),
+    )
+    view.curve_bindings = [broken]
+    y_fid, y_channel = binding.y_ref.fid, binding.y_ref.channel
+    assert mw.channel_list.get_file_data(y_fid) is not None
+
+    bind_result = bound_time_plot_rows([broken], mw.files)
+    rows, issues, claimed = bind_result
+    assert isinstance(bind_result, BoundTimePlotResult)
+    assert claimed is bind_result.claimed_channel_keys
+    assert (y_fid, y_channel) in bind_result.claimed_channel_keys
+    assert (y_fid, y_channel) not in bind_result.successful_channel_keys
+    assert any(issue.code == "missing_record" for issue in issues)
+    assert rows == []
+
+    result = mw._build_time_plot_data(
+        checked=[(y_fid, y_channel, "#000080")],
+        range_enabled=False,
+    )
+    assert any(issue.code == "missing_record" for issue in result.issues)
+    assert (y_fid, y_channel) in result.attempted_channel_keys
+    assert (y_fid, y_channel) not in result.successful_channel_keys
+    fd = mw.files[y_fid]
+    prefixed = fd.get_prefixed_channel(y_channel)
+    time_y = [row for row in result.rows if row[0] == prefixed]
+    assert time_y == [], [row[0] for row in result.rows]
+
+
+def test_unchecking_channel_backed_y_hides_binding(qapp, tmp_path, monkeypatch):
+    """RED: channel-backed Y must not plot when it is not in the View checked set."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")
+    mw = MainWindow()
+    _load_synthetic_wwt(mw, monkeypatch, path)
+    qapp.processEvents()
+
+    view = mw.view_manager.get(mw.view_manager.active)
+    binding = next(item for item in view.curve_bindings if item.y_ref.kind == "channel")
+    assert binding.y_ref.channel == wwt.CHAN_Y
+    y_key = (binding.y_ref.fid, binding.y_ref.channel)
+    persisted = list(view.curve_bindings)
+    rows, _issues, _consumed = bound_time_plot_rows(view.curve_bindings, mw.files)
+    assert any(row[6] == y_key[0] and wwt.CHAN_Y in str(row[0]) for row in rows)
+
+    hidden = mw._build_time_plot_data(checked=[], range_enabled=False)
+    assert hidden.rows == []
+    assert y_key not in hidden.successful_channel_keys
+    assert view.curve_bindings == persisted
+
+    shown = mw._build_time_plot_data(
+        checked=[(y_key[0], y_key[1], binding.color)],
+        range_enabled=False,
+    )
+    assert view.curve_bindings == persisted
+    assert y_key in shown.successful_channel_keys
+    bind_rows = [
+        row for row in shown.rows
+        if len(row) > 7 and (row[7] or {}).get("native_axis")
+    ]
+    assert any(row[6] == y_key[0] for row in bind_rows)
+    fd = mw.files[y_key[0]]
+    prefixed = fd.get_prefixed_channel(y_key[1])
+    matching = [row for row in shown.rows if row[0] == prefixed]
+    assert len(matching) == 1
+    assert (matching[0][7] or {}).get("native_axis")
+
+
+def test_missing_record_x_claims_channel_y_without_row():
+    from dataclasses import replace
+
+    y_key = ("f1", "ChanY")
+    binding = replace(
+        _channel_binding(),
+        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=999),
+    )
+    files = {"f1": _owner()}
+    result = bound_time_plot_rows(
+        [binding], files, checked_channel_keys={y_key},
+    )
+    rows, issues, claimed = result
+    assert rows == []
+    assert any(issue.code == "missing_record" for issue in issues)
+    assert claimed == {y_key}
+    assert result.successful_channel_keys == set()
+
+
+def test_unaligned_xy_claims_channel_y_without_row():
+    from dataclasses import replace
+
+    y_key = ("f1", "ChanY")
+    binding = replace(
+        _channel_binding(),
+        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=1),
+    )
+    files = {
+        "f1": _owner(n=8, records={1: np.linspace(-1.0, 1.0, 5)}),
+    }
+    result = bound_time_plot_rows(
+        [binding], files, checked_channel_keys={y_key},
+    )
+    assert result.rows == []
+    assert any(issue.code == "unaligned" for issue in result.issues)
+    assert y_key in result.claimed_channel_keys
+    assert y_key not in result.successful_channel_keys
+
+
+def test_unchecked_channel_backed_y_is_claimed_as_inactive():
+    y_key = ("f1", "ChanY")
+    binding = _channel_binding()
+    files = {"f1": _owner()}
+    result = bound_time_plot_rows(
+        [binding], files, checked_channel_keys=set(),
+    )
+    assert result.rows == []
+    assert result.issues == []
+    assert y_key in result.claimed_channel_keys
+    assert y_key not in result.successful_channel_keys
+
+
+def test_record_only_y_plots_without_checked_identity():
+    binding = _record_binding()
+    x = np.linspace(-10.0, 10.0, 16)
+    y = np.linspace(0.2, 0.8, 16)
+    files = {
+        "f1": _owner(n=8, records={1: x, 2: y}),
+    }
+    result = bound_time_plot_rows(
+        [binding], files, checked_channel_keys=set(),
+    )
+    assert len(result.rows) == 1
+    assert result.issues == []
+    assert result.claimed_channel_keys == set()
+    assert result.successful_channel_keys == set()
+    np.testing.assert_array_equal(result.rows[0][2], x)
+    np.testing.assert_array_equal(result.rows[0][3], y)
+    assert result.rows[0][7]["native_xy_full_range"] is True
+
+
+def test_unclaimed_checked_channel_appends_time_y(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")
+    mw = MainWindow()
+    _load_synthetic_wwt(mw, monkeypatch, path)
+    qapp.processEvents()
+
+    view = mw.view_manager.get(mw.view_manager.active)
+    binding = next(item for item in view.curve_bindings if item.y_ref.kind == "channel")
+    y_fid, y_channel = binding.y_ref.fid, binding.y_ref.channel
+    fd = mw.files[y_fid]
+    extra = next(
+        name for name in fd.get_signal_channels()
+        if name != y_channel
+    )
+    extra_key = (y_fid, extra)
+    result = mw._build_time_plot_data(
+        checked=[
+            (y_fid, y_channel, binding.color),
+            (y_fid, extra, "#ff0000"),
+        ],
+        range_enabled=False,
+    )
+    bind_rows = [
+        row for row in result.rows
+        if len(row) > 7 and (row[7] or {}).get("native_axis")
+    ]
+    assert any(row[6] == y_fid for row in bind_rows)
+    prefixed_extra = fd.get_prefixed_channel(extra)
+    time_y = [row for row in result.rows if row[0] == prefixed_extra]
+    assert len(time_y) == 1
+    assert extra_key in result.successful_channel_keys
+    assert extra_key not in bound_time_plot_rows(
+        view.curve_bindings, mw.files,
+        checked_channel_keys={(y_fid, y_channel), extra_key},
+    ).claimed_channel_keys
+
+
+def test_acquisition_mask_aligns_channel_backed_xy():
+    n = 8
+    time_axis = np.arange(n, dtype=np.float64)
+    x_values = np.arange(n, dtype=np.float64) * 10.0
+    y_values = np.arange(n, dtype=np.float64)
+    binding = _channel_binding()
+    files = {
+        "f1": _owner(
+            n=n, x_values=x_values, y_values=y_values, time_array=time_axis,
+        )
+    }
+    result = bound_time_plot_rows(
+        [binding], files, range_lo=2.0, range_hi=4.0,
+        checked_channel_keys={("f1", "ChanY")},
+    )
+    assert len(result.rows) == 1
+    np.testing.assert_array_equal(result.rows[0][2], np.array([20.0, 30.0, 40.0]))
+    np.testing.assert_array_equal(result.rows[0][3], np.array([2.0, 3.0, 4.0]))
+    assert result.rows[0][2].shape == result.rows[0][3].shape
+    assert "native_xy_full_range" not in result.rows[0][7]
+
+
+def test_duplicate_display_names_use_composite_identity():
+    shared_name = "Force"
+    left = _channel_binding(
+        fid="f1", binding_id="left", display_name=shared_name,
+    )
+    right = _channel_binding(
+        fid="f2", binding_id="right", display_name=shared_name,
+    )
+    files = {
+        "f1": _owner(y_values=np.arange(8, dtype=np.float64)),
+        "f2": _owner(y_values=np.arange(8, dtype=np.float64) + 100.0),
+    }
+    result = bound_time_plot_rows(
+        [left, right], files, checked_channel_keys={("f1", "ChanY")},
+    )
+    assert result.claimed_channel_keys == {("f1", "ChanY"), ("f2", "ChanY")}
+    assert result.successful_channel_keys == {("f1", "ChanY")}
+    assert len(result.rows) == 1
+    assert result.rows[0][6] == "f1"
+    np.testing.assert_array_equal(result.rows[0][3], np.arange(8, dtype=np.float64))
+
+
+def test_record_only_gap_binding_preserves_nan_and_array_length(tmp_path):
+    from mf4_analyzer.io.wwt_document import load_wwt_document
+    from tests._helpers import wwt_factory as wwt
+
+    loaded = load_wwt_document(wwt.record_only_gap_curves(tmp_path / "gap.wwt"))
+    records = {record.name: record for record in loaded.document.records}
+    group = loaded.groups[0]
+    owner = SimpleNamespace(
+        data=group["data"],
+        source_metadata=group["source_metadata"],
+        time_array=np.asarray(group["data"]["Time"]),
+    )
+    binding = _record_binding(
+        x_index=records[wwt.GAP_X].index,
+        y_index=records[wwt.GAP_Y_SPEED].index,
+        display_name=wwt.GAP_Y_SPEED,
+    )
+
+    result = bound_time_plot_rows([binding], {"f1": owner})
+
+    assert result.issues == []
+    assert len(result.rows) == 1
+    x_values, y_values = result.rows[0][2:4]
+    assert x_values.shape == y_values.shape == (7,)
+    assert np.isnan(y_values[[2, 5]]).all()
+    np.testing.assert_array_equal(
+        np.delete(y_values, [2, 5]),
+        np.array([60.0, 90.0, 60.0, 90.0, 60.0]),
+    )
+
+
+def test_channel_backed_binding_prefers_tracelab_channel_color():
+    binding = _channel_binding(display_name="ChanY [N]")
+    key = (binding.y_ref.fid, binding.y_ref.channel)
+
+    result = bound_time_plot_rows(
+        [binding],
+        {"f1": _owner()},
+        checked_channel_keys={key},
+        channel_colors={key: "#13a36b"},
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0][4] == "#13a36b"
+    assert result.rows[0][0] == "ChanY"
+
+
+def test_record_only_binding_keeps_compatibility_color():
+    binding = _record_binding()
+    x = np.linspace(-10.0, 10.0, 16)
+    y = np.linspace(0.2, 0.8, 16)
+
+    result = bound_time_plot_rows(
+        [binding],
+        {"f1": _owner(records={1: x, 2: y})},
+        channel_colors={("f1", "ChanY"): "#13a36b"},
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0][4] == binding.color

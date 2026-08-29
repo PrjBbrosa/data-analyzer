@@ -264,7 +264,7 @@ class UltraViewCoordinator(QObject):
                 ),
             ))
         plan = plan_native_layout(planned)
-        return self._workspace_ctl.apply_native_layout_plan(plan)
+        return self._workspace_controller.apply_native_layout_plan(plan)
 
     def add_from_source_tab(self, section: str, view_id: str) -> None:
         if self._inactive():

@@ -567,6 +567,14 @@ class ProjectIOMixin:
             if notice:
                 self.toast(notice, "warning")
 
+    def _consume_wwt_import_outcome(self, outcome):
+        """Surface the coordinator's one degraded-import summary. Restore is silent."""
+        if outcome is None or getattr(self, "_restoring_project", False):
+            return
+        summary = getattr(outcome, "summary", "") or ""
+        if summary:
+            self.toast(summary, "warning")
+
     def _is_can_log_path(self, path) -> bool:
         """True for Vector BLF or evidence-matched CANoe ASC CAN logs."""
         suffix = Path(path).suffix.lower()
@@ -818,12 +826,24 @@ class ProjectIOMixin:
                     f"✅ 已加载 WWT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
                     f"已加载 {p.name} · {len(groups)} 组",
                 )
-                self._toast_io_load_diagnostics(
-                    *(g.get("source_metadata") for g in groups))
-                coordinator = getattr(self, "_wwt_import", None)
-                offer = getattr(coordinator, "offer_layout", None)
-                if callable(offer) and not getattr(self, "_restoring_project", False):
-                    offer(loaded.document, new_fids, reuse_blank=reuse_blank)
+                restoring = bool(getattr(self, "_restoring_project", False))
+                if not restoring:
+                    # skipped_channels is consumed by the WWT import summary
+                    # (auxiliaries are no longer in that list). Keep renamed
+                    # and other generic notices.
+                    toast_metas = []
+                    for group in groups:
+                        smeta = dict(group.get("source_metadata") or {})
+                        smeta.pop("skipped_channels", None)
+                        toast_metas.append(smeta)
+                    self._toast_io_load_diagnostics(*toast_metas)
+                    coordinator = getattr(self, "_wwt_import", None)
+                    offer = getattr(coordinator, "offer_layout", None)
+                    outcome = (
+                        offer(loaded.document, new_fids, reuse_blank=reuse_blank)
+                        if callable(offer) else None
+                    )
+                    self._consume_wwt_import_outcome(outcome)
                 return
             elif ext == '.zfd':
                 report(-1.0, "读取 ZFD")

@@ -85,7 +85,12 @@ def test_yp_ss_single_group_scaling_and_skipped():
     assert smeta["source_kind"] == "wwt"
     assert smeta["title"] == "Yoke Play_sensor side"
     assert smeta["winwert_version"] == "091293"
-    assert smeta["skipped_channels"] == ["Tol_oben", "Tol_unten", "Tol_x"]
+    aux_names = [
+        item["name"] if isinstance(item, dict) else item
+        for item in smeta.get("wwt_auxiliary_records") or []
+    ]
+    assert aux_names == ["Tol_oben", "Tol_unten", "Tol_x"]
+    assert smeta["skipped_channels"] == []
     assert smeta["source_filename"] == "YP_SS_X04-CSER_000009.wwt"
 
     cmeta = g["channel_metadata"]["Md-Lenkrad"]
@@ -232,10 +237,15 @@ def test_u_can_200401_version_short_block_and_pars():
     assert smeta["records_parsed"] == 32
 
     skipped = smeta["skipped_channels"]
-    # 首块 15 点 Grenze/SKL 全在 skipped（短块整体过滤，含 n 匹配的）
+    aux_names = [
+        item["name"] if isinstance(item, dict) else item
+        for item in smeta.get("wwt_auxiliary_records") or []
+    ]
+    # 首块 15 点 Grenze/SKL 保留为 auxiliary（短块整体过滤，含 n 匹配的）
     for name in ("Grenze 1 Md(x)", "SKL Grenze 1", "Grenze 2 Md(x)",
                  "SKL Grenze 2"):
-        assert name in skipped
+        assert name in aux_names
+        assert name not in skipped
     derived_names = {
         "Spurstangenkraft": "abs(k20)",
         "Diff. Moment": "-(k19-(-k26))",
@@ -467,7 +477,12 @@ def test_short_zeit_block_filtered_as_curve_definitions(tmp_path):
     assert len(groups) == 1
     g = groups[0]
     assert g["channels"] == ["Time", "Weg"]
-    assert g["source_metadata"]["skipped_channels"] == ["Grenze 1 Md(x)"]
+    aux_names = [
+        item["name"] if isinstance(item, dict) else item
+        for item in g["source_metadata"].get("wwt_auxiliary_records") or []
+    ]
+    assert aux_names == ["Grenze 1 Md(x)"]
+    assert g["source_metadata"]["skipped_channels"] == []
 
 
 def test_truncated_data_region_rejected(tmp_path):

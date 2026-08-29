@@ -7,12 +7,18 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
+from mf4_analyzer._palette import FILE_PALETTES
 from mf4_analyzer.io.wwt_display import WwtCurveDisplay, WwtWindowRectMm
 from mf4_analyzer.io.wwt_document import WwtDocument, WwtRecord
 from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
+from mf4_analyzer.ui.time_xaxis import (
+    CHANNEL_MODE,
+    EXACT_SOURCE,
+    CustomXAxisSpec,
+)
 from mf4_analyzer.ui.view_state import ViewState
 
 _UNIT_SUFFIX = re.compile(r"\s*\[[^\]]*\]\s*$")
@@ -25,6 +31,7 @@ class RegisteredWwtSources:
     fids: tuple[str, ...]
     record_channels: Mapping[int, tuple[str, str]]
     warnings: tuple[str, ...] = ()
+    display_channels: Mapping[tuple[str, str], str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,7 @@ def register_groups_for_test(
     start = int(digits or "1")
     fids: list[str] = []
     record_channels: dict[int, tuple[str, str]] = {}
+    display_channels: dict[tuple[str, str], str] = {}
     warnings: list[str] = []
     for offset, group in enumerate(groups):
         fid = f"{prefix}{start + offset}"
@@ -59,12 +67,15 @@ def register_groups_for_test(
                     f"{_MAX_RECORD_WARN}: {record_index}"
                 )
                 continue
-            record_channels[record_index] = (fid, str(column))
+            channel = str(column)
+            record_channels[record_index] = (fid, channel)
+            display_channels[(fid, channel)] = channel
     return RegisteredWwtSources(
         owner_fid=fids[0] if fids else owner_fid,
         fids=tuple(fids),
         record_channels=record_channels,
         warnings=tuple(warnings),
+        display_channels=display_channels,
     )
 
 
@@ -74,9 +85,11 @@ def build_registered_record_map(
     if not fids:
         raise ValueError("registered WWT sources require at least one fid")
     record_channels: dict[int, tuple[str, str]] = {}
+    display_channels: dict[tuple[str, str], str] = {}
     warnings: list[str] = []
     for fid, group in zip(fids, groups):
         metadata = group.get("channel_metadata") or {}
+        display_names = group.get("channel_display_names") or {}
         for column, meta in metadata.items():
             if not isinstance(meta, Mapping) or "record_index" not in meta:
                 continue
@@ -84,12 +97,18 @@ def build_registered_record_map(
             if record_index in record_channels:
                 warnings.append(f"{_MAX_RECORD_WARN}: {record_index}")
                 continue
-            record_channels[record_index] = (str(fid), str(column))
+            source_fid = str(fid)
+            channel = str(column)
+            record_channels[record_index] = (source_fid, channel)
+            display_channels[(source_fid, channel)] = str(
+                display_names.get(column) or channel
+            )
     return RegisteredWwtSources(
         owner_fid=str(fids[0]),
         fids=tuple(str(fid) for fid in fids),
         record_channels=record_channels,
         warnings=tuple(warnings),
+        display_channels=display_channels,
     )
 
 
@@ -97,10 +116,11 @@ def attach_wwt_record_store(
     groups: Sequence[dict], document: WwtDocument
 ) -> None:
     """Share the immutable record tuple on every logical source."""
-    for group in groups:
-        metadata = dict(group.get("source_metadata") or {})
-        metadata["wwt_record_store"] = document.records
-        group["source_metadata"] = metadata
+    from mf4_analyzer.io.wwt_document import (
+        attach_wwt_record_store as _attach_store,
+    )
+
+    _attach_store(groups, document.records)
 
 
 def _label_without_unit(label: str) -> str:
@@ -109,10 +129,6 @@ def _label_without_unit(label: str) -> str:
 
 def _ylim_key(key: tuple[str, str]) -> str:
     return json.dumps([key[0], key[1]], ensure_ascii=False, separators=(",", ":"))
-
-
-def _rgb_hex(rgb: tuple[int, int, int]) -> str:
-    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
 
 def _curve_unit(curve: WwtCurveDisplay, records: Sequence[WwtRecord]) -> str:
@@ -208,6 +224,33 @@ def _y_visible_rows(window) -> list[WwtCurveDisplay]:
     return [row for row in y_rows if row.visible]
 
 
+def _x_axis_opts(
+    bindings: Sequence[TimeCurveBinding], x_label: str,
+) -> dict:
+    """Expose a real shared channel X to the existing Inspector contract.
+
+    Per-curve or record-backed X has no state-schema representation.  Those
+    cases retain the legacy fallback instead of guessing one source/channel.
+    """
+    channel_refs = {
+        (binding.x_ref.fid, binding.x_ref.channel)
+        for binding in bindings
+        if binding.x_ref.kind == "channel" and binding.x_ref.channel
+    }
+    if bindings and len(channel_refs) == 1 and all(
+        binding.x_ref.kind == "channel" for binding in bindings
+    ):
+        fid, channel = next(iter(channel_refs))
+        return CustomXAxisSpec(
+            mode=CHANNEL_MODE,
+            resolver=EXACT_SOURCE,
+            source_fid=str(fid),
+            channel=str(channel),
+            label=str(x_label or ""),
+        ).to_axis_opts()
+    return {"mode": "time", "label": str(x_label or "")}
+
+
 def build_wwt_view_proposals(
     document: WwtDocument,
     registered: RegisteredWwtSources,
@@ -224,6 +267,12 @@ def build_wwt_view_proposals(
                     f"unknown_record: window {window.index + 1} "
                     f"record {row.record_index}"
                 )
+                continue
+            # A WinWert display block may contain tolerance/limit/guide
+            # records that are not TraceLab Navigator channels.  They remain
+            # available in the read-only record store for X resolution, but
+            # are never promoted into an extra plotted Y series.
+            if _data_ref(row.record_index, registered).kind != "channel":
                 continue
             if row.factor != 1.0 or row.move != 0.0 or row.log_scale:
                 warnings.append(
@@ -248,13 +297,15 @@ def build_wwt_view_proposals(
             xlim = (float(x_row.lo), float(x_row.hi))
         bindings: list[TimeCurveBinding] = []
         checked: list[tuple[str, str]] = []
-        colors: dict[tuple[str, str], str] = {}
         ylims: dict[str, tuple[float, float]] = {}
         native_y: dict[str, dict] = {}
         for row in visible:
             y_ref = _data_ref(row.record_index, registered)
             x_ref = _data_ref(row.x_record_index, registered)
-            color = _rgb_hex(row.color_rgb)
+            # The runtime payload replaces this compatibility fallback with
+            # the registered Navigator color.  Never persist WinWert RGB: it
+            # would overwrite TraceLab swatches when the View is projected.
+            color = FILE_PALETTES[0][len(bindings) % len(FILE_PALETTES[0])]
             axis_id = axis_of[row.record_index]
             y_range = (float(row.lo), float(row.hi)) if _range_ok(row.lo, row.hi) else (0.0, 1.0)
             if not _range_ok(row.lo, row.hi):
@@ -281,9 +332,11 @@ def build_wwt_view_proposals(
                 key = (y_ref.fid, y_ref.channel)
                 if key not in checked:
                     checked.append(key)
-                colors[key] = color
                 if row.selected and _range_ok(row.lo, row.hi):
-                    ylims[_ylim_key(key)] = (float(row.lo), float(row.hi))
+                    display_name = registered.display_channels.get(key, key[1])
+                    ylims[_ylim_key((key[0], display_name))] = (
+                        float(row.lo), float(row.hi)
+                    )
             if axis_id not in native_y and row.selected:
                 native_y[axis_id] = {
                     "major": row.tick_interval,
@@ -311,15 +364,12 @@ def build_wwt_view_proposals(
             tab_color="#2d7ff9",
             attached_file_ids=list(registered.fids),
             checked=checked,
-            colors=colors,
+            colors={},
             plot_mode="overlay",
             xlim=xlim,
             ylims=ylims,
             axis_opts={
-                "x_axis": {
-                    "mode": "time",
-                    "label": x_label,
-                },
+                "x_axis": _x_axis_opts(bindings, x_label),
                 "native_ticks": native_ticks,
             },
             curve_bindings=bindings,

@@ -7,7 +7,7 @@ read-only WWT record store on the owner FileData. The canvas never imports
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal, Mapping, Sequence
+from typing import AbstractSet, Any, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
 
@@ -20,6 +20,26 @@ class TimePlotIssue:
     code: str
     detail: str
     binding_id: str | None = None
+
+
+@dataclass
+class BoundTimePlotResult:
+    """Resolved TimeDomain rows plus the channel keys a binding declared.
+
+    Three-value unpacking yields ``(rows, issues, claimed_channel_keys)`` so
+    callers that skip ordinary Time-Y by the third item keep using claimed,
+    not only successful, keys.
+    """
+
+    rows: list
+    issues: list[TimePlotIssue]
+    claimed_channel_keys: set[tuple[str, str]]
+    successful_channel_keys: set[tuple[str, str]]
+
+    def __iter__(self):
+        yield self.rows
+        yield self.issues
+        yield self.claimed_channel_keys
 
 
 @dataclass(frozen=True)
@@ -342,18 +362,40 @@ def _apply_acquisition_mask(
     return x_values[mask], y_values[mask]
 
 
+def _channel_key(ref: TimeDataRef) -> tuple[str, str] | None:
+    if ref.kind != _CHANNEL or not ref.channel:
+        return None
+    return (ref.fid, ref.channel)
+
+
 def bound_time_plot_rows(
     bindings: Sequence[TimeCurveBinding],
     files: Mapping[str, Any],
     *,
     range_lo: float | None = None,
     range_hi: float | None = None,
-) -> tuple[list, list[TimePlotIssue], set[tuple[str, str]]]:
-    """Resolve bindings to TimeDomain row tuples in binding order."""
+    checked_channel_keys: AbstractSet[tuple[str, str]] | None = None,
+    channel_colors: Mapping[tuple[str, str], str] | None = None,
+) -> BoundTimePlotResult:
+    """Resolve bindings to TimeDomain row tuples in binding order.
+
+    A channel-backed Y is claimed before X/Y resolve so a failed or
+    unchecked binding cannot fall back to a normal Time-Y curve.
+    ``checked_channel_keys=None`` skips Navigator gating.
+    """
     rows: list = []
     issues: list[TimePlotIssue] = []
-    consumed: set[tuple[str, str]] = set()
+    claimed: set[tuple[str, str]] = set()
+    successful: set[tuple[str, str]] = set()
     for binding in bindings or ():
+        y_key = _channel_key(binding.y_ref)
+        if y_key is not None:
+            claimed.add(y_key)
+            if (
+                checked_channel_keys is not None
+                and y_key not in checked_channel_keys
+            ):
+                continue
         x_values, y_values, issue = resolve_time_curve_binding(binding, files)
         if issue is not None:
             issues.append(issue)
@@ -380,16 +422,35 @@ def bound_time_plot_rows(
         }
         if native_xy:
             meta["native_xy_full_range"] = True
-        if binding.y_ref.kind == _CHANNEL and binding.y_ref.channel:
-            consumed.add((binding.y_ref.fid, binding.y_ref.channel))
+        if y_key is not None:
+            successful.add(y_key)
+        color = binding.color
+        if y_key is not None and channel_colors is not None:
+            color = str(channel_colors.get(y_key) or color)
+        row_name = binding.display_name
+        if y_key is not None:
+            # Canvas/View range identity follows the same raw/prefixed channel
+            # name contract as ordinary Navigator rows.  The WinWert display
+            # label may contain a unit suffix and is presentation-only; using
+            # it here prevents the imported ``(fid, channel)`` Y range from
+            # restoring and leaves the axis at the placeholder 0..1 frame.
+            row_name = y_key[1]
+            prefix = getattr(owner, "get_prefixed_channel", None)
+            if callable(prefix):
+                row_name = str(prefix(y_key[1]))
         rows.append((
-            binding.display_name,
+            row_name,
             True,
             x_values,
             y_values,
-            binding.color,
+            color,
             binding.unit,
             owner_fid,
             meta,
         ))
-    return rows, issues, consumed
+    return BoundTimePlotResult(
+        rows=rows,
+        issues=issues,
+        claimed_channel_keys=claimed,
+        successful_channel_keys=successful,
+    )

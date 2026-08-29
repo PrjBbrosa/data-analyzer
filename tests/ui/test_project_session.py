@@ -951,7 +951,7 @@ def test_file_removal_drops_ylims_for_closed_fid():
 
 
 def test_load_wwt_toasts_skipped_channels(qapp, tmp_path, monkeypatch):
-    """D3: WWT skipped_channels must surface as a warning toast (HDF template)."""
+    """Real degraded skip (unknown tag) still surfaces as one 未导入 summary."""
     import numpy as np
 
     from mf4_analyzer.ui.main_window import MainWindow
@@ -960,20 +960,79 @@ def test_load_wwt_toasts_skipped_channels(qapp, tmp_path, monkeypatch):
     n = 120
     vals = np.arange(n, dtype=np.float64)
     body = _make_record(b"Zeit", n, name=b"Time", unit=b"s")
+    body += _make_record(b"Wxyz", n, name=b"Mystery", payload=b"\x01" * 37)
     body += _make_record(b"Real", n, name=b"Weg", unit=b"mm", payload=vals.tobytes())
-    # n mismatch → skipped
-    body += _make_record(b"Real", 6, name=b"Tol_oben", unit=b"mm",
-                         payload=np.zeros(6, dtype=np.float64).tobytes())
     p = tmp_path / "skip.wwt"
     p.write_bytes(_make_header(3) + body)
 
     mw = MainWindow()
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: True)
     mw._load_one(str(p))
 
-    warn = [(m, lv) for m, lv in toasts if lv == "warning"]
-    assert any("未导入" in m and "Tol_oben" in m for m, _ in warn), toasts
+    fd = next(iter(mw.files.values()))
+    skipped = fd.source_metadata.get("skipped_channels") or []
+    aux_names = [
+        item["name"] if isinstance(item, dict) else item
+        for item in fd.source_metadata.get("wwt_auxiliary_records") or []
+    ]
+    assert "Mystery" in skipped
+    assert "Mystery" not in aux_names
+
+    warn = [(m, lv) for m, lv in toasts if lv in {"warning", "warn"}]
+    mystery = [
+        msg for msg, _lv in warn
+        if "Mystery" in msg and ("未导入" in msg or "unknown_record" in msg)
+    ]
+    assert len(mystery) == 1, toasts
+
+
+def test_retained_auxiliary_does_not_toast_skipped(qapp, tmp_path, monkeypatch):
+    """RED: limit/line records stay in the store and must not yellow-toast 未导入."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+
+    path = wwt.channel_xy_with_auxiliaries(tmp_path / "aux.wwt")
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: True)
+    monkeypatch.setattr(
+        mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
+    )
+    monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
+    mw._load_one(str(path))
+
+    fd = next(iter(mw.files.values()))
+    skipped = fd.source_metadata.get("skipped_channels") or []
+    aux_entries = fd.source_metadata.get("wwt_auxiliary_records") or []
+    aux_names = [
+        item["name"] if isinstance(item, dict) else item
+        for item in aux_entries
+    ]
+    assert wwt.LIMIT_HI in aux_names
+    assert wwt.LIMIT_LO in aux_names
+    assert wwt.LINE_X in aux_names
+    assert wwt.LIMIT_HI not in skipped
+    assert wwt.LIMIT_LO not in skipped
+    assert wwt.LINE_X not in skipped
+    assert wwt.CHAN_X in fd.data.columns and wwt.CHAN_Y in fd.data.columns
+    assert wwt.LIMIT_HI not in fd.data.columns
+    store = fd.source_metadata.get("wwt_record_store")
+    assert store is not None
+    store_names = [getattr(item, "name", None) for item in store]
+    assert wwt.LIMIT_HI in store_names
+    assert wwt.LIMIT_LO in store_names
+    assert wwt.LINE_X in store_names
+
+    warn = [(m, lv) for m, lv in toasts if lv in {"warning", "warn"}]
+    leaked = [
+        msg for msg, _lv in warn
+        if "未导入" in msg and any(name in msg for name in aux_names)
+    ]
+    assert leaked == [], warn
 
 
 def test_load_zfd_estimated_fs_toasts_estimate_wording(qapp, tmp_path, monkeypatch):

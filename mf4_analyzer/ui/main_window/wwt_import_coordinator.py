@@ -1,10 +1,21 @@
 """Confirm WinWert layout import and commit ordinary time Views in one shot."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PyQt5.QtWidgets import QMessageBox
 
+from mf4_analyzer.io.loader import format_skipped_channels_notice
+from mf4_analyzer.io.wwt_document import (
+    CODE_EXACT_OVERLAP,
+    CODE_SKIPPED_CHANNEL,
+    CODE_UNKNOWN_RECORD,
+    CODE_UNSUPPORTED_FORMULA,
+    CODE_VIEW_CAP,
+    WwtIssue,
+    format_wwt_issue,
+    parse_wwt_issue,
+)
 from mf4_analyzer.ui.view_state import MAX_VIEWS, is_reusable_blank_view
 from mf4_analyzer.ui.wwt_view_import import (
     build_registered_record_map,
@@ -15,6 +26,14 @@ from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_t
 ACCEPT_TEXT = "按 WinWert 排版并绘图"
 REJECT_TEXT = "仅加载数据"
 
+# Placement is explained by the confirm dialog; do not yellow-toast it again.
+# Axis-planning notes are not degraded-import facts.
+_SILENT_CODES = frozenset({
+    CODE_EXACT_OVERLAP,
+    "hidden_axis",
+    "auto_range",
+})
+
 
 @dataclass(frozen=True)
 class WwtImportOutcome:
@@ -22,6 +41,9 @@ class WwtImportOutcome:
     created: int
     view_ids: tuple[str, ...]
     warnings: tuple[str, ...]
+    issues: tuple[WwtIssue, ...] = field(default_factory=tuple)
+    summary: str = ""
+    accepted: bool = False
 
 
 def _exact_overlap_pairs(proposals) -> list[tuple[int, int]]:
@@ -67,6 +89,125 @@ def layout_dialog_text(document, proposals, *, available: int) -> tuple[str, str
     return body, informative
 
 
+def _issue_key(issue: WwtIssue) -> tuple[str, str]:
+    return (issue.code, issue.detail)
+
+
+def _unique_issues(issues: list[WwtIssue]) -> tuple[WwtIssue, ...]:
+    seen: set[tuple[str, str]] = set()
+    unique: list[WwtIssue] = []
+    for issue in issues:
+        key = _issue_key(issue)
+        if key in seen or not issue.code:
+            continue
+        seen.add(key)
+        unique.append(issue)
+    return tuple(unique)
+
+
+def _skipped_name(entry) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("name") or "")
+    return str(entry or "")
+
+
+def collect_wwt_import_issues(
+    document,
+    registered,
+    proposals,
+    *,
+    created: int = 0,
+    detected: int | None = None,
+    overlap_count: int = 0,
+) -> tuple[WwtIssue, ...]:
+    """Grade document + proposal + placement into stable-code issues."""
+    issues: list[WwtIssue] = []
+    skip_seen: set[str] = set()
+    formula_from_skip = False
+    for group in getattr(document, "groups", ()) or ():
+        metadata = (group or {}).get("source_metadata") or {}
+        for entry in metadata.get("skipped_channels") or []:
+            name = _skipped_name(entry)
+            if not name or name in skip_seen:
+                continue
+            skip_seen.add(name)
+            if " (公式:" in name:
+                formula_from_skip = True
+                issues.append(WwtIssue(CODE_UNSUPPORTED_FORMULA, name))
+            else:
+                issues.append(WwtIssue(CODE_UNKNOWN_RECORD, name))
+        break
+
+    for text in getattr(document, "diagnostics", ()) or ():
+        issue = parse_wwt_issue(text)
+        if issue.code == CODE_UNSUPPORTED_FORMULA and formula_from_skip:
+            continue
+        issues.append(issue)
+
+    for text in getattr(registered, "warnings", ()) or ():
+        issues.append(parse_wwt_issue(text))
+    for proposal in proposals or ():
+        for text in getattr(proposal, "warnings", ()) or ():
+            issues.append(parse_wwt_issue(text))
+
+    total = len(proposals) if detected is None else int(detected)
+    if 0 <= created < total:
+        issues.append(WwtIssue(
+            CODE_VIEW_CAP,
+            f"已生成 {created}/{total} 个 WinWert View",
+        ))
+    if overlap_count:
+        issues.append(WwtIssue(
+            CODE_EXACT_OVERLAP,
+            "1 个重叠窗口已放入未放置区",
+        ))
+    return _unique_issues(issues)
+
+
+def _is_channel_skip_notice(issue: WwtIssue) -> bool:
+    """True for retained-not-imported names that still use the 未导入 template."""
+    detail = issue.detail or ""
+    if issue.code == CODE_SKIPPED_CHANNEL:
+        return True
+    if issue.code == CODE_UNSUPPORTED_FORMULA and " (公式:" in detail:
+        return True
+    if issue.code != CODE_UNKNOWN_RECORD:
+        return False
+    return bool(detail) and "显示块" not in detail and "window " not in detail.lower()
+
+
+def format_wwt_import_summary(
+    issues,
+    *,
+    accepted: bool = False,
+) -> str:
+    """One user-facing degraded-import summary. Empty → no yellow toast."""
+    toastable: list[WwtIssue] = []
+    for issue in issues or ():
+        if issue.code in _SILENT_CODES:
+            continue
+        if issue.code == CODE_VIEW_CAP and not accepted:
+            continue
+        toastable.append(issue)
+    if not toastable:
+        return ""
+
+    skip_names: list[str] = []
+    others: list[str] = []
+    for issue in toastable:
+        detail = issue.detail or issue.code
+        if _is_channel_skip_notice(issue):
+            skip_names.append(detail)
+        else:
+            others.append(detail if detail else format_wwt_issue(issue.code))
+    parts: list[str] = []
+    skip_notice = format_skipped_channels_notice(skip_names)
+    if skip_notice:
+        parts.append(skip_notice)
+    parts.extend(others)
+    return "；".join(dict.fromkeys(part for part in parts if part))
+
+
 class WwtImportCoordinator:
     def __init__(self, window):
         self._window = window
@@ -99,21 +240,56 @@ class WwtImportCoordinator:
             fd = files.get(fid)
             if fd is None:
                 continue
+            channel_metadata = getattr(fd, "channel_metadata", {}) or {}
             groups.append({
-                "channel_metadata": getattr(fd, "channel_metadata", {}) or {},
+                "channel_metadata": channel_metadata,
+                "channel_display_names": {
+                    channel: fd.get_prefixed_channel(channel)
+                    for channel in channel_metadata
+                },
                 "source_metadata": getattr(fd, "source_metadata", {}) or {},
             })
-        for fid in fids:
-            fd = files.get(fid)
-            if fd is None:
-                continue
-            metadata = dict(getattr(fd, "source_metadata", None) or {})
-            metadata["wwt_record_store"] = document.records
-            fd.source_metadata = metadata
         registered = build_registered_record_map(groups, fids)
         proposals = build_wwt_view_proposals(document, registered)
+
+        def _outcome(
+            *,
+            created: int,
+            view_ids: tuple[str, ...] = (),
+            accepted: bool = False,
+            overlap_count: int = 0,
+            extra_warnings: tuple[str, ...] = (),
+        ) -> WwtImportOutcome:
+            issues = collect_wwt_import_issues(
+                document,
+                registered,
+                proposals,
+                created=created,
+                detected=len(proposals),
+                overlap_count=overlap_count,
+            )
+            summary = format_wwt_import_summary(issues, accepted=accepted)
+            warning_texts = [
+                *(extra_warnings or ()),
+                *(
+                    issue.detail or format_wwt_issue(issue.code)
+                    for issue in issues
+                    if issue.code not in _SILENT_CODES
+                ),
+            ]
+            warnings = tuple(dict.fromkeys(text for text in warning_texts if text))
+            return WwtImportOutcome(
+                detected=len(proposals),
+                created=created,
+                view_ids=view_ids,
+                warnings=warnings,
+                issues=issues,
+                summary=summary,
+                accepted=accepted,
+            )
+
         if not proposals:
-            return WwtImportOutcome(0, 0, (), tuple(registered.warnings))
+            return _outcome(created=0)
 
         manager = window.view_manager
         if reuse_blank is None:
@@ -126,7 +302,7 @@ class WwtImportCoordinator:
             document, proposals, available=max(0, available)
         )
         if not self._ask_layout(body, informative):
-            return WwtImportOutcome(len(proposals), 0, (), ())
+            return _outcome(created=0)
 
         capture = getattr(window, "_capture_current_view", None)
         if callable(capture):
@@ -137,22 +313,10 @@ class WwtImportCoordinator:
             states, reuse_blank=bool(reuse_blank), active_offset=0
         )
         view_ids = tuple(manager.views[idx].view_id for idx in indexes)
-        warnings = []
+        extra = []
         for item in keep:
-            warnings.extend(item.warnings)
-        if len(keep) < len(proposals):
-            warnings.append(
-                f"已生成 {len(keep)}/{len(proposals)} 个 WinWert View"
-            )
+            extra.extend(item.warnings)
         overlaps = _exact_overlap_pairs(keep)
-        if overlaps:
-            warnings.append("1 个重叠窗口已放入未放置区")
-        toast = getattr(window, "toast", None)
-        if callable(toast) and (len(keep) < len(proposals) or overlaps):
-            if len(keep) < len(proposals):
-                toast(f"已生成 {len(keep)}/{len(proposals)} 个 WinWert View", "warn")
-            elif overlaps:
-                toast("1 个重叠窗口已放入未放置区", "warn")
         ultra = getattr(window, "_ultraview", None)
         adder = getattr(ultra, "add_time_views_from_native_layout", None) if ultra else None
         if callable(adder) and indexes:
@@ -161,9 +325,10 @@ class WwtImportCoordinator:
                 for idx, proposal in zip(indexes, keep)
             ]
             adder(items)
-        return WwtImportOutcome(
-            detected=len(proposals),
+        return _outcome(
             created=len(indexes),
             view_ids=view_ids,
-            warnings=tuple(dict.fromkeys(warnings)),
+            accepted=True,
+            overlap_count=len(overlaps),
+            extra_warnings=tuple(extra),
         )

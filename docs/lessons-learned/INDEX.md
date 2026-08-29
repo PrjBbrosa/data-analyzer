@@ -214,6 +214,8 @@ lesson by default.
 | [Windows A2L Config Paths Round Trip](windows-a2l-config-path-roundtrip.md) | Changing Acquisition config scalar encoding, parsing, or persisted A2L | See lesson |
 | [UltraView Live Editor Suppresses Persisted Text](ultraview-live-editor-suppresses-persisted-text.md) | Editing an existing UltraView text object, shape label, or connector | See lesson |
 | [Frozen Windows Defers New View Activation](frozen-windows-defer-new-view-activation.md) | Changing the path from a View-tab ``+`` click to canvas activation or | See lesson |
+| [Core owner tests must use in-repo synthetic fixtures](core-owner-tests-use-in-repo-synthetic-fixtures.md) | Adding or reviewing pytest owner tests that open `testdoc/` paths, customer WWT/MF4 files, or other gitignored local samples as required fixtures. | `rg -n testdoc/WWT tests`; skip-guarded optional smoke only |
+| [Exercise The Real WWT To UltraView Boundary](codex-wwt-ultraview-real-boundary-test.md) | A WWT import change adds or modifies the projection from generated | See lesson |
 
 ## Selection Rules
 

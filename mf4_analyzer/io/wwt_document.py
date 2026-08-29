@@ -31,12 +31,32 @@ __all__ = [
     "WwtCurveDisplay",
     "WwtDisplayWindow",
     "WwtDocument",
+    "WwtIssue",
     "WwtLoadResult",
     "WwtRecord",
     "WwtWindowRectMm",
+    "attach_wwt_record_store",
+    "format_wwt_issue",
     "load_wwt_document",
     "parse_wwt_document",
+    "parse_wwt_issue",
 ]
+
+# Stable diagnostic codes. Display text is generated from code + context;
+# do not dedupe on Chinese strings.
+CODE_TRUNCATED_WINDOW = "truncated_window"
+CODE_UNKNOWN_RECORD = "unknown_record"
+CODE_UNSUPPORTED_DISPLAY = "unsupported_display"
+CODE_UNSUPPORTED_FORMULA = "unsupported_formula"
+CODE_UNSUPPORTED_REPRESENTATION = "unsupported_representation"
+CODE_VIEW_CAP = "view_cap"
+CODE_EXACT_OVERLAP = "exact_overlap"
+CODE_DUPLICATE_RECORD = "duplicate_record_index"
+CODE_SKIPPED_CHANNEL = "skipped_channel"
+
+# WinWert uses this exact finite value as an in-record pen-up marker.  Keep the
+# comparison exact: nearby large engineering values are still valid data.
+_WWT_MISSING_SENTINEL = -1e300
 
 
 @dataclass(frozen=True)
@@ -70,6 +90,55 @@ class WwtLoadResult:
     document: WwtDocument
 
 
+@dataclass(frozen=True)
+class WwtIssue:
+    code: str
+    detail: str = ""
+    record_index: int | None = None
+    window_index: int | None = None
+
+    def text(self) -> str:
+        return format_wwt_issue(self.code, self.detail)
+
+
+def format_wwt_issue(code: str, detail: str = "") -> str:
+    """Stable ``code: detail`` form used in diagnostics, toasts, and tests."""
+    code = str(code or "").strip()
+    detail = str(detail or "").strip()
+    if not code:
+        return detail
+    if not detail:
+        return code
+    if detail.startswith(f"{code}:"):
+        return detail
+    return f"{code}: {detail}"
+
+
+def parse_wwt_issue(text: str) -> WwtIssue:
+    raw = str(text or "").strip()
+    if not raw:
+        return WwtIssue("diagnostic", "")
+    code, sep, detail = raw.partition(": ")
+    if sep and code.replace("_", "").isalnum() and code[:1].isalpha():
+        return WwtIssue(code, detail)
+    return WwtIssue("diagnostic", raw)
+
+
+def attach_wwt_record_store(groups, records: tuple[WwtRecord, ...]) -> None:
+    """Share one immutable record tuple on every logical source from this file.
+
+    Load-layer ownership: Accept, Reject, no-display, and project restore all
+    receive this same object. Do not copy ndarrays per group.
+    """
+    store = records
+    for group in groups or ():
+        metadata = group.get("source_metadata")
+        if metadata is None:
+            metadata = {}
+            group["source_metadata"] = metadata
+        metadata["wwt_record_store"] = store
+
+
 def _freeze_array(values: np.ndarray) -> np.ndarray:
     out = np.asarray(values, dtype=np.float64)
     if out.ndim != 1:
@@ -78,6 +147,16 @@ def _freeze_array(values: np.ndarray) -> np.ndarray:
     frozen = np.array(view, dtype=np.float64, copy=True)
     frozen.setflags(write=False)
     return frozen
+
+
+def _freeze_record_array(values: np.ndarray) -> np.ndarray:
+    frozen = _freeze_array(values)
+    if not np.any(frozen == _WWT_MISSING_SENTINEL):
+        return frozen
+    with_gaps = np.array(frozen, dtype=np.float64, copy=True)
+    with_gaps[with_gaps == _WWT_MISSING_SENTINEL] = np.nan
+    with_gaps.setflags(write=False)
+    return with_gaps
 
 
 def _scan_next_boundary(data: bytes, data_pos: int, size: int) -> int:
@@ -113,6 +192,7 @@ def _materialize_groups(
     count: int,
     records_parsed: int,
     skipped: list[str],
+    auxiliary: list[dict],
 ) -> list[dict]:
     merged: dict[tuple, dict] = {}
     order: list[tuple] = []
@@ -134,6 +214,7 @@ def _materialize_groups(
         "winwert_version": version,
         "records_declared": count, "records_parsed": records_parsed,
         "skipped_channels": skipped, "source_filename": name,
+        "wwt_auxiliary_records": auxiliary,
     }
     groups: list[dict] = []
     for key in order:
@@ -201,6 +282,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
 
     blocks: list[dict] = []
     skipped: list[str] = []
+    auxiliary: list[dict] = []
     records: list[WwtRecord] = []
     pos = _HEADER_SIZE
     records_parsed = 0
@@ -278,7 +360,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
                     f"（偏移 0x{pos:x}）: {name}")
             blk = blocks[-1]
             raw = np.frombuffer(data, dtype=dtype, count=n, offset=data_pos)
-            physical = _freeze_array(raw.astype(np.float64) * a + c)
+            physical = _freeze_record_array(raw.astype(np.float64) * a + c)
             values = physical
             if (
                 current_zeit is not None
@@ -288,7 +370,12 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
             else:
                 axis_record = None
             if blk["curve_def"] or n != blk["n"]:
-                skipped.append(ch_name)
+                auxiliary.append({
+                    "name": ch_name,
+                    "record_index": rec_index,
+                    "tag": tag,
+                    "n": int(n),
+                })
             else:
                 blk["channels"].append({
                     "name": ch_name, "unit": unit, "tag": tag,
@@ -321,6 +408,7 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
         count=count,
         records_parsed=records_parsed,
         skipped=skipped,
+        auxiliary=auxiliary,
     )
 
     diagnostics: list[str] = []
@@ -330,23 +418,26 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
     for marker_i, marker in enumerate(markers):
         limit = markers[marker_i + 1] if marker_i + 1 < len(markers) else size
         if not trailer_is_structurally_valid(data, marker, limit):
-            diagnostics.append(
-                f"显示块 {marker_i + 1} 截断或曲线表越界（偏移 0x{marker:x}）"
-            )
+            diagnostics.append(format_wwt_issue(
+                CODE_TRUNCATED_WINDOW,
+                f"显示块 {marker_i + 1} 截断或曲线表越界（偏移 0x{marker:x}）",
+            ))
             continue
         window = decode_display_window(data, marker, window_index)
         if window is None:
-            diagnostics.append(
-                f"显示块 {marker_i + 1} 截断或曲线表越界（偏移 0x{marker:x}）"
-            )
+            diagnostics.append(format_wwt_issue(
+                CODE_TRUNCATED_WINDOW,
+                f"显示块 {marker_i + 1} 截断或曲线表越界（偏移 0x{marker:x}）",
+            ))
             continue
         valid_curves: list[WwtCurveDisplay] = []
         for curve in window.curves:
             if curve.record_index >= len(records):
-                diagnostics.append(
+                diagnostics.append(format_wwt_issue(
+                    CODE_UNKNOWN_RECORD,
                     f"显示块 {marker_i + 1} 曲线引用未知记录 "
-                    f"{curve.record_index}"
-                )
+                    f"{curve.record_index}",
+                ))
                 continue
             valid_curves.append(curve)
         windows.append(WwtDisplayWindow(
@@ -357,10 +448,12 @@ def parse_wwt_document(fp: str | Path) -> WwtDocument:
         ))
         window_index += 1
 
+    catalog = tuple(records)
+    attach_wwt_record_store(groups, catalog)
     return WwtDocument(
         path=path,
         version=version,
-        records=tuple(records),
+        records=catalog,
         groups=tuple(groups),
         windows=tuple(windows),
         diagnostics=tuple(diagnostics),
@@ -373,6 +466,10 @@ def _copy_groups(groups: tuple[dict, ...] | list[dict]) -> list[dict]:
         smeta = dict(group["source_metadata"])
         smeta["skipped_channels"] = list(smeta.get("skipped_channels") or [])
         smeta["renamed_channels"] = list(smeta.get("renamed_channels") or [])
+        smeta["wwt_auxiliary_records"] = [
+            dict(item) if isinstance(item, dict) else item
+            for item in smeta.get("wwt_auxiliary_records") or []
+        ]
         copied.append({
             "data": group["data"].copy(),
             "channels": list(group["channels"]),
@@ -463,6 +560,7 @@ def load_wwt_document(fp: str | Path) -> WwtLoadResult:
         parsed.records, strict=False
     )
     groups = _inject_derived_channels(_copy_groups(parsed.groups), records)
+    attach_wwt_record_store(groups, records)
     document = WwtDocument(
         path=parsed.path,
         version=parsed.version,
