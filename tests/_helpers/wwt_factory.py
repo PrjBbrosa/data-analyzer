@@ -675,6 +675,49 @@ def shared_axis_evaluation_before_owner(
     return _emit(write_wwt_bytes(records, windows), path)
 
 
+def two_window_non_overlap(path=None) -> Path | bytes:
+    """Two visible windows with distinct non-overlapping millimetre rects."""
+    n = CHANNEL_N
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", MEAS_Y, MEAS_Y_UNIT, n=n,
+            values=_linspace(MEAS_Y_LO, MEAS_Y_HI, n),
+        ),
+    )
+    chan_y = _y_curve(
+        2, f"{CHAN_Y} [{CHAN_Y_UNIT}]", CHAN_Y_LO, CHAN_Y_HI,
+        x_record_index=1, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+        color=CHAN_Y_COLOR,
+    )
+    meas_y = _y_curve(
+        3, f"{MEAS_Y} [{MEAS_Y_UNIT}]", MEAS_Y_LO, MEAS_Y_HI,
+        x_record_index=1, tick=MEAS_Y_TICK, grid=MEAS_Y_GRID,
+        color=CHAN_Y_COLOR,
+    )
+    axis = _axis_curve(
+        f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+        x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A, global_x=1, x_axis=axis, curves=(chan_y,),
+        ),
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_B, global_x=1, x_axis=axis, curves=(meas_y,),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
 def valid_and_zero_width_windows(path=None) -> Path | bytes:
     """One usable window plus a structurally valid ``right == left`` block."""
     n = CHANNEL_N

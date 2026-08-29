@@ -200,6 +200,41 @@ def rename_board(
     return []
 
 
+def board_is_empty(board: UltraViewBoardState) -> bool:
+    """True when a Board has no cards, tray items, or author objects."""
+    return (
+        not board.placements
+        and not board.free_grid
+        and not board.unplaced
+        and not board.author_objects
+    )
+
+
+def unique_board_name(
+    workspace: UltraViewWorkspaceState,
+    stem: str,
+    *,
+    ignore_board_id: str | None = None,
+) -> str:
+    """Return ``stem``, or ``stem (2)`` / ``(3)`` / … when that name is taken.
+
+    ``ignore_board_id`` is the Board being renamed onto ``stem``: its current
+    name is not a collision with the new name.
+    """
+    cleaned = str(stem or "").strip() or DEFAULT_BOARD_NAME
+    taken = {
+        board.name
+        for board in workspace.boards
+        if ignore_board_id is None or board.board_id != ignore_board_id
+    }
+    if cleaned not in taken:
+        return cleaned
+    index = 2
+    while f"{cleaned} ({index})" in taken:
+        index += 1
+    return f"{cleaned} ({index})"
+
+
 def delete_board(workspace: UltraViewWorkspaceState, board_id: str) -> list[str]:
     index = _board_index(workspace, str(board_id))
     if index is None:
@@ -616,6 +651,40 @@ def _iter_safety_origins(col_span: int, row_span: int):
     for row in range(SAFETY_ROW_MIN, SAFETY_ROW_MAX - row_span + 1):
         for column in range(SAFETY_COLUMN_MIN, SAFETY_COLUMN_MAX - col_span + 1):
             yield column, row
+
+
+def nearest_unoccupied_origin(
+    occupied: Sequence[GridRect],
+    span: tuple[int, int],
+    origin: GridRect,
+) -> GridRect | None:
+    """Nearest legal origin by Manhattan ``|dcol|+|drow|``.
+
+    Ties pick the smaller ``(row, column)`` (top-to-bottom, left-to-right).
+    Span is preserved; neighbours are never moved or rescaled.
+    """
+    prototype = _legal_grid_rect(
+        {
+            "column": int(origin.column),
+            "row": int(origin.row),
+            "column_span": int(span[0]),
+            "row_span": int(span[1]),
+        }
+    )
+    if prototype is None:
+        return None
+    col_span = prototype.column_span
+    row_span = prototype.row_span
+    best: tuple[int, int, int, GridRect] | None = None
+    for column, row in _iter_safety_origins(col_span, row_span):
+        candidate = GridRect(column, row, col_span, row_span)
+        if any(_grid_overlaps(candidate, rect) for rect in occupied):
+            continue
+        distance = abs(column - origin.column) + abs(row - origin.row)
+        key = (distance, row, column, candidate)
+        if best is None or key[:3] < best[:3]:
+            best = key
+    return None if best is None else best[3]
 
 
 def _iter_first_free_origins(col_span: int, row_span: int):

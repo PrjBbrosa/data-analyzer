@@ -8,6 +8,7 @@ and keeps façade delegates. Capture, PreviewStore, and sidecar live on
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -25,6 +26,7 @@ from ...ultraview_core.board_ops import (
     apply_board_placement,
     apply_native_layout,
     apply_free_grid_preset,
+    board_is_empty,
     capture_board_placement,
     create_board,
     delete_board,
@@ -35,6 +37,7 @@ from ...ultraview_core.board_ops import (
     mark_workspace_mutated,
     membership_set,
     move_to_unplaced,
+    nearest_unoccupied_origin,
     nudge_ratio,
     organize_free_grid,
     place_from_unplaced,
@@ -54,6 +57,7 @@ from ...ultraview_core.board_ops import (
     set_workspace_show_card_actions,
     swap_slots,
     template_to_free_grid,
+    unique_board_name,
 )
 from ...ultraview_core.model import (
     DEFAULT_BOARD_NAME,
@@ -119,6 +123,7 @@ from ..chart_stack.ultraview.card_fit import (
 from ..chart_stack.ultraview.free_grid import (
     LAYOUT_ARRANGE,
     plan_auto_arrange,
+    rects_overlap,
     screen_grid_metrics,
 )
 from ..chart_stack.ultraview.layouts import (
@@ -137,6 +142,12 @@ _NATIVE_LAYOUT_SILENT_CODES = frozenset({
     "duplicate_ref",
     "invalid_rect",
 })
+_PENDING_AUTO_ASPECT = "auto_aspect"
+_PENDING_NATIVE_CARD_FIT = "native_card_fit"
+_BOARD_LIMIT_TOAST = (
+    "时域 View 已创建，但 Board 已达 20 个上限，未加入 UltraView。"
+    "请删除一个 Board 后手动加入。"
+)
 
 
 def _alive(obj) -> bool:
@@ -176,6 +187,10 @@ class _PendingAutoAspect:
     inserted_rect: GridRect
     layout_revision: int
     merge_add: bool = True
+    kind: str = _PENDING_AUTO_ASPECT
+    group_id: str = ""
+    sequence: int = 0
+    group_refs: tuple[UltraViewRef, ...] = ()
 
 
 def _visible_widget_height(widget) -> int:
@@ -298,44 +313,84 @@ class UltraViewWorkspaceController:
                 self._register_pending_auto_aspect(board, ref, item.rect)
 
     def apply_native_layout_plan(
-        self, plan
+        self,
+        plan,
+        *,
+        board_name: str | None = None,
+        dedicated_board: bool = False,
+        reuse_empty_board: bool = True,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Commit a native layout plan through the single mutation funnel.
 
         Returns ``(placed_view_ids_this_call, warnings)``.  Ids are the time
         refs actually landed on the free-grid this call, not every time card
         already on the Board.
+
+        ``dedicated_board=True`` resolves the target Board once from a
+        workspace snapshot: reuse the current empty Board or ``create_board``.
+        A 20-Board cap returns ``board_limit`` and mutates nothing.
         """
         if self._inactive():
             return (), ()
-        board = active_board(self._workspace)
-        before = self._placement_snapshot(board)
-        if board.layout_mode == LAYOUT_MODE_FREE_GRID:
+        workspace = self._workspace
+        current = next(
+            (
+                board
+                for board in workspace.boards
+                if board.board_id == workspace.active_board_id
+            ),
+            None,
+        )
+        if current is None:
+            current = active_board(workspace)
+        target = current
+        if dedicated_board:
+            reuse = bool(reuse_empty_board) and board_is_empty(current)
+            unique = unique_board_name(
+                workspace,
+                board_name or "WinWert",
+                ignore_board_id=current.board_id if reuse else None,
+            )
+            if reuse:
+                rename_board(workspace, current.board_id, unique)
+                if current.layout_mode != LAYOUT_MODE_FREE_GRID:
+                    template_to_free_grid(current)
+                target = current
+            else:
+                created = create_board(workspace, name=unique)
+                if created is None:
+                    self._toast(_BOARD_LIMIT_TOAST, "warning")
+                    return (), ("board_limit",)
+                target = created
+            set_active_board(workspace, target.board_id)
+        before = self._placement_snapshot(target)
+        if target.layout_mode == LAYOUT_MODE_FREE_GRID:
             already_placed = {
                 item.ref.view_id
-                for item in board.free_grid
+                for item in target.free_grid
                 if item.ref.section == "time"
             }
         else:
             already_placed = {
                 item.ref.view_id
-                for item in board.placements
+                for item in target.placements
                 if item.ref.section == "time"
             }
-        warnings = apply_native_layout(board, plan)
+        warnings = apply_native_layout(target, plan)
         # ``apply_native_layout`` can intentionally place the usable cards and
         # return warnings for the remainder (for example an exact overlap goes
         # to the unplaced tray).  Commit that complete Board result before
         # reporting the warnings; routing them through ``_commit_grid_change``
         # would return early after the mutation and skip history/dirty/refresh.
-        self._commit_grid_change(board, before, [])
+        self._commit_grid_change(target, before, [])
         if warnings:
             self._toast_grid_warnings(warnings)
         placed_this_call = tuple(
             item.ref.view_id
-            for item in board.free_grid
+            for item in target.free_grid
             if item.ref.section == "time" and item.ref.view_id not in already_placed
         )
+        self._register_pending_native_card_fits(target, plan, placed_this_call)
         return placed_this_call, tuple(warnings)
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
@@ -520,8 +575,10 @@ class UltraViewWorkspaceController:
             or current.rect.row_span != wanted.row_span
         )
         warnings = set_free_grid_rect(board, ref, wanted)
-        if not warnings and span_changed:
-            self._cancel_pending_for_ref(board.board_id, ref)
+        if not warnings:
+            self._cancel_pending_after_rect_write(
+                board.board_id, ref, wanted, span_changed=span_changed
+            )
         self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_group_geometry(self, updates) -> None:
@@ -555,8 +612,14 @@ class UltraViewWorkspaceController:
         ]
         warnings = set_free_grid_rects(board, parsed)
         if not warnings:
-            for ref in span_changed:
-                self._cancel_pending_for_ref(board.board_id, ref)
+            span_changed_set = set(span_changed)
+            for ref, wanted in parsed:
+                self._cancel_pending_after_rect_write(
+                    board.board_id,
+                    ref,
+                    wanted,
+                    span_changed=ref in span_changed_set,
+                )
         self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_preset(self, section: str, view_id: str, preset: str) -> None:
@@ -964,6 +1027,9 @@ class UltraViewWorkspaceController:
         if "membership_limit" in codes:
             self._toast(text_for_key(MEMBERSHIP_CAP), "warning")
             return
+        if "board_limit" in codes:
+            self._toast(_BOARD_LIMIT_TOAST, "warning")
+            return
         leftover = [
             item for item in warnings
             if item.split(":", 1)[0] not in _NATIVE_LAYOUT_SILENT_CODES
@@ -1097,6 +1163,57 @@ class UltraViewWorkspaceController:
             merge_add=True,
         )
 
+    def _register_pending_native_card_fits(
+        self, board: UltraViewBoardState, plan, placed_view_ids: tuple[str, ...]
+    ) -> None:
+        placed_ids = set(placed_view_ids)
+        items = []
+        for ref, _rect in getattr(plan, "placed", ()) or ():
+            if ref.view_id not in placed_ids:
+                continue
+            item = free_grid_placement_for(board, ref)
+            if item is not None:
+                items.append(item)
+        if not items:
+            return
+        group_id = uuid.uuid4().hex
+        group_refs = tuple(item.ref for item in items)
+        revision = self._current_layout_revision(board.board_id)
+        for sequence, item in enumerate(items):
+            self._pending_auto_aspect[(board.board_id, item.ref)] = _PendingAutoAspect(
+                board_id=board.board_id,
+                ref=item.ref,
+                inserted_rect=item.rect,
+                layout_revision=revision,
+                merge_add=True,
+                kind=_PENDING_NATIVE_CARD_FIT,
+                group_id=group_id,
+                sequence=sequence,
+                group_refs=group_refs,
+            )
+        for item in items:
+            if self._preview_fit_image_size(item.ref) is not None:
+                self._maybe_apply_pending_auto_aspect(item.ref)
+                break
+
+    def _cancel_pending_after_rect_write(
+        self,
+        board_id: str,
+        ref: UltraViewRef,
+        new_rect: GridRect,
+        *,
+        span_changed: bool,
+    ) -> None:
+        token = self._pending_auto_aspect.get((str(board_id), ref))
+        if token is None:
+            return
+        if token.kind == _PENDING_NATIVE_CARD_FIT:
+            if new_rect != token.inserted_rect:
+                self._cancel_pending_for_ref(board_id, ref)
+            return
+        if span_changed:
+            self._cancel_pending_for_ref(board_id, ref)
+
     def _cancel_pending_for_ref(self, board_id: str, ref: UltraViewRef) -> None:
         self._pending_auto_aspect.pop((str(board_id), ref), None)
 
@@ -1133,8 +1250,117 @@ class UltraViewWorkspaceController:
             for token in tuple(self._pending_auto_aspect.values())
             if token.ref == ref
         ]
+        native_groups: list[str] = []
         for token in matching:
+            if token.kind == _PENDING_NATIVE_CARD_FIT:
+                group_id = token.group_id or token.ref.view_id
+                if group_id not in native_groups:
+                    native_groups.append(group_id)
+                continue
             self._apply_one_pending_auto_aspect(token)
+        for group_id in native_groups:
+            self._apply_pending_native_card_fit_group(group_id)
+
+    def _apply_pending_native_card_fit_group(self, group_id: str) -> None:
+        tokens = sorted(
+            (
+                token
+                for token in tuple(self._pending_auto_aspect.values())
+                if token.kind == _PENDING_NATIVE_CARD_FIT
+                and (token.group_id or token.ref.view_id) == group_id
+            ),
+            key=lambda token: token.sequence,
+        )
+        if not tokens:
+            return
+        board = next(
+            (
+                item
+                for item in self._workspace.boards
+                if item.board_id == tokens[0].board_id
+            ),
+            None,
+        )
+        if board is None or board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            for token in tokens:
+                self._cancel_pending_for_ref(token.board_id, token.ref)
+            return
+        group_refs = set(tokens[0].group_refs) if tokens[0].group_refs else {
+            token.ref for token in tokens
+        }
+        live = {item.ref: item.rect for item in board.free_grid}
+        updates: list[tuple[UltraViewRef, GridRect]] = []
+        drop: list[_PendingAutoAspect] = []
+        merge_add = False
+        for token in tokens:
+            if token.layout_revision != self._current_layout_revision(board.board_id):
+                self._cancel_pending_for_ref(token.board_id, token.ref)
+                continue
+            current = live.get(token.ref)
+            if current is None or current != token.inserted_rect:
+                self._cancel_pending_for_ref(token.board_id, token.ref)
+                continue
+            image_size = self._preview_fit_image_size(token.ref)
+            if image_size is None:
+                continue
+            item = free_grid_placement_for(board, token.ref)
+            if item is None:
+                self._cancel_pending_for_ref(token.board_id, token.ref)
+                continue
+            occupied_for_span = tuple(
+                rect
+                for ref, rect in live.items()
+                if ref != token.ref and ref not in group_refs
+            )
+            facts = replace(
+                self._card_fit_facts_for(board, item, image_size),
+                occupied=occupied_for_span,
+            )
+            fitted = solve_card_fit(facts).candidate
+            occupied_for_move = tuple(
+                rect for ref, rect in live.items() if ref != token.ref
+            )
+            if any(rects_overlap(fitted, other) for other in occupied_for_move):
+                moved = nearest_unoccupied_origin(
+                    occupied_for_move,
+                    (fitted.column_span, fitted.row_span),
+                    fitted,
+                )
+                if moved is None:
+                    drop.append(token)
+                    continue
+                fitted = moved
+            live[token.ref] = fitted
+            if fitted != token.inserted_rect:
+                updates.append((token.ref, fitted))
+            drop.append(token)
+            merge_add = merge_add or token.merge_add
+        if updates:
+            warnings = set_free_grid_rects(board, updates)
+            if warnings:
+                return
+            after = self._placement_snapshot(board)
+            if merge_add:
+                history = self._grid_histories.get(board.board_id)
+                if (
+                    history is not None
+                    and history.undo
+                    and isinstance(history.undo[-1], _GridHistoryEntry)
+                ):
+                    last = history.undo[-1]
+                    replacement = _GridHistoryEntry(
+                        last.before, after, kind=last.kind
+                    )
+                    history.undo[-1] = replacement
+                    history.undo_bytes += (
+                        self._history_entry_byte_cost(replacement)
+                        - self._history_entry_byte_cost(last)
+                    )
+                    self._clear_history_redo(history)
+        for token in drop:
+            self._pending_auto_aspect.pop((token.board_id, token.ref), None)
+        if updates:
+            self._after_board_mutation()
 
     def _apply_one_pending_auto_aspect(self, token: _PendingAutoAspect) -> None:
         self._pending_auto_aspect.pop((token.board_id, token.ref), None)

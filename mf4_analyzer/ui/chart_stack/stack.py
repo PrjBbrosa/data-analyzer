@@ -148,9 +148,9 @@ class ChartStack(QWidget):
         # ``canvas_fft`` / ``_fft_card`` etc. survive as @property aliases onto
         # pane 0 so the large existing call surface stays unchanged (single-pane
         # behaviour == pre-V7).
-        # Per-section analysis ViewManagers. Cap matches time-domain
-        # (view_state.MAX_VIEWS): one shared ViewTabBar implementation, one
-        # ceiling — only state_factory / split semantics differ per section.
+        # Per-section analysis ViewManagers. Cap is MAX_VIEWS (12);
+        # time-domain uses TIME_DOMAIN_MAX_VIEWS (24) on MainWindow's
+        # view_manager. ViewTabBar reads the instance cap.
         from ..view_state import MAX_VIEWS
         self.analysis_managers = {
             'fft': ViewManager(

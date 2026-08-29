@@ -23,14 +23,15 @@ from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 from .time_curve_bindings import TimeCurveBinding, parse_curve_bindings
 from .view_overlay_state import normalize_cursor_placement, normalize_remarks
 
-# Default per-manager View cap. The real cap is per ViewManager instance
-# (``max_views``); this is the shared product default for every section —
-# time-domain workspace and the four analysis managers all use 12. Narrow
-# bars still degrade via ViewTabBar's roomy → compact → overflow path.
+# Analysis-section and compatibility default. The real cap is per
+# ViewManager instance (``max_views``); time-domain uses
+# TIME_DOMAIN_MAX_VIEWS. Narrow bars still degrade via ViewTabBar's
+# roomy → compact → overflow path.
 MAX_VIEWS = 12
+TIME_DOMAIN_MAX_VIEWS = 24  # time-domain workspace only
 
 # Open Color hues, 12 entries so a 12-View section gets pairwise-distinct tab
-# dots via ``_PALETTE[idx % len(_PALETTE)]``. The FIRST SIX MUST NOT CHANGE in
+# dots. Indexes 12–23 cycle the same 12. The FIRST SIX MUST NOT CHANGE in
 # value or order: archived projects store the resolved color in
 # ViewState.tab_color, so re-ordering them would make View 1-6 of an old file
 # disagree with a freshly created one.
@@ -38,6 +39,11 @@ _PALETTE = [
     "#2d7ff9", "#e8590c", "#2f9e44", "#9c36b5", "#e03131", "#1098ad",
     "#f08c00", "#c2255c", "#5c940d", "#5f3dc4", "#0ca678", "#495057",
 ]
+
+
+def default_view_tab_color(index: int) -> str:
+    """Palette color for a View at ``index`` (0-based). Cycles every 12."""
+    return _PALETTE[index % len(_PALETTE)]
 
 
 ChannelKey = tuple[str, str]
@@ -212,7 +218,7 @@ class ViewManager(QObject):
     def _make(self, idx: int):
         return self._state_factory(
             name=f"View {idx + 1}",
-            tab_color=_PALETTE[idx % len(_PALETTE)],
+            tab_color=default_view_tab_color(idx),
         )
 
     def get(self, idx: int) -> ViewState:

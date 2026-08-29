@@ -272,7 +272,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "lead", "html": "TraceLab 把「打开测量数据 → 看图分析 → 导出结果」连成一条龙；还能直接连设备，边录边看。下面六件事，是你最常用到的。" },
         { "type": "cards", "cols": 3, "items": [
           { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4、MDF、WWT、ZFD、MAT、ASCII、TDMS、表格、BLF、HEAD .hdf 和音视频等；拖进来就能用。" },
-          { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看；最多新建 12 个 View，随手拖动、放大查看细节。" },
+          { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看；最多新建 24 个 View，随手拖动、放大查看细节。" },
           { "no": "03", "h": "看信号里的频率", "p": "一键 FFT，找出振动或噪声里主要是哪些频率。" },
           { "no": "04", "h": "看转速相关的振动", "p": "阶次分析，专为发动机、电机这类会转的设备准备。", "accent": "teal" },
           { "no": "05", "h": "一批文件批量处理", "p": "一次给很多文件做同样的分析，自动出图、出表。", "accent": "teal" },
@@ -293,7 +293,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "先认准常用格式",
             "pills": [".mf4", ".mdf", ".wwt", ".zfd", ".mat", ".csv", ".xlsx", ".xls"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。" ] } ] }
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。多窗口会同步到以文件名命名的独立 Board；单窗口只生成时域 View。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。" ] } ] }
       ] },
 
     { "id": "load-more-formats", "sec": "第一步", "kicker": "STEP 1 · MORE FILES", "title": "更多格式，按<c>可靠时基</c>读取", "foot": "支持的文件（续）", "density": "compact",

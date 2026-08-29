@@ -29,16 +29,18 @@ def _stub_wwt_ui(mw, monkeypatch, accept=True, *, projected=None):
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
     if projected is None:
         monkeypatch.setattr(
-            mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
+            mw._ultraview,
+            "add_time_views_from_native_layout",
+            lambda items, **_kwargs: (),
         )
     else:
         real = mw._ultraview.add_time_views_from_native_layout
 
-        def _capture(items):
+        def _capture(items, **kwargs):
             projected.append(tuple(
                 (str(view_id), rect) for view_id, rect in items
             ))
-            return real(items)
+            return real(items, **kwargs)
 
         monkeypatch.setattr(
             mw._ultraview, "add_time_views_from_native_layout", _capture
@@ -94,16 +96,42 @@ def test_layout_dialog_text_matches_multi_window_copy(tmp_path):
         f"{wwt.MULTI_FORMULA_COUNT} 个可用计算通道。"
     ) in body
     assert (
-        f"可按原排版生成 {wwt.MULTI_WINDOW_COUNT} 个时域 View，并同步加入 UltraView。"
+        f"可按原排版生成 {wwt.MULTI_WINDOW_COUNT} 个时域 View，并同步到独立 Board。"
     ) in body
+    assert "仅生成时域 View" not in body
+    assert "同步加入 UltraView" not in body
     assert "重叠" in body
     assert "第 3 个窗口与第 2 个" in body
     assert informative == ""
     capped, info = layout_dialog_text(
         loaded.document, proposals, available=1
     )
-    assert "可按原排版生成 1 个时域 View" in capped
+    assert "可按原排版生成 1 个时域 View，仅生成时域 View。" in capped
+    assert "同步到独立 Board" not in capped
+    assert "同步加入 UltraView" not in capped
     assert info == f"检测到 {wwt.MULTI_WINDOW_COUNT} 个，可创建 1 个"
+
+
+def test_layout_dialog_text_single_window_does_not_promise_ultraview(tmp_path):
+    from mf4_analyzer.io.wwt_document import load_wwt_document
+    from mf4_analyzer.ui.wwt_view_import import (
+        build_wwt_view_proposals,
+        register_groups_for_test,
+    )
+
+    loaded = load_wwt_document(
+        wwt.channel_xy_with_auxiliaries(tmp_path / "one.wwt")
+    )
+    proposals = build_wwt_view_proposals(
+        loaded.document, register_groups_for_test(loaded.groups, owner_fid="f1")
+    )
+    body, informative = layout_dialog_text(
+        loaded.document, proposals, available=MAX_VIEWS
+    )
+    assert "仅生成时域 View" in body
+    assert "同步加入 UltraView" not in body
+    assert "同步到独立 Board" not in body
+    assert informative == ""
 
 
 def test_layout_dialog_text_counts_visible_y_windows_not_kept_proposals(tmp_path):
@@ -304,7 +332,9 @@ def test_save_reopen_keeps_record_only_y_bindings(qapp, tmp_path, monkeypatch):
 
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", fail_if_called)
     monkeypatch.setattr(
-        restored._ultraview, "add_time_views_from_native_layout", lambda items: ()
+        restored._ultraview,
+        "add_time_views_from_native_layout",
+        lambda items, **_kwargs: (),
     )
     monkeypatch.setattr(restored, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(restored, "_apply_active_view", lambda *a, **k: None)

@@ -351,6 +351,8 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         # 58030e4d: same priority 70 as coaxis.merge; registry order wins.
         "channel.export_wwt_storage",
         "coaxis.merge",
+        # Same priority 65 as view.compact_tabs; registry order wins.
+        "file.wwt_native_layout",
         "view.compact_tabs",
         "ultraview.view_rail",
         "ultraview.add_from_tab",

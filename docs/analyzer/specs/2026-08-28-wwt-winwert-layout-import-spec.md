@@ -9,6 +9,8 @@
   [`2026-08-28-wwt-import-correctness-followup-plan.md`](../plans/2026-08-28-wwt-import-correctness-followup-plan.md)
 - 第二轮加固（2026-08-29 保真回归与投影边界，已实施，见配套规格）：
   [`2026-08-29-wwt-import-fidelity-and-projection-hardening-spec.md`](2026-08-29-wwt-import-fidelity-and-projection-hardening-spec.md)
+- 后续产品合同（多窗口独立 Board、毫米非等距换算、时域 24 View；不回溯改写本文）：
+  [`2026-08-29-wwt-multi-board-layout-fit-and-24-views-spec.md`](2026-08-29-wwt-multi-board-layout-fit-and-24-views-spec.md)
 - 产品范围：TraceLab WWT 导入、时域 View、UltraView、项目保存与恢复
 - 既有相关规格：
   [`2026-08-11-wwt-export-dual-compat-spec.md`](2026-08-11-wwt-export-dual-compat-spec.md)

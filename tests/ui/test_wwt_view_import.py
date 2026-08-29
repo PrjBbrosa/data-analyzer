@@ -28,6 +28,15 @@ def _proposals(path):
     return build_wwt_view_proposals(loaded.document, registered), registered, loaded
 
 
+def test_wwt_proposals_do_not_pin_a_shared_tab_color(tmp_path):
+    proposals, _registered, _loaded = _proposals(
+        wwt.two_window_non_overlap(tmp_path / "two.wwt")
+    )
+    assert len(proposals) == 2
+    colors = [item.state.tab_color for item in proposals]
+    assert colors != ["#2d7ff9"] * len(proposals)
+
+
 def test_channel_xy_proposal_uses_only_registered_y_and_winwert_color(tmp_path):
     proposals, registered, _loaded = _proposals(
         wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")

@@ -137,6 +137,46 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert mw2.chart_stack.current_mode() == "time"
 
 
+def test_project_roundtrip_preserves_twenty_four_time_domain_views(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.view_state import (
+        MAX_VIEWS,
+        TIME_DOMAIN_MAX_VIEWS,
+        default_view_tab_color,
+    )
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a)
+    proj = tmp_path / "td24.tlproj"
+
+    mw = MainWindow()
+    assert mw.view_manager.max_views == TIME_DOMAIN_MAX_VIEWS
+    mw._load_one(str(csv_a))
+    while mw.view_manager.new_view() != -1:
+        pass
+    assert len(mw.view_manager.views) == TIME_DOMAIN_MAX_VIEWS
+    assert mw.view_manager.new_view() == -1
+    names = []
+    colors = []
+    for idx, view in enumerate(mw.view_manager.views):
+        name = f"TD {idx + 1}"
+        mw.view_manager.rename(idx, name)
+        names.append(name)
+        colors.append(view.tab_color)
+        assert view.tab_color == default_view_tab_color(idx)
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+    assert mw2.view_manager.max_views == TIME_DOMAIN_MAX_VIEWS
+    assert [view.name for view in mw2.view_manager.views] == names
+    assert [view.tab_color for view in mw2.view_manager.views] == colors
+    assert mw2.view_manager.new_view() == -1
+    assert set(mw2.analysis_managers) == {"fft", "fft_time", "frf", "order"}
+    for section, manager in mw2.analysis_managers.items():
+        assert manager.max_views == MAX_VIEWS, section
+
+
 def test_project_roundtrip_preserves_navigator_file_and_channel_order(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
 

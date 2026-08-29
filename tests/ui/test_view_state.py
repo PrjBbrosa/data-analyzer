@@ -1,6 +1,12 @@
 import json
 
-from mf4_analyzer.ui.view_state import ViewState
+from mf4_analyzer.ui.view_state import (
+    MAX_VIEWS,
+    TIME_DOMAIN_MAX_VIEWS,
+    ViewManager,
+    ViewState,
+    default_view_tab_color,
+)
 from mf4_analyzer.ui.project_io import remap_view_fids
 
 
@@ -200,3 +206,24 @@ def test_viewstate_to_dict_keeps_placement_when_cursor_mode_is_off():
     again = ViewState.from_dict(payload)
     assert again.cursor_mode == "off"
     assert again.cursor_placement == {"ax": 1.0, "bx": 2.0}
+
+
+def test_time_domain_cap_is_twenty_four_and_analysis_default_stays_twelve():
+    assert MAX_VIEWS == 12
+    assert TIME_DOMAIN_MAX_VIEWS == 24
+    assert ViewManager().max_views == MAX_VIEWS
+    assert ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS).max_views == 24
+
+
+def test_default_view_tab_color_matches_make_and_cycles_every_twelve():
+    manager = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+    first_twelve = [default_view_tab_color(i) for i in range(12)]
+    second_twelve = [default_view_tab_color(i) for i in range(12, 24)]
+
+    assert first_twelve == second_twelve
+    assert first_twelve[:6] == [
+        "#2d7ff9", "#e8590c", "#2f9e44", "#9c36b5", "#e03131", "#1098ad",
+    ]
+    assert len(set(first_twelve)) == 12
+    for idx in range(TIME_DOMAIN_MAX_VIEWS):
+        assert default_view_tab_color(idx) == manager._make(idx).tab_color

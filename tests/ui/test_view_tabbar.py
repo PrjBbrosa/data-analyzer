@@ -13,7 +13,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager, ViewState
+from mf4_analyzer.ui.view_state import (
+    MAX_VIEWS,
+    TIME_DOMAIN_MAX_VIEWS,
+    ViewManager,
+    ViewState,
+)
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
 
 
@@ -298,7 +303,7 @@ def test_refresh_fit_calls_sync_tabbar_width(qtbot):
 
 def test_plus_button_follows_the_managers_own_cap_not_the_module_constant(qtbot):
     # Cap must differ from MAX_VIEWS so we prove the bar reads the instance,
-    # not the module default (both are 12 in the product today).
+    # not the module default (analysis default 12, time-domain 24).
     manager = ViewManager(max_views=4)
     for _ in range(2):
         manager.new_view()
@@ -345,6 +350,18 @@ def test_plus_button_falls_back_to_module_cap_when_manager_has_no_max_views(qtbo
     while len(manager.views) < MAX_VIEWS:
         manager.add()
 
+    assert not plus.isEnabled()
+
+
+def test_plus_button_disabled_at_time_domain_instance_cap(qtbot):
+    manager = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+    while manager.new_view() != -1:
+        pass
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    plus = bar.findChild(QPushButton, "viewTabPlus")
+
+    assert len(manager.views) == TIME_DOMAIN_MAX_VIEWS
     assert not plus.isEnabled()
 
 
@@ -998,6 +1015,83 @@ def test_section_anchor_and_split_actions_are_both_fixed_budget_siblings(qtbot):
         bar._split_clear,
     ):
         assert bar.rect().contains(widget.geometry())
+
+
+def test_time_domain_cap_overflow_keeps_active_visible_and_lists_all(
+    qtbot, monkeypatch
+):
+    manager = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+    while len(manager.views) < TIME_DOMAIN_MAX_VIEWS:
+        manager.new_view()
+    last = TIME_DOMAIN_MAX_VIEWS - 1
+    manager.set_active(last)
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    bar.resize(4000, 28)
+    bar.show()
+    QApplication.processEvents()
+    switches = []
+    bar.switch_requested.connect(switches.append)
+    _roomy, compact, _overhead = _measure(bar)
+
+    _resize_to_budget(bar, compact // 2)
+
+    tabs = bar.tabBar()
+    assert bar.overflow_indices()
+    assert tabs.isTabVisible(last)
+    assert last not in bar.overflow_indices()
+    assert tabs.currentIndex() == last
+    assert switches == []
+    assert bar._overflow.isVisible()
+    assert bar._overflow.text().startswith("»")
+
+    captured = {}
+
+    def fake_exec(menu, *_args):
+        captured["menu"] = menu
+        return None
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_overflow_clicked()
+
+    actions = captured["menu"].actions()
+    assert [action.text() for action in actions] == [view.name for view in manager.views]
+    assert actions[last].isChecked()
+
+
+def test_time_domain_cap_reorder_duplicate_and_delete(qtbot):
+    manager = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+    while len(manager.views) < TIME_DOMAIN_MAX_VIEWS - 1:
+        manager.new_view()
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    bar.reorder_requested.connect(manager.reorder)
+    bar.duplicate_requested.connect(manager.duplicate)
+    bar.delete_requested.connect(manager.delete_view)
+    plus = bar.findChild(QPushButton, "viewTabPlus")
+
+    assert len(manager.views) == TIME_DOMAIN_MAX_VIEWS - 1
+    assert plus.isEnabled()
+
+    names_before = [view.name for view in manager.views]
+    bar.tabBar().moveTab(0, 2)
+    QApplication.processEvents()
+    expected = names_before[1:3] + [names_before[0]] + names_before[3:]
+    assert [view.name for view in manager.views] == expected
+    assert [bar.tabBar().tabText(i) for i in range(bar.count())] == expected
+
+    bar.duplicate_requested.emit(0)
+    QApplication.processEvents()
+    assert len(manager.views) == TIME_DOMAIN_MAX_VIEWS
+    assert manager.views[1].name.endswith("副本")
+    assert not plus.isEnabled()
+    assert manager.duplicate(0) == -1
+
+    bar.delete_requested.emit(1)
+    QApplication.processEvents()
+    assert len(manager.views) == TIME_DOMAIN_MAX_VIEWS - 1
+    assert plus.isEnabled()
+    assert bar.count() == len(manager.views)
 
 
 def test_section_context_menu_add_to_ultraview_emits_stable_ref(qtbot, monkeypatch):

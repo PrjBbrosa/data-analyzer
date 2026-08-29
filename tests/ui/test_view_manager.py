@@ -1,7 +1,12 @@
 import pytest
 from PyQt5.QtCore import QObject
 
-from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager
+from mf4_analyzer.ui.view_state import (
+    MAX_VIEWS,
+    TIME_DOMAIN_MAX_VIEWS,
+    ViewManager,
+    default_view_tab_color,
+)
 
 # The six colors shipped before the palette grew to 12. Archived projects store
 # these in ViewState.tab_color, so View 1-6 must keep resolving to them.
@@ -392,8 +397,8 @@ def test_get_rejects_negative_and_out_of_range_indexes():
 
 
 # --- per-instance View cap -------------------------------------------------
-# The cap is per manager: the time-domain section runs at 12 while the FFT /
-# fft_time / order managers keep the module default.
+# The cap is per manager: time-domain uses TIME_DOMAIN_MAX_VIEWS; FFT /
+# fft_time / order / frf keep the MAX_VIEWS default.
 
 
 def test_new_view_honors_raised_instance_cap():
@@ -460,3 +465,30 @@ def test_twelve_views_get_pairwise_distinct_tab_colors():
     colors = [v.tab_color for v in m.views]
     assert len(colors) == 12
     assert len(set(colors)) == 12
+
+
+def test_time_domain_cap_allows_twenty_four_views_and_rejects_the_twenty_fifth():
+    m = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+
+    for expected_idx in range(1, TIME_DOMAIN_MAX_VIEWS):
+        assert m.new_view() == expected_idx
+
+    assert len(m.views) == TIME_DOMAIN_MAX_VIEWS
+    assert TIME_DOMAIN_MAX_VIEWS == 24
+    assert m.new_view() == -1
+    assert len(m.views) == TIME_DOMAIN_MAX_VIEWS
+
+
+def test_time_domain_palette_cycles_twelve_colors_and_keeps_legacy_first_six():
+    m = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+    while m.new_view() != -1:
+        pass
+
+    colors = [view.tab_color for view in m.views]
+    assert colors[:6] == _LEGACY_PALETTE
+    assert colors[:12] == colors[12:24]
+    assert len(set(colors[:12])) == 12
+    for idx, view in enumerate(m.views):
+        expected = default_view_tab_color(idx)
+        assert view.tab_color == expected
+        assert m._make(idx).tab_color == expected

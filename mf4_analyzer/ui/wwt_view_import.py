@@ -371,7 +371,7 @@ def build_wwt_view_proposals(
         }
         state = ViewState(
             name=name,
-            tab_color="#2d7ff9",
+            tab_color="",
             attached_file_ids=list(registered.fids),
             checked=checked,
             colors=colors,

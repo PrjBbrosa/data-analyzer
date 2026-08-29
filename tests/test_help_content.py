@@ -227,6 +227,30 @@ def test_published_guide_tracks_v810_and_real_ui_assets():
     assert "matplotlib" not in html
 
 
+def test_live_time_domain_view_cap_is_24_not_12():
+    """Current-product time-domain copy is 24 Views; v7.6 changelog stays 12."""
+    current_manual, changelog = MANUAL.read_text(encoding="utf-8").split(
+        '  "changelog": [', 1,
+    )
+    assert "最多新建 24 个 View" in current_manual
+    assert "最多新建 12 个 View" not in current_manual
+    assert "独立 Board" in current_manual
+    assert "单窗口只生成时域 View" in current_manual
+    assert "时域工作区扩容至 <b>12 个 View</b>" in changelog
+
+    time_guide = (HELP / "time-domain-guide.html").read_text(encoding="utf-8")
+    assert "最多 24 个" in time_guide
+    assert "最多可建 24 个 View" in time_guide
+    assert "最多 12 个" not in time_guide
+    assert "最多可建 12 个 View" not in time_guide
+
+    published = PUBLISHED_GUIDE.read_text(encoding="utf-8")
+    assert "最多 24 个时域 View" in published
+    assert "最多 12 个时域 View" not in published
+    assert "独立 Board" in published
+    assert "单窗口只生成时域 View" in published
+
+
 def test_help_has_no_developer_jargon():
     banned = ["pyqtgraph", "matplotlib", "scipy", "QWidget", "PyQt5"]
     for f in HELP.glob("*.html"):

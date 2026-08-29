@@ -863,7 +863,11 @@ class FrfMixin:
         if target is None:
             target = self.view_manager.new_view()
             if target < 0:
-                self.toast("时域 View 已达 12 个；请先关闭一个 View 再重试", "warning")
+                cap = self.view_manager.max_views
+                self.toast(
+                    f"时域 View 已达 {cap} 个；请先关闭一个 View 再重试",
+                    "warning",
+                )
                 return -1
             view = self.view_manager.get(target)
             view.name = title

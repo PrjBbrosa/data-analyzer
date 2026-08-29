@@ -243,9 +243,17 @@ class UltraViewCoordinator(QObject):
         return self._capture.capture_leaving_source(section)
 
     def add_time_views_from_native_layout(
-        self, items
+        self,
+        items,
+        *,
+        board_name: str | None = None,
+        dedicated_board: bool = False,
+        reuse_empty_board: bool = True,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        """Add stable time view ids to the active Board in one mutation.
+        """Add stable time view ids to a Board in one mutation.
+
+        The items-only call writes the current active Board. Dedicated WWT
+        projection may reuse an empty Board or create one named ``board_name``.
 
         Returns ``(placed_view_ids_this_call, warnings)``.
         """
@@ -269,7 +277,12 @@ class UltraViewCoordinator(QObject):
                 ),
             ))
         plan = plan_native_layout(planned)
-        return self._workspace_controller.apply_native_layout_plan(plan)
+        return self._workspace_controller.apply_native_layout_plan(
+            plan,
+            board_name=board_name,
+            dedicated_board=dedicated_board,
+            reuse_empty_board=reuse_empty_board,
+        )
 
     def add_from_source_tab(self, section: str, view_id: str) -> None:
         if self._inactive():

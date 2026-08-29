@@ -674,5 +674,7 @@ def test_wwt_native_layout_hint_mentions_views_without_pixel_claims():
     joined = hint.text
     for token in ("WWT", "WinWert", "View"):
         assert token in joined
+    assert "Board" in joined
+    assert hints.hint_display_width(joined) <= hints.HINT_MAX_WIDTH
     assert "像素级一致" not in joined
     assert "全部公式" not in joined

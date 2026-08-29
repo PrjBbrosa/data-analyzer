@@ -377,6 +377,11 @@ def test_catalog_channel_editor_create_and_param_help():
     assert "?" in haystack
     time_views = _row_by_desc("时域 View")
     assert "悬停" in time_views.sub and "全名" in time_views.sub
+    assert "24" in time_views.sub
+    assert "»" in time_views.sub
+    alt_views = _row_by_desc("切换当前分区 View")
+    assert "10–24" in alt_views.sub
+    assert "»" in alt_views.sub
 
 
 def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
@@ -471,5 +476,8 @@ def test_wwt_winwert_layout_row_covers_views_and_ultraview():
     joined = f"{row.desc} {row.sub}"
     for token in ("WWT", "WinWert", "View", "UltraView"):
         assert token in joined
+    assert "独立 Board" in joined
+    assert "单窗口" in joined
+    assert "时域 View" in joined
     assert "像素级一致" not in joined
     assert "全部公式" not in joined

@@ -203,12 +203,14 @@ def test_chart_stack_registers_frf_page_manager_and_reset(qapp, qtbot):
 
 
 def test_analysis_managers_share_the_product_view_cap(qapp, qtbot):
-    from mf4_analyzer.ui.view_state import MAX_VIEWS
+    from mf4_analyzer.ui.view_state import MAX_VIEWS, TIME_DOMAIN_MAX_VIEWS
 
     cs = ChartStack()
     qtbot.addWidget(cs)
 
     assert MAX_VIEWS == 12
+    assert TIME_DOMAIN_MAX_VIEWS == 24
+    assert set(cs.analysis_managers) == {"fft", "fft_time", "frf", "order"}
     for section, manager in cs.analysis_managers.items():
         assert manager.max_views == MAX_VIEWS, section
 

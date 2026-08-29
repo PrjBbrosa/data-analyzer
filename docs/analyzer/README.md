@@ -25,8 +25,10 @@ Published guide entry points:
 ## Current Product Baseline
 
 The current baseline is TraceLab 8.1.0. It retains the 7.6 ASCII (`.asc`),
-NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
-ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
+NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
+Views; the four analysis sections stay at 12), as well as the native WinWert
+(`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
+in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
 preview, JSON import/export, and keep/replace/skip conflict handling. Separate
 full and Analyzer-only Windows packages remain available. 7.9 makes precision-

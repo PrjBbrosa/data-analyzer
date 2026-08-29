@@ -191,7 +191,7 @@ _HINTS = (
     ),
     Hint(
         id="file.wwt_native_layout",
-        text="WWT 可按 WinWert 排版生成 View",
+        text="WWT 多窗口按 WinWert 进独立 Board 生成 View",
         surface="discovery",
         retire_on="wwt_native_layout",
         priority=65,
@@ -279,7 +279,7 @@ _HINTS = (
     # view_tabbar._mark_compact_tabs_discovered() from BOTH the compact
     # tab's tooltip and the » menu — the
     # overflow menu alone would never fire for a row that compacts without
-    # overflowing. The 12 cap and the » menu itself live in the quickref panel
+    # overflowing. The 24 cap and the » menu itself live in the quickref panel
     # (时域 View row); repeating them here would just be footer noise.
     Hint(
         id="view.compact_tabs",

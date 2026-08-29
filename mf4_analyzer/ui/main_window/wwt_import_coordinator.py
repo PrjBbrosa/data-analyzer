@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from PyQt5.QtWidgets import QMessageBox
 
@@ -16,7 +17,7 @@ from mf4_analyzer.io.wwt_document import (
     format_wwt_issue,
     parse_wwt_issue,
 )
-from mf4_analyzer.ui.view_state import MAX_VIEWS, is_reusable_blank_view
+from mf4_analyzer.ui.view_state import default_view_tab_color, is_reusable_blank_view
 from mf4_analyzer.ui.wwt_view_import import (
     build_registered_record_map,
     build_wwt_view_proposals,
@@ -41,6 +42,7 @@ _SILENT_CODES = frozenset({
     "placed_limit",
     "grid_full",
     "grid_collision",
+    "board_limit",
 })
 
 
@@ -68,6 +70,23 @@ class WwtImportOutcome:
     issues: tuple[WwtIssue, ...] = field(default_factory=tuple)
     summary: str = ""
     accepted: bool = False
+
+
+def _wwt_stem_for_fids(window, fids) -> str:
+    """Filename stem of the physical ``.wwt`` that produced ``fids``."""
+    files = getattr(window, "files", {}) or {}
+    for fid in fids or ():
+        fd = files.get(fid)
+        if fd is None:
+            continue
+        path = getattr(fd, "filepath", None)
+        if path is None:
+            path = getattr(fd, "filename", None)
+        if path:
+            stem = Path(path).stem
+            if stem:
+                return stem
+    return "WinWert"
 
 
 def _layout_index(item) -> int:
@@ -126,16 +145,24 @@ def layout_dialog_text(document, proposals, *, available: int) -> tuple[str, str
         if record.tag == "Pars" and record.values is not None
     )
     create = min(kept, available)
+    if create <= 1:
+        layout_line = (
+            f"可按原排版生成 {create} 个时域 View，仅生成时域 View。"
+        )
+    else:
+        layout_line = (
+            f"可按原排版生成 {create} 个时域 View，并同步到独立 Board。"
+        )
     body = (
         f"检测到 {detected} 个 WinWert 数据窗口和 {formulas} 个可用计算通道。\n"
-        f"可按原排版生成 {create} 个时域 View，并同步加入 UltraView。"
+        f"{layout_line}"
     )
     if kept < detected:
         dropped = detected - kept
         reason = _classify_unkept_windows(document, proposals)
         body += f"\n其中 {dropped} 个窗口未生成 View（{reason}）。"
     overlaps = _exact_overlap_pairs(file_windows)
-    if overlaps:
+    if overlaps and create >= 2:
         parts = [
             f"第 {later + 1} 个窗口与第 {earlier + 1} 个位置重叠"
             for later, earlier in overlaps
@@ -376,7 +403,7 @@ class WwtImportCoordinator:
                 manager.views and is_reusable_blank_view(manager.views[0])
             )
         reusable = 1 if reuse_blank and manager.views else 0
-        available = MAX_VIEWS - len(manager.views) + reusable
+        available = manager.max_views - len(manager.views) + reusable
         body, informative = layout_dialog_text(
             document, proposals, available=max(0, available)
         )
@@ -387,25 +414,41 @@ class WwtImportCoordinator:
         if callable(capture):
             capture()
         keep = proposals[: max(0, available)]
-        states = [item.state for item in keep]
+        color_base = 0 if reusable else len(manager.views)
+        for offset, item in enumerate(keep):
+            item.state.tab_color = default_view_tab_color(color_base + offset)
         indexes = manager.insert_states(
-            states, reuse_blank=bool(reuse_blank), active_offset=0
+            [item.state for item in keep],
+            reuse_blank=bool(reuse_blank),
+            active_offset=0,
         )
+        for idx in indexes:
+            manager.views[idx].tab_color = default_view_tab_color(idx)
         view_ids = tuple(manager.views[idx].view_id for idx in indexes)
         extra = []
         for item in keep:
             extra.extend(item.warnings)
         overlaps = _exact_overlap_pairs(keep)
-        ultra = getattr(window, "_ultraview", None)
-        adder = getattr(ultra, "add_time_views_from_native_layout", None) if ultra else None
-        if callable(adder) and indexes:
-            items = [
-                (manager.views[idx].view_id, proposal.rect_mm)
-                for idx, proposal in zip(indexes, keep)
-            ]
-            extra.extend(_projection_warnings(adder(items)))
+        created = len(indexes)
+        if created >= 2:
+            ultra = getattr(window, "_ultraview", None)
+            adder = (
+                getattr(ultra, "add_time_views_from_native_layout", None)
+                if ultra else None
+            )
+            if callable(adder):
+                items = [
+                    (manager.views[idx].view_id, proposal.rect_mm)
+                    for idx, proposal in zip(indexes, keep)
+                ]
+                extra.extend(_projection_warnings(adder(
+                    items,
+                    board_name=_wwt_stem_for_fids(window, fids),
+                    dedicated_board=True,
+                    reuse_empty_board=True,
+                )))
         return _outcome(
-            created=len(indexes),
+            created=created,
             view_ids=view_ids,
             accepted=True,
             overlap_count=len(overlaps),

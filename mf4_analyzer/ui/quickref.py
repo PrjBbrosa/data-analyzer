@@ -99,7 +99,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "WWT WinWert 排版",
-                sub="打开后可恢复原生窗口 View、计算通道与 UltraView 布局；不支持的公式或显示选项会警告，不是像素级复刻",
+                sub="多窗口同步到以文件名命名的独立 Board；单窗口只生成时域 View，不自动加入 UltraView。不支持的公式或显示选项会警告，不是像素级复刻",
             ),
             QuickRow("BLF / CANoe ASC 报文解码", sub="需配 DBC；界面写「完整匹配」和/或「抽样解码」，不以估算帧数充精确计数。ASC 回退进度只升不降，100% 只在帧交付后"),
             QuickRow(
@@ -214,7 +214,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("后退 / 前进视图", keys=(_sc("back"),)),
             QuickRow(
                 "时域 View",
-                sub="最多 12 个；窄窗口先显示编号，悬停看全名，再用「»」切换收纳的 View",
+                sub="最多 24 个；窄窗口先显示编号，悬停看全名，再用「»」切换收纳的 View",
             ),
             QuickRow(
                 "图表角落的质量小圆点",
@@ -243,7 +243,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "切换当前分区 View",
                 keys=("Alt+1…9",),
-                sub="第 10–12 个走标签栏或 » 溢出菜单",
+                sub="第 10–24 个走标签栏或 » 溢出菜单",
             ),
             QuickRow("顶部按钮的快捷键", sub="悬停按钮即显示"),
         ),

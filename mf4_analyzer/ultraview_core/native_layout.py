@@ -4,8 +4,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
+from .grid_geometry import (
+    BOARD_PADDING,
+    GRID_MIN_COLUMN_WIDTH,
+    GRID_ROW_HEIGHT,
+    SLOT_GUTTER,
+    GridMetrics,
+)
 from .model import (
     GRID_COLUMNS,
+    GRID_RESOLUTION,
     GridRect,
     UltraViewRef,
     clamp_grid_rect,
@@ -59,8 +67,33 @@ def _grid_overlap(left: GridRect, right: GridRect) -> bool:
     )
 
 
+def _canonical_grid_metrics() -> GridMetrics:
+    """1× pitch independent of the current window width.
+
+    ``board_width`` / ``board_height`` are dummy extents so callers never
+    inherit a viewport-stretched ``column_width``. Pitch uses the min
+    column and fixed row height only.
+    """
+    physical_columns = max(1, GRID_COLUMNS // GRID_RESOLUTION)
+    return GridMetrics(
+        board_width=(
+            2 * BOARD_PADDING
+            + physical_columns * GRID_MIN_COLUMN_WIDTH
+            + max(0, physical_columns - 1) * SLOT_GUTTER
+        ),
+        board_height=2 * BOARD_PADDING + GRID_ROW_HEIGHT,
+        column_width=GRID_MIN_COLUMN_WIDTH,
+        row_height=GRID_ROW_HEIGHT,
+        gutter=SLOT_GUTTER,
+        padding=BOARD_PADDING,
+        resolution=GRID_RESOLUTION,
+    )
+
+
 def plan_native_layout(
     items: Sequence[tuple[UltraViewRef, NativeLayoutRect]],
+    *,
+    metrics: GridMetrics | None = None,
 ) -> NativeLayoutPlan:
     valid: list[tuple[UltraViewRef, NativeLayoutRect]] = []
     unplaced: list[UltraViewRef] = []
@@ -97,18 +130,27 @@ def plan_native_layout(
     rights = [rect.x + rect.width for _, rect in unique]
     origin_x = min(xs)
     origin_top = min(tops)
-    total_width = max(rights) - origin_x
-    if total_width <= 0.0:
+    total_width_mm = max(rights) - origin_x
+    if total_width_mm <= 0.0:
         return NativeLayoutPlan((), tuple(ref for ref, _ in items), tuple(warnings))
-    scale = GRID_COLUMNS / total_width
+
+    used_metrics = _canonical_grid_metrics() if metrics is None else metrics
+    pitch_x, pitch_y = used_metrics.exact_pitch()
+    px_per_mm = (GRID_COLUMNS * pitch_x) / total_width_mm
 
     quantized: list[tuple[UltraViewRef, GridRect]] = []
     for ref, rect in unique:
-        left = round((rect.x - origin_x) * scale)
-        right = round((rect.x + rect.width - origin_x) * scale)
-        top = round((rect.y - rect.height - origin_top) * scale)
-        bottom = round((rect.y - origin_top) * scale)
-        grid = clamp_grid_rect(GridRect(left, top, max(1, right - left), max(1, bottom - top)))
+        left_px = (rect.x - origin_x) * px_per_mm
+        width_px = rect.width * px_per_mm
+        top_px = (rect.y - rect.height - origin_top) * px_per_mm
+        height_px = rect.height * px_per_mm
+        left = round(left_px / pitch_x)
+        right = round((left_px + width_px) / pitch_x)
+        top = round(top_px / pitch_y)
+        bottom = round((top_px + height_px) / pitch_y)
+        grid = clamp_grid_rect(
+            GridRect(left, top, max(1, right - left), max(1, bottom - top))
+        )
         quantized.append((ref, grid))
 
     accepted: list[tuple[UltraViewRef, GridRect]] = []
