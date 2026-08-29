@@ -7,6 +7,7 @@ and keeps façade delegates. Capture, PreviewStore, and sidecar live on
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -125,6 +126,17 @@ from ..chart_stack.ultraview.layouts import (
     CARD_HEADER_HEIGHT,
     CARD_IMAGE_PADDING,
 )
+
+logger = logging.getLogger(__name__)
+
+# Native-layout projection codes already explained by the WWT confirm dialog
+# (or not user-facing). ``_toast_grid_warnings`` must not dump them raw.
+_NATIVE_LAYOUT_SILENT_CODES = frozenset({
+    "exact_overlap",
+    "quantized_collision",
+    "duplicate_ref",
+    "invalid_rect",
+})
 
 
 def _alive(obj) -> bool:
@@ -285,12 +297,31 @@ class UltraViewWorkspaceController:
             if item is not None:
                 self._register_pending_auto_aspect(board, ref, item.rect)
 
-    def apply_native_layout_plan(self, plan) -> tuple[str, ...]:
-        """Commit a native layout plan through the single mutation funnel."""
+    def apply_native_layout_plan(
+        self, plan
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Commit a native layout plan through the single mutation funnel.
+
+        Returns ``(placed_view_ids_this_call, warnings)``.  Ids are the time
+        refs actually landed on the free-grid this call, not every time card
+        already on the Board.
+        """
         if self._inactive():
-            return ()
+            return (), ()
         board = active_board(self._workspace)
         before = self._placement_snapshot(board)
+        if board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            already_placed = {
+                item.ref.view_id
+                for item in board.free_grid
+                if item.ref.section == "time"
+            }
+        else:
+            already_placed = {
+                item.ref.view_id
+                for item in board.placements
+                if item.ref.section == "time"
+            }
         warnings = apply_native_layout(board, plan)
         # ``apply_native_layout`` can intentionally place the usable cards and
         # return warnings for the remainder (for example an exact overlap goes
@@ -300,11 +331,12 @@ class UltraViewWorkspaceController:
         self._commit_grid_change(board, before, [])
         if warnings:
             self._toast_grid_warnings(warnings)
-        return tuple(
+        placed_this_call = tuple(
             item.ref.view_id
             for item in board.free_grid
-            if item.ref.section == "time"
+            if item.ref.section == "time" and item.ref.view_id not in already_placed
         )
+        return placed_this_call, tuple(warnings)
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
         if self._inactive():
@@ -926,14 +958,18 @@ class UltraViewWorkspaceController:
         if "invalid_grid_rect" in codes:
             self._toast("目标超出安全区", "warning")
             return
-        if "grid_full" in codes:
+        if "grid_full" in codes or "placed_limit" in codes:
             self._toast(text_for_key(PLACED_CAP_STILL_UNPLACED), "info")
             return
         if "membership_limit" in codes:
             self._toast(text_for_key(MEMBERSHIP_CAP), "warning")
             return
-        if warnings:
-            self._toast(str(warnings[0]), "warning")
+        leftover = [
+            item for item in warnings
+            if item.split(":", 1)[0] not in _NATIVE_LAYOUT_SILENT_CODES
+        ]
+        if leftover:
+            self._toast(str(leftover[0]), "warning")
 
     def _toast_layout_warnings(self, warnings: list[str]) -> None:
         for item in warnings:

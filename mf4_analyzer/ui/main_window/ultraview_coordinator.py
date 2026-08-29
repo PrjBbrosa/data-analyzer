@@ -242,8 +242,13 @@ class UltraViewCoordinator(QObject):
     def capture_leaving_source(self, section: str) -> None:
         return self._capture.capture_leaving_source(section)
 
-    def add_time_views_from_native_layout(self, items) -> tuple[str, ...]:
-        """Add stable time view ids to the active Board in one mutation."""
+    def add_time_views_from_native_layout(
+        self, items
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Add stable time view ids to the active Board in one mutation.
+
+        Returns ``(placed_view_ids_this_call, warnings)``.
+        """
         from ...ultraview_core.model import UltraViewRef
         from ...ultraview_core.native_layout import (
             NativeLayoutRect,
@@ -251,7 +256,7 @@ class UltraViewCoordinator(QObject):
         )
 
         if self._inactive():
-            return ()
+            return (), ()
         planned = []
         for view_id, rect in items:
             planned.append((

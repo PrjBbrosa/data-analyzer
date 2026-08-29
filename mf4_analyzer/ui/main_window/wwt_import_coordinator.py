@@ -27,13 +27,36 @@ from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_t
 ACCEPT_TEXT = "按 WinWert 排版并绘图"
 REJECT_TEXT = "仅加载数据"
 
-# Placement is explained by the confirm dialog; do not yellow-toast it again.
-# Axis-planning notes are not degraded-import facts.
+# Placement is explained by the confirm dialog; UltraView already maps
+# membership/placed/collision caps to Chinese copy. Do not yellow-toast
+# those codes again. Axis-planning notes are not degraded-import facts.
 _SILENT_CODES = frozenset({
     CODE_EXACT_OVERLAP,
     "hidden_axis",
     "auto_range",
+    "quantized_collision",
+    "duplicate_ref",
+    "invalid_rect",
+    "membership_limit",
+    "placed_limit",
+    "grid_full",
+    "grid_collision",
 })
+
+
+def _projection_warnings(result) -> tuple[str, ...]:
+    """Extract native-layout warnings from ``add_time_views_from_native_layout``."""
+    warnings = getattr(result, "warnings", None)
+    if warnings is not None:
+        return tuple(str(item) for item in warnings if item)
+    if (
+        isinstance(result, tuple)
+        and len(result) == 2
+        and isinstance(result[0], tuple)
+        and isinstance(result[1], (tuple, list))
+    ):
+        return tuple(str(item) for item in result[1] if item)
+    return ()
 
 
 @dataclass(frozen=True)
@@ -316,22 +339,22 @@ class WwtImportCoordinator:
             overlap_count: int = 0,
             extra_warnings: tuple[str, ...] = (),
         ) -> WwtImportOutcome:
-            issues = collect_wwt_import_issues(
+            issues = list(collect_wwt_import_issues(
                 document,
                 registered,
                 proposals,
                 created=created,
                 detected=len(proposals),
                 overlap_count=overlap_count,
-            )
+            ))
+            for text in extra_warnings or ():
+                issues.append(parse_wwt_issue(text))
+            issues = _unique_issues(issues)
             summary = format_wwt_import_summary(issues, accepted=accepted)
             warning_texts = [
-                *(extra_warnings or ()),
-                *(
-                    issue.detail or format_wwt_issue(issue.code)
-                    for issue in issues
-                    if issue.code not in _SILENT_CODES
-                ),
+                issue.detail or format_wwt_issue(issue.code)
+                for issue in issues
+                if issue.code not in _SILENT_CODES
             ]
             warnings = tuple(dict.fromkeys(text for text in warning_texts if text))
             return WwtImportOutcome(
@@ -380,7 +403,7 @@ class WwtImportCoordinator:
                 (manager.views[idx].view_id, proposal.rect_mm)
                 for idx, proposal in zip(indexes, keep)
             ]
-            adder(items)
+            extra.extend(_projection_warnings(adder(items)))
         return _outcome(
             created=len(indexes),
             view_ids=view_ids,

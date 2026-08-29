@@ -77,7 +77,7 @@ def test_coordinator_commits_native_layout_to_its_owned_workspace(qapp):
     controller = coordinator._workspace_controller
     board = coordinator.board
     try:
-        placed_ids = coordinator.add_time_views_from_native_layout(
+        placed_ids, _warnings = coordinator.add_time_views_from_native_layout(
             (
                 ("view-left", NativeLayoutRect(0.0, 60.0, 100.0, 60.0)),
                 ("view-right", NativeLayoutRect(120.0, 60.0, 100.0, 60.0)),
@@ -126,7 +126,7 @@ def test_workspace_controller_commits_native_layout_with_overlap_warning(qapp):
     refreshes: list[None] = []
     controller._refresh_projection = lambda: refreshes.append(None)
     try:
-        placed_ids = controller.apply_native_layout_plan(plan)
+        placed_ids, _warnings = controller.apply_native_layout_plan(plan)
 
         assert placed_ids == ("view-front",)
         assert [(item.ref, item.rect) for item in board.free_grid] == [
@@ -332,12 +332,12 @@ def test_apply_native_layout_plan_commits_collision_with_existing_cards(qapp):
 
     coordinator.add_time_views_from_native_layout = _capture
     try:
-        first = real(
+        first_ids, _first_warnings = real(
             (("view-left", NativeLayoutRect(0.0, 60.0, 100.0, 60.0)),)
         )
         existing = [(item.ref, item.rect) for item in board.free_grid]
-        assert first == ("view-left",)
-        second = coordinator.add_time_views_from_native_layout(
+        assert first_ids == ("view-left",)
+        second_ids, _second_warnings = coordinator.add_time_views_from_native_layout(
             (("view-collide", NativeLayoutRect(0.0, 60.0, 100.0, 60.0)),)
         )
         assert captured
@@ -347,7 +347,7 @@ def test_apply_native_layout_plan_commits_collision_with_existing_cards(qapp):
         history = controller.grid_histories[board.board_id]
         assert len(history.undo) == 2
         assert history.redo == []
-        assert second == ("view-left",) or "view-collide" not in second
+        assert "view-collide" not in second_ids
     finally:
         coordinator.shutdown()
         host.deleteLater()
