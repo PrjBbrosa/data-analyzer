@@ -70,6 +70,14 @@ def test_no_empty_groups():
             assert row.desc, f"row in {group.title!r} has empty desc"
 
 
+def test_secondary_copy_stays_scannable():
+    """Quick-reference rows name an action and outcome, not the full manual."""
+    for group, row in _all_rows():
+        assert len(row.sub) <= 160, (
+            f"{group.title} / {row.desc} is too long for a quick-reference row"
+        )
+
+
 def test_supported_formats_include_v77_imports():
     start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
     formats = next(r for r in start.rows if r.desc == "支持格式")
