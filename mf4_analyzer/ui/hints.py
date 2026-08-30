@@ -844,7 +844,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.zoom",
-        text="打开或切板即适应内容≤300%，只缩放画布不改卡片，100%不挪中心",
+        text="切板适应内容≤300%，100%不挪中心",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,
@@ -900,7 +900,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.board_menu",
-        text="空白右击智能排版或紧凑排列，排版重算大小位置",
+        text="空白右击智能排版或紧凑排列",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,

@@ -2267,6 +2267,77 @@ def test_free_grid_drag_past_threshold_shows_ghost_and_commits_legal_move(qtbot)
     assert free.ghost_overlay()._handles_rect is not None
 
 
+def test_card_release_does_not_touch_wrapper_after_sync_rebuild(qtbot, monkeypatch):
+    """A synchronous geometry slot may delete the card before release returns."""
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "sync-rebuild")
+    unit = free.metrics().column_width + free.metrics().gutter
+    start = QPoint(16, 16)
+    end = QPoint(start.x() + unit * 6, start.y())
+    _drag_card(card, start, end, release=False)
+    assert free.gesture().is_active()
+
+    state = {"commit_barrier_crossed": False}
+    geometry = []
+    finished = []
+    mouse_releases = []
+    release_mouse = free._release_mouse_if_grabbed
+
+    def release_mouse_once() -> None:
+        mouse_releases.append(True)
+        release_mouse()
+
+    monkeypatch.setattr(free, "_release_mouse_if_grabbed", release_mouse_once)
+
+    class _ReleaseEvent(QMouseEvent):
+        def _assert_before_commit_barrier(self) -> None:
+            assert not state["commit_barrier_crossed"], (
+                "release accessed the QMouseEvent after a synchronous rebuild"
+            )
+
+        def button(self):
+            self._assert_before_commit_barrier()
+            return super().button()
+
+        def modifiers(self):
+            self._assert_before_commit_barrier()
+            return super().modifiers()
+
+        def pos(self):
+            self._assert_before_commit_barrier()
+            return super().pos()
+
+        def globalPos(self):
+            self._assert_before_commit_barrier()
+            return super().globalPos()
+
+    def rebuild_card_synchronously(*payload) -> None:
+        geometry.append(payload)
+        state["commit_barrier_crossed"] = True
+        free.set_free_grid((), {})
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        assert sip.isdeleted(card)
+
+    free.geometry_requested.connect(rebuild_card_synchronously)
+    free.drag_finished.connect(lambda: finished.append(True))
+    release = _ReleaseEvent(
+        QEvent.MouseButtonRelease,
+        end,
+        card.mapToGlobal(end),
+        Qt.LeftButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    free.handle_card_mouse_release(card, release)
+
+    assert geometry == [("time", "sync-rebuild", 12, 0, 12, 6, "drag-move")]
+    assert finished == [True]
+    assert mouse_releases == [True]
+    assert not free.gesture().is_armed()
+    assert not free._pointer_coalesce_timer.isActive()
+    assert not free.ghost_overlay().is_showing()
+
+
 def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
     harness = _Harness(qtbot)
     free, (card, other) = _prepare_free_grid(harness, qtbot, "block-0", "block-1")
@@ -3363,7 +3434,11 @@ def test_safety_bounds_use_copper_wall_not_base_frame(qtbot):
 def test_card_drag_near_viewport_edge_starts_page_edge_timer(qtbot):
     harness = _Harness(qtbot)
     page = harness.page
-    _free, (card,) = _prepare_free_grid(harness, qtbot, "edge-timer")
+    free, (card,) = _prepare_free_grid(harness, qtbot, "edge-timer")
+    geometry = []
+    finished = []
+    page.free_grid_geometry_requested.connect(lambda *payload: geometry.append(payload))
+    free.drag_finished.connect(lambda: finished.append(True))
     page.set_board_zoom(1.0)
     viewport = page.board_scroll_area().viewport()
     start = QPoint(16, 16)
@@ -3388,6 +3463,10 @@ def test_card_drag_near_viewport_edge_starts_page_edge_timer(qtbot):
     QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, edge_local)
     assert not page._edge_pan_timer.isActive()
     assert not page._edge_pan_active
+    assert len(geometry) <= 1
+    assert len(finished) <= 1
+    assert not free._pointer_coalesce_timer.isActive()
+    assert not free.ghost_overlay().is_showing()
 
 
 def test_library_drop_over_board_starts_edge_timer(qtbot):

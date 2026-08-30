@@ -9,7 +9,7 @@ single ``BoardInteractionController`` session.
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Callable, Mapping, Sequence
 
 from PyQt5 import sip
@@ -132,6 +132,19 @@ def _log_plan_result(plan: LayoutPlan) -> None:
 def _reject_feedback(reason: LayoutRejectReason | None) -> str:
     """One mapping from reject reason to user copy, for every commit path."""
     return text_for_reason(reason)
+
+
+@dataclass(frozen=True)
+class _CardReleaseSnapshot:
+    """Value-only input needed after a card release can rebuild its widgets."""
+
+    ref: UltraViewRef | None
+    board_pos: QPoint
+    logical_board_pos: tuple[int, int]
+    global_pos: QPoint
+    button: int
+    modifiers: int
+    gesture_intent: str
 
 
 class FreeGridBoard(QWidget):
@@ -1257,20 +1270,59 @@ class FreeGridBoard(QWidget):
         )
 
     def handle_card_mouse_release(self, card: FreeGridCard, event: QMouseEvent) -> None:
-        if event.button() != Qt.LeftButton:
+        button = int(event.button())
+        if button != int(Qt.LeftButton):
             return
+        release = self._freeze_card_release(card, event, button=button)
         if self._finish_pending_shift_toggle():
             return
-        if self._gesture.is_armed():
+        if release.gesture_intent != "none":
             self._ingest_pointer_sample(
-                self._logical_board_pos(self._board_pos(card, event.pos())),
-                keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
-                global_pos=event.globalPos(),
+                release.logical_board_pos,
+                keep_aspect=bool(release.modifiers & int(Qt.ShiftModifier)),
+                global_pos=release.global_pos,
             )
             self._flush_pointer_sample()
-        self._finish_gesture(commit=True, global_pos=event.globalPos())
+        # ``_finish_gesture(commit=True)`` can synchronously emit geometry and
+        # cause Page to delete/rebuild this card.  Only the value snapshot may
+        # cross that barrier; do not touch ``card`` or ``event`` below it.
+        self._finish_gesture(commit=True, global_pos=release.global_pos)
         self.unlock_resize_cursor()
-        self._apply_resolved_cursor(card.mapTo(self, event.pos()))
+        self._apply_resolved_cursor(release.board_pos)
+
+    def _freeze_card_release(
+        self, card: FreeGridCard, event: QMouseEvent, *, button: int
+    ) -> _CardReleaseSnapshot:
+        """Capture every release value before a synchronous commit can tear down Qt.
+
+        The returned DTO deliberately contains no QWidget, QMouseEvent, parent,
+        or bound Qt method.  ``QPoint`` is copied as a Qt value type.
+        """
+        card_pos = QPoint(event.pos())
+        board_pos = QPoint(card.mapTo(self, card_pos))
+        model = card.model()
+        ref = parse_ref_payload(
+            {"section": str(model.section), "view_id": str(model.view_id)}
+        )
+        session = self._gesture.session()
+        if session is None:
+            gesture_intent = "none"
+        elif session.handle is not None:
+            gesture_intent = "resize"
+        elif session.is_group_move():
+            gesture_intent = "group-move"
+        else:
+            gesture_intent = "move"
+        logical_board_pos = self._logical_board_pos((board_pos.x(), board_pos.y()))
+        return _CardReleaseSnapshot(
+            ref=ref,
+            board_pos=board_pos,
+            logical_board_pos=logical_board_pos,
+            global_pos=QPoint(event.globalPos()),
+            button=int(button),
+            modifiers=int(event.modifiers()),
+            gesture_intent=gesture_intent,
+        )
 
     def _finish_pending_shift_toggle(self) -> bool:
         ref = self._pending_shift_toggle

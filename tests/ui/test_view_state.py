@@ -291,4 +291,3 @@ def test_x_viewport_intent_roundtrip_and_legacy_missing_field():
     assert is_reusable_blank_view(st) is False
     legacy = ViewState.from_dict({"name": "Legacy", "tab_color": "#2d7ff9"})
     assert legacy.x_viewport_intent is None
-

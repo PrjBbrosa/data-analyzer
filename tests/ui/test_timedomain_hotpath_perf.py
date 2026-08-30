@@ -313,7 +313,7 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
         def plot_channels(
             self, data, mode, xlabel, defer_first_frame=False,
             progress_callback=None, render_context_key=None,
-            full_rebuild_reason=None,
+            full_rebuild_reason=None, x_axis_context=None,
         ):
             self.data = data
             self.mode = mode
@@ -321,6 +321,7 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
             self.defer_first_frame = defer_first_frame
             self.render_context_key = render_context_key
             self.full_rebuild_reason = full_rebuild_reason
+            self.x_axis_context = x_axis_context
 
         def try_apply_selection_delta(self, data, *, mode, render_context_key=None):
             self.delta_attempt = (data, mode, render_context_key)
@@ -377,6 +378,8 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     # plot path now opens (returns None → the finally block skips finish).
     fake._last_filter_state_by_canvas = {}
     fake._begin_compute_progress = lambda *_a, **_k: None
+    fake._active_time_curve_bindings = lambda: []
+    fake._bindings_include_record_only = lambda _bindings: False
     fake._custom_xaxis_fid = None
     fake._custom_xaxis_ch = None
     fake._custom_xlabel = None

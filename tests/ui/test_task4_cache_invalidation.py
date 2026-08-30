@@ -431,6 +431,12 @@ class TestFallbackKeyAlignsPrimaryKey:
             def _capture_active_analysis_view(self_, section):
                 assert section == 'fft_time'
 
+            @staticmethod
+            def _clear_analysis_view_viewports(state):
+                for pane in state.panes:
+                    pane.xlim = None
+                    pane.ylim = None
+
             def _pane_time_range_for(self_, section, pane_idx=None):
                 assert section == 'fft_time'
                 return self_.pane_ranges[int(pane_idx)]

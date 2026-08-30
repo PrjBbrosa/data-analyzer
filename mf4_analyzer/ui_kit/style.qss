@@ -2000,7 +2000,7 @@ Inspector QFrame#xaxisDropHint {
 }
 
 Inspector QLabel#xaxisDropHintText {
-    color: #1e3a8a;
+    color: #1f3f77;
     font-size: 11px;
     background-color: transparent;
 }
@@ -2017,7 +2017,7 @@ Inspector QToolButton#xaxisDropHintClose {
 
 Inspector QToolButton#xaxisDropHintClose:hover {
     background-color: #dbeafe;
-    color: #1e3a8a;
+    color: #1f3f77;
 }
 
 Inspector QWidget#timeRangeToggleRow,

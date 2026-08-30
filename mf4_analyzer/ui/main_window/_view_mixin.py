@@ -617,20 +617,12 @@ class ViewMixin:
             _clear()
             return
         if state is None:
-            resolved = None
             getter = getattr(self, "_focused_time_view_state", None)
-            if callable(getter):
-                resolved = getter()
+            resolved = getter() if callable(getter) else None
             if resolved is None:
-                vm = getattr(self, "view_manager", None)
-                idx = getattr(vm, "active", None) if vm is not None else None
-                views = getattr(vm, "views", None) or ()
-                if vm is None or idx is None or not (0 <= idx < len(views)):
-                    _clear()
-                    return
-                state = vm.get(idx)
-            else:
-                state = resolved[1]
+                _clear()
+                return
+            state = resolved[1]
         if state is None:
             _clear()
             return
@@ -667,14 +659,24 @@ class ViewMixin:
         setter(view_id, rows)
 
     def _on_record_curve_visibility_toggled(self, view_id, binding_id, visible):
-        vm = getattr(self, "view_manager", None)
-        if vm is None or not vm.views:
+        """Apply one record-eye payload to its still-focused Time View only."""
+        resolved = self._focused_time_view_state()
+        if resolved is None:
+            self._sync_record_curve_tree()
             return
-        idx = vm.active
-        if not (0 <= idx < len(vm.views)):
-            return
-        state = vm.get(idx)
-        if str(getattr(state, "view_id", "") or "") != str(view_id or ""):
+        idx, state = resolved
+        focused_view_id = str(getattr(state, "view_id", "") or "")
+        canvas = self._canvas_for_view_index(idx)
+
+        # The tree's payload is an optimistic UI event. It is stale as soon
+        # as focus changed, the View was replaced, or its bound canvas went
+        # away; never fall back to the active primary View in those cases.
+        if (
+            not focused_view_id
+            or focused_view_id != str(view_id or "")
+            or canvas is None
+        ):
+            self._sync_record_curve_tree(state)
             return
         bid = str(binding_id or "")
         binding = None
@@ -684,7 +686,7 @@ class ViewMixin:
                 break
         y_ref = getattr(binding, "y_ref", None) if binding is not None else None
         if binding is None or getattr(y_ref, "kind", None) != "wwt_record":
-            self._sync_record_curve_tree()
+            self._sync_record_curve_tree(state)
             return
         hidden = [
             str(item)
@@ -695,9 +697,8 @@ class ViewMixin:
         elif bid not in hidden:
             hidden.append(bid)
         state.hidden_curve_binding_ids = hidden
-        canvas = self._canvas_for_view_index(idx) or getattr(self, "canvas_time", None)
         self._replot_canvas_for_view(idx, canvas, preserve_xlim=True)
-        self._sync_record_curve_tree()
+        self._sync_record_curve_tree(state)
 
     # -- view tab-bar intent handlers (time section) --------------------
     def _on_view_new(self):

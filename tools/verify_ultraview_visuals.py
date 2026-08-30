@@ -39,8 +39,6 @@ REQUIRED_SHOTS = (
     "card_context_1280",
     "board_context_1280",
     "board_context_800",
-    "arrange_before_1280",
-    "arrange_after_1280",
     "presentation_1280",
     "pointer_popup_800",
     "pointer_popup_1280",
@@ -51,7 +49,7 @@ REQUIRED_SHOTS = (
 
 #: Fail-closed visual-facts schema. Missing or mismatched versions must not
 #: validate as if chrome were proven on-stage.
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 HOST_COORD_SPACE = "host"
 _SELECTION_CHROME_KEYS = (
     "stage",
@@ -1258,9 +1256,9 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         snap("presentation_1280", page, _page_snapshot(page))
         page.set_presentation_active(False)
 
-        from mf4_analyzer.ui.chart_stack.ultraview.free_grid import plan_auto_arrange
         from mf4_analyzer.ui.chart_stack.ultraview.page import (
             BOARD_MENU_ARRANGE,
+            BOARD_MENU_COMPACT,
             BOARD_MENU_FIT,
             BOARD_MENU_OBJECT_NAME,
         )
@@ -1303,21 +1301,6 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
                 for item in page.board().free_grid
             ]
 
-        snap(
-            "arrange_before_1280",
-            page,
-            _page_snapshot(page, {"free_grid": _rect_facts()}),
-        )
-        plan = plan_auto_arrange(tuple(page.board().free_grid))
-        if plan.accepted and plan.committed_updates():
-            set_free_grid_rects(page.board(), plan.committed_updates())
-            page.set_board(page.board())
-            _pump(app, page)
-        snap(
-            "arrange_after_1280",
-            page,
-            _page_snapshot(page, {"free_grid": _rect_facts()}),
-        )
         menu = page.make_board_context_menu()
         menu.popup(page.mapToGlobal(QPoint(420, 260)))
         _pump(app, page)
@@ -1330,6 +1313,67 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
                 "actions": board_actions,
             },
         )
+
+        def _menu_action(label: str):
+            return next(action for action in menu.actions() if action.text() == label)
+
+        smart_layout_requests: list[None] = []
+        compact_arrange_requests: list[None] = []
+        card_fit_requests: list[tuple[str, str]] = []
+        page.auto_arrange_requested.connect(
+            lambda: smart_layout_requests.append(None)
+        )
+        page.compact_arrange_requested.connect(
+            lambda: compact_arrange_requests.append(None)
+        )
+        page.free_grid_autofit_requested.connect(
+            lambda section, view_id: card_fit_requests.append((section, view_id))
+        )
+        _menu_action(BOARD_MENU_ARRANGE).trigger()
+        _menu_action(BOARD_MENU_COMPACT).trigger()
+
+        first_ref = page.board().free_grid[0].ref
+        card = page.card_widget(first_ref.section, first_ref.view_id)
+        if card is None:
+            raise GeometryError("free-grid card missing for card-fit action")
+        card_fit = card.action_button("fit")
+        if card_fit is None:
+            raise GeometryError("free-grid card missing card-fit action")
+        card_fit.click()
+
+        content_fit = page.navigation_island().findChild(
+            QWidget, "ultraViewNavFitButton"
+        )
+        if content_fit is None:
+            raise GeometryError("navigation island missing content-fit action")
+        before_content_fit = _rect_facts()
+        content_fit.click()
+        _pump(app, page)
+        after_content_fit = _rect_facts()
+        manifest["geometry"]["layout_actions_1280"] = {
+            "smart_layout": {
+                "label": BOARD_MENU_ARRANGE,
+                "requests": len(smart_layout_requests),
+            },
+            "compact_arrange": {
+                "label": BOARD_MENU_COMPACT,
+                "requests": len(compact_arrange_requests),
+            },
+            "card_fit": {
+                "object_name": card_fit.objectName(),
+                "tooltip": card_fit.toolTip(),
+                "requests": [
+                    {"section": section, "view_id": view_id}
+                    for section, view_id in card_fit_requests
+                ],
+            },
+            "content_fit": {
+                "object_name": content_fit.objectName(),
+                "tooltip": content_fit.toolTip(),
+                "free_grid_before": before_content_fit,
+                "free_grid_after": after_content_fit,
+            },
+        }
         menu.close()
         page.resize(800, 560)
         _pump(app, page)
@@ -1683,11 +1727,15 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
     actions = board_menu.get("actions") or []
     if "适应内容" not in actions:
         errors.append("board_context_1280 missing 适应内容")
-    if "自动排版" not in actions:
-        errors.append("board_context_1280 missing 自动排版")
+    if "智能排版" not in actions:
+        errors.append("board_context_1280 missing 智能排版")
+    if "紧凑排列" not in actions:
+        errors.append("board_context_1280 missing 紧凑排列")
+    if "自动排版" in actions:
+        errors.append("board_context_1280 exposed retired 自动排版")
     card_actions = board_menu.get("card_actions") or []
     if "自动排版" in card_actions:
-        errors.append("card context leaked board auto-arrange")
+        errors.append("card context exposed retired 自动排版")
     if "打开原 View" in card_actions:
         errors.append("card context still lists 打开原 View")
     if "临时放大" in card_actions:
@@ -1698,10 +1746,27 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         errors.append("card context still lists 按原图比例")
     if "复制本卡图像" not in card_actions:
         errors.append("card context missing 复制本卡图像")
-    before = (geometry.get("arrange_before_1280") or {}).get("free_grid") or []
-    after = (geometry.get("arrange_after_1280") or {}).get("free_grid") or []
-    if len(before) >= 2 and before == after:
-        errors.append("auto-arrange did not change scattered placements")
+    layout_actions = geometry.get("layout_actions_1280") or {}
+    smart_layout = layout_actions.get("smart_layout") or {}
+    if smart_layout.get("label") != "智能排版" or smart_layout.get("requests") != 1:
+        errors.append("智能排版 did not use the production action route")
+    compact_arrange = layout_actions.get("compact_arrange") or {}
+    if compact_arrange.get("label") != "紧凑排列" or compact_arrange.get("requests") != 1:
+        errors.append("紧凑排列 did not use the production action route")
+    card_fit = layout_actions.get("card_fit") or {}
+    if (
+        card_fit.get("object_name") != "ultraViewCardFitButton"
+        or "按原图比例" not in str(card_fit.get("tooltip") or "")
+        or len(card_fit.get("requests") or []) != 1
+    ):
+        errors.append("按原图比例 did not use the current card action")
+    content_fit = layout_actions.get("content_fit") or {}
+    if (
+        content_fit.get("object_name") != "ultraViewNavFitButton"
+        or "适应内容" not in str(content_fit.get("tooltip") or "")
+        or content_fit.get("free_grid_before") != content_fit.get("free_grid_after")
+    ):
+        errors.append("适应内容 did not stay camera-only")
 
     moon = (narrow_1280.get("moonstone") or {})
     sample = moon.get("canvas_sample") or {}

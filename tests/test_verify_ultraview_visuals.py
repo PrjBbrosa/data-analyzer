@@ -139,6 +139,24 @@ def test_required_shots_cover_pointer_minimap_and_laser_facts():
     assert "selected_bottom_right_with_minimap" in REQUIRED_SHOTS
     assert "selected_shape_format_picker" in REQUIRED_SHOTS
     assert "laser_cursor" in REQUIRED_SHOTS
+    assert "arrange_before_1280" not in REQUIRED_SHOTS
+    assert "arrange_after_1280" not in REQUIRED_SHOTS
+
+
+def test_visual_harness_routes_all_four_current_layout_actions(qapp, tmp_path):
+    """The verifier drives the live controls, not a retired layout helper."""
+    manifest = generate(tmp_path)
+    routes = manifest["geometry"]["layout_actions_1280"]
+    assert routes["smart_layout"] == {"label": "智能排版", "requests": 1}
+    assert routes["compact_arrange"] == {"label": "紧凑排列", "requests": 1}
+    card_fit = routes["card_fit"]
+    assert card_fit["object_name"] == "ultraViewCardFitButton"
+    assert "按原图比例" in card_fit["tooltip"]
+    assert len(card_fit["requests"]) == 1
+    content_fit = routes["content_fit"]
+    assert content_fit["object_name"] == "ultraViewNavFitButton"
+    assert "适应内容" in content_fit["tooltip"]
+    assert content_fit["free_grid_before"] == content_fit["free_grid_after"]
 
 
 def test_library_contract_accepts_the_single_grouped_path():

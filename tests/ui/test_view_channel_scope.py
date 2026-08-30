@@ -734,3 +734,152 @@ def test_eye_writes_only_target_view_hidden_curve_binding_ids(
     window._on_record_curve_visibility_toggled(other.view_id, record.binding_id, False)
     qapp.processEvents()
     assert other.hidden_curve_binding_ids == []
+
+
+def test_split_secondary_record_eye_writes_only_secondary_state(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    """The record tree follows the focused secondary, never active primary."""
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_roles
+
+    window = _window(qtbot, qapp)
+    monkeypatch.setattr(window._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(window, "plot_time", lambda *_a, **_k: None)
+    window._load_one(
+        str(wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt"))
+    )
+    qapp.processEvents()
+
+    primary_idx = window.view_manager.active
+    secondary_idx = window.view_manager.duplicate(primary_idx)
+    window._switch_view(primary_idx)
+    window.view_manager.set_split(secondary_idx)
+    qapp.processEvents()
+    window._on_chart_focus_changed(True)
+    qapp.processEvents()
+
+    primary = window.view_manager.get(primary_idx)
+    secondary = window.view_manager.get(secondary_idx)
+    record = next(
+        binding for binding in secondary.curve_bindings
+        if binding.y_ref.kind == "wwt_record"
+    )
+    primary_checked_before = list(primary.checked)
+    primary_colors_before = primary.colors.copy()
+    secondary_checked_before = list(secondary.checked)
+    secondary_colors_before = secondary.colors.copy()
+    replots = []
+    monkeypatch.setattr(
+        window,
+        "_replot_canvas_for_view",
+        lambda idx, canvas, *, preserve_xlim=True: replots.append(
+            (idx, canvas, preserve_xlim)
+        ),
+    )
+
+    window._sync_record_curve_tree()
+    qapp.processEvents()
+    assert window.view_manager.active == primary_idx
+    assert window._focused_view_idx == secondary_idx
+    assert {
+        role[1] for role in record_binding_roles(window.navigator)
+    } == {secondary.view_id}
+
+    window._on_record_curve_visibility_toggled(
+        secondary.view_id, record.binding_id, False
+    )
+    qapp.processEvents()
+
+    assert primary.hidden_curve_binding_ids == []
+    assert secondary.hidden_curve_binding_ids == [record.binding_id]
+    assert primary.checked == primary_checked_before
+    assert primary.colors == primary_colors_before
+    assert secondary.checked == secondary_checked_before
+    assert secondary.colors == secondary_colors_before
+    assert replots == [
+        (secondary_idx, window.chart_stack.secondary_canvas(), True)
+    ]
+    assert {
+        role[1] for role in record_binding_roles(window.navigator)
+    } == {secondary.view_id}
+
+
+def test_stale_secondary_record_eye_event_is_zero_mutation(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    """An old secondary payload may only re-project the current focus."""
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_roles
+
+    window = _window(qtbot, qapp)
+    monkeypatch.setattr(window._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(window, "plot_time", lambda *_a, **_k: None)
+    window._load_one(
+        str(wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt"))
+    )
+    qapp.processEvents()
+
+    primary_idx = window.view_manager.active
+    secondary_idx = window.view_manager.duplicate(primary_idx)
+    window._switch_view(primary_idx)
+    window.view_manager.set_split(secondary_idx)
+    qapp.processEvents()
+    window._on_chart_focus_changed(True)
+    qapp.processEvents()
+
+    primary = window.view_manager.get(primary_idx)
+    secondary = window.view_manager.get(secondary_idx)
+    stale_record = next(
+        binding for binding in secondary.curve_bindings
+        if binding.y_ref.kind == "wwt_record"
+    )
+    window._sync_record_curve_tree()
+    qapp.processEvents()
+    assert {
+        role[1] for role in record_binding_roles(window.navigator)
+    } == {secondary.view_id}
+
+    window._on_chart_focus_changed(False)
+    qapp.processEvents()
+    # Recreate the queued-click race: its old row is still present even though
+    # focus has switched back to primary. The handler must refresh from the
+    # current focus, never accept the payload's former secondary owner.
+    window._sync_record_curve_tree(secondary)
+    qapp.processEvents()
+    primary_hidden_before = list(primary.hidden_curve_binding_ids)
+    secondary_hidden_before = list(secondary.hidden_curve_binding_ids)
+    primary_checked_before = list(primary.checked)
+    secondary_checked_before = list(secondary.checked)
+    replots = []
+    sync_calls = []
+    original_sync = window._sync_record_curve_tree
+
+    def tracked_sync(state=None):
+        sync_calls.append(state)
+        return original_sync(state)
+
+    monkeypatch.setattr(window, "_sync_record_curve_tree", tracked_sync)
+    monkeypatch.setattr(
+        window,
+        "_replot_canvas_for_view",
+        lambda idx, canvas, *, preserve_xlim=True: replots.append(
+            (idx, canvas, preserve_xlim)
+        ),
+    )
+
+    window._on_record_curve_visibility_toggled(
+        secondary.view_id, stale_record.binding_id, False
+    )
+    qapp.processEvents()
+
+    assert primary.hidden_curve_binding_ids == primary_hidden_before
+    assert secondary.hidden_curve_binding_ids == secondary_hidden_before
+    assert primary.checked == primary_checked_before
+    assert secondary.checked == secondary_checked_before
+    assert replots == []
+    assert sync_calls == [primary]
+    assert window._focused_view_idx == primary_idx
+    assert {
+        role[1] for role in record_binding_roles(window.navigator)
+    } == {primary.view_id}
