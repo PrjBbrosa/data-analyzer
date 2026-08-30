@@ -617,3 +617,111 @@ def test_project_missing_source_blocks_overwrite_save_by_default(
     assert result is False
     assert saved == []
     assert health.degraded is True
+
+
+def test_wwt_group_close_is_atomic_and_clears_record_rows_once(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_count
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(win, "plot_time", lambda *_a, **_k: None)
+    path = wwt.two_zeit_cohorts_record_only_on_owner_a(tmp_path / "split.wwt")
+    win._load_one(str(path))
+    qapp.processEvents()
+    fids = list(win.files)
+    assert len(fids) == 2
+    sync = getattr(win, "_sync_record_curve_tree", None)
+    if callable(sync):
+        sync()
+        qapp.processEvents()
+    assert record_binding_count(win.navigator) == 1
+    files_before = dict(win.files)
+    bindings_before = [list(v.curve_bindings) for v in win.view_manager.views]
+    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: False)
+    win._close_files(fids)
+    qapp.processEvents()
+    assert list(win.files) == list(files_before)
+    assert [list(v.curve_bindings) for v in win.view_manager.views] == bindings_before
+    assert record_binding_count(win.navigator) == 1
+
+    toasts = []
+    monkeypatch.setattr(
+        win, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    syncs = []
+    if callable(sync):
+        orig = win._sync_record_curve_tree
+
+        def _tracked(state=None):
+            syncs.append(state)
+            return orig(state)
+
+        monkeypatch.setattr(win, "_sync_record_curve_tree", _tracked)
+    resets = []
+    orig_reset = win._reset_plot_state
+
+    def _tracked_reset(*a, **k):
+        resets.append((a, k))
+        return orig_reset(*a, **k)
+
+    monkeypatch.setattr(win, "_reset_plot_state", _tracked_reset)
+    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: True)
+    win._close_files(fids)
+    qapp.processEvents()
+    assert win.files == {}
+    assert record_binding_count(win.navigator) == 0
+    close_toasts = [t for t in toasts if str(t[0]).startswith("已关闭")]
+    assert len(close_toasts) == 1
+    assert len(resets) == 1
+    if callable(sync):
+        assert len(syncs) == 1
+
+
+def test_detach_wwt_source_from_focused_view_keeps_sibling_view_records(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_count
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(win, "plot_time", lambda *_a, **_k: None)
+    monkeypatch.setattr(win, "_confirm_detach_files", lambda *_a, **_k: True)
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    win._load_one(str(path))
+    qapp.processEvents()
+    fid = next(iter(win.files))
+    src_idx = win.view_manager.active
+    copied = win.view_manager.duplicate(src_idx)
+    qapp.processEvents()
+    win.view_manager.set_active(src_idx)
+    win._focused_view_idx = src_idx
+    sync = getattr(win, "_sync_record_curve_tree", None)
+    if callable(sync):
+        sync()
+        qapp.processEvents()
+    assert record_binding_count(win.navigator) == 1
+    win._detach_files_from_focused_view([fid], "synthetic")
+    qapp.processEvents()
+    focused = win.view_manager.get(src_idx)
+    other = win.view_manager.get(copied)
+    assert fid not in focused.attached_file_ids
+    assert not any(b.y_ref.fid == fid for b in focused.curve_bindings)
+    if callable(sync):
+        sync(focused)
+        qapp.processEvents()
+    assert record_binding_count(win.navigator) == 0
+    win.view_manager.set_active(copied)
+    if callable(sync):
+        sync(other)
+        qapp.processEvents()
+    assert fid in other.attached_file_ids
+    assert any(b.y_ref.kind == "wwt_record" for b in other.curve_bindings)
+    assert record_binding_count(win.navigator) == 1

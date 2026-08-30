@@ -1709,30 +1709,15 @@ class ProjectIOMixin:
         )
         return list(dbcs)
 
-    def _close(self, fid, *, force=False, notify=True):
-        """Close one logical source (fid).
+    def _purge_closed_source(self, fid):
+        """Delete one logical source's owner state. No projection, replot, or toast.
 
-        ``notify`` gates the tail-end user feedback (plot-state reset +
-        statusBar + toast). It defaults to True so every existing call site
-        — including the single-file ``file_close_requested`` →
-        ``_on_file_close_requested`` → ``_close`` path — is byte-for-byte
-        unchanged. ``_close_files`` passes ``notify=False`` for multi-source
-        physical-file groups and emits one aggregated summary itself instead
-        (spec: group close must not spam N toasts / N full canvas resets)."""
-        if fid not in self.files: return
-        from .analysis_source_scope import collect_source_uses
-
-        uses = collect_source_uses(
-            fid,
-            time_views=self.view_manager.views,
-            analysis_managers=self.analysis_managers,
-        )
-        if (
-            uses
-            and not force
-            and not self._confirm_global_file_close(uses, files=(fid,))
-        ):
-            return
+        Batch close loops this helper per fid; the caller owns the single
+        final sync / canvas reset / preview invalidation / toast.
+        """
+        fid = str(fid)
+        if fid not in self.files:
+            return None
         name = self.files[fid].short_name
         # Cache invalidation site 2: drop entries for this file before
         # we discard the FileData — capture fid so the per-data_id filter
@@ -1752,18 +1737,99 @@ class ProjectIOMixin:
         del self.files[fid]
         self.navigator_order.remove_fid(fid)
         self.navigator.remove_file(fid, emit=False)
-        resolved = self._focused_time_view_state()
-        if resolved is not None and self.chart_stack.current_mode() == "time":
-            self._project_view_controls(resolved[0])
-        elif self.chart_stack.current_mode() in self.analysis_managers:
-            mode = self.chart_stack.current_mode()
-            mgr = self.analysis_managers[mode]
-            self._project_analysis_attachments(mode, mgr.get(mgr.active))
+        return name
+
+    def _present_after_sources_closed(self):
+        """One-shot navigator / record-tree projection after one or more purges."""
+        mode = self.chart_stack.current_mode()
+        if mode == "time":
+            resolved = self._focused_time_view_state()
+            if resolved is not None:
+                self._project_view_controls(resolved[0])
+            elif self.view_manager.views:
+                self._project_view_controls(self.view_manager.active)
+            else:
+                self._sync_record_curve_tree()
+        else:
+            if mode in self.analysis_managers:
+                mgr = self.analysis_managers[mode]
+                self._project_analysis_attachments(mode, mgr.get(mgr.active))
+            self._sync_record_curve_tree()
         self._refresh_analysis_candidates()
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
+
+    def _invalidate_ultraview_previews_for_time_views(self, view_ids):
+        """Drop stored UltraView pixels for Time Views; keep View/Board identity."""
+        uv = getattr(self, "_ultraview", None)
+        if uv is None or getattr(uv, "is_shutdown", False):
+            return
+        invalidate = getattr(uv, "_invalidate_previews_for_time_views", None)
+        if callable(invalidate):
+            invalidate(view_ids)
+
+    def _drop_unmapped_wwt_records_on_restore(self, states):
+        """Drop wwt_record bindings whose catalog index is gone; prune hidden ids."""
+        from ..time_curve_bindings import (
+            drop_missing_wwt_record_bindings,
+            prune_hidden_curve_binding_ids,
+        )
+
+        dropped = []
+        for state in states or ():
+            kept, missing = drop_missing_wwt_record_bindings(
+                getattr(state, "curve_bindings", None) or [],
+                self.files,
+                view_id=str(getattr(state, "view_id", "") or ""),
+            )
+            state.curve_bindings = kept
+            state.hidden_curve_binding_ids = prune_hidden_curve_binding_ids(
+                getattr(state, "hidden_curve_binding_ids", None),
+                kept,
+            )
+            dropped.extend(missing)
+        if not dropped:
+            return dropped
+        health = getattr(self, "_project_restore_health", None)
+        if health is not None:
+            health.dropped_time_refs.extend(dropped)
+            health.degraded = True
+        return dropped
+
+    def _close(self, fid, *, force=False, notify=True):
+        """Close one logical source (fid).
+
+        ``notify`` gates the aggregatable tail (record-tree sync, plot-state
+        reset, UltraView preview invalidation, statusBar, toast). It defaults
+        to True so the single-file close path stays one sync / one reset /
+        one toast. ``_close_files`` passes ``notify=False`` for multi-source
+        physical-file groups and emits one aggregated summary itself instead
+        (spec: group close must not spam N toasts / N full canvas resets)."""
+        if fid not in self.files:
+            return
+        from .analysis_source_scope import collect_source_uses
+
+        uses = collect_source_uses(
+            fid,
+            time_views=self.view_manager.views,
+            analysis_managers=self.analysis_managers,
+        )
+        if (
+            uses
+            and not force
+            and not self._confirm_global_file_close(uses, files=(fid,))
+        ):
+            return
+        affected = (
+            self._time_view_ids_using_fids((fid,)) if notify else ()
+        )
+        name = self._purge_closed_source(fid)
+        if name is None:
+            return
         if notify:
+            self._present_after_sources_closed()
             self._reset_plot_state(scope='file')
+            self._invalidate_ultraview_previews_for_time_views(affected)
             self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
             self.toast(f"已关闭 {name}", "info")
 
@@ -1959,6 +2025,7 @@ class ProjectIOMixin:
         states = [ViewState.from_dict(v) for v in remapped]
         if not states:
             states = [self.view_manager._make(0)]
+        self._drop_unmapped_wwt_records_on_restore(states)
         self.view_manager.views = states
         self.view_manager._split_pairs = {
             int(host): int(src)
@@ -2170,6 +2237,10 @@ class ProjectIOMixin:
             health.clear()
         self._refresh_analysis_candidates()
         self._update_info()
+        # Empty-files plot_time() often skips the successful-render tail that
+        # would otherwise sync record rows. Clear presentation here, not after
+        # a successful replot.
+        self._sync_record_curve_tree()
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")
         self.toast(f"已关闭全部 {n} 个文件", "info")

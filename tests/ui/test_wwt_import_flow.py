@@ -17,6 +17,7 @@ from mf4_analyzer.ui.main_window.wwt_import_coordinator import (
 )
 from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager, ViewState, is_reusable_blank_view
 from tests._helpers import wwt_factory as wwt
+from tests._helpers.wwt_record_tree import record_binding_count, record_binding_roles
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -443,6 +444,33 @@ def test_record_only_overlap_is_reported_without_raw_code_toast(
     assert any("已生成 3 个 WinWert View" in msg and "已放置" in msg for msg in info)
 
 
+def test_exact_overlap_relocated_stays_out_of_yellow_user_warning(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.three_exact_overlap_windows(tmp_path / "triple.wwt")
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(
+        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    projected = []
+    asked = _stub_wwt_ui(mw, monkeypatch, accept=True, projected=projected)
+    mw._load_one(str(path))
+    qapp.processEvents()
+    assert asked
+    assert projected and len(projected[0]) == wwt.THREE_EXACT_OVERLAP_COUNT
+    warn = _user_warning_blob(toasts)
+    _assert_no_relocation_arrows(warn)
+    info = " ".join(msg for msg, level in toasts if level == "info")
+    _assert_no_relocation_arrows(info)
+    board = mw._ultraview.board
+    assert len(board.free_grid) == wwt.THREE_EXACT_OVERLAP_COUNT
+    assert board.unplaced == []
+    assert len(projected[0]) == len(board.free_grid) == wwt.THREE_EXACT_OVERLAP_COUNT
+
+
 def test_format_wwt_placement_summary_reports_counts_and_stub_fallback():
     full = format_wwt_placement_summary(
         WwtImportOutcome(
@@ -480,6 +508,37 @@ def test_format_wwt_placement_summary_reports_counts_and_stub_fallback():
     assert stub == "已生成 3 个 WinWert View"
 
 
+def _user_warning_blob(toasts) -> str:
+    return " ".join(str(msg) for msg, level in toasts if level in {"warning", "warn"})
+
+
+def _assert_formula_user_copy(text):
+    blob = str(text)
+    assert wwt.PARS_ABTRIEB in blob
+    assert wwt.PARS_F_SPUST in blob
+    assert "k51" in blob and "k52" in blob
+    assert "record 16" not in blob
+    assert "record 17" not in blob
+    assert "missing_formula_ref" not in blob
+    assert "abs(" not in blob
+    assert "exact_overlap_relocated" not in blob
+
+
+def _assert_no_relocation_arrows(text):
+    import re
+
+    blob = str(text)
+    assert "exact_overlap_relocated" not in blob
+    assert "→" not in blob
+    assert re.search(r"\d+\s*->\s*\d+", blob) is None
+
+
+def _sync_record_tree(mw, state=None):
+    fn = getattr(mw, "_sync_record_curve_tree", None)
+    assert callable(fn), "MainWindow._sync_record_curve_tree is the single sync entry"
+    fn(state)
+
+
 def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(
     qapp, tmp_path, monkeypatch,
 ):
@@ -487,20 +546,19 @@ def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(
     from mf4_analyzer.ui.main_window import MainWindow
 
     panel = TimeContextual()
-    panel.set_record_curves([])
-    assert panel._record_curves._row_widgets == []
-    panel.set_record_curves([{
-        "binding_id": "a",
-        "name": "TolY",
-        "color": "#ff0000",
-        "visible": True,
-    }])
-    assert len(panel._record_curves._row_widgets) == 1
+    assert not hasattr(panel, "set_record_curves")
+    assert not hasattr(panel, "_record_curves")
+    assert not hasattr(panel, "record_curve_visibility_toggled")
 
     path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
     mw = MainWindow()
     _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
+    qapp.processEvents()
+    assert not hasattr(mw.inspector, "record_curve_visibility_toggled")
+    assert hasattr(mw.navigator, "record_curve_visibility_toggled")
+    _sync_record_tree(mw)
+    qapp.processEvents()
     state = mw.view_manager.get(mw.view_manager.active)
     record_ids = [
         binding.binding_id
@@ -508,14 +566,101 @@ def test_wwt_inspector_lists_record_only_and_hide_does_not_touch_navigator(
         if binding.y_ref.kind == "wwt_record"
     ]
     assert len(record_ids) == 1
+    assert record_binding_count(mw.navigator) == 1
     checked_before = mw.navigator.get_checked_channels()
     bindings_before = list(state.curve_bindings)
-    mw._on_record_curve_visibility_toggled(record_ids[0], False)
+    hidden_before = list(state.hidden_curve_binding_ids)
+    mw._on_record_curve_visibility_toggled(
+        state.view_id, record_ids[0], False,
+    )
+    qapp.processEvents()
     assert record_ids[0] in state.hidden_curve_binding_ids
     assert mw.navigator.get_checked_channels() == checked_before
     assert state.curve_bindings == bindings_before
-    mw._refresh_record_curve_inspector(state)
-    assert len(mw.inspector.time_ctx._record_curves._row_widgets) == 1
+    assert hidden_before != list(state.hidden_curve_binding_ids)
+
+
+def test_wwt_record_rows_follow_active_time_view_and_not_sibling_hidden(
+    qapp, tmp_path, monkeypatch,
+):
+    from dataclasses import replace
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    mw = MainWindow()
+    _stub_wwt_ui(mw, monkeypatch, accept=True)
+    mw._load_one(str(path))
+    qapp.processEvents()
+    src = mw.view_manager.get(mw.view_manager.active)
+    record = next(
+        binding for binding in src.curve_bindings
+        if binding.y_ref.kind == "wwt_record"
+    )
+    src.hidden_curve_binding_ids = [record.binding_id]
+    copied = mw.view_manager.duplicate(mw.view_manager.active)
+    other = mw.view_manager.get(copied)
+    other.curve_bindings = [
+        replace(binding, binding_id=f"{binding.binding_id}-v2")
+        if binding.y_ref.kind == "wwt_record" else binding
+        for binding in other.curve_bindings
+    ]
+    other.hidden_curve_binding_ids = []
+    mw.view_manager.set_active(0)
+    _sync_record_tree(mw, src)
+    qapp.processEvents()
+    roles_a = record_binding_roles(mw.navigator)
+    assert len(roles_a) == 1
+    assert roles_a[0][1] == src.view_id
+    assert roles_a[0][2] == record.binding_id
+    mw.view_manager.set_active(copied)
+    _sync_record_tree(mw, other)
+    qapp.processEvents()
+    roles_b = record_binding_roles(mw.navigator)
+    assert len(roles_b) == 1
+    assert roles_b[0][1] == other.view_id
+    assert roles_b[0][2] == f"{record.binding_id}-v2"
+    assert roles_b[0][2] != roles_a[0][2]
+
+
+def test_switching_to_analysis_hides_record_rows_and_time_restores_them(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    mw = MainWindow()
+    _stub_wwt_ui(mw, monkeypatch, accept=True)
+    mw._load_one(str(path))
+    qapp.processEvents()
+    _sync_record_tree(mw)
+    qapp.processEvents()
+    assert record_binding_count(mw.navigator) == 1
+    mw.toolbar._set_mode("fft")
+    qapp.processEvents()
+    assert record_binding_count(mw.navigator) == 0
+    mw.toolbar._set_mode("time")
+    qapp.processEvents()
+    assert record_binding_count(mw.navigator) == 1
+
+
+def test_two_missing_formula_refs_emit_one_grouped_chinese_summary(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.catalog_32_unresolved_k51_k52(tmp_path / "eo3.wwt")
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(
+        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    _stub_wwt_ui(mw, monkeypatch, accept=True)
+    mw._load_one(str(path))
+    qapp.processEvents()
+    warn = _user_warning_blob(toasts)
+    assert warn
+    _assert_formula_user_copy(warn)
 
 
 def test_optional_customer_wwt_import_smoke_when_present(qapp, tmp_path, monkeypatch):

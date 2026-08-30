@@ -6,6 +6,12 @@ from PyQt5.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropE
 from PyQt5.QtWidgets import QToolButton
 
 from mf4_analyzer.ui.file_navigator import FileNavigator, _FileRow
+from tests._helpers.wwt_record_tree import (
+    item_holds_ndarray,
+    iter_record_tree_items,
+    make_record_row,
+    record_binding_roles,
+)
 
 
 def test_file_navigator_constructs(qapp):
@@ -1038,3 +1044,36 @@ def test_file_row_drag_parent_is_stable_host(qapp, qtbot, monkeypatch):
     )
     row.mouseMoveEvent(event)
     assert parents == [nav.window()]
+
+
+def test_file_navigator_forwards_record_curve_rows_and_visibility_signal(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    _add_attached(nav, "f0", FakeFd())
+    assert hasattr(nav, "set_record_curve_rows")
+    assert hasattr(nav, "clear_record_curve_rows")
+    assert hasattr(nav, "record_curve_visibility_toggled")
+    assert not hasattr(nav, "_hidden_curve_binding_ids")
+    assert not hasattr(nav, "_record_visibility")
+
+    rows = [make_record_row(owner_fid="f0", binding_id="b-nav")]
+    nav.set_record_curve_rows("view-1", rows)
+    qtbot.wait(0)
+    assert record_binding_roles(nav) == [
+        ("record_binding", "view-1", "b-nav", "f0", 5),
+    ]
+    for item, _data in iter_record_tree_items(nav):
+        assert not item_holds_ndarray(item)
+
+    emitted = []
+    nav.record_curve_visibility_toggled.connect(
+        lambda view_id, binding_id, visible: emitted.append(
+            (view_id, binding_id, visible)
+        )
+    )
+    nav.channel_list.record_curve_visibility_toggled.emit("view-1", "b-nav", False)
+    qtbot.wait(0)
+    assert emitted == [("view-1", "b-nav", False)]
+    nav.clear_record_curve_rows()
+    qtbot.wait(0)
+    assert record_binding_roles(nav) == []

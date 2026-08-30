@@ -223,6 +223,7 @@ class FileNavigator(QWidget):
     channel_config_apply_requested = pyqtSignal(str)
     channel_config_manage_requested = pyqtSignal(object)
     channel_config_selection_changed = pyqtSignal(object)
+    record_curve_visibility_toggled = pyqtSignal(str, str, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -376,6 +377,9 @@ class FileNavigator(QWidget):
         )
         self.channel_list.file_tree_order_requested.connect(
             self._on_tree_file_order_requested
+        )
+        self.channel_list.record_curve_visibility_toggled.connect(
+            self.record_curve_visibility_toggled
         )
         config_bar = self.channel_list.config_bar
         config_bar.save_requested.connect(self.channel_config_save_requested)
@@ -743,6 +747,12 @@ class FileNavigator(QWidget):
 
     def set_time_visibility_available(self, available):
         self.channel_list.set_time_visibility_available(available)
+
+    def set_record_curve_rows(self, view_id, rows):
+        self.channel_list.set_record_curve_rows(view_id, rows)
+
+    def clear_record_curve_rows(self):
+        self.channel_list.clear_record_curve_rows()
 
     def projection_role(self):
         return self.channel_list.projection_role()

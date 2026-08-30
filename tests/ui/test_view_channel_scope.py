@@ -686,3 +686,51 @@ def test_manager_drafts_do_not_mutate_store_until_one_save(
     assert window._save_channel_config_drafts(dialog, dialog.drafts) is True
     assert window.channel_config_store.get(config.config_id).name == "动力分析"
     assert replots == []
+
+
+def test_eye_writes_only_target_view_hidden_curve_binding_ids(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    from dataclasses import replace
+
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_count
+
+    window = _window(qtbot, qapp)
+    monkeypatch.setattr(window._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(window, "plot_time", lambda *_a, **_k: None)
+    monkeypatch.setattr(window, "_apply_active_view", lambda *_a, **_k: None)
+    window._load_one(
+        str(wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt"))
+    )
+    qapp.processEvents()
+    src = window.view_manager.get(window.view_manager.active)
+    record = next(
+        binding for binding in src.curve_bindings
+        if binding.y_ref.kind == "wwt_record"
+    )
+    copied = window.view_manager.duplicate(window.view_manager.active)
+    other = window.view_manager.get(copied)
+    other.curve_bindings = [
+        replace(binding, binding_id=f"{binding.binding_id}-v2")
+        if binding.y_ref.kind == "wwt_record" else binding
+        for binding in other.curve_bindings
+    ]
+    other.hidden_curve_binding_ids = []
+    checked_before = list(src.checked)
+    bindings_before = list(src.curve_bindings)
+    window.view_manager.set_active(0)
+    sync = getattr(window, "_sync_record_curve_tree", None)
+    assert callable(sync)
+    sync(src)
+    qapp.processEvents()
+    assert record_binding_count(window.navigator) == 1
+    window._on_record_curve_visibility_toggled(src.view_id, record.binding_id, False)
+    qapp.processEvents()
+    assert record.binding_id in src.hidden_curve_binding_ids
+    assert other.hidden_curve_binding_ids == []
+    assert src.checked == checked_before
+    assert src.curve_bindings == bindings_before
+    window._on_record_curve_visibility_toggled(other.view_id, record.binding_id, False)
+    qapp.processEvents()
+    assert other.hidden_curve_binding_ids == []

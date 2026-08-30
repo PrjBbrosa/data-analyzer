@@ -6,18 +6,21 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import QMessageBox
 
-from mf4_analyzer.io.loader import format_skipped_channels_notice
 from mf4_analyzer.io.wwt_document import (
     CODE_EXACT_OVERLAP,
-    CODE_SKIPPED_CHANNEL,
+    CODE_MISSING_FORMULA_REF,
     CODE_UNKNOWN_RECORD,
     CODE_UNSUPPORTED_FORMULA,
     CODE_VIEW_CAP,
     WwtIssue,
-    format_wwt_issue,
+    format_wwt_import_summary as format_wwt_import_summary_io,
+    format_wwt_issue_for_user,
     parse_wwt_issue,
 )
 from mf4_analyzer.ui.view_state import default_view_tab_color, is_reusable_blank_view
+from mf4_analyzer.ultraview_core.native_layout import (
+    NATIVE_LAYOUT_NON_DEGRADED_CODES,
+)
 from mf4_analyzer.ui.wwt_view_import import (
     build_registered_record_map,
     build_wwt_view_proposals,
@@ -31,19 +34,18 @@ REJECT_TEXT = "仅加载数据"
 # Placement is explained by the confirm dialog; UltraView already maps
 # membership/placed/collision caps to Chinese copy. Do not yellow-toast
 # those codes again. Axis-planning notes are not degraded-import facts.
+# Layout-success codes come from the shared native-layout set so
+# ``exact_overlap_relocated`` cannot drift. ``invalid_rect`` is graded with
+# outcome facts (Chinese when it caused unplaced), not dumped raw.
 _SILENT_CODES = frozenset({
-    CODE_EXACT_OVERLAP,
     "hidden_axis",
     "auto_range",
-    "quantized_collision",
-    "duplicate_ref",
-    "invalid_rect",
     "membership_limit",
     "placed_limit",
     "grid_full",
     "grid_collision",
     "board_limit",
-})
+}) | (NATIVE_LAYOUT_NON_DEGRADED_CODES - {"invalid_rect"})
 
 
 def _projection_warnings(result) -> tuple[str, ...]:
@@ -201,6 +203,42 @@ def _skipped_name(entry) -> str:
     return str(entry or "")
 
 
+_CONCRETE_FORMULA_CODES = frozenset({
+    CODE_MISSING_FORMULA_REF,
+    "formula_axis_mismatch",
+    "formula_shape_mismatch",
+    "formula_no_finite_values",
+    "formula_nonfinite_values",
+    "formula_cycle",
+})
+_FORMULA_SKIP_MARK = " (公式:"
+
+
+def _skip_channel_name(detail: str) -> str:
+    text = str(detail or "").strip()
+    if _FORMULA_SKIP_MARK in text:
+        return text.split(_FORMULA_SKIP_MARK, 1)[0].strip()
+    return text
+
+
+def _record_name_for_issue(document, issue: WwtIssue) -> str:
+    records = getattr(document, "records", None) or ()
+    detail = issue.detail or ""
+    marker = "record "
+    lowered = detail.lower()
+    start = lowered.find(marker)
+    if start < 0:
+        return ""
+    token = detail[start + len(marker):].split(":", 1)[0].strip().split()[0]
+    try:
+        index = int(token)
+    except ValueError:
+        return ""
+    if 0 <= index < len(records):
+        return str(getattr(records[index], "name", "") or "")
+    return ""
+
+
 def collect_wwt_import_issues(
     document,
     registered,
@@ -213,7 +251,8 @@ def collect_wwt_import_issues(
     """Grade document + proposal + placement into stable-code issues."""
     issues: list[WwtIssue] = []
     skip_seen: set[str] = set()
-    formula_from_skip = False
+    formula_skips: list[tuple[str, str]] = []
+    other_skips: list[str] = []
     for group in getattr(document, "groups", ()) or ():
         metadata = (group or {}).get("source_metadata") or {}
         for entry in metadata.get("skipped_channels") or []:
@@ -221,18 +260,43 @@ def collect_wwt_import_issues(
             if not name or name in skip_seen:
                 continue
             skip_seen.add(name)
-            if " (公式:" in name:
-                formula_from_skip = True
-                issues.append(WwtIssue(CODE_UNSUPPORTED_FORMULA, name))
+            if _FORMULA_SKIP_MARK in name:
+                formula_skips.append((_skip_channel_name(name), name))
             else:
-                issues.append(WwtIssue(CODE_UNKNOWN_RECORD, name))
+                other_skips.append(name)
         break
 
+    concrete_names: set[str] = set()
     for text in getattr(document, "diagnostics", ()) or ():
         issue = parse_wwt_issue(text)
-        if issue.code == CODE_UNSUPPORTED_FORMULA and formula_from_skip:
+        if issue.code == CODE_UNSUPPORTED_FORMULA:
             continue
         issues.append(issue)
+        if issue.code in _CONCRETE_FORMULA_CODES:
+            name = _record_name_for_issue(document, issue)
+            if name:
+                concrete_names.add(name)
+
+    covered_formula = set(concrete_names)
+    for channel, raw in formula_skips:
+        if channel in covered_formula:
+            continue
+        issues.append(WwtIssue(CODE_UNSUPPORTED_FORMULA, raw))
+        covered_formula.add(channel)
+    for text in getattr(document, "diagnostics", ()) or ():
+        issue = parse_wwt_issue(text)
+        if issue.code != CODE_UNSUPPORTED_FORMULA:
+            continue
+        name = _record_name_for_issue(document, issue)
+        if name and name in covered_formula:
+            continue
+        issues.append(issue)
+        if name:
+            covered_formula.add(name)
+    for name in other_skips:
+        if name in covered_formula:
+            continue
+        issues.append(WwtIssue(CODE_UNKNOWN_RECORD, name))
 
     for text in getattr(registered, "warnings", ()) or ():
         issues.append(parse_wwt_issue(text))
@@ -275,48 +339,16 @@ def collect_wwt_import_issues(
     return _unique_issues(issues)
 
 
-def _is_channel_skip_notice(issue: WwtIssue) -> bool:
-    """True for retained-not-imported names that still use the 未导入 template."""
-    detail = issue.detail or ""
-    if issue.code == CODE_SKIPPED_CHANNEL:
-        return True
-    if issue.code == CODE_UNSUPPORTED_FORMULA and " (公式:" in detail:
-        return True
-    if issue.code != CODE_UNKNOWN_RECORD:
-        return False
-    return bool(detail) and "显示块" not in detail and "window " not in detail.lower()
-
-
 def format_wwt_import_summary(
     issues,
     *,
     accepted: bool = False,
+    document=None,
 ) -> str:
-    """One user-facing degraded-import summary. Empty → no yellow toast."""
-    toastable: list[WwtIssue] = []
-    for issue in issues or ():
-        if issue.code in _SILENT_CODES:
-            continue
-        if issue.code == CODE_VIEW_CAP and not accepted:
-            continue
-        toastable.append(issue)
-    if not toastable:
-        return ""
-
-    skip_names: list[str] = []
-    others: list[str] = []
-    for issue in toastable:
-        detail = issue.detail or issue.code
-        if _is_channel_skip_notice(issue):
-            skip_names.append(detail)
-        else:
-            others.append(detail if detail else format_wwt_issue(issue.code))
-    parts: list[str] = []
-    skip_notice = format_skipped_channels_notice(skip_names)
-    if skip_notice:
-        parts.append(skip_notice)
-    parts.extend(others)
-    return "；".join(dict.fromkeys(part for part in parts if part))
+    """User-facing degraded-import summary. Delegates to the io formatter."""
+    return format_wwt_import_summary_io(
+        issues, document=document, accepted=accepted,
+    )
 
 
 def format_wwt_placement_summary(outcome) -> str:
@@ -408,12 +440,19 @@ class WwtImportCoordinator:
             for text in extra_warnings or ():
                 issues.append(parse_wwt_issue(text))
             issues = _unique_issues(issues)
-            summary = format_wwt_import_summary(issues, accepted=accepted)
-            warning_texts = [
-                issue.detail or format_wwt_issue(issue.code)
-                for issue in issues
-                if issue.code not in _SILENT_CODES
-            ]
+            summary = format_wwt_import_summary(
+                issues, document=document, accepted=accepted,
+            )
+            warning_texts = []
+            if summary:
+                warning_texts.append(summary)
+            else:
+                for issue in issues:
+                    if issue.code in _SILENT_CODES:
+                        continue
+                    text = format_wwt_issue_for_user(issue, document=document)
+                    if text:
+                        warning_texts.append(text)
             warnings = tuple(dict.fromkeys(text for text in warning_texts if text))
             return WwtImportOutcome(
                 detected=len(proposals),

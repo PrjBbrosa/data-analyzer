@@ -198,7 +198,7 @@ _HINTS = (
     ),
     Hint(
         id="time.record_curve_eye",
-        text="辅助线眼睛可单条隐藏",
+        text="所属文件下眼睛可单条隐藏",
         surface="discovery",
         modes=frozenset({"time"}),
         retire_on="record_curve_eye",

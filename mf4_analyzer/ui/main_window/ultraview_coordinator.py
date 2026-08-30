@@ -377,6 +377,20 @@ class UltraViewCoordinator(QObject):
     def bump_presentation_revision(self, ref: UltraViewRef) -> int:
         return self._capture.bump_presentation_revision(ref)
 
+    def _invalidate_previews_for_time_views(self, view_ids) -> None:
+        """Expire Time View previews without deleting the View or Board ref."""
+        if self._inactive():
+            return
+        seen = set()
+        for raw in view_ids or ():
+            view_id = str(raw or "")
+            if not view_id or view_id in seen:
+                continue
+            seen.add(view_id)
+            ref = UltraViewRef("time", view_id)
+            self._capture.invalidate_preview(ref)
+            self._push_preview(ref, usable=False)
+
     def copy_board_to_clipboard(self) -> bool:
         image = self._compose_or_toast(scale=1, action="复制整板图")
         if image is None:

@@ -479,5 +479,22 @@ def test_wwt_winwert_layout_row_covers_views_and_ultraview():
     assert "独立 Board" in joined
     assert "单窗口" in joined
     assert "时域 View" in joined
+    assert "未生成" in joined
+    assert "不等于整个文件导入失败" in joined
     assert "像素级一致" not in joined
     assert "全部公式" not in joined
+
+
+def test_wwt_record_rows_live_under_owner_file_not_inspector():
+    tree = next(g for g in quickref.QUICKREF if g.title == "通道树（左侧）")
+    row = next(r for r in tree.rows if "WinWert" in r.desc)
+    joined = f"{row.desc} {row.sub} {row.gesture or ''}"
+    assert "所属文件下的 WinWert 原始记录" in joined
+    assert "当前时域 View" in joined
+    assert "普通通道" in joined
+    assert "源文件" in joined
+    assert "同步消失" in joined
+    assert "时域 Inspector" not in joined
+    assert "Inspector 列出" not in joined
+    assert "Inspector 眼睛" not in joined
+    assert "左侧树" in (row.gesture or "")

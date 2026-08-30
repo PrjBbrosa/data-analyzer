@@ -1,6 +1,8 @@
 """One-pass WinWert document parse: record catalog, groups, display windows."""
 from __future__ import annotations
 
+import logging
+import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +38,9 @@ __all__ = [
     "WwtRecord",
     "WwtWindowRectMm",
     "attach_wwt_record_store",
+    "format_wwt_import_summary",
     "format_wwt_issue",
+    "format_wwt_issue_for_user",
     "load_wwt_document",
     "parse_wwt_document",
     "parse_wwt_issue",
@@ -53,6 +57,38 @@ CODE_VIEW_CAP = "view_cap"
 CODE_EXACT_OVERLAP = "exact_overlap"
 CODE_DUPLICATE_RECORD = "duplicate_record_index"
 CODE_SKIPPED_CHANNEL = "skipped_channel"
+CODE_EXACT_OVERLAP_RELOCATED = "exact_overlap_relocated"
+CODE_MISSING_FORMULA_REF = "missing_formula_ref"
+CODE_DROPPED_CURVE = "dropped_curve"
+CODE_DROPPED_WINDOW = "dropped_window"
+
+_LOG = logging.getLogger(__name__)
+_RECORD_INDEX_RE = re.compile(r"\brecord\s+(\d+)\b", re.I)
+_FORMULA_SKIP_MARK = " (公式:"
+_GENERIC_USER_SUMMARY = "部分 WinWert 内容未能按原样导入，其余可读取数据已导入。"
+_CONCRETE_FORMULA_CODES = frozenset({
+    CODE_MISSING_FORMULA_REF,
+    "formula_axis_mismatch",
+    "formula_shape_mismatch",
+    "formula_no_finite_values",
+    "formula_nonfinite_values",
+    "formula_cycle",
+})
+# User toast never shows these codes. Layout success codes overlap the shared
+# native-layout non-degraded set; ``invalid_rect`` is graded separately.
+_USER_SILENT_CODES = frozenset({
+    CODE_EXACT_OVERLAP,
+    CODE_EXACT_OVERLAP_RELOCATED,
+    "auto_range",
+    "hidden_axis",
+    "quantized_collision",
+    "duplicate_ref",
+    "membership_limit",
+    "placed_limit",
+    "grid_full",
+    "grid_collision",
+    "board_limit",
+})
 
 # WinWert uses this exact finite value as an in-record pen-up marker.  Keep the
 # comparison exact: nearby large engineering values are still valid data.
@@ -127,6 +163,343 @@ def parse_wwt_issue(text: str) -> WwtIssue:
     if sep and code.replace("_", "").isalnum() and code[:1].isalpha():
         return WwtIssue(code, detail)
     return WwtIssue("diagnostic", raw)
+
+
+def _issue_record_index(issue: WwtIssue) -> int | None:
+    if getattr(issue, "record_index", None) is not None:
+        return int(issue.record_index)
+    detail = str(getattr(issue, "detail", "") or "")
+    match = _RECORD_INDEX_RE.search(detail)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _record_from_issue(issue: WwtIssue, document) -> WwtRecord | None:
+    records = getattr(document, "records", None) or ()
+    index = _issue_record_index(issue)
+    if index is None or index < 0 or index >= len(records):
+        return None
+    return records[index]
+
+
+def _skip_channel_name(detail: str) -> str:
+    text = str(detail or "").strip()
+    if _FORMULA_SKIP_MARK in text:
+        return text.split(_FORMULA_SKIP_MARK, 1)[0].strip()
+    return text
+
+
+def _join_names(names: list[str]) -> str:
+    unique = list(dict.fromkeys(name for name in names if name))
+    return "、".join(unique)
+
+
+def _unresolved_ref_labels(issue: WwtIssue, document) -> tuple[str, ...]:
+    rec = _record_from_issue(issue, document)
+    if rec is None:
+        return ()
+    from .wwt_formula import unresolved_formula_ref_labels
+    catalog = getattr(document, "records", ()) or ()
+    return unresolved_formula_ref_labels(rec, catalog)
+
+
+def _format_missing_formula_refs(
+    issues: list[WwtIssue], document, *, trailing_ok: bool = True
+) -> str:
+    names: list[str] = []
+    refs: list[str] = []
+    seen_records: set[int | None] = set()
+    unique: list[WwtIssue] = []
+    for issue in issues:
+        key = _issue_record_index(issue)
+        if key is not None and key in seen_records:
+            continue
+        seen_records.add(key)
+        unique.append(issue)
+        rec = _record_from_issue(issue, document)
+        if rec is not None and rec.name:
+            names.append(rec.name)
+        for label in _unresolved_ref_labels(issue, document):
+            if label not in refs:
+                refs.append(label)
+    count = len(unique) or len(issues)
+    name_part = f"（{_join_names(names)}）" if names else ""
+    if refs:
+        reason = f"当前文件解析结果中无法解析引用 {_join_names(refs)}。"
+    else:
+        reason = "当前文件解析结果中无法解析引用。"
+    text = f"{count} 个 WinWert 公式通道未生成{name_part}：{reason}"
+    if trailing_ok:
+        text += "其余可读取数据已导入。"
+    return text
+
+
+def _format_unsupported_formula(issues: list[WwtIssue], document) -> str:
+    names: list[str] = []
+    seen_records: set[int | None] = set()
+    unique: list[WwtIssue] = []
+    for issue in issues:
+        key = _issue_record_index(issue)
+        rec = _record_from_issue(issue, document)
+        name = rec.name if rec is not None else _skip_channel_name(issue.detail)
+        if key is not None and key in seen_records:
+            continue
+        if key is not None:
+            seen_records.add(key)
+        elif name and name in names:
+            continue
+        unique.append(issue)
+        if name:
+            names.append(name)
+    count = len(unique) or len(issues)
+    name_part = f"（{_join_names(names)}）" if names else ""
+    return (
+        f"{count} 个 WinWert 公式通道未生成{name_part}："
+        "当前版本暂不支持该公式语法。"
+    )
+
+
+def _format_named_formula_failure(
+    issues: list[WwtIssue], document, reason: str
+) -> str:
+    names: list[str] = []
+    seen: set[int | None] = set()
+    unique: list[WwtIssue] = []
+    for issue in issues:
+        key = _issue_record_index(issue)
+        if key is not None and key in seen:
+            continue
+        seen.add(key)
+        unique.append(issue)
+        rec = _record_from_issue(issue, document)
+        if rec is not None and rec.name:
+            names.append(rec.name)
+        else:
+            name = _skip_channel_name(issue.detail)
+            if name and not _RECORD_INDEX_RE.search(name):
+                names.append(name)
+    count = len(unique) or len(issues)
+    name_part = f"（{_join_names(names)}）" if names else ""
+    return f"{count} 个 WinWert 公式通道未生成{name_part}：{reason}"
+
+
+def _format_nonfinite_values(issues: list[WwtIssue], document) -> str:
+    parts: list[str] = []
+    for issue in issues:
+        rec = _record_from_issue(issue, document)
+        name = rec.name if rec is not None else ""
+        match = re.search(r"(\d+)\s*/\s*(\d+)", issue.detail or "")
+        if match:
+            finite = int(match.group(1))
+            total = int(match.group(2))
+            bad = max(0, total - finite)
+            quantity = f"{bad} 个非有限点"
+        else:
+            quantity = "非有限点"
+        if name:
+            parts.append(f"{name} 已生成，但含 {quantity}")
+        else:
+            parts.append(f"公式通道已生成，但含 {quantity}")
+    return "；".join(dict.fromkeys(parts))
+
+
+def _format_dropped(code: str, issues: list[WwtIssue]) -> str:
+    count = len(issues)
+    if code == CODE_DROPPED_CURVE:
+        return f"跳过 {count} 条 WinWert 曲线"
+    return f"跳过 {count} 个 WinWert 窗口"
+
+
+def _format_invalid_rect(issues: list[WwtIssue]) -> str:
+    total = 0
+    parsed = False
+    for issue in issues:
+        detail = str(issue.detail or "").strip()
+        token = detail.split()[0] if detail else ""
+        try:
+            total += int(token)
+            parsed = True
+        except (TypeError, ValueError):
+            continue
+    if not parsed:
+        total = len(issues)
+    return f"{total} 个窗口因布局无效未放置"
+
+
+def _format_view_cap(issue: WwtIssue) -> str:
+    detail = str(issue.detail or "").strip()
+    if detail and issue.code not in detail and "record " not in detail.lower():
+        return detail
+    return "可创建的 WinWert View 已达上限"
+
+
+def format_wwt_issue_for_user(issue, *, document=None) -> str | None:
+    """User-facing copy for one issue. Silent codes return ``None``.
+
+    Never falls back to ``issue.detail`` for unknown codes. Internal
+    ``format_wwt_issue`` (``code: detail``) stays the log/test form.
+    """
+    if issue is None:
+        return None
+    code = str(getattr(issue, "code", "") or "").strip()
+    if not code:
+        return None
+    if code in _USER_SILENT_CODES:
+        return None
+    if code == CODE_VIEW_CAP:
+        return _format_view_cap(issue)
+    if code == CODE_MISSING_FORMULA_REF:
+        return _format_missing_formula_refs([issue], document)
+    if code == CODE_UNSUPPORTED_FORMULA:
+        return _format_unsupported_formula([issue], document)
+    if code == "formula_axis_mismatch":
+        return _format_named_formula_failure(
+            [issue], document, "引用数据轴不一致，未生成。"
+        )
+    if code == "formula_shape_mismatch":
+        return _format_named_formula_failure(
+            [issue], document, "样本长度或形状不一致，未生成。"
+        )
+    if code == "formula_no_finite_values":
+        return _format_named_formula_failure(
+            [issue], document, "无有效数值，未生成。"
+        )
+    if code == "formula_nonfinite_values":
+        return _format_nonfinite_values([issue], document)
+    if code == "formula_cycle":
+        return _format_named_formula_failure(
+            [issue], document, "公式互相引用形成循环，未生成。"
+        )
+    if code in {CODE_DROPPED_CURVE, CODE_DROPPED_WINDOW}:
+        return _format_dropped(code, [issue])
+    if code == "invalid_rect":
+        return _format_invalid_rect([issue])
+    if code in {CODE_UNKNOWN_RECORD, CODE_SKIPPED_CHANNEL}:
+        name = _skip_channel_name(issue.detail)
+        if name and "显示块" in str(issue.detail or ""):
+            detail = str(issue.detail or "").strip()
+            if code not in detail and not _RECORD_INDEX_RE.search(detail):
+                return detail
+            return "部分曲线引用了无法解析的记录，已跳过。"
+        if name and _FORMULA_SKIP_MARK not in str(issue.detail or ""):
+            if not _RECORD_INDEX_RE.search(name):
+                return f"1 个通道未导入：{name}"
+        return "部分通道未导入。"
+    if code == CODE_TRUNCATED_WINDOW:
+        return "部分 WinWert 显示窗口截断，已跳过。"
+    _LOG.info("unrecognized WWT issue code %s", code)
+    return _GENERIC_USER_SUMMARY
+
+
+def _dedupe_formula_skips(
+    issues: list[WwtIssue], document
+) -> list[WwtIssue]:
+    concrete_names: set[str] = set()
+    concrete_indexes: set[int] = set()
+    for issue in issues:
+        if issue.code not in _CONCRETE_FORMULA_CODES:
+            continue
+        index = _issue_record_index(issue)
+        if index is not None:
+            concrete_indexes.add(index)
+        rec = _record_from_issue(issue, document)
+        if rec is not None and rec.name:
+            concrete_names.add(rec.name)
+    kept: list[WwtIssue] = []
+    for issue in issues:
+        if issue.code in {
+            CODE_UNSUPPORTED_FORMULA, CODE_SKIPPED_CHANNEL, CODE_UNKNOWN_RECORD,
+        }:
+            name = _skip_channel_name(issue.detail)
+            index = _issue_record_index(issue)
+            if name and name in concrete_names:
+                continue
+            if index is not None and index in concrete_indexes:
+                continue
+        kept.append(issue)
+    return kept
+
+
+def format_wwt_import_summary(
+    issues, *, document=None, accepted: bool = False
+) -> str:
+    """One user-facing degraded-import summary. Empty → no yellow toast."""
+    toastable: list[WwtIssue] = []
+    for issue in issues or ():
+        code = str(getattr(issue, "code", "") or "").strip()
+        if not code or code in _USER_SILENT_CODES:
+            continue
+        if code == CODE_VIEW_CAP and not accepted:
+            continue
+        toastable.append(issue)
+    toastable = _dedupe_formula_skips(toastable, document)
+    if not toastable:
+        return ""
+
+    grouped: dict[str, list[WwtIssue]] = {}
+    order: list[str] = []
+    for issue in toastable:
+        if issue.code not in grouped:
+            grouped[issue.code] = []
+            order.append(issue.code)
+        grouped[issue.code].append(issue)
+
+    parts: list[str] = []
+    for code in order:
+        bucket = grouped[code]
+        if code == CODE_MISSING_FORMULA_REF:
+            parts.append(_format_missing_formula_refs(bucket, document))
+        elif code == CODE_UNSUPPORTED_FORMULA:
+            parts.append(_format_unsupported_formula(bucket, document))
+        elif code == "formula_axis_mismatch":
+            parts.append(_format_named_formula_failure(
+                bucket, document, "引用数据轴不一致，未生成。"
+            ))
+        elif code == "formula_shape_mismatch":
+            parts.append(_format_named_formula_failure(
+                bucket, document, "样本长度或形状不一致，未生成。"
+            ))
+        elif code == "formula_no_finite_values":
+            parts.append(_format_named_formula_failure(
+                bucket, document, "无有效数值，未生成。"
+            ))
+        elif code == "formula_nonfinite_values":
+            parts.append(_format_nonfinite_values(bucket, document))
+        elif code == "formula_cycle":
+            parts.append(_format_named_formula_failure(
+                bucket, document, "公式互相引用形成循环，未生成。"
+            ))
+        elif code in {CODE_DROPPED_CURVE, CODE_DROPPED_WINDOW}:
+            parts.append(_format_dropped(code, bucket))
+        elif code == CODE_VIEW_CAP:
+            parts.append(_format_view_cap(bucket[0]))
+        elif code == "invalid_rect":
+            parts.append(_format_invalid_rect(bucket))
+        elif code in {CODE_UNKNOWN_RECORD, CODE_SKIPPED_CHANNEL}:
+            skip_names: list[str] = []
+            display_parts: list[str] = []
+            for issue in bucket:
+                detail = str(issue.detail or "")
+                if "显示块" in detail:
+                    text = format_wwt_issue_for_user(issue, document=document)
+                    if text:
+                        display_parts.append(text)
+                    continue
+                name = _skip_channel_name(detail)
+                if name and not _RECORD_INDEX_RE.search(name):
+                    skip_names.append(name)
+            if skip_names:
+                unique_names = list(dict.fromkeys(skip_names))
+                parts.append(
+                    f"{len(unique_names)} 个通道未导入：" + "、".join(unique_names)
+                )
+            parts.extend(dict.fromkeys(display_parts))
+        else:
+            text = format_wwt_issue_for_user(bucket[0], document=document)
+            if text:
+                parts.append(text)
+    return "；".join(dict.fromkeys(part for part in parts if part))
 
 
 def attach_wwt_record_store(groups, records: tuple[WwtRecord, ...]) -> None:

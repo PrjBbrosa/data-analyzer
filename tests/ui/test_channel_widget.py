@@ -15,6 +15,15 @@ from mf4_analyzer.ui.channel_drag import (
 from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui.widgets import INTERNAL_FILE_FIDS_MIME, MultiFileChannelWidget
+from tests._helpers.wwt_record_tree import (
+    RECORD_BINDING,
+    RECORD_GROUP,
+    item_holds_ndarray,
+    iter_record_tree_items,
+    make_record_row,
+    record_binding_roles,
+    record_group_roles,
+)
 
 
 def test_channel_tree_selected_rows_render_approved_windows_highlight(qapp, qtbot):
@@ -1474,3 +1483,250 @@ def test_wwt_grouped_sources_use_zeit_labels_and_search_hits_pars(qapp, qtbot):
     ]
     assert visible == [("ChanY", False), ("SumAB", True)]
     assert ("f0", "SumAB") in widget._colors
+
+
+def _require_record_row_api(widget):
+    assert hasattr(widget, "set_record_curve_rows"), (
+        "MultiFileChannelWidget.set_record_curve_rows is the record-tree seam"
+    )
+    assert hasattr(widget, "clear_record_curve_rows")
+    assert hasattr(widget, "record_curve_visibility_toggled")
+    return widget.set_record_curve_rows
+
+
+def test_wwt_record_rows_live_under_owner_file_or_raster(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(520, 360)
+    widget.show()
+    qtbot.waitExposed(widget)
+    setter = _require_record_row_api(widget)
+
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+    setter("view-flat", [make_record_row(owner_fid="file-a", binding_id="b-flat")])
+    QCoreApplication.processEvents()
+    groups = record_group_roles(widget)
+    bindings = record_binding_roles(widget)
+    assert groups == [(RECORD_GROUP, "view-flat", "file-a")]
+    assert bindings == [(RECORD_BINDING, "view-flat", "b-flat", "file-a", 5)]
+    file_item = widget._file_items["file-a"]
+    group_item = next(
+        item for item, data in iter_record_tree_items(widget) if data[0] == RECORD_GROUP
+    )
+    assert group_item.parent() is file_item
+    for item, _data in iter_record_tree_items(widget):
+        assert not item_holds_ndarray(item)
+
+    setter("view-flat", [make_record_row(owner_fid="missing-fid", binding_id="b-drop")])
+    QCoreApplication.processEvents()
+    assert record_binding_roles(widget) == []
+    assert record_group_roles(widget) == []
+
+    nested = MultiFileChannelWidget()
+    qtbot.addWidget(nested)
+    nested.resize(520, 360)
+    nested.show()
+    qtbot.waitExposed(nested)
+    _add_attached_file(nested, "f0", _WwtGroupedFileData(0, ["ChanY"]))
+    _add_attached_file(nested, "f1", _WwtGroupedFileData(2, ["RackForce"]))
+    nested.tree.expandAll()
+    QCoreApplication.processEvents()
+    nested_setter = _require_record_row_api(nested)
+    nested_setter("view-nest", [
+        make_record_row(owner_fid="f0", binding_id="b-a", name="TolY"),
+    ])
+    QCoreApplication.processEvents()
+    nest_groups = record_group_roles(nested)
+    assert nest_groups == [(RECORD_GROUP, "view-nest", "f0")]
+    group_item = next(
+        item for item, data in iter_record_tree_items(nested) if data[0] == RECORD_GROUP
+    )
+    assert group_item.parent() is nested._raster_items["f0"]
+    assert group_item.parent() is not nested._raster_items["f1"]
+
+
+def test_wwt_record_rows_use_view_binding_identity_not_display_name(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    setter = _require_record_row_api(widget)
+    setter("view-a", [
+        make_record_row(binding_id="bind-a", name="TolY", visible=False),
+        make_record_row(binding_id="bind-b", name="TolY", record_index=6, visible=True),
+    ])
+    QCoreApplication.processEvents()
+    roles = record_binding_roles(widget)
+    ids = [role[2] for role in roles]
+    assert ids == ["bind-a", "bind-b"]
+    assert all(role[1] == "view-a" for role in roles)
+    setter("view-b", [
+        make_record_row(binding_id="bind-a", name="Limit renamed", color="#00ff00"),
+    ])
+    QCoreApplication.processEvents()
+    roles = record_binding_roles(widget)
+    assert roles == [(RECORD_BINDING, "view-b", "bind-a", "file-a", 5)]
+    item = next(item for item, data in iter_record_tree_items(widget) if data[0] == RECORD_BINDING)
+    assert "Limit renamed" in item.text(0) or "Limit renamed" in item.toolTip(0)
+    assert item.data(0, Qt.UserRole)[2] == "bind-a"
+
+
+def test_wwt_record_rows_follow_search_but_not_channel_bulk_checks(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    setter = _require_record_row_api(widget)
+    setter("view-1", [
+        make_record_row(name="TolY", unit="mm", binding_id="b-tol"),
+    ])
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    widget.search.setText("tol")
+    QCoreApplication.processEvents()
+    visible_bindings = [
+        data for item, data in iter_record_tree_items(widget)
+        if data[0] == RECORD_BINDING and not item.isHidden()
+    ]
+    assert visible_bindings
+    widget.search.setText("WinWert")
+    QCoreApplication.processEvents()
+    visible_groups = [
+        data for item, data in iter_record_tree_items(widget)
+        if data[0] == RECORD_GROUP and not item.isHidden()
+    ]
+    assert visible_groups
+    widget.search.setText("")
+    QCoreApplication.processEvents()
+
+    widget.btn_all.click()
+    QCoreApplication.processEvents()
+    checked = [row[:2] for row in widget.get_checked_channels()]
+    assert ("file-a", "speed") in checked
+    assert all(row[1] != "TolY" and "bind" not in str(row[1]) for row in checked)
+    binding_item = next(
+        item for item, data in iter_record_tree_items(widget) if data[0] == RECORD_BINDING
+    )
+    assert binding_item.checkState(0) != Qt.Checked or (
+        binding_item.flags() & Qt.ItemIsUserCheckable == 0
+    )
+    widget.btn_none.click()
+    QCoreApplication.processEvents()
+    assert [row[:2] for row in widget.get_checked_channels()] == []
+
+    widget.search.setText("")
+    selected_button = next(
+        button for button in widget.findChildren(QPushButton)
+        if button.text() == "已选"
+    )
+    file_item = widget._file_items["file-a"]
+    file_item.child(0).setCheckState(0, Qt.Checked)
+    selected_button.click()
+    QCoreApplication.processEvents()
+    assert selected_button.isChecked()
+    binding_item = next(
+        item for item, data in iter_record_tree_items(widget) if data[0] == RECORD_BINDING
+    )
+    assert binding_item.isHidden()
+
+
+def test_wwt_record_rows_do_not_enter_axis_group_drag_or_context_menu(qapp, qtbot, monkeypatch):
+    _FakeChannelDrag.last_mime = None
+    _FakeChannelDrag.parents = []
+    monkeypatch.setattr("mf4_analyzer.ui.widgets.channel_tree.QDrag", _FakeChannelDrag)
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    setter = _require_record_row_api(widget)
+    setter("view-1", [make_record_row(binding_id="b-tol")])
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    binding_item = next(
+        item for item, data in iter_record_tree_items(widget) if data[0] == RECORD_BINDING
+    )
+    menus = []
+    widget.channel_context_menu_requested.connect(lambda: menus.append(True))
+    widget._on_context_menu(widget.tree.visualItemRect(binding_item).center())
+    QCoreApplication.processEvents()
+    assert menus == []
+
+    tree = widget.tree
+    pos = tree.visualItemRect(binding_item).center()
+    tree.mousePressEvent(
+        QMouseEvent(QEvent.MouseButtonPress, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    )
+    far = QPoint(pos.x(), pos.y() + QApplication.startDragDistance() + 8)
+    tree.mouseMoveEvent(
+        QMouseEvent(QEvent.MouseMove, far, Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+    )
+    assert _FakeChannelDrag.last_mime is None
+
+    widget.merge_axis_group([("file-a", "TolY")])
+    assert widget.axis_group_for("file-a", "TolY") is None
+    assert widget.axis_group_for("file-a", "speed") is None
+
+
+def test_set_record_rows_preserves_channel_selection_expansion_and_current_item(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    file_item = widget._file_items["file-a"]
+    file_item.setExpanded(True)
+    speed = file_item.child(0)
+    torque = file_item.child(2)
+    speed.setCheckState(0, Qt.Checked)
+    widget.tree.setCurrentItem(torque)
+    torque.setSelected(True)
+    QCoreApplication.processEvents()
+
+    setter = _require_record_row_api(widget)
+    setter("view-1", [make_record_row(binding_id="b-tol")])
+    QCoreApplication.processEvents()
+    assert file_item.isExpanded()
+    assert widget.tree.currentItem() is torque
+    assert speed.checkState(0) == Qt.Checked
+    assert [row[:2] for row in widget.get_checked_channels()] == [("file-a", "speed")]
+
+    widget.clear_record_curve_rows()
+    QCoreApplication.processEvents()
+    assert record_binding_roles(widget) == []
+    assert file_item.isExpanded()
+    assert widget.tree.currentItem() is torque
+    assert [row[:2] for row in widget.get_checked_channels()] == [("file-a", "speed")]
+
+
+def test_record_eye_emits_view_id_binding_id_and_visibility(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.set_time_visibility_available(True)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    setter = _require_record_row_api(widget)
+    setter("view-focus", [make_record_row(binding_id="b-tol", visible=True)])
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    emitted = []
+    widget.record_curve_visibility_toggled.connect(
+        lambda view_id, binding_id, visible: emitted.append((view_id, binding_id, visible))
+    )
+    binding_item = next(
+        item for item, data in iter_record_tree_items(widget) if data[0] == RECORD_BINDING
+    )
+    widget._on_item_clicked(binding_item, 2)
+    QCoreApplication.processEvents()
+    assert emitted == [("view-focus", "b-tol", False)]
+    assert all(not item_holds_ndarray(item) for item, _data in iter_record_tree_items(widget))

@@ -251,6 +251,28 @@ def test_live_time_domain_view_cap_is_24_not_12():
     assert "单窗口只生成时域 View" in published
 
 
+def test_wwt_record_tree_copy_matches_left_tree_control_surface():
+    """Live help/guide copy follows the left-tree record control surface."""
+    current_manual, changelog = MANUAL.read_text(encoding="utf-8").split(
+        '  "changelog": [', 1,
+    )
+    time_guide = (HELP / "time-domain-guide.html").read_text(encoding="utf-8")
+    published = PUBLISHED_GUIDE.read_text(encoding="utf-8")
+    for text in (current_manual, time_guide, published):
+        assert "所属文件下的 WinWert 原始记录" in text
+        assert "未生成" in text
+        assert "时域 Inspector 列出 WinWert" not in text
+        assert "右侧 Inspector 列出" not in text
+        assert "RecordCurveList" not in text
+        assert "set_record_curves" not in text
+    assert "同步消失" in current_manual
+    assert "同步消失" in time_guide
+    assert "同步消失" in published
+    assert "原始辅助线" in time_guide
+    assert "不等于整个文件导入失败" in current_manual
+    assert "所属文件下的 WinWert 原始记录" not in changelog
+
+
 def test_help_has_no_developer_jargon():
     banned = ["pyqtgraph", "matplotlib", "scipy", "QWidget", "PyQt5"]
     for f in HELP.glob("*.html"):

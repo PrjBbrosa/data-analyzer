@@ -99,6 +99,16 @@ RECT_ZERO_WIDTH = WwtWindowRectMm(20.0, 40.0, 0.0, 50.0)
 
 MULTI_WINDOW_COUNT = 3
 MULTI_FORMULA_COUNT = 1
+THREE_EXACT_OVERLAP_COUNT = 3
+CATALOG_32_COUNT = 32
+COHORT_A_N = CHANNEL_N
+COHORT_B_N = 160
+COHORT_A_Y = "CohortA_Y"
+COHORT_B_Y = "CohortB_Y"
+CHAN_Z = "ChanZ"
+PARS_ABTRIEB = "Abtrieb - mech. Krafteinleitung"
+PARS_F_SPUST = "Theor. F_Spust. min"
+UNRESOLVED_K51_K52_FORMULA = "abs(k51-(k52*0.85/(0.01787512/2))/1000)"
 SHARED_AXIS_OWNER_TICK = 0.05
 SHARED_AXIS_OWNER_GRID = 0.05
 SPEED_ALIAS_UNIT_DEG = "deg/s"
@@ -956,3 +966,206 @@ def merged_zeit_formula_cohort(path=None) -> Path | bytes:
         write_wwt_bytes(records, (_single_channel_window(1, "ChanA", CHAN_Y_UNIT),)),
         path,
     )
+
+
+def two_zeit_cohorts_record_only_on_owner_a(path=None) -> Path | bytes:
+    """One physical WWT that splits into two Navigator sources.
+
+    Zeit A and Zeit B use different ``n`` (both >= ``_MIN_TIMESERIES_SAMPLES``)
+    so they become two logical fids. The short auxiliary Y stays a document
+    record and is bound only to owner A (the first Zeit cohort).
+    """
+    n_a = COHORT_A_N
+    n_b = COHORT_B_N
+    aux = AUX_N
+    if n_a < _MIN_TIMESERIES_SAMPLES or n_b < _MIN_TIMESERIES_SAMPLES:
+        raise ValueError("both Zeit cohorts must become Navigator sources")
+    if n_a == n_b:
+        raise ValueError("cohorts must differ in n so they do not merge")
+    if aux >= _MIN_TIMESERIES_SAMPLES:
+        raise ValueError("aux Y must stay a record-only curve")
+    records = (
+        WwtRecordSpec("Zeit", "TimeA", "s", n=n_a, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n_a,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, n_a),
+        ),
+        WwtRecordSpec(
+            "Real", COHORT_A_Y, CHAN_Y_UNIT, n=n_a,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n_a),
+        ),
+        WwtRecordSpec("Zeit", "TimeB", "s", n=n_b, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", COHORT_B_Y, CHAN_Y_UNIT, n=n_b,
+            values=_linspace(0.0, 1.0, n_b),
+        ),
+        WwtRecordSpec("Zeit", "TimeTol", "s", n=aux, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", LINE_X, LINE_X_UNIT, n=aux,
+            values=_linspace(LINE_X_LO, LINE_X_HI, aux),
+        ),
+        WwtRecordSpec(
+            "Real", TOL_Y, TOL_Y_UNIT, n=aux,
+            values=_linspace(0.2, 0.8, aux),
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+                x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+            ),
+            curves=(
+                _y_curve(
+                    2, f"{COHORT_A_Y} [{CHAN_Y_UNIT}]", CHAN_Y_LO, CHAN_Y_HI,
+                    x_record_index=1, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+                _y_curve(
+                    7, f"{TOL_Y} [{TOL_Y_UNIT}]", TOL_Y_LO, TOL_Y_HI,
+                    x_record_index=6, tick=TOL_Y_TICK, grid=TOL_Y_GRID,
+                    selected=False, color=TOL_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
+def catalog_32_unresolved_k51_k52(path=None) -> Path | bytes:
+    """32-record catalog whose Pars at 16/17 both reference out-of-range k51/k52.
+
+    Distinctive ASCII names let formatter tests assert channel names without
+    embedding the full ``abs(...)`` formula. Indices 16 and 17 match the
+    customer-sample warning shape (``record 16`` / ``record 17``) that user
+    copy must not leak.
+    """
+    n = CHANNEL_N
+    aux = AUX_N
+    records: list[WwtRecordSpec] = [
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n),
+        ),
+    ]
+    while len(records) < 16:
+        idx = len(records)
+        records.append(
+            WwtRecordSpec(
+                "Real", f"Pad{idx:02d}", CHAN_Y_UNIT, n=aux,
+                values=_linspace(0.0, 1.0, aux),
+            )
+        )
+    records.append(
+        WwtRecordSpec(
+            "Pars", PARS_ABTRIEB, FORM_Y_UNIT, n=1,
+            formula=UNRESOLVED_K51_K52_FORMULA,
+        )
+    )
+    records.append(
+        WwtRecordSpec(
+            "Pars", PARS_F_SPUST, FORM_Y_UNIT, n=1,
+            formula=UNRESOLVED_K51_K52_FORMULA,
+        )
+    )
+    while len(records) < CATALOG_32_COUNT:
+        idx = len(records)
+        records.append(
+            WwtRecordSpec(
+                "Real", f"Pad{idx:02d}", CHAN_Y_UNIT, n=aux,
+                values=_linspace(0.0, 1.0, aux),
+            )
+        )
+    if len(records) != CATALOG_32_COUNT:
+        raise ValueError(f"expected {CATALOG_32_COUNT} records, got {len(records)}")
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+                x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+            ),
+            curves=(
+                _y_curve(
+                    2, f"{CHAN_Y} [{CHAN_Y_UNIT}]", CHAN_Y_LO, CHAN_Y_HI,
+                    x_record_index=1, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(tuple(records), windows), path)
+
+
+def three_exact_overlap_windows(path=None) -> Path | bytes:
+    """Three visible windows that share one native millimetre rect.
+
+    Native layout should relocate the overlaps (``exact_overlap_relocated``)
+    while still placing every generated View. User warning text must not
+    contain ``4 → 3``-style arrows.
+    """
+    n = CHANNEL_N
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", MEAS_Y, MEAS_Y_UNIT, n=n,
+            values=_linspace(MEAS_Y_LO, MEAS_Y_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", CHAN_Z, CHAN_Y_UNIT, n=n,
+            values=_linspace(-1.0, 1.0, n),
+        ),
+    )
+    axis = _axis_curve(
+        f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+        x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A, global_x=1, x_axis=axis,
+            curves=(
+                _y_curve(
+                    2, f"{CHAN_Y} [{CHAN_Y_UNIT}]", CHAN_Y_LO, CHAN_Y_HI,
+                    x_record_index=1, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+            ),
+        ),
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A, global_x=1, x_axis=axis,
+            curves=(
+                _y_curve(
+                    3, f"{MEAS_Y} [{MEAS_Y_UNIT}]", MEAS_Y_LO, MEAS_Y_HI,
+                    x_record_index=1, tick=MEAS_Y_TICK, grid=MEAS_Y_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+            ),
+        ),
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A, global_x=1, x_axis=axis,
+            curves=(
+                _y_curve(
+                    4, f"{CHAN_Z} [{CHAN_Y_UNIT}]", CHAN_Y_LO, CHAN_Y_HI,
+                    x_record_index=1, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+                    color=FORM_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)

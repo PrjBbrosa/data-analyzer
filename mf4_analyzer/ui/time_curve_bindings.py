@@ -269,6 +269,67 @@ def collect_dropped_binding_refs(
     return dropped
 
 
+def _record_index_in_store(store: Any, record_index: int) -> bool:
+    """True when ``record_index`` names a catalog slot, not necessarily values."""
+    try:
+        index = int(record_index)
+    except (TypeError, ValueError):
+        return False
+    if store is None:
+        return False
+    if isinstance(store, Mapping):
+        return index in store or str(index) in store
+    if isinstance(store, (tuple, list)):
+        return 0 <= index < len(store)
+    records = getattr(store, "records", None)
+    if records is not None:
+        return 0 <= index < len(records)
+    return _store_values(store, index) is not None
+
+
+def _wwt_record_present(files: Mapping[str, Any], ref: TimeDataRef) -> bool:
+    if getattr(ref, "kind", None) != _WWT_RECORD:
+        return True
+    if ref.record_index is None:
+        return False
+    owner = _owner_file(files, str(ref.fid or ""))
+    if owner is None:
+        return False
+    metadata = getattr(owner, "source_metadata", None) or {}
+    store = metadata.get("wwt_record_store") if isinstance(metadata, Mapping) else None
+    return _record_index_in_store(store, int(ref.record_index))
+
+
+def drop_missing_wwt_record_bindings(
+    bindings: Sequence[TimeCurveBinding] | None,
+    files: Mapping[str, Any],
+    *,
+    view_id: str = "",
+) -> tuple[list[TimeCurveBinding], list[tuple]]:
+    """Drop wwt_record bindings whose record_index is absent after files load.
+
+    ``remap_curve_bindings`` only rewrites/drops fids. Ghost catalog indices
+    must be removed against the live ``wwt_record_store`` so restore cannot
+    project a tree row for a record that does not exist.
+    """
+    kept: list[TimeCurveBinding] = []
+    dropped: list[tuple] = []
+    for binding in bindings or ():
+        missing = False
+        for role, ref in (("x", binding.x_ref), ("y", binding.y_ref)):
+            if getattr(ref, "kind", None) != _WWT_RECORD:
+                continue
+            if _wwt_record_present(files, ref):
+                continue
+            dropped.append(
+                (view_id, str(ref.fid or ""), f"binding:record:{role}")
+            )
+            missing = True
+        if not missing:
+            kept.append(binding)
+    return kept, dropped
+
+
 def _as_1d(values: Any) -> np.ndarray | None:
     array = np.asarray(values)
     if array.ndim != 1:

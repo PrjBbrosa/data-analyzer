@@ -289,6 +289,7 @@ class ViewMixin:
         empty = getattr(self.navigator, 'set_empty_state_context', None)
         if callable(empty):
             empty(section_label='时域', view_name=state.name)
+        self._sync_record_curve_tree(state)
 
     def _sync_focus_accent(self):
         idx = self._focused_view_idx
@@ -583,7 +584,7 @@ class ViewMixin:
             if callable(restore_placement):
                 restore_placement(state.cursor_placement)
             if update_primary_ui:
-                self._refresh_record_curve_inspector(state)
+                self._sync_record_curve_tree(state)
         finally:
             self._applying_view = old_applying_view
             # F8: secondary-pane restore must not project time controls while
@@ -603,19 +604,50 @@ class ViewMixin:
             coord.request_capture(new_ref, canvas, "time-render")
         return rendered
 
-    def _refresh_record_curve_inspector(self, state=None):
-        panel = getattr(getattr(self, "inspector", None), "time_ctx", None)
-        setter = getattr(panel, "set_record_curves", None)
+    def _sync_record_curve_tree(self, state=None) -> None:
+        """Project the focused Time View's record-only Y bindings onto ChannelTree.
+
+        ChannelTree owns presentation. This entry is idempotent: Time Section
+        off, no files, or no valid Time View always clears stale rows.
+        """
+        setter = getattr(getattr(self, "navigator", None), "set_record_curve_rows", None)
         if not callable(setter):
             return
+
+        def _clear():
+            setter(None, ())
+
+        stack = getattr(self, "chart_stack", None)
+        current_mode = getattr(stack, "current_mode", None)
+        mode = current_mode() if callable(current_mode) else ""
+        if mode != "time" or not getattr(self, "files", None):
+            _clear()
+            return
         if state is None:
-            try:
-                state = self.view_manager.get(self.view_manager.active)
-            except Exception:
-                setter(())
-                return
+            resolved = None
+            getter = getattr(self, "_focused_time_view_state", None)
+            if callable(getter):
+                resolved = getter()
+            if resolved is None:
+                vm = getattr(self, "view_manager", None)
+                idx = getattr(vm, "active", None) if vm is not None else None
+                views = getattr(vm, "views", None) or ()
+                if vm is None or idx is None or not (0 <= idx < len(views)):
+                    _clear()
+                    return
+                state = vm.get(idx)
+            else:
+                state = resolved[1]
+        if state is None:
+            _clear()
+            return
+        view_id = str(getattr(state, "view_id", "") or "")
+        if not view_id:
+            _clear()
+            return
         hidden = {
-            str(item) for item in (getattr(state, "hidden_curve_binding_ids", None) or ())
+            str(item)
+            for item in (getattr(state, "hidden_curve_binding_ids", None) or ())
         }
         rows = []
         for binding in getattr(state, "curve_bindings", None) or ():
@@ -623,32 +655,56 @@ class ViewMixin:
             if getattr(y_ref, "kind", None) != "wwt_record":
                 continue
             binding_id = str(getattr(binding, "binding_id", "") or "")
-            if not binding_id:
+            owner_fid = str(getattr(y_ref, "fid", "") or "")
+            record_index = getattr(y_ref, "record_index", None)
+            if not binding_id or not owner_fid or record_index is None:
                 continue
             rows.append({
                 "binding_id": binding_id,
+                "owner_fid": owner_fid,
+                "record_index": int(record_index),
                 "name": str(getattr(binding, "display_name", "") or binding_id),
+                "unit": str(getattr(binding, "unit", "") or ""),
                 "color": str(getattr(binding, "color", "") or "#64748b"),
                 "visible": binding_id not in hidden,
             })
-        setter(rows)
-
-    def _on_record_curve_visibility_toggled(self, binding_id, visible):
-        if not getattr(self, "view_manager", None) or not self.view_manager.views:
+        if not rows:
+            _clear()
             return
-        state = self.view_manager.get(self.view_manager.active)
+        setter(view_id, rows)
+
+    def _on_record_curve_visibility_toggled(self, view_id, binding_id, visible):
+        vm = getattr(self, "view_manager", None)
+        if vm is None or not vm.views:
+            return
+        idx = vm.active
+        if not (0 <= idx < len(vm.views)):
+            return
+        state = vm.get(idx)
+        if str(getattr(state, "view_id", "") or "") != str(view_id or ""):
+            return
+        bid = str(binding_id or "")
+        binding = None
+        for item in getattr(state, "curve_bindings", None) or ():
+            if str(getattr(item, "binding_id", "") or "") == bid:
+                binding = item
+                break
+        y_ref = getattr(binding, "y_ref", None) if binding is not None else None
+        if binding is None or getattr(y_ref, "kind", None) != "wwt_record":
+            self._sync_record_curve_tree()
+            return
         hidden = [
-            str(item) for item in (getattr(state, "hidden_curve_binding_ids", None) or [])
+            str(item)
+            for item in (getattr(state, "hidden_curve_binding_ids", None) or [])
         ]
-        bid = str(binding_id)
         if visible:
             hidden = [item for item in hidden if item != bid]
         elif bid not in hidden:
             hidden.append(bid)
         state.hidden_curve_binding_ids = hidden
-        self._replot_canvas_for_view(
-            self.view_manager.active, self.canvas_time, preserve_xlim=True
-        )
+        canvas = self._canvas_for_view_index(idx) or getattr(self, "canvas_time", None)
+        self._replot_canvas_for_view(idx, canvas, preserve_xlim=True)
+        self._sync_record_curve_tree()
 
     # -- view tab-bar intent handlers (time section) --------------------
     def _on_view_new(self):

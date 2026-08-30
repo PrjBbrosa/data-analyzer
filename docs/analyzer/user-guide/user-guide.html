@@ -919,8 +919,8 @@
         <span class="pane-hint">FileNavigator</span>
         <ul>
           <li>已加载的数据文件列表（MF4、WWT、ZFD、MAT、ASCII、TDMS 等）</li>
-          <li>每个文件下的通道树</li>
-          <li>勾选通道用于分析</li>
+          <li>每个文件下的通道树（WWT 的 WinWert 原始记录也挂在所属文件下）</li>
+          <li>勾选通道用于分析；原始记录用眼睛控制当前时域 View</li>
         </ul>
       </div>
       <div class="pane-block" data-pane="center">
@@ -952,7 +952,7 @@
     </figure>
     <figure class="real-ui-figure">
       <img src="../../../mf4_analyzer/help/assets/imports-panel.png" alt="TraceLab v8.1.0 载入 WWT、ZFD、MAT 的真机截图">
-      <figcaption>使用仓库内真实样本同时载入 WWT、ZFD、MAT；文件卡片和 WWT 曲线均为实际渲染。含多个窗口的 WWT 会同步到以文件名命名的独立 Board，导入完成会报告已放置 / 未放置数量；单窗口只生成时域 View，不自动加入 UltraView。时域 Inspector 可用眼睛单独隐藏 WinWert 原始辅助线。</figcaption>
+      <figcaption>使用仓库内真实样本同时载入 WWT、ZFD、MAT；文件卡片和 WWT 曲线均为实际渲染。含多个窗口的 WWT 会同步到以文件名命名的独立 Board，导入完成会报告已放置 / 未放置数量；单窗口只生成时域 View，不自动加入 UltraView。所属文件下的 WinWert 原始记录可用眼睛单独隐藏当前时域 View 的辅助线，不改普通通道也不改源文件；关闭文件或从当前 View 移除后，这些记录会从树里同步消失。公式警告里的「未生成」不等于整个 WWT 导入失败。</figcaption>
     </figure>
   </section>
 
@@ -1441,6 +1441,11 @@
       <summary>多个文件叠加，但有的文件没有那个通道怎么办？</summary>
       <div class="faq-body">缺通道的文件会被跳过，状态栏会提示。建议先用 <b>编辑通道</b> 抽屉把不同文件里通道名对齐（重命名），再叠加。</div>
     </details>
+
+    <details class="faq">
+      <summary>WinWert 提示「未生成」是不是整个文件没导入？</summary>
+      <div class="faq-body">不是。那只说明个别公式通道当前解析结果里没法生成，其余可读取数据已经导入。所属文件下的 WinWert 原始记录可用眼睛单独隐藏当前时域 View；关闭文件或从当前 View 移除后，这些记录会从树里同步消失。</div>
+    </details>
   </section>
 
   <footer class="bot">
@@ -1451,7 +1456,7 @@
 <script>
 // ─── 1. Pane diagram ─────────────────────────────────────
 const paneDescs = {
-  left:  '<b>左侧 — 文件 / 通道</b><br>顶部是文件列表（每行显示文件名 · 行数 · 采样率 · 时长，右边带关闭按钮）。点一行切换"当前文件"。下方是该文件的通道树，勾选哪些通道，分析时就用哪些。',
+  left:  '<b>左侧 — 文件 / 通道</b><br>顶部是文件列表（每行显示文件名 · 行数 · 采样率 · 时长，右边带关闭按钮）。点一行切换"当前文件"。下方是该文件的通道树，勾选哪些通道，分析时就用哪些。WWT 的 WinWert 原始记录挂在所属文件下；眼睛只隐藏当前时域 View 的辅助线，不改普通通道也不改源文件。关闭文件或从当前 View 移除后，这些记录会从树里同步消失。',
   center:'<b>中部 — 图表区</b><br>当前模式的输出图在这里。顶部有图表工具栏（缩放 / 平移 / 分屏 · 叠加 / 标注 / 复制图片 / 图表选项）。多通道默认叠加；点"分屏"切成多个子图。',
   right: '<b>右侧 — Inspector</b><br>分两部分。<b>常驻顶部</b>：横坐标类型、时间范围、刻度密度。<b>下半部分</b>：随当前模式变化的参数卡（时域 / FFT / FFT vs Time / 阶次各有一套）。下方还有 6 槽预设栏，1 键存取整套参数。'
 };

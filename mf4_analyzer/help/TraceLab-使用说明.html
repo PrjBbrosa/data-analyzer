@@ -293,7 +293,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "先认准常用格式",
             "pills": [".mf4", ".mdf", ".wwt", ".zfd", ".mat", ".csv", ".xlsx", ".xls"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。多窗口会同步到以文件名命名的独立 Board；单窗口只生成时域 View。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。" ] } ] }
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。多窗口会同步到以文件名命名的独立 Board；单窗口只生成时域 View。当前时域 View 的原始辅助线出现在所属文件下的 WinWert 原始记录分组；眼睛只隐藏该 View 的辅助线，不改普通通道也不改源文件。关闭文件或从当前 View 移除后，记录会从树里同步消失。公式警告里的「未生成」不等于整个文件导入失败。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。" ] } ] }
       ] },
 
     { "id": "load-more-formats", "sec": "第一步", "kicker": "STEP 1 · MORE FILES", "title": "更多格式，按<c>可靠时基</c>读取", "foot": "支持的文件（续）", "density": "compact",

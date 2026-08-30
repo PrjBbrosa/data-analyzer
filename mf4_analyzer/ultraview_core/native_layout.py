@@ -91,6 +91,38 @@ class NativeLayoutProjection:
         return 2
 
 
+# Native-layout codes that are not a degraded import by themselves.
+# WWT import grading and UltraView leftover-toast filters share this set so
+# ``exact_overlap_relocated`` cannot drift between owners.
+NATIVE_LAYOUT_NON_DEGRADED_CODES = frozenset({
+    "exact_overlap",
+    "exact_overlap_relocated",
+    "quantized_collision",
+    "duplicate_ref",
+    "invalid_rect",
+})
+
+
+def is_native_layout_non_degraded(
+    code: str,
+    *,
+    unplaced_count: int = 0,
+    unprojected_count: int = 0,
+) -> bool:
+    """True when ``code`` is a layout success/internal note, not user loss.
+
+    ``quantized_collision`` stays silent as a code; unplaced is reported by
+    structured placement counts. ``invalid_rect`` is silent only when nothing
+    was left unplaced or unprojected.
+    """
+    token = str(code or "").split(":", 1)[0].strip()
+    if token not in NATIVE_LAYOUT_NON_DEGRADED_CODES:
+        return False
+    if token == "invalid_rect":
+        return int(unplaced_count or 0) == 0 and int(unprojected_count or 0) == 0
+    return True
+
+
 def generated_ids_from_plan(plan) -> tuple[str, ...]:
     ids: list[str] = []
     seen: set[str] = set()

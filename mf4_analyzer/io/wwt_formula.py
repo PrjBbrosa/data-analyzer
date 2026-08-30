@@ -281,10 +281,59 @@ def evaluate_wwt_formulas(
     return tuple(catalog), tuple(diagnostics)
 
 
+def collect_formula_refs(formula: str, owner: int = 0) -> tuple[int, ...]:
+    """Return positional catalog indexes referenced by ``formula``.
+
+    Does not evaluate and does not change whitelist / resolver semantics.
+    Unsupported syntax raises ``WwtFormulaError``.
+    """
+    if not formula:
+        return ()
+    return _collect_refs(_parse_formula(formula, owner), owner)
+
+
 def formula_references(record: WwtRecord) -> tuple[int, ...]:
     if not record.formula:
         return ()
-    return _collect_refs(_parse_formula(record.formula, record.index), record.index)
+    return collect_formula_refs(record.formula, record.index)
+
+
+def catalog_resolves_formula_ref(
+    index: int, catalog: tuple[WwtRecord, ...] | list[WwtRecord]
+) -> bool:
+    """True when ``k{index}`` is a present catalog identity the evaluator can bind.
+
+    Out-of-range indexes and value-less non-Pars leaves are unresolved. An
+    in-range ``Pars`` with a formula is a resolvable identity even if that
+    Pars later fails for a different reason. Does not evaluate.
+    """
+    records = catalog or ()
+    if index < 0 or index >= len(records):
+        return False
+    rec = records[index]
+    if rec.values is not None:
+        return True
+    return rec.tag == "Pars" and bool(rec.formula)
+
+
+def unresolved_formula_ref_labels(
+    record: WwtRecord,
+    catalog: tuple[WwtRecord, ...] | list[WwtRecord] | None = None,
+) -> tuple[str, ...]:
+    """``kNN`` labels the current catalog cannot resolve. Does not evaluate."""
+    formula = getattr(record, "formula", None) or ""
+    owner = int(getattr(record, "index", 0) or 0)
+    try:
+        refs = collect_formula_refs(formula, owner)
+    except WwtFormulaError:
+        return ()
+    records = tuple(catalog or ())
+    labels: list[str] = []
+    for ref in refs:
+        if catalog_resolves_formula_ref(ref, records):
+            continue
+        labels.append(f"k{ref}")
+    return tuple(dict.fromkeys(labels))
 
 
 def formula_channel_metadata(record: WwtRecord, refs: tuple[int, ...]) -> dict:

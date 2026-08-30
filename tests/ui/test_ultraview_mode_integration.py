@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtCore import QCoreApplication, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QComboBox, QLabel, QPushButton, QStackedWidget, QToolButton, QWidget
@@ -15,7 +16,10 @@ from mf4_analyzer.ui.side_panels import PanelState
 from mf4_analyzer.ui.ultraview_state import (
     DEFAULT_BOARD_NAME,
     GridAnchor,
+    PreviewMeta,
     STATUS_FRESH,
+    STATUS_MISSING,
+    STATUS_STALE,
     UltraViewRef,
     add_ref,
     free_grid_placement_for,
@@ -1028,3 +1032,50 @@ def test_free_grid_insert_intent_reaches_coordinator_once_with_its_anchor(qapp, 
     assert item is not None
     assert item.rect.column == 12
     assert item.rect.row == 16
+
+
+def test_closing_wwt_source_invalidates_ultraview_preview_keeps_view_id(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from tests._helpers import wwt_factory as wwt
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(win, "plot_time", lambda *_a, **_k: None)
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    win._load_one(str(path))
+    qapp.processEvents()
+    fid = next(iter(win.files))
+    view_id = str(win.view_manager.get(win.view_manager.active).view_id)
+    win.open_ultraview()
+    qapp.processEvents()
+    uv = win._ultraview
+    ref = UltraViewRef("time", view_id)
+    uv.add_from_source_tab("time", view_id)
+    qapp.processEvents()
+    image = QImage(64, 64, QImage.Format_ARGB32)
+    image.fill(QColor("#336699"))
+    published = uv.store.publish(
+        ref,
+        image,
+        digest="pre-close-wwt",
+        meta=PreviewMeta(ref=ref, title=view_id),
+    )
+    assert published is True
+    before = uv.store.get(ref)
+    assert before is not None
+    assert uv.store.image_valid(before.image)
+    win._close(fid, force=True)
+    qapp.processEvents()
+    assert any(str(view.view_id) == view_id for view in win.view_manager.views)
+    after = uv.store.get(ref)
+    still_valid = (
+        after is not None and uv.store.image_valid(getattr(after, "image", None))
+        and getattr(after, "captured_digest", None) == "pre-close-wwt"
+    )
+    assert still_valid is False
+    page = uv.page()
+    if page is not None:
+        status = page._status_for(ref)
+        assert status in {STATUS_STALE, STATUS_MISSING, None} or status != STATUS_FRESH

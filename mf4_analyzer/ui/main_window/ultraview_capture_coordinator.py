@@ -777,6 +777,23 @@ class UltraViewCaptureCoordinator(QObject):
         self._presentation_revision[ref] = next_value
         return next_value
 
+    def invalidate_preview(self, ref: UltraViewRef) -> None:
+        """Drop stored pixels and in-flight grabs. Board membership is unchanged.
+
+        Queued capture callbacks keep the existing digest/generation guard:
+        after this bump they cannot republish the pre-close frame.
+        """
+        if self._inactive() or ref is None:
+            return
+        self._drop_queued_for_ref(ref)
+        self._idle_pending.pop(ref, None)
+        for ident, payload in list(self._unstable.items()):
+            if payload and payload[0] == ref:
+                self._unstable.pop(ident, None)
+        self.bump_presentation_revision(ref)
+        if _alive(self._store):
+            self._store.drop(ref)
+
     def _on_store_images_dropped(self, refs) -> None:
         if self._inactive():
             return

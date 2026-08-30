@@ -1150,7 +1150,7 @@ class MainWindow(
         self.inspector.plot_time_requested.connect(
             lambda: self.plot_time(user_initiated=True)
         )
-        self.inspector.record_curve_visibility_toggled.connect(
+        self.navigator.record_curve_visibility_toggled.connect(
             self._on_record_curve_visibility_toggled
         )
         # Live display toggles for the filter overlay: 显示原始 / 显示滤波后
@@ -1871,6 +1871,9 @@ class MainWindow(
                 # pump and freeze the UI (macOS beachball).
                 QTimer.singleShot(0, self._plot_time_preserving_xlim)
         elif mode in self.analysis_managers:
+            # D8: hide the Time View record subtree when leaving Time. The
+            # sync entry itself no-ops to empty rows whenever mode != "time".
+            self._sync_record_curve_tree()
             role = (
                 "fft_sources" if mode == "fft" else "analysis_candidates"
             )
@@ -2818,13 +2821,18 @@ class MainWindow(
         ):
             return
         group_close = len(ordered) > 1
+        affected = (
+            self._time_view_ids_using_fids(ordered) if group_close else ()
+        )
         closed = []
         for fid in ordered:
             if fid in self.files:
                 self._close(fid, force=True, notify=not group_close)
                 closed.append(fid)
         if group_close and closed:
+            self._present_after_sources_closed()
             self._reset_plot_state(scope='file')
+            self._invalidate_ultraview_previews_for_time_views(affected)
             self.statusBar.showMessage(
                 f"已关闭 {len(closed)} 个来源 | 剩余 {len(self.files)} 文件"
             )

@@ -75,7 +75,11 @@ from ...ultraview_core.model import (
     layout_slots,
     parse_ref_payload,
 )
-from ...ultraview_core.native_layout import NativeLayoutRect, plan_native_layout
+from ...ultraview_core.native_layout import (
+    NATIVE_LAYOUT_NON_DEGRADED_CODES as _NATIVE_LAYOUT_SILENT_CODES,
+    NativeLayoutRect,
+    plan_native_layout,
+)
 from ..ultraview_edits import (
     SelectionMutationPlan,
     plan_selection_delete,
@@ -137,13 +141,7 @@ logger = logging.getLogger(__name__)
 
 # Native-layout projection codes already explained by the WWT confirm dialog
 # (or not user-facing). ``_toast_grid_warnings`` must not dump them raw.
-_NATIVE_LAYOUT_SILENT_CODES = frozenset({
-    "exact_overlap",
-    "exact_overlap_relocated",
-    "quantized_collision",
-    "duplicate_ref",
-    "invalid_rect",
-})
+# ``_NATIVE_LAYOUT_SILENT_CODES`` is the shared set imported from native_layout.
 _PENDING_AUTO_ASPECT = "auto_aspect"
 _PENDING_NATIVE_CARD_FIT = "native_card_fit"
 _BOARD_LIMIT_TOAST = (

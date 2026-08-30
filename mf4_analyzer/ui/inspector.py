@@ -104,7 +104,6 @@ class _ContextualStack(QStackedWidget):
 
 class Inspector(QWidget):
     plot_time_requested = pyqtSignal()
-    record_curve_visibility_toggled = pyqtSignal(str, bool)
     fft_requested = pyqtSignal()
     fft_time_requested = pyqtSignal()
     frf_requested = pyqtSignal()
@@ -282,9 +281,6 @@ class Inspector(QWidget):
         self.top.xaxis_drop_hint_dismissed.connect(self.xaxis_drop_hint_dismissed)
         self.top.tick_density_changed.connect(self.tick_density_changed)
         self.time_ctx.plot_time_requested.connect(self.plot_time_requested)
-        self.time_ctx.record_curve_visibility_toggled.connect(
-            self.record_curve_visibility_toggled
-        )
         self.fft_ctx.fft_requested.connect(self.fft_requested)
         # Ctx signals carry the mode tag themselves (E8); signal-to-signal
         # direct connect avoids a lambda that would keep Inspector↔ctx cycles.

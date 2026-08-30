@@ -367,6 +367,40 @@ def test_exact_overlap_relocated_on_dedicated_board(
         qapp.processEvents()
 
 
+def test_three_exact_overlap_windows_place_all_without_arrow_warning(
+    qapp, tmp_path, monkeypatch,
+):
+    import re
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mw = MainWindow()
+    qapp.processEvents()
+    toasts = []
+    monkeypatch.setattr(
+        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    path = wwt.three_exact_overlap_windows(tmp_path / "triple.wwt")
+    _load_wwt(mw, monkeypatch, path, accept=True)
+    qapp.processEvents()
+    try:
+        board = mw._ultraview.board
+        assert len(board.free_grid) == wwt.THREE_EXACT_OVERLAP_COUNT
+        assert board.unplaced == []
+        warn = " ".join(
+            str(msg) for msg, level in toasts if level in {"warning", "warn"}
+        )
+        assert "exact_overlap_relocated" not in warn
+        assert "→" not in warn
+        assert re.search(r"\d+\s*->\s*\d+", warn) is None
+        info = " ".join(msg for msg, level in toasts if level == "info")
+        assert str(wwt.THREE_EXACT_OVERLAP_COUNT) in info or board.free_grid
+    finally:
+        mw.close()
+        mw.deleteLater()
+        qapp.processEvents()
+
+
 def test_add_time_views_items_only_still_writes_active_board(qapp):
     host = QWidget()
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (

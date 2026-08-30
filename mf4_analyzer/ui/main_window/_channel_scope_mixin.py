@@ -527,6 +527,31 @@ class ChannelScopeMixin:
         box.exec_()
         return box.clickedButton() is remove
 
+    def _time_view_ids_using_fids(self, fids):
+        """View ids whose attachments or curve bindings still name these fids."""
+        removed = {str(fid) for fid in fids or ()}
+        if not removed:
+            return ()
+        found = []
+        seen = set()
+        for state in self.view_manager.views:
+            view_id = str(getattr(state, "view_id", "") or "")
+            if not view_id or view_id in seen:
+                continue
+            attached = {str(fid) for fid in (state.attached_file_ids or ())}
+            if attached & removed:
+                seen.add(view_id)
+                found.append(view_id)
+                continue
+            for binding in getattr(state, "curve_bindings", None) or ():
+                x_fid = str(getattr(getattr(binding, "x_ref", None), "fid", "") or "")
+                y_fid = str(getattr(getattr(binding, "y_ref", None), "fid", "") or "")
+                if x_fid in removed or y_fid in removed:
+                    seen.add(view_id)
+                    found.append(view_id)
+                    break
+        return tuple(found)
+
     def _remove_file_from_all_time_views(self, fid):
         removed = {str(fid)}
         for state in self.view_manager.views:

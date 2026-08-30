@@ -592,3 +592,106 @@ def test_trailer_count_over_max_is_truncated_window(tmp_path):
     assert doc.groups
     assert doc.windows == ()
     assert any(item.startswith("truncated_window:") for item in doc.diagnostics)
+
+
+def test_two_zeit_cohorts_record_only_on_owner_a_roundtrip(tmp_path):
+    path = wwt.two_zeit_cohorts_record_only_on_owner_a(tmp_path / "split.wwt")
+    loaded = load_wwt_document(path)
+    assert len(loaded.groups) == 2
+    lengths = [len(group["data"]) for group in loaded.groups]
+    assert sorted(lengths) == sorted([wwt.COHORT_A_N, wwt.COHORT_B_N])
+    channels = [list(group["channels"]) for group in loaded.groups]
+    assert any(wwt.COHORT_A_Y in cols for cols in channels)
+    assert any(wwt.COHORT_B_Y in cols for cols in channels)
+    assert all(wwt.TOL_Y not in cols for cols in channels)
+    by_name = {record.name: record for record in loaded.document.records}
+    assert by_name[wwt.TOL_Y].declared_n == wwt.AUX_N
+    visible = [
+        row.record_index
+        for window in loaded.document.windows
+        for row in window.curves
+        if row.visible
+    ]
+    assert by_name[wwt.COHORT_A_Y].index in visible
+    assert by_name[wwt.TOL_Y].index in visible
+
+
+def test_catalog_32_unresolved_k51_k52_roundtrip(tmp_path):
+    path = wwt.catalog_32_unresolved_k51_k52(tmp_path / "eo3.wwt")
+    loaded = load_wwt_document(path)
+    assert len(loaded.document.records) == wwt.CATALOG_32_COUNT
+    pars = [record for record in loaded.document.records if record.tag == "Pars"]
+    assert [record.index for record in pars] == [16, 17]
+    assert [record.name for record in pars] == [wwt.PARS_ABTRIEB, wwt.PARS_F_SPUST]
+    assert all(record.formula == wwt.UNRESOLVED_K51_K52_FORMULA for record in pars)
+    assert all(record.values is None for record in pars)
+    joined = " ".join(loaded.document.diagnostics)
+    assert "missing_formula_ref" in joined
+    assert "record 16" in joined
+    assert "record 17" in joined
+
+
+def test_three_exact_overlap_windows_roundtrip(tmp_path):
+    path = wwt.three_exact_overlap_windows(tmp_path / "triple.wwt")
+    parsed = parse_wwt_document(path)
+    assert len(parsed.windows) == wwt.THREE_EXACT_OVERLAP_COUNT
+    rects = [window.rect_mm for window in parsed.windows]
+    assert rects == [wwt.RECT_WIN_A] * wwt.THREE_EXACT_OVERLAP_COUNT
+    visible = [
+        [row.record_index for row in window.curves if row.visible]
+        for window in parsed.windows
+    ]
+    assert visible == [[2], [3], [4]]
+
+
+def test_format_wwt_import_summary_groups_two_missing_ref_pars(tmp_path):
+    from mf4_analyzer.io.wwt_document import (
+        format_wwt_import_summary,
+        format_wwt_issue_for_user,
+        parse_wwt_issue,
+    )
+
+    path = wwt.catalog_32_unresolved_k51_k52(tmp_path / "eo3.wwt")
+    loaded = load_wwt_document(path)
+    issues = [parse_wwt_issue(text) for text in loaded.document.diagnostics]
+    assert any(issue.code == "missing_formula_ref" for issue in issues)
+    summary = format_wwt_import_summary(
+        issues, document=loaded.document, accepted=True,
+    )
+    user = " ".join(
+        filter(None, (
+            format_wwt_issue_for_user(issue, document=loaded.document)
+            for issue in issues
+        ))
+    )
+    blob = f"{summary} {user}"
+    assert wwt.PARS_ABTRIEB in blob
+    assert wwt.PARS_F_SPUST in blob
+    assert "k51" in blob and "k52" in blob
+    assert "record 16" not in summary
+    assert "record 17" not in summary
+    assert "missing_formula_ref" not in summary
+    assert "abs(" not in summary
+    assert "未生成" in summary or "公式通道" in summary
+
+
+def test_format_wwt_import_summary_silences_relocated_keeps_real_losses():
+    from mf4_analyzer.io.wwt_document import WwtIssue, format_wwt_import_summary
+
+    summary = format_wwt_import_summary(
+        (
+            WwtIssue("exact_overlap_relocated", "4 → 3"),
+            WwtIssue("dropped_curve", "window 2 record 9"),
+            WwtIssue("dropped_window", "window 3"),
+            WwtIssue("view_cap", "已生成 2/7 个 WinWert View"),
+            WwtIssue("unsupported_formula", "BadPars (公式: k1.attr)"),
+        ),
+        accepted=True,
+    )
+    assert "exact_overlap_relocated" not in summary
+    assert "4 → 3" not in summary
+    assert "4 -> 3" not in summary
+    assert "dropped_curve" not in summary
+    assert "unsupported_formula" not in summary
+    assert "未生成" in summary or "跳过" in summary or "不支持" in summary
+    assert "2/7" in summary or "上限" in summary or "容量" in summary or "可创建" in summary

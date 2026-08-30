@@ -679,3 +679,15 @@ def test_wwt_native_layout_hint_mentions_views_without_pixel_claims():
     assert hints.hint_display_width(joined) <= hints.HINT_MAX_WIDTH
     assert "像素级一致" not in joined
     assert "全部公式" not in joined
+
+
+def test_record_curve_eye_hint_points_at_owner_file_not_inspector():
+    hint = next(
+        item for item in hints.all_hints() if item.id == "time.record_curve_eye"
+    )
+    joined = hint.text
+    assert "所属文件" in joined
+    assert "眼睛" in joined
+    assert "Inspector" not in joined
+    assert hint.modes == frozenset({"time"})
+    assert hints.hint_display_width(joined) <= hints.HINT_MAX_WIDTH

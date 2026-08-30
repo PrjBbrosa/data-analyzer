@@ -99,7 +99,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "WWT WinWert 排版",
-                sub="多窗口同步到以文件名命名的独立 Board；单窗口只生成时域 View，不自动加入 UltraView。导入完成会报告已放置/未放置数量。不支持的公式或显示选项会警告，不是像素级复刻",
+                sub="多窗口同步到以文件名命名的独立 Board；单窗口只生成时域 View，不自动加入 UltraView。导入完成会报告已放置/未放置数量。公式警告「未生成」不等于整个文件导入失败；成功自动调整位置不会出黄条。不支持的公式或显示选项会警告，不是像素级复刻",
             ),
             QuickRow("BLF / CANoe ASC 报文解码", sub="需配 DBC；界面写「完整匹配」和/或「抽样解码」，不以估算帧数充精确计数。ASC 回退进度只升不降，100% 只在帧交付后"),
             QuickRow(
@@ -259,8 +259,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("绘制 / 取消通道", gesture="勾选复选框"),
             QuickRow(
                 "WinWert 原始辅助线",
-                sub="时域 Inspector 列出 WinWert 原始记录；眼睛只隐藏当前 View 的辅助线，不改 Navigator 也不改源文件",
-                gesture="Inspector 眼睛",
+                sub="所属文件下的 WinWert 原始记录；眼睛只隐藏当前时域 View 的辅助线，不改普通通道也不改源文件。关闭文件或从当前 View 移除后，记录会从树里同步消失",
+                gesture="左侧树眼睛",
             ),
             QuickRow(
                 "调整文件 / 通道顺序",

@@ -4983,3 +4983,81 @@ def test_f10_view_rename_refreshes_navigator_empty_state(qapp, qtbot):
     qtbot.wait(10)
     assert "频谱 · 噪声谱" in cl.empty_state.text()
     assert cl._empty_view_name == "噪声谱"
+
+
+def test_close_all_clears_wwt_record_tree_without_waiting_for_plot(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_count
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    win._load_one(str(path))
+    qapp.processEvents()
+    sync = getattr(win, "_sync_record_curve_tree", None)
+    if callable(sync):
+        sync()
+        qapp.processEvents()
+    rows_before = record_binding_count(win.navigator)
+    assert rows_before == 1
+    state = win.view_manager.get(win.view_manager.active)
+    assert any(b.y_ref.kind == "wwt_record" for b in state.curve_bindings)
+    win.close_all(force=True)
+    qapp.processEvents()
+    assert win.files == {}
+    for view in win.view_manager.views:
+        assert list(view.curve_bindings) == []
+        assert list(getattr(view, "hidden_curve_binding_ids", []) or []) == []
+    assert record_binding_count(win.navigator) == 0
+    assert win.canvas_time.axes_list == []
+    assert win.canvas_time._channel_lines == {}
+
+
+def test_close_single_wwt_source_filters_all_time_views_and_keeps_sibling(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_count, record_binding_roles
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(win, "plot_time", lambda *_a, **_k: None)
+    path = wwt.two_zeit_cohorts_record_only_on_owner_a(tmp_path / "split.wwt")
+    win._load_one(str(path))
+    qapp.processEvents()
+    fids = list(win.files)
+    assert len(fids) == 2
+    view_ids_before = [view.view_id for view in win.view_manager.views]
+    owner_fid = None
+    for state in win.view_manager.views:
+        for binding in state.curve_bindings:
+            if binding.y_ref.kind == "wwt_record":
+                owner_fid = binding.y_ref.fid
+                break
+    assert owner_fid in fids
+    sibling = next(fid for fid in fids if fid != owner_fid)
+    win.view_manager.duplicate(win.view_manager.active)
+    qapp.processEvents()
+    sync = getattr(win, "_sync_record_curve_tree", None)
+    if callable(sync):
+        sync()
+        qapp.processEvents()
+    assert record_binding_count(win.navigator) == 1
+    win._close(owner_fid, force=True)
+    qapp.processEvents()
+    assert owner_fid not in win.files
+    assert sibling in win.files
+    remaining_ids = [view.view_id for view in win.view_manager.views]
+    assert set(view_ids_before).issubset(set(remaining_ids))
+    for state in win.view_manager.views:
+        assert all(b.y_ref.fid != owner_fid for b in state.curve_bindings)
+        assert owner_fid not in state.attached_file_ids
+    if callable(sync):
+        sync()
+        qapp.processEvents()
+    assert record_binding_count(win.navigator) == 0
+    assert all(role[3] != owner_fid for role in record_binding_roles(win.navigator))

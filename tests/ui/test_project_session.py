@@ -1522,3 +1522,94 @@ def test_project_roundtrip_restores_fft_remarks_and_frequency_cursor(
     assert canvas2._cursor_a_frequency == pytest.approx(placement["ax"])
     assert canvas2._cursor_b_frequency == pytest.approx(placement["bx"])
     assert all(line.isVisible() for line in canvas2._cursor_a_lines)
+
+
+def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_count, record_binding_roles
+
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    proj = tmp_path / "wwt-records.tlproj"
+    mw = MainWindow()
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(mw, "plot_time", lambda *_a, **_k: None)
+    mw._load_one(str(path))
+    qapp.processEvents()
+    state = mw.view_manager.get(mw.view_manager.active)
+    record = next(
+        binding for binding in state.curve_bindings
+        if binding.y_ref.kind == "wwt_record"
+    )
+    state.hidden_curve_binding_ids = [record.binding_id]
+    mw.save_project(proj)
+
+    restored = MainWindow()
+    monkeypatch.setattr(restored._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(restored, "plot_time", lambda *_a, **_k: None)
+    restored.open_project(proj)
+    qapp.processEvents()
+    sync = getattr(restored, "_sync_record_curve_tree", None)
+    if callable(sync):
+        sync()
+        qapp.processEvents()
+    restored_state = restored.view_manager.get(restored.view_manager.active)
+    assert record.binding_id in restored_state.hidden_curve_binding_ids
+    assert record_binding_count(restored.navigator) == 1
+    roles = record_binding_roles(restored.navigator)
+    assert roles[0][2] == record.binding_id
+
+
+def test_project_restore_unremapable_record_has_no_ghost_row(
+    qapp, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QMessageBox
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+    from tests._helpers.wwt_record_tree import record_binding_roles
+
+    path = wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")
+    proj = tmp_path / "wwt-ghost.tlproj"
+    mw = MainWindow()
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(mw, "plot_time", lambda *_a, **_k: None)
+    mw._load_one(str(path))
+    qapp.processEvents()
+    mw.save_project(proj)
+    payload = json.loads(proj.read_text(encoding="utf-8"))
+    mutated = False
+    for view in payload.get("views") or []:
+        for binding in view.get("curve_bindings") or []:
+            y_ref = binding.get("y_ref") or {}
+            if y_ref.get("kind") == "wwt_record":
+                y_ref["record_index"] = 9999
+                binding["y_ref"] = y_ref
+                mutated = True
+    assert mutated
+    proj.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    restored = MainWindow()
+    monkeypatch.setattr(restored._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(restored, "plot_time", lambda *_a, **_k: None)
+    restored.open_project(proj)
+    qapp.processEvents()
+    sync = getattr(restored, "_sync_record_curve_tree", None)
+    if callable(sync):
+        sync()
+        qapp.processEvents()
+    roles = record_binding_roles(restored.navigator)
+    assert all(role[4] != 9999 for role in roles)
+    health = restored._project_restore_health
+    live_bad = [
+        binding
+        for view in restored.view_manager.views
+        for binding in view.curve_bindings
+        if getattr(binding.y_ref, "kind", None) == "wwt_record"
+        and getattr(binding.y_ref, "record_index", None) == 9999
+    ]
+    assert live_bad == []
+    assert health.degraded or health.dropped_time_refs
