@@ -9,7 +9,7 @@ def test_update_button_opens_release_url(qapp, monkeypatch):
                         lambda url: captured.__setitem__("url", url.toString()) or True)
 
     mw = MainWindow()
-    assert mw._update_btn.toolTip() == "检查更新"
+    assert mw._update_btn.toolTip() == f"检查更新\n{app_meta.APP_CREDIT}"
     assert mw._update_btn.text() == app_meta.APP_VERSION
     mw._update_btn.click()
     assert captured["url"] == app_meta.RELEASE_URL

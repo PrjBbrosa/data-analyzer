@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.1.0. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.2.0. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -95,8 +95,12 @@ uses right-drag for canvas panning while left-drag continues to box-select. In
 the Time workspace, channels can be dragged into the current View or its X band,
 and the left-side file/channel order now determines both subplot and overlay
 ordering.
-8.1.0 establishes the current product release baseline and synchronizes the
-application title, published guides, and Windows Full/Analyzer package defaults.
+8.1.0 synchronized the application title, published guides, and Windows
+Full/Analyzer package defaults. 8.2.0 closes the focused View ownership path
+for WinWert record visibility and the UltraView release lifecycle: record eyes
+only affect the focused Time View, while card-release completion remains safe
+during synchronous projection refresh. Smart Layout, Compact Arrange, Card Fit,
+and Board Fit remain separate actions with persisted layout intent.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

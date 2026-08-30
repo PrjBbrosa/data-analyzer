@@ -654,7 +654,7 @@ class MainWindow(
         self._update_btn.setText(app_meta.APP_VERSION)
         self._update_btn.setAutoRaise(True)
         self._update_btn.setCursor(Qt.PointingHandCursor)
-        self._update_btn.setToolTip("检查更新")
+        self._update_btn.setToolTip(f"检查更新\n{app_meta.APP_CREDIT}")
         self._update_btn.clicked.connect(self._open_release_page)
 
         self.statusBar.addPermanentWidget(self._update_btn)

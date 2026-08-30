@@ -24,17 +24,29 @@ def _deck_data() -> dict:
 
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
-    assert d["meta"]["version"] == "v8.1.0"
-    assert d["meta"]["updated"] == "2026-08-23"
+    assert d["meta"]["version"] == "v8.2.0"
+    assert d["meta"]["updated"] == "2026-08-30"
     assert d["meta"]["docVersion"] == "3.0"
     assert [c["v"] for c in d["changelog"]][:5] == [
-        "v8.1.0", "v8.0.1", "v8.0.0", "v7.9.9", "v7.9.8",
+        "v8.2.0", "v8.1.0", "v8.0.1", "v8.0.0", "v7.9.9",
     ]
     current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
         '  "changelog": [', 1,
     )
-    assert "TraceLab v8.1.0" in current_manual
+    assert "TraceLab v8.2.0" in current_manual
     assert "v8.0.0" not in current_manual.lower()
+
+
+def test_v820_changelog_covers_stability_closure():
+    entry = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v8.2.0"
+    )
+    description = " ".join(entry["items"])
+    for keyword in (
+        "WinWert 原始记录", "当前聚焦的时域 View", "UltraView", "智能排版",
+        "紧凑排列", "按原图比例", "适应内容", "保存重开",
+    ):
+        assert keyword in description
 
 
 def test_v800_changelog_covers_ultraview_workspace_and_restore():
@@ -219,9 +231,9 @@ def test_manual_uses_current_real_ui_assets():
         assert f"assets/{name}" in html
 
 
-def test_published_guide_tracks_v810_and_real_ui_assets():
+def test_published_guide_tracks_v820_and_real_ui_assets():
     html = PUBLISHED_GUIDE.read_text(encoding="utf-8")
-    assert "TraceLab v8.1.0" in html
+    assert "TraceLab v8.2.0" in html
     for name in ("WWT", "ZFD", "MAT", "time-panel.png", "imports-panel.png"):
         assert name in html
     assert "matplotlib" not in html
@@ -294,7 +306,7 @@ def test_panel_guides_cover_new_topics():
     }
     for fname, kws in checks.items():
         text = (HELP / fname).read_text(encoding="utf-8")
-        assert "TraceLab v8.1.0" in text
+        assert "TraceLab v8.2.0" in text
         for kw in kws:
             assert kw in text, f"{fname} missing: {kw}"
 
@@ -329,7 +341,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
     assert guide_path("ultraview") == path
     assert path.is_file()
     text = path.read_text(encoding="utf-8")
-    assert "TraceLab v8.1.0" in text
+    assert "TraceLab v8.2.0" in text
     for keyword in (
         "只读", "不计算", "View 库", "托盘", "加入总览",
         "打开原 View", "PNG", "缺", "孤儿", ".tlproj",
@@ -360,6 +372,24 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "自动排版",
     ):
         assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
+
+
+def test_manual_cover_lists_all_analysis_modes_and_quiet_credit():
+    html = MANUAL.read_text(encoding="utf-8")
+    from mf4_analyzer.app_meta import APP_CREDIT
+
+    assert _deck_data()["meta"]["credit"] == APP_CREDIT
+    assert "m.credit ? ` · ${m.credit}` : ''" in html
+    for row in (
+        ("看波形", "时域"),
+        ("看频率成分", "FFT"),
+        ("看频率随时间", "时频"),
+        ("看输入到输出", "频响"),
+        ("看转速相关振动", "阶次"),
+        ("实时录数据", "采集"),
+    ):
+        label, mode = row
+        assert f"<span>{label}</span><b>{mode}</b>" in html, f"cover missing {mode}"
 
 
 def test_main_manual_and_published_guide_name_the_five_modes_and_frf():
