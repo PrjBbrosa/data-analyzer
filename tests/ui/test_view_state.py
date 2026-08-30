@@ -3,9 +3,12 @@ import json
 from mf4_analyzer.ui.view_state import (
     MAX_VIEWS,
     TIME_DOMAIN_MAX_VIEWS,
+    X_VIEWPORT_WWT_NATIVE,
+    XViewportIntent,
     ViewManager,
     ViewState,
     default_view_tab_color,
+    is_reusable_blank_view,
 )
 from mf4_analyzer.ui.project_io import remap_view_fids
 
@@ -80,6 +83,7 @@ def test_viewstate_defaults_are_empty():
     assert st.cursor_placement is None
     assert st.curve_bindings == []
     assert st.hidden_curve_binding_ids == []
+    assert st.x_viewport_intent is None
     assert isinstance(st.view_id, str) and st.view_id
 
 
@@ -232,7 +236,6 @@ def test_default_view_tab_color_matches_make_and_cycles_every_twelve():
 
 def test_hidden_curve_binding_ids_roundtrip_and_block_blank_reuse():
     from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
-    from mf4_analyzer.ui.view_state import is_reusable_blank_view
 
     binding = TimeCurveBinding(
         binding_id="window-1-record-2",
@@ -266,3 +269,26 @@ def test_hidden_curve_binding_ids_roundtrip_and_block_blank_reuse():
         hidden_curve_binding_ids=["window-1-record-2"],
     )
     assert is_reusable_blank_view(hidden_only) is False
+
+
+def test_x_viewport_intent_roundtrip_and_legacy_missing_field():
+    st = ViewState(
+        name="WinWert 1",
+        tab_color="#2d7ff9",
+        xlim=(-100.0, 100.0),
+        x_viewport_intent=XViewportIntent(
+            source=X_VIEWPORT_WWT_NATIVE,
+            initial_range=(-100.0, 100.0),
+            home_range=(-100.0, 100.0),
+        ),
+    )
+    payload = json.loads(json.dumps(st.to_dict()))
+    again = ViewState.from_dict(payload)
+    assert again.x_viewport_intent is not None
+    assert again.x_viewport_intent.source == X_VIEWPORT_WWT_NATIVE
+    assert again.x_viewport_intent.home_range == (-100.0, 100.0)
+    assert again.xlim == (-100.0, 100.0)
+    assert is_reusable_blank_view(st) is False
+    legacy = ViewState.from_dict({"name": "Legacy", "tab_color": "#2d7ff9"})
+    assert legacy.x_viewport_intent is None
+

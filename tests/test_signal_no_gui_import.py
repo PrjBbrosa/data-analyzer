@@ -79,6 +79,7 @@ import mf4_analyzer.signal.fft  # noqa: F401
 import mf4_analyzer.signal.frf  # noqa: F401
 import mf4_analyzer.signal.spectrogram  # noqa: F401
 import mf4_analyzer.signal.analysis_defaults  # noqa: F401
+import mf4_analyzer.signal.custom_x_paths  # noqa: F401
 
 # A sanity smoke: the classes must exist and be callable.
 from mf4_analyzer.signal.fft import FFTAnalyzer
@@ -98,6 +99,14 @@ from mf4_analyzer.signal.analysis_defaults import (
 assert ANALYSIS_WINDOW_CANDIDATES[-1] == 'flattop'
 assert DEFAULT_COHERENCE_THRESHOLD == 0.8
 assert normalize_overlap_fraction(50) == 0.5
+
+from mf4_analyzer.signal.custom_x_paths import SeriesPathResult, analyze_custom_x_paths
+assert callable(analyze_custom_x_paths), 'analyze_custom_x_paths missing'
+assert isinstance(
+    analyze_custom_x_paths([0.0, 1.0, 0.0], [1.0, 2.0, 3.0]),
+    SeriesPathResult,
+)
+
 assert 'scipy' not in sys.modules or sys.modules['scipy'] is None
 assert 'mf4_analyzer.ui' not in sys.modules, 'signal import pulled in mf4_analyzer.ui'
 

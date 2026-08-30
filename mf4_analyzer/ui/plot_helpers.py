@@ -9,7 +9,101 @@ so existing ``from mf4_analyzer.ui.canvases import _format_dual_html``
 calls continue to work without change.
 """
 
+from dataclasses import dataclass, field
+
 import numpy as np
+
+from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, TIME_MODE
+
+_DUAL_TABLE_OPEN = (
+    '<table cellspacing="0" cellpadding="0" '
+    'style="font-size:11px; color:#111827;">'
+)
+_DUAL_MINI_TABLE_OPEN = (
+    '<table cellspacing="0" cellpadding="0" style="font-size:11px;">'
+)
+_MINI_VALUE_FONT = "font-family:'SF Mono',Menlo,Consolas,monospace;"
+
+
+@dataclass(frozen=True)
+class DualCursorBranch:
+    """One Custom-X path contribution shown as a compact subrow."""
+
+    direction: int
+    min_value: float
+    max_value: float
+    avg: float
+
+    @property
+    def branch_label(self) -> str:
+        if self.direction > 0:
+            return "X↑"
+        if self.direction < 0:
+            return "X↓"
+        return "全程"
+
+    @property
+    def tooltip_role(self) -> str:
+        if self.direction > 0:
+            return "升程"
+        if self.direction < 0:
+            return "回程"
+        return ""
+
+
+@dataclass
+class DualCursorRow:
+    """Structured dual-cursor row. Time mode keeps the 7-field visual contract.
+
+    Custom-X rows carry ``mode='channel'`` plus optional ``branches`` / ``status``.
+    Sequence access ``row[0]..row[6]`` remains the historical 7-tuple so hidden-
+    curve and pill tests that index a time row keep working.
+    """
+
+    channel_name: str
+    min_value: float | None
+    max_value: float | None
+    avg: float | None
+    delta: float | None
+    unit_suffix: str
+    color: str
+    identity: object = None
+    label: str = ""
+    mode: str = TIME_MODE
+    branch: str = ""
+    status: str = ""
+    x_unit: str = ""
+    branches: tuple[DualCursorBranch, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            self.label = self.channel_name
+
+    def __len__(self) -> int:
+        return 7
+
+    def __getitem__(self, index):
+        seq = (
+            self.channel_name,
+            _numeric_or_nan(self.min_value),
+            _numeric_or_nan(self.max_value),
+            _numeric_or_nan(self.avg),
+            _numeric_or_nan(self.delta),
+            self.unit_suffix,
+            self.color,
+        )
+        return seq[index]
+
+
+def _numeric_or_nan(value):
+    if value is None:
+        return float("nan")
+    return value
+
+
+def dual_row_is_custom_x(row) -> bool:
+    mode = getattr(row, "mode", None)
+    return mode in (CHANNEL_MODE, "channel")
 
 
 def _split_prefixed_label(text):
@@ -86,50 +180,209 @@ def _format_single_cursor_channel_html(channel_name, value, unit_suffix, color):
     )
 
 
-def _format_dual_html(rows):
-    """rows: list of (channel_name, mn, mx, avg, delta, unit_suffix, color).
-    Channel name is rendered on its own line (file prefix + name split when
-    the source matches '[file] channel'); stats follow as a 4-column row.
-    Channel name and numeric cells are tinted with the channel's plot color."""
+def _channel_name_html(channel_name, color):
     from html import escape
-    parts = ['<table cellspacing="0" cellpadding="0" '
-             'style="font-size:11px; color:#111827;">']
-    for i, row in enumerate(rows):
-        if len(row) >= 7:
-            ch, mn, mx, avg, delta, u, color = row[:7]
-        else:
-            ch, mn, mx, avg, delta, u = row[:6]
-            color = '#111827'
-        prefix, rest = _split_prefixed_label(ch)
-        if prefix is not None:
-            name_html = (f'<span style="color:#64748b;">{escape(prefix)}</span>'
-                         f'<br/><b style="color:{color};">{escape(rest)}</b>')
-        else:
-            name_html = f'<b style="color:{color};">{escape(ch)}</b>'
-        top_pad = '8px' if i > 0 else '0'
-        parts.append(
-            f'<tr><td colspan="4" style="padding-top:{top_pad}; padding-bottom:2px;">'
-            f'{name_html}</td></tr>'
+
+    prefix, rest = _split_prefixed_label(channel_name)
+    if prefix is not None:
+        return (
+            f'<span style="color:#64748b;">{escape(prefix)}</span>'
+            f'<br/><b style="color:{color};">{escape(rest)}</b>'
         )
-        cell = (f'padding:1px 8px 1px 0; color:{color}; font-family:'
-                '\'SF Mono\',Menlo,Consolas,monospace;')
-        lab = 'padding:1px 4px 1px 0; color:#94a3b8;'
+    return f'<b style="color:{color};">{escape(channel_name)}</b>'
+
+
+def _unpack_time_dual_row(row):
+    if len(row) >= 7:
+        ch, mn, mx, avg, delta, u, color = row[:7]
+    else:
+        ch, mn, mx, avg, delta, u = row[:6]
+        color = '#111827'
+    return ch, mn, mx, avg, delta, u, color
+
+
+def _format_time_dual_block(parts, *, index, channel_name, mn, mx, avg, delta, unit_suffix, color):
+    from html import escape
+
+    top_pad = '8px' if index > 0 else '0'
+    parts.append(
+        f'<tr><td colspan="4" style="padding-top:{top_pad}; padding-bottom:2px;">'
+        f'{_channel_name_html(channel_name, color)}</td></tr>'
+    )
+    cell = (f'padding:1px 8px 1px 0; color:{color}; font-family:'
+            '\'SF Mono\',Menlo,Consolas,monospace;')
+    lab = 'padding:1px 4px 1px 0; color:#94a3b8;'
+    parts.append(
+        f'<tr>'
+        f'<td style="{lab}">Min</td>'
+        f'<td style="{cell}" align="right">{mn:.4g}{escape(unit_suffix)}</td>'
+        f'<td style="{lab}; padding-left:8px;">Max</td>'
+        f'<td style="{cell}" align="right">{mx:.4g}{escape(unit_suffix)}</td>'
+        f'</tr>'
+        f'<tr>'
+        f'<td style="{lab}">Avg</td>'
+        f'<td style="{cell}" align="right">{avg:.4g}{escape(unit_suffix)}</td>'
+        f'<td style="{lab}; padding-left:8px;">△</td>'
+        f'<td style="{cell}" align="right">{delta:.4g}{escape(unit_suffix)}</td>'
+        f'</tr>'
+    )
+
+
+def _format_custom_x_dual_block(parts, *, index, row):
+    from html import escape
+
+    color = row.color or '#111827'
+    unit = row.unit_suffix or ''
+    top_pad = '8px' if index > 0 else '0'
+    parts.append(
+        f'<tr><td colspan="4" style="padding-top:{top_pad}; padding-bottom:2px;">'
+        f'{_channel_name_html(row.channel_name, color)}</td></tr>'
+    )
+    cell = (f'padding:1px 8px 1px 0; color:{color}; font-family:'
+            '\'SF Mono\',Menlo,Consolas,monospace;')
+    lab = 'padding:1px 4px 1px 0; color:#94a3b8;'
+    if row.status and not row.branches:
+        parts.append(
+            f'<tr><td colspan="4" style="{lab}">{escape(row.status)}</td></tr>'
+        )
+        return
+    for branch in row.branches:
+        label = branch.branch_label
         parts.append(
             f'<tr>'
-            f'<td style="{lab}">Min</td>'
-            f'<td style="{cell}" align="right">{mn:.4g}{escape(u)}</td>'
+            f'<td style="{lab}">{escape(label)}</td>'
+            f'<td style="{cell}" align="right">Min {branch.min_value:.4g}{escape(unit)}</td>'
             f'<td style="{lab}; padding-left:8px;">Max</td>'
-            f'<td style="{cell}" align="right">{mx:.4g}{escape(u)}</td>'
+            f'<td style="{cell}" align="right">{branch.max_value:.4g}{escape(unit)}</td>'
             f'</tr>'
             f'<tr>'
-            f'<td style="{lab}">Avg</td>'
-            f'<td style="{cell}" align="right">{avg:.4g}{escape(u)}</td>'
-            f'<td style="{lab}; padding-left:8px;">△</td>'
-            f'<td style="{cell}" align="right">{delta:.4g}{escape(u)}</td>'
+            f'<td style="{lab}"></td>'
+            f'<td style="{cell}" align="right">Avg {branch.avg:.4g}{escape(unit)}</td>'
+            f'<td colspan="2"></td>'
             f'</tr>'
+        )
+    if row.status and row.branches:
+        parts.append(
+            f'<tr><td colspan="4" style="{lab}">{escape(row.status)}</td></tr>'
+        )
+
+
+def _format_dual_html(rows):
+    """Format dual-cursor rows.
+
+    Time rows keep the historical 4-cell Min/Max/Avg/△ table. Custom-X rows
+    show a channel title plus ``X↑`` / ``X↓`` / ``全程`` subrows and never a
+    single-value △ column.
+    """
+    parts = [_DUAL_TABLE_OPEN]
+    for i, row in enumerate(rows):
+        if dual_row_is_custom_x(row):
+            _format_custom_x_dual_block(parts, index=i, row=row)
+            continue
+        ch, mn, mx, avg, delta, u, color = _unpack_time_dual_row(row)
+        _format_time_dual_block(
+            parts,
+            index=i,
+            channel_name=ch,
+            mn=mn,
+            mx=mx,
+            avg=avg,
+            delta=delta,
+            unit_suffix=u,
+            color=color,
         )
     parts.append('</table>')
     return ''.join(parts)
+
+
+def _format_dual_mini_html(rows):
+    """Mini dual-cursor table.
+
+    Time rows keep coloured-dot + name + △. Custom-X rows keep direction + Avg
+    so four files × two branches stay readable.
+    """
+    from html import escape
+
+    if any(dual_row_is_custom_x(row) for row in rows or ()):
+        parts = [_DUAL_MINI_TABLE_OPEN]
+        for i, row in enumerate(rows):
+            color = getattr(row, "color", "#111827") or '#111827'
+            top_pad = '5px' if i > 0 else '0'
+            name = str(getattr(row, "channel_name", "") or "")
+            if ']' in name and name.startswith('['):
+                name = name.split(']', 1)[-1].strip()
+            parts.append(
+                f'<tr><td style="padding-top:{top_pad};">'
+                f'<span style="color:{color};">●</span></td>'
+                f'<td style="padding-left:4px; color:{color}; font-weight:600; '
+                f'padding-top:{top_pad};">{escape(name)}</td>'
+                f'<td></td></tr>'
+            )
+            if row.status and not getattr(row, "branches", ()):
+                parts.append(
+                    f'<tr><td></td><td colspan="2" style="padding-left:4px; '
+                    f'color:#94a3b8;">{escape(row.status)}</td></tr>'
+                )
+                continue
+            unit = getattr(row, "unit_suffix", "") or ""
+            for branch in getattr(row, "branches", ()) or ():
+                parts.append(
+                    f'<tr><td></td>'
+                    f'<td style="padding-left:4px; color:{color};">{escape(branch.branch_label)}</td>'
+                    f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT}">'
+                    f'Avg&nbsp;{branch.avg:.4g}{escape(unit)}</td></tr>'
+                )
+            if row.status and getattr(row, "branches", ()):
+                parts.append(
+                    f'<tr><td></td><td colspan="2" style="padding-left:4px; '
+                    f'color:#94a3b8;">{escape(row.status)}</td></tr>'
+                )
+        parts.append('</table>')
+        return ''.join(parts)
+
+    parts = [_DUAL_MINI_TABLE_OPEN]
+    for i, row in enumerate(rows):
+        ch, _mn, _mx, _avg, delta, u, color = _unpack_time_dual_row(row)
+        if ']' in ch and ch.startswith('['):
+            ch = ch.split(']', 1)[-1].strip()
+        top_pad = '5px' if i > 0 else '0'
+        parts.append(
+            f'<tr><td style="padding-top:{top_pad};">'
+            f'<span style="color:{color};">●</span></td>'
+            f'<td style="padding-left:4px; color:{color}; font-weight:600; padding-top:{top_pad};">'
+            f'{escape(ch)}</td>'
+            f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT} padding-top:{top_pad};">'
+            f'△&nbsp;{delta:.4g}{escape(u)}</td></tr>'
+        )
+    parts.append('</table>')
+    return ''.join(parts)
+
+
+def format_dual_rows_tooltip(rows) -> str:
+    """Plain-text tooltip for mini Custom-X rows (Min/Max + 升程/回程)."""
+    lines = []
+    for row in rows or ():
+        if not dual_row_is_custom_x(row):
+            continue
+        name = str(row.channel_name or row.label or "")
+        if row.status and not row.branches:
+            lines.append(f"{name}: {row.status}" if name else row.status)
+            continue
+        if name:
+            lines.append(name)
+        unit = row.unit_suffix or ""
+        for branch in row.branches:
+            role = branch.tooltip_role
+            role_bit = f" {role}" if role else ""
+            lines.append(
+                f"{branch.branch_label}{role_bit}  "
+                f"Min={branch.min_value:.4g}{unit}  "
+                f"Max={branch.max_value:.4g}{unit}  "
+                f"Avg={branch.avg:.4g}{unit}"
+            )
+        if row.status:
+            lines.append(row.status)
+    return "\n".join(lines)
 
 
 def _interp_cursor_value(t, sig, x):

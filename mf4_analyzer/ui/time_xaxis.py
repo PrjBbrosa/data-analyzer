@@ -24,6 +24,20 @@ SelectionPayload = tuple[str, str | None, str]
 
 
 @dataclass(frozen=True)
+class CursorXAxisContext:
+    """Explicit TimeDomain cursor X-axis identity. Display labels are not keys."""
+
+    mode: str = TIME_MODE
+    identity: object = None
+    label: str = ""
+    unit: str = ""
+
+    @property
+    def is_channel(self) -> bool:
+        return self.mode == CHANNEL_MODE
+
+
+@dataclass(frozen=True)
 class CustomXAxisSpec:
     """Applied custom-X state, independent of the Inspector draft widgets."""
 
@@ -424,6 +438,7 @@ __all__ = [
     "EXACT_SOURCE",
     "PER_SOURCE_NAME",
     "TIME_MODE",
+    "CursorXAxisContext",
     "CustomXAxisSpec",
     "CustomXResolution",
     "SelectionPayload",

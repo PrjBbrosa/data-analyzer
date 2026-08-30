@@ -443,7 +443,7 @@ class ViewMixin:
         if callable(empty):
             empty(section_label='时域', view_name=state.name)
 
-    def _restore_view_xlim(self, canvas, xlim):
+    def _restore_view_xlim(self, canvas, xlim, intent=None):
         """Restore a View's saved X window unless it no longer frames the data.
 
         A saved window is always a window INTO the data it was captured on, so
@@ -478,7 +478,10 @@ class ViewMixin:
             except (TypeError, ValueError):
                 lo = hi = None
             if lo is not None:
-                keep = bool(fits(canvas, lo, hi))
+                try:
+                    keep = bool(fits(canvas, lo, hi, intent))
+                except TypeError:
+                    keep = bool(fits(canvas, lo, hi))
         if keep:
             canvas.restore_visible_xlim(xlim, flush=False)
             return
@@ -541,7 +544,12 @@ class ViewMixin:
             # then a single settlement. _restore_view_xlim keeps that contract
             # on both its verbatim-restore and reframe-to-data branches (see
             # its docstring) — settle_view_restore() below is what flushes.
-            self._restore_view_xlim(canvas, state.xlim)
+            install_intent = getattr(canvas, "set_x_viewport_intent", None)
+            if callable(install_intent):
+                install_intent(getattr(state, "x_viewport_intent", None))
+            self._restore_view_xlim(
+                canvas, state.xlim, intent=getattr(state, "x_viewport_intent", None),
+            )
             axis_opts = state.axis_opts or {}
             native_ticks = axis_opts.get("native_ticks") or {}
             native_y = native_ticks.get("y") if isinstance(native_ticks, dict) else None

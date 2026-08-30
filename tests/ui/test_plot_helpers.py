@@ -13,13 +13,18 @@ import numpy as np
 import pytest
 
 from mf4_analyzer.ui.plot_helpers import (
+    DualCursorBranch,
+    DualCursorRow,
     _compact_axis_label,
     _format_dual_html,
+    _format_dual_mini_html,
     _format_single_cursor_channel_html,
     _interp_cursor_value,
+    format_dual_rows_tooltip,
     _middle_ellipsis,
     _split_prefixed_label,
 )
+from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE
 
 
 # ---------------------------------------------------------------------------
@@ -460,3 +465,60 @@ class TestInterpCursorValue:
         result = _interp_cursor_value(t, sig, 3.0)
         # linear: 100 + (200-100)*3/10 = 130
         assert result == pytest.approx(130.0)
+
+
+def _custom_x_pair_row(name="Rack Force", color="#1769e0"):
+    return DualCursorRow(
+        channel_name=name,
+        min_value=1.0,
+        max_value=3.0,
+        avg=2.0,
+        delta=None,
+        unit_suffix=" N",
+        color=color,
+        mode=CHANNEL_MODE,
+        branches=(
+            DualCursorBranch(1, 1.0, 3.0, 2.0),
+            DualCursorBranch(-1, 0.0, 2.0, 1.0),
+        ),
+    )
+
+
+class TestCustomXDualHtml:
+    def test_unique_pair_has_direction_subrows_without_delta(self):
+        html = _format_dual_html([_custom_x_pair_row()])
+        assert "X↑" in html
+        assert "X↓" in html
+        assert "Rack Force" in html
+        assert "△" not in html
+        assert "N" in html
+
+    def test_diagnostic_status_has_no_forged_pair(self):
+        row = DualCursorRow(
+            channel_name="Rack Force",
+            min_value=None,
+            max_value=None,
+            avg=None,
+            delta=None,
+            unit_suffix=" N",
+            color="#1769e0",
+            mode=CHANNEL_MODE,
+            status="无法可靠区分升程/回程",
+        )
+        html = _format_dual_html([row])
+        assert "无法可靠区分升程/回程" in html
+        assert "X↑" not in html
+        assert "△" not in html
+
+    def test_mini_keeps_direction_and_avg(self):
+        html = _format_dual_mini_html([_custom_x_pair_row()])
+        assert "X↑" in html
+        assert "Avg" in html
+        assert "△" not in html
+
+    def test_tooltip_adds_stroke_roles_and_minmax(self):
+        tip = format_dual_rows_tooltip([_custom_x_pair_row()])
+        assert "升程" in tip
+        assert "回程" in tip
+        assert "Min=" in tip
+        assert "Max=" in tip

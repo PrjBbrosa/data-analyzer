@@ -394,3 +394,53 @@ def test_chart_stack_delegates_are_pure_pass_throughs(stack):
     assert (stack._single_cursor_channel_color(part)
             == cursor_pill.single_cursor_channel_color(part))
     assert stack._strip_html(part) == cursor_pill.strip_html(part)
+
+
+def _custom_x_pill_rows():
+    from mf4_analyzer.ui.plot_helpers import DualCursorBranch, DualCursorRow
+    from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE
+
+    return [
+        DualCursorRow(
+            channel_name="[sfns] Rack Force",
+            min_value=1.0,
+            max_value=3.0,
+            avg=2.0,
+            delta=None,
+            unit_suffix=" N",
+            color="#ef4444",
+            mode=CHANNEL_MODE,
+            branches=(
+                DualCursorBranch(1, 1.0, 3.0, 2.0),
+                DualCursorBranch(-1, 0.0, 2.0, 1.0),
+            ),
+        )
+    ]
+
+
+def test_custom_x_pill_full_mode_has_branch_subrows_without_delta(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    pill = CursorPill()
+    qtbot.addWidget(pill)
+    pill.set_dual_rows(_custom_x_pill_rows())
+    html = pill.detail_text()
+    assert "X↑" in html and "X↓" in html
+    assert "Rack Force" in html
+    assert "△" not in html
+    assert "N" in html
+
+
+def test_custom_x_pill_mini_keeps_direction_avg_and_tooltip_minmax(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    pill = CursorPill()
+    qtbot.addWidget(pill)
+    pill.set_dual_rows(_custom_x_pill_rows())
+    pill._toggle_mode()
+    html = pill.detail_text()
+    assert "X↑" in html and "X↓" in html
+    assert "Avg" in html
+    tooltip = pill._detail.toolTip()
+    assert "升程" in tooltip and "回程" in tooltip
+    assert "Min=" in tooltip and "Max=" in tooltip

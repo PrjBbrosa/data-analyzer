@@ -23,6 +23,62 @@ from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 from .time_curve_bindings import TimeCurveBinding, parse_curve_bindings
 from .view_overlay_state import normalize_cursor_placement, normalize_remarks
 
+
+X_VIEWPORT_WWT_NATIVE = "wwt_native"
+X_VIEWPORT_USER = "user"
+X_VIEWPORT_ORDINARY = "ordinary"
+
+
+@dataclass(frozen=True)
+class XViewportIntent:
+    """Viewport provenance: current ``ViewState.xlim`` is separate from Home.
+
+    ``source='wwt_native'`` keeps a file-defined home range even after the user
+    pans or zooms. Ordinary views leave this ``None``.
+    """
+
+    source: str = X_VIEWPORT_ORDINARY
+    initial_range: tuple[float, float] | None = None
+    home_range: tuple[float, float] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source": str(self.source or X_VIEWPORT_ORDINARY),
+            "initial_range": (
+                list(self.initial_range) if self.initial_range is not None else None
+            ),
+            "home_range": list(self.home_range) if self.home_range is not None else None,
+        }
+
+    @classmethod
+    def from_mapping(cls, data: Any) -> "XViewportIntent | None":
+        if data is None:
+            return None
+        if isinstance(data, cls):
+            return data
+        if not isinstance(data, dict):
+            return None
+        source = str(data.get("source") or "").strip() or X_VIEWPORT_ORDINARY
+        if source not in {
+            X_VIEWPORT_WWT_NATIVE, X_VIEWPORT_USER, X_VIEWPORT_ORDINARY,
+        }:
+            source = X_VIEWPORT_ORDINARY
+        initial = _coerce_pair(data.get("initial_range"))
+        home = _coerce_pair(data.get("home_range"))
+        if source == X_VIEWPORT_ORDINARY and initial is None and home is None:
+            return None
+        return cls(source=source, initial_range=initial, home_range=home)
+
+
+def trusted_wwt_native_intent(intent: Any) -> bool:
+    parsed = XViewportIntent.from_mapping(intent)
+    return (
+        parsed is not None
+        and parsed.source == X_VIEWPORT_WWT_NATIVE
+        and parsed.home_range is not None
+    )
+
+
 # Analysis-section and compatibility default. The real cap is per
 # ViewManager instance (``max_views``); time-domain uses
 # TIME_DOMAIN_MAX_VIEWS. Narrow bars still degrade via ViewTabBar's
@@ -59,6 +115,8 @@ def is_reusable_blank_view(state: "ViewState") -> bool:
         return False
     if state.xlim is not None or state.ylims:
         return False
+    if getattr(state, "x_viewport_intent", None) is not None:
+        return False
     if state.cursor_mode != "off" or state.plot_mode != "subplot":
         return False
     if state.overlay_primary is not None:
@@ -91,6 +149,7 @@ class ViewState:
     cursor_placement: dict | None = None
     curve_bindings: list[TimeCurveBinding] = field(default_factory=list)
     hidden_curve_binding_ids: list[str] = field(default_factory=list)
+    x_viewport_intent: XViewportIntent | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -112,6 +171,10 @@ class ViewState:
         data["curve_bindings"] = [
             binding.to_dict() for binding in self.curve_bindings
         ]
+        intent = self.x_viewport_intent
+        data["x_viewport_intent"] = (
+            intent.to_dict() if isinstance(intent, XViewportIntent) else None
+        )
         return data
 
     @classmethod
@@ -150,6 +213,9 @@ class ViewState:
             curve_bindings=parse_curve_bindings(data.get("curve_bindings")),
             hidden_curve_binding_ids=_coerce_id_list(
                 data.get("hidden_curve_binding_ids")
+            ),
+            x_viewport_intent=XViewportIntent.from_mapping(
+                data.get("x_viewport_intent")
             ),
         )
 

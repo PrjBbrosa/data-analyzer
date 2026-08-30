@@ -42,6 +42,8 @@ from ..time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
     PER_SOURCE_NAME,
+    TIME_MODE,
+    CursorXAxisContext,
     CustomXAxisSpec,
     TimePlotIssue,
     apply_unit_cohort,
@@ -2106,7 +2108,10 @@ class MainWindow(
         if (
             new_hi <= cur_lo
             or new_lo >= cur_hi
-            or not self._preserved_xlim_fits_data(canvas, new_lo, new_hi)
+            or not self._preserved_xlim_fits_data(
+                canvas, new_lo, new_hi,
+                intent=getattr(canvas, "x_viewport_intent", None),
+            )
         ):
             frame = getattr(canvas, 'frame_x_to_data', None)
             if callable(frame):
@@ -2131,7 +2136,7 @@ class MainWindow(
                 pass
 
     @staticmethod
-    def _preserved_xlim_fits_data(canvas, lo, hi):
+    def _preserved_xlim_fits_data(canvas, lo, hi, intent=None):
         """Is a carried-over X window still a window *into* the new data?
 
         Preserving X across a replot exists so ticking a channel on or off
@@ -2149,7 +2154,13 @@ class MainWindow(
         a full-view window survives too, since it equals the extent. Data
         growing longer than the window is left alone on purpose — that is a
         legitimate "stay where I am looking" case, and Home reframes it.
+
+        Trusted WWT native viewports are the exception: they may keep file-
+        defined margin outside the data union, as long as the window still
+        has a non-degenerate intersection with the plotted data.
         """
+        from mf4_analyzer.ui.view_state import trusted_wwt_native_intent
+
         union = None
         getter = getattr(canvas, 'get_data_x_union', None)
         if callable(getter):
@@ -2163,6 +2174,10 @@ class MainWindow(
         span = union_hi - union_lo
         if not np.isfinite(span) or span <= 0:
             return True
+        if trusted_wwt_native_intent(intent):
+            overlap_lo = max(float(lo), float(union_lo))
+            overlap_hi = min(float(hi), float(union_hi))
+            return overlap_hi > overlap_lo
         # 1% of the extent absorbs float drift and pyqtgraph's own rounding
         # on the full-view case without admitting a visibly empty margin.
         tol = 0.01 * span
@@ -4014,6 +4029,28 @@ class MainWindow(
             # collapse it to None, which means "derive from a provider" and
             # could leak the first provider's unrelated unit into the title.
             xlabel = self._time_axis_label(result.x_unit)
+            if applied_x.mode == CHANNEL_MODE and applied_x.channel:
+                x_identity = (
+                    (applied_x.source_fid, applied_x.channel)
+                    if applied_x.resolver == EXACT_SOURCE
+                    else (None, applied_x.channel)
+                )
+                x_axis_context = CursorXAxisContext(
+                    mode=CHANNEL_MODE,
+                    identity=x_identity,
+                    label=applied_x.label or applied_x.channel,
+                    unit=str(result.x_unit or "").strip(),
+                )
+            else:
+                x_axis_context = CursorXAxisContext(
+                    mode=TIME_MODE,
+                    identity=None,
+                    label="",
+                    unit="s",
+                )
+            setter = getattr(canvas, "set_cursor_x_axis_context", None)
+            if callable(setter):
+                setter(x_axis_context)
             render_context_key = (
                 (
                     applied_x.mode,
@@ -4066,6 +4103,7 @@ class MainWindow(
                         progress_callback=canvas_progress,
                         render_context_key=render_context_key,
                         full_rebuild_reason=rebuild_reason,
+                        x_axis_context=x_axis_context,
                     )
             elif canvas_progress is not None:
                 canvas_progress(1, 1)

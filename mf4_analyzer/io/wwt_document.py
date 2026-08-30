@@ -388,6 +388,10 @@ def format_wwt_issue_for_user(issue, *, document=None) -> str | None:
         return "部分通道未导入。"
     if code == CODE_TRUNCATED_WINDOW:
         return "部分 WinWert 显示窗口截断，已跳过。"
+    if code == "native_x_range_invalid":
+        return "WinWert 原生 X 范围无效，已改用数据范围。"
+    if code == "native_x_range_no_overlap":
+        return "WinWert 原生 X 范围与数据无交集，已改用数据范围。"
     _LOG.info("unrecognized WWT issue code %s", code)
     return _GENERIC_USER_SUMMARY
 

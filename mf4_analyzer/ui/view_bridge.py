@@ -110,6 +110,7 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     tick-density user action may drop it.
     """
     preserved_native = None
+    preserved_intent = getattr(state, "x_viewport_intent", None)
     old_opts = state.axis_opts if isinstance(getattr(state, "axis_opts", None), dict) else None
     if old_opts is not None:
         native = old_opts.get("native_ticks")
@@ -124,6 +125,7 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     state.axis_opts = dict(fresh.axis_opts)
     if preserved_native is not None:
         state.axis_opts["native_ticks"] = preserved_native
+    state.x_viewport_intent = preserved_intent
 
     chart_stack = window.chart_stack
     target = canvas if canvas is not None else chart_stack.canvas_time

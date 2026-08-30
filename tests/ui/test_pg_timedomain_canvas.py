@@ -4401,6 +4401,78 @@ class TestTimeDomainCanvasPGCursorParity:
     # _format_dual_html in mf4_analyzer.ui.plot_helpers.
 
 
+class TestTimeDomainCustomXCursorContext:
+    def test_time_x_header_and_rows_keep_delta_t(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        canvas.plot_channels(
+            [("speed", True, t, np.sin(2 * np.pi * t), "#1769e0", "rpm", "fid-1")],
+            mode="overlay",
+        )
+        QCoreApplication.processEvents()
+        headers, htmls, rows_seen = [], [], []
+        canvas.cursor_info.connect(headers.append)
+        canvas.dual_cursor_info.connect(htmls.append)
+        canvas.dual_cursor_rows.connect(rows_seen.append)
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.20
+        canvas._cursor.bx = 0.80
+        canvas._emit_dual_cursor_html()
+        header = headers[-1]
+        html = htmls[-1]
+        rows = rows_seen[-1]
+        assert "ΔT=" in header
+        assert "1/ΔT=" in header
+        assert "Hz" in header
+        assert "△" in html
+        assert rows and rows[0][0] == "speed"
+
+    def test_plot_channels_clears_stale_custom_x_context(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.time_xaxis import CursorXAxisContext
+        from tests._helpers import wwt_factory as wwt
+
+        canvas = _pg_canvas(qapp)
+        series = wwt.sfns_like_hysteresis_arrays("cycle")
+        ctx = CursorXAxisContext(
+            mode="channel",
+            identity=("f1", wwt.SFNS_RACK_TRAVEL),
+            label=wwt.SFNS_RACK_TRAVEL,
+            unit="mm",
+        )
+        canvas.plot_channels(
+            [(
+                wwt.SFNS_RACK_FORCE, True,
+                np.asarray(series.x, dtype=np.float64),
+                np.asarray(series.y, dtype=np.float64),
+                "#1769e0", wwt.SFNS_RACK_FORCE_UNIT, "f1",
+            )],
+            mode="overlay",
+            x_axis_context=ctx,
+        )
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 1.0, 50, dtype=np.float64)
+        canvas.plot_channels(
+            [("speed", True, t, t, "#1769e0", "rpm", "fid-1")],
+            mode="overlay",
+        )
+        QCoreApplication.processEvents()
+        headers = []
+        canvas.cursor_info.connect(headers.append)
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.20
+        canvas._cursor.bx = 0.80
+        canvas._emit_dual_cursor_html()
+        header = headers[-1]
+        assert "ΔT=" in header
+        assert "mm" not in header
+        assert "ΔX" not in header
+
+
 class TestTimeDomainCanvasPGCursorInteraction:
     """Cursor helpers must be wired to real mouse interaction and visible
     pyqtgraph line items, not only callable from tests.

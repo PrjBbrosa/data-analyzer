@@ -12,11 +12,22 @@ from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
+from mf4_analyzer.signal.custom_x_paths import (
+    REASON_EMPTY,
+    REASON_MULTIPLE_PATHS,
+    REASON_SAME_DIRECTION,
+    REASON_SHORT_SEQUENCE,
+    REASON_UNIDIRECTIONAL,
+    analyze_custom_x_paths,
+)
 from mf4_analyzer.ui.plot_helpers import (
+    DualCursorBranch,
+    DualCursorRow,
     _format_dual_html,
     _format_single_cursor_channel_html,
     _interp_cursor_value,
 )
+from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, CursorXAxisContext, TIME_MODE
 
 
 def _finite_float(value):
@@ -66,6 +77,7 @@ class CursorController(_CanvasBackref):
         "_cursor_b_items",
         "_cursor_item_owners",
         "_dual_cursor_extreme_markers",
+        "_x_axis_context",
         "visible",
         "dual",
         "ax",
@@ -98,6 +110,7 @@ class CursorController(_CanvasBackref):
         "_cursor_x_to_pixmap_x",
         "snapshot_placement",
         "restore_placement",
+        "set_x_axis_context",
     })
 
     def __init__(self, canvas):
@@ -113,6 +126,7 @@ class CursorController(_CanvasBackref):
         self._cursor_b_items = []
         self._cursor_item_owners = {}
         self._dual_cursor_extreme_markers = []
+        self._x_axis_context = None
 
     @property
     def visible(self):
@@ -202,6 +216,25 @@ class CursorController(_CanvasBackref):
         self._cursor_visible = False
         self._dual = False
         self._last_t = 0
+        self._x_axis_context = None
+
+    def set_x_axis_context(self, context):
+        self._x_axis_context = context
+
+    @property
+    def x_axis_context(self):
+        return self._x_axis_context
+
+    @x_axis_context.setter
+    def x_axis_context(self, value):
+        self._x_axis_context = value
+
+    def _is_custom_x_cursor(self):
+        ctx = self._x_axis_context
+        if ctx is None:
+            return False
+        mode = getattr(ctx, "mode", TIME_MODE)
+        return mode in (CHANNEL_MODE, "channel")
 
     def set_cursor_visible(self, v):
         """Toggle single-cursor visibility."""
@@ -676,31 +709,162 @@ class CursorController(_CanvasBackref):
                 parts.append(_format_single_cursor_channel_html(ch, sf[idx], unit_s, color))
         self.cursor_info.emit(sep.join(parts))
 
+    def _cursor_x_unit_suffix(self):
+        ctx = self._x_axis_context
+        unit = str(getattr(ctx, "unit", "") or "").strip()
+        return f" {unit}" if unit else ""
+
+    def _visible_channel_items(self):
+        hidden = self._hidden_channel_names()
+        if hasattr(self.channel_data, "composite_items"):
+            channel_items = self.channel_data.composite_items()
+        else:
+            channel_items = (
+                (ch, ch, values)
+                for ch, values in self.channel_data.items()
+            )
+        for channel_key, ch, values in channel_items:
+            if ch in hidden:
+                continue
+            yield channel_key, ch, values
+
+    def _finite_stats(self, y):
+        y = np.asarray(y, dtype=float)
+        finite = y[np.isfinite(y)]
+        if not finite.size:
+            return None
+        return float(np.min(finite)), float(np.max(finite)), float(np.mean(finite))
+
+    def _extrema_from_contribution(self, channel_key, contrib):
+        x = np.asarray(contrib.x, dtype=float)
+        y = np.asarray(contrib.y, dtype=float)
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
+            return None
+        xf = x[finite]
+        yf = y[finite]
+        min_i = int(np.argmin(yf))
+        max_i = int(np.argmax(yf))
+        return (
+            channel_key,
+            float(xf[min_i]),
+            float(yf[min_i]),
+            float(xf[max_i]),
+            float(yf[max_i]),
+        )
+
+    def _custom_x_status(self, reason):
+        if reason == REASON_EMPTY:
+            return "区间内无数据"
+        if reason in (REASON_UNIDIRECTIONAL, REASON_SHORT_SEQUENCE):
+            return "全程"
+        if reason == REASON_SAME_DIRECTION:
+            return "两次同向访问，无法确定升程/回程"
+        if reason == REASON_MULTIPLE_PATHS:
+            return "无法可靠区分升程/回程"
+        return ""
+
+    def _build_custom_x_dual_row(self, channel_key, ch, tf, sf, color, unit_suffix, xlo, xhi):
+        result = analyze_custom_x_paths(
+            tf, sf, x_range=(xlo, xhi),
+        )
+        ctx = self._x_axis_context
+        x_unit = str(getattr(ctx, "unit", "") or "").strip()
+        status = self._custom_x_status(result.reason)
+        branches = ()
+        stats = None
+        if result.unique_pair:
+            ordered = sorted(result.accepted, key=lambda item: -int(item.direction))
+            branch_rows = []
+            for contrib in ordered:
+                stats = self._finite_stats(contrib.y)
+                if stats is None:
+                    continue
+                branch_rows.append(DualCursorBranch(
+                    direction=int(contrib.direction),
+                    min_value=stats[0],
+                    max_value=stats[1],
+                    avg=stats[2],
+                ))
+            branches = tuple(branch_rows)
+            status = ""
+        elif result.reason in (REASON_UNIDIRECTIONAL, REASON_SHORT_SEQUENCE):
+            samples = result.accepted or result.contributions
+            if samples:
+                y = np.concatenate(tuple(np.asarray(item.y, dtype=float) for item in samples))
+                stats = self._finite_stats(y)
+            if stats is not None:
+                branches = (DualCursorBranch(
+                    direction=0,
+                    min_value=stats[0],
+                    max_value=stats[1],
+                    avg=stats[2],
+                ),)
+            else:
+                status = "区间内无数据"
+        extrema = []
+        if result.unique_pair:
+            sources = result.accepted
+        elif result.reason in (REASON_UNIDIRECTIONAL, REASON_SHORT_SEQUENCE):
+            sources = result.accepted or result.contributions
+        else:
+            sources = ()
+        for contrib in sources:
+            point = self._extrema_from_contribution(channel_key, contrib)
+            if point is not None:
+                extrema.append(point)
+        row = DualCursorRow(
+            channel_name=ch,
+            min_value=None if not branches else branches[0].min_value,
+            max_value=None if not branches else branches[0].max_value,
+            avg=None if not branches else branches[0].avg,
+            delta=None,
+            unit_suffix=unit_suffix,
+            color=color,
+            identity=channel_key,
+            label=ch,
+            mode=CHANNEL_MODE,
+            branch="",
+            status=status,
+            x_unit=x_unit,
+            branches=branches,
+        )
+        return row, extrema
+
     def _emit_dual_cursor_html(self):
         info, dual = [], []
         extreme_points = []
+        custom_x = self._is_custom_x_cursor()
+        unit_suffix = self._cursor_x_unit_suffix() if custom_x else "s"
         if self._ax is not None:
-            info.append(f"A={self._ax:.4f}s")
+            if custom_x:
+                info.append(f"A={self._ax:.1f}{unit_suffix}")
+            else:
+                info.append(f"A={self._ax:.4f}s")
         if self._bx is not None:
-            info.append(f"B={self._bx:.4f}s")
+            if custom_x:
+                info.append(f"B={self._bx:.1f}{unit_suffix}")
+            else:
+                info.append(f"B={self._bx:.4f}s")
         if self._ax is not None and self._bx is not None:
             dx = self._bx - self._ax
-            info.append(f"ΔT={dx:.4f}s")
-            if abs(dx) > 1e-12:
-                info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
-            xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
-            hidden = self._hidden_channel_names()
-            if hasattr(self.channel_data, "composite_items"):
-                channel_items = self.channel_data.composite_items()
+            if custom_x:
+                info.append(f"ΔX={abs(dx):.1f}{unit_suffix}")
             else:
-                channel_items = (
-                    (ch, ch, values)
-                    for ch, values in self.channel_data.items()
-                )
-            for channel_key, ch, (tf, sf, color, u) in channel_items:
-                if ch in hidden:
-                    continue
+                info.append(f"ΔT={dx:.4f}s")
+                if abs(dx) > 1e-12:
+                    info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
+            xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
+            for channel_key, ch, (tf, sf, color, u) in self._visible_channel_items():
                 if not len(tf):
+                    continue
+                y_suffix = f" {u}" if u else ""
+                if custom_x:
+                    row, extrema = self._build_custom_x_dual_row(
+                        channel_key, ch, tf, sf, color, y_suffix, xlo, xhi,
+                    )
+                    dual.append(row)
+                    extreme_points.extend(extrema)
                     continue
                 m = (tf >= xlo) & (tf <= xhi)
                 seg = sf[m]
@@ -720,18 +884,20 @@ class CursorController(_CanvasBackref):
                         float(tf[max_idx]),
                         float(sf[max_idx]),
                     ))
-                u_suffix = f" {u}" if u else ""
                 delta = _interp_cursor_value(tf, sf, self._bx) - _interp_cursor_value(
                     tf, sf, self._ax
                 )
-                dual.append((
-                    ch,
-                    float(np.min(seg)),
-                    float(np.max(seg)),
-                    float(np.mean(seg)),
-                    float(delta),
-                    u_suffix,
-                    color,
+                dual.append(DualCursorRow(
+                    channel_name=ch,
+                    min_value=float(np.min(seg)),
+                    max_value=float(np.max(seg)),
+                    avg=float(np.mean(seg)),
+                    delta=float(delta),
+                    unit_suffix=y_suffix,
+                    color=color,
+                    identity=channel_key,
+                    label=ch,
+                    mode=TIME_MODE,
                 ))
         if info:
             primary_html = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
@@ -761,4 +927,4 @@ class CursorController(_CanvasBackref):
         return frac * float(pixmap_width)
 
 
-__all__ = ["CursorController"]
+__all__ = ["CursorController", "CursorXAxisContext"]

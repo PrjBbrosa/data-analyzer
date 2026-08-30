@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QCheckBox, QMessageBox
 
 from mf4_analyzer.io.wwt_document import (
     CODE_EXACT_OVERLAP,
@@ -30,6 +31,47 @@ from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_t
 
 ACCEPT_TEXT = "按 WinWert 排版并绘图"
 REJECT_TEXT = "仅加载数据"
+APPLY_TO_REMAINING_TEXT = "对本次剩余 WWT 使用此选择"
+
+
+class WwtBatchChoice(Enum):
+    ASK = "ask"
+    APPLY_LAYOUT = "apply_layout"
+    LOAD_DATA_ONLY = "load_data_only"
+    NOT_APPLICABLE = "not_applicable"
+
+
+@dataclass(frozen=True)
+class WwtLayoutPromptResult:
+    accepted: bool
+    apply_to_remaining: bool = False
+
+
+_MISSING = object()
+
+
+def coerce_layout_prompt(value) -> WwtLayoutPromptResult:
+    """Accept the typed prompt, a raw bool, or a duck-typed decision.
+
+    Monkeypatched tests may return ``bool`` (``apply_to_remaining=False``)
+    or an object with ``.accepted`` / ``.apply_to_remaining``. Missing
+    attributes are a TypeError, not a silent False.
+    """
+    if isinstance(value, WwtLayoutPromptResult):
+        return value
+    if isinstance(value, bool):
+        return WwtLayoutPromptResult(accepted=value, apply_to_remaining=False)
+    accepted = getattr(value, "accepted", _MISSING)
+    remaining = getattr(value, "apply_to_remaining", _MISSING)
+    if accepted is _MISSING or remaining is _MISSING:
+        raise TypeError(
+            "WWT layout prompt must be bool or have accepted and "
+            f"apply_to_remaining, got {type(value).__name__}"
+        )
+    return WwtLayoutPromptResult(
+        accepted=bool(accepted),
+        apply_to_remaining=bool(remaining),
+    )
 
 # Placement is explained by the confirm dialog; UltraView already maps
 # membership/placed/collision caps to Chinese copy. Do not yellow-toast
@@ -375,8 +417,18 @@ def format_wwt_placement_summary(outcome) -> str:
 class WwtImportCoordinator:
     def __init__(self, window):
         self._window = window
+        self._batch_active = False
+        self._batch_choice = WwtBatchChoice.ASK
 
-    def _ask_layout(self, body: str, informative: str) -> bool:
+    def begin_open_batch(self) -> None:
+        self._batch_active = True
+        self._batch_choice = WwtBatchChoice.ASK
+
+    def end_open_batch(self) -> None:
+        self._batch_active = False
+        self._batch_choice = WwtBatchChoice.ASK
+
+    def _ask_layout(self, body: str, informative: str) -> WwtLayoutPromptResult:
         box = QMessageBox(self._window)
         box.setWindowTitle("WinWert 排版")
         box.setIcon(QMessageBox.Question)
@@ -386,9 +438,34 @@ class WwtImportCoordinator:
         accept = box.addButton(ACCEPT_TEXT, QMessageBox.AcceptRole)
         box.addButton(REJECT_TEXT, QMessageBox.RejectRole)
         box.setDefaultButton(accept)
+        checkbox = QCheckBox(APPLY_TO_REMAINING_TEXT)
+        checkbox.setChecked(False)
+        box.setCheckBox(checkbox)
         fit_message_box_buttons_to_text(box)
         box.exec_()
-        return box.clickedButton() is accept
+        return WwtLayoutPromptResult(
+            accepted=box.clickedButton() is accept,
+            apply_to_remaining=bool(checkbox.isChecked()),
+        )
+
+    def _resolve_layout_prompt(
+        self, body: str, informative: str
+    ) -> WwtLayoutPromptResult:
+        if self._batch_active:
+            if self._batch_choice is WwtBatchChoice.APPLY_LAYOUT:
+                return WwtLayoutPromptResult(accepted=True, apply_to_remaining=False)
+            if self._batch_choice is WwtBatchChoice.LOAD_DATA_ONLY:
+                return WwtLayoutPromptResult(accepted=False, apply_to_remaining=False)
+        return coerce_layout_prompt(self._ask_layout(body, informative))
+
+    def _remember_prompt_if_requested(self, prompt: WwtLayoutPromptResult) -> None:
+        if not self._batch_active or not prompt.apply_to_remaining:
+            return
+        self._batch_choice = (
+            WwtBatchChoice.APPLY_LAYOUT
+            if prompt.accepted
+            else WwtBatchChoice.LOAD_DATA_ONLY
+        )
 
     def offer_layout(
         self, document, fids: list[str], *, reuse_blank: bool | None = None
@@ -397,6 +474,7 @@ class WwtImportCoordinator:
         if getattr(window, "_restoring_project", False):
             return None
         if not fids:
+            # NOT_APPLICABLE: do not consume or overwrite a remembered choice.
             return WwtImportOutcome(0, 0, (), ())
         groups = []
         files = getattr(window, "files", {}) or {}
@@ -470,6 +548,7 @@ class WwtImportCoordinator:
             )
 
         if not proposals:
+            # NOT_APPLICABLE: no askable layout; keep the current batch choice.
             return _outcome(created=0)
 
         manager = window.view_manager
@@ -482,7 +561,9 @@ class WwtImportCoordinator:
         body, informative = layout_dialog_text(
             document, proposals, available=max(0, available)
         )
-        if not self._ask_layout(body, informative):
+        prompt = self._resolve_layout_prompt(body, informative)
+        self._remember_prompt_if_requested(prompt)
+        if not prompt.accepted:
             return _outcome(created=0)
 
         capture = getattr(window, "_capture_current_view", None)

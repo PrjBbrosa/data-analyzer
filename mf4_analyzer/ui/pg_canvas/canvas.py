@@ -409,6 +409,7 @@ class TimeDomainCanvasPG(QWidget):
         self._raw_x_bounds_by_fingerprint = {}
         self._raw_x_union_cache = None
         self._raw_x_union_cache_valid = False
+        self._x_viewport_intent = None
         # Parallel data_id dict (kept separate per design §4.2).
         self._channel_data_id = _ChannelKeyDict()
         # Composite keys of display-companion curves (e.g. filter overlays)
@@ -791,6 +792,7 @@ class TimeDomainCanvasPG(QWidget):
         progress_callback=None,
         render_context_key=None,
         full_rebuild_reason=None,
+        x_axis_context=None,
     ):
         """Build the chart for ``ch_list``.
 
@@ -824,6 +826,7 @@ class TimeDomainCanvasPG(QWidget):
         report_progress(0)
         self.disable_interactive_quality()
         self.clear()
+        self.set_cursor_x_axis_context(x_axis_context)
         self._native_line_width_px = {}
 
         # Split primary channels from display companions. A companion row
@@ -2240,11 +2243,13 @@ class TimeDomainCanvasPG(QWidget):
         ``codex-confirmed-issue-list-means-remaining-scope`` annotations).
         """
         cur_xlim = self._capture_primary_xlim()
+        x_axis_context = getattr(self._cursor, "x_axis_context", None)
         self.plot_channels(
             ch_list,
             mode=mode,
             xlabel=xlabel,
             defer_first_frame=(cur_xlim is not None),
+            x_axis_context=x_axis_context,
         )
         if cur_xlim is not None:
             self._restore_primary_xlim(cur_xlim)
@@ -2811,9 +2816,14 @@ class TimeDomainCanvasPG(QWidget):
         """
         self.disable_interactive_quality()
         try:
-            # (1) Set X to the raw union on every handle (seeds the X-master
-            # too in overlay mode).
-            self._set_xrange_to_data_union()
+            # (1) Set X to the native Home target when this canvas is a WWT
+            # view; otherwise the raw data union (seeds the X-master too in
+            # overlay mode).
+            home = self._home_x_range()
+            if home is not None:
+                self._set_xrange_to_data_union(home)
+            else:
+                self._set_xrange_to_data_union()
             # (2) Set Y per handle from the RAW channel data (full, finite),
             # not from the clipped PlotDataItem. Frame each handle to the
             # union of the curves VISIBLE on it: a companion shares its
@@ -2947,11 +2957,16 @@ class TimeDomainCanvasPG(QWidget):
             self._selection_array_fingerprint(values), None,
         )
 
-    def _set_xrange_to_data_union(self):
-        x_union = self._data_x_union()
-        if x_union is None:
-            return
-        lo, hi = x_union
+    def _set_xrange_to_data_union(self, xlim=None):
+        if xlim is None:
+            x_union = self._data_x_union()
+            if x_union is None:
+                return
+            lo, hi = x_union
+        else:
+            lo, hi = float(xlim[0]), float(xlim[1])
+            if not (isfinite(lo) and isfinite(hi) and hi > lo):
+                return
         # In overlay mode the X-master ViewBox owns the shared X range but
         # is not in axes_list (no curve lives on it); seed its X too so
         # cursor mapping and _current_pixel_width read a real range.
@@ -3105,6 +3120,8 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_axes.reset_for_rebuild()
         self._subplot_label_specs = []
         self._cursor.clear_items()
+        self.set_cursor_x_axis_context(None)
+        self.set_x_viewport_intent(None)
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
         # do that. Mirror TimeDomainCanvas.clear's behavior.
 
@@ -3152,6 +3169,36 @@ class TimeDomainCanvasPG(QWidget):
 
     def set_dual_cursor_mode(self, en):
         return CursorController.set_dual_cursor_mode(self._cursor, en)
+
+    def set_cursor_x_axis_context(self, context):
+        return CursorController.set_x_axis_context(self._cursor, context)
+
+    def set_x_viewport_intent(self, intent):
+        self._x_viewport_intent = intent
+
+    @property
+    def x_viewport_intent(self):
+        return self._x_viewport_intent
+
+    def _home_x_range(self):
+        from mf4_analyzer.ui.view_state import trusted_wwt_native_intent
+
+        intent = self._x_viewport_intent
+        if not trusted_wwt_native_intent(intent):
+            return None
+        home = getattr(intent, "home_range", None)
+        if home is None:
+            return None
+        lo, hi = float(home[0]), float(home[1])
+        if not (isfinite(lo) and isfinite(hi) and hi > lo):
+            return None
+        union = self._data_x_union()
+        if union is not None:
+            overlap_lo = max(lo, float(union[0]))
+            overlap_hi = min(hi, float(union[1]))
+            if not (overlap_hi > overlap_lo):
+                return None
+        return (lo, hi)
 
     def reset_cursor_state(self):
         return CursorController.reset_cursor_state(self._cursor)

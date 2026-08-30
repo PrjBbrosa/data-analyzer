@@ -18,7 +18,11 @@ from mf4_analyzer.ui.time_xaxis import (
     EXACT_SOURCE,
     CustomXAxisSpec,
 )
-from mf4_analyzer.ui.view_state import ViewState
+from mf4_analyzer.ui.view_state import (
+    X_VIEWPORT_WWT_NATIVE,
+    XViewportIntent,
+    ViewState,
+)
 
 _UNIT_SUFFIX = re.compile(r"\s*\[[^\]]*\]\s*$")
 _MAX_RECORD_WARN = "duplicate_record_index"
@@ -158,6 +162,49 @@ def _range_ok(lo: float, hi: float) -> bool:
         lo == lo and hi == hi  # not NaN
         and abs(lo) != float("inf") and abs(hi) != float("inf")
         and hi > lo
+    )
+
+
+def _record_finite_span(record: WwtRecord | None) -> tuple[float, float] | None:
+    if record is None or record.values is None:
+        return None
+    finite = [
+        float(value) for value in record.values
+        if value == value and abs(value) != float("inf")
+    ]
+    if len(finite) < 2:
+        return None
+    lo, hi = min(finite), max(finite)
+    if not (hi > lo):
+        return None
+    return lo, hi
+
+
+def _ranges_overlap(left: tuple[float, float], right: tuple[float, float]) -> bool:
+    return max(left[0], right[0]) < min(left[1], right[1])
+
+
+def _resolve_native_x_viewport(
+    x_row, records: Sequence[WwtRecord], *, window_index: int, warnings: list[str],
+) -> tuple[tuple[float, float] | None, XViewportIntent | None]:
+    native = None
+    if x_row is not None and _range_ok(x_row.lo, x_row.hi):
+        native = (float(x_row.lo), float(x_row.hi))
+    elif x_row is not None:
+        warnings.append(f"native_x_range_invalid: window {window_index + 1}")
+        return None, None
+    if native is None:
+        return None, None
+    span = None
+    if 0 <= int(x_row.record_index) < len(records):
+        span = _record_finite_span(records[x_row.record_index])
+    if span is not None and not _ranges_overlap(native, span):
+        warnings.append(f"native_x_range_no_overlap: window {window_index + 1}")
+        return None, None
+    return native, XViewportIntent(
+        source=X_VIEWPORT_WWT_NATIVE,
+        initial_range=native,
+        home_range=native,
     )
 
 
@@ -316,9 +363,9 @@ def build_wwt_view_proposals(
         x_row = window.curves[0] if window.curves else None
         x_label = x_row.label if x_row is not None else ""
         name = f"WinWert {window.index + 1} · {_label_without_unit(x_label)}"
-        xlim = None
-        if x_row is not None and _range_ok(x_row.lo, x_row.hi):
-            xlim = (float(x_row.lo), float(x_row.hi))
+        xlim, x_viewport_intent = _resolve_native_x_viewport(
+            x_row, records, window_index=window.index, warnings=warnings,
+        )
         bindings: list[TimeCurveBinding] = []
         checked: list[tuple[str, str]] = []
         colors: dict[tuple[str, str], str] = {}
@@ -389,6 +436,7 @@ def build_wwt_view_proposals(
                 "native_ticks": native_ticks,
             },
             curve_bindings=bindings,
+            x_viewport_intent=x_viewport_intent,
         )
         proposals.append(
             WwtViewProposal(

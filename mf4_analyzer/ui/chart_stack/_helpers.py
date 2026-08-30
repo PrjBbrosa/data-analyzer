@@ -117,29 +117,10 @@ def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
 
 
 def _format_mini_html(rows):
-    """Mini dual-cursor: one row per channel — colored dot + name + △ only."""
-    from html import escape
-    parts = ['<table cellspacing="0" cellpadding="0" style="font-size:11px;">']
-    for i, row in enumerate(rows):
-        if len(row) >= 7:
-            ch, _mn, _mx, _avg, delta, u, color = row[:7]
-        else:
-            ch, _mn, _mx, _avg, delta, u = row[:6]
-            color = '#111827'
-        if ']' in ch and ch.startswith('['):
-            ch = ch.split(']', 1)[-1].strip()
-        top_pad = '5px' if i > 0 else '0'
-        mono = "font-family:'SF Mono',Menlo,Consolas,monospace;"
-        parts.append(
-            f'<tr><td style="padding-top:{top_pad};">'
-            f'<span style="color:{color};">●</span></td>'
-            f'<td style="padding-left:4px; color:{color}; font-weight:600; padding-top:{top_pad};">'
-            f'{escape(ch)}</td>'
-            f'<td style="padding-left:8px; color:{color}; {mono} padding-top:{top_pad};">'
-            f'△&nbsp;{delta:.4g}{escape(u)}</td></tr>'
-        )
-    parts.append('</table>')
-    return ''.join(parts)
+    """Mini dual-cursor: time rows keep △; Custom X keeps direction + Avg."""
+    from mf4_analyzer.ui.plot_helpers import _format_dual_mini_html
+
+    return _format_dual_mini_html(rows)
 
 
 # ---------------------------------------------------------------------------

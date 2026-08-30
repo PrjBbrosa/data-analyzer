@@ -3270,3 +3270,50 @@ def test_toolbar_hint_removed_but_bottom_hint_bar_stays(qapp):
     # full_text() is the logical value; text() may elide/collapse when centered.
     assert card._hint_context.full_text()
     assert not hasattr(card, "_hint_persistent")
+
+
+def test_custom_x_dual_rows_route_to_primary_and_clear_on_empty_emit(qapp, qtbot):
+    from mf4_analyzer.ui.plot_helpers import DualCursorBranch, DualCursorRow
+    from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode('time')
+    cs.set_cursor_mode('dual')
+    qapp.processEvents()
+
+    rows = [
+        DualCursorRow(
+            channel_name="Rack Force",
+            min_value=1.0,
+            max_value=3.0,
+            avg=2.0,
+            delta=None,
+            unit_suffix=" N",
+            color="#1769e0",
+            mode=CHANNEL_MODE,
+            branches=(
+                DualCursorBranch(1, 1.0, 3.0, 2.0),
+                DualCursorBranch(-1, 0.0, 2.0, 1.0),
+            ),
+        )
+    ]
+    cs.canvas_time.dual_cursor_rows.emit(rows)
+    qapp.processEvents()
+    assert "X↑" in cs._pill.detail_text()
+    assert "△" not in cs._pill.detail_text()
+
+    cs.canvas_time.dual_cursor_rows.emit([])
+    qapp.processEvents()
+    assert "X↑" not in (cs._pill.detail_text() or "")
+
+    cs.enter_split()
+    qapp.processEvents()
+    secondary = cs.secondary_canvas()
+    assert secondary is not None
+    secondary.dual_cursor_rows.emit(rows)
+    qapp.processEvents()
+    assert cs._pill_secondary is not None
+    assert "X↑" in cs._pill_secondary.detail_text()

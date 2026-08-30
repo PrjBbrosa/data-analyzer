@@ -285,6 +285,7 @@ class ProjectIOMixin:
             )
 
         try:
+            self._wwt_import.begin_open_batch()
             can_log_paths = [
                 path for path in data_files
                 if self._is_can_log_path(path)
@@ -343,6 +344,7 @@ class ProjectIOMixin:
                 )
                 self.toast(f"已加载 {loaded_files} 个文件", "success")
         finally:
+            self._wwt_import.end_open_batch()
             self._finish_compute_progress(token=token)
 
     def save_project_via_dialog(self):

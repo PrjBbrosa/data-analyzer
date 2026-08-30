@@ -505,13 +505,20 @@ class CursorPill(QFrame):
 
     def _refresh_detail(self):
         if self._dual_rows:
-            from ..plot_helpers import _format_dual_html
+            from ..plot_helpers import (
+                _format_dual_html,
+                format_dual_rows_tooltip,
+            )
             html = (
                 _format_dual_html(self._dual_rows)
                 if self._mode == "full"
                 else _format_mini_html(self._dual_rows)
             )
-            tooltip = ""
+            tooltip = (
+                format_dual_rows_tooltip(self._dual_rows)
+                if self._mode == "mini"
+                else ""
+            )
         elif self._frequency_dual_rows:
             html = (
                 _format_frequency_dual_html(self._frequency_dual_rows)

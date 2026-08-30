@@ -1,6 +1,7 @@
 """Accept/Reject/restore/cap contracts for WinWert layout import."""
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -10,8 +11,12 @@ import pytest
 
 from mf4_analyzer.ui.main_window.wwt_import_coordinator import (
     ACCEPT_TEXT,
+    APPLY_TO_REMAINING_TEXT,
     REJECT_TEXT,
+    WwtBatchChoice,
     WwtImportOutcome,
+    WwtLayoutPromptResult,
+    coerce_layout_prompt,
     format_wwt_placement_summary,
     layout_dialog_text,
 )
@@ -22,11 +27,15 @@ from tests._helpers.wwt_record_tree import record_binding_count, record_binding_
 _ROOT = Path(__file__).resolve().parents[2]
 
 
-def _stub_wwt_ui(mw, monkeypatch, accept=True, *, projected=None):
+def _stub_wwt_ui(mw, monkeypatch, accept=True, *, projected=None, apply_to_remaining=False):
     asked = []
 
     def fake_ask(body, informative=""):
         asked.append((body, informative))
+        if apply_to_remaining:
+            return WwtLayoutPromptResult(
+                accepted=bool(accept), apply_to_remaining=True,
+            )
         return accept
 
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
@@ -676,3 +685,363 @@ def test_optional_customer_wwt_import_smoke_when_present(qapp, tmp_path, monkeyp
     mw._load_one(str(samples[0]))
     qapp.processEvents()
     assert mw.files
+
+
+def _winwert_views(mw):
+    return [
+        view for view in mw.view_manager.views
+        if (view.name or "").startswith("WinWert")
+    ]
+
+
+def _checked_fids(views):
+    fids = set()
+    for view in views:
+        for fid, _channel in view.checked or ():
+            fids.add(fid)
+    return fids
+
+
+def _write_simple_csv(path, n=40):
+    with open(path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "rpm"])
+        for index in range(n):
+            writer.writerow([index / 100.0, float(index)])
+    return path
+
+
+def _no_display_wwt(path):
+    n = wwt.CHANNEL_N
+    return wwt.write_wwt_file(
+        path,
+        (
+            wwt.WwtRecordSpec("Zeit", wwt.TIME_NAME, "s", n=n, dt=wwt.DT, t0=wwt.T0),
+            wwt.WwtRecordSpec(
+                "Real", wwt.CHAN_Y, wwt.CHAN_Y_UNIT, n=n,
+                values=np.linspace(wwt.CHAN_Y_LO, wwt.CHAN_Y_HI, n),
+            ),
+        ),
+    )
+
+
+def test_coerce_layout_prompt_bool_means_do_not_remember():
+    from_bool = coerce_layout_prompt(True)
+    assert from_bool == WwtLayoutPromptResult(accepted=True, apply_to_remaining=False)
+    typed = WwtLayoutPromptResult(accepted=False, apply_to_remaining=True)
+    assert coerce_layout_prompt(typed) is typed
+
+    class Duck:
+        accepted = True
+        apply_to_remaining = True
+
+    assert coerce_layout_prompt(Duck()) == WwtLayoutPromptResult(
+        accepted=True, apply_to_remaining=True,
+    )
+
+
+def test_ask_layout_checkbox_default_unchecked_and_wires_result(qapp, monkeypatch):
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui.main_window.wwt_import_coordinator import (
+        WwtImportCoordinator,
+    )
+
+    captured = {}
+
+    def fake_exec(self):
+        checkbox = self.checkBox()
+        captured["text"] = checkbox.text() if checkbox is not None else None
+        captured["checked"] = None if checkbox is None else checkbox.isChecked()
+        captured["buttons"] = [button.text() for button in self.buttons()]
+        checkbox.setChecked(True)
+        for button in self.buttons():
+            if button.text() == ACCEPT_TEXT:
+                button.click()
+                break
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec_", fake_exec)
+    result = WwtImportCoordinator(None)._ask_layout("body", "info")
+    assert captured["text"] == APPLY_TO_REMAINING_TEXT
+    assert captured["checked"] is False
+    assert ACCEPT_TEXT in captured["buttons"]
+    assert REJECT_TEXT in captured["buttons"]
+    assert result == WwtLayoutPromptResult(accepted=True, apply_to_remaining=True)
+
+
+def test_empty_fids_and_restore_do_not_consume_remembered_choice(tmp_path):
+    from mf4_analyzer.io.wwt_document import load_wwt_document
+    from mf4_analyzer.ui.main_window.wwt_import_coordinator import (
+        WwtImportCoordinator,
+    )
+
+    class Dummy:
+        _restoring_project = False
+        files = {}
+
+    loaded = load_wwt_document(_no_display_wwt(tmp_path / "bare.wwt"))
+    coord = WwtImportCoordinator(Dummy())
+    coord.begin_open_batch()
+    coord._batch_choice = WwtBatchChoice.APPLY_LAYOUT
+    empty = coord.offer_layout(loaded.document, [])
+    assert empty.created == 0
+    assert empty.accepted is False
+    assert coord._batch_choice is WwtBatchChoice.APPLY_LAYOUT
+
+    no_proposals = coord.offer_layout(loaded.document, ["missing-fid"])
+    assert no_proposals.created == 0
+    assert no_proposals.accepted is False
+    assert coord._batch_choice is WwtBatchChoice.APPLY_LAYOUT
+
+    Dummy._restoring_project = True
+    assert coord.offer_layout(loaded.document, ["missing-fid"]) is None
+    assert coord._batch_choice is WwtBatchChoice.APPLY_LAYOUT
+    coord.end_open_batch()
+    assert coord._batch_choice is WwtBatchChoice.ASK
+    assert coord._batch_active is False
+
+
+def test_open_batch_remember_layout_asks_once_and_projects_each_file(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    paths = [
+        wwt.two_window_non_overlap(tmp_path / f"layout_{index}.wwt")
+        for index in range(3)
+    ]
+    mw = MainWindow()
+    projected = []
+    asked = _stub_wwt_ui(
+        mw, monkeypatch, accept=True, projected=projected, apply_to_remaining=True,
+    )
+    mw._open_data_paths([str(path) for path in paths])
+    qapp.processEvents()
+    assert len(asked) == 1
+    views = _winwert_views(mw)
+    assert len(views) == 6
+    assert len(mw.files) == 3
+    assert _checked_fids(views) == set(mw.files)
+    assert len(projected) == 3
+    assert all(len(batch) == 2 for batch in projected)
+    assert mw._wwt_import._batch_choice is WwtBatchChoice.ASK
+    assert mw._wwt_import._batch_active is False
+
+
+def test_open_batch_remember_data_only_asks_once_and_keeps_records(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    paths = [
+        wwt.two_window_non_overlap(tmp_path / f"data_{index}.wwt")
+        for index in range(3)
+    ]
+    mw = MainWindow()
+    asked = _stub_wwt_ui(
+        mw, monkeypatch, accept=False, apply_to_remaining=True,
+    )
+    before = len(mw.view_manager.views)
+    mw._open_data_paths([str(path) for path in paths])
+    qapp.processEvents()
+    assert len(asked) == 1
+    assert _winwert_views(mw) == []
+    assert len(mw.view_manager.views) == before
+    assert len(mw.files) == 3
+    assert all(_store_of(fd) is not None for fd in mw.files.values())
+
+
+def test_open_batch_second_remember_reused_by_third(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    paths = [
+        wwt.two_window_non_overlap(tmp_path / f"seq_{index}.wwt")
+        for index in range(3)
+    ]
+    mw = MainWindow()
+    asked = []
+    answers = [
+        WwtLayoutPromptResult(accepted=True, apply_to_remaining=False),
+        WwtLayoutPromptResult(accepted=False, apply_to_remaining=True),
+    ]
+
+    def fake_ask(body, informative=""):
+        asked.append((body, informative))
+        if not answers:
+            pytest.fail("layout dialog must not run for the remembered third file")
+        return answers.pop(0)
+
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
+    monkeypatch.setattr(
+        mw._ultraview, "add_time_views_from_native_layout", lambda items, **_k: (),
+    )
+    monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
+    mw._open_data_paths([str(path) for path in paths])
+    qapp.processEvents()
+    assert len(asked) == 2
+    assert answers == []
+    assert len(mw.files) == 3
+    assert len(_winwert_views(mw)) == 2
+
+
+def test_open_batch_mixed_csv_does_not_consume_wwt_choice(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    first = wwt.two_window_non_overlap(tmp_path / "mixed_a.wwt")
+    csv_path = _write_simple_csv(tmp_path / "mixed.csv")
+    second = wwt.two_window_non_overlap(tmp_path / "mixed_b.wwt")
+    mw = MainWindow()
+    asked = _stub_wwt_ui(
+        mw, monkeypatch, accept=True, apply_to_remaining=True,
+    )
+    mw._open_data_paths([str(first), str(csv_path), str(second)])
+    qapp.processEvents()
+    assert len(asked) == 1
+    names = {fd.filename for fd in mw.files.values()}
+    assert "mixed.csv" in names
+    assert "mixed_a.wwt" in names
+    assert "mixed_b.wwt" in names
+    assert len(_winwert_views(mw)) == 4
+
+
+def test_open_batch_no_display_does_not_establish_choice(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    bare = _no_display_wwt(tmp_path / "bare.wwt")
+    first = wwt.two_window_non_overlap(tmp_path / "valid_a.wwt")
+    second = wwt.two_window_non_overlap(tmp_path / "valid_b.wwt")
+    mw = MainWindow()
+    asked = _stub_wwt_ui(
+        mw, monkeypatch, accept=True, apply_to_remaining=True,
+    )
+    mw._open_data_paths([str(bare), str(first), str(second)])
+    qapp.processEvents()
+    assert len(asked) == 1
+    assert len(_winwert_views(mw)) == 4
+    assert any(fd.filename == "bare.wwt" for fd in mw.files.values())
+
+
+def test_open_batch_middle_failure_keeps_remembered_choice(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    first = wwt.two_window_non_overlap(tmp_path / "ok_a.wwt")
+    bad = tmp_path / "bad.wwt"
+    bad.write_bytes(b"not a WinWert file")
+    second = wwt.two_window_non_overlap(tmp_path / "ok_b.wwt")
+    errors = []
+
+    def _critical(_parent, title, text, *args, **kwargs):
+        errors.append((title, str(text)))
+        return 0
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window._project_io_mixin.QMessageBox.critical",
+        _critical,
+    )
+    mw = MainWindow()
+    asked = _stub_wwt_ui(
+        mw, monkeypatch, accept=True, apply_to_remaining=True,
+    )
+    mw._open_data_paths([str(first), str(bad), str(second)])
+    qapp.processEvents()
+    assert len(asked) == 1
+    assert errors
+    assert errors[0][0] == "错误"
+    names = {fd.filename for fd in mw.files.values()}
+    assert "ok_a.wwt" in names
+    assert "ok_b.wwt" in names
+    assert "bad.wwt" not in names
+    assert len(_winwert_views(mw)) == 4
+
+
+def test_open_batch_new_open_asks_again(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    first_batch = [
+        wwt.two_window_non_overlap(tmp_path / f"batch1_{index}.wwt")
+        for index in range(2)
+    ]
+    later = wwt.two_window_non_overlap(tmp_path / "batch2.wwt")
+    mw = MainWindow()
+    asked = _stub_wwt_ui(
+        mw, monkeypatch, accept=True, apply_to_remaining=True,
+    )
+    mw._open_data_paths([str(path) for path in first_batch])
+    qapp.processEvents()
+    assert len(asked) == 1
+    mw._open_data_paths([str(later)])
+    qapp.processEvents()
+    assert len(asked) == 2
+
+
+def test_open_batch_exception_clears_remembered_choice(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.two_window_non_overlap(tmp_path / "boom.wwt")
+    mw = MainWindow()
+    _stub_wwt_ui(mw, monkeypatch, accept=True, apply_to_remaining=True)
+
+    def boom(*_a, **_k):
+        mw._wwt_import._batch_choice = WwtBatchChoice.APPLY_LAYOUT
+        raise RuntimeError("load failed")
+
+    monkeypatch.setattr(mw, "_load_one", boom)
+    with pytest.raises(RuntimeError, match="load failed"):
+        mw._open_data_paths([str(path)])
+    assert mw._wwt_import._batch_choice is WwtBatchChoice.ASK
+    assert mw._wwt_import._batch_active is False
+
+
+def test_open_batch_bool_monkeypatch_still_asks_each_file(
+    qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    paths = [
+        wwt.two_window_non_overlap(tmp_path / f"bool_{index}.wwt")
+        for index in range(3)
+    ]
+    mw = MainWindow()
+    asked = _stub_wwt_ui(mw, monkeypatch, accept=True)
+    mw._open_data_paths([str(path) for path in paths])
+    qapp.processEvents()
+    assert len(asked) == 3
+    assert len(_winwert_views(mw)) == 6
+
+
+def test_open_batch_project_restore_asks_zero_times(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.two_window_non_overlap(tmp_path / "restore.wwt")
+    mw = MainWindow()
+    asked = _stub_wwt_ui(mw, monkeypatch, accept=True, apply_to_remaining=True)
+    mw._open_data_paths([str(path)])
+    qapp.processEvents()
+    assert asked
+    proj = tmp_path / "batch.tlproj"
+    assert mw.save_project(proj) is True
+
+    restored = MainWindow()
+
+    def fail_if_called(*_a, **_k):
+        pytest.fail("layout dialog must not run during project restore")
+
+    monkeypatch.setattr(restored._wwt_import, "_ask_layout", fail_if_called)
+    monkeypatch.setattr(
+        restored._ultraview,
+        "add_time_views_from_native_layout",
+        lambda items, **_kwargs: (),
+    )
+    monkeypatch.setattr(restored, "plot_time", lambda *a, **k: None)
+    monkeypatch.setattr(restored, "_apply_active_view", lambda *a, **k: None)
+    restored.open_project(proj)
+    qapp.processEvents()
+    assert restored.files
+    assert _winwert_views(restored)

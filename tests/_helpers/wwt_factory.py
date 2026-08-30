@@ -122,6 +122,31 @@ SPEED_ALIAS_MISMATCH_HI = 100.0
 NLTNP_X_LO, NLTNP_X_HI = -660.0, 540.0
 NLTNP_X_TICK, NLTNP_X_GRID = 120.0, 60.0
 HUGE_ZEIT_N = 2_000_000_000
+
+# SFNS-like Custom X + native viewport (synthetic; not customer testdoc bytes).
+SFNS_RACK_TRAVEL = "Rack Travel"
+SFNS_RACK_FORCE = "Rack Force"
+SFNS_RACK_TRAVEL_UNIT = "mm"
+SFNS_RACK_FORCE_UNIT = "N"
+SFNS_NATIVE_X_LO, SFNS_NATIVE_X_HI = -100.0, 100.0
+SFNS_NATIVE_X_TICK, SFNS_NATIVE_X_GRID = 20.0, 10.0
+SFNS_DATA_X_LO, SFNS_DATA_X_HI = -83.0, 83.0
+SFNS_CURSOR_A, SFNS_CURSOR_B = -60.0, -45.0
+SFNS_Y_LO, SFNS_Y_HI = -50.0, 50.0
+SFNS_Y_TICK, SFNS_Y_GRID = 10.0, 5.0
+SFNS_Y_UP_OFFSET = 20.0
+SFNS_Y_DOWN_OFFSET = -20.0
+SFNS_Y_SLOPE = 0.05
+SFNS_N_HALF = 201
+SFNS_VARIANTS = (
+    "cycle",
+    "noisy",
+    "unidirectional",
+    "two_cycles",
+    "same_direction",
+    "nan_gap",
+    "inf_gap",
+)
 SENTINEL_RAW = -1e300
 SENTINEL_SCALE = 2.0
 SENTINEL_INDEX = 10
@@ -1250,3 +1275,231 @@ def three_exact_overlap_windows(path=None) -> Path | bytes:
         ),
     )
     return _emit(write_wwt_bytes(records, windows), path)
+
+
+@dataclass(frozen=True)
+class WwtBatchChoiceSet:
+    """Distinct-filename batch: N display-bearing WWTs plus optional no-display."""
+
+    display_paths: tuple[Path, ...]
+    no_display_path: Path | None
+    ordered_paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class SfnsLikeSeries:
+    """Custom-X Rack Travel / Rack Force arrays for cursor and WWT builders."""
+
+    x: np.ndarray
+    y: np.ndarray
+    variant: str
+
+
+def _sfns_force(x: np.ndarray, *, going_up: np.ndarray, y_offset: float = 0.0) -> np.ndarray:
+    """Deterministic hysteresis: same X maps to two distinct Y values."""
+    baseline = SFNS_Y_SLOPE * np.asarray(x, dtype=np.float64) + float(y_offset)
+    return np.where(
+        np.asarray(going_up, dtype=bool),
+        baseline + SFNS_Y_UP_OFFSET,
+        baseline + SFNS_Y_DOWN_OFFSET,
+    )
+
+
+def _sfns_add_turn_chatter(x: np.ndarray) -> np.ndarray:
+    """Quantisation chatter around the turn, not a new physical reversal."""
+    x = np.asarray(x, dtype=np.float64).copy()
+    chatter = np.resize(
+        np.asarray((0.20, 0.10, 0.0, -0.10, -0.20, -0.10, 0.0, 0.10)),
+        x.size,
+    )
+    near_turn = (
+        np.abs(x - SFNS_DATA_X_HI) < 4.0
+    ) | (
+        np.abs(x - SFNS_DATA_X_LO) < 4.0
+    )
+    x[near_turn] = x[near_turn] + chatter[near_turn]
+    return x
+
+
+def sfns_like_hysteresis_arrays(
+    variant: str = "cycle", *, y_offset: float = 0.0, n_half: int = SFNS_N_HALF,
+) -> SfnsLikeSeries:
+    """Build SFNS-like Custom X/Y arrays.
+
+    ``variant``:
+      cycle — one hysteresis loop ``-83 → 83 → -83``
+      noisy — same loop with chatter around the turn
+      unidirectional — outward stroke only
+      two_cycles — two full loops (four major legs)
+      same_direction — two same-direction visits split by a NaN gap
+      nan_gap / inf_gap — non-finite hole inside the outward stroke
+    """
+    if variant not in SFNS_VARIANTS:
+        raise ValueError(f"unknown SFNS-like variant: {variant!r}")
+    n_half = int(n_half)
+    if n_half < 8:
+        raise ValueError("n_half must be large enough for major-leg detection")
+    up = _linspace(SFNS_DATA_X_LO, SFNS_DATA_X_HI, n_half)
+    down = _linspace(SFNS_DATA_X_HI, SFNS_DATA_X_LO, n_half)[1:]
+    up_y = _sfns_force(up, going_up=np.ones(up.size, dtype=bool), y_offset=y_offset)
+    down_y = _sfns_force(down, going_up=np.zeros(down.size, dtype=bool), y_offset=y_offset)
+
+    if variant == "unidirectional":
+        x, y = up, up_y
+    elif variant == "same_direction":
+        x = np.concatenate((up, np.asarray((np.nan,)), up))
+        y = np.concatenate((up_y, np.asarray((np.nan,)), up_y + 4.0))
+    elif variant in {"nan_gap", "inf_gap"}:
+        hole = np.nan if variant == "nan_gap" else np.inf
+        mid = n_half // 2
+        x = np.concatenate((up[:mid], np.asarray((hole,)), up[mid:], down))
+        y = np.concatenate((up_y[:mid], np.asarray((hole,)), up_y[mid:], down_y))
+    elif variant == "two_cycles":
+        x = np.concatenate((up, down, up[1:], down))
+        y = np.concatenate((up_y, down_y, up_y[1:], down_y))
+    else:
+        x = np.concatenate((up, down))
+        y = np.concatenate((up_y, down_y))
+        if variant == "noisy":
+            x = _sfns_add_turn_chatter(x)
+
+    return SfnsLikeSeries(x=np.asarray(x, dtype=np.float64), y=np.asarray(y, dtype=np.float64), variant=variant)
+
+
+def no_display_source(path=None, *, title: str = "no-display") -> Path | bytes:
+    """Zeit + channel record with no DatenFenste2 window / proposal."""
+    n = CHANNEL_N
+    source_filename = Path(path).name if path is not None else "no_display.wwt"
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, n),
+        ),
+    )
+    return _emit(
+        write_wwt_bytes(
+            records, title=title, comment="no-display",
+            source_filename=source_filename,
+        ),
+        path,
+    )
+
+
+def batch_choice_set(
+    directory,
+    *,
+    n_display: int = 3,
+    include_no_display: bool = True,
+    no_display_at: int = 0,
+) -> WwtBatchChoiceSet:
+    """Write N distinct display-bearing WWTs plus one optional no-display WWT.
+
+    Display files reuse the one-window channel XY profile so
+    ``offer_layout`` actually asks. The no-display file still loads a
+    Navigator source/record but must not consume a batch decision.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    if n_display < 1:
+        raise ValueError("n_display must be at least 1")
+    display_paths = []
+    for index in range(int(n_display)):
+        name = f"batch_display_{index + 1:02d}.wwt"
+        display_paths.append(channel_xy_with_auxiliaries(directory / name))
+    no_display_path = None
+    ordered: list[Path] = list(display_paths)
+    if include_no_display:
+        no_display_path = no_display_source(directory / "batch_no_display.wwt")
+        insert_at = max(0, min(int(no_display_at), len(ordered)))
+        ordered.insert(insert_at, no_display_path)
+    return WwtBatchChoiceSet(
+        display_paths=tuple(display_paths),
+        no_display_path=no_display_path,
+        ordered_paths=tuple(ordered),
+    )
+
+
+def sfns_like_custom_x_native_viewport(
+    path=None,
+    *,
+    variant: str = "cycle",
+    y_offset: float = 0.0,
+    source_filename: str | None = None,
+    title: str = "sfns-like",
+) -> Path | bytes:
+    """Custom X ``Rack Travel`` with native window X range ``-100..100``.
+
+    Data union is about ``-83..83``; Y ``Rack Force`` has a deterministic
+    hysteresis so the same X has two distinct Y values on the up vs down
+    stroke. Does not depend on ``testdoc/``.
+    """
+    series = sfns_like_hysteresis_arrays(variant, y_offset=y_offset)
+    n = int(series.x.size)
+    if n < _MIN_TIMESERIES_SAMPLES:
+        raise ValueError(
+            f"SFNS-like series n={n} is below {_MIN_TIMESERIES_SAMPLES}; "
+            "Zeit group would not become a Navigator source"
+        )
+    filename = source_filename
+    if filename is None:
+        filename = Path(path).name if path is not None else "sfns_like.wwt"
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", SFNS_RACK_TRAVEL, SFNS_RACK_TRAVEL_UNIT, n=n, values=series.x,
+        ),
+        WwtRecordSpec(
+            "Real", SFNS_RACK_FORCE, SFNS_RACK_FORCE_UNIT, n=n, values=series.y,
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{SFNS_RACK_TRAVEL} [{SFNS_RACK_TRAVEL_UNIT}]",
+                SFNS_NATIVE_X_LO, SFNS_NATIVE_X_HI,
+                x_record_index=1,
+                tick=SFNS_NATIVE_X_TICK, grid=SFNS_NATIVE_X_GRID,
+            ),
+            curves=(
+                _y_curve(
+                    2,
+                    f"{SFNS_RACK_FORCE} [{SFNS_RACK_FORCE_UNIT}]",
+                    SFNS_Y_LO, SFNS_Y_HI,
+                    x_record_index=1,
+                    tick=SFNS_Y_TICK, grid=SFNS_Y_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(
+        write_wwt_bytes(
+            records, windows, title=title, comment=f"sfns-{variant}",
+            source_filename=filename,
+        ),
+        path,
+    )
+
+
+def sfns_like_same_display_names(directory) -> tuple[Path, Path]:
+    """Two WWTs with identical channel labels and distinct source identity."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    first = sfns_like_custom_x_native_viewport(
+        directory / "sfns_src_a.wwt",
+        variant="cycle",
+        y_offset=0.0,
+        source_filename="sfns_src_a.wwt",
+        title="sfns-src-a",
+    )
+    second = sfns_like_custom_x_native_viewport(
+        directory / "sfns_src_b.wwt",
+        variant="cycle",
+        y_offset=8.0,
+        source_filename="sfns_src_b.wwt",
+        title="sfns-src-b",
+    )
+    return first, second
