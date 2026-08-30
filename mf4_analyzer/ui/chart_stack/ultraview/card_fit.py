@@ -27,8 +27,14 @@ from mf4_analyzer.ui.ultraview_state import (
 
 from mf4_analyzer.ultraview_core.grid_geometry import (
     GridMetrics,
-    rect_to_pixels,
+    HugChrome,
+    hug_plot_targets as _hug_plot_targets,
+    hug_span_centers as _hug_span_centers,
+    plot_size_for_rect,
+    preferred_hug_axis as _preferred_hug_axis,
+    preferred_hug_span as _preferred_hug_span,
     rects_overlap,
+    snap_plot_to_span as _snap_plot_to_span,
 )
 
 from .layouts import (
@@ -179,22 +185,25 @@ def fit_rect_for_aspect(
     return result.candidate
 
 
+def _hug_chrome(facts: CardFitFacts) -> HugChrome:
+    return HugChrome(
+        header_height=int(facts.header_height),
+        footer_height=int(facts.footer_height),
+        image_margin_x=int(facts.image_margin_x),
+        image_margin_y=int(facts.image_margin_y),
+        orphan_height=int(facts.orphan_height),
+        min_column_span=int(facts.min_column_span),
+        max_column_span=int(facts.max_column_span),
+        min_row_span=int(facts.min_row_span),
+        max_row_span=int(facts.max_row_span),
+    )
+
+
 def card_fit_plot_size(
     rect: GridRect, facts: CardFitFacts
 ) -> tuple[int, int] | None:
     """Plot-area pixels for ``rect``: outer cell box minus live chrome/margins."""
-    _x, _y, width, height = rect_to_pixels(rect, facts.metrics)
-    plot_w = int(width) - 2 * max(0, int(facts.image_margin_x))
-    plot_h = (
-        int(height)
-        - max(0, int(facts.header_height))
-        - max(0, int(facts.footer_height))
-        - max(0, int(facts.orphan_height))
-        - 2 * max(0, int(facts.image_margin_y))
-    )
-    if plot_w < 1 or plot_h < 1:
-        return None
-    return plot_w, plot_h
+    return plot_size_for_rect(rect, facts.metrics, _hug_chrome(facts))
 
 
 def aspect_contain_box(
@@ -255,35 +264,11 @@ def _overlaps_occupied(rect: GridRect, facts: CardFitFacts) -> bool:
     return any(rects_overlap(rect, occupied) for occupied in facts.occupied)
 
 
-def _span_from_outer(outer: float, pitch: float, cell: float) -> int:
-    if pitch <= 0.0:
-        return 1
-    raw = 1.0 + (float(outer) - float(cell)) / float(pitch)
-    return max(1, int(round(raw)))
-
-
 def snap_plot_to_span(
     plot_size: tuple[int, int], facts: CardFitFacts
 ) -> tuple[int, int]:
     """Nearest legal ``(column_span, row_span)`` for a desired plot box."""
-    plot_w, plot_h = int(plot_size[0]), int(plot_size[1])
-    outer_w = plot_w + 2 * max(0, int(facts.image_margin_x))
-    outer_h = (
-        plot_h
-        + max(0, int(facts.header_height))
-        + max(0, int(facts.footer_height))
-        + max(0, int(facts.orphan_height))
-        + 2 * max(0, int(facts.image_margin_y))
-    )
-    pitch_x, pitch_y = facts.metrics.exact_pitch()
-    cell_w, cell_h = facts.metrics.exact_cell()
-    column_span = _span_from_outer(outer_w, pitch_x, cell_w)
-    row_span = _span_from_outer(outer_h, pitch_y, cell_h)
-    column_span = min(
-        int(facts.max_column_span), max(int(facts.min_column_span), column_span)
-    )
-    row_span = min(int(facts.max_row_span), max(int(facts.min_row_span), row_span))
-    return column_span, row_span
+    return _snap_plot_to_span(plot_size, facts.metrics, _hug_chrome(facts))
 
 
 def hug_plot_targets(facts: CardFitFacts) -> tuple[tuple[int, int], ...]:
@@ -292,65 +277,50 @@ def hug_plot_targets(facts: CardFitFacts) -> tuple[tuple[int, int], ...]:
     plot = card_fit_plot_size(facts.current_rect, facts)
     if image is None or plot is None:
         return ()
-    plot_w, plot_h = plot
-    image_w, image_h = image
-    aspect = image_w / float(image_h)
+    aspect = image[0] / float(image[1])
     if aspect <= 0.0:
         return ()
-    keep_width = (plot_w, max(1, int(round(plot_w / aspect))))
-    keep_height = (max(1, int(round(plot_h * aspect))), plot_h)
-    return keep_width, keep_height
+    return _hug_plot_targets(plot, aspect)
 
 
 def hug_span_centers(facts: CardFitFacts) -> tuple[tuple[int, int], ...]:
     """Snap the keep-width and keep-height plot targets."""
-    found: list[tuple[int, int]] = []
-    seen: set[tuple[int, int]] = set()
-    for plot in hug_plot_targets(facts):
-        center = snap_plot_to_span(plot, facts)
-        if center in seen:
-            continue
-        seen.add(center)
-        found.append(center)
-    return tuple(found)
+    image = _image_size(facts)
+    plot = card_fit_plot_size(facts.current_rect, facts)
+    if image is None or plot is None:
+        return ()
+    aspect = image[0] / float(image[1])
+    if aspect <= 0.0:
+        return ()
+    return _hug_span_centers(plot, aspect, facts.metrics, _hug_chrome(facts))
 
 
 def preferred_hug_span(facts: CardFitFacts) -> tuple[int, int] | None:
     """Pick the hug snap that stays closest to the current area, without growing."""
-    labeled = _labeled_hug_snaps(facts)
-    if not labeled:
+    image = _image_size(facts)
+    plot = card_fit_plot_size(facts.current_rect, facts)
+    if image is None or plot is None:
         return None
-    return min(labeled, key=lambda item: _hug_preference_key(item[1], facts))[1]
+    aspect = image[0] / float(image[1])
+    if aspect <= 0.0:
+        return None
+    return _preferred_hug_span(
+        facts.current_rect, plot, aspect, facts.metrics, _hug_chrome(facts)
+    )
 
 
 def preferred_hug_axis(facts: CardFitFacts) -> str | None:
     """``'width'`` keeps columns; ``'height'`` keeps rows."""
-    labeled = _labeled_hug_snaps(facts)
-    if not labeled:
+    image = _image_size(facts)
+    plot = card_fit_plot_size(facts.current_rect, facts)
+    if image is None or plot is None:
         return None
-    return min(labeled, key=lambda item: _hug_preference_key(item[1], facts))[0]
-
-
-def _labeled_hug_snaps(
-    facts: CardFitFacts,
-) -> tuple[tuple[str, tuple[int, int]], ...]:
-    plots = hug_plot_targets(facts)
-    if len(plots) < 2:
-        return ()
-    return (
-        ("width", snap_plot_to_span(plots[0], facts)),
-        ("height", snap_plot_to_span(plots[1], facts)),
+    aspect = image[0] / float(image[1])
+    if aspect <= 0.0:
+        return None
+    return _preferred_hug_axis(
+        facts.current_rect, plot, aspect, facts.metrics, _hug_chrome(facts)
     )
-
-
-def _hug_preference_key(
-    center: tuple[int, int], facts: CardFitFacts
-) -> tuple[int, int, int, int]:
-    current = facts.current_rect
-    current_area = int(current.column_span) * int(current.row_span)
-    area = int(center[0]) * int(center[1])
-    grows = 1 if area > current_area else 0
-    return (grows, abs(area - current_area), int(center[1]), int(center[0]))
 
 
 def iter_card_fit_search_rects(facts: CardFitFacts) -> tuple[GridRect, ...]:

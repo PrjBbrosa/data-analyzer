@@ -97,6 +97,29 @@ RECT_WIN_A = WwtWindowRectMm(20.0, 40.0, 90.0, 50.0)
 RECT_WIN_B = WwtWindowRectMm(120.0, 40.0, 70.0, 50.0)
 RECT_ZERO_WIDTH = WwtWindowRectMm(20.0, 40.0, 0.0, 50.0)
 
+# U-Can EO3-like millimetre topology (WinWert y is the window bottom).
+# Two semantic rows, mixed widths; windows 6 and 7 share an exact rect
+# so native layout assigns a continuation ordinal. Not testdoc bytes.
+UCAN_SEMANTIC_MM = (
+    (25.0, 65.0, 100.0, 60.0),   # v1 row0 col0
+    (41.0, 138.2, 90.0, 60.0),   # v2 row1 col0
+    (147.5, 62.5, 50.0, 60.0),   # v3 row0 col1
+    (215.5, 62.5, 50.0, 60.0),   # v4 row0 col2
+    (147.5, 138.0, 50.0, 60.0),  # v5 row1 col1
+    (214.5, 138.0, 50.0, 60.0),  # v6 row1 col2
+    (214.5, 138.0, 50.0, 60.0),  # v7 exact overlap of v6 → continuation ordinal 3
+)
+UCAN_SEMANTIC_WINDOW_COUNT = 7
+UCAN_SEMANTIC_Y = (
+    "WinY1",
+    "WinY2",
+    "WinY3",
+    "WinY4",
+    "WinY5",
+    "WinY6",
+    "WinY7",
+)
+
 MULTI_WINDOW_COUNT = 3
 MULTI_FORMULA_COUNT = 1
 THREE_EXACT_OVERLAP_COUNT = 3
@@ -923,6 +946,61 @@ def two_window_non_overlap(path=None) -> Path | bytes:
         ),
     )
     return _emit(write_wwt_bytes(records, windows), path)
+
+
+def ucan_semantic_seven_windows(path=None) -> Path | bytes:
+    """Seven visible windows matching ``UCAN_SEMANTIC_MM`` topology.
+
+    Two semantic rows, mixed widths, and one exact overlap (windows 6 and 7).
+    Tiny/anonymous; does not read ``testdoc/``.
+    """
+    n = CHANNEL_N
+    if len(UCAN_SEMANTIC_MM) != UCAN_SEMANTIC_WINDOW_COUNT:
+        raise ValueError("UCAN_SEMANTIC_MM must list seven millimetre rects")
+    y_records = tuple(
+        WwtRecordSpec(
+            "Real", name, CHAN_Y_UNIT, n=n,
+            values=_linspace(CHAN_Y_LO + index, CHAN_Y_HI + index, n),
+        )
+        for index, name in enumerate(UCAN_SEMANTIC_Y)
+    )
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, n),
+        ),
+        *y_records,
+    )
+    axis = _axis_curve(
+        f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+        x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+    )
+    windows = []
+    for index, mm in enumerate(UCAN_SEMANTIC_MM):
+        y_index = index + 2
+        name = UCAN_SEMANTIC_Y[index]
+        windows.append(
+            WwtWindowSpec(
+                rect_mm=WwtWindowRectMm(*mm),
+                global_x=1,
+                x_axis=axis,
+                curves=(
+                    _y_curve(
+                        y_index, f"{name} [{CHAN_Y_UNIT}]", CHAN_Y_LO, CHAN_Y_HI,
+                        x_record_index=1, tick=CHAN_Y_TICK, grid=CHAN_Y_GRID,
+                        color=CHAN_Y_COLOR if index < 6 else FORM_Y_COLOR,
+                    ),
+                ),
+            )
+        )
+    return _emit(
+        write_wwt_bytes(
+            records, tuple(windows),
+            title="ucan-semantic", comment="factory-ucan",
+        ),
+        path,
+    )
 
 
 def valid_and_zero_width_windows(path=None) -> Path | bytes:

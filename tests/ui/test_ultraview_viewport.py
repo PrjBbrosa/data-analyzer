@@ -1126,6 +1126,19 @@ def test_zoom_fit_fills_and_centers_template_content(qtbot):
     assert y + height / 2.0 == pytest.approx(float(target.y) + float(target.height) / 2.0, abs=2)
 
 
+def test_zoom_fit_does_not_mutate_free_grid_rects(qtbot):
+    """UFP-01/02: zoom_fit / zoom_in / overview are camera-only."""
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a", "b", "c")
+    before = tuple((item.ref, item.rect) for item in harness.board.free_grid)
+    harness.page.zoom_fit()
+    harness.page.zoom_in()
+    harness.page.show_overview()
+    harness.page.hide_overview()
+    after = tuple((item.ref, item.rect) for item in harness.board.free_grid)
+    assert after == before
+
+
 def test_lod_hides_footer_below_sixty_percent(qtbot):
     harness = _Harness(qtbot)
     _free, cards = _prepare_free_grid(harness, qtbot, "a")

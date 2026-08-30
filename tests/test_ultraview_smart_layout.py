@@ -39,18 +39,11 @@ from mf4_analyzer.ultraview_core.smart_layout import (
     SmartLayoutResult,
     solve_smart_layout,
 )
+from tests._helpers.wwt_factory import UCAN_SEMANTIC_MM
 
-# Copied from tests/ui/test_ultraview_native_layout.py ``UCAN_MM``.
-# WinWert y is the window bottom. Not loaded from testdoc/.
-UCAN_MM = (
-    (25.0, 65.0, 100.0, 60.0),
-    (41.0, 138.2, 90.0, 60.0),
-    (147.5, 62.5, 50.0, 60.0),
-    (215.5, 62.5, 50.0, 60.0),
-    (147.5, 138.0, 50.0, 60.0),
-    (214.5, 138.0, 50.0, 60.0),
-    (214.5, 138.0, 50.0, 60.0),
-)
+# Shared with ``tests/_helpers/wwt_factory.py`` so Qt-free and WWT fixtures
+# cannot drift. WinWert y is the window bottom. Not loaded from testdoc/.
+UCAN_MM = UCAN_SEMANTIC_MM
 
 # Frozen topology: upper group views 1,3,4 / lower group 2,5,6,7.
 # View 7 exact-overlaps View 6 → same source_row, continuation after View 6.
@@ -677,3 +670,248 @@ def test_result_exposes_search_diagnostics_not_a_scalar_score():
     if vector is not None:
         assert isinstance(vector, (tuple, list))
         assert len(vector) >= 2
+
+
+# ---------------------------------------------------------------------------
+# W0 follow-up contracts (UFP-04 / UFP-05 / UFP-06 / UFP-07)
+# Missing public names (SmartLayoutInputSnapshot, canonical fact builder,
+# material_card_fit_delta) are valid reds until W1/W2 land them.
+# ---------------------------------------------------------------------------
+
+
+def _ucan_native_items():
+    from mf4_analyzer.ultraview_core.native_layout import NativeLayoutRect
+
+    return tuple(
+        (
+            UltraViewRef("time", view_id),
+            NativeLayoutRect(x, y, width, height),
+        )
+        for (view_id, _order, _row, _column), (x, y, width, height) in zip(
+            UCAN_SOURCE, UCAN_MM, strict=True
+        )
+    )
+
+
+def _semantic_identity(facts: Sequence[SmartCardFact]):
+    """Compare import vs manual facts without GridRect / current_rect."""
+    return tuple(
+        (
+            fact.ref.section,
+            fact.ref.view_id,
+            None if fact.source_row is None else int(fact.source_row),
+            None if fact.source_column is None else int(fact.source_column),
+        )
+        for fact in sorted(
+            facts,
+            key=lambda item: (item.ref.section, item.ref.view_id),
+        )
+    )
+
+
+def _assert_no_unforced_internal_row_holes(
+    result: SmartLayoutResult,
+    facts: Sequence[SmartCardFact],
+) -> None:
+    locked = {
+        fact.ref: fact.locked_rect
+        for fact in facts
+        if fact.locked_rect is not None
+    }
+    by_ref = {ref: rect for ref, rect in result.placements}
+    buckets: dict[tuple[int | None, int], list[GridRect]] = {}
+    for fact in facts:
+        if fact.ref in locked:
+            continue
+        rect = by_ref[fact.ref]
+        buckets.setdefault((fact.source_row, int(rect.row)), []).append(rect)
+    for key, rects in buckets.items():
+        ordered = sorted(rects, key=lambda item: int(item.column))
+        for left, right in zip(ordered, ordered[1:]):
+            gap_start = int(left.column + left.column_span)
+            gap_end = int(right.column)
+            if gap_end <= gap_start:
+                continue
+            forced = any(
+                lock.row <= left.row < lock.row + lock.row_span
+                and lock.column < gap_end
+                and lock.column + lock.column_span > gap_start
+                for lock in locked.values()
+            )
+            assert forced, (
+                f"unforced hole of {gap_end - gap_start} columns between "
+                f"{left} and {right} on {key}"
+            )
+
+
+def _material_probe_is_noop(delta) -> bool:
+    """UFP-07: no-op or one-axis microcell with reading_fill gain < 0.03."""
+    if delta is None:
+        return True
+    if hasattr(delta, "column_delta"):
+        col = abs(int(delta.column_delta))
+        row = abs(int(delta.row_delta))
+        fill = float(getattr(delta, "reading_fill_improvement", 0.0))
+    elif isinstance(delta, tuple) and len(delta) >= 3:
+        col = abs(int(delta[0]))
+        row = abs(int(delta[1]))
+        fill = float(delta[2])
+    elif delta is False or delta == 0 or delta == ():
+        return True
+    else:
+        raise AssertionError(f"unexpected material_card_fit_delta shape: {delta!r}")
+    if col == 0 and row == 0:
+        return True
+    one_axis_micro = (col <= 1 and row == 0) or (row <= 1 and col == 0)
+    return one_axis_micro and fill < 0.03
+
+
+def test_import_and_manual_paths_build_equivalent_semantic_facts():
+    """UFP-03/04: native WWT facts and placements-rebuilt facts share ordinals."""
+    from mf4_analyzer.ultraview_core.native_layout import (
+        native_layout_facts,
+        plan_native_layout,
+    )
+    from mf4_analyzer.ultraview_core.smart_layout import (
+        SmartLayoutInputSnapshot,
+        facts_digest,
+        smart_layout_facts_from_placements,
+    )
+
+    items = _ucan_native_items()
+    native_facts = native_layout_facts(items)
+    assert native_facts
+    plan = plan_native_layout(items, policy=_balanced_ucan_policy())
+    assert plan.placed
+    placements = _as_placements(plan.placed)
+    manual_facts = smart_layout_facts_from_placements(placements)
+    assert _semantic_identity(manual_facts) == _semantic_identity(native_facts)
+
+    native_digest = facts_digest(native_facts)
+    manual_digest = facts_digest(manual_facts)
+    assert native_digest == manual_digest
+    native_snap = SmartLayoutInputSnapshot(
+        facts=tuple(native_facts),
+        policy=_balanced_ucan_policy(),
+        facts_digest=native_digest,
+        provenance="wwt-import",
+    )
+    manual_snap = SmartLayoutInputSnapshot(
+        facts=tuple(manual_facts),
+        policy=_balanced_ucan_policy(),
+        facts_digest=manual_digest,
+        provenance="manual-board",
+    )
+    assert native_snap.facts_digest == manual_snap.facts_digest
+
+
+def test_manual_fact_builder_uses_row_ordinal_not_absolute_column():
+    """UFP-04: gappy absolute Grid X must canonicalize to source_column 0,1,2."""
+    from mf4_analyzer.ultraview_core.smart_layout import (
+        canonicalize_smart_card_facts,
+        smart_layout_facts_from_placements,
+    )
+
+    placements = _as_placements(
+        (
+            (UltraViewRef("time", "a"), GridRect(12, 4, 6, 6)),
+            (UltraViewRef("time", "b"), GridRect(24, 4, 6, 6)),
+            (UltraViewRef("time", "c"), GridRect(40, 4, 6, 6)),
+        )
+    )
+    try:
+        facts = smart_layout_facts_from_placements(placements)
+    except TypeError:
+        facts = canonicalize_smart_card_facts(placements)
+    by_id = {fact.ref.view_id: fact for fact in facts}
+    assert [by_id[name].source_column for name in ("a", "b", "c")] == [0, 1, 2]
+    rows = {by_id[name].source_row for name in ("a", "b", "c")}
+    assert len(rows) == 1
+    for name in ("a", "b", "c"):
+        assert by_id[name].source_column != by_id[name].current_rect.column
+
+
+def test_balanced_layout_has_no_unforced_internal_row_holes():
+    """UFP-06: unlocked semantic rows compact-pack; gappy columns are not topology."""
+    ucan = _ucan_facts()
+    ucan_result = solve_smart_layout(ucan, _balanced_ucan_policy())
+    _assert_legal_solve(ucan_result, ucan)
+    _assert_no_unforced_internal_row_holes(ucan_result, ucan)
+
+    gappy = tuple(
+        _card_fact(
+            f"g{index}",
+            index,
+            source_row=0,
+            source_column=index,
+            current_rect=GridRect((0, 12, 24, 40)[index], 0, 6, 6),
+            preview_aspect=FALLBACK_ASPECT,
+        )
+        for index in range(4)
+    )
+    gappy_result = solve_smart_layout(gappy, _policy())
+    _assert_legal_solve(gappy_result, gappy)
+    _assert_no_unforced_internal_row_holes(gappy_result, gappy)
+
+
+def test_smart_layout_is_material_card_fit_fixed_point():
+    """UFP-07: accepted layout has no material origin-pinned Card Fit leftover."""
+    from mf4_analyzer.ultraview_core.smart_layout import material_card_fit_delta
+
+    facts = _ucan_facts()
+    result = solve_smart_layout(facts, _balanced_ucan_policy())
+    by_ref = _assert_legal_solve(result, facts)
+    metrics = canonical_screen_metrics(_as_placements(result.placements))
+    fact_by_ref = {fact.ref: fact for fact in facts}
+    for ref, rect in by_ref.items():
+        fact = fact_by_ref[ref]
+        if fact.locked_rect is not None:
+            continue
+        if fact.preview_confidence != "captured":
+            continue
+        delta = material_card_fit_delta(
+            rect, fact.preview_aspect, metrics,
+        )
+        assert _material_probe_is_noop(delta), (
+            f"{ref} still has a material Card Fit hug from {rect}: {delta!r}"
+        )
+
+
+def test_smart_layout_canonicalize_then_solve_is_fixed_point():
+    """UFP-05: L2 = solve(canonicalize(L1)) equals L1; no N-loop convergence."""
+    from mf4_analyzer.ultraview_core.smart_layout import (
+        SmartLayoutInputSnapshot,
+        canonicalize_smart_card_facts,
+        facts_digest,
+    )
+
+    facts = _ucan_facts()
+    policy = _balanced_ucan_policy()
+    snapshot = SmartLayoutInputSnapshot(
+        facts=facts,
+        policy=policy,
+        facts_digest=facts_digest(facts),
+        provenance="wwt-import",
+    )
+    first = solve_smart_layout(snapshot.facts, snapshot.policy)
+    _assert_legal_solve(first, facts)
+    try:
+        canonical = canonicalize_smart_card_facts(
+            snapshot, placements=first.placements,
+        )
+    except TypeError:
+        canonical = canonicalize_smart_card_facts(
+            snapshot.facts, placements=first.placements,
+        )
+    if hasattr(canonical, "facts"):
+        second_facts = canonical.facts
+        second_policy = getattr(canonical, "policy", policy)
+    else:
+        second_facts = canonical
+        second_policy = policy
+    second = solve_smart_layout(second_facts, second_policy)
+    assert second.accepted is True
+    assert second.placements == first.placements
+    committed = getattr(second, "committed_updates", None)
+    if callable(committed):
+        assert committed() == ()

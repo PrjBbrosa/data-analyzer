@@ -627,7 +627,7 @@ def test_import_commits_provisional_geometry_without_per_preview_reflow(qapp):
 
 @pytest.mark.parametrize("order", ((0, 1, 2), (2, 1, 0), (1, 2, 0)))
 def test_group_settle_all_ready_is_one_history_and_one_zoom_fit(qapp, order):
-    """D8: all captured aspects ready → one settle, independent of arrival order."""
+    """D8: captured aspects never rewrite import geometry; one camera fit at import."""
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
@@ -646,24 +646,20 @@ def test_group_settle_all_ready_is_one_history_and_one_zoom_fit(qapp, order):
         )
         board = coordinator.board
         history = controller.grid_histories[board.board_id]
-        provisional = _placed_map(board)
-        for step, index in enumerate(order):
+        imported = _placed_map(board)
+        assert probe.calls == ["fit"]
+        assert len(history.undo) == 1
+        for index in order:
             _record_preview(coordinator, refs[index], *sizes[index])
             qapp.processEvents()
-            if step < len(order) - 1:
-                assert _placed_map(board) == provisional
-                assert probe.calls == []
-                assert len(history.undo) == 1
-        assert len(history.undo) == 1
-        assert probe.calls == ["fit"]
-        after = _placed_map(board)
-        assert set(after) == set(provisional)
-        _assert_no_overlap_map(after)
+            assert _placed_map(board) == imported
+            assert probe.calls == ["fit"]
+            assert len(history.undo) == 1
         late_revision = controller._current_layout_revision(board.board_id)
         _record_preview(coordinator, refs[0], 1200, 300)
         qapp.processEvents()
         assert controller._current_layout_revision(board.board_id) == late_revision
-        assert _placed_map(board) == after
+        assert _placed_map(board) == imported
         assert probe.calls == ["fit"]
         assert len(history.undo) == 1
     finally:
@@ -673,7 +669,7 @@ def test_group_settle_all_ready_is_one_history_and_one_zoom_fit(qapp, order):
 
 
 def test_group_settle_quiet_timer_fires_once_with_partial_capture(qapp):
-    """D8: 250ms quiet after last aspect with ≥1 captured settles once."""
+    """D8: 250ms quiet closes the aspect group without rewriting GridRect."""
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
@@ -691,20 +687,20 @@ def test_group_settle_quiet_timer_fires_once_with_partial_capture(qapp):
         )
         board = coordinator.board
         history = controller.grid_histories[board.board_id]
-        provisional = _placed_map(board)
+        imported = _placed_map(board)
+        assert probe.calls == ["fit"]
         _record_preview(coordinator, top, 1600, 400)
         qapp.processEvents()
-        assert _placed_map(board) == provisional
-        assert probe.calls == []
+        assert _placed_map(board) == imported
         _emit_timer(_quiet_timer(controller), qapp)
         assert len(history.undo) == 1
         assert probe.calls == ["fit"]
-        settled = _placed_map(board)
+        assert _placed_map(board) == imported
         _emit_timer(_quiet_timer(controller), qapp)
         _record_preview(coordinator, bottom, 800, 800)
         qapp.processEvents()
         assert probe.calls == ["fit"]
-        assert _placed_map(board) == settled
+        assert _placed_map(board) == imported
         assert len(history.undo) == 1
     finally:
         coordinator.shutdown()
@@ -713,7 +709,7 @@ def test_group_settle_quiet_timer_fires_once_with_partial_capture(qapp):
 
 
 def test_group_settle_deadline_fires_once_from_register(qapp):
-    """D8: 1200ms deadline from register settles once even if aspects are incomplete."""
+    """D8: 1200ms deadline closes the group once and never rewrites GridRect."""
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
@@ -730,14 +726,15 @@ def test_group_settle_deadline_fires_once_from_register(qapp):
         )
         board = coordinator.board
         history = controller.grid_histories[board.board_id]
-        assert probe.calls == []
+        imported = _placed_map(board)
+        assert probe.calls == ["fit"]
         _emit_timer(_deadline_timer(controller), qapp)
         assert len(history.undo) == 1
         assert probe.calls == ["fit"]
-        settled = _placed_map(board)
+        assert _placed_map(board) == imported
         _emit_timer(_deadline_timer(controller), qapp)
         assert probe.calls == ["fit"]
-        assert _placed_map(board) == settled
+        assert _placed_map(board) == imported
         assert not _group_is_active(_pending_group_or_none(controller))
     finally:
         coordinator.shutdown()
@@ -834,7 +831,7 @@ def test_delayed_preview_group_survives_until_settle_or_user_mutation(qapp):
             controller._current_layout_revision(coordinator.board.board_id)
             == revision_after_move
         )
-        assert probe.calls == []
+        assert probe.calls == ["fit"]
     finally:
         coordinator.shutdown()
         host.deleteLater()
@@ -969,14 +966,14 @@ def test_settle_reject_stale_deleted_or_switched_is_zero_mutation(qapp, monkeypa
         assert tuple((item.ref, item.rect) for item in board.free_grid) == fingerprint
         assert len(history.undo) == history_count
         assert controller._current_layout_revision(board.board_id) == revision
-        assert probe.calls == []
+        assert probe.calls == ["fit"]
 
         controller._bump_layout_revision(board.board_id)
         stale_revision = controller._current_layout_revision(board.board_id)
         _emit_timer(_deadline_timer(controller), qapp)
         assert controller._current_layout_revision(board.board_id) == stale_revision
         assert tuple((item.ref, item.rect) for item in board.free_grid) == fingerprint
-        assert probe.calls == []
+        assert probe.calls == ["fit"]
 
         created = create_board(controller.workspace, name="other")
         assert created is not None
@@ -985,7 +982,7 @@ def test_settle_reject_stale_deleted_or_switched_is_zero_mutation(qapp, monkeypa
         _emit_timer(_quiet_timer(controller), qapp)
         assert tuple((item.ref, item.rect) for item in board.free_grid) == fingerprint
         assert tuple((item.ref, item.rect) for item in created.free_grid) == other_fp
-        assert probe.calls == []
+        assert probe.calls == ["fit"]
 
         controller._on_select_board(board.board_id)
         controller._on_delete_board(board.board_id)
@@ -994,7 +991,7 @@ def test_settle_reject_stale_deleted_or_switched_is_zero_mutation(qapp, monkeypa
             item for item in controller.workspace.boards if item.board_id == board.board_id
         ]
         assert remaining == []
-        assert probe.calls == []
+        assert probe.calls == ["fit"]
     finally:
         coordinator.shutdown()
         host.deleteLater()
@@ -1178,5 +1175,128 @@ def test_delete_board_and_shutdown_drop_lock_map(qapp):
     finally:
         if not getattr(coordinator, "_shutdown", False):
             coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def _placement_digest(board, layout_revision):
+    rects = tuple(
+        sorted(
+            (
+                item.ref.section,
+                item.ref.view_id,
+                int(item.rect.column),
+                int(item.rect.row),
+                int(item.rect.column_span),
+                int(item.rect.row_span),
+            )
+            for item in board.free_grid
+        )
+    )
+    return (board.board_id, int(layout_revision), rects)
+
+
+class _SettleCount:
+    """Bound-method wrapper around pending settle; no Qt-signal lambdas."""
+
+    def __init__(self, original) -> None:
+        self._original = original
+        self.calls = 0
+
+    def settle(self) -> None:
+        self.calls += 1
+        return self._original()
+
+
+def test_late_capture_and_resolution_recapture_never_change_geometry(qapp):
+    """UFP-08: late preview / recapture update images only, never GridRects."""
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    top, bottom = _stacked_refs()
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_stacked_items(),
+            dedicated_board=True,
+            board_name="late-capture",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        revision = controller._current_layout_revision(board.board_id)
+        before_map = _placed_map(board)
+        before_digest = _placement_digest(board, revision)
+        undo_before = list(history.undo)
+        _record_preview(coordinator, top, 1600, 400)
+        _record_preview(coordinator, bottom, 800, 800)
+        qapp.processEvents()
+        _publish(coordinator, top, 3200, 800)
+        controller.record_smart_layout_aspect(top)
+        coordinator.store.mark_resolution_stale(top, True)
+        recapture = getattr(
+            coordinator._capture, "_recapture_resolution_stale_refs", None,
+        )
+        if callable(recapture):
+            recapture()
+        qapp.processEvents()
+        after_revision = controller._current_layout_revision(board.board_id)
+        assert _placed_map(board) == before_map
+        assert _placement_digest(board, after_revision) == before_digest
+        assert after_revision == revision
+        assert list(history.undo) == undo_before
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_fit_during_pending_capture_is_camera_only(qapp, monkeypatch):
+    """UFP-02: Fit during pending capture does not flush or commit layout."""
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    settle = _SettleCount(controller._settle_pending_smart_layout)
+    monkeypatch.setattr(controller, "_settle_pending_smart_layout", settle.settle)
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_stacked_items(),
+            dedicated_board=True,
+            board_name="fit-pending",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        revision = controller._current_layout_revision(board.board_id)
+        before = _placement_digest(board, revision)
+        undo_before = list(history.undo)
+        group = _pending_smart_layout_group(controller)
+        assert _group_is_active(group)
+        quiet = getattr(controller, "_smart_layout_quiet_timer", None)
+        deadline = getattr(controller, "_smart_layout_deadline_timer", None)
+        if quiet is not None:
+            quiet.stop()
+        if deadline is not None:
+            deadline.stop()
+        settle_before = settle.calls
+        probe.zoom_fit()
+        qapp.processEvents()
+        after_revision = controller._current_layout_revision(board.board_id)
+        assert _placement_digest(board, after_revision) == before
+        assert _group_is_active(_pending_group_or_none(controller))
+        assert list(history.undo) == undo_before
+        assert after_revision == revision
+        assert settle.calls == settle_before
+        kinds_after = tuple(getattr(entry, "kind", "") for entry in history.undo)
+        kinds_before = tuple(getattr(entry, "kind", "") for entry in undo_before)
+        assert kinds_after == kinds_before
+    finally:
+        coordinator.shutdown()
         host.deleteLater()
         qapp.processEvents()

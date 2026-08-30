@@ -370,8 +370,8 @@ class NavigationIsland(QFrame):
             self,
             object_name="ultraViewNavFitButton",
             icon=Icons.ultraview_fit(UV_MUTED),
-            tooltip="适应内容：图面填满画布，最高 300%",
-            accessible_name="适应内容：图面填满画布，最高 300%",
+            tooltip="适应内容：只缩放画布，不改卡片；最高 300%",
+            accessible_name="适应内容：只缩放画布，不改卡片；最高 300%",
         )
         self._fit.clicked.connect(self.zoom_fit_requested)
         layout.addWidget(self._fit, 0)
@@ -477,7 +477,7 @@ class CardContextIsland(QFrame):
     remove_requested = pyqtSignal(str, str)
     fit_requested = pyqtSignal(str, str)
 
-    _FIT_TOOLTIP = "按原图比例收紧当前卡片，不移动邻卡、不整板改尺寸"
+    _FIT_TOOLTIP = "按原图比例：只收紧当前卡，不移动邻卡"
     _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
 
     def __init__(self, parent: QWidget | None = None) -> None:

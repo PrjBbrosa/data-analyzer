@@ -17,6 +17,7 @@ from .model import GridRect, UltraViewRef
 from .smart_layout import (
     SmartCardFact,
     SmartLayoutPolicy,
+    cluster_source_row_ids,
     solve_smart_layout,
 )
 
@@ -198,45 +199,10 @@ def _same_source_row(left: _Item, right: _Item) -> bool:
 
 def _cluster_source_rows(unique: Sequence[_Item]) -> list[int]:
     """Assign dense ``source_row`` ids. Independent of ``unique`` list order."""
-    count = len(unique)
-    if count == 0:
-        return []
-    parent = list(range(count))
-
-    def find(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    def union(left: int, right: int) -> None:
-        root_left, root_right = find(left), find(right)
-        if root_left == root_right:
-            return
-        if unique[root_left].source_order > unique[root_right].source_order:
-            root_left, root_right = root_right, root_left
-        parent[root_right] = root_left
-
-    for index in range(count):
-        for other in range(index + 1, count):
-            if _same_source_row(unique[index], unique[other]):
-                union(index, other)
-
-    clusters: dict[int, list[int]] = {}
-    for index in range(count):
-        clusters.setdefault(find(index), []).append(index)
-    ranked = sorted(
-        clusters.values(),
-        key=lambda members: (
-            min(_item_center(unique[index]) for index in members),
-            min(unique[index].source_order for index in members),
-        ),
+    bands = tuple(
+        (item.top, item.bottom, item.source_order) for item in unique
     )
-    rows = [0] * count
-    for row_id, members in enumerate(ranked):
-        for index in members:
-            rows[index] = row_id
-    return rows
+    return list(cluster_source_row_ids(bands))
 
 
 def _compressed_salience(area: float, median_area: float) -> float:

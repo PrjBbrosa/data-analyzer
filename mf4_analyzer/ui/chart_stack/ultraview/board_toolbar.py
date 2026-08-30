@@ -161,7 +161,7 @@ class BoardToolbar(QFrame):
         self._zoom_fit = QToolButton(self)
         self._zoom_fit.setObjectName("ultraViewZoomFitButton")
         self._zoom_fit.setText("适应")
-        self._zoom_fit.setToolTip("适应内容：图面填满画布，最高 300%")
+        self._zoom_fit.setToolTip("适应内容：只缩放画布，不改卡片；最高 300%")
         self._zoom_fit.clicked.connect(self.zoom_fit_requested)
         layout.addWidget(self._zoom_fit, 0)
         self._zoom_reset = QToolButton(self)

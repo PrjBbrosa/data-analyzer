@@ -85,7 +85,6 @@ from ...ultraview_core.smart_layout import (
     SmartCardFact,
     SmartLayoutPolicy,
 )
-from ...ultraview_core import smart_layout as _smart_layout
 from ..ultraview_edits import (
     SelectionMutationPlan,
     plan_selection_delete,
@@ -207,7 +206,7 @@ class _PendingAutoAspect:
 
 @dataclass
 class _PendingSmartLayoutGroup:
-    """One WWT/native import's deferred Smart Layout settle."""
+    """Import-time aspect tracker. Must not mutate GridRect after first paint."""
 
     board_id: str
     refs: tuple[UltraViewRef, ...]
@@ -503,6 +502,11 @@ class UltraViewWorkspaceController:
         # through ``_commit_grid_change`` would return early after the mutation
         # and skip history/dirty/refresh.
         self._commit_grid_change(target, before, [])
+        logger.debug(
+            "ultraview event kind=layout_commit board=%s source=native-import",
+            target.board_id,
+        )
+        self._zoom_fit_after_smart_layout_settle()
         if warnings:
             self._toast_grid_warnings(warnings)
         placed_this_call = tuple(
@@ -933,9 +937,7 @@ class UltraViewWorkspaceController:
             self._toast("卡片不足", "info")
             return
         before = self._placement_snapshot(board)
-        policy = load_smart_layout_policy(
-            target_viewport=self._freeze_smart_layout_viewport(),
-        )
+        policy = self.freeze_smart_layout_policy()
         locked_refs = (
             self._locked_refs_for_board(board) if policy.preserve_locked else None
         )
@@ -963,7 +965,7 @@ class UltraViewWorkspaceController:
             return
         updates = plan.committed_updates()
         if not updates:
-            self._toast("已是紧凑布局", "info")
+            self._toast("布局已是最优状态", "info")
             return
         warnings = set_free_grid_rects(board, updates)
         if warnings:
@@ -1540,6 +1542,12 @@ class UltraViewWorkspaceController:
             )
         return tuple(fallback)
 
+    def freeze_smart_layout_policy(self) -> SmartLayoutPolicy:
+        """Freeze QSettings + current viewport for one import/manual command."""
+        return load_smart_layout_policy(
+            target_viewport=self._freeze_smart_layout_viewport(),
+        )
+
     def _freeze_smart_layout_viewport(self) -> tuple[int, int]:
         default = _SMART_LAYOUT_DEFAULT_VIEWPORT
         page = self.page()
@@ -1652,6 +1660,7 @@ class UltraViewWorkspaceController:
         return all(ref in live_refs for ref in group.refs)
 
     def _settle_pending_smart_layout(self) -> None:
+        """Close the import aspect group. Never writes GridRect or history (UFP-08)."""
         group = self._pending_smart_layout_group
         if group is None or not group.active:
             return
@@ -1661,64 +1670,15 @@ class UltraViewWorkspaceController:
             group.cancelled = True
             return
         group.settled = True
-        board = self._board_by_id(group.board_id)
-        if board is None:
-            group.cancelled = True
-            return
-        live = {item.ref: item.rect for item in board.free_grid}
-        facts = tuple(
-            replace(fact, current_rect=live.get(fact.ref, fact.current_rect))
-            for fact in group.facts
+        captured = sum(
+            1 for fact in group.facts if fact.preview_confidence == "captured"
         )
-        policy = SmartLayoutPolicy(
-            mode="balanced",
-            density="auto",
-            target_viewport=group.target_viewport,
-            preserve_locked=True,
+        logger.debug(
+            "ultraview pending aspects closed without geometry board=%s captured=%s/%s",
+            group.board_id,
+            captured,
+            len(group.refs),
         )
-        result = _smart_layout.solve_smart_layout(facts, policy)
-        if not result.accepted:
-            return
-        updates = tuple(result.placements)
-        before = self._placement_snapshot(board)
-        if not updates:
-            self._after_board_mutation()
-            self._zoom_fit_after_smart_layout_settle()
-            return
-        changed = any(live.get(ref) != rect for ref, rect in updates)
-        if changed:
-            warnings = set_free_grid_rects(board, updates)
-            if warnings:
-                return
-            after = self._placement_snapshot(board)
-            if group.merge_import:
-                self._merge_settle_into_import_history(board, after)
-            else:
-                self._record_grid_transition(board, before)
-        else:
-            self._after_board_mutation()
-        self._zoom_fit_after_smart_layout_settle()
-
-    def _merge_settle_into_import_history(
-        self, board: UltraViewBoardState, after
-    ) -> None:
-        history = self._grid_histories.get(board.board_id)
-        if (
-            history is not None
-            and history.undo
-            and isinstance(history.undo[-1], _GridHistoryEntry)
-        ):
-            last = history.undo[-1]
-            replacement = _GridHistoryEntry(last.before, after, kind=last.kind)
-            history.undo[-1] = replacement
-            history.undo_bytes += (
-                self._history_entry_byte_cost(replacement)
-                - self._history_entry_byte_cost(last)
-            )
-            self._clear_history_redo(history)
-            self._after_board_mutation()
-            return
-        self._after_board_mutation()
 
     def _zoom_fit_after_smart_layout_settle(self) -> None:
         page = self.page()
@@ -1726,6 +1686,7 @@ class UltraViewWorkspaceController:
             return
         zoom = getattr(page, "zoom_fit", None)
         if callable(zoom):
+            logger.debug("ultraview event kind=camera_fit")
             zoom()
 
     def shutdown(self) -> None:

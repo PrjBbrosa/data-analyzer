@@ -24,6 +24,10 @@ from typing import Iterable, Sequence
 
 from .model import (
     GRID_COLUMNS,
+    GRID_MAX_COLUMN_SPAN,
+    GRID_MAX_ROW_SPAN,
+    GRID_MIN_COLUMN_SPAN,
+    GRID_MIN_ROW_SPAN,
     GRID_RESOLUTION,
     SAFETY_ROW_MAX,
     FreeGridPlacement,
@@ -341,3 +345,169 @@ def union_grid_rect(rects: Iterable[GridRect]) -> GridRect | None:
     right = max(item.column + item.column_span for item in items)
     bottom = max(item.row + item.row_span for item in items)
     return GridRect(left, top, right - left, bottom - top)
+
+
+@dataclass(frozen=True)
+class HugChrome:
+    """Origin-pinned Card Fit chrome. Defaults are canonical 34 / 24 / 8."""
+
+    header_height: int = CARD_HEADER_HEIGHT
+    footer_height: int = CARD_FOOTER_HEIGHT
+    image_margin_x: int = CARD_IMAGE_PADDING
+    image_margin_y: int = CARD_IMAGE_PADDING
+    orphan_height: int = 0
+    min_column_span: int = GRID_MIN_COLUMN_SPAN
+    max_column_span: int = GRID_MAX_COLUMN_SPAN
+    min_row_span: int = GRID_MIN_ROW_SPAN
+    max_row_span: int = GRID_MAX_ROW_SPAN
+
+
+def plot_size_for_rect(
+    rect: GridRect,
+    metrics: GridMetrics,
+    chrome: HugChrome | None = None,
+) -> tuple[int, int] | None:
+    """Plot-area pixels: outer cell box minus header/footer/image margins."""
+    used = chrome if chrome is not None else HugChrome()
+    _x, _y, width, height = rect_to_pixels(rect, metrics)
+    plot_w = int(width) - 2 * max(0, int(used.image_margin_x))
+    plot_h = (
+        int(height)
+        - max(0, int(used.header_height))
+        - max(0, int(used.footer_height))
+        - max(0, int(used.orphan_height))
+        - 2 * max(0, int(used.image_margin_y))
+    )
+    if plot_w < 1 or plot_h < 1:
+        return None
+    return plot_w, plot_h
+
+
+def _span_from_outer(outer: float, pitch: float, cell: float) -> int:
+    if pitch <= 0.0:
+        return 1
+    raw = 1.0 + (float(outer) - float(cell)) / float(pitch)
+    return max(1, int(round(raw)))
+
+
+def snap_plot_to_span(
+    plot_size: tuple[int, int],
+    metrics: GridMetrics,
+    chrome: HugChrome | None = None,
+) -> tuple[int, int]:
+    """Nearest legal ``(column_span, row_span)`` for a desired plot box."""
+    used = chrome if chrome is not None else HugChrome()
+    plot_w, plot_h = int(plot_size[0]), int(plot_size[1])
+    outer_w = plot_w + 2 * max(0, int(used.image_margin_x))
+    outer_h = (
+        plot_h
+        + max(0, int(used.header_height))
+        + max(0, int(used.footer_height))
+        + max(0, int(used.orphan_height))
+        + 2 * max(0, int(used.image_margin_y))
+    )
+    pitch_x, pitch_y = metrics.exact_pitch()
+    cell_w, cell_h = metrics.exact_cell()
+    column_span = _span_from_outer(outer_w, pitch_x, cell_w)
+    row_span = _span_from_outer(outer_h, pitch_y, cell_h)
+    column_span = min(
+        int(used.max_column_span), max(int(used.min_column_span), column_span)
+    )
+    row_span = min(int(used.max_row_span), max(int(used.min_row_span), row_span))
+    return column_span, row_span
+
+
+def hug_plot_targets(
+    plot_size: tuple[int, int],
+    aspect: float,
+) -> tuple[tuple[int, int], ...]:
+    """Keep-width and keep-height plot boxes around the current reading scale."""
+    plot_w, plot_h = int(plot_size[0]), int(plot_size[1])
+    if plot_w < 1 or plot_h < 1:
+        return ()
+    ratio = float(aspect)
+    if not math.isfinite(ratio) or ratio <= 0.0:
+        return ()
+    keep_width = (plot_w, max(1, int(round(plot_w / ratio))))
+    keep_height = (max(1, int(round(plot_h * ratio))), plot_h)
+    return keep_width, keep_height
+
+
+def hug_span_centers(
+    plot_size: tuple[int, int],
+    aspect: float,
+    metrics: GridMetrics,
+    chrome: HugChrome | None = None,
+) -> tuple[tuple[int, int], ...]:
+    """Snap the keep-width and keep-height plot targets."""
+    used = chrome if chrome is not None else HugChrome()
+    found: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for plot in hug_plot_targets(plot_size, aspect):
+        center = snap_plot_to_span(plot, metrics, used)
+        if center in seen:
+            continue
+        seen.add(center)
+        found.append(center)
+    return tuple(found)
+
+
+def preferred_hug_span(
+    current_rect: GridRect,
+    plot_size: tuple[int, int],
+    aspect: float,
+    metrics: GridMetrics,
+    chrome: HugChrome | None = None,
+) -> tuple[int, int] | None:
+    """Pick the hug snap that stays closest to the current area, without growing."""
+    used = chrome if chrome is not None else HugChrome()
+    labeled = _labeled_hug_snaps(plot_size, aspect, metrics, used)
+    if not labeled:
+        return None
+    return min(
+        labeled,
+        key=lambda item: _hug_preference_key(item[1], current_rect),
+    )[1]
+
+
+def preferred_hug_axis(
+    current_rect: GridRect,
+    plot_size: tuple[int, int],
+    aspect: float,
+    metrics: GridMetrics,
+    chrome: HugChrome | None = None,
+) -> str | None:
+    """``'width'`` keeps columns; ``'height'`` keeps rows."""
+    used = chrome if chrome is not None else HugChrome()
+    labeled = _labeled_hug_snaps(plot_size, aspect, metrics, used)
+    if not labeled:
+        return None
+    return min(
+        labeled,
+        key=lambda item: _hug_preference_key(item[1], current_rect),
+    )[0]
+
+
+def _labeled_hug_snaps(
+    plot_size: tuple[int, int],
+    aspect: float,
+    metrics: GridMetrics,
+    chrome: HugChrome,
+) -> tuple[tuple[str, tuple[int, int]], ...]:
+    plots = hug_plot_targets(plot_size, aspect)
+    if len(plots) < 2:
+        return ()
+    return (
+        ("width", snap_plot_to_span(plots[0], metrics, chrome)),
+        ("height", snap_plot_to_span(plots[1], metrics, chrome)),
+    )
+
+
+def _hug_preference_key(
+    center: tuple[int, int],
+    current: GridRect,
+) -> tuple[int, int, int, int]:
+    current_area = int(current.column_span) * int(current.row_span)
+    area = int(center[0]) * int(center[1])
+    grows = 1 if area > current_area else 0
+    return (grows, abs(area - current_area), int(center[1]), int(center[0]))

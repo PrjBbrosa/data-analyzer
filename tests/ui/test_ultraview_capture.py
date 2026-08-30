@@ -2999,12 +2999,13 @@ def test_resolution_stale_compares_logical_pixels_across_dpr(qapp, monkeypatch):
 
 
 def test_resolution_recapture_updates_preview_without_layout(qapp, monkeypatch):
-    import mf4_analyzer.ui.main_window.ultraview_workspace_controller as wc_mod
-
     def _layout_boom(*_args, **_kwargs):
         raise AssertionError("resolution recapture must not mutate layout")
 
-    monkeypatch.setattr(wc_mod._smart_layout, "solve_smart_layout", _layout_boom)
+    monkeypatch.setattr(
+        "mf4_analyzer.ultraview_core.smart_layout.solve_smart_layout",
+        _layout_boom,
+    )
     window, coord = _make_coord()
     monkeypatch.setattr(
         coord._workspace_controller,
@@ -3073,12 +3074,13 @@ def test_resolution_recapture_updates_preview_without_layout(qapp, monkeypatch):
 
 
 def test_resolution_request_updates_preview_without_layout(qapp, monkeypatch):
-    import mf4_analyzer.ui.main_window.ultraview_workspace_controller as wc_mod
-
     def _layout_boom(*_args, **_kwargs):
         raise AssertionError("resolution recapture must not mutate layout")
 
-    monkeypatch.setattr(wc_mod._smart_layout, "solve_smart_layout", _layout_boom)
+    monkeypatch.setattr(
+        "mf4_analyzer.ultraview_core.smart_layout.solve_smart_layout",
+        _layout_boom,
+    )
     window, coord = _make_coord()
     monkeypatch.setattr(
         coord._workspace_controller,

@@ -1,10 +1,12 @@
 # UltraView 自适应智能排版与 Fit Spec
 
 - 日期：2026-08-30
-- 状态：设计完成，待实施
-- 设计基线：`main` @ `db92d41cace2b4b97fa6a6c8ba7234c085d1722a`
+- 状态：实施中（已吸收 2026-08-30 固定点 / Fit 隔离 follow-up：UFP-01～UFP-09）
+- 设计基线：`main` @ `253ba972c207f0c8e70896a9ef0e9c1ab168b9d5`（自适应 Smart Layout 已落地）
 - 配套计划：
   [`2026-08-30-ultraview-adaptive-smart-layout-and-fit-plan.md`](../plans/2026-08-30-ultraview-adaptive-smart-layout-and-fit-plan.md)
+- Follow-up：
+  [`2026-08-30-ultraview-smart-layout-fixed-point-and-fit-isolation-followup-plan.md`](../plans/2026-08-30-ultraview-smart-layout-fixed-point-and-fit-isolation-followup-plan.md)
 - 适用范围：UltraView Free Grid、WWT 多 View 投影、自动排版、卡片 Fit、Board Fit、预览 settle
 - 证据等级：源码与确定性 probe 已核对；用户截图已核对；macOS Cocoa 前台与 Windows frozen 仍为 **UNVERIFIED**
 
@@ -19,7 +21,7 @@ UltraView 不再把“保留 WWT 毫米宽度、逐卡等预览、固定 span �
 本规格仅覆盖下列旧行为：
 
 - WWT 原生毫米几何到 UltraView 卡片几何的换算；
-- WWT 预览到达后的整组延迟 Fit；
+- WWT 预览到达后的图像更新（不再自动改几何）；
 - Free Grid 的“自动排版”语义；
 - Card Fit、Smart Layout、Compact Arrange、Board Fit 之间的边界；
 - 完全重叠窗口的重定位顺序；
@@ -108,14 +110,14 @@ WWT 的窗口位置是阅读拓扑证据，窗口大小是弱 salience 证据，
 
 ## 6. 四个动作必须说人话
 
-| 动作 | 是否改卡片大小 | 是否改卡片位置 | 是否改相机 | 语义 |
-| --- | --- | --- | --- | --- |
-| **智能排版** | 是 | 是 | 完成后一次 | 按当前策略重新求解整个可操作集合 |
-| **紧凑排列** | 否 | 是 | 完成后一次 | 保持 span，只消除空洞；即现有 first-fit 能力的新名字 |
-| **按原图比例** | 仅目标卡 | 必要时局部避碰 | 否 | chrome-aware 的局部 Card Fit，保持当前阅读尺度 |
-| **适应内容** | 否 | 否 | 是 | 只把当前卡片 union 放进可用 viewport |
+| 动作 | 是否改卡片大小 | 是否改卡片位置 | 是否改相机 | 是否启动 solver | 语义 |
+| --- | --- | --- | --- | --- | --- |
+| **智能排版** | 是 | 是 | 完成后一次 | 是，整板一次 | 按冻结策略重新求解整个可操作集合 |
+| **紧凑排列** | 否 | 是 | 完成后一次 | 否，position-only pack | 保持 span，只消除空洞 |
+| **按原图比例** | 仅目标卡 | 否；冲突则拒绝 | 否 | 否，只调用 Card Fit | chrome-aware 的局部 hug，不移动邻卡 |
+| **适应内容** | 否 | 否 | 是 | 否 | 只缩放画布，不改卡片 |
 
-不得再用“Auto Fit”同时指代卡片改形、整组排版和相机适应。
+不得再用“Auto Fit”同时指代卡片改形、整组排版和相机适应。任何按钮、快捷键、菜单或 callback 不满足该表即为 wiring bug。
 
 ## 7. 用户可选策略：少而有用
 
@@ -187,15 +189,26 @@ class SmartLayoutResult:
     diagnostics: tuple[str, ...]
     search_visits: int
     used_fallback: bool
+
+@dataclass(frozen=True)
+class SmartLayoutInputSnapshot:
+    facts: tuple[SmartCardFact, ...]
+    policy: SmartLayoutPolicy
+    facts_digest: str
+    provenance: Literal["wwt-import", "manual-board", "project-current"]
 ```
 
 约束：
 
-- DTO 不引用 Qt、MainWindow、widget 或 PreviewStore；
+- DTO 不引用 Qt、MainWindow、widget 或 PreviewStore；`smart_layout.py` 不读取 QSettings、PreviewStore 或 MainWindow；
 - `ref` 是唯一身份，显示名不得参与 key 或 tie-break；
 - preview aspect 是逻辑像素比例，调用前必须完成 DPR 归一化；
 - `target_viewport` 是命令触发时冻结的 chrome-clear 逻辑像素尺寸；它可以让显式重排适配窄/宽窗口，但求解期间不得跟随 resize 事件漂移；
-- 所有集合在进入 solver 前按稳定身份和 `source_order` 冻结。
+- 所有集合在进入 solver 前按稳定身份和 `source_order` 冻结；
+- WWT 首次布局、可选的首帧前原子替换、手动 Smart Layout 都消费 `SmartLayoutInputSnapshot`；
+- `facts_digest` 只编码语义拓扑（`ref`、`source_row`、行内 ordinal `source_column`），不含绝对 grid X、`current_rect`、provenance 或 QSettings；
+- provenance 只进 diagnostics，不得改变 solver score；
+- policy 不得在 native owner、controller 和 UI wrapper 各自创建一份默认值。QSettings 缺失时唯一默认仍是 `balanced/auto/preserve_locked=True`。
 
 ## 9. 唯一几何真相
 
@@ -233,10 +246,12 @@ outer card rect
 
 从 WWT rect 提取：
 
-- `source_order`：文件出现顺序；
-- `source_row`：按纵向重叠带生成的稳定行；
-- `source_column`：同一行按 X、再按 source order；
+- `source_order`：文件出现顺序（已排 Board 上退化为稳定 reading order：row band、ordinal、`UltraViewRef`）；
+- `source_row`：稳定语义 row id，不是最终 `GridRect.row` 的别名；
+- `source_column`：该语义行内按 reading order 得到的 `0..n-1` ordinal，**不是**绝对网格 X；
 - `source_salience`：来源面积对中位面积的压缩值，`clamp(exp(0.35 × ln(area / median_area)), 0.75, 1.80)`。
+
+原始 WWT X/Y 只用于提取 row/order/salience。已排 Board 只从 `(row band, column, stable ref)` 推导 ordinal。gap 大小、signed origin 和历史绝对 column 不得变成“必须保留”的拓扑事实。
 
 `balanced` 主要保留前三项；`preserve_salience` 才使用压缩后的 salience。不得再用 `GRID_COLUMNS / max_row_mm` 直接把最宽来源卡扩成满行。
 
@@ -276,11 +291,11 @@ U-Can 的 View 7 必须跟随 View 6 的阅读组，不得浮到两排之间。
 
 ### 11.2 有限候选与确定性预算
 
-- 每张卡最多生成 6 个相邻 span 候选；
+- 每张卡最多生成 6 个相邻 span 候选，且必须覆盖 hug center、相邻量化候选、当前 rect 与密度候选；
 - row-break/skyline 使用固定遍历顺序；
 - 2–24 卡最多扩展 4096 个状态；
 - 超预算先减少 salience 候选，再降级为确定性 equal-grid row pack；
-- fallback 仍须满足 hard constraints；否则返回 `no_legal_layout`，不做部分提交。
+- fallback 仍须满足 hard constraints，并走 compact normalize 与固定点验证；否则返回 `no_legal_layout`，不做部分提交。
 
 测试断言 `search_visits` 上限，不用易受机器负载影响的毫秒阈值作为 CI 主合同。
 
@@ -294,32 +309,23 @@ size_ratio   = max(ordinary_reading_area) / min(ordinary_reading_area)
 
 `captured` preview 的 `reading_fill` 默认目标 `>= 0.82`。无法满足时，solver 必须在 diagnostics 中说明是锁定、极端 aspect、密度还是 safety bound 导致。
 
-## 12. 异步预览：只允许一次可见 settle
+## 12. 异步预览：首次可见以后不再后台改几何
 
-### D7 — import 先提交 membership，不逐张改几何
+### D7 — import 在首次可见前提交最终 geometry
 
-WWT 导入事务先创建 Board membership 和一份稳定 provisional layout；它使用 source facts + 冻结的 host-estimate/fallback aspect。provisional layout 可以直接显示，但不会随着每张 preview 到达反复重排。若 preview 在 Board 首帧前已齐，用户只看到 final layout；否则 provisional 到 final 也必须是一次整板原子替换，中间不做 Board Fit。
+WWT 导入在 Board 首次可见提交前，使用 source facts 与冻结的 host-estimate / captured / fallback logical aspect 求一次最终 geometry，并一次性提交 membership 与 `GridRect`。禁止随着每张 preview 到达反复重排。
 
-### D8 — settle 条件
+若实现者坚持保留 provisional→final 自动替换，必须证明最终 geometry 在首帧前原子完成；不得继续依赖“用户可能看不见 1200ms 内的跳动”。推荐删除“首帧以后自动 geometry settle”。
 
-整组 Smart Layout 在以下任一条件满足时计算一次：
+### D8 — capture / recapture 退出 placement mutation 链
 
-- 所有可捕获卡片 aspect 已到达；或
-- 最后一个 aspect 事件后安静 `250 ms`，且至少有一个 captured aspect；或
-- 从注册起到 `1200 ms` deadline。
+quiet `250 ms` / deadline `1200 ms` 不得再作为首次可见之后的 geometry 提交条件。preview 到达、resolution recapture、DPR 变化、cache replacement 只更新 PreviewStore 图像与质量状态（含 `resolution_stale`），永不调用 solver，永不 `set_free_grid_rects`。
 
-这些是首版产品常量，必须用 fake clock 测试；Cocoa probe 可校准数值，但不能改变“安静窗 + deadline + 单次提交”语义。
+若最新 captured aspect 可能改善布局，只记录非侵入诊断（“重新智能排版可改善”），不自动跳动。
 
-### D9 — settle 后不自动改几何
+### D9 — 用户显式命令才开新事务
 
-settle 完成后：
-
-- 晚到 preview 只更新图像质量与缓存；
-- 不再次运行 solver；
-- 用户可显式点“智能排版”重新求解；
-- 用户在 settle 前 move/resize/lock 任一卡，取消该组自动 settle；Board 保留 provisional/current geometry。
-
-因此结果不依赖 capture 完成顺序，用户也不会看到卡片自己跳第二次、第三次。
+已经显示给用户的 Board 不再因为 late preview、Board Fit、窗口 resize 或 cache replacement 自动重排。用户显式点“智能排版”才允许用最新 captured aspects 建立新的 `SmartLayoutInputSnapshot` 事务。用户在导入过程中 move/resize/lock 任一卡，取消任何尚未发生的首帧前原子替换，保留用户 rect。
 
 ## 13. Preview 分辨率与 Fit
 
@@ -343,20 +349,20 @@ TimeDomain 的“有内容”继续按 plotted channel/dense-raster 合同判断
 ### D12 — 锁定分两层
 
 - 显式 lock：用户从卡片菜单锁定，后续 Smart Layout 保留 rect；
-- 隐式 touch：本次 pending settle 注册后，用户 move/resize 的卡片使整组自动 settle 失效，但不永久锁定。
+- 隐式 touch：若仍存在首帧前 pending 替换，用户 move/resize 的卡片使该替换失效，但不永久锁定。首次可见之后不再有自动 geometry settle，因此隐式 touch 不能再作为“后台改布局”的入口。
 
 显式“智能排版”时，用户可选择保留 locked cards；默认保留。若剩余卡无法绕开锁定卡合法排布，操作整体拒绝并提示“锁定卡片占用空间，未改变布局”。
 
 ### D13 — 不新增 MainWindow 散状态
 
-pending group、quiet timer、deadline、captured aspects 与 touched revision 由现有 UltraView workspace controller 的明确 holder 所有，在 Board 删除、workspace clear、项目恢复、窗口销毁时对称清理。
+pending group、quiet timer、deadline、captured aspects 与 touched revision 由现有 UltraView workspace controller 的明确 holder 所有，在 Board 删除、workspace clear、项目恢复、窗口销毁时对称清理。Follow-up 落地后，这些 holder 不得再在首次可见之后写出 `GridRect`。
 
 ## 15. 事务、Undo 与持久化
 
 - 一次 Smart Layout = 一次 geometry snapshot、一次 history、一次 dirty、一次 refresh、一次 Board Fit；
 - reject = 零 mutation、零 history、零相机变化；
-- WWT provisional + settle 在用户看来仍是一笔导入操作，Undo 一次回到导入前；
-- 用户在 provisional 与 settle 之间编辑，则导入 history 封口并取消 settle，禁止篡改已存在 undo step；
+- WWT 导入在用户看来仍是一笔操作，Undo 一次回到导入前；
+- 若仍有首帧前原子替换，用户在替换前编辑则导入 history 封口并取消替换，禁止篡改已存在 undo step；
 - 项目只保存最终 `GridRect`。重开项目不按当前 preview 或窗口宽度重新排版；
 - 策略偏好可保存在 QSettings，但不得成为项目恢复的隐藏前提。
 
@@ -364,7 +370,26 @@ pending group、quiet timer、deadline、captured aspects 与 touched revision �
 
 ### D14 — Board Fit 仍只负责相机
 
-Smart Layout 接受后调用一次现有 `zoom_fit()`；它不参与 solver mutation，也不成为 geometry 的隐式输入。
+定义：
+
+```text
+placement_digest = stable tuple(
+    board_id,
+    layout_revision,
+    (ref.section, ref.view_id, column, row, column_span, row_span)...
+)
+```
+
+连续执行任意次数 `zoom_fit()`、zoom in/out、overview、minimap navigation 后，`placement_digest`、history depth 和 dirty revision 必须逐字不变。
+
+如果调用前存在 pending layout：
+
+- Board Fit 仍只 fit 当前已提交 geometry；
+- 不同步 flush、不间接触发、不等待 solver；
+- pending geometry 不得把其提交归因于 Fit 事务；
+- 前台事件记录必须能区分 `camera_fit` 与 `layout_commit`。
+
+Smart Layout 接受后调用一次现有 `zoom_fit()`；它不参与 solver mutation，也不成为 geometry 的隐式输入。第二次已是固定点的 Smart Layout 不得再调用 `zoom_fit()`。
 
 ### D15 — “全放进来”不等于“全部可读”
 
@@ -372,18 +397,49 @@ Smart Layout 接受后调用一次现有 `zoom_fit()`；它不参与 solver muta
 - 9–12 卡：允许 compact chrome，但 preview 必须可辨认；
 - 13–24 卡：允许 Board Fit 给出总览，日常阅读依靠滚动/双击聚焦；不得为了让 zoom 数字变大而违反最小 1× reading-box。
 
+### D16 — Smart Layout 必须成为固定点
+
+对同一 `policy + target_viewport + preview_aspects + locks`：
+
+```text
+L1 = solve(snapshot)
+S1 = canonicalize(snapshot, placements=L1)
+L2 = solve(S1)
+
+要求：L2.placements == L1.placements
+     L2.accepted is True
+     committed_updates(L2) == ()
+```
+
+第二次执行不增加 history、dirty revision 或 camera-fit 次数。fallback 输出同样满足固定点。fixed-point failure 返回 diagnostic 并拒绝第一次提交，不能把不稳定解先显示给用户。不允许以最多循环 N 次的方式“碰运气收敛”。
+
+### D17 — Span 决策之后必须 compact normalize
+
+对每个没有 locked obstacle 的语义行：卡片按稳定 reading order 排列；相邻 unlocked 卡之间不得存在一个或多个未被约束强迫的空 Grid column；row-break/continuation 可以产生下一行，但同样从可用的最左合法位置开始。locked card、signed safety bound 或跨行 continuation 造成的空洞必须进入 structured diagnostic。whitespace 不再仅作为 score 第五位的软惩罚；明显内部空洞应在候选 canonicalization 阶段直接消除。不要只靠交换 score 权重来修某一张截图。
+
+### D18 — Smart Layout 对 Card Fit 无明显二次改进
+
+Smart Layout 的 span candidates 必须包含每张卡的 chrome-aware `preferred_hug_span()` 及相邻量化候选。最终 accepted layout 对每张 unlocked/captured 卡执行只读 Card Fit probe：
+
+- 最佳候选等于当前 rect；或
+- 仅有网格量化误差：单轴不超过 1 个 microcell，且 `reading_fill` 改善 `< 0.03`。
+
+若任一卡仍能从例如 `6×6` 明显缩到 `4×6/5×6`，当前整板解不是稳定终态，应把 hug candidate 纳入整组重解，而不是提交后等用户再次点击。此 probe 只验证/丰富候选，不允许 Smart Layout 逐卡调用并提交 Card Fit，也不允许 Card Fit 移动邻卡。纯几何必须迁到 `ultraview_core` 单一 owner，禁止 core 反向 import `ui`。
+
 ## 17. 降级与错误表
 
 | 条件 | 行为 | 用户可见性 |
 | --- | --- | --- |
-| preview 全部缺失 | 冻结 host-estimate；无 host 时用 16:9 fallback 做确定性 provisional；deadline 后不再自动改 | 静默；卡片可正常等待预览 |
+| preview 全部缺失 | 冻结 host-estimate；无 host 时用 16:9 fallback 做确定性首次 geometry；之后不再自动改 | 静默；卡片可正常等待预览 |
 | 单个 preview 非有限/零尺寸 | 该卡降级到冻结 host-estimate 或 16:9 fallback | diagnostic log，不卡住整组 |
 | locked cards 无合法解 | 整笔拒绝，保留原布局 | 可行动提示：解锁或改用紧凑排列 |
-| 搜索超预算 | 确定性 equal-grid fallback | diagnostic `search_budget_fallback` |
+| 搜索超预算 | 确定性 equal-grid fallback（仍须 compact normalize + 固定点验证） | diagnostic `search_budget_fallback` |
 | fallback 仍无合法解 | 零 mutation | 提示保留现状，可减少卡片或解锁 |
-| late preview | 更新图像，不改几何 | 无跳动；必要时显示质量状态 |
+| 固定点 / material Card Fit probe 失败 | 拒绝提交，保留原布局 | diagnostic；不得先显示不稳定解 |
+| late preview / recapture / DPR | 更新图像与质量状态，不改几何 | 无跳动；必要时显示“重新智能排版可改善” |
+| Board Fit / 窗口 resize | 只改相机或窗口；不 flush pending、不跑 solver | 卡片外框不变 |
 | Board 被删除/切换/恢复 | 取消 pending timer 和 group | 静默，禁止写入 stale Board |
-| layout revision 已变化 | 取消自动 settle | 静默，尊重用户编辑 |
+| layout revision 已变化 | 取消任何尚未发生的首帧前替换 | 静默，尊重用户编辑 |
 | 24 placed cap 到达 | 沿用既有 unplaced/提示合同 | 不静默丢失 View |
 
 ## 18. U-Can 字面验收
@@ -396,12 +452,14 @@ Smart Layout 接受后调用一次现有 `zoom_fit()`；它不参与 solver muta
 4. captured preview 的 `reading_fill >= 0.82`；
 5. 对 `1200×750 logical px` chrome-clear viewport，最终 Board Fit `>= 0.85` 且处于 full-preview LOD；
 6. 7 个 aspect 的所有测试排列顺序得到完全相同的最终 `GridRect`；
-7. settle 后再到达任意 preview，layout revision、history 数与相机不变；
-8. 用户在 settle 前移动任一卡，自动 settle 取消，用户 rect 保留；
-9. Undo 一次回到导入前/排版前，Redo 一次恢复完整结果；
-10. 保存重开后的 rect 逐项相同，不因屏幕宽度、DPR 或缓存 preview 尺寸漂移。
+7. 打开完成后点击 Board Fit，`placement_digest` / history / layout revision 精确不变；
+8. 打开完成后的首次显式 Smart Layout 已是固定点；第二次 Smart Layout 零 mutation、零 history、零 camera fit；
+9. 晚到 preview / recapture / 窗口 resize 不改 `GridRect`；
+10. 无非强迫内部横向空洞，没有仅因来源毫米出现的霸屏卡；Smart Layout 结果对每张卡无明显 Card Fit 二次改进；
+11. Undo 一次回到导入前/排版前，Redo 一次恢复完整结果；
+12. 保存重开后的 rect 逐项相同，不因屏幕宽度、DPR 或缓存 preview 尺寸漂移。
 
-若真实样本缺失，1–10 的 synthetic owner tests 仍必须运行；真实 `testdoc/` 只能作为 optional smoke，不能成为唯一回归保护。
+若真实样本缺失，1–12 的 synthetic owner tests 仍必须运行；真实 `testdoc/` 只能作为 optional smoke，不能成为唯一回归保护。
 
 ## 19. 通用验收矩阵
 
@@ -433,12 +491,16 @@ Cocoa 与 Windows 没跑时必须写 `UNVERIFIED`，不得用 offscreen 绿灯�
 
 只有同时满足以下条件才算完成：
 
-- 四个动作的产品语义和文案不再混淆；
-- import、手动 Smart Layout 共用同一 neutral solver；
+- 四个动作的产品语义和文案满足 §6 表（UFP-01），不再混淆 AutoFit；
+- import、手动 Smart Layout 共用唯一 `SmartLayoutInputSnapshot` 与同一 policy owner；
+- `source_column` 是行内 ordinal，不是绝对网格 X；
 - planner 与 renderer 只有一份 canonical 1× metrics；
+- Smart Layout 是固定点：canonicalize 后再求解逐字相同；第二次命令零 mutation、零 history、零 camera fit；
+- 无非强迫内部行空洞；accepted 布局对 Card Fit 无明显二次改进；
+- Board Fit 的 `placement_digest` 严格不变；Fit 不 flush pending layout；
+- 首次可见以后 late preview / recapture / resize 不自动改 geometry；
 - U-Can 与通用 2–24 矩阵满足确定性和可读性合同；
-- 异步 settle 只产生一次可见布局提交；
-- 用户手动意图、Undo、保存恢复、Board 生命周期均闭环；
-- `ui/hints.py` 与 `ui/quickref.py` 同步新动作语义；
+- 用户手动意图、Undo、锁定、保存恢复、Board 生命周期均闭环；
+- `ui/hints.py` 与 `ui/quickref.py`、help、user guide 使用同一中文动作名；
 - owner tests、边界门禁、稳定 milestone 全量门禁按计划通过；
 - Cocoa/Windows 未执行项被如实标为 `UNVERIFIED`。

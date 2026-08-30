@@ -181,7 +181,7 @@ class _CardActionBar(QFrame):
     which dropped the buttons ~2 px below the header center.
     """
 
-    _FIT_TOOLTIP = "按原图比例收紧当前卡片，不移动邻卡、不整板改尺寸"
+    _FIT_TOOLTIP = "按原图比例：只收紧当前卡，不移动邻卡"
     _FIT_DISABLED_TOOLTIP = "模板布局的尺寸由模板决定，切到自由网格后可用"
     _REMOVE_TOOLTIP = "从当前 Board 移除（不删除源 View）"
     _HEIGHT = 24

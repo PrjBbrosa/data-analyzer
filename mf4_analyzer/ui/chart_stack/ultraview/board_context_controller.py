@@ -201,6 +201,7 @@ class BoardContextController:
         menu.setObjectName(BOARD_MENU_OBJECT_NAME)
         apply_rounded_menu_chrome(menu)
         fit = menu.addAction(BOARD_MENU_FIT)
+        fit.setToolTip("适应内容：只缩放画布，不改卡片")
         fit.triggered.connect(self.on_board_menu_zoom_fit)
         reset = menu.addAction(BOARD_MENU_RESET)
         reset.triggered.connect(self.on_board_menu_zoom_reset)
@@ -211,8 +212,10 @@ class BoardContextController:
         if free_grid and placed >= 2:
             menu.addSeparator()
             arrange = menu.addAction(BOARD_MENU_ARRANGE)
+            arrange.setToolTip("智能排版：重新计算大小与位置")
             arrange.triggered.connect(self.on_board_menu_auto_arrange)
             compact = menu.addAction(BOARD_MENU_COMPACT)
+            compact.setToolTip("紧凑排列：保持尺寸，只消除空洞")
             compact.triggered.connect(self.on_board_menu_compact_arrange)
             self._add_smart_layout_settings_menu(menu)
             if self._can_undo_arrange():

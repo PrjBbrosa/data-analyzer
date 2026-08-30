@@ -6,15 +6,19 @@ PreviewStore, QSettings, or viewport widgets.
 """
 from __future__ import annotations
 
+import hashlib
 import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal
 
 from .grid_geometry import (
     GridMetrics,
     canonical_screen_metrics,
     contained_preview_rect,
     inner_reading_box,
+    plot_size_for_rect,
+    preferred_hug_span,
     reading_fill,
     rect_to_pixels,
     rects_overlap,
@@ -36,6 +40,7 @@ from .model import (
 Mode = Literal["balanced", "preserve_salience", "equal_grid"]
 Density = Literal["auto", "comfortable", "compact"]
 PreviewConfidence = Literal["captured", "host-estimate", "fallback"]
+Provenance = Literal["wwt-import", "manual-board", "project-current"]
 
 SEARCH_VISIT_CAP = 4096
 MAX_SPAN_CANDIDATES = 6
@@ -45,6 +50,10 @@ CANONICAL_VIEWPORT = (1600, 900)
 BALANCED_AREA_RATIO = 1.35
 PRESERVE_AREA_RATIO = 1.80
 _READING_FILL_TARGET = 0.82
+_MATERIAL_FILL_EPS = 0.03
+_ROW_OVERLAP_RATIO = 0.5
+_ROW_CENTER_FACTOR = 0.5
+_OVERLAP_EPS = 1e-6
 
 _Score = tuple[int, int, int, int, int, int, int, tuple[tuple[int, int, int, int], ...]]
 
@@ -81,6 +90,397 @@ class SmartLayoutResult:
 
 
 @dataclass(frozen=True)
+class SmartLayoutInputSnapshot:
+    facts: tuple[SmartCardFact, ...]
+    policy: SmartLayoutPolicy
+    facts_digest: str
+    provenance: Provenance
+
+
+@dataclass(frozen=True)
+class MaterialCardFitDelta:
+    column_delta: int
+    row_delta: int
+    reading_fill_improvement: float
+
+
+def facts_digest(facts: Sequence[SmartCardFact]) -> str:
+    """Stable digest of semantic topology only: (ref, source_row, ordinal column)."""
+    rows = [
+        (
+            fact.ref.section,
+            fact.ref.view_id,
+            None if fact.source_row is None else int(fact.source_row),
+            None if fact.source_column is None else int(fact.source_column),
+        )
+        for fact in sorted(facts, key=lambda item: (item.ref.section, item.ref.view_id))
+    ]
+    payload = repr(rows).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def cluster_source_row_ids(
+    bands: Sequence[tuple[float, float, int]],
+) -> tuple[int, ...]:
+    """D5: overlap-ratio + centerline clustering. Independent of input order."""
+    count = len(bands)
+    if count == 0:
+        return ()
+    parent = list(range(count))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        root_left, root_right = find(left), find(right)
+        if root_left == root_right:
+            return
+        if bands[root_left][2] > bands[root_right][2]:
+            root_left, root_right = root_right, root_left
+        parent[root_right] = root_left
+
+    def same_row(left: int, right: int) -> bool:
+        top_l, bottom_l, _order_l = bands[left]
+        top_r, bottom_r, _order_r = bands[right]
+        height_l = bottom_l - top_l
+        height_r = bottom_r - top_r
+        if height_l <= _OVERLAP_EPS or height_r <= _OVERLAP_EPS:
+            return False
+        overlap = min(bottom_l, bottom_r) - max(top_l, top_r)
+        if overlap <= _OVERLAP_EPS:
+            return False
+        min_height = min(height_l, height_r)
+        if overlap / min_height < _ROW_OVERLAP_RATIO:
+            return False
+        center_l = 0.5 * (top_l + bottom_l)
+        center_r = 0.5 * (top_r + bottom_r)
+        return abs(center_l - center_r) <= (_ROW_CENTER_FACTOR * min_height)
+
+    for index in range(count):
+        for other in range(index + 1, count):
+            if same_row(index, other):
+                union(index, other)
+
+    clusters: dict[int, list[int]] = {}
+    for index in range(count):
+        clusters.setdefault(find(index), []).append(index)
+    ranked = sorted(
+        clusters.values(),
+        key=lambda members: (
+            min(0.5 * (bands[index][0] + bands[index][1]) for index in members),
+            min(bands[index][2] for index in members),
+        ),
+    )
+    rows = [0] * count
+    for row_id, members in enumerate(ranked):
+        for index in members:
+            rows[index] = row_id
+    return tuple(rows)
+
+
+def _placement_pairs(
+    placements: Sequence[FreeGridPlacement | tuple[UltraViewRef, GridRect]],
+) -> tuple[tuple[UltraViewRef, GridRect], ...]:
+    pairs: list[tuple[UltraViewRef, GridRect]] = []
+    for item in placements:
+        if isinstance(item, FreeGridPlacement):
+            pairs.append((item.ref, item.rect))
+            continue
+        if isinstance(item, tuple) and len(item) == 2:
+            ref, rect = item
+            pairs.append((ref, rect))
+            continue
+        ref = getattr(item, "ref", None)
+        rect = getattr(item, "rect", None)
+        if ref is None or rect is None:
+            raise TypeError(f"unsupported placement item: {item!r}")
+        pairs.append((ref, rect))
+    return tuple(pairs)
+
+
+def _looks_like_placement(item: object) -> bool:
+    if isinstance(item, FreeGridPlacement):
+        return True
+    if isinstance(item, SmartCardFact):
+        return False
+    if isinstance(item, tuple) and len(item) == 2:
+        ref, rect = item
+        return isinstance(ref, UltraViewRef) and isinstance(rect, GridRect)
+    return hasattr(item, "ref") and hasattr(item, "rect") and not hasattr(
+        item, "source_order"
+    )
+
+
+def _preview_lookup(
+    ref: UltraViewRef,
+    preview_aspect: (
+        Callable[[UltraViewRef], float | None]
+        | Mapping[UltraViewRef, float | None]
+        | None
+    ),
+) -> tuple[float | None, PreviewConfidence]:
+    if preview_aspect is None:
+        return None, "fallback"
+    if callable(preview_aspect) and not isinstance(preview_aspect, Mapping):
+        raw = preview_aspect(ref)
+    else:
+        try:
+            raw = preview_aspect[ref]  # type: ignore[index]
+        except (KeyError, TypeError):
+            return None, "fallback"
+    if raw is None:
+        return None, "fallback"
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        return None, "fallback"
+    if not math.isfinite(number) or number <= 0.0:
+        return None, "fallback"
+    return number, "host-estimate"
+
+
+def _merge_continuation_rows(
+    items: Sequence[tuple[UltraViewRef, GridRect, int]],
+    row_ids: Sequence[int],
+) -> list[int]:
+    """D6: an overflow remainder immediately below a full row stays in that row."""
+    merged = list(row_ids)
+    if not items:
+        return merged
+    buckets: dict[int, list[int]] = {}
+    for index, row_id in enumerate(merged):
+        buckets.setdefault(row_id, []).append(index)
+
+    def band_key(row_id: int) -> tuple[int, int]:
+        members = buckets[row_id]
+        min_row = min(items[index][1].row for index in members)
+        min_order = min(items[index][2] for index in members)
+        return (min_row, min_order)
+
+    ordered_rows = sorted(buckets, key=band_key)
+    alive = set(ordered_rows)
+    for previous, current in zip(ordered_rows, ordered_rows[1:]):
+        if previous not in alive or current not in alive:
+            continue
+        prev_members = buckets[previous]
+        cur_members = buckets[current]
+        if len(cur_members) >= len(prev_members):
+            continue
+        prev_bottom = max(
+            items[index][1].row + items[index][1].row_span for index in prev_members
+        )
+        cur_top = min(items[index][1].row for index in cur_members)
+        if cur_top != prev_bottom:
+            continue
+        rightmost = max(prev_members, key=lambda index: items[index][1].column)
+        last = items[rightmost][1]
+        first = items[min(cur_members, key=lambda index: items[index][1].column)][1]
+        leftover = GRID_COLUMNS - (last.column + last.column_span)
+        if leftover >= first.column_span:
+            continue
+        for index in cur_members:
+            merged[index] = previous
+        buckets[previous].extend(cur_members)
+        del buckets[current]
+        alive.discard(current)
+    remapped: dict[int, int] = {}
+    dense = [0] * len(merged)
+    next_id = 0
+    for index, row_id in enumerate(merged):
+        # Dense ids in first-seen order after reading-order sort of items.
+        if row_id not in remapped:
+            remapped[row_id] = next_id
+            next_id += 1
+        dense[index] = remapped[row_id]
+    # Re-rank by visual top so ids stay 0..n-1 in reading order.
+    groups: dict[int, list[int]] = {}
+    for index, row_id in enumerate(dense):
+        groups.setdefault(row_id, []).append(index)
+    ranked = sorted(
+        groups,
+        key=lambda row_id: (
+            min(items[index][1].row for index in groups[row_id]),
+            min(items[index][2] for index in groups[row_id]),
+        ),
+    )
+    rank_of = {row_id: rank for rank, row_id in enumerate(ranked)}
+    return [rank_of[row_id] for row_id in dense]
+
+
+def smart_layout_facts_from_placements(
+    placements: Sequence[FreeGridPlacement | tuple[UltraViewRef, GridRect]],
+    *,
+    preview_aspect: (
+        Callable[[UltraViewRef], float | None]
+        | Mapping[UltraViewRef, float | None]
+        | None
+    ) = None,
+    locked_refs: Mapping[UltraViewRef, GridRect] | None = None,
+    prior_facts: Sequence[SmartCardFact] | None = None,
+) -> tuple[SmartCardFact, ...]:
+    """Rebuild semantic facts from an already-laid Board.
+
+    ``source_column`` is the 0..n-1 reading-order ordinal inside a semantic
+    row band, never the absolute ``GridRect.column``.
+    """
+    pairs = _placement_pairs(placements)
+    if not pairs:
+        return ()
+    prior_by_ref = {fact.ref: fact for fact in (prior_facts or ())}
+    reading = sorted(
+        pairs,
+        key=lambda item: (
+            item[1].row,
+            item[1].column,
+            item[0].section,
+            item[0].view_id,
+        ),
+    )
+    tagged = [
+        (ref, rect, order) for order, (ref, rect) in enumerate(reading)
+    ]
+    bands = [
+        (float(rect.row), float(rect.row + rect.row_span), order)
+        for _ref, rect, order in tagged
+    ]
+    row_ids = list(cluster_source_row_ids(bands))
+    if prior_facts:
+        for index, (ref, _rect, _order) in enumerate(tagged):
+            prior = prior_by_ref.get(ref)
+            if prior is not None and prior.source_row is not None:
+                row_ids[index] = int(prior.source_row)
+    else:
+        row_ids = _merge_continuation_rows(tagged, row_ids)
+
+    members: dict[int, list[int]] = {}
+    for index, row_id in enumerate(row_ids):
+        members.setdefault(row_id, []).append(index)
+    ordinal: dict[int, int] = {}
+    for _row_id, indexes in members.items():
+        ordered = sorted(
+            indexes,
+            key=lambda index: (
+                tagged[index][1].row,
+                tagged[index][1].column,
+                tagged[index][0].section,
+                tagged[index][0].view_id,
+            ),
+        )
+        for column, index in enumerate(ordered):
+            ordinal[index] = column
+
+    facts: list[SmartCardFact] = []
+    for index, (ref, rect, order) in enumerate(tagged):
+        prior = prior_by_ref.get(ref)
+        aspect, confidence = _preview_lookup(ref, preview_aspect)
+        locked = None if locked_refs is None else locked_refs.get(ref)
+        if prior is not None:
+            if preview_aspect is None:
+                aspect = prior.preview_aspect
+                confidence = prior.preview_confidence
+            if locked is None:
+                locked = prior.locked_rect
+            salience = prior.source_salience
+            source_order = prior.source_order
+        else:
+            salience = None
+            source_order = order
+        if aspect is None:
+            confidence = "fallback"
+        facts.append(
+            SmartCardFact(
+                ref=ref,
+                source_order=int(source_order),
+                source_row=int(row_ids[index]),
+                source_column=int(ordinal[index]),
+                source_salience=salience,
+                preview_aspect=aspect,
+                preview_confidence=confidence,
+                current_rect=rect,
+                locked_rect=locked,
+            )
+        )
+    facts.sort(key=lambda item: (item.source_order, item.ref.section, item.ref.view_id))
+    return tuple(facts)
+
+
+def canonicalize_smart_card_facts(
+    snapshot_or_facts,
+    *,
+    placements=None,
+):
+    """Accept a snapshot, a facts sequence, or placements. Deterministic."""
+    if isinstance(snapshot_or_facts, SmartLayoutInputSnapshot):
+        facts = snapshot_or_facts.facts
+        if placements is not None:
+            facts = smart_layout_facts_from_placements(
+                placements,
+                prior_facts=facts,
+            )
+        return SmartLayoutInputSnapshot(
+            facts=facts,
+            policy=snapshot_or_facts.policy,
+            facts_digest=facts_digest(facts),
+            provenance=snapshot_or_facts.provenance,
+        )
+    seq = tuple(snapshot_or_facts or ())
+    if seq and _looks_like_placement(seq[0]) and placements is None:
+        return smart_layout_facts_from_placements(seq)
+    facts = seq
+    if placements is not None:
+        facts = smart_layout_facts_from_placements(placements, prior_facts=facts)
+    return facts
+
+
+def material_card_fit_delta(
+    rect: GridRect,
+    preview_aspect: float | None,
+    metrics: GridMetrics,
+) -> MaterialCardFitDelta | None:
+    """Read-only origin-pinned hug probe using canonical chrome 34 / 24 / 8."""
+    aspect, used_fallback = _finite_aspect(preview_aspect)
+    if used_fallback and preview_aspect is None:
+        return None
+    if used_fallback:
+        return None
+    plot = plot_size_for_rect(rect, metrics)
+    if plot is None:
+        return None
+    hug = preferred_hug_span(rect, plot, aspect, metrics)
+    if hug is None:
+        return None
+    hug_cs, hug_rs = int(hug[0]), int(hug[1])
+    column_delta = hug_cs - int(rect.column_span)
+    row_delta = hug_rs - int(rect.row_span)
+    hug_rect = GridRect(int(rect.column), int(rect.row), hug_cs, hug_rs)
+    current_fill = _contain_fill(rect.column_span, rect.row_span, aspect, metrics)
+    hug_fill = _contain_fill(hug_cs, hug_rs, aspect, metrics)
+    improvement = float(hug_fill) - float(current_fill)
+    if not math.isfinite(improvement):
+        improvement = 0.0
+    return MaterialCardFitDelta(
+        column_delta=int(column_delta),
+        row_delta=int(row_delta),
+        reading_fill_improvement=improvement,
+    )
+
+
+def _material_delta_is_noop(delta: MaterialCardFitDelta | None) -> bool:
+    if delta is None:
+        return True
+    col = abs(int(delta.column_delta))
+    row = abs(int(delta.row_delta))
+    fill = float(delta.reading_fill_improvement)
+    if col == 0 and row == 0:
+        return True
+    one_axis_micro = (col <= 1 and row == 0) or (row <= 1 and col == 0)
+    return one_axis_micro and fill < _MATERIAL_FILL_EPS
+
+
+@dataclass(frozen=True)
 class _Work:
     fact: SmartCardFact
     aspect: float
@@ -94,6 +494,8 @@ class _Work:
 def solve_smart_layout(
     facts: Sequence[SmartCardFact],
     policy: SmartLayoutPolicy,
+    *,
+    _validate_fixed_point: bool = True,
 ) -> SmartLayoutResult:
     """Solve a whole-board Smart Layout. Never mutates ``facts``."""
     diagnostics: list[str] = []
@@ -175,6 +577,7 @@ def solve_smart_layout(
                 require_min,
                 metrics,
                 ratio=_ratio_cap(mode),
+                current_rect=fact.current_rect,
             )
         works.append(
             _Work(
@@ -251,10 +654,39 @@ def solve_smart_layout(
 
     rects, _score = best
     placements = tuple((work.fact.ref, rects[index]) for index, work in enumerate(works))
-    diagnostics.extend(
-        _quality_diagnostics(works, rects, metrics)
+    diagnostics.extend(_quality_diagnostics(works, rects, metrics))
+    diagnostics.extend(_forced_gap_diagnostics(works, rects))
+    leftover = _unlocked_captured_have_material_leftover(
+        works, rects, metrics, min_w, min_h, require_min
     )
-    return _result(True, placements, None, diagnostics, visits, used_fallback)
+    if leftover:
+        diagnostics.append("material_fit_leftover")
+        return _result(
+            False,
+            (),
+            "material_fit_failure",
+            diagnostics,
+            visits,
+            used_fallback,
+        )
+    result = _result(True, placements, None, diagnostics, visits, used_fallback)
+    if not _validate_fixed_point:
+        return result
+    canonical = canonicalize_smart_card_facts(frozen, placements=placements)
+    probe = solve_smart_layout(
+        canonical, policy, _validate_fixed_point=False
+    )
+    if not probe.accepted or probe.placements != result.placements:
+        diagnostics = list(result.diagnostics) + ["fixed_point_failure"]
+        return _result(
+            False,
+            (),
+            "fixed_point_failure",
+            diagnostics,
+            visits,
+            used_fallback,
+        )
+    return result
 
 
 def _result(
@@ -482,6 +914,20 @@ def _card_target_area(
     return base * scale
 
 
+def _hug_span_from(
+    aspect: float,
+    current: GridRect,
+    metrics: GridMetrics,
+) -> tuple[int, int] | None:
+    plot = plot_size_for_rect(current, metrics)
+    if plot is None:
+        return None
+    hug = preferred_hug_span(current, plot, aspect, metrics)
+    if hug is None:
+        return None
+    return int(hug[0]), int(hug[1])
+
+
 def _span_candidates(
     aspect: float,
     target_area: float,
@@ -491,10 +937,12 @@ def _span_candidates(
     metrics: GridMetrics,
     *,
     ratio: float,
+    current_rect: GridRect | None = None,
 ) -> tuple[tuple[int, int], ...]:
     spans = _legal_spans(min_w, min_h, require_min, metrics)
     if not spans:
         return ((GRID_MIN_COLUMN_SPAN, GRID_MIN_ROW_SPAN),)
+    legal_set = {(item[0], item[1]) for item in spans}
     lo = target_area / max(ratio, 1.0)
     hi = target_area * max(ratio, 1.0)
     band = [item for item in spans if lo <= item[4] <= hi]
@@ -506,26 +954,73 @@ def _span_candidates(
         unused = 1.0 - _contain_fill(cs, rs, aspect, metrics)
         return (_q(unused), _q(abs(area - target_area)), cs, rs)
 
+    by_key = {(item[0], item[1]): item for item in spans}
+    band_rank = {(item[0], item[1]): rank(item) for item in band}
     primary = min(band, key=rank)
-    pcs, prs = primary[0], primary[1]
-    legal_keys = {(item[0], item[1]): rank(item) for item in band}
-    chosen: list[tuple[int, int]] = []
+    density_key = (primary[0], primary[1])
+    density_virtual = GridRect(0, 0, density_key[0], density_key[1])
+    density_hug = _hug_span_from(aspect, density_virtual, metrics)
+    if density_hug is not None and density_hug not in legal_set:
+        density_hug = None
+    current_key = None
+    current_hug = None
+    if current_rect is not None:
+        current_key = (int(current_rect.column_span), int(current_rect.row_span))
+        if current_key not in legal_set:
+            current_key = None
+        current_hug = _hug_span_from(aspect, current_rect, metrics)
+        if current_hug is not None and current_hug not in legal_set:
+            current_hug = None
+
+    pinned: list[tuple[int, int]] = []
+    for key in (density_hug, current_hug, current_key, density_key):
+        if key is None or key in pinned:
+            continue
+        pinned.append(key)
+
+    # Adjacent quantized spans around the density hug so the neighborhood
+    # does not drift when current_rect is filled in after the first solve.
+    center = density_hug if density_hug is not None else density_key
+    adjacent: list[tuple[int, int]] = []
+    for distance in range(1, 3):
+        ring = [
+            key
+            for key in legal_set
+            if abs(key[0] - center[0]) + abs(key[1] - center[1]) == distance
+        ]
+        ring.sort(key=lambda key: (band_rank.get(key, rank(by_key[key])), key))
+        for key in ring:
+            if key not in pinned and key not in adjacent:
+                adjacent.append(key)
+
+    density_ring: list[tuple[int, int]] = []
+    pcs, prs = density_key
     for distance in range(0, GRID_MAX_COLUMN_SPAN + GRID_MAX_ROW_SPAN + 1):
         ring = [
             key
-            for key in legal_keys
+            for key in band_rank
             if abs(key[0] - pcs) + abs(key[1] - prs) == distance
         ]
-        ring.sort(key=lambda key: (legal_keys[key], key))
+        ring.sort(key=lambda key: (band_rank[key], key))
         for key in ring:
-            if key not in chosen:
-                chosen.append(key)
-            if len(chosen) >= MAX_SPAN_CANDIDATES:
-                break
+            if key not in pinned and key not in adjacent and key not in density_ring:
+                density_ring.append(key)
+
+    chosen: list[tuple[int, int]] = list(pinned)
+    for key in adjacent + density_ring:
+        if key in chosen:
+            continue
+        chosen.append(key)
         if len(chosen) >= MAX_SPAN_CANDIDATES:
             break
-    chosen.sort(key=lambda key: (legal_keys[key], key))
-    return tuple(chosen[:MAX_SPAN_CANDIDATES])
+    # Density hug must survive the cap: pinned prefix is never dropped.
+    hug_key = density_hug if density_hug is not None else current_hug
+    if hug_key is not None and hug_key not in chosen[:MAX_SPAN_CANDIDATES]:
+        chosen = [hug_key] + [key for key in chosen if key != hug_key]
+    rest = chosen[len(pinned):]
+    rest.sort(key=lambda key: (band_rank.get(key, rank(by_key[key])), key))
+    ordered = list(pinned) + rest
+    return tuple(ordered[:MAX_SPAN_CANDIDATES])
 
 
 def _pack_order(works: Sequence[_Work]) -> tuple[int, ...]:
@@ -807,12 +1302,18 @@ def _equal_grid_pack(
             equalized.append(work)
             continue
         span = landscape if work.aspect >= 1.0 else portrait
+        virtual = GridRect(0, 0, span[0], span[1])
+        hug = _hug_span_from(work.aspect, virtual, metrics)
+        candidates: list[tuple[int, int]] = []
+        if hug is not None and hug != span:
+            candidates.append(hug)
+        candidates.append(span)
         equalized.append(
             _Work(
                 fact=work.fact,
                 aspect=work.aspect,
                 aspect_fallback=work.aspect_fallback,
-                candidates=(span,),
+                candidates=tuple(candidates),
                 locked=work.locked,
                 group_key=work.group_key,
                 target_area=work.target_area,
@@ -857,6 +1358,106 @@ def _equal_grid_spans(
     return pick(FALLBACK_ASPECT), pick(9.0 / 16.0)
 
 
+def _compact_normalize(
+    works: Sequence[_Work],
+    rects: Sequence[GridRect],
+) -> tuple[GridRect, ...] | None:
+    """Topology-preserving left-pack of already chosen spans (UFP-06)."""
+    pack_order = _pack_order(works)
+    n = len(works)
+    out: list[GridRect | None] = [None] * n
+    occupied: list[GridRect] = []
+    for index, work in enumerate(works):
+        if work.locked is not None:
+            out[index] = work.locked
+            occupied.append(work.locked)
+    last: GridRect | None = None
+    origin_row = 0
+    prev_group: object = object()
+    for step, index in enumerate(pack_order):
+        work = works[index]
+        if work.group_key != prev_group:
+            last = None
+            origin_row = _packed_origin(out, pack_order, step)
+            prev_group = work.group_key
+        if work.locked is not None:
+            last = work.locked
+            continue
+        placed = _place_after(
+            int(rects[index].column_span),
+            int(rects[index].row_span),
+            last,
+            occupied,
+            origin_row,
+        )
+        if placed is None:
+            return None
+        out[index] = placed
+        occupied.append(placed)
+        last = placed
+    if any(item is None for item in out):
+        return None
+    return tuple(out)  # type: ignore[arg-type]
+
+
+def _forced_gap_diagnostics(
+    works: Sequence[_Work],
+    rects: Sequence[GridRect],
+) -> tuple[str, ...]:
+    locked = [work.locked for work in works if work.locked is not None]
+    buckets: dict[tuple[int | None, int], list[GridRect]] = {}
+    for work, rect in zip(works, rects, strict=True):
+        if work.locked is not None:
+            continue
+        buckets.setdefault((work.group_key, int(rect.row)), []).append(rect)
+    tokens: list[str] = []
+    for _key, row_rects in buckets.items():
+        ordered = sorted(row_rects, key=lambda item: int(item.column))
+        for left, right in zip(ordered, ordered[1:]):
+            gap_start = int(left.column + left.column_span)
+            gap_end = int(right.column)
+            if gap_end <= gap_start:
+                continue
+            forced = any(
+                lock.row <= left.row < lock.row + lock.row_span
+                and lock.column < gap_end
+                and lock.column + lock.column_span > gap_start
+                for lock in locked
+            )
+            tokens.append("forced_gap" if forced else "unforced_gap")
+    return tuple(tokens)
+
+
+def _unlocked_captured_have_material_leftover(
+    works: Sequence[_Work],
+    rects: Sequence[GridRect],
+    metrics: GridMetrics,
+    min_w: int,
+    min_h: int,
+    require_min: bool,
+) -> bool:
+    legal = {
+        (item[0], item[1])
+        for item in _legal_spans(min_w, min_h, require_min, metrics)
+    }
+    for work, rect in zip(works, rects, strict=True):
+        if work.locked is not None:
+            continue
+        if work.fact.preview_confidence != "captured" or work.aspect_fallback:
+            continue
+        delta = material_card_fit_delta(rect, work.aspect, metrics)
+        if _material_delta_is_noop(delta):
+            continue
+        hug = (
+            int(rect.column_span) + int(delta.column_delta),
+            int(rect.row_span) + int(delta.row_delta),
+        )
+        if hug not in legal:
+            continue
+        return True
+    return False
+
+
 def _evaluate(
     works: Sequence[_Work],
     rects: Sequence[GridRect],
@@ -870,7 +1471,15 @@ def _evaluate(
     placed = tuple(rects)
     if len(placed) != len(works):
         return None
+    compacted = _compact_normalize(works, placed)
+    if compacted is None:
+        return None
+    placed = compacted
     if not _hard_constraints(works, placed, metrics, min_w, min_h, require_min, mode):
+        return None
+    if _unlocked_captured_have_material_leftover(
+        works, placed, metrics, min_w, min_h, require_min
+    ):
         return None
     score = _score_vector(works, placed, metrics, viewport, min_w, min_h, mode)
     return placed, score

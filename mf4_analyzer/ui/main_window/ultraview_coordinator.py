@@ -278,7 +278,10 @@ class UltraViewCoordinator(QObject):
                     float(rect.height),
                 ),
             ))
-        plan = plan_native_layout(planned)
+        plan = plan_native_layout(
+            planned,
+            policy=self._workspace_controller.freeze_smart_layout_policy(),
+        )
         return self._workspace_controller.apply_native_layout_plan(
             plan,
             board_name=board_name,

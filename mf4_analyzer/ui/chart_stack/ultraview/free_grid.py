@@ -15,8 +15,8 @@ from enum import Enum
 
 from mf4_analyzer.ultraview_core.smart_layout import (
     CANONICAL_VIEWPORT,
-    SmartCardFact,
     SmartLayoutPolicy,
+    smart_layout_facts_from_placements,
     solve_smart_layout,
 )
 from mf4_analyzer.ultraview_core.grid_geometry import (
@@ -973,25 +973,17 @@ def plan_smart_layout(
             item.ref.view_id,
         ),
     )
-    facts: list[SmartCardFact] = []
-    for source_order, item in enumerate(ordered):
-        aspect = _preview_aspect_for(item.ref, preview_aspect)
-        locked_rect = None
-        if active.preserve_locked and locked_refs is not None:
-            locked_rect = locked_refs.get(item.ref)
-        facts.append(
-            SmartCardFact(
-                ref=item.ref,
-                source_order=source_order,
-                source_row=item.rect.row,
-                source_column=item.rect.column,
-                source_salience=None,
-                preview_aspect=aspect,
-                preview_confidence="host-estimate" if aspect is not None else "fallback",
-                current_rect=item.rect,
-                locked_rect=locked_rect,
-            )
-        )
+    aspect_by_ref = {
+        item.ref: _preview_aspect_for(item.ref, preview_aspect) for item in ordered
+    }
+    locked = None
+    if active.preserve_locked and locked_refs is not None:
+        locked = locked_refs
+    facts = smart_layout_facts_from_placements(
+        ordered,
+        preview_aspect=aspect_by_ref,
+        locked_refs=locked,
+    )
     result = solve_smart_layout(facts, active)
     if not result.accepted:
         return _empty_plan(
