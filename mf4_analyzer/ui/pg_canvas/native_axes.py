@@ -126,8 +126,15 @@ def native_tick_levels(
 
 
 def apply_native_ticks(axis, levels: NativeTickLevels) -> None:
-    """Label only the major level; grid labels stay empty strings."""
-    if levels.adaptive or axis is None:
+    """Label only the major level; grid labels stay empty strings.
+
+    Adaptive/invalid/overflow must clear any previous explicit ``_tickLevels``
+    so a later WWT View cannot leak cadence onto the next axis.
+    """
+    if axis is None:
+        return
+    if levels.adaptive:
+        axis.setTicks(None)
         return
     axis.setStyle(maxTickLevel=1)
     axis.setTicks([list(levels.major), list(levels.grid)])
@@ -175,16 +182,53 @@ def y_axis_items_by_id(canvas) -> dict:
     return by_id
 
 
+def _finite_span(lo, hi) -> tuple[float, float] | None:
+    try:
+        lo_f, hi_f = float(lo), float(hi)
+    except (TypeError, ValueError):
+        return None
+    if math.isfinite(lo_f) and math.isfinite(hi_f) and hi_f > lo_f:
+        return lo_f, hi_f
+    return None
+
+
+def _effective_y_range(handle, axis, spec) -> tuple[object, object]:
+    """Prefer the live handle/AxisItem range; spec lo/hi is first-range fallback."""
+    if handle is not None:
+        getter = getattr(handle, "get_ylim", None)
+        if callable(getter):
+            try:
+                span = _finite_span(*getter())
+            except Exception:
+                span = None
+            if span is not None:
+                return span
+    rng = getattr(axis, "range", None)
+    if rng is not None and len(rng) >= 2:
+        span = _finite_span(rng[0], rng[1])
+        if span is not None:
+            return span
+    return spec.get("lo"), spec.get("hi")
+
+
 def apply_native_y_ticks(canvas, native_y) -> None:
-    """Apply owner tick facts by axis_id. Unmatched axes stay adaptive."""
+    """Apply owner cadence by axis_id over the current effective range.
+
+    Spec ``lo``/``hi`` are not a permanent clip; they only fill in when the
+    handle has no finite viewport yet. Unmatched axes stay adaptive.
+    """
     axes_by_id = y_axis_items_by_id(canvas)
+    handles_by_id = {}
+    for handle in getattr(canvas, "axes_list", None) or ():
+        axis_id = getattr(handle, "axis_group", None)
+        if axis_id is not None:
+            handles_by_id[axis_id] = handle
     for axis_id, spec in (native_y or {}).items():
         axis = axes_by_id.get(axis_id)
         if axis is None or not isinstance(spec, dict):
             continue
-        y_levels = native_tick_levels(
-            spec.get("lo"), spec.get("hi"),
-            spec.get("major"), spec.get("grid"),
+        lo, hi = _effective_y_range(handles_by_id.get(axis_id), axis, spec)
+        apply_native_ticks(
+            axis,
+            native_tick_levels(lo, hi, spec.get("major"), spec.get("grid")),
         )
-        if not y_levels.adaptive:
-            apply_native_ticks(axis, y_levels)

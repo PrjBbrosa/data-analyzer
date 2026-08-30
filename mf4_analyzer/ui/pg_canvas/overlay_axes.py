@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 from PyQt5.QtCore import QEasingCurve, QVariantAnimation, Qt
-from PyQt5.QtGui import QFontMetrics
+from PyQt5.QtGui import QFontMetrics, QFontMetricsF
 
 from . import _binding  # noqa: F401
 from ._backref import _CanvasBackref
@@ -14,6 +14,12 @@ from ._backref import _CanvasBackref
 import pyqtgraph as pg
 
 from mf4_analyzer.qt_chart_fonts import CHART_FONT_PT
+from mf4_analyzer.ui_kit.axis_metrics import (
+    TICK_TEXT_PROBE,
+    activate_item_layouts,
+    axis_tick_font,
+    axis_tick_texts,
+)
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
@@ -46,6 +52,9 @@ _DEFAULT_OVERLAY_DIVISIONS = DEFAULT_CHART_TICK_DENSITY[1]
 _OVERLAY_AXIS_LABEL_MIN_CHARS = 12
 _OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
 _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
+# pyqtgraph AxisItem.textWidth starts at 30. Zero it and the PlotItem column
+# collapses: ticks still paint, stacked on the same X.
+_OVERLAY_AXIS_MIN_TEXT_WIDTH = 30.0
 
 class OverlayAxisManager(_CanvasBackref):
     """Overlay axis binding, graticule, selection, and interaction routing."""
@@ -89,6 +98,7 @@ class OverlayAxisManager(_CanvasBackref):
         "_apply_pg_axis_style",
         "_sync_pg_channel_color",
         "_configure_overlay_axis_geometry",
+        "_realize_overlay_axis_columns",
         "_initial_bind_pixel_width",
         "_configure_subplot_bottom_axis",
         "_build_overlay_y_grid",
@@ -670,6 +680,74 @@ class OverlayAxisManager(_CanvasBackref):
         except Exception:
             pass
 
+    def _overlay_plot_item(self):
+        handle = getattr(self, "_primary_xaxis_ax", None)
+        if handle is None:
+            handle = getattr(self, "_x_master_handle", None)
+        return getattr(handle, "plot_item", None) if handle is not None else None
+
+    def _seed_overlay_axis_auto_width(self, axis):
+        """Fill AxisItem.textWidth from current tick strings, then auto-size.
+
+        ``setWidth(w)`` is a hard clamp. Seeding ``textWidth`` and releasing
+        with ``setWidth(None)`` lets ``_updateWidth`` add tick offset, tick
+        length, and the rotated-label allowance the same way a later paint
+        would, so wide numbers are not jammed.
+        """
+        texts = axis_tick_texts(axis)
+        if texts:
+            metrics = QFontMetricsF(axis_tick_font(axis, 9.0))
+            axis.textWidth = max(
+                float(
+                    metrics.boundingRect(
+                        TICK_TEXT_PROBE, Qt.AlignCenter, text
+                    ).width()
+                )
+                for text in texts
+            )
+        else:
+            axis.textWidth = max(
+                float(getattr(axis, "textWidth", 0) or 0),
+                _OVERLAY_AXIS_MIN_TEXT_WIDTH,
+            )
+        axis.setWidth(None)
+
+    def _realize_overlay_axis_columns(self):
+        """Give each extra right overlay axis a measured PlotItem column.
+
+        Extra ``AxisItem``s live in PlotItem grid columns 3+. If those columns
+        collapse, pyqtgraph still paints the tick text — the items sit on
+        nearly the same X, so the coloured numbers stack in the right gutter.
+        ``AxisItem.textWidth`` is only refreshed during paint, and
+        ``_settle_layout`` only activates the outer ``GraphicsLayout``
+        (``glw.ci``), not the PlotItem cells that own the axes. View restore
+        also does not resize the widget, so ``_on_resize_settled`` never
+        runs. Seed auto-width from the pinned tick strings, then activate
+        the PlotItem layout.
+        """
+        if not getattr(self, "_overlay_mode", False):
+            return
+        for axis in list(self._overlay_aux_axes)[1:]:
+            try:
+                self._seed_overlay_axis_auto_width(axis)
+            except Exception:
+                try:
+                    axis.setWidth(None)
+                except Exception:
+                    pass
+        owners = [self._overlay_plot_item()]
+        try:
+            owners.append(self._glw.ci)
+        except Exception:
+            pass
+        # Activating the PlotItem layout resizes the primary ViewBox, which
+        # would fire the overlay sigResized handler and double-sync. Drop
+        # that handler for the activate, then sync once on the final rects.
+        self._disconnect_overlay_view_sync()
+        activate_item_layouts(owners)
+        self._sync_overlay_aux_viewboxes()
+        self._connect_overlay_view_sync()
+
     def _initial_bind_pixel_width(self, axis_handle=None, *, source_len=None) -> int:
         """Return a first-frame envelope width close to the visible plot width.
 
@@ -773,43 +851,64 @@ class OverlayAxisManager(_CanvasBackref):
                 pass
         self._overlay_grid_lines = lines
 
-    def _repin_overlay_channel_ticks(self):
-        """Frame overlay channels and pin their ticks to the shared graticule."""
+    def _repin_overlay_channel_ticks(self, *, reframe=True):
+        """Frame overlay channels and pin their ticks to the shared graticule.
+
+        ``reframe=False`` updates tick projection without mutating already
+        committed Y ranges (native View restore). An active native tick policy
+        also suppresses nice-grid reframe so generic density cannot reopen
+        a native viewport.
+        """
         if not getattr(self, "_overlay_mode", False):
             return
+        controller = getattr(self, "_tick_density_controller", None)
+        native_active = bool(
+            controller is not None and controller.native_policy_active()
+        )
+        allow_reframe = bool(reframe) and not native_active
         n = self._current_overlay_divisions()
         for handle in list(self.axes_list):
             try:
                 lo, hi = handle.get_ylim()
             except Exception:
                 continue
-            current_per_div = (hi - lo) / n
-            nice_per_div = _nice_per_div(current_per_div)
-            lower_nice_per_div = (
-                _adjacent_nice_step(nice_per_div, -1)
-                if nice_per_div is not None
-                else None
-            )
-            if (
-                any(
-                    candidate is not None
-                    and math.isclose(
-                        current_per_div,
-                        candidate,
-                        rel_tol=1e-9,
-                        abs_tol=0.0,
-                    )
-                    for candidate in (nice_per_div, lower_nice_per_div)
+            if allow_reframe:
+                current_per_div = (hi - lo) / n
+                nice_per_div = _nice_per_div(current_per_div)
+                lower_nice_per_div = (
+                    _adjacent_nice_step(nice_per_div, -1)
+                    if nice_per_div is not None
+                    else None
                 )
-            ):
-                bottom, top, per_div = lo, hi, current_per_div
-                ticks = [bottom + k * per_div for k in range(n + 1)]
+                if (
+                    any(
+                        candidate is not None
+                        and math.isclose(
+                            current_per_div,
+                            candidate,
+                            rel_tol=1e-9,
+                            abs_tol=0.0,
+                        )
+                        for candidate in (nice_per_div, lower_nice_per_div)
+                    )
+                ):
+                    bottom, top, per_div = lo, hi, current_per_div
+                    ticks = [bottom + k * per_div for k in range(n + 1)]
+                else:
+                    bottom, top, ticks = _frame_to_nice(lo, hi, n)
+                    per_div = (top - bottom) / n
+                try:
+                    handle.set_ylim(bottom, top)
+                except Exception:
+                    continue
             else:
-                bottom, top, ticks = _frame_to_nice(lo, hi, n)
-                per_div = (top - bottom) / n
-            try:
-                handle.set_ylim(bottom, top)
-            except Exception:
+                span = hi - lo
+                if not (math.isfinite(span) and span > 0):
+                    continue
+                bottom, top = lo, hi
+                per_div = span / n
+                ticks = [bottom + k * per_div for k in range(n + 1)]
+            if native_active:
                 continue
             axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
             if axis is None:
@@ -824,6 +923,10 @@ class OverlayAxisManager(_CanvasBackref):
                 ])
             except Exception:
                 pass
+        if native_active and controller is not None:
+            apply_y = getattr(controller, "project_native_ticks", None)
+            if callable(apply_y):
+                apply_y()
 
     def _snap_overlay_channel_to_grid(self, ax):
         """Snap a dragged overlay channel to its current graticule span."""

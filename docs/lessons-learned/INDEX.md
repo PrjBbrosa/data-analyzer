@@ -216,6 +216,8 @@ lesson by default.
 | [Frozen Windows Defers New View Activation](frozen-windows-defer-new-view-activation.md) | Changing the path from a View-tab ``+`` click to canvas activation or | See lesson |
 | [Core owner tests must use in-repo synthetic fixtures](core-owner-tests-use-in-repo-synthetic-fixtures.md) | Adding or reviewing pytest owner tests that open `testdoc/` paths, customer WWT/MF4 files, or other gitignored local samples as required fixtures. | `rg -n testdoc/WWT tests`; skip-guarded optional smoke only |
 | [Exercise The Real WWT To UltraView Boundary](codex-wwt-ultraview-real-boundary-test.md) | A WWT import change adds or modifies the projection from generated | See lesson |
+| [View Restore Range And Ticks Need The Full Transaction](view-restore-range-and-ticks-need-full-transaction.md) | Changing TimeDomain View restore, overlay `set_tick_density()`, WWT `native_ticks`, or `_repin_overlay_channel_ticks()`. | See lesson |
+| [Overlay Right Axis Columns Need A Post-Tick Realize](overlay-right-axis-columns-need-post-tick-realize.md) | Changing TimeDomain overlay right Y-axes, View restore, `_settle_layout()`, overlay `setWidth`, or PlotItem extra columns. | See lesson |
 
 ## Selection Rules
 

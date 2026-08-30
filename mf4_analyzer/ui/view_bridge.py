@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+import copy
 import json
 from typing import Any, Iterable
 
@@ -102,14 +103,27 @@ def capture_view(window) -> ViewState:
 
 
 def capture_controls_into(state: ViewState, window, canvas=None) -> None:
-    """Capture widget/control state into ``state`` for the given time pane."""
+    """Capture widget/control state into ``state`` for the given time pane.
+
+    Ordinary inspector fields are refreshed from live widgets. ``native_ticks``
+    is a semantic WWT fact: passive capture must keep it. Only an explicit
+    tick-density user action may drop it.
+    """
+    preserved_native = None
+    old_opts = state.axis_opts if isinstance(getattr(state, "axis_opts", None), dict) else None
+    if old_opts is not None:
+        native = old_opts.get("native_ticks")
+        if isinstance(native, dict):
+            preserved_native = copy.deepcopy(native)
     fresh = capture_view(window)
     state.attached_file_ids = fresh.attached_file_ids
     state.checked = fresh.checked
     state.hidden_channels = fresh.hidden_channels
     state.colors = fresh.colors
     state.overlay_primary = fresh.overlay_primary
-    state.axis_opts = fresh.axis_opts
+    state.axis_opts = dict(fresh.axis_opts)
+    if preserved_native is not None:
+        state.axis_opts["native_ticks"] = preserved_native
 
     chart_stack = window.chart_stack
     target = canvas if canvas is not None else chart_stack.canvas_time

@@ -1250,8 +1250,9 @@ class TimeDomainCanvasPG(QWidget):
                 self._repin_overlay_channel_ticks()
 
         if self._overlay_mode:
-            self._settle_layout()
-            self._sync_overlay_aux_viewboxes()
+            # PlotItem columns, not just glw.ci — collapsed right axes still
+            # paint, so this has to pin measured widths after ticks exist.
+            self._realize_overlay_axis_columns()
 
         # Bug 3: notify owners that fresh ViewBoxes exist so they can
         # re-apply pinned interaction state (toolbar pan/zoom mode). Runs
@@ -2336,8 +2337,13 @@ class TimeDomainCanvasPG(QWidget):
 
         Order is load-bearing: ``_refresh_visible_data`` re-arms the 150 ms
         idle-quality timer on its way out, so the quality decision has to come
-        after the flush or it would be overwritten.
+        after the flush or it would be overwritten. Overlay right-axis columns
+        are realized before that flush so the first restored paint already
+        has separated gutters — View switch does not resize the widget, so
+        ``_on_resize_settled`` will not do this later.
         """
+        if self._overlay_mode:
+            self._realize_overlay_axis_columns()
         if self._refresh_pending:
             # No pending work means this was a first visit (no stored xlim,
             # non-deferred build): the bind envelope already IS the first
@@ -2976,8 +2982,10 @@ class TimeDomainCanvasPG(QWidget):
                 self._sync_x_axis_item_range(handle, lo, hi)
         self._tick_density_controller._apply_target_x_ticks_to_all_axes()
 
-    def _repin_overlay_channel_ticks(self):
-        return OverlayAxisManager._repin_overlay_channel_ticks(self._overlay_axes)
+    def _repin_overlay_channel_ticks(self, *, reframe=True):
+        return OverlayAxisManager._repin_overlay_channel_ticks(
+            self._overlay_axes, reframe=reframe,
+        )
 
     def _snap_overlay_channel_to_grid(self, ax):
         return OverlayAxisManager._snap_overlay_channel_to_grid(
@@ -3047,6 +3055,7 @@ class TimeDomainCanvasPG(QWidget):
             pass
         self._refresh_pending = False
         self._quality.reset_for_rebuild()
+        self._tick_density_controller.set_native_tick_policy(None)
 
         # Strip everything from the GraphicsLayoutWidget.
         try:
@@ -3315,8 +3324,16 @@ class TimeDomainCanvasPG(QWidget):
         self._span_callback = cb
         # Intentionally no widget installed. self.span_selector stays None.
 
-    def set_tick_density(self, x, y):
-        return self._tick_density_controller.set_tick_density(x, y)
+    def set_tick_density(self, x, y, *, reframe_overlay_y=True):
+        return self._tick_density_controller.set_tick_density(
+            x, y, reframe_overlay_y=reframe_overlay_y,
+        )
+
+    def set_native_tick_policy(self, native_ticks):
+        return self._tick_density_controller.set_native_tick_policy(native_ticks)
+
+    def project_native_ticks(self):
+        return self._tick_density_controller.project_native_ticks()
 
     # ------------------------------------------------------------------
     # Chart-options dialog (Fix 1: parity with the matplotlib path's
@@ -3545,6 +3562,9 @@ class TimeDomainCanvasPG(QWidget):
             layout.activate()
         except Exception:
             pass
+
+    def _realize_overlay_axis_columns(self):
+        return OverlayAxisManager._realize_overlay_axis_columns(self._overlay_axes)
 
     def _sync_overlay_aux_viewboxes(self):
         return OverlayAxisManager._sync_overlay_aux_viewboxes(self._overlay_axes)
@@ -4601,8 +4621,7 @@ class TimeDomainCanvasPG(QWidget):
             pass
         try:
             if self._overlay_mode:
-                self._settle_layout()
-                self._sync_overlay_aux_viewboxes()
+                self._realize_overlay_axis_columns()
         except Exception:
             pass
         try:

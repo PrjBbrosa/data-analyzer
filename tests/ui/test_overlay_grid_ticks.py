@@ -1264,3 +1264,63 @@ class TestOverlaySwitchGeometry:
 
         canvas._on_resize_settled()
         self._assert_aux_match_xmaster(canvas)
+
+    def _right_overlay_axis_rects(self, canvas):
+        return [
+            axis.sceneBoundingRect()
+            for axis in canvas._overlay_axes.aux_axes[1:]
+        ]
+
+    def _assert_right_overlay_axes_separated(self, canvas, *, min_width=24.0, min_step=20.0):
+        vb = canvas._x_master_handle.view_box.sceneBoundingRect()
+        rects = self._right_overlay_axis_rects(canvas)
+        assert len(rects) >= 2, "need multiple extra right overlay axes"
+        rects = sorted(rects, key=lambda rect: rect.left())
+        for i, rect in enumerate(rects):
+            assert rect.width() >= min_width, (
+                f"right overlay axis {i} collapsed to width={rect.width():.1f}"
+            )
+            assert rect.left() >= vb.right() - 12, (
+                f"right overlay axis {i} must sit to the right of the plot "
+                f"(axis.left={rect.left():.1f} vb.right={vb.right():.1f})"
+            )
+        for i in range(1, len(rects)):
+            gap = rects[i].left() - rects[i - 1].left()
+            assert gap >= min_step, (
+                f"right overlay axes {i - 1} and {i} stacked together "
+                f"(lefts={rects[i - 1].left():.1f}, {rects[i].left():.1f})"
+            )
+
+    def test_view_restore_right_axes_stay_separated_without_resize(self, qapp):
+        """View switch must separate overlay right axes without a drag/resize.
+
+        Production restore does not change the QWidget size, so
+        ``_on_resize_settled`` never runs. Collapsed PlotItem columns still
+        paint tick text, stacking the coloured numbers until the user pans.
+        """
+        from PyQt5.QtCore import QCoreApplication
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        t = np.linspace(0.0, 1.0, 256)
+        rows = [
+            ("ch0", True, t, 2.0 * np.sin(2 * np.pi * t), "#1769e0", "V", "fid-0"),
+            ("ch1", True, t, 50.0 * np.cos(2 * np.pi * 3 * t), "#e07b17", "A", "fid-1"),
+            ("ch2", True, t, 0.4 * np.sin(2 * np.pi * 5 * t), "#17a07b", "Nm", "fid-2"),
+            ("ch3", True, t, 400.0 * np.sin(2 * np.pi * 7 * t), "#c026d3", "rpm", "fid-3"),
+        ]
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1100, 720)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas._resize_settle_timer.stop()
+
+        def restore():
+            canvas.plot_channels(rows, mode="overlay", defer_first_frame=True)
+            canvas.restore_visible_xlim((0.0, 1.0), flush=False)
+            canvas.restore_visible_ylims({})
+            canvas.set_tick_density(8, 8)
+            canvas.settle_view_restore()
+
+        restore()
+        restore()
+        self._assert_right_overlay_axes_separated(canvas)

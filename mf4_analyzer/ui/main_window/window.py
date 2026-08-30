@@ -2462,6 +2462,15 @@ class MainWindow(
         yt = int(yt)
         self._set_tick_density_controls_silent(xt, yt)
         canvas = self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(canvas)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            state = self.view_manager.get(idx)
+            axis_opts = dict(state.axis_opts or {})
+            axis_opts.pop('native_ticks', None)
+            state.axis_opts = axis_opts
+        clearer = getattr(canvas, "set_native_tick_policy", None)
+        if callable(clearer):
+            clearer(None)
         canvas.set_tick_density(xt, yt)
         idx = self._view_index_for_canvas(canvas)
         if idx is not None and 0 <= idx < len(self.view_manager.views):

@@ -119,6 +119,8 @@ SPEED_ALIAS_TICK, SPEED_ALIAS_GRID = 20.0, 10.0
 SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI = -10.0, 10.0
 SPEED_ALIAS_TORQUE_TICK, SPEED_ALIAS_TORQUE_GRID = 1.0, 0.5
 SPEED_ALIAS_MISMATCH_HI = 100.0
+NLTNP_X_LO, NLTNP_X_HI = -660.0, 540.0
+NLTNP_X_TICK, NLTNP_X_GRID = 120.0, 60.0
 HUGE_ZEIT_N = 2_000_000_000
 SENTINEL_RAW = -1e300
 SENTINEL_SCALE = 2.0
@@ -740,6 +742,85 @@ def speed_unit_alias_shared_axis(path=None) -> Path | bytes:
             x_axis=_axis_curve(
                 f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
                 x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
+            ),
+            curves=(
+                _y_curve(
+                    2, f"{SPEED_ALIAS_TORQUE} [{SPEED_ALIAS_UNIT_TORQUE}]",
+                    SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI,
+                    x_record_index=1,
+                    tick=SPEED_ALIAS_TORQUE_TICK, grid=SPEED_ALIAS_TORQUE_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+                _y_curve(
+                    3, f"{SPEED_ALIAS_STEER} [{SPEED_ALIAS_UNIT_DEGREE}]",
+                    SPEED_ALIAS_LO, SPEED_ALIAS_HI,
+                    x_record_index=1,
+                    tick=SPEED_ALIAS_TICK, grid=SPEED_ALIAS_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+                _y_curve(
+                    5, f"{SPEED_ALIAS_POS} [{SPEED_ALIAS_UNIT_TORQUE}]",
+                    SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI,
+                    x_record_index=4,
+                    tick=SPEED_ALIAS_TORQUE_TICK, grid=SPEED_ALIAS_TORQUE_GRID,
+                    selected=False, color=TOL_Y_COLOR,
+                ),
+                _y_curve(
+                    6, f"{SPEED_ALIAS_Y} [{SPEED_ALIAS_UNIT_DEG}]",
+                    SPEED_ALIAS_LO, SPEED_ALIAS_HI,
+                    x_record_index=4,
+                    tick=SPEED_ALIAS_TICK, grid=SPEED_ALIAS_GRID,
+                    selected=False, color=TOL_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
+def nltnp_like_dual_axis(path=None) -> Path | bytes:
+    """NLTNP-like overlay window for native range/tick lifecycle tests.
+
+    X ``-660..540`` (major 120, grid 60). Torque ``-10..10 Nm`` (1 / 0.5)
+    and speed ``0..460`` (20 / 10) each have a selected channel-backed
+    owner plus a record-only companion. Does not depend on ``testdoc/``.
+    """
+    n = CHANNEL_N
+    aux = AUX_N
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=n,
+            values=_linspace(NLTNP_X_LO, NLTNP_X_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_TORQUE, SPEED_ALIAS_UNIT_TORQUE, n=n,
+            values=_linspace(SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_STEER, SPEED_ALIAS_UNIT_DEGREE, n=n,
+            values=_linspace(SPEED_ALIAS_LO, SPEED_ALIAS_HI, n),
+        ),
+        WwtRecordSpec(
+            "Real", LINE_X, LINE_X_UNIT, n=aux,
+            values=_linspace(LINE_X_LO, LINE_X_HI, aux),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_POS, SPEED_ALIAS_UNIT_TORQUE, n=aux,
+            values=_linspace(SPEED_ALIAS_TORQUE_LO, SPEED_ALIAS_TORQUE_HI, aux),
+        ),
+        WwtRecordSpec(
+            "Real", SPEED_ALIAS_Y, SPEED_ALIAS_UNIT_DEG, n=aux,
+            values=_linspace(SPEED_ALIAS_LO, SPEED_ALIAS_HI, aux),
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{CHAN_X} [{CHAN_X_UNIT}]", NLTNP_X_LO, NLTNP_X_HI,
+                x_record_index=1, tick=NLTNP_X_TICK, grid=NLTNP_X_GRID,
             ),
             curves=(
                 _y_curve(

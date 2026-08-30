@@ -551,34 +551,19 @@ class ViewMixin:
             )
             tick_opts = axis_opts.get('tick_density') or {}
             default_x, default_y = DEFAULT_CHART_TICK_DENSITY
-            canvas.set_tick_density(
-                int(tick_opts.get('x', default_x)),
-                int(tick_opts.get('y', default_y)),
-            )
-            if native_ticks:
-                from ..pg_canvas.native_axes import (
-                    apply_native_ticks,
-                    apply_native_y_ticks,
-                    native_tick_levels,
-                )
-                x_spec = native_ticks.get("x") or {}
-                if state.xlim is not None:
-                    x_levels = native_tick_levels(
-                        state.xlim[0], state.xlim[1],
-                        x_spec.get("major"), x_spec.get("grid"),
-                    )
-                    if not x_levels.adaptive:
-                        handles = []
-                        getter = getattr(canvas, "_x_tick_axis_handles", None)
-                        if callable(getter):
-                            handles = list(getter())
-                        else:
-                            handles = list(getattr(canvas, "axes_list", []) or [])
-                        for handle in handles:
-                            axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
-                            if axis is not None:
-                                apply_native_ticks(axis, x_levels)
-                apply_native_y_ticks(canvas, native_ticks.get("y") or {})
+            xt = int(tick_opts.get('x', default_x))
+            yt = int(tick_opts.get('y', default_y))
+            install_native = getattr(canvas, "set_native_tick_policy", None)
+            if native_ticks and callable(install_native):
+                canvas.set_native_tick_policy(native_ticks)
+                canvas.set_tick_density(xt, yt, reframe_overlay_y=False)
+                project = getattr(canvas, "project_native_ticks", None)
+                if callable(project):
+                    project()
+            else:
+                if callable(install_native):
+                    canvas.set_native_tick_policy(None)
+                canvas.set_tick_density(xt, yt)
             canvas.settle_view_restore()
             restore_placement = getattr(canvas, "restore_cursor_placement", None)
             if callable(restore_placement):

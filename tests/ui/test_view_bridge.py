@@ -1,3 +1,5 @@
+import copy
+
 from mf4_analyzer.ui import view_bridge
 from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 from mf4_analyzer.ui.view_state import ViewState
@@ -483,6 +485,84 @@ def test_capture_ranges_preserves_hidden_channel_ylim():
     assert state.ylims == {
         '["f1","[sample] rpm"]': (-1.0, 1.0),
         '["f1","[sample] torque"]': (-2.0, 2.0),
+    }
+
+
+def test_passive_capture_preserves_native_ticks():
+    native_ticks = {
+        "x": {"major": 120.0, "grid": 60.0, "label": "Zeit"},
+        "y": {
+            "axis_torque": {
+                "lo": -10.0,
+                "hi": 10.0,
+                "major": 1.0,
+                "grid": 0.5,
+            },
+            "axis_speed": {
+                "lo": 0.0,
+                "hi": 460.0,
+                "major": 20.0,
+                "grid": 10.0,
+            },
+        },
+    }
+    win = _Window()
+    win.inspector.top._tick_density = (12, 7)
+    win.inspector.top._range_enabled = False
+    win.inspector.top._range_values = (1.0, 8.0)
+    win._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="exact_source",
+        source_fid="f1",
+        channel="angle",
+    )
+    win._custom_xaxis_fid = "f1"
+    win._custom_xaxis_ch = "angle"
+    win._custom_xlabel = "Angle"
+    win.inspector.top._xaxis_label = "Angle"
+    state = ViewState(
+        name="WWT native",
+        tab_color="#000000",
+        axis_opts={
+            "range_filter": {"enabled": True, "start": 0.0, "end": 9.0},
+            "x_axis": {
+                "mode": "time",
+                "resolver": None,
+                "fid": None,
+                "channel": None,
+                "label": "Time (s)",
+            },
+            "tick_density": {"x": 10, "y": 6},
+            "native_ticks": native_ticks,
+            "transient_scratch": {"do_not_keep": True},
+        },
+    )
+    original_native_ticks = copy.deepcopy(state.axis_opts["native_ticks"])
+
+    view_bridge.capture_controls_into(state, win)
+
+    captured_keys = sorted(state.axis_opts)
+    expected_keys = sorted(
+        {"range_filter", "x_axis", "tick_density", "native_ticks"}
+    )
+    assert "native_ticks" in state.axis_opts, (
+        "passive capture dropped native_ticks; "
+        f"expected axis_opts keys={expected_keys}, "
+        f"actual axis_opts keys={captured_keys}"
+    )
+    assert state.axis_opts["native_ticks"] == original_native_ticks
+    assert state.axis_opts["tick_density"] == {"x": 12, "y": 7}
+    assert state.axis_opts["range_filter"] == {
+        "enabled": False,
+        "start": 1.0,
+        "end": 8.0,
+    }
+    assert state.axis_opts["x_axis"] == {
+        "mode": "channel",
+        "resolver": "exact_source",
+        "fid": "f1",
+        "channel": "angle",
+        "label": "Angle",
     }
 
 
