@@ -21,6 +21,12 @@ Trigger: Changing TimeDomain View restore, overlay `set_tick_density()`, WWT `na
 
 Past failure: Shared-axis tests asserted `restore_visible_ylims()` then stopped. Production still ran default density 15, which nice-reframed speed `0..460` to `0..600`, then native helper wrote labels from spec `lo/hi` only. Local tests stayed green while the right axis showed a 23% unlabeled band.
 
-Rule: After a stable frame, ViewState/effective range, `PgAxisHandle.get_*lim()`, and `AxisItem.range` must match; native explicit ticks must be the native cadence over that same range. Assert this after the full restore sequence (`plot` → restore X/Y → density → native project → settle/resize), not after a single helper. Passive capture must keep `native_ticks`; only an explicit density user action may drop it.
+A later partial-native WinWert View exposed the other half of the same owner
+error: a canvas-level `native_active` guard skipped generic tick projection for
+axes absent from `native_ticks['y']`. Their final range was `-12..18`, but their
+explicit build-time ticks remained `0..1.2`, stacking every label into the
+middle 4% of the axis.
 
-Verification: Run `tests/ui/test_wwt_native_render.py` and `tests/ui/test_view_bridge.py::test_passive_capture_preserves_native_ticks` with offscreen Qt, plus `git diff --check`.
+Rule: After a stable frame, ViewState/effective range, `PgAxisHandle.get_*lim()`, and `AxisItem.range` must match; native explicit ticks must be the native cadence over that same range. Native Y ownership is per `axis_id`, never per canvas: matched axes use native cadence, while unmatched axes still receive generic/adaptive ticks over their final range without a restore-time reframe. Assert this after the full restore sequence (`plot` → restore X/Y → density → native project → settle/resize), not after a single helper. Passive capture must keep `native_ticks`; only an explicit density user action may drop it.
+
+Verification: Run `tests/ui/test_wwt_native_render.py`, including `test_mixed_native_restore_reprojects_generic_axes_from_final_ranges`, and `tests/ui/test_view_bridge.py::test_passive_capture_preserves_native_ticks` with offscreen Qt, plus `git diff --check`.

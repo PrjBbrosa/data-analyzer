@@ -215,7 +215,8 @@ def apply_native_y_ticks(canvas, native_y) -> None:
     """Apply owner cadence by axis_id over the current effective range.
 
     Spec ``lo``/``hi`` are not a permanent clip; they only fill in when the
-    handle has no finite viewport yet. Unmatched axes stay adaptive.
+    handle has no finite viewport yet. Unmatched axes are intentionally left
+    to the caller's generic/adaptive policy router.
     """
     axes_by_id = y_axis_items_by_id(canvas)
     handles_by_id = {}

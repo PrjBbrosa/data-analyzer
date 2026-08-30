@@ -865,6 +865,12 @@ class OverlayAxisManager(_CanvasBackref):
         native_active = bool(
             controller is not None and controller.native_policy_active()
         )
+        native_y = {}
+        if native_active:
+            policy = getattr(controller, "native_tick_policy", None) or {}
+            candidate = policy.get("y") if isinstance(policy, dict) else None
+            if isinstance(candidate, dict):
+                native_y = candidate
         allow_reframe = bool(reframe) and not native_active
         n = self._current_overlay_divisions()
         for handle in list(self.axes_list):
@@ -908,7 +914,14 @@ class OverlayAxisManager(_CanvasBackref):
                 bottom, top = lo, hi
                 per_div = span / n
                 ticks = [bottom + k * per_div for k in range(n + 1)]
-            if native_active:
+            # Native ownership is per axis_id, not per canvas.  A WinWert View
+            # may mix selected/native owners with visible generic axes.  Only
+            # the handles covered by a valid native spec are projected below;
+            # unmatched handles still need fresh generic ticks over the final
+            # restored range or their 0..1 build-time levels remain stranded.
+            axis_id = getattr(handle, "axis_group", None)
+            native_owned = isinstance(native_y.get(axis_id), dict)
+            if native_owned:
                 continue
             axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
             if axis is None:

@@ -548,6 +548,94 @@ def _production_restore_wwt_view(qapp, view, files, checked_channel_keys):
     return canvas, result
 
 
+def test_mixed_native_restore_reprojects_generic_axes_from_final_ranges(qapp):
+    """A partial native policy must not strand generic axes on build-time ticks.
+
+    Real WinWert Views can mix selected/native axis owners with visible axes
+    that have no native cadence.  ``defer_first_frame`` builds every overlay
+    axis on the temporary 0..1 range; the first generic density pass pins
+    explicit ticks there.  After Y restore, unmatched axes must receive fresh
+    generic ticks from their final range instead of keeping that stale level.
+    """
+    from PyQt5.QtCore import QCoreApplication
+
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    t = np.linspace(0.0, 1.0, 128, dtype=np.float64)
+    rows = [
+        (
+            "native-a", True, t, np.linspace(-1.0, 1.0, t.size),
+            "#1769e0", "V", "f", {"axis_group": "native-a"},
+        ),
+        (
+            "native-b", True, t, np.linspace(0.0, 100.0, t.size),
+            "#e07b17", "A", "f", {"axis_group": "native-b"},
+        ),
+        (
+            "generic-a", True, t, np.linspace(-12.0, 18.0, t.size),
+            "#17a07b", "Nm", "f", {"axis_group": "generic-a"},
+        ),
+        (
+            "generic-b", True, t, np.linspace(-12.0, 18.0, t.size),
+            "#c026d3", "Nm", "f", {"axis_group": "generic-b"},
+        ),
+    ]
+    native_ticks = {
+        "x": {"major": 0.2, "grid": 0.1},
+        "y": {
+            "native-a": {"major": 0.2, "grid": 0.1, "lo": -1.0, "hi": 1.0},
+            "native-b": {"major": 20.0, "grid": 10.0, "lo": 0.0, "hi": 100.0},
+        },
+    }
+    persisted_ylims = {
+        '["f","generic-a"]': (-12.0, 18.0),
+        '["f","generic-b"]': (-12.0, 18.0),
+    }
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1100, 720)
+    canvas.show()
+    QCoreApplication.processEvents()
+    canvas.plot_channels(rows, mode="overlay", defer_first_frame=True)
+    canvas.set_tick_density(10, 15)
+
+    handles = {handle.axis_group: handle for handle in canvas.axes_list}
+    for axis_id in ("generic-a", "generic-b"):
+        assert _major_tick_values(handles[axis_id].y_axis_item()) == pytest.approx(
+            tuple(np.linspace(0.0, 1.2, 16))
+        ), "precondition: build-time placeholder ticks must be explicit"
+
+    canvas.restore_visible_xlim((0.0, 1.0), flush=False)
+    canvas.restore_visible_ylims(
+        persisted_ylims,
+        native_axis_ranges=native_ticks["y"],
+    )
+    canvas.set_native_tick_policy(native_ticks)
+    canvas.set_tick_density(10, 15, reframe_overlay_y=False)
+    canvas.project_native_ticks()
+    canvas.settle_view_restore()
+    QCoreApplication.processEvents()
+
+    for axis_id in ("generic-a", "generic-b"):
+        handle = handles[axis_id]
+        assert handle.get_ylim() == pytest.approx((-12.0, 18.0))
+        assert tuple(float(v) for v in handle.y_axis_item().range) == pytest.approx(
+            (-12.0, 18.0)
+        )
+        majors = _major_tick_values(handle.y_axis_item())
+        assert majors[0] == pytest.approx(-12.0)
+        assert majors[-1] == pytest.approx(18.0)
+        assert len(majors) == 16
+
+    assert _major_tick_values(handles["native-a"].y_axis_item()) == tuple(
+        value for value, _label in native_tick_levels(-1.0, 1.0, 0.2, 0.1).major
+    )
+    assert _major_tick_values(handles["native-b"].y_axis_item()) == tuple(
+        value for value, _label in native_tick_levels(0.0, 100.0, 20.0, 10.0).major
+    )
+    canvas.deleteLater()
+
+
 def _native_y_ids_for_range(native_y, lo, hi):
     matched = []
     for axis_id, spec in (native_y or {}).items():
