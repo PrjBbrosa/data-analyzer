@@ -53,6 +53,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.feedback import COPY, CONTINUE_EXPAND
 from mf4_analyzer.ui.chart_stack.ultraview.ghost_overlay import PREVIEW_DISPLACED_WARNING
 from mf4_analyzer.ui.chart_stack.ultraview.page import (
     BOARD_MENU_ARRANGE,
+    BOARD_MENU_COMPACT,
     BOARD_MENU_COPY,
     BOARD_MENU_EXPORT,
     BOARD_MENU_FIT,
@@ -314,6 +315,7 @@ class _Harness:
         self.copied_board = 0
         self.exports: list[int] = []
         self.auto_arrange = 0
+        self.compact_arrange = 0
         self.grid_undo = 0
         self.filters: list[str] = []
         self.layouts: list[str] = []
@@ -338,6 +340,7 @@ class _Harness:
         self.page.copy_board_requested.connect(self._record_copy_board)
         self.page.export_png_requested.connect(self._record_export)
         self.page.auto_arrange_requested.connect(self._record_auto_arrange)
+        self.page.compact_arrange_requested.connect(self._record_compact_arrange)
         self.page.free_grid_undo_requested.connect(self._record_grid_undo)
         self.page.compare_filter_changed.connect(self._record_filter)
         self.page.layout_changed.connect(self._record_layout)
@@ -430,6 +433,9 @@ class _Harness:
 
     def _record_auto_arrange(self) -> None:
         self.auto_arrange += 1
+
+    def _record_compact_arrange(self) -> None:
+        self.compact_arrange += 1
 
     def _record_grid_undo(self) -> None:
         self.grid_undo += 1
@@ -4640,6 +4646,7 @@ def test_board_context_menu_labels_and_visibility_matrix(qtbot):
         BOARD_MENU_OVERVIEW,
     ]
     assert BOARD_MENU_ARRANGE in _menu_texts(two)
+    assert BOARD_MENU_COMPACT in _menu_texts(two)
     assert BOARD_MENU_UNDO_ARRANGE not in _menu_texts(two)
     harness.page.can_undo_auto_arrange = lambda: True
     with_undo = harness.page.make_board_context_menu()
@@ -4784,9 +4791,11 @@ def test_board_context_menu_escape_closes_and_actions_emit(qtbot):
     by_text[BOARD_MENU_COPY].trigger()
     by_text[BOARD_MENU_EXPORT].trigger()
     by_text[BOARD_MENU_ARRANGE].trigger()
+    by_text[BOARD_MENU_COMPACT].trigger()
     assert harness.copied_board == 1
     assert harness.exports == [1]
     assert harness.auto_arrange == 1
+    assert harness.compact_arrange == 1
     harness.page.can_undo_auto_arrange = lambda: True
     undo_menu = harness.page.make_board_context_menu()
     undo_by_text = {action.text(): action for action in undo_menu.actions()}

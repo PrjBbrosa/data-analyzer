@@ -407,7 +407,16 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "行尾复制" in haystack
     assert "一键更新源" in haystack
     assert "空白右击" in haystack or "画布右键" in haystack or "空白处" in haystack
-    assert "自动排版" in haystack
+    assert "智能排版" in haystack
+    assert "紧凑排列" in haystack
+    assert "按原图比例" in haystack
+    assert "适应内容" in haystack
+    assert "锁定" in haystack
+    assert "解锁" in haystack
+    assert "锁定卡片占用空间" in haystack
+    assert "保存项目后重开不会自动重排" in haystack or "保存项目后重开不会" in haystack
+    assert "分辨率偏低" in haystack
+    assert "打开源 View" in haystack
     overview = _row_by_desc("总览")
     assert "当前工程所有 Board" in overview.sub
     assert "保存项目后保留" in overview.sub
@@ -481,6 +490,10 @@ def test_wwt_winwert_layout_row_covers_views_and_ultraview():
     assert "时域 View" in joined
     assert "未生成" in joined
     assert "不等于整个文件导入失败" in joined
+    assert "一次智能排版" in joined
+    assert "撤销" in joined
+    assert "重开" in joined
+    assert "不" in joined and "重排" in joined
     assert "像素级一致" not in joined
     assert "全部公式" not in joined
 

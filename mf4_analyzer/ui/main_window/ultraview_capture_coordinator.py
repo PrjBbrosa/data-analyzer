@@ -26,8 +26,13 @@ from ...render_profile import source_revision_for
 from ...ultraview_core.board_ops import (
     active_board,
     all_refs,
+    free_grid_placement_for,
     placed_ref_set,
     set_workspace_preview_sidecar,
+)
+from ...ultraview_core.grid_geometry import (
+    canonical_screen_metrics,
+    inner_reading_box,
 )
 from ...ultraview_core.model import (
     PreviewMeta,
@@ -77,6 +82,8 @@ logger = logging.getLogger(__name__)
 _IDLE_CAPTURE_MS = 120
 _SIDECAR_LOAD_BATCH = 2
 _DIGEST_RETRY_LIMIT = 3
+RESOLUTION_STALE_RATIO = 1.25
+RESOLUTION_STALE_TOAST = "预览分辨率较低，打开源 View 后可更新"
 _HEATMAP_SECTIONS = frozenset({"fft_time", "order"})
 _PIXEL_AFFECTING_SIGNALS = frozenset(
     {
@@ -200,6 +207,48 @@ def _display_target_size(display) -> tuple[int, int] | None:
     if width < _MIN_CAPTURE_EDGE or height < _MIN_CAPTURE_EDGE:
         return None
     return (width, height)
+
+
+def needs_resolution_recapture(
+    reading_box: tuple[int, int],
+    cache_logical: tuple[int, int],
+    *,
+    ratio: float = RESOLUTION_STALE_RATIO,
+) -> bool:
+    """True when either reading-box edge exceeds cache logical size × ``ratio``.
+
+    Spec D11 uses a strict greater-than against ``1.25``. A missing cache is
+    not resolution-stale (that is ``STATUS_MISSING``). Comparison is in
+    logical pixels so Retina and DPR=1 share geometry.
+    """
+    try:
+        box_w, box_h = int(reading_box[0]), int(reading_box[1])
+        cache_w, cache_h = int(cache_logical[0]), int(cache_logical[1])
+    except (TypeError, ValueError, IndexError):
+        return False
+    if box_w < 1 or box_h < 1 or cache_w < 1 or cache_h < 1:
+        return False
+    threshold = float(ratio) if ratio > 0 else RESOLUTION_STALE_RATIO
+    return box_w > cache_w * threshold or box_h > cache_h * threshold
+
+
+def resolution_grab_scale(
+    native_size: tuple[float, float],
+    target_device_size: tuple[float, float],
+    *,
+    max_edge: float,
+) -> float:
+    """Scale a source-widget grab to ``target_logical × DPR`` device pixels."""
+    native_w = max(1.0, float(native_size[0]))
+    native_h = max(1.0, float(native_size[1]))
+    target_w = max(1.0, float(target_device_size[0]))
+    target_h = max(1.0, float(target_device_size[1]))
+    scale = max(target_w / native_w, target_h / native_h, 1.0)
+    produced = max(native_w, native_h) * scale
+    limit = max(1.0, float(max_edge))
+    if produced > limit:
+        scale *= limit / produced
+    return max(1.0, float(scale))
 def _digest_leaf(value):
     if value is None or isinstance(value, (bool, int, str)):
         return value
@@ -279,6 +328,7 @@ class UltraViewCaptureCoordinator(QObject):
         self._result_generation: dict[tuple, int] = {}
         self._runtime = PresentationRuntimeLedger()
         self._presentation_revision: dict[UltraViewRef, int] = {}
+        self._resolution_stale_notified: set[UltraViewRef] = set()
 
     @property
     def store(self) -> PreviewStore:
@@ -341,6 +391,7 @@ class UltraViewCaptureCoordinator(QObject):
         self._digest_retries.clear()
         self._runtime.clear()
         self._presentation_revision.clear()
+        self._resolution_stale_notified.clear()
 
     def shutdown_capture(self) -> None:
         """Final close path: reset capture and forget destroy watches."""
@@ -430,8 +481,10 @@ class UltraViewCaptureCoordinator(QObject):
         if digest is None:
             self._warn_capture(ref, widget, reason, "digest-unavailable")
             return
-        if self._has_current_preview(ref, digest) and not self._needs_focus_recapture(
-            ref
+        if (
+            self._has_current_preview(ref, digest)
+            and not self._needs_focus_recapture(ref)
+            and not self._needs_resolution_recapture(ref)
         ):
             return
         key = (ref, digest)
@@ -513,17 +566,24 @@ class UltraViewCaptureCoordinator(QObject):
         """Compatibility name for P0 callers; residency is Workspace-wide."""
         active = active_board(self._workspace)
         sizes = self._card_display_sizes()
+        dpr = self._device_pixel_ratio()
         requests = []
         for candidate in self._workspace.boards:
             if candidate.board_id == active.board_id:
                 placed = placed_ref_set(candidate)
                 for ref in placed:
-                    target = _display_target_size(sizes.get(ref))
+                    self._refresh_resolution_state(ref)
+                    display_target = _display_target_size(sizes.get(ref))
                     preview = self._preview_pixel_size(ref)
-                    if target is not None and needs_focus_recapture(target, preview):
+                    resolution_target = self._resolution_target_device(ref, dpr)
+                    if display_target is not None and needs_focus_recapture(
+                        display_target, preview
+                    ):
                         requests.append(
                             ResidencyRequest(
-                                ref, tier=RESIDENCY_TIER_FOCUS, target_size=target
+                                ref,
+                                tier=RESIDENCY_TIER_FOCUS,
+                                target_size=display_target,
                             )
                         )
                     else:
@@ -531,6 +591,11 @@ class UltraViewCaptureCoordinator(QObject):
                             RESIDENCY_TIER_ACTIVE_VISIBLE
                             if self._active_card_visible(ref)
                             else RESIDENCY_TIER_ACTIVE_PLACED
+                        )
+                        target = (
+                            resolution_target
+                            if self._store.is_resolution_stale(ref)
+                            else display_target
                         )
                         requests.append(
                             ResidencyRequest(ref, tier=tier, target_size=target)
@@ -549,6 +614,7 @@ class UltraViewCaptureCoordinator(QObject):
                     for ref in candidate.unplaced
                 )
         self._store.set_residency_requests(requests)
+        self._recapture_resolution_stale_refs()
 
     def _active_card_visible(self, ref: UltraViewRef) -> bool:
         page = self.page()
@@ -580,6 +646,150 @@ class UltraViewCaptureCoordinator(QObject):
         if image is None or not PreviewStore.image_valid(image):
             return (0, 0)
         return (int(image.width()), int(image.height()))
+
+    def _device_pixel_ratio(self) -> float:
+        """Logical-to-device scale of the Board's current screen.
+
+        PreviewStore keeps DPR-normalized raw pixels. Resolution compare and
+        recapture targets divide/multiply by this so Retina and DPR=1 share
+        the same logical geometry (Spec D11).
+        """
+        for widget in (self.page(), self._window):
+            if widget is None:
+                continue
+            getter = getattr(widget, "devicePixelRatioF", None)
+            if not callable(getter):
+                continue
+            try:
+                ratio = float(getter())
+            except (RuntimeError, TypeError, ValueError):
+                continue
+            if ratio > 0.0:
+                return max(1.0, ratio)
+        return 1.0
+
+    def _preview_logical_size(self, ref: UltraViewRef) -> tuple[int, int] | None:
+        raw_w, raw_h = self._preview_pixel_size(ref)
+        if raw_w <= 0 or raw_h <= 0:
+            return None
+        dpr = self._device_pixel_ratio()
+        return (
+            max(1, int(round(raw_w / dpr))),
+            max(1, int(round(raw_h / dpr))),
+        )
+
+    def _inner_reading_box_logical(self, ref: UltraViewRef) -> tuple[int, int] | None:
+        board = active_board(self._workspace)
+        item = free_grid_placement_for(board, ref)
+        if item is not None:
+            metrics = canonical_screen_metrics(board.free_grid)
+            _x, _y, width, height = inner_reading_box(item.rect, metrics)
+            if width >= 1 and height >= 1:
+                return (int(width), int(height))
+        sizes = self._card_display_sizes()
+        target = sizes.get(ref)
+        if target is None:
+            return None
+        try:
+            width, height = int(target[0]), int(target[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if width < 1 or height < 1:
+            return None
+        dpr = self._device_pixel_ratio()
+        return (
+            max(1, int(round(width / dpr))),
+            max(1, int(round(height / dpr))),
+        )
+
+    def _resolution_target_device(
+        self, ref: UltraViewRef, dpr: float | None = None
+    ) -> tuple[int, int] | None:
+        reading = self._inner_reading_box_logical(ref)
+        if reading is None:
+            return None
+        scale = self._device_pixel_ratio() if dpr is None else max(1.0, float(dpr))
+        return _display_target_size(
+            (
+                max(1, int(round(reading[0] * scale))),
+                max(1, int(round(reading[1] * scale))),
+            )
+        )
+
+    def _refresh_resolution_state(self, ref: UltraViewRef) -> None:
+        reading = self._inner_reading_box_logical(ref)
+        cache = self._preview_logical_size(ref)
+        stale = bool(
+            reading is not None
+            and cache is not None
+            and needs_resolution_recapture(reading, cache)
+        )
+        self._store.mark_resolution_stale(ref, stale)
+
+    def _needs_resolution_recapture(self, ref: UltraViewRef) -> bool:
+        reading = self._inner_reading_box_logical(ref)
+        cache = self._preview_logical_size(ref)
+        if reading is None or cache is None:
+            return False
+        if not needs_resolution_recapture(reading, cache):
+            return False
+        record = self._store.get(ref)
+        image = getattr(record, "image", None) if record is not None else None
+        if image is None or not PreviewStore.image_valid(image):
+            return False
+        if max(image.width(), image.height()) >= MAX_PREVIEW_RAW_EDGE:
+            return False
+        widget = self._widget_for_ref(ref)
+        if widget is None:
+            return True
+        try:
+            native_w = max(1.0, float(widget.width()) * float(widget.devicePixelRatioF()))
+            native_h = max(1.0, float(widget.height()) * float(widget.devicePixelRatioF()))
+        except RuntimeError:
+            return True
+        scale = self._grab_scale(widget, ref)
+        next_w = native_w * scale
+        next_h = native_h * scale
+        return image.width() + 1 < next_w or image.height() + 1 < next_h
+
+    def _widget_for_resolution_recapture(self, ref: UltraViewRef):
+        widget = self._widget_for_ref(ref)
+        if widget is not None:
+            return widget
+        candidate = self._visible_widget_for(ref.section)
+        if candidate is not None and self._active_ref(ref.section) == ref:
+            return candidate
+        return None
+
+    def _recapture_resolution_stale_refs(self) -> None:
+        """Grab a larger preview for undersized caches. Preview bits only."""
+        if self._inactive():
+            return
+        notify_not_resident = False
+        for board in self._workspace.boards:
+            for ref in placed_ref_set(board):
+                self._refresh_resolution_state(ref)
+                if not self._store.is_resolution_stale(ref):
+                    self._resolution_stale_notified.discard(ref)
+                    continue
+                if not self._needs_resolution_recapture(ref):
+                    continue
+                widget = self._widget_for_resolution_recapture(ref)
+                if widget is None:
+                    logger.debug(
+                        "resolution_stale view not resident section=%s view_id=%s",
+                        ref.section,
+                        ref.view_id,
+                    )
+                    if ref not in self._resolution_stale_notified:
+                        notify_not_resident = True
+                        self._resolution_stale_notified.add(ref)
+                    continue
+                self._resolution_stale_notified.discard(ref)
+                self.bind_canvas(widget, ref)
+                self.request_capture(ref, widget, "resolution")
+        if notify_not_resident:
+            self._toast(RESOLUTION_STALE_TOAST, "info")
 
     def _needs_focus_recapture(self, ref: UltraViewRef) -> bool:
         request = self._store.residency_request(ref)
@@ -1043,8 +1253,10 @@ class UltraViewCaptureCoordinator(QObject):
         if digest is None:
             self._warn_capture(ref, widget, reason, "digest-unavailable")
             return False
-        if self._has_current_preview(ref, digest) and not self._needs_focus_recapture(
-            ref
+        if (
+            self._has_current_preview(ref, digest)
+            and not self._needs_focus_recapture(ref)
+            and not self._needs_resolution_recapture(ref)
         ):
             return True
         if not self._is_stable(widget, ref.section, facts=captured):
@@ -1141,6 +1353,7 @@ class UltraViewCaptureCoordinator(QObject):
         if published:
             self._digest_retries.pop(ref, None)
             self._runtime.commit(ref, self._facts_from_widget(widget))
+            self._refresh_resolution_state(ref)
             self._push_preview(ref)
         return published
 
@@ -1148,13 +1361,6 @@ class UltraViewCaptureCoordinator(QObject):
         if ref is None:
             return 1.0
         request = self._store.residency_request(ref)
-        if (
-            request is None
-            or request.tier != RESIDENCY_TIER_FOCUS
-            or request.target_size is None
-        ):
-            return 1.0
-        target_w, target_h = request.target_size
         try:
             width = max(1, int(widget.width()))
             height = max(1, int(widget.height()))
@@ -1163,9 +1369,33 @@ class UltraViewCaptureCoordinator(QObject):
             return 1.0
         native_w = max(1.0, width * dpr)
         native_h = max(1.0, height * dpr)
-        return focus_grab_scale(
+        if (
+            request is not None
+            and request.tier == RESIDENCY_TIER_FOCUS
+            and request.target_size is not None
+        ):
+            target_w, target_h = request.target_size
+            return focus_grab_scale(
+                (native_w, native_h),
+                (target_w, target_h),
+                max_edge=MAX_PREVIEW_RAW_EDGE,
+            )
+        target = None
+        if request is not None and request.target_size is not None:
+            target = request.target_size
+        else:
+            target = self._resolution_target_device(ref, dpr)
+        if target is None:
+            return 1.0
+        reading = self._inner_reading_box_logical(ref)
+        cache = self._preview_logical_size(ref)
+        if reading is None or cache is None:
+            return 1.0
+        if not needs_resolution_recapture(reading, cache):
+            return 1.0
+        return resolution_grab_scale(
             (native_w, native_h),
-            (target_w, target_h),
+            target,
             max_edge=MAX_PREVIEW_RAW_EDGE,
         )
 
@@ -1332,6 +1562,19 @@ class UltraViewCaptureCoordinator(QObject):
                 return stack.focused_canvas()
             return getattr(window, "canvas_time", None)
         return self._analysis_page(window, section)
+
+    def _toast(self, message: str, level: str) -> None:
+        window = self._window
+        host = None
+        if window is not None and self._sheet_visible():
+            sheet = getattr(window, "_ultraview_sheet", None)
+            if sheet is not None and _alive(sheet):
+                host = sheet
+        if host is None:
+            host = window
+        toast = getattr(host, "toast", None) if host is not None else None
+        if callable(toast):
+            toast(message, level)
 
     def _widget_for_ref(self, ref: UltraViewRef):
         return self._bound_widget_for(ref)

@@ -7,23 +7,37 @@ cards through ``make_context_menu``.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 
 from PyQt5.QtCore import QEvent, QPoint
 from PyQt5.QtGui import QContextMenuEvent, QCursor
-from PyQt5.QtWidgets import QApplication, QMenu, QWidget
+from PyQt5.QtWidgets import QActionGroup, QApplication, QMenu, QWidget
 
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui.ultraview_state import LAYOUT_MODE_FREE_GRID
 
 from .card_widgets import UltraViewCard
 from .chrome_islands import CardContextIsland
+from .smart_layout_settings import (
+    DENSITY_LABELS,
+    DENSITIES,
+    MODE_LABELS,
+    MODES,
+    load_smart_layout_policy,
+    set_smart_layout_density,
+    set_smart_layout_mode,
+    set_smart_layout_preserve_locked,
+)
 
 
 BOARD_MENU_OBJECT_NAME = "ultraViewBoardContextMenu"
 BOARD_MENU_FIT = "适应内容"
 BOARD_MENU_RESET = "100%"
 BOARD_MENU_OVERVIEW = "概览"
-BOARD_MENU_ARRANGE = "自动排版"
+BOARD_MENU_ARRANGE = "智能排版"
+BOARD_MENU_COMPACT = "紧凑排列"
+BOARD_MENU_SMART_SETTINGS = "排版策略"
+BOARD_MENU_PRESERVE_LOCKED = "保留锁定卡片"
 BOARD_MENU_UNDO_ARRANGE = "撤销排版"
 BOARD_MENU_COPY = "复制图片"
 BOARD_MENU_EXPORT = "导出 PNG"
@@ -72,6 +86,7 @@ class BoardContextController:
         zoom_reset: Callable[[], None],
         show_overview: Callable[[], None],
         auto_arrange: Callable[[], None],
+        compact_arrange: Callable[[], None],
         undo_arrange: Callable[[], None],
         copy_board: Callable[[], None],
         export_png: Callable[[int], None],
@@ -98,6 +113,7 @@ class BoardContextController:
         self._zoom_reset = zoom_reset
         self._show_overview = show_overview
         self._auto_arrange = auto_arrange
+        self._compact_arrange = compact_arrange
         self._undo_arrange = undo_arrange
         self._copy_board = copy_board
         self._export_png = export_png
@@ -196,6 +212,9 @@ class BoardContextController:
             menu.addSeparator()
             arrange = menu.addAction(BOARD_MENU_ARRANGE)
             arrange.triggered.connect(self.on_board_menu_auto_arrange)
+            compact = menu.addAction(BOARD_MENU_COMPACT)
+            compact.triggered.connect(self.on_board_menu_compact_arrange)
+            self._add_smart_layout_settings_menu(menu)
             if self._can_undo_arrange():
                 undo = menu.addAction(BOARD_MENU_UNDO_ARRANGE)
                 undo.triggered.connect(self.on_board_menu_undo_arrange)
@@ -248,8 +267,52 @@ class BoardContextController:
     def on_board_menu_auto_arrange(self, _checked: bool = False) -> None:
         self._auto_arrange()
 
+    def on_board_menu_compact_arrange(self, _checked: bool = False) -> None:
+        self._compact_arrange()
+
     def on_board_menu_undo_arrange(self, _checked: bool = False) -> None:
         self._undo_arrange()
+
+    def _add_smart_layout_settings_menu(self, menu: QMenu) -> None:
+        policy = load_smart_layout_policy()
+        settings = menu.addMenu(BOARD_MENU_SMART_SETTINGS)
+        mode_group = QActionGroup(settings)
+        mode_group.setExclusive(True)
+        for mode in MODES:
+            action = settings.addAction(MODE_LABELS[mode])
+            action.setCheckable(True)
+            action.setChecked(policy.mode == mode)
+            mode_group.addAction(action)
+            action.triggered.connect(partial(self._on_board_menu_smart_mode, mode))
+        settings.addSeparator()
+        density_group = QActionGroup(settings)
+        density_group.setExclusive(True)
+        for density in DENSITIES:
+            action = settings.addAction(DENSITY_LABELS[density])
+            action.setCheckable(True)
+            action.setChecked(policy.density == density)
+            density_group.addAction(action)
+            action.triggered.connect(
+                partial(self._on_board_menu_smart_density, density)
+            )
+        settings.addSeparator()
+        locked = settings.addAction(BOARD_MENU_PRESERVE_LOCKED)
+        locked.setCheckable(True)
+        locked.setChecked(policy.preserve_locked)
+        locked.toggled.connect(self.on_board_menu_preserve_locked)
+
+    def _on_board_menu_smart_mode(self, mode: str, checked: bool = False) -> None:
+        if not checked:
+            return
+        set_smart_layout_mode(mode)
+
+    def _on_board_menu_smart_density(self, density: str, checked: bool = False) -> None:
+        if not checked:
+            return
+        set_smart_layout_density(density)
+
+    def on_board_menu_preserve_locked(self, checked: bool = False) -> None:
+        set_smart_layout_preserve_locked(bool(checked))
 
     def on_board_menu_copy(self, _checked: bool = False) -> None:
         self._copy_board()

@@ -11,7 +11,9 @@ from PyQt5.QtWidgets import QMessageBox
 
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.ultraview_state import (
+    GRID_RESOLUTION,
     LAYOUT_MODE_FREE_GRID,
+    GridRect,
     PreviewMeta,
     UltraViewRef,
     add_ref,
@@ -19,6 +21,7 @@ from mf4_analyzer.ui.ultraview_state import (
     free_grid_placement_for,
     membership_set,
     normalize_workspace_payload,
+    set_free_grid_rects,
     workspace_to_payload,
 )
 from tests.ui.ultraview_fakes import ComputeProbe
@@ -571,3 +574,68 @@ def test_reopened_placed_card_does_not_auto_aspect(qapp, qtbot, tmp_path):
     ruv._push_preview(ref)
     assert free_grid_placement_for(ruv.board, ref).rect == original
     assert ruv._pending_auto_aspect == {}
+
+
+def test_reopen_keeps_exact_grid_rects_without_smart_layout(
+    qapp, qtbot, tmp_path, monkeypatch
+):
+    csv_a = tmp_path / "restore-rects.csv"
+    _write_csv(csv_a)
+    proj = tmp_path / "restore-rects.tlproj"
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    uv = win._ultraview
+    first = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    second = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    uv._apply_add_ref(first)
+    uv._apply_add_ref(second)
+    warnings = set_free_grid_rects(
+        uv.board,
+        (
+            (
+                first,
+                GridRect(
+                    8 * GRID_RESOLUTION,
+                    6 * GRID_RESOLUTION,
+                    4 * GRID_RESOLUTION,
+                    3 * GRID_RESOLUTION,
+                ),
+            ),
+            (
+                second,
+                GridRect(
+                    0,
+                    14 * GRID_RESOLUTION,
+                    6 * GRID_RESOLUTION,
+                    3 * GRID_RESOLUTION,
+                ),
+            ),
+        ),
+    )
+    assert warnings == []
+    original = {item.ref: item.rect for item in uv.board.free_grid}
+    payload = json.dumps(uv.to_project_payload())
+    assert "preserve_locked" not in payload
+    assert "locked_refs" not in payload
+    assert win.save_project(proj) is True
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("project restore must not re-run Smart Layout")
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window.ultraview_workspace_controller.plan_smart_layout",
+        boom,
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ultraview_core.smart_layout.solve_smart_layout",
+        boom,
+    )
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    QCoreApplication.processEvents()
+    ruv = restored._ultraview
+    assert {item.ref: item.rect for item in ruv.board.free_grid} == original
+    assert ruv._workspace_controller._pending_smart_layout_group is None
+    assert ruv._workspace_controller._locked_free_grid_refs == {}

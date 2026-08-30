@@ -170,6 +170,27 @@ def test_dpr_normalization_and_minimum_valid_dimensions(qapp):
     assert abs(edge.image.width() / edge.image.height() - 1601 / 800) < 0.02
 
 
+def test_resolution_stale_flag_and_publish_resets(qapp):
+    store = PreviewStore()
+    ref = _ref("stale")
+    assert store.is_resolution_stale(ref) is False
+    store.mark_resolution_stale(ref)
+    assert store.is_resolution_stale(ref) is False
+    assert store.publish(ref, _image(32, 24), digest="first", meta=_meta(ref))
+    assert store.is_resolution_stale(ref) is False
+    store.mark_resolution_stale(ref)
+    assert store.is_resolution_stale(ref) is True
+    store.mark_resolution_stale(ref, False)
+    assert store.is_resolution_stale(ref) is False
+    store.mark_resolution_stale(ref, True)
+    assert store.publish(ref, _image(48, 32), digest="recapture", meta=_meta(ref))
+    record = store.get(ref)
+    assert record is not None
+    assert record.resolution_stale is False
+    assert store.is_resolution_stale(ref) is False
+    assert record.captured_digest == "recapture"
+
+
 def test_failed_publish_does_not_overwrite_last_valid_image(qapp):
     store = PreviewStore()
     ref = _ref("keep")

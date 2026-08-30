@@ -11,6 +11,10 @@ from mf4_analyzer.ui.chart_stack.ultraview.feedback import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.card_fit import fit_rect_for_aspect
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+    LAYOUT_ARRANGE,
+    LayoutPlan,
+    LayoutRejectReason,
+    plan_smart_layout,
     screen_grid_metrics,
 )
 from mf4_analyzer.ui.main_window import MainWindow
@@ -370,8 +374,6 @@ def test_auto_arrange_undo_redo_restores_every_rect(qapp, qtbot):
     uv._on_auto_arrange_free_grid()
     arranged = {item.ref: item.rect for item in uv.board.free_grid}
     assert arranged != before
-    assert arranged[first].column_span == before[first].column_span
-    assert arranged[second].row_span == before[second].row_span
     assert uv._can_undo_auto_arrange() is True
     uv._on_free_grid_undo()
     assert {item.ref: item.rect for item in uv.board.free_grid} == before
@@ -379,3 +381,172 @@ def test_auto_arrange_undo_redo_restores_every_rect(qapp, qtbot):
     uv._on_free_grid_redo()
     assert {item.ref: item.rect for item in uv.board.free_grid} == arranged
     assert uv._can_undo_auto_arrange() is True
+
+
+def test_compact_arrange_undo_redo_keeps_spans(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    first = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    second = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    uv._apply_add_ref(first)
+    uv._apply_add_ref(second)
+    warnings = set_free_grid_rects(
+        uv.board,
+        (
+            (first, _legacy_rect(8, 6, 4, 3)),
+            (second, _legacy_rect(0, 14, 6, 3)),
+        ),
+    )
+    assert warnings == []
+    before = {item.ref: item.rect for item in uv.board.free_grid}
+    fits: list[str] = []
+    controller = uv._workspace_controller
+    original_zoom = controller._zoom_fit_after_smart_layout_settle
+
+    def spy_zoom() -> None:
+        fits.append("fit")
+        original_zoom()
+
+    controller._zoom_fit_after_smart_layout_settle = spy_zoom
+    uv._on_compact_arrange_free_grid()
+    arranged = {item.ref: item.rect for item in uv.board.free_grid}
+    assert arranged != before
+    assert arranged[first].column_span == before[first].column_span
+    assert arranged[second].row_span == before[second].row_span
+    assert fits == ["fit"]
+    assert uv._can_undo_auto_arrange() is True
+    uv._on_free_grid_undo()
+    assert {item.ref: item.rect for item in uv.board.free_grid} == before
+    assert uv._can_undo_auto_arrange() is False
+    uv._on_free_grid_redo()
+    assert {item.ref: item.rect for item in uv.board.free_grid} == arranged
+    assert uv._can_undo_auto_arrange() is True
+    assert fits == ["fit"]
+
+
+def _two_sparse_cards(uv, win):
+    first = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    second = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    uv._apply_add_ref(first)
+    uv._apply_add_ref(second)
+    warnings = set_free_grid_rects(
+        uv.board,
+        (
+            (first, _legacy_rect(8, 6, 4, 3)),
+            (second, _legacy_rect(0, 14, 6, 3)),
+        ),
+    )
+    assert warnings == []
+    return first, second
+
+
+def test_explicit_lock_feeds_smart_layout_and_survives_arrange(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    first, _second = _two_sparse_cards(uv, win)
+    before = {item.ref: item.rect for item in uv.board.free_grid}
+    uv._on_free_grid_lock(first.section, first.view_id)
+    assert uv._workspace_controller._free_grid_ref_is_locked(uv.board.board_id, first)
+    captured: list[object] = []
+    real = plan_smart_layout
+
+    def spy(*args, **kwargs):
+        captured.append(kwargs.get("locked_refs"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window.ultraview_workspace_controller.plan_smart_layout",
+        spy,
+    )
+    uv._on_auto_arrange_free_grid()
+    assert captured
+    locked_refs = captured[0]
+    assert locked_refs is not None
+    assert first in locked_refs
+    assert locked_refs[first] == before[first]
+    after = {item.ref: item.rect for item in uv.board.free_grid}
+    assert after[first] == before[first]
+    uv._on_free_grid_lock(first.section, first.view_id)
+    assert not uv._workspace_controller._free_grid_ref_is_locked(
+        uv.board.board_id, first
+    )
+
+
+def test_locked_reject_is_zero_mutation_and_skips_camera(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    toasts: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        win, "toast", lambda msg, level="info": toasts.append((msg, level))
+    )
+    first, _second = _two_sparse_cards(uv, win)
+    before = tuple((item.ref, item.rect) for item in uv.board.free_grid)
+    uv._on_free_grid_lock(first.section, first.view_id)
+    fits: list[str] = []
+    controller = uv._workspace_controller
+    original_zoom = controller._zoom_fit_after_smart_layout_settle
+
+    def spy_zoom() -> None:
+        fits.append("fit")
+        original_zoom()
+
+    controller._zoom_fit_after_smart_layout_settle = spy_zoom
+
+    def reject(*_args, **_kwargs):
+        return LayoutPlan(
+            accepted=False,
+            reason=LayoutRejectReason.NO_LEGAL_LAYOUT,
+            mover_before=None,
+            mover_after=None,
+            displaced_before_after=(),
+            operation=LAYOUT_ARRANGE,
+            based_on_layout_revision=0,
+            solver_reason="locked cards occupy space",
+        )
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window.ultraview_workspace_controller.plan_smart_layout",
+        reject,
+    )
+    uv._on_auto_arrange_free_grid()
+    assert tuple((item.ref, item.rect) for item in uv.board.free_grid) == before
+    assert fits == []
+    assert any("锁定卡片占用空间" in msg for msg, _level in toasts)
+
+
+def test_layout_undo_redo_does_not_rerun_solver_or_zoom(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    _two_sparse_cards(uv, win)
+    fits: list[str] = []
+    controller = uv._workspace_controller
+    original_zoom = controller._zoom_fit_after_smart_layout_settle
+
+    def spy_zoom() -> None:
+        fits.append("fit")
+        original_zoom()
+
+    controller._zoom_fit_after_smart_layout_settle = spy_zoom
+    uv._on_auto_arrange_free_grid()
+    arranged = {item.ref: item.rect for item in uv.board.free_grid}
+    assert fits == ["fit"]
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("Undo/Redo must apply snapshot rects, not re-solve")
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window.ultraview_workspace_controller.plan_smart_layout",
+        boom,
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ultraview_core.smart_layout.solve_smart_layout",
+        boom,
+    )
+    uv._on_free_grid_undo()
+    uv._on_free_grid_redo()
+    assert {item.ref: item.rect for item in uv.board.free_grid} == arranged
+    assert fits == ["fit"]

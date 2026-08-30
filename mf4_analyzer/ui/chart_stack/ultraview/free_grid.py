@@ -9,10 +9,16 @@ metrics. No helper here knows about widgets, preview pixels, or MainWindow.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Mapping, Sequence
 
+from mf4_analyzer.ultraview_core.smart_layout import (
+    CANONICAL_VIEWPORT,
+    SmartCardFact,
+    SmartLayoutPolicy,
+    solve_smart_layout,
+)
 from mf4_analyzer.ultraview_core.grid_geometry import (
     GRID_MIN_COLUMN_WIDTH,
     GRID_MIN_VISIBLE_ROWS,
@@ -20,6 +26,8 @@ from mf4_analyzer.ultraview_core.grid_geometry import (
     GRID_SPARE_ROWS,
     GridMetrics,
     Rect,
+    canonical_export_metrics,
+    canonical_screen_metrics,
     clamp_rect,
     grid_metrics,
     legal_grid_rect,
@@ -44,8 +52,6 @@ from mf4_analyzer.ui.ultraview_state import (
     UltraViewRef,
 )
 
-from .layouts import BASE_BOARD_SIZE
-
 # Cell probes granted to *each* blocker the planner has to relocate, not to the
 # whole plan (see ``_SearchBudget``).  A shared pool made dense-but-solvable
 # boards report "no legal layout" (review 2026-08-15 P1-4).  Sized so one card
@@ -55,10 +61,12 @@ from .layouts import BASE_BOARD_SIZE
 PLANNER_SEARCH_CAP = 768
 LAYOUT_MOVE = "move"
 LAYOUT_RESIZE = "resize"
-# Board-level auto-arrange owns this operation via ``plan_auto_arrange``.
-# Do not feed it to ``plan_layout``: that path's fallback is
-# ``plan_neighbor_shrink`` and may shrink neighbours.  Empty-row compaction
-# stays on ``organized_placements``.
+# Board-level Smart Layout and Compact Arrange both commit as ``LAYOUT_ARRANGE``
+# so ``_commit_grid_change`` / undo stay on one kind.  ``plan_smart_layout``
+# may change spans; ``plan_auto_arrange`` keeps them.  Do not feed this
+# operation to ``plan_layout``: that path's fallback is ``plan_neighbor_shrink``
+# and may shrink neighbours.  Empty-row compaction stays on
+# ``organized_placements``.
 LAYOUT_ARRANGE = "arrange"
 
 
@@ -91,6 +99,8 @@ class LayoutPlan:
     based_on_layout_revision: int
     mover_ref: UltraViewRef | None = None
     search_visits: int = 0
+    used_fallback: bool = False
+    solver_reason: str | None = None
 
     def committed_updates(self) -> tuple[tuple[UltraViewRef, GridRect], ...]:
         if not self.accepted:
@@ -123,9 +133,7 @@ def export_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
     The compositor then crops the canvas to the placed-content bounding box;
     this helper only supplies the 1× cell size, not the PNG extent.
     """
-    return grid_metrics(
-        (BASE_BOARD_SIZE[0], 0), placements, min_visible_rows=1
-    )
+    return canonical_export_metrics(placements)
 
 
 def screen_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
@@ -135,7 +143,7 @@ def screen_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
     1× result uniformly via ``scale_grid_metrics``. Empty trailing rows stay
     so the user can drop beside or below existing cards.
     """
-    return grid_metrics((BASE_BOARD_SIZE[0], 0), placements)
+    return canonical_screen_metrics(placements)
 
 
 def translated_move_rect(
@@ -716,6 +724,8 @@ def _empty_plan(
     mover_after: GridRect | None = None,
     displaced: tuple[RectTransition, ...] = (),
     search_visits: int = 0,
+    used_fallback: bool = False,
+    solver_reason: str | None = None,
 ) -> LayoutPlan:
     return LayoutPlan(
         accepted=accepted,
@@ -727,6 +737,8 @@ def _empty_plan(
         based_on_layout_revision=int(layout_revision),
         mover_ref=mover_ref,
         search_visits=search_visits,
+        used_fallback=bool(used_fallback),
+        solver_reason=solver_reason,
     )
 
 
@@ -899,6 +911,125 @@ def plan_auto_arrange(
         based_on_layout_revision=revision,
         mover_ref=None,
         search_visits=visits,
+    )
+
+
+def _default_smart_policy() -> SmartLayoutPolicy:
+    return SmartLayoutPolicy(
+        mode="balanced",
+        density="auto",
+        target_viewport=CANONICAL_VIEWPORT,
+        preserve_locked=True,
+    )
+
+
+def _preview_aspect_for(
+    ref: UltraViewRef,
+    lookup: Callable[[UltraViewRef], float | None] | None,
+) -> float | None:
+    if lookup is None:
+        return None
+    value = lookup(ref)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number <= 0.0:  # NaN or non-positive
+        return None
+    return number
+
+
+def _smart_reject_reason(raw: str | None) -> LayoutRejectReason:
+    text = str(raw or "")
+    if "duplicate" in text:
+        return LayoutRejectReason.INVALID_INPUT
+    return LayoutRejectReason.NO_LEGAL_LAYOUT
+
+
+def plan_smart_layout(
+    placements: Sequence[FreeGridPlacement],
+    layout_revision: int = 0,
+    *,
+    policy: SmartLayoutPolicy | None = None,
+    locked_refs: Mapping[UltraViewRef, GridRect] | None = None,
+    preview_aspect: Callable[[UltraViewRef], float | None] | None = None,
+) -> LayoutPlan:
+    """UI wrapper around ``solve_smart_layout``. May change spans.
+
+    Reading order is ``(row, column, section, view_id)``. Compact Arrange
+    stays on ``plan_auto_arrange``. Rejected plans have empty updates.
+    """
+    revision = int(layout_revision)
+    active = policy if policy is not None else _default_smart_policy()
+    items = tuple(placements)
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            item.rect.row,
+            item.rect.column,
+            item.ref.section,
+            item.ref.view_id,
+        ),
+    )
+    facts: list[SmartCardFact] = []
+    for source_order, item in enumerate(ordered):
+        aspect = _preview_aspect_for(item.ref, preview_aspect)
+        locked_rect = None
+        if active.preserve_locked and locked_refs is not None:
+            locked_rect = locked_refs.get(item.ref)
+        facts.append(
+            SmartCardFact(
+                ref=item.ref,
+                source_order=source_order,
+                source_row=item.rect.row,
+                source_column=item.rect.column,
+                source_salience=None,
+                preview_aspect=aspect,
+                preview_confidence="host-estimate" if aspect is not None else "fallback",
+                current_rect=item.rect,
+                locked_rect=locked_rect,
+            )
+        )
+    result = solve_smart_layout(facts, active)
+    if not result.accepted:
+        return _empty_plan(
+            accepted=False,
+            reason=_smart_reject_reason(result.reason),
+            operation=LAYOUT_ARRANGE,
+            layout_revision=revision,
+            search_visits=result.search_visits,
+            used_fallback=result.used_fallback,
+            solver_reason=result.reason,
+        )
+    by_ref = dict(result.placements)
+    displaced: list[RectTransition] = []
+    for item in items:
+        after = by_ref.get(item.ref)
+        if after is None or after == item.rect:
+            continue
+        displaced.append(RectTransition(ref=item.ref, before=item.rect, after=after))
+    displaced.sort(
+        key=lambda item: (
+            item.before.row,
+            item.before.column,
+            item.ref.section,
+            item.ref.view_id,
+        )
+    )
+    return LayoutPlan(
+        accepted=True,
+        reason=None,
+        mover_before=None,
+        mover_after=None,
+        displaced_before_after=tuple(displaced),
+        operation=LAYOUT_ARRANGE,
+        based_on_layout_revision=revision,
+        mover_ref=None,
+        search_visits=result.search_visits,
+        used_fallback=result.used_fallback,
+        solver_reason=result.reason,
     )
 
 

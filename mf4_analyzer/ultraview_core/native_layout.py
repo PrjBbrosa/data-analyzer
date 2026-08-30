@@ -1,9 +1,10 @@
 """Qt-free native millimetre layout → UltraView free-grid plan.
 
-WWT millimetre rects decide row/column order and wide/narrow rank. Empty
-screenshot distances are discarded: neighbours in a row share one grid
-gutter, and rows share one row gap. Exact-overlap later views relocate to
-the nearest legal slot instead of the unplaced tray.
+WWT millimetre rects are semantic topology facts (source order / row /
+column / compressed salience). Smart Layout chooses the final ``GridRect``s.
+Planner 1× pitch is canonical 1600-wide screen metrics, not a 96px dummy.
+Exact-overlap later views inherit the covered window's ``source_row`` and
+stack as a continuation; they are not Manhattan-relocated upward.
 """
 from __future__ import annotations
 
@@ -11,30 +12,26 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from .grid_geometry import (
-    BOARD_PADDING,
-    GRID_MIN_COLUMN_WIDTH,
-    GRID_ROW_HEIGHT,
-    SLOT_GUTTER,
-    GridMetrics,
-)
-from .model import (
-    GRID_COLUMNS,
-    GRID_MAX_COLUMN_SPAN,
-    GRID_MAX_ROW_SPAN,
-    GRID_MIN_COLUMN_SPAN,
-    GRID_MIN_ROW_SPAN,
-    GRID_RESOLUTION,
-    SAFETY_COLUMN_MAX,
-    SAFETY_COLUMN_MIN,
-    SAFETY_ROW_MAX,
-    SAFETY_ROW_MIN,
-    GridRect,
-    UltraViewRef,
-    clamp_grid_rect,
+from .grid_geometry import GridMetrics, canonical_screen_metrics
+from .model import GridRect, UltraViewRef
+from .smart_layout import (
+    SmartCardFact,
+    SmartLayoutPolicy,
+    solve_smart_layout,
 )
 
 _OVERLAP_EPS = 1e-6
+# Pairwise same-row: overlap vs the shorter band, plus close centerlines so a
+# tall bridge cannot chain-merge two separated rows (spec §10 D5).
+_ROW_OVERLAP_RATIO = 0.5
+_ROW_CENTER_FACTOR = 0.5
+_DEFAULT_TARGET_VIEWPORT = (1200, 750)
+_DEFAULT_NATIVE_POLICY = SmartLayoutPolicy(
+    mode="balanced",
+    density="auto",
+    target_viewport=_DEFAULT_TARGET_VIEWPORT,
+    preserve_locked=True,
+)
 
 
 @dataclass(frozen=True)
@@ -52,16 +49,7 @@ class NativeLayoutPlan:
     warnings: tuple[str, ...]
     sources: tuple[tuple[UltraViewRef, NativeLayoutRect], ...] = ()
     relocated: tuple[UltraViewRef, ...] = ()
-
-
-@dataclass(frozen=True)
-class _Slot:
-    ref: UltraViewRef
-    rect: NativeLayoutRect
-    source_index: int
-    top: float
-    bottom: float
-    duplicate_of: int | None = None
+    facts: tuple[SmartCardFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -89,6 +77,16 @@ class NativeLayoutProjection:
 
     def __len__(self):
         return 2
+
+
+@dataclass(frozen=True)
+class _Item:
+    ref: UltraViewRef
+    rect: NativeLayoutRect
+    source_order: int
+    top: float
+    bottom: float
+    duplicate_of: int | None = None
 
 
 # Native-layout codes that are not a degraded import by themselves.
@@ -160,46 +158,6 @@ def _valid_rect(rect: NativeLayoutRect) -> bool:
     )
 
 
-def _grid_overlap(left: GridRect, right: GridRect) -> bool:
-    return not (
-        left.column + left.column_span <= right.column
-        or right.column + right.column_span <= left.column
-        or left.row + left.row_span <= right.row
-        or right.row + right.row_span <= left.row
-    )
-
-
-def _canonical_grid_metrics() -> GridMetrics:
-    """1× pitch independent of the current window width.
-
-    ``board_width`` / ``board_height`` are dummy extents so callers never
-    inherit a viewport-stretched ``column_width``. Pitch uses the min
-    column and fixed row height only.
-    """
-    physical_columns = max(1, GRID_COLUMNS // GRID_RESOLUTION)
-    return GridMetrics(
-        board_width=(
-            2 * BOARD_PADDING
-            + physical_columns * GRID_MIN_COLUMN_WIDTH
-            + max(0, physical_columns - 1) * SLOT_GUTTER
-        ),
-        board_height=2 * BOARD_PADDING + GRID_ROW_HEIGHT,
-        column_width=GRID_MIN_COLUMN_WIDTH,
-        row_height=GRID_ROW_HEIGHT,
-        gutter=SLOT_GUTTER,
-        padding=BOARD_PADDING,
-        resolution=GRID_RESOLUTION,
-    )
-
-
-def _round_positive(value: float) -> int:
-    return int(math.floor(float(value) + 0.5))
-
-
-def _clamp_span(value: int, lo: int, hi: int) -> int:
-    return min(int(hi), max(int(lo), int(value)))
-
-
 def _winwert_top(rect: NativeLayoutRect) -> float:
     return float(rect.y) - float(rect.height)
 
@@ -208,89 +166,249 @@ def _winwert_bottom(rect: NativeLayoutRect) -> float:
     return float(rect.y)
 
 
-def _cluster_rows(unique: Sequence[_Slot]) -> list[list[_Slot]]:
-    ordered = sorted(
-        unique,
-        key=lambda slot: (slot.top, slot.rect.x, slot.source_index),
+def _item_height(item: _Item) -> float:
+    return item.bottom - item.top
+
+
+def _item_center(item: _Item) -> float:
+    return 0.5 * (item.top + item.bottom)
+
+
+def _same_source_row(left: _Item, right: _Item) -> bool:
+    """True when two unique windows share a stable visual row (spec §10 D5).
+
+    Overlap ratio is against the shorter band. Centerlines must also be close
+    relative to that shorter height, so a tall bridge that merely overlaps A
+    and C does not union A with C.
+    """
+    height_left = _item_height(left)
+    height_right = _item_height(right)
+    if height_left <= _OVERLAP_EPS or height_right <= _OVERLAP_EPS:
+        return False
+    overlap = min(left.bottom, right.bottom) - max(left.top, right.top)
+    if overlap <= _OVERLAP_EPS:
+        return False
+    min_height = min(height_left, height_right)
+    if overlap / min_height < _ROW_OVERLAP_RATIO:
+        return False
+    return abs(_item_center(left) - _item_center(right)) <= (
+        _ROW_CENTER_FACTOR * min_height
     )
-    rows: list[list[_Slot]] = []
-    bounds: list[list[float]] = []
-    for slot in ordered:
-        matched: int | None = None
-        for index, band in enumerate(bounds):
-            if slot.top < band[1] - _OVERLAP_EPS and slot.bottom > band[0] + _OVERLAP_EPS:
-                matched = index
-                break
-        if matched is None:
-            rows.append([slot])
-            bounds.append([slot.top, slot.bottom])
-            continue
-        rows[matched].append(slot)
-        bounds[matched][0] = min(bounds[matched][0], slot.top)
-        bounds[matched][1] = max(bounds[matched][1], slot.bottom)
-    for row in rows:
-        row.sort(key=lambda slot: (slot.rect.x, slot.source_index))
+
+
+def _cluster_source_rows(unique: Sequence[_Item]) -> list[int]:
+    """Assign dense ``source_row`` ids. Independent of ``unique`` list order."""
+    count = len(unique)
+    if count == 0:
+        return []
+    parent = list(range(count))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        root_left, root_right = find(left), find(right)
+        if root_left == root_right:
+            return
+        if unique[root_left].source_order > unique[root_right].source_order:
+            root_left, root_right = root_right, root_left
+        parent[root_right] = root_left
+
+    for index in range(count):
+        for other in range(index + 1, count):
+            if _same_source_row(unique[index], unique[other]):
+                union(index, other)
+
+    clusters: dict[int, list[int]] = {}
+    for index in range(count):
+        clusters.setdefault(find(index), []).append(index)
+    ranked = sorted(
+        clusters.values(),
+        key=lambda members: (
+            min(_item_center(unique[index]) for index in members),
+            min(unique[index].source_order for index in members),
+        ),
+    )
+    rows = [0] * count
+    for row_id, members in enumerate(ranked):
+        for index in members:
+            rows[index] = row_id
     return rows
 
 
-def _item_spans(
-    rect: NativeLayoutRect,
+def _compressed_salience(area: float, median_area: float) -> float:
+    if not (
+        math.isfinite(area)
+        and math.isfinite(median_area)
+        and area > 0.0
+        and median_area > 0.0
+    ):
+        return 1.0
+    ratio = area / median_area
+    if ratio <= 0.0:
+        return 1.0
+    return min(1.80, max(0.75, math.exp(0.35 * math.log(ratio))))
+
+
+def _preview_aspect(
+    ref: UltraViewRef,
+    aspects: Mapping[UltraViewRef, tuple[float, float]] | None,
+) -> tuple[float | None, str]:
+    if aspects is None:
+        return None, "fallback"
+    try:
+        pair = aspects[ref]
+    except KeyError:
+        return None, "fallback"
+    try:
+        width = float(pair[0])
+        height = float(pair[1])
+    except (TypeError, ValueError, IndexError):
+        return None, "fallback"
+    if not math.isfinite(width) or not math.isfinite(height) or width <= 0.0 or height <= 0.0:
+        return None, "fallback"
+    return width / height, "captured"
+
+
+def _build_items(
+    items: Sequence[tuple[UltraViewRef, NativeLayoutRect]],
+) -> tuple[list[_Item], list[_Item], list[UltraViewRef], list[str]]:
+    """Split valid unique windows from exact-overlap stacks.
+
+    Duplicate *refs* are dropped (solver identity is unique). Exact-overlap
+    later *windows* stay as stack members. Invalid rects are omitted here;
+    the planner records ``invalid_rect`` separately.
+    """
+    unique: list[_Item] = []
+    overlaps: list[_Item] = []
+    skipped_refs: list[UltraViewRef] = []
+    warnings: list[str] = []
+    seen_refs: set[UltraViewRef] = set()
+    seen_rects: list[NativeLayoutRect] = []
+    unique_order: list[int] = []
+    order = 0
+    for ref, rect in items:
+        if not _valid_rect(rect):
+            continue
+        if ref in seen_refs:
+            skipped_refs.append(ref)
+            warnings.append("duplicate_ref")
+            continue
+        seen_refs.add(ref)
+        duplicate_of: int | None = None
+        for previous_index, previous in enumerate(seen_rects):
+            if _edges_equal(rect, previous):
+                duplicate_of = unique_order[previous_index]
+                break
+        item = _Item(
+            ref=ref,
+            rect=rect,
+            source_order=order,
+            top=_winwert_top(rect),
+            bottom=_winwert_bottom(rect),
+            duplicate_of=duplicate_of,
+        )
+        order += 1
+        if duplicate_of is not None:
+            overlaps.append(item)
+            continue
+        seen_rects.append(rect)
+        unique_order.append(item.source_order)
+        unique.append(item)
+    return unique, overlaps, skipped_refs, warnings
+
+
+def native_layout_facts(
+    items: Sequence[tuple[UltraViewRef, NativeLayoutRect]],
     *,
-    scale: float,
-    pitch_x: float,
-    pitch_y: float,
-    aspect: tuple[float, float] | None,
-) -> tuple[int, int]:
-    width = float(rect.width)
-    height = float(rect.height)
-    if aspect is not None:
-        aspect_w = float(aspect[0])
-        aspect_h = float(aspect[1])
-        if aspect_w > 0.0 and aspect_h > 0.0:
-            height = width * aspect_h / aspect_w
-    pitch_y = max(pitch_y, 1e-9)
-    column_span = _clamp_span(
-        _round_positive(width * scale),
-        GRID_MIN_COLUMN_SPAN,
-        GRID_MAX_COLUMN_SPAN,
+    aspects: Mapping[UltraViewRef, tuple[float, float]] | None = None,
+) -> tuple[SmartCardFact, ...]:
+    """Extract D4–D6 topology facts. Does not choose ``GridRect`` spans."""
+    unique, overlaps, _skipped, _warnings = _build_items(items)
+    if not unique:
+        return ()
+    row_ids = _cluster_source_rows(unique)
+    row_of_order = {
+        unique[index].source_order: row_ids[index] for index in range(len(unique))
+    }
+    members_by_row: dict[int, list[int]] = {}
+    for index, row_id in enumerate(row_ids):
+        members_by_row.setdefault(row_id, []).append(index)
+    column_of_order: dict[int, int] = {}
+    next_column: dict[int, int] = {}
+    for row_id, members in members_by_row.items():
+        ordered = sorted(
+            members,
+            key=lambda index: (unique[index].rect.x, unique[index].source_order),
+        )
+        for column, index in enumerate(ordered):
+            column_of_order[unique[index].source_order] = column
+        next_column[row_id] = len(ordered)
+
+    # D6: exact-overlap inherits the covered window's row and appends after
+    # the last known member by source_order. The solver packs overflow onto a
+    # continuation row immediately below that group — never Manhattan-up.
+    for item in overlaps:
+        covered_row = row_of_order[int(item.duplicate_of)]
+        column = next_column[covered_row]
+        row_of_order[item.source_order] = covered_row
+        column_of_order[item.source_order] = column
+        next_column[covered_row] = column + 1
+
+    areas = [
+        float(item.rect.width) * float(item.rect.height)
+        for item in (*unique, *overlaps)
+    ]
+    median_area = float(sorted(areas)[len(areas) // 2])
+    ordered_items = sorted(
+        (*unique, *overlaps),
+        key=lambda item: item.source_order,
     )
-    row_span = _clamp_span(
-        _round_positive(height * scale * pitch_x / pitch_y),
-        GRID_MIN_ROW_SPAN,
-        GRID_MAX_ROW_SPAN,
-    )
-    return column_span, row_span
+    facts: list[SmartCardFact] = []
+    for item in ordered_items:
+        area = float(item.rect.width) * float(item.rect.height)
+        aspect, confidence = _preview_aspect(item.ref, aspects)
+        facts.append(
+            SmartCardFact(
+                ref=item.ref,
+                source_order=item.source_order,
+                source_row=row_of_order[item.source_order],
+                source_column=column_of_order[item.source_order],
+                source_salience=_compressed_salience(area, median_area),
+                preview_aspect=aspect,
+                preview_confidence=confidence,  # type: ignore[arg-type]
+                current_rect=None,
+                locked_rect=None,
+            )
+        )
+    return tuple(facts)
 
 
-def _fit_row_column_spans(spans: list[int]) -> list[int]:
-    fitted = list(spans)
-    while sum(fitted) > GRID_COLUMNS:
-        widest = max(range(len(fitted)), key=lambda index: fitted[index])
-        if fitted[widest] <= GRID_MIN_COLUMN_SPAN:
-            break
-        fitted[widest] -= 1
-    return fitted
-
-
-def _nearest_unoccupied(
-    occupied: Sequence[GridRect],
-    span: tuple[int, int],
-    origin: GridRect,
-) -> GridRect | None:
-    from .board_ops import nearest_unoccupied_origin
-
-    return nearest_unoccupied_origin(occupied, span, origin)
-
-
-def _legal_in_safety(rect: GridRect) -> bool:
-    return (
-        SAFETY_COLUMN_MIN <= rect.column
-        and rect.column + rect.column_span <= SAFETY_COLUMN_MAX
-        and SAFETY_ROW_MIN <= rect.row
-        and rect.row + rect.row_span <= SAFETY_ROW_MAX
-        and GRID_MIN_COLUMN_SPAN <= rect.column_span <= GRID_MAX_COLUMN_SPAN
-        and GRID_MIN_ROW_SPAN <= rect.row_span <= GRID_MAX_ROW_SPAN
-    )
+def _overlap_warnings(
+    unique: Sequence[_Item],
+    overlaps: Sequence[_Item],
+    placed_refs: set[UltraViewRef],
+) -> tuple[list[str], tuple[UltraViewRef, ...]]:
+    warnings: list[str] = []
+    relocated: list[UltraViewRef] = []
+    unique_by_order = {item.source_order: item for item in unique}
+    for item in overlaps:
+        covered = unique_by_order.get(int(item.duplicate_of))
+        covered_index = (
+            (covered.source_order + 1) if covered is not None else int(item.duplicate_of) + 1
+        )
+        token_index = item.source_order + 1
+        if item.ref in placed_refs:
+            relocated.append(item.ref)
+            warnings.append(
+                f"exact_overlap_relocated: {token_index} -> {covered_index}"
+            )
+        else:
+            warnings.append(f"exact_overlap: {token_index} -> {covered_index}")
+    return warnings, tuple(relocated)
 
 
 def plan_native_layout(
@@ -298,8 +416,16 @@ def plan_native_layout(
     *,
     metrics: GridMetrics | None = None,
     aspects: Mapping[UltraViewRef, tuple[float, float]] | None = None,
-    span_overrides: Mapping[UltraViewRef, tuple[int, int]] | None = None,
+    policy: SmartLayoutPolicy | None = None,
 ) -> NativeLayoutPlan:
+    """Validate millimetre rects, extract facts, then ask Smart Layout.
+
+    ``metrics`` remains keyword-only for call-site compatibility. Default
+    planner pitch is ``canonical_screen_metrics``; the solver owns 1× spans
+    and ignores a dummy 96px column. Do not pass window-stretched metrics
+    expecting different ``GridRect``s.
+    """
+    _ = metrics if metrics is not None else canonical_screen_metrics(())
     valid: list[tuple[UltraViewRef, NativeLayoutRect]] = []
     unplaced: list[UltraViewRef] = []
     warnings: list[str] = []
@@ -316,133 +442,50 @@ def plan_native_layout(
     if not valid:
         return NativeLayoutPlan((), tuple(unplaced), tuple(warnings), sources)
 
-    unique: list[_Slot] = []
-    relocates: list[_Slot] = []
-    seen: list[NativeLayoutRect] = []
-    unique_source_index: list[int] = []
-    for index, (ref, rect) in enumerate(valid):
-        duplicate_of = None
-        for previous_index, previous in enumerate(seen):
-            if _edges_equal(rect, previous):
-                duplicate_of = unique_source_index[previous_index]
-                break
-        slot = _Slot(
-            ref=ref,
-            rect=rect,
-            source_index=index + 1,
-            top=_winwert_top(rect),
-            bottom=_winwert_bottom(rect),
-            duplicate_of=duplicate_of,
-        )
-        if duplicate_of is not None:
-            relocates.append(slot)
-            continue
-        seen.append(rect)
-        unique_source_index.append(index + 1)
-        unique.append(slot)
-
+    unique, overlaps, skipped_refs, extra_warnings = _build_items(valid)
+    warnings.extend(extra_warnings)
+    unplaced.extend(skipped_refs)
     if not unique:
         return NativeLayoutPlan(
             (),
-            tuple(unplaced) + tuple(slot.ref for slot in relocates),
+            tuple(unplaced) + tuple(ref for ref, _rect in valid if ref not in skipped_refs),
             tuple(warnings),
             sources,
         )
 
-    rows = _cluster_rows(unique)
-    max_row_mm = max(sum(slot.rect.width for slot in row) for row in rows)
-    if max_row_mm <= 0.0:
+    facts = native_layout_facts(valid, aspects=aspects)
+    used_policy = _DEFAULT_NATIVE_POLICY if policy is None else policy
+    result = solve_smart_layout(facts, used_policy)
+    if not result.accepted:
+        reason = str(result.reason or "no_legal_layout")
+        warnings.append(reason)
+        remaining = [
+            ref for ref, _rect in valid
+            if ref not in skipped_refs
+        ]
         return NativeLayoutPlan(
-            (),
-            tuple(ref for ref, _rect in items),
-            tuple(warnings),
-            sources,
+            placed=(),
+            unplaced=tuple(unplaced) + tuple(remaining),
+            warnings=tuple(warnings),
+            sources=sources,
+            relocated=(),
+            facts=facts,
         )
 
-    used_metrics = _canonical_grid_metrics() if metrics is None else metrics
-    pitch_x, pitch_y = used_metrics.exact_pitch()
-    scale = float(GRID_COLUMNS) / max_row_mm
-    aspect_map = aspects or {}
-    override_map = span_overrides or {}
-
-    def _spans_for(slot: _Slot) -> tuple[int, int]:
-        override = override_map.get(slot.ref)
-        if override is not None:
-            column_span, row_span = int(override[0]), int(override[1])
-            return (
-                _clamp_span(column_span, GRID_MIN_COLUMN_SPAN, GRID_MAX_COLUMN_SPAN),
-                _clamp_span(row_span, GRID_MIN_ROW_SPAN, GRID_MAX_ROW_SPAN),
-            )
-        return _item_spans(
-            slot.rect,
-            scale=scale,
-            pitch_x=pitch_x,
-            pitch_y=pitch_y,
-            aspect=aspect_map.get(slot.ref),
-        )
-
-    packed: dict[UltraViewRef, GridRect] = {}
-    occupied: list[GridRect] = []
-    row_origin = 0
-    for row in rows:
-        spans = [_spans_for(slot) for slot in row]
-        column_spans = _fit_row_column_spans([span[0] for span in spans])
-        column = 0
-        row_height = 0
-        for slot, (_column_span_raw, row_span), column_span in zip(
-            row, spans, column_spans
-        ):
-            candidate = clamp_grid_rect(
-                GridRect(column, row_origin, column_span, row_span)
-            )
-            if any(_grid_overlap(candidate, other) for other in occupied):
-                found = _nearest_unoccupied(
-                    occupied, (column_span, row_span), candidate
-                )
-                if found is None or not _legal_in_safety(found):
-                    unplaced.append(slot.ref)
-                    warnings.append(f"quantized_collision: {slot.source_index}")
-                    continue
-                candidate = found
-            packed[slot.ref] = candidate
-            occupied.append(candidate)
-            column = candidate.column + candidate.column_span
-            row_height = max(row_height, candidate.row_span)
-        row_origin += max(row_height, GRID_MIN_ROW_SPAN)
-
-    first_by_source = {slot.source_index: slot.ref for slot in unique}
-    relocated_refs: list[UltraViewRef] = []
-    for slot in relocates:
-        first_ref = first_by_source.get(int(slot.duplicate_of or 0))
-        preferred = packed.get(first_ref) if first_ref is not None else None
-        column_span, row_span = _spans_for(slot)
-        origin = (
-            preferred
-            if preferred is not None
-            else GridRect(0, 0, column_span, row_span)
-        )
-        found = _nearest_unoccupied(occupied, (column_span, row_span), origin)
-        if found is None or not _legal_in_safety(found):
-            unplaced.append(slot.ref)
-            if slot.duplicate_of is not None:
-                warnings.append(
-                    f"exact_overlap: {slot.source_index} -> {slot.duplicate_of}"
-                )
+    packed = {ref: rect for ref, rect in result.placements}
+    placed = tuple((ref, packed[ref]) for ref, _rect in valid if ref in packed)
+    placed_refs = {ref for ref, _rect in placed}
+    for ref, _rect in valid:
+        if ref in skipped_refs or ref in placed_refs:
             continue
-        packed[slot.ref] = found
-        occupied.append(found)
-        relocated_refs.append(slot.ref)
-        warnings.append(
-            f"exact_overlap_relocated: {slot.source_index} -> {slot.duplicate_of}"
-        )
-
-    placed = tuple(
-        (ref, packed[ref]) for ref, _rect in valid if ref in packed
-    )
+        unplaced.append(ref)
+    overlap_notes, relocated = _overlap_warnings(unique, overlaps, placed_refs)
+    warnings.extend(overlap_notes)
     return NativeLayoutPlan(
         placed=placed,
         unplaced=tuple(unplaced),
         warnings=tuple(warnings),
         sources=sources,
-        relocated=tuple(relocated_refs),
+        relocated=relocated,
+        facts=facts,
     )

@@ -18,7 +18,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.compositor import _draw_preview
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import preview_reading_box
-from mf4_analyzer.ui.chart_stack.ultraview.page import BOARD_MENU_ARRANGE
+from mf4_analyzer.ui.chart_stack.ultraview.page import BOARD_MENU_ARRANGE, BOARD_MENU_COMPACT
 from mf4_analyzer.ui.ultraview_state import (
     GRID_RESOLUTION,
     LAYOUT_MODE_FREE_GRID,
@@ -277,5 +277,7 @@ def test_twenty_four_cards_is_the_placed_ceiling_and_stays_interactive(qtbot):
 
 
 def test_optimize_board_is_not_disguised_as_auto_arrange():
-    assert BOARD_MENU_ARRANGE == "自动排版"
+    assert BOARD_MENU_ARRANGE == "智能排版"
+    assert BOARD_MENU_COMPACT == "紧凑排列"
     assert "优化布局" not in BOARD_MENU_ARRANGE
+    assert "自动排版" not in BOARD_MENU_ARRANGE

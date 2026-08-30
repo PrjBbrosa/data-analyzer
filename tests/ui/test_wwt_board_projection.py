@@ -1,6 +1,8 @@
-"""Owner-level WWT → UltraView Board projection and delayed Card Fit."""
+"""Owner-level WWT → UltraView Board projection and group settle."""
 from __future__ import annotations
 
+import pytest
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtWidgets import QWidget
 
@@ -74,6 +76,98 @@ def _publish(uv, ref: UltraViewRef, width: int, height: int) -> None:
 
 def _placed_map(board):
     return {item.ref: item.rect for item in board.free_grid}
+
+
+SMART_LAYOUT_QUIET_MS = 250
+SMART_LAYOUT_DEADLINE_MS = 1200
+
+
+class _ZoomFitProbe:
+    """Bound-method page stub so settle can call zoom_fit without lambdas."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def zoom_fit(self) -> None:
+        self.calls.append("fit")
+
+    def select_ref(self, ref) -> None:
+        return None
+
+    def current_free_grid_insert_anchor(self):
+        return None
+
+    def page(self):
+        return self
+
+
+def _install_zoom_fit_probe(controller) -> _ZoomFitProbe:
+    probe = _ZoomFitProbe()
+    controller._page_impl = probe.page
+    return probe
+
+
+def _pending_smart_layout_group(controller):
+    holder = getattr(controller, "pending_smart_layout_group", None)
+    if holder is None:
+        holder = getattr(controller, "_pending_smart_layout_group", None)
+    assert holder is not None, (
+        "UltraViewWorkspaceController must own pending_smart_layout_group "
+        "(group settle, not per-card native_card_fit)"
+    )
+    return holder
+
+
+def _smart_layout_timer(controller, name: str, interval_ms: int) -> QTimer:
+    timer = getattr(controller, name, None)
+    assert timer is not None, (
+        f"UltraViewWorkspaceController must own {name} "
+        f"(fake-clock/QTimer settle, interval {interval_ms} ms)"
+    )
+    assert isinstance(timer, QTimer)
+    assert timer.interval() == interval_ms, (
+        f"{name}.interval() must stay {interval_ms} "
+        "(QTimer.start(int) rewrites interval permanently)"
+    )
+    return timer
+
+
+def _quiet_timer(controller) -> QTimer:
+    return _smart_layout_timer(
+        controller, "_smart_layout_quiet_timer", SMART_LAYOUT_QUIET_MS
+    )
+
+
+def _deadline_timer(controller) -> QTimer:
+    return _smart_layout_timer(
+        controller, "_smart_layout_deadline_timer", SMART_LAYOUT_DEADLINE_MS
+    )
+
+
+def _record_preview(coordinator, ref: UltraViewRef, width: int, height: int) -> None:
+    """Publish a preview and record it on the pending group settle holder."""
+    _publish(coordinator, ref, width, height)
+    controller = coordinator._workspace_controller
+    recorder = getattr(controller, "record_smart_layout_aspect", None)
+    assert callable(recorder), (
+        "workspace controller must expose record_smart_layout_aspect "
+        "so preview arrival updates group facts without reshaping per card"
+    )
+    recorder(ref)
+
+
+def _emit_timer(timer: QTimer, qapp) -> None:
+    timer.timeout.emit()
+    qapp.processEvents()
+
+
+def _native_fit_tokens(controller):
+    pending = getattr(controller, "pending_auto_aspect", {}) or {}
+    return [
+        token
+        for token in pending.values()
+        if getattr(token, "kind", "") == "native_card_fit"
+    ]
 
 
 def test_board_is_empty_and_unique_name_ignore_self():
@@ -441,7 +535,60 @@ def _native_stacked_items():
     )
 
 
-def test_fit_after_preview_reflows_whole_group(qapp):
+def _stacked_refs():
+    return (
+        UltraViewRef("time", "fit-top"),
+        UltraViewRef("time", "fit-bottom"),
+    )
+
+
+def _native_triple_items():
+    return (
+        ("a", NativeLayoutRect(0.0, 70.0, 50.0, 60.0)),
+        ("b", NativeLayoutRect(60.0, 70.0, 50.0, 60.0)),
+        ("c", NativeLayoutRect(0.0, 200.0, 50.0, 60.0)),
+    )
+
+
+def _triple_refs():
+    return (
+        UltraViewRef("time", "a"),
+        UltraViewRef("time", "b"),
+        UltraViewRef("time", "c"),
+    )
+
+
+def _assert_no_overlap_map(placed: dict) -> None:
+    rects = list(placed.values())
+    for index, left in enumerate(rects):
+        for right in rects[index + 1 :]:
+            overlap = not (
+                left.column + left.column_span <= right.column
+                or right.column + right.column_span <= left.column
+                or left.row + left.row_span <= right.row
+                or right.row + right.row_span <= left.row
+            )
+            assert not overlap, (left, right)
+
+
+def _group_is_active(group) -> bool:
+    if group is None or group in ({}, (), []):
+        return False
+    if getattr(group, "cancelled", None) is True:
+        return False
+    if getattr(group, "active", None) is False:
+        return False
+    return True
+
+
+def _pending_group_or_none(controller):
+    return getattr(controller, "pending_smart_layout_group", None) or getattr(
+        controller, "_pending_smart_layout_group", None
+    )
+
+
+def test_import_commits_provisional_geometry_without_per_preview_reflow(qapp):
+    """D7: import commits membership + stable provisional layout, not a reshape per preview."""
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
@@ -457,31 +604,141 @@ def test_fit_after_preview_reflows_whole_group(qapp):
         )
         board = coordinator.board
         assert board.name == "fit-demo"
-        tokens = [
-            token
-            for token in controller.pending_auto_aspect.values()
-            if token.kind == "native_card_fit"
-        ]
-        assert len(tokens) == 2
-        inserted = {token.ref: token.inserted_rect for token in tokens}
-        top = UltraViewRef("time", "fit-top")
-        bottom = UltraViewRef("time", "fit-bottom")
-        _publish(coordinator, top, 1600, 400)
-        _publish(coordinator, bottom, 1600, 400)
-        coordinator._maybe_apply_pending_auto_aspect(top)
-        after = _placed_map(board)
-        assert after[bottom].row == after[top].row + after[top].row_span
-        assert after[bottom].row < inserted[bottom].row
-        overlap = (
-            after[top].column < after[bottom].column + after[bottom].column_span
-            and after[bottom].column < after[top].column + after[top].column_span
-            and after[top].row < after[bottom].row + after[bottom].row_span
-            and after[bottom].row < after[top].row + after[top].row_span
-        )
-        assert not overlap
+        assert len(board.free_grid) == 2
+        group = _pending_smart_layout_group(controller)
+        assert group is not None
+        assert _native_fit_tokens(controller) == []
         history = controller.grid_histories[board.board_id]
         assert len(history.undo) == 1
-        assert controller.pending_auto_aspect == {}
+        revision = controller._current_layout_revision(board.board_id)
+        provisional = _placed_map(board)
+        top, _bottom = _stacked_refs()
+        _publish(coordinator, top, 1600, 400)
+        coordinator._maybe_apply_pending_auto_aspect(top)
+        qapp.processEvents()
+        assert _placed_map(board) == provisional
+        assert len(history.undo) == 1
+        assert controller._current_layout_revision(board.board_id) == revision
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.parametrize("order", ((0, 1, 2), (2, 1, 0), (1, 2, 0)))
+def test_group_settle_all_ready_is_one_history_and_one_zoom_fit(qapp, order):
+    """D8: all captured aspects ready → one settle, independent of arrival order."""
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    refs = _triple_refs()
+    sizes = ((1600, 400), (800, 800), (400, 1600))
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_triple_items(),
+            dedicated_board=True,
+            board_name="all-ready",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        provisional = _placed_map(board)
+        for step, index in enumerate(order):
+            _record_preview(coordinator, refs[index], *sizes[index])
+            qapp.processEvents()
+            if step < len(order) - 1:
+                assert _placed_map(board) == provisional
+                assert probe.calls == []
+                assert len(history.undo) == 1
+        assert len(history.undo) == 1
+        assert probe.calls == ["fit"]
+        after = _placed_map(board)
+        assert set(after) == set(provisional)
+        _assert_no_overlap_map(after)
+        late_revision = controller._current_layout_revision(board.board_id)
+        _record_preview(coordinator, refs[0], 1200, 300)
+        qapp.processEvents()
+        assert controller._current_layout_revision(board.board_id) == late_revision
+        assert _placed_map(board) == after
+        assert probe.calls == ["fit"]
+        assert len(history.undo) == 1
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_group_settle_quiet_timer_fires_once_with_partial_capture(qapp):
+    """D8: 250ms quiet after last aspect with ≥1 captured settles once."""
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    top, bottom = _stacked_refs()
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_stacked_items(),
+            dedicated_board=True,
+            board_name="quiet",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        provisional = _placed_map(board)
+        _record_preview(coordinator, top, 1600, 400)
+        qapp.processEvents()
+        assert _placed_map(board) == provisional
+        assert probe.calls == []
+        _emit_timer(_quiet_timer(controller), qapp)
+        assert len(history.undo) == 1
+        assert probe.calls == ["fit"]
+        settled = _placed_map(board)
+        _emit_timer(_quiet_timer(controller), qapp)
+        _record_preview(coordinator, bottom, 800, 800)
+        qapp.processEvents()
+        assert probe.calls == ["fit"]
+        assert _placed_map(board) == settled
+        assert len(history.undo) == 1
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_group_settle_deadline_fires_once_from_register(qapp):
+    """D8: 1200ms deadline from register settles once even if aspects are incomplete."""
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_stacked_items(),
+            dedicated_board=True,
+            board_name="deadline",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        assert probe.calls == []
+        _emit_timer(_deadline_timer(controller), qapp)
+        assert len(history.undo) == 1
+        assert probe.calls == ["fit"]
+        settled = _placed_map(board)
+        _emit_timer(_deadline_timer(controller), qapp)
+        assert probe.calls == ["fit"]
+        assert _placed_map(board) == settled
+        assert not _group_is_active(_pending_group_or_none(controller))
     finally:
         coordinator.shutdown()
         host.deleteLater()
@@ -495,7 +752,11 @@ def test_fit_after_preview_dpr_uses_logical_size(qapp, monkeypatch):
 
     host = QWidget()
     coordinator = UltraViewCoordinator(host, parent=host)
-    monkeypatch.setattr(coordinator, "_preview_fit_device_pixel_ratio", lambda: 2.0)
+
+    def _dpr():
+        return 2.0
+
+    monkeypatch.setattr(coordinator, "_preview_fit_device_pixel_ratio", _dpr)
     try:
         coordinator.add_time_views_from_native_layout(
             _native_pair_items(),
@@ -504,28 +765,26 @@ def test_fit_after_preview_dpr_uses_logical_size(qapp, monkeypatch):
         )
         left = UltraViewRef("time", "fit-left")
         right = UltraViewRef("time", "fit-right")
-        before = _placed_map(coordinator.board)
         _publish(coordinator, left, 800, 200)
         _publish(coordinator, right, 800, 200)
         assert coordinator._preview_fit_image_size(left) == (400, 100)
-        coordinator._maybe_apply_pending_auto_aspect(left)
-        placed = _placed_map(coordinator.board)
-        assert placed[left].column_span == before[left].column_span
-        assert placed[right].column_span == before[right].column_span
-        assert placed[left].row_span <= before[left].row_span
+        assert coordinator._preview_fit_image_size(right) == (400, 100)
     finally:
         coordinator.shutdown()
         host.deleteLater()
         qapp.processEvents()
 
 
-def test_delayed_preview_tokens_survive_until_preview_or_user_mutation(qapp):
+def test_delayed_preview_group_survives_until_settle_or_user_mutation(qapp):
+    """User mutation still cancels pending work; the holder is the group settle."""
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
+
     host = QWidget()
     coordinator = UltraViewCoordinator(host, parent=host)
     controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
     try:
         coordinator.add_time_views_from_native_layout(
             _native_pair_items(),
@@ -534,13 +793,15 @@ def test_delayed_preview_tokens_survive_until_preview_or_user_mutation(qapp):
         )
         left = UltraViewRef("time", "fit-left")
         right = UltraViewRef("time", "fit-right")
-        assert (coordinator.board.board_id, left) in controller.pending_auto_aspect
-        token = controller.pending_auto_aspect[(coordinator.board.board_id, left)]
-        assert token.kind == "native_card_fit"
+        group = _pending_smart_layout_group(controller)
+        assert _group_is_active(group)
+        assert _native_fit_tokens(controller) == []
         native = _placed_map(coordinator.board)[left]
-        coordinator._maybe_apply_pending_auto_aspect(left)
-        assert (coordinator.board.board_id, left) in controller.pending_auto_aspect
+        right_native = _placed_map(coordinator.board)[right]
+        _publish(coordinator, left, 1600, 400)
+        qapp.processEvents()
         assert _placed_map(coordinator.board)[left] == native
+        assert _group_is_active(_pending_smart_layout_group(controller))
 
         moved = GridRect(
             native.column,
@@ -557,24 +818,32 @@ def test_delayed_preview_tokens_survive_until_preview_or_user_mutation(qapp):
             moved.row_span,
             "drag-move",
         )
-        assert (coordinator.board.board_id, left) not in controller.pending_auto_aspect
-        assert (coordinator.board.board_id, right) not in controller.pending_auto_aspect
-        _publish(coordinator, left, 1600, 400)
-        coordinator._maybe_apply_pending_auto_aspect(left)
+        assert not _group_is_active(_pending_group_or_none(controller))
+        history = controller.grid_histories[coordinator.board.board_id]
+        history_after_move = len(history.undo)
+        revision_after_move = controller._current_layout_revision(
+            coordinator.board.board_id
+        )
+        _record_preview(coordinator, left, 1600, 400)
+        _record_preview(coordinator, right, 1600, 400)
+        qapp.processEvents()
         assert _placed_map(coordinator.board)[left] == moved
-
-        right_native = _placed_map(coordinator.board)[right]
-        _publish(coordinator, right, 1600, 400)
-        coordinator._maybe_apply_pending_auto_aspect(right)
-        assert (coordinator.board.board_id, right) not in controller.pending_auto_aspect
         assert _placed_map(coordinator.board)[right] == right_native
+        assert len(history.undo) == history_after_move
+        assert (
+            controller._current_layout_revision(coordinator.board.board_id)
+            == revision_after_move
+        )
+        assert probe.calls == []
     finally:
         coordinator.shutdown()
         host.deleteLater()
         qapp.processEvents()
 
 
-def test_import_and_delayed_fit_share_one_undo_step(qapp):
+@pytest.mark.parametrize("gesture", ("move", "resize", "lock"))
+def test_user_gesture_before_settle_cancels_auto_submit(qapp, gesture):
+    """D9/D12: move/resize/lock before settle cancels auto-submit; user rect kept."""
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
@@ -582,6 +851,165 @@ def test_import_and_delayed_fit_share_one_undo_step(qapp):
     host = QWidget()
     coordinator = UltraViewCoordinator(host, parent=host)
     controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    left, right = (
+        UltraViewRef("time", "fit-left"),
+        UltraViewRef("time", "fit-right"),
+    )
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_pair_items(),
+            dedicated_board=True,
+            board_name="touch",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        native = _placed_map(board)[left]
+        _record_preview(coordinator, left, 1600, 400)
+        qapp.processEvents()
+        if gesture == "lock":
+            lock = getattr(controller, "_on_free_grid_lock", None)
+            assert callable(lock), (
+                "explicit card lock must cancel pending group settle"
+            )
+            lock(left.section, left.view_id)
+            kept = native
+            assert controller._free_grid_ref_is_locked(board.board_id, left)
+        elif gesture == "move":
+            kept = GridRect(
+                native.column,
+                native.row + native.row_span,
+                native.column_span,
+                native.row_span,
+            )
+            coordinator._on_free_grid_geometry(
+                left.section,
+                left.view_id,
+                kept.column,
+                kept.row,
+                kept.column_span,
+                kept.row_span,
+                "drag-move",
+            )
+        else:
+            kept = GridRect(
+                native.column,
+                native.row,
+                native.column_span,
+                native.row_span + 2,
+            )
+            coordinator._on_free_grid_geometry(
+                left.section,
+                left.view_id,
+                kept.column,
+                kept.row,
+                kept.column_span,
+                kept.row_span,
+                "drag-resize",
+            )
+        assert not _group_is_active(_pending_group_or_none(controller))
+        history_after = len(history.undo)
+        revision_after = controller._current_layout_revision(board.board_id)
+        zoom_after = list(probe.calls)
+        _record_preview(coordinator, right, 800, 800)
+        qapp.processEvents()
+        assert _placed_map(board)[left] == kept
+        assert len(history.undo) == history_after
+        assert controller._current_layout_revision(board.board_id) == revision_after
+        assert probe.calls == zoom_after
+        if gesture != "lock":
+            assert not controller._free_grid_ref_is_locked(board.board_id, left)
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_settle_reject_stale_deleted_or_switched_is_zero_mutation(qapp, monkeypatch):
+    """Solver reject / stale token / Board deleted / workspace switched → zero mutation."""
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    top, bottom = _stacked_refs()
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_stacked_items(),
+            dedicated_board=True,
+            board_name="reject",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        fingerprint = tuple((item.ref, item.rect) for item in board.free_grid)
+        history_count = len(history.undo)
+        revision = controller._current_layout_revision(board.board_id)
+
+        class _Reject:
+            accepted = False
+            placements = ()
+            reason = "no_legal_layout"
+            diagnostics = ("locked",)
+            search_visits = 0
+            used_fallback = False
+
+        def _reject(*args, **kwargs):
+            return _Reject()
+
+        monkeypatch.setattr(
+            "mf4_analyzer.ultraview_core.smart_layout.solve_smart_layout",
+            _reject,
+        )
+        _record_preview(coordinator, top, 1600, 400)
+        _record_preview(coordinator, bottom, 800, 800)
+        qapp.processEvents()
+        assert tuple((item.ref, item.rect) for item in board.free_grid) == fingerprint
+        assert len(history.undo) == history_count
+        assert controller._current_layout_revision(board.board_id) == revision
+        assert probe.calls == []
+
+        controller._bump_layout_revision(board.board_id)
+        stale_revision = controller._current_layout_revision(board.board_id)
+        _emit_timer(_deadline_timer(controller), qapp)
+        assert controller._current_layout_revision(board.board_id) == stale_revision
+        assert tuple((item.ref, item.rect) for item in board.free_grid) == fingerprint
+        assert probe.calls == []
+
+        created = create_board(controller.workspace, name="other")
+        assert created is not None
+        other_fp = tuple((item.ref, item.rect) for item in created.free_grid)
+        controller._on_select_board(created.board_id)
+        _emit_timer(_quiet_timer(controller), qapp)
+        assert tuple((item.ref, item.rect) for item in board.free_grid) == fingerprint
+        assert tuple((item.ref, item.rect) for item in created.free_grid) == other_fp
+        assert probe.calls == []
+
+        controller._on_select_board(board.board_id)
+        controller._on_delete_board(board.board_id)
+        _emit_timer(_deadline_timer(controller), qapp)
+        remaining = [
+            item for item in controller.workspace.boards if item.board_id == board.board_id
+        ]
+        assert remaining == []
+        assert probe.calls == []
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_import_and_group_settle_share_one_undo_step(qapp):
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
     try:
         coordinator.add_time_views_from_native_layout(
             _native_pair_items(),
@@ -593,17 +1021,162 @@ def test_import_and_delayed_fit_share_one_undo_step(qapp):
         assert len(history.undo) == 1
         left = UltraViewRef("time", "fit-left")
         right = UltraViewRef("time", "fit-right")
-        _publish(coordinator, left, 1600, 400)
-        _publish(coordinator, right, 1600, 400)
-        coordinator._maybe_apply_pending_auto_aspect(left)
+        _record_preview(coordinator, left, 1600, 400)
+        _record_preview(coordinator, right, 1600, 400)
+        qapp.processEvents()
         assert len(history.undo) == 1
+        assert probe.calls == ["fit"]
         assert board.free_grid
         coordinator._on_free_grid_undo()
         assert board.free_grid == []
         assert board.unplaced == []
         assert history.undo == []
         assert history.redo
+        assert probe.calls == ["fit"]
     finally:
         coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_user_move_before_settle_seals_import_history(qapp):
+    """Spec §15: user edit between provisional and settle seals import Undo."""
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    left, right = (
+        UltraViewRef("time", "fit-left"),
+        UltraViewRef("time", "fit-right"),
+    )
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_pair_items(),
+            dedicated_board=True,
+            board_name="seal",
+        )
+        board = coordinator.board
+        history = controller.grid_histories[board.board_id]
+        assert len(history.undo) == 1
+        import_before = history.undo[-1].before
+        import_after = history.undo[-1].after
+        native = _placed_map(board)[left]
+        kept = GridRect(
+            native.column,
+            native.row + native.row_span,
+            native.column_span,
+            native.row_span,
+        )
+        coordinator._on_free_grid_geometry(
+            left.section,
+            left.view_id,
+            kept.column,
+            kept.row,
+            kept.column_span,
+            kept.row_span,
+            "drag-move",
+        )
+        assert not _group_is_active(_pending_group_or_none(controller))
+        assert len(history.undo) == 2
+        assert history.undo[0].before == import_before
+        assert history.undo[0].after == import_after
+        zoom_after = list(probe.calls)
+        _record_preview(coordinator, left, 1600, 400)
+        _record_preview(coordinator, right, 800, 800)
+        _emit_timer(_quiet_timer(controller), qapp)
+        _emit_timer(_deadline_timer(controller), qapp)
+        qapp.processEvents()
+        assert len(history.undo) == 2
+        assert history.undo[0].before == import_before
+        assert history.undo[0].after == import_after
+        assert _placed_map(board)[left] == kept
+        assert probe.calls == zoom_after
+        coordinator._on_free_grid_undo()
+        assert _placed_map(board)[left] == native
+        coordinator._on_free_grid_undo()
+        assert board.free_grid == []
+        assert probe.calls == zoom_after
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_wwt_undo_redo_does_not_rerun_solver(qapp, monkeypatch):
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    probe = _install_zoom_fit_probe(controller)
+    left = UltraViewRef("time", "fit-left")
+    right = UltraViewRef("time", "fit-right")
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_pair_items(),
+            dedicated_board=True,
+            board_name="undo-resolve",
+        )
+        board = coordinator.board
+        _record_preview(coordinator, left, 1600, 400)
+        _record_preview(coordinator, right, 1600, 400)
+        qapp.processEvents()
+        settled = _placed_map(board)
+        zoom_after_settle = list(probe.calls)
+
+        def boom(*_args, **_kwargs):
+            raise AssertionError("Undo/Redo must not re-run Smart Layout")
+
+        monkeypatch.setattr(
+            "mf4_analyzer.ultraview_core.smart_layout.solve_smart_layout",
+            boom,
+        )
+        monkeypatch.setattr(
+            "mf4_analyzer.ui.main_window.ultraview_workspace_controller.plan_smart_layout",
+            boom,
+        )
+        coordinator._on_free_grid_undo()
+        coordinator._on_free_grid_redo()
+        assert _placed_map(board) == settled
+        assert probe.calls == zoom_after_settle
+        assert not _group_is_active(_pending_group_or_none(controller))
+    finally:
+        coordinator.shutdown()
+        host.deleteLater()
+        qapp.processEvents()
+
+
+def test_delete_board_and_shutdown_drop_lock_map(qapp):
+    from mf4_analyzer.ui.main_window.ultraview_coordinator import (
+        UltraViewCoordinator,
+    )
+
+    host = QWidget()
+    coordinator = UltraViewCoordinator(host, parent=host)
+    controller = coordinator._workspace_controller
+    left = UltraViewRef("time", "fit-left")
+    try:
+        coordinator.add_time_views_from_native_layout(
+            _native_pair_items(),
+            dedicated_board=True,
+            board_name="locks",
+        )
+        board_id = coordinator.board.board_id
+        controller._on_free_grid_lock(left.section, left.view_id)
+        assert controller._free_grid_ref_is_locked(board_id, left)
+        controller._on_create_board()
+        controller._on_delete_board(board_id)
+        assert board_id not in controller._locked_free_grid_refs
+        coordinator.shutdown()
+        assert controller._locked_free_grid_refs == {}
+    finally:
+        if not getattr(coordinator, "_shutdown", False):
+            coordinator.shutdown()
         host.deleteLater()
         qapp.processEvents()

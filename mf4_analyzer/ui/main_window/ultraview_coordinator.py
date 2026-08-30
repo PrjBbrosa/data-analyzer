@@ -465,6 +465,7 @@ class UltraViewCoordinator(QObject):
         self._capture.shutdown_capture()
         self._workspace = default_workspace()
         self._clear_placement_runtime()
+        self._workspace_controller.shutdown()
         self._reset_page_runtime()
         self._disconnect_page_hooks()
         self._disconnect_stack_hooks()
@@ -753,8 +754,10 @@ class UltraViewCoordinator(QObject):
             (page.free_grid_autofit_requested, self._on_free_grid_autofit),
             (page.organize_free_grid_requested, self._on_organize_free_grid),
             (page.auto_arrange_requested, self._on_auto_arrange_free_grid),
+            (page.compact_arrange_requested, self._on_compact_arrange_free_grid),
             (page.free_grid_undo_requested, self._on_free_grid_undo),
             (page.free_grid_redo_requested, self._on_free_grid_redo),
+            (page.free_grid_lock_requested, self._on_free_grid_lock),
             (page.author_create_requested, self._on_author_create),
             (page.author_update_requested, self._on_author_update),
             (page.author_delete_requested, self._on_author_delete),
@@ -770,6 +773,7 @@ class UltraViewCoordinator(QObject):
             self._page_hooks.append((page, signal, slot))
         page.resolve_insert_span = self._insert_span_for_drag
         page.can_undo_auto_arrange = self._can_undo_auto_arrange
+        page.free_grid_card_locked = self._free_grid_card_locked
 
     def _connect_managers(self) -> None:
         if self._manager_hooks:
@@ -1128,8 +1132,17 @@ class UltraViewCoordinator(QObject):
     def _on_auto_arrange_free_grid(self) -> None:
         return self._workspace_controller._on_auto_arrange_free_grid()
 
+    def _on_compact_arrange_free_grid(self) -> None:
+        return self._workspace_controller._on_compact_arrange_free_grid()
+
     def _can_undo_auto_arrange(self) -> bool:
         return self._workspace_controller._can_undo_auto_arrange()
+
+    def _on_free_grid_lock(self, section: str, view_id: str) -> None:
+        return self._workspace_controller._on_free_grid_lock(section, view_id)
+
+    def _free_grid_card_locked(self, section: str, view_id: str) -> bool:
+        return self._workspace_controller._free_grid_card_locked(section, view_id)
 
     def _grid_history(self, board: UltraViewBoardState) -> _GridHistory:
         return self._workspace_controller._grid_history(board)

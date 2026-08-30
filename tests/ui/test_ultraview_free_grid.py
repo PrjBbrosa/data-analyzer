@@ -1141,3 +1141,87 @@ def test_plan_auto_arrange_rejects_illegal_or_unsolvable_input():
     assert rejected.reason is LayoutRejectReason.NO_LEGAL_LAYOUT
     assert rejected.committed_updates() == ()
     assert unsolvable[-1].rect == GridRect(0, -8, 12, 8)
+
+
+def test_plan_smart_layout_is_the_ui_wrapper_around_solve_smart_layout():
+    """T5 UI-facing name: plan_smart_layout wraps solve_smart_layout in free_grid."""
+    from mf4_analyzer.ui.chart_stack.ultraview import free_grid
+
+    assert hasattr(free_grid, "plan_smart_layout")
+    wrapper = free_grid.plan_smart_layout
+    assert callable(wrapper)
+    from mf4_analyzer.ultraview_core.smart_layout import solve_smart_layout
+
+    assert wrapper is not solve_smart_layout
+
+
+def test_plan_smart_layout_changes_spans_compact_arrange_does_not():
+    """Spec §6: Smart Layout may change spans; Compact Arrange keeps them."""
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import plan_smart_layout
+    from mf4_analyzer.ultraview_core.smart_layout import SmartLayoutPolicy
+
+    scattered = [
+        _placement("wide", GridRect(0, 20, 8, 3)),
+        _placement("narrow", GridRect(8, 10, 2, 3)),
+        _placement("mid", GridRect(3, 2, 4, 3)),
+    ]
+    original_spans = {
+        item.ref: (item.rect.column_span, item.rect.row_span) for item in scattered
+    }
+    compact = plan_auto_arrange(scattered, layout_revision=7)
+    assert compact.accepted is True
+    compact_updates = dict(compact.committed_updates())
+    for item in scattered:
+        after = compact_updates.get(item.ref, item.rect)
+        assert (after.column_span, after.row_span) == original_spans[item.ref]
+
+    policy = SmartLayoutPolicy(
+        mode="balanced",
+        density="auto",
+        target_viewport=(1200, 750),
+    )
+    smart = plan_smart_layout(scattered, layout_revision=7, policy=policy)
+    assert smart.accepted is True
+    smart_updates = dict(smart.committed_updates())
+    span_changed = False
+    packed = []
+    for item in scattered:
+        after = smart_updates.get(item.ref, item.rect)
+        if (after.column_span, after.row_span) != original_spans[item.ref]:
+            span_changed = True
+        packed.append(after)
+    assert span_changed, (
+        "Smart Layout must change spans to satisfy reading-box constraints; "
+        "Compact Arrange is the keep-span command"
+    )
+    for index, left in enumerate(packed):
+        for right in packed[index + 1 :]:
+            assert not rects_overlap(left, right)
+
+
+def test_card_fit_solver_is_not_the_group_smart_layout_entry():
+    """Spec §6: 按原图比例 stays local Card Fit, not whole-group Smart Layout."""
+    from mf4_analyzer.ui.chart_stack.ultraview.card_fit import solve_card_fit
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import plan_smart_layout
+
+    assert plan_smart_layout.__name__ == "plan_smart_layout"
+    assert solve_card_fit.__name__ == "solve_card_fit"
+    assert plan_smart_layout is not solve_card_fit
+
+
+def test_board_fit_does_not_mutate_free_grid_placements():
+    """Spec §6: 适应内容 / zoom_fit is camera-only and is not a placement planner."""
+    from mf4_analyzer.ui.chart_stack.ultraview import free_grid
+
+    placements = [
+        _placement("a", GridRect(0, 0, 6, 3)),
+        _placement("b", GridRect(6, 4, 4, 3)),
+    ]
+    before = [(item.ref, item.rect) for item in placements]
+    metrics = screen_grid_metrics(placements)
+    union = union_grid_rect(tuple(item.rect for item in placements))
+    assert metrics.board_width == 1600
+    assert union is not None
+    assert [(item.ref, item.rect) for item in placements] == before
+    assert not hasattr(free_grid, "plan_board_fit")
+    assert not hasattr(free_grid, "plan_zoom_fit")

@@ -344,7 +344,8 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "基准网格", "导出标尺", "四向平移", "自动适应", "切换 Board", "适应内容",
         "临时聚焦", "不删除源 View", "200", "Ctrl/Cmd+Z",
         "常驻可关", "当前工程的所有 Board", "保存项目后保留",
-        "schema 4", "schema 5", "24 列微格", "自动排版", "空白处右击", "右键按住", "左键按住空白框选",
+        "schema 4", "schema 5", "24 列微格", "智能排版", "紧凑排列", "空白处右击", "右键按住", "左键按住空白框选",
+        "锁定", "保存重开不重排", "预览分辨率较低",
         "Stack", "整框", "连接线",
         "V / N / T / S / P", "仍会渲染",
     ):
@@ -356,6 +357,7 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "隐藏来源条", "约 60%", "约 40% 只留标题", "碰撞会提示",
         "逻辑画布固定", "默认适应视口", "铺满视口", "12 列受控",
         "尚未提供", "Coming Soon",
+        "自动排版",
     ):
         assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
 
@@ -365,6 +367,16 @@ def test_main_manual_and_published_guide_name_the_five_modes_and_frf():
         text = guide.read_text(encoding="utf-8")
         for label in ("时域", "频谱", "时频", "频响", "阶次", "FRF"):
             assert label in text, f"{guide.name} missing: {label}"
+
+
+def test_published_guide_covers_ultraview_four_actions():
+    text = PUBLISHED_GUIDE.read_text(encoding="utf-8")
+    for keyword in (
+        "UltraView", "智能排版", "紧凑排列", "按原图比例", "适应内容",
+        "锁定", "解锁", "撤销", "重开不会再自动重排",
+    ):
+        assert keyword in text, f"published guide missing: {keyword}"
+    assert "自动排版" not in text
 
 
 def test_published_guide_removes_hidden_controls_and_explains_frf_range():

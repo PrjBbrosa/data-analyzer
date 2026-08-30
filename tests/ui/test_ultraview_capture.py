@@ -30,6 +30,13 @@ from mf4_analyzer.ui.chart_stack.ultraview.preview_store import (
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.main_window._state_holders import AnalysisPinBook
 from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
+from mf4_analyzer.ui.main_window.ultraview_capture_coordinator import (
+    RESOLUTION_STALE_RATIO,
+    RESOLUTION_STALE_TOAST,
+    UltraViewCaptureCoordinator,
+    needs_resolution_recapture,
+    resolution_grab_scale,
+)
 from mf4_analyzer.ui.main_window.ultraview_coordinator import (
     UltraViewCoordinator,
     _DIGEST_RETRY_LIMIT,
@@ -196,7 +203,7 @@ class FakeCanvas(QWidget):
     def restore_visible_xlim(self, xlim, *, flush=True) -> None:
         return None
 
-    def restore_visible_ylims(self, ylims) -> None:
+    def restore_visible_ylims(self, ylims, native_axis_ranges=None, **kwargs) -> None:
         return None
 
     def set_tick_density(self, x, y) -> None:
@@ -2891,3 +2898,319 @@ def test_coordinator_and_collector_do_not_getattr_host_capture_privates():
             assert f"getattr(stack, '{name}'" not in source
             assert f'getattr(pill, "{name}"' not in source
             assert f"getattr(pill, '{name}'" not in source
+
+
+class _LogicalDprCanvas(FakeCanvas):
+    """QWidget.devicePixelRatioF is C++; subclass so tests pin logical geometry."""
+
+    def __init__(self, dpr: float = 1.0, color: str = "#123456") -> None:
+        super().__init__(color)
+        self._forced_dpr = float(dpr)
+
+    def devicePixelRatioF(self) -> float:
+        return self._forced_dpr
+
+
+def _pin_capture_dpr(monkeypatch, coord, dpr: float) -> None:
+    monkeypatch.setattr(coord._capture, "_device_pixel_ratio", lambda: float(dpr))
+
+
+def _pin_reading_box(monkeypatch, coord, size: tuple[int, int]) -> None:
+    monkeypatch.setattr(
+        coord._capture, "_inner_reading_box_logical", lambda _ref: size
+    )
+
+
+def test_needs_resolution_recapture_strict_1_25_ratio():
+    assert RESOLUTION_STALE_RATIO == 1.25
+    cache = (100, 80)
+    assert needs_resolution_recapture((126, 80), cache) is True
+    assert needs_resolution_recapture((100, 101), cache) is True
+    assert needs_resolution_recapture((126, 101), cache) is True
+    assert needs_resolution_recapture((125, 100), cache) is False
+    assert needs_resolution_recapture((100, 100), cache) is False
+    assert needs_resolution_recapture((100, 80), cache) is False
+    assert needs_resolution_recapture((80, 70), cache) is False
+    assert needs_resolution_recapture((0, 200), cache) is False
+    assert needs_resolution_recapture((200, 0), cache) is False
+    assert needs_resolution_recapture((200, 200), (0, 80)) is False
+    assert needs_resolution_recapture("nope", cache) is False
+
+
+def test_needs_resolution_recapture_is_logical_and_dpr_independent():
+    """Same logical pair is stale or not regardless of which screen DPR produced it."""
+    reading = (200, 100)
+    cache_logical = (100, 80)
+    assert needs_resolution_recapture(reading, cache_logical) is True
+    raw_dpr1 = cache_logical
+    raw_dpr2 = (cache_logical[0] * 2, cache_logical[1] * 2)
+    logical_from_dpr1 = (raw_dpr1[0] // 1, raw_dpr1[1] // 1)
+    logical_from_dpr2 = (raw_dpr2[0] // 2, raw_dpr2[1] // 2)
+    assert logical_from_dpr1 == logical_from_dpr2 == cache_logical
+    assert needs_resolution_recapture(reading, logical_from_dpr1) is True
+    assert needs_resolution_recapture(reading, logical_from_dpr2) is True
+    equal_reading = (125, 100)
+    assert needs_resolution_recapture(equal_reading, cache_logical) is False
+    assert needs_resolution_recapture(equal_reading, logical_from_dpr2) is False
+
+
+def test_refresh_resolution_state_marks_stale_above_ratio(qapp, monkeypatch):
+    window, coord = _make_coord()
+    ref = _ref("view-a")
+    image = QImage(100, 80, QImage.Format_ARGB32)
+    image.fill(QColor("#123456"))
+    assert coord.store.publish(ref, image, digest="snap", meta=PreviewMeta(ref=ref))
+    _pin_capture_dpr(monkeypatch, coord, 1.0)
+    _pin_reading_box(monkeypatch, coord, (126, 80))
+    coord._capture._refresh_resolution_state(ref)
+    assert coord.store.is_resolution_stale(ref) is True
+    _pin_reading_box(monkeypatch, coord, (125, 100))
+    coord._capture._refresh_resolution_state(ref)
+    assert coord.store.is_resolution_stale(ref) is False
+    _pin_reading_box(monkeypatch, coord, (100, 101))
+    coord._capture._refresh_resolution_state(ref)
+    assert coord.store.is_resolution_stale(ref) is True
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_resolution_stale_compares_logical_pixels_across_dpr(qapp, monkeypatch):
+    window, coord = _make_coord()
+    ref = _ref("view-a")
+    image = QImage(200, 100, QImage.Format_ARGB32)
+    image.fill(QColor("#123456"))
+    assert coord.store.publish(ref, image, digest="snap", meta=PreviewMeta(ref=ref))
+    reading = (140, 70)
+    _pin_reading_box(monkeypatch, coord, reading)
+
+    _pin_capture_dpr(monkeypatch, coord, 1.0)
+    assert coord._capture._preview_logical_size(ref) == (200, 100)
+    coord._capture._refresh_resolution_state(ref)
+    assert coord.store.is_resolution_stale(ref) is False
+    assert needs_resolution_recapture(reading, (200, 100)) is False
+
+    _pin_capture_dpr(monkeypatch, coord, 2.0)
+    assert coord._capture._preview_logical_size(ref) == (100, 50)
+    coord._capture._refresh_resolution_state(ref)
+    assert coord.store.is_resolution_stale(ref) is True
+    assert needs_resolution_recapture(reading, (100, 50)) is True
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_resolution_recapture_updates_preview_without_layout(qapp, monkeypatch):
+    import mf4_analyzer.ui.main_window.ultraview_workspace_controller as wc_mod
+
+    def _layout_boom(*_args, **_kwargs):
+        raise AssertionError("resolution recapture must not mutate layout")
+
+    monkeypatch.setattr(wc_mod._smart_layout, "solve_smart_layout", _layout_boom)
+    window, coord = _make_coord()
+    monkeypatch.setattr(
+        coord._workspace_controller,
+        "_zoom_fit_after_smart_layout_settle",
+        _layout_boom,
+    )
+    monkeypatch.setattr(
+        coord._workspace_controller, "_bump_layout_revision", _layout_boom
+    )
+    monkeypatch.setattr(
+        coord._workspace_controller, "_push_history_undo", _layout_boom
+    )
+    source = _CAPTURE_COORDINATOR_PATH.read_text(encoding="utf-8")
+    assert "solve_smart_layout" not in source
+    assert "zoom_fit" not in source
+    assert "layout_revision" not in source
+
+    window.view_manager.get(0).view_id = "view-a"
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    rects_before = tuple((item.ref, item.rect) for item in coord.board.free_grid)
+    revision_before = dict(coord._workspace_controller.layout_revision)
+    history = coord._workspace_controller._grid_history(coord.board)
+    undo_before = list(history.undo)
+
+    canvas = _LogicalDprCanvas(dpr=1.0)
+    _pin_capture_dpr(monkeypatch, coord, 1.0)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    assert canvas.grab_calls == 1
+    first = coord.store.get(ref)
+    assert first is not None
+    first_w, first_h = first.image.width(), first.image.height()
+
+    _pin_reading_box(monkeypatch, coord, (200, 150))
+    coord._capture._refresh_resolution_state(ref)
+    assert coord.store.is_resolution_stale(ref) is True
+
+    reasons = []
+    orig_request = coord._capture.request_capture
+
+    def _tracked(captured_ref, widget, reason):
+        reasons.append(str(reason))
+        return orig_request(captured_ref, widget, reason)
+
+    monkeypatch.setattr(coord._capture, "request_capture", _tracked)
+    toasts: list[tuple[str, str]] = []
+    window.toast = lambda msg, level: toasts.append((msg, level))
+    coord.set_pinned_from_board(coord.board)
+    _flush()
+    assert "resolution" in reasons
+    assert canvas.grab_calls == 2
+    updated = coord.store.get(ref)
+    assert updated is not None
+    assert updated.image is not None
+    assert updated.image.width() > first_w or updated.image.height() > first_h
+    assert coord.store.is_resolution_stale(ref) is False
+    assert toasts == []
+    assert tuple((item.ref, item.rect) for item in coord.board.free_grid) == rects_before
+    assert dict(coord._workspace_controller.layout_revision) == revision_before
+    assert list(history.undo) == undo_before
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_resolution_request_updates_preview_without_layout(qapp, monkeypatch):
+    import mf4_analyzer.ui.main_window.ultraview_workspace_controller as wc_mod
+
+    def _layout_boom(*_args, **_kwargs):
+        raise AssertionError("resolution recapture must not mutate layout")
+
+    monkeypatch.setattr(wc_mod._smart_layout, "solve_smart_layout", _layout_boom)
+    window, coord = _make_coord()
+    monkeypatch.setattr(
+        coord._workspace_controller,
+        "_zoom_fit_after_smart_layout_settle",
+        _layout_boom,
+    )
+    window.view_manager.get(0).view_id = "view-a"
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    canvas = _LogicalDprCanvas(dpr=1.0)
+    _pin_capture_dpr(monkeypatch, coord, 1.0)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    first = coord.store.get(ref)
+    assert first is not None
+    first_w = first.image.width()
+    _pin_reading_box(monkeypatch, coord, (200, 150))
+    coord.request_capture(ref, canvas, "resolution")
+    _flush()
+    assert canvas.grab_calls == 2
+    updated = coord.store.get(ref)
+    assert updated is not None
+    assert updated.image.width() > first_w
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_resolution_recapture_ignores_destroyed_canvas(qapp, monkeypatch):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    canvas = _LogicalDprCanvas(dpr=1.0)
+    _pin_capture_dpr(monkeypatch, coord, 1.0)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    record = coord.store.get(ref)
+    assert record is not None
+    old_digest = record.captured_digest
+    old_w, old_h = record.image.width(), record.image.height()
+    _pin_reading_box(monkeypatch, coord, (200, 150))
+    coord.request_capture(ref, canvas, "resolution")
+    sip.delete(canvas)
+    _flush()
+    kept = coord.store.get(ref)
+    assert kept is not None
+    assert kept.captured_digest == old_digest
+    assert kept.image is not None
+    assert kept.image.width() == old_w
+    assert kept.image.height() == old_h
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_resolution_recapture_drops_when_view_digest_is_gone(qapp, monkeypatch):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    canvas = _LogicalDprCanvas(dpr=1.0)
+    _pin_capture_dpr(monkeypatch, coord, 1.0)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    record = coord.store.get(ref)
+    assert record is not None
+    old_digest = record.captured_digest
+    old_w = record.image.width()
+    _pin_reading_box(monkeypatch, coord, (200, 150))
+    coord.request_capture(ref, canvas, "resolution")
+    window.view_manager.views.clear()
+    _flush()
+    kept = coord.store.get(ref)
+    assert kept is not None
+    assert kept.captured_digest == old_digest
+    assert kept.image.width() == old_w
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_resolution_grab_scale_targets_logical_times_dpr():
+    scale = resolution_grab_scale((64.0, 48.0), (200.0, 150.0), max_edge=1600)
+    assert abs(scale - 200.0 / 64.0) < 1e-9
+    capped = resolution_grab_scale((10.0, 10.0), (4000.0, 4000.0), max_edge=1600)
+    assert 10.0 * capped <= 1600 + 1e-6
+    assert capped >= 1.0
+
+
+def test_resolution_stale_toasts_when_view_is_not_resident(qapp, monkeypatch, caplog):
+    window, coord = _make_coord()
+    toasts: list[tuple[str, str]] = []
+    window.toast = lambda msg, level: toasts.append((msg, level))
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    image = QImage(100, 80, QImage.Format_ARGB32)
+    image.fill(QColor("#123456"))
+    assert coord.store.publish(ref, image, digest="snap", meta=PreviewMeta(ref=ref))
+    _pin_capture_dpr(monkeypatch, coord, 1.0)
+    _pin_reading_box(monkeypatch, coord, (200, 150))
+    with caplog.at_level(logging.DEBUG, logger=_CAPTURE_LOGGER):
+        coord.set_pinned_from_board(coord.board)
+    assert coord.store.is_resolution_stale(ref) is True
+    assert toasts == [(RESOLUTION_STALE_TOAST, "info")]
+    assert any("resolution_stale view not resident" in rec.message for rec in caplog.records)
+    coord.set_pinned_from_board(coord.board)
+    assert toasts == [(RESOLUTION_STALE_TOAST, "info")]
+    assert "search_visits" not in RESOLUTION_STALE_TOAST
+    assert "solve_smart_layout" not in _CAPTURE_COORDINATOR_PATH.read_text(encoding="utf-8")
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_layout_and_resolution_toasts_stay_human_without_solver_internals():
+    workspace = (
+        Path(__file__).resolve().parents[2]
+        / "mf4_analyzer"
+        / "ui"
+        / "main_window"
+        / "ultraview_workspace_controller.py"
+    ).read_text(encoding="utf-8")
+    capture = _CAPTURE_COORDINATOR_PATH.read_text(encoding="utf-8")
+    assert 'self._toast("锁定卡片占用空间，布局未改变"' in workspace
+    assert 'self._toast("已使用等大网格完成降级排版"' in workspace
+    assert RESOLUTION_STALE_TOAST in capture
+    assert "_toast(RESOLUTION_STALE_TOAST" in capture
+    for source in (workspace, capture):
+        for line in source.splitlines():
+            if "_toast(" not in line:
+                continue
+            for banned in ("search_visits", "used_fallback", "solver_reason"):
+                assert banned not in line, line

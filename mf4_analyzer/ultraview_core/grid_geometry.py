@@ -7,7 +7,9 @@ Task 5.2: ``GridRect`` / ``GRID_*`` / ``FreeGridPlacement`` / ``clamp_grid_rect`
 come from ``ultraview_core.model``. This module must not import
 ``mf4_analyzer.ui``, ``chart_stack``, widgets, Qt, or ``card_fit``.
 
-Pitch chrome (``BOARD_PADDING`` / ``SLOT_GUTTER``) is numerically identical to
+Pitch chrome (``BOARD_PADDING`` / ``SLOT_GUTTER``), card chrome
+(``CARD_HEADER_HEIGHT`` / ``CARD_FOOTER_HEIGHT`` / ``CARD_IMAGE_PADDING``),
+and ``BASE_BOARD_SIZE`` are numerically identical to
 ``ui.chart_stack.ultraview.layouts``; core cannot import ``chart_stack``. A
 focused test pins the identity. Do not drift.
 
@@ -29,9 +31,14 @@ from .model import (
     clamp_grid_rect,
 )
 
-# Same numbers as ``layouts.BOARD_PADDING`` / ``SLOT_GUTTER``. Do not drift.
+# Same numbers as ``layouts.BOARD_PADDING`` / ``SLOT_GUTTER`` /
+# ``CARD_*`` / ``BASE_BOARD_SIZE``. Do not drift.
 BOARD_PADDING = 16
 SLOT_GUTTER = 12
+BASE_BOARD_SIZE = (1600, 900)
+CARD_HEADER_HEIGHT = 34
+CARD_FOOTER_HEIGHT = 24
+CARD_IMAGE_PADDING = 8
 
 # These are deliberately smaller than P1's reading-card floor.  A four-micro-
 # column free-grid card is an allowed thumbnail role; the Board scrolls rather
@@ -155,6 +162,22 @@ def grid_metrics(
     )
 
 
+def canonical_screen_metrics(
+    placements: Sequence[FreeGridPlacement],
+) -> GridMetrics:
+    """1× screen pitch: 1600-wide columns, spare trailing rows. Window width must not enter."""
+    return grid_metrics((BASE_BOARD_SIZE[0], 0), placements)
+
+
+def canonical_export_metrics(
+    placements: Sequence[FreeGridPlacement],
+) -> GridMetrics:
+    """1× export pitch: same column/row pitch as screen; occupied-row height (min_visible_rows=1)."""
+    return grid_metrics(
+        (BASE_BOARD_SIZE[0], 0), placements, min_visible_rows=1
+    )
+
+
 def rect_to_pixels(
     rect: GridRect,
     metrics: GridMetrics,
@@ -178,6 +201,79 @@ def rect_to_pixels(
     bottom = top + (rect.row_span - 1) * pitch_y + cell_h
     x, y = int(round(left)), int(round(top))
     return x, y, int(round(right)) - x, int(round(bottom)) - y
+
+
+def inner_reading_box(rect: GridRect, metrics: GridMetrics) -> tuple[int, int, int, int]:
+    """Outer card pixels minus header 34, footer 24, image padding 8 on each side → x,y,w,h."""
+    outer_x, outer_y, outer_w, outer_h = rect_to_pixels(rect, metrics)
+    _base, scale = metrics._exact_source()
+    header = CARD_HEADER_HEIGHT * scale
+    footer = CARD_FOOTER_HEIGHT * scale
+    pad = CARD_IMAGE_PADDING * scale
+    left = outer_x + pad
+    top = outer_y + header + pad
+    right = outer_x + outer_w - pad
+    bottom = outer_y + outer_h - footer - pad
+    x, y = int(round(left)), int(round(top))
+    width = int(round(right)) - x
+    height = int(round(bottom)) - y
+    return x, y, max(0, width), max(0, height)
+
+
+def contained_preview_rect(
+    reading_box: tuple[int, int, int, int],
+    aspect_wh: tuple[float, float],
+) -> tuple[int, int, int, int]:
+    """Keep-aspect contain of preview inside reading box.
+
+    Height-first contain (side gaps preferred), matching
+    ``layouts.preview_reading_box``. No upscale past 1.0.
+    """
+    box_x, box_y, box_w, box_h = (
+        int(reading_box[0]),
+        int(reading_box[1]),
+        int(reading_box[2]),
+        int(reading_box[3]),
+    )
+    if box_w <= 0 or box_h <= 0:
+        return box_x, box_y, 0, 0
+    aspect_w = float(aspect_wh[0])
+    aspect_h = float(aspect_wh[1])
+    if (
+        not math.isfinite(aspect_w)
+        or not math.isfinite(aspect_h)
+        or aspect_w <= 0.0
+        or aspect_h <= 0.0
+    ):
+        return box_x, box_y, 0, 0
+    # Height-first virtual image: match the box height, then KeepAspectRatio
+    # contain with the same ``min(..., 1.0)`` cap as ``preview_reading_box``.
+    image_h = float(box_h)
+    image_w = image_h * (aspect_w / aspect_h)
+    scale = min(box_w / image_w, box_h / image_h, 1.0)
+    preview_w = max(1, int(round(image_w * scale)))
+    preview_h = max(1, int(round(image_h * scale)))
+    preview_w = min(preview_w, box_w)
+    preview_h = min(preview_h, box_h)
+    preview_x = box_x + (box_w - preview_w) // 2
+    preview_y = box_y + (box_h - preview_h) // 2
+    return preview_x, preview_y, preview_w, preview_h
+
+
+def reading_fill(
+    preview_rect: tuple[int, int, int, int],
+    reading_box: tuple[int, int, int, int],
+) -> float:
+    """rendered_preview_area / inner_reading_box_area. Finite, 0 if box area is 0."""
+    box_w = float(reading_box[2])
+    box_h = float(reading_box[3])
+    box_area = box_w * box_h
+    if box_area == 0.0 or not math.isfinite(box_area):
+        return 0.0
+    preview_area = float(preview_rect[2]) * float(preview_rect[3])
+    if not math.isfinite(preview_area):
+        return 0.0
+    return preview_area / box_area
 
 
 def pixels_to_grid_delta(delta: tuple[int, int], metrics: GridMetrics) -> tuple[int, int]:

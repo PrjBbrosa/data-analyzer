@@ -508,8 +508,15 @@ def test_existing_auto_arrange_is_not_a_loop_of_card_fit():
     organize_calls = _call_names(tree, "UltraViewWorkspaceController", "_on_organize_free_grid")
     assert "solve_card_fit" in autofit_calls
     assert "plan_layout" not in autofit_calls
-    assert "plan_auto_arrange" in arrange_calls
+    assert "plan_smart_layout" in arrange_calls
+    assert "plan_auto_arrange" not in arrange_calls
     assert "solve_card_fit" not in arrange_calls
+    compact_calls = _call_names(
+        tree, "UltraViewWorkspaceController", "_on_compact_arrange_free_grid"
+    )
+    assert "plan_auto_arrange" in compact_calls
+    assert "plan_smart_layout" not in compact_calls
+    assert "solve_card_fit" not in compact_calls
     assert "solve_card_fit" not in organize_calls
     facade = ast.parse(COORDINATOR_PATH.read_text(encoding="utf-8"))
     assert "solve_card_fit" not in _call_names(

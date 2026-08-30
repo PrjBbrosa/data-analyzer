@@ -1,5 +1,7 @@
-"""Compact native WWT layout: topology, width ranks, and overlap relocation."""
+"""WWT native layout → UltraView: topology, apply transactions, Smart Layout seams."""
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -9,7 +11,7 @@ from mf4_analyzer.ultraview_core.grid_geometry import (
     GRID_ROW_HEIGHT,
     SLOT_GUTTER,
     GridMetrics,
-    rect_to_pixels,
+    canonical_screen_metrics,
 )
 from mf4_analyzer.ultraview_core.model import (
     GRID_COLUMNS,
@@ -41,6 +43,150 @@ UCAN_MM = (
     NativeLayoutRect(214.5, 138.0, 50.0, 60.0),
     NativeLayoutRect(214.5, 138.0, 50.0, 60.0),
 )
+# Views 1,3,4 on the upper WinWert band; 2,5,6,7 on the lower band.
+# View 7 exact-overlaps View 6 and must follow that reading group.
+UCAN_UPPER_ORDERS = (0, 2, 3)
+UCAN_LOWER_ORDERS = (1, 4, 5, 6)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_UCAN_SAMPLE_CANDIDATES = (
+    _REPO_ROOT / "testdoc" / "WWT" / "U-Can_D6-CSER double_00479.wwt",
+    _REPO_ROOT / "testdoc" / "wwt" / "U-Can_D6-CSER double_00479.wwt",
+)
+
+
+def _optional_ucan_sample() -> Path | None:
+    for path in _UCAN_SAMPLE_CANDIDATES:
+        if path.is_file():
+            return path
+    return None
+
+
+def _ucan_refs() -> tuple[UltraViewRef, ...]:
+    return tuple(UltraViewRef("time", f"v{index}") for index in range(7))
+
+
+def _ucan_items(refs: tuple[UltraViewRef, ...]):
+    return list(zip(refs, UCAN_MM))
+
+
+def _source_row_groups(plan, refs: tuple[UltraViewRef, ...]):
+    """Prefer solver facts; fall back to placed GridRect bands."""
+    facts = getattr(plan, "facts", None) or getattr(plan, "card_facts", None)
+    if facts:
+        buckets: dict[int, list[UltraViewRef]] = {}
+        order = {ref: index for index, ref in enumerate(refs)}
+        for fact in facts:
+            buckets.setdefault(int(fact.source_row), []).append(fact.ref)
+        groups = []
+        for row_id in sorted(
+            buckets,
+            key=lambda rid: min(order[ref] for ref in buckets[rid]),
+        ):
+            members = tuple(sorted(buckets[row_id], key=lambda ref: order[ref]))
+            groups.append(members)
+        return groups
+    items = list(plan.placed)
+    ordered = sorted(items, key=lambda pair: (pair[1].row, pair[1].column))
+    bands: list[list[UltraViewRef]] = []
+    bounds: list[list[int]] = []
+    for ref, rect in ordered:
+        top = rect.row
+        bottom = rect.row + rect.row_span
+        matched = None
+        for index, band in enumerate(bounds):
+            if top < band[1] and bottom > band[0]:
+                matched = index
+                break
+        if matched is None:
+            bands.append([ref])
+            bounds.append([top, bottom])
+            continue
+        bands[matched].append(ref)
+        bounds[matched][0] = min(bounds[matched][0], top)
+        bounds[matched][1] = max(bounds[matched][1], bottom)
+    order = sorted(range(len(bands)), key=lambda index: bounds[index][0])
+    return [tuple(bands[index]) for index in order]
+
+
+def _assert_ucan_reading_groups(plan, refs: tuple[UltraViewRef, ...]) -> None:
+    upper = {refs[index] for index in UCAN_UPPER_ORDERS}
+    lower = {refs[index] for index in UCAN_LOWER_ORDERS}
+    groups = _source_row_groups(plan, refs)
+    group_sets = [set(group) for group in groups]
+    mixed = [group for group in group_sets if not (group <= upper or group <= lower)]
+    assert not mixed, f"reading groups mixed upper/lower members: {mixed}"
+    upper_bands = [group for group in group_sets if group <= upper]
+    lower_bands = [group for group in group_sets if group <= lower]
+    assert set().union(*upper_bands) == upper
+    assert set().union(*lower_bands) == lower
+    v6_bands = [index for index, group in enumerate(groups) if refs[5] in group]
+    v7_bands = [index for index, group in enumerate(groups) if refs[6] in group]
+    assert v6_bands and v7_bands
+    assert abs(v7_bands[0] - v6_bands[0]) <= 1, (
+        "View 7 must follow View 6's reading group or an adjacent continuation, "
+        f"not float between groups: groups={groups}"
+    )
+
+
+def _assert_view7_follows_view6(placed, refs: tuple[UltraViewRef, ...]) -> None:
+    by_ref = dict(placed)
+    rect6 = by_ref[refs[5]]
+    rect7 = by_ref[refs[6]]
+    overlapping = not (
+        rect6.row + rect6.row_span <= rect7.row
+        or rect7.row + rect7.row_span <= rect6.row
+    )
+    continuation = rect7.row == rect6.row + rect6.row_span
+    assert overlapping or continuation, (
+        "View 7 must share View 6's reading band or sit on the next "
+        f"continuation row: {rect6!r} vs {rect7!r}"
+    )
+    upper = [by_ref[refs[index]] for index in UCAN_UPPER_ORDERS]
+    lower_core = [by_ref[refs[index]] for index in (1, 4, 5)]
+    upper_bottom = max(rect.row + rect.row_span for rect in upper)
+    lower_top = min(rect.row for rect in lower_core)
+    if upper_bottom < lower_top:
+        floating = (
+            upper_bottom <= rect7.row
+            and rect7.row + rect7.row_span <= lower_top
+        )
+        assert not floating, (
+            f"View 7 floated between groups: {rect7!r} gap=[{upper_bottom}, {lower_top})"
+        )
+
+
+def _ordinary_reading_area_ratio(placed) -> float:
+    """balanced ordinary reading-box area ratio via frozen geometry helpers.
+
+    Helpers live on ``ultraview_core.grid_geometry`` (findings.md). Missing
+    names are an intended T0 failure.
+    """
+    from mf4_analyzer.ultraview_core.grid_geometry import (
+        canonical_screen_metrics,
+        inner_reading_box,
+    )
+
+    placements = tuple(FreeGridPlacement(ref, rect) for ref, rect in placed)
+    metrics = canonical_screen_metrics(placements)
+    areas: list[float] = []
+    for _ref, rect in placed:
+        _x, _y, width, height = inner_reading_box(rect, metrics)
+        area = float(width) * float(height)
+        assert area > 0.0
+        areas.append(area)
+    return max(areas) / min(areas)
+
+
+def _ucan_reading_area_ratio(plan) -> float:
+    direct = getattr(plan, "ordinary_reading_area_ratio", None)
+    if isinstance(direct, (int, float)):
+        return float(direct)
+    result = getattr(plan, "result", None)
+    if result is not None:
+        ratio = getattr(result, "size_ratio", None)
+        if isinstance(ratio, (int, float)):
+            return float(ratio)
+    return _ordinary_reading_area_ratio(plan.placed)
 
 
 def _grid_overlap(left: GridRect, right: GridRect) -> bool:
@@ -96,42 +242,48 @@ def _assert_compact_packing(placed) -> None:
         assert nxt[0] == previous[1], (previous, nxt)
 
 
-def test_ucan_plan_places_all_seven_compact_and_relocates_overlap():
-    refs = tuple(UltraViewRef("time", f"v{i}") for i in range(7))
-    plan = plan_native_layout(list(zip(refs, UCAN_MM)))
+def test_ucan_plan_places_all_seven_preserving_reading_groups():
+    """Spec §10/§18: 7 placed, source order, groups 1,3,4 / 2,5,6,7, View 7 follows 6.
+
+    Does not require Manhattan ``exact_overlap_relocated`` upward or compact
+    first-fit packing. Continuation rows must stay adjacent to the lower group.
+    """
+    refs = _ucan_refs()
+    plan = plan_native_layout(_ucan_items(refs))
     assert len(plan.placed) == 7
     assert plan.unplaced == ()
     assert tuple(ref for ref, _grid in plan.placed) == refs
-    assert refs[6] in plan.relocated
     assert refs[6] not in plan.unplaced
-    assert any("exact_overlap_relocated: 7 -> 6" in warning for warning in plan.warnings)
-    assert not any(warning.startswith("exact_overlap:") for warning in plan.warnings)
-    _assert_compact_packing(plan.placed)
-    _assert_placed_aspects(list(zip(refs, UCAN_MM)), plan, _canonical_metrics())
+    _assert_no_overlaps(plan.placed)
+    _assert_ucan_reading_groups(plan, refs)
+    _assert_view7_follows_view6(plan.placed, refs)
     by_ref = dict(plan.placed)
-    wide = (by_ref[refs[0]].column_span, by_ref[refs[1]].column_span)
-    narrow = [
-        by_ref[refs[index]].column_span
-        for index in (2, 3, 4, 5, 6)
-    ]
-    narrow_span = min(narrow)
-    for span in wide:
-        assert abs(span - 2 * narrow_span) <= 1
     assert by_ref[refs[0]].column < by_ref[refs[2]].column < by_ref[refs[3]].column
-    assert by_ref[refs[1]].column < by_ref[refs[4]].column < by_ref[refs[5]].column
     assert by_ref[refs[6]] != by_ref[refs[5]]
 
 
+def test_ucan_balanced_ordinary_reading_area_ratio_at_most_1_35():
+    """Spec §7.1/§18: balanced ordinary reading-area ratio <= 1.35; no 100mm hero."""
+    refs = _ucan_refs()
+    plan = plan_native_layout(_ucan_items(refs))
+    assert len(plan.placed) == 7
+    ratio = _ucan_reading_area_ratio(plan)
+    assert ratio <= 1.35, (
+        "balanced ordinary reading-area ratio must be <= 1.35 "
+        f"(got {ratio:.3f}; 100mm source width is not a hero command)"
+    )
+
+
 def test_apply_native_layout_is_one_board_mutation():
-    refs = tuple(UltraViewRef("time", f"v{i}") for i in range(7))
-    plan = plan_native_layout(list(zip(refs, UCAN_MM)))
+    refs = _ucan_refs()
+    plan = plan_native_layout(_ucan_items(refs))
     board = default_board()
     warnings = apply_native_layout(board, plan)
     assert len(board.free_grid) == 7
     assert board.unplaced == []
     assert [item.ref for item in board.free_grid] == list(refs)
-    assert "exact_overlap_relocated: 7 -> 6" in warnings
-    _assert_compact_packing([(item.ref, item.rect) for item in board.free_grid])
+    _assert_no_overlaps([(item.ref, item.rect) for item in board.free_grid])
+    _assert_ucan_reading_groups(plan, refs)
 
 
 def test_coordinator_commits_native_layout_to_its_owned_workspace(qapp):
@@ -157,8 +309,8 @@ def test_coordinator_commits_native_layout_to_its_owned_workspace(qapp):
         assert coordinator.board is board
         assert placed_ids == ("view-left", "view-right")
         assert [(item.ref, item.rect) for item in board.free_grid] == [
-            (UltraViewRef("time", "view-left"), GridRect(0, 0, 12, 8)),
-            (UltraViewRef("time", "view-right"), GridRect(12, 0, 12, 8)),
+            (UltraViewRef("time", "view-left"), GridRect(0, 0, 6, 6)),
+            (UltraViewRef("time", "view-right"), GridRect(6, 0, 6, 6)),
         ]
         assert board.unplaced == []
         history = controller.grid_histories[board.board_id]
@@ -263,20 +415,8 @@ def test_plan_invalid_rect_goes_to_unplaced_with_warning():
 
 
 def _canonical_metrics() -> GridMetrics:
-    physical_columns = GRID_COLUMNS // GRID_RESOLUTION
-    return GridMetrics(
-        board_width=(
-            2 * BOARD_PADDING
-            + physical_columns * GRID_MIN_COLUMN_WIDTH
-            + (physical_columns - 1) * SLOT_GUTTER
-        ),
-        board_height=2 * BOARD_PADDING + GRID_ROW_HEIGHT,
-        column_width=GRID_MIN_COLUMN_WIDTH,
-        row_height=GRID_ROW_HEIGHT,
-        gutter=SLOT_GUTTER,
-        padding=BOARD_PADDING,
-        resolution=GRID_RESOLUTION,
-    )
+    """Planner 1× pitch is the 1600-wide canonical screen metrics, not 96px."""
+    return canonical_screen_metrics(())
 
 
 def _nonsquare_metrics() -> GridMetrics:
@@ -289,54 +429,6 @@ def _nonsquare_metrics() -> GridMetrics:
         padding=BOARD_PADDING,
         resolution=GRID_RESOLUTION,
     )
-
-
-def _assert_aspect_within_one_cell(
-    pixel_w: int,
-    pixel_h: int,
-    mm_w: float,
-    mm_h: float,
-    pitch_x: float,
-    pitch_y: float,
-) -> None:
-    """Rendered pixel aspect may differ from mm aspect by at most one cell.
-
-    Changing width by ``pitch_x`` or height by ``pitch_y`` is the quantization
-    envelope: the millimetre aspect must stay inside that range.
-    """
-    rendered = pixel_w / pixel_h
-    target = mm_w / mm_h
-    neighbors = [rendered]
-    if pixel_w + pitch_x > 0:
-        neighbors.append((pixel_w + pitch_x) / pixel_h)
-    if pixel_w - pitch_x > 0:
-        neighbors.append((pixel_w - pitch_x) / pixel_h)
-    if pixel_h + pitch_y > 0:
-        neighbors.append(pixel_w / (pixel_h + pitch_y))
-    if pixel_h - pitch_y > 0:
-        neighbors.append(pixel_w / (pixel_h - pitch_y))
-    lo, hi = min(neighbors), max(neighbors)
-    assert lo <= target <= hi, (
-        f"rendered aspect {rendered:.6f} vs mm aspect {target:.6f} "
-        f"outside one-cell envelope [{lo:.6f}, {hi:.6f}] "
-        f"(pixel={pixel_w}x{pixel_h} mm={mm_w}x{mm_h} "
-        f"pitch=({pitch_x}, {pitch_y}))"
-    )
-
-
-def _assert_placed_aspects(
-    items: list[tuple[UltraViewRef, NativeLayoutRect]],
-    plan: NativeLayoutPlan,
-    metrics: GridMetrics,
-) -> None:
-    pitch_x, pitch_y = metrics.exact_pitch()
-    mm_by_ref = {ref: rect for ref, rect in items}
-    for ref, grid in plan.placed:
-        _x, _y, pixel_w, pixel_h = rect_to_pixels(grid, metrics)
-        mm = mm_by_ref[ref]
-        _assert_aspect_within_one_cell(
-            pixel_w, pixel_h, mm.width, mm.height, pitch_x, pitch_y
-        )
 
 
 def test_plan_metrics_are_keyword_only():
@@ -364,39 +456,40 @@ def test_plan_default_metrics_match_canonical_not_stretched_column():
     default_plan = plan_native_layout(items)
     assert default_plan.placed == plan_native_layout(items, metrics=canonical).placed
     stretched_plan = plan_native_layout(items, metrics=stretched)
-    assert [rect.column_span for _, rect in default_plan.placed] == [
-        rect.column_span for _, rect in stretched_plan.placed
-    ]
-    assert [rect.row_span for _, rect in default_plan.placed] != [
-        rect.row_span for _, rect in stretched_plan.placed
-    ]
+    # Smart Layout owns spans from canonical pitch; a dummy/stretched
+    # ``metrics=`` must not reopen the 96px millimetre conversion path.
+    assert stretched_plan.placed == default_plan.placed
 
 
-def test_plan_wide_rect_aspect_within_one_micro_cell():
-    metrics = _canonical_metrics()
+def test_plan_wide_rect_is_not_a_full_row_hero():
+    """Source millimetre width is salience, not a GRID_COLUMNS hero command."""
     ref = UltraViewRef("time", "wide")
     items = [(ref, NativeLayoutRect(0.0, 50.0, 180.0, 50.0))]
-    plan = plan_native_layout(items, metrics=metrics)
+    plan = plan_native_layout(items, metrics=_canonical_metrics())
     assert tuple(item[0] for item in plan.placed) == (ref,)
-    _assert_placed_aspects(items, plan, metrics)
+    wide = plan.placed[0][1]
+    assert wide.column_span < GRID_COLUMNS
+    assert wide.column_span == plan_native_layout(
+        [(UltraViewRef("time", "narrow"), NativeLayoutRect(0.0, 50.0, 50.0, 50.0))],
+        metrics=_canonical_metrics(),
+    ).placed[0][1].column_span
 
 
-def test_plan_tall_narrow_rect_aspect_within_one_micro_cell():
-    metrics = _canonical_metrics()
+def test_plan_tall_and_companion_keep_source_order_without_mm_spans():
     tall = UltraViewRef("time", "tall")
     companion = UltraViewRef("time", "companion")
     items = [
         (tall, NativeLayoutRect(0.0, 120.0, 40.0, 120.0)),
         (companion, NativeLayoutRect(50.0, 80.0, 160.0, 80.0)),
     ]
-    plan = plan_native_layout(items, metrics=metrics)
+    plan = plan_native_layout(items, metrics=_canonical_metrics())
     assert tuple(item[0] for item in plan.placed) == (tall, companion)
-    tall_grid = dict(plan.placed)[tall]
-    assert tall_grid.column_span < tall_grid.row_span
-    _assert_placed_aspects(items, plan, metrics)
+    by_ref = dict(plan.placed)
+    assert by_ref[tall].column < by_ref[companion].column
+    _assert_no_overlaps(plan.placed)
 
 
-def test_plan_stacked_top_bottom_preserves_source_order_and_aspect():
+def test_plan_stacked_top_bottom_preserves_source_order():
     metrics = _canonical_metrics()
     first = UltraViewRef("time", "lower-on-board")
     second = UltraViewRef("time", "upper-on-board")
@@ -411,11 +504,10 @@ def test_plan_stacked_top_bottom_preserves_source_order_and_aspect():
         plan.placed[0][1].row
         == plan.placed[1][1].row + plan.placed[1][1].row_span
     )
-    _assert_placed_aspects(items, plan, metrics)
     _assert_compact_packing(plan.placed)
 
 
-def test_plan_side_by_side_preserves_source_order_and_aspect():
+def test_plan_side_by_side_preserves_source_order():
     metrics = _canonical_metrics()
     left = UltraViewRef("time", "left")
     right = UltraViewRef("time", "right")
@@ -430,7 +522,6 @@ def test_plan_side_by_side_preserves_source_order_and_aspect():
         plan.placed[1][1].column
         == plan.placed[0][1].column + plan.placed[0][1].column_span
     )
-    _assert_placed_aspects(items, plan, metrics)
     _assert_compact_packing(plan.placed)
 
 
@@ -450,10 +541,13 @@ def test_plan_exact_overlap_relocates_and_keeps_source_order():
     assert plan.relocated == (overlap,)
     assert plan.warnings == ("exact_overlap_relocated: 2 -> 1",)
     _assert_compact_packing(plan.placed)
-    _assert_placed_aspects(items, plan, metrics)
+    by_ref = dict(plan.placed)
+    assert by_ref[overlap] != by_ref[front]
+    assert by_ref[overlap].row >= by_ref[front].row
 
 
-def test_plan_nonsquare_pitch_divides_y_by_pitch_y():
+def test_plan_nonsquare_metrics_do_not_change_canonical_spans():
+    """Dummy nonsquare pitch must not reopen millimetre→span conversion."""
     metrics = _nonsquare_metrics()
     pitch_x, pitch_y = metrics.exact_pitch()
     assert pitch_x != pitch_y
@@ -465,10 +559,7 @@ def test_plan_nonsquare_pitch_divides_y_by_pitch_y():
     ]
     plan = plan_native_layout(items, metrics=metrics)
     assert tuple(item[0] for item in plan.placed) == (left, right)
-    for _ref, grid in plan.placed:
-        assert grid.row_span == 13
-        assert grid.row_span != 7
-    _assert_placed_aspects(items, plan, metrics)
+    assert plan.placed == plan_native_layout(items).placed
     _assert_compact_packing(plan.placed)
 
 
@@ -633,14 +724,17 @@ def test_apply_native_layout_plan_commits_collision_with_existing_cards(qapp):
         qapp.processEvents()
 
 
-def test_ucan_import_preview_reflow_is_one_undo(qapp):
-    from PyQt5.QtGui import QColor, QImage
+def test_ucan_import_is_one_undo_through_the_real_projection_seam(qapp):
+    """WWT→UltraView owner boundary: real plan_native_layout + apply, one undo.
+
+    Does not replace the projection with a lambda. Warning-bearing placement
+    still commits history/dirty/refresh. Undo once returns to the empty Board.
+    """
     from PyQt5.QtWidgets import QWidget
 
     from mf4_analyzer.ui.main_window.ultraview_coordinator import (
         UltraViewCoordinator,
     )
-    from mf4_analyzer.ui.ultraview_state import PreviewMeta
 
     host = QWidget()
     coordinator = UltraViewCoordinator(host, parent=host)
@@ -657,28 +751,12 @@ def test_ucan_import_preview_reflow_is_one_undo(qapp):
             == len(result.generated_ids)
         )
         assert coordinator.board.unplaced == []
-        assert any("exact_overlap_relocated" in item for item in warnings)
         history = controller.grid_histories[coordinator.board.board_id]
         assert len(history.undo) == 1
-        _assert_compact_packing(
-            [(item.ref, item.rect) for item in coordinator.board.free_grid]
-        )
-        for index in range(7):
-            ref = UltraViewRef("time", f"v{index}")
-            image = QImage(400, 240, QImage.Format_ARGB32)
-            image.fill(QColor("#336699"))
-            coordinator.store.publish(
-                ref,
-                image,
-                digest=f"v{index}",
-                meta=PreviewMeta(ref=ref, title=f"v{index}"),
-            )
-        coordinator._maybe_apply_pending_auto_aspect(UltraViewRef("time", "v0"))
-        assert len(history.undo) == 1
-        assert len(coordinator.board.free_grid) == 7
-        _assert_no_overlaps(
-            [(item.ref, item.rect) for item in coordinator.board.free_grid]
-        )
+        placed_pairs = [(item.ref, item.rect) for item in coordinator.board.free_grid]
+        _assert_no_overlaps(placed_pairs)
+        refs = _ucan_refs()
+        _assert_view7_follows_view6(placed_pairs, refs)
         coordinator._on_free_grid_undo()
         assert coordinator.board.free_grid == []
         assert coordinator.board.unplaced == []
@@ -687,4 +765,46 @@ def test_ucan_import_preview_reflow_is_one_undo(qapp):
     finally:
         coordinator.shutdown()
         host.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.skipif(
+    _optional_ucan_sample() is None,
+    reason="optional local U-Can WWT sample is not present",
+)
+def test_optional_ucan_wwt_sample_smoke(qapp, monkeypatch):
+    """Optional testdoc smoke. Missing sample skips this test only, not owners."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = _optional_ucan_sample()
+    assert path is not None
+    mw = MainWindow()
+    qapp.processEvents()
+
+    class _AcceptLayout:
+        def ask(self, body, informative=""):
+            return True
+
+        def noop(self, *args, **kwargs):
+            return None
+
+    accept = _AcceptLayout()
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", accept.ask)
+    monkeypatch.setattr(mw, "plot_time", accept.noop)
+    monkeypatch.setattr(mw, "_apply_active_view", accept.noop)
+    try:
+        mw._load_one(str(path))
+        qapp.processEvents()
+        board = mw._ultraview.board
+        assert len(board.free_grid) == 7
+        assert board.unplaced == []
+        placed = [(item.ref, item.rect) for item in board.free_grid]
+        _assert_no_overlaps(placed)
+        refs = tuple(item.ref for item in board.free_grid)
+        assert len(refs) == 7
+        history = mw._ultraview._workspace_controller.grid_histories[board.board_id]
+        assert len(history.undo) == 1
+    finally:
+        mw.close()
+        mw.deleteLater()
         qapp.processEvents()

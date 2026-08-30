@@ -102,6 +102,7 @@ from .viewport_router import ViewportGestureRouter
 from .viewport_controller import ViewportController
 from .board_context_controller import (
     BOARD_MENU_ARRANGE,
+    BOARD_MENU_COMPACT,
     BOARD_MENU_COPY,
     BOARD_MENU_EXPORT,
     BOARD_MENU_FIT,
@@ -342,8 +343,10 @@ class UltraViewPage(QWidget):
     free_grid_autofit_requested = pyqtSignal(str, str)
     organize_free_grid_requested = pyqtSignal()
     auto_arrange_requested = pyqtSignal()
+    compact_arrange_requested = pyqtSignal()
     free_grid_undo_requested = pyqtSignal()
     free_grid_redo_requested = pyqtSignal()
+    free_grid_lock_requested = pyqtSignal(str, str)
     camera_settled = pyqtSignal()
     author_create_requested = pyqtSignal(object)
     author_update_requested = pyqtSignal(object)
@@ -681,6 +684,7 @@ class UltraViewPage(QWidget):
             zoom_reset=self.zoom_reset,
             show_overview=self.show_overview,
             auto_arrange=self.auto_arrange_requested.emit,
+            compact_arrange=self.compact_arrange_requested.emit,
             undo_arrange=self.free_grid_undo_requested.emit,
             copy_board=self.copy_board_requested.emit,
             export_png=self.export_png_requested.emit,
@@ -1706,12 +1710,34 @@ class UltraViewPage(QWidget):
         if card is None:
             return
         menu = card.make_context_menu()
+        self._append_free_grid_lock_action(menu, section, view_id)
         button = card.action_button("more")
         if button is not None:
             origin = button.mapToGlobal(QPoint(0, button.height()))
         else:
             origin = card.mapToGlobal(QPoint(card.width(), 0))
         self._exec_native_menu(menu, origin, trigger=button)
+
+    def _append_free_grid_lock_action(
+        self, menu: QMenu, section: str, view_id: str
+    ) -> None:
+        if self._board is None or self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            return
+        locked = False
+        probe = getattr(self, "free_grid_card_locked", None)
+        if callable(probe):
+            locked = bool(probe(section, view_id))
+        if menu.actions():
+            menu.addSeparator()
+        action = menu.addAction("解锁" if locked else "锁定")
+        action.triggered.connect(
+            partial(self._emit_free_grid_lock, section, view_id)
+        )
+
+    def _emit_free_grid_lock(
+        self, section: str, view_id: str, _checked: bool = False
+    ) -> None:
+        self.free_grid_lock_requested.emit(section, view_id)
 
     def _position_card_context(self) -> None:
         if self._presentation or self._overview.isVisible() or self._selected is None or not self._card_context.isVisible():
@@ -2968,6 +2994,9 @@ class UltraViewPage(QWidget):
     def _on_board_menu_auto_arrange(self, _checked: bool = False) -> None:
         self._board_context.on_board_menu_auto_arrange(_checked)
 
+    def _on_board_menu_compact_arrange(self, _checked: bool = False) -> None:
+        self._board_context.on_board_menu_compact_arrange(_checked)
+
     def _on_board_menu_undo_arrange(self, _checked: bool = False) -> None:
         self._board_context.on_board_menu_undo_arrange(_checked)
 
@@ -3583,6 +3612,10 @@ class UltraViewPage(QWidget):
             return
         if key == "delete":
             self._delete_selection()
+            return
+        if key == "lock" and caps.card_refs and not caps.author_ids:
+            for ref in caps.card_refs:
+                self.free_grid_lock_requested.emit(ref.section, ref.view_id)
             return
         if key == "lock" and (
             len(caps.author_ids) != 1 or caps.kind in {"mixed", "card_author", "sticky", "stroke"}

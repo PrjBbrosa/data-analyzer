@@ -61,6 +61,10 @@ class PreviewRecord:
     tab_color: str
     last_access: int
     captured_revision: int = 0
+    # True when the card's inner reading box exceeds this image's logical
+    # size on either edge (Spec D11). Not a digest ``status``; callers keep
+    # the last valid pixels and request a higher-resolution recapture.
+    resolution_stale: bool = False
 
 
 @dataclass(frozen=True)
@@ -175,6 +179,7 @@ class PreviewStore(QObject):
             tab_color=meta.tab_color,
             last_access=self._next_access(),
             captured_revision=int(revision or 0),
+            resolution_stale=False,
         )
         self._records[ref] = record
         self._enforce_budget()
@@ -182,6 +187,17 @@ class PreviewStore(QObject):
 
     def get(self, ref: UltraViewRef) -> PreviewRecord | None:
         return self._records.get(ref)
+
+    def mark_resolution_stale(self, ref: UltraViewRef, stale: bool = True) -> None:
+        """Set or clear the D11 ``resolution_stale`` flag. No-op if missing."""
+        record = self._records.get(ref)
+        if record is None:
+            return
+        record.resolution_stale = bool(stale)
+
+    def is_resolution_stale(self, ref: UltraViewRef) -> bool:
+        record = self._records.get(ref)
+        return bool(record is not None and record.resolution_stale)
 
     def touch(self, ref: UltraViewRef) -> None:
         record = self._records.get(ref)

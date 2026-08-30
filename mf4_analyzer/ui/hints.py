@@ -893,14 +893,14 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.card_menu",
-        text="右上角打开聚焦，更多里复制",
+        text="右上打开聚焦，更多可锁定",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
     ),
     Hint(
         id="ultraview.board_menu",
-        text="画布空白右击可排版、适应、复制",
+        text="空白右击智能排版或紧凑排列",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
@@ -911,6 +911,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=79,
+    ),
+    Hint(
+        id="ultraview.resolution",
+        text="预览偏低时打开源 View 更新",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=77,
     ),
     Hint(
         id="ultraview.sync_all",

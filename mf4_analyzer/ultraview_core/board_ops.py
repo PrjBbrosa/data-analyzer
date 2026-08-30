@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import uuid
 from copy import deepcopy
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .model import (
     DEFAULT_BOARD_NAME,
@@ -754,13 +754,29 @@ def capture_board_placement(board: UltraViewBoardState) -> BoardPlacementSnapsho
     )
 
 
+def locked_rects_for(
+    placements: Sequence[FreeGridPlacement],
+    locked_refs: Iterable[UltraViewRef],
+) -> dict[UltraViewRef, GridRect]:
+    """Current ``GridRect`` for each explicitly locked card still on the Board.
+
+    Identity is ``UltraViewRef``. Missing or unplaced refs are omitted. This
+    does not mutate Board state and is not a serialized field.
+    """
+    wanted = {ref for ref in locked_refs}
+    if not wanted:
+        return {}
+    return {item.ref: item.rect for item in placements if item.ref in wanted}
+
+
 def apply_board_placement(
     board: UltraViewBoardState, snapshot: BoardPlacementSnapshot
 ) -> bool:
     """Restore exact membership, tray order, slots, and GridRects.
 
-    Does not first-fit, re-anchor, or consult PreviewStore. Returns False
-    only when ``snapshot`` is not a placement snapshot.
+    Applies the snapshot rects only. Does not first-fit, re-anchor, consult
+    PreviewStore, re-run Smart Layout, or re-arm settle. Returns False only
+    when ``snapshot`` is not a placement snapshot.
     """
     if not isinstance(snapshot, BoardPlacementSnapshot):
         return False

@@ -244,8 +244,10 @@ FROZEN_PAGE_SIGNALS = (
     "free_grid_autofit_requested",
     "organize_free_grid_requested",
     "auto_arrange_requested",
+    "compact_arrange_requested",
     "free_grid_undo_requested",
     "free_grid_redo_requested",
+    "free_grid_lock_requested",
     "camera_settled",
     "author_create_requested",
     "author_update_requested",
@@ -288,8 +290,10 @@ FROZEN_CONNECT_PAGE_SIGNALS = (
     "free_grid_autofit_requested",
     "organize_free_grid_requested",
     "auto_arrange_requested",
+    "compact_arrange_requested",
     "free_grid_undo_requested",
     "free_grid_redo_requested",
+    "free_grid_lock_requested",
     "author_create_requested",
     "author_update_requested",
     "author_delete_requested",
@@ -327,6 +331,7 @@ FROZEN_COORDINATOR_PUBLIC_METHODS = (
     # Returns (placed_view_ids_this_call, warnings), not every time card
     # already on the Board.
     "add_time_views_from_native_layout",
+    "open_unplaced_tray",
     "add_from_source_tab",
     "open_source",
     "sync_preview",
@@ -781,7 +786,7 @@ def test_wave1_facade_modules_are_reexports_only():
 def test_page_signal_names_are_frozen():
     names = _pyqt_signal_names(PAGE_PATH, "UltraViewPage")
     assert names == FROZEN_PAGE_SIGNALS
-    assert len(names) == 49
+    assert len(names) == 51
     for name in names:
         assert hasattr(UltraViewPage, name)
 
@@ -789,7 +794,7 @@ def test_page_signal_names_are_frozen():
 def test_coordinator_connect_page_pairs_are_frozen():
     names = _connect_page_signal_names()
     assert names == FROZEN_CONNECT_PAGE_SIGNALS
-    assert len(names) == 45
+    assert len(names) == 47
     page_signals = set(FROZEN_PAGE_SIGNALS)
     unknown = [name for name in names if name not in page_signals]
     assert unknown == []
@@ -858,7 +863,7 @@ def test_interaction_facts_keys_are_frozen():
 def test_coordinator_public_methods_are_frozen():
     names = _coordinator_public_methods()
     assert names == FROZEN_COORDINATOR_PUBLIC_METHODS
-    assert len(names) == 38
+    assert len(names) == 39
     for required in ("shutdown", "reset_project_state", "clear"):
         assert required in names
 
