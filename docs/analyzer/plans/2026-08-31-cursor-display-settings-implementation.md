@@ -41,7 +41,7 @@
 
 ## Task 1 — 自定义 X 单游标数值契约
 
-**Agent：** signal-processing expert  
+**Agent：** signal-processing expert
 **Owner files：**
 
 - `mf4_analyzer/signal/custom_x_paths.py`
@@ -107,7 +107,7 @@ def sample_custom_x_cursor(
 
 ## Task 2 — 设置控件、展示模型与结果面板布局
 
-**Agent：** PyQt UI engineer  
+**Agent：** PyQt UI engineer
 **Owner files：**
 
 - 新建 `mf4_analyzer/ui/chart_stack/cursor_display.py`
@@ -173,7 +173,7 @@ git diff --check
 
 ## Task 3 — 实时游标、marker、分屏同步与帮助接线
 
-**Agent：** PyQt UI engineer  
+**Agent：** PyQt UI engineer
 **Owner files：**
 
 - `mf4_analyzer/ui/pg_canvas/cursor.py`

@@ -1,7 +1,7 @@
 # Cursor Display Settings Specification
 
-**Status:** Approved for implementation  
-**Date:** 2026-08-31  
+**Status:** Approved for implementation
+**Date:** 2026-08-31
 **Prototype:** `docs/analyzer/ui-prototypes/2026-08-31-cursor-display-settings.html`
 
 ## 1. Outcome
