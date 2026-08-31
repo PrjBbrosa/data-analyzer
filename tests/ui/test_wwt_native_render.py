@@ -351,6 +351,7 @@ def test_wwt_restore_never_finalizes_generic_density_before_native_policy(
     qapp, qtbot, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
     from tests._helpers import wwt_factory as wwt
 
     path = wwt.sfns_like_custom_x_native_viewport(path=tmp_path / "sfns.wwt")
@@ -362,9 +363,23 @@ def test_wwt_restore_never_finalizes_generic_density_before_native_policy(
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
 
     calls = []
-    real_set_density = type(
-        mw.canvas_time._tick_density_controller
-    ).set_tick_density
+    generic_density_calls = []
+    repin_calls = []
+    controller = mw.canvas_time._tick_density_controller
+    real_set_density = type(controller).set_tick_density
+    real_apply_density = type(controller)._apply_tick_density_to_all_axes
+    real_repin = OverlayAxisManager._repin_overlay_channel_ticks
+
+    def tracked_apply_density():
+        generic_density_calls.append(controller.native_policy_active())
+        return real_apply_density(controller)
+
+    def tracked_repin(overlay_manager, *, reframe=True):
+        repin_calls.append((
+            overlay_manager._c._tick_density_controller.native_policy_active(),
+            bool(reframe),
+        ))
+        return real_repin(overlay_manager, reframe=reframe)
 
     def tracked_set_density(x, y, *, reframe_overlay_y=True):
         calls.append((
@@ -375,16 +390,24 @@ def test_wwt_restore_never_finalizes_generic_density_before_native_policy(
         # the host. Invoke the implementation directly to keep this observer
         # out of that loop while preserving the real canvas outcome.
         return real_set_density(
-            mw.canvas_time._tick_density_controller,
+            controller,
             x,
             y,
             reframe_overlay_y=reframe_overlay_y,
         )
 
+    monkeypatch.setattr(
+        controller, "_apply_tick_density_to_all_axes", tracked_apply_density,
+    )
+    monkeypatch.setattr(
+        OverlayAxisManager, "_repin_overlay_channel_ticks", tracked_repin,
+    )
     monkeypatch.setattr(mw.canvas_time, "set_tick_density", tracked_set_density)
     mw._load_one(str(path))
     qapp.processEvents()
 
+    assert generic_density_calls == [True]
+    assert repin_calls == []
     assert calls == [(True, False)]
     handle = mw.canvas_time.axes_list[0]
     assert handle.get_xlim() == pytest.approx((-100.0, 100.0))
@@ -396,6 +419,62 @@ def test_wwt_restore_never_finalizes_generic_density_before_native_policy(
         -50.0, -40.0, -30.0, -20.0, -10.0, 0.0,
         10.0, 20.0, 30.0, 40.0, 50.0,
     )
+
+
+def test_deferred_plot_channels_skips_overlay_build_axis_finalization(
+    qapp, monkeypatch,
+):
+    from PyQt5.QtCore import QCoreApplication
+
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+    from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(800, 400)
+    canvas.show()
+    QCoreApplication.processEvents()
+    controller = canvas._tick_density_controller
+    density_calls = []
+    repin_calls = []
+    real_apply_density = type(controller)._apply_tick_density_to_all_axes
+    real_repin = OverlayAxisManager._repin_overlay_channel_ticks
+
+    def tracked_apply_density():
+        density_calls.append(controller.native_policy_active())
+        return real_apply_density(controller)
+
+    def tracked_repin(overlay_manager, *, reframe=True):
+        repin_calls.append((
+            overlay_manager._c._tick_density_controller.native_policy_active(),
+            bool(reframe),
+        ))
+        return real_repin(overlay_manager, reframe=reframe)
+
+    monkeypatch.setattr(
+        controller, "_apply_tick_density_to_all_axes", tracked_apply_density,
+    )
+    monkeypatch.setattr(
+        OverlayAxisManager, "_repin_overlay_channel_ticks", tracked_repin,
+    )
+    t = np.linspace(0.0, 1.0, 32, dtype=np.float64)
+    rows = [
+        ("signal-a", True, t, t, "#0a0", "N", "f1"),
+        ("signal-b", True, t, 2.0 * t, "#a00", "N", "f1"),
+    ]
+
+    canvas.plot_channels(
+        rows,
+        mode="overlay",
+        defer_axis_finalize=True,
+    )
+    assert density_calls == []
+    assert repin_calls == []
+
+    canvas.clear()
+    canvas.plot_channels(rows, mode="overlay")
+    assert density_calls == [False]
+    assert repin_calls == [(False, True)]
+    canvas.deleteLater()
 
 
 def test_native_y_ticks_pair_by_axis_id_when_leading_binding_is_omitted(qapp, tmp_path):

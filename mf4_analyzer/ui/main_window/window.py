@@ -4107,6 +4107,7 @@ class MainWindow(
                         render_context_key=render_context_key,
                         full_rebuild_reason=rebuild_reason,
                         x_axis_context=x_axis_context,
+                        defer_axis_finalize=defer_axis_finalize,
                     )
             elif canvas_progress is not None:
                 canvas_progress(1, 1)

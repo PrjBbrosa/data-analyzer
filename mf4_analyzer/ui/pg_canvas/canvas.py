@@ -793,6 +793,8 @@ class TimeDomainCanvasPG(QWidget):
         render_context_key=None,
         full_rebuild_reason=None,
         x_axis_context=None,
+        *,
+        defer_axis_finalize=False,
     ):
         """Build the chart for ``ch_list``.
 
@@ -808,6 +810,10 @@ class TimeDomainCanvasPG(QWidget):
         empty stubs. Only use it when an xlim restore + flush follows the
         rebuild; plain plot_channels needs the bind envelope as its first
         frame because data-union x seeding blocks range signals.
+
+        ``defer_axis_finalize`` leaves only the build-stage density/re-pin
+        mutations to the caller's complete restore transaction; it does not
+        select a native policy or skip subplot layout settlement.
         """
         def report_progress(current, total=1000):
             if not callable(progress_callback):
@@ -1246,8 +1252,10 @@ class TimeDomainCanvasPG(QWidget):
                 self._overlay_axes._connect_overlay_view_sync()
 
         if self._subplot_label_specs:
-            self._settle_subplot_layout()
-        else:
+            self._settle_subplot_layout(
+                defer_axis_finalize=defer_axis_finalize,
+            )
+        elif not defer_axis_finalize:
             self._tick_density_controller._apply_tick_density_to_all_axes()
             if self._overlay_mode:
                 self._repin_overlay_channel_ticks()
@@ -4433,7 +4441,7 @@ class TimeDomainCanvasPG(QWidget):
                     except Exception:
                         pass
 
-    def _settle_subplot_layout(self):
+    def _settle_subplot_layout(self, *, defer_axis_finalize=False):
         """Finalize active subplot axes before geometry is observed or painted.
 
         Single end-of-projection seam for subplot full builds AND in-place
@@ -4448,7 +4456,8 @@ class TimeDomainCanvasPG(QWidget):
             return
         if self._subplot_label_specs:
             self._recheck_subplot_label_placement()
-        self._tick_density_controller._apply_tick_density_to_all_axes()
+        if not defer_axis_finalize:
+            self._tick_density_controller._apply_tick_density_to_all_axes()
         self._unify_subplot_bottom_axis_heights()
         self._unify_subplot_left_axis_widths()
         self._settle_layout()

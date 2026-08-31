@@ -4,7 +4,7 @@
 
 **Goal:** Eliminate the generic pre-finalization of time-domain axes during View restore so ordinary single-file Views and WWT-native Views both commit Y range, tick policy, and nice-step behavior exactly once through the existing final restore transaction.
 
-**Architecture:** Keep `ui_kit/ticks_math.py`, `pg_canvas/tick_density.py`, `pg_canvas/native_axes.py`, and `wwt_view_import.py` as the existing algorithm and imported-fact owners. Add one explicit caller-owes-finalization flag to `_plot_time_on_canvas()`; `_render_view_onto_canvas()` uses it while it owns the complete X -> Y -> policy -> ticks -> settle transaction. Direct/user-initiated plots keep the current default and continue applying generic density themselves.
+**Architecture:** Keep `ui_kit/ticks_math.py`, `pg_canvas/tick_density.py`, `pg_canvas/native_axes.py`, and `wwt_view_import.py` as the existing algorithm and imported-fact owners. Add one explicit caller-owes-finalization flag to `_plot_time_on_canvas()` and propagate it to `TimeDomainCanvasPG.plot_channels()`; `_render_view_onto_canvas()` uses it while it owns the complete X -> Y -> policy -> ticks -> settle transaction. Direct/user-initiated plots keep the current default and continue applying generic density themselves.
 
 **Tech Stack:** Python 3, PyQt5, pyqtgraph, pytest, existing `TimeDomainCanvasPG` and WWT synthetic fixture factory.
 
@@ -26,6 +26,7 @@
 ## File Structure
 
 - Modify `mf4_analyzer/ui/main_window/window.py`: let the caller explicitly defer the existing tail `set_tick_density()` when a View restore transaction owns final axis policy.
+- Modify `mf4_analyzer/ui/pg_canvas/canvas.py`: propagate that contract to build closeout, skipping only generic density/overlay repin while retaining layout settlement.
 - Modify `mf4_analyzer/ui/main_window/_view_mixin.py`: opt the View restore path into deferred axis finalization, then keep its existing final transaction as the sole axis commit.
 - Modify `tests/ui/test_wwt_native_render.py`: add a real-canvas regression proving no generic density finalization occurs before native policy installation and preserve final range/tick invariants.
 - Modify `tests/ui/test_ultraview_capture.py` only for its existing `_TimeHost._plot_time_on_canvas` exact-keyword test double, which must accept the new `defer_axis_finalize` keyword; do not broaden mocks pre-emptively.
@@ -37,6 +38,7 @@
 **Files:**
 - Modify: `tests/ui/test_wwt_native_render.py`
 - Modify: `mf4_analyzer/ui/main_window/window.py:3784-4116`
+- Modify: `mf4_analyzer/ui/pg_canvas/canvas.py:786-1260,4436-4454`
 - Modify: `mf4_analyzer/ui/main_window/_view_mixin.py:502-575`
 - Modify for the concrete exact-keyword test-double compatibility failure: `tests/ui/test_ultraview_capture.py`
 
@@ -47,7 +49,7 @@
 
 - [ ] **Step 1: Add a synthetic regression that observes the real density calls**
 
-  In `tests/ui/test_wwt_native_render.py`, add a full `MainWindow` test using the existing `wwt.sfns_like_custom_x_native_viewport()` profile. Wrap the real `mw.canvas_time.set_tick_density` method, record the active native-policy state and `reframe_overlay_y` argument, then call the real WWT import/active-View path.
+  In `tests/ui/test_wwt_native_render.py`, add a full `MainWindow` test using the existing `wwt.sfns_like_custom_x_native_viewport()` profile. Instrument the real controller generic-density and `OverlayAxisManager` repin seams as well as the public `set_tick_density` seam, recording native-policy state before calling the real WWT import/active-View path. Add a focused real overlay `plot_channels()` check proving deferral skips both build-stage mutations while the default direct call retains them.
 
   The assertions must use literal expected WWT facts and the real canvas outcome:
 
@@ -108,7 +110,7 @@
 
   Expected: FAIL because `calls` contains at least one `(False, True)` generic density finalization before the final `(True, False)` native-policy call. A fixture/import error is not the required red result.
 
-- [ ] **Step 3: Add an explicit deferred-finalization parameter**
+- [ ] **Step 3: Add and propagate an explicit deferred-finalization parameter**
 
   Change the signature in `mf4_analyzer/ui/main_window/window.py` to:
 
@@ -132,7 +134,7 @@
       canvas.set_tick_density(xt, yt)
   ```
 
-  Add a short docstring/comment stating that `defer_axis_finalize=True` is a caller-owes-finalization contract, not WWT detection and not a native-axis algorithm.
+  Add a short docstring/comment stating that `defer_axis_finalize=True` is a caller-owes-finalization contract, not WWT detection and not a native-axis algorithm. Propagate the keyword to `plot_channels()`; its default preserves direct callers, while overlay builds skip both generic density and repin and subplot builds retain label/layout settlement while deferring only density.
 
 - [ ] **Step 4: Opt the complete View restore transaction into deferral**
 
@@ -220,6 +222,7 @@
   ```powershell
   git add mf4_analyzer/ui/main_window/window.py `
     mf4_analyzer/ui/main_window/_view_mixin.py `
+    mf4_analyzer/ui/pg_canvas/canvas.py `
     tests/ui/test_wwt_native_render.py `
     tests/ui/test_ultraview_capture.py `
     docs/analyzer/plans/2026-08-31-wwt-single-owner-axis-finalization-plan.md
@@ -232,7 +235,7 @@
 
 - Stop if the failing test already records only `(True, False)` on the unchanged baseline; that disproves the diagnosed intermediate-finalization cause and requires a new hypothesis.
 - Stop if fixing the exact `P166_0095` sample requires inventing a range, cadence, unit, source match, or axis identity.
-- Stop if the implementation requires changing shared nice-step math, WWT parsing, native tick enumeration, or adding MainWindow mutable state.
+- Stop if the implementation requires changing shared nice-step math, WWT parsing, native tick enumeration, `tick_density.py`, `native_axes.py`, `overlay_axes.py`, or adding MainWindow mutable state.
 - Stop if a test requires a customer file from `testdoc/` to pass.
 - Stop if the ordinary overlay path loses its generic density reframe or direct plotting stops finalizing its axes.
 
