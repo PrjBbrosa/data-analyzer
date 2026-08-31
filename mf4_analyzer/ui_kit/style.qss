@@ -2566,6 +2566,20 @@ QWidget#chartToolbar QToolButton#chartTickDensityButton:checked {
     border-color: #b7c8dc;
     background-color: #ffffff;
 }
+QWidget#chartToolbar QToolButton#cursorDisplaySettingsButton {
+    color: #334155;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #cbd5e1;
+    border-radius: 7px;
+    background-color: #ffffff;
+    padding: 0;
+}
+QWidget#chartToolbar QToolButton#cursorDisplaySettingsButton:hover {
+    color: {{CONTROL_ACCENT}};
+    border-color: {{CONTROL_ACCENT}};
+    background-color: #e8f1ff;
+}
 QWidget#chartToolbar QToolButton:disabled {
     border: 1px solid #e5eaf2;
     border-radius: 6px;
@@ -2661,6 +2675,39 @@ QPushButton#cursorPillToggle[cursorPillMode="mini"]:hover {
 }
 QPushButton#cursorPillToggle[cursorPillMode="mini"]:pressed {
     background: rgba(37, 99, 235, 0.26);
+}
+
+QFrame#cursorDisplayPopover {
+    background-color: #ffffff;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #d8e0eb;
+    border-radius: 10px;
+}
+QLabel#cursorDisplayPopoverTitle {
+    color: #172033;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLabel#cursorDisplayPopoverGroup {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 600;
+    padding-top: 4px;
+}
+QFrame#cursorDisplayPopover QCheckBox#cursorDisplayOption {
+    color: #334155;
+    spacing: 8px;
+    min-height: 22px;
+}
+QLabel#cursorDisplayPopoverNote {
+    color: #64748b;
+    background-color: #f8fafc;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #e5eaf2;
+    border-radius: 6px;
+    padding: 6px 8px;
 }
 
 StatsStrip {
@@ -3226,6 +3273,16 @@ QWidget#chartToolbar QPushButton[role="chart-choice"] {
     background-color: transparent;
     color: {{CONTROL_TEXT_MUTED}};
     font-weight: 600;
+}
+QWidget#chartToolbar QPushButton[role="chart-choice"][timeControlDensity="compact"] {
+    margin-top: 0;
+    margin-right: 1px;
+    margin-bottom: 0;
+    margin-left: 1px;
+    padding-top: 2px;
+    padding-right: 4px;
+    padding-bottom: 2px;
+    padding-left: 4px;
 }
 QWidget#chartToolbar QPushButton[role="chart-choice"]:hover {
     background-color: transparent;

@@ -8,7 +8,7 @@ It knows nothing about Qt, so it is unit-testable on its own.
 import re
 from html import escape, unescape
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QFrame, QLabel, QPushButton, QVBoxLayout,
@@ -239,6 +239,8 @@ class CursorPill(QFrame):
     optional detail block (per-channel Min/Max/Avg/△ as RichText). The
     user can drag it anywhere inside the canvas area."""
 
+    display_mode_changed = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("cursorPill")
@@ -274,6 +276,10 @@ class CursorPill(QFrame):
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
+        self._display_projection = None
+        self._display_layout_category = "natural"
+        self._visible_channel_count = 0
+        self._avoidance_restore_geometry = None
         # Free-floating child pinned to the top-right corner. Repositioned from
         # adjustSize() (every content/width change funnels through it) and
         # resizeEvent, so it stays in the corner without depending on event
@@ -320,10 +326,18 @@ class CursorPill(QFrame):
         return self._detail.text()
 
     def set_primary(self, text):
+        old_right = self.geometry().right()
+        old_top = self.y()
         self._primary.setText(text)
         self.adjustSize()
+        if self._display_projection is not None:
+            self.reflow_to_parent(
+                preserved_right=old_right if self._user_placed else None,
+                preserved_top=old_top if self._user_placed else None,
+            )
 
     def set_detail_html(self, html):
+        self._clear_display_projection()
         self._dual_rows = []
         self._frequency_dual_rows = []
         self._single_full_detail = ""
@@ -340,6 +354,7 @@ class CursorPill(QFrame):
         self.adjustSize()
 
     def set_single_detail_html(self, full_html, mini_html, tooltip=""):
+        self._clear_display_projection()
         self._dual_rows = []
         self._frequency_dual_rows = []
         self._single_full_detail = full_html or ""
@@ -363,6 +378,7 @@ class CursorPill(QFrame):
         }
 
     def restore_snapshot(self, snapshot):
+        self._clear_display_projection()
         self._mode = snapshot.get("mode") or "full"
         if self._mode not in {"full", "mini"}:
             self._mode = "full"
@@ -406,6 +422,7 @@ class CursorPill(QFrame):
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
+        self._clear_display_projection()
         self.setVisible(False)
 
     def mark_user_placed(self, value=True):
@@ -413,6 +430,156 @@ class CursorPill(QFrame):
 
     def is_user_placed(self):
         return self._user_placed
+
+    def _clear_display_projection(self):
+        self._display_projection = None
+        self._display_layout_category = "natural"
+        self._visible_channel_count = 0
+        self._avoidance_restore_geometry = None
+
+    def safe_rect(self):
+        parent = self.parentWidget()
+        if parent is None:
+            return QRect(self.rect())
+        rect = parent.contentsRect().adjusted(8, 8, -8, -8)
+        return rect if rect.isValid() else QRect(parent.contentsRect())
+
+    def layout_category(self):
+        return self._display_layout_category
+
+    def display_mode(self):
+        return self._mode
+
+    def visible_channel_count(self):
+        return self._visible_channel_count
+
+    def set_display_projection(self, projection):
+        """Show a structured projection and adapt it to the parent safe rect."""
+        old_right = self.geometry().right()
+        old_top = self.y()
+        had_geometry = self.width() > 0 and self.height() > 0
+        self._dual_rows = []
+        self._frequency_dual_rows = []
+        self._single_full_detail = ""
+        self._single_mini_detail = ""
+        self._single_tooltip = ""
+        self._display_projection = projection
+        self._mode = "mini" if bool(getattr(projection, "mini", False)) else "full"
+        self._update_toggle_button()
+        self._detail.setToolTip(getattr(projection, "tooltip", "") or "")
+        self.reflow_to_parent(
+            preserved_right=old_right if self._user_placed and had_geometry else None,
+            preserved_top=old_top if self._user_placed and had_geometry else None,
+        )
+
+    def _apply_display_projection(self, category, count):
+        from .cursor_display import render_cursor_presentation
+
+        projection = self._display_projection
+        self._display_layout_category = category
+        self._visible_channel_count = min(count, len(projection.blocks))
+        self._detail.setWordWrap(category == "constrained")
+        self._detail.setText(render_cursor_presentation(
+            projection,
+            layout_category=category,
+            visible_count=self._visible_channel_count,
+        ))
+        self._detail.setToolTip(projection.tooltip or "")
+        self._detail.setVisible(bool(projection.blocks))
+        self._detail.updateGeometry()
+        if self.layout() is not None:
+            self.layout().activate()
+        self.adjustSize()
+
+    def reflow_to_parent(self, *, preserved_right=None, preserved_top=None):
+        projection = self._display_projection
+        if projection is None:
+            return
+        safe = self.safe_rect()
+        if safe.width() <= 0 or safe.height() <= 0:
+            return
+        if preserved_right is None and self._user_placed:
+            preserved_right = self.geometry().right()
+            preserved_top = self.y()
+
+        self._detail.setMaximumWidth(16777215)
+        self._apply_display_projection("natural", len(projection.blocks))
+        hint = self.sizeHint()
+        category = (
+            "natural"
+            if hint.width() <= safe.width() and hint.height() <= safe.height()
+            else "constrained"
+        )
+        if category == "constrained":
+            detail_width = max(20, safe.width() - 20)
+            self._detail.setMaximumWidth(detail_width)
+            chosen = max(1, len(projection.blocks)) if projection.blocks else 0
+            for count in range(len(projection.blocks), 0, -1):
+                self._apply_display_projection("constrained", count)
+                if self.sizeHint().height() <= safe.height():
+                    chosen = count
+                    break
+                chosen = 1
+            self._apply_display_projection("constrained", chosen)
+            target = self.sizeHint()
+            self.resize(
+                min(target.width(), safe.width()),
+                min(target.height(), safe.height()),
+            )
+        else:
+            self._detail.setMaximumWidth(16777215)
+            self._apply_display_projection("natural", len(projection.blocks))
+
+        if preserved_right is not None:
+            self.move_preserving_right_edge(preserved_right, preserved_top or safe.top())
+        elif not self._user_placed:
+            self.move(safe.right() - self.width() + 1, safe.top())
+        self._clamp_to_safe_rect()
+
+    def _clamp_to_safe_rect(self):
+        safe = self.safe_rect()
+        x = max(safe.left(), min(self.x(), safe.right() - self.width() + 1))
+        y = max(safe.top(), min(self.y(), safe.bottom() - self.height() + 1))
+        self.move(x, y)
+
+    def avoid_rect(self, obstacle, *, gap=8):
+        """Displace away from a parent-coordinate obstacle without drift."""
+        obstacle = QRect(obstacle)
+        padded = obstacle.adjusted(-gap, -gap, gap, gap)
+        if not self.geometry().intersects(padded):
+            return
+        if self._avoidance_restore_geometry is None:
+            self._avoidance_restore_geometry = QRect(self.geometry())
+        safe = self.safe_rect()
+        left_x = padded.left() - self.width() - 1
+        right_x = padded.right() + 1
+        if left_x >= safe.left():
+            self.move(left_x, self.y())
+        elif right_x + self.width() - 1 <= safe.right():
+            self.move(right_x, self.y())
+        else:
+            above_y = padded.top() - self.height() - 1
+            below_y = padded.bottom() + 1
+            self.move(self.x(), above_y if above_y >= safe.top() else below_y)
+        self._clamp_to_safe_rect()
+
+    def avoid_global_rect(self, obstacle, *, gap=8):
+        """Displace from a screen-coordinate popup rectangle."""
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        obstacle = QRect(obstacle)
+        top_left = parent.mapFromGlobal(obstacle.topLeft())
+        bottom_right = parent.mapFromGlobal(obstacle.bottomRight())
+        self.avoid_rect(QRect(top_left, bottom_right), gap=gap)
+
+    def restore_after_avoidance(self):
+        if self._avoidance_restore_geometry is None:
+            return
+        restore = self._avoidance_restore_geometry
+        self._avoidance_restore_geometry = None
+        self.move(restore.topLeft())
+        self._clamp_to_safe_rect()
 
     # ---- drag handling ----
     def mousePressEvent(self, e):
@@ -428,9 +595,13 @@ class CursorPill(QFrame):
             parent = self.parentWidget()
             new_top_left = self.mapToParent(e.pos() - self._drag_offset)
             if parent is not None:
-                pw, ph = parent.width(), parent.height()
-                x = max(0, min(new_top_left.x(), pw - self.width()))
-                y = max(0, min(new_top_left.y(), ph - self.height()))
+                safe = self.safe_rect()
+                x = max(safe.left(), min(
+                    new_top_left.x(), safe.right() - self.width() + 1
+                ))
+                y = max(safe.top(), min(
+                    new_top_left.y(), safe.bottom() - self.height() + 1
+                ))
                 self.move(x, y)
             else:
                 self.move(new_top_left)
@@ -452,9 +623,13 @@ class CursorPill(QFrame):
         old_top = self.y()
         self._mode = "mini" if self._mode == "full" else "full"
         self._update_toggle_button()
+        if self._display_projection is not None:
+            self.display_mode_changed.emit(self._mode)
+            return
         self._refresh_detail()
         self.adjustSize()
         self.move_preserving_right_edge(old_right, old_top)
+        self.display_mode_changed.emit(self._mode)
 
     def move_preserving_right_edge(self, right_edge, top):
         parent = self.parentWidget()
@@ -481,6 +656,7 @@ class CursorPill(QFrame):
         self._toggle_btn.style().polish(self._toggle_btn)
 
     def set_dual_rows(self, rows):
+        self._clear_display_projection()
         self._dual_rows = rows or []
         self._frequency_dual_rows = []
         self._single_full_detail = ""
@@ -493,6 +669,7 @@ class CursorPill(QFrame):
 
     def set_frequency_dual_rows(self, rows):
         """Set structured FFT A/B rows for full/mini cursor-pill toggling."""
+        self._clear_display_projection()
         self._frequency_dual_rows = rows or []
         self._dual_rows = []
         self._single_full_detail = ""

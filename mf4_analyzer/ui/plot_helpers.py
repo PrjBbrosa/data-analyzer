@@ -201,7 +201,23 @@ def _unpack_time_dual_row(row):
     return ch, mn, mx, avg, delta, u, color
 
 
-def _format_time_dual_block(parts, *, index, channel_name, mn, mx, avg, delta, unit_suffix, color):
+def _enabled_cursor_value_fields(options):
+    if options is None:
+        return (("Min", "min_value"), ("Max", "max_value"), ("Avg", "avg"))
+    return tuple(
+        item for item, enabled in (
+            (("Min", "min_value"), getattr(options, "show_min_value", True)),
+            (("Max", "max_value"), getattr(options, "show_max_value", True)),
+            (("Avg", "avg"), getattr(options, "show_avg_value", True)),
+        )
+        if enabled
+    )
+
+
+def _format_time_dual_block(
+    parts, *, index, channel_name, mn, mx, avg, delta, unit_suffix, color,
+    options=None,
+):
     from html import escape
 
     top_pad = '8px' if index > 0 else '0'
@@ -212,23 +228,37 @@ def _format_time_dual_block(parts, *, index, channel_name, mn, mx, avg, delta, u
     cell = (f'padding:1px 8px 1px 0; color:{color}; font-family:'
             '\'SF Mono\',Menlo,Consolas,monospace;')
     lab = 'padding:1px 4px 1px 0; color:#94a3b8;'
+    if options is None:
+        parts.append(
+            f'<tr>'
+            f'<td style="{lab}">Min</td>'
+            f'<td style="{cell}" align="right">{mn:.4g}{escape(unit_suffix)}</td>'
+            f'<td style="{lab}; padding-left:8px;">Max</td>'
+            f'<td style="{cell}" align="right">{mx:.4g}{escape(unit_suffix)}</td>'
+            f'</tr>'
+            f'<tr>'
+            f'<td style="{lab}">Avg</td>'
+            f'<td style="{cell}" align="right">{avg:.4g}{escape(unit_suffix)}</td>'
+            f'<td style="{lab}; padding-left:8px;">△</td>'
+            f'<td style="{cell}" align="right">{delta:.4g}{escape(unit_suffix)}</td>'
+            f'</tr>'
+        )
+        return
+    values = {"min_value": mn, "max_value": mx, "avg": avg}
+    for label, attr in _enabled_cursor_value_fields(options):
+        parts.append(
+            f'<tr><td style="{lab}">{label}</td>'
+            f'<td style="{cell}" align="right">{values[attr]:.4g}{escape(unit_suffix)}</td>'
+            '<td colspan="2"></td></tr>'
+        )
     parts.append(
-        f'<tr>'
-        f'<td style="{lab}">Min</td>'
-        f'<td style="{cell}" align="right">{mn:.4g}{escape(unit_suffix)}</td>'
-        f'<td style="{lab}; padding-left:8px;">Max</td>'
-        f'<td style="{cell}" align="right">{mx:.4g}{escape(unit_suffix)}</td>'
-        f'</tr>'
-        f'<tr>'
-        f'<td style="{lab}">Avg</td>'
-        f'<td style="{cell}" align="right">{avg:.4g}{escape(unit_suffix)}</td>'
-        f'<td style="{lab}; padding-left:8px;">△</td>'
+        f'<tr><td style="{lab}">△</td>'
         f'<td style="{cell}" align="right">{delta:.4g}{escape(unit_suffix)}</td>'
-        f'</tr>'
+        '<td colspan="2"></td></tr>'
     )
 
 
-def _format_custom_x_dual_block(parts, *, index, row):
+def _format_custom_x_dual_block(parts, *, index, row, options=None):
     from html import escape
 
     color = row.color or '#111827'
@@ -246,28 +276,42 @@ def _format_custom_x_dual_block(parts, *, index, row):
             f'<tr><td colspan="4" style="{lab}">{escape(row.status)}</td></tr>'
         )
         return
+    enabled = _enabled_cursor_value_fields(options)
     for branch in row.branches:
         label = branch.branch_label
+        if options is None:
+            parts.append(
+                f'<tr>'
+                f'<td style="{lab}">{escape(label)}</td>'
+                f'<td style="{cell}" align="right">Min {branch.min_value:.4g}{escape(unit)}</td>'
+                f'<td style="{lab}; padding-left:8px;">Max</td>'
+                f'<td style="{cell}" align="right">{branch.max_value:.4g}{escape(unit)}</td>'
+                f'</tr>'
+                f'<tr>'
+                f'<td style="{lab}"></td>'
+                f'<td style="{cell}" align="right">Avg {branch.avg:.4g}{escape(unit)}</td>'
+                f'<td colspan="2"></td>'
+                f'</tr>'
+            )
+            continue
         parts.append(
-            f'<tr>'
-            f'<td style="{lab}">{escape(label)}</td>'
-            f'<td style="{cell}" align="right">Min {branch.min_value:.4g}{escape(unit)}</td>'
-            f'<td style="{lab}; padding-left:8px;">Max</td>'
-            f'<td style="{cell}" align="right">{branch.max_value:.4g}{escape(unit)}</td>'
-            f'</tr>'
-            f'<tr>'
-            f'<td style="{lab}"></td>'
-            f'<td style="{cell}" align="right">Avg {branch.avg:.4g}{escape(unit)}</td>'
-            f'<td colspan="2"></td>'
-            f'</tr>'
+            f'<tr><td style="{lab}">{escape(label)}</td>'
+            '<td colspan="3"></td></tr>'
         )
+        for value_label, attr in enabled:
+            parts.append(
+                f'<tr><td style="{lab}"></td>'
+                f'<td style="{cell}" align="right">{value_label} '
+                f'{getattr(branch, attr):.4g}{escape(unit)}</td>'
+                '<td colspan="2"></td></tr>'
+            )
     if row.status and row.branches:
         parts.append(
             f'<tr><td colspan="4" style="{lab}">{escape(row.status)}</td></tr>'
         )
 
 
-def _format_dual_html(rows):
+def _format_dual_html(rows, options=None):
     """Format dual-cursor rows.
 
     Time rows keep the historical 4-cell Min/Max/Avg/△ table. Custom-X rows
@@ -277,7 +321,7 @@ def _format_dual_html(rows):
     parts = [_DUAL_TABLE_OPEN]
     for i, row in enumerate(rows):
         if dual_row_is_custom_x(row):
-            _format_custom_x_dual_block(parts, index=i, row=row)
+            _format_custom_x_dual_block(parts, index=i, row=row, options=options)
             continue
         ch, mn, mx, avg, delta, u, color = _unpack_time_dual_row(row)
         _format_time_dual_block(
@@ -290,12 +334,13 @@ def _format_dual_html(rows):
             delta=delta,
             unit_suffix=u,
             color=color,
+            options=options,
         )
     parts.append('</table>')
     return ''.join(parts)
 
 
-def _format_dual_mini_html(rows):
+def _format_dual_mini_html(rows, options=None):
     """Mini dual-cursor table.
 
     Time rows keep coloured-dot + name + △. Custom-X rows keep direction + Avg
@@ -325,12 +370,25 @@ def _format_dual_mini_html(rows):
                 )
                 continue
             unit = getattr(row, "unit_suffix", "") or ""
+            enabled = _enabled_cursor_value_fields(options)
+            priority = next(
+                (item for wanted in ("Avg", "Max", "Min")
+                 for item in enabled if item[0] == wanted),
+                None,
+            )
             for branch in getattr(row, "branches", ()) or ():
+                value_html = ""
+                if priority is not None:
+                    value_label, attr = priority
+                    value_html = (
+                        f'{value_label}&nbsp;{getattr(branch, attr):.4g}'
+                        f'{escape(unit)}'
+                    )
                 parts.append(
                     f'<tr><td></td>'
                     f'<td style="padding-left:4px; color:{color};">{escape(branch.branch_label)}</td>'
                     f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT}">'
-                    f'Avg&nbsp;{branch.avg:.4g}{escape(unit)}</td></tr>'
+                    f'{value_html}</td></tr>'
                 )
             if row.status and getattr(row, "branches", ()):
                 parts.append(
@@ -358,7 +416,7 @@ def _format_dual_mini_html(rows):
     return ''.join(parts)
 
 
-def format_dual_rows_tooltip(rows) -> str:
+def format_dual_rows_tooltip(rows, options=None) -> str:
     """Plain-text tooltip for mini Custom-X rows (Min/Max + 升程/回程)."""
     lines = []
     for row in rows or ():
@@ -371,15 +429,15 @@ def format_dual_rows_tooltip(rows) -> str:
         if name:
             lines.append(name)
         unit = row.unit_suffix or ""
+        enabled = _enabled_cursor_value_fields(options)
         for branch in row.branches:
             role = branch.tooltip_role
             role_bit = f" {role}" if role else ""
-            lines.append(
-                f"{branch.branch_label}{role_bit}  "
-                f"Min={branch.min_value:.4g}{unit}  "
-                f"Max={branch.max_value:.4g}{unit}  "
-                f"Avg={branch.avg:.4g}{unit}"
+            values = "  ".join(
+                f"{label}={getattr(branch, attr):.4g}{unit}"
+                for label, attr in enabled
             )
+            lines.append(f"{branch.branch_label}{role_bit}  {values}".rstrip())
         if row.status:
             lines.append(row.status)
     return "\n".join(lines)

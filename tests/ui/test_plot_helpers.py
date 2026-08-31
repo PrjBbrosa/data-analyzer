@@ -522,3 +522,30 @@ class TestCustomXDualHtml:
         assert "回程" in tip
         assert "Min=" in tip
         assert "Max=" in tip
+
+
+def test_dual_formatters_filter_value_columns_with_immutable_options():
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+    rows = [DualCursorRow(
+        channel_name="[run] Speed",
+        min_value=1.0,
+        max_value=9.0,
+        avg=5.0,
+        delta=2.5,
+        unit_suffix=" rpm",
+        color="#1769e0",
+    )]
+    options = CursorDisplayOptions(
+        show_max_point=False,
+        show_min_point=False,
+        show_max_value=False,
+        show_min_value=True,
+        show_avg_value=False,
+    )
+    full = _format_dual_html(rows, options=options)
+    mini = _format_dual_mini_html(rows, options=options)
+    assert "Min" in full
+    assert "Max" not in full
+    assert "Avg" not in full
+    assert "△" in full and "△" in mini

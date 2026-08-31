@@ -32,6 +32,10 @@ from ._helpers import (
 )
 from .toolbar import PgNavigationToolbar, _TickDensityPopover
 from .cursor_pill import _QualityStatusIndicator
+from .cursor_display import (
+    CursorDisplayOptions,
+    CursorDisplayPopover,
+)
 
 
 class _TimePlotDiagnosticsPill(QFrame):
@@ -1038,6 +1042,8 @@ class TimeChartCard(_ChartCard):
 
     plot_mode_changed = pyqtSignal(str)    # 'subplot' | 'overlay'
     cursor_mode_changed = pyqtSignal(str)  # 'off' | 'single' | 'dual'
+    cursor_display_options_changed = pyqtSignal(object)
+    cursor_display_popover_geometry_changed = pyqtSignal(object)
 
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent, chart_mode='time')
@@ -1104,6 +1110,33 @@ class TimeChartCard(_ChartCard):
         self._cursor_mode = 'off'
         self._cursor_buttons['off'].setChecked(True)
 
+        self._cursor_display_options = CursorDisplayOptions()
+        self._cursor_display_popover = CursorDisplayPopover(self)
+        self._cursor_display_popover.options_changed.connect(
+            self._on_cursor_display_options_changed
+        )
+        self._cursor_display_popover.visibility_changed.connect(
+            self._on_cursor_display_popover_visibility_changed
+        )
+        self._cursor_display_settings_btn = QToolButton(self.toolbar)
+        self._cursor_display_settings_btn.setObjectName(
+            "cursorDisplaySettingsButton"
+        )
+        self._cursor_display_settings_btn.setAccessibleName("游标显示设置")
+        self._cursor_display_settings_btn.setToolTip("游标显示设置")
+        self._cursor_display_settings_btn.setAutoRaise(True)
+        self._cursor_display_settings_btn.setIcon(
+            qta.icon('mdi.tune-vertical', color=_ICON_COLOR)
+        )
+        self._cursor_display_settings_btn.setIconSize(QSize(15, 15))
+        self._cursor_display_settings_btn.setFixedSize(28, 28)
+        self._cursor_display_settings_btn.clicked.connect(
+            self._toggle_cursor_display_popover
+        )
+        self._insert_right_toolbar_widget(
+            loc_action, self._cursor_display_settings_btn
+        )
+
         # Overlay-selection hook: when a single curve is selected in overlay
         # mode, force the nav toolbar OUT of pan/zoom so a blank-area click can
         # clear the selection without being eaten by a pan
@@ -1149,6 +1182,17 @@ class TimeChartCard(_ChartCard):
             "Ctrl+M",
             "annotation",
         )
+        self._time_control_widgets = (
+            self._time_controls_spacer,
+            self._time_separators[0],
+            self.btn_subplot,
+            self.btn_overlay,
+            self._time_separators[1],
+            self._cursor_buttons['off'],
+            self._cursor_buttons['single'],
+            self._cursor_buttons['dual'],
+            self._cursor_display_settings_btn,
+        )
         self.view_tabbar = None
         self._sync_responsive_toolbar()
 
@@ -1157,15 +1201,65 @@ class TimeChartCard(_ChartCard):
         labels = getattr(self, '_time_button_labels', None)
         if not labels:
             return
-        self._time_toolbar_compact = False
+        compact = self.toolbar.width() < 840
+        if compact == self._time_toolbar_compact:
+            return
+        self._time_toolbar_compact = compact
+        self._prioritize_time_controls(compact)
         for button, full, _short in labels:
             button.setText(full)
+            button.setProperty(
+                "timeControlDensity", "compact" if compact else "normal"
+            )
+            style = button.style()
+            if style is not None:
+                style.unpolish(button)
+                style.polish(button)
             text_width = button.fontMetrics().horizontalAdvance(full)
-            button_width = max(52, text_width + 24)
+            button_width = max(
+                46 if compact else 52,
+                text_width + (16 if compact else 24),
+            )
             button.setFixedWidth(button_width)
         for sep in self._time_separators:
             sep.setVisible(True)
         self.toolbar.updateGeometry()
+
+    def _prioritize_time_controls(self, compact):
+        widgets = getattr(self, '_time_control_widgets', ())
+        if not widgets:
+            return
+        action_for = {
+            widget: self._toolbar_action_for_widget(widget)
+            for widget in widgets
+        }
+        if compact:
+            action_for[self._time_controls_spacer].setVisible(False)
+            action_for[self._time_separators[0]].setVisible(False)
+            action_for[self._time_separators[1]].setVisible(True)
+            anchor = _find_action(self.toolbar, 'pan')
+            ordered = (
+                self._time_controls_spacer,
+                self.btn_subplot,
+                self.btn_overlay,
+                self._time_separators[1],
+                self._cursor_buttons['off'],
+                self._cursor_buttons['single'],
+                self._cursor_buttons['dual'],
+                self._cursor_display_settings_btn,
+            )
+        else:
+            action_for[self._time_controls_spacer].setVisible(True)
+            action_for[self._time_separators[0]].setVisible(True)
+            action_for[self._time_separators[1]].setVisible(True)
+            anchor = getattr(self, '_loc_action', None)
+            if anchor not in self.toolbar.actions():
+                anchor = None
+            ordered = widgets
+        for widget in ordered:
+            action = action_for.get(widget)
+            if action is not None:
+                self.toolbar.insertAction(anchor, action)
 
     # ----- plot mode -----
     def plot_mode(self):
@@ -1188,12 +1282,52 @@ class TimeChartCard(_ChartCard):
         if mode not in ('off', 'single', 'dual') or mode == self._cursor_mode:
             return
         self._cursor_mode = mode
+        if mode == 'off':
+            self._cursor_display_popover.hide()
+        elif self._cursor_display_popover.isVisible():
+            self._cursor_display_popover.set_cursor_mode(mode)
         for k, b in self._cursor_buttons.items():
             b.setChecked(k == mode)
         # Cursor mode is part of HintState, so refresh the bottom context
         # label whenever it flips.
         self._refresh_bottom_hint()
         self.cursor_mode_changed.emit(mode)
+
+    def cursor_display_settings_button(self):
+        return self._cursor_display_settings_btn
+
+    def cursor_display_popover(self):
+        return self._cursor_display_popover
+
+    def cursor_display_options(self):
+        return self._cursor_display_options
+
+    def set_cursor_display_options(self, options):
+        if not isinstance(options, CursorDisplayOptions):
+            raise TypeError("options must be CursorDisplayOptions")
+        self._cursor_display_options = options
+        self._cursor_display_popover.set_options(options)
+
+    def close_cursor_display_popover(self):
+        self._cursor_display_popover.hide()
+
+    def _toggle_cursor_display_popover(self, _checked=False):
+        popover = self._cursor_display_popover
+        if popover.isVisible():
+            popover.hide()
+            return
+        popover.set_options(self._cursor_display_options)
+        popover.show_for(
+            self._cursor_display_settings_btn,
+            self._cursor_mode,
+        )
+
+    def _on_cursor_display_options_changed(self, options):
+        self._cursor_display_options = options
+        self.cursor_display_options_changed.emit(options)
+
+    def _on_cursor_display_popover_visibility_changed(self, geometry):
+        self.cursor_display_popover_geometry_changed.emit(geometry)
 
     def set_channel_drop_zone(self, zone, x_rect=None):
         """Show plot-join or X-axis drop highlight; ``zone`` is plot/xaxis/''."""
