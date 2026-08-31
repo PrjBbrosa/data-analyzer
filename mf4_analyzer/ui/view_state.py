@@ -372,6 +372,25 @@ class ViewManager(QObject):
             self.set_active(idx)
         return idx
 
+    def reset_to_single_default(self) -> None:
+        """Replace every View with a fresh default empty View 1.
+
+        Used when the workspace becomes empty so leftover View skeletons
+        (purged channel tables, stale ``axis_opts``) cannot survive into the
+        next file load. Replacement avoids filtering composite-key tables
+        in place.
+        """
+        old_split = self.split_with
+        self.views = [self._make(0)]
+        self.active = 0
+        self.split_with = None
+        self._split_pairs = {}
+        self.views_changed.emit()
+        if old_split is not None:
+            self.split_changed.emit(None)
+        # Always emit so the host re-projects even when the index stays 0.
+        self.active_changed.emit(0)
+
     def delete_view(self, idx: int) -> None:
         if len(self.views) <= 1 or not self._is_valid_index(idx):
             return

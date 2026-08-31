@@ -262,6 +262,9 @@ class _ChartCard(QWidget):
             self.toolbar.insertWidget(first_action, self._toolbar_leading_spacer)
             if first_action is not None else self.toolbar.addWidget(self._toolbar_leading_spacer)
         )
+        # TimeChartCard detaches this toolbar onto a sibling row, so the card's
+        # own resizeEvent can see a stale toolbar width. Sync off the toolbar.
+        self.toolbar.installEventFilter(self)
 
     def _build_toolbar_actions(self, annotations):
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
@@ -583,6 +586,8 @@ class _ChartCard(QWidget):
 
     def eventFilter(self, obj, event):
         etype = event.type()
+        if obj is self.toolbar and etype == QEvent.Resize:
+            self._sync_responsive_toolbar()
         if etype == QEvent.MouseButtonPress:
             self.set_hint_rotation_paused(True)
         elif etype in (QEvent.MouseButtonRelease, QEvent.Leave):
@@ -1205,7 +1210,12 @@ class TimeChartCard(_ChartCard):
         if compact == self._time_toolbar_compact:
             return
         self._time_toolbar_compact = compact
-        self._prioritize_time_controls(compact)
+        layout = self.toolbar.layout()
+        if layout is not None:
+            # Compact packing has to finish before overflow is decided:
+            # at ~500 px (three-pane min) Dual already sits near the
+            # extension chevron, and the settings button is the next action.
+            layout.setSpacing(1 if compact else 4)
         for button, full, _short in labels:
             button.setText(full)
             button.setProperty(
@@ -1221,6 +1231,7 @@ class TimeChartCard(_ChartCard):
                 text_width + (16 if compact else 24),
             )
             button.setFixedWidth(button_width)
+        self._prioritize_time_controls(compact)
         for sep in self._time_separators:
             sep.setVisible(True)
         self.toolbar.updateGeometry()
@@ -1237,17 +1248,11 @@ class TimeChartCard(_ChartCard):
             action_for[self._time_controls_spacer].setVisible(False)
             action_for[self._time_separators[0]].setVisible(False)
             action_for[self._time_separators[1]].setVisible(True)
+            # Keep the cursor cluster ahead of Pan so QToolBar overflow
+            # swallows Pan/Zoom/Save rather than the settings button.
+            # Trailing-aligning the cluster (insert before `_loc_action`)
+            # dumps the last action — settings — into the chevron at 500 px.
             anchor = _find_action(self.toolbar, 'pan')
-            ordered = (
-                self._time_controls_spacer,
-                self.btn_subplot,
-                self.btn_overlay,
-                self._time_separators[1],
-                self._cursor_buttons['off'],
-                self._cursor_buttons['single'],
-                self._cursor_buttons['dual'],
-                self._cursor_display_settings_btn,
-            )
         else:
             action_for[self._time_controls_spacer].setVisible(True)
             action_for[self._time_separators[0]].setVisible(True)
@@ -1255,8 +1260,12 @@ class TimeChartCard(_ChartCard):
             anchor = getattr(self, '_loc_action', None)
             if anchor not in self.toolbar.actions():
                 anchor = None
-            ordered = widgets
-        for widget in ordered:
+        settings_action = action_for.get(self._cursor_display_settings_btn)
+        if settings_action is not None:
+            settings_action.setVisible(True)
+        # Always walk the same widget tuple so compact↔normal crossings
+        # cannot accumulate insertAction order drift.
+        for widget in widgets:
             action = action_for.get(widget)
             if action is not None:
                 self.toolbar.insertAction(anchor, action)

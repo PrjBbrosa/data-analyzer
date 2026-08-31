@@ -168,6 +168,8 @@ def test_quickref_documents_time_cursor_display_settings():
     assert "最小值点" in row.sub
     assert "最大值点" in row.sub
     assert "Min / Max / Avg" in row.sub
+    assert "mini" in row.sub
+    assert "tooltip" in row.sub
     assert "全局" in row.sub
 
 

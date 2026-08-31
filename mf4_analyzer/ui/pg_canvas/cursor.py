@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time as _time
 
 import numpy as np
@@ -21,16 +20,24 @@ from mf4_analyzer.signal.custom_x_paths import (
     REASON_SAME_DIRECTION,
     REASON_SHORT_SEQUENCE,
     REASON_UNIDIRECTIONAL,
+    CustomXCursorResult,
     analyze_custom_x_paths,
-    sample_custom_x_cursor,
+    sample_custom_x_cursor_from_paths,
+)
+from mf4_analyzer.ui.cursor_display_model import (
+    CursorDisplayBranch,
+    CursorDisplayChannel,
+    CursorDisplayOptions,
 )
 from mf4_analyzer.ui.plot_helpers import (
     DualCursorBranch,
     DualCursorRow,
+    apply_cursor_source_prefix_policy,
+    _cursor_identity_parts,
     _format_dual_html,
     _format_single_cursor_channel_html,
     _interp_cursor_value,
-    _split_prefixed_label,
+    resolve_cursor_source_label,
 )
 from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, CursorXAxisContext, TIME_MODE
 
@@ -84,6 +91,8 @@ class CursorController(_CanvasBackref):
         "_dual_cursor_extreme_markers",
         "_dual_cursor_extreme_points",
         "_cursor_display_options",
+        "_source_label_resolver",
+        "_custom_x_path_cache",
         "_x_axis_context",
         "visible",
         "dual",
@@ -120,6 +129,8 @@ class CursorController(_CanvasBackref):
         "set_x_axis_context",
         "set_cursor_display_options",
         "cursor_display_options",
+        "set_source_label_resolver",
+        "invalidate_custom_x_path_cache",
     })
 
     def __init__(self, canvas):
@@ -137,6 +148,8 @@ class CursorController(_CanvasBackref):
         self._dual_cursor_extreme_markers = []
         self._dual_cursor_extreme_points = ()
         self._cursor_display_options = None
+        self._source_label_resolver = None
+        self._custom_x_path_cache = {}
         self._x_axis_context = None
 
     @property
@@ -242,9 +255,87 @@ class CursorController(_CanvasBackref):
     def set_x_axis_context(self, context):
         self._x_axis_context = context
 
-    def set_cursor_display_options(self, options):
-        from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+    def set_source_label_resolver(self, resolver):
+        self._source_label_resolver = resolver
 
+    def invalidate_custom_x_path_cache(self, data_id=None, channel=None):
+        """Drop memoized ``analyze_custom_x_paths`` results.
+
+        No filters (the monotonicity / envelope full-clear shape) drop the
+        whole memo. A ``data_id`` and/or ``channel`` filter drops matching
+        keys only. ``channel`` is the composite identity used in
+        ``channel_data``.
+        """
+        if data_id is None and channel is None:
+            self._custom_x_path_cache.clear()
+            return
+        drop = []
+        for key in self._custom_x_path_cache:
+            key_data_id, key_channel = key
+            if data_id is not None and key_data_id != data_id:
+                continue
+            if channel is not None and key_channel != channel:
+                continue
+            drop.append(key)
+        for key in drop:
+            self._custom_x_path_cache.pop(key, None)
+
+    def _custom_x_path_data_id(self, channel_key):
+        mapping = getattr(self, "_channel_data_id", None)
+        if mapping is None:
+            return None
+        getter = getattr(mapping, "get", None)
+        if not callable(getter):
+            return None
+        return getter(channel_key)
+
+    @staticmethod
+    def _custom_x_path_version(tf, sf):
+        tf = np.asarray(tf)
+        sf = np.asarray(sf)
+        n = int(tf.size)
+        if n == 0:
+            return (0, 0.0, 0.0, 0.0, 0.0)
+        y0 = float(sf[0]) if sf.size else 0.0
+        y1 = float(sf[-1]) if sf.size else 0.0
+        return (n, float(tf[0]), float(tf[-1]), y0, y1)
+
+    def _custom_x_paths_for_channel(self, channel_key, tf, sf, x_range=None):
+        """Return analyzed Custom-X paths, memoized when ``x_range`` is None.
+
+        Dual-cursor clipping still calls the analyzer with an A/B window
+        because that window is not part of the ``(data_id, channel)`` memo
+        key. Single-cursor sampling always uses the unclipped cached plan.
+        """
+        try:
+            tf_array = np.asarray(tf, dtype=float)
+            sf_array = np.asarray(sf, dtype=float)
+        except (TypeError, ValueError):
+            return None
+        if (
+            tf_array.ndim != 1
+            or sf_array.ndim != 1
+            or tf_array.size != sf_array.size
+        ):
+            return None
+        if x_range is not None:
+            return analyze_custom_x_paths(tf_array, sf_array, x_range=x_range)
+        key = (self._custom_x_path_data_id(channel_key), channel_key)
+        version = self._custom_x_path_version(tf_array, sf_array)
+        cached = self._custom_x_path_cache.get(key)
+        if cached is not None and cached[0] == version:
+            return cached[1]
+        paths = analyze_custom_x_paths(tf_array, sf_array)
+        self._custom_x_path_cache[key] = (version, paths)
+        return paths
+
+    def _sample_custom_x_cursor_cached(self, channel_key, tf, sf, x_value):
+        paths = self._custom_x_paths_for_channel(channel_key, tf, sf)
+        if paths is None:
+            return CustomXCursorResult((), REASON_INCOMPATIBLE_SHAPE)
+        return sample_custom_x_cursor_from_paths(paths, x_value)
+
+    def set_cursor_display_options(self, options):
         if not isinstance(options, CursorDisplayOptions):
             raise TypeError("options must be CursorDisplayOptions")
         previous = self.cursor_display_options()
@@ -275,8 +366,6 @@ class CursorController(_CanvasBackref):
 
     def cursor_display_options(self):
         if self._cursor_display_options is None:
-            from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
-
             return CursorDisplayOptions()
         return self._cursor_display_options
 
@@ -781,40 +870,29 @@ class CursorController(_CanvasBackref):
         return hidden
 
     def _emit_single_cursor_html(self, x):
-        from mf4_analyzer.ui.chart_stack.cursor_display import (
-            CursorDisplayBranch,
-            CursorDisplayChannel,
-        )
-
         sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
         custom_x = self._is_custom_x_cursor()
         if custom_x:
             parts = [
                 f'<span style="color:#111827;">'
-                f'X={x:.1f}{self._cursor_x_unit_suffix()}</span>'
+                f'X={self._format_cursor_axis_number(x)}'
+                f'{self._cursor_x_unit_suffix()}</span>'
             ]
         else:
             parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
         rows = []
-        hidden = self._hidden_channel_names()
-        if hasattr(self.channel_data, "composite_items"):
-            channel_items = self.channel_data.composite_items()
-        else:
-            channel_items = (
-                (ch, ch, values) for ch, values in self.channel_data.items()
-            )
-        for channel_key, ch, (tf, sf, color, u) in channel_items:
-            if channel_key in hidden:
-                continue
-            source_label, channel_label = self._cursor_identity_labels(
-                channel_key, ch
+        for channel_key, ch, (tf, sf, color, u) in self._visible_channel_items():
+            source_label, channel_label = resolve_cursor_source_label(
+                ch, channel_key, self._source_label_resolver
             )
             unit_s = f" {u}" if u else ""
             if custom_x:
-                result = sample_custom_x_cursor(tf, sf, x)
+                result = self._sample_custom_x_cursor_cached(
+                    channel_key, tf, sf, x,
+                )
                 branches = tuple(
                     CursorDisplayBranch(
-                        "X↑" if value.direction > 0 else "X↓",
+                        self._custom_x_branch_face(value.direction),
                         current_value=value.value,
                     )
                     for value in result.values
@@ -852,40 +930,68 @@ class CursorController(_CanvasBackref):
                     unit_suffix=unit_s,
                     current_value=float(value),
                 ))
+        rows = apply_cursor_source_prefix_policy(rows)
         self.cursor_info.emit(sep.join(parts))
         self.single_cursor_rows.emit(rows)
-
-    def _cursor_identity_labels(self, channel_key, display_name):
-        prefix, channel_label = _split_prefixed_label(str(display_name))
-        source_label = prefix[1:-1] if prefix else ""
-        identity = channel_key
-        if isinstance(identity, str):
-            try:
-                identity = json.loads(identity)
-            except (TypeError, ValueError):
-                identity = None
-        if isinstance(identity, (tuple, list)) and len(identity) == 2:
-            source_label = str(identity[0])
-        return source_label, str(channel_label)
 
     def _cursor_x_unit_suffix(self):
         ctx = self._x_axis_context
         unit = str(getattr(ctx, "unit", "") or "").strip()
         return f" {unit}" if unit else ""
 
+    def _format_cursor_axis_number(self, x):
+        """Format a custom-X coordinate for the primary pill line.
+
+        Shared by single-cursor ``X=`` and dual-cursor ``A=`` / ``B=`` / ``ΔX=``
+        so both faces use the same axis-context precision instead of a
+        hardcoded ``:.1f``.
+        """
+        try:
+            value = float(x)
+        except (TypeError, ValueError):
+            return str(x)
+        if not np.isfinite(value):
+            return "—"
+        return f"{value:.4g}"
+
+    @staticmethod
+    def _custom_x_branch_face(direction):
+        if direction > 0:
+            return "X↑"
+        if direction < 0:
+            return "X↓"
+        return "全程"
+
+    def _hidden_display_names(self):
+        """Display-name projection of :meth:`_hidden_channel_names`.
+
+        Hidden identities are composite keys (JSON ``[fid, name]``). Plain-dict
+        ``channel_data`` iterates by display name, so the fallback path must
+        stay in that domain instead of mixing the two.
+        """
+        names = set()
+        for key in self._hidden_channel_names():
+            _source, channel = _cursor_identity_parts(key)
+            if channel:
+                names.add(channel)
+            else:
+                names.add(key)
+        return names
+
     def _visible_channel_items(self):
-        hidden = self._hidden_channel_names()
         if hasattr(self.channel_data, "composite_items"):
+            hidden = self._hidden_channel_names()
             channel_items = self.channel_data.composite_items()
-        else:
-            channel_items = (
-                (ch, ch, values)
-                for ch, values in self.channel_data.items()
-            )
-        for channel_key, ch, values in channel_items:
-            if channel_key in hidden:
+            for channel_key, ch, values in channel_items:
+                if channel_key in hidden:
+                    continue
+                yield channel_key, ch, values
+            return
+        hidden_names = self._hidden_display_names()
+        for ch, values in self.channel_data.items():
+            if ch in hidden_names:
                 continue
-            yield channel_key, ch, values
+            yield ch, ch, values
 
     def _finite_stats(self, y):
         y = np.asarray(y, dtype=float)
@@ -960,8 +1066,8 @@ class CursorController(_CanvasBackref):
                 x_unit=x_unit,
                 branches=(),
             ), []
-        result = analyze_custom_x_paths(
-            tf_array, sf_array, x_range=(xlo, xhi),
+        result = self._custom_x_paths_for_channel(
+            channel_key, tf_array, sf_array, x_range=(xlo, xhi),
         )
         status = self._custom_x_status(result.reason)
         branches = ()
@@ -1042,18 +1148,24 @@ class CursorController(_CanvasBackref):
         unit_suffix = self._cursor_x_unit_suffix() if custom_x else "s"
         if self._ax is not None:
             if custom_x:
-                info.append(f"A={self._ax:.1f}{unit_suffix}")
+                info.append(
+                    f"A={self._format_cursor_axis_number(self._ax)}{unit_suffix}"
+                )
             else:
                 info.append(f"A={self._ax:.4f}s")
         if self._bx is not None:
             if custom_x:
-                info.append(f"B={self._bx:.1f}{unit_suffix}")
+                info.append(
+                    f"B={self._format_cursor_axis_number(self._bx)}{unit_suffix}"
+                )
             else:
                 info.append(f"B={self._bx:.4f}s")
         if self._ax is not None and self._bx is not None:
             dx = self._bx - self._ax
             if custom_x:
-                info.append(f"ΔX={abs(dx):.1f}{unit_suffix}")
+                info.append(
+                    f"ΔX={self._format_cursor_axis_number(abs(dx))}{unit_suffix}"
+                )
             else:
                 info.append(f"ΔT={dx:.4f}s")
                 if abs(dx) > 1e-12:

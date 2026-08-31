@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from itertools import product
+import re
 
 from PyQt5.QtCore import QSettings, QRect, Qt
 from PyQt5.QtTest import QSignalSpy
@@ -86,15 +87,21 @@ def test_all_32_options_project_deterministically_without_orphans(bits):
                 )
                 assert len(projection.blocks) == count
                 assert projection.html.strip()
-                assert "></td>" not in projection.html
+                assert not re.search(r"<td(?:\s[^>]*)?>\s*</td>", projection.html)
                 assert all(block.visible_rows for block in projection.blocks)
                 assert all(block.identity is not None for block in projection.blocks)
                 for block in projection.blocks:
                     labels = [row.label for row in block.visible_rows]
                     if x_mode == "time":
-                        assert "Δ" in labels
                         metric_labels = [item for item in labels if item in {"Min", "Max", "Avg"}]
                         assert metric_labels == ([] if mini else enabled)
+                        if mini:
+                            assert "Δ" not in labels
+                            assert "●" in projection.html
+                            assert "△" in projection.html
+                            assert "Δ=" in projection.tooltip
+                        else:
+                            assert "Δ" in labels
                     else:
                         assert "X↑" in labels and "X↓" in labels
                         assert "Δ" not in labels
@@ -105,8 +112,10 @@ def test_all_32_options_project_deterministically_without_orphans(bits):
                                 None,
                             )
                             assert visible_metrics == ([priority, priority] if priority else [])
+                            assert "●" in projection.html
                         else:
                             assert visible_metrics == enabled * 2
+                            assert "●" not in projection.html
                     for label in enabled:
                         assert label in projection.tooltip
                     for label in ({"Min", "Max", "Avg"} - set(enabled)):
@@ -131,16 +140,29 @@ def test_point_bits_do_not_change_result_projection_or_layout_category(x_mode, r
 
 
 def test_custom_x_single_shows_current_branches_only_in_full_and_mini():
-    for mini in (False, True):
-        projection = build_cursor_presentation(
-            _custom_rows(), CursorDisplayOptions(),
-            cursor_mode="single", x_mode="custom", mini=mini,
-        )
-        visible = [row.label for row in projection.blocks[0].visible_rows]
-        assert visible == ["X↑", "X↓"]
-        assert "3.25 N" in projection.html
-        assert "2.25 N" in projection.html
-        assert not ({"Min", "Max", "Avg", "Δ"} & set(visible))
+    full = build_cursor_presentation(
+        _custom_rows(), CursorDisplayOptions(),
+        cursor_mode="single", x_mode="custom", mini=False,
+    )
+    mini = build_cursor_presentation(
+        _custom_rows(), CursorDisplayOptions(),
+        cursor_mode="single", x_mode="custom", mini=True,
+    )
+    full_visible = [row.label for row in full.blocks[0].visible_rows]
+    mini_visible = [row.label for row in mini.blocks[0].visible_rows]
+    assert full_visible != mini_visible
+    assert full_visible[0] == "Rack Force 1"
+    assert mini_visible[0] == "●"
+    assert "X↑" in full_visible and "X↓" in full_visible
+    assert "X↑" in mini_visible and "X↓" in mini_visible
+    assert "3.25 N" in full.html and "3.25 N" in mini.html
+    assert "2.25 N" in full.html and "2.25 N" in mini.html
+    assert "Rack Force 1" in full.html
+    assert "●" in mini.html
+    assert "Rack Force 1" not in mini.html
+    assert not ({"Min", "Max", "Avg", "Δ"} & set(full_visible))
+    assert not ({"Min", "Max", "Avg", "Δ"} & set(mini_visible))
+    assert full.html != mini.html
 
 
 @pytest.mark.parametrize("cursor_mode", ("single", "dual"))
@@ -181,16 +203,32 @@ def test_custom_x_diagnostic_only_channel_is_a_populated_block(
     assert "source-a / Rack Force" in projection.tooltip
 
 
-def test_time_x_single_shows_only_the_real_current_value_in_full_and_mini():
-    for mini in (False, True):
-        projection = build_cursor_presentation(
-            _time_rows(), CursorDisplayOptions(),
-            cursor_mode="single", x_mode="time", mini=mini,
-        )
-        rows = projection.blocks[0].visible_rows
-        assert [(row.label, row.value) for row in rows] == [("Value", "4.25 rpm")]
-        assert "Value=4.25 rpm" in projection.tooltip
-        assert not ({"Min", "Max", "Avg", "Δ"} & {row.label for row in rows})
+def test_time_x_single_full_uses_channel_name_not_a_value_label():
+    projection = build_cursor_presentation(
+        _time_rows(), CursorDisplayOptions(),
+        cursor_mode="single", x_mode="time", mini=False,
+    )
+    rows = projection.blocks[0].visible_rows
+    assert [(row.label, row.value) for row in rows] == [("Speed 1", "4.25 rpm")]
+    assert "Speed 1=4.25 rpm" in projection.tooltip
+    assert "Value" not in projection.html
+    assert projection.html.count("<tr>") == 1
+    assert not ({"Min", "Max", "Avg", "Δ"} & {row.label for row in rows})
+
+
+def test_time_x_single_mini_uses_colored_dot_instead_of_name():
+    projection = build_cursor_presentation(
+        _time_rows(), CursorDisplayOptions(),
+        cursor_mode="single", x_mode="time", mini=True,
+    )
+    rows = projection.blocks[0].visible_rows
+    assert [(row.label, row.value) for row in rows] == [("●", "4.25 rpm")]
+    assert "Speed 1=4.25 rpm" in projection.tooltip
+    assert "●" in projection.html
+    assert "Speed 1" not in projection.html
+    assert "Value" not in projection.html
+    assert projection.html.count("<tr>") == 1
+    assert not ({"Min", "Max", "Avg", "Δ"} & {row.label for row in rows})
 
 
 def test_time_x_single_missing_current_value_never_falls_back_to_statistics():
@@ -200,12 +238,73 @@ def test_time_x_single_missing_current_value_never_falls_back_to_statistics():
         cursor_mode="single", x_mode="time", mini=False,
     )
     assert [(row.label, row.value) for row in projection.blocks[0].visible_rows] == [
-        ("Value", "—"),
+        ("Speed 1", "—"),
     ]
     assert "Δ=" not in projection.tooltip
     assert "Min=" not in projection.tooltip
     assert "Max=" not in projection.tooltip
     assert "Avg=" not in projection.tooltip
+
+
+@pytest.mark.parametrize("cursor_mode", ("single", "dual"))
+@pytest.mark.parametrize("x_mode", ("time", "custom"))
+@pytest.mark.parametrize(
+    "options",
+    (
+        CursorDisplayOptions(),
+        CursorDisplayOptions(False, False, False, False, False),
+    ),
+)
+def test_mini_html_differs_from_full_for_every_mode_pair(cursor_mode, x_mode, options):
+    factory = _time_rows if x_mode == "time" else _custom_rows
+    channels = factory(2)
+    full = build_cursor_presentation(
+        channels, options, cursor_mode=cursor_mode, x_mode=x_mode, mini=False,
+    )
+    mini = build_cursor_presentation(
+        channels, options, cursor_mode=cursor_mode, x_mode=x_mode, mini=True,
+    )
+    assert full.blocks and mini.blocks
+    assert full.html != mini.html
+
+
+def test_single_full_emits_one_table_row_per_channel_without_value_label():
+    for x_mode, factory in (("time", _time_rows), ("custom", _custom_rows)):
+        projection = build_cursor_presentation(
+            factory(3), CursorDisplayOptions(),
+            cursor_mode="single", x_mode=x_mode, mini=False,
+        )
+        assert projection.html.count("<tr>") == 3
+        assert "Value" not in projection.html
+
+
+def test_dual_time_mini_emits_one_table_row_per_channel():
+    projection = build_cursor_presentation(
+        _time_rows(3), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="time", mini=True,
+    )
+    assert projection.html.count("<tr>") == 3
+    assert "●" in projection.html
+    assert "△" in projection.html
+    assert "Min" not in projection.html
+    assert "Max" not in projection.html
+    assert "Avg" not in projection.html
+    for block in projection.blocks:
+        assert len(block.visible_rows) == 1
+        assert "Δ=" in projection.tooltip
+
+
+def test_dual_custom_mini_keeps_identity_and_branches_on_one_row():
+    projection = build_cursor_presentation(
+        _custom_rows(2), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="custom", mini=True,
+    )
+    assert projection.html.count("<tr>") == 2
+    assert "●" in projection.html
+    assert "X↑" in projection.html and "X↓" in projection.html
+    assert "Avg" in projection.html
+    assert "Min" not in projection.html
+    assert "Max" not in projection.html
 
 
 def test_duplicate_display_labels_keep_two_composite_blocks_and_full_tooltip_identity():
@@ -357,25 +456,35 @@ def test_cursor_pill_middle_elides_constrained_identity_but_tooltip_keeps_full_t
 
     parent = QWidget()
     qtbot.addWidget(parent)
+    # Two sources so D1 keeps the qualified prefix on the visible face.
     # This width still forces constrained rendering for the full identity, but
     # leaves enough measured text space to prove both retained identity ends.
     parent.resize(440, 210)
     pill = CursorPill(parent)
     qtbot.addWidget(pill)
     source = "source_begin_" + "x" * 70 + "_source_end"
+    other = "other_begin_" + "z" * 70 + "_other_end"
     channel = "channel_begin_" + "y" * 70 + "_channel_end"
     full_identity = f"{source} / {channel}"
-    projection = build_cursor_presentation((CursorDisplayChannel(
-        identity=(source, channel), source_label=source, channel_label=channel,
-        color="#1769e0", unit_suffix=" V", delta=1.0,
-        min_value=0.0, max_value=2.0, avg_value=1.0,
-    ),), CursorDisplayOptions(), cursor_mode="dual", x_mode="time", mini=False)
+    projection = build_cursor_presentation((
+        CursorDisplayChannel(
+            identity=(source, channel), source_label=source, channel_label=channel,
+            color="#1769e0", unit_suffix=" V", delta=1.0,
+            min_value=0.0, max_value=2.0, avg_value=1.0,
+        ),
+        CursorDisplayChannel(
+            identity=(other, channel), source_label=other, channel_label=channel,
+            color="#ef4444", unit_suffix=" V", delta=1.5,
+            min_value=0.0, max_value=3.0, avg_value=1.5,
+        ),
+    ), CursorDisplayOptions(), cursor_mode="dual", x_mode="time", mini=False)
     pill.set_display_projection(projection)
     parent.show()
     pill.show()
     qapp.processEvents()
     visible = pill.detail_text()
     assert pill.layout_category() == "constrained"
+    assert projection.omit_visible_source_prefix is False
     assert full_identity not in visible
     assert "..." in visible
     displayed_identity = pill._middle_elide_label(
@@ -388,6 +497,19 @@ def test_cursor_pill_middle_elides_constrained_identity_but_tooltip_keeps_full_t
     assert pill.width() <= pill.safe_rect().width()
 
 
+def test_single_source_projection_omits_visible_prefix_but_keeps_tooltip(qapp):
+    channel = _time_rows(1)[0]
+    for mini in (False, True):
+        projection = build_cursor_presentation(
+            (channel,), CursorDisplayOptions(),
+            cursor_mode="single", x_mode="time", mini=mini,
+        )
+        assert projection.omit_visible_source_prefix is True
+        assert "run_0 / " in projection.tooltip
+        assert "run_0 / " not in projection.html
+        assert "Speed 1" in projection.html or "●" in projection.html
+
+
 def test_cursor_display_popover_uses_native_popup_shell_chrome(qapp, qtbot):
     popover = CursorDisplayPopover()
     qtbot.addWidget(popover)
@@ -395,6 +517,32 @@ def test_cursor_display_popover_uses_native_popup_shell_chrome(qapp, qtbot):
     assert popover.windowFlags() & Qt.FramelessWindowHint
     assert popover.windowFlags() & Qt.NoDropShadowWindowHint
     assert popover.testAttribute(Qt.WA_TranslucentBackground)
+
+
+def test_cursor_display_popover_paints_opaque_background(qapp, qtbot):
+    from PyQt5.QtGui import QColor, QImage, QPainter
+
+    popover = CursorDisplayPopover()
+    qtbot.addWidget(popover)
+    popover.resize(280, 260)
+    popover.show()
+    qapp.processEvents()
+
+    image = QImage(popover.size(), QImage.Format_ARGB32)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    popover.render(painter)
+    painter.end()
+
+    sample = image.pixelColor(image.width() // 2, 8)
+    grid = QColor("#e5eaf2")
+    assert sample.alpha() >= 245
+    assert not (
+        abs(sample.red() - grid.red()) < 12
+        and abs(sample.green() - grid.green()) < 12
+        and abs(sample.blue() - grid.blue()) < 12
+    )
+    assert sample.red() >= 240 and sample.green() >= 240 and sample.blue() >= 240
 
 
 def test_time_card_settings_button_stays_beside_cursor_segment_and_emits_options(qapp, qtbot):
@@ -426,3 +574,42 @@ def test_time_card_settings_button_stays_beside_cursor_segment_and_emits_options
     assert spy[0][0].show_avg_value is False
     card.set_cursor_mode("off")
     assert not popover.isVisible()
+
+
+def test_tooltip_uses_branch_role_for_full_path_label():
+    channel = CursorDisplayChannel(
+        identity=("source-a", "Rack Force"),
+        source_label="source-a",
+        channel_label="Rack Force",
+        unit_suffix=" N",
+        branches=(
+            CursorDisplayBranch(
+                "全程", min_value=1.0, max_value=5.0, avg_value=3.0,
+            ),
+        ),
+    )
+    projection = build_cursor_presentation(
+        (channel,), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="custom", mini=False,
+    )
+    lines = projection.tooltip.splitlines()
+    assert "全程" in lines
+    assert "全程=" not in projection.tooltip
+    assert "Min=1 N" in projection.tooltip
+
+
+def test_popover_refit_drops_forced_min_height_when_note_hidden(qapp, qtbot):
+    popover = CursorDisplayPopover()
+    qtbot.addWidget(popover)
+    popover.set_cursor_mode("single")
+    popover.show()
+    qapp.processEvents()
+    qtbot.wait(30)
+    tall = popover.height()
+    popover.set_cursor_mode("dual")
+    qapp.processEvents()
+    qtbot.wait(30)
+    assert popover.height() <= tall
+    hint = popover.sizeHint().expandedTo(popover.minimumSizeHint())
+    assert popover.height() == hint.height()
+    assert popover.height() == max(hint.height(), 0)

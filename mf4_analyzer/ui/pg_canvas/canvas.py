@@ -3129,6 +3129,7 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_axes.reset_for_rebuild()
         self._subplot_label_specs = []
         self._cursor.clear_items()
+        self._cursor.invalidate_custom_x_path_cache()
         self.set_cursor_x_axis_context(None)
         self.set_x_viewport_intent(None)
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
@@ -3187,6 +3188,14 @@ class TimeDomainCanvasPG(QWidget):
 
     def cursor_display_options(self):
         return CursorController.cursor_display_options(self._cursor)
+
+    def set_source_label_resolver(self, resolver):
+        return CursorController.set_source_label_resolver(self._cursor, resolver)
+
+    def invalidate_custom_x_path_cache(self, data_id=None, channel=None):
+        return CursorController.invalidate_custom_x_path_cache(
+            self._cursor, data_id=data_id, channel=channel,
+        )
 
     def set_x_viewport_intent(self, intent):
         self._x_viewport_intent = intent
@@ -3648,6 +3657,7 @@ class TimeDomainCanvasPG(QWidget):
             self._curve_path_cache.clear()
             self._last_range_key.clear()
             self._last_refresh_signature = None
+            self._cursor.invalidate_custom_x_path_cache()
             return
         keys_to_drop = []
         for k in self._curve_path_cache:
@@ -3684,15 +3694,18 @@ class TimeDomainCanvasPG(QWidget):
                     self._last_range_key.pop(ck, None)
                     self._line_ink_state.pop(ck, None)
                     self._ink_raster_admitted.discard(ck)
+        self._cursor.invalidate_custom_x_path_cache()
 
     def invalidate_monotonicity_cache(self, custom_xaxis_fid=None, custom_xaxis_ch=None):
         """Drop per-channel monotonicity flags. Mirrors the matplotlib
         canvas surface so MainWindow's invalidation call sites remain
         renderer-agnostic. Full-clear (no filters) matches the
         TimeDomainCanvas behavior — the next plot_channels rebuilds the
-        dict."""
+        dict. Custom-X path analysis memo follows the same full-clear.
+        """
         self._channel_is_monotonic.clear()
         self._monotonic_fingerprint_cache.clear()
+        self._cursor.invalidate_custom_x_path_cache()
 
     # ------------------------------------------------------------------
     # Viewport refresh wiring (design §5.2 hot path).

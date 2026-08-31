@@ -311,3 +311,48 @@ def test_off_save_reopen_restores_placement_when_dual_turns_on(
     emitted_rows = last_rows[-1] if last_rows else []
     visible_names = [ch for ch, _values in mw2.canvas_time.channel_data.items()]
     assert len(emitted_rows) == len(visible_names)
+
+
+def test_custom_x_axis_number_matches_dual_and_is_not_fixed_one_decimal(qapp):
+    canvas = _pg_canvas(qapp)
+    cursor = canvas._cursor
+    value = 1.23456
+    formatted = cursor._format_cursor_axis_number(value)
+    assert formatted == f"{value:.4g}"
+    assert formatted != f"{value:.1f}"
+    assert cursor._format_cursor_axis_number(value) == formatted
+    assert cursor._custom_x_branch_face(0) == "全程"
+    assert cursor._custom_x_branch_face(1) == "X↑"
+    assert cursor._custom_x_branch_face(-1) == "X↓"
+
+
+def test_plain_dict_channel_data_hides_by_display_name(qapp):
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 360)
+    canvas.show()
+    t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+    canvas.plot_channels([
+        ("speed", True, t, np.asarray([0.0, 1.0, 2.0]),
+         "#ef4444", "rpm", "fid-a"),
+        ("torque", True, t, np.asarray([10.0, 11.0, 12.0]),
+         "#1769e0", "Nm", "fid-a"),
+    ], mode="overlay")
+    QCoreApplication.processEvents()
+    line_items = list(canvas._channel_lines.composite_items())
+    assert len(line_items) == 2
+    line_items[0][2][1].plot_data_item.setVisible(False)
+    QCoreApplication.processEvents()
+    hidden = canvas._cursor._hidden_channel_names()
+    assert hidden
+    as_dict = {
+        ch: values
+        for _key, ch, values in canvas.channel_data.composite_items()
+    }
+    canvas.channel_data = as_dict
+    visible = [ch for _key, ch, _values in canvas._cursor._visible_channel_items()]
+    hidden_name = line_items[0][1]
+    kept_name = line_items[1][1]
+    assert hidden_name not in visible
+    assert kept_name in visible

@@ -463,15 +463,22 @@ def test_cursor_pill_toggle_exposes_distinct_full_and_mini_states(qapp, qtbot):
 
 
 def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
+    from functools import partial
+    from PyQt5.QtCore import QObject, pyqtSignal
     from mf4_analyzer.ui.chart_stack import ChartStack
+
+    class Legacy(QObject):
+        cursor_info = pyqtSignal(str)
 
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.set_mode('time')
     cs.set_cursor_mode('single')
+    source = Legacy(cs)
+    source.cursor_info.connect(partial(cs._on_cursor_info, source=source))
 
     sep = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
-    cs.canvas_time.cursor_info.emit(
+    source.cursor_info.emit(
         sep.join([
             '<span style="color:#111827;">t=89.1278s</span>',
             '<span style="color:#ef4444;">[tiadodamping] Rte_=<b>424.2</b></span>',
@@ -549,19 +556,26 @@ def test_single_cursor_pill_mini_detail_reescapes_html_entities(qapp, qtbot):
 
 
 def test_single_cursor_pill_toggle_shows_value_only_mini_detail(qapp, qtbot):
+    from functools import partial
+    from PyQt5.QtCore import QObject, pyqtSignal
     from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    class Legacy(QObject):
+        cursor_info = pyqtSignal(str)
 
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.set_mode('time')
     cs.set_cursor_mode('single')
+    source = Legacy(cs)
+    source.cursor_info.connect(partial(cs._on_cursor_info, source=source))
 
     text = _CURSOR_HTML_SEP.join([
         '<span style="color:#111827;">t=35.0358s</span>',
         '<span style="color:#64748b;">[taiyaok]</span> '
         '<span style="color:#ef4444;">Rte_PA_mAtMotorTorque_xds16=<b>-1.841 Nm</b></span>',
     ])
-    cs.canvas_time.cursor_info.emit(text)
+    source.cursor_info.emit(text)
 
     assert 'Rte_PA_mAtMotorTorque_xds16' in cs._pill._detail.text()
     cs._pill._toggle_mode()
@@ -760,6 +774,7 @@ def test_user_placed_primary_pill_preserves_right_edge_when_content_shrinks(
     qapp, qtbot
 ):
     from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayChannel
 
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -789,6 +804,15 @@ def test_user_placed_primary_pill_preserves_right_edge_when_content_shrinks(
         '<span style="color:#1769e0;">speed=<b>5 rpm</b></span>',
     ])
     cs.canvas_time.cursor_info.emit(text)
+    cs.canvas_time.single_cursor_rows.emit((
+        CursorDisplayChannel(
+            identity="speed",
+            source_label="",
+            channel_label="speed",
+            current_value=5.0,
+            unit_suffix=" rpm",
+        ),
+    ))
     qapp.processEvents()
 
     new_right = cs._pill.x() + cs._pill.width()
@@ -824,19 +848,26 @@ def test_default_primary_pill_reanchors_to_canvas_after_mode_content_resize(
 
 
 def test_cursor_pill_snapshot_restore_preserves_single_mini_variants(qapp, qtbot):
+    from functools import partial
+    from PyQt5.QtCore import QObject, pyqtSignal
     from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    class Legacy(QObject):
+        cursor_info = pyqtSignal(str)
 
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.set_mode('time')
     cs.set_cursor_mode('single')
+    source = Legacy(cs)
+    source.cursor_info.connect(partial(cs._on_cursor_info, source=source))
 
     text = _CURSOR_HTML_SEP.join([
         '<span style="color:#111827;">t=35.0358s</span>',
         '<span style="color:#64748b;">[taiyaok]</span> '
         '<span style="color:#ef4444;">Rte_PA_mAtMotorTorque_xds16=<b>-1.841 Nm</b></span>',
     ])
-    cs.canvas_time.cursor_info.emit(text)
+    source.cursor_info.emit(text)
     cs._pill._toggle_mode()
 
     snapshot = cs.cursor_pill_snapshot()
@@ -1188,6 +1219,52 @@ def test_chart_toolbar_keeps_back_forward_actions_visible(qapp, qtbot):
         assert widget is not None
         assert widget.isVisible()
         assert not widget.icon().isNull()
+
+
+def test_time_toolbar_compact_normal_resize_is_idempotent(qapp, qtbot):
+    """Crossing the 840 px density threshold must not hide the cursor
+    settings button or accumulate insertAction order drift."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(500, 440)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+    card = cs._time_card
+    button = card.cursor_display_settings_button()
+    dual = card._cursor_buttons["dual"]
+    cluster = (
+        card._cursor_buttons["off"],
+        card._cursor_buttons["single"],
+        card._cursor_buttons["dual"],
+        button,
+    )
+
+    def cluster_action_order():
+        widgets = []
+        for act in card.toolbar.actions():
+            widget = card.toolbar.widgetForAction(act)
+            if widget in cluster:
+                widgets.append(widget)
+        return tuple(widgets)
+
+    def assert_settings_beside_dual():
+        assert button.isVisible()
+        assert all(item.isVisible() for item in card._cursor_buttons.values())
+        assert button.geometry().left() >= dual.geometry().right()
+        assert button.geometry().right() <= card.toolbar.contentsRect().right()
+
+    compact_orders = []
+    for width in (500, 1200, 500, 1200, 500):
+        cs.resize(width, 440)
+        qapp.processEvents()
+        assert_settings_beside_dual()
+        if width < 840:
+            compact_orders.append(cluster_action_order())
+
+    assert compact_orders
+    assert all(order == compact_orders[0] for order in compact_orders)
+    assert compact_orders[0] == cluster
 
 
 def test_pg_navigation_toolbar_pan_zoom_sets_all_subplot_viewboxes(qapp, qtbot):
@@ -1711,13 +1788,29 @@ def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
 
 
 def test_dual_cursor_primary_update_preserves_existing_detail(qapp, qtbot):
+    from mf4_analyzer.ui.plot_helpers import DualCursorRow
+
     cs = ChartStack()
     qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
     cs.set_mode('time')
     cs.set_cursor_mode('dual')
 
     cs.canvas_time.cursor_info.emit("A=1.0s")
-    cs.canvas_time.dual_cursor_info.emit("<b>stats</b>")
+    cs.canvas_time.dual_cursor_rows.emit([
+        DualCursorRow(
+            channel_name="stats",
+            min_value=0.0,
+            max_value=2.0,
+            avg=1.0,
+            delta=1.0,
+            unit_suffix="",
+            color="#111827",
+            identity="stats",
+            label="stats",
+        ),
+    ])
     cs.canvas_time.cursor_info.emit("A=1.5s")
 
     assert cs._pill.primary_text() == "A=1.5s"
@@ -3393,10 +3486,20 @@ def test_split_single_cursor_rows_share_options_without_crossing_results(
     secondary.single_cursor_rows.emit(right)
     qapp.processEvents()
 
-    assert "left-source" in cs._pill.detail_text()
+    # Each pane is a single-source batch (D1): visible face is channel-only;
+    # tooltip keeps the qualified name. Crossing is forbidden on both faces.
+    assert "force" in cs._pill.detail_text()
+    assert "X↑" in cs._pill.detail_text()
+    assert "left-source" not in cs._pill.detail_text()
+    assert "left-source" in cs._pill._detail.toolTip()
     assert "right-source" not in cs._pill.detail_text()
-    assert "right-source" in cs._pill_secondary.detail_text()
+    assert "right-source" not in cs._pill._detail.toolTip()
+    assert "force" in cs._pill_secondary.detail_text()
+    assert "X↓" in cs._pill_secondary.detail_text()
+    assert "right-source" not in cs._pill_secondary.detail_text()
+    assert "right-source" in cs._pill_secondary._detail.toolTip()
     assert "left-source" not in cs._pill_secondary.detail_text()
+    assert "left-source" not in cs._pill_secondary._detail.toolTip()
     assert cs._pill._display_projection.blocks[0].identity == ("left", "force")
     assert cs._pill_secondary._display_projection.blocks[0].identity == (
         "right", "force"
@@ -3540,7 +3643,8 @@ def test_live_custom_x_diagnostic_survives_legacy_then_structured_projection(
     assert structured_seen
     assert expected in cs._pill.detail_text()
     assert expected in cs._pill._detail.toolTip()
-    assert "fid-a / Rack Force" in cs._pill._detail.toolTip()
+    assert "Rack Force" in cs._pill._detail.toolTip()
+    assert "fid-a" not in cs._pill._detail.toolTip()
 
 
 def test_direct_canvas_clear_clears_legacy_and_structured_cursor_pill(

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
 from html import escape
 import json
 from typing import Iterable
 
-from PyQt5.QtCore import QSettings, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QRectF, QSettings, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -15,20 +15,25 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..cursor_display_model import (
+    CursorDisplayBlock,
+    CursorDisplayBranch,
+    CursorDisplayChannel,
+    CursorDisplayOptions,
+    CursorDisplayRow,
+    CursorPresentation,
+    _OPTION_NAMES,
+    enabled_value_fields,
+)
+from ..plot_helpers import cursor_result_source_count
+
+_POPOVER_BG = QColor(255, 255, 255, 248)
+_POPOVER_BORDER = QColor("#d8e0eb")
+_POPOVER_RADIUS = 10.0
+_DOT_MARKER = "●"
+
 
 CURSOR_DISPLAY_SETTINGS_KEY = "charts/time_cursor/display_options_v1"
-
-
-@dataclass(frozen=True)
-class CursorDisplayOptions:
-    show_max_point: bool = True
-    show_min_point: bool = True
-    show_max_value: bool = True
-    show_min_value: bool = True
-    show_avg_value: bool = True
-
-
-_OPTION_NAMES = tuple(item.name for item in fields(CursorDisplayOptions))
 
 
 class CursorDisplaySettingsStore:
@@ -63,76 +68,6 @@ class CursorDisplaySettingsStore:
         self._settings.sync()
 
 
-@dataclass(frozen=True)
-class CursorDisplayBranch:
-    label: str
-    current_value: float | None = None
-    min_value: float | None = None
-    max_value: float | None = None
-    avg_value: float | None = None
-
-
-@dataclass(frozen=True)
-class CursorDisplayChannel:
-    identity: object
-    source_label: str
-    channel_label: str
-    color: str = "#111827"
-    unit_suffix: str = ""
-    current_value: float | None = None
-    delta: float | None = None
-    min_value: float | None = None
-    max_value: float | None = None
-    avg_value: float | None = None
-    branches: tuple[CursorDisplayBranch, ...] = ()
-    diagnostic: str = ""
-
-    @property
-    def qualified_label(self) -> str:
-        source = str(self.source_label or "").strip()
-        channel = str(self.channel_label or "").strip()
-        return f"{source} / {channel}" if source else channel
-
-
-@dataclass(frozen=True)
-class CursorDisplayRow:
-    label: str
-    value: str
-
-
-@dataclass(frozen=True)
-class CursorDisplayBlock:
-    identity: object
-    qualified_label: str
-    color: str
-    visible_rows: tuple[CursorDisplayRow, ...]
-    tooltip_rows: tuple[CursorDisplayRow, ...]
-    diagnostic: str = ""
-
-
-@dataclass(frozen=True)
-class CursorPresentation:
-    blocks: tuple[CursorDisplayBlock, ...]
-    html: str
-    tooltip: str
-    layout_category: str
-    cursor_mode: str
-    x_mode: str
-    mini: bool
-
-
-def enabled_value_fields(options: CursorDisplayOptions):
-    """Return enabled value fields in the product order Min, Max, Avg."""
-    return tuple(
-        item for item, enabled in (
-            (("Min", "min_value"), options.show_min_value),
-            (("Max", "max_value"), options.show_max_value),
-            (("Avg", "avg_value"), options.show_avg_value),
-        )
-        if enabled
-    )
-
-
 def _formatted(value, unit="") -> str:
     if value is None:
         return "—"
@@ -142,20 +77,28 @@ def _formatted(value, unit="") -> str:
         return f"{value}{unit}"
 
 
+def _face_name(channel) -> str:
+    return str(channel.channel_label or channel.qualified_label or "").strip()
+
+
 def _time_rows(channel, options, cursor_mode, mini):
+    name = _face_name(channel)
     if cursor_mode == "single":
-        row = CursorDisplayRow(
-            "Value", _formatted(channel.current_value, channel.unit_suffix)
-        )
-        return (row,), (row,)
-    visible = [CursorDisplayRow("Δ", _formatted(channel.delta, channel.unit_suffix))]
-    tooltip = list(visible)
+        value = _formatted(channel.current_value, channel.unit_suffix)
+        tooltip = (CursorDisplayRow(name, value),)
+        if mini:
+            return (CursorDisplayRow(_DOT_MARKER, value),), tooltip
+        return (CursorDisplayRow(name, value),), tooltip
+    delta = CursorDisplayRow("Δ", _formatted(channel.delta, channel.unit_suffix))
+    tooltip = [delta]
+    stats = []
     for label, attr in enabled_value_fields(options):
         row = CursorDisplayRow(label, _formatted(getattr(channel, attr), channel.unit_suffix))
         tooltip.append(row)
-        if not mini:
-            visible.append(row)
-    return tuple(visible), tuple(tooltip)
+        stats.append(row)
+    if mini:
+        return (CursorDisplayRow(name, delta.value),), tuple(tooltip)
+    return (delta, *stats), tuple(tooltip)
 
 
 def _custom_rows(channel, options, cursor_mode, mini):
@@ -166,14 +109,24 @@ def _custom_rows(channel, options, cursor_mode, mini):
         (item for wanted in ("Avg", "Max", "Min") for item in enabled if item[0] == wanted),
         None,
     )
-    for branch in channel.branches:
-        if cursor_mode == "single":
-            row = CursorDisplayRow(branch.label, _formatted(branch.current_value, channel.unit_suffix))
+    if cursor_mode == "single":
+        for branch in channel.branches:
+            row = CursorDisplayRow(
+                branch.label, _formatted(branch.current_value, channel.unit_suffix)
+            )
             visible.append(row)
             tooltip.append(row)
-            continue
-        visible.append(CursorDisplayRow(branch.label, ""))
-        tooltip.append(CursorDisplayRow(branch.label, ""))
+        if visible:
+            face = _DOT_MARKER if mini else _face_name(channel)
+            visible.insert(0, CursorDisplayRow(face, ""))
+        elif channel.diagnostic:
+            row = CursorDisplayRow("状态", str(channel.diagnostic))
+            visible.append(row)
+            tooltip.append(row)
+        return tuple(visible), tuple(tooltip)
+    for branch in channel.branches:
+        visible.append(CursorDisplayRow(branch.label, "", role="branch"))
+        tooltip.append(CursorDisplayRow(branch.label, "", role="branch"))
         for label, attr in enabled:
             row = CursorDisplayRow(label, _formatted(getattr(branch, attr), channel.unit_suffix))
             tooltip.append(row)
@@ -189,14 +142,190 @@ def _custom_rows(channel, options, cursor_mode, mini):
     return tuple(visible), tuple(tooltip)
 
 
+def _channel_face_name(block: CursorDisplayBlock) -> str:
+    qualified = str(block.qualified_label or "").strip()
+    if " / " in qualified:
+        channel = qualified.split(" / ", 1)[-1].strip()
+        if channel:
+            return channel
+    return qualified
+
+
+def visible_block_label(block: CursorDisplayBlock, omit_source_prefix: bool) -> str:
+    """Visible identity: channel-only when D1 omits the source prefix."""
+    if omit_source_prefix:
+        return _channel_face_name(block)
+    return str(block.qualified_label or "").strip()
+
+
+def _metric_cells(rows, color: str) -> str:
+    parts = []
+    for row in rows:
+        if not row.value:
+            parts.append(
+                f'<td style="color:#94a3b8;padding-right:10px;">{escape(row.label)}</td>'
+            )
+            continue
+        parts.append(
+            f'<td style="color:#94a3b8;padding-right:4px;">{escape(row.label)}</td>'
+            f'<td style="color:{color};font-family:Consolas,monospace;padding-right:10px;">'
+            f'{escape(row.value)}</td>'
+        )
+    return "".join(parts)
+
+
+def _branch_groups(rows):
+    groups = []
+    label = None
+    metrics = []
+    pending = False
+    for row in rows:
+        if not row.value:
+            if pending:
+                groups.append((label, tuple(metrics)))
+            label = row.label
+            metrics = []
+            pending = True
+            continue
+        metrics.append(row)
+        pending = True
+    if pending:
+        groups.append((label, tuple(metrics)))
+    return groups
+
+
+def _dot_html(color: str) -> str:
+    return f'<span style="color:{color};">{_DOT_MARKER}</span>'
+
+
+def _compact_block_html(
+    block: CursorDisplayBlock,
+    *,
+    color: str,
+    constrained: bool,
+    header_override: str | None,
+    mini: bool,
+    cursor_mode: str,
+    x_mode: str,
+) -> str:
+    out = ['<table cellspacing="0" cellpadding="0" style="font-size:11px;">']
+    face_name = header_override or _channel_face_name(block)
+    rows = block.visible_rows
+    if cursor_mode == "single" and x_mode == "time":
+        row = rows[0] if rows else CursorDisplayRow(
+            _DOT_MARKER if mini else face_name, "—"
+        )
+        if mini:
+            out.append(
+                '<tr>'
+                f'<td style="padding-right:5px;line-height:1.15;">{_dot_html(color)}</td>'
+                f'<td style="color:{color};line-height:1.15;'
+                'font-family:Consolas,monospace;font-weight:650;">'
+                f'{escape(row.value)}</td>'
+                '</tr>'
+            )
+        else:
+            out.append(
+                '<tr>'
+                f'<td style="color:{color};font-weight:600;padding-right:8px;">'
+                f'{escape(row.label)}</td>'
+                f'<td style="color:{color};font-family:Consolas,monospace;">'
+                f'{escape(row.value)}</td>'
+                '</tr>'
+            )
+        out.append('</table>')
+        return "".join(out)
+    if cursor_mode == "dual" and x_mode == "time" and mini:
+        row = rows[0] if rows else CursorDisplayRow(face_name, "—")
+        name = header_override or row.label
+        out.append(
+            '<tr>'
+            f'<td style="padding-right:4px;">{_dot_html(color)}</td>'
+            f'<td style="color:{color};font-weight:600;padding-right:8px;">'
+            f'{escape(name)}</td>'
+            f'<td style="color:{color};font-family:Consolas,monospace;">'
+            f'△&nbsp;{escape(row.value)}</td>'
+            '</tr>'
+        )
+        out.append('</table>')
+        return "".join(out)
+    metrics = list(rows)
+    identity_label = None
+    if (
+        cursor_mode == "single"
+        and x_mode == "custom"
+        and metrics
+        and not metrics[0].value
+        and metrics[0].label
+    ):
+        identity_label = metrics[0].label
+        metrics = metrics[1:]
+    if mini and cursor_mode == "dual":
+        face = (
+            f'<td style="color:{color};font-weight:600;padding-right:8px;">'
+            f'{_dot_html(color)} {escape(face_name)}</td>'
+        )
+    elif mini:
+        face = f'<td style="padding-right:5px;">{_dot_html(color)}</td>'
+    else:
+        name = header_override or identity_label or face_name
+        face = (
+            f'<td style="color:{color};font-weight:600;padding-right:8px;">'
+            f'{escape(name)}</td>'
+        )
+    wrap_branches = (
+        constrained and mini and cursor_mode == "dual" and x_mode == "custom"
+    )
+    groups = _branch_groups(metrics)
+    if wrap_branches:
+        out.append(f'<tr>{face}</tr>')
+        for label, group_rows in groups:
+            cells = ""
+            if label:
+                cells += (
+                    f'<td style="color:#94a3b8;padding-right:4px;">'
+                    f'{escape(label)}</td>'
+                )
+            cells += _metric_cells(group_rows, color)
+            out.append(f'<tr>{cells}</tr>')
+    else:
+        cells = face
+        for label, group_rows in groups:
+            if label:
+                cells += (
+                    f'<td style="color:#94a3b8;padding-right:4px;">'
+                    f'{escape(label)}</td>'
+                )
+            cells += _metric_cells(group_rows, color)
+        out.append(f'<tr>{cells}</tr>')
+    out.append('</table>')
+    return "".join(out)
+
+
 def _block_html(
     block: CursorDisplayBlock,
     *,
     constrained: bool,
     header_override: str | None = None,
+    mini: bool = False,
+    cursor_mode: str = "dual",
+    x_mode: str = "time",
+    omit_visible_source_prefix: bool = False,
 ) -> str:
     color = escape(block.color or "#111827", quote=True)
-    header = escape(header_override or block.qualified_label)
+    compact = bool(mini) or cursor_mode == "single"
+    if compact:
+        return _compact_block_html(
+            block,
+            color=color,
+            constrained=constrained,
+            header_override=header_override,
+            mini=bool(mini),
+            cursor_mode=cursor_mode,
+            x_mode=x_mode,
+        )
+    default_header = visible_block_label(block, omit_visible_source_prefix)
+    header = escape(header_override or default_header)
     out = [
         '<table cellspacing="0" cellpadding="0" style="font-size:11px;">',
         f'<tr><td colspan="8" style="color:{color};font-weight:600;padding:2px 0;">{header}</td></tr>',
@@ -274,7 +403,13 @@ def render_cursor_presentation(
             else None
         )
         parts.append(_block_html(
-            block, constrained=constrained, header_override=header
+            block,
+            constrained=constrained,
+            header_override=header,
+            mini=projection.mini,
+            cursor_mode=projection.cursor_mode,
+            x_mode=projection.x_mode,
+            omit_visible_source_prefix=projection.omit_visible_source_prefix,
         ))
     omitted = len(projection.blocks) - len(shown)
     if omitted:
@@ -292,7 +427,7 @@ def _tooltip(blocks: Iterable[CursorDisplayBlock]) -> str:
         lines.append(block.qualified_label)
         branch = ""
         for row in block.tooltip_rows:
-            if row.label.startswith("X") and not row.value:
+            if row.role == "branch" or (not row.value and row.label not in {_DOT_MARKER}):
                 branch = row.label
                 lines.append(branch)
                 continue
@@ -319,8 +454,10 @@ def build_cursor_presentation(
         raise ValueError("cursor_mode must be single or dual")
     if x_mode not in {"time", "custom"}:
         raise ValueError("x_mode must be time or custom")
+    channel_list = tuple(channels)
+    omit_prefix = cursor_result_source_count(channel_list) <= 1
     blocks = []
-    for channel in channels:
+    for channel in channel_list:
         if x_mode == "custom":
             visible, tooltip = _custom_rows(channel, options, cursor_mode, mini)
         else:
@@ -343,6 +480,7 @@ def build_cursor_presentation(
         cursor_mode=cursor_mode,
         x_mode=x_mode,
         mini=bool(mini),
+        omit_visible_source_prefix=omit_prefix,
     )
     return CursorPresentation(
         blocks=projection.blocks,
@@ -352,6 +490,7 @@ def build_cursor_presentation(
         cursor_mode=projection.cursor_mode,
         x_mode=projection.x_mode,
         mini=projection.mini,
+        omit_visible_source_prefix=omit_prefix,
     )
 
 
@@ -446,6 +585,17 @@ class CursorDisplayPopover(QFrame):
         super().hideEvent(event)
         self.visibility_changed.emit(None)
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            painter.setBrush(_POPOVER_BG)
+            painter.setPen(QPen(_POPOVER_BORDER, 1.0))
+            painter.drawRoundedRect(rect, _POPOVER_RADIUS, _POPOVER_RADIUS)
+        finally:
+            painter.end()
+
     def _on_toggle(self, _checked):
         sender = self.sender()
         if sender not in self._checks.values():
@@ -466,7 +616,7 @@ class CursorDisplayPopover(QFrame):
         if self.layout() is not None:
             self.layout().activate()
         hint = self.sizeHint().expandedTo(self.minimumSizeHint())
-        self.resize(max(hint.width(), 252), max(hint.height(), 248))
+        self.resize(max(hint.width(), 252), hint.height())
         if self.isVisible():
             self.visibility_changed.emit(self.frameGeometry())
 
@@ -484,4 +634,5 @@ __all__ = [
     "build_cursor_presentation",
     "enabled_value_fields",
     "render_cursor_presentation",
+    "visible_block_label",
 ]

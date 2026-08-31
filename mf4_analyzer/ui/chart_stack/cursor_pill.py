@@ -499,7 +499,7 @@ class CursorPill(QFrame):
         return f"{text[:max(1, head - 1)]}{marker}{text[-max(1, tail - 1):]}"
 
     def _apply_display_projection(self, category, count):
-        from .cursor_display import render_cursor_presentation
+        from .cursor_display import render_cursor_presentation, visible_block_label
 
         projection = self._display_projection
         self._display_layout_category = category
@@ -508,8 +508,11 @@ class CursorPill(QFrame):
         header_overrides = None
         if category == "constrained":
             header_width = max(20, int(self._detail.maximumWidth() * 1.2))
+            omit_prefix = bool(projection.omit_visible_source_prefix)
             header_overrides = tuple(
-                self._middle_elide_label(block.qualified_label, header_width)
+                self._middle_elide_label(
+                    visible_block_label(block, omit_prefix), header_width
+                )
                 for block in projection.blocks[:self._visible_channel_count]
             )
         self._detail.setText(render_cursor_presentation(

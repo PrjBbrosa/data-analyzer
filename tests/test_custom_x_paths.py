@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -19,7 +20,9 @@ from mf4_analyzer.signal.custom_x_paths import (
     REASON_SHORT_SEQUENCE,
     REASON_UNIDIRECTIONAL,
     REASON_UNIQUE_PAIR,
+    PathContribution,
     sample_custom_x_cursor,
+    sample_custom_x_cursor_from_paths,
     analyze_custom_x_paths,
 )
 
@@ -478,3 +481,159 @@ print(json.dumps({'blocked': blocked, 'marker': 'clean'}))
     payload = json.loads(result.stdout)
     assert payload["marker"] == "clean"
     assert payload["blocked"] == []
+
+
+def _sample_path_contribution_loop_oracle(contribution, x_value):
+    """Retired production loop, kept as the numerical oracle for searchsorted."""
+    x = contribution.x
+    y = contribution.y
+    if not x.size or x_value < float(np.min(x)) or x_value > float(np.max(x)):
+        return None
+    exact = np.flatnonzero(x == x_value)
+    if exact.size:
+        return float(y[int(exact[0])])
+    for index in range(int(x.size) - 1):
+        left_x = float(x[index])
+        right_x = float(x[index + 1])
+        if not min(left_x, right_x) <= x_value <= max(left_x, right_x):
+            continue
+        if left_x == right_x:
+            continue
+        fraction = (x_value - left_x) / (right_x - left_x)
+        value = float(y[index]) + fraction * (float(y[index + 1]) - float(y[index]))
+        return value if math.isfinite(value) else None
+    return None
+
+
+def _assert_searchsorted_matches_oracle(contribution, x_values):
+    from mf4_analyzer.signal.custom_x_paths import _sample_path_contribution
+
+    for x_value in x_values:
+        got = _sample_path_contribution(contribution, x_value)
+        expected = _sample_path_contribution_loop_oracle(contribution, x_value)
+        if expected is None:
+            assert got is None
+            continue
+        assert got is not None
+        assert got == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+def _monotonic_round_trip(rng, n=80):
+    up_steps = rng.uniform(0.05, 1.4, size=n)
+    down_steps = rng.uniform(0.05, 1.4, size=n)
+    x_up = np.concatenate((np.asarray((0.0,)), np.cumsum(up_steps)))
+    x_down = x_up[-1] - np.cumsum(down_steps)
+    x = np.concatenate((x_up, x_down))
+    y = np.concatenate((2.0 * x_up, 50.0 + 0.5 * x_down))
+    return x, y
+
+
+def test_sample_from_paths_matches_one_shot_sample_api():
+    x, y = _cursor_out_and_back()
+    paths = analyze_custom_x_paths(x, y)
+    one_shot = sample_custom_x_cursor(x, y, 4.25)
+    split = sample_custom_x_cursor_from_paths(paths, 4.25)
+
+    assert split.reason == one_shot.reason
+    assert [item.direction for item in split.values] == [
+        item.direction for item in one_shot.values
+    ]
+    assert [item.value for item in split.values] == pytest.approx(
+        [item.value for item in one_shot.values]
+    )
+
+
+def test_searchsorted_sample_matches_old_loop_on_random_round_trips():
+    rng = np.random.default_rng(20260831)
+    for _ in range(8):
+        x, y = _monotonic_round_trip(rng)
+        paths = analyze_custom_x_paths(x, y)
+        assert paths.accepted
+        probes = np.concatenate((
+            x[:1],
+            x[-1:],
+            rng.uniform(float(np.min(x)), float(np.max(x)), size=24),
+        ))
+        for contrib in paths.accepted:
+            _assert_searchsorted_matches_oracle(contrib, probes)
+
+
+def test_searchsorted_sample_matches_old_loop_at_endpoints_duplicates_and_nonfinite():
+    from mf4_analyzer.signal.custom_x_paths import _sample_path_contribution
+
+    rising = PathContribution(
+        x=np.asarray([0.0, 1.0, 1.0, 2.0, 3.0]),
+        y=np.asarray([10.0, 20.0, 21.0, 30.0, 40.0]),
+        indices=np.arange(5),
+        direction=1,
+    )
+    falling = PathContribution(
+        x=np.asarray([3.0, 2.0, 2.0, 1.0, 0.0]),
+        y=np.asarray([4.0, 3.0, 2.5, 1.0, 0.0]),
+        indices=np.arange(5),
+        direction=-1,
+    )
+    nonfinite = PathContribution(
+        x=np.asarray([0.0, 1.0, 2.0]),
+        y=np.asarray([0.0, np.inf, 2.0]),
+        indices=np.arange(3),
+        direction=1,
+    )
+    empty = PathContribution(
+        x=np.asarray([], dtype=float),
+        y=np.asarray([], dtype=float),
+        indices=np.asarray([], dtype=int),
+        direction=1,
+    )
+    probes = (-0.5, 0.0, 0.5, 1.0, 1.5, 3.0, 3.5, np.nan, np.inf)
+    _assert_searchsorted_matches_oracle(rising, probes)
+    _assert_searchsorted_matches_oracle(falling, probes)
+    _assert_searchsorted_matches_oracle(nonfinite, (0.5, 1.5))
+    assert _sample_path_contribution(empty, 0.0) is None
+    assert _sample_path_contribution_loop_oracle(empty, 0.0) is None
+    assert _sample_path_contribution(nonfinite, 0.5) is None
+    assert _sample_path_contribution(rising, 1.0) == pytest.approx(20.0)
+
+
+def test_monotonic_leg_interpolates_via_searchsorted(monkeypatch):
+    from mf4_analyzer.signal import custom_x_paths as module
+
+    calls = []
+    original = module.np.searchsorted
+
+    def _wrapped(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module.np, "searchsorted", _wrapped)
+    contrib = PathContribution(
+        x=np.linspace(0.0, 10.0, 21),
+        y=np.linspace(0.0, 40.0, 21),
+        indices=np.arange(21),
+        direction=1,
+    )
+    value = module._sample_path_contribution(contrib, 4.25)
+    assert calls
+    assert value == pytest.approx(17.0)
+
+
+def test_searchsorted_sample_matches_old_loop_on_hysteresis_fixtures():
+    from tests._helpers import wwt_factory as wwt
+
+    series_list = (
+        wwt.sfns_like_hysteresis_arrays("cycle"),
+        wwt.sfns_like_hysteresis_arrays("noisy"),
+        wwt.sfns_like_hysteresis_arrays("unidirectional"),
+    )
+    noisy_x = _noisy_single_cycle()
+    extra = ((noisy_x, np.arange(noisy_x.size, dtype=float)),)
+    for series in series_list:
+        extra += ((series.x, series.y),)
+    for x, y in extra:
+        paths = analyze_custom_x_paths(x, y)
+        lo = float(np.nanmin(x))
+        hi = float(np.nanmax(x))
+        mid = 0.5 * (lo + hi)
+        probes = (lo, mid, hi, lo + 0.1 * (hi - lo), hi - 0.1 * (hi - lo))
+        for contrib in (*paths.accepted, *paths.contributions):
+            _assert_searchsorted_matches_oracle(contrib, probes)

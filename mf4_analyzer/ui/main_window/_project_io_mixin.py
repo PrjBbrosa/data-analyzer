@@ -76,9 +76,10 @@ class ProjectIOMixin:
     """
 
     #: Set while a project restore is in flight. ChannelScopeMixin reads it to
-    #: suppress auto-attach, but only this mixin writes it -- the default lives
-    #: here as a class attribute so the guard has exactly one owning file
-    #: (spec D-E2).
+    #: suppress auto-attach; ``_reset_empty_workspace_session`` also reads it
+    #: so ``open_project``'s intermediate ``close_all`` does not collapse
+    #: Views. Only this mixin writes it -- the default lives here as a class
+    #: attribute so the guard has exactly one owning file (spec D-E2).
     _restoring_project = False
 
     def open_files_or_project(self):
@@ -1741,8 +1742,72 @@ class ProjectIOMixin:
         self.navigator.remove_file(fid, emit=False)
         return name
 
+    def _reset_empty_workspace_session(self):
+        """One session-reset transaction when the last logical source is gone.
+
+        Interactive close that empties ``self.files`` must land on a single
+        default empty View per manager, time-axis X, default time-range /
+        filter, and a cleared cursor pill. Project load/restore intermediate
+        empties must not run this (``_restoring_project`` / ``_opening_project``
+        / ``_applying_view``). Does not touch QSettings, recent files, presets,
+        or the five global cursor-display preference bits.
+        """
+        if self.files:
+            return
+        if getattr(self, "_restoring_project", False):
+            return
+        if getattr(self, "_opening_project", False):
+            return
+        if getattr(self, "_applying_view", False):
+            return
+
+        view_manager = getattr(self, "view_manager", None)
+        if view_manager is not None:
+            view_manager.reset_to_single_default()
+        for manager in (getattr(self, "analysis_managers", None) or {}).values():
+            reset = getattr(manager, "reset_to_single_default", None)
+            if callable(reset):
+                reset()
+
+        custom_xaxis = getattr(self, "_custom_xaxis", None)
+        if custom_xaxis is not None:
+            custom_xaxis.clear()
+        sync_xaxis = getattr(self, "_sync_inspector_to_xaxis_spec", None)
+        if callable(sync_xaxis) and custom_xaxis is not None:
+            sync_xaxis(custom_xaxis.spec)
+
+        top = getattr(getattr(self, "inspector", None), "top", None)
+        if top is not None:
+            old_chk = top.chk_range.blockSignals(True)
+            try:
+                top.chk_range.setChecked(False)
+            finally:
+                top.chk_range.blockSignals(old_chk)
+            top._range_checked_by_mode = {}
+            top.set_range_limits(0, 0)
+            top.set_range_values(0, 0)
+            update_range_rows = getattr(top, "_update_range_rows_visible", None)
+            if callable(update_range_rows):
+                update_range_rows()
+
+        filter_panel = getattr(getattr(self, "inspector", None), "filter_panel", None)
+        if filter_panel is not None:
+            filter_panel.set_kind("低通")
+            filter_panel.set_cutoff(100.0)
+            filter_panel.set_band(100.0, 2000.0)
+            filter_panel.set_order(4)
+            filter_panel.chk_orig.setChecked(True)
+            filter_panel.chk_filt.setChecked(True)
+            filter_panel.set_enabled(False)
+
+        chart_stack = getattr(self, "chart_stack", None)
+        if chart_stack is not None:
+            chart_stack.clear_cursor_pill()
+
     def _present_after_sources_closed(self):
         """One-shot navigator / record-tree projection after one or more purges."""
+        if not self.files:
+            self._reset_empty_workspace_session()
         mode = self.chart_stack.current_mode()
         if mode == "time":
             resolved = self._focused_time_view_state()
@@ -1995,13 +2060,16 @@ class ProjectIOMixin:
         path = Path(path)
 
         doc = pio.load_project_from_json(path)
-        self.close_all(force=True)
-        # Fresh restore: clear any stale auto-recompute queue from a prior open.
-        self._analysis_restore_pending = set()
-
+        # Hold the restore guard across close_all so the empty-workspace
+        # session reset does not collapse Views that the project is about
+        # to reinstall. Auto-attach stays suppressed for the file-ref
+        # restore that follows (same as before this wrap).
         old_restoring = getattr(self, "_restoring_project", False)
         self._restoring_project = True
         try:
+            self.close_all(force=True)
+            # Fresh restore: clear any stale auto-recompute queue from a prior open.
+            self._analysis_restore_pending = set()
             restore = self._restore_project_file_refs(doc, path, pio)
         finally:
             self._restoring_project = old_restoring
@@ -2243,6 +2311,7 @@ class ProjectIOMixin:
         # would otherwise sync record rows. Clear presentation here, not after
         # a successful replot.
         self._sync_record_curve_tree()
+        self._reset_empty_workspace_session()
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")
         self.toast(f"已关闭全部 {n} 个文件", "info")

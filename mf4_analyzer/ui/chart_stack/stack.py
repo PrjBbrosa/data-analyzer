@@ -1,5 +1,4 @@
 """ChartStack — the centre-pane QWidget coordinator."""
-import json
 import logging
 from functools import partial
 
@@ -47,7 +46,11 @@ from .cursor_display import (
     CursorDisplaySettingsStore,
     build_cursor_presentation,
 )
-from ..plot_helpers import _split_prefixed_label, dual_row_is_custom_x
+from ..plot_helpers import (
+    apply_cursor_source_prefix_policy,
+    dual_row_is_custom_x,
+    resolve_cursor_source_label,
+)
 from .toolbar import PgNavigationToolbar
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ..channel_drag import INTERNAL_CHANNEL_MIME, decode_channel_drag
@@ -83,6 +86,7 @@ class ChartStack(QWidget):
         self._cursor_display_store = CursorDisplaySettingsStore(cursor_settings)
         self._cursor_display_options = self._cursor_display_store.load()
         self._cursor_rows_by_canvas = {}
+        self._source_label_resolver = None
         # QSS (ChartStack { border-radius:10px; background:#fff }) only paints on
         # a plain QWidget subclass once WA_StyledBackground is set; without it Qt
         # skips the styled fill/border and the rounded card never renders.
@@ -925,6 +929,7 @@ class ChartStack(QWidget):
             canvas = TimeDomainCanvasPG(self)
             self._secondary_card = TimeChartCard(canvas)
             canvas.set_cursor_display_options(self._cursor_display_options)
+            canvas.set_source_label_resolver(self._source_label_resolver)
             self._secondary_card.set_cursor_display_options(
                 self._cursor_display_options
             )
@@ -1594,6 +1599,19 @@ class ChartStack(QWidget):
         if pill is not None:
             self._update_pill_content(pill, card, pill.clear)
 
+    def _is_managed_time_canvas(self, source):
+        """True when ``source`` is this stack's live time-domain canvas.
+
+        Spec §3.5: live canvases render detail only through the structured
+        projection pipeline. Unknown QObject emitters keep the legacy
+        ``cursor_info`` / ``dual_cursor_info`` fallback. Identity is the
+        owning canvas, not whether a rows signal happens to be present.
+        """
+        if source is None or source is self.canvas_time:
+            return True
+        secondary = self.secondary_canvas()
+        return secondary is not None and source is secondary
+
     def _on_cursor_info(self, text, source=None):
         if not self._cursor_source_on_screen(source):
             return
@@ -1605,11 +1623,12 @@ class ChartStack(QWidget):
         if not text:
             self._update_pill_content(pill, card, pill.clear)
             return
-        if mode == 'single':
+        managed = self._is_managed_time_canvas(source)
+        if mode == 'single' and not managed:
             # Compatibility callers may emit only ``cursor_info``. Drop an
             # older empty-dual cache so the pill's mini toggle does not revive
-            # that stale projection. The live canvas emits single_cursor_rows
-            # immediately after this signal and repopulates the cache.
+            # that stale projection. Live canvases keep the cache: rows update
+            # it, and popping here flashed the pill before rows arrived.
             cache_source = self.canvas_time if source is None else source
             self._cursor_rows_by_canvas.pop(cache_source, None)
 
@@ -1619,7 +1638,8 @@ class ChartStack(QWidget):
                     self._format_single_cursor_variants_for_pill(text)
                 )
                 pill.set_primary(primary)
-                pill.set_single_detail_html(detail, mini_detail, tooltip)
+                if not managed:
+                    pill.set_single_detail_html(detail, mini_detail, tooltip)
             else:
                 primary, _detail = self._format_cursor_info_for_pill(text, mode)
                 pill.set_primary(primary)
@@ -1659,6 +1679,17 @@ class ChartStack(QWidget):
             return
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
+        if self._is_managed_time_canvas(source):
+            # Live dual detail comes from dual_cursor_rows. Keep visibility
+            # if this HTML is the only signal a caller sent; do not write
+            # detail from the legacy string.
+            pill = self._pill_for_canvas(source)
+            if (
+                self._cursor_pill_visible_for_mode(self.current_mode(), source)
+                and (text or pill.primary_text())
+            ):
+                pill.setVisible(True)
+            return
         pill = self._pill_for_canvas(source)
         card = self._card_for_canvas(source)
 
@@ -1676,7 +1707,9 @@ class ChartStack(QWidget):
         source = self.canvas_time if source is None else source
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
-        channels = tuple(self._cursor_display_channel_from_dual(row) for row in rows)
+        channels = tuple(apply_cursor_source_prefix_policy(
+            tuple(self._cursor_display_channel_from_dual(row) for row in rows)
+        ))
         x_mode = (
             "custom"
             if any(dual_row_is_custom_x(row) for row in rows)
@@ -1706,6 +1739,8 @@ class ChartStack(QWidget):
         return "custom" if callable(checker) and checker() else "time"
 
     def _cursor_display_channel_from_dual(self, row):
+        if isinstance(row, CursorDisplayChannel):
+            return row
         if not hasattr(row, "channel_name"):
             name, minimum, maximum, average, delta, unit_suffix, color = row[:7]
             return CursorDisplayChannel(
@@ -1721,7 +1756,9 @@ class ChartStack(QWidget):
             )
         name = str(getattr(row, "label", "") or getattr(row, "channel_name", ""))
         identity = getattr(row, "identity", None)
-        source_label, channel_label = self._cursor_identity_labels(identity, name)
+        source_label, channel_label = resolve_cursor_source_label(
+            name, identity, self._source_label_resolver
+        )
         branches = tuple(
             CursorDisplayBranch(
                 branch.branch_label,
@@ -1745,18 +1782,11 @@ class ChartStack(QWidget):
             diagnostic=str(getattr(row, "status", "") or ""),
         )
 
-    def _cursor_identity_labels(self, identity, display_name):
-        prefix, channel_label = _split_prefixed_label(str(display_name))
-        source_label = prefix[1:-1] if prefix else ""
-        parsed = identity
-        if isinstance(parsed, str):
-            try:
-                parsed = json.loads(parsed)
-            except (TypeError, ValueError):
-                parsed = None
-        if isinstance(parsed, (tuple, list)) and len(parsed) == 2:
-            source_label = str(parsed[0])
-        return source_label, str(channel_label)
+    def set_source_label_resolver(self, resolver):
+        self._source_label_resolver = resolver
+        for canvas in (self.canvas_time, self.secondary_canvas()):
+            if canvas is not None:
+                canvas.set_source_label_resolver(resolver)
 
     def _refresh_cursor_projection(self, source):
         cached = self._cursor_rows_by_canvas.get(source)
@@ -1907,13 +1937,6 @@ class ChartStack(QWidget):
             self._pill_secondary, self._secondary_card
         )
         self._cursor_rows_by_canvas.clear()
-
-    def closeEvent(self, event):
-        for card in (self._time_card, self._secondary_card):
-            if card is not None:
-                card.close_cursor_display_popover()
-        self.clear_cursor_pill()
-        super().closeEvent(event)
 
     def cursor_pill_snapshot(self):
         """Return the current floating cursor pill UI state.

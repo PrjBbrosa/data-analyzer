@@ -340,11 +340,77 @@ def analyze_custom_x_paths(
     )
 
 
+def _leg_search_direction(contribution: PathContribution) -> int:
+    """Return +1 / -1 for search order, or 0 when the leg has no span."""
+    direction = int(contribution.direction)
+    if direction in (-1, 1):
+        return direction
+    x = contribution.x
+    if x.size < 2:
+        return 0
+    delta = float(x[-1]) - float(x[0])
+    if delta > 0.0:
+        return 1
+    if delta < 0.0:
+        return -1
+    return 0
+
+
+def _interpolate_sorted_neighbors(
+    x_mono: np.ndarray,
+    y_mono: np.ndarray,
+    x_value: float,
+) -> float | None:
+    """Linear interpolate ``x_value`` on a non-decreasing ``x_mono``."""
+    idx = int(np.searchsorted(x_mono, x_value, side="left"))
+    if idx <= 0 or idx >= int(x_mono.size):
+        return None
+    left_x = float(x_mono[idx - 1])
+    right_x = float(x_mono[idx])
+    if left_x == right_x:
+        return None
+    fraction = (x_value - left_x) / (right_x - left_x)
+    value = float(y_mono[idx - 1]) + fraction * (
+        float(y_mono[idx]) - float(y_mono[idx - 1])
+    )
+    return value if math.isfinite(value) else None
+
+
+def _interpolate_first_bracket(
+    x: np.ndarray,
+    y: np.ndarray,
+    x_value: float,
+) -> float | None:
+    """First containing segment in acquisition order (old-loop equivalent)."""
+    left_x = x[:-1]
+    right_x = x[1:]
+    lo = np.minimum(left_x, right_x)
+    hi = np.maximum(left_x, right_x)
+    hit = (left_x != right_x) & (lo <= x_value) & (x_value <= hi)
+    indices = np.flatnonzero(hit)
+    if not indices.size:
+        return None
+    index = int(indices[0])
+    lx = float(left_x[index])
+    rx = float(right_x[index])
+    fraction = (x_value - lx) / (rx - lx)
+    value = float(y[index]) + fraction * (float(y[index + 1]) - float(y[index]))
+    return value if math.isfinite(value) else None
+
+
 def _sample_path_contribution(
     contribution: PathContribution,
     x_value: float,
 ) -> float | None:
-    """Interpolate one physical leg in its acquired local order."""
+    """Interpolate one physical leg with ``searchsorted`` on a monotonic view.
+
+    Descending legs are reversed first so the search runs on non-decreasing
+    X. Exact ``x == x_value`` still returns the first acquired Y. Out of
+    range, empty, and non-finite interpolated Y still return ``None``.
+    Quantisation chatter can make a directional leg non-monotonic; those
+    visits keep the acquisition-order first-bracket rule so sampling stays
+    pointwise equivalent to the retired Python loop.
+    """
     x = contribution.x
     y = contribution.y
     if not x.size or x_value < float(np.min(x)) or x_value > float(np.max(x)):
@@ -352,17 +418,48 @@ def _sample_path_contribution(
     exact = np.flatnonzero(x == x_value)
     if exact.size:
         return float(y[int(exact[0])])
-    for index in range(int(x.size) - 1):
-        left_x = float(x[index])
-        right_x = float(x[index + 1])
-        if not min(left_x, right_x) <= x_value <= max(left_x, right_x):
-            continue
-        if left_x == right_x:
-            continue
-        fraction = (x_value - left_x) / (right_x - left_x)
-        value = float(y[index]) + fraction * (float(y[index + 1]) - float(y[index]))
-        return value if math.isfinite(value) else None
-    return None
+    direction = _leg_search_direction(contribution)
+    if direction < 0:
+        x_mono = x[::-1]
+        y_mono = y[::-1]
+    else:
+        x_mono = x
+        y_mono = y
+    if x_mono.size >= 2 and not np.any(np.diff(x_mono) < 0.0):
+        return _interpolate_sorted_neighbors(x_mono, y_mono, x_value)
+    return _interpolate_first_bracket(x, y, x_value)
+
+
+def sample_custom_x_cursor_from_paths(
+    paths: SeriesPathResult,
+    x_value,
+) -> CustomXCursorResult:
+    """Sample a selected X on already-analyzed major paths.
+
+    Callers that cache ``analyze_custom_x_paths`` should use this instead of
+    re-running the one-shot ``sample_custom_x_cursor`` on every cursor move.
+    """
+    try:
+        selected_x = float(x_value)
+    except (TypeError, ValueError):
+        return CustomXCursorResult((), REASON_EMPTY)
+    if not math.isfinite(selected_x):
+        return CustomXCursorResult((), REASON_EMPTY)
+    if paths.reason not in (REASON_UNIQUE_PAIR, REASON_UNIDIRECTIONAL):
+        return CustomXCursorResult((), paths.reason)
+
+    accepted = tuple(sorted(
+        paths.accepted,
+        key=lambda item: 0 if item.direction > 0 else 1,
+    ))
+    values = tuple(
+        CursorBranchValue(direction=item.direction, value=value)
+        for item in accepted
+        if (value := _sample_path_contribution(item, selected_x)) is not None
+    )
+    if not values:
+        return CustomXCursorResult((), REASON_EMPTY)
+    return CustomXCursorResult(values, paths.reason)
 
 
 def sample_custom_x_cursor(
@@ -392,21 +489,7 @@ def sample_custom_x_cursor(
         return CustomXCursorResult((), REASON_EMPTY)
 
     paths = analyze_custom_x_paths(x_array, y_array)
-    if paths.reason not in (REASON_UNIQUE_PAIR, REASON_UNIDIRECTIONAL):
-        return CustomXCursorResult((), paths.reason)
-
-    accepted = tuple(sorted(
-        paths.accepted,
-        key=lambda item: 0 if item.direction > 0 else 1,
-    ))
-    values = tuple(
-        CursorBranchValue(direction=item.direction, value=value)
-        for item in accepted
-        if (value := _sample_path_contribution(item, selected_x)) is not None
-    )
-    if not values:
-        return CustomXCursorResult((), REASON_EMPTY)
-    return CustomXCursorResult(values, paths.reason)
+    return sample_custom_x_cursor_from_paths(paths, selected_x)
 
 
 __all__ = [
@@ -423,4 +506,5 @@ __all__ = [
     "SeriesPathResult",
     "analyze_custom_x_paths",
     "sample_custom_x_cursor",
+    "sample_custom_x_cursor_from_paths",
 ]

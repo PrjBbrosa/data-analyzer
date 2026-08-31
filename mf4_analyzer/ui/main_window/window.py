@@ -457,6 +457,7 @@ class MainWindow(
         self.splitter = splitter
         self.navigator = FileNavigator(self)
         self.chart_stack = ChartStack(self)
+        self.chart_stack.set_source_label_resolver(self._cursor_fid_short_name)
         self.inspector = Inspector(self)
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
@@ -1425,6 +1426,12 @@ class MainWindow(
         if fd is None:
             return str(fid)
         return getattr(fd, 'short_name', None) or str(fid)
+
+    def _cursor_fid_short_name(self, fid):
+        fd = self.files.get(fid)
+        if fd is None:
+            return ""
+        return str(getattr(fd, "short_name", "") or "")
 
     def _sync_fft_source_summary(self, checked=None):
         if checked is None:

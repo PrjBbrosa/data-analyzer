@@ -191,11 +191,11 @@ def test_custom_x_single_emits_rise_then_fall_current_values_only(qapp):
 
     legacy, rows = _emit_single(canvas, 4.0)
 
-    assert "X=4.0 mm" in legacy
+    assert "X=4" in legacy and "mm" in legacy
     assert len(rows) == 1
     row = rows[0]
     assert row.identity is not None
-    assert row.source_label == "fid-a"
+    assert row.source_label == "source-a"
     assert row.channel_label == "force"
     assert [branch.label for branch in row.branches] == ["X↑", "X↓"]
     assert [branch.current_value for branch in row.branches] == pytest.approx(

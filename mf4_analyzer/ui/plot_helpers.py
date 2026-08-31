@@ -10,6 +10,8 @@ calls continue to work without change.
 """
 
 from dataclasses import dataclass, field
+import json
+import re
 
 import numpy as np
 
@@ -115,6 +117,97 @@ def _split_prefixed_label(text):
         if rest:
             return text[:i + 1], rest
     return None, text
+
+
+_FID_LABEL_RE = re.compile(r"^f\d+$")
+
+
+def _is_internal_fid(text):
+    return bool(_FID_LABEL_RE.fullmatch(str(text or "").strip()))
+
+
+def _cursor_identity_parts(identity):
+    """Return ``(source_id, channel)`` from a composite identity, else ``(None, None)``."""
+    parsed = identity
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except (TypeError, ValueError):
+            return None, None
+    if isinstance(parsed, (tuple, list)) and len(parsed) == 2:
+        source_id, channel = parsed[0], parsed[1]
+        source_s = "" if source_id is None else str(source_id)
+        channel_s = "" if channel is None else str(channel)
+        return source_s, channel_s
+    return None, None
+
+
+def _reject_fid_label(text):
+    value = str(text or "").strip()
+    if not value or _is_internal_fid(value):
+        return ""
+    return value
+
+
+def resolve_cursor_source_label(display_name, identity, fid_resolver=None):
+    """Return ``(source_label, channel_label)``. ``source_label`` is never an internal fid.
+
+    1. If ``display_name`` has a ``[short_name]`` prefix via ``_split_prefixed_label``,
+       use that prefix content (unless it is itself an internal fid).
+    2. Else if identity is ``(fid, ch)`` or a JSON list of that shape, call
+       ``fid_resolver(fid)`` when provided.
+    3. Else empty ``source_label``.
+
+    Channel label: prefixed rest, else identity[1], else ``display_name``.
+    Strings matching ``^f\\d+$`` are treated as fids, never as display labels.
+    """
+    display = "" if display_name is None else str(display_name)
+    prefix, rest = _split_prefixed_label(display)
+    source_label = _reject_fid_label(prefix[1:-1] if prefix else "")
+    source_id, ident_channel = _cursor_identity_parts(identity)
+    if not source_label and source_id is not None and callable(fid_resolver):
+        source_label = _reject_fid_label(fid_resolver(source_id))
+
+    if prefix is not None:
+        channel_label = rest
+    elif ident_channel:
+        channel_label = ident_channel
+    else:
+        channel_label = display
+    channel_label = str(channel_label or "")
+    if _is_internal_fid(channel_label):
+        if ident_channel and not _is_internal_fid(ident_channel):
+            channel_label = ident_channel
+        elif rest and not _is_internal_fid(rest) and rest != display:
+            channel_label = rest
+        elif display and not _is_internal_fid(display):
+            channel_label = display
+        else:
+            channel_label = ""
+    return source_label, channel_label
+
+
+def cursor_result_source_count(channels):
+    """Count distinct sources in a cursor-result batch (identity fid, else label)."""
+    unique = set()
+    for channel in channels:
+        source_id, _ = _cursor_identity_parts(getattr(channel, "identity", None))
+        source_label = str(getattr(channel, "source_label", "") or "").strip()
+        if source_id:
+            unique.add(("id", source_id))
+        elif source_label:
+            unique.add(("label", source_label))
+    return len(unique)
+
+
+def apply_cursor_source_prefix_policy(channels):
+    """Identity passthrough: D1 omit is a visible-face decision in presentation.
+
+    ``source_label`` stays resolved (never fid) so tooltips keep the qualified
+    name. Visible HTML omits the prefix when :func:`cursor_result_source_count`
+    is ≤ 1.
+    """
+    return list(channels)
 
 
 def _compact_axis_label(name, unit='', max_chars=22):

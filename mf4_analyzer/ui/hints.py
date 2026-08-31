@@ -205,7 +205,7 @@ _HINTS = (
     ),
     Hint(
         id="time.custom_x_paths",
-        text="游标显示设置管极值点；Custom X 游标 X↑/X↓",
+        text="游标显示设置管极值点；− 收 mini；X↑/X↓",
         surface="discovery",
         modes=frozenset({"time"}),
         retire_on="custom_x_dual_cursor",
