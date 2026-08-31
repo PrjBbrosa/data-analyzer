@@ -593,6 +593,32 @@ def test_time_card_settings_button_stays_beside_cursor_segment_and_emits_options
     assert not popover.isVisible()
 
 
+def test_cursor_display_settings_icon_is_list_checks_not_chart_options_tune(
+    qapp, qtbot,
+):
+    import qtawesome as qta
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.chart_stack._helpers import _ICON_COLOR
+
+    stack = ChartStack()
+    qtbot.addWidget(stack)
+    stack.show()
+    qapp.processEvents()
+    card = stack._time_card
+    button = card.cursor_display_settings_button()
+    size = button.iconSize()
+    actual = button.icon().pixmap(size).toImage()
+    expected = qta.icon(
+        "mdi.format-list-checks", color=_ICON_COLOR,
+    ).pixmap(size).toImage()
+    chart_options = qta.icon(
+        "mdi.tune-vertical", color=_ICON_COLOR,
+    ).pixmap(size).toImage()
+    assert actual == expected
+    assert actual != chart_options
+    assert card._options_btn.icon().pixmap(size).toImage() == chart_options
+
+
 def test_tooltip_uses_branch_role_for_full_path_label():
     channel = CursorDisplayChannel(
         identity=("source-a", "Rack Force"),

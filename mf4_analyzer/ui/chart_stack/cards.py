@@ -1152,7 +1152,7 @@ class TimeChartCard(_ChartCard):
         self._cursor_display_settings_btn.setToolTip("游标显示设置")
         self._cursor_display_settings_btn.setAutoRaise(True)
         self._cursor_display_settings_btn.setIcon(
-            qta.icon('mdi.tune-vertical', color=_ICON_COLOR)
+            qta.icon('mdi.format-list-checks', color=_ICON_COLOR)
         )
         self._cursor_display_settings_btn.setIconSize(QSize(15, 15))
         self._cursor_display_settings_btn.setFixedSize(28, 28)
