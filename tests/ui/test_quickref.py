@@ -168,9 +168,17 @@ def test_quickref_documents_time_cursor_display_settings():
     assert "最小值点" in row.sub
     assert "最大值点" in row.sub
     assert "Min / Max / Avg" in row.sub
+    assert "差值" in row.sub
     assert "mini" in row.sub
     assert "tooltip" in row.sub
     assert "全局" in row.sub
+
+
+def test_quickref_documents_narrow_toolbar_pan():
+    group = next(g for g in quickref.QUICKREF if g.title == "快捷键")
+    row = next(row for row in group.rows if row.desc == "窄窗口工具栏")
+    assert "滑动" in row.sub
+    assert "顺序" in row.sub
 
 
 def test_order_mode_names_eps_motor_speed():

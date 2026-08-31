@@ -35,6 +35,7 @@ class DualCursorBranch:
     min_value: float
     max_value: float
     avg: float
+    delta: float | None = None
 
     @property
     def branch_label(self) -> str:
@@ -302,9 +303,24 @@ def _enabled_cursor_value_fields(options):
             (("Min", "min_value"), getattr(options, "show_min_value", True)),
             (("Max", "max_value"), getattr(options, "show_max_value", True)),
             (("Avg", "avg"), getattr(options, "show_avg_value", True)),
+            (("Δ", "delta"), getattr(options, "show_delta_value", True)),
         )
         if enabled
     )
+
+
+def _format_dual_stat_text(value, unit):
+    from html import escape
+
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not np.isfinite(number):
+        return "—"
+    return f"{number:.4g}{escape(unit)}"
 
 
 def _format_time_dual_block(
@@ -337,16 +353,14 @@ def _format_time_dual_block(
             f'</tr>'
         )
         return
-    values = {"min_value": mn, "max_value": mx, "avg": avg}
+    values = {"min_value": mn, "max_value": mx, "avg": avg, "delta": delta}
     for label, attr in _enabled_cursor_value_fields(options):
+        display = "△" if label == "Δ" else label
         parts.append(
-            f'<tr><td style="{lab}">{label}</td>'
-            f'<td style="{cell}" align="right">{values[attr]:.4g}{escape(unit_suffix)}</td></tr>'
+            f'<tr><td style="{lab}">{display}</td>'
+            f'<td style="{cell}" align="right">'
+            f'{_format_dual_stat_text(values[attr], unit_suffix)}</td></tr>'
         )
-    parts.append(
-        f'<tr><td style="{lab}">△</td>'
-        f'<td style="{cell}" align="right">{delta:.4g}{escape(unit_suffix)}</td></tr>'
-    )
 
 
 def _format_custom_x_dual_block(parts, *, index, row, options=None):
@@ -390,9 +404,9 @@ def _format_custom_x_dual_block(parts, *, index, row, options=None):
         )
         for value_label, attr in enabled:
             parts.append(
-                f'<tr><td style="{lab}">{escape(label)} {value_label}</td>'
+                f'<tr><td style="{lab}">{escape(label)} {escape(value_label)}</td>'
                 f'<td style="{cell}" align="right">'
-                f'{getattr(branch, attr):.4g}{escape(unit)}</td></tr>'
+                f'{_format_dual_stat_text(getattr(branch, attr, None), unit)}</td></tr>'
             )
     if row.status and row.branches:
         parts.append(
@@ -474,7 +488,7 @@ def _format_dual_mini_html(rows, options=None):
             unit = getattr(row, "unit_suffix", "") or ""
             enabled = _enabled_cursor_value_fields(options)
             priority = next(
-                (item for wanted in ("Avg", "Max", "Min")
+                (item for wanted in ("Δ", "Avg", "Max", "Min")
                  for item in enabled if item[0] == wanted),
                 None,
             )
@@ -483,8 +497,8 @@ def _format_dual_mini_html(rows, options=None):
                 if priority is not None:
                     value_label, attr = priority
                     value_html = (
-                        f'{value_label}&nbsp;{getattr(branch, attr):.4g}'
-                        f'{escape(unit)}'
+                        f'{escape(value_label)}&nbsp;'
+                        f'{_format_dual_stat_text(getattr(branch, attr, None), unit)}'
                     )
                 if options is None:
                     parts.append(
@@ -520,17 +534,40 @@ def _format_dual_mini_html(rows, options=None):
 
     parts = [_DUAL_MINI_TABLE_OPEN]
     for i, row in enumerate(rows):
-        ch, _mn, _mx, _avg, delta, u, color = _unpack_time_dual_row(row)
+        ch, mn, mx, avg, delta, u, color = _unpack_time_dual_row(row)
         if ']' in ch and ch.startswith('['):
             ch = ch.split(']', 1)[-1].strip()
         top_pad = '5px' if i > 0 else '0'
+        values = {"min_value": mn, "max_value": mx, "avg": avg, "delta": delta}
+        if options is None:
+            metric_html = f'△&nbsp;{_format_dual_stat_text(delta, u)}'
+        else:
+            enabled = _enabled_cursor_value_fields(options)
+            priority = next(
+                (item for wanted in ("Δ", "Avg", "Max", "Min")
+                 for item in enabled if item[0] == wanted),
+                None,
+            )
+            if priority is None:
+                metric_html = ""
+            else:
+                label, attr = priority
+                display = "△" if label == "Δ" else label
+                metric_html = (
+                    f'{display}&nbsp;{_format_dual_stat_text(values[attr], u)}'
+                )
+        metric_td = ""
+        if metric_html:
+            metric_td = (
+                f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT} '
+                f'padding-top:{top_pad};">{metric_html}</td>'
+            )
         parts.append(
             f'<tr><td style="padding-top:{top_pad};">'
             f'<span style="color:{color};">●</span></td>'
             f'<td style="padding-left:4px; color:{color}; font-weight:600; padding-top:{top_pad};">'
             f'{escape(ch)}</td>'
-            f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT} padding-top:{top_pad};">'
-            f'△&nbsp;{delta:.4g}{escape(u)}</td></tr>'
+            f'{metric_td}</tr>'
         )
     parts.append('</table>')
     return ''.join(parts)
@@ -554,7 +591,7 @@ def format_dual_rows_tooltip(rows, options=None) -> str:
             role = branch.tooltip_role
             role_bit = f" {role}" if role else ""
             values = "  ".join(
-                f"{label}={getattr(branch, attr):.4g}{unit}"
+                f"{label}={_format_dual_stat_text(getattr(branch, attr, None), unit)}"
                 for label, attr in enabled
             )
             lines.append(f"{branch.branch_label}{role_bit}  {values}".rstrip())

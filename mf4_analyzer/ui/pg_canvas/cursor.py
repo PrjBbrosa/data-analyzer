@@ -23,6 +23,7 @@ from mf4_analyzer.signal.custom_x_paths import (
     CustomXCursorResult,
     analyze_custom_x_paths,
     sample_custom_x_cursor_from_paths,
+    sample_custom_x_dual_delta_from_paths,
 )
 from mf4_analyzer.ui.cursor_display_model import (
     CursorDisplayBranch,
@@ -344,10 +345,12 @@ class CursorController(_CanvasBackref):
             previous.show_max_value,
             previous.show_min_value,
             previous.show_avg_value,
+            previous.show_delta_value,
         ) != (
             options.show_max_value,
             options.show_min_value,
             options.show_avg_value,
+            options.show_delta_value,
         )
         point_changed = (
             previous.show_max_point,
@@ -1072,6 +1075,13 @@ class CursorController(_CanvasBackref):
         status = self._custom_x_status(result.reason)
         branches = ()
         stats = None
+        delta_by_dir = {}
+        cached_paths = self._custom_x_paths_for_channel(channel_key, tf_array, sf_array)
+        if cached_paths is not None:
+            for direction, delta in sample_custom_x_dual_delta_from_paths(
+                cached_paths, self._ax, self._bx,
+            ):
+                delta_by_dir[int(direction)] = delta
         if result.unique_pair:
             ordered = sorted(result.accepted, key=lambda item: -int(item.direction))
             branch_rows = []
@@ -1079,11 +1089,13 @@ class CursorController(_CanvasBackref):
                 stats = self._finite_stats(contrib.y)
                 if stats is None:
                     continue
+                direction = int(contrib.direction)
                 branch_rows.append(DualCursorBranch(
-                    direction=int(contrib.direction),
+                    direction=direction,
                     min_value=stats[0],
                     max_value=stats[1],
                     avg=stats[2],
+                    delta=delta_by_dir.get(direction),
                 ))
             branches = tuple(branch_rows)
             status = ""
@@ -1107,6 +1119,7 @@ class CursorController(_CanvasBackref):
                     min_value=stats[0],
                     max_value=stats[1],
                     avg=stats[2],
+                    delta=delta_by_dir.get(direction),
                 ),)
                 if direction:
                     status = ""
@@ -1226,6 +1239,7 @@ class CursorController(_CanvasBackref):
             options.show_max_value
             and options.show_min_value
             and options.show_avg_value
+            and options.show_delta_value
         ) else options
         self.dual_cursor_info.emit(
             _format_dual_html(dual, formatter_options) if dual else ""

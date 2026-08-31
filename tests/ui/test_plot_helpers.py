@@ -582,6 +582,7 @@ def test_custom_x_compat_formatters_options_never_emit_placeholder_cells(enabled
         show_max_value=flags["max"],
         show_min_value=flags["min"],
         show_avg_value=flags["avg"],
+        show_delta_value=False,
     )
     row = _custom_x_pair_row()
     full = _format_dual_html([row], options=options)

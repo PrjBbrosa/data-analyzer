@@ -1233,38 +1233,21 @@ def test_time_toolbar_compact_normal_resize_is_idempotent(qapp, qtbot):
     card = cs._time_card
     button = card.cursor_display_settings_button()
     dual = card._cursor_buttons["dual"]
-    cluster = (
-        card._cursor_buttons["off"],
-        card._cursor_buttons["single"],
-        card._cursor_buttons["dual"],
-        button,
-    )
-
-    def cluster_action_order():
-        widgets = []
-        for act in card.toolbar.actions():
-            widget = card.toolbar.widgetForAction(act)
-            if widget in cluster:
-                widgets.append(widget)
-        return tuple(widgets)
 
     def assert_settings_beside_dual():
         assert button.isVisible()
         assert all(item.isVisible() for item in card._cursor_buttons.values())
         assert button.geometry().left() >= dual.geometry().right()
-        assert button.geometry().right() <= card.toolbar.contentsRect().right()
 
-    compact_orders = []
+    orders = []
     for width in (500, 1200, 500, 1200, 500):
         cs.resize(width, 440)
         qapp.processEvents()
         assert_settings_beside_dual()
-        if width < 840:
-            compact_orders.append(cluster_action_order())
+        orders.append(tuple(card.toolbar.actions()))
 
-    assert compact_orders
-    assert all(order == compact_orders[0] for order in compact_orders)
-    assert compact_orders[0] == cluster
+    assert orders
+    assert all(order == orders[0] for order in orders)
 
 
 def test_pg_navigation_toolbar_pan_zoom_sets_all_subplot_viewboxes(qapp, qtbot):
@@ -2757,7 +2740,7 @@ def test_time_chart_card_has_segmented_controls(qapp, qtbot):
     card = cs._time_card
     assert isinstance(card, TimeChartCard)
     assert card.toolbar is cs._time_toolbar
-    assert card.toolbar.parentWidget() is cs._time_page
+    assert cs._time_page.isAncestorOf(card.toolbar)
     # Five segmented buttons on the shared toolbar (post-i18n labels):
     # 分屏 / 叠加 / 游标关 / 单游标 / 双游标
     texts = {b.text() for b in cs._time_toolbar.findChildren(type(card.btn_subplot))}
@@ -3541,6 +3524,44 @@ def test_cursor_off_closes_popovers_clears_results_and_keeps_preferences(
     assert cs.cursor_display_options() is wanted
 
 
+def test_cursor_display_settings_button_clears_hover_when_popover_hides(
+    qapp, qtbot
+):
+    """Qt.Popup grab does not send Leave; hide must drop stale WA_UnderMouse."""
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtGui import QCursor
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+
+    card = cs._time_card
+    btn = card.cursor_display_settings_button()
+    popover = card.cursor_display_popover()
+    emitted = []
+    card.cursor_display_popover_geometry_changed.connect(emitted.append)
+
+    btn.click()
+    qapp.processEvents()
+    assert popover.isVisible()
+
+    btn.setAttribute(Qt.WA_UnderMouse, True)
+    assert btn.testAttribute(Qt.WA_UnderMouse)
+
+    QCursor.setPos(btn.mapToGlobal(QPoint(-80, -80)))
+    qapp.processEvents()
+
+    popover.hide()
+    qapp.processEvents()
+
+    assert not popover.isVisible()
+    assert emitted and emitted[-1] is None
+    assert not btn.testAttribute(Qt.WA_UnderMouse)
+
+
 def test_structured_cursor_pill_stays_in_safe_rect_in_narrow_chart_stack(
     qapp, qtbot, tmp_path
 ):
@@ -3720,3 +3741,93 @@ def test_secondary_off_and_split_exit_clear_pills_through_update_seam(
 
     assert not cs._pill_secondary.isVisible()
     assert any(pill is cs._pill_secondary for pill, _card in calls)
+
+
+def _qt_toolbar_extension(toolbar):
+    from PyQt5.QtWidgets import QToolButton
+
+    return toolbar.findChild(QToolButton, "qt_toolbar_ext_button")
+
+
+def test_narrow_time_toolbar_has_no_overflow_extension(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(500, 440)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+    card = cs._time_card
+    host = card._toolbar_host
+    host.fit_inner_toolbar()
+    qapp.processEvents()
+    extension = _qt_toolbar_extension(card.toolbar)
+    assert extension is None or not extension.isVisible()
+    button = card.cursor_display_settings_button()
+    host.ensure_widget_visible(button)
+    qapp.processEvents()
+    mapped = button.mapTo(host.viewport(), button.rect().center())
+    assert host.viewport().rect().contains(mapped)
+
+
+def test_toolbar_scroll_host_pan_threshold_and_horizontal_wheel(qapp, qtbot):
+    from PyQt5.QtCore import QPoint, QPointF
+    from PyQt5.QtGui import QWheelEvent
+    from PyQt5.QtWidgets import QApplication, QPushButton, QToolBar
+
+    from mf4_analyzer.ui.chart_stack.toolbar import ToolbarScrollHost
+
+    bar = QToolBar()
+    clicked = []
+    button = QPushButton("Go", bar)
+    button.clicked.connect(lambda _checked=False: clicked.append(True))
+    bar.addWidget(button)
+    for index in range(16):
+        bar.addAction(f"Act{index}")
+    host = ToolbarScrollHost(bar)
+    qtbot.addWidget(host)
+    host.resize(140, 40)
+    host.show()
+    qtbot.waitExposed(host)
+    qapp.processEvents()
+    host.fit_inner_toolbar()
+    qapp.processEvents()
+    assert host.horizontalScrollBar().maximum() > 0
+
+    host._arm_pan(host.mapToGlobal(host.rect().center()))
+    host._handle_pan_move(
+        host.mapToGlobal(host.rect().center()) + QPoint(4, 0)
+    )
+    assert host._panning is False
+    host._handle_pan_release()
+    qtbot.mouseClick(button, Qt.LeftButton)
+    assert clicked == [True]
+
+    start = host.horizontalScrollBar().value()
+    host._arm_pan(host.mapToGlobal(host.rect().center()))
+    moved = host._handle_pan_move(
+        host.mapToGlobal(host.rect().center()) + QPoint(-24, 0)
+    )
+    assert moved is True
+    assert host.horizontalScrollBar().value() != start
+    host._handle_pan_release()
+
+    before = host.horizontalScrollBar().value()
+    pos = QPointF(host.rect().center())
+    horizontal = QWheelEvent(
+        pos, host.mapToGlobal(pos.toPoint()),
+        QPoint(-40, 0), QPoint(-120, 0),
+        Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    assert QApplication.sendEvent(host.viewport(), horizontal)
+    qapp.processEvents()
+    assert host.horizontalScrollBar().value() != before
+
+    after_h = host.horizontalScrollBar().value()
+    vertical = QWheelEvent(
+        pos, host.mapToGlobal(pos.toPoint()),
+        QPoint(0, 40), QPoint(0, 120),
+        Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+    )
+    QApplication.sendEvent(host.viewport(), vertical)
+    qapp.processEvents()
+    assert host.horizontalScrollBar().value() == after_h

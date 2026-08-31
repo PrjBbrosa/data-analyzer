@@ -95,6 +95,12 @@ cursor_segment_and_emits_options` 红（F1），其余绿。该红测归 T4 所�
 
 ## T4 紧凑工具栏按钮可见性（F1，spec §3.4）
 
+> **已被取代（2026-08-31 晚）**：用户追加报告紧凑重排导致按钮**错位**，
+> 并决策工具栏改为横向滑动。本任务的「修重排」方案废弃，F1 红测的
+> owner 归属转移到
+> [`2026-08-31-cursor-display-followup-2-plan.md`](2026-08-31-cursor-display-followup-2-plan.md)
+> 的 **C6**（滑动工具栏 + 废除重排）。不要按下述原方案实施。
+
 **改动**
 - 根因排查 `_sync_responsive_toolbar` / `_prioritize_time_controls`：
   确认 500 px 下按钮不可见是 QToolBar overflow 吞掉末位 action、还是

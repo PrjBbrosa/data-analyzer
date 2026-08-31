@@ -1,12 +1,9 @@
 # 游标显示 Follow-up 2 + WWT 原生刻度视口跟随实施计划
 
 - 日期：2026-08-31（晚）
-- 状态：实施中
-- 基线：`main@a9667968` + 工作区中**未提交**的 followup-1 实现
-  （`cursor_display_model.py` 中立 DTO、fid 泄漏修复、mini/full 密度、
-  弹层 paintEvent、单管线、custom-X 缓存、关闭全清复位；聚焦测试本机
-  170 passed）。**本计划开工前先把 followup-1 审查合入**，不要在双份
-  未提交改动上叠加。
+- 状态：离屏实施完成（Cocoa 真机未验收，见 §5）
+- 基线：`main@a36ef529`（followup-1 已合入：`fix(ui): land cursor-display followup contracts`）。
+  本计划改动叠在该提交之上，**尚未单独提交**。
 - 上游文档：[`2026-08-31-cursor-display-followup-spec.md`](../specs/2026-08-31-cursor-display-followup-spec.md) ·
   [`2026-08-31-cursor-display-settings-spec.md`](../specs/2026-08-31-cursor-display-settings-spec.md) ·
   [`2026-08-31-wwt-single-owner-axis-finalization-plan.md`](2026-08-31-wwt-single-owner-axis-finalization-plan.md)
@@ -68,6 +65,20 @@ bug；bug 是刻度不跟随（W1 修）。Home 在原生 View 上**应该**回�
 按钮补发 Leave 事件，QSS `:hover`（蓝框+底色）残留到鼠标再次掠过才消
 （用户截图 5）。代码中无任何 `WA_UnderMouse` 清理。经典 Qt popup 坑。
 
+### R12 窄面宽下工具栏按钮错位，且放不下的按钮不可用
+
+- **错位**：`cards.py:_prioritize_time_controls` 在紧凑模式（<840 px）把
+  分屏/叠加/游标按钮组用 `insertAction` 重排到 `pan` 锚点之前，导致这组
+  控件插进导航工具中间（用户截图：`⌂ ← → | 分屏 叠加 | 游标… | ✛ 🔍 …`），
+  与常规宽度下的顺序不一致。
+- **不可用**：`PgNavigationToolbar` 是 QToolBar，放不下的 action 被 Qt
+  收进 overflow 扩展钮（首日红测
+  `test_time_card_settings_button_stays_beside_cursor_segment_and_emits_options`
+  抓到的就是设置按钮在 500 px 下不可见）。
+- **用户决策**：工具栏改为**横向滑动**——Windows 上空白区域按住左右拖动，
+  macOS 上触摸板横向滑动；面宽不足时所有按钮保持原顺序、经滑动可达，
+  不再重排。
+
 ## 2. 规格增量（对既有两份规格的修订）
 
 1. **Δ 成为第六个偏好开关**（推翻上游规格 §13 「No setting for Δ」与
@@ -90,6 +101,13 @@ bug；bug 是刻度不跟随（W1 修）。Home 在原生 View 上**应该**回�
    视口变更（View 恢复、resize、Home、滚轮缩放、平移释放、Y-Fit、
    Shift-wheel）之后，刻度必须是原生 cadence 在**当前视口**上的投影；
    显式密度修改仍是唯一退出 native 模式的动作（既有契约不变）。
+7. **图表工具栏滑动契约**：工具栏 action 的左右顺序在任何面宽下**恒定**
+   （紧凑重排废除）；面宽不足时工具栏可横向滑动——空白处按住拖动
+   （鼠标）与触摸板横向滚动（`QWheelEvent` 的水平 delta）两种手势；
+   任何按钮在任何面宽下都保持可达且可点击，不进 QToolBar overflow
+   扩展钮；滑动不得吞掉按钮点击（拖动判定需超过启动阈值）；有可滑动
+   余量时给出边缘视觉暗示。紧凑密度**样式**（更窄 padding）可保留，
+   但不再作为可用性的兜底手段。
 
 ## 3. 任务
 
@@ -177,6 +195,44 @@ unpolish/polish + `update()`。不引入计时器，不改按钮为 checkable。
 **owner 测试**：offscreen 模拟开→关弹层（光标不在按钮上），断言
 `WA_UnderMouse` 已清；真机顺手在 W1 截图时目验一次（无需单独证据）。
 
+### C6 工具栏横向滑动，废除紧凑重排（R12）
+
+**改动**
+- 给 `PgNavigationToolbar` 加横向滑动宿主：工具栏按自然 sizeHint 完整
+  排布，外层视口裁剪（建议 QScrollArea 隐藏滚动条，或等价的偏移绘制
+  容器）；QToolBar overflow 扩展钮不再出现（所有 action 始终实排）。
+- 手势：视口上实现「空白处按下 + 位移超阈值（建议 8 px）→ 拖动滚动，
+  未超阈值 → 正常透传点击」；`wheelEvent` 消费水平 delta
+  （`pixelDelta().x()` 优先，退回 `angleDelta().x()`，macOS 触摸板
+  横滑天然产生）。垂直滚轮不劫持。
+- 删除 `cards.py:_prioritize_time_controls` 的 action 重排（错位根因），
+  `_sync_responsive_toolbar` 只保留紧凑密度样式（`timeControlDensity`
+  属性与按钮宽度收紧可留）。action 顺序自此与常规宽度恒等。
+- 有可滑余量时的边缘暗示（左右渐隐或细箭头，QSS/paint 皆可，从简）。
+- 兼容 seam：`detach_toolbar`（分屏次卡）、`_find_action`、
+  `_insert_right_toolbar_widget`、`toolbar.actions()` 顺序契约、MDI 图标
+  与中文标签替换全部保持；新接线不用 lambda（棘轮）。
+- 交互新增 → 同步 `ui/hints.py` 与 `ui/quickref.py`（窄窗口滑动查看
+  更多工具），实施后跑 `/update-hints` 核对。
+
+**owner 测试**
+- followup-1 的 F1 红测
+  `test_time_card_settings_button_stays_beside_cursor_segment_and_emits_options`
+  归本任务，转绿且**不放宽断言**（followup-1 计划的 T4「修重排」方案
+  由本任务取代，见该计划标注）。
+- 顺序恒定：500 px 与 1200 px 下 `toolbar.actions()` 顺序一致（错位
+  防复发）。
+- 可达性：500 px 下设置按钮经程序化滚动进入视口后 `isVisible()` 且
+  可点击（`qtbot.mouseClick` 触发 `options_changed`）。
+- 手势判定：位移 < 阈值的按压透传为按钮点击；> 阈值为滚动且不触发
+  点击；水平 wheel 改变滚动偏移，垂直 wheel 不改。
+- 无 overflow：窄宽下 `QToolBar` extension 按钮不可见。
+- 回归：`tests/ui/test_chart_stack.py` 工具栏簇、`test_hints.py`、
+  `test_quickref.py`。
+
+**护栏**：`test_no_lambda_signal_connections.py`；真机（Cocoa 前台）
+窄窗口触摸板横滑目验一次，随 W1 证据一并归档。
+
 ### C5 收尾
 
 - 全部 Task 合入后跑一遍护栏组：backref invariants · import boundaries ·
@@ -195,3 +251,44 @@ unpolish/polish + `update()`。不引入计时器，不改按钮为 checkable。
   那是新的产品语义，先补规格。
 - 任何 Task 需要放宽既有护栏（值列顺序除外——它由本计划 §2.2 显式修订）
   即停。
+
+## 5. 实施结果
+
+**快照**：`HEAD=a36ef529`（`fix(ui): land cursor-display followup contracts`）。
+followup-2 代码在工作区未提交。跑 C5 时相关实现文件未被并行会话改写。
+
+**停止条件**：未触发。W1 投影后 majors 覆盖新 ylim；C2 Δ 仅同支路
+`Y(B)−Y(A)`，无跨支路求差；未放宽既有护栏。
+
+**D3**：采纳推荐。原生 View 上 Home 的 Y 回到
+`native_tick_policy['y'][axis_id]` 的 lo/hi，不是数据 autorange；Y-Fit
+仍全数据。
+
+| Task | 离屏结果 | 真机 |
+| --- | --- | --- |
+| W1 原生刻度跟随 + D3 Home Y | owner `test_wwt_native_render.py` 簇绿；paint 哨兵 + `TestDiscreteSettle` + backref 绿 | **未跑**。待 Cocoa 开 SFNS_20 → Home → 截图归档 `docs/analyzer/verify/` |
+| C1 支路分行 | custom-X dual full `<tr>` = header + 支路数 | n/a |
+| C2 差值开关 + 支路 Δ | 64 组合、列序 Min→Max→Avg→Δ、旧 5 字段 JSON 载入 `show_delta_value=True`；`test_signal_no_gui_import.py` 绿 | n/a |
+| C3 mini Δ 优先 | 默认 `X↑ Δ`；关 Δ 退 Avg | n/a |
+| C4 hover 残留 | offscreen：弹层关且光标不在按钮上时 `WA_UnderMouse` 已清 | **未跑**。计划允许随 W1 截图顺手目验 |
+| C6 工具栏横滑 | F1 设置按钮窄宽可点；500/1200 action 顺序恒等；无 overflow 扩展钮；位移阈值 + 水平 wheel 绿；hints/quickref 绿 | **未跑**。待 Cocoa 窄窗口触摸板横滑目验，随 W1 证据归档 |
+| C5 收尾 | 见下方计数；`git diff --check` 通过；未决 TODO 扫描无本轮残留 | — |
+
+C1–C3 合跑 251 passed；C4 合跑 152 passed；W1 合跑 71 passed；C6 owner
+22 passed。C5 护栏组与 `tests/ui/test_chart_stack.py` + hints/quickref
+合跑 **245 passed**（`TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=.
+.venv/bin/python -m pytest`，约 39 s）：
+
+- `tests/ui/test_chart_stack.py`
+- `tests/ui/test_pg_canvas_backref_invariants.py`
+- `tests/ui/test_import_boundaries.py`
+- `tests/ui/test_main_window_state_ownership.py`
+- `tests/ui/test_no_lambda_signal_connections.py`
+- `tests/ui_kit/test_qss_border_shorthand.py`
+- `tests/ui/test_pg_timedomain_canvas.py::TestAaBackstopLatch::test_frame_paint_backstop_is_installed_on_real_canvas`
+- `tests/test_signal_no_gui_import.py`
+- `tests/ui/test_hints.py`
+- `tests/ui/test_quickref.py`
+
+**不得记成全绿**：W1 / C4 / C6 的 Cocoa 前台证据未采集。offscreen 不能
+代替真机渲染或触摸板横滑。

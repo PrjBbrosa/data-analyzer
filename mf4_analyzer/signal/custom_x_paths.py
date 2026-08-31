@@ -492,6 +492,38 @@ def sample_custom_x_cursor(
     return sample_custom_x_cursor_from_paths(paths, selected_x)
 
 
+def sample_custom_x_dual_delta_from_paths(
+    paths: SeriesPathResult,
+    x_a,
+    x_b,
+) -> tuple[tuple[int, float | None], ...]:
+    """Per-accepted-leg Δ = Y(B) − Y(A) using the single-cursor interpolator.
+
+    Each accepted physical stroke is sampled independently at A and at B.
+    Either end outside that stroke, or a non-finite interpolated Y, yields
+    ``None`` for that leg. Deltas are never computed across different legs.
+    """
+    a_result = sample_custom_x_cursor_from_paths(paths, x_a)
+    b_result = sample_custom_x_cursor_from_paths(paths, x_b)
+    a_by_dir = {item.direction: item.value for item in a_result.values}
+    b_by_dir = {item.direction: item.value for item in b_result.values}
+    deltas = []
+    for contrib in paths.accepted:
+        direction = int(contrib.direction)
+        y_a = a_by_dir.get(direction)
+        y_b = b_by_dir.get(direction)
+        if y_a is None or y_b is None:
+            deltas.append((direction, None))
+            continue
+        try:
+            delta = float(y_b) - float(y_a)
+        except (TypeError, ValueError):
+            deltas.append((direction, None))
+            continue
+        deltas.append((direction, delta if math.isfinite(delta) else None))
+    return tuple(deltas)
+
+
 __all__ = [
     "CursorBranchValue",
     "CustomXCursorResult",
@@ -507,4 +539,5 @@ __all__ = [
     "analyze_custom_x_paths",
     "sample_custom_x_cursor",
     "sample_custom_x_cursor_from_paths",
+    "sample_custom_x_dual_delta_from_paths",
 ]

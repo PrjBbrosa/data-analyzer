@@ -23,6 +23,7 @@ from mf4_analyzer.signal.custom_x_paths import (
     PathContribution,
     sample_custom_x_cursor,
     sample_custom_x_cursor_from_paths,
+    sample_custom_x_dual_delta_from_paths,
     analyze_custom_x_paths,
 )
 
@@ -637,3 +638,48 @@ def test_searchsorted_sample_matches_old_loop_on_hysteresis_fixtures():
         probes = (lo, mid, hi, lo + 0.1 * (hi - lo), hi - 0.1 * (hi - lo))
         for contrib in (*paths.accepted, *paths.contributions):
             _assert_searchsorted_matches_oracle(contrib, probes)
+
+
+def test_dual_delta_samples_each_leg_independently_when_both_ends_are_on_it():
+    x, y = _cursor_out_and_back()
+    paths = analyze_custom_x_paths(x, y)
+    deltas = dict(sample_custom_x_dual_delta_from_paths(paths, 2.0, 8.0))
+
+    assert paths.unique_pair
+    assert set(deltas) == {1, -1}
+    assert deltas[1] == pytest.approx(60.0)
+    assert deltas[-1] == pytest.approx(6.0)
+
+
+def test_dual_delta_is_none_when_one_end_is_outside_the_leg():
+    x, y = _cursor_out_and_back()
+    paths = analyze_custom_x_paths(x, y)
+    deltas = dict(sample_custom_x_dual_delta_from_paths(paths, -1.0, 4.0))
+
+    assert set(deltas) == {1, -1}
+    assert deltas[1] is None
+    assert deltas[-1] is None
+
+
+def test_dual_delta_unidirectional_leg_uses_the_same_interpolator():
+    x = np.arange(101, dtype=float)
+    y = 3.0 * x + 1.0
+    paths = analyze_custom_x_paths(x, y)
+    deltas = dict(sample_custom_x_dual_delta_from_paths(paths, 12.5, 20.0))
+
+    assert paths.reason == REASON_UNIDIRECTIONAL
+    assert list(deltas) == [1]
+    assert deltas[1] == pytest.approx(22.5)
+
+    out_of_range = dict(sample_custom_x_dual_delta_from_paths(paths, 12.5, 200.0))
+    assert out_of_range[1] is None
+
+
+def test_dual_delta_non_finite_cursor_or_difference_is_none():
+    x, y = _cursor_out_and_back()
+    paths = analyze_custom_x_paths(x, y)
+    for x_a, x_b in ((math.nan, 4.0), (4.0, math.inf), (math.inf, math.nan)):
+        deltas = dict(sample_custom_x_dual_delta_from_paths(paths, x_a, x_b))
+        assert set(deltas) == {1, -1}
+        assert deltas[1] is None
+        assert deltas[-1] is None

@@ -81,6 +81,26 @@ def _face_name(channel) -> str:
     return str(channel.channel_label or channel.qualified_label or "").strip()
 
 
+_MINI_PRIORITY = ("Δ", "Avg", "Max", "Min")
+_BRANCH_ATTR = {
+    "min_value": "min_value",
+    "max_value": "max_value",
+    "avg_value": "avg_value",
+    "delta": "delta_value",
+}
+
+
+def _identity_row(name):
+    return CursorDisplayRow(name, "")
+
+
+def _priority_stat(stats):
+    return next(
+        (row for wanted in _MINI_PRIORITY for row in stats if row.label == wanted),
+        None,
+    )
+
+
 def _time_rows(channel, options, cursor_mode, mini):
     name = _face_name(channel)
     if cursor_mode == "single":
@@ -89,16 +109,17 @@ def _time_rows(channel, options, cursor_mode, mini):
         if mini:
             return (CursorDisplayRow(_DOT_MARKER, value),), tooltip
         return (CursorDisplayRow(name, value),), tooltip
-    delta = CursorDisplayRow("Δ", _formatted(channel.delta, channel.unit_suffix))
-    tooltip = [delta]
     stats = []
     for label, attr in enabled_value_fields(options):
         row = CursorDisplayRow(label, _formatted(getattr(channel, attr), channel.unit_suffix))
-        tooltip.append(row)
         stats.append(row)
+    tooltip = tuple(stats) if stats else (_identity_row(name),)
     if mini:
-        return (CursorDisplayRow(name, delta.value),), tuple(tooltip)
-    return (delta, *stats), tuple(tooltip)
+        priority = _priority_stat(stats)
+        if priority is None:
+            return (_identity_row(name),), tooltip
+        return (CursorDisplayRow(name, priority.value, role=priority.label),), tooltip
+    return tuple(stats) if stats else (_identity_row(name),), tooltip
 
 
 def _custom_rows(channel, options, cursor_mode, mini):
@@ -106,7 +127,7 @@ def _custom_rows(channel, options, cursor_mode, mini):
     tooltip = []
     enabled = enabled_value_fields(options)
     priority = next(
-        (item for wanted in ("Avg", "Max", "Min") for item in enabled if item[0] == wanted),
+        (item for wanted in _MINI_PRIORITY for item in enabled if item[0] == wanted),
         None,
     )
     if cursor_mode == "single":
@@ -128,13 +149,19 @@ def _custom_rows(channel, options, cursor_mode, mini):
         visible.append(CursorDisplayRow(branch.label, "", role="branch"))
         tooltip.append(CursorDisplayRow(branch.label, "", role="branch"))
         for label, attr in enabled:
-            row = CursorDisplayRow(label, _formatted(getattr(branch, attr), channel.unit_suffix))
+            branch_attr = _BRANCH_ATTR.get(attr, attr)
+            row = CursorDisplayRow(
+                label, _formatted(getattr(branch, branch_attr), channel.unit_suffix)
+            )
             tooltip.append(row)
             if not mini:
                 visible.append(row)
         if mini and priority is not None:
             label, attr = priority
-            visible.append(CursorDisplayRow(label, _formatted(getattr(branch, attr), channel.unit_suffix)))
+            branch_attr = _BRANCH_ATTR.get(attr, attr)
+            visible.append(CursorDisplayRow(
+                label, _formatted(getattr(branch, branch_attr), channel.unit_suffix)
+            ))
     if not visible and channel.diagnostic:
         row = CursorDisplayRow("状态", str(channel.diagnostic))
         visible.append(row)
@@ -238,13 +265,24 @@ def _compact_block_html(
     if cursor_mode == "dual" and x_mode == "time" and mini:
         row = rows[0] if rows else CursorDisplayRow(face_name, "—")
         name = header_override or row.label
+        metric_cell = ""
+        if row.value:
+            if row.role == "Δ":
+                prefix = "△"
+            elif row.role in {"Min", "Max", "Avg"}:
+                prefix = escape(row.role)
+            else:
+                prefix = "△"
+            metric_cell = (
+                f'<td style="color:{color};font-family:Consolas,monospace;">'
+                f'{prefix}&nbsp;{escape(row.value)}</td>'
+            )
         out.append(
             '<tr>'
             f'<td style="padding-right:4px;">{_dot_html(color)}</td>'
             f'<td style="color:{color};font-weight:600;padding-right:8px;">'
             f'{escape(name)}</td>'
-            f'<td style="color:{color};font-family:Consolas,monospace;">'
-            f'△&nbsp;{escape(row.value)}</td>'
+            f'{metric_cell}'
             '</tr>'
         )
         out.append('</table>')
@@ -364,7 +402,18 @@ def _block_html(
             append_metric_pair(pending)
     else:
         out.append('<tr>')
+        first_cell = True
         for row in block.visible_rows:
+            if row.role == "branch":
+                if not first_cell:
+                    out.append('</tr><tr>')
+                first_cell = False
+                out.append(
+                    f'<td colspan="2" style="color:#94a3b8;padding-right:10px;">'
+                    f'{escape(row.label)}</td>'
+                )
+                continue
+            first_cell = False
             if not row.value:
                 out.append(
                     f'<td colspan="2" style="color:#94a3b8;padding-right:10px;">'
@@ -495,7 +544,7 @@ def build_cursor_presentation(
 
 
 class CursorDisplayPopover(QFrame):
-    """Five-option floating control anchored by :class:`TimeChartCard`."""
+    """Six-option floating control anchored by :class:`TimeChartCard`."""
 
     options_changed = pyqtSignal(object)
     visibility_changed = pyqtSignal(object)
@@ -506,6 +555,7 @@ class CursorDisplayPopover(QFrame):
         ("show_max_value", "显示最大值"),
         ("show_min_value", "显示最小值"),
         ("show_avg_value", "显示平均值"),
+        ("show_delta_value", "显示差值"),
     )
 
     def __init__(self, parent=None):

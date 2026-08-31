@@ -117,8 +117,8 @@ class AnalysisSectionPage(QWidget):
         self._toolbar = None
         detach_toolbar = getattr(self._cards[0], 'detach_toolbar', None)
         if callable(detach_toolbar) and getattr(self._cards[0], 'toolbar', None) is not None:
-            self._toolbar = detach_toolbar(self)
-            lay.addWidget(self._toolbar)
+            lay.addWidget(detach_toolbar(self))
+            self._toolbar = self._cards[0].toolbar
             self._configure_shared_toolbar()
         lay.addWidget(self._split, stretch=1)
 

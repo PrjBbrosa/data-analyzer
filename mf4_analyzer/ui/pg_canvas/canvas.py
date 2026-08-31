@@ -2808,20 +2808,27 @@ class TimeDomainCanvasPG(QWidget):
         self._flush_pending_refresh()
 
     def reset_view_to_data_extents(self):
-        """Toolbar Home helper: restore global X (raw union) AND global Y
-        (per-channel raw full min/max) in one click.
+        """Toolbar Home helper: restore Home X and Home Y in one click.
+
+        X is the native Home target when this is a WWT native view, otherwise
+        the raw data union. Y uses ``native_tick_policy['y'][axis_id]``
+        ``lo``/``hi`` (the same table ``restore_visible_ylims`` reads) while
+        native policy is active; otherwise each handle is framed from the
+        RAW ``channel_data`` min/max of its visible curves. Y-Fit stays the
+        full-data path even on a native View.
 
         Bug 4: the hot-path ``PlotDataItem`` holds ONLY the viewport-clipped
         envelope (``_refresh_visible_data`` ships the xlim-clipped envelope),
         so an ``autoRange()``-based Home computed Y from the clipped window
         and left Y stuck at the previous zoom. We instead read Y from the
-        RAW ``channel_data`` arrays.
+        RAW ``channel_data`` arrays when native policy is off.
 
         Ordering honors pyqt-ui/2026-04-25-flush-after-axis-mutation-not-
         before: set the X union and Y ranges first (all synchronous, no
         intermediate frame can paint), then the single try/finally tail
         flush drains the debounce so the frame after Home holds the
-        global-window envelope.
+        global-window envelope. That flush's settle also reprojects native
+        ticks once over the restored viewport.
         """
         self.disable_interactive_quality()
         try:
@@ -2833,17 +2840,27 @@ class TimeDomainCanvasPG(QWidget):
                 self._set_xrange_to_data_union(home)
             else:
                 self._set_xrange_to_data_union()
-            # (2) Set Y per handle from the RAW channel data (full, finite),
-            # not from the clipped PlotDataItem. Frame each handle to the
-            # union of the curves VISIBLE on it: a companion shares its
-            # source's ViewBox, so with 显示原始 on Y covers the dominant
-            # original (wall avoided), and with 显示原始 off + 显示滤波后 on Y
-            # fits the visible ±0.0x companion (no dense original drawn → no
-            # 满屏竖线墙 — the filtered waveform is usable). Non-companion
-            # handles host a single visible primary, so the union == that
-            # primary's full extent (unchanged behavior).
-            n_y = max(3, min(20, self._tick_density_controller.density[1]))
+            # (2) Native Home Y is the installed policy table, not a second
+            # range source. Handles without a native spec still frame from
+            # RAW visible samples (mixed native/generic Views).
+            ctrl = self._tick_density_controller
+            native_y = {}
+            if ctrl.native_policy_active():
+                candidate = (ctrl.native_tick_policy or {}).get("y")
+                if isinstance(candidate, dict):
+                    native_y = candidate
+            n_y = max(3, min(20, ctrl.density[1]))
             for handle, names in self._axis_groups().values():
+                native = _finite_y_range(
+                    native_y.get(getattr(handle, "axis_group", None)),
+                    require_span=True,
+                )
+                if native is not None:
+                    try:
+                        handle.set_ylim(native[0], native[1])
+                        continue
+                    except Exception:
+                        pass
                 extent = self._visible_raw_y_extent(names)
                 if extent is None:
                     continue
@@ -2865,8 +2882,10 @@ class TimeDomainCanvasPG(QWidget):
         autoscale Y to just the waveform inside that window.
 
         Distinct from ``reset_view_to_data_extents`` (查看全部), which restores
-        BOTH X and Y to the full data union. Here X is untouched; for every
-        channel we read its handle's current X range, slice the RAW
+        BOTH X and Y to the native Home viewport on a WWT native View, or to
+        the full data union otherwise. Here X is untouched; Y always fits the
+        waveform inside the current X window — including on a native View.
+        For every channel we read its handle's current X range, slice the RAW
         ``channel_data`` signal to that window, and ``set_ylim`` to the slice's
         finite min/max with a small symmetric pad.
 
@@ -3405,6 +3424,17 @@ class TimeDomainCanvasPG(QWidget):
 
     def project_native_ticks(self):
         return self._tick_density_controller.project_native_ticks()
+
+    def _project_native_ticks_after_commit(self):
+        """Reproject native cadence once after a committed viewport settle.
+
+        No-op when native policy is off. Not called from the X-wheel hot
+        path; that arms ``_refresh_timer`` and lands here via settle.
+        """
+        ctrl = self._tick_density_controller
+        if not ctrl.native_policy_active():
+            return
+        self.project_native_ticks()
 
     # ------------------------------------------------------------------
     # Chart-options dialog (Fix 1: parity with the matplotlib path's
@@ -4044,6 +4074,7 @@ class TimeDomainCanvasPG(QWidget):
             self._refresh_pending = False
             self._interaction_state = "idle"
             self._quality._emit_quality_status_changed()
+        self._project_native_ticks_after_commit()
         return True
 
     def _emit_xrange_changed(self, source_handle=None):

@@ -969,6 +969,7 @@ class OverlayAxisManager(_CanvasBackref):
                 axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
         except Exception:
             pass
+        self._project_native_ticks_after_commit()
 
     def _stop_snap_anim(self):
         """Stop any in-flight drag-release snap animation."""
@@ -1107,6 +1108,7 @@ class OverlayAxisManager(_CanvasBackref):
                     ])
             except Exception:
                 continue
+        self._project_native_ticks_after_commit()
         self.draw_idle()
 
     def _teardown_overlay_aux_viewboxes(self):
@@ -1535,6 +1537,7 @@ class OverlayAxisManager(_CanvasBackref):
                 except Exception:
                     continue
             if changed:
+                self._project_native_ticks_after_commit()
                 self.visible_range_changed.emit()
                 self.draw_idle()
             self.schedule_idle_quality()
@@ -1568,6 +1571,11 @@ class OverlayAxisManager(_CanvasBackref):
             self.schedule_idle_quality()
             return False
 
+        # Y-only commits project here. Ctrl+wheel X zoom is the hot path:
+        # canvas arms ``_refresh_timer`` and ``_settle_visible_data`` projects
+        # once after the quiet window.
+        if not ctrl:
+            self._project_native_ticks_after_commit()
         self.visible_range_changed.emit()
         self.draw_idle()
         self.schedule_idle_quality()

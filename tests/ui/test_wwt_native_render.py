@@ -1135,3 +1135,295 @@ def test_native_tick_policy_clears_on_rebuild_and_empty_plot(qapp, tmp_path):
     )
     qapp.processEvents()
     assert canvas._tick_density_controller.native_tick_policy is None
+
+
+def _patch_ultraview_dpr(monkeypatch):
+    from mf4_analyzer.ui.main_window.ultraview_capture_coordinator import (
+        UltraViewCaptureCoordinator,
+    )
+
+    monkeypatch.setattr(
+        UltraViewCaptureCoordinator,
+        "_device_pixel_ratio",
+        lambda self: 2.0,
+        raising=False,
+    )
+
+
+def _load_sfns_like_native_mainwindow(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+
+    _patch_ultraview_dpr(monkeypatch)
+    path = wwt.sfns_like_custom_x_native_viewport(path=tmp_path / "sfns.wwt")
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 760)
+    mw.show()
+    qapp.processEvents()
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        mw._ultraview, "add_time_views_from_native_layout", lambda *_a, **_k: (),
+    )
+    mw._load_one(str(path))
+    qapp.processEvents()
+    mw._apply_active_view(mw.view_manager.active)
+    qapp.processEvents()
+    return mw
+
+
+def _native_y_spec_for_handle(canvas, handle):
+    policy = canvas._tick_density_controller.native_tick_policy or {}
+    table = policy.get("y") if isinstance(policy, dict) else {}
+    spec = table.get(getattr(handle, "axis_group", None)) if isinstance(table, dict) else None
+    return spec if isinstance(spec, dict) else None
+
+
+def _assert_y_majors_cover_current_ylim(handle, *, step, label):
+    ylim = handle.get_ylim()
+    majors = _major_tick_values(handle.y_axis_item())
+    _assert_majors_cover_effective_range(
+        majors, ylim[0], ylim[1], step, label=label,
+    )
+    first = float(majors[0])
+    bottom_gap = first - float(ylim[0])
+    assert bottom_gap < float(step) - 1e-12, (
+        f"{label}: unlabeled bottom gap {bottom_gap} is not smaller than one "
+        f"major step {step}; range={ylim[0]}..{ylim[1]} first={first}"
+    )
+    return ylim, majors
+
+
+def test_native_home_reprojects_y_majors_over_restored_viewport(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from tests._helpers import wwt_factory as wwt
+
+    mw = _load_sfns_like_native_mainwindow(qapp, qtbot, tmp_path, monkeypatch)
+    canvas = mw.canvas_time
+    handle = canvas.axes_list[0]
+    spec = _native_y_spec_for_handle(canvas, handle)
+    assert spec is not None, "precondition: SFNS-like View must install native Y"
+    native_lo, native_hi = float(spec["lo"]), float(spec["hi"])
+    step = float(spec["major"])
+    lo, hi = handle.get_ylim()
+    span = hi - lo
+    handle.set_ylim(lo - span, hi + span)
+    qapp.processEvents()
+    zoomed = handle.get_ylim()
+    assert zoomed[0] < native_lo or zoomed[1] > native_hi
+
+    mw.chart_stack._time_toolbar.home()
+    qapp.processEvents()
+
+    assert canvas._tick_density_controller.native_policy_active()
+    ylim = handle.get_ylim()
+    assert ylim == pytest.approx((native_lo, native_hi)), (
+        f"native Home Y must restore policy lo/hi {(native_lo, native_hi)}, "
+        f"not data autorange; got {ylim!r}"
+    )
+    _assert_y_majors_cover_current_ylim(handle, step=step, label="home")
+    assert ylim == pytest.approx((wwt.SFNS_Y_LO, wwt.SFNS_Y_HI))
+
+
+def test_native_committed_zoom_reprojects_y_majors_after_settle(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    mw = _load_sfns_like_native_mainwindow(qapp, qtbot, tmp_path, monkeypatch)
+    canvas = mw.canvas_time
+    handle = canvas.axes_list[0]
+    spec = _native_y_spec_for_handle(canvas, handle)
+    assert spec is not None
+    step = float(spec["major"])
+    native_ylim = handle.get_ylim()
+
+    vb = handle.view_box
+    assert vb is not None
+    vb.scaleBy(x=0.8, y=2.0)
+    x_handle = canvas._x_master_handle or handle
+    x_vb = x_handle.view_box
+    if x_vb is not None and x_vb is not vb:
+        x_vb.scaleBy(x=0.8)
+    qapp.processEvents()
+    zoomed = handle.get_ylim()
+    assert zoomed[1] - zoomed[0] > (native_ylim[1] - native_ylim[0]) * 1.2, (
+        f"precondition: scaleBy must expand Y; before={native_ylim!r} "
+        f"after={zoomed!r}"
+    )
+
+    qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
+    qapp.processEvents()
+
+    assert canvas._tick_density_controller.native_policy_active()
+    _assert_y_majors_cover_current_ylim(handle, step=step, label="zoom-settle")
+
+
+def test_ordinary_view_home_and_zoom_do_not_project_native_ticks(qapp, monkeypatch):
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 360)
+    canvas.show()
+    qapp.processEvents()
+    t = np.linspace(0.0, 1.0, 80, dtype=np.float64)
+    canvas.plot_channels(
+        [("y", True, t, t * 10.0 - 2.0, "#1769e0", "", "fid-1")],
+        mode="overlay",
+    )
+    qapp.processEvents()
+    canvas.set_x_viewport_intent(None)
+    assert not canvas._tick_density_controller.native_policy_active()
+
+    calls = []
+    real = canvas.project_native_ticks
+
+    def _tracked():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(canvas, "project_native_ticks", _tracked)
+    canvas.reset_view_to_data_extents()
+    qapp.processEvents()
+    handle = canvas.axes_list[0]
+    vb = handle.view_box
+    vb.scaleBy(x=0.8, y=2.0)
+    qapp.processEvents()
+    canvas._refresh_pending = True
+    canvas._arm_interaction_settle()
+    from PyQt5.QtTest import QTest
+    QTest.qWait(canvas._INTERACTION_SETTLE_MS + 40)
+    qapp.processEvents()
+
+    assert calls == [], (
+        "non-WWT Home/zoom must not call project_native_ticks; "
+        f"got {len(calls)} call(s)"
+    )
+    assert not canvas._tick_density_controller.native_policy_active()
+    canvas.deleteLater()
+
+
+def test_native_home_y_is_policy_range_y_fit_stays_data_extent(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from tests._helpers import wwt_factory as wwt
+
+    mw = _load_sfns_like_native_mainwindow(qapp, qtbot, tmp_path, monkeypatch)
+    canvas = mw.canvas_time
+    handle = canvas.axes_list[0]
+    spec = _native_y_spec_for_handle(canvas, handle)
+    assert spec is not None
+    native = (float(spec["lo"]), float(spec["hi"]))
+    step = float(spec["major"])
+
+    lo, hi = handle.get_ylim()
+    handle.set_ylim(lo - (hi - lo), hi + (hi - lo))
+    qapp.processEvents()
+    canvas.reset_view_to_data_extents()
+    qapp.processEvents()
+    assert handle.get_ylim() == pytest.approx(native)
+    assert native == pytest.approx((wwt.SFNS_Y_LO, wwt.SFNS_Y_HI))
+    _assert_y_majors_cover_current_ylim(handle, step=step, label="d3-home")
+
+    canvas.fit_y_to_visible_x()
+    qapp.processEvents()
+    fitted = handle.get_ylim()
+    assert fitted != pytest.approx(native), (
+        f"Y-Fit must remain full-data fit, not native Home {native!r}; "
+        f"got {fitted!r}"
+    )
+    data_span = fitted[1] - fitted[0]
+    native_span = native[1] - native[0]
+    assert data_span < native_span, (
+        f"Y-Fit span {data_span} should be inside native span {native_span}"
+    )
+    assert canvas._tick_density_controller.native_policy_active()
+    _assert_y_majors_cover_current_ylim(handle, step=step, label="y-fit")
+
+
+def test_ordinary_home_y_still_uses_data_extents(qapp):
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 360)
+    canvas.show()
+    qapp.processEvents()
+    t = np.linspace(0.0, 1.0, 80, dtype=np.float64)
+    y = t * 10.0
+    canvas.plot_channels(
+        [("y", True, t, y, "#1769e0", "", "fid-1")],
+        mode="overlay",
+    )
+    qapp.processEvents()
+    canvas.set_x_viewport_intent(None)
+    handle = canvas.axes_list[0]
+    handle.set_ylim(-50.0, 50.0)
+    qapp.processEvents()
+    canvas.reset_view_to_data_extents()
+    qapp.processEvents()
+    ylim = handle.get_ylim()
+    assert ylim[0] <= 0.05
+    assert ylim[1] >= 9.95
+    assert ylim[1] - ylim[0] < 20.0, (
+        f"ordinary Home Y should frame data 0..10, not a native-style span; "
+        f"got {ylim!r}"
+    )
+    assert not canvas._tick_density_controller.native_policy_active()
+    canvas.deleteLater()
+
+
+def test_customer_sfns20_home_zoom_native_ticks_skip_if_missing(
+    qapp, qtbot, monkeypatch,
+):
+    sample = (
+        _ROOT / "testdoc" / "2024_3_17" / "SFNS_20_X04-CSER_000009.wwt"
+    )
+    if not sample.is_file():
+        pytest.skip(f"customer sample missing: {sample}")
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    _patch_ultraview_dpr(monkeypatch)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 760)
+    mw.show()
+    qapp.processEvents()
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        mw._ultraview, "add_time_views_from_native_layout", lambda *_a, **_k: (),
+    )
+    mw._load_one(str(sample))
+    qapp.processEvents()
+    mw._apply_active_view(mw.view_manager.active)
+    qapp.processEvents()
+
+    canvas = mw.canvas_time
+    assert canvas._tick_density_controller.native_policy_active(), (
+        "customer SFNS_20 View should install native tick policy"
+    )
+    handle = canvas.axes_list[0]
+    spec = _native_y_spec_for_handle(canvas, handle)
+    assert spec is not None
+    step = float(spec["major"])
+    native = (float(spec["lo"]), float(spec["hi"]))
+
+    lo, hi = handle.get_ylim()
+    handle.set_ylim(lo - (hi - lo), hi + (hi - lo))
+    qapp.processEvents()
+    mw.chart_stack._time_toolbar.home()
+    qapp.processEvents()
+    assert canvas._tick_density_controller.native_policy_active()
+    assert handle.get_ylim() == pytest.approx(native)
+    _assert_y_majors_cover_current_ylim(handle, step=step, label="sfns20-home")
+
+    vb = handle.view_box
+    vb.scaleBy(x=0.8, y=2.0)
+    x_handle = canvas._x_master_handle or handle
+    x_vb = x_handle.view_box
+    if x_vb is not None and x_vb is not vb:
+        x_vb.scaleBy(x=0.8)
+    qapp.processEvents()
+    qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
+    qapp.processEvents()
+    assert canvas._tick_density_controller.native_policy_active()
+    _assert_y_majors_cover_current_ylim(handle, step=step, label="sfns20-zoom")

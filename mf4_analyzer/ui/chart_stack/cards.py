@@ -1,6 +1,6 @@
 """_ChartCard and TimeChartCard widget classes."""
 from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QKeySequence
+from PyQt5.QtGui import QColor, QCursor, QKeySequence
 from PyQt5.QtWidgets import (
     QAction, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy,
     QToolButton, QVBoxLayout, QWidget,
@@ -30,7 +30,7 @@ from ._helpers import (
     _TOOLBAR_COMPACT_WIDTH,
     CHART_HINT_BAR_HEIGHT,
 )
-from .toolbar import PgNavigationToolbar, _TickDensityPopover
+from .toolbar import PgNavigationToolbar, ToolbarScrollHost, _TickDensityPopover
 from .cursor_pill import _QualityStatusIndicator
 from .cursor_display import (
     CursorDisplayOptions,
@@ -262,9 +262,11 @@ class _ChartCard(QWidget):
             self.toolbar.insertWidget(first_action, self._toolbar_leading_spacer)
             if first_action is not None else self.toolbar.addWidget(self._toolbar_leading_spacer)
         )
-        # TimeChartCard detaches this toolbar onto a sibling row, so the card's
-        # own resizeEvent can see a stale toolbar width. Sync off the toolbar.
+        # TimeChartCard detaches this host onto a sibling row, so the card's
+        # own resizeEvent can see a stale toolbar width. Sync off the host.
         self.toolbar.installEventFilter(self)
+        self._toolbar_host = ToolbarScrollHost(self.toolbar, self)
+        self._toolbar_host.installEventFilter(self)
 
     def _build_toolbar_actions(self, annotations):
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
@@ -426,7 +428,8 @@ class _ChartCard(QWidget):
         self._refresh_hint()
 
     def _assemble_layout(self, lay, canvas):
-        lay.addWidget(self.toolbar)
+        host = getattr(self, "_toolbar_host", None)
+        lay.addWidget(host if host is not None else self.toolbar)
         lay.addWidget(canvas, stretch=1)
         lay.addWidget(self._hint_bar)
 
@@ -586,7 +589,8 @@ class _ChartCard(QWidget):
 
     def eventFilter(self, obj, event):
         etype = event.type()
-        if obj is self.toolbar and etype == QEvent.Resize:
+        host = getattr(self, "_toolbar_host", None)
+        if obj in (self.toolbar, host) and etype == QEvent.Resize:
             self._sync_responsive_toolbar()
         if etype == QEvent.MouseButtonPress:
             self.set_hint_rotation_paused(True)
@@ -608,10 +612,18 @@ class _ChartCard(QWidget):
         return super().eventFilter(obj, event)
 
     def detach_toolbar(self, parent):
-        """Remove the card toolbar from this card layout and reparent it."""
-        self.layout().removeWidget(self.toolbar)
-        self.toolbar.setParent(parent)
-        return self.toolbar
+        """Remove the toolbar host from this card layout and reparent it.
+
+        Callers add the returned widget to their layout. The inner
+        ``self.toolbar`` (``PgNavigationToolbar``) stays inside the host so
+        split/analysis pages keep pan-scroll instead of a naked inner bar.
+        """
+        host = getattr(self, "_toolbar_host", None) or self.toolbar
+        layout = self.layout()
+        if layout is not None:
+            layout.removeWidget(host)
+        host.setParent(parent)
+        return host
 
     def _remove_toolbar_loc_label(self):
         loc_label = getattr(self.toolbar, "locLabel", None)
@@ -630,10 +642,16 @@ class _ChartCard(QWidget):
         self._hint_bar.setParent(parent)
         return self._hint_bar
 
+    def _toolbar_layout_width(self):
+        host = getattr(self, "_toolbar_host", None)
+        if host is not None and host.width() > 0:
+            return host.width()
+        return self.toolbar.width()
+
     def _sync_responsive_toolbar(self):
         if not self.toolbar.isVisible():
             return
-        width = self.toolbar.width()
+        width = self._toolbar_layout_width()
         if width <= 0:
             return
         compact = width < _TOOLBAR_COMPACT_WIDTH
@@ -641,6 +659,9 @@ class _ChartCard(QWidget):
             return
         self._toolbar_compact = compact
         self.toolbar.updateGeometry()
+        host = getattr(self, "_toolbar_host", None)
+        if host is not None:
+            host.fit_inner_toolbar()
 
     def _insert_toolbar_widget(self, loc_action, widget):
         if loc_action is not None:
@@ -1206,15 +1227,12 @@ class TimeChartCard(_ChartCard):
         labels = getattr(self, '_time_button_labels', None)
         if not labels:
             return
-        compact = self.toolbar.width() < 840
+        compact = self._toolbar_layout_width() < _TOOLBAR_COMPACT_WIDTH
         if compact == self._time_toolbar_compact:
             return
         self._time_toolbar_compact = compact
         layout = self.toolbar.layout()
         if layout is not None:
-            # Compact packing has to finish before overflow is decided:
-            # at ~500 px (three-pane min) Dual already sits near the
-            # extension chevron, and the settings button is the next action.
             layout.setSpacing(1 if compact else 4)
         for button, full, _short in labels:
             button.setText(full)
@@ -1231,44 +1249,29 @@ class TimeChartCard(_ChartCard):
                 text_width + (16 if compact else 24),
             )
             button.setFixedWidth(button_width)
-        self._prioritize_time_controls(compact)
+        self._set_time_control_spacer_visible(not compact)
         for sep in self._time_separators:
             sep.setVisible(True)
+        settings_action = self._toolbar_action_for_widget(
+            self._cursor_display_settings_btn
+        )
+        if settings_action is not None:
+            settings_action.setVisible(True)
         self.toolbar.updateGeometry()
+        host = getattr(self, "_toolbar_host", None)
+        if host is not None:
+            host.fit_inner_toolbar()
 
-    def _prioritize_time_controls(self, compact):
+    def _set_time_control_spacer_visible(self, visible):
         widgets = getattr(self, '_time_control_widgets', ())
         if not widgets:
             return
-        action_for = {
-            widget: self._toolbar_action_for_widget(widget)
-            for widget in widgets
-        }
-        if compact:
-            action_for[self._time_controls_spacer].setVisible(False)
-            action_for[self._time_separators[0]].setVisible(False)
-            action_for[self._time_separators[1]].setVisible(True)
-            # Keep the cursor cluster ahead of Pan so QToolBar overflow
-            # swallows Pan/Zoom/Save rather than the settings button.
-            # Trailing-aligning the cluster (insert before `_loc_action`)
-            # dumps the last action — settings — into the chevron at 500 px.
-            anchor = _find_action(self.toolbar, 'pan')
-        else:
-            action_for[self._time_controls_spacer].setVisible(True)
-            action_for[self._time_separators[0]].setVisible(True)
-            action_for[self._time_separators[1]].setVisible(True)
-            anchor = getattr(self, '_loc_action', None)
-            if anchor not in self.toolbar.actions():
-                anchor = None
-        settings_action = action_for.get(self._cursor_display_settings_btn)
-        if settings_action is not None:
-            settings_action.setVisible(True)
-        # Always walk the same widget tuple so compact↔normal crossings
-        # cannot accumulate insertAction order drift.
-        for widget in widgets:
-            action = action_for.get(widget)
-            if action is not None:
-                self.toolbar.insertAction(anchor, action)
+        spacer = self._toolbar_action_for_widget(self._time_controls_spacer)
+        sep0 = self._toolbar_action_for_widget(self._time_separators[0])
+        if spacer is not None:
+            spacer.setVisible(visible)
+        if sep0 is not None:
+            sep0.setVisible(visible)
 
     # ----- plot mode -----
     def plot_mode(self):
@@ -1337,6 +1340,22 @@ class TimeChartCard(_ChartCard):
 
     def _on_cursor_display_popover_visibility_changed(self, geometry):
         self.cursor_display_popover_geometry_changed.emit(geometry)
+        if geometry is not None:
+            return
+        btn = self._cursor_display_settings_btn
+        if sip.isdeleted(btn):
+            return
+        # Qt.Popup grabs the mouse and does not send Leave to the anchor
+        # on hide, so QSS :hover would stick. Clear only when the cursor
+        # is actually outside the button; underMouse() is the stale flag.
+        if btn.rect().contains(btn.mapFromGlobal(QCursor.pos())):
+            return
+        btn.setAttribute(Qt.WA_UnderMouse, False)
+        style = btn.style()
+        if style is not None:
+            style.unpolish(btn)
+            style.polish(btn)
+        btn.update()
 
     def set_channel_drop_zone(self, zone, x_rect=None):
         """Show plot-join or X-axis drop highlight; ``zone`` is plot/xaxis/''."""

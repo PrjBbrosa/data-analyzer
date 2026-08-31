@@ -16,6 +16,7 @@ class CursorDisplayOptions:
     show_max_value: bool = True
     show_min_value: bool = True
     show_avg_value: bool = True
+    show_delta_value: bool = True
 
 
 _OPTION_NAMES = tuple(item.name for item in fields(CursorDisplayOptions))
@@ -28,6 +29,7 @@ class CursorDisplayBranch:
     min_value: float | None = None
     max_value: float | None = None
     avg_value: float | None = None
+    delta_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -82,12 +84,17 @@ class CursorPresentation:
 
 
 def enabled_value_fields(options: CursorDisplayOptions):
-    """Return enabled value fields in the product order Min, Max, Avg."""
+    """Return enabled value fields in the product order Min, Max, Avg, Δ.
+
+    Δ maps to time-X channel field ``delta``; custom-X branch rows remap
+    that token to ``delta_value``.
+    """
     return tuple(
         item for item, enabled in (
             (("Min", "min_value"), options.show_min_value),
             (("Max", "max_value"), options.show_max_value),
             (("Avg", "avg_value"), options.show_avg_value),
+            (("Δ", "delta"), options.show_delta_value),
         )
         if enabled
     )

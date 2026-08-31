@@ -55,12 +55,12 @@ def _custom_rows(count=1, *, duplicate_label=False):
                 CursorDisplayBranch(
                     label="X↑", current_value=3.25 + index,
                     min_value=1.0 + index, max_value=5.0 + index,
-                    avg_value=3.0 + index,
+                    avg_value=3.0 + index, delta_value=1.5 + index,
                 ),
                 CursorDisplayBranch(
                     label="X↓", current_value=2.25 + index,
                     min_value=0.0 + index, max_value=4.0 + index,
-                    avg_value=2.0 + index,
+                    avg_value=2.0 + index, delta_value=-0.5 + index,
                 ),
             ),
         )
@@ -68,16 +68,18 @@ def _custom_rows(count=1, *, duplicate_label=False):
     )
 
 
-@pytest.mark.parametrize("bits", tuple(product((False, True), repeat=5)))
-def test_all_32_options_project_deterministically_without_orphans(bits):
+@pytest.mark.parametrize("bits", tuple(product((False, True), repeat=6)))
+def test_all_64_options_project_deterministically_without_orphans(bits):
     options = _options(bits)
     enabled = [
         label for label, flag in (
             ("Min", options.show_min_value),
             ("Max", options.show_max_value),
             ("Avg", options.show_avg_value),
+            ("Δ", options.show_delta_value),
         ) if flag
     ]
+    all_metrics = {"Min", "Max", "Avg", "Δ"}
     for x_mode, factory in (("time", _time_rows), ("custom", _custom_rows)):
         for count in (1, 2):
             for mini in (False, True):
@@ -93,22 +95,23 @@ def test_all_32_options_project_deterministically_without_orphans(bits):
                 for block in projection.blocks:
                     labels = [row.label for row in block.visible_rows]
                     if x_mode == "time":
-                        metric_labels = [item for item in labels if item in {"Min", "Max", "Avg"}]
+                        metric_labels = [item for item in labels if item in all_metrics]
                         assert metric_labels == ([] if mini else enabled)
                         if mini:
                             assert "Δ" not in labels
                             assert "●" in projection.html
-                            assert "△" in projection.html
-                            assert "Δ=" in projection.tooltip
-                        else:
-                            assert "Δ" in labels
+                            if options.show_delta_value:
+                                assert "△" in projection.html
+                                assert "Δ=" in projection.tooltip
+                            else:
+                                assert "△" not in projection.html
+                                assert "Δ=" not in projection.tooltip
                     else:
                         assert "X↑" in labels and "X↓" in labels
-                        assert "Δ" not in labels
-                        visible_metrics = [item for item in labels if item in {"Min", "Max", "Avg"}]
+                        visible_metrics = [item for item in labels if item in all_metrics]
                         if mini:
                             priority = next(
-                                (name for name in ("Avg", "Max", "Min") if name in enabled),
+                                (name for name in ("Δ", "Avg", "Max", "Min") if name in enabled),
                                 None,
                             )
                             assert visible_metrics == ([priority, priority] if priority else [])
@@ -118,7 +121,7 @@ def test_all_32_options_project_deterministically_without_orphans(bits):
                             assert "●" not in projection.html
                     for label in enabled:
                         assert label in projection.tooltip
-                    for label in ({"Min", "Max", "Avg"} - set(enabled)):
+                    for label in (all_metrics - set(enabled)):
                         assert f"{label}=" not in projection.tooltip
                 assert "diagnostic-" in projection.tooltip or "branch-diagnostic-" in projection.tooltip
                 assert "run_" in projection.tooltip or "trace_" in projection.tooltip
@@ -302,9 +305,10 @@ def test_dual_custom_mini_keeps_identity_and_branches_on_one_row():
     assert projection.html.count("<tr>") == 2
     assert "●" in projection.html
     assert "X↑" in projection.html and "X↓" in projection.html
-    assert "Avg" in projection.html
+    assert "Δ" in projection.html
     assert "Min" not in projection.html
     assert "Max" not in projection.html
+    assert "Avg" not in projection.html
 
 
 def test_duplicate_display_labels_keep_two_composite_blocks_and_full_tooltip_identity():
@@ -332,6 +336,14 @@ def test_settings_store_uses_one_json_key_and_defaults_each_invalid_field(tmp_pa
         '{"show_max_point":false,"show_min_point":"bad","show_max_value":0}',
     )
     assert store.load() == CursorDisplayOptions(False, True, True, True, True)
+    settings.setValue(
+        "charts/time_cursor/display_options_v1",
+        '{"show_max_point":true,"show_min_point":false,'
+        '"show_max_value":true,"show_min_value":true,"show_avg_value":false}',
+    )
+    loaded = store.load()
+    assert loaded.show_delta_value is True
+    assert loaded == CursorDisplayOptions(True, False, True, True, False)
 
 
 def test_cursor_pill_natural_then_constrained_width_and_whole_block_truncation(qapp, qtbot):
@@ -561,9 +573,14 @@ def test_time_card_settings_button_stays_beside_cursor_segment_and_emits_options
     assert button.isVisible()
     assert all(item.isVisible() for item in card._cursor_buttons.values())
     assert button.geometry().left() >= card._cursor_buttons["dual"].geometry().right()
-    assert button.geometry().right() <= card.toolbar.contentsRect().right()
+    host = getattr(card, "_toolbar_host", None)
+    if host is not None:
+        host.ensure_widget_visible(button)
+        qapp.processEvents()
+        mapped = button.mapTo(host.viewport(), button.rect().center())
+        assert host.viewport().rect().contains(mapped)
     card.set_cursor_mode("single")
-    button.click()
+    qtbot.mouseClick(button, Qt.LeftButton)
     qapp.processEvents()
     popover = card.cursor_display_popover()
     assert popover.isVisible()
@@ -596,6 +613,112 @@ def test_tooltip_uses_branch_role_for_full_path_label():
     assert "全程" in lines
     assert "全程=" not in projection.tooltip
     assert "Min=1 N" in projection.tooltip
+
+
+def test_custom_x_dual_full_puts_each_branch_on_its_own_table_row():
+    projection = build_cursor_presentation(
+        _custom_rows(), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="custom", mini=False,
+    )
+    html = projection.html
+    assert html.count("<tr>") == 3
+    rows = re.findall(r"<tr>.*?</tr>", html, flags=re.DOTALL)
+    up_rows = [row for row in rows if "X↑" in row]
+    down_rows = [row for row in rows if "X↓" in row]
+    assert len(up_rows) == 1 and len(down_rows) == 1
+    assert up_rows[0] != down_rows[0]
+    assert "X↓" not in up_rows[0]
+    assert "X↑" not in down_rows[0]
+
+
+def test_custom_x_dual_full_single_branch_still_one_branch_row():
+    channel = replace(_custom_rows()[0], branches=(_custom_rows()[0].branches[0],))
+    projection = build_cursor_presentation(
+        (channel,), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="custom", mini=False,
+    )
+    html = projection.html
+    assert html.count("<tr>") == 2
+    rows = re.findall(r"<tr>.*?</tr>", html, flags=re.DOTALL)
+    branch_rows = [row for row in rows if "X↑" in row]
+    assert len(branch_rows) == 1
+    assert "X↓" not in html
+
+
+def test_time_x_dual_full_value_order_is_min_max_avg_delta():
+    projection = build_cursor_presentation(
+        _time_rows(), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="time", mini=False,
+    )
+    labels = [row.label for row in projection.blocks[0].visible_rows]
+    assert labels == ["Min", "Max", "Avg", "Δ"]
+
+
+def test_delta_switch_hides_delta_column_on_time_and_custom_x():
+    options = replace(CursorDisplayOptions(), show_delta_value=False)
+    time_proj = build_cursor_presentation(
+        _time_rows(), options, cursor_mode="dual", x_mode="time", mini=False,
+    )
+    custom_proj = build_cursor_presentation(
+        _custom_rows(), options, cursor_mode="dual", x_mode="custom", mini=False,
+    )
+    time_labels = [row.label for row in time_proj.blocks[0].visible_rows]
+    custom_labels = [row.label for row in custom_proj.blocks[0].visible_rows]
+    assert time_labels == ["Min", "Max", "Avg"]
+    assert "Δ" not in time_labels
+    assert "Δ" not in custom_labels
+    assert "Δ=" not in time_proj.tooltip
+    assert "Δ=" not in custom_proj.tooltip
+
+
+def test_all_six_off_keeps_identity_and_never_blanks_the_panel():
+    options = CursorDisplayOptions(False, False, False, False, False, False)
+    time_proj = build_cursor_presentation(
+        _time_rows(), options, cursor_mode="dual", x_mode="time", mini=False,
+    )
+    custom_proj = build_cursor_presentation(
+        _custom_rows(), options, cursor_mode="dual", x_mode="custom", mini=False,
+    )
+    assert time_proj.blocks and time_proj.html.strip()
+    assert custom_proj.blocks and custom_proj.html.strip()
+    assert "Speed 1" in time_proj.html
+    assert "X↑" in custom_proj.html and "X↓" in custom_proj.html
+    assert "Δ" not in [row.label for row in time_proj.blocks[0].visible_rows]
+
+
+def test_custom_x_mini_defaults_to_delta_then_falls_back_to_avg():
+    default = build_cursor_presentation(
+        _custom_rows(), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="custom", mini=True,
+    )
+    labels = [row.label for row in default.blocks[0].visible_rows]
+    assert labels.count("Δ") == 2
+    assert "Avg" not in labels
+    assert "X↑" in labels
+    assert "1.5 N" in default.html
+    assert "Avg=" in default.tooltip
+    assert "Min=" in default.tooltip
+    assert "Max=" in default.tooltip
+
+    without_delta = build_cursor_presentation(
+        _custom_rows(), replace(CursorDisplayOptions(), show_delta_value=False),
+        cursor_mode="dual", x_mode="custom", mini=True,
+    )
+    fallback = [row.label for row in without_delta.blocks[0].visible_rows]
+    assert fallback.count("Avg") == 2
+    assert "Δ" not in fallback
+    assert "Δ=" not in without_delta.tooltip
+    assert "Avg=" in without_delta.tooltip
+    assert "Min=" in without_delta.tooltip
+
+
+def test_popover_places_delta_checkbox_after_avg_in_stats_group(qapp, qtbot):
+    popover = CursorDisplayPopover()
+    qtbot.addWidget(popover)
+    names = [name for name, _label in popover._LABELS]
+    assert names[-2:] == ["show_avg_value", "show_delta_value"]
+    assert popover.checkbox("show_delta_value").text() == "显示差值"
+    assert names.index("show_max_value") == 2
 
 
 def test_popover_refit_drops_forced_min_height_when_note_hidden(qapp, qtbot):

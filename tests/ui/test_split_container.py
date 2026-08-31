@@ -28,7 +28,8 @@ def test_split_shows_two_panes(qtbot):
     assert cs.split_active() is True
     assert cs.secondary_canvas() is not None
     assert cs.stack.widget(0) is cs._time_page
-    assert cs._time_toolbar.parentWidget() is cs._time_page
+    assert cs._time_page.isAncestorOf(cs._time_toolbar)
+    assert cs._time_card._toolbar_host.parentWidget() is cs._time_page
     assert cs._time_split.count() == 2
     left, right = cs._time_split.sizes()
     assert left > 0
@@ -91,7 +92,7 @@ def test_analysis_split_uses_one_shared_toolbar_and_equal_widths(qtbot, qapp):
     qapp.processEvents()
 
     assert page.pane_count() == 2
-    assert page._toolbar.parentWidget() is page
+    assert page.isAncestorOf(page._toolbar)
     assert page._cards[0].toolbar is page._toolbar
     assert page._toolbar.isVisibleTo(page)
     assert not page._cards[1].toolbar.isVisibleTo(page)

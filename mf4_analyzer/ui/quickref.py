@@ -250,6 +250,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="第 10–24 个走标签栏或 » 溢出菜单",
             ),
             QuickRow("顶部按钮的快捷键", sub="悬停按钮即显示"),
+            QuickRow(
+                "窄窗口工具栏",
+                sub="空白处拖动或触摸板横向滑动，查看被裁掉的按钮；左右顺序不变。",
+            ),
         ),
     ),
     # 5 — 通道树（左侧）
@@ -334,7 +338,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "游标显示设置",
-                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg；− 把读数收成 mini，丢掉的进 tooltip。全局同步所有分屏。",
+                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；− 把读数收成 mini，丢掉的进 tooltip。全局同步所有分屏。",
             ),
             QuickRow(
                 "频谱 / 频响游标",

@@ -205,11 +205,18 @@ _HINTS = (
     ),
     Hint(
         id="time.custom_x_paths",
-        text="游标显示设置管极值点；− 收 mini；X↑/X↓",
+        text="游标显示设置管极值点与差值；− 收 mini；X↑/X↓",
         surface="discovery",
         modes=frozenset({"time"}),
         retire_on="custom_x_dual_cursor",
         priority=43,
+    ),
+    Hint(
+        id="chart.toolbar_pan",
+        text="窄工具栏可横滑查看更多",
+        surface="discovery",
+        modes=frozenset({"time", "fft", "fft_time", "order", "frf"}),
+        priority=41,
     ),
     Hint(
         id="time.wwt_native_home",

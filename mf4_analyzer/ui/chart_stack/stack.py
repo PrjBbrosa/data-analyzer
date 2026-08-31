@@ -115,8 +115,8 @@ class ChartStack(QWidget):
         time_lay = QVBoxLayout(self._time_page)
         time_lay.setContentsMargins(0, 0, 0, 0)
         time_lay.setSpacing(0)
-        self._time_toolbar = self._time_card.detach_toolbar(self._time_page)
-        time_lay.addWidget(self._time_toolbar)
+        time_lay.addWidget(self._time_card.detach_toolbar(self._time_page))
+        self._time_toolbar = self._time_card.toolbar
         self._time_split = QSplitter(Qt.Horizontal, self._time_page)
         self._time_split.setObjectName("timeDomainSplit")
         self._time_split.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -1765,6 +1765,7 @@ class ChartStack(QWidget):
                 min_value=branch.min_value,
                 max_value=branch.max_value,
                 avg_value=branch.avg,
+                delta_value=getattr(branch, "delta", None),
             )
             for branch in getattr(row, "branches", ())
         )

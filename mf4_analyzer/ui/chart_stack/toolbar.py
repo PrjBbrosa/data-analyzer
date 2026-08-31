@@ -1,10 +1,11 @@
-"""PgNavigationToolbar and _TickDensityPopover."""
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+"""PgNavigationToolbar, ToolbarScrollHost, and _TickDensityPopover."""
+from PyQt5.QtCore import QEvent, QPoint, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QAction, QButtonGroup, QFileDialog, QFrame,
-    QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy,
-    QSlider, QSpinBox, QToolBar, QVBoxLayout,
+    QAbstractButton, QAbstractSpinBox, QAction, QButtonGroup, QFileDialog,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QScrollArea, QSizePolicy, QSlider, QSpinBox, QToolBar, QVBoxLayout,
+    QWidget,
 )
 
 from ..chart_defaults import DEFAULT_CHART_TICK_DENSITY
@@ -175,6 +176,218 @@ class _TickDensityPopover(QFrame):
                 btn.update()
         finally:
             self._preset_group.setExclusive(True)
+
+
+class ToolbarScrollHost(QScrollArea):
+    """Clip a chart QToolBar to the viewport and pan-scroll when it overflows.
+
+    The inner bar always lays out at its natural ``sizeHint()`` (or the
+    viewport width, whichever is larger), so Qt never creates the QToolBar
+    extension/overflow button. Dragging empty chrome past
+    ``PAN_START_PX`` pans; smaller motion stays a normal click. Horizontal
+    wheel/trackpad delta scrolls; vertical delta is ignored.
+    """
+
+    PAN_START_PX = 8
+
+    def __init__(self, toolbar, parent=None):
+        super().__init__(parent)
+        self.setObjectName("chartToolbarScrollHost")
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setWidgetResizable(False)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setStyleSheet(
+            "QScrollArea#chartToolbarScrollHost { background: transparent; }"
+        )
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.setWidget(toolbar)
+        self._press_global = None
+        self._press_offset = 0
+        self._panning = False
+        self._hint_left = QLabel("‹", self)
+        self._hint_right = QLabel("›", self)
+        for hint in (self._hint_left, self._hint_right):
+            hint.setObjectName("chartToolbarEdgeHint")
+            hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            hint.setAlignment(Qt.AlignCenter)
+            hint.setFixedWidth(14)
+            hint.setStyleSheet(
+                "color:#94a3b8;background:transparent;font-size:16px;"
+            )
+            hint.hide()
+        self._install_filters(toolbar)
+        self.viewport().installEventFilter(self)
+        self.installEventFilter(self)
+        self.horizontalScrollBar().valueChanged.connect(self._sync_edge_hints)
+
+    def sizeHint(self):
+        bar = self.widget()
+        height = 32
+        if bar is not None:
+            height = max(bar.sizeHint().height(), height)
+        return QSize(0, height)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit_inner_toolbar()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_inner_toolbar()
+
+    def wheelEvent(self, event):
+        if self._apply_horizontal_wheel(event):
+            event.accept()
+            return
+        event.ignore()
+
+    def mouseMoveEvent(self, event):
+        if self._handle_pan_move(event.globalPos()):
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._handle_pan_release():
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def eventFilter(self, obj, event):
+        etype = event.type()
+        if etype == QEvent.ChildAdded:
+            child = event.child()
+            if isinstance(child, QWidget):
+                self._install_filters(child)
+            return False
+        if etype == QEvent.LayoutRequest and obj is self.widget():
+            self.fit_inner_toolbar()
+            return False
+        if etype == QEvent.Wheel:
+            if self._is_descended_from_toolbar(obj) or obj in (
+                self, self.viewport(), self.widget(),
+            ):
+                if self._apply_horizontal_wheel(event):
+                    return True
+            return False
+        if etype == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            if self._is_chrome(obj):
+                self._arm_pan(event.globalPos())
+            return False
+        if etype == QEvent.MouseMove and self._press_global is not None:
+            if self._handle_pan_move(event.globalPos()):
+                return True
+            return False
+        if etype == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            return self._handle_pan_release()
+        return super().eventFilter(obj, event)
+
+    def fit_inner_toolbar(self):
+        """Keep the inner bar at natural width so QToolBar never overflows."""
+        bar = self.widget()
+        if bar is None:
+            return
+        hint = bar.sizeHint()
+        viewport_w = max(0, self.viewport().width())
+        viewport_h = max(0, self.viewport().height())
+        target_w = max(hint.width(), viewport_w)
+        target_h = max(hint.height(), viewport_h, 1)
+        if bar.minimumWidth() != hint.width():
+            bar.setMinimumWidth(hint.width())
+        if bar.size() != QSize(target_w, target_h):
+            bar.resize(target_w, target_h)
+        self._sync_edge_hints()
+
+    def ensure_widget_visible(self, widget, xmargin=12):
+        if widget is None:
+            return
+        self.fit_inner_toolbar()
+        self.ensureWidgetVisible(widget, xmargin, 0)
+        self._sync_edge_hints()
+
+    def _install_filters(self, widget):
+        widget.installEventFilter(self)
+        for child in widget.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    def _is_descended_from_toolbar(self, widget):
+        bar = self.widget()
+        current = widget
+        while current is not None:
+            if current is bar:
+                return True
+            current = current.parentWidget()
+        return False
+
+    def _is_chrome(self, widget):
+        if widget is None or isinstance(widget, QAbstractButton):
+            return False
+        current = widget
+        while current is not None:
+            if isinstance(current, QAbstractButton):
+                return False
+            if current is self.widget() or current is self or current is self.viewport():
+                return True
+            current = current.parentWidget()
+        return False
+
+    def _arm_pan(self, global_pos):
+        self._press_global = QPoint(global_pos)
+        self._press_offset = self.horizontalScrollBar().value()
+        self._panning = False
+
+    def _handle_pan_move(self, global_pos):
+        if self._press_global is None:
+            return False
+        delta_x = global_pos.x() - self._press_global.x()
+        if not self._panning:
+            if abs(delta_x) < self.PAN_START_PX:
+                return False
+            self._panning = True
+        self.horizontalScrollBar().setValue(self._press_offset - delta_x)
+        self._sync_edge_hints()
+        return True
+
+    def _handle_pan_release(self):
+        was_panning = self._panning
+        self._panning = False
+        self._press_global = None
+        return was_panning
+
+    def _apply_horizontal_wheel(self, event):
+        pixel = event.pixelDelta()
+        dx = pixel.x()
+        if dx == 0:
+            dx = event.angleDelta().x()
+        if dx == 0:
+            return False
+        bar = self.horizontalScrollBar()
+        bar.setValue(bar.value() - dx)
+        self._sync_edge_hints()
+        return True
+
+    def _sync_edge_hints(self, *_args):
+        bar = self.horizontalScrollBar()
+        height = max(1, self.viewport().height())
+        width = self.viewport().width()
+        self._hint_left.setGeometry(0, 0, 14, height)
+        self._hint_right.setGeometry(max(0, width - 14), 0, 14, height)
+        overflow = bar.maximum() > 0
+        self._hint_left.setVisible(overflow and bar.value() > 0)
+        self._hint_right.setVisible(overflow and bar.value() < bar.maximum())
+        if self._hint_left.isVisible():
+            self._hint_left.raise_()
+        if self._hint_right.isVisible():
+            self._hint_right.raise_()
 
 
 class PgNavigationToolbar(QToolBar):
