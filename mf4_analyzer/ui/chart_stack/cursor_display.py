@@ -182,6 +182,10 @@ def _custom_rows(channel, options, cursor_mode, mini):
         if mini and priority is not None:
             label, attr = priority
             visible.append(CursorDisplayRow(label, _formatted(getattr(branch, attr), channel.unit_suffix)))
+    if not visible and channel.diagnostic:
+        row = CursorDisplayRow("状态", str(channel.diagnostic))
+        visible.append(row)
+        tooltip.append(row)
     return tuple(visible), tuple(tooltip)
 
 
@@ -294,7 +298,9 @@ def _tooltip(blocks: Iterable[CursorDisplayBlock]) -> str:
                 continue
             prefix = f"{branch} " if branch else ""
             lines.append(f"{prefix}{row.label}={row.value}")
-        if block.diagnostic:
+        if block.diagnostic and not any(
+            row.value == block.diagnostic for row in block.tooltip_rows
+        ):
             lines.append(block.diagnostic)
     return "\n".join(lines)
 

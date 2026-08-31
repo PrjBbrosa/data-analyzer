@@ -279,11 +279,38 @@ def test_empty_custom_x_interval_does_not_forge_stats(qapp):
     assert "区间内无数据" in blob
 
 
-def test_unidirectional_custom_x_uses_full_path_not_forged_pair(qapp):
+def test_rise_only_custom_x_keeps_known_direction(qapp):
     canvas = _pg_canvas(qapp)
     series = wwt.sfns_like_hysteresis_arrays("unidirectional")
     _plot_custom_x(canvas, [_force_row(series, name=wwt.SFNS_RACK_FORCE, fid="f1")])
     _header, html, rows = _emit_dual(canvas, wwt.SFNS_CURSOR_A, wwt.SFNS_CURSOR_B)
+    blob = html + " " + _row_text(rows)
+    assert "X↑" in blob
+    assert "全程" not in blob
+    assert "X↓" not in blob
+
+
+def test_fall_only_custom_x_keeps_known_direction(qapp):
+    canvas = _pg_canvas(qapp)
+    series = wwt.sfns_like_hysteresis_arrays("unidirectional")
+    falling = SimpleNamespace(x=series.x[::-1], y=series.y[::-1])
+    _plot_custom_x(canvas, [_force_row(falling, name=wwt.SFNS_RACK_FORCE, fid="f1")])
+    _header, html, rows = _emit_dual(canvas, wwt.SFNS_CURSOR_A, wwt.SFNS_CURSOR_B)
+    blob = html + " " + _row_text(rows)
+    assert "X↓" in blob
+    assert "全程" not in blob
+    assert "X↑" not in blob
+
+
+def test_short_unknown_custom_x_keeps_full_path_fallback(qapp):
+    canvas = _pg_canvas(qapp)
+    x = np.asarray([0.0, 1.0, 2.0, 1.0, 0.0])
+    y = np.arange(x.size, dtype=float)
+    _plot_custom_x(
+        canvas,
+        [(wwt.SFNS_RACK_FORCE, True, x, y, "#1769e0", "N", "f1")],
+    )
+    _header, html, rows = _emit_dual(canvas, 0.0, 2.0)
     blob = html + " " + _row_text(rows)
     assert "全程" in blob
     assert "X↑" not in blob

@@ -935,11 +935,34 @@ class CursorController(_CanvasBackref):
         return self._custom_x_status(reason)
 
     def _build_custom_x_dual_row(self, channel_key, ch, tf, sf, color, unit_suffix, xlo, xhi):
-        result = analyze_custom_x_paths(
-            tf, sf, x_range=(xlo, xhi),
-        )
         ctx = self._x_axis_context
         x_unit = str(getattr(ctx, "unit", "") or "").strip()
+        tf_array = np.asarray(tf)
+        sf_array = np.asarray(sf)
+        if (
+            tf_array.ndim != 1
+            or sf_array.ndim != 1
+            or tf_array.size != sf_array.size
+        ):
+            return DualCursorRow(
+                channel_name=ch,
+                min_value=None,
+                max_value=None,
+                avg=None,
+                delta=None,
+                unit_suffix=unit_suffix,
+                color=color,
+                identity=channel_key,
+                label=ch,
+                mode=CHANNEL_MODE,
+                branch="",
+                status=self._custom_x_status(REASON_INCOMPATIBLE_SHAPE),
+                x_unit=x_unit,
+                branches=(),
+            ), []
+        result = analyze_custom_x_paths(
+            tf_array, sf_array, x_range=(xlo, xhi),
+        )
         status = self._custom_x_status(result.reason)
         branches = ()
         stats = None
@@ -964,12 +987,23 @@ class CursorController(_CanvasBackref):
                 y = np.concatenate(tuple(np.asarray(item.y, dtype=float) for item in samples))
                 stats = self._finite_stats(y)
             if stats is not None:
+                direction = 0
+                if result.reason == REASON_UNIDIRECTIONAL:
+                    known_directions = {
+                        int(item.direction)
+                        for item in result.accepted
+                        if int(item.direction) in (-1, 1)
+                    }
+                    if len(known_directions) == 1:
+                        direction = known_directions.pop()
                 branches = (DualCursorBranch(
-                    direction=0,
+                    direction=direction,
                     min_value=stats[0],
                     max_value=stats[1],
                     avg=stats[2],
                 ),)
+                if direction:
+                    status = ""
             else:
                 status = "区间内无数据"
         extrema = []

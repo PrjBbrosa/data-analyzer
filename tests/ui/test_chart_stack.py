@@ -3466,6 +3466,83 @@ def test_structured_cursor_pill_stays_in_safe_rect_in_narrow_chart_stack(
     assert cs._pill.safe_rect().contains(cs._pill.geometry())
 
 
+def _plot_live_custom_x_diagnostic_case(canvas, case):
+    from tests._helpers import wwt_factory as wwt
+
+    if case == "ambiguous":
+        series = wwt.sfns_like_hysteresis_arrays("two_cycles")
+        x = np.asarray(series.x, dtype=float)
+        y = np.asarray(series.y, dtype=float)
+        single_x = wwt.SFNS_CURSOR_A
+        dual_x = (wwt.SFNS_CURSOR_A, wwt.SFNS_CURSOR_B)
+    else:
+        x = np.linspace(0.0, 10.0, 101)
+        y = 2.0 * x + 1.0
+        single_x = 20.0 if case == "out_of_range" else 4.0
+        dual_x = (20.0, 30.0) if case == "out_of_range" else (2.0, 8.0)
+    name = "[source-a] Rack Force"
+    canvas.plot_channels(
+        [(name, True, x, y, "#1769e0", "N", "fid-a")],
+        mode="overlay",
+        x_axis_context=SimpleNamespace(
+            mode="channel",
+            identity=("fid-a", "travel"),
+            label="travel",
+            unit="mm",
+        ),
+    )
+    if case == "incompatible_shape":
+        canvas.channel_data[name] = (x, y[:-1], "#1769e0", "N")
+    return single_x, dual_x
+
+
+@pytest.mark.parametrize("cursor_mode", ("single", "dual"))
+@pytest.mark.parametrize("pill_mode", ("full", "mini"))
+@pytest.mark.parametrize(
+    "case,expected_single,expected_dual",
+    (
+        ("out_of_range", "当前 X 不在有效路径内", "区间内无数据"),
+        ("incompatible_shape", "X/Y 形状不兼容", "X/Y 形状不兼容"),
+        ("ambiguous", "无法可靠区分升程/回程", "无法可靠区分升程/回程"),
+    ),
+)
+def test_live_custom_x_diagnostic_survives_legacy_then_structured_projection(
+    qapp, qtbot, tmp_path, cursor_mode, pill_mode, case,
+    expected_single, expected_dual,
+):
+    cs = ChartStack(cursor_settings=_cursor_settings(tmp_path))
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode("time")
+    cs.set_cursor_mode_for_canvas(cs.canvas_time, cursor_mode)
+    if pill_mode == "mini":
+        cs._pill._toggle_mode()
+    single_x, (ax, bx) = _plot_live_custom_x_diagnostic_case(
+        cs.canvas_time, case
+    )
+    legacy_seen = []
+    structured_seen = []
+    cs.canvas_time.cursor_info.connect(legacy_seen.append)
+    if cursor_mode == "single":
+        cs.canvas_time.single_cursor_rows.connect(structured_seen.append)
+        cs.canvas_time._emit_single_cursor_html(single_x)
+        expected = expected_single
+    else:
+        cs.canvas_time.dual_cursor_rows.connect(structured_seen.append)
+        cs.canvas_time._cursor.ax = ax
+        cs.canvas_time._cursor.bx = bx
+        cs.canvas_time._emit_dual_cursor_html()
+        expected = expected_dual
+    qapp.processEvents()
+
+    assert legacy_seen
+    assert structured_seen
+    assert expected in cs._pill.detail_text()
+    assert expected in cs._pill._detail.toolTip()
+    assert "fid-a / Rack Force" in cs._pill._detail.toolTip()
+
+
 def test_direct_canvas_clear_clears_legacy_and_structured_cursor_pill(
     qapp, qtbot, tmp_path
 ):

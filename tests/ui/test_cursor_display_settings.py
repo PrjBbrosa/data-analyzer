@@ -143,6 +143,44 @@ def test_custom_x_single_shows_current_branches_only_in_full_and_mini():
         assert not ({"Min", "Max", "Avg", "Δ"} & set(visible))
 
 
+@pytest.mark.parametrize("cursor_mode", ("single", "dual"))
+@pytest.mark.parametrize("mini", (False, True))
+@pytest.mark.parametrize(
+    "diagnostic",
+    (
+        "当前 X 不在有效路径内",
+        "X/Y 形状不兼容",
+        "无法可靠区分升程/回程",
+    ),
+)
+def test_custom_x_diagnostic_only_channel_is_a_populated_block(
+    cursor_mode, mini, diagnostic
+):
+    channel = CursorDisplayChannel(
+        identity=("source-a", "Rack Force"),
+        source_label="source-a",
+        channel_label="Rack Force",
+        color="#1769e0",
+        unit_suffix=" N",
+        diagnostic=diagnostic,
+    )
+
+    projection = build_cursor_presentation(
+        (channel,), CursorDisplayOptions(),
+        cursor_mode=cursor_mode, x_mode="custom", mini=mini,
+    )
+
+    assert len(projection.blocks) == 1
+    block = projection.blocks[0]
+    assert block.identity == ("source-a", "Rack Force")
+    assert [(row.label, row.value) for row in block.visible_rows] == [
+        ("状态", diagnostic),
+    ]
+    assert diagnostic in projection.html
+    assert diagnostic in projection.tooltip
+    assert "source-a / Rack Force" in projection.tooltip
+
+
 def test_time_x_single_shows_only_the_real_current_value_in_full_and_mini():
     for mini in (False, True):
         projection = build_cursor_presentation(
