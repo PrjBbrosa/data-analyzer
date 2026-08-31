@@ -162,6 +162,15 @@ def test_quickref_explains_the_pane_local_frequency_cursor_modes():
     assert "pane" in row.sub and "默认关闭" in row.sub
 
 
+def test_quickref_documents_time_cursor_display_settings():
+    group = next(g for g in quickref.QUICKREF if g.title == "游标")
+    row = next(row for row in group.rows if row.desc == "游标显示设置")
+    assert "最小值点" in row.sub
+    assert "最大值点" in row.sub
+    assert "Min / Max / Avg" in row.sub
+    assert "全局" in row.sub
+
+
 def test_order_mode_names_eps_motor_speed():
     modes = next(g for g in quickref.QUICKREF if g.title == "五个分析工作区 + 总览")
     order_row = next(r for r in modes.rows if r.desc == "阶次")

@@ -322,11 +322,19 @@ QUICKREF: Tuple[QuickGroup, ...] = (
     QuickGroup(
         title="游标",
         rows=(
-            QuickRow("单游标", keys=(_sc("cursor_single"),)),
+            QuickRow(
+                "单游标",
+                sub="时间轴显示当前位置；Custom X 显示当前位置的 X↑ / X↓ 分支值。",
+                keys=(_sc("cursor_single"),),
+            ),
             QuickRow(
                 "双游标",
                 sub="点 A、B：时间轴显示 ΔT/1/ΔT；Custom X 显示单位/ΔX。无法可靠区分会提示。",
                 keys=(_sc("cursor_dual"),),
+            ),
+            QuickRow(
+                "游标显示设置",
+                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg；全局同步所有分屏。",
             ),
             QuickRow(
                 "频谱 / 频响游标",

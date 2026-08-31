@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time as _time
 
 import numpy as np
@@ -14,11 +15,13 @@ import pyqtgraph as pg
 
 from mf4_analyzer.signal.custom_x_paths import (
     REASON_EMPTY,
+    REASON_INCOMPATIBLE_SHAPE,
     REASON_MULTIPLE_PATHS,
     REASON_SAME_DIRECTION,
     REASON_SHORT_SEQUENCE,
     REASON_UNIDIRECTIONAL,
     analyze_custom_x_paths,
+    sample_custom_x_cursor,
 )
 from mf4_analyzer.ui.plot_helpers import (
     DualCursorBranch,
@@ -26,6 +29,7 @@ from mf4_analyzer.ui.plot_helpers import (
     _format_dual_html,
     _format_single_cursor_channel_html,
     _interp_cursor_value,
+    _split_prefixed_label,
 )
 from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, CursorXAxisContext, TIME_MODE
 
@@ -77,6 +81,8 @@ class CursorController(_CanvasBackref):
         "_cursor_b_items",
         "_cursor_item_owners",
         "_dual_cursor_extreme_markers",
+        "_dual_cursor_extreme_points",
+        "_cursor_display_options",
         "_x_axis_context",
         "visible",
         "dual",
@@ -111,6 +117,8 @@ class CursorController(_CanvasBackref):
         "snapshot_placement",
         "restore_placement",
         "set_x_axis_context",
+        "set_cursor_display_options",
+        "cursor_display_options",
     })
 
     def __init__(self, canvas):
@@ -126,6 +134,8 @@ class CursorController(_CanvasBackref):
         self._cursor_b_items = []
         self._cursor_item_owners = {}
         self._dual_cursor_extreme_markers = []
+        self._dual_cursor_extreme_points = ()
+        self._cursor_display_options = None
         self._x_axis_context = None
 
     @property
@@ -207,7 +217,14 @@ class CursorController(_CanvasBackref):
         self._remove_cursor_items(self._cursor_a_items)
         self._remove_cursor_items(self._cursor_b_items)
         self._cursor_item_owners.clear()
+        # Scatter markers are transient cursor decoration.  They are not owned
+        # by ``_cursor_item_owners``, so hide their data explicitly before
+        # dropping the wrappers during a canvas rebuild.
+        self._hide_dual_cursor_extreme_markers()
         self._dual_cursor_extreme_markers = []
+        self._dual_cursor_extreme_points = ()
+        self.single_cursor_rows.emit([])
+        self.dual_cursor_rows.emit([])
 
     def reset_all_state(self):
         self._ax = None
@@ -217,9 +234,48 @@ class CursorController(_CanvasBackref):
         self._dual = False
         self._last_t = 0
         self._x_axis_context = None
+        self._dual_cursor_extreme_points = ()
 
     def set_x_axis_context(self, context):
         self._x_axis_context = context
+
+    def set_cursor_display_options(self, options):
+        from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+        if not isinstance(options, CursorDisplayOptions):
+            raise TypeError("options must be CursorDisplayOptions")
+        previous = self.cursor_display_options()
+        self._cursor_display_options = options
+        value_changed = (
+            previous.show_max_value,
+            previous.show_min_value,
+            previous.show_avg_value,
+        ) != (
+            options.show_max_value,
+            options.show_min_value,
+            options.show_avg_value,
+        )
+        point_changed = (
+            previous.show_max_point,
+            previous.show_min_point,
+        ) != (
+            options.show_max_point,
+            options.show_min_point,
+        )
+        if self._dual and self._ax is not None and value_changed:
+            self._emit_dual_cursor_html()
+        elif self._dual and self._ax is not None and point_changed:
+            self._update_dual_cursor_extreme_markers(
+                self._dual_cursor_extreme_points
+            )
+            self.draw_idle()
+
+    def cursor_display_options(self):
+        if self._cursor_display_options is None:
+            from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+            return CursorDisplayOptions()
+        return self._cursor_display_options
 
     @property
     def x_axis_context(self):
@@ -244,6 +300,11 @@ class CursorController(_CanvasBackref):
             self._hide_cursor_items(self._cursor_a_items)
             self._hide_cursor_items(self._cursor_b_items)
             self._hide_dual_cursor_extreme_markers()
+            self._dual_cursor_extreme_points = ()
+            self.single_cursor_rows.emit([])
+            self.dual_cursor_rows.emit([])
+            self.cursor_info.emit("")
+            self.dual_cursor_info.emit("")
             self.draw_idle()
 
     def set_dual_cursor_mode(self, en):
@@ -260,6 +321,7 @@ class CursorController(_CanvasBackref):
             self._hide_cursor_items(self._cursor_b_items)
             self._hide_dual_cursor_extreme_markers()
             self.dual_cursor_info.emit("")
+            self.dual_cursor_rows.emit([])
             self.draw_idle()
             return
         if _finite_float(self._ax) is not None:
@@ -282,7 +344,10 @@ class CursorController(_CanvasBackref):
         self._hide_cursor_items(self._cursor_a_items)
         self._hide_cursor_items(self._cursor_b_items)
         self._hide_dual_cursor_extreme_markers()
+        self._dual_cursor_extreme_points = ()
         self.dual_cursor_info.emit("")
+        self.dual_cursor_rows.emit([])
+        self.single_cursor_rows.emit([])
         self.draw_idle()
 
     def snapshot_placement(self):
@@ -478,16 +543,18 @@ class CursorController(_CanvasBackref):
 
     def _update_dual_cursor_extreme_markers(self, points_by_channel):
         markers = self._ensure_dual_cursor_extreme_markers()
+        options = self.cursor_display_options()
         points_by_handle = {}
         for channel_key, min_x, min_y, max_x, max_y in points_by_channel:
             pair = self._channel_lines.get(channel_key)
             if pair is None:
                 continue
             handle = pair[0]
-            points_by_handle.setdefault(handle, []).extend((
-                (min_x, min_y, "#16a34a"),
-                (max_x, max_y, "#dc2626"),
-            ))
+            points = points_by_handle.setdefault(handle, [])
+            if options.show_min_point:
+                points.append((min_x, min_y, "#16a34a", "o"))
+            if options.show_max_point:
+                points.append((max_x, max_y, "#dc2626", "d"))
         for marker, handle in zip(markers, [
             h for h in self.axes_list if not getattr(h, "placeholder", False)
         ]):
@@ -500,7 +567,7 @@ class CursorController(_CanvasBackref):
                 marker.setData(
                     [point[0] for point in points],
                     [point[1] for point in points],
-                    symbol="o",
+                    symbol=[point[3] for point in points],
                     size=10,
                     pen=[pg.mkPen("#ffffff", width=1.2) for _ in points],
                     brush=[pg.mkBrush(point[2]) for point in points],
@@ -671,7 +738,7 @@ class CursorController(_CanvasBackref):
         return pts[:ok]
 
     def _hidden_channel_names(self):
-        """Return the set of DISPLAY names whose curve is currently hidden
+        """Return the set of COMPOSITE keys whose curve is currently hidden
         (显示原始/显示滤波后 off). The cursor reads samples from
         ``channel_data`` (which always carries the full series, hidden or
         not), so the readout must drop a channel whose ``PlotDataItem`` is not
@@ -687,27 +754,102 @@ class CursorController(_CanvasBackref):
             items = lines.composite_items()
         except Exception:
             return hidden
-        for _ck, name, value in items:
+        for channel_key, _name, value in items:
             try:
                 pdi = value[1].plot_data_item
                 if pdi is not None and not pdi.isVisible():
-                    hidden.add(name)
+                    hidden.add(channel_key)
             except Exception:
                 pass
         return hidden
 
     def _emit_single_cursor_html(self, x):
+        from mf4_analyzer.ui.chart_stack.cursor_display import (
+            CursorDisplayBranch,
+            CursorDisplayChannel,
+        )
+
         sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
-        parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
+        custom_x = self._is_custom_x_cursor()
+        if custom_x:
+            parts = [
+                f'<span style="color:#111827;">'
+                f'X={x:.1f}{self._cursor_x_unit_suffix()}</span>'
+            ]
+        else:
+            parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
+        rows = []
         hidden = self._hidden_channel_names()
-        for ch, (tf, sf, color, u) in self.channel_data.items():
-            if ch in hidden:
+        if hasattr(self.channel_data, "composite_items"):
+            channel_items = self.channel_data.composite_items()
+        else:
+            channel_items = (
+                (ch, ch, values) for ch, values in self.channel_data.items()
+            )
+        for channel_key, ch, (tf, sf, color, u) in channel_items:
+            if channel_key in hidden:
+                continue
+            source_label, channel_label = self._cursor_identity_labels(
+                channel_key, ch
+            )
+            unit_s = f" {u}" if u else ""
+            if custom_x:
+                result = sample_custom_x_cursor(tf, sf, x)
+                branches = tuple(
+                    CursorDisplayBranch(
+                        "X↑" if value.direction > 0 else "X↓",
+                        current_value=value.value,
+                    )
+                    for value in result.values
+                )
+                rows.append(CursorDisplayChannel(
+                    identity=channel_key,
+                    source_label=source_label,
+                    channel_label=channel_label,
+                    color=color,
+                    unit_suffix=unit_s,
+                    branches=branches,
+                    diagnostic=self._custom_x_single_status(
+                        result.reason, bool(branches)
+                    ),
+                ))
+                for branch in branches:
+                    parts.append(_format_single_cursor_channel_html(
+                        f"{ch} {branch.label}",
+                        branch.current_value,
+                        unit_s,
+                        color,
+                    ))
                 continue
             if len(tf):
                 idx = min(np.searchsorted(tf, x), len(sf) - 1)
-                unit_s = f" {u}" if u else ""
-                parts.append(_format_single_cursor_channel_html(ch, sf[idx], unit_s, color))
+                value = sf[idx]
+                parts.append(_format_single_cursor_channel_html(
+                    ch, value, unit_s, color
+                ))
+                rows.append(CursorDisplayChannel(
+                    identity=channel_key,
+                    source_label=source_label,
+                    channel_label=channel_label,
+                    color=color,
+                    unit_suffix=unit_s,
+                    current_value=float(value),
+                ))
         self.cursor_info.emit(sep.join(parts))
+        self.single_cursor_rows.emit(rows)
+
+    def _cursor_identity_labels(self, channel_key, display_name):
+        prefix, channel_label = _split_prefixed_label(str(display_name))
+        source_label = prefix[1:-1] if prefix else ""
+        identity = channel_key
+        if isinstance(identity, str):
+            try:
+                identity = json.loads(identity)
+            except (TypeError, ValueError):
+                identity = None
+        if isinstance(identity, (tuple, list)) and len(identity) == 2:
+            source_label = str(identity[0])
+        return source_label, str(channel_label)
 
     def _cursor_x_unit_suffix(self):
         ctx = self._x_axis_context
@@ -724,7 +866,7 @@ class CursorController(_CanvasBackref):
                 for ch, values in self.channel_data.items()
             )
         for channel_key, ch, values in channel_items:
-            if ch in hidden:
+            if channel_key in hidden:
                 continue
             yield channel_key, ch, values
 
@@ -756,6 +898,8 @@ class CursorController(_CanvasBackref):
     def _custom_x_status(self, reason):
         if reason == REASON_EMPTY:
             return "区间内无数据"
+        if reason == REASON_INCOMPATIBLE_SHAPE:
+            return "X/Y 形状不兼容"
         if reason in (REASON_UNIDIRECTIONAL, REASON_SHORT_SEQUENCE):
             return "全程"
         if reason == REASON_SAME_DIRECTION:
@@ -763,6 +907,15 @@ class CursorController(_CanvasBackref):
         if reason == REASON_MULTIPLE_PATHS:
             return "无法可靠区分升程/回程"
         return ""
+
+    def _custom_x_single_status(self, reason, has_values):
+        if has_values:
+            return ""
+        if reason == REASON_SHORT_SEQUENCE:
+            return "有效数据不足"
+        if reason == REASON_EMPTY:
+            return "当前 X 不在有效路径内"
+        return self._custom_x_status(reason)
 
     def _build_custom_x_dual_row(self, channel_key, ch, tf, sf, color, unit_suffix, xlo, xhi):
         result = analyze_custom_x_paths(
@@ -905,8 +1058,17 @@ class CursorController(_CanvasBackref):
         else:
             primary_html = "Click A"
         self.cursor_info.emit(primary_html)
-        self.dual_cursor_info.emit(_format_dual_html(dual) if dual else "")
+        options = self.cursor_display_options()
+        formatter_options = None if (
+            options.show_max_value
+            and options.show_min_value
+            and options.show_avg_value
+        ) else options
+        self.dual_cursor_info.emit(
+            _format_dual_html(dual, formatter_options) if dual else ""
+        )
         self.dual_cursor_rows.emit(dual if dual else [])
+        self._dual_cursor_extreme_points = tuple(extreme_points)
         if self._ax is not None and self._bx is not None:
             self._update_dual_cursor_extreme_markers(extreme_points)
         else:

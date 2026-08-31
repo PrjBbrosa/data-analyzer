@@ -162,3 +162,10 @@ def test_canvas_backref_delegate_names_do_not_shadow_canvas_state(qapp):
     }
 
     assert conflicts == {}
+
+
+def test_cursor_display_state_and_live_methods_are_explicitly_declared():
+    assert "_cursor_display_options" in CursorController._owned_names
+    assert "_dual_cursor_extreme_points" in CursorController._owned_names
+    assert "set_cursor_display_options" in CursorController._delegate_names
+    assert "cursor_display_options" in CursorController._delegate_names

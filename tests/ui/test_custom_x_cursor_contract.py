@@ -106,6 +106,17 @@ def _emit_dual(canvas, a, b):
     return header, html, rows
 
 
+def _emit_single(canvas, x):
+    legacy, structured = [], []
+    canvas.cursor_info.connect(legacy.append)
+    canvas.single_cursor_rows.connect(structured.append)
+    canvas.set_cursor_visible(True)
+    canvas.set_dual_cursor_mode(False)
+    canvas._emit_single_cursor_html(float(x))
+    QCoreApplication.processEvents()
+    return legacy[-1] if legacy else "", structured[-1] if structured else []
+
+
 def _blob(header, html, rows) -> str:
     return f"{header}\n{html}\n{rows!r}"
 
@@ -161,6 +172,67 @@ def test_time_domain_x_header_still_shows_delta_t_and_hz(qapp):
     assert "ΔT=" in header
     assert "1/ΔT=" in header
     assert "Hz" in header
+
+
+def test_custom_x_single_emits_rise_then_fall_current_values_only(qapp):
+    canvas = _pg_canvas(qapp)
+    x = np.concatenate((
+        np.linspace(0.0, 10.0, 51),
+        np.linspace(10.0, 0.0, 51)[1:],
+    ))
+    y = np.concatenate((10.0 * x[:51], 100.0 + x[51:]))
+    _plot_custom_x(
+        canvas,
+        [("[source-a] force", True, x, y, "#1769e0", "N", "fid-a")],
+        unit="mm",
+        label="travel",
+        identity=("fid-a", "travel"),
+    )
+
+    legacy, rows = _emit_single(canvas, 4.0)
+
+    assert "X=4.0 mm" in legacy
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.identity is not None
+    assert row.source_label == "fid-a"
+    assert row.channel_label == "force"
+    assert [branch.label for branch in row.branches] == ["X↑", "X↓"]
+    assert [branch.current_value for branch in row.branches] == pytest.approx(
+        [40.0, 104.0]
+    )
+    assert row.current_value is None
+    assert row.delta is None
+    assert row.min_value is None
+    assert row.max_value is None
+    assert row.avg_value is None
+
+
+def test_time_single_legacy_html_stays_compatible_and_adds_structured_value(qapp):
+    from mf4_analyzer.ui.plot_helpers import _format_single_cursor_channel_html
+
+    canvas = _pg_canvas(qapp)
+    t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+    y = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+    canvas.plot_channels(
+        [("[source-a] speed", True, t, y, "#1769e0", "rpm", "fid-a")],
+        mode="overlay",
+    )
+    QCoreApplication.processEvents()
+
+    legacy, rows = _emit_single(canvas, 0.5)
+
+    sep = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+    expected = sep.join((
+        '<span style="color:#111827;">t=0.5000s</span>',
+        _format_single_cursor_channel_html(
+            "[source-a] speed", 2.0, " rpm", "#1769e0"
+        ),
+    ))
+    assert legacy == expected
+    assert len(rows) == 1
+    assert rows[0].current_value == pytest.approx(2.0)
+    assert rows[0].branches == ()
 
 
 def test_noisy_single_cycle_emits_exactly_two_x_up_x_down_branches(qapp):

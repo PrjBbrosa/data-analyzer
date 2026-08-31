@@ -14,6 +14,14 @@ from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
 
 
+def _cursor_settings(tmp_path, name="cursor-stack.ini"):
+    from PyQt5.QtCore import QSettings
+
+    settings = QSettings(str(tmp_path / name), QSettings.IniFormat)
+    settings.clear()
+    return settings
+
+
 def test_apply_mdi_icons_sets_navactive_property_on_active_button(qtbot):
     from PyQt5.QtWidgets import QToolBar, QToolButton
     from mf4_analyzer.ui.chart_stack import _apply_mdi_icons, _MDI_NAV_ICONS
@@ -3317,3 +3325,142 @@ def test_custom_x_dual_rows_route_to_primary_and_clear_on_empty_emit(qapp, qtbot
     qapp.processEvents()
     assert cs._pill_secondary is not None
     assert "X↑" in cs._pill_secondary.detail_text()
+
+
+def test_cursor_display_options_round_trip_and_sync_existing_and_future_panes(
+    qapp, qtbot, tmp_path
+):
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+    settings = _cursor_settings(tmp_path)
+    cs = ChartStack(cursor_settings=settings)
+    qtbot.addWidget(cs)
+    wanted = CursorDisplayOptions(
+        show_max_point=False,
+        show_min_point=True,
+        show_max_value=False,
+        show_min_value=True,
+        show_avg_value=False,
+    )
+
+    cs._time_card.cursor_display_options_changed.emit(wanted)
+
+    assert cs.cursor_display_options() is wanted
+    assert cs._time_card.cursor_display_options() is wanted
+    assert cs.canvas_time.cursor_display_options() is wanted
+    cs.enter_split()
+    secondary = cs.secondary_canvas()
+    assert cs._secondary_card.cursor_display_options() is wanted
+    assert secondary.cursor_display_options() is wanted
+
+    restored = ChartStack(cursor_settings=settings)
+    qtbot.addWidget(restored)
+    assert restored.cursor_display_options() == wanted
+
+
+def test_split_single_cursor_rows_share_options_without_crossing_results(
+    qapp, qtbot, tmp_path
+):
+    from mf4_analyzer.ui.chart_stack.cursor_display import (
+        CursorDisplayBranch,
+        CursorDisplayChannel,
+    )
+
+    cs = ChartStack(cursor_settings=_cursor_settings(tmp_path))
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode("time")
+    cs.set_cursor_mode_for_canvas(cs.canvas_time, "single")
+    cs.enter_split()
+    secondary = cs.secondary_canvas()
+    cs.set_cursor_mode_for_canvas(secondary, "single")
+    qapp.processEvents()
+    left = (CursorDisplayChannel(
+        identity=("left", "force"),
+        source_label="left-source",
+        channel_label="force",
+        branches=(CursorDisplayBranch("X↑", current_value=4.0),),
+    ),)
+    right = (CursorDisplayChannel(
+        identity=("right", "force"),
+        source_label="right-source",
+        channel_label="force",
+        branches=(CursorDisplayBranch("X↓", current_value=104.0),),
+    ),)
+
+    cs.canvas_time.single_cursor_rows.emit(left)
+    secondary.single_cursor_rows.emit(right)
+    qapp.processEvents()
+
+    assert "left-source" in cs._pill.detail_text()
+    assert "right-source" not in cs._pill.detail_text()
+    assert "right-source" in cs._pill_secondary.detail_text()
+    assert "left-source" not in cs._pill_secondary.detail_text()
+    assert cs._pill._display_projection.blocks[0].identity == ("left", "force")
+    assert cs._pill_secondary._display_projection.blocks[0].identity == (
+        "right", "force"
+    )
+
+
+def test_cursor_off_closes_popovers_clears_results_and_keeps_preferences(
+    qapp, qtbot, tmp_path
+):
+    from mf4_analyzer.ui.chart_stack.cursor_display import (
+        CursorDisplayChannel,
+        CursorDisplayOptions,
+    )
+
+    cs = ChartStack(cursor_settings=_cursor_settings(tmp_path))
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    wanted = CursorDisplayOptions(show_avg_value=False)
+    cs._time_card.cursor_display_options_changed.emit(wanted)
+    cs.set_cursor_mode_for_canvas(cs.canvas_time, "single")
+    cs.canvas_time.single_cursor_rows.emit((CursorDisplayChannel(
+        identity=("fid", "speed"),
+        source_label="source",
+        channel_label="speed",
+        current_value=12.0,
+    ),))
+    cs._time_card.cursor_display_settings_button().click()
+    qapp.processEvents()
+    assert cs._time_card.cursor_display_popover().isVisible()
+    assert cs._pill.isVisible()
+
+    cs.set_cursor_mode("off")
+    qapp.processEvents()
+
+    assert not cs._time_card.cursor_display_popover().isVisible()
+    assert not cs._pill.isVisible()
+    assert cs._pill._display_projection is None
+    assert cs.cursor_display_options() is wanted
+
+
+def test_structured_cursor_pill_stays_in_safe_rect_in_narrow_chart_stack(
+    qapp, qtbot, tmp_path
+):
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayChannel
+
+    cs = ChartStack(cursor_settings=_cursor_settings(tmp_path))
+    qtbot.addWidget(cs)
+    cs.resize(340, 180)
+    cs.show()
+    cs.set_mode("time")
+    cs.set_cursor_mode_for_canvas(cs.canvas_time, "single")
+    channels = tuple(
+        CursorDisplayChannel(
+            identity=(f"source-{index}", "Speed"),
+            source_label=f"long-source-{index}-capture",
+            channel_label="Speed",
+            current_value=12.5 + index,
+            unit_suffix=" rpm",
+        )
+        for index in range(3)
+    )
+
+    cs.canvas_time.single_cursor_rows.emit(channels)
+    qapp.processEvents()
+
+    assert cs._pill.safe_rect().contains(cs._pill.geometry())

@@ -1,4 +1,5 @@
 """ChartStack — the centre-pane QWidget coordinator."""
+import json
 import logging
 from functools import partial
 
@@ -39,6 +40,14 @@ from .cursor_pill import (
     single_cursor_channel_color,
     strip_html,
 )
+from .cursor_display import (
+    CursorDisplayBranch,
+    CursorDisplayChannel,
+    CursorDisplayOptions,
+    CursorDisplaySettingsStore,
+    build_cursor_presentation,
+)
+from ..plot_helpers import _split_prefixed_label, dual_row_is_custom_x
 from .toolbar import PgNavigationToolbar
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ..channel_drag import INTERNAL_CHANNEL_MIME, decode_channel_drag
@@ -69,8 +78,11 @@ class ChartStack(QWidget):
     # Carries (canvas, (fid, channel), zone); MainWindow owns View writes.
     channel_drop_requested = pyqtSignal(object, object, str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, cursor_settings=None):
         super().__init__(parent)
+        self._cursor_display_store = CursorDisplaySettingsStore(cursor_settings)
+        self._cursor_display_options = self._cursor_display_store.load()
+        self._cursor_rows_by_canvas = {}
         # QSS (ChartStack { border-radius:10px; background:#fff }) only paints on
         # a plain QWidget subclass once WA_StyledBackground is set; without it Qt
         # skips the styled fill/border and the rounded card never renders.
@@ -87,6 +99,8 @@ class ChartStack(QWidget):
         self.stack.setAutoFillBackground(False)
         self.canvas_time = TimeDomainCanvasPG(self)
         self._time_card = TimeChartCard(self.canvas_time)
+        self.canvas_time.set_cursor_display_options(self._cursor_display_options)
+        self._time_card.set_cursor_display_options(self._cursor_display_options)
         self._primary_plot_mode = self._time_card.plot_mode()
         self._primary_cursor_mode = self._time_card.cursor_mode()
         self._time_page = QWidget(self.stack)
@@ -273,12 +287,18 @@ class ChartStack(QWidget):
         # the secondary pill is created when split view is first opened.
         self._pill = CursorPill(self.stack)
         self._pill.setVisible(False)
+        self._pill.display_mode_changed.connect(
+            partial(self._on_cursor_pill_display_mode_changed, source=self.canvas_time)
+        )
         self._pill_secondary = None  # created/destroyed with enter/exit_split
         self._active_cursor_card = self._time_card
         # Pass the SOURCE canvas so the pill picks the right per-pane cursor
         # mode (single/dual formatting) and anchors over the emitting pane.
         self.canvas_time.cursor_info.connect(
             lambda text: self._on_cursor_info(text, self.canvas_time)
+        )
+        self.canvas_time.single_cursor_rows.connect(
+            partial(self._on_single_cursor_rows, source=self.canvas_time)
         )
         self.canvas_time.dual_cursor_info.connect(
             lambda text: self._on_dual_cursor_info(text, self.canvas_time)
@@ -293,6 +313,18 @@ class ChartStack(QWidget):
         self._time_card.plot_mode_changed.connect(self._on_shared_plot_mode_changed)
         self._time_card.cursor_mode_changed.connect(
             self._on_shared_cursor_mode_changed
+        )
+        self._time_card.cursor_display_options_changed.connect(
+            partial(
+                self._on_cursor_display_options_changed,
+                source_card=self._time_card,
+            )
+        )
+        self._time_card.cursor_display_popover_geometry_changed.connect(
+            partial(
+                self._on_cursor_display_popover_geometry_changed,
+                source_card=self._time_card,
+            )
         )
         # The time card's annotation relay; analysis cards (pane 0) are wired in
         # _connect_analysis_card_signals during page construction above.
@@ -892,6 +924,10 @@ class ChartStack(QWidget):
         if self._secondary_card is None:
             canvas = TimeDomainCanvasPG(self)
             self._secondary_card = TimeChartCard(canvas)
+            canvas.set_cursor_display_options(self._cursor_display_options)
+            self._secondary_card.set_cursor_display_options(
+                self._cursor_display_options
+            )
             self._secondary_card.detach_toolbar(self._secondary_card).hide()
             self._secondary_card.detach_bottom_hint_bar(self._secondary_card).hide()
             self._set_secondary_time_controls_enabled(False)
@@ -916,6 +952,18 @@ class ChartStack(QWidget):
             self._secondary_card.cursor_mode_changed.connect(
                 self._on_secondary_cursor_mode_changed
             )
+            self._secondary_card.cursor_display_options_changed.connect(
+                partial(
+                    self._on_cursor_display_options_changed,
+                    source_card=self._secondary_card,
+                )
+            )
+            self._secondary_card.cursor_display_popover_geometry_changed.connect(
+                partial(
+                    self._on_cursor_display_popover_geometry_changed,
+                    source_card=self._secondary_card,
+                )
+            )
             self._secondary_card.toolbar._peer_toolbars_provider = as_weak_callable(
                 self._primary_peer_toolbars
             )
@@ -927,8 +975,17 @@ class ChartStack(QWidget):
             if self._pill_secondary is None:
                 self._pill_secondary = CursorPill(self.stack)
                 self._pill_secondary.setVisible(False)
+                self._pill_secondary.display_mode_changed.connect(
+                    partial(
+                        self._on_cursor_pill_display_mode_changed,
+                        source=canvas,
+                    )
+                )
             canvas.cursor_info.connect(
                 lambda text, c=canvas: self._on_cursor_info(text, c)
+            )
+            canvas.single_cursor_rows.connect(
+                partial(self._on_single_cursor_rows, source=canvas)
             )
             canvas.dual_cursor_info.connect(
                 lambda text, c=canvas: self._on_dual_cursor_info(text, c)
@@ -987,7 +1044,9 @@ class ChartStack(QWidget):
 
     def exit_split(self):
         if self._secondary_card is not None:
+            self._secondary_card.close_cursor_display_popover()
             self._secondary_card.setVisible(False)
+            self._cursor_rows_by_canvas.pop(self._secondary_card.canvas, None)
         if self._pill_secondary is not None:
             self._pill_secondary.setVisible(False)
             self._pill_secondary.clear()
@@ -1272,6 +1331,9 @@ class ChartStack(QWidget):
 
     def _on_time_cursor_mode_changed(self, mode):
         if mode == 'off':
+            for card in (self._time_card, self._secondary_card):
+                if card is not None:
+                    card.close_cursor_display_popover()
             self.clear_cursor_pill()
         self.cursor_mode_changed.emit(mode)
 
@@ -1533,9 +1595,15 @@ class ChartStack(QWidget):
         pill = self._pill_for_canvas(source)
         card = self._card_for_canvas(source)
         if not text:
-            pill.clear()
-            self._reposition_pill()
+            self._update_pill_content(pill, card, pill.clear)
             return
+        if mode == 'single':
+            # Compatibility callers may emit only ``cursor_info``. Drop an
+            # older empty-dual cache so the pill's mini toggle does not revive
+            # that stale projection. The live canvas emits single_cursor_rows
+            # immediately after this signal and repopulates the cache.
+            cache_source = self.canvas_time if source is None else source
+            self._cursor_rows_by_canvas.pop(cache_source, None)
 
         def update():
             if mode == 'single':
@@ -1597,17 +1665,155 @@ class ChartStack(QWidget):
     def _on_dual_cursor_rows(self, rows, source=None):
         if not self._cursor_source_on_screen(source):
             return
+        source = self.canvas_time if source is None else source
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
+        channels = tuple(self._cursor_display_channel_from_dual(row) for row in rows)
+        x_mode = (
+            "custom"
+            if any(dual_row_is_custom_x(row) for row in rows)
+            else self._cursor_x_mode(source, channels)
+        )
+        self._cursor_rows_by_canvas[source] = ("dual", x_mode, channels)
+        self._refresh_cursor_projection(source)
+
+    def _on_single_cursor_rows(self, rows, source=None):
+        if not self._cursor_source_on_screen(source):
+            return
+        source = self.canvas_time if source is None else source
+        self._active_cursor_card = self._card_for_canvas(source)
+        channels = tuple(rows or ())
+        self._cursor_rows_by_canvas[source] = (
+            "single",
+            self._cursor_x_mode(source, channels),
+            channels,
+        )
+        self._refresh_cursor_projection(source)
+
+    def _cursor_x_mode(self, source, channels):
+        if any(getattr(channel, "branches", ()) for channel in channels):
+            return "custom"
+        cursor = getattr(source, "_cursor", None)
+        checker = getattr(cursor, "_is_custom_x_cursor", None)
+        return "custom" if callable(checker) and checker() else "time"
+
+    def _cursor_display_channel_from_dual(self, row):
+        if not hasattr(row, "channel_name"):
+            name, minimum, maximum, average, delta, unit_suffix, color = row[:7]
+            return CursorDisplayChannel(
+                identity=name,
+                source_label="",
+                channel_label=str(name),
+                color=str(color or "#111827"),
+                unit_suffix=str(unit_suffix or ""),
+                delta=delta,
+                min_value=minimum,
+                max_value=maximum,
+                avg_value=average,
+            )
+        name = str(getattr(row, "label", "") or getattr(row, "channel_name", ""))
+        identity = getattr(row, "identity", None)
+        source_label, channel_label = self._cursor_identity_labels(identity, name)
+        branches = tuple(
+            CursorDisplayBranch(
+                branch.branch_label,
+                min_value=branch.min_value,
+                max_value=branch.max_value,
+                avg_value=branch.avg,
+            )
+            for branch in getattr(row, "branches", ())
+        )
+        return CursorDisplayChannel(
+            identity=identity,
+            source_label=source_label,
+            channel_label=channel_label,
+            color=str(getattr(row, "color", "#111827") or "#111827"),
+            unit_suffix=str(getattr(row, "unit_suffix", "") or ""),
+            delta=getattr(row, "delta", None),
+            min_value=getattr(row, "min_value", None),
+            max_value=getattr(row, "max_value", None),
+            avg_value=getattr(row, "avg", None),
+            branches=branches,
+            diagnostic=str(getattr(row, "status", "") or ""),
+        )
+
+    def _cursor_identity_labels(self, identity, display_name):
+        prefix, channel_label = _split_prefixed_label(str(display_name))
+        source_label = prefix[1:-1] if prefix else ""
+        parsed = identity
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except (TypeError, ValueError):
+                parsed = None
+        if isinstance(parsed, (tuple, list)) and len(parsed) == 2:
+            source_label = str(parsed[0])
+        return source_label, str(channel_label)
+
+    def _refresh_cursor_projection(self, source):
+        cached = self._cursor_rows_by_canvas.get(source)
+        if cached is None:
+            return
+        cursor_mode, x_mode, channels = cached
         pill = self._pill_for_canvas(source)
         card = self._card_for_canvas(source)
+        projection = build_cursor_presentation(
+            channels,
+            self._cursor_display_options,
+            cursor_mode=cursor_mode,
+            x_mode=x_mode,
+            mini=pill.display_mode() == "mini",
+        )
 
         def update():
-            pill.set_dual_rows(rows)
-            if self.current_mode() == 'time' and (rows or pill.primary_text()):
+            pill.set_display_projection(projection)
+            if self.current_mode() == 'time' and (
+                channels or pill.primary_text()
+            ):
                 pill.setVisible(True)
 
         self._update_pill_content(pill, card, update)
+
+    def _on_cursor_pill_display_mode_changed(self, _mode, *, source):
+        self._refresh_cursor_projection(source)
+
+    def cursor_display_options(self):
+        return self._cursor_display_options
+
+    def _on_cursor_display_options_changed(self, options, *, source_card=None):
+        if not isinstance(options, CursorDisplayOptions):
+            raise TypeError("options must be CursorDisplayOptions")
+        self._cursor_display_options = options
+        self._cursor_display_store.save(options)
+        for card in (self._time_card, self._secondary_card):
+            if card is not None:
+                card.set_cursor_display_options(options)
+        for canvas in (self.canvas_time, self.secondary_canvas()):
+            if canvas is not None:
+                canvas.set_cursor_display_options(options)
+        if source_card is not None:
+            for card in (self._time_card, self._secondary_card):
+                if card is not None and card is not source_card:
+                    card.close_cursor_display_popover()
+        for canvas in tuple(self._cursor_rows_by_canvas):
+            self._refresh_cursor_projection(canvas)
+
+    def _on_cursor_display_popover_geometry_changed(
+        self, geometry, *, source_card
+    ):
+        canvas = getattr(source_card, "canvas", None)
+        pill = self._pill_for_canvas(canvas)
+        if geometry is None:
+            pill.restore_after_avoidance()
+            if pill.isVisible():
+                pill.raise_()
+            return
+        for card in (self._time_card, self._secondary_card):
+            if card is not None and card is not source_card:
+                card.close_cursor_display_popover()
+        pill.avoid_global_rect(geometry, gap=8)
+        if pill.isVisible():
+            pill.raise_()
 
     def _on_frequency_cursor_rows(self, rows, source=None):
         """Render FFT A/B values through the pill's reversible row contract."""
@@ -1656,10 +1862,10 @@ class ChartStack(QWidget):
         its user-placed position)."""
         if not pill.isVisible():
             return
+        safe = pill.safe_rect()
         if pill.is_user_placed():
-            pw, ph = self.stack.width(), self.stack.height()
-            x = max(0, min(pill.x(), pw - pill.width()))
-            y = max(0, min(pill.y(), ph - pill.height()))
+            x = max(safe.left(), min(pill.x(), safe.right() - pill.width() + 1))
+            y = max(safe.top(), min(pill.y(), safe.bottom() - pill.height() + 1))
             pill.move(x, y)
         else:
             canvas = getattr(card, 'canvas', None)
@@ -1667,11 +1873,15 @@ class ChartStack(QWidget):
                 origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
                 x_right = origin.x() + canvas.width()
                 x = min(x_right - pill.width() - 8,
-                        self.stack.width() - pill.width())
-                pill.move(max(x, 0), origin.y() + 8)
+                        safe.right() - pill.width() + 1)
+                y = origin.y() + 8
             else:
-                w = self.stack.width()
-                pill.move(max(w - pill.width() - 8, 0), 8)
+                x = safe.right() - pill.width() + 1
+                y = safe.top()
+            pill.move(
+                max(safe.left(), x),
+                max(safe.top(), min(y, safe.bottom() - pill.height() + 1)),
+            )
         pill.raise_()
 
     def resizeEvent(self, event):
@@ -1681,9 +1891,20 @@ class ChartStack(QWidget):
     def clear_cursor_pill(self):
         """Clear pill content and hide it; preserves the user-placed flag so a
         subsequent cursor activation reappears at the spot the user chose."""
+        for card in (self._time_card, self._secondary_card):
+            if card is not None:
+                card.close_cursor_display_popover()
         self._pill.clear()
         if self._pill_secondary is not None:
             self._pill_secondary.clear()
+        self._cursor_rows_by_canvas.clear()
+
+    def closeEvent(self, event):
+        for card in (self._time_card, self._secondary_card):
+            if card is not None:
+                card.close_cursor_display_popover()
+        self.clear_cursor_pill()
+        super().closeEvent(event)
 
     def cursor_pill_snapshot(self):
         """Return the current floating cursor pill UI state.
