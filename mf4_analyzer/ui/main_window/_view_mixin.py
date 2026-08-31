@@ -538,6 +538,7 @@ class ViewMixin:
                 canvas,
                 update_primary_ui=update_primary_ui,
                 defer_first_frame=(state.xlim is not None),
+                defer_axis_finalize=True,
             )
             # Restoring a View is ONE transaction (2026-08-15 view-switch
             # quality settlement spec §3.1): X, then Y, then ticks, and only

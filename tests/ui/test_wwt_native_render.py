@@ -347,6 +347,57 @@ def _major_tick_values(axis):
     return tuple(value for value, _label in levels[0])
 
 
+def test_wwt_restore_never_finalizes_generic_density_before_native_policy(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+
+    path = wwt.sfns_like_custom_x_native_viewport(path=tmp_path / "sfns.wwt")
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1200, 760)
+    mw.show()
+    qapp.processEvents()
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+
+    calls = []
+    real_set_density = type(
+        mw.canvas_time._tick_density_controller
+    ).set_tick_density
+
+    def tracked_set_density(x, y, *, reframe_overlay_y=True):
+        calls.append((
+            mw.canvas_time._tick_density_controller.native_policy_active(),
+            bool(reframe_overlay_y),
+        ))
+        # The controller deliberately delegates its monkeypatch seam back to
+        # the host. Invoke the implementation directly to keep this observer
+        # out of that loop while preserving the real canvas outcome.
+        return real_set_density(
+            mw.canvas_time._tick_density_controller,
+            x,
+            y,
+            reframe_overlay_y=reframe_overlay_y,
+        )
+
+    monkeypatch.setattr(mw.canvas_time, "set_tick_density", tracked_set_density)
+    mw._load_one(str(path))
+    qapp.processEvents()
+
+    assert calls == [(True, False)]
+    handle = mw.canvas_time.axes_list[0]
+    assert handle.get_xlim() == pytest.approx((-100.0, 100.0))
+    assert handle.get_ylim() == pytest.approx((-50.0, 50.0))
+    assert tuple(float(v) for v in handle.y_axis_item().range) == pytest.approx(
+        (-50.0, 50.0)
+    )
+    assert _major_tick_values(handle.y_axis_item()) == (
+        -50.0, -40.0, -30.0, -20.0, -10.0, 0.0,
+        10.0, 20.0, 30.0, 40.0, 50.0,
+    )
+
+
 def test_native_y_ticks_pair_by_axis_id_when_leading_binding_is_omitted(qapp, tmp_path):
     """Omitting the first channel-backed row must not zip-shift owner ticks."""
     from PyQt5.QtCore import QCoreApplication

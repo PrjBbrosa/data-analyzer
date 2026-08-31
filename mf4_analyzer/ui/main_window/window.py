@@ -3787,7 +3787,10 @@ class MainWindow(
         update_primary_ui=True,
         defer_first_frame=False,
         user_initiated=False,
+        *,
+        defer_axis_finalize=False,
     ):
+        """Plot time data; deferred finalization leaves it to the caller."""
         if not self.files:
             self._set_time_plot_diagnostics(canvas)
             canvas.clear()
@@ -4112,8 +4115,11 @@ class MainWindow(
                 finalize_progress(1, 1)
             if update_primary_ui:
                 self._sync_time_range_inputs_from_visible_xlim()
-            xt, yt = self.inspector.top.tick_density()
-            canvas.set_tick_density(xt, yt)
+            # A View restore owns its one final range/tick commit; this is not
+            # WWT detection or a native-axis algorithm.
+            if not defer_axis_finalize:
+                xt, yt = self.inspector.top.tick_density()
+                canvas.set_tick_density(xt, yt)
             # [perf-probe] 诊断探针，定位后移除。诊断行 + 强制同步首帧 paint
             # （离屏 settle 后是缓存 blit，需 repaint() 触发 paintEvent hook 记真实首帧）。
             if _pp.ENABLED:

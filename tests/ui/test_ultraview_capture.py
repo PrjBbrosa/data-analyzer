@@ -439,7 +439,14 @@ class _TimeHost(ViewMixin):
         self.defer_flags = []
         self.plot_calls = 0
 
-    def _plot_time_on_canvas(self, canvas, *, update_primary_ui, defer_first_frame):
+    def _plot_time_on_canvas(
+        self,
+        canvas,
+        *,
+        update_primary_ui,
+        defer_first_frame,
+        defer_axis_finalize=False,
+    ):
         self.plot_calls += 1
         self.defer_flags.append(bool(defer_first_frame))
         if defer_first_frame:
