@@ -156,6 +156,13 @@ def test_frf_hints_cover_cursor_display_and_time_domain_limits():
     assert fft_hints["fft.frequency_cursor"] == "频谱工具栏：关/单/双游标，双游标读 Δf"
 
 
+def test_time_hint_documents_cursor_display_settings_and_custom_x_single_values():
+    hint = next(item for item in hints.all_hints() if item.id == "time.custom_x_paths")
+    assert "显示设置" in hint.text
+    assert "极值点" in hint.text
+    assert "X↑/X↓" in hint.text
+
+
 def test_mark_discovered_round_trips_through_qsettings():
     temp_dir = Path(".pytmp") / "test_hints"
     temp_dir.mkdir(parents=True, exist_ok=True)

@@ -13,11 +13,13 @@ import pytest
 
 from mf4_analyzer.signal.custom_x_paths import (
     REASON_EMPTY,
+    REASON_INCOMPATIBLE_SHAPE,
     REASON_MULTIPLE_PATHS,
     REASON_SAME_DIRECTION,
     REASON_SHORT_SEQUENCE,
     REASON_UNIDIRECTIONAL,
     REASON_UNIQUE_PAIR,
+    sample_custom_x_cursor,
     analyze_custom_x_paths,
 )
 
@@ -223,6 +225,128 @@ def test_turning_point_range_still_finds_the_unique_pair():
 def test_misaligned_xy_are_rejected():
     with pytest.raises(ValueError, match="aligned"):
         analyze_custom_x_paths([0.0, 1.0], [0.0])
+
+
+def _cursor_out_and_back():
+    """Two deliberately different local branches at the same X values."""
+    rising_x = np.linspace(0.0, 10.0, 101)
+    falling_x = np.linspace(10.0, 0.0, 101)[1:]
+    x = np.concatenate((rising_x, falling_x))
+    y = np.concatenate((10.0 * rising_x, 100.0 + falling_x))
+    return x, y
+
+
+def test_sample_custom_x_cursor_returns_rise_then_fall_values():
+    x, y = _cursor_out_and_back()
+
+    result = sample_custom_x_cursor(x, y, 4.0)
+
+    assert result.reason == REASON_UNIQUE_PAIR
+    assert [item.direction for item in result.values] == [1, -1]
+    assert [item.value for item in result.values] == pytest.approx([40.0, 104.0])
+
+
+def test_sample_custom_x_cursor_orders_branches_rise_then_fall_not_by_acquisition():
+    falling_x = np.linspace(10.0, 0.0, 101)
+    rising_x = np.linspace(0.0, 10.0, 101)[1:]
+    x = np.concatenate((falling_x, rising_x))
+    y = np.concatenate((100.0 + falling_x, 10.0 * rising_x))
+
+    result = sample_custom_x_cursor(x, y, 4.0)
+
+    assert result.reason == REASON_UNIQUE_PAIR
+    assert [item.direction for item in result.values] == [1, -1]
+    assert [item.value for item in result.values] == pytest.approx([40.0, 104.0])
+
+
+def test_sample_custom_x_cursor_interpolates_within_each_leg_only():
+    x, y = _cursor_out_and_back()
+
+    result = sample_custom_x_cursor(x, y, 4.25)
+
+    assert [item.direction for item in result.values] == [1, -1]
+    assert [item.value for item in result.values] == pytest.approx([42.5, 104.25])
+
+
+def test_sample_custom_x_cursor_reports_one_reliable_direction():
+    x = np.arange(101, dtype=np.int64)
+    y = 3 * x + 1
+
+    result = sample_custom_x_cursor(x, y, 12.5)
+
+    assert result.reason == REASON_UNIDIRECTIONAL
+    assert len(result.values) == 1
+    assert result.values[0].direction == 1
+    assert result.values[0].value == pytest.approx(38.5)
+    assert isinstance(result.values[0].value, float)
+
+
+def test_sample_custom_x_cursor_rejects_shape_mismatch_without_truncation():
+    result = sample_custom_x_cursor(
+        np.asarray([0.0, 1.0, 2.0]), np.asarray([10.0, 11.0]), 1.0,
+    )
+
+    assert result.values == ()
+    assert result.reason == REASON_INCOMPATIBLE_SHAPE
+
+
+def test_sample_custom_x_cursor_handles_empty_short_and_nonfinite_segments():
+    empty = sample_custom_x_cursor(np.asarray([]), np.asarray([]), 1.0)
+    short = sample_custom_x_cursor(np.asarray([0.0, 1.0]), np.asarray([0.0, 1.0]), 0.5)
+    x, y = _cursor_out_and_back()
+    y[100] = np.nan
+    segmented = sample_custom_x_cursor(x, y, 4.0)
+
+    assert empty.values == ()
+    assert empty.reason == REASON_EMPTY
+    assert short.values == ()
+    assert short.reason == REASON_SHORT_SEQUENCE
+    assert [item.direction for item in segmented.values] == [1, -1]
+    assert [item.value for item in segmented.values] == pytest.approx([40.0, 104.0])
+    assert all(np.isfinite(item.value) for item in segmented.values)
+
+
+@pytest.mark.parametrize("x_value", (-0.1, 10.1, np.nan, np.inf))
+def test_sample_custom_x_cursor_does_not_extrapolate(x_value):
+    x, y = _cursor_out_and_back()
+
+    result = sample_custom_x_cursor(x, y, x_value)
+
+    assert result.values == ()
+    assert result.reason == REASON_EMPTY
+
+
+def test_sample_custom_x_cursor_reports_ambiguous_multi_turn_path():
+    x = np.concatenate((
+        np.linspace(-30.0, 30.0, 121),
+        np.linspace(30.0, -30.0, 121)[1:],
+        np.linspace(-30.0, 30.0, 121)[1:],
+    ))
+
+    result = sample_custom_x_cursor(x, np.arange(x.size, dtype=float), 24.0)
+
+    assert result.values == ()
+    assert result.reason == REASON_MULTIPLE_PATHS
+
+
+def test_sample_custom_x_cursor_handles_endpoints_dtypes_repeated_turns_and_tolerance():
+    rising_x = np.linspace(0.0, 10.0, 101)
+    falling_x = np.linspace(10.0, 0.0, 101)
+    repeated_turn_x = np.concatenate((rising_x, falling_x))
+    repeated_turn_y = np.concatenate((10.0 * rising_x, 100.0 + falling_x))
+
+    low = sample_custom_x_cursor(repeated_turn_x.astype(np.int64), repeated_turn_y.astype(np.int64), 0)
+    high = sample_custom_x_cursor(repeated_turn_x.astype(np.float32), repeated_turn_y.astype(np.float32), 10.0)
+    noisy_x = _noisy_single_cycle()
+    noisy_y = 2.0 * noisy_x + np.where(np.arange(noisy_x.size) < noisy_x.size // 2, 0.0, 1000.0)
+    noisy = sample_custom_x_cursor(noisy_x, noisy_y, 20.0)
+
+    assert [item.direction for item in low.values] == [1, -1]
+    assert [item.value for item in low.values] == pytest.approx([0.0, 100.0])
+    assert [item.direction for item in high.values] == [1, -1]
+    assert [item.value for item in high.values] == pytest.approx([100.0, 100.0])
+    assert [item.direction for item in noisy.values] == [1, -1]
+    assert all(np.isfinite(item.value) for item in noisy.values)
 
 
 def _plan_channel_x(x, y, lo=None, hi=None):

@@ -2132,14 +2132,15 @@ class TestTimeDomainCanvasPGContract:
     method callability), not "the constructor returned".
     """
 
-    def test_four_signals_exposed_with_exact_payload_shapes(self, qapp):
-        """Design §3.1: four pyqtSignals with the exact payload shapes
+    def test_cursor_signals_exposed_with_exact_payload_shapes(self, qapp):
+        """Design §3.1: cursor pyqtSignals keep exact payload shapes
         downstream consumers (TimeChartCard, MainWindow) rely on."""
         from PyQt5.QtCore import pyqtBoundSignal
 
         canvas = _pg_canvas(qapp)
         expected = {
             "cursor_info": "cursor_info(QString)",
+            "single_cursor_rows": "single_cursor_rows(PyQt_PyObject)",
             "dual_cursor_info": "dual_cursor_info(QString)",
             "span_selected": "span_selected(double,double)",
             "overlay_channel_selected": "overlay_channel_selected(PyQt_PyObject)",
@@ -4568,6 +4569,69 @@ class TestTimeDomainCanvasPGCursorInteraction:
         assert list(ys) == pytest.approx([-3.0, 5.0])
         assert markers[0].isVisible()
 
+        spots = list(markers[0].data)
+        assert [spot["symbol"] for spot in spots] == ["o", "d"]
+        assert [spot["brush"].color().name() for spot in spots] == [
+            "#16a34a", "#dc2626",
+        ]
+
+    def test_cursor_display_options_filter_values_and_marker_scatter_independently(
+        self, qapp
+    ):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+        canvas = _pg_canvas(qapp)
+        t = np.asarray([0.0, 0.25, 0.50, 0.75, 1.0], dtype=np.float64)
+        y = np.asarray([1.0, -3.0, 2.0, 5.0, 0.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, y, "#1769e0", "rpm", "fid-1"),
+        ], mode="overlay")
+        QCoreApplication.processEvents()
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.20
+        canvas._cursor.bx = 0.80
+
+        htmls, rows_seen = [], []
+        canvas.dual_cursor_info.connect(htmls.append)
+        canvas.dual_cursor_rows.connect(rows_seen.append)
+        canvas.set_cursor_display_options(CursorDisplayOptions(
+            show_max_point=False,
+            show_min_point=True,
+            show_max_value=False,
+            show_min_value=True,
+            show_avg_value=False,
+        ))
+        canvas._emit_dual_cursor_html()
+        assert "Min" in htmls[-1]
+        assert "Max" not in htmls[-1]
+        assert "Avg" not in htmls[-1]
+        assert rows_seen[-1][0].max_value == pytest.approx(5.0)
+        marker = canvas._cursor.extreme_markers[0]
+        xs, ys = marker.getData()
+        assert list(xs) == pytest.approx([0.25])
+        assert list(ys) == pytest.approx([-3.0])
+        assert [spot["symbol"] for spot in marker.data] == ["o"]
+
+        before_html = htmls[-1]
+        before_html_count = len(htmls)
+        before_rows_count = len(rows_seen)
+        canvas.set_cursor_display_options(CursorDisplayOptions(
+            show_max_point=True,
+            show_min_point=False,
+            show_max_value=False,
+            show_min_value=True,
+            show_avg_value=False,
+        ))
+        assert len(htmls) == before_html_count
+        assert len(rows_seen) == before_rows_count
+        assert htmls[-1] == before_html
+        xs, ys = marker.getData()
+        assert list(xs) == pytest.approx([0.75])
+        assert list(ys) == pytest.approx([5.0])
+        assert [spot["symbol"] for spot in marker.data] == ["d"]
+
     def test_dual_cursor_marks_every_channel_in_a_shared_coaxis_group(self, qapp):
         """A co-axis slot must retain extrema for every member channel."""
         from PyQt5.QtCore import QCoreApplication
@@ -4598,6 +4662,99 @@ class TestTimeDomainCanvasPGCursorInteraction:
         assert list(xs) == pytest.approx([0.25, 0.75, 0.50, 0.25, 0.75, 0.50])
         assert list(ys) == pytest.approx([-3.0, 5.0, -2.0, 7.0, -4.0, 8.0])
         assert markers[0].isVisible()
+
+    def test_hidden_same_display_name_filters_only_its_composite_source(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("[same] speed", True, t, np.asarray([0.0, 1.0, 2.0]),
+             "#ef4444", "rpm", "fid-a"),
+            ("[same] speed", True, t, np.asarray([10.0, 11.0, 12.0]),
+             "#1769e0", "rpm", "fid-b"),
+        ], mode="overlay")
+        QCoreApplication.processEvents()
+        line_items = list(canvas._channel_lines.composite_items())
+        assert len(line_items) == 2
+        line_items[0][2][1].plot_data_item.setVisible(False)
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.0
+        canvas._cursor.bx = 1.0
+        rows_seen = []
+        canvas.dual_cursor_rows.connect(rows_seen.append)
+
+        canvas._emit_dual_cursor_html()
+
+        assert [row.identity for row in rows_seen[-1]] == [line_items[1][0]]
+
+    def test_clear_drops_transient_markers_but_keeps_display_preferences(self, qapp):
+        from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+        canvas = _pg_canvas(qapp)
+        t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, np.asarray([0.0, 3.0, -1.0]),
+             "#1769e0", "rpm", "fid-a"),
+        ], mode="overlay")
+        options = CursorDisplayOptions(show_max_point=False)
+        canvas.set_cursor_display_options(options)
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.0
+        canvas._cursor.bx = 1.0
+        canvas._emit_dual_cursor_html()
+        assert canvas._cursor.extreme_markers
+
+        canvas.clear()
+
+        assert canvas._cursor.extreme_markers == []
+        assert canvas.cursor_display_options() is options
+
+    def test_marker_update_programming_error_propagates(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, np.asarray([0.0, 3.0, -1.0]),
+             "#1769e0", "rpm", "fid-a"),
+        ], mode="overlay")
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.0
+        canvas._cursor.bx = 1.0
+        canvas._emit_dual_cursor_html()
+        marker = canvas._cursor.extreme_markers[0]
+
+        def fail_set_data(*_args, **_kwargs):
+            raise RuntimeError("intentional marker programming error")
+
+        monkeypatch.setattr(marker, "setData", fail_set_data)
+        with pytest.raises(RuntimeError, match="intentional marker programming error"):
+            canvas._cursor._update_dual_cursor_extreme_markers(
+                canvas._cursor._dual_cursor_extreme_points
+            )
+
+    def test_clear_tolerates_a_deleted_marker_wrapper(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, np.asarray([0.0, 3.0, -1.0]),
+             "#1769e0", "rpm", "fid-a"),
+        ], mode="overlay")
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.0
+        canvas._cursor.bx = 1.0
+        canvas._emit_dual_cursor_html()
+        marker = canvas._cursor.extreme_markers[0]
+        marker.setData = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("wrapped C/C++ object of type ScatterPlotItem has been deleted")
+        )
+
+        canvas.clear()
+
+        assert canvas._cursor.extreme_markers == []
 
     def test_dual_cursor_hover_move_does_not_recompute_stats(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication, Qt

@@ -10,6 +10,8 @@ No Qt is needed for any of these helpers.
 import math
 
 import numpy as np
+import re
+
 import pytest
 
 from mf4_analyzer.ui.plot_helpers import (
@@ -522,3 +524,73 @@ class TestCustomXDualHtml:
         assert "回程" in tip
         assert "Min=" in tip
         assert "Max=" in tip
+
+
+def test_dual_formatters_filter_value_columns_with_immutable_options():
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+    rows = [DualCursorRow(
+        channel_name="[run] Speed",
+        min_value=1.0,
+        max_value=9.0,
+        avg=5.0,
+        delta=2.5,
+        unit_suffix=" rpm",
+        color="#1769e0",
+    )]
+    options = CursorDisplayOptions(
+        show_max_point=False,
+        show_min_point=False,
+        show_max_value=False,
+        show_min_value=True,
+        show_avg_value=False,
+    )
+    full = _format_dual_html(rows, options=options)
+    mini = _format_dual_mini_html(rows, options=options)
+    assert "Min" in full
+    assert "Max" not in full
+    assert "Avg" not in full
+    assert "△" in full and "△" in mini
+
+
+@pytest.mark.parametrize("enabled", ("min", "max", "avg", "none"))
+def test_time_compat_formatter_options_never_emit_placeholder_cells(enabled):
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+    flags = {name: enabled == name for name in ("min", "max", "avg")}
+    options = CursorDisplayOptions(
+        show_max_value=flags["max"],
+        show_min_value=flags["min"],
+        show_avg_value=flags["avg"],
+    )
+    row = DualCursorRow("Speed", 1.0, 9.0, 5.0, 8.0, " rpm", "#1769e0")
+    full = _format_dual_html([row], options=options)
+    mini = _format_dual_mini_html([row], options=options)
+    assert not re.search(r"<td(?:\s[^>]*)?>\s*</td>", full)
+    assert not re.search(r"<td(?:\s[^>]*)?>\s*</td>", mini)
+    assert "△" in full and "△" in mini
+    for label in ("Min", "Max", "Avg"):
+        assert (label in full) is (label.lower() == enabled)
+
+
+@pytest.mark.parametrize("enabled", ("min", "max", "avg", "none"))
+def test_custom_x_compat_formatters_options_never_emit_placeholder_cells(enabled):
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions
+
+    flags = {name: enabled == name for name in ("min", "max", "avg")}
+    options = CursorDisplayOptions(
+        show_max_value=flags["max"],
+        show_min_value=flags["min"],
+        show_avg_value=flags["avg"],
+    )
+    row = _custom_x_pair_row()
+    full = _format_dual_html([row], options=options)
+    mini = _format_dual_mini_html([row], options=options)
+    assert not re.search(r"<td(?:\s[^>]*)?>\s*</td>", full)
+    assert not re.search(r"<td(?:\s[^>]*)?>\s*</td>", mini)
+    assert "X↑" in full and "X↓" in full
+    assert "X↑" in mini and "X↓" in mini
+    for label in ("Min", "Max", "Avg"):
+        expected = label.lower() == enabled
+        assert (label in full) is expected
+        assert (label in mini) is expected

@@ -21,6 +21,7 @@ import numpy as np
 
 REASON_UNIQUE_PAIR = ""
 REASON_EMPTY = "empty"
+REASON_INCOMPATIBLE_SHAPE = "incompatible_shape"
 REASON_SHORT_SEQUENCE = "short_sequence"
 REASON_UNIDIRECTIONAL = "unidirectional"
 REASON_SAME_DIRECTION = "same_direction"
@@ -67,6 +68,22 @@ class SeriesPathResult:
             len(self.accepted) == 2
             and self.accepted[0].direction * self.accepted[1].direction < 0
         )
+
+
+@dataclass(frozen=True)
+class CursorBranchValue:
+    """The sampled value on one reliably classified physical X branch."""
+
+    direction: int
+    value: float
+
+
+@dataclass(frozen=True)
+class CustomXCursorResult:
+    """UI-neutral Custom-X single-cursor samples and their diagnostic."""
+
+    values: tuple[CursorBranchValue, ...]
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -323,9 +340,81 @@ def analyze_custom_x_paths(
     )
 
 
+def _sample_path_contribution(
+    contribution: PathContribution,
+    x_value: float,
+) -> float | None:
+    """Interpolate one physical leg in its acquired local order."""
+    x = contribution.x
+    y = contribution.y
+    if not x.size or x_value < float(np.min(x)) or x_value > float(np.max(x)):
+        return None
+    exact = np.flatnonzero(x == x_value)
+    if exact.size:
+        return float(y[int(exact[0])])
+    for index in range(int(x.size) - 1):
+        left_x = float(x[index])
+        right_x = float(x[index + 1])
+        if not min(left_x, right_x) <= x_value <= max(left_x, right_x):
+            continue
+        if left_x == right_x:
+            continue
+        fraction = (x_value - left_x) / (right_x - left_x)
+        value = float(y[index]) + fraction * (float(y[index + 1]) - float(y[index]))
+        return value if math.isfinite(value) else None
+    return None
+
+
+def sample_custom_x_cursor(
+    x: np.ndarray,
+    y: np.ndarray,
+    x_value: float,
+) -> CustomXCursorResult:
+    """Sample a selected Custom-X coordinate on each reliable physical leg.
+
+    The shared path analyzer owns finite segmentation, turn tolerance, and
+    major-leg classification.  Sampling deliberately retains each accepted
+    leg's acquisition order, so rising and falling visits are never merged or
+    interpolated as one non-monotonic series.
+    """
+    try:
+        x_array = np.asarray(x, dtype=float)
+        y_array = np.asarray(y, dtype=float)
+    except (TypeError, ValueError):
+        return CustomXCursorResult((), REASON_INCOMPATIBLE_SHAPE)
+    if x_array.ndim != 1 or y_array.ndim != 1 or x_array.size != y_array.size:
+        return CustomXCursorResult((), REASON_INCOMPATIBLE_SHAPE)
+    try:
+        selected_x = float(x_value)
+    except (TypeError, ValueError):
+        return CustomXCursorResult((), REASON_EMPTY)
+    if not math.isfinite(selected_x):
+        return CustomXCursorResult((), REASON_EMPTY)
+
+    paths = analyze_custom_x_paths(x_array, y_array)
+    if paths.reason not in (REASON_UNIQUE_PAIR, REASON_UNIDIRECTIONAL):
+        return CustomXCursorResult((), paths.reason)
+
+    accepted = tuple(sorted(
+        paths.accepted,
+        key=lambda item: 0 if item.direction > 0 else 1,
+    ))
+    values = tuple(
+        CursorBranchValue(direction=item.direction, value=value)
+        for item in accepted
+        if (value := _sample_path_contribution(item, selected_x)) is not None
+    )
+    if not values:
+        return CustomXCursorResult((), REASON_EMPTY)
+    return CustomXCursorResult(values, paths.reason)
+
+
 __all__ = [
+    "CursorBranchValue",
+    "CustomXCursorResult",
     "PathContribution",
     "REASON_EMPTY",
+    "REASON_INCOMPATIBLE_SHAPE",
     "REASON_MULTIPLE_PATHS",
     "REASON_SAME_DIRECTION",
     "REASON_SHORT_SEQUENCE",
@@ -333,4 +422,5 @@ __all__ = [
     "REASON_UNIQUE_PAIR",
     "SeriesPathResult",
     "analyze_custom_x_paths",
+    "sample_custom_x_cursor",
 ]

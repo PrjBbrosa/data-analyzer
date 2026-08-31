@@ -321,6 +321,7 @@ class TimeDomainCanvasPG(QWidget):
 
     # Signal contract (design §3.1 — frozen by W0 contract test).
     cursor_info = pyqtSignal(str)
+    single_cursor_rows = pyqtSignal(object)
     dual_cursor_info = pyqtSignal(str)
     dual_cursor_rows = pyqtSignal(object)  # emits raw dual list for mini pill
     span_selected = pyqtSignal(float, float)
@@ -3180,6 +3181,12 @@ class TimeDomainCanvasPG(QWidget):
 
     def set_cursor_x_axis_context(self, context):
         return CursorController.set_x_axis_context(self._cursor, context)
+
+    def set_cursor_display_options(self, options):
+        return CursorController.set_cursor_display_options(self._cursor, options)
+
+    def cursor_display_options(self):
+        return CursorController.cursor_display_options(self._cursor)
 
     def set_x_viewport_intent(self, intent):
         self._x_viewport_intent = intent
