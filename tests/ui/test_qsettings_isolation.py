@@ -15,6 +15,8 @@ writes to the developer's preferences). The collection-level cause that broke
 it before is covered by ``tests/test_conftest_autouse_scope.py``.
 """
 
+from pathlib import Path
+
 from mf4_analyzer.ui.inspector_sections import _helpers, presets
 from mf4_analyzer.ui.inspector_sections import collapsible, persistent_top
 
@@ -33,7 +35,9 @@ def test_preset_settings_is_redirected_away_from_the_real_store(tmp_path):
         f"PresetBar settings resolve to {file_name!r}, which looks like the "
         f"live application store."
     )
-    assert file_name.startswith(str(tmp_path.parent.parent)), (
+    settings_path = Path(file_name).resolve()
+    temp_root = tmp_path.parent.parent.resolve()
+    assert settings_path.is_relative_to(temp_root), (
         f"PresetBar settings resolve to {file_name!r}, outside the per-test "
         f"temporary directory."
     )
