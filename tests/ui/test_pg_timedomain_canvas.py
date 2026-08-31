@@ -4712,6 +4712,50 @@ class TestTimeDomainCanvasPGCursorInteraction:
         assert canvas._cursor.extreme_markers == []
         assert canvas.cursor_display_options() is options
 
+    def test_marker_update_programming_error_propagates(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, np.asarray([0.0, 3.0, -1.0]),
+             "#1769e0", "rpm", "fid-a"),
+        ], mode="overlay")
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.0
+        canvas._cursor.bx = 1.0
+        canvas._emit_dual_cursor_html()
+        marker = canvas._cursor.extreme_markers[0]
+
+        def fail_set_data(*_args, **_kwargs):
+            raise RuntimeError("intentional marker programming error")
+
+        monkeypatch.setattr(marker, "setData", fail_set_data)
+        with pytest.raises(RuntimeError, match="intentional marker programming error"):
+            canvas._cursor._update_dual_cursor_extreme_markers(
+                canvas._cursor._dual_cursor_extreme_points
+            )
+
+    def test_clear_tolerates_a_deleted_marker_wrapper(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, np.asarray([0.0, 3.0, -1.0]),
+             "#1769e0", "rpm", "fid-a"),
+        ], mode="overlay")
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.0
+        canvas._cursor.bx = 1.0
+        canvas._emit_dual_cursor_html()
+        marker = canvas._cursor.extreme_markers[0]
+        marker.setData = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("wrapped C/C++ object of type ScatterPlotItem has been deleted")
+        )
+
+        canvas.clear()
+
+        assert canvas._cursor.extreme_markers == []
+
     def test_dual_cursor_hover_move_does_not_recompute_stats(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication, Qt
         from PyQt5.QtTest import QTest

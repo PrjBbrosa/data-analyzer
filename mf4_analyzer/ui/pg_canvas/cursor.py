@@ -6,6 +6,7 @@ import json
 import time as _time
 
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import Qt
 
 from . import _binding  # noqa: F401
@@ -223,6 +224,8 @@ class CursorController(_CanvasBackref):
         self._hide_dual_cursor_extreme_markers()
         self._dual_cursor_extreme_markers = []
         self._dual_cursor_extreme_points = ()
+        self.cursor_info.emit("")
+        self.dual_cursor_info.emit("")
         self.single_cursor_rows.emit([])
         self.dual_cursor_rows.emit([])
 
@@ -513,10 +516,7 @@ class CursorController(_CanvasBackref):
         if len(markers) == len(handles):
             return markers
         for marker in markers or []:
-            try:
-                marker.setVisible(False)
-            except Exception:
-                pass
+            self._run_marker_cleanup(marker, lambda: marker.setVisible(False))
         new_markers = []
         for handle in handles:
             vb = handle.view_box
@@ -525,21 +525,41 @@ class CursorController(_CanvasBackref):
             marker = pg.ScatterPlotItem(size=10)
             marker.setZValue(1100)
             marker.setVisible(False)
-            try:
-                vb.addItem(marker, ignoreBounds=True)
-                new_markers.append(marker)
-            except Exception:
-                pass
+            # Creation/binding failures are programming or collaborator
+            # failures, not teardown.  Let them propagate rather than hiding
+            # a missing marker behind an empty cursor result.
+            vb.addItem(marker, ignoreBounds=True)
+            new_markers.append(marker)
         self._dual_cursor_extreme_markers = new_markers
         return new_markers
 
     def _hide_dual_cursor_extreme_markers(self):
         for marker in getattr(self, "_dual_cursor_extreme_markers", []) or []:
-            try:
+            def hide_marker():
                 marker.setData([], [])
                 marker.setVisible(False)
-            except Exception:
-                pass
+            self._run_marker_cleanup(marker, hide_marker)
+
+    @staticmethod
+    def _run_marker_cleanup(marker, operation):
+        """Ignore only the expected race with Qt wrapper destruction.
+
+        Cursor cleanup can run after a ViewBox has deleted its transient
+        ScatterPlotItem. Any other marker error represents malformed data or
+        wiring and must remain visible to the caller.
+        """
+        if marker is None or sip.isdeleted(marker):
+            return
+        try:
+            operation()
+        except RuntimeError as exc:
+            message = str(exc)
+            if sip.isdeleted(marker) or (
+                "wrapped C/C++ object" in message
+                and "has been deleted" in message
+            ):
+                return
+            raise
 
     def _update_dual_cursor_extreme_markers(self, points_by_channel):
         markers = self._ensure_dual_cursor_extreme_markers()
@@ -559,22 +579,19 @@ class CursorController(_CanvasBackref):
             h for h in self.axes_list if not getattr(h, "placeholder", False)
         ]):
             points = points_by_handle.get(handle, [])
-            try:
-                if not points:
-                    marker.setData([], [])
-                    marker.setVisible(False)
-                    continue
-                marker.setData(
-                    [point[0] for point in points],
-                    [point[1] for point in points],
-                    symbol=[point[3] for point in points],
-                    size=10,
-                    pen=[pg.mkPen("#ffffff", width=1.2) for _ in points],
-                    brush=[pg.mkBrush(point[2]) for point in points],
-                )
-                marker.setVisible(True)
-            except Exception:
-                pass
+            if not points:
+                marker.setData([], [])
+                marker.setVisible(False)
+                continue
+            marker.setData(
+                [point[0] for point in points],
+                [point[1] for point in points],
+                symbol=[point[3] for point in points],
+                size=10,
+                pen=[pg.mkPen("#ffffff", width=1.2) for _ in points],
+                brush=[pg.mkBrush(point[2]) for point in points],
+            )
+            marker.setVisible(True)
 
     def _cursor_data_x_from_viewport_pos(self, viewport_pos):
         scene_pos = self._viewport_pos_to_scene(viewport_pos)

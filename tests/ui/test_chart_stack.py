@@ -3464,3 +3464,78 @@ def test_structured_cursor_pill_stays_in_safe_rect_in_narrow_chart_stack(
     qapp.processEvents()
 
     assert cs._pill.safe_rect().contains(cs._pill.geometry())
+
+
+def test_direct_canvas_clear_clears_legacy_and_structured_cursor_pill(
+    qapp, qtbot, tmp_path
+):
+    import numpy as np
+
+    cs = ChartStack(cursor_settings=_cursor_settings(tmp_path))
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode("time")
+    cs.set_cursor_mode_for_canvas(cs.canvas_time, "single")
+    cs.canvas_time.plot_channels([
+        ("speed", True, np.asarray([0.0, 0.5, 1.0]),
+         np.asarray([1.0, 2.0, 3.0]), "#1769e0", "rpm", "fid-a"),
+    ], mode="overlay")
+    cs.canvas_time._emit_single_cursor_html(0.5)
+    qapp.processEvents()
+    assert cs._pill.isVisible()
+    assert "t=0.5000s" in cs._pill.primary_text()
+    assert cs._pill.has_detail()
+
+    cs.canvas_time.clear()
+    qapp.processEvents()
+
+    assert not cs._pill.isVisible()
+    assert cs._pill.primary_text() == ""
+    assert not cs._pill.has_detail()
+
+
+def test_secondary_off_and_split_exit_clear_pills_through_update_seam(
+    qapp, qtbot, tmp_path, monkeypatch
+):
+    from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayChannel
+
+    cs = ChartStack(cursor_settings=_cursor_settings(tmp_path))
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode("time")
+    cs.enter_split()
+    secondary = cs.secondary_canvas()
+    cs.set_cursor_mode_for_canvas(secondary, "single")
+    channel = CursorDisplayChannel(
+        identity=("secondary", "speed"),
+        source_label="secondary",
+        channel_label="speed",
+        current_value=2.0,
+    )
+    secondary.single_cursor_rows.emit((channel,))
+    qapp.processEvents()
+    assert cs._pill_secondary.isVisible()
+
+    calls = []
+    original = cs._update_pill_content
+
+    def record(pill, card, update):
+        calls.append((pill, card))
+        return original(pill, card, update)
+
+    monkeypatch.setattr(cs, "_update_pill_content", record)
+    cs.set_cursor_mode_for_canvas(secondary, "off")
+    qapp.processEvents()
+    assert not cs._pill_secondary.isVisible()
+    assert any(pill is cs._pill_secondary for pill, _card in calls)
+
+    cs.set_cursor_mode_for_canvas(secondary, "single")
+    secondary.single_cursor_rows.emit((channel,))
+    qapp.processEvents()
+    calls.clear()
+    cs.exit_split()
+
+    assert not cs._pill_secondary.isVisible()
+    assert any(pill is cs._pill_secondary for pill, _card in calls)

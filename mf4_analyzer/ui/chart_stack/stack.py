@@ -1022,7 +1022,9 @@ class ChartStack(QWidget):
     def _on_secondary_cursor_mode_changed(self, mode):
         """Toggle the secondary canvas's cursor (off/single/dual) in place."""
         if mode == 'off' and self._pill_secondary is not None:
-            self._pill_secondary.clear()
+            self._clear_cursor_pill_content(
+                self._pill_secondary, self._secondary_card
+            )
         canvas = self._secondary_card.canvas
         canvas.set_cursor_visible(mode != 'off')
         canvas.set_dual_cursor_mode(mode == 'dual')
@@ -1048,8 +1050,9 @@ class ChartStack(QWidget):
             self._secondary_card.setVisible(False)
             self._cursor_rows_by_canvas.pop(self._secondary_card.canvas, None)
         if self._pill_secondary is not None:
-            self._pill_secondary.setVisible(False)
-            self._pill_secondary.clear()
+            self._clear_cursor_pill_content(
+                self._pill_secondary, self._secondary_card
+            )
         # Back to single pane: drop focus highlighting and reset to primary.
         self._focused_card = self._time_card
         self._refresh_focus_borders()
@@ -1586,6 +1589,11 @@ class ChartStack(QWidget):
         else:
             self._reposition_one_pill(pill, card)
 
+    def _clear_cursor_pill_content(self, pill, card):
+        """Clear one pill through the sole content-mutation geometry seam."""
+        if pill is not None:
+            self._update_pill_content(pill, card, pill.clear)
+
     def _on_cursor_info(self, text, source=None):
         if not self._cursor_source_on_screen(source):
             return
@@ -1894,9 +1902,10 @@ class ChartStack(QWidget):
         for card in (self._time_card, self._secondary_card):
             if card is not None:
                 card.close_cursor_display_popover()
-        self._pill.clear()
-        if self._pill_secondary is not None:
-            self._pill_secondary.clear()
+        self._clear_cursor_pill_content(self._pill, self._time_card)
+        self._clear_cursor_pill_content(
+            self._pill_secondary, self._secondary_card
+        )
         self._cursor_rows_by_canvas.clear()
 
     def closeEvent(self, event):
