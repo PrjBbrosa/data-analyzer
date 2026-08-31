@@ -198,7 +198,11 @@ def test_non_empty_view_is_not_reused():
 def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeypatch):
     pytest.importorskip("pytestqt")
     from mf4_analyzer.ui.main_window import MainWindow
-    from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, EXACT_SOURCE, CustomXAxisSpec
+    from mf4_analyzer.ui.time_xaxis import (
+        CHANNEL_MODE,
+        PER_SOURCE_NAME,
+        CustomXAxisSpec,
+    )
 
     path = wwt.multi_window_overlap_and_formula(tmp_path / "multi.wwt")
     mw = MainWindow()
@@ -233,7 +237,8 @@ def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeyp
         active.axis_opts["x_axis"]
     )
     assert x_axis.mode == CHANNEL_MODE
-    assert x_axis.resolver == EXACT_SOURCE
+    assert x_axis.resolver == PER_SOURCE_NAME
+    assert x_axis.source_fid is None
     assert x_axis.channel == wwt.CHAN_X
     apply_active_view(mw.view_manager.active)
     assert mw._custom_xaxis_spec == x_axis
@@ -250,6 +255,101 @@ def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeyp
     assert any(wwt.FORM_Y in fd.data.columns for fd in mw2.files.values())
     _assert_store_on_every_file(mw)
     _assert_store_on_every_file(mw2)
+
+
+def test_fresh_wwt_view_uses_later_sources_own_same_name_x(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """A WWT binding stays exact while later ordinary curves resolve X locally."""
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import PER_SOURCE_NAME, CustomXAxisSpec
+
+    source_path = wwt.sfns_like_custom_x_native_viewport(
+        tmp_path / "native.wwt"
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+    apply_active_view = window._apply_active_view
+    _stub_wwt_ui(window, monkeypatch, accept=True)
+    window._load_one(str(source_path))
+    qapp.processEvents()
+
+    state = window.view_manager.views[0]
+    original_fid = state.checked[0][0]
+    original_x = window.files[original_fid].data[
+        wwt.SFNS_RACK_TRAVEL
+    ].to_numpy(copy=False)
+    original_n = len(original_x)
+
+    same_x = np.linspace(500.0, 900.0, original_n)
+    short_x = np.linspace(-45.0, 65.0, max(8, original_n // 2))
+    expected_for_path = {}
+    for name, x_values, offset in (
+        ("same-length.csv", same_x, 1000.0),
+        ("shorter.csv", short_x, 2000.0),
+    ):
+        path = tmp_path / name
+        pd.DataFrame({
+            "time": np.arange(len(x_values), dtype=float),
+            wwt.SFNS_RACK_TRAVEL: x_values,
+            wwt.SFNS_RACK_FORCE: np.arange(len(x_values), dtype=float) + offset,
+        }).to_csv(path, index=False)
+        expected_for_path[path] = x_values
+        window._load_one(str(path))
+
+    added_fids = [
+        fid for fid, fd in window.files.items()
+        if fd.filepath in expected_for_path
+    ]
+    assert len(added_fids) == 2
+    expected_x = {
+        original_fid: np.asarray(original_x, dtype=float),
+        **{
+            fid: expected_for_path[window.files[fid].filepath]
+            for fid in added_fids
+        },
+    }
+    for fid in added_fids:
+        window.files[fid].channel_units[wwt.SFNS_RACK_TRAVEL] = (
+            wwt.SFNS_RACK_TRAVEL_UNIT
+        )
+        if fid not in state.attached_file_ids:
+            state.attached_file_ids.append(fid)
+        key = (fid, wwt.SFNS_RACK_FORCE)
+        if key not in state.checked:
+            state.checked.append(key)
+
+    apply_active_view(0)
+    qapp.processEvents()
+
+    applied = CustomXAxisSpec.from_axis_opts(state.axis_opts["x_axis"])
+    assert applied.resolver == PER_SOURCE_NAME
+    assert applied.source_fid is None
+    combo = window.inspector.top._combo_xaxis_ch
+    texts = [combo.itemText(index) for index in range(combo.count())]
+    assert any(
+        combo.itemData(index)
+        == (PER_SOURCE_NAME, None, wwt.SFNS_RACK_TRAVEL)
+        for index in range(combo.count())
+    )
+    assert all("历史精确来源" not in text for text in texts)
+    result = window._build_time_plot_data()
+    expected_keys = {
+        (fid, wwt.SFNS_RACK_FORCE) for fid in expected_x
+    }
+    assert result.attempted_channel_keys == expected_keys
+    assert result.successful_channel_keys == expected_keys
+    assert result.issues == []
+    x_by_fid = {
+        row[6]: np.asarray(row[2], dtype=float)
+        for row in result.rows
+        if row[6] in expected_x
+    }
+    assert set(x_by_fid) == set(expected_x)
+    for fid, values in expected_x.items():
+        np.testing.assert_allclose(x_by_fid[fid], values)
 
 
 def test_project_restore_does_not_prompt(qapp, tmp_path, monkeypatch):

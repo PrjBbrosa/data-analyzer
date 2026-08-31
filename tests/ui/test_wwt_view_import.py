@@ -9,7 +9,7 @@ import pytest
 from mf4_analyzer.io.wwt_document import load_wwt_document
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
-    EXACT_SOURCE,
+    PER_SOURCE_NAME,
     CustomXAxisSpec,
 )
 from mf4_analyzer.ui.wwt_view_import import (
@@ -49,8 +49,8 @@ def test_channel_xy_proposal_uses_only_registered_y_and_winwert_color(tmp_path):
     assert wwt.CHAN_X in view.name
     assert view.axis_opts["x_axis"] == CustomXAxisSpec(
         mode=CHANNEL_MODE,
-        resolver=EXACT_SOURCE,
-        source_fid="f1",
+        resolver=PER_SOURCE_NAME,
+        source_fid=None,
         channel=wwt.CHAN_X,
         label=f"{wwt.CHAN_X} [{wwt.CHAN_X_UNIT}]",
     ).to_axis_opts()
@@ -64,6 +64,7 @@ def test_channel_xy_proposal_uses_only_registered_y_and_winwert_color(tmp_path):
     assert force.y_tick_interval == wwt.CHAN_Y_TICK
     assert force.y_grid_interval == wwt.CHAN_Y_GRID
     assert force.x_ref.kind == "channel"
+    assert force.x_ref.fid == "f1"
     assert force.x_ref.channel == wwt.CHAN_X
     assert force.y_ref.kind == "channel"
     assert force.y_ref.channel == wwt.CHAN_Y

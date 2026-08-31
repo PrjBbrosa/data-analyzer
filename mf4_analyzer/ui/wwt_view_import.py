@@ -15,7 +15,7 @@ from mf4_analyzer.io.wwt_document import WwtDocument, WwtRecord
 from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
-    EXACT_SOURCE,
+    PER_SOURCE_NAME,
     CustomXAxisSpec,
 )
 from mf4_analyzer.ui.view_state import (
@@ -289,10 +289,15 @@ def visible_y_windows(document) -> list:
 def _x_axis_opts(
     bindings: Sequence[TimeCurveBinding], x_label: str,
 ) -> dict:
-    """Expose a real shared channel X to the existing Inspector contract.
+    """Expose a real shared channel name to the Inspector resolver contract.
 
-    Per-curve or record-backed X has no state-schema representation.  Those
-    cases retain the legacy fallback instead of guessing one source/channel.
+    Each imported WWT curve keeps its exact X identity in ``binding.x_ref``.
+    The Inspector spec also governs ordinary curves added to this View later,
+    so it must resolve that shared channel name inside each curve's own source
+    rather than pinning every future Y to the original WWT's X array.
+
+    Per-curve or record-backed X still has no honest global resolver shape.
+    Those cases retain the time-axis fallback instead of guessing a channel.
     """
     channel_refs = {
         (binding.x_ref.fid, binding.x_ref.channel)
@@ -302,11 +307,11 @@ def _x_axis_opts(
     if bindings and len(channel_refs) == 1 and all(
         binding.x_ref.kind == "channel" for binding in bindings
     ):
-        fid, channel = next(iter(channel_refs))
+        channel = next(iter(channel_refs))[1]
         return CustomXAxisSpec(
             mode=CHANNEL_MODE,
-            resolver=EXACT_SOURCE,
-            source_fid=str(fid),
+            resolver=PER_SOURCE_NAME,
+            source_fid=None,
             channel=str(channel),
             label=str(x_label or ""),
         ).to_axis_opts()

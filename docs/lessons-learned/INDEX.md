@@ -218,6 +218,7 @@ lesson by default.
 | [Exercise The Real WWT To UltraView Boundary](codex-wwt-ultraview-real-boundary-test.md) | A WWT import change adds or modifies the projection from generated | See lesson |
 | [View Restore Range And Ticks Need The Full Transaction](view-restore-range-and-ticks-need-full-transaction.md) | Changing TimeDomain View restore, overlay `set_tick_density()`, WWT `native_ticks`, or `_repin_overlay_channel_ticks()`. | See lesson |
 | [Overlay Right Axis Columns Need A Post-Tick Realize](overlay-right-axis-columns-need-post-tick-realize.md) | Changing TimeDomain overlay right Y-axes, View restore, `_settle_layout()`, overlay `setWidth`, or PlotItem extra columns. | See lesson |
+| [WWT Exact Bindings Must Not Pin Global Custom X](wwt-exact-binding-does-not-pin-global-custom-x.md) | Changing WWT View proposals, curve bindings, or the Inspector custom-X | See lesson |
 
 ## Selection Rules
 

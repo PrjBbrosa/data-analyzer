@@ -1249,7 +1249,14 @@ class TimeChartCard(_ChartCard):
                 text_width + (16 if compact else 24),
             )
             button.setFixedWidth(button_width)
-        self._set_time_control_spacer_visible(not compact)
+        # Keep the trailing spacer in the layout at every responsive density.
+        # When the toolbar is narrower than its natural width it collapses to
+        # zero and ToolbarScrollHost scrolls the controls; when spare width is
+        # available it absorbs that width so the time-only controls stay flush
+        # with the right edge.  Hiding it solely because the shared 1500 px
+        # density threshold was crossed left a large unused gap on Hi-DPI
+        # windows that still had ample room for the complete toolbar.
+        self._set_time_control_spacer_visible(True)
         for sep in self._time_separators:
             sep.setVisible(True)
         settings_action = self._toolbar_action_for_widget(

@@ -392,6 +392,30 @@ def test_frequency_cursor_controls_are_trailing_aligned_like_time(qapp, qtbot):
         ) <= 8
 
 
+def test_wide_time_toolbar_controls_are_trailing_aligned(qapp, qtbot):
+    """Spare width belongs before the time-only controls, even in compact mode."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1000, 700)
+    cs.show()
+    cs.set_mode("time")
+    qapp.processEvents()
+
+    card = cs._time_card
+    host = card._toolbar_host
+    host.fit_inner_toolbar()
+    qapp.processEvents()
+
+    assert host.horizontalScrollBar().maximum() == 0
+    assert card._time_controls_spacer.width() > 0
+    settings = card.cursor_display_settings_button()
+    assert card.btn_subplot.geometry().left() > (
+        card._time_controls_spacer.geometry().right()
+    )
+    assert (
+        card.toolbar.contentsRect().right() - settings.geometry().right()
+    ) <= 8
+
 
 def test_cursor_pill_updates_on_time_signal(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
