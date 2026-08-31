@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TraceLab 游标显示设置原型</title>
+  <style>
+    :root {
+      --page: #e8edf4;
+      --shell: #f7f9fc;
+      --panel: #ffffff;
+      --line: #d8e0ea;
+      --line-strong: #c7d1dd;
+      --ink: #172033;
+      --muted: #64748b;
+      --faint: #94a3b8;
+      --blue: #2f6feb;
+      --blue-soft: #eaf1ff;
+      --up: #1976d2;
+      --down: #e46b28;
+      --green: #1f9d73;
+      --shadow: 0 22px 55px rgba(35, 50, 74, 0.16);
+      --popover-shadow: 0 18px 45px rgba(23, 32, 51, 0.18), 0 2px 8px rgba(23, 32, 51, 0.08);
+      --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 1080px;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(255,255,255,0.88), transparent 31%),
+        linear-gradient(145deg, #edf2f7 0%, var(--page) 48%, #e2e8f0 100%);
+      font-family: var(--sans);
+    }
+
+    button, input { font: inherit; }
+
+    button:focus-visible, input:focus-visible + .switch-track {
+      outline: 3px solid rgba(47, 111, 235, 0.28);
+      outline-offset: 2px;
+    }
+
+    .page {
+      width: min(1450px, calc(100vw - 64px));
+      margin: 28px auto 42px;
+    }
+
+    .prototype-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin: 0 4px 16px;
+    }
+
+    .eyebrow {
+      margin: 0 0 4px;
+      color: #52647a;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+    }
+
+    .head-note {
+      margin: 0 0 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .app-shell {
+      overflow: hidden;
+      min-height: 760px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      background: var(--shell);
+      box-shadow: var(--shadow);
+    }
+
+    .window-bar {
+      height: 43px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: #f3f6fa;
+    }
+
+    .app-mark {
+      width: 21px;
+      height: 21px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      color: #fff;
+      background: #2d5fba;
+      font-size: 11px;
+      font-weight: 800;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2);
+    }
+
+    .window-title { font-size: 12px; font-weight: 650; }
+    .window-file { color: var(--muted); font-size: 11px; }
+    .window-spacer { flex: 1; }
+    .window-state {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #5d6d80;
+      font-size: 11px;
+    }
+    .state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 224px 1fr;
+      min-height: 717px;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: #f5f7fa;
+    }
+
+    .sidebar-title {
+      height: 47px;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      color: #4a5b70;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid #e3e8ef;
+    }
+
+    .file-row {
+      margin: 10px 8px 0;
+      padding: 10px 10px 9px;
+      border: 1px solid #d7e1ec;
+      border-radius: 7px;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(23, 32, 51, 0.04);
+    }
+
+    .file-name { font-size: 11px; font-weight: 700; }
+    .file-meta { margin-top: 3px; color: var(--muted); font-size: 10px; }
+
+    .channel-section { margin: 17px 10px 0; }
+    .section-label { color: #758397; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
+    .channel-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 6px;
+      background: #eaf1fb;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .channel-dot { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; }
+
+    .main { padding: 12px 14px 14px; }
+
+    .view-tabs {
+      height: 34px;
+      display: flex;
+      align-items: end;
+      gap: 2px;
+      padding-left: 4px;
+    }
+
+    .view-tab {
+      padding: 7px 15px 8px;
+      border: 0;
+      border-radius: 7px 7px 0 0;
+      color: #405168;
+      background: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      box-shadow: 0 -1px 0 var(--line), 1px 0 0 var(--line), -1px 0 0 var(--line);
+    }
+
+    .chart-card {
+      position: relative;
+      min-height: 648px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 5px 18px rgba(35, 50, 74, 0.07);
+    }
+
+    .chart-toolbar {
+      position: relative;
+      z-index: 15;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+      border-radius: 8px 8px 0 0;
+    }
+
+    .tool-icon {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      border-radius: 5px;
+      color: #53657a;
+      background: transparent;
+    }
+    .tool-icon:hover { background: #eef2f7; }
+    .tool-icon svg { width: 15px; height: 15px; stroke: currentColor; }
+
+    .toolbar-sep { width: 1px; height: 20px; margin: 0 5px; background: #d9e1ea; }
+    .toolbar-spacer { flex: 1; }
+
+    .segment {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid #d6dee8;
+      border-radius: 7px;
+      background: #f3f6fa;
+    }
+
+    .segment button {
+      height: 27px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 5px;
+      color: #526277;
+      background: transparent;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .segment button:hover { color: #26384e; background: rgba(255,255,255,0.65); }
+    .segment button.active {
+      color: #174ea6;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(35, 50, 74, 0.14), inset 0 0 0 1px #cbdcf8;
+    }
+
+    .settings-wrap { position: relative; margin-left: 2px; }
+    .settings-button {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid #d6dee8;
+      border-radius: 6px;
+      color: #506178;
+      background: #fff;
+      cursor: pointer;
+    }
+    .settings-button:hover { color: #234f98; border-color: #b8cae2; background: #f7faff; }
+    .settings-button[aria-expanded="true"] {
+      color: #174ea6;
+      border-color: #9bb9e9;
+      background: var(--blue-soft);
+      box-shadow: 0 0 0 2px rgba(47,111,235,0.1);
+    }
+    .settings-button svg { width: 16px; height: 16px; stroke: currentColor; }
+
+    .settings-popover {
+      position: absolute;
+      top: 39px;
+      right: 0;
+      z-index: 30;
+      width: 282px;
+      padding: 0;
+      border: 1px solid #ccd6e2;
+      border-radius: 9px;
+      background: rgba(255,255,255,0.985);
+      box-shadow: var(--popover-shadow);
+      transform-origin: top right;
+    }
+    .settings-popover[hidden] { display: none; }
+
+    .popover-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 13px 14px 11px;
+      border-bottom: 1px solid #e3e8ef;
+    }
+    .popover-title { font-size: 12px; font-weight: 750; }
+    .popover-sub { margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .scope-badge {
+      margin-left: auto;
+      padding: 3px 6px;
+      border: 1px solid #cddcf2;
+      border-radius: 999px;
+      color: #35609a;
+      background: #f1f6fd;
+      font-size: 9px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .setting-group { padding: 10px 14px 8px; }
+    .setting-group + .setting-group { border-top: 1px solid #edf1f5; }
+    .setting-kicker { margin-bottom: 4px; color: #8090a3; font-size: 9px; font-weight: 750; letter-spacing: 0.08em; }
+
+    .setting-row {
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      font-size: 11px;
+      color: #34445a;
+    }
+    .setting-label { display: flex; align-items: center; gap: 8px; }
+    .legend-mark { width: 15px; height: 15px; display: grid; place-items: center; }
+    .legend-mark.max { color: #2563eb; }
+    .legend-mark.min { color: #e46b28; }
+
+    .switch {
+      position: relative;
+      width: 30px;
+      height: 18px;
+      flex: 0 0 auto;
+    }
+    .switch input { position: absolute; opacity: 0; pointer-events: none; }
+    .switch-track {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: #c9d2de;
+      cursor: pointer;
+      transition: background 140ms ease;
+    }
+    .switch-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(23,32,51,0.25);
+      transition: transform 140ms ease;
+    }
+    .switch input:checked + .switch-track { background: var(--blue); }
+    .switch input:checked + .switch-track::after { transform: translateX(12px); }
+
+    .popover-foot {
+      padding: 9px 14px 11px;
+      color: #718096;
+      background: #f8fafc;
+      border-top: 1px solid #e4e9f0;
+      border-radius: 0 0 9px 9px;
+      font-size: 9.5px;
+      line-height: 1.45;
+    }
+
+    .chart-area {
+      position: relative;
+      height: 552px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .chart-title {
+      position: absolute;
+      z-index: 3;
+      top: 17px;
+      left: 64px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .chart-subtitle { margin-left: 6px; color: var(--muted); font-weight: 500; }
+
+    .plot {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .plot text { font-family: var(--sans); }
+    .axis-label { fill: #7d8da1; font-size: 10px; }
+    .axis-unit { fill: #52657a; font-size: 10px; font-weight: 700; }
+    .grid-line { stroke: #e7ecf2; stroke-width: 1; }
+    .axis-line { stroke: #aebbc9; stroke-width: 1; }
+    .curve-up { fill: none; stroke: var(--up); stroke-width: 2.25; vector-effect: non-scaling-stroke; }
+    .curve-down { fill: none; stroke: var(--down); stroke-width: 2.25; vector-effect: non-scaling-stroke; }
+    .cursor-line { stroke: #334155; stroke-width: 1.2; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+    .cursor-line-b { stroke: #6b7280; }
+    .interval-fill { fill: rgba(47, 111, 235, 0.055); }
+    .cursor-tag-bg { fill: #334155; }
+    .cursor-tag-text { fill: #fff; font-size: 9px; font-weight: 700; }
+    .intersection-up { fill: #fff; stroke: var(--up); stroke-width: 2.3; }
+    .intersection-down { fill: #fff; stroke: var(--down); stroke-width: 2.3; }
+    .marker-max { fill: #fff; stroke: #2563eb; stroke-width: 2; }
+    .marker-min { fill: #fff; stroke: #e46b28; stroke-width: 2; }
+    .marker-label-bg { fill: #fff; stroke: #d9e2ec; }
+    .marker-label { fill: #43546a; font-size: 8.5px; font-weight: 650; }
+
+    .cursor-card {
+      position: absolute;
+      z-index: 9;
+      top: 62px;
+      right: 25px;
+      min-width: 272px;
+      border: 1px solid #cbd5e1;
+      border-radius: 9px;
+      background: rgba(255,255,255,0.965);
+      box-shadow: 0 10px 30px rgba(34, 48, 70, 0.15);
+      backdrop-filter: blur(7px);
+      transition: right 140ms ease;
+    }
+
+    .mode-dual.settings-open .cursor-card { right: 325px; }
+
+    .readout-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .readout-x { font-family: var(--mono); font-size: 11px; font-weight: 750; color: #28384d; }
+    .readout-mode { color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: 0.04em; }
+    .readout-body { padding: 10px 12px 12px; }
+    .readout-channel { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; font-size: 10.5px; font-weight: 700; }
+    .channel-source { color: #7b8999; font-weight: 500; }
+
+    .branch-row {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      min-height: 30px;
+      align-items: center;
+      border-left: 3px solid transparent;
+    }
+    .branch-row + .branch-row { margin-top: 4px; }
+    .branch-row.up { border-left-color: var(--up); background: #f2f7fd; }
+    .branch-row.down { border-left-color: var(--down); background: #fff6f1; }
+    .branch-name { padding-left: 8px; font-size: 10px; font-weight: 800; }
+    .branch-row.up .branch-name { color: #155da6; }
+    .branch-row.down .branch-name { color: #b9521c; }
+    .branch-value { padding-right: 9px; text-align: right; font-family: var(--mono); font-size: 11px; font-weight: 750; color: #25344a; }
+
+    .dual-card { min-width: 390px; }
+    .dual-stats {
+      display: flex;
+      align-items: stretch;
+      gap: 4px;
+    }
+    .branch-column { width: 46px; flex: 0 0 46px; }
+    .metric-column { width: 84px; flex: 1 1 84px; }
+    .stats-head {
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding-right: 8px;
+      color: #8998aa;
+      font-size: 9px;
+      text-align: right;
+    }
+    .branch-column .stats-head { padding-right: 0; }
+    .stats-branch {
+      height: 27px;
+      display: flex;
+      align-items: center;
+      padding-left: 7px;
+      border-left: 3px solid;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .stats-branch + .stats-branch, .stat-value + .stat-value { margin-top: 4px; }
+    .stats-branch.up { color: #155da6; border-left-color: var(--up); background: #f3f7fd; }
+    .stats-branch.down { color: #b9521c; border-left-color: var(--down); background: #fff6f1; }
+    .stat-value {
+      height: 27px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding-right: 8px;
+      background: #f8fafc;
+      color: #2f3d51;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .stat-value.down-bg { background: #fffaf7; }
+
+    .mode-off .cursor-layer,
+    .mode-off .cursor-card { display: none; }
+    .mode-single .dual-only { display: none !important; }
+    .mode-dual .single-only { display: none !important; }
+
+    .chart-status {
+      height: 47px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-top: 1px solid var(--line);
+      background: #fafbfd;
+      border-radius: 0 0 8px 8px;
+      color: #6b7b8e;
+      font-size: 10px;
+    }
+    .status-hint strong { color: #405168; font-weight: 700; }
+    .legend { display: flex; align-items: center; gap: 15px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-stroke { width: 18px; height: 2px; border-radius: 2px; }
+    .legend-stroke.up { background: var(--up); }
+    .legend-stroke.down { background: var(--down); }
+
+    .prototype-caption {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 13px;
+      padding: 0 4px;
+      color: #5f7085;
+      font-size: 11px;
+    }
+    .caption-strong { color: #32445a; font-weight: 700; }
+    .caption-actions { display: flex; align-items: center; gap: 6px; }
+    .caption-key {
+      padding: 3px 7px;
+      border: 1px solid #cbd5e1;
+      border-bottom-color: #b5c1cf;
+      border-radius: 5px;
+      background: #f8fafc;
+      color: #4b5d73;
+      font-family: var(--mono);
+      font-size: 9px;
+      box-shadow: 0 1px 0 #fff inset;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .settings-popover { animation: pop 130ms ease-out; }
+      @keyframes pop { from { opacity: 0; transform: translateY(-3px) scale(0.985); } }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="prototype-head">
+      <div>
+        <p class="eyebrow">TraceLab · Cursor interaction study</p>
+        <h1>单游标分支读数与双游标显示设置</h1>
+      </div>
+      <p class="head-note">交互原型：切换“单游标 / 双游标”，再打开右侧设置按钮</p>
+    </header>
+
+    <section class="app-shell">
+      <div class="window-bar">
+        <div class="app-mark">T</div>
+        <span class="window-title">TraceLab 8.2</span>
+        <span class="window-file">踏板力测试 · Pedal_Test_042.mf4</span>
+        <span class="window-spacer"></span>
+        <span class="window-state"><span class="state-dot"></span>数据已加载</span>
+      </div>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-title">文件与通道</div>
+          <div class="file-row">
+            <div class="file-name">Pedal_Test_042.mf4</div>
+            <div class="file-meta">1.28 GB · 18 个通道</div>
+          </div>
+          <div class="channel-section">
+            <div class="section-label">已显示</div>
+            <div class="channel-row"><span class="channel-dot"></span>PedalForce</div>
+          </div>
+        </aside>
+
+        <div class="main">
+          <div class="view-tabs"><button class="view-tab">时域 View 1</button></div>
+
+          <article class="chart-card mode-single" id="chartCard">
+            <div class="chart-toolbar">
+              <button class="tool-icon" title="复位视图" aria-label="复位视图">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 11.5 12 5l8 6.5M6.5 10.5V20h11v-9.5M10 20v-5h4v5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="tool-icon" title="后退" aria-label="后退">
+                <svg viewBox="0 0 24 24" fill="none"><path d="m10 7-5 5 5 5M5.5 12H20" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="tool-icon" title="框选缩放" aria-label="框选缩放">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="6" stroke-width="1.8"/><path d="m15 15 5 5M10.5 7.5v6M7.5 10.5h6" stroke-width="1.8" stroke-linecap="round"/></svg>
+              </button>
+              <div class="toolbar-sep"></div>
+              <button class="tool-icon" title="标注" aria-label="标注">
+                <svg viewBox="0 0 24 24" fill="none"><path d="m5 18 1-4L16.5 3.5a2.1 2.1 0 0 1 3 3L9 17l-4 1Z" stroke-width="1.7" stroke-linejoin="round"/><path d="m14.5 5.5 3 3" stroke-width="1.7"/></svg>
+              </button>
+
+              <span class="toolbar-spacer"></span>
+
+              <div class="segment" aria-label="绘图模式">
+                <button class="active">分屏</button>
+                <button>叠加</button>
+              </div>
+              <div class="toolbar-sep"></div>
+              <div class="segment" id="cursorModes" aria-label="游标模式">
+                <button data-mode="off">游标关</button>
+                <button class="active" data-mode="single">单游标</button>
+                <button data-mode="dual">双游标</button>
+              </div>
+
+              <div class="settings-wrap">
+                <button class="settings-button" id="settingsButton" aria-expanded="false" aria-controls="settingsPopover" title="游标显示设置">
+                  <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6" stroke-width="1.8" stroke-linecap="round"/><circle cx="15" cy="7" r="2" stroke-width="1.6"/><circle cx="9" cy="17" r="2" stroke-width="1.6"/></svg>
+                </button>
+
+                <div class="settings-popover" id="settingsPopover" hidden>
+                  <div class="popover-head">
+                    <div>
+                      <div class="popover-title">游标显示</div>
+                      <div class="popover-sub">控制双游标 A–B 区间的图面标记与读数项</div>
+                    </div>
+                    <span class="scope-badge">双游标</span>
+                  </div>
+
+                  <div class="setting-group">
+                    <div class="setting-kicker">图面标记</div>
+                    <div class="setting-row">
+                      <span class="setting-label"><span class="legend-mark max">◆</span>显示最大点</span>
+                      <label class="switch"><input type="checkbox" data-toggle="max-point" checked><span class="switch-track"></span></label>
+                    </div>
+                    <div class="setting-row">
+                      <span class="setting-label"><span class="legend-mark min">●</span>显示最小点</span>
+                      <label class="switch"><input type="checkbox" data-toggle="min-point" checked><span class="switch-track"></span></label>
+                    </div>
+                  </div>
+
+                  <div class="setting-group">
+                    <div class="setting-kicker">读数卡</div>
+                    <div class="setting-row"><span>显示最大值</span><label class="switch"><input type="checkbox" data-toggle="stat-max" checked><span class="switch-track"></span></label></div>
+                    <div class="setting-row"><span>显示最小值</span><label class="switch"><input type="checkbox" data-toggle="stat-min" checked><span class="switch-track"></span></label></div>
+                    <div class="setting-row"><span>显示平均值</span><label class="switch"><input type="checkbox" data-toggle="stat-avg" checked><span class="switch-track"></span></label></div>
+                  </div>
+
+                  <div class="popover-foot">单游标不做区间统计，只显示当前 X 位置的 X↑ / X↓ 读数。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="chart-area">
+              <div class="chart-title">PedalForce <span class="chart-subtitle">自定义 X · PedalTravel</span></div>
+              <svg class="plot" viewBox="0 0 1180 552" preserveAspectRatio="none" role="img" aria-label="力位移曲线与游标状态">
+                <defs>
+                  <clipPath id="plotClip"><rect x="64" y="52" width="1078" height="432" rx="1"/></clipPath>
+                </defs>
+
+                <g>
+                  <line class="grid-line" x1="64" x2="1142" y1="52" y2="52"/>
+                  <line class="grid-line" x1="64" x2="1142" y1="138" y2="138"/>
+                  <line class="grid-line" x1="64" x2="1142" y1="225" y2="225"/>
+                  <line class="grid-line" x1="64" x2="1142" y1="311" y2="311"/>
+                  <line class="grid-line" x1="64" x2="1142" y1="398" y2="398"/>
+                  <line class="grid-line" x1="64" x2="1142" y1="484" y2="484"/>
+                  <line class="grid-line" x1="64" x2="64" y1="52" y2="484"/>
+                  <line class="grid-line" x1="280" x2="280" y1="52" y2="484"/>
+                  <line class="grid-line" x1="495" x2="495" y1="52" y2="484"/>
+                  <line class="grid-line" x1="711" x2="711" y1="52" y2="484"/>
+                  <line class="grid-line" x1="926" x2="926" y1="52" y2="484"/>
+                  <line class="grid-line" x1="1142" x2="1142" y1="52" y2="484"/>
+                  <line class="axis-line" x1="64" x2="1142" y1="484" y2="484"/>
+                  <line class="axis-line" x1="64" x2="64" y1="52" y2="484"/>
+
+                  <text class="axis-label" x="50" y="488" text-anchor="end">0</text>
+                  <text class="axis-label" x="50" y="402" text-anchor="end">30</text>
+                  <text class="axis-label" x="50" y="315" text-anchor="end">60</text>
+                  <text class="axis-label" x="50" y="229" text-anchor="end">90</text>
+                  <text class="axis-label" x="50" y="142" text-anchor="end">120</text>
+                  <text class="axis-label" x="50" y="56" text-anchor="end">150</text>
+                  <text class="axis-label" x="64" y="505" text-anchor="middle">0</text>
+                  <text class="axis-label" x="280" y="505" text-anchor="middle">20</text>
+                  <text class="axis-label" x="495" y="505" text-anchor="middle">40</text>
+                  <text class="axis-label" x="711" y="505" text-anchor="middle">60</text>
+                  <text class="axis-label" x="926" y="505" text-anchor="middle">80</text>
+                  <text class="axis-label" x="1142" y="505" text-anchor="middle">100</text>
+                  <text class="axis-unit" x="64" y="39">N</text>
+                  <text class="axis-unit" x="603" y="536" text-anchor="middle">PedalTravel (mm)</text>
+                </g>
+
+                <g clip-path="url(#plotClip)">
+                  <rect class="dual-only cursor-layer interval-fill" x="392" y="52" width="389" height="432"/>
+
+                  <path class="curve-up" d="M64 471 C135 468 198 456 265 431 C350 400 420 355 487 298 C548 247 608 188 673 139 C748 83 827 63 918 73 C1000 82 1072 112 1142 160"/>
+                  <path class="curve-down" d="M1142 160 C1065 194 984 217 900 235 C811 254 731 280 654 319 C575 359 500 398 421 426 C310 464 183 477 64 471"/>
+
+                  <g class="single-only cursor-layer">
+                    <line class="cursor-line" x1="603" x2="603" y1="52" y2="484"/>
+                    <circle class="intersection-up" cx="603" cy="193" r="5"/>
+                    <circle class="intersection-down" cx="603" cy="344" r="5"/>
+                  </g>
+
+                  <g class="dual-only cursor-layer">
+                    <line class="cursor-line" x1="392" x2="392" y1="52" y2="484"/>
+                    <line class="cursor-line cursor-line-b" x1="781" x2="781" y1="52" y2="484"/>
+                    <circle class="intersection-up" cx="392" cy="369" r="4.5"/>
+                    <circle class="intersection-down" cx="392" cy="437" r="4.5"/>
+                    <circle class="intersection-up" cx="781" cy="76" r="4.5"/>
+                    <circle class="intersection-down" cx="781" cy="263" r="4.5"/>
+
+                    <g class="max-point">
+                      <path class="marker-max" d="M714 84 l6 -10 6 10 z"/>
+                      <rect class="marker-label-bg" x="730" y="64" width="56" height="18" rx="4"/>
+                      <text class="marker-label" x="758" y="76" text-anchor="middle">Max ↑</text>
+                      <path class="marker-max" d="M770 269 l6 -10 6 10 z"/>
+                    </g>
+
+                    <g class="min-point">
+                      <circle class="marker-min" cx="407" cy="357" r="5"/>
+                      <rect class="marker-label-bg" x="416" y="339" width="53" height="18" rx="4"/>
+                      <text class="marker-label" x="442.5" y="351" text-anchor="middle">Min ↑</text>
+                      <circle class="marker-min" cx="427" cy="424" r="5"/>
+                    </g>
+                  </g>
+                </g>
+
+                <g class="single-only cursor-layer">
+                  <rect class="cursor-tag-bg" x="580" y="470" width="46" height="19" rx="4"/>
+                  <text class="cursor-tag-text" x="603" y="483" text-anchor="middle">X</text>
+                </g>
+                <g class="dual-only cursor-layer">
+                  <rect class="cursor-tag-bg" x="381" y="470" width="22" height="19" rx="4"/>
+                  <text class="cursor-tag-text" x="392" y="483" text-anchor="middle">A</text>
+                  <rect class="cursor-tag-bg" x="770" y="470" width="22" height="19" rx="4"/>
+                  <text class="cursor-tag-text" x="781" y="483" text-anchor="middle">B</text>
+                </g>
+              </svg>
+
+              <section class="cursor-card single-only">
+                <div class="readout-head">
+                  <span class="readout-x">X = 50.0 mm</span>
+                  <span class="readout-mode">单游标</span>
+                </div>
+                <div class="readout-body">
+                  <div class="readout-channel"><span class="channel-dot"></span><span>PedalForce</span><span class="channel-source">[Pedal_Test_042]</span></div>
+                  <div class="branch-row up"><span class="branch-name">X↑</span><span class="branch-value">101.2 N</span></div>
+                  <div class="branch-row down"><span class="branch-name">X↓</span><span class="branch-value">48.6 N</span></div>
+                </div>
+              </section>
+
+              <section class="cursor-card dual-card dual-only">
+                <div class="readout-head">
+                  <span class="readout-x">A = 30.4 mm&nbsp;&nbsp;│&nbsp;&nbsp;B = 66.5 mm&nbsp;&nbsp;│&nbsp;&nbsp;ΔX = 36.1 mm</span>
+                  <span class="readout-mode">双游标</span>
+                </div>
+                <div class="readout-body">
+                  <div class="readout-channel"><span class="channel-dot"></span><span>PedalForce</span><span class="channel-source">[Pedal_Test_042]</span></div>
+                  <div class="dual-stats">
+                    <div class="branch-column">
+                      <span class="stats-head"></span>
+                      <span class="stats-branch up">X↑</span>
+                      <span class="stats-branch down">X↓</span>
+                    </div>
+                    <div class="metric-column stat-min">
+                      <span class="stats-head">最小值</span>
+                      <span class="stat-value">38.7 N</span>
+                      <span class="stat-value down-bg">14.8 N</span>
+                    </div>
+                    <div class="metric-column stat-max">
+                      <span class="stats-head">最大值</span>
+                      <span class="stat-value">142.6 N</span>
+                      <span class="stat-value down-bg">76.2 N</span>
+                    </div>
+                    <div class="metric-column stat-avg">
+                      <span class="stats-head">平均值</span>
+                      <span class="stat-value">91.4 N</span>
+                      <span class="stat-value down-bg">43.9 N</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <footer class="chart-status">
+              <span class="status-hint" id="statusHint"><strong>单游标：</strong>点击图面放置读数线；同一 X 的升程与回程分别显示</span>
+              <span class="legend"><span class="legend-item"><i class="legend-stroke up"></i>X↑ 升程</span><span class="legend-item"><i class="legend-stroke down"></i>X↓ 回程</span></span>
+            </footer>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <div class="prototype-caption">
+      <span><span class="caption-strong">本轮口径：</span>单游标只显示当前 X 的 X↑ / X↓；五个设置项仅控制双游标区间。</span>
+      <span class="caption-actions">可点击 <span class="caption-key">单游标</span><span class="caption-key">双游标</span><span class="caption-key">设置</span> 体验状态</span>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      const card = document.getElementById('chartCard');
+      const modeGroup = document.getElementById('cursorModes');
+      const settingsButton = document.getElementById('settingsButton');
+      const popover = document.getElementById('settingsPopover');
+      const statusHint = document.getElementById('statusHint');
+
+      function setMode(mode) {
+        card.classList.remove('mode-off', 'mode-single', 'mode-dual');
+        card.classList.add(`mode-${mode}`);
+        modeGroup.querySelectorAll('[data-mode]').forEach((button) => {
+          button.classList.toggle('active', button.dataset.mode === mode);
+        });
+        if (mode === 'single') {
+          statusHint.innerHTML = '<strong>单游标：</strong>点击图面放置读数线；同一 X 的升程与回程分别显示';
+        } else if (mode === 'dual') {
+          statusHint.innerHTML = '<strong>双游标：</strong>点击设置 A / B；区间标记与统计项由右侧设置按钮控制';
+        } else {
+          statusHint.innerHTML = '<strong>游标已关闭：</strong>图面保持当前缩放与通道显示';
+          closeSettings();
+        }
+      }
+
+      function closeSettings() {
+        popover.hidden = true;
+        settingsButton.setAttribute('aria-expanded', 'false');
+        card.classList.remove('settings-open');
+      }
+
+      modeGroup.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-mode]');
+        if (button) setMode(button.dataset.mode);
+      });
+
+      settingsButton.addEventListener('click', () => {
+        const willOpen = popover.hidden;
+        popover.hidden = !willOpen;
+        settingsButton.setAttribute('aria-expanded', String(willOpen));
+        card.classList.toggle('settings-open', willOpen);
+      });
+
+      document.addEventListener('click', (event) => {
+        if (!event.target.closest('.settings-wrap')) closeSettings();
+      });
+
+      document.querySelectorAll('[data-toggle]').forEach((input) => {
+        input.addEventListener('change', () => {
+          const selector = `.${input.dataset.toggle}`;
+          document.querySelectorAll(selector).forEach((node) => {
+            node.style.display = input.checked ? '' : 'none';
+          });
+        });
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeSettings();
+      });
+    })();
+  </script>
+</body>
+</html>
