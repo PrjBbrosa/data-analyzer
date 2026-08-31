@@ -3,7 +3,7 @@
 > **执行要求：** 每个实现任务由独立 agent 按 TDD 完成，随后由独立 reviewer 对照规格审查；不允许在红测之前写生产实现。
 
 - 日期：2026-08-31
-- 状态：待实施
+- 状态：已完成（2026-08-31，分支 `codex/cursor-display-settings`）
 - 实施基线：`main@44a65faad9f141b29397d930f8c8f8cbafb0b3a7`
 - 对应规格：[`2026-08-31-cursor-display-settings-spec.md`](../specs/2026-08-31-cursor-display-settings-spec.md)
 - 交互原型：[`2026-08-31-cursor-display-settings.html`](../ui-prototypes/2026-08-31-cursor-display-settings.html)
@@ -279,3 +279,11 @@ git diff --check
 - 五个 setting 的 32 组合在 pure presentation layer 全覆盖；Qt 层覆盖等价类，不以肉眼替代 geometry assertion。
 - 单游标无统计、custom-X 当前分支值、dual 过滤、marker、split、identity、popover collision、宽高 fallback 均通过。
 - 没有扩大 MainWindow state、破坏 import boundary、引入未声明 backref、修改 project schema 或碰触无关 dirty files。
+
+## 实施结果
+
+- Task 1–3 均按 RED → GREEN 实施并通过独立 task review；Task 2、Task 3 各有一轮 review fix，整分支 final review 的一轮 fix 也已通过 scoped re-review。
+- 稳定代码快照 `a3ce6edd` 上，`test_chart_stack.py` 为 141 passed；核心数值/展示/格式化组为 222 passed、1 skipped；游标与 paint/backstop 聚焦节点为 36 passed；边界与帮助门禁为 97 passed。
+- `test_pg_timedomain_canvas.py` 全文件曾出现 2 个与本改动无关的环境/顺序型失败；两个节点在最终稳定快照独立复跑为 2 passed，不将先前 partial/full-file 结果误记为全绿。
+- 六个确定性布局场景和 Windows 前台诊断/单向分支场景的非 Git 证据保存在 `.state/cursor-display-settings-final/`；几何 JSON 证明 safe bounds、popover 不相交、无空单元格与 whole-block 截断。
+- 完整 pytest 未运行：本轮不是 release/merge acceptance 或跨边界大重构，按仓库门禁只运行 owner tests、paint backstop 与相关边界 ratchets。
