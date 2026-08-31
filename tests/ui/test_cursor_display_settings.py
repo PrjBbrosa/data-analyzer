@@ -3,7 +3,7 @@
 from dataclasses import replace
 from itertools import product
 
-from PyQt5.QtCore import QSettings, QRect
+from PyQt5.QtCore import QSettings, QRect, Qt
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QWidget
 import pytest
@@ -12,6 +12,7 @@ from mf4_analyzer.ui.chart_stack.cursor_display import (
     CursorDisplayBranch,
     CursorDisplayChannel,
     CursorDisplayOptions,
+    CursorDisplayPopover,
     CursorDisplaySettingsStore,
     build_cursor_presentation,
 )
@@ -29,6 +30,7 @@ def _time_rows(count=1, *, duplicate_label=False):
             channel_label="Speed" if duplicate_label else f"Speed {index + 1}",
             color="#1769e0",
             unit_suffix=" rpm",
+            current_value=4.25 + index,
             delta=2.5 + index,
             min_value=1.0 + index,
             max_value=9.0 + index,
@@ -141,6 +143,33 @@ def test_custom_x_single_shows_current_branches_only_in_full_and_mini():
         assert not ({"Min", "Max", "Avg", "Δ"} & set(visible))
 
 
+def test_time_x_single_shows_only_the_real_current_value_in_full_and_mini():
+    for mini in (False, True):
+        projection = build_cursor_presentation(
+            _time_rows(), CursorDisplayOptions(),
+            cursor_mode="single", x_mode="time", mini=mini,
+        )
+        rows = projection.blocks[0].visible_rows
+        assert [(row.label, row.value) for row in rows] == [("Value", "4.25 rpm")]
+        assert "Value=4.25 rpm" in projection.tooltip
+        assert not ({"Min", "Max", "Avg", "Δ"} & {row.label for row in rows})
+
+
+def test_time_x_single_missing_current_value_never_falls_back_to_statistics():
+    channel = replace(_time_rows()[0], current_value=None)
+    projection = build_cursor_presentation(
+        (channel,), CursorDisplayOptions(),
+        cursor_mode="single", x_mode="time", mini=False,
+    )
+    assert [(row.label, row.value) for row in projection.blocks[0].visible_rows] == [
+        ("Value", "—"),
+    ]
+    assert "Δ=" not in projection.tooltip
+    assert "Min=" not in projection.tooltip
+    assert "Max=" not in projection.tooltip
+    assert "Avg=" not in projection.tooltip
+
+
 def test_duplicate_display_labels_keep_two_composite_blocks_and_full_tooltip_identity():
     projection = build_cursor_presentation(
         _time_rows(2, duplicate_label=True), CursorDisplayOptions(),
@@ -229,6 +258,105 @@ def test_cursor_pill_user_anchor_and_popover_collision_restore_without_drift(qap
     pill.avoid_rect(popover_rect, gap=8)
     pill.restore_after_avoidance()
     assert pill.geometry() == restored
+
+
+def test_cursor_pill_restores_original_right_anchor_after_width_changes_while_avoided(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    parent.resize(900, 500)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    pill.set_display_projection(build_cursor_presentation(
+        _time_rows(1), CursorDisplayOptions(False, False, False, False, False),
+        cursor_mode="dual", x_mode="time", mini=False,
+    ))
+    parent.show()
+    pill.show()
+    pill.move(620, 30)
+    pill.mark_user_placed()
+    qapp.processEvents()
+    original_right = pill.geometry().right()
+    original_top = pill.y()
+    obstacle = QRect(pill.x() + pill.width() - 20, pill.y(), 180, 220)
+    pill.avoid_rect(obstacle, gap=8)
+    pill.set_display_projection(build_cursor_presentation(
+        _time_rows(3), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="time", mini=False,
+    ))
+    assert pill.width() > 0
+    pill.restore_after_avoidance()
+    assert abs(pill.geometry().right() - original_right) <= 1
+    assert pill.y() == original_top
+
+
+def test_cursor_pill_extremely_short_host_shows_only_fitting_summary(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    parent.resize(260, 72)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    projection = build_cursor_presentation(
+        _time_rows(3), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="time", mini=False,
+    )
+    pill.set_display_projection(projection)
+    parent.show()
+    pill.show()
+    qapp.processEvents()
+    assert pill.layout_category() == "constrained"
+    assert pill.visible_channel_count() == 0
+    assert "+3 channels" in pill.detail_text()
+    assert "run_0 / Speed 1" not in pill.detail_text()
+    assert pill.height() <= pill.safe_rect().height()
+
+
+def test_cursor_pill_middle_elides_constrained_identity_but_tooltip_keeps_full_text(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    # This width still forces constrained rendering for the full identity, but
+    # leaves enough measured text space to prove both retained identity ends.
+    parent.resize(440, 210)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    source = "source_begin_" + "x" * 70 + "_source_end"
+    channel = "channel_begin_" + "y" * 70 + "_channel_end"
+    full_identity = f"{source} / {channel}"
+    projection = build_cursor_presentation((CursorDisplayChannel(
+        identity=(source, channel), source_label=source, channel_label=channel,
+        color="#1769e0", unit_suffix=" V", delta=1.0,
+        min_value=0.0, max_value=2.0, avg_value=1.0,
+    ),), CursorDisplayOptions(), cursor_mode="dual", x_mode="time", mini=False)
+    pill.set_display_projection(projection)
+    parent.show()
+    pill.show()
+    qapp.processEvents()
+    visible = pill.detail_text()
+    assert pill.layout_category() == "constrained"
+    assert full_identity not in visible
+    assert "..." in visible
+    displayed_identity = pill._middle_elide_label(
+        full_identity, int(pill._detail.maximumWidth() * 1.2)
+    )
+    assert displayed_identity in visible
+    assert displayed_identity.startswith(source[0])
+    assert displayed_identity.endswith(channel[-1])
+    assert pill._detail.toolTip().splitlines()[0] == full_identity
+    assert pill.width() <= pill.safe_rect().width()
+
+
+def test_cursor_display_popover_uses_native_popup_shell_chrome(qapp, qtbot):
+    popover = CursorDisplayPopover()
+    qtbot.addWidget(popover)
+    assert popover.windowFlags() & Qt.Popup
+    assert popover.windowFlags() & Qt.FramelessWindowHint
+    assert popover.windowFlags() & Qt.NoDropShadowWindowHint
+    assert popover.testAttribute(Qt.WA_TranslucentBackground)
 
 
 def test_time_card_settings_button_stays_beside_cursor_segment_and_emits_options(qapp, qtbot):

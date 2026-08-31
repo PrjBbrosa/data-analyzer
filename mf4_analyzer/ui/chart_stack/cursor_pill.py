@@ -279,7 +279,7 @@ class CursorPill(QFrame):
         self._display_projection = None
         self._display_layout_category = "natural"
         self._visible_channel_count = 0
-        self._avoidance_restore_geometry = None
+        self._avoidance_restore_anchor = None
         # Free-floating child pinned to the top-right corner. Repositioned from
         # adjustSize() (every content/width change funnels through it) and
         # resizeEvent, so it stays in the corner without depending on event
@@ -435,7 +435,7 @@ class CursorPill(QFrame):
         self._display_projection = None
         self._display_layout_category = "natural"
         self._visible_channel_count = 0
-        self._avoidance_restore_geometry = None
+        self._avoidance_restore_anchor = None
 
     def safe_rect(self):
         parent = self.parentWidget()
@@ -472,6 +472,32 @@ class CursorPill(QFrame):
             preserved_top=old_top if self._user_placed and had_geometry else None,
         )
 
+    def _middle_elide_label(self, text, width):
+        """Return a width-aware middle elision that keeps both identities visible."""
+        text = str(text or "")
+        metrics = self._detail.fontMetrics()
+        if metrics.horizontalAdvance(text) <= width:
+            return text
+        marker = "..."
+        if metrics.horizontalAdvance(marker) >= width:
+            return marker
+        # Preserve a meaningful source prefix and channel suffix when the
+        # available width permits it; these are the two identity cues users
+        # need to distinguish similar long labels.
+        head = min(14, max(1, len(text) - 1))
+        tail = min(12, max(1, len(text) - head))
+        if metrics.horizontalAdvance(f"{text[:head]}{marker}{text[-tail:]}") > width:
+            head = tail = 1
+        while head + tail < len(text):
+            candidate = f"{text[:head]}{marker}{text[-tail:]}"
+            if metrics.horizontalAdvance(candidate) > width:
+                break
+            if head <= tail:
+                head += 1
+            else:
+                tail += 1
+        return f"{text[:max(1, head - 1)]}{marker}{text[-max(1, tail - 1):]}"
+
     def _apply_display_projection(self, category, count):
         from .cursor_display import render_cursor_presentation
 
@@ -479,10 +505,18 @@ class CursorPill(QFrame):
         self._display_layout_category = category
         self._visible_channel_count = min(count, len(projection.blocks))
         self._detail.setWordWrap(category == "constrained")
+        header_overrides = None
+        if category == "constrained":
+            header_width = max(20, int(self._detail.maximumWidth() * 1.2))
+            header_overrides = tuple(
+                self._middle_elide_label(block.qualified_label, header_width)
+                for block in projection.blocks[:self._visible_channel_count]
+            )
         self._detail.setText(render_cursor_presentation(
             projection,
             layout_category=category,
             visible_count=self._visible_channel_count,
+            header_overrides=header_overrides,
         ))
         self._detail.setToolTip(projection.tooltip or "")
         self._detail.setVisible(bool(projection.blocks))
@@ -513,13 +547,13 @@ class CursorPill(QFrame):
         if category == "constrained":
             detail_width = max(20, safe.width() - 20)
             self._detail.setMaximumWidth(detail_width)
-            chosen = max(1, len(projection.blocks)) if projection.blocks else 0
-            for count in range(len(projection.blocks), 0, -1):
+            self.layout().setContentsMargins(10, 1, 10, 1)
+            chosen = 0
+            for count in range(len(projection.blocks), -1, -1):
                 self._apply_display_projection("constrained", count)
                 if self.sizeHint().height() <= safe.height():
                     chosen = count
                     break
-                chosen = 1
             self._apply_display_projection("constrained", chosen)
             target = self.sizeHint()
             self.resize(
@@ -528,6 +562,7 @@ class CursorPill(QFrame):
             )
         else:
             self._detail.setMaximumWidth(16777215)
+            self.layout().setContentsMargins(10, 7, 10, 8)
             self._apply_display_projection("natural", len(projection.blocks))
 
         if preserved_right is not None:
@@ -548,8 +583,8 @@ class CursorPill(QFrame):
         padded = obstacle.adjusted(-gap, -gap, gap, gap)
         if not self.geometry().intersects(padded):
             return
-        if self._avoidance_restore_geometry is None:
-            self._avoidance_restore_geometry = QRect(self.geometry())
+        if self._avoidance_restore_anchor is None:
+            self._avoidance_restore_anchor = (self.geometry().right(), self.y())
         safe = self.safe_rect()
         left_x = padded.left() - self.width() - 1
         right_x = padded.right() + 1
@@ -574,12 +609,15 @@ class CursorPill(QFrame):
         self.avoid_rect(QRect(top_left, bottom_right), gap=gap)
 
     def restore_after_avoidance(self):
-        if self._avoidance_restore_geometry is None:
+        if self._avoidance_restore_anchor is None:
             return
-        restore = self._avoidance_restore_geometry
-        self._avoidance_restore_geometry = None
-        self.move(restore.topLeft())
-        self._clamp_to_safe_rect()
+        right, top = self._avoidance_restore_anchor
+        self._avoidance_restore_anchor = None
+        safe = self.safe_rect()
+        x = int(right) - self.width() + 1
+        x = max(safe.left(), min(x, safe.right() - self.width() + 1))
+        y = max(safe.top(), min(int(top), safe.bottom() - self.height() + 1))
+        self.move(x, y)
 
     # ---- drag handling ----
     def mousePressEvent(self, e):

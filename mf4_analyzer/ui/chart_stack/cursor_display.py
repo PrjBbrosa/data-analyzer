@@ -79,6 +79,7 @@ class CursorDisplayChannel:
     channel_label: str
     color: str = "#111827"
     unit_suffix: str = ""
+    current_value: float | None = None
     delta: float | None = None
     min_value: float | None = None
     max_value: float | None = None
@@ -141,7 +142,12 @@ def _formatted(value, unit="") -> str:
         return f"{value}{unit}"
 
 
-def _time_rows(channel, options, mini):
+def _time_rows(channel, options, cursor_mode, mini):
+    if cursor_mode == "single":
+        row = CursorDisplayRow(
+            "Value", _formatted(channel.current_value, channel.unit_suffix)
+        )
+        return (row,), (row,)
     visible = [CursorDisplayRow("Δ", _formatted(channel.delta, channel.unit_suffix))]
     tooltip = list(visible)
     for label, attr in enabled_value_fields(options):
@@ -179,28 +185,50 @@ def _custom_rows(channel, options, cursor_mode, mini):
     return tuple(visible), tuple(tooltip)
 
 
-def _block_html(block: CursorDisplayBlock, *, constrained: bool) -> str:
+def _block_html(
+    block: CursorDisplayBlock,
+    *,
+    constrained: bool,
+    header_override: str | None = None,
+) -> str:
     color = escape(block.color or "#111827", quote=True)
-    header = escape(block.qualified_label)
+    header = escape(header_override or block.qualified_label)
     out = [
         '<table cellspacing="0" cellpadding="0" style="font-size:11px;">',
         f'<tr><td colspan="8" style="color:{color};font-weight:600;padding:2px 0;">{header}</td></tr>',
     ]
     if constrained:
+        pending = []
+
+        def append_metric_pair(rows):
+            values = " · ".join(
+                f'<span style="color:#94a3b8;">{escape(row.label)}</span> '
+                f'<span style="color:{color};font-family:Consolas,monospace;">'
+                f'{escape(row.value)}</span>'
+                for row in rows
+            )
+            out.append(
+                '<tr><td colspan="4" style="padding-right:4px;">'
+                f'{values}</td></tr>'
+            )
+
         for row in block.visible_rows:
             if not row.value:
+                if pending:
+                    append_metric_pair(pending)
+                    pending = []
                 out.append(
                     '<tr>'
-                    f'<td colspan="2" style="color:#94a3b8;">{escape(row.label)}</td>'
+                    f'<td colspan="4" style="color:#94a3b8;">{escape(row.label)}</td>'
                     '</tr>'
                 )
                 continue
-            out.append(
-                '<tr>'
-                f'<td style="color:#94a3b8;padding-right:8px;">{escape(row.label)}</td>'
-                f'<td style="color:{color};font-family:Consolas,monospace;">{escape(row.value)}</td>'
-                '</tr>'
-            )
+            pending.append(row)
+            if len(pending) == 2:
+                append_metric_pair(pending)
+                pending = []
+        if pending:
+            append_metric_pair(pending)
     else:
         out.append('<tr>')
         for row in block.visible_rows:
@@ -225,6 +253,7 @@ def render_cursor_presentation(
     *,
     layout_category: str | None = None,
     visible_count: int | None = None,
+    header_overrides: tuple[str, ...] | None = None,
 ) -> str:
     category = layout_category or projection.layout_category
     constrained = category == "constrained"
@@ -235,7 +264,14 @@ def render_cursor_presentation(
     for index, block in enumerate(shown):
         if index:
             parts.append(f'<div style="height:{gap};"></div>')
-        parts.append(_block_html(block, constrained=constrained))
+        header = (
+            header_overrides[index]
+            if header_overrides is not None and index < len(header_overrides)
+            else None
+        )
+        parts.append(_block_html(
+            block, constrained=constrained, header_override=header
+        ))
     omitted = len(projection.blocks) - len(shown)
     if omitted:
         parts.append(
@@ -282,7 +318,7 @@ def build_cursor_presentation(
         if x_mode == "custom":
             visible, tooltip = _custom_rows(channel, options, cursor_mode, mini)
         else:
-            visible, tooltip = _time_rows(channel, options, mini)
+            visible, tooltip = _time_rows(channel, options, cursor_mode, mini)
         if not visible:
             continue
         blocks.append(CursorDisplayBlock(
@@ -328,8 +364,13 @@ class CursorDisplayPopover(QFrame):
     )
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
+        super().__init__(
+            parent,
+            Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
+        )
         self.setObjectName("cursorDisplayPopover")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setMinimumWidth(252)
         layout = QVBoxLayout(self)

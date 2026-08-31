@@ -248,13 +248,11 @@ def _format_time_dual_block(
     for label, attr in _enabled_cursor_value_fields(options):
         parts.append(
             f'<tr><td style="{lab}">{label}</td>'
-            f'<td style="{cell}" align="right">{values[attr]:.4g}{escape(unit_suffix)}</td>'
-            '<td colspan="2"></td></tr>'
+            f'<td style="{cell}" align="right">{values[attr]:.4g}{escape(unit_suffix)}</td></tr>'
         )
     parts.append(
         f'<tr><td style="{lab}">△</td>'
-        f'<td style="{cell}" align="right">{delta:.4g}{escape(unit_suffix)}</td>'
-        '<td colspan="2"></td></tr>'
+        f'<td style="{cell}" align="right">{delta:.4g}{escape(unit_suffix)}</td></tr>'
     )
 
 
@@ -295,15 +293,13 @@ def _format_custom_x_dual_block(parts, *, index, row, options=None):
             )
             continue
         parts.append(
-            f'<tr><td style="{lab}">{escape(label)}</td>'
-            '<td colspan="3"></td></tr>'
+            f'<tr><td colspan="4" style="{lab}">{escape(label)}</td></tr>'
         )
         for value_label, attr in enabled:
             parts.append(
-                f'<tr><td style="{lab}"></td>'
-                f'<td style="{cell}" align="right">{value_label} '
-                f'{getattr(branch, attr):.4g}{escape(unit)}</td>'
-                '<td colspan="2"></td></tr>'
+                f'<tr><td style="{lab}">{escape(label)} {value_label}</td>'
+                f'<td style="{cell}" align="right">'
+                f'{getattr(branch, attr):.4g}{escape(unit)}</td></tr>'
             )
     if row.status and row.branches:
         parts.append(
@@ -356,18 +352,31 @@ def _format_dual_mini_html(rows, options=None):
             name = str(getattr(row, "channel_name", "") or "")
             if ']' in name and name.startswith('['):
                 name = name.split(']', 1)[-1].strip()
-            parts.append(
-                f'<tr><td style="padding-top:{top_pad};">'
-                f'<span style="color:{color};">●</span></td>'
-                f'<td style="padding-left:4px; color:{color}; font-weight:600; '
-                f'padding-top:{top_pad};">{escape(name)}</td>'
-                f'<td></td></tr>'
-            )
-            if row.status and not getattr(row, "branches", ()):
+            if options is None:
                 parts.append(
-                    f'<tr><td></td><td colspan="2" style="padding-left:4px; '
-                    f'color:#94a3b8;">{escape(row.status)}</td></tr>'
+                    f'<tr><td style="padding-top:{top_pad};">'
+                    f'<span style="color:{color};">●</span></td>'
+                    f'<td style="padding-left:4px; color:{color}; font-weight:600; '
+                    f'padding-top:{top_pad};">{escape(name)}</td>'
+                    f'<td></td></tr>'
                 )
+            else:
+                parts.append(
+                    f'<tr><td colspan="3" style="color:{color}; font-weight:600; '
+                    f'padding-top:{top_pad};"><span style="color:{color};">●</span> '
+                    f'{escape(name)}</td></tr>'
+                )
+            if row.status and not getattr(row, "branches", ()):
+                if options is None:
+                    parts.append(
+                        f'<tr><td></td><td colspan="2" style="padding-left:4px; '
+                        f'color:#94a3b8;">{escape(row.status)}</td></tr>'
+                    )
+                else:
+                    parts.append(
+                        f'<tr><td colspan="3" style="padding-left:4px; '
+                        f'color:#94a3b8;">{escape(row.status)}</td></tr>'
+                    )
                 continue
             unit = getattr(row, "unit_suffix", "") or ""
             enabled = _enabled_cursor_value_fields(options)
@@ -384,17 +393,35 @@ def _format_dual_mini_html(rows, options=None):
                         f'{value_label}&nbsp;{getattr(branch, attr):.4g}'
                         f'{escape(unit)}'
                     )
-                parts.append(
-                    f'<tr><td></td>'
-                    f'<td style="padding-left:4px; color:{color};">{escape(branch.branch_label)}</td>'
-                    f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT}">'
-                    f'{value_html}</td></tr>'
-                )
+                if options is None:
+                    parts.append(
+                        f'<tr><td></td>'
+                        f'<td style="padding-left:4px; color:{color};">{escape(branch.branch_label)}</td>'
+                        f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT}">'
+                        f'{value_html}</td></tr>'
+                    )
+                elif value_html:
+                    parts.append(
+                        f'<tr><td colspan="3" style="padding-left:4px; color:{color}; '
+                        f'{_MINI_VALUE_FONT}">{escape(branch.branch_label)} '
+                        f'{value_html}</td></tr>'
+                    )
+                else:
+                    parts.append(
+                        f'<tr><td colspan="3" style="padding-left:4px; color:{color};">'
+                        f'{escape(branch.branch_label)}</td></tr>'
+                    )
             if row.status and getattr(row, "branches", ()):
-                parts.append(
-                    f'<tr><td></td><td colspan="2" style="padding-left:4px; '
-                    f'color:#94a3b8;">{escape(row.status)}</td></tr>'
-                )
+                if options is None:
+                    parts.append(
+                        f'<tr><td></td><td colspan="2" style="padding-left:4px; '
+                        f'color:#94a3b8;">{escape(row.status)}</td></tr>'
+                    )
+                else:
+                    parts.append(
+                        f'<tr><td colspan="3" style="padding-left:4px; '
+                        f'color:#94a3b8;">{escape(row.status)}</td></tr>'
+                    )
         parts.append('</table>')
         return ''.join(parts)
 
