@@ -95,6 +95,20 @@ class TestAxisGroupModel:
         w.merge_axis_group([("f1", "a"), ("f1", "b")])
         assert w._axis_group_menu_plan([("f1", "a"), ("f1", "b")]) == (True, True)
 
+    def test_restored_group_uses_normal_badge_and_split_action(self, qapp):
+        w = MultiFileChannelWidget()
+        w.set_restored_axis_group_projection({
+            '["f1","a"]': "window-0-axis-2",
+        })
+
+        assert w.axis_group_for("f1", "a") == "window-0-axis-2"
+        assert w._axis_group_menu_plan([("f1", "a")]) == (False, True)
+
+        w.split_axis_group([("f1", "a")])
+
+        assert w.axis_group_for("f1", "a") is None
+        assert w.restored_axis_group_projection() == {}
+
     def test_collect_selected_channel_keys_then_merge(self, qapp):
         # 直接驱动数据模型，模拟 _on_context_menu 收集到的 sel_keys → 合并
         w = MultiFileChannelWidget()

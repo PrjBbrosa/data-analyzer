@@ -219,6 +219,7 @@ lesson by default.
 | [View Restore Range And Ticks Need The Full Transaction](view-restore-range-and-ticks-need-full-transaction.md) | Changing TimeDomain View restore, overlay `set_tick_density()`, WWT `native_ticks`, or `_repin_overlay_channel_ticks()`. | See lesson |
 | [Overlay Right Axis Columns Need A Post-Tick Realize](overlay-right-axis-columns-need-post-tick-realize.md) | Changing TimeDomain overlay right Y-axes, View restore, `_settle_layout()`, overlay `setWidth`, or PlotItem extra columns. | See lesson |
 | [WWT Exact Bindings Must Not Pin Global Custom X](wwt-exact-binding-does-not-pin-global-custom-x.md) | Changing WWT View proposals, curve bindings, or the Inspector custom-X | See lesson |
+| [WWT Initial Axis Groups Stay Ordinary And Editable](wwt-initial-axis-groups-stay-ordinary-editable.md) | Importing or restoring WWT-derived initial axis groups in the shared | See lesson |
 
 ## Selection Rules
 

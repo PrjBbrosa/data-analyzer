@@ -2342,6 +2342,11 @@ class MultiFileChannelWidget(QWidget):
             del self._files[fid]
         for k in [k for k in self._axis_groups if k[0] == fid]:
             del self._axis_groups[k]
+        self._restored_axis_group_projection = {
+            key: group
+            for key, group in self._restored_axis_group_projection.items()
+            if key[0] != str(fid)
+        }
         self._hidden_channels = {
             key for key in self._hidden_channels if key[0] != fid
         }
@@ -2658,7 +2663,10 @@ class MultiFileChannelWidget(QWidget):
 
     # ---- overlay shared-axis groups -------------------------------------
     def axis_group_for(self, fid, ch):
-        return self._axis_groups.get((str(fid), str(ch)))
+        key = (str(fid), str(ch))
+        return self._axis_groups.get(
+            key, self._restored_axis_group_projection.get(key)
+        )
 
     def _new_axis_group_id(self):
         self._axis_group_seq += 1
@@ -2681,6 +2689,7 @@ class MultiFileChannelWidget(QWidget):
                 if g in fold:
                     self._axis_groups[k] = gid
         for k in keys:
+            self._restored_axis_group_projection.pop(k, None)
             self._axis_groups[k] = gid
         self._prune_axis_groups()
         self.axis_groups_changed.emit()
@@ -2693,6 +2702,9 @@ class MultiFileChannelWidget(QWidget):
             k = (str(f), str(c))
             if k in self._axis_groups:
                 del self._axis_groups[k]
+                changed = True
+            if k in self._restored_axis_group_projection:
+                del self._restored_axis_group_projection[k]
                 changed = True
         if changed:
             self._prune_axis_groups()
@@ -2725,12 +2737,13 @@ class MultiFileChannelWidget(QWidget):
 
     def checked_axis_groups(self):
         checked = {(f, c) for (f, c, _color) in self.get_checked_channels()}
-        effective = self._effective_groups(self._axis_groups, checked)
-        effective.update({
+        effective = {
             key: group
             for key, group in self._restored_axis_group_projection.items()
             if key in checked
-        })
+        }
+        # Explicit ordinary Canvas edits win over the imported initial seed.
+        effective.update(self._effective_groups(self._axis_groups, checked))
         return effective
 
     def set_restored_axis_group_projection(self, raw_groups) -> None:
@@ -2776,7 +2789,10 @@ class MultiFileChannelWidget(QWidget):
         """(can_merge, can_split) for the right-click menu (Task 2)."""
         sel = [(str(f), str(c)) for (f, c) in sel_keys]
         can_merge = len(sel) >= 2
-        can_split = any(k in self._axis_groups for k in sel)
+        can_split = any(
+            k in self._axis_groups or k in self._restored_axis_group_projection
+            for k in sel
+        )
         return can_merge, can_split
 
     def _confirm_selected_channel_checks(self, count, state):

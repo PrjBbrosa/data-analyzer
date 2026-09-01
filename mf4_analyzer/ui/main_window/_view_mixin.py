@@ -20,6 +20,9 @@ from ..chart_stack.toolbar import DEFAULT_CHART_TICK_DENSITY
 from . import view_activation
 
 
+_MIN_RESTORED_X_DATA_FRACTION = 0.5
+
+
 class ViewMixin:
     """Domain mixin: the time-domain View system (named views + split panes).
 
@@ -445,16 +448,45 @@ class ViewMixin:
             empty(section_label='时域', view_name=state.name)
 
     def _restore_view_xlim(self, canvas, xlim):
-        """Restore an explicit View X range without closing the transaction.
+        """Restore a View X range only while it still frames current data.
 
-        ``ViewState.xlim`` is the user's committed viewport.  It must land
-        before Y/ticks and the one final settlement; treating it as a hint and
-        reframing against the data union changes a WWT import's first frame.
-        Home remains the ordinary data-union recovery path after restore.
+        An imported WWT range may intentionally include modest margins beyond
+        its data union, so strict containment is too strong.  A stale View or
+        project range must still be rejected before it can render an empty or
+        mostly-empty chart.  Keep a non-contained range only when at least half
+        of its visible span intersects the newly plotted data; otherwise frame
+        the ordinary data union.  Both paths leave final settlement to the
+        caller.
         """
         if xlim is None:
             return
-        canvas.restore_visible_xlim(xlim, flush=False)
+        try:
+            lo, hi = (float(value) for value in xlim)
+        except (TypeError, ValueError):
+            return
+
+        fits = getattr(self, "_preserved_xlim_fits_data", None)
+        frame = getattr(canvas, "frame_x_to_data", None)
+        keep = True
+        if callable(fits) and callable(frame):
+            keep = bool(fits(canvas, lo, hi))
+            if not keep:
+                union_getter = getattr(canvas, "get_data_x_union", None)
+                union = union_getter() if callable(union_getter) else None
+                if union is not None:
+                    union_lo, union_hi = (float(value) for value in union)
+                    width = hi - lo
+                    overlap = min(hi, union_hi) - max(lo, union_lo)
+                    keep = (
+                        isfinite(width)
+                        and width > 0.0
+                        and isfinite(overlap)
+                        and overlap / width >= _MIN_RESTORED_X_DATA_FRACTION
+                    )
+        if keep:
+            canvas.restore_visible_xlim((lo, hi), flush=False)
+        elif callable(frame):
+            frame()
 
     @staticmethod
     def _exceptional_initial_axis_ranges(state):

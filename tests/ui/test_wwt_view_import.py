@@ -151,6 +151,32 @@ def test_registered_y_may_keep_record_only_x_without_promoting_auxiliary_y(tmp_p
     assert proposals[0].state.axis_opts["x_axis"]["mode"] == "time"
 
 
+def test_cross_source_channel_xy_keeps_exact_curve_binding(tmp_path):
+    """Per-source Custom-X must not replace an explicitly cross-source X."""
+    loaded = load_wwt_document(
+        wwt.channel_xy_with_auxiliaries(tmp_path / "cross-source-x.wwt")
+    )
+    record_by_name = {record.name: record.index for record in loaded.document.records}
+    registered = RegisteredWwtSources(
+        owner_fid="f1",
+        fids=("f1", "f2"),
+        record_channels={
+            record_by_name[wwt.CHAN_X]: ("f1", wwt.CHAN_X),
+            record_by_name[wwt.CHAN_Y]: ("f2", wwt.CHAN_Y),
+        },
+    )
+
+    proposals = build_wwt_view_proposals(loaded.document, registered)
+
+    assert len(proposals) == 1
+    view = proposals[0].state
+    assert view.axis_opts["x_axis"]["mode"] == "time"
+    assert len(view.curve_bindings) == 1
+    binding = view.curve_bindings[0]
+    assert (binding.x_ref.fid, binding.x_ref.channel) == ("f1", wwt.CHAN_X)
+    assert (binding.y_ref.fid, binding.y_ref.channel) == ("f2", wwt.CHAN_Y)
+
+
 def test_two_registered_y_axes_are_not_joined_by_record_only_aux_axis(tmp_path):
     loaded = load_wwt_document(
         wwt.measurement_plus_record_only_tolerance(path=tmp_path / "axes.wwt")

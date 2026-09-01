@@ -271,10 +271,13 @@ def test_view_window_outside_its_data_is_reframed_not_blanked(
 
     # However it got there (stale project, re-entrant capture), the second
     # View now carries a window that lies past the end of its own recording.
-    window.view_manager.get(1).xlim = (118.41, 125.03)
-    window._switch_view(0)
-    qapp.processEvents()
-    window._switch_view(1)
+    # The stale window still overlaps the short recording, but would leave
+    # roughly three quarters of the chart blank if restored verbatim.
+    window.view_manager.get(1).xlim = (0.0, 185.0)
+    # Project restore and other direct applications do not pass through a
+    # switch that first captures/replaces the stale state.  Exercise that real
+    # boundary: the restore itself must reject a viewport outside the data.
+    window._apply_active_view(1)
     qapp.processEvents()
 
     assert _visible_channels(window.canvas_time) == ["L"]

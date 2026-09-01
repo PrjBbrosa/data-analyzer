@@ -297,7 +297,12 @@ def _ordinary_channel_record_indexes(
     channel_rows = [
         (row, y_ref, x_ref)
         for row, y_ref, x_ref in rows
-        if y_ref.kind == "channel" and x_ref.kind == "channel" and x_ref.channel
+        if (
+            y_ref.kind == "channel"
+            and x_ref.kind == "channel"
+            and x_ref.channel
+            and x_ref.fid == y_ref.fid
+        )
     ]
     x_channels = {str(x_ref.channel) for _row, _y_ref, x_ref in channel_rows}
     if len(x_channels) != 1:
