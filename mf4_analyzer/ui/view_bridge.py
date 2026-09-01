@@ -214,6 +214,11 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
     restore_axis_opts = getattr(window, "_restore_view_axis_opts", None)
     if callable(restore_axis_opts):
         restore_axis_opts(state.axis_opts)
+    restore_bound_x = getattr(
+        window, "_restore_curve_bound_xaxis_projection", None,
+    )
+    if callable(restore_bound_x):
+        restore_bound_x(state)
 
 
 def apply_view(state: ViewState, window) -> None:

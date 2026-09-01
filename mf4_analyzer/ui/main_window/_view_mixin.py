@@ -447,7 +447,9 @@ class ViewMixin:
         if callable(empty):
             empty(section_label='时域', view_name=state.name)
 
-    def _restore_view_xlim(self, canvas, xlim):
+    def _restore_view_xlim(
+        self, canvas, xlim, *, allow_partial_exact_data=False,
+    ):
         """Restore a View X range only while it still frames current data.
 
         An imported WWT range may intentionally include modest margins beyond
@@ -455,8 +457,11 @@ class ViewMixin:
         project range must still be rejected before it can render an empty or
         mostly-empty chart.  Keep a non-contained range only when at least half
         of its visible span intersects the newly plotted data; otherwise frame
-        the ordinary data union.  Both paths leave final settlement to the
-        caller.
+        the ordinary data union.  Exact curve bindings are different: their X
+        identity cannot silently switch to another source, and a WinWert first
+        frame may intentionally clip part of that exact data.  Such a range is
+        retained while it still has a real overlap.  Both paths leave final
+        settlement to the caller.
         """
         if xlim is None:
             return
@@ -477,12 +482,16 @@ class ViewMixin:
                     union_lo, union_hi = (float(value) for value in union)
                     width = hi - lo
                     overlap = min(hi, union_hi) - max(lo, union_lo)
-                    keep = (
-                        isfinite(width)
-                        and width > 0.0
-                        and isfinite(overlap)
-                        and overlap / width >= _MIN_RESTORED_X_DATA_FRACTION
-                    )
+                    if allow_partial_exact_data:
+                        keep = isfinite(overlap) and overlap > 0.0
+                    else:
+                        keep = (
+                            isfinite(width)
+                            and width > 0.0
+                            and isfinite(overlap)
+                            and overlap / width
+                            >= _MIN_RESTORED_X_DATA_FRACTION
+                        )
         if keep:
             canvas.restore_visible_xlim((lo, hi), flush=False)
         elif callable(frame):
@@ -570,7 +579,13 @@ class ViewMixin:
             # quality settlement spec §3.1): X, then Y, then ticks, and only
             # then a single settlement.  _restore_view_xlim keeps the
             # transaction open; settle_view_restore() below is what flushes.
-            self._restore_view_xlim(canvas, state.xlim)
+            self._restore_view_xlim(
+                canvas,
+                state.xlim,
+                allow_partial_exact_data=bool(
+                    getattr(state, "curve_bindings", None)
+                ),
+            )
             axis_opts = state.axis_opts or {}
             initial_axis_ranges = self._exceptional_initial_axis_ranges(state)
             canvas.restore_visible_ylims(
@@ -833,6 +848,9 @@ class ViewMixin:
     def _restore_view_axis_opts(self, axis_opts):
         axis_opts = axis_opts or {}
         top = self.inspector.top
+        clear_bound_x = getattr(top, "set_curve_bound_xaxis_summary", None)
+        if callable(clear_bound_x):
+            clear_bound_x()
 
         # The range widgets are shared with analysis sections.  Restoring a
         # Time View while FRF/FFT is on screen must not overwrite the
@@ -911,6 +929,43 @@ class ViewMixin:
         xt = tick_opts.get('x', default_x)
         yt = tick_opts.get('y', default_y)
         self._set_tick_density_controls_silent(xt, yt)
+
+    def _restore_curve_bound_xaxis_projection(self, state):
+        """Show exact curve-local X ownership as read-only Inspector state."""
+        bindings = list(getattr(state, "curve_bindings", None) or ())
+        if not bindings:
+            return
+        claimed_channels = {
+            (str(y_ref.fid), str(y_ref.channel))
+            for binding in bindings
+            if (
+                (y_ref := getattr(binding, "y_ref", None)) is not None
+                and getattr(y_ref, "kind", None) == "channel"
+                and getattr(y_ref, "fid", None) is not None
+                and getattr(y_ref, "channel", None)
+            )
+        }
+        ordinary_channels = {
+            (str(fid), str(channel))
+            for fid, channel in (getattr(state, "checked", None) or ())
+        } - claimed_channels
+        if ordinary_channels:
+            # Mixed Views still need their ordinary View-wide Custom-X; exact
+            # auxiliary rows do not own or disable that shared control.
+            return
+        top = self.inspector.top
+        projector = getattr(top, "set_curve_bound_xaxis_summary", None)
+        if not callable(projector):
+            return
+        axis_opts = getattr(state, "axis_opts", None) or {}
+        spec = CustomXAxisSpec.from_axis_opts(axis_opts.get("x_axis"))
+        label = str(spec.label or "")
+        old_label = top.edit_xlabel.blockSignals(True)
+        try:
+            top.set_xaxis_label(label)
+        finally:
+            top.edit_xlabel.blockSignals(old_label)
+        projector(f"文件内绑定 · {len(bindings)} 条曲线")
 
     def _applied_xaxis_opts(self):
         spec = getattr(self, '_custom_xaxis_spec', None)

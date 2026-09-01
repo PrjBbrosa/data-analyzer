@@ -684,6 +684,64 @@ def record_only_gap_curves(path=None) -> Path | bytes:
     return _emit(write_wwt_bytes(records, windows), path)
 
 
+def record_only_clipped_initial_view(path=None) -> Path | bytes:
+    """Record-only XY whose valid WinWert first frame clips the data union.
+
+    The imported viewport is ``-2.5..2.5`` while X reaches ``4.8535``.  This
+    mirrors the U-Can symmetry window without depending on a customer file:
+    WinWert intentionally shows a clipped first frame, and the ordinary Home
+    action remains available to frame the complete data union later.
+    """
+    aux = 7
+    clipped_x = np.array(
+        [0.0042724609375, 0.2, 0.8, 1.6, 2.5, 3.7, 4.853515625],
+        dtype=np.float64,
+    )
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=CHANNEL_N, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", CHAN_X, CHAN_X_UNIT, n=CHANNEL_N,
+            values=_linspace(CHAN_X_LO, CHAN_X_HI, CHANNEL_N),
+        ),
+        WwtRecordSpec(
+            "Real", CHAN_Y, CHAN_Y_UNIT, n=CHANNEL_N,
+            values=_linspace(CHAN_Y_LO, CHAN_Y_HI, CHANNEL_N),
+        ),
+        WwtRecordSpec("Zeit", "TimeClip", "s", n=aux, dt=DT, t0=T0),
+        WwtRecordSpec("Real", "Symmetry X", "Nm", n=aux, values=clipped_x),
+        WwtRecordSpec(
+            "Real", "Symmetry A", "kN", n=aux,
+            values=np.linspace(0.2, 15.6, aux, dtype=np.float64),
+        ),
+        WwtRecordSpec(
+            "Real", "Symmetry B", "kN", n=aux,
+            values=np.linspace(15.6, 0.2, aux, dtype=np.float64),
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=4,
+            x_axis=_axis_curve(
+                "Symmetry X [Nm]", -2.5, 2.5,
+                x_record_index=4, tick=0.5, grid=0.25,
+            ),
+            curves=(
+                _y_curve(
+                    5, "Symmetry A [kN]", 0.0, 18.0,
+                    x_record_index=4, tick=2.0, grid=1.0,
+                ),
+                _y_curve(
+                    6, "Symmetry B [kN]", 0.0, 18.0,
+                    x_record_index=4, tick=2.0, grid=1.0,
+                    selected=False,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
 def shared_axis_evaluation_before_owner(
     *, meas_n: int = CHANNEL_N, tol_n: int = AUX_N, path=None,
 ) -> Path | bytes:

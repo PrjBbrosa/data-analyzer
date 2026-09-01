@@ -374,6 +374,28 @@ class ViewManager(QObject):
         # Always emit so the host re-projects even when the index stays 0.
         self.active_changed.emit(0)
 
+    def reset_view_to_default(
+        self, idx: int, *, preserve_view_id: bool = True, emit: bool = True,
+    ) -> bool:
+        """Replace one View's contents without deleting its stable slot.
+
+        Partial file close uses this when a formerly source-backed View becomes
+        empty.  Keeping ``view_id`` preserves any UltraView reference while a
+        fresh state removes the old imported name, axes, ranges, filters,
+        bindings, remarks, and cursor intent that would contaminate a later
+        attachment.
+        """
+        if not self._is_valid_index(idx):
+            return False
+        previous = self.views[idx]
+        fresh = self._make(idx)
+        if preserve_view_id:
+            fresh.view_id = previous.view_id
+        self.views[idx] = fresh
+        if emit:
+            self.views_changed.emit()
+        return True
+
     def delete_view(self, idx: int) -> None:
         if len(self.views) <= 1 or not self._is_valid_index(idx):
             return

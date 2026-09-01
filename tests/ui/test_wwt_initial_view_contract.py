@@ -67,6 +67,47 @@ def test_wwt_first_frame_keeps_imported_ranges_with_generic_density(
     assert not hasattr(controller, "native_tick_policy")
 
 
+def test_record_only_wwt_first_frame_may_intentionally_clip_data_union(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """A committed WinWert first frame is not a stale carried viewport."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.record_only_clipped_initial_view(tmp_path / "record-only-clip.wwt")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(
+        window._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
+    )
+
+    window._load_one(str(path))
+    qapp.processEvents()
+
+    state = window.view_manager.get(window.view_manager.active)
+    assert state.checked == []
+    assert len(state.curve_bindings) == 2
+    assert all(
+        binding.y_ref.kind == "wwt_record" for binding in state.curve_bindings
+    )
+    assert state.xlim == (-2.5, 2.5)
+    assert window.canvas_time.get_data_x_union() == (
+        0.0042724609375, 4.853515625,
+    )
+    assert window.canvas_time.get_visible_xlim() == (-2.5, 2.5)
+    top = window.inspector.top
+    assert top.xaxis_mode() == "channel"
+    assert top.choice_xaxis.buttons()[1].text() == "曲线自带"
+    assert top._combo_xaxis_ch.currentText() == "文件内绑定 · 2 条曲线"
+    assert not top.choice_xaxis.isEnabled()
+    assert not top.btn_apply_xaxis.isEnabled()
+
+    window._capture_range_change_into_view(state, window.canvas_time)
+
+    assert top.choice_xaxis.buttons()[1].text() == "曲线自带"
+    assert top._combo_xaxis_ch.currentText() == "文件内绑定 · 2 条曲线"
+    assert not top.choice_xaxis.isEnabled()
+
+
 def test_channel_backed_wwt_filter_builds_normal_companion(
     qapp, qtbot, tmp_path, monkeypatch,
 ):

@@ -554,8 +554,32 @@ class ChannelScopeMixin:
 
     def _remove_file_from_all_time_views(self, fid):
         removed = {str(fid)}
-        for state in self.view_manager.views:
+        affected_view_ids = set(self._time_view_ids_using_fids(removed))
+        reset_indexes = []
+        reset_empty = not any(
+            getattr(self, flag, False)
+            for flag in ("_restoring_project", "_opening_project", "_applying_view")
+        )
+        for idx, state in enumerate(list(self.view_manager.views)):
             self._filter_time_view_state_for_removed_fids(state, removed)
+            if not reset_empty:
+                continue
+            view_id = str(getattr(state, "view_id", "") or "")
+            if view_id not in affected_view_ids:
+                continue
+            if (
+                state.attached_file_ids
+                or state.checked
+                or getattr(state, "curve_bindings", None)
+            ):
+                continue
+            reset_indexes.append(idx)
+        for idx in reset_indexes:
+            self.view_manager.reset_view_to_default(
+                idx, preserve_view_id=True, emit=False,
+            )
+        if reset_indexes:
+            self.view_manager.views_changed.emit()
 
     def _remove_channels_from_all_time_views(self, fid, channels):
         """Drop deleted channel references from every persisted TimeDomain View."""

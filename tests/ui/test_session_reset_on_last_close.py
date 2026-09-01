@@ -173,6 +173,52 @@ def test_closing_one_of_two_files_keeps_custom_x_and_extra_views(
     assert win.inspector.filter_panel.is_enabled() is True
 
 
+def test_close_one_wwt_file_resets_only_its_now_empty_view(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from tests._helpers import wwt_factory as wwt
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(
+        win._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
+    )
+    first_path = wwt.rack_travel_force_initial_view(tmp_path / "first.wwt")
+    second_path = wwt.rack_travel_force_initial_view(tmp_path / "second.wwt")
+    win._load_one(str(first_path))
+    win._load_one(str(second_path))
+    qapp.processEvents()
+
+    assert len(win.view_manager.views) == 2
+    first_fid = next(
+        fid for fid, data in win.files.items()
+        if str(data.filepath) == str(first_path)
+    )
+    first_before, second_before = win.view_manager.views
+    first_view_id = first_before.view_id
+    second_view_id = second_before.view_id
+    assert first_before.name.startswith("WinWert")
+    assert second_before.name.startswith("WinWert")
+    win.view_manager.set_active(0)
+    qapp.processEvents()
+
+    win._close(first_fid, force=True)
+    qapp.processEvents()
+
+    first_after, second_after = win.view_manager.views
+    assert first_after.view_id == first_view_id
+    assert first_after.name == "View 1"
+    assert is_reusable_blank_view(first_after)
+    assert second_after.view_id == second_view_id
+    assert second_after.name == second_before.name
+    assert second_after.attached_file_ids == second_before.attached_file_ids
+    assert win.inspector.top.xaxis_mode() == TIME_MODE
+    assert win._custom_xaxis.spec == CustomXAxisSpec()
+    assert win.inspector.top.choice_xaxis.buttons()[1].text() == "指定通道"
+    assert win.inspector.top.choice_xaxis.isEnabled()
+    assert win.inspector.top.btn_apply_xaxis.isEnabled()
+
+
 @pytest.mark.parametrize("flag", ("_restoring_project", "_opening_project", "_applying_view"))
 def test_empty_workspace_reset_skipped_while_restore_guards_hold(
     qapp, qtbot, flag,

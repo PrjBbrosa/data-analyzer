@@ -101,6 +101,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "WWT WinWert 视图",
                 sub="按 WinWert 窗口创建时域 View 并绘图，不会自动加入 UltraView 或改变 Board；之后可正常使用 TraceLab Canvas。需要总览时手动把 View 加入 UltraView，再用智能排版；选择「仅加载数据」则不创建 View。",
             ),
+            QuickRow(
+                "WinWert 曲线自带横坐标",
+                sub="record-only 或独立 XY 曲线在右侧显示「曲线自带」，使用文件内各自绑定的 X；原始首帧可以裁剪完整数据，点 Home 仍可查看全部。",
+            ),
             QuickRow("BLF / CANoe ASC 报文解码", sub="选择 DBC；界面会标注「完整匹配」或「抽样解码」。ASC 进度只增不减。"),
             QuickRow(
                 "把文件加入当前 View",

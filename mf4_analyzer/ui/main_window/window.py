@@ -1772,11 +1772,15 @@ class MainWindow(
 
     def _snapshot_xaxis_controls(self):
         top = self.inspector.top
+        bound_summary = getattr(top, "curve_bound_xaxis_summary", None)
         return {
             "mode": top.xaxis_mode(),
             "channel_data": top._combo_xaxis_ch.currentData(),
             "label": top.xaxis_label(),
             "auto_label": getattr(top, "_xlabel_auto_from_channel", False),
+            "curve_bound_summary": (
+                bound_summary() if callable(bound_summary) else ""
+            ),
         }
 
     def _restore_xaxis_controls_snapshot(self, snapshot):
@@ -1809,6 +1813,9 @@ class MainWindow(
         update_xaxis_row = getattr(top, '_update_xaxis_channel_row_visible', None)
         if callable(update_xaxis_row):
             update_xaxis_row(top.combo_xaxis.currentIndex())
+        restore_bound = getattr(top, "set_curve_bound_xaxis_summary", None)
+        if callable(restore_bound) and snapshot.get("curve_bound_summary"):
+            restore_bound(snapshot["curve_bound_summary"])
 
     def _set_tick_density_controls_silent(self, xt, yt):
         xt = int(xt)
@@ -2937,6 +2944,11 @@ class MainWindow(
         return cands
 
     def _refresh_xaxis_candidates(self):
+        bound_summary = getattr(
+            self.inspector.top, "curve_bound_xaxis_summary", None,
+        )
+        if callable(bound_summary) and bound_summary():
+            return
         self.inspector.top.set_xaxis_candidates(self._build_xaxis_candidates())
 
     def _validate_custom_xaxis_source(self):

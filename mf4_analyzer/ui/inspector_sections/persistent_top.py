@@ -52,6 +52,8 @@ class PersistentTop(QWidget):
     _DROP_HINT_DISMISSED_KEY = (
         "inspector/persistent_top/xaxis_drop_hint_dismissed"
     )
+    _XAXIS_CHANNEL_LABEL = "指定通道"
+    _XAXIS_BOUND_LABEL = "曲线自带"
 
     xaxis_apply_requested = pyqtSignal()
     xaxis_drop_hint_dismissed = pyqtSignal()
@@ -133,8 +135,11 @@ class PersistentTop(QWidget):
         _configure_form(fl)
         self._xaxis_form = fl
         self._xlabel_auto_from_channel = False
+        self._curve_bound_xaxis_summary = ""
         self.combo_xaxis = QComboBox()
-        self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
+        self.combo_xaxis.addItems([
+            '自动(时间)', self._XAXIS_CHANNEL_LABEL,
+        ])
         self.choice_xaxis = SegmentedChoice()
         self.choice_xaxis.bind(self.combo_xaxis)
         fl.addRow("来源:", _fit_field(self.choice_xaxis))
@@ -423,6 +428,44 @@ class PersistentTop(QWidget):
 
     def set_xaxis_mode(self, mode):
         self.combo_xaxis.setCurrentIndex(1 if mode == 'channel' else 0)
+
+    def set_curve_bound_xaxis_summary(self, summary=None):
+        """Project exact per-curve X ownership without inventing a global X.
+
+        ``curve_bindings`` can give different curves different X records, so
+        neither 自动(时间) nor one editable ordinary channel is truthful.  The
+        existing second segment becomes a read-only ``曲线自带`` projection;
+        clearing the projection restores the ordinary editable control.
+        """
+        text = str(summary or "").strip()
+        bound = bool(text)
+        self._curve_bound_xaxis_summary = text
+        tip = hints.XAXIS_CURVE_BOUND_HINT if bound else ""
+        old_mode = self.combo_xaxis.blockSignals(True)
+        try:
+            self.combo_xaxis.setItemText(
+                1,
+                self._XAXIS_BOUND_LABEL if bound
+                else self._XAXIS_CHANNEL_LABEL,
+            )
+            self.combo_xaxis.setItemData(1, tip, Qt.ToolTipRole)
+            if bound:
+                self.set_xaxis_candidates(((text, None),))
+                self.combo_xaxis.setCurrentIndex(1)
+        finally:
+            self.combo_xaxis.blockSignals(old_mode)
+        self.choice_xaxis.refresh_from_bound_combo()
+        self.choice_xaxis.setEnabled(not bound)
+        self.choice_xaxis.setToolTip(tip)
+        self._combo_xaxis_ch.setEnabled(False if bound else self.xaxis_mode() == 'channel')
+        self._combo_xaxis_ch.setToolTip(tip)
+        self.edit_xlabel.setEnabled(not bound)
+        self.btn_apply_xaxis.setEnabled(not bound)
+        self.btn_apply_xaxis.setToolTip(tip)
+        self._update_xaxis_channel_row_visible(self.combo_xaxis.currentIndex())
+
+    def curve_bound_xaxis_summary(self):
+        return self._curve_bound_xaxis_summary
 
     def xaxis_channel_data(self):
         """Return ``(resolver, fid, channel)`` tagged triple or ``None``."""

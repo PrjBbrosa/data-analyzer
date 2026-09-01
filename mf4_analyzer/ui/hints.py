@@ -30,6 +30,9 @@ HINT_MAX_WIDTH = 18
 # 「应用」 button and can be dismissed into that footer.
 XAXIS_DROP_PANEL_HINT = "可直接把通道拖到图底横坐标带，替换当前横坐标"
 XAXIS_DROP_PANEL_DISMISSED_TOAST = "已收藏到左下角帮助提示"
+XAXIS_CURVE_BOUND_HINT = (
+    "当前曲线使用文件内各自绑定的横坐标，不是自动时间轴"
+)
 
 
 def hint_display_width(text):
