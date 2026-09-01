@@ -14,6 +14,8 @@ from mf4_analyzer.ui.time_curve_bindings import (
     TimeDataRef,
     bound_time_plot_rows,
     filter_curve_bindings,
+    migrate_legacy_channel_bindings,
+    prune_channel_axis_groups_for_live_files,
     prune_hidden_curve_binding_ids,
     remap_curve_bindings,
     resolve_time_curve_binding,
@@ -249,6 +251,120 @@ def _owner(
     )
 
 
+def test_legacy_channel_binding_migrates_only_after_live_custom_x_proof():
+    ordinary = _channel_binding()
+    record_only = _record_binding(binding_id="record-only")
+    state = ViewState(
+        name="Legacy WWT",
+        tab_color="#2d7ff9",
+        axis_opts={
+            "x_axis": {
+                "mode": "channel",
+                "resolver": "per_source_name",
+                "fid": None,
+                "channel": "ChanX",
+                "label": "Travel",
+            },
+        },
+        curve_bindings=[ordinary, record_only],
+        hidden_curve_binding_ids=[ordinary.binding_id, record_only.binding_id],
+    )
+    files = {
+        "f1": _owner(
+            records={
+                1: np.linspace(-2.0, 2.0, 8),
+                2: np.linspace(0.0, 1.0, 8),
+            },
+        ),
+    }
+
+    migrated = migrate_legacy_channel_bindings(state, files)
+
+    assert migrated == [ordinary.binding_id]
+    assert state.checked == [("f1", "ChanY")]
+    assert state.colors[("f1", "ChanY")] == ordinary.color
+    assert state.ylims['["f1","ChanY"]'] == ordinary.y_range
+    assert state.axis_opts["channel_axis_groups"] == {
+        '["f1","ChanY"]': ordinary.axis_id,
+    }
+    assert state.curve_bindings == [record_only]
+    assert state.hidden_curve_binding_ids == [record_only.binding_id]
+
+
+def test_legacy_channel_binding_stays_exact_when_current_x_is_not_identical():
+    binding = _channel_binding(x_channel="OtherX")
+    state = ViewState(
+        name="Legacy WWT",
+        tab_color="#2d7ff9",
+        axis_opts={
+            "x_axis": {
+                "mode": "channel",
+                "resolver": "per_source_name",
+                "fid": None,
+                "channel": "ChanX",
+                "label": "Travel",
+            },
+        },
+        curve_bindings=[binding],
+    )
+    files = {"f1": _owner(extra={"OtherX": np.arange(8, dtype=float)})}
+
+    assert migrate_legacy_channel_bindings(state, files) == []
+    assert state.checked == []
+    assert state.curve_bindings == [binding]
+
+
+def test_legacy_channel_binding_stays_exact_when_another_binding_claims_its_y():
+    ordinary = _channel_binding(binding_id="ordinary")
+    exceptional = TimeCurveBinding(
+        binding_id="exceptional",
+        y_ref=ordinary.y_ref,
+        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=1),
+        display_name="ChanY exact",
+        unit="N",
+        color="#f00",
+        axis_id="axis-exact",
+        y_range=(-1.0, 1.0),
+    )
+    state = ViewState(
+        name="Legacy WWT",
+        tab_color="#2d7ff9",
+        axis_opts={
+            "x_axis": {
+                "mode": "channel",
+                "resolver": "per_source_name",
+                "fid": None,
+                "channel": "ChanX",
+            },
+        },
+        curve_bindings=[ordinary, exceptional],
+    )
+    files = {"f1": _owner(records={1: np.linspace(-1.0, 1.0, 8)})}
+
+    assert migrate_legacy_channel_bindings(state, files) == []
+    assert state.checked == []
+    assert state.curve_bindings == [ordinary, exceptional]
+
+
+def test_live_restore_prunes_axis_groups_for_missing_channels_only():
+    state = ViewState(
+        name="Legacy WWT",
+        tab_color="#2d7ff9",
+        axis_opts={
+            "channel_axis_groups": {
+                '["f1","ChanY"]': "axis-y",
+                '["f1","gone"]': "axis-gone",
+            },
+        },
+    )
+
+    prune_channel_axis_groups_for_live_files(state, {"f1": _owner()})
+
+    assert state.axis_opts["channel_axis_groups"] == {
+        '["f1","ChanY"]': "axis-y",
+    }
+
+
 def _stub_wwt_ui(mw, monkeypatch, accept=True):
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: accept)
     monkeypatch.setattr(
@@ -264,7 +380,7 @@ def _load_synthetic_wwt(mw, monkeypatch, path):
 
 
 def test_missing_record_x_does_not_fallback_to_time_y(qapp, tmp_path, monkeypatch):
-    """RED: a failed record X must not be replaced by a normal Time-Y row."""
+    """An explicitly exceptional X failure must not fall back to Time-Y."""
     from dataclasses import replace
 
     from mf4_analyzer.ui.main_window import MainWindow
@@ -276,15 +392,16 @@ def test_missing_record_x_does_not_fallback_to_time_y(qapp, tmp_path, monkeypatc
     qapp.processEvents()
 
     view = mw.view_manager.get(mw.view_manager.active)
-    binding = next(item for item in view.curve_bindings if item.y_ref.kind == "channel")
+    assert view.curve_bindings == []
+    y_fid, y_channel = view.checked[0]
+    binding = _channel_binding(fid=y_fid, y_channel=y_channel)
     broken = replace(
         binding,
         x_ref=TimeDataRef(
-            kind="wwt_record", fid=binding.y_ref.fid, record_index=999,
+            kind="wwt_record", fid=y_fid, record_index=999,
         ),
     )
     view.curve_bindings = [broken]
-    y_fid, y_channel = binding.y_ref.fid, binding.y_ref.channel
     assert mw.channel_list.get_file_data(y_fid) is not None
 
     bind_result = bound_time_plot_rows([broken], mw.files)
@@ -309,8 +426,10 @@ def test_missing_record_x_does_not_fallback_to_time_y(qapp, tmp_path, monkeypatc
     assert time_y == [], [row[0] for row in result.rows]
 
 
-def test_unchecking_channel_backed_y_hides_binding(qapp, tmp_path, monkeypatch):
-    """RED: channel-backed Y must not plot when it is not in the View checked set."""
+def test_unchecking_ordinary_channel_backed_y_follows_view_checked_set(
+    qapp, tmp_path, monkeypatch,
+):
+    """Ordinary WWT channels use the same checked path as a normal View."""
     from mf4_analyzer.ui.main_window import MainWindow
     from tests._helpers import wwt_factory as wwt
 
@@ -320,34 +439,24 @@ def test_unchecking_channel_backed_y_hides_binding(qapp, tmp_path, monkeypatch):
     qapp.processEvents()
 
     view = mw.view_manager.get(mw.view_manager.active)
-    binding = next(item for item in view.curve_bindings if item.y_ref.kind == "channel")
-    assert binding.y_ref.channel == wwt.CHAN_Y
-    y_key = (binding.y_ref.fid, binding.y_ref.channel)
-    persisted = list(view.curve_bindings)
-    rows, _issues, _consumed = bound_time_plot_rows(view.curve_bindings, mw.files)
-    assert any(row[6] == y_key[0] and wwt.CHAN_Y in str(row[0]) for row in rows)
+    assert view.curve_bindings == []
+    y_key = view.checked[0]
+    assert y_key[1] == wwt.CHAN_Y
 
     hidden = mw._build_time_plot_data(checked=[], range_enabled=False)
     assert hidden.rows == []
     assert y_key not in hidden.successful_channel_keys
-    assert view.curve_bindings == persisted
 
     shown = mw._build_time_plot_data(
-        checked=[(y_key[0], y_key[1], binding.color)],
+        checked=[(y_key[0], y_key[1], view.colors[y_key])],
         range_enabled=False,
     )
-    assert view.curve_bindings == persisted
     assert y_key in shown.successful_channel_keys
-    bind_rows = [
-        row for row in shown.rows
-        if len(row) > 7 and (row[7] or {}).get("line_width_mm") is not None
-    ]
-    assert any(row[6] == y_key[0] for row in bind_rows)
     fd = mw.files[y_key[0]]
     prefixed = fd.get_prefixed_channel(y_key[1])
     matching = [row for row in shown.rows if row[0] == prefixed]
     assert len(matching) == 1
-    assert (matching[0][7] or {}).get("axis_group")
+    assert len(matching[0]) == 7
 
 
 def test_missing_record_x_claims_channel_y_without_row():
@@ -433,8 +542,8 @@ def test_unclaimed_checked_channel_appends_time_y(qapp, tmp_path, monkeypatch):
     qapp.processEvents()
 
     view = mw.view_manager.get(mw.view_manager.active)
-    binding = next(item for item in view.curve_bindings if item.y_ref.kind == "channel")
-    y_fid, y_channel = binding.y_ref.fid, binding.y_ref.channel
+    assert view.curve_bindings == []
+    y_fid, y_channel = view.checked[0]
     fd = mw.files[y_fid]
     extra = next(
         name for name in fd.get_signal_channels()
@@ -443,16 +552,12 @@ def test_unclaimed_checked_channel_appends_time_y(qapp, tmp_path, monkeypatch):
     extra_key = (y_fid, extra)
     result = mw._build_time_plot_data(
         checked=[
-            (y_fid, y_channel, binding.color),
+            (y_fid, y_channel, view.colors[(y_fid, y_channel)]),
             (y_fid, extra, "#ff0000"),
         ],
         range_enabled=False,
     )
-    bind_rows = [
-        row for row in result.rows
-        if len(row) > 7 and (row[7] or {}).get("line_width_mm") is not None
-    ]
-    assert any(row[6] == y_fid for row in bind_rows)
+    assert {row[6] for row in result.rows} == {y_fid}
     prefixed_extra = fd.get_prefixed_channel(extra)
     time_y = [row for row in result.rows if row[0] == prefixed_extra]
     assert len(time_y) == 1

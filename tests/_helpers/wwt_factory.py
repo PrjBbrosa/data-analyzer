@@ -161,6 +161,9 @@ SFNS_Y_UP_OFFSET = 20.0
 SFNS_Y_DOWN_OFFSET = -20.0
 SFNS_Y_SLOPE = 0.05
 SFNS_N_HALF = 201
+RACK_INITIAL_Y_LO, RACK_INITIAL_Y_HI = -1500.0, 1500.0
+RACK_INITIAL_Y_TICK, RACK_INITIAL_Y_GRID = 300.0, 150.0
+RACK_INITIAL_FORCE_SCALE = 40.0
 SFNS_VARIANTS = (
     "cycle",
     "noisy",
@@ -1556,6 +1559,70 @@ def sfns_like_custom_x_native_viewport(
     return _emit(
         write_wwt_bytes(
             records, windows, title=title, comment=f"sfns-{variant}",
+            source_filename=filename,
+        ),
+        path,
+    )
+
+
+def rack_travel_force_initial_view(
+    path=None,
+    *,
+    source_filename: str | None = None,
+    title: str = "rack-travel-force-initial",
+) -> Path | bytes:
+    """Screenshot-family first-frame fixture, entirely synthetic and committed.
+
+    The ordinary channel-backed ``Rack Force`` uses ``Rack Travel`` as a
+    shared Custom-X channel.  The data stays inside the WinWert first-frame
+    range so the contract can separately prove data identity and committed
+    viewport restoration without customer ``testdoc/`` bytes.
+    """
+    series = sfns_like_hysteresis_arrays("cycle")
+    force = np.asarray(series.y, dtype=np.float64) * RACK_INITIAL_FORCE_SCALE
+    n = int(series.x.size)
+    filename = source_filename
+    if filename is None:
+        filename = Path(path).name if path is not None else "rack_initial.wwt"
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", SFNS_RACK_TRAVEL, SFNS_RACK_TRAVEL_UNIT,
+            n=n, values=series.x,
+        ),
+        WwtRecordSpec(
+            "Real", SFNS_RACK_FORCE, SFNS_RACK_FORCE_UNIT,
+            n=n, values=force,
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{SFNS_RACK_TRAVEL} [{SFNS_RACK_TRAVEL_UNIT}]",
+                SFNS_NATIVE_X_LO, SFNS_NATIVE_X_HI,
+                x_record_index=1,
+                tick=SFNS_NATIVE_X_TICK, grid=SFNS_NATIVE_X_GRID,
+            ),
+            curves=(
+                _y_curve(
+                    2,
+                    f"{SFNS_RACK_FORCE} [{SFNS_RACK_FORCE_UNIT}]",
+                    RACK_INITIAL_Y_LO, RACK_INITIAL_Y_HI,
+                    x_record_index=1,
+                    tick=RACK_INITIAL_Y_TICK, grid=RACK_INITIAL_Y_GRID,
+                    color=CHAN_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(
+        write_wwt_bytes(
+            records,
+            windows,
+            title=title,
+            comment="rack-travel-force-first-frame",
             source_filename=filename,
         ),
         path,

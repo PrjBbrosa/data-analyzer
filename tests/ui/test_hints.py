@@ -224,7 +224,7 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
         # 58030e4d: landed WWT lossless/compact export; same default-mode
         # discovery pool as custom_action_slot (priority 70 > 50).
         "channel.export_wwt_storage",
-        "file.wwt_native_layout",
+        "file.wwt_create_views",
         "view.history",
     }
     state = HintState(discovered=frozenset(seen))
@@ -687,15 +687,18 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "S " in by_id["ultraview.shapes"].text
 
 
-def test_wwt_native_layout_hint_mentions_views_without_pixel_claims():
+def test_wwt_import_hint_mentions_ordinary_view_creation_only():
     hint = next(
-        item for item in hints.all_hints() if item.id == "file.wwt_native_layout"
+        item for item in hints.all_hints() if item.id == "file.wwt_create_views"
     )
     joined = hint.text
     for token in ("WWT", "WinWert", "View"):
         assert token in joined
-    assert "Board" in joined
+    assert "时域" in joined
     assert hints.hint_display_width(joined) <= hints.HINT_MAX_WIDTH
+    assert "Board" not in joined
+    assert "UltraView" not in joined
+    assert "原生" not in joined
     assert "像素级一致" not in joined
     assert "全部公式" not in joined
 

@@ -977,6 +977,11 @@ class MultiFileChannelWidget(QWidget):
         self._raster_items = {}  # fid -> QTreeWidgetItem (raster subgroup node)
         self._axis_groups = {}      # (fid, ch) -> group_id:int
         self._axis_group_seq = 0
+        # ViewState-owned axis memberships restored for the focused Time View.
+        # Unlike user-created groups, a WWT group may have one Navigator
+        # channel plus an exceptional record-only binding, so it must not go
+        # through the ordinary singleton-pruning model above.
+        self._restored_axis_group_projection = {}
         # Per-TimeDomain-View projection. The persisted owner is ViewState;
         # this set is the live channel-tree copy for the currently focused View.
         self._hidden_channels = set()
@@ -2720,7 +2725,52 @@ class MultiFileChannelWidget(QWidget):
 
     def checked_axis_groups(self):
         checked = {(f, c) for (f, c, _color) in self.get_checked_channels()}
-        return self._effective_groups(self._axis_groups, checked)
+        effective = self._effective_groups(self._axis_groups, checked)
+        effective.update({
+            key: group
+            for key, group in self._restored_axis_group_projection.items()
+            if key in checked
+        })
+        return effective
+
+    def set_restored_axis_group_projection(self, raw_groups) -> None:
+        """Project persisted ViewState groups for the currently focused View.
+
+        The persisted JSON map uses composite ``[fid, channel]`` keys and an
+        opaque axis id.  It is deliberately separate from ``_axis_groups``:
+        that interactive model drops one-channel groups, while a View can
+        share its remaining ordinary channel with an exceptional binding that
+        has no Navigator row.
+        """
+        projected = {}
+        if isinstance(raw_groups, Mapping):
+            for raw_key, raw_group in raw_groups.items():
+                if isinstance(raw_key, str):
+                    try:
+                        key = json.loads(raw_key)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                else:
+                    key = raw_key
+                try:
+                    fid, channel = key
+                except (TypeError, ValueError):
+                    continue
+                group = str(raw_group or "").strip()
+                if not group:
+                    continue
+                projected[(str(fid), str(channel))] = group
+        if projected == self._restored_axis_group_projection:
+            return
+        self._restored_axis_group_projection = projected
+        self.axis_groups_changed.emit()
+
+    def restored_axis_group_projection(self):
+        """Return the focused View's persisted-ready composite-key map."""
+        return {
+            json.dumps([fid, channel], ensure_ascii=False, separators=(",", ":")): group
+            for (fid, channel), group in self._restored_axis_group_projection.items()
+        }
 
     def _axis_group_menu_plan(self, sel_keys):
         """(can_merge, can_split) for the right-click menu (Task 2)."""

@@ -98,8 +98,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="MF4 · MDF · BLF · ASCII · TDMS · WWT · ZFD · MAT · 表格 · HDF · 音视频",
             ),
             QuickRow(
-                "WWT WinWert 排版",
-                sub="多窗口建同名独立 Board；单窗口只建时域 View，不加入 UltraView。查看全部/Home 回到文件原生 X 范围；导入会报放置数量。「未生成」不等于整个文件导入失败；一次智能排版可撤销，保存重开不重排。",
+                "WWT WinWert 视图",
+                sub="按 WinWert 窗口创建时域 View 并绘图，不会自动加入 UltraView 或改变 Board；之后可正常使用 TraceLab Canvas。需要总览时手动把 View 加入 UltraView，再用智能排版；选择「仅加载数据」则不创建 View。",
             ),
             QuickRow("BLF / CANoe ASC 报文解码", sub="选择 DBC；界面会标注「完整匹配」或「抽样解码」。ASC 进度只增不减。"),
             QuickRow(
@@ -595,7 +595,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "撤销 / 重做",
-                sub="移动、调整或移除可 Ctrl/Cmd+Z / Ctrl+Shift+Z；移除不删除源 View。一次重排或 WWT 导入后的智能排版都可撤销。",
+                sub="移动、调整或移除可 Ctrl/Cmd+Z / Ctrl+Shift+Z；移除不删除源 View。一次智能排版或紧凑排列都可撤销。",
                 keys=("Ctrl+Z", "Ctrl+Shift+Z"),
             ),
             QuickRow(

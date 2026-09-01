@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import math
 
 import numpy as np
@@ -13,7 +12,6 @@ from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
 
 from ._backref import _CanvasBackref
 from .fonts import _pg_chart_font
-from .native_axes import apply_native_ticks, apply_native_y_ticks, native_tick_levels
 
 
 _TARGET_X_TICK_NICE_FACTORS = (1.0, 2.0, 2.5, 5.0, 10.0)
@@ -24,12 +22,10 @@ _TARGET_X_TICK_MIN_COUNT = 3
 class TickDensityController(_CanvasBackref):
     """Own and apply Inspector tick-density settings."""
 
-    _owned_names = frozenset({"density", "ticks_cache", "native_tick_policy"})
+    _owned_names = frozenset({"density", "ticks_cache"})
 
     _delegate_names = frozenset({
         "set_tick_density",
-        "set_native_tick_policy",
-        "project_native_ticks",
         "_apply_tick_density_to_all_axes",
         "_apply_target_x_ticks_to_all_axes",
         "_x_tick_axis_handles",
@@ -48,41 +44,13 @@ class TickDensityController(_CanvasBackref):
         super().__init__(canvas)
         self.density = DEFAULT_CHART_TICK_DENSITY
         self.ticks_cache = {}
-        self.native_tick_policy = None
-
-    def set_native_tick_policy(self, native_ticks):
-        """Install or clear the canvas-owned native tick snapshot.
-
-        ``native_ticks`` is a deep copy of ViewState ``axis_opts['native_ticks']``
-        or ``None``. The controller does not hold ViewState or MainWindow.
-        """
-        if native_ticks is None:
-            self.native_tick_policy = None
-            self.ticks_cache.clear()
-            return
-        if not isinstance(native_ticks, dict):
-            raise TypeError(
-                f"native_tick_policy must be a dict or None, got {type(native_ticks)!r}"
-            )
-        self.native_tick_policy = copy.deepcopy(native_ticks)
-        self.ticks_cache.clear()
-
-    def native_policy_active(self) -> bool:
-        return isinstance(self.native_tick_policy, dict)
-
-    def project_native_ticks(self):
-        """Project native X/Y cadence over the current effective ranges."""
-        if not self.native_policy_active():
-            return
-        self._apply_target_x_ticks_to_all_axes()
-        apply_native_y_ticks(self._c, (self.native_tick_policy or {}).get("y") or {})
 
     def set_tick_density(self, x, y, *, reframe_overlay_y=True):
         """Apply inspector-controlled tick density to PG axes.
 
         ``reframe_overlay_y`` is the generic overlay nice-grid range mutation.
-        Native policy owns Y range: restore passes False, and an active native
-        policy also suppresses reframe so density cannot reopen 0..460 to 0..600.
+        View restore passes ``False`` after it has restored an explicit range,
+        so density repopulates ordinary ticks without reopening that viewport.
         """
         try:
             x_n = max(3, int(x))
@@ -93,15 +61,10 @@ class TickDensityController(_CanvasBackref):
         if self._overlay_mode:
             self._overlay_axes.divisions = y_n
             self._overlay_axes._build_overlay_y_grid()
-            native_active = self.native_policy_active()
             self._overlay_axes._repin_overlay_channel_ticks(
-                reframe=bool(reframe_overlay_y) and not native_active,
+                reframe=bool(reframe_overlay_y),
             )
             self._apply_target_x_ticks_to_all_axes()
-            if native_active:
-                apply_native_y_ticks(
-                    self._c, (self.native_tick_policy or {}).get("y") or {},
-                )
             realize = getattr(self._c, "_realize_overlay_axis_columns", None)
             if callable(realize):
                 realize()
@@ -132,18 +95,6 @@ class TickDensityController(_CanvasBackref):
             seen.add(key)
             self._apply_target_x_ticks(axis, handle)
 
-    def _apply_native_x_ticks(self, axis, handle):
-        x_spec = (self.native_tick_policy or {}).get("x") or {}
-        try:
-            lo, hi = handle.get_xlim()
-        except Exception:
-            axis.setTicks(None)
-            return
-        apply_native_ticks(
-            axis,
-            native_tick_levels(lo, hi, x_spec.get("major"), x_spec.get("grid")),
-        )
-
     def _x_tick_axis_handles(self):
         handles = list(self.axes_list)
         if self._overlay_mode and self._x_master_handle is not None:
@@ -152,9 +103,6 @@ class TickDensityController(_CanvasBackref):
 
     def _use_adaptive_x_ticks_during_range_change(self):
         """Release stale explicit X ticks once per interaction burst."""
-        if self.native_policy_active():
-            self._apply_target_x_ticks_to_all_axes()
-            return
         seen = set()
         for handle in self._x_tick_axis_handles():
             axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
@@ -168,9 +116,6 @@ class TickDensityController(_CanvasBackref):
                 self._reset_x_ticks_to_adaptive(axis)
 
     def _apply_target_x_ticks(self, axis, handle):
-        if self.native_policy_active():
-            self._apply_native_x_ticks(axis, handle)
-            return
         try:
             lo, hi = handle.get_xlim()
             axis_width = float(axis.size().width())

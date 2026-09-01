@@ -14,10 +14,8 @@ from mf4_analyzer.ui.main_window.wwt_import_coordinator import (
     APPLY_TO_REMAINING_TEXT,
     REJECT_TEXT,
     WwtBatchChoice,
-    WwtImportOutcome,
     WwtLayoutPromptResult,
     coerce_layout_prompt,
-    format_wwt_placement_summary,
     layout_dialog_text,
 )
 from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager, ViewState, is_reusable_blank_view
@@ -27,7 +25,7 @@ from tests._helpers.wwt_record_tree import record_binding_count, record_binding_
 _ROOT = Path(__file__).resolve().parents[2]
 
 
-def _stub_wwt_ui(mw, monkeypatch, accept=True, *, projected=None, apply_to_remaining=False):
+def _stub_wwt_ui(mw, monkeypatch, accept=True, *, apply_to_remaining=False):
     asked = []
 
     def fake_ask(body, informative=""):
@@ -39,24 +37,6 @@ def _stub_wwt_ui(mw, monkeypatch, accept=True, *, projected=None, apply_to_remai
         return accept
 
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
-    if projected is None:
-        monkeypatch.setattr(
-            mw._ultraview,
-            "add_time_views_from_native_layout",
-            lambda items, **_kwargs: (),
-        )
-    else:
-        real = mw._ultraview.add_time_views_from_native_layout
-
-        def _capture(items, **kwargs):
-            projected.append(tuple(
-                (str(view_id), rect) for view_id, rect in items
-            ))
-            return real(items, **kwargs)
-
-        monkeypatch.setattr(
-            mw._ultraview, "add_time_views_from_native_layout", _capture
-        )
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     return asked
@@ -108,23 +88,22 @@ def test_layout_dialog_text_matches_multi_window_copy(tmp_path):
         f"{wwt.MULTI_FORMULA_COUNT} 个可用计算通道。"
     ) in body
     assert (
-        f"可按原排版生成 {wwt.MULTI_WINDOW_COUNT} 个时域 View，并同步到独立 Board。"
+        f"可按 WinWert 窗口创建 {wwt.MULTI_WINDOW_COUNT} 个时域 View 并绘图。"
     ) in body
-    assert "仅生成时域 View" not in body
-    assert "同步加入 UltraView" not in body
-    assert "重叠" in body
-    assert "第 3 个窗口与第 2 个" in body
+    assert "Board" not in body
+    assert "UltraView" not in body
+    assert "重叠" not in body
     assert informative == ""
     capped, info = layout_dialog_text(
         loaded.document, proposals, available=1
     )
-    assert "可按原排版生成 1 个时域 View，仅生成时域 View。" in capped
-    assert "同步到独立 Board" not in capped
-    assert "同步加入 UltraView" not in capped
+    assert "可按 WinWert 窗口创建 1 个时域 View 并绘图。" in capped
+    assert "Board" not in capped
+    assert "UltraView" not in capped
     assert info == f"检测到 {wwt.MULTI_WINDOW_COUNT} 个，可创建 1 个"
 
 
-def test_layout_dialog_text_single_window_does_not_promise_ultraview(tmp_path):
+def test_layout_dialog_text_single_window_describes_ordinary_time_view(tmp_path):
     from mf4_analyzer.io.wwt_document import load_wwt_document
     from mf4_analyzer.ui.wwt_view_import import (
         build_wwt_view_proposals,
@@ -140,9 +119,9 @@ def test_layout_dialog_text_single_window_does_not_promise_ultraview(tmp_path):
     body, informative = layout_dialog_text(
         loaded.document, proposals, available=MAX_VIEWS
     )
-    assert "仅生成时域 View" in body
-    assert "同步加入 UltraView" not in body
-    assert "同步到独立 Board" not in body
+    assert "可按 WinWert 窗口创建 1 个时域 View 并绘图。" in body
+    assert "Board" not in body
+    assert "UltraView" not in body
     assert informative == ""
 
 
@@ -255,6 +234,26 @@ def test_accept_creates_views_and_reject_keeps_data_only(qapp, tmp_path, monkeyp
     assert any(wwt.FORM_Y in fd.data.columns for fd in mw2.files.values())
     _assert_store_on_every_file(mw)
     _assert_store_on_every_file(mw2)
+
+
+def test_multiple_wwt_windows_create_views_without_native_board_projection(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """WWT import creates ordinary Views; it never owns a Board placement."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.two_window_non_overlap(tmp_path / "two.wwt")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qapp.processEvents()
+    monkeypatch.setattr(
+        window._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
+    )
+    window._load_one(str(path))
+    qapp.processEvents()
+
+    assert len(_winwert_views(window)) == 2
 
 
 def test_fresh_wwt_view_uses_later_sources_own_same_name_x(
@@ -383,7 +382,7 @@ def test_cap_truncates_with_visible_copy(tmp_path):
     )
     _body, info = layout_dialog_text(loaded.document, proposals, available=1)
     assert info == f"检测到 {wwt.MULTI_WINDOW_COUNT} 个，可创建 1 个"
-    assert ACCEPT_TEXT == "按 WinWert 排版并绘图"
+    assert ACCEPT_TEXT == "创建时域 View 并绘图"
     assert REJECT_TEXT == "仅加载数据"
 
 
@@ -443,11 +442,6 @@ def test_save_reopen_keeps_record_only_y_bindings(qapp, tmp_path, monkeypatch):
         pytest.fail("layout dialog must not run during project restore")
 
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", fail_if_called)
-    monkeypatch.setattr(
-        restored._ultraview,
-        "add_time_views_from_native_layout",
-        lambda items, **_kwargs: (),
-    )
     monkeypatch.setattr(restored, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(restored, "_apply_active_view", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -516,7 +510,7 @@ def test_reject_and_no_display_still_attach_record_store(
     _assert_store_on_every_file(mw2)
 
 
-def test_record_only_overlap_is_reported_without_raw_code_toast(
+def test_window_position_overlap_does_not_block_ordinary_view_creation(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -527,14 +521,11 @@ def test_record_only_overlap_is_reported_without_raw_code_toast(
     monkeypatch.setattr(
         mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
     )
-    projected = []
-    asked = _stub_wwt_ui(mw, monkeypatch, accept=True, projected=projected)
+    asked = _stub_wwt_ui(mw, monkeypatch, accept=True)
     mw._load_one(str(path))
     assert asked
-    assert "重叠" in asked[0][0]
-    assert "第 3 个窗口与第 2 个" in asked[0][0]
-    assert projected
-    assert len(projected[0]) == wwt.MULTI_WINDOW_COUNT
+    assert "重叠" not in asked[0][0]
+    assert len(_winwert_views(mw)) == wwt.MULTI_WINDOW_COUNT
     warn = [(m, lv) for m, lv in toasts if lv in {"warning", "warn"}]
     leaked = [
         msg for msg, _lv in warn
@@ -544,81 +535,6 @@ def test_record_only_overlap_is_reported_without_raw_code_toast(
         or "duplicate_ref" in str(msg)
     ]
     assert leaked == [], warn
-    board = mw._ultraview.board
-    history = mw._ultraview._workspace_controller.grid_histories[board.board_id]
-    assert len(history.undo) == 1
-    assert len(board.free_grid) == wwt.MULTI_WINDOW_COUNT
-    assert board.unplaced == []
-    info = [msg for msg, level in toasts if level == "info"]
-    assert any("已生成 3 个 WinWert View" in msg and "已放置" in msg for msg in info)
-
-
-def test_exact_overlap_relocated_stays_out_of_yellow_user_warning(
-    qapp, tmp_path, monkeypatch,
-):
-    from mf4_analyzer.ui.main_window import MainWindow
-
-    path = wwt.three_exact_overlap_windows(tmp_path / "triple.wwt")
-    mw = MainWindow()
-    toasts = []
-    monkeypatch.setattr(
-        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
-    )
-    projected = []
-    asked = _stub_wwt_ui(mw, monkeypatch, accept=True, projected=projected)
-    mw._load_one(str(path))
-    qapp.processEvents()
-    assert asked
-    assert projected and len(projected[0]) == wwt.THREE_EXACT_OVERLAP_COUNT
-    warn = _user_warning_blob(toasts)
-    _assert_no_relocation_arrows(warn)
-    info = " ".join(msg for msg, level in toasts if level == "info")
-    _assert_no_relocation_arrows(info)
-    board = mw._ultraview.board
-    assert len(board.free_grid) == wwt.THREE_EXACT_OVERLAP_COUNT
-    assert board.unplaced == []
-    assert len(projected[0]) == len(board.free_grid) == wwt.THREE_EXACT_OVERLAP_COUNT
-
-
-def test_format_wwt_placement_summary_reports_counts_and_stub_fallback():
-    full = format_wwt_placement_summary(
-        WwtImportOutcome(
-            detected=7,
-            created=7,
-            view_ids=tuple(f"v{i}" for i in range(7)),
-            warnings=(),
-            accepted=True,
-            placed_count=7,
-            unplaced_count=0,
-        )
-    )
-    assert full == "已生成 7 个 WinWert View：7 个已放置，0 个在未放置区"
-    mixed = format_wwt_placement_summary(
-        WwtImportOutcome(
-            detected=7,
-            created=7,
-            view_ids=tuple(f"v{i}" for i in range(7)),
-            warnings=(),
-            accepted=True,
-            placed_count=6,
-            unplaced_count=1,
-        )
-    )
-    assert mixed == "已生成 7 个 WinWert View：6 个已放置，1 个在未放置区"
-    stub = format_wwt_placement_summary(
-        WwtImportOutcome(
-            detected=3,
-            created=3,
-            view_ids=("a", "b", "c"),
-            warnings=(),
-            accepted=True,
-        )
-    )
-    assert stub == "已生成 3 个 WinWert View"
-
-
-def _user_warning_blob(toasts) -> str:
-    return " ".join(str(msg) for msg, level in toasts if level in {"warning", "warn"})
 
 
 def _assert_formula_user_copy(text):
@@ -633,13 +549,10 @@ def _assert_formula_user_copy(text):
     assert "exact_overlap_relocated" not in blob
 
 
-def _assert_no_relocation_arrows(text):
-    import re
-
-    blob = str(text)
-    assert "exact_overlap_relocated" not in blob
-    assert "→" not in blob
-    assert re.search(r"\d+\s*->\s*\d+", blob) is None
+def _user_warning_blob(toasts) -> str:
+    return " ".join(
+        str(msg) for msg, level in toasts if level in {"warning", "warn"}
+    )
 
 
 def _sync_record_tree(mw, state=None):
@@ -901,7 +814,7 @@ def test_empty_fids_and_restore_do_not_consume_remembered_choice(tmp_path):
     assert coord._batch_active is False
 
 
-def test_open_batch_remember_layout_asks_once_and_projects_each_file(
+def test_open_batch_remember_layout_asks_once_and_creates_each_file(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -911,9 +824,8 @@ def test_open_batch_remember_layout_asks_once_and_projects_each_file(
         for index in range(3)
     ]
     mw = MainWindow()
-    projected = []
     asked = _stub_wwt_ui(
-        mw, monkeypatch, accept=True, projected=projected, apply_to_remaining=True,
+        mw, monkeypatch, accept=True, apply_to_remaining=True,
     )
     mw._open_data_paths([str(path) for path in paths])
     qapp.processEvents()
@@ -922,8 +834,6 @@ def test_open_batch_remember_layout_asks_once_and_projects_each_file(
     assert len(views) == 6
     assert len(mw.files) == 3
     assert _checked_fids(views) == set(mw.files)
-    assert len(projected) == 3
-    assert all(len(batch) == 2 for batch in projected)
     assert mw._wwt_import._batch_choice is WwtBatchChoice.ASK
     assert mw._wwt_import._batch_active is False
 
@@ -972,9 +882,6 @@ def test_open_batch_second_remember_reused_by_third(qapp, tmp_path, monkeypatch)
         return answers.pop(0)
 
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
-    monkeypatch.setattr(
-        mw._ultraview, "add_time_views_from_native_layout", lambda items, **_k: (),
-    )
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     mw._open_data_paths([str(path) for path in paths])
@@ -1134,11 +1041,6 @@ def test_open_batch_project_restore_asks_zero_times(qapp, tmp_path, monkeypatch)
         pytest.fail("layout dialog must not run during project restore")
 
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", fail_if_called)
-    monkeypatch.setattr(
-        restored._ultraview,
-        "add_time_views_from_native_layout",
-        lambda items, **_kwargs: (),
-    )
     monkeypatch.setattr(restored, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(restored, "_apply_active_view", lambda *a, **k: None)
     restored.open_project(proj)

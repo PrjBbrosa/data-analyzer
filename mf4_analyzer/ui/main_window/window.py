@@ -2117,7 +2117,6 @@ class MainWindow(
             or new_lo >= cur_hi
             or not self._preserved_xlim_fits_data(
                 canvas, new_lo, new_hi,
-                intent=getattr(canvas, "x_viewport_intent", None),
             )
         ):
             frame = getattr(canvas, 'frame_x_to_data', None)
@@ -2143,7 +2142,7 @@ class MainWindow(
                 pass
 
     @staticmethod
-    def _preserved_xlim_fits_data(canvas, lo, hi, intent=None):
+    def _preserved_xlim_fits_data(canvas, lo, hi):
         """Is a carried-over X window still a window *into* the new data?
 
         Preserving X across a replot exists so ticking a channel on or off
@@ -2162,12 +2161,7 @@ class MainWindow(
         growing longer than the window is left alone on purpose — that is a
         legitimate "stay where I am looking" case, and Home reframes it.
 
-        Trusted WWT native viewports are the exception: they may keep file-
-        defined margin outside the data union, as long as the window still
-        has a non-degenerate intersection with the plotted data.
         """
-        from mf4_analyzer.ui.view_state import trusted_wwt_native_intent
-
         union = None
         getter = getattr(canvas, 'get_data_x_union', None)
         if callable(getter):
@@ -2181,10 +2175,6 @@ class MainWindow(
         span = union_hi - union_lo
         if not np.isfinite(span) or span <= 0:
             return True
-        if trusted_wwt_native_intent(intent):
-            overlap_lo = max(float(lo), float(union_lo))
-            overlap_hi = min(float(hi), float(union_hi))
-            return overlap_hi > overlap_lo
         # 1% of the extent absorbs float drift and pyqtgraph's own rounding
         # on the full-view case without admitting a visibly empty margin.
         tol = 0.01 * span
@@ -2484,15 +2474,6 @@ class MainWindow(
         yt = int(yt)
         self._set_tick_density_controls_silent(xt, yt)
         canvas = self.chart_stack.focused_canvas()
-        idx = self._view_index_for_canvas(canvas)
-        if idx is not None and 0 <= idx < len(self.view_manager.views):
-            state = self.view_manager.get(idx)
-            axis_opts = dict(state.axis_opts or {})
-            axis_opts.pop('native_ticks', None)
-            state.axis_opts = axis_opts
-        clearer = getattr(canvas, "set_native_tick_policy", None)
-        if callable(clearer):
-            clearer(None)
         canvas.set_tick_density(xt, yt)
         idx = self._view_index_for_canvas(canvas)
         if idx is not None and 0 <= idx < len(self.view_manager.views):
@@ -2500,7 +2481,6 @@ class MainWindow(
             self._view_bridge.capture_controls_into(state, self, canvas)
             axis_opts = dict(state.axis_opts or {})
             axis_opts['tick_density'] = {'x': int(xt), 'y': int(yt)}
-            axis_opts.pop('native_ticks', None)
             state.axis_opts = axis_opts
         # M5/M11: canvas_fft (PgLineCanvas) and canvas_order
         # (PgHeatmapCanvas) are pyqtgraph widgets — no ``fig``/``draw_idle``.

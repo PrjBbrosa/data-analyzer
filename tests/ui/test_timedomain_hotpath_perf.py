@@ -314,6 +314,7 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
             self, data, mode, xlabel, defer_first_frame=False,
             progress_callback=None, render_context_key=None,
             full_rebuild_reason=None, x_axis_context=None,
+            *, defer_axis_finalize=False,
         ):
             self.data = data
             self.mode = mode
@@ -322,13 +323,15 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
             self.render_context_key = render_context_key
             self.full_rebuild_reason = full_rebuild_reason
             self.x_axis_context = x_axis_context
+            self.defer_axis_finalize = bool(defer_axis_finalize)
 
         def try_apply_selection_delta(self, data, *, mode, render_context_key=None):
             self.delta_attempt = (data, mode, render_context_key)
             return {"applied": False, "reason": "no-render-model"}
 
-        def set_tick_density(self, x, y):
+        def set_tick_density(self, x, y, *, reframe_overlay_y=True):
             self.tick_density = (x, y)
+            self.reframe_overlay_y = bool(reframe_overlay_y)
 
         def invalidate_envelope_cache(self, reason):
             self.invalidated = reason
@@ -394,6 +397,8 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     assert len(canvas.data) == 1
     assert canvas.delta_attempt[1] == "subplot"
     assert canvas.full_rebuild_reason == "no-render-model"
+    assert canvas.defer_axis_finalize is False
+    assert canvas.reframe_overlay_y is True
     assert stats_updates == []
 
 

@@ -571,14 +571,9 @@ class ProjectIOMixin:
                 self.toast(notice, "warning")
 
     def _consume_wwt_import_outcome(self, outcome):
-        """Surface placement completion plus any degraded-import warning."""
+        """Surface degraded-data diagnostics from a WWT View import."""
         if outcome is None or getattr(self, "_restoring_project", False):
             return
-        from .wwt_import_coordinator import format_wwt_placement_summary
-
-        info = format_wwt_placement_summary(outcome)
-        if info:
-            self.toast(info, "info")
         summary = getattr(outcome, "summary", "") or ""
         if summary:
             self.toast(summary, "warning")
@@ -1742,6 +1737,30 @@ class ProjectIOMixin:
         self.navigator.remove_file(fid, emit=False)
         return name
 
+    def _ultraview_time_view_ids_to_preserve(self):
+        """Return live Time View ids that remain manually referenced by a Board."""
+        uv = getattr(self, "_ultraview", None)
+        if uv is None or getattr(uv, "is_shutdown", False):
+            return ()
+        workspace = getattr(uv, "workspace", None)
+        if workspace is None:
+            return ()
+        from ...ultraview_core.board_ops import all_refs
+        referenced = {
+            str(ref.view_id)
+            for board in getattr(workspace, "boards", ()) or ()
+            for ref in all_refs(board)
+            if getattr(ref, "section", None) == "time"
+            and str(getattr(ref, "view_id", "") or "")
+        }
+        if not referenced:
+            return ()
+        return tuple(
+            str(state.view_id)
+            for state in self.view_manager.views
+            if str(getattr(state, "view_id", "") or "") in referenced
+        )
+
     def _reset_empty_workspace_session(self):
         """One session-reset transaction when the last logical source is gone.
 
@@ -1753,17 +1772,39 @@ class ProjectIOMixin:
         or the five global cursor-display preference bits.
         """
         if self.files:
-            return
+            return False
         if getattr(self, "_restoring_project", False):
-            return
+            return False
         if getattr(self, "_opening_project", False):
-            return
+            return False
         if getattr(self, "_applying_view", False):
-            return
+            return False
 
         view_manager = getattr(self, "view_manager", None)
         if view_manager is not None:
-            view_manager.reset_to_single_default()
+            preserved_ids = self._ultraview_time_view_ids_to_preserve()
+            if not preserved_ids:
+                view_manager.reset_to_single_default()
+            else:
+                # An UltraView Board owns only a stable View reference, not
+                # its old source state.  Closing the last source must therefore
+                # leave each referenced View as a fresh empty View with the
+                # same id, so the Board can show a stale/missing card instead
+                # of silently turning it into an orphan.
+                old_split = view_manager.split_with
+                view_manager.views = [
+                    view_manager._make(index)
+                    for index, _view_id in enumerate(preserved_ids)
+                ]
+                for state, view_id in zip(view_manager.views, preserved_ids):
+                    state.view_id = view_id
+                view_manager.active = 0
+                view_manager.split_with = None
+                view_manager._split_pairs = {}
+                view_manager.views_changed.emit()
+                if old_split is not None:
+                    view_manager.split_changed.emit(None)
+                view_manager.active_changed.emit(0)
         for manager in (getattr(self, "analysis_managers", None) or {}).values():
             reset = getattr(manager, "reset_to_single_default", None)
             if callable(reset):
@@ -1803,20 +1844,26 @@ class ProjectIOMixin:
         chart_stack = getattr(self, "chart_stack", None)
         if chart_stack is not None:
             chart_stack.clear_cursor_pill()
+        # ``active_changed`` above synchronously applies the active Time View,
+        # including its record-tree projection.  The close presenter uses this
+        # to avoid performing the same projection a second time.
+        return view_manager is not None
 
     def _present_after_sources_closed(self):
         """One-shot navigator / record-tree projection after one or more purges."""
+        reset_projected_time_view = False
         if not self.files:
-            self._reset_empty_workspace_session()
+            reset_projected_time_view = self._reset_empty_workspace_session()
         mode = self.chart_stack.current_mode()
         if mode == "time":
-            resolved = self._focused_time_view_state()
-            if resolved is not None:
-                self._project_view_controls(resolved[0])
-            elif self.view_manager.views:
-                self._project_view_controls(self.view_manager.active)
-            else:
-                self._sync_record_curve_tree()
+            if not reset_projected_time_view:
+                resolved = self._focused_time_view_state()
+                if resolved is not None:
+                    self._project_view_controls(resolved[0])
+                elif self.view_manager.views:
+                    self._project_view_controls(self.view_manager.active)
+                else:
+                    self._sync_record_curve_tree()
         else:
             if mode in self.analysis_managers:
                 mgr = self.analysis_managers[mode]
@@ -1862,6 +1909,19 @@ class ProjectIOMixin:
             health.dropped_time_refs.extend(dropped)
             health.degraded = True
         return dropped
+
+    def _migrate_legacy_channel_bindings_on_restore(self, states):
+        """Adopt only live-proven ordinary legacy bindings before first plot."""
+        from ..time_curve_bindings import (
+            migrate_legacy_channel_bindings,
+            prune_channel_axis_groups_for_live_files,
+        )
+
+        migrated = []
+        for state in states or ():
+            prune_channel_axis_groups_for_live_files(state, self.files)
+            migrated.extend(migrate_legacy_channel_bindings(state, self.files))
+        return migrated
 
     def _close(self, fid, *, force=False, notify=True):
         """Close one logical source (fid).
@@ -2096,6 +2156,11 @@ class ProjectIOMixin:
         if not states:
             states = [self.view_manager._make(0)]
         self._drop_unmapped_wwt_records_on_restore(states)
+        # Binding → ordinary-channel conversion needs freshly loaded source
+        # arrays and the remapped current Custom-X resolver; doing it here
+        # keeps pure JSON decoding conservative and finishes before the first
+        # active View is projected or plotted.
+        self._migrate_legacy_channel_bindings_on_restore(states)
         self.view_manager.views = states
         self.view_manager._split_pairs = {
             int(host): int(src)

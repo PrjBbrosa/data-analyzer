@@ -645,6 +645,25 @@ class ChannelScopeMixin:
             and str(spec.source_fid) in removed
         ):
             axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
+        groups = axis_opts.get("channel_axis_groups")
+        if isinstance(groups, dict):
+            kept_groups = {}
+            for raw_key, raw_axis_id in groups.items():
+                try:
+                    fid, channel = json.loads(raw_key)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                axis_id = str(raw_axis_id or "").strip()
+                if str(fid) not in removed and str(channel) and axis_id:
+                    key = json.dumps(
+                        [str(fid), str(channel)], ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    kept_groups[key] = axis_id
+            if kept_groups:
+                axis_opts["channel_axis_groups"] = kept_groups
+            else:
+                axis_opts.pop("channel_axis_groups", None)
         from ..time_curve_bindings import filter_curve_bindings, prune_hidden_curve_binding_ids
         state.curve_bindings = filter_curve_bindings(
             getattr(state, "curve_bindings", None) or [],
@@ -694,6 +713,25 @@ class ChannelScopeMixin:
             and (str(spec.source_fid), str(spec.channel)) in removed
         ):
             axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
+        groups = axis_opts.get("channel_axis_groups")
+        if isinstance(groups, dict):
+            kept_groups = {}
+            for raw_key, raw_axis_id in groups.items():
+                try:
+                    fid, channel = json.loads(raw_key)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                axis_id = str(raw_axis_id or "").strip()
+                if (str(fid), str(channel)) not in removed and axis_id:
+                    key = json.dumps(
+                        [str(fid), str(channel)], ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    kept_groups[key] = axis_id
+            if kept_groups:
+                axis_opts["channel_axis_groups"] = kept_groups
+            else:
+                axis_opts.pop("channel_axis_groups", None)
         from ..time_curve_bindings import filter_curve_bindings, prune_hidden_curve_binding_ids
         state.curve_bindings = filter_curve_bindings(
             getattr(state, "curve_bindings", None) or [],

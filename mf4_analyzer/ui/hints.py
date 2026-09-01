@@ -190,10 +190,10 @@ _HINTS = (
         priority=70,
     ),
     Hint(
-        id="file.wwt_native_layout",
-        text="WWT 多窗口按 WinWert 进独立 Board 生成 View",
+        id="file.wwt_create_views",
+        text="WWT 按 WinWert 窗口创建时域 View",
         surface="discovery",
-        retire_on="wwt_native_layout",
+        retire_on="wwt_create_views",
         priority=65,
     ),
     Hint(
@@ -217,14 +217,6 @@ _HINTS = (
         surface="discovery",
         modes=frozenset({"time", "fft", "fft_time", "order", "frf"}),
         priority=41,
-    ),
-    Hint(
-        id="time.wwt_native_home",
-        text="WWT Home 回原生图面",
-        surface="discovery",
-        modes=frozenset({"time"}),
-        retire_on="wwt_native_home",
-        priority=42,
     ),
     Hint(
         id="time.record_curve_eye",

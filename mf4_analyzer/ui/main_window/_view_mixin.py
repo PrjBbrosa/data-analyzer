@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
+from math import isfinite
 
 from PyQt5 import sip
 from PyQt5.QtCore import QTimer
@@ -443,49 +444,42 @@ class ViewMixin:
         if callable(empty):
             empty(section_label='时域', view_name=state.name)
 
-    def _restore_view_xlim(self, canvas, xlim, intent=None):
-        """Restore a View's saved X window unless it no longer frames the data.
+    def _restore_view_xlim(self, canvas, xlim):
+        """Restore an explicit View X range without closing the transaction.
 
-        A saved window is always a window INTO the data it was captured on, so
-        restoring it verbatim is right whenever the View still draws that data.
-        When it does not — the View's files/channels changed, or a re-entrant
-        capture wrote another View's zoom into this one — the window can sit
-        entirely outside the plotted extent and the chart renders blank with no
-        way back: 绘图 rebinds the same curves without touching X, so only
-        右键·全图 recovers it. Reuse the reframe predicate the plot-mode toggle
-        already uses (``_preserved_xlim_fits_data``) and fall back to the data
-        union.
-
-        Both branches leave the View-restore transaction OPEN (2026-08-15
-        view-switch quality settlement spec §3.1): ``plot_channels`` already
-        set ``_refresh_pending`` when it deferred the first frame for this
-        restore, so the caller's ``settle_view_restore()`` -- invoked after Y
-        and tick density land -- is what actually flushes. Reframing here and
-        then flushing immediately (the old behaviour) would measure ink
-        against the not-yet-restored Y, the exact bug that spec fixed for the
-        verbatim-restore path.
-
-        Hosts without the predicate (test doubles) keep the verbatim restore.
+        ``ViewState.xlim`` is the user's committed viewport.  It must land
+        before Y/ticks and the one final settlement; treating it as a hint and
+        reframing against the data union changes a WWT import's first frame.
+        Home remains the ordinary data-union recovery path after restore.
         """
         if xlim is None:
             return
-        fits = getattr(self, '_preserved_xlim_fits_data', None)
-        frame = getattr(canvas, 'frame_x_to_data', None)
-        keep = True
-        if callable(fits) and callable(frame):
+        canvas.restore_visible_xlim(xlim, flush=False)
+
+    @staticmethod
+    def _exceptional_initial_axis_ranges(state):
+        """Return one-time Y fallbacks from exceptional curve bindings.
+
+        These ranges establish the first frame only.  They carry no tick,
+        grid, Home, or resize policy; persisted ViewState ylims always win.
+        Multiple exceptional curves sharing one axis contribute their finite
+        union so they stay co-axial even before a live range has been saved.
+        """
+        ranges = {}
+        for binding in getattr(state, "curve_bindings", None) or ():
+            axis_id = str(getattr(binding, "axis_id", "") or "").strip()
             try:
-                lo, hi = (float(value) for value in xlim)
-            except (TypeError, ValueError):
-                lo = hi = None
-            if lo is not None:
-                try:
-                    keep = bool(fits(canvas, lo, hi, intent))
-                except TypeError:
-                    keep = bool(fits(canvas, lo, hi))
-        if keep:
-            canvas.restore_visible_xlim(xlim, flush=False)
-            return
-        frame()
+                lo, hi = (float(value) for value in binding.y_range)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if not (isfinite(lo) and isfinite(hi) and hi > lo and axis_id):
+                continue
+            existing = ranges.get(axis_id)
+            if existing is None:
+                ranges[axis_id] = (lo, hi)
+            else:
+                ranges[axis_id] = (min(existing[0], lo), max(existing[1], hi))
+        return ranges
 
     def _render_view_to_canvas(self, idx, canvas, *, update_primary_ui):
         """Project View ``idx`` onto ``canvas``, serialized against re-entry.
@@ -542,37 +536,26 @@ class ViewMixin:
             )
             # Restoring a View is ONE transaction (2026-08-15 view-switch
             # quality settlement spec §3.1): X, then Y, then ticks, and only
-            # then a single settlement. _restore_view_xlim keeps that contract
-            # on both its verbatim-restore and reframe-to-data branches (see
-            # its docstring) — settle_view_restore() below is what flushes.
-            install_intent = getattr(canvas, "set_x_viewport_intent", None)
-            if callable(install_intent):
-                install_intent(getattr(state, "x_viewport_intent", None))
-            self._restore_view_xlim(
-                canvas, state.xlim, intent=getattr(state, "x_viewport_intent", None),
-            )
+            # then a single settlement.  _restore_view_xlim keeps the
+            # transaction open; settle_view_restore() below is what flushes.
+            self._restore_view_xlim(canvas, state.xlim)
             axis_opts = state.axis_opts or {}
-            native_ticks = axis_opts.get("native_ticks") or {}
-            native_y = native_ticks.get("y") if isinstance(native_ticks, dict) else None
+            initial_axis_ranges = self._exceptional_initial_axis_ranges(state)
             canvas.restore_visible_ylims(
                 state.ylims,
-                native_axis_ranges=native_y or None,
+                initial_axis_ranges=initial_axis_ranges,
             )
             tick_opts = axis_opts.get('tick_density') or {}
             default_x, default_y = DEFAULT_CHART_TICK_DENSITY
             xt = int(tick_opts.get('x', default_x))
             yt = int(tick_opts.get('y', default_y))
-            install_native = getattr(canvas, "set_native_tick_policy", None)
-            if native_ticks and callable(install_native):
-                canvas.set_native_tick_policy(native_ticks)
-                canvas.set_tick_density(xt, yt, reframe_overlay_y=False)
-                project = getattr(canvas, "project_native_ticks", None)
-                if callable(project):
-                    project()
-            else:
-                if callable(install_native):
-                    canvas.set_native_tick_policy(None)
-                canvas.set_tick_density(xt, yt)
+            canvas.set_tick_density(
+                xt,
+                yt,
+                reframe_overlay_y=not bool(
+                    state.xlim or state.ylims or initial_axis_ranges
+                ),
+            )
             canvas.settle_view_restore()
             restore_placement = getattr(canvas, "restore_cursor_placement", None)
             if callable(restore_placement):

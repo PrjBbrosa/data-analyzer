@@ -410,7 +410,6 @@ class TimeDomainCanvasPG(QWidget):
         self._raw_x_bounds_by_fingerprint = {}
         self._raw_x_union_cache = None
         self._raw_x_union_cache_valid = False
-        self._x_viewport_intent = None
         # Parallel data_id dict (kept separate per design §4.2).
         self._channel_data_id = _ChannelKeyDict()
         # Composite keys of display-companion curves (e.g. filter overlays)
@@ -834,7 +833,6 @@ class TimeDomainCanvasPG(QWidget):
         self.disable_interactive_quality()
         self.clear()
         self.set_cursor_x_axis_context(x_axis_context)
-        self._native_line_width_px = {}
 
         # Split primary channels from display companions. A companion row
         # carries an 8th ``meta`` dict with ``companion_of`` set to the
@@ -887,20 +885,6 @@ class TimeDomainCanvasPG(QWidget):
                     companion_visible_by_source[companion_of] = True
                 continue
             axis_group = meta.get("axis_group") if meta else None
-            if meta and meta.get("line_width_mm"):
-                from .native_axes import line_width_px
-                dpi = 96.0
-                logical = getattr(self, "logicalDpiX", None)
-                if callable(logical):
-                    try:
-                        dpi = float(logical()) or 96.0
-                    except (TypeError, ValueError, RuntimeError):
-                        # Widget may be mid-teardown; 96 dpi is a safe mm→px default.
-                        dpi = 96.0
-                ck = _view_state_channel_key(data_id, name)
-                self._native_line_width_px[ck] = line_width_px(
-                    float(meta["line_width_mm"]), dpi
-                )
             primary = (
                 name, bool(visible), t, sig, color, unit, data_id, axis_group
             )
@@ -2387,22 +2371,22 @@ class TimeDomainCanvasPG(QWidget):
                 continue
         return out
 
-    def restore_visible_ylims(self, ylims, *, native_axis_ranges=None):
+    def restore_visible_ylims(self, ylims, *, initial_axis_ranges=None):
         """Restore Y ranges once per shared axis handle.
 
         Priority for each unique handle: any persisted member ylim (finite
-        union when they disagree), then WWT ``native_ticks['y'][axis_id]``
-        ``lo``/``hi``, then the union of visible raw samples inside the
-        current X window (full finite samples if that window is empty).
+        union when they disagree), then its one-time initial axis range, then
+        the union of visible raw samples inside the current X window (full
+        finite samples if that window is empty).
 
         Independent handles still fit a newly plotted channel that has no
         saved ylim. A sibling on a *shared* handle must not overwrite a
-        persisted or native range already applied to that handle.
+        persisted or initial range already applied to that handle.
         """
         view_state_lines = getattr(self, "_channel_view_state_lines", None) or {}
         legacy_lines = getattr(self, "_channel_lines", None) or {}
         ylims = ylims or {}
-        native_table = native_axis_ranges or {}
+        initial_table = initial_axis_ranges or {}
 
         def _pair_for_key(key):
             pair = view_state_lines.get(key)
@@ -2504,11 +2488,11 @@ class TimeDomainCanvasPG(QWidget):
                 any_persisted_applied = True
                 changed = True
                 continue
-            native = _finite_y_range(
-                native_table.get(getattr(handle, "axis_group", None)),
+            initial = _finite_y_range(
+                initial_table.get(getattr(handle, "axis_group", None)),
                 require_span=True,
             )
-            if native is not None and _apply_ylim(handle, native[0], native[1], keys):
+            if initial is not None and _apply_ylim(handle, initial[0], initial[1], keys):
                 changed = True
                 continue
             pending_fit.append((handle, keys))
@@ -2810,12 +2794,9 @@ class TimeDomainCanvasPG(QWidget):
     def reset_view_to_data_extents(self):
         """Toolbar Home helper: restore Home X and Home Y in one click.
 
-        X is the native Home target when this is a WWT native view, otherwise
-        the raw data union. Y uses ``native_tick_policy['y'][axis_id]``
-        ``lo``/``hi`` (the same table ``restore_visible_ylims`` reads) while
-        native policy is active; otherwise each handle is framed from the
-        RAW ``channel_data`` min/max of its visible curves. Y-Fit stays the
-        full-data path even on a native View.
+        X uses the raw data union and each handle frames from the RAW
+        ``channel_data`` min/max of its visible curves. Y-Fit stays the
+        full-data path.
 
         Bug 4: the hot-path ``PlotDataItem`` holds ONLY the viewport-clipped
         envelope (``_refresh_visible_data`` ships the xlim-clipped envelope),
@@ -2827,40 +2808,17 @@ class TimeDomainCanvasPG(QWidget):
         before: set the X union and Y ranges first (all synchronous, no
         intermediate frame can paint), then the single try/finally tail
         flush drains the debounce so the frame after Home holds the
-        global-window envelope. That flush's settle also reprojects native
-        ticks once over the restored viewport.
+        global-window envelope.
         """
         self.disable_interactive_quality()
         try:
-            # (1) Set X to the native Home target when this canvas is a WWT
-            # view; otherwise the raw data union (seeds the X-master too in
-            # overlay mode).
-            home = self._home_x_range()
-            if home is not None:
-                self._set_xrange_to_data_union(home)
-            else:
-                self._set_xrange_to_data_union()
-            # (2) Native Home Y is the installed policy table, not a second
-            # range source. Handles without a native spec still frame from
-            # RAW visible samples (mixed native/generic Views).
+            # (1) Home is always the ordinary raw-data union (including the
+            # X-master in overlay mode).
+            self._set_xrange_to_data_union()
+            # (2) Frame every visible handle from its raw full-data extent.
             ctrl = self._tick_density_controller
-            native_y = {}
-            if ctrl.native_policy_active():
-                candidate = (ctrl.native_tick_policy or {}).get("y")
-                if isinstance(candidate, dict):
-                    native_y = candidate
             n_y = max(3, min(20, ctrl.density[1]))
             for handle, names in self._axis_groups().values():
-                native = _finite_y_range(
-                    native_y.get(getattr(handle, "axis_group", None)),
-                    require_span=True,
-                )
-                if native is not None:
-                    try:
-                        handle.set_ylim(native[0], native[1])
-                        continue
-                    except Exception:
-                        pass
                 extent = self._visible_raw_y_extent(names)
                 if extent is None:
                     continue
@@ -3098,7 +3056,6 @@ class TimeDomainCanvasPG(QWidget):
             pass
         self._refresh_pending = False
         self._quality.reset_for_rebuild()
-        self._tick_density_controller.set_native_tick_policy(None)
 
         # Strip everything from the GraphicsLayoutWidget.
         try:
@@ -3150,7 +3107,6 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor.clear_items()
         self._cursor.invalidate_custom_x_path_cache()
         self.set_cursor_x_axis_context(None)
-        self.set_x_viewport_intent(None)
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
         # do that. Mirror TimeDomainCanvas.clear's behavior.
 
@@ -3215,33 +3171,6 @@ class TimeDomainCanvasPG(QWidget):
         return CursorController.invalidate_custom_x_path_cache(
             self._cursor, data_id=data_id, channel=channel,
         )
-
-    def set_x_viewport_intent(self, intent):
-        self._x_viewport_intent = intent
-
-    @property
-    def x_viewport_intent(self):
-        return self._x_viewport_intent
-
-    def _home_x_range(self):
-        from mf4_analyzer.ui.view_state import trusted_wwt_native_intent
-
-        intent = self._x_viewport_intent
-        if not trusted_wwt_native_intent(intent):
-            return None
-        home = getattr(intent, "home_range", None)
-        if home is None:
-            return None
-        lo, hi = float(home[0]), float(home[1])
-        if not (isfinite(lo) and isfinite(hi) and hi > lo):
-            return None
-        union = self._data_x_union()
-        if union is not None:
-            overlap_lo = max(lo, float(union[0]))
-            overlap_hi = min(hi, float(union[1]))
-            if not (overlap_hi > overlap_lo):
-                return None
-        return (lo, hi)
 
     def reset_cursor_state(self):
         return CursorController.reset_cursor_state(self._cursor)
@@ -3418,23 +3347,6 @@ class TimeDomainCanvasPG(QWidget):
         return self._tick_density_controller.set_tick_density(
             x, y, reframe_overlay_y=reframe_overlay_y,
         )
-
-    def set_native_tick_policy(self, native_ticks):
-        return self._tick_density_controller.set_native_tick_policy(native_ticks)
-
-    def project_native_ticks(self):
-        return self._tick_density_controller.project_native_ticks()
-
-    def _project_native_ticks_after_commit(self):
-        """Reproject native cadence once after a committed viewport settle.
-
-        No-op when native policy is off. Not called from the X-wheel hot
-        path; that arms ``_refresh_timer`` and lands here via settle.
-        """
-        ctrl = self._tick_density_controller
-        if not ctrl.native_policy_active():
-            return
-        self.project_native_ticks()
 
     # ------------------------------------------------------------------
     # Chart-options dialog (Fix 1: parity with the matplotlib path's
@@ -4074,7 +3986,6 @@ class TimeDomainCanvasPG(QWidget):
             self._refresh_pending = False
             self._interaction_state = "idle"
             self._quality._emit_quality_status_changed()
-        self._project_native_ticks_after_commit()
         return True
 
     def _emit_xrange_changed(self, source_handle=None):

@@ -506,21 +506,24 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     assert "尚未提供" not in existing.sub
 
 
-def test_wwt_winwert_layout_row_covers_views_and_ultraview():
+def test_wwt_winwert_row_creates_ordinary_views_without_auto_ultraview():
     start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
     row = next(r for r in start.rows if "WinWert" in r.desc)
     joined = f"{row.desc} {row.sub}"
     for token in ("WWT", "WinWert", "View", "UltraView"):
         assert token in joined
-    assert "独立 Board" in joined
-    assert "单窗口" in joined
+    assert "按 WinWert 窗口" in joined
     assert "时域 View" in joined
-    assert "未生成" in joined
-    assert "不等于整个文件导入失败" in joined
-    assert "一次智能排版" in joined
-    assert "撤销" in joined
-    assert "重开" in joined
-    assert "不" in joined and "重排" in joined
+    assert "不会自动加入 UltraView" in joined
+    assert "手动把 View 加入 UltraView" in joined
+    assert "智能排版" in joined
+    assert "仅加载数据" in joined
+    for retired_promise in ("独立 Board", "原生 X 范围", "放置数量", "未生成"):
+        assert retired_promise not in joined
+    all_copy = " ".join(
+        f"{quick.desc} {quick.sub or ''}" for group in quickref.QUICKREF for quick in group.rows
+    )
+    assert "WWT 导入后的智能排版" not in all_copy
     assert "像素级一致" not in joined
     assert "全部公式" not in joined
 

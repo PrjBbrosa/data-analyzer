@@ -1,8 +1,6 @@
 """WWT native layout → UltraView: topology, apply transactions, Smart Layout seams."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from mf4_analyzer.ultraview_core.grid_geometry import (
@@ -47,20 +45,6 @@ UCAN_MM = (
 # View 7 exact-overlaps View 6 and must follow that reading group.
 UCAN_UPPER_ORDERS = (0, 2, 3)
 UCAN_LOWER_ORDERS = (1, 4, 5, 6)
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_UCAN_SAMPLE_CANDIDATES = (
-    _REPO_ROOT / "testdoc" / "WWT" / "U-Can_D6-CSER double_00479.wwt",
-    _REPO_ROOT / "testdoc" / "wwt" / "U-Can_D6-CSER double_00479.wwt",
-)
-
-
-def _optional_ucan_sample() -> Path | None:
-    for path in _UCAN_SAMPLE_CANDIDATES:
-        if path.is_file():
-            return path
-    return None
-
-
 def _ucan_refs() -> tuple[UltraViewRef, ...]:
     return tuple(UltraViewRef("time", f"v{index}") for index in range(7))
 
@@ -320,7 +304,6 @@ def test_coordinator_commits_native_layout_to_its_owned_workspace(qapp):
         coordinator.shutdown()
         host.deleteLater()
         qapp.processEvents()
-
 
 def test_workspace_controller_commits_native_layout_with_overlap_warning(qapp):
     from PyQt5.QtWidgets import QWidget
@@ -765,46 +748,4 @@ def test_ucan_import_is_one_undo_through_the_real_projection_seam(qapp):
     finally:
         coordinator.shutdown()
         host.deleteLater()
-        qapp.processEvents()
-
-
-@pytest.mark.skipif(
-    _optional_ucan_sample() is None,
-    reason="optional local U-Can WWT sample is not present",
-)
-def test_optional_ucan_wwt_sample_smoke(qapp, monkeypatch):
-    """Optional testdoc smoke. Missing sample skips this test only, not owners."""
-    from mf4_analyzer.ui.main_window import MainWindow
-
-    path = _optional_ucan_sample()
-    assert path is not None
-    mw = MainWindow()
-    qapp.processEvents()
-
-    class _AcceptLayout:
-        def ask(self, body, informative=""):
-            return True
-
-        def noop(self, *args, **kwargs):
-            return None
-
-    accept = _AcceptLayout()
-    monkeypatch.setattr(mw._wwt_import, "_ask_layout", accept.ask)
-    monkeypatch.setattr(mw, "plot_time", accept.noop)
-    monkeypatch.setattr(mw, "_apply_active_view", accept.noop)
-    try:
-        mw._load_one(str(path))
-        qapp.processEvents()
-        board = mw._ultraview.board
-        assert len(board.free_grid) == 7
-        assert board.unplaced == []
-        placed = [(item.ref, item.rect) for item in board.free_grid]
-        _assert_no_overlaps(placed)
-        refs = tuple(item.ref for item in board.free_grid)
-        assert len(refs) == 7
-        history = mw._ultraview._workspace_controller.grid_histories[board.board_id]
-        assert len(history.undo) == 1
-    finally:
-        mw.close()
-        mw.deleteLater()
         qapp.processEvents()

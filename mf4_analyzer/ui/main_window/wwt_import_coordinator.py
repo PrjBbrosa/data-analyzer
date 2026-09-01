@@ -3,12 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
-
 from PyQt5.QtWidgets import QCheckBox, QMessageBox
 
 from mf4_analyzer.io.wwt_document import (
-    CODE_EXACT_OVERLAP,
     CODE_MISSING_FORMULA_REF,
     CODE_UNKNOWN_RECORD,
     CODE_UNSUPPORTED_FORMULA,
@@ -19,9 +16,6 @@ from mf4_analyzer.io.wwt_document import (
     parse_wwt_issue,
 )
 from mf4_analyzer.ui.view_state import default_view_tab_color, is_reusable_blank_view
-from mf4_analyzer.ultraview_core.native_layout import (
-    NATIVE_LAYOUT_NON_DEGRADED_CODES,
-)
 from mf4_analyzer.ui.wwt_view_import import (
     build_registered_record_map,
     build_wwt_view_proposals,
@@ -29,7 +23,7 @@ from mf4_analyzer.ui.wwt_view_import import (
 )
 from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
-ACCEPT_TEXT = "按 WinWert 排版并绘图"
+ACCEPT_TEXT = "创建时域 View 并绘图"
 REJECT_TEXT = "仅加载数据"
 APPLY_TO_REMAINING_TEXT = "对本次剩余 WWT 使用此选择"
 
@@ -73,36 +67,12 @@ def coerce_layout_prompt(value) -> WwtLayoutPromptResult:
         apply_to_remaining=bool(remaining),
     )
 
-# Placement is explained by the confirm dialog; UltraView already maps
-# membership/placed/collision caps to Chinese copy. Do not yellow-toast
-# those codes again. Axis-planning notes are not degraded-import facts.
-# Layout-success codes come from the shared native-layout set so
-# ``exact_overlap_relocated`` cannot drift. ``invalid_rect`` is graded with
-# outcome facts (Chinese when it caused unplaced), not dumped raw.
+# Axis-planning notes are not degraded-import facts and should not produce a
+# warning toast after the ordinary TimeDomain Views are created.
 _SILENT_CODES = frozenset({
     "hidden_axis",
     "auto_range",
-    "membership_limit",
-    "placed_limit",
-    "grid_full",
-    "grid_collision",
-    "board_limit",
-}) | (NATIVE_LAYOUT_NON_DEGRADED_CODES - {"invalid_rect"})
-
-
-def _projection_warnings(result) -> tuple[str, ...]:
-    """Extract native-layout warnings from ``add_time_views_from_native_layout``."""
-    warnings = getattr(result, "warnings", None)
-    if warnings is not None:
-        return tuple(str(item) for item in warnings if item)
-    if (
-        isinstance(result, tuple)
-        and len(result) == 2
-        and isinstance(result[0], tuple)
-        and isinstance(result[1], (tuple, list))
-    ):
-        return tuple(str(item) for item in result[1] if item)
-    return ()
+})
 
 
 @dataclass(frozen=True)
@@ -114,54 +84,6 @@ class WwtImportOutcome:
     issues: tuple[WwtIssue, ...] = field(default_factory=tuple)
     summary: str = ""
     accepted: bool = False
-    placed_count: int = 0
-    unplaced_count: int = 0
-    board_id: str = ""
-    unprojected_count: int = 0
-    generated_ids: tuple[str, ...] = ()
-
-
-def _wwt_stem_for_fids(window, fids) -> str:
-    """Filename stem of the physical ``.wwt`` that produced ``fids``."""
-    files = getattr(window, "files", {}) or {}
-    for fid in fids or ():
-        fd = files.get(fid)
-        if fd is None:
-            continue
-        path = getattr(fd, "filepath", None)
-        if path is None:
-            path = getattr(fd, "filename", None)
-        if path:
-            stem = Path(path).stem
-            if stem:
-                return stem
-    return "WinWert"
-
-
-def _layout_index(item) -> int:
-    if hasattr(item, "window_index"):
-        return int(item.window_index)
-    return int(item.index)
-
-
-def _exact_overlap_pairs(items) -> list[tuple[int, int]]:
-    pairs = []
-    seen = []
-    for item in items:
-        rect = item.rect_mm
-        idx = _layout_index(item)
-        for previous in seen:
-            prev = previous.rect_mm
-            if (
-                abs(rect.x - prev.x) <= 1e-6
-                and abs(rect.y - prev.y) <= 1e-6
-                and abs(rect.width - prev.width) <= 1e-6
-                and abs(rect.height - prev.height) <= 1e-6
-            ):
-                pairs.append((idx, _layout_index(previous)))
-                break
-        seen.append(item)
-    return pairs
 
 
 def _classify_unkept_windows(document, proposals) -> str:
@@ -194,14 +116,7 @@ def layout_dialog_text(document, proposals, *, available: int) -> tuple[str, str
         if record.tag == "Pars" and record.values is not None
     )
     create = min(kept, available)
-    if create <= 1:
-        layout_line = (
-            f"可按原排版生成 {create} 个时域 View，仅生成时域 View。"
-        )
-    else:
-        layout_line = (
-            f"可按原排版生成 {create} 个时域 View，并同步到独立 Board。"
-        )
+    layout_line = f"可按 WinWert 窗口创建 {create} 个时域 View 并绘图。"
     body = (
         f"检测到 {detected} 个 WinWert 数据窗口和 {formulas} 个可用计算通道。\n"
         f"{layout_line}"
@@ -210,13 +125,6 @@ def layout_dialog_text(document, proposals, *, available: int) -> tuple[str, str
         dropped = detected - kept
         reason = _classify_unkept_windows(document, proposals)
         body += f"\n其中 {dropped} 个窗口未生成 View（{reason}）。"
-    overlaps = _exact_overlap_pairs(file_windows)
-    if overlaps and create >= 2:
-        parts = [
-            f"第 {later + 1} 个窗口与第 {earlier + 1} 个位置重叠"
-            for later, earlier in overlaps
-        ]
-        body += "\n" + "，".join(parts) + "，将放入 UltraView 未放置区。"
     informative = ""
     if create < detected:
         informative = f"检测到 {detected} 个，可创建 {create} 个"
@@ -288,9 +196,8 @@ def collect_wwt_import_issues(
     *,
     created: int = 0,
     detected: int | None = None,
-    overlap_count: int = 0,
 ) -> tuple[WwtIssue, ...]:
-    """Grade document + proposal + placement into stable-code issues."""
+    """Grade document + ordinary View proposal into stable-code issues."""
     issues: list[WwtIssue] = []
     skip_seen: set[str] = set()
     formula_skips: list[tuple[str, str]] = []
@@ -373,11 +280,6 @@ def collect_wwt_import_issues(
             CODE_VIEW_CAP,
             f"已生成 {created}/{total} 个 WinWert View",
         ))
-    if overlap_count:
-        issues.append(WwtIssue(
-            CODE_EXACT_OVERLAP,
-            f"{overlap_count} 个重叠窗口已放入未放置区",
-        ))
     return _unique_issues(issues)
 
 
@@ -391,27 +293,6 @@ def format_wwt_import_summary(
     return format_wwt_import_summary_io(
         issues, document=document, accepted=accepted,
     )
-
-
-def format_wwt_placement_summary(outcome) -> str:
-    """Accepted-import completion line. Empty when nothing was created."""
-    if not getattr(outcome, "accepted", False):
-        return ""
-    created = int(getattr(outcome, "created", 0) or 0)
-    if created <= 0:
-        return ""
-    placed = int(getattr(outcome, "placed_count", 0) or 0)
-    unplaced = int(getattr(outcome, "unplaced_count", 0) or 0)
-    unprojected = int(getattr(outcome, "unprojected_count", 0) or 0)
-    if created < 2 or (placed == 0 and unplaced == 0 and unprojected == 0):
-        return f"已生成 {created} 个 WinWert View"
-    text = (
-        f"已生成 {created} 个 WinWert View："
-        f"{placed} 个已放置，{unplaced} 个在未放置区"
-    )
-    if unprojected:
-        text += f"，{unprojected} 个未投影"
-    return text
 
 
 class WwtImportCoordinator:
@@ -499,13 +380,7 @@ class WwtImportCoordinator:
             created: int,
             view_ids: tuple[str, ...] = (),
             accepted: bool = False,
-            overlap_count: int = 0,
             extra_warnings: tuple[str, ...] = (),
-            placed_count: int = 0,
-            unplaced_count: int = 0,
-            board_id: str = "",
-            unprojected_count: int = 0,
-            generated_ids: tuple[str, ...] = (),
         ) -> WwtImportOutcome:
             issues = list(collect_wwt_import_issues(
                 document,
@@ -513,7 +388,6 @@ class WwtImportCoordinator:
                 proposals,
                 created=created,
                 detected=len(proposals),
-                overlap_count=overlap_count,
             ))
             for text in extra_warnings or ():
                 issues.append(parse_wwt_issue(text))
@@ -540,11 +414,6 @@ class WwtImportCoordinator:
                 issues=issues,
                 summary=summary,
                 accepted=accepted,
-                placed_count=placed_count,
-                unplaced_count=unplaced_count,
-                board_id=board_id,
-                unprojected_count=unprojected_count,
-                generated_ids=generated_ids,
             )
 
         if not proposals:
@@ -584,53 +453,10 @@ class WwtImportCoordinator:
         extra = []
         for item in keep:
             extra.extend(item.warnings)
-        overlaps = _exact_overlap_pairs(keep)
         created = len(indexes)
-        placed_count = 0
-        unplaced_count = 0
-        unprojected_count = 0
-        board_id = ""
-        generated_ids: tuple[str, ...] = ()
-        if created >= 2:
-            ultra = getattr(window, "_ultraview", None)
-            adder = (
-                getattr(ultra, "add_time_views_from_native_layout", None)
-                if ultra else None
-            )
-            if callable(adder):
-                items = [
-                    (manager.views[idx].view_id, proposal.rect_mm)
-                    for idx, proposal in zip(indexes, keep)
-                ]
-                result = adder(
-                    items,
-                    board_name=_wwt_stem_for_fids(window, fids),
-                    dedicated_board=True,
-                    reuse_empty_board=True,
-                )
-                extra.extend(_projection_warnings(result))
-                placed_ids = getattr(result, "placed_view_ids", None)
-                if placed_ids is None:
-                    placed_ids = result[0] if isinstance(result, tuple) and result else ()
-                unplaced_ids = tuple(getattr(result, "unplaced_ids", ()) or ())
-                generated_ids = tuple(getattr(result, "generated_ids", None) or ())
-                if not generated_ids:
-                    generated_ids = tuple(placed_ids or ()) + unplaced_ids
-                board_id = str(getattr(result, "board_id", "") or "")
-                placed_count = len(tuple(placed_ids or ()))
-                unplaced_count = len(unplaced_ids)
-                unprojected_count = max(
-                    0, len(generated_ids) - placed_count - unplaced_count
-                )
         return _outcome(
             created=created,
             view_ids=view_ids,
             accepted=True,
-            overlap_count=len(overlaps),
             extra_warnings=tuple(extra),
-            placed_count=placed_count,
-            unplaced_count=unplaced_count,
-            board_id=board_id,
-            unprojected_count=unprojected_count,
-            generated_ids=generated_ids,
         )

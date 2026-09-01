@@ -352,7 +352,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "channel.export_wwt_storage",
         "coaxis.merge",
         # Same priority 65 as view.compact_tabs; registry order wins.
-        "file.wwt_native_layout",
+        "file.wwt_create_views",
         "view.compact_tabs",
         "ultraview.view_rail",
         "ultraview.unplaced_badge",
@@ -363,7 +363,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "batch.export_options",
         "file.wwt_batch_choice",
         "time.custom_x_paths",
-        "time.wwt_native_home",
+        "chart.toolbar_pan",
         "toolbar.save_as_menu",
     ]
 

@@ -1,8 +1,9 @@
-"""W0 owner: WWT open → Board Fit / Smart Layout fixed-point integration.
+"""WWT ordinary Views → manual UltraView → Smart Layout fixed-point coverage.
 
-Uses the synthetic U-Can fixture and the real UltraView projection seam.
-Does not stub ``add_time_views_from_native_layout``. QSettings isolation is
-the directory autouse fixture; policy is frozen explicitly where possible.
+WWT import must not alter a Board.  The cards below enter through the same
+source-tab entry point that the ``加入总览`` command uses; no test writes Board
+state or calls the retired WWT native-layout projection.  QSettings isolation
+is the directory autouse fixture; policy is frozen explicitly where possible.
 """
 from __future__ import annotations
 
@@ -101,20 +102,35 @@ class _ZoomFitCount:
         return self._original()
 
 
-def _open_ucan_board(mw, monkeypatch, tmp_path, qapp):
+def _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp):
     _install_explicit_policy(monkeypatch)
     path = wwt.ucan_semantic_seven_windows(tmp_path / "ucan_semantic.wwt")
     asked = _load_wwt(mw, monkeypatch, path, accept=True)
     qapp.processEvents()
     board = mw._ultraview.board
     assert asked
-    assert "同步到独立 Board" in asked[0][0]
-    assert len(board.free_grid) == 7
+    assert "创建 7 个时域 View" in asked[0][0]
+    assert "UltraView" not in asked[0][0]
+    view_ids = tuple(str(state.view_id) for state in mw.view_manager.views)
+    assert len(view_ids) == wwt.UCAN_SEMANTIC_WINDOW_COUNT
+    assert board.free_grid == []
+    assert board.unplaced == []
+
+    # This is the signal emitted by the View-tab ``加入总览`` command.  Do not
+    # seed ``board.free_grid`` directly here: import and this user action have
+    # intentionally different ownership.
+    for view_id in view_ids:
+        mw.chart_stack.add_to_ultraview_requested.emit("time", view_id)
+        qapp.processEvents()
+
+    assert {item.ref.view_id for item in board.free_grid} == set(view_ids)
+    assert len(board.free_grid) == wwt.UCAN_SEMANTIC_WINDOW_COUNT
+    assert board.unplaced == []
     _hold_pending_settle(_controller(mw))
     return board
 
 
-def test_wwt_open_then_board_fit_keeps_exact_placement_digest(
+def test_wwt_import_then_manual_board_fit_keeps_exact_placement_digest(
     qapp, tmp_path, monkeypatch,
 ):
     """UFP-02: zoom_fit is camera-only; digest / history / revision stay put."""
@@ -123,7 +139,7 @@ def test_wwt_open_then_board_fit_keeps_exact_placement_digest(
     mw = MainWindow()
     qapp.processEvents()
     try:
-        board = _open_ucan_board(mw, monkeypatch, tmp_path, qapp)
+        board = _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp)
         controller = _controller(mw)
         page = _page(mw)
         revision = controller._current_layout_revision(board.board_id)
@@ -153,24 +169,27 @@ def test_wwt_open_then_board_fit_keeps_exact_placement_digest(
         qapp.processEvents()
 
 
-def test_wwt_open_then_smart_layout_is_already_a_fixed_point(
+def test_manual_smart_layout_reaches_a_fixed_point(
     qapp, tmp_path, monkeypatch,
 ):
-    """Import geometry is already the Smart Layout fixed point (UFP-05)."""
+    """One manual Smart Layout makes a subsequent command a strict no-op."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     mw = MainWindow()
     qapp.processEvents()
     try:
-        board = _open_ucan_board(mw, monkeypatch, tmp_path, qapp)
+        board = _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp)
         controller = _controller(mw)
         page = _page(mw)
+        page.auto_arrange_requested.emit()
+        qapp.processEvents()
         revision = controller._current_layout_revision(board.board_id)
-        before = _placement_digest(board, revision)
+        after_first = _placement_digest(board, revision)
         page.auto_arrange_requested.emit()
         qapp.processEvents()
         after_revision = controller._current_layout_revision(board.board_id)
-        assert _placement_digest(board, after_revision) == before
+        assert _placement_digest(board, after_revision) == after_first
+        assert after_revision == revision
     finally:
         mw.close()
         mw.deleteLater()
@@ -186,7 +205,7 @@ def test_second_manual_smart_layout_is_zero_mutation_zero_history(
     mw = MainWindow()
     qapp.processEvents()
     try:
-        board = _open_ucan_board(mw, monkeypatch, tmp_path, qapp)
+        board = _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp)
         controller = _controller(mw)
         page = _page(mw)
         counter = _ZoomFitCount(page.zoom_fit)
@@ -218,7 +237,7 @@ def test_window_resize_does_not_relayout_until_explicit_command(
     mw = MainWindow()
     qapp.processEvents()
     try:
-        board = _open_ucan_board(mw, monkeypatch, tmp_path, qapp)
+        board = _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp)
         controller = _controller(mw)
         page = _page(mw)
         revision = controller._current_layout_revision(board.board_id)

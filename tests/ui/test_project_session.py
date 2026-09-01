@@ -990,6 +990,35 @@ def test_file_removal_drops_ylims_for_closed_fid():
     assert state.ylims == {keep: (-2.0, 2.0)}
 
 
+def test_file_and_channel_removal_prune_persisted_channel_axis_groups():
+    """View-owned composite group ids cannot outlive their channel identity."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.view_state import ViewState
+
+    state = ViewState(
+        name="Scoped",
+        tab_color="#2d7ff9",
+        attached_file_ids=["f1", "f2"],
+        checked=[("f1", "speed"), ("f2", "speed")],
+        axis_opts={
+            "channel_axis_groups": {
+                '["f1","speed"]': "axis-1",
+                '["f2","speed"]': "axis-2",
+            },
+        },
+    )
+
+    MainWindow._filter_time_view_state_for_removed_fids(state, {"f1"})
+    assert state.axis_opts["channel_axis_groups"] == {
+        '["f2","speed"]': "axis-2",
+    }
+
+    MainWindow._filter_time_view_state_for_removed_channels(
+        state, {("f2", "speed")},
+    )
+    assert "channel_axis_groups" not in state.axis_opts
+
+
 def test_load_wwt_toasts_skipped_channels(qapp, tmp_path, monkeypatch):
     """Real degraded skip (unknown tag) still surfaces as one 未导入 summary."""
     import numpy as np
@@ -1560,6 +1589,77 @@ def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(
     assert record_binding_count(restored.navigator) == 1
     roles = record_binding_roles(restored.navigator)
     assert roles[0][2] == record.binding_id
+
+
+def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
+    qapp, tmp_path, monkeypatch,
+):
+    """Legacy binding conversion waits for the reopened WWT source arrays."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers import wwt_factory as wwt
+
+    path = wwt.channel_xy_with_auxiliaries(path=tmp_path / "legacy.wwt")
+    project = tmp_path / "legacy.tlproj"
+    source = MainWindow()
+    monkeypatch.setattr(source._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    source._load_one(str(path))
+    qapp.processEvents()
+    old_fid = next(iter(source.files))
+    source.save_project(project)
+
+    payload = json.loads(project.read_text(encoding="utf-8"))
+    view = payload["views"][0]
+    view["checked"] = []
+    view["colors"] = {}
+    view["curve_bindings"] = [{
+        "binding_id": "legacy-channel",
+        "y_ref": {
+            "kind": "channel", "fid": old_fid, "channel": wwt.CHAN_Y,
+            "record_index": None,
+        },
+        "x_ref": {
+            "kind": "channel", "fid": old_fid, "channel": wwt.CHAN_X,
+            "record_index": None,
+        },
+        "display_name": f"{wwt.CHAN_Y} [{wwt.CHAN_Y_UNIT}]",
+        "unit": wwt.CHAN_Y_UNIT,
+        "color": wwt.palette_hex(wwt.CHAN_Y_COLOR),
+        "axis_id": "legacy-axis",
+        "y_range": [wwt.CHAN_Y_LO, wwt.CHAN_Y_HI],
+    }]
+    view["hidden_curve_binding_ids"] = ["legacy-channel"]
+    view["x_viewport_intent"] = {"source": "wwt_native"}
+    view.setdefault("axis_opts", {}).update({
+        "native_ticks": {"x": {"major": 20.0}},
+        "x_viewport_intent": {"source": "wwt_native"},
+    })
+    project.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = MainWindow()
+    monkeypatch.setattr(restored._wwt_import, "_ask_layout", lambda *_a, **_k: True)
+    restored.open_project(project)
+    qapp.processEvents()
+
+    state = restored.view_manager.get(restored.view_manager.active)
+    fresh_fid = next(iter(restored.files))
+    assert state.curve_bindings == []
+    assert state.checked == [(fresh_fid, wwt.CHAN_Y)]
+    assert state.colors[(fresh_fid, wwt.CHAN_Y)] == wwt.palette_hex(
+        wwt.CHAN_Y_COLOR,
+    )
+    assert state.hidden_curve_binding_ids == []
+    assert state.axis_opts["channel_axis_groups"] == {
+        f'["{fresh_fid}","{wwt.CHAN_Y}"]': "legacy-axis",
+    }
+    assert "native_ticks" not in state.axis_opts
+    assert "x_viewport_intent" not in state.axis_opts
+
+    rewritten = tmp_path / "rewritten.tlproj"
+    restored.save_project(rewritten)
+    saved = json.loads(rewritten.read_text(encoding="utf-8"))["views"][0]
+    assert "x_viewport_intent" not in saved
+    assert "native_ticks" not in saved["axis_opts"]
+    assert saved["curve_bindings"] == []
 
 
 def test_project_restore_unremapable_record_has_no_ghost_row(

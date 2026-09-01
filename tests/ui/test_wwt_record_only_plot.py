@@ -2,29 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
-
 import pyqtgraph as pg
-import pytest
 
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.time_curve_bindings import TimeDataRef
 from tests._helpers import wwt_factory as wwt
 
-_ROOT = Path(__file__).resolve().parents[2]
-_UCAN_SAMPLE = _ROOT / "testdoc" / "WWT" / "U-Can_D6-CSER double_00479.wwt"
-
-
-def _accept_wwt_layout(mw, monkeypatch):
+def _accept_wwt_import(mw, monkeypatch):
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: True)
-    monkeypatch.setattr(
-        mw._ultraview, "add_time_views_from_native_layout", lambda *a, **k: (),
-    )
 
 
 def _load_wwt_and_plot(mw, monkeypatch, path, *, plot=True):
     """Load a synthetic WWT. ``plot=True`` keeps the live View-restore path."""
-    _accept_wwt_layout(mw, monkeypatch)
+    _accept_wwt_import(mw, monkeypatch)
     if not plot:
         monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
         monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
@@ -113,11 +103,9 @@ def test_unchecking_measurement_keeps_record_only_tolerance(
 
     view = mw.view_manager.get(mw.view_manager.active)
     kinds = [binding.y_ref.kind for binding in view.curve_bindings]
-    assert kinds == ["channel", "wwt_record"]
-    meas = next(
-        binding for binding in view.curve_bindings if binding.y_ref.kind == "channel"
-    )
-    y_key = (meas.y_ref.fid, meas.y_ref.channel)
+    assert kinds == ["wwt_record"]
+    y_key = next(key for key in view.checked if key[1] == wwt.MEAS_Y)
+    assert y_key in view.colors
     assert y_key in {(fid, ch) for fid, ch, _c in mw.channel_list.get_checked_channels()}
 
     mw._plot_time_on_canvas(mw.canvas_time, update_primary_ui=True)
@@ -142,7 +130,7 @@ def test_unchecking_measurement_keeps_record_only_tolerance(
     assert y_key not in result.successful_channel_keys
 
 
-def test_unchecking_channel_backed_binding_does_not_resurrect_it(
+def test_unchecking_ordinary_channel_follows_checked_and_color_path(
     qapp, qtbot, tmp_path, monkeypatch,
 ):
     path = wwt.channel_xy_with_auxiliaries(tmp_path / "xy.wwt")
@@ -153,8 +141,12 @@ def test_unchecking_channel_backed_binding_does_not_resurrect_it(
     qapp.processEvents()
 
     view = mw.view_manager.get(mw.view_manager.active)
-    assert any(binding.y_ref.kind == "channel" for binding in view.curve_bindings)
-    assert not any(binding.y_ref.kind == "wwt_record" for binding in view.curve_bindings)
+    assert view.curve_bindings == []
+    y_key = next(key for key in view.checked if key[1] == wwt.CHAN_Y)
+    assert y_key in view.colors
+    assert y_key in {
+        (fid, channel) for fid, channel, _color in mw.channel_list.get_checked_channels()
+    }
 
     mw.channel_list.set_checked_channels([])
     result = mw._plot_time_on_canvas(
@@ -178,9 +170,7 @@ def test_failed_record_only_binding_keeps_issue_and_does_not_fallback(
     qapp.processEvents()
 
     view = mw.view_manager.get(mw.view_manager.active)
-    meas = next(
-        binding for binding in view.curve_bindings if binding.y_ref.kind == "channel"
-    )
+    assert [binding.y_ref.kind for binding in view.curve_bindings] == ["wwt_record"]
     broken = [
         replace(
             binding,
@@ -193,8 +183,7 @@ def test_failed_record_only_binding_keeps_issue_and_does_not_fallback(
         for binding in view.curve_bindings
     ]
     view.curve_bindings = broken
-    y_fid, y_channel = meas.y_ref.fid, meas.y_ref.channel
-    mw.channel_list.set_checked_channels([])
+    y_fid, y_channel = next(key for key in view.checked if key[1] == wwt.MEAS_Y)
 
     result = mw._plot_time_on_canvas(
         mw.canvas_time, update_primary_ui=True, user_initiated=True,
@@ -203,37 +192,11 @@ def test_failed_record_only_binding_keeps_issue_and_does_not_fallback(
 
     assert result is not None
     assert any(issue.code == "missing_record" for issue in result.issues)
-    assert result.rows == []
-    assert (y_fid, y_channel) not in result.successful_channel_keys
+    assert (y_fid, y_channel) in result.successful_channel_keys
     fd = mw.files[y_fid]
     prefixed = fd.get_prefixed_channel(y_channel)
-    assert all(row[0] != prefixed for row in result.rows)
-    assert _drawn_series(mw.canvas_time) == []
+    assert any(row[0] == prefixed for row in result.rows)
+    assert all(wwt.TOL_Y not in row[0] for row in result.rows)
+    assert any(wwt.MEAS_Y in name for name in _names(_drawn_series(mw.canvas_time)))
+    assert not any(wwt.TOL_Y in name for name in _names(_drawn_series(mw.canvas_time)))
     assert "请在左侧勾选至少一个通道" not in toasts
-
-
-def test_ucan_record_only_views_plot_when_customer_sample_present(
-    qapp, qtbot, monkeypatch,
-):
-    if not _UCAN_SAMPLE.is_file():
-        pytest.skip(f"optional customer WWT sample missing: {_UCAN_SAMPLE}")
-    mw = _window(qapp, qtbot)
-    _load_wwt_and_plot(mw, monkeypatch, _UCAN_SAMPLE)
-    qapp.processEvents()
-
-    record_only = [
-        idx
-        for idx, view in enumerate(mw.view_manager.views)
-        if view.checked == []
-        and any(binding.y_ref.kind == "wwt_record" for binding in view.curve_bindings)
-        and not any(binding.y_ref.kind == "channel" for binding in view.curve_bindings)
-    ]
-    assert record_only, "U-Can sample should include record-only Views"
-    for idx in record_only:
-        mw.view_manager.set_active(idx)
-        qapp.processEvents()
-        assert mw.channel_list.get_checked_channels() == []
-        drawn = _drawn_series(mw.canvas_time)
-        assert drawn, f"U-Can View index {idx} must plot record-only XY"
-        assert all(isinstance(pdi, pg.PlotDataItem) for _n, pdi, _x, _y in drawn)
-        assert mw.canvas_time._empty_hint_text in ("", None)

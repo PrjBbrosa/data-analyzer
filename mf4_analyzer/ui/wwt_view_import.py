@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
-from mf4_analyzer.io.wwt_display import WwtCurveDisplay, WwtWindowRectMm
+from mf4_analyzer.io.wwt_display import WwtCurveDisplay
 from mf4_analyzer.io.wwt_document import WwtDocument, WwtRecord
 from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
 from mf4_analyzer.ui.time_xaxis import (
@@ -18,11 +18,7 @@ from mf4_analyzer.ui.time_xaxis import (
     PER_SOURCE_NAME,
     CustomXAxisSpec,
 )
-from mf4_analyzer.ui.view_state import (
-    X_VIEWPORT_WWT_NATIVE,
-    XViewportIntent,
-    ViewState,
-)
+from mf4_analyzer.ui.view_state import ViewState
 
 _UNIT_SUFFIX = re.compile(r"\s*\[[^\]]*\]\s*$")
 _MAX_RECORD_WARN = "duplicate_record_index"
@@ -40,10 +36,8 @@ class RegisteredWwtSources:
 @dataclass(frozen=True)
 class WwtViewProposal:
     window_index: int
-    rect_mm: WwtWindowRectMm
     state: ViewState
     warnings: tuple[str, ...]
-    line_width_mm: float = 0.2
 
 
 def register_groups_for_test(
@@ -184,28 +178,25 @@ def _ranges_overlap(left: tuple[float, float], right: tuple[float, float]) -> bo
     return max(left[0], right[0]) < min(left[1], right[1])
 
 
-def _resolve_native_x_viewport(
+def _initial_xlim(
     x_row, records: Sequence[WwtRecord], *, window_index: int, warnings: list[str],
-) -> tuple[tuple[float, float] | None, XViewportIntent | None]:
-    native = None
+) -> tuple[float, float] | None:
+    """Keep a valid file-specified initial X range without a native mode."""
+    initial = None
     if x_row is not None and _range_ok(x_row.lo, x_row.hi):
-        native = (float(x_row.lo), float(x_row.hi))
+        initial = (float(x_row.lo), float(x_row.hi))
     elif x_row is not None:
         warnings.append(f"native_x_range_invalid: window {window_index + 1}")
-        return None, None
-    if native is None:
-        return None, None
+        return None
+    if initial is None:
+        return None
     span = None
     if 0 <= int(x_row.record_index) < len(records):
         span = _record_finite_span(records[x_row.record_index])
-    if span is not None and not _ranges_overlap(native, span):
+    if span is not None and not _ranges_overlap(initial, span):
         warnings.append(f"native_x_range_no_overlap: window {window_index + 1}")
-        return None, None
-    return native, XViewportIntent(
-        source=X_VIEWPORT_WWT_NATIVE,
-        initial_range=native,
-        home_range=native,
-    )
+        return None
+    return initial
 
 
 def _data_ref(
@@ -226,14 +217,7 @@ def _data_ref(
 def _compatible_axis(curve: WwtCurveDisplay, owner: WwtCurveDisplay, unit: str, owner_unit: str) -> bool:
     if _norm_unit(unit) != _norm_unit(owner_unit):
         return False
-    if curve.lo != owner.lo or curve.hi != owner.hi:
-        return False
-    if curve.tick_interval == 0.0 and curve.grid_interval == 0.0:
-        return True
-    return (
-        curve.tick_interval == owner.tick_interval
-        and curve.grid_interval == owner.grid_interval
-    )
+    return curve.lo == owner.lo and curve.hi == owner.hi
 
 
 def _plan_axes(
@@ -286,36 +270,78 @@ def visible_y_windows(document) -> list:
     return [window for window in windows if _y_visible_rows(window)]
 
 
-def _x_axis_opts(
-    bindings: Sequence[TimeCurveBinding], x_label: str,
-) -> dict:
-    """Expose a real shared channel name to the Inspector resolver contract.
-
-    Each imported WWT curve keeps its exact X identity in ``binding.x_ref``.
-    The Inspector spec also governs ordinary curves added to this View later,
-    so it must resolve that shared channel name inside each curve's own source
-    rather than pinning every future Y to the original WWT's X array.
-
-    Per-curve or record-backed X still has no honest global resolver shape.
-    Those cases retain the time-axis fallback instead of guessing a channel.
-    """
-    channel_refs = {
-        (binding.x_ref.fid, binding.x_ref.channel)
-        for binding in bindings
-        if binding.x_ref.kind == "channel" and binding.x_ref.channel
-    }
-    if bindings and len(channel_refs) == 1 and all(
-        binding.x_ref.kind == "channel" for binding in bindings
-    ):
-        channel = next(iter(channel_refs))[1]
+def _x_axis_opts(ordinary_x_channel: str | None, x_label: str) -> dict:
+    """Build one honest View-wide Custom-X spec for ordinary curves only."""
+    if ordinary_x_channel:
         return CustomXAxisSpec(
             mode=CHANNEL_MODE,
             resolver=PER_SOURCE_NAME,
             source_fid=None,
-            channel=str(channel),
+            channel=str(ordinary_x_channel),
             label=str(x_label or ""),
         ).to_axis_opts()
     return {"mode": "time", "label": str(x_label or "")}
+
+
+def _ordinary_channel_record_indexes(
+    rows: Sequence[tuple[WwtCurveDisplay, TimeDataRef, TimeDataRef]],
+) -> tuple[set[int], str | None]:
+    """Classify rows that ordinary TimeDomain data can represent exactly.
+
+    A single View-wide Custom-X spec can only name one channel.  Record-backed
+    X/Y and heterogeneous channel X stay as exact bindings.  Axis sharing is
+    intentionally not part of this classification: it is a display grouping,
+    not data identity.  Ordinary channel rows therefore never become bindings
+    merely because a record-only curve shares their Y axis.
+    """
+    channel_rows = [
+        (row, y_ref, x_ref)
+        for row, y_ref, x_ref in rows
+        if y_ref.kind == "channel" and x_ref.kind == "channel" and x_ref.channel
+    ]
+    x_channels = {str(x_ref.channel) for _row, _y_ref, x_ref in channel_rows}
+    if len(x_channels) != 1:
+        return set(), None
+    ordinary = {
+        row.record_index
+        for row, _y_ref, _x_ref in channel_rows
+    }
+    if not ordinary:
+        return set(), None
+    return ordinary, next(iter(x_channels))
+
+
+def _ordinary_channel_axis_groups(
+    rows: Sequence[tuple[WwtCurveDisplay, TimeDataRef, TimeDataRef]],
+    ordinary_records: set[int],
+    axis_of: Mapping[int, str],
+) -> dict[str, str]:
+    """Persist only ordinary channel membership for shared initial Y axes.
+
+    Keys are JSON composite channel identities, matching the other persisted
+    ViewState tables.  The mapping has no tick, grid, range, or WWT-policy
+    fact; Task 2 restores it through the existing channel-tree axis-group
+    owner.  Keep a group whenever its source WWT axis contains more than one
+    visible curve, including a record-only sibling, so a mixed curve set has
+    enough information to rejoin ordinary and exceptional rows.
+    """
+    member_counts: dict[str, int] = {}
+    for row, _y_ref, _x_ref in rows:
+        axis_id = axis_of[row.record_index]
+        member_counts[axis_id] = member_counts.get(axis_id, 0) + 1
+    groups: dict[str, str] = {}
+    for row, y_ref, _x_ref in rows:
+        if (
+            row.record_index not in ordinary_records
+            or not y_ref.fid
+            or not y_ref.channel
+        ):
+            continue
+        axis_id = axis_of[row.record_index]
+        if member_counts.get(axis_id, 0) < 2:
+            continue
+        groups[_ylim_key((y_ref.fid, y_ref.channel))] = axis_id
+    return groups
 
 
 def build_wwt_view_proposals(
@@ -368,17 +394,24 @@ def build_wwt_view_proposals(
         x_row = window.curves[0] if window.curves else None
         x_label = x_row.label if x_row is not None else ""
         name = f"WinWert {window.index + 1} · {_label_without_unit(x_label)}"
-        xlim, x_viewport_intent = _resolve_native_x_viewport(
+        xlim = _initial_xlim(
             x_row, records, window_index=window.index, warnings=warnings,
+        )
+        resolved = [
+            (row, _data_ref(row.record_index, registered), _data_ref(row.x_record_index, registered))
+            for row in visible
+        ]
+        ordinary_records, ordinary_x_channel = _ordinary_channel_record_indexes(
+            resolved,
+        )
+        channel_axis_groups = _ordinary_channel_axis_groups(
+            resolved, ordinary_records, axis_of,
         )
         bindings: list[TimeCurveBinding] = []
         checked: list[tuple[str, str]] = []
         colors: dict[tuple[str, str], str] = {}
         ylims: dict[str, tuple[float, float]] = {}
-        native_y: dict[str, dict] = {}
-        for row in visible:
-            y_ref = _data_ref(row.record_index, registered)
-            x_ref = _data_ref(row.x_record_index, registered)
+        for row, y_ref, x_ref in resolved:
             color = _rgb_hex(row.color_rgb)
             axis_id = axis_of[row.record_index]
             y_range = (float(row.lo), float(row.hi)) if _range_ok(row.lo, row.hi) else (0.0, 1.0)
@@ -386,47 +419,36 @@ def build_wwt_view_proposals(
                 warnings.append(
                     f"auto_range: window {window.index + 1} record {row.record_index}"
                 )
-            bindings.append(
-                TimeCurveBinding(
-                    binding_id=f"window-{window.index}-record-{row.record_index}",
-                    y_ref=y_ref,
-                    x_ref=x_ref,
-                    display_name=row.label,
-                    unit=_curve_unit(row, records),
-                    color=color,
-                    axis_id=axis_id,
-                    y_range=y_range,
-                    y_tick_interval=row.tick_interval or None,
-                    y_grid_interval=row.grid_interval or None,
-                    line_width_mm=float(window.line_width_mm),
-                    line_style="line",
+            if row.record_index not in ordinary_records:
+                bindings.append(
+                    TimeCurveBinding(
+                        binding_id=f"window-{window.index}-record-{row.record_index}",
+                        y_ref=y_ref,
+                        x_ref=x_ref,
+                        display_name=row.label,
+                        unit=_curve_unit(row, records),
+                        color=color,
+                        axis_id=axis_id,
+                        y_range=y_range,
+                    )
                 )
-            )
             if y_ref.kind == "channel" and y_ref.channel:
                 key = (y_ref.fid, y_ref.channel)
                 if key not in checked:
                     checked.append(key)
                 colors[key] = color
-                if row.selected and _range_ok(row.lo, row.hi):
+                if (
+                    row.record_index in ordinary_records
+                    and row.selected
+                    and _range_ok(row.lo, row.hi)
+                ):
                     display_name = registered.display_channels.get(key, key[1])
                     ylims[_ylim_key((key[0], display_name))] = (
                         float(row.lo), float(row.hi)
                     )
-            if row.selected and axis_id not in native_y:
-                native_y[axis_id] = {
-                    "major": row.tick_interval,
-                    "grid": row.grid_interval,
-                    "lo": row.lo,
-                    "hi": row.hi,
-                }
-        native_ticks = {
-            "x": {
-                "major": x_row.tick_interval if x_row is not None else 0.0,
-                "grid": x_row.grid_interval if x_row is not None else 0.0,
-                "label": x_label,
-            },
-            "y": native_y,
-        }
+        axis_opts = {"x_axis": _x_axis_opts(ordinary_x_channel, x_label)}
+        if channel_axis_groups:
+            axis_opts["channel_axis_groups"] = channel_axis_groups
         state = ViewState(
             name=name,
             tab_color="",
@@ -436,20 +458,14 @@ def build_wwt_view_proposals(
             plot_mode="overlay",
             xlim=xlim,
             ylims=ylims,
-            axis_opts={
-                "x_axis": _x_axis_opts(bindings, x_label),
-                "native_ticks": native_ticks,
-            },
+            axis_opts=axis_opts,
             curve_bindings=bindings,
-            x_viewport_intent=x_viewport_intent,
         )
         proposals.append(
             WwtViewProposal(
                 window_index=window.index,
-                rect_mm=window.rect_mm,
                 state=state,
                 warnings=tuple(dict.fromkeys(warnings)),
-                line_width_mm=float(window.line_width_mm),
             )
         )
     return proposals

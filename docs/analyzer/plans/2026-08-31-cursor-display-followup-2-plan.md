@@ -9,6 +9,9 @@
   [`2026-08-31-wwt-single-owner-axis-finalization-plan.md`](2026-08-31-wwt-single-owner-axis-finalization-plan.md)
 - 验证范围声明：各 Task 只跑自己的 owner 聚焦用例 + 所列护栏，不安排
   全量。真机（Cocoa 前台）证据仅 W1（WWT 截图）与 C4（hover 状态）需要。
+- **现行性说明（2026-09-01）**：本文 W1 的 WWT native tick/viewport follow-up 已由
+  [`2026-09-01-wwt-minimal-initial-view-contract-simplification-plan.md`](2026-09-01-wwt-minimal-initial-view-contract-simplification-plan.md)
+  取代；Cursor C1–C6 的历史计划与结论不回溯改写。
 
 ## 1. 本轮问题与根因（均已在当前工作区复现/定位）
 

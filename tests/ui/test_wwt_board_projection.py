@@ -204,8 +204,8 @@ def test_single_created_view_does_not_touch_board(qapp, tmp_path, monkeypatch):
     qapp.processEvents()
     try:
         assert asked
-        assert "仅生成时域 View" in asked[0][0]
-        assert "同步到独立 Board" not in asked[0][0]
+        assert "创建 1 个时域 View 并绘图" in asked[0][0]
+        assert "UltraView" not in asked[0][0]
         assert len(mw.view_manager.views) == 1
         assert mw.view_manager.views[0].name.startswith("WinWert")
         assert _board_fingerprint(mw._ultraview.workspace) == before
@@ -217,7 +217,7 @@ def test_single_created_view_does_not_touch_board(qapp, tmp_path, monkeypatch):
         qapp.processEvents()
 
 
-def test_first_multi_view_reuses_empty_board_named_for_stem(
+def test_multi_view_import_creates_views_without_board_side_effects(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -225,28 +225,36 @@ def test_first_multi_view_reuses_empty_board_named_for_stem(
     mw = MainWindow()
     qapp.processEvents()
     path = wwt.two_window_non_overlap(tmp_path / "rack.wwt")
-    board_id = mw._ultraview.board.board_id
+    before = _board_fingerprint(mw._ultraview.workspace)
+    active_board_id = mw._ultraview.workspace.active_board_id
+
+    def _unexpected_native_projection(*_args, **_kwargs):
+        raise AssertionError("WWT import must not project Views into UltraView")
+
+    monkeypatch.setattr(
+        mw._ultraview,
+        "add_time_views_from_native_layout",
+        _unexpected_native_projection,
+    )
     asked = _load_wwt(mw, monkeypatch, path, accept=True)
     qapp.processEvents()
     try:
         assert asked
-        assert "同步到独立 Board" in asked[0][0]
+        assert "创建 2 个时域 View 并绘图" in asked[0][0]
         uv = mw._ultraview
-        assert len(uv.workspace.boards) == 1
-        assert uv.board.board_id == board_id
-        assert uv.board.name == "rack"
-        assert uv.board.layout_mode == "free_grid"
-        assert len(uv.board.free_grid) == 2
-        assert uv.workspace.active_board_id == board_id
-        history = uv._workspace_controller.grid_histories[board_id]
-        assert len(history.undo) == 1
+        assert len(mw.view_manager.views) == 2
+        assert mw.view_manager.active == 0
+        assert _board_fingerprint(uv.workspace) == before
+        assert uv.workspace.active_board_id == active_board_id
     finally:
         mw.close()
         mw.deleteLater()
         qapp.processEvents()
 
 
-def test_second_multi_view_creates_new_active_board(qapp, tmp_path, monkeypatch):
+def test_second_multi_view_import_leaves_existing_board_selection_untouched(
+    qapp, tmp_path, monkeypatch,
+):
     from mf4_analyzer.ui.main_window import MainWindow
 
     mw = MainWindow()
@@ -256,19 +264,15 @@ def test_second_multi_view_creates_new_active_board(qapp, tmp_path, monkeypatch)
     _load_wwt(mw, monkeypatch, first, accept=True)
     qapp.processEvents()
     uv = mw._ultraview
-    first_board = uv.board
-    first_fp = _board_fingerprint(uv.workspace)
+    before = _board_fingerprint(uv.workspace)
+    active_board_id = uv.workspace.active_board_id
     _load_wwt(mw, monkeypatch, second, accept=True)
     qapp.processEvents()
     try:
-        assert len(uv.workspace.boards) == 2
-        assert uv.workspace.boards[0].board_id == first_board.board_id
-        assert uv.workspace.boards[0].name == "alpha"
-        assert _board_fingerprint(uv.workspace)[0] == first_fp[0]
-        assert uv.board.board_id != first_board.board_id
-        assert uv.board.name == "beta"
-        assert uv.workspace.active_board_id == uv.board.board_id
-        assert len(uv.board.free_grid) == 2
+        assert len(mw.view_manager.views) == 4
+        assert mw.view_manager.active == 2
+        assert _board_fingerprint(uv.workspace) == before
+        assert uv.workspace.active_board_id == active_board_id
     finally:
         mw.close()
         mw.deleteLater()
@@ -295,31 +299,7 @@ def test_reject_dialog_creates_no_views_and_leaves_board(qapp, tmp_path, monkeyp
         qapp.processEvents()
 
 
-def test_duplicate_stem_gets_numbered_board_name(qapp, tmp_path, monkeypatch):
-    from mf4_analyzer.ui.main_window import MainWindow
-
-    first_dir = tmp_path / "one"
-    second_dir = tmp_path / "two"
-    first_dir.mkdir()
-    second_dir.mkdir()
-    first = wwt.two_window_non_overlap(first_dir / "torque.wwt")
-    second = wwt.two_window_non_overlap(second_dir / "torque.wwt")
-    mw = MainWindow()
-    qapp.processEvents()
-    _load_wwt(mw, monkeypatch, first, accept=True)
-    _load_wwt(mw, monkeypatch, second, accept=True)
-    qapp.processEvents()
-    try:
-        names = [board.name for board in mw._ultraview.workspace.boards]
-        assert names == ["torque", "torque (2)"]
-        assert mw._ultraview.board.name == "torque (2)"
-    finally:
-        mw.close()
-        mw.deleteLater()
-        qapp.processEvents()
-
-
-def test_time_domain_cap_truncated_to_one_view_skips_dedicated_board(
+def test_time_domain_cap_truncated_to_one_view_leaves_board_untouched(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
@@ -333,8 +313,8 @@ def test_time_domain_cap_truncated_to_one_view_skips_dedicated_board(
     asked = _load_wwt(mw, monkeypatch, path, accept=True)
     qapp.processEvents()
     try:
-        assert "仅生成时域 View" in asked[0][0]
-        assert "同步到独立 Board" not in asked[0][0]
+        assert "创建 1 个时域 View 并绘图" in asked[0][0]
+        assert "UltraView" not in asked[0][0]
         assert len(mw.view_manager.views) == 2
         assert mw.view_manager.views[1].name.startswith("WinWert")
         assert _board_fingerprint(mw._ultraview.workspace) == before
@@ -346,20 +326,14 @@ def test_time_domain_cap_truncated_to_one_view_skips_dedicated_board(
         qapp.processEvents()
 
 
-def test_board_cap_keeps_views_and_does_not_mutate_existing_boards(
+def test_full_existing_board_set_does_not_affect_wwt_view_import(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
 
     mw = MainWindow()
     qapp.processEvents()
-    toasts = []
     uv = mw._ultraview
-    monkeypatch.setattr(
-        uv._workspace_controller,
-        "_toast_impl",
-        lambda msg, level="info": toasts.append((msg, level)),
-    )
     ws = uv.workspace
     while len(ws.boards) < MAX_UI_BOARDS:
         created = create_board(ws, name=f"filled-{len(ws.boards) + 1}")
@@ -369,26 +343,12 @@ def test_board_cap_keeps_views_and_does_not_mutate_existing_boards(
             add_ref(board, UltraViewRef("time", f"seed-{board.board_id[:8]}"))
     before = _board_fingerprint(ws)
     path = wwt.two_window_non_overlap(tmp_path / "full.wwt")
-    returns = []
-    real = uv.add_time_views_from_native_layout
-
-    def _capture(items, **kwargs):
-        result = real(items, **kwargs)
-        returns.append(result)
-        return result
-
-    monkeypatch.setattr(uv, "add_time_views_from_native_layout", _capture)
     _load_wwt(mw, monkeypatch, path, accept=True)
     qapp.processEvents()
     try:
         assert len(mw.view_manager.views) >= 2
         assert any(view.name.startswith("WinWert") for view in mw.view_manager.views)
-        assert returns
-        _placed, warnings = returns[0]
-        assert "board_limit" in warnings
         assert _board_fingerprint(ws) == before
-        assert any("Board 已达 20" in str(msg) for msg, _level in toasts)
-        assert any("未加入 UltraView" in str(msg) for msg, _level in toasts)
     finally:
         mw.close()
         mw.deleteLater()
@@ -429,66 +389,22 @@ def test_wwt_views_use_slot_palette_and_keep_winwert_curve_colors(
         qapp.processEvents()
 
 
-def test_exact_overlap_relocated_on_dedicated_board(
+def test_overlapping_wwt_windows_create_views_without_board_projection(
     qapp, tmp_path, monkeypatch,
 ):
     from mf4_analyzer.ui.main_window import MainWindow
 
     mw = MainWindow()
     qapp.processEvents()
+    before = _board_fingerprint(mw._ultraview.workspace)
+    active_board_id = mw._ultraview.workspace.active_board_id
     path = wwt.multi_window_overlap_and_formula(tmp_path / "overlap.wwt")
     _load_wwt(mw, monkeypatch, path, accept=True)
     qapp.processEvents()
     try:
-        board = mw._ultraview.board
-        assert board.name == "overlap"
-        assert len(board.free_grid) == wwt.MULTI_WINDOW_COUNT
-        assert board.unplaced == []
-        rects = [(item.ref, item.rect) for item in board.free_grid]
-        for index, left in enumerate(rects):
-            for right in rects[index + 1 :]:
-                a, b = left[1], right[1]
-                overlap = not (
-                    a.column + a.column_span <= b.column
-                    or b.column + b.column_span <= a.column
-                    or a.row + a.row_span <= b.row
-                    or b.row + b.row_span <= a.row
-                )
-                assert not overlap, (left, right)
-    finally:
-        mw.close()
-        mw.deleteLater()
-        qapp.processEvents()
-
-
-def test_three_exact_overlap_windows_place_all_without_arrow_warning(
-    qapp, tmp_path, monkeypatch,
-):
-    import re
-
-    from mf4_analyzer.ui.main_window import MainWindow
-
-    mw = MainWindow()
-    qapp.processEvents()
-    toasts = []
-    monkeypatch.setattr(
-        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
-    )
-    path = wwt.three_exact_overlap_windows(tmp_path / "triple.wwt")
-    _load_wwt(mw, monkeypatch, path, accept=True)
-    qapp.processEvents()
-    try:
-        board = mw._ultraview.board
-        assert len(board.free_grid) == wwt.THREE_EXACT_OVERLAP_COUNT
-        assert board.unplaced == []
-        warn = " ".join(
-            str(msg) for msg, level in toasts if level in {"warning", "warn"}
-        )
-        assert "exact_overlap_relocated" not in warn
-        assert "→" not in warn
-        assert re.search(r"\d+\s*->\s*\d+", warn) is None
-        info = " ".join(msg for msg, level in toasts if level == "info")
-        assert str(wwt.THREE_EXACT_OVERLAP_COUNT) in info or board.free_grid
+        assert len(mw.view_manager.views) == wwt.MULTI_WINDOW_COUNT
+        assert _board_fingerprint(mw._ultraview.workspace) == before
+        assert mw._ultraview.workspace.active_board_id == active_board_id
     finally:
         mw.close()
         mw.deleteLater()

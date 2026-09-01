@@ -1,5 +1,3 @@
-import copy
-
 from mf4_analyzer.ui import view_bridge
 from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 from mf4_analyzer.ui.view_state import ViewState
@@ -24,6 +22,8 @@ class _Nav:
         self.set_checked = None
         self.set_hidden = None
         self.set_colors = None
+        self._restored_axis_groups = {}
+        self.set_restored_axis_groups = None
         self.blocked = []
 
     def blockSignals(self, blocked):
@@ -54,6 +54,13 @@ class _Nav:
 
     def set_channel_colors(self, colors):
         self.set_colors = dict(colors)
+
+    def set_restored_axis_group_projection(self, groups):
+        self.set_restored_axis_groups = dict(groups or {})
+        self._restored_axis_groups = dict(groups or {})
+
+    def restored_axis_group_projection(self):
+        return dict(self._restored_axis_groups)
 
 
 class _Canvas:
@@ -488,7 +495,7 @@ def test_capture_ranges_preserves_hidden_channel_ylim():
     }
 
 
-def test_passive_capture_preserves_native_ticks():
+def test_passive_capture_discards_retired_native_ticks():
     native_ticks = {
         "x": {"major": 120.0, "grid": 60.0, "label": "Zeit"},
         "y": {
@@ -537,20 +544,12 @@ def test_passive_capture_preserves_native_ticks():
             "transient_scratch": {"do_not_keep": True},
         },
     )
-    original_native_ticks = copy.deepcopy(state.axis_opts["native_ticks"])
-
     view_bridge.capture_controls_into(state, win)
 
     captured_keys = sorted(state.axis_opts)
-    expected_keys = sorted(
-        {"range_filter", "x_axis", "tick_density", "native_ticks"}
-    )
-    assert "native_ticks" in state.axis_opts, (
-        "passive capture dropped native_ticks; "
-        f"expected axis_opts keys={expected_keys}, "
-        f"actual axis_opts keys={captured_keys}"
-    )
-    assert state.axis_opts["native_ticks"] == original_native_ticks
+    expected_keys = sorted({"range_filter", "x_axis", "tick_density"})
+    assert captured_keys == expected_keys
+    assert "native_ticks" not in state.axis_opts
     assert state.axis_opts["tick_density"] == {"x": 12, "y": 7}
     assert state.axis_opts["range_filter"] == {
         "enabled": False,
@@ -564,6 +563,25 @@ def test_passive_capture_preserves_native_ticks():
         "channel": "angle",
         "label": "Angle",
     }
+
+
+def test_apply_and_capture_keep_view_axis_group_projection():
+    win = _Window()
+    persisted_groups = {"[\"f1\",\"rpm\"]": "window-0-axis-force"}
+    state = ViewState(
+        name="WWT ordinary",
+        tab_color="#000000",
+        axis_opts={
+            "channel_axis_groups": persisted_groups,
+            "tick_density": {"x": 10, "y": 6},
+        },
+    )
+
+    view_bridge.apply_controls_from_state(state, win)
+
+    assert win.navigator.set_restored_axis_groups == persisted_groups
+    view_bridge.capture_controls_into(state, win)
+    assert state.axis_opts["channel_axis_groups"] == persisted_groups
 
 
 def test_capture_controls_uses_snapshot_without_merging_previous():

@@ -10,6 +10,9 @@
 - 历史合同：
   - `docs/analyzer/specs/2026-08-28-wwt-winwert-layout-import-spec.md` §8
   - `docs/analyzer/plans/2026-08-29-wwt-timedomain-plot-and-ultraview-reflow-plan.md` §1.2
+- **现行性说明（2026-09-01）**：本文的 WWT native display policy 生命周期已由
+  [`2026-09-01-wwt-minimal-initial-view-contract-simplification-plan.md`](2026-09-01-wwt-minimal-initial-view-contract-simplification-plan.md)
+  取代；本文保留为历史实施证据，不回溯改写其结论。
 
 ### 实施后实测（offscreen）
 

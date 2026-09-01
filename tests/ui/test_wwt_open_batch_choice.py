@@ -101,8 +101,6 @@ def _winwert_view_count(mw) -> int:
         1
         for view in mw.view_manager.views
         if (view.name or "").startswith("WinWert")
-        or (view.axis_opts or {}).get("native_ticks")
-        or view.curve_bindings
     )
 
 

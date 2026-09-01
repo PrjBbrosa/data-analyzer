@@ -3,8 +3,6 @@ import json
 from mf4_analyzer.ui.view_state import (
     MAX_VIEWS,
     TIME_DOMAIN_MAX_VIEWS,
-    X_VIEWPORT_WWT_NATIVE,
-    XViewportIntent,
     ViewManager,
     ViewState,
     default_view_tab_color,
@@ -83,7 +81,7 @@ def test_viewstate_defaults_are_empty():
     assert st.cursor_placement is None
     assert st.curve_bindings == []
     assert st.hidden_curve_binding_ids == []
-    assert st.x_viewport_intent is None
+    assert not hasattr(st, "x_viewport_intent")
     assert isinstance(st.view_id, str) and st.view_id
 
 
@@ -271,23 +269,63 @@ def test_hidden_curve_binding_ids_roundtrip_and_block_blank_reuse():
     assert is_reusable_blank_view(hidden_only) is False
 
 
-def test_x_viewport_intent_roundtrip_and_legacy_missing_field():
-    st = ViewState(
-        name="WinWert 1",
-        tab_color="#2d7ff9",
-        xlim=(-100.0, 100.0),
-        x_viewport_intent=XViewportIntent(
-            source=X_VIEWPORT_WWT_NATIVE,
-            initial_range=(-100.0, 100.0),
-            home_range=(-100.0, 100.0),
-        ),
-    )
-    payload = json.loads(json.dumps(st.to_dict()))
-    again = ViewState.from_dict(payload)
-    assert again.x_viewport_intent is not None
-    assert again.x_viewport_intent.source == X_VIEWPORT_WWT_NATIVE
-    assert again.x_viewport_intent.home_range == (-100.0, 100.0)
-    assert again.xlim == (-100.0, 100.0)
-    assert is_reusable_blank_view(st) is False
-    legacy = ViewState.from_dict({"name": "Legacy", "tab_color": "#2d7ff9"})
-    assert legacy.x_viewport_intent is None
+def test_legacy_x_viewport_intent_is_ignored_and_not_resaved():
+    legacy = ViewState.from_dict({
+        "name": "WinWert 1",
+        "tab_color": "#2d7ff9",
+        "xlim": [-100.0, 100.0],
+        "x_viewport_intent": {
+            "source": "wwt_native",
+            "initial_range": [-100.0, 100.0],
+            "home_range": [-100.0, 100.0],
+        },
+        "axis_opts": {
+            "x_viewport_intent": {
+                "source": "wwt_native",
+                "home_range": [-100.0, 100.0],
+            },
+        },
+    })
+
+    payload = json.loads(json.dumps(legacy.to_dict()))
+    assert legacy.xlim == (-100.0, 100.0)
+    assert not hasattr(legacy, "x_viewport_intent")
+    assert "x_viewport_intent" not in legacy.axis_opts
+    assert "x_viewport_intent" not in payload
+    assert "x_viewport_intent" not in payload["axis_opts"]
+
+    blank = ViewState.from_dict({
+        "name": "View 1",
+        "tab_color": "#2d7ff9",
+        "x_viewport_intent": {"source": "wwt_native"},
+    })
+    assert is_reusable_blank_view(blank)
+
+
+def test_legacy_native_axis_opts_are_dropped_and_groups_are_canonical():
+    state = ViewState.from_dict({
+        "name": "Legacy WWT",
+        "tab_color": "#2d7ff9",
+        "axis_opts": {
+            "native_ticks": {"x": {"major": 20.0}},
+            "x_viewport_intent": {"source": "wwt_native"},
+            "channel_axis_groups": {
+                '["f1","force"]': "axis-1",
+                ("f2", "speed"): "axis-2",
+                "not-json": "bad",
+                '["f3"]': "bad",
+                '["f4",""]': "bad",
+                '["f5","rpm"]': "",
+            },
+        },
+    })
+
+    assert state.axis_opts == {
+        "channel_axis_groups": {
+            '["f1","force"]': "axis-1",
+            '["f2","speed"]': "axis-2",
+        },
+    }
+    payload = state.to_dict()
+    assert "native_ticks" not in payload["axis_opts"]
+    assert "x_viewport_intent" not in payload["axis_opts"]

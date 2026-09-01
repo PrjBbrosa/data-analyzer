@@ -82,7 +82,7 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
             }
             for r in doc.files
         ],
-        "views": doc.views,
+        "views": [_retire_view_display_fields(view) for view in doc.views],
         "view_manager": doc.view_manager,
         "analysis_views": doc.analysis_views,
         "filter": doc.filter,
@@ -177,7 +177,10 @@ def load_project_from_json(path) -> ProjectDocument:
         active_file=raw.get("active_file"),
         current_mode=mode,
         files=files,
-        views=list(raw.get("views", [])),
+        views=[
+            _retire_view_display_fields(view)
+            for view in raw.get("views", [])
+        ],
         view_manager=dict(raw.get("view_manager", {})),
         analysis_views=dict(raw.get("analysis_views", {})),
         filter=raw.get("filter") if version >= 2 else None,
@@ -244,13 +247,52 @@ def _encode_channel_key(fid: str, channel: str) -> str:
     return json.dumps([fid, channel], ensure_ascii=False, separators=(",", ":"))
 
 
+def _retire_view_display_fields(view):
+    """Drop retired WWT display policy from a serialized Time View payload."""
+    if not isinstance(view, dict):
+        return view
+    result = dict(view)
+    result.pop("x_viewport_intent", None)
+    axis = result.get("axis_opts")
+    if not isinstance(axis, dict):
+        return result
+    axis = dict(axis)
+    axis.pop("native_ticks", None)
+    axis.pop("x_viewport_intent", None)
+    result["axis_opts"] = axis
+    return result
+
+
+def _remap_channel_axis_groups(value, fid_map: dict) -> dict[str, str]:
+    """Remap valid persisted channel-axis memberships, dropping stale fids."""
+    if not isinstance(value, dict):
+        return {}
+    groups: dict[str, str] = {}
+    for raw_key, raw_axis_id in value.items():
+        if not isinstance(raw_key, str):
+            continue
+        try:
+            key = json.loads(raw_key)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(key, (list, tuple)) or len(key) != 2:
+            continue
+        old_fid = str(key[0] or "").strip()
+        channel = str(key[1] or "").strip()
+        axis_id = str(raw_axis_id or "").strip()
+        if not old_fid or not channel or not axis_id or old_fid not in fid_map:
+            continue
+        groups[_encode_channel_key(fid_map[old_fid], channel)] = axis_id
+    return groups
+
+
 def remap_view_fids(views: list, fid_map: dict) -> list:
     """Rewrite the fid of every channel reference in a list of
     ``ViewState.to_dict()`` payloads, dropping references whose fid is absent
     from ``fid_map`` (the file went missing on load)."""
     out = []
     for view in views:
-        v = dict(view)
+        v = _retire_view_display_fields(view)
 
         if "attached_file_ids" in view:
             v["attached_file_ids"] = [
@@ -304,7 +346,14 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
             [fid_map[op[0]], op[1]] if op and op[0] in fid_map else None
         )
 
-        axis = dict(view.get("axis_opts") or {})
+        axis = dict(v.get("axis_opts") or {})
+        channel_axis_groups = _remap_channel_axis_groups(
+            axis.get("channel_axis_groups"), fid_map,
+        )
+        if channel_axis_groups:
+            axis["channel_axis_groups"] = channel_axis_groups
+        else:
+            axis.pop("channel_axis_groups", None)
         signature = axis.get("frf_source_signature")
         if isinstance(signature, dict):
             input_source = signature.get("input")
@@ -342,13 +391,20 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
         v["remarks"] = remap_remarks(view.get("remarks"), fid_map)
         # cursor_placement has no fid; keep the payload as copied above.
 
-        from .time_curve_bindings import remap_curve_bindings
+        from .time_curve_bindings import (
+            prune_hidden_curve_binding_ids,
+            remap_curve_bindings,
+        )
+        bindings = remap_curve_bindings(
+            view.get("curve_bindings") or [], fid_map
+        )
         v["curve_bindings"] = [
             binding.to_dict()
-            for binding in remap_curve_bindings(
-                view.get("curve_bindings") or [], fid_map
-            )
+            for binding in bindings
         ]
+        v["hidden_curve_binding_ids"] = prune_hidden_curve_binding_ids(
+            view.get("hidden_curve_binding_ids"), bindings,
+        )
 
         out.append(v)
     return out

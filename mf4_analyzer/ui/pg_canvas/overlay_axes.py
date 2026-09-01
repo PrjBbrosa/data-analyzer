@@ -84,7 +84,6 @@ class OverlayAxisManager(_CanvasBackref):
         "_overlay_view_sync_conns",
         "_overlay_divisions",
         "_overlay_grid_lines",
-        "_native_line_width_px",
     })
 
     _delegate_names = frozenset({
@@ -138,7 +137,6 @@ class OverlayAxisManager(_CanvasBackref):
         self._overlay_de_emphasised_alpha = 0.42
         self._overlay_pick_radius_px = 12.0
         self._overlay_axis_column_spacing = 12
-        self._native_line_width_px = {}
         self._overlay_y_drag_start = None
         self._overlay_dragging = False
         self._snap_anim = None
@@ -358,9 +356,7 @@ class OverlayAxisManager(_CanvasBackref):
                 pixel_width=initial_width,
                 is_monotonic=is_monotonic,
             )
-        width = float(
-            (self._native_line_width_px or {}).get(ck, self._overlay_default_lw)
-        )
+        width = float(self._overlay_default_lw)
         pen = pg.mkPen(color=color, width=width)
         primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
         target_vb = axis_handle.view_box
@@ -854,24 +850,12 @@ class OverlayAxisManager(_CanvasBackref):
     def _repin_overlay_channel_ticks(self, *, reframe=True):
         """Frame overlay channels and pin their ticks to the shared graticule.
 
-        ``reframe=False`` updates tick projection without mutating already
-        committed Y ranges (native View restore). An active native tick policy
-        also suppresses nice-grid reframe so generic density cannot reopen
-        a native viewport.
+        ``reframe=False`` updates ordinary tick projection without mutating an
+        already committed restore range.
         """
         if not getattr(self, "_overlay_mode", False):
             return
-        controller = getattr(self, "_tick_density_controller", None)
-        native_active = bool(
-            controller is not None and controller.native_policy_active()
-        )
-        native_y = {}
-        if native_active:
-            policy = getattr(controller, "native_tick_policy", None) or {}
-            candidate = policy.get("y") if isinstance(policy, dict) else None
-            if isinstance(candidate, dict):
-                native_y = candidate
-        allow_reframe = bool(reframe) and not native_active
+        allow_reframe = bool(reframe)
         n = self._current_overlay_divisions()
         for handle in list(self.axes_list):
             try:
@@ -914,15 +898,6 @@ class OverlayAxisManager(_CanvasBackref):
                 bottom, top = lo, hi
                 per_div = span / n
                 ticks = [bottom + k * per_div for k in range(n + 1)]
-            # Native ownership is per axis_id, not per canvas.  A WinWert View
-            # may mix selected/native owners with visible generic axes.  Only
-            # the handles covered by a valid native spec are projected below;
-            # unmatched handles still need fresh generic ticks over the final
-            # restored range or their 0..1 build-time levels remain stranded.
-            axis_id = getattr(handle, "axis_group", None)
-            native_owned = isinstance(native_y.get(axis_id), dict)
-            if native_owned:
-                continue
             axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
             if axis is None:
                 continue
@@ -936,10 +911,6 @@ class OverlayAxisManager(_CanvasBackref):
                 ])
             except Exception:
                 pass
-        if native_active and controller is not None:
-            apply_y = getattr(controller, "project_native_ticks", None)
-            if callable(apply_y):
-                apply_y()
 
     def _snap_overlay_channel_to_grid(self, ax):
         """Snap a dragged overlay channel to its current graticule span."""
@@ -969,7 +940,6 @@ class OverlayAxisManager(_CanvasBackref):
                 axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
         except Exception:
             pass
-        self._project_native_ticks_after_commit()
 
     def _stop_snap_anim(self):
         """Stop any in-flight drag-release snap animation."""
@@ -1108,7 +1078,6 @@ class OverlayAxisManager(_CanvasBackref):
                     ])
             except Exception:
                 continue
-        self._project_native_ticks_after_commit()
         self.draw_idle()
 
     def _teardown_overlay_aux_viewboxes(self):
@@ -1537,7 +1506,6 @@ class OverlayAxisManager(_CanvasBackref):
                 except Exception:
                     continue
             if changed:
-                self._project_native_ticks_after_commit()
                 self.visible_range_changed.emit()
                 self.draw_idle()
             self.schedule_idle_quality()
@@ -1571,11 +1539,6 @@ class OverlayAxisManager(_CanvasBackref):
             self.schedule_idle_quality()
             return False
 
-        # Y-only commits project here. Ctrl+wheel X zoom is the hot path:
-        # canvas arms ``_refresh_timer`` and ``_settle_visible_data`` projects
-        # once after the quiet window.
-        if not ctrl:
-            self._project_native_ticks_after_commit()
         self.visible_range_changed.emit()
         self.draw_idle()
         self.schedule_idle_quality()

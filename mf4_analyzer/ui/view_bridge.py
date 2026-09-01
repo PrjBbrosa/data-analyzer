@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
-import copy
 import json
 from typing import Any, Iterable
 
@@ -51,7 +50,7 @@ def capture_axis_opts(window) -> dict[str, Any]:
         label = str(xaxis_spec.channel)
     xaxis_spec = replace(xaxis_spec, label=str(label or ""))
 
-    return {
+    axis_opts = {
         "range_filter": {
             "enabled": bool(top.range_enabled()),
             "start": float(range_start),
@@ -60,6 +59,14 @@ def capture_axis_opts(window) -> dict[str, Any]:
         "x_axis": xaxis_spec.to_axis_opts(),
         "tick_density": {"x": int(tick_x), "y": int(tick_y)},
     }
+    projection = getattr(
+        _axis_group_owner(window), "restored_axis_group_projection", None,
+    )
+    if callable(projection):
+        groups = projection()
+        if isinstance(groups, dict) and groups:
+            axis_opts["channel_axis_groups"] = dict(groups)
+    return axis_opts
 
 
 def capture_view(window) -> ViewState:
@@ -105,17 +112,10 @@ def capture_view(window) -> ViewState:
 def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     """Capture widget/control state into ``state`` for the given time pane.
 
-    Ordinary inspector fields are refreshed from live widgets. ``native_ticks``
-    is a semantic WWT fact: passive capture must keep it. Only an explicit
-    tick-density user action may drop it.
+    Ordinary inspector fields and the current View's effective axis-group
+    projection are refreshed from live widgets.  Historic native tick fields
+    are intentionally not carried forward.
     """
-    preserved_native = None
-    preserved_intent = getattr(state, "x_viewport_intent", None)
-    old_opts = state.axis_opts if isinstance(getattr(state, "axis_opts", None), dict) else None
-    if old_opts is not None:
-        native = old_opts.get("native_ticks")
-        if isinstance(native, dict):
-            preserved_native = copy.deepcopy(native)
     fresh = capture_view(window)
     state.attached_file_ids = fresh.attached_file_ids
     state.checked = fresh.checked
@@ -123,9 +123,6 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     state.colors = fresh.colors
     state.overlay_primary = fresh.overlay_primary
     state.axis_opts = dict(fresh.axis_opts)
-    if preserved_native is not None:
-        state.axis_opts["native_ticks"] = preserved_native
-    state.x_viewport_intent = preserved_intent
 
     chart_stack = window.chart_stack
     target = canvas if canvas is not None else chart_stack.canvas_time
@@ -208,6 +205,12 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
             _apply_cursor_to_canvas(target, state.cursor_mode)
 
     window._overlay_primary = state.overlay_primary
+    restore_axis_groups = getattr(
+        _axis_group_owner(window), "set_restored_axis_group_projection", None,
+    )
+    if callable(restore_axis_groups):
+        axis_opts = state.axis_opts if isinstance(state.axis_opts, dict) else {}
+        restore_axis_groups(axis_opts.get("channel_axis_groups"))
     restore_axis_opts = getattr(window, "_restore_view_axis_opts", None)
     if callable(restore_axis_opts):
         restore_axis_opts(state.axis_opts)
@@ -222,16 +225,7 @@ def restore_axes(state: ViewState, window) -> None:
     """Restore post-replot visible ranges through canvas contract methods."""
     canvas = window.chart_stack.canvas_time
     canvas.restore_visible_xlim(state.xlim)
-    native_ranges = None
-    axis_opts = getattr(state, "axis_opts", None) or {}
-    native_ticks = axis_opts.get("native_ticks") if isinstance(axis_opts, dict) else None
-    if isinstance(native_ticks, dict):
-        native_ranges = native_ticks.get("y")
-    restore_y = canvas.restore_visible_ylims
-    try:
-        restore_y(state.ylims, native_axis_ranges=native_ranges)
-    except TypeError:
-        restore_y(state.ylims)
+    canvas.restore_visible_ylims(state.ylims)
 
 
 def _capture_colors(navigator, checked_rows: Iterable[Any]) -> dict[ChannelKey, str]:
@@ -254,6 +248,16 @@ def _capture_colors(navigator, checked_rows: Iterable[Any]) -> dict[ChannelKey, 
 def _channel_key(value: Any) -> ChannelKey:
     fid, channel = value[:2]
     return (str(fid), str(channel))
+
+
+def _axis_group_owner(window):
+    """Find the ChannelTree that owns live View axis-group presentation."""
+    owner = getattr(window, "channel_list", None)
+    if owner is not None:
+        return owner
+    navigator = getattr(window, "navigator", None)
+    owner = getattr(navigator, "channel_list", None)
+    return owner if owner is not None else navigator
 
 
 def _ylim_key_belongs_to_hidden(key: Any, hidden: Iterable[ChannelKey]) -> bool:

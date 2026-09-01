@@ -3490,8 +3490,8 @@ class TestTimeDomainCanvasPGSubplotMode:
         assert high_ylim[0] > 50.0
         assert low_ylim[1] < 50.0
 
-    def test_restore_visible_ylims_native_range_wins_over_sibling_fit(self, qapp):
-        """Empty ylims still apply WWT native lo/hi to the shared handle."""
+    def test_restore_visible_ylims_initial_range_wins_over_sibling_fit(self, qapp):
+        """An exceptional binding's initial range seeds its shared handle."""
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
@@ -3507,7 +3507,7 @@ class TestTimeDomainCanvasPGSubplotMode:
         canvas.restore_visible_xlim((0.0, 10.0), flush=False)
         canvas.restore_visible_ylims(
             {},
-            native_axis_ranges={gid: {"lo": 0.0, "hi": 0.2}},
+            initial_axis_ranges={gid: (0.0, 0.2)},
         )
         QCoreApplication.processEvents()
 

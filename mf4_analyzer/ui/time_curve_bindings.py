@@ -6,10 +6,20 @@ read-only WWT record store on the owner FileData. The canvas never imports
 """
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass
 from typing import AbstractSet, Any, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
+
+from .time_xaxis import (
+    CHANNEL_MODE,
+    EXACT_SOURCE,
+    PER_SOURCE_NAME,
+    CustomXAxisSpec,
+    resolve_custom_xaxis,
+)
 
 _CHANNEL = "channel"
 _WWT_RECORD = "wwt_record"
@@ -93,13 +103,15 @@ class TimeCurveBinding:
     color: str
     axis_id: str
     y_range: tuple[float, float]
-    y_tick_interval: float | None
-    y_grid_interval: float | None
-    line_width_mm: float
-    line_style: str
+    # Compatibility-only decode fields.  New bindings never produce them and
+    # payload generation deliberately does not consume them as display policy.
+    y_tick_interval: float | None = None
+    y_grid_interval: float | None = None
+    line_width_mm: float = 0.0
+    line_style: str = "line"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "binding_id": self.binding_id,
             "y_ref": self.y_ref.to_dict(),
             "x_ref": self.x_ref.to_dict(),
@@ -108,11 +120,16 @@ class TimeCurveBinding:
             "color": self.color,
             "axis_id": self.axis_id,
             "y_range": [self.y_range[0], self.y_range[1]],
-            "y_tick_interval": self.y_tick_interval,
-            "y_grid_interval": self.y_grid_interval,
-            "line_width_mm": self.line_width_mm,
-            "line_style": self.line_style,
         }
+        if self.y_tick_interval is not None:
+            data["y_tick_interval"] = self.y_tick_interval
+        if self.y_grid_interval is not None:
+            data["y_grid_interval"] = self.y_grid_interval
+        if self.line_width_mm:
+            data["line_width_mm"] = self.line_width_mm
+        if self.line_style != "line":
+            data["line_style"] = self.line_style
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "TimeCurveBinding":
@@ -330,6 +347,237 @@ def drop_missing_wwt_record_bindings(
     return kept, dropped
 
 
+def migrate_legacy_channel_bindings(state: Any, files: Mapping[str, Any]) -> list[str]:
+    """Move provably ordinary legacy bindings onto the normal View contract.
+
+    This is intentionally a post-load migration: ``ViewState.from_dict`` and
+    ``project_io`` only have serialized identities, whereas proving that an
+    old binding is equivalent to normal Custom-X needs live columns and the
+    active resolver.  Any missing, record-backed, heterogeneous, non-finite,
+    or otherwise unprovable row stays as its exact binding.
+    """
+    bindings = list(getattr(state, "curve_bindings", None) or ())
+    if not bindings:
+        return []
+    axis_opts = getattr(state, "axis_opts", None)
+    if not isinstance(axis_opts, dict):
+        return []
+    x_spec = CustomXAxisSpec.from_axis_opts(axis_opts.get("x_axis"))
+    if (
+        x_spec.mode != CHANNEL_MODE
+        or x_spec.resolver not in {PER_SOURCE_NAME, EXACT_SOURCE}
+        or not x_spec.channel
+    ):
+        return []
+
+    candidates: list[TimeCurveBinding] = []
+    kept: list[TimeCurveBinding] = []
+    for binding in bindings:
+        if _binding_is_normal_custom_x_equivalent(binding, files, x_spec):
+            candidates.append(binding)
+        else:
+            kept.append(binding)
+    # The ordinary checked model has one row per composite Y identity.  Leave
+    # duplicate or mixed-X legacy bindings exact: moving only one would make a
+    # retained binding claim that ordinary row, while moving both would silently
+    # collapse two legacy curves into one.
+    retained_channel_y = {
+        _channel_key(binding.y_ref)
+        for binding in kept
+        if _channel_key(binding.y_ref) is not None
+    }
+    candidate_counts: dict[tuple[str, str], int] = {}
+    for binding in candidates:
+        key = _channel_key(binding.y_ref)
+        assert key is not None
+        candidate_counts[key] = candidate_counts.get(key, 0) + 1
+    migrated: list[TimeCurveBinding] = []
+    for binding in candidates:
+        key = _channel_key(binding.y_ref)
+        assert key is not None
+        if key in retained_channel_y or candidate_counts[key] != 1:
+            kept.append(binding)
+        else:
+            migrated.append(binding)
+    if not migrated:
+        return []
+
+    checked = list(getattr(state, "checked", None) or ())
+    checked_keys = {(str(fid), str(channel)) for fid, channel in checked}
+    colors = dict(getattr(state, "colors", None) or {})
+    ylims = dict(getattr(state, "ylims", None) or {})
+    groups = _channel_axis_groups(axis_opts.get("channel_axis_groups"))
+    for binding in migrated:
+        assert binding.y_ref.channel is not None
+        key = (str(binding.y_ref.fid), str(binding.y_ref.channel))
+        if key not in checked_keys:
+            checked.append(key)
+            checked_keys.add(key)
+        if binding.color:
+            colors.setdefault(key, binding.color)
+        _preserve_binding_ylim(ylims, binding, files)
+        if binding.axis_id:
+            groups[_encode_channel_key(key)] = binding.axis_id
+
+    state.checked = checked
+    state.colors = colors
+    state.ylims = ylims
+    state.curve_bindings = kept
+    state.hidden_curve_binding_ids = prune_hidden_curve_binding_ids(
+        getattr(state, "hidden_curve_binding_ids", None), kept,
+    )
+    if groups:
+        axis_opts["channel_axis_groups"] = groups
+    else:
+        axis_opts.pop("channel_axis_groups", None)
+    state.axis_opts = axis_opts
+    return [binding.binding_id for binding in migrated]
+
+
+def prune_channel_axis_groups_for_live_files(
+    state: Any,
+    files: Mapping[str, Any],
+) -> None:
+    """Remove persisted group members whose reloaded channel no longer exists."""
+    axis_opts = getattr(state, "axis_opts", None)
+    if not isinstance(axis_opts, dict):
+        return
+    groups = _channel_axis_groups(axis_opts.get("channel_axis_groups"))
+    live = {}
+    for key, axis_id in groups.items():
+        try:
+            fid, channel = json.loads(key)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        source = files.get(str(fid))
+        data = getattr(source, "data", None)
+        columns = getattr(data, "columns", ())
+        try:
+            present = str(channel) in columns
+        except TypeError:
+            present = False
+        if present:
+            live[key] = axis_id
+    if live:
+        axis_opts["channel_axis_groups"] = live
+    else:
+        axis_opts.pop("channel_axis_groups", None)
+    state.axis_opts = axis_opts
+
+
+def _binding_is_normal_custom_x_equivalent(
+    binding: TimeCurveBinding,
+    files: Mapping[str, Any],
+    x_spec: CustomXAxisSpec,
+) -> bool:
+    """True only when normal Custom-X resolves the exact legacy arrays."""
+    if binding.x_ref.kind != _CHANNEL or binding.y_ref.kind != _CHANNEL:
+        return False
+    if not binding.x_ref.channel or not binding.y_ref.channel:
+        return False
+    if x_spec.resolver == PER_SOURCE_NAME:
+        if (
+            binding.x_ref.fid != binding.y_ref.fid
+            or binding.x_ref.channel != x_spec.channel
+        ):
+            return False
+    elif x_spec.resolver == EXACT_SOURCE:
+        if (
+            binding.x_ref.fid != x_spec.source_fid
+            or binding.x_ref.channel != x_spec.channel
+        ):
+            return False
+    else:
+        return False
+
+    binding_x, binding_y, issue = resolve_time_curve_binding(binding, files)
+    if issue is not None or binding_x is None or binding_y is None:
+        return False
+    resolved = resolve_custom_xaxis(
+        target_fid=binding.y_ref.fid,
+        target_channel=binding.y_ref.channel,
+        files=files,
+        spec=x_spec,
+    )
+    if not resolved.ready or resolved.x_values is None:
+        return False
+    normal_y, normal_y_issue = resolve_time_data_ref(binding.y_ref, files)
+    if normal_y_issue is not None or normal_y is None:
+        return False
+    # Normal Custom-X removes non-finite X entries before drawing.  Preserve
+    # exact binding data when that would alter cardinality or array positions.
+    try:
+        if not np.isfinite(resolved.x_values).all():
+            return False
+    except TypeError:
+        return False
+    return (
+        _arrays_equal(binding_x, resolved.x_values)
+        and _arrays_equal(binding_y, normal_y)
+    )
+
+
+def _arrays_equal(left: np.ndarray, right: np.ndarray) -> bool:
+    if left.shape != right.shape:
+        return False
+    try:
+        return bool(np.array_equal(left, right, equal_nan=True))
+    except TypeError:
+        return bool(np.array_equal(left, right))
+
+
+def _channel_axis_groups(value: Any) -> dict[str, str]:
+    """Keep valid composite-key group entries while a migration appends one."""
+    if not isinstance(value, Mapping):
+        return {}
+    groups: dict[str, str] = {}
+    for raw_key, raw_axis_id in value.items():
+        if not isinstance(raw_key, str):
+            continue
+        try:
+            key = json.loads(raw_key)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(key, (list, tuple)) or len(key) != 2:
+            continue
+        fid = str(key[0] or "").strip()
+        channel = str(key[1] or "").strip()
+        axis_id = str(raw_axis_id or "").strip()
+        if fid and channel and axis_id:
+            groups[_encode_channel_key((fid, channel))] = axis_id
+    return groups
+
+
+def _encode_channel_key(key: tuple[str, str]) -> str:
+    return json.dumps([key[0], key[1]], ensure_ascii=False, separators=(",", ":"))
+
+
+def _preserve_binding_ylim(
+    ylims: dict[str, Any],
+    binding: TimeCurveBinding,
+    files: Mapping[str, Any],
+) -> None:
+    try:
+        lo, hi = (float(binding.y_range[0]), float(binding.y_range[1]))
+    except (IndexError, TypeError, ValueError):
+        return
+    if not (math.isfinite(lo) and math.isfinite(hi) and hi > lo):
+        return
+    assert binding.y_ref.channel is not None
+    source = files.get(binding.y_ref.fid)
+    display_name = binding.y_ref.channel
+    prefix = getattr(source, "get_prefixed_channel", None)
+    if callable(prefix):
+        try:
+            display_name = str(prefix(binding.y_ref.channel))
+        except (KeyError, TypeError, ValueError):
+            return
+    ylims.setdefault(
+        _encode_channel_key((str(binding.y_ref.fid), display_name)),
+        (lo, hi),
+    )
+
+
 def _as_1d(values: Any) -> np.ndarray | None:
     array = np.asarray(values)
     if array.ndim != 1:
@@ -496,10 +744,7 @@ def bound_time_plot_rows(
             x_values, y_values = _apply_acquisition_mask(
                 x_values, y_values, owner, range_lo, range_hi
             )
-        meta = {
-            "axis_group": binding.axis_id,
-            "line_width_mm": binding.line_width_mm,
-        }
+        meta = {"axis_group": binding.axis_id}
         if y_key is not None:
             successful.add(y_key)
         color = binding.color

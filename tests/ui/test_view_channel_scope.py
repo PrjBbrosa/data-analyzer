@@ -341,6 +341,9 @@ def test_wwt_view_color_seed_does_not_pollute_other_views(
     assert other_colors[(csv_fid, "torque")] == csv_torque
 
     window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
+    existing_view_ids = {
+        state.view_id for state in window.view_manager.views
+    }
     monkeypatch.setattr(window._wwt_import, "_ask_layout", lambda *_a, **_k: True)
     monkeypatch.setattr(
         window._ultraview, "add_time_views_from_native_layout", lambda items: ()
@@ -355,14 +358,14 @@ def test_wwt_view_color_seed_does_not_pollute_other_views(
     wwt_idx, wwt_state = next(
         (idx, state)
         for idx, state in enumerate(window.view_manager.views)
-        if state.curve_bindings
+        if state.view_id not in existing_view_ids
     )
     assert wwt_idx != 0
-    y_key = next(
-        (binding.y_ref.fid, binding.y_ref.channel)
-        for binding in wwt_state.curve_bindings
-        if binding.y_ref.kind == "channel"
-    )
+    assert wwt_state.name.startswith("WinWert")
+    assert wwt_state.curve_bindings == []
+    assert len(wwt_state.checked) == 1
+    y_key = wwt_state.checked[0]
+    assert y_key[1] == wwt.CHAN_Y
     winwert = wwt.palette_hex(wwt.CHAN_Y_COLOR)
     assert wwt_state.colors == {y_key: winwert}
     assert dict(window.view_manager.get(0).colors) == other_colors

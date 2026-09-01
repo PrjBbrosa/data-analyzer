@@ -10,6 +10,10 @@
 
 **Spec:** `docs/analyzer/plans/2026-08-30-wwt-native-axis-range-and-tick-lifecycle-optimization-plan.md`
 
+> **现行性说明（2026-09-01）**：本文的 native policy 安装/project 部分已由
+> [`2026-09-01-wwt-minimal-initial-view-contract-simplification-plan.md`](2026-09-01-wwt-minimal-initial-view-contract-simplification-plan.md)
+> 取代；“View restore 只 finalise 一次”的通用结论仍保留。本文历史结论不回溯改写。
+
 ## Global Constraints
 
 - Do not create a WWT-specific nice-step implementation or copy `_frame_to_nice`; `mf4_analyzer/ui_kit/ticks_math.py` remains the single math owner.

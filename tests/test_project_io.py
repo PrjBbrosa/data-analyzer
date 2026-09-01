@@ -98,6 +98,39 @@ def test_schema_v1_without_filter_loads_as_filter_none(tmp_path):
     assert loaded.ultraview is None
 
 
+def test_load_and_resave_drop_retired_wwt_display_fields_without_schema_bump(tmp_path):
+    path = tmp_path / "legacy.tlproj"
+    raw = {
+        "schema_version": 3,
+        "active_file": None,
+        "current_mode": "time",
+        "files": [],
+        "views": [{
+            "name": "Legacy WWT",
+            "tab_color": "#2d7ff9",
+            "x_viewport_intent": {"source": "wwt_native"},
+            "axis_opts": {
+                "native_ticks": {"x": {"major": 20.0}},
+                "x_viewport_intent": {"source": "wwt_native"},
+            },
+        }],
+        "view_manager": {},
+    }
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = pio.load_project_from_json(path)
+    assert "x_viewport_intent" not in loaded.views[0]
+    assert "native_ticks" not in loaded.views[0]["axis_opts"]
+    assert "x_viewport_intent" not in loaded.views[0]["axis_opts"]
+
+    rewritten = tmp_path / "rewritten.tlproj"
+    pio.save_project_to_json(loaded, rewritten)
+    saved = json.loads(rewritten.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 3
+    assert "x_viewport_intent" not in saved["views"][0]
+    assert "native_ticks" not in saved["views"][0]["axis_opts"]
+
+
 def test_unknown_version_rejected(tmp_path):
     path = tmp_path / "s.tlproj"
     path.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
@@ -159,6 +192,51 @@ def test_remap_rewrites_and_drops():
     assert out["axis_opts"]["x_axis"]["fid"] is None
     assert out["axis_opts"]["x_axis"]["mode"] == "time"
     assert out["axis_opts"]["x_axis"]["resolver"] is None
+
+
+def test_remap_drops_retired_native_state_and_remaps_channel_axis_groups():
+    view = {
+        "name": "Legacy WWT",
+        "tab_color": "#fff",
+        "x_viewport_intent": {"source": "wwt_native"},
+        "axis_opts": {
+            "native_ticks": {"x": {"major": 20.0}},
+            "x_viewport_intent": {"source": "wwt_native"},
+            "channel_axis_groups": {
+                '["old","force"]': "axis-force",
+                '["missing","speed"]': "axis-speed",
+                "malformed": "axis-bad",
+            },
+        },
+        "curve_bindings": [{
+            "binding_id": "record-only",
+            "y_ref": {
+                "kind": "wwt_record", "fid": "old", "record_index": 2,
+                "channel": None,
+            },
+            "x_ref": {
+                "kind": "wwt_record", "fid": "old", "record_index": 1,
+                "channel": None,
+            },
+            "display_name": "Tolerance",
+            "unit": "mm",
+            "color": "#f00",
+            "axis_id": "axis-force",
+            "y_range": [-1.0, 1.0],
+        }],
+        "hidden_curve_binding_ids": ["record-only", "gone"],
+    }
+
+    out = pio.remap_view_fids([view], {"old": "new"})[0]
+
+    assert "x_viewport_intent" not in out
+    assert "native_ticks" not in out["axis_opts"]
+    assert "x_viewport_intent" not in out["axis_opts"]
+    assert out["axis_opts"]["channel_axis_groups"] == {
+        '["new","force"]': "axis-force",
+    }
+    assert out["curve_bindings"][0]["x_ref"]["fid"] == "new"
+    assert out["hidden_curve_binding_ids"] == ["record-only"]
 
 
 def test_remap_ylims_skipped_when_absent():

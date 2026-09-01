@@ -24,61 +24,6 @@ from .time_curve_bindings import TimeCurveBinding, parse_curve_bindings
 from .view_overlay_state import normalize_cursor_placement, normalize_remarks
 
 
-X_VIEWPORT_WWT_NATIVE = "wwt_native"
-X_VIEWPORT_USER = "user"
-X_VIEWPORT_ORDINARY = "ordinary"
-
-
-@dataclass(frozen=True)
-class XViewportIntent:
-    """Viewport provenance: current ``ViewState.xlim`` is separate from Home.
-
-    ``source='wwt_native'`` keeps a file-defined home range even after the user
-    pans or zooms. Ordinary views leave this ``None``.
-    """
-
-    source: str = X_VIEWPORT_ORDINARY
-    initial_range: tuple[float, float] | None = None
-    home_range: tuple[float, float] | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "source": str(self.source or X_VIEWPORT_ORDINARY),
-            "initial_range": (
-                list(self.initial_range) if self.initial_range is not None else None
-            ),
-            "home_range": list(self.home_range) if self.home_range is not None else None,
-        }
-
-    @classmethod
-    def from_mapping(cls, data: Any) -> "XViewportIntent | None":
-        if data is None:
-            return None
-        if isinstance(data, cls):
-            return data
-        if not isinstance(data, dict):
-            return None
-        source = str(data.get("source") or "").strip() or X_VIEWPORT_ORDINARY
-        if source not in {
-            X_VIEWPORT_WWT_NATIVE, X_VIEWPORT_USER, X_VIEWPORT_ORDINARY,
-        }:
-            source = X_VIEWPORT_ORDINARY
-        initial = _coerce_pair(data.get("initial_range"))
-        home = _coerce_pair(data.get("home_range"))
-        if source == X_VIEWPORT_ORDINARY and initial is None and home is None:
-            return None
-        return cls(source=source, initial_range=initial, home_range=home)
-
-
-def trusted_wwt_native_intent(intent: Any) -> bool:
-    parsed = XViewportIntent.from_mapping(intent)
-    return (
-        parsed is not None
-        and parsed.source == X_VIEWPORT_WWT_NATIVE
-        and parsed.home_range is not None
-    )
-
-
 # Analysis-section and compatibility default. The real cap is per
 # ViewManager instance (``max_views``); time-domain uses
 # TIME_DOMAIN_MAX_VIEWS. Narrow bars still degrade via ViewTabBar's
@@ -115,8 +60,6 @@ def is_reusable_blank_view(state: "ViewState") -> bool:
         return False
     if state.xlim is not None or state.ylims:
         return False
-    if getattr(state, "x_viewport_intent", None) is not None:
-        return False
     if state.cursor_mode != "off" or state.plot_mode != "subplot":
         return False
     if state.overlay_primary is not None:
@@ -149,7 +92,6 @@ class ViewState:
     cursor_placement: dict | None = None
     curve_bindings: list[TimeCurveBinding] = field(default_factory=list)
     hidden_curve_binding_ids: list[str] = field(default_factory=list)
-    x_viewport_intent: XViewportIntent | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -171,14 +113,12 @@ class ViewState:
         data["curve_bindings"] = [
             binding.to_dict() for binding in self.curve_bindings
         ]
-        intent = self.x_viewport_intent
-        data["x_viewport_intent"] = (
-            intent.to_dict() if isinstance(intent, XViewportIntent) else None
-        )
+        data["axis_opts"] = _normalize_axis_opts(self.axis_opts)
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ViewState":
+        axis_opts = _normalize_axis_opts(data.get("axis_opts"))
         return cls(
             name=data["name"],
             tab_color=data["tab_color"],
@@ -204,7 +144,7 @@ class ViewState:
                 if (pair := _coerce_pair(value)) is not None
             },
             overlay_primary=_coerce_optional_channel_key(data.get("overlay_primary")),
-            axis_opts=data.get("axis_opts", {}),
+            axis_opts=axis_opts,
             remarks=normalize_remarks(data.get("remarks")),
             cursor_placement=normalize_cursor_placement(
                 data.get("cursor_placement"),
@@ -214,10 +154,53 @@ class ViewState:
             hidden_curve_binding_ids=_coerce_id_list(
                 data.get("hidden_curve_binding_ids")
             ),
-            x_viewport_intent=XViewportIntent.from_mapping(
-                data.get("x_viewport_intent")
-            ),
         )
+
+
+def _normalize_axis_opts(value: Any) -> dict[str, Any]:
+    """Return serializable ordinary View axis state only.
+
+    ``native_ticks`` and either location of ``x_viewport_intent`` belonged to
+    the retired WWT display policy.  They remain accepted in old JSON, but are
+    removed at the ViewState boundary so no later capture/save can reactivate
+    them.  ``channel_axis_groups`` is the one View-owned WWT-era fact that
+    remains: it describes ordinary channel membership only, never cadence or
+    range policy.
+    """
+    if not isinstance(value, dict):
+        return {}
+    axis_opts = dict(value)
+    axis_opts.pop("native_ticks", None)
+    axis_opts.pop("x_viewport_intent", None)
+    groups = _normalize_channel_axis_groups(axis_opts.get("channel_axis_groups"))
+    if groups:
+        axis_opts["channel_axis_groups"] = groups
+    else:
+        axis_opts.pop("channel_axis_groups", None)
+    return axis_opts
+
+
+def _normalize_channel_axis_groups(value: Any) -> dict[str, str]:
+    """Validate/canonicalize persisted ``[fid, channel] -> axis_id`` maps."""
+    if not isinstance(value, dict):
+        return {}
+    groups: dict[str, str] = {}
+    for raw_key, raw_axis_id in value.items():
+        key = raw_key
+        if isinstance(raw_key, str):
+            try:
+                key = json.loads(raw_key)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        if not isinstance(key, (list, tuple)) or len(key) != 2:
+            continue
+        fid = str(key[0] or "").strip()
+        channel = str(key[1] or "").strip()
+        axis_id = str(raw_axis_id or "").strip()
+        if not fid or not channel or not axis_id:
+            continue
+        groups[_encode_channel_key((fid, channel))] = axis_id
+    return groups
 
 
 def _encode_channel_key(key: ChannelKey) -> str:
