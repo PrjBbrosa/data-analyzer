@@ -45,6 +45,46 @@ def test_filter_editors_share_one_field_column(qtbot):
     assert len(right_edges) == 1
 
 
+def test_filter_panel_uses_inspector_form_spacing(qtbot):
+    p = FilterPanel()
+    qtbot.addWidget(p)
+    assert p._form.horizontalSpacing() == 6
+    assert p._form.verticalSpacing() == 4
+
+
+def test_filter_kinds_keep_three_form_rows_and_uniform_gaps(qtbot):
+    p = FilterPanel()
+    qtbot.addWidget(p)
+    p.resize(360, 280)
+    p.show()
+    qtbot.waitExposed(p)
+    p.set_enabled(True)
+    for kind in ("低通", "高通", "带通", "带阻"):
+        p.set_kind(kind)
+        qtbot.wait(20)
+        assert p._form.rowCount() == 3
+        if kind in ("带通", "带阻"):
+            editors = (p.combo_kind, p.spin_lo, p.combo_order)
+            assert p._band_row.isVisible()
+            assert not p._single_row.isVisible()
+            assert p._single_label.text() == "下限:"
+        else:
+            editors = (p.combo_kind, p.spin_cut, p.combo_order)
+            assert p._single_row.isVisible()
+            assert not p._band_row.isVisible()
+            assert p._single_label.text() == "截止:"
+        gaps = []
+        prev = None
+        for editor in editors:
+            top = editor.mapTo(p, editor.rect().topLeft()).y()
+            if prev is not None:
+                gaps.append(top - prev)
+            prev = top + editor.height()
+        assert len(gaps) == 2
+        assert gaps[0] == gaps[1]
+        assert gaps[0] >= p._form.verticalSpacing()
+
+
 # --- Task 4: 卡片重组 + 挂载 结构断言 ---------------------------------------
 
 def test_inspector_mounts_filter_panel_in_range_card(qtbot):

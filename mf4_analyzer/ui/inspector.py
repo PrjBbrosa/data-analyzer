@@ -261,7 +261,10 @@ class Inspector(QWidget):
         body_lay.addWidget(self.contextual_stack)
         self.contextual_stack.setVisible(False)
 
-        body_lay.addStretch(1)
+        # Do not addStretch here. The host layout already pins this body to
+        # the top and absorbs leftover viewport height. An inner stretch
+        # steals ~10px from the time card, and QFormLayout spends that deficit
+        # by collapsing FilterPanel's ``_configure_form`` 4px row gaps.
 
         # Anchor the capped body to the leading edge; the trailing stretch
         # absorbs any extra width the splitter hands us.

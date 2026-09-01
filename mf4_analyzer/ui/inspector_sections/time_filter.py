@@ -9,7 +9,13 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QComboBox, QCheckBox,
 )
 
-from ._helpers import _no_buttons, _fit_field, _pair_field
+from ._helpers import (
+    _configure_form,
+    _fit_field,
+    _no_buttons,
+    _pair_field,
+    _stacked_field,
+)
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ..widgets.pill_switch import PillSwitch, PillSwitchLabel
 from ...signal.filters import FilterSpec
@@ -71,30 +77,22 @@ class FilterPanel(QWidget):
         root.addWidget(self._settings)
 
         fl = QFormLayout()
-        fl.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        fl.setHorizontalSpacing(6)
-        fl.setVerticalSpacing(4)
-        fl.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        _configure_form(fl)
         self._form = fl
 
         self.combo_kind = QComboBox()
         self.combo_kind.addItems(list(_KIND_MAP))
         fl.addRow("类型:", _fit_field(self.combo_kind))
 
-        # --- single-cutoff row (low / high) ---
+        # --- cutoff slot: 截止 (low/high) and 下限/上限 (band) share one
+        # form row so hiding the unused editor cannot leave extra spacing.
         self.spin_cut = _no_buttons(CompactDoubleSpinBox())
         self.spin_cut.setDecimals(1)
         self.spin_cut.setRange(0.0, 1e6)
         self.spin_cut.setSuffix(" Hz")
         self.spin_cut.setValue(100.0)
-        # Keep the three filter editors on one field-column datum.  A short
-        # 120px cap makes the cutoff and order controls trail-align while the
-        # kind combo fills the field, producing visibly staggered left edges.
         self._single_row = _fit_field(self.spin_cut)
         self._single_label = QLabel("截止:")
-        fl.addRow(self._single_label, self._single_row)
-
-        # --- dual-cutoff row (band / bandstop) ---
         self.spin_lo = _no_buttons(CompactDoubleSpinBox())
         self.spin_lo.setDecimals(1)
         self.spin_lo.setRange(0.0, 1e6)
@@ -106,8 +104,9 @@ class FilterPanel(QWidget):
         self.spin_hi.setSuffix(" Hz")
         self.spin_hi.setValue(2000.0)
         self._band_row = _pair_field(self.spin_lo, "– 上限", self.spin_hi)
-        self._band_label = QLabel("下限:")
-        fl.addRow(self._band_label, self._band_row)
+        self._band_label = self._single_label
+        self._cutoff_host = _stacked_field(self._single_row, self._band_row)
+        fl.addRow(self._single_label, self._cutoff_host)
 
         self.combo_order = QComboBox()
         self.combo_order.addItems(["2", "4", "6", "8"])
@@ -164,22 +163,12 @@ class FilterPanel(QWidget):
     def _is_band(self):
         return _KIND_MAP[self.combo_kind.currentText()] in ("band", "bandstop")
 
-    def _set_row_visible(self, row, label, visible):
-        """Toggle a row's wrapper, its label, and the wrapper's direct child
-        widgets so per-widget ``isHidden()``/``isVisible()`` stays honest for
-        paired-field hosts (lesson: a wrapper-only toggle leaves each inner
-        widget's own hidden flag untouched)."""
-        row.setVisible(visible)
-        label.setVisible(visible)
-        for child in row.findChildren(
-            QWidget, options=Qt.FindDirectChildrenOnly
-        ):
-            child.setVisible(visible)
-
     def _sync_rows(self, *_):
         band = self._is_band()
-        self._set_row_visible(self._single_row, self._single_label, not band)
-        self._set_row_visible(self._band_row, self._band_label, band)
+        self._cutoff_host.layout().setCurrentWidget(
+            self._band_row if band else self._single_row
+        )
+        self._single_label.setText("下限:" if band else "截止:")
         self.filter_changed.emit()
 
     # --- programmatic setters (tests / presets) ------------------------

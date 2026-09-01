@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....signal.filters import FilterSpec
-from ...inspector_sections._helpers import _fit_field, _pair_field
+from ...inspector_sections._helpers import _fit_field, _pair_field, _stacked_field
 from ...widgets.pill_switch import PillSwitch
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 from .optional_eyebrow import BatchOptionalEyebrow
@@ -81,8 +81,6 @@ class BatchFilterPanel(QWidget):
         self.spin_cutoff.setValue(100.0)
         self._single_label = QLabel("截止", self._settings)
         self._single_row = _fit_field(self.spin_cutoff)
-        form.addRow(self._single_label, self._single_row)
-
         self.spin_cutoff_lo = no_buttons(CompactDoubleSpinBox(self._settings))
         self.spin_cutoff_lo.setDecimals(1)
         self.spin_cutoff_lo.setRange(0.0, 1e6)
@@ -93,9 +91,10 @@ class BatchFilterPanel(QWidget):
         self.spin_cutoff_hi.setRange(0.0, 1e6)
         self.spin_cutoff_hi.setSuffix(" Hz")
         self.spin_cutoff_hi.setValue(2000.0)
-        self._band_label = QLabel("频段", self._settings)
+        self._band_label = self._single_label
         self._band_row = _pair_field(self.spin_cutoff_lo, "–", self.spin_cutoff_hi)
-        form.addRow(self._band_label, self._band_row)
+        self._cutoff_host = _stacked_field(self._single_row, self._band_row)
+        form.addRow(self._single_label, self._cutoff_host)
 
         self.combo_order = QComboBox(self._settings)
         self.combo_order.addItems(("2", "4", "6", "8"))
@@ -142,13 +141,10 @@ class BatchFilterPanel(QWidget):
 
     def _sync_kind_rows(self, *_args) -> None:
         is_band = self._kind_key() in {"band", "bandstop"}
-        self._single_label.setVisible(not is_band)
-        self._single_row.setVisible(not is_band)
-        self.spin_cutoff.setVisible(not is_band)
-        self._band_label.setVisible(is_band)
-        self._band_row.setVisible(is_band)
-        self.spin_cutoff_lo.setVisible(is_band)
-        self.spin_cutoff_hi.setVisible(is_band)
+        self._cutoff_host.layout().setCurrentWidget(
+            self._band_row if is_band else self._single_row
+        )
+        self._single_label.setText("频段" if is_band else "截止")
         self._refresh_summary()
 
     def _refresh_summary(self, *_args) -> None:

@@ -92,6 +92,66 @@ def test_frf_first_open_rows_keep_breathing_gaps(shown_inspector, qtbot):
         prev_bottom = top + field.height()
 
 
+def _assert_uniform_filter_editor_gaps(panel, editors):
+    spacing = panel._form.verticalSpacing()
+    gaps = []
+    prev_bottom = None
+    for editor in editors:
+        host = editor.parentWidget()
+        assert host.height() >= editor.sizeHint().height(), (
+            f"{editor.objectName() or type(editor).__name__}: row host "
+            f"{host.height()}px starves the Fixed-height field "
+            f"({editor.sizeHint().height()}px)"
+        )
+        top = editor.mapTo(panel, editor.rect().topLeft()).y()
+        if prev_bottom is not None:
+            gap = top - prev_bottom
+            assert gap >= spacing, (
+                f"filter editor gap is {gap}px, expected >= form "
+                f"verticalSpacing {spacing}px"
+            )
+            gaps.append(gap)
+        prev_bottom = top + editor.height()
+    assert gaps, "expected at least two visible filter editors"
+    assert len(set(gaps)) == 1, (
+        f"filter row gaps should match across kinds, got {gaps}"
+    )
+
+
+def test_time_filter_rows_keep_inspector_form_gaps(shown_inspector, qtbot):
+    """滤波 类型/截止/阶数 must keep the same ``_configure_form`` gaps as
+    横坐标 / 时间范围, not collapse into overlapping field borders."""
+    _win, inspector = shown_inspector
+    inspector.set_mode("time")
+    qtbot.wait(50)
+
+    panel = inspector.filter_panel
+    form = panel._form
+    assert form.horizontalSpacing() == 6
+    assert form.verticalSpacing() == 4
+    _assert_uniform_filter_editor_gaps(
+        panel, (panel.combo_kind, panel.spin_cut, panel.combo_order),
+    )
+
+
+def test_time_filter_row_gaps_stay_uniform_for_every_kind(shown_inspector, qtbot):
+    """低通/高通 hide the band editors; 带通/带阻 swap them in the same slot."""
+    _win, inspector = shown_inspector
+    inspector.set_mode("time")
+    qtbot.wait(50)
+    panel = inspector.filter_panel
+    panel.set_enabled(True)
+    qtbot.wait(20)
+    for kind in ("低通", "高通", "带通", "带阻"):
+        panel.set_kind(kind)
+        qtbot.wait(20)
+        if kind in ("带通", "带阻"):
+            editors = (panel.combo_kind, panel.spin_lo, panel.combo_order)
+        else:
+            editors = (panel.combo_kind, panel.spin_cut, panel.combo_order)
+        _assert_uniform_filter_editor_gaps(panel, editors)
+
+
 def test_frf_reentry_stays_settled(shown_inspector, qtbot):
     """切走再切回（历史上的治愈路径）不得比首开验收更差。"""
     _win, inspector = shown_inspector

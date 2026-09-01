@@ -471,6 +471,26 @@ def _pair_field(widget_a, label_b_text, widget_b):
     return host
 
 
+def _stacked_field(*pages):
+    """One QFormLayout field that shows exactly one of ``pages``.
+
+    Hiding a sibling form row in Qt 5 still leaves ``verticalSpacing`` in
+    the layout, so mutually exclusive editors (截止 vs 下限) must share a
+    single slot. ``QStackedLayout`` matches the axis-range host pattern.
+    """
+    host = QWidget()
+    host.setObjectName("inspectorStackedField")
+    host.setAutoFillBackground(False)
+    host.setAttribute(Qt.WA_StyledBackground, False)
+    host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    stack = QStackedLayout(host)
+    stack.setContentsMargins(0, 0, 0, 0)
+    stack.setSpacing(0)
+    for page in pages:
+        stack.addWidget(page)
+    return host
+
+
 def _enforce_label_widths(widget, *, max_field_width=None, unify_columns=False):
     """Pin every QFormLayout label's minimumWidth to its sizeHint width
     and (optionally) cap every uncapped field's maximumWidth.

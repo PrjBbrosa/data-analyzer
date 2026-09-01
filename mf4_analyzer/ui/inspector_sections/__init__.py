@@ -46,6 +46,7 @@ from ._helpers import (  # noqa: F401
     _configure_form,
     _fit_field,
     _pair_field,
+    _stacked_field,
     _enforce_label_widths,
     _set_form_row_visible,
     _AxisRangeHost,
