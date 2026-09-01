@@ -121,9 +121,12 @@ class ViewOverflowPopup(QFrame):
         self._list_well = _OverflowListWell(self._surface)
         self._list_well.setObjectName("viewOverflowListWell")
         # Widget contentsMargins (not layout margins) shrink contentsRect so
-        # the well stroke can sit in the 8px pad, inside the clip, outside the
-        # opaque scroll child.
-        self._list_well.setContentsMargins(int(_WELL_INSET), 0, int(_WELL_INSET), 0)
+        # every edge of the well stroke sits in protected padding, inside the
+        # clip and outside the opaque scroll child. The 1px top/bottom guards
+        # keep both side strokes joined to the same horizontal endpoints.
+        self._list_well.setContentsMargins(
+            int(_WELL_INSET), 1, int(_WELL_INSET), 1
+        )
         well_lay = QVBoxLayout(self._list_well)
         well_lay.setContentsMargins(0, 0, 0, 0)
         well_lay.setSpacing(0)
@@ -448,7 +451,7 @@ class _OverflowListWell(QWidget):
         painter.fillRect(self.rect(), _SURFACE_BG)
         # Outset the stroke by 0.5px into the contents-margin pad so the 1px
         # line stays inside this widget's clip and is not covered by the scroll.
-        well = QRectF(self.contentsRect()).adjusted(-0.5, 0.5, 0.5, -0.5)
+        well = QRectF(self.contentsRect()).adjusted(-0.5, -0.5, 0.5, 0.5)
         if well.width() > 2 and well.height() > 2:
             painter.setRenderHint(QPainter.Antialiasing, False)
             painter.setPen(QPen(_SEPARATOR, 1))

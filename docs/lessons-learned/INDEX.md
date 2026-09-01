@@ -221,6 +221,7 @@ lesson by default.
 | [WWT Exact Bindings Must Not Pin Global Custom X](wwt-exact-binding-does-not-pin-global-custom-x.md) | Changing WWT View proposals, curve bindings, or the Inspector custom-X | See lesson |
 | [WWT Initial Axis Groups Stay Ordinary And Editable](wwt-initial-axis-groups-stay-ordinary-editable.md) | Importing or restoring WWT-derived initial axis groups in the shared | See lesson |
 | [Translucent Popup Chrome Must Self-Paint](translucent-popup-chrome-must-self-paint.md) | Drawing inner frames or hover fills on a `Qt.Popup` with | See lesson |
+| [Qt Inner Frame Needs Four Edge Paint Guards](qt-inner-frame-needs-four-edge-paint-guards.md) | Custom-painting an inner frame around an opaque scroll area or other | See lesson |
 
 ## Selection Rules
 

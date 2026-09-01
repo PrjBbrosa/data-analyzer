@@ -1467,21 +1467,68 @@ def test_overflow_popup_omits_help_copy_and_paints_list_separators(qtbot):
     image = well.grab().toImage()
     mid_y = image.height() // 2
     mid_x = image.width() // 2
-    inset = well.contentsRect().left()
+    dpr = image.devicePixelRatio()
+    margins = well.contentsMargins()
+    inset = margins.left()
+    separator = QColor("#c9d5e3")
 
-    def _has_ink(x, y, band=2):
-        for dx in range(-band, band + 1):
-            px = max(0, min(image.width() - 1, x + dx))
-            color = QColor(image.pixel(px, y))
-            if color.red() < 245 or color.green() < 245:
-                return True
+    def _has_separator(x, y, x_band=None, y_band=None):
+        x_band = round(2 * dpr) if x_band is None else x_band
+        y_band = round(2 * dpr) if y_band is None else y_band
+        for dy in range(-y_band, y_band + 1):
+            py = max(0, min(image.height() - 1, y + dy))
+            for dx in range(-x_band, x_band + 1):
+                px = max(0, min(image.width() - 1, x + dx))
+                color = QColor(image.pixel(px, py))
+                if all(
+                    abs(channel - expected) <= 12
+                    for channel, expected in (
+                        (color.red(), separator.red()),
+                        (color.green(), separator.green()),
+                        (color.blue(), separator.blue()),
+                    )
+                ):
+                    return True
         return False
 
-    assert inset >= 8
-    assert _has_ink(inset, mid_y)
-    assert _has_ink(image.width() - inset, mid_y)
-    assert _has_ink(mid_x, 0)
-    assert _has_ink(mid_x, image.height() - 1)
+    def _separator_y_near(edge_y):
+        for dy in range(0, round(2 * dpr) + 1):
+            for y in {edge_y - dy, edge_y + dy}:
+                if 0 <= y < image.height() and _has_separator(
+                    mid_x, y, x_band=1, y_band=0
+                ):
+                    return y
+        return None
+
+    def _separator_x_near(edge_x):
+        for dx in range(0, round(2 * dpr) + 1):
+            for x in {edge_x - dx, edge_x + dx}:
+                if 0 <= x < image.width() and _has_separator(
+                    x, mid_y, x_band=0, y_band=1
+                ):
+                    return x
+        return None
+
+    top_y = _separator_y_near(0)
+    bottom_y = _separator_y_near(image.height() - 1)
+    left_x = _separator_x_near(round(inset * dpr))
+    right_x = _separator_x_near(image.width() - 1 - round(inset * dpr))
+
+    assert (margins.left(), margins.right()) == (8, 8)
+    # The scroll child needs a one-pixel guard on every edge. Otherwise it can
+    # cover the horizontal strokes on Cocoa and leave two unmatched side lines.
+    assert (margins.top(), margins.bottom()) == (1, 1)
+    assert top_y is not None
+    assert bottom_y is not None
+    assert left_x is not None
+    assert right_x is not None
+    for x in (left_x, right_x):
+        for y in (top_y, bottom_y):
+            assert _has_separator(
+                x, y, x_band=round(dpr), y_band=round(dpr)
+            ), (
+                f"separator corner missing at ({x}, {y})"
+            )
     popup.hide()
 
 
