@@ -353,6 +353,34 @@ def test_ucan_d6_cser_customer_sample_has_seven_proposals():
     assert len(proposals) == 7
 
 
+def test_header_x_keeps_matching_channel_rows_ordinary_with_one_exception(
+    tmp_path,
+):
+    proposals, _registered, _loaded = _proposals(
+        wwt.channel_exception_with_header_x(tmp_path / "mixed-channel-x.wwt")
+    )
+
+    view = proposals[0].state
+    assert CustomXAxisSpec.from_axis_opts(view.axis_opts["x_axis"]) == (
+        CustomXAxisSpec(
+            mode=CHANNEL_MODE,
+            resolver=PER_SOURCE_NAME,
+            source_fid=None,
+            channel="Wheel input torque",
+            label="Wheel input torque [Nm]",
+        )
+    )
+    assert set(view.checked) == {
+        ("f1", "Diff.Limit A"),
+        ("f1", "Diff.Moment A"),
+        ("f1", "Diff.Moment B"),
+    }
+    assert [binding.display_name for binding in view.curve_bindings] == [
+        "Diff.Limit A [Nm]",
+    ]
+    assert view.curve_bindings[0].x_ref.channel == "X_Wheel input torque"
+
+
 def test_ucan_eo3_customer_sample_has_seven_proposals_after_empty_windows():
     proposals, _registered, loaded = _proposals(_customer_wwt("U-Can_EO3_000089.wwt"))
     visible_windows = sum(

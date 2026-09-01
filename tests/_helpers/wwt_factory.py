@@ -580,6 +580,68 @@ def measurement_plus_record_only_tolerance(
     return _emit(write_wwt_bytes(records, windows), path)
 
 
+def channel_exception_with_header_x(path=None) -> Path | bytes:
+    """Channel-backed WinWert rows with one exceptional channel X.
+
+    The window header names ``Wheel input torque``.  Two measurement rows use
+    that normal View-wide X, while one evaluation row uses the similarly named
+    ``X_Wheel input torque`` and must retain an exact curve-local binding.
+    """
+    primary_x = "Wheel input torque"
+    exception_x = "X_Wheel input torque"
+    records = (
+        WwtRecordSpec("Zeit", TIME_NAME, "s", n=CHANNEL_N, dt=DT, t0=T0),
+        WwtRecordSpec(
+            "Real", primary_x, "Nm", n=CHANNEL_N,
+            values=_linspace(-12.0, 12.0, CHANNEL_N),
+        ),
+        WwtRecordSpec(
+            "Real", exception_x, "Nm", n=CHANNEL_N,
+            values=_linspace(-10.0, 10.0, CHANNEL_N),
+        ),
+        WwtRecordSpec(
+            "Real", "Diff.Limit A", "Nm", n=CHANNEL_N,
+            values=_linspace(0.0, 4.0, CHANNEL_N),
+        ),
+        WwtRecordSpec(
+            "Real", "Diff.Moment A", "Nm", n=CHANNEL_N,
+            values=_linspace(-0.5, 0.5, CHANNEL_N),
+        ),
+        WwtRecordSpec(
+            "Real", "Diff.Moment B", "Nm", n=CHANNEL_N,
+            values=_linspace(0.5, -0.5, CHANNEL_N),
+        ),
+    )
+    windows = (
+        WwtWindowSpec(
+            rect_mm=RECT_WIN_A,
+            global_x=1,
+            x_axis=_axis_curve(
+                f"{primary_x} [Nm]", -12.0, 12.0,
+                x_record_index=1, tick=2.0, grid=1.0,
+            ),
+            curves=(
+                _y_curve(
+                    3, "Diff.Limit A [Nm]", -1.0, 5.0,
+                    x_record_index=2, tick=1.0, grid=0.5,
+                    selected=False, color=TOL_Y_COLOR,
+                ),
+                _y_curve(
+                    4, "Diff.Moment A [Nm]", -1.0, 1.0,
+                    x_record_index=1, tick=0.2, grid=0.1,
+                    color=CHAN_Y_COLOR,
+                ),
+                _y_curve(
+                    5, "Diff.Moment B [Nm]", -1.0, 1.0,
+                    x_record_index=1, tick=0.2, grid=0.1,
+                    color=FORM_Y_COLOR,
+                ),
+            ),
+        ),
+    )
+    return _emit(write_wwt_bytes(records, windows), path)
+
+
 def multi_window_overlap_and_formula(path=None) -> Path | bytes:
     """Three windows, a Pars formula, independent X/Y refs, one exact overlap."""
     n = CHANNEL_N

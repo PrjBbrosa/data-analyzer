@@ -285,14 +285,18 @@ def _x_axis_opts(ordinary_x_channel: str | None, x_label: str) -> dict:
 
 def _ordinary_channel_record_indexes(
     rows: Sequence[tuple[WwtCurveDisplay, TimeDataRef, TimeDataRef]],
+    *,
+    preferred_x_channel: str | None = None,
 ) -> tuple[set[int], str | None]:
     """Classify rows that ordinary TimeDomain data can represent exactly.
 
     A single View-wide Custom-X spec can only name one channel.  Record-backed
-    X/Y and heterogeneous channel X stay as exact bindings.  Axis sharing is
-    intentionally not part of this classification: it is a display grouping,
-    not data identity.  Ordinary channel rows therefore never become bindings
-    merely because a record-only curve shares their Y axis.
+    X/Y stay as exact bindings.  When channel rows contain one exceptional X,
+    the WinWert window header is the explicit owner of the normal View-wide X:
+    rows matching that channel remain ordinary and only the exception stays an
+    exact binding.  If the header cannot prove one owner, heterogeneous channel
+    X remains fail-closed as exact bindings.  Axis sharing is intentionally not
+    part of this classification: it is a display grouping, not data identity.
     """
     channel_rows = [
         (row, y_ref, x_ref)
@@ -305,15 +309,23 @@ def _ordinary_channel_record_indexes(
         )
     ]
     x_channels = {str(x_ref.channel) for _row, _y_ref, x_ref in channel_rows}
-    if len(x_channels) != 1:
+    ordinary_x_channel = None
+    if len(x_channels) == 1:
+        ordinary_x_channel = next(iter(x_channels))
+    else:
+        preferred = str(preferred_x_channel or "").strip()
+        if preferred in x_channels:
+            ordinary_x_channel = preferred
+    if ordinary_x_channel is None:
         return set(), None
     ordinary = {
         row.record_index
-        for row, _y_ref, _x_ref in channel_rows
+        for row, _y_ref, x_ref in channel_rows
+        if str(x_ref.channel) == ordinary_x_channel
     }
     if not ordinary:
         return set(), None
-    return ordinary, next(iter(x_channels))
+    return ordinary, ordinary_x_channel
 
 
 def _ordinary_channel_axis_groups(
@@ -408,6 +420,7 @@ def build_wwt_view_proposals(
         ]
         ordinary_records, ordinary_x_channel = _ordinary_channel_record_indexes(
             resolved,
+            preferred_x_channel=_label_without_unit(x_label),
         )
         channel_axis_groups = _ordinary_channel_axis_groups(
             resolved, ordinary_records, axis_of,
