@@ -223,16 +223,57 @@ class AnalysisMixin:
         mgr = self.analysis_managers[section]
         if len(mgr.views) > 1 and 0 <= idx < len(mgr.views):
             state = mgr.get(idx)
-            self._analysis_restore_pending.discard((section, state.view_id))
-            # Drop pin bookkeeping before the view disappears so later LRU
-            # passes treat its results as unowned history (spec §5).
-            self._drop_analysis_view_pins(section, state.view_id)
-            if section == 'frf':
-                for pane_idx in range(len(state.panes)):
-                    self._frf_coordinator.invalidate_pane(
-                        state.view_id, pane_idx
-                    )
+            self._forget_analysis_view(
+                section, state.view_id, len(getattr(state, "panes", ()))
+            )
         mgr.delete_view(idx)
+
+    def _forget_analysis_view(self, section, view_id, pane_count=1):
+        self._analysis_restore_pending.discard((section, view_id))
+        self._drop_analysis_view_pins(section, view_id)
+        if section == "frf":
+            for pane_idx in range(max(1, int(pane_count or 1))):
+                self._frf_coordinator.invalidate_pane(view_id, pane_idx)
+
+    def _on_analysis_close_others(self, section, keep_view_id):
+        mgr = self.analysis_managers[section]
+        keep_idx = next(
+            (
+                idx
+                for idx, state in enumerate(mgr.views)
+                if str(state.view_id) == str(keep_view_id)
+            ),
+            -1,
+        )
+        if keep_idx < 0 or len(mgr.views) <= 1:
+            return
+        keep = mgr.get(keep_idx)
+        if not self._confirm_close_other_views(
+            len(mgr.views) - 1, keep_idx + 1, keep.name
+        ):
+            return
+        self._capture_active_analysis_view(section)
+        removed_meta = [
+            (state.view_id, len(getattr(state, "panes", ())))
+            for state in mgr.views
+            if str(state.view_id) != str(keep.view_id)
+        ]
+        for view_id, pane_count in removed_meta:
+            self._forget_analysis_view(section, view_id, pane_count)
+        mgr.retain_only_view(str(keep.view_id))
+
+    def _on_analysis_close_all(self, section):
+        mgr = self.analysis_managers[section]
+        count = len(mgr.views)
+        if count <= 1:
+            return
+        if not self._confirm_close_all_views(count):
+            return
+        for state in list(mgr.views):
+            self._forget_analysis_view(
+                section, state.view_id, len(getattr(state, "panes", ()))
+            )
+        mgr.reset_to_single_default()
 
     def _on_analysis_duplicate(self, section, idx):
         self._capture_active_analysis_view(section)

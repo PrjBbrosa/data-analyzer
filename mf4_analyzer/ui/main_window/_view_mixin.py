@@ -803,13 +803,19 @@ class ViewMixin:
                 )
 
     def _on_view_delete(self, idx):
-        # 删除 View 会一并丢弃它的通道范围、分屏配对与已加入文件，且无法撤销。
-        # 删除是低频、破坏性操作，故每次都确认——不属于会被弹窗打扰的高频动作。
+        self._delete_time_view(idx, confirm=True)
+
+    def _on_overflow_view_delete(self, idx):
+        self._delete_time_view(idx, confirm=False)
+
+    def _delete_time_view(self, idx, confirm=True):
+        # 底栏色标 / 右键删除是低频误触面，时域每次确认。
+        # » 面板行内 × 是整理台，直接执行，避免 Qt.Popup 被 QMessageBox 挤掉。
         if not (0 <= idx < len(self.view_manager.views)):
             return
         if len(self.view_manager.views) <= 1:
             return
-        if not self._confirm_view_delete(self.view_manager.get(idx).name):
+        if confirm and not self._confirm_view_delete(self.view_manager.get(idx).name):
             return
         self._capture_current_view()
         self.view_manager.delete_view(idx)
@@ -826,6 +832,67 @@ class ViewMixin:
         fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is delete
+
+    def _confirm_close_other_views(self, count, ordinal, name):
+        box = QMessageBox(self)
+        box.setWindowTitle(f"关闭其他 {count} 个 View？")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(f"将只保留当前的 View {ordinal}「{name}」。")
+        box.setInformativeText(
+            "其他 View 保存的范围、split 和附件关系会一并移除。"
+        )
+        confirm = box.addButton("关闭其他", QMessageBox.DestructiveRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        return box.clickedButton() is confirm
+
+    def _confirm_close_all_views(self, count):
+        box = QMessageBox(self)
+        box.setWindowTitle(f"关闭全部 {count} 个 View？")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(
+            "完成后保留一个已重置的空白 View，工作区不会变成无 View 状态。"
+        )
+        box.setInformativeText(
+            "全部 View 保存的范围、split 和附件关系会一并移除。"
+        )
+        confirm = box.addButton("关闭全部", QMessageBox.DestructiveRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        return box.clickedButton() is confirm
+
+    def _on_view_close_others(self, keep_view_id):
+        manager = self.view_manager
+        keep_idx = next(
+            (
+                idx
+                for idx, state in enumerate(manager.views)
+                if str(state.view_id) == str(keep_view_id)
+            ),
+            -1,
+        )
+        if keep_idx < 0 or len(manager.views) <= 1:
+            return
+        keep = manager.get(keep_idx)
+        if not self._confirm_close_other_views(
+            len(manager.views) - 1, keep_idx + 1, keep.name
+        ):
+            return
+        self._capture_current_view()
+        manager.retain_only_view(str(keep.view_id))
+
+    def _on_view_close_all(self):
+        manager = self.view_manager
+        count = len(manager.views)
+        if count <= 1:
+            return
+        if not self._confirm_close_all_views(count):
+            return
+        manager.reset_to_single_default()
 
     def _on_view_duplicate(self, idx):
         self._capture_current_view()

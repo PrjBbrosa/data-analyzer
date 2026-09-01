@@ -417,3 +417,72 @@ def test_exit_split_drops_pane1_pins_for_analysis_sections(win):
         assert (section, state.view_id, 1) not in win._analysis_pins
         assert key0 in win._analysis_pins[(section, state.view_id, 0)]
         assert len(state.panes) == 1
+
+
+def test_bulk_close_others_unpins_removed_analysis_views(win, monkeypatch):
+    section = "fft_time"
+    mgr = win.analysis_managers[section]
+    mgr.new_view()
+    keep = mgr.get(0)
+    victim = mgr.get(1)
+    cache = win.analysis_caches[section]
+    v_key = cache.make_key("f1", "victim", {"nfft": 1, "time_range": None})
+    k_key = cache.make_key("f1", "keep", {"nfft": 1, "time_range": None})
+    win._store_analysis_result(section, victim.view_id, 0, v_key, _fake_heatmap("v"))
+    win._store_analysis_result(section, keep.view_id, 0, k_key, _fake_heatmap("k"))
+    win._replace_analysis_pane_pins(section, victim.view_id, 0, (v_key,))
+    win._replace_analysis_pane_pins(section, keep.view_id, 0, (k_key,))
+    monkeypatch.setattr(win, "_confirm_close_other_views", lambda *_a: True)
+    monkeypatch.setattr(win, "_capture_active_analysis_view", lambda *_a, **_k: None)
+    monkeypatch.setattr(win, "_render_analysis_view_from_cache", lambda *_a, **_k: None)
+
+    win._on_analysis_close_others(section, keep.view_id)
+
+    assert len(mgr.views) == 1
+    assert mgr.views[0].view_id == keep.view_id
+    assert (section, victim.view_id, 0) not in win._analysis_pins
+    assert (section, keep.view_id, 0) in win._analysis_pins
+    for i in range(cache._capacity + 2):
+        cache.put(cache.make_key("storm", str(i), {"nfft": i}), _fake_heatmap(i))
+    assert v_key not in cache._store
+    assert k_key in cache._store
+
+
+def test_bulk_close_all_clears_analysis_pins_and_leaves_one_view(win, monkeypatch):
+    section = "fft"
+    mgr = win.analysis_managers[section]
+    mgr.new_view()
+    cache = win.analysis_caches[section]
+    keys = []
+    for state in mgr.views:
+        key = cache.make_key("f1", state.view_id, {"nfft": 1, "time_range": None})
+        keys.append((state.view_id, key))
+        win._store_analysis_result(section, state.view_id, 0, key, _fake_heatmap(state.view_id))
+        win._replace_analysis_pane_pins(section, state.view_id, 0, (key,))
+    win._analysis_restore_pending.add((section, mgr.views[1].view_id))
+    monkeypatch.setattr(win, "_confirm_close_all_views", lambda *_a: True)
+
+    win._on_analysis_close_all(section)
+
+    assert len(mgr.views) == 1
+    for view_id, _key in keys:
+        assert (section, view_id, 0) not in win._analysis_pins
+        assert (section, view_id) not in win._analysis_restore_pending
+
+
+def test_bulk_close_cancel_leaves_analysis_pins(win, monkeypatch):
+    section = "fft_time"
+    mgr = win.analysis_managers[section]
+    mgr.new_view()
+    victim = mgr.get(1)
+    cache = win.analysis_caches[section]
+    key = cache.make_key("f1", "victim", {"nfft": 1, "time_range": None})
+    win._store_analysis_result(section, victim.view_id, 0, key, _fake_heatmap("v"))
+    win._replace_analysis_pane_pins(section, victim.view_id, 0, (key,))
+    monkeypatch.setattr(win, "_confirm_close_other_views", lambda *_a: False)
+    monkeypatch.setattr(win, "_confirm_close_all_views", lambda *_a: False)
+    before = len(mgr.views)
+    win._on_analysis_close_others(section, mgr.get(0).view_id)
+    win._on_analysis_close_all(section)
+    assert len(mgr.views) == before
+    assert (section, victim.view_id, 0) in win._analysis_pins

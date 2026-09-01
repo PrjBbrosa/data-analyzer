@@ -1281,6 +1281,11 @@ class MainWindow(
         self.view_tabbar.switch_requested.connect(self._switch_view)
         self.view_tabbar.new_requested.connect(self._on_view_new)
         self.view_tabbar.delete_requested.connect(self._on_view_delete)
+        self.view_tabbar.overflow_delete_requested.connect(
+            self._on_overflow_view_delete
+        )
+        self.view_tabbar.close_others_requested.connect(self._on_view_close_others)
+        self.view_tabbar.close_all_requested.connect(self._on_view_close_all)
         self.view_tabbar.duplicate_requested.connect(self._on_view_duplicate)
         self.view_tabbar.rename_requested.connect(self._on_time_view_rename)
         self.view_tabbar.color_requested.connect(self._on_view_color)
@@ -1313,6 +1318,12 @@ class MainWindow(
                 lambda s=sec: self._on_analysis_new(s))
             bar.delete_requested.connect(
                 lambda idx, s=sec: self._on_analysis_delete(s, idx))
+            bar.overflow_delete_requested.connect(
+                partial(self._on_analysis_delete, sec))
+            bar.close_others_requested.connect(
+                partial(self._on_analysis_close_others, sec))
+            bar.close_all_requested.connect(
+                partial(self._on_analysis_close_all, sec))
             bar.rename_requested.connect(
                 partial(self._on_analysis_view_rename, sec))
             bar.duplicate_requested.connect(

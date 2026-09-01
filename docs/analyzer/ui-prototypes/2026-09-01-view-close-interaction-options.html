@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab — 多 View 快速关闭交互方案</title>
+  <style>
+    :root {
+      --ink: #182538;
+      --ink-2: #35465d;
+      --muted: #66778d;
+      --quiet: #8a98aa;
+      --line: #d5dfeb;
+      --line-2: #c3cfdd;
+      --surface: #ffffff;
+      --surface-2: #f7f9fc;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --blue-line: #a7bfea;
+      --danger: #c23a4b;
+      --danger-soft: #fff0f2;
+      --green: #168a4a;
+      --shadow: 0 18px 48px rgba(29, 45, 68, .12);
+      --sans: "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", system-ui, sans-serif;
+      --mono: "SF Mono", Menlo, ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      color: var(--ink);
+      font: 13px/1.5 var(--sans);
+      background:
+        radial-gradient(820px 360px at 8% -6%, #fff 0, transparent 62%),
+        linear-gradient(180deg, #f5f8fc 0, #e9eff6 100%);
+    }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid rgba(37, 99, 235, .25); outline-offset: 2px; }
+
+    .page { width: min(1380px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 54px; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 30px; align-items: end; }
+    .eyebrow { margin-bottom: 7px; color: var(--quiet); font-size: 11px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(24px, 3vw, 36px); line-height: 1.12; letter-spacing: -.035em; }
+    .lede { max-width: 76ch; margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+    .recommendation {
+      max-width: 360px; padding: 13px 15px; border: 1px solid #bad0f4; border-radius: 12px;
+      background: rgba(239, 245, 255, .9); box-shadow: 0 8px 28px rgba(37, 99, 235, .08);
+    }
+    .recommendation b { display: block; margin-bottom: 3px; color: #184ca8; font-size: 12px; }
+    .recommendation span { color: #506985; font-size: 12px; }
+
+    .facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 18px; }
+    .fact { padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.72); color: var(--muted); font-size: 11px; }
+    .fact b { color: var(--ink-2); }
+
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .option { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.92); box-shadow: var(--shadow); }
+    .option.recommended { border-color: #96b8ef; box-shadow: 0 20px 52px rgba(38, 91, 170, .16); }
+    .option.recommended::before { position: absolute; inset: 0 0 auto; height: 3px; background: var(--blue); content: ""; }
+    .option-head { min-height: 154px; padding: 19px 20px 15px; }
+    .option-kicker { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--quiet); font: 750 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .badge { padding: 4px 8px; border-radius: 999px; background: var(--blue-soft); color: #1855b8; font: 750 10px/1.2 var(--sans); letter-spacing: 0; }
+    h2 { margin: 11px 0 5px; font-size: 19px; letter-spacing: -.02em; }
+    .option-head p { margin: 0; min-height: 39px; color: var(--muted); font-size: 12px; }
+    .metrics { display: flex; gap: 6px; margin-top: 12px; }
+    .metric { display: inline-flex; gap: 5px; padding: 4px 7px; border-radius: 6px; background: #f1f5f9; color: #718096; font-size: 10px; }
+    .metric b { color: #394b62; }
+
+    .demo-shell { position: relative; margin: 0 12px; border: 1px solid #c9d5e3; border-radius: 10px; background: #f5f8fb; overflow: visible; }
+    .plot { position: relative; height: 128px; border-radius: 9px 9px 0 0; background: linear-gradient(#fbfdff, #f8fafc); overflow: hidden; }
+    .plot::before {
+      position: absolute; inset: 0; content: "";
+      background-image: linear-gradient(rgba(117,137,162,.10) 1px, transparent 1px), linear-gradient(90deg, rgba(117,137,162,.10) 1px, transparent 1px);
+      background-size: 34px 25px;
+    }
+    .plot svg { position: absolute; inset: 21px 20px 17px 18px; width: calc(100% - 38px); height: calc(100% - 38px); }
+    .plot path { fill: none; stroke: #3a75d1; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .plot .ghost { stroke: #8ba1b8; stroke-width: 1.2; opacity: .52; }
+    .plot-label { position: absolute; left: 12px; top: 8px; color: #718096; font-size: 9px; }
+
+    .rail { position: relative; display: flex; align-items: center; min-width: 0; height: 44px; padding: 4px 8px; border-top: 1px solid #cfdae6; background: #fbfcfe; }
+    .anchor { display: flex; align-items: center; flex: 0 0 auto; gap: 7px; height: 30px; margin-right: 6px; padding-right: 12px; border-right: 1px solid #c8d2e0; color: #3d4f66; font-size: 12px; font-weight: 650; }
+    .wave-icon { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; background: #e8f0ff; color: #2563eb; font-size: 14px; font-weight: 850; }
+    .tabs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+    .tab { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 52px; height: 28px; padding: 0 9px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #475569; cursor: pointer; font-weight: 650; }
+    .tab:hover { border-color: #c7d7f2; background: #eef4ff; color: #1f3b68; }
+    .tab.active, .tab.paired { border-color: var(--blue-line); background: var(--blue-soft); color: #173262; }
+    .tab.active { border-bottom: 2px solid var(--blue); }
+    .dot { width: 16px; height: 11px; border-radius: 4px; background: var(--dot, #168a4a); box-shadow: inset 0 -1px 0 rgba(0,0,0,.18); }
+    .tab-label { min-width: 12px; }
+    .tools { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; margin-left: 5px; }
+    .icon-btn { display: grid; place-items: center; min-width: 28px; height: 26px; padding: 0 7px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #26364b; cursor: pointer; font-size: 14px; font-weight: 750; }
+    .icon-btn:hover { border-color: #a7bfea; background: #e8f0ff; color: #173262; }
+    .icon-btn.danger { color: var(--danger); }
+    .icon-btn.danger:hover { border-color: #e4a9b0; background: var(--danger-soft); }
+    .hintline { display: flex; align-items: center; justify-content: space-between; min-height: 43px; padding: 8px 13px; color: #65758a; font-size: 11px; }
+    .hintline button { padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #52657d; cursor: pointer; font-size: 10px; }
+
+    .close-x { position: absolute; right: 3px; display: grid; place-items: center; width: 17px; height: 17px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #64748b; cursor: pointer; opacity: .16; font-size: 14px; line-height: 1; }
+    .tab:hover .close-x, .tab:focus-within .close-x, .tab.active .close-x { opacity: 1; }
+    .close-x:hover { background: #d9e5f8; color: #9d2c3a; }
+    .option[data-option="a"] .tab { flex: 1 1 62px; min-width: 49px; padding: 0 20px 0 4px; gap: 3px; }
+    .option[data-option="a"] .dot { width: 12px; }
+    .option[data-option="a"] .close-x { opacity: 1; }
+
+    .menu, .manager { position: absolute; z-index: 20; display: none; border: 1px solid #cbd6e3; border-radius: 9px; background: #fff; box-shadow: 0 16px 36px rgba(24, 40, 65, .18); }
+    .menu.open, .manager.open { display: block; }
+    .menu { left: 305px; bottom: 38px; width: 190px; padding: 6px; }
+    .menu button { display: flex; width: 100%; justify-content: space-between; padding: 7px 9px; border: 0; border-radius: 5px; background: transparent; color: #34465e; cursor: pointer; text-align: left; font-size: 11px; }
+    .menu button:hover { background: #eef4ff; }
+    .menu .destructive { color: var(--danger); }
+    .menu hr { height: 1px; margin: 5px 4px; border: 0; background: #e5ebf2; }
+    kbd { color: #8a98aa; font: 9px/1 var(--mono); }
+
+    .manager { right: 40px; bottom: 38px; width: 250px; padding: 8px; }
+    .manager-title { display: flex; align-items: center; justify-content: space-between; padding: 3px 4px 7px; color: #52647a; font-size: 10px; font-weight: 750; }
+    .manager-list { display: grid; gap: 2px; max-height: 196px; overflow: auto; }
+    .manager-row { display: grid; grid-template-columns: 14px minmax(0,1fr) 24px; align-items: center; gap: 7px; min-height: 31px; padding: 2px 3px 2px 8px; border-radius: 6px; color: #3b4d64; font-size: 11px; }
+    .manager-row.current { background: #eef4ff; color: #173262; font-weight: 700; }
+    .manager-row .mini-dot { width: 10px; height: 7px; border-radius: 3px; background: var(--dot); }
+    .manager-row button { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 5px; background: transparent; color: #76869a; cursor: pointer; }
+    .manager-row button:hover { background: #ffe6e9; color: var(--danger); }
+    .manager-footer { display: flex; justify-content: space-between; gap: 6px; margin-top: 7px; padding-top: 7px; border-top: 1px solid #e2e9f1; }
+    .manager-footer button { flex: 1; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #4a5d74; cursor: pointer; font-size: 10px; }
+    .manager-footer .destructive { border-color: #e5b3b9; color: var(--danger); }
+
+    .toast { position: absolute; z-index: 24; left: 50%; bottom: 52px; display: none; align-items: center; gap: 12px; transform: translateX(-50%); padding: 8px 10px 8px 12px; border: 1px solid #cad5e2; border-radius: 8px; background: #1e2c3e; color: #fff; box-shadow: 0 10px 25px rgba(0,0,0,.18); white-space: nowrap; font-size: 11px; }
+    .toast.show { display: flex; }
+    .toast button { padding: 2px 5px; border: 0; border-radius: 4px; background: rgba(255,255,255,.13); color: #bcd5ff; cursor: pointer; font-weight: 750; }
+
+    .confirm { position: absolute; z-index: 30; inset: 0; display: none; place-items: center; padding: 15px; background: rgba(31, 43, 59, .24); backdrop-filter: blur(1px); }
+    .confirm.open { display: grid; }
+    .dialog { width: min(330px, 92%); padding: 15px; border: 1px solid #cdd7e3; border-radius: 11px; background: #fff; box-shadow: 0 18px 48px rgba(25,37,55,.23); }
+    .dialog h3 { margin: 0 0 5px; font-size: 15px; }
+    .dialog p { margin: 0; color: var(--muted); font-size: 11px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 14px; }
+    .dialog-actions button { padding: 6px 11px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #44566d; cursor: pointer; font-size: 11px; }
+    .dialog-actions .destructive { border-color: var(--danger); background: var(--danger); color: #fff; }
+
+    .option-foot { padding: 15px 20px 19px; }
+    .tradeoff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .tradeoff div { padding: 10px 11px; border-radius: 8px; background: #f5f8fb; color: #66778d; font-size: 11px; }
+    .tradeoff b { display: block; margin-bottom: 2px; color: #33465e; }
+
+    .matrix { margin-top: 20px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.88); box-shadow: var(--shadow); }
+    .matrix h2 { margin: 0; padding: 17px 18px 12px; font-size: 17px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 10px 14px; border-top: 1px solid #e3e9f0; text-align: left; }
+    th { background: #f5f8fb; color: #62738a; font-size: 10px; letter-spacing: .04em; }
+    td { color: #485b72; }
+    tr.reco td { background: #f1f6ff; color: #244d87; font-weight: 650; }
+    .good { color: var(--green); font-weight: 750; }
+    .warn { color: #a25f16; font-weight: 750; }
+    .bad { color: var(--danger); font-weight: 750; }
+    .decision { margin: 16px 18px 18px; padding: 12px 14px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: #edf4ff; color: #45617f; font-size: 12px; }
+    .decision b { color: #184ca8; }
+
+    @media (max-width: 1000px) {
+      .hero { grid-template-columns: 1fr; gap: 14px; }
+      .recommendation { max-width: none; }
+      .grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 660px) {
+      .page { width: calc(100vw - 18px); padding-top: 18px; }
+      .option-head { min-height: 0; }
+      .demo-shell { overflow-x: auto; }
+      .plot, .rail, .hintline { min-width: 610px; }
+      .tradeoff { grid-template-columns: 1fr; }
+      .matrix { overflow-x: auto; }
+      table { min-width: 760px; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .tab, .icon-btn, .close-x { transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">TraceLab / View rail study / 2026-09-01</div>
+        <h1>View 多起来以后，关闭应该快，但不能轻率。</h1>
+        <p class="lede">四组方案都从当前底部 View 条出发，使用同样的 8 个 View、同样的主 View 3 + 对比 View 7。试着关闭单个、关闭其他、关闭全部，再点“重置演示”反复比较。</p>
+      </div>
+      <aside class="recommendation">
+        <b>建议落地方向：D · 双通道</b>
+        <span>高频单个关闭走悬停 ×；批量整理走固定管理入口。单个关闭可撤销，批量关闭只确认一次。</span>
+      </aside>
+    </header>
+
+    <div class="facts" aria-label="当前产品约束">
+      <span class="fact"><b>当前：</b>右键 → 删除 → 再确认</span>
+      <span class="fact"><b>状态：</b>最后一个 View 不可删除</span>
+      <span class="fact"><b>窄栏：</b>完整名 → 编号 → »N 溢出</span>
+      <span class="fact"><b>原型约定：</b>关闭全部 = 留 1 个空白 View</span>
+    </div>
+
+    <section class="grid" aria-label="四种 View 关闭方案">
+      <article class="option" data-option="a">
+        <header class="option-head">
+          <div class="option-kicker"><span>Option A / Visible controls</span><span class="badge">最直观</span></div>
+          <h2>标签内 × + 固定“全部”按钮</h2>
+          <p>每个标签始终给出 ×；右侧再放一个批量关闭按钮。第一次使用也不需要学习。</p>
+          <div class="metrics"><span class="metric">关闭单个 <b>1 次</b></span><span class="metric">关闭全部 <b>2 次</b></span><span class="metric">栏宽 <b>最高</b></span></div>
+        </header>
+        <div class="demo-shell">
+          <div class="plot"><span class="plot-label">View 3 + View 7 · 对比中</span><svg viewBox="0 0 640 100" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 74 C60 68 70 23 125 44 S211 77 269 34 375 83 425 39 533 76 640 25"/><path d="M0 68 C46 71 85 39 121 55 S190 24 237 57 316 77 367 31 445 66 506 44 562 52 640 18"/></svg></div>
+          <div class="rail"><div class="anchor"><span class="wave-icon">⌁</span><span>时域</span></div><div class="tabs" data-tabs></div><div class="tools"><button class="icon-btn" type="button" title="新建 View">+</button><button class="icon-btn danger" type="button" data-close-all title="关闭全部 View">×全</button></div></div>
+          <div class="hintline"><span>× 始终可见，最快也最占空间。</span><button type="button" data-reset>重置演示</button></div>
+          <div class="toast" data-toast><span></span><button type="button" data-undo>撤销</button></div>
+          <div class="confirm" data-confirm><div class="dialog"><h3>关闭全部 View？</h3><p>将关闭其余 View，并把最后一个重置为空白。当前对比会结束。</p><div class="dialog-actions"><button type="button" data-cancel>取消</button><button class="destructive" type="button" data-confirm-all>关闭全部</button></div></div></div>
+        </div>
+        <footer class="option-foot"><div class="tradeoff"><div><b>优势</b>零学习成本，单个与全部都直接。</div><div><b>代价</b>8–24 个 View 时明显拥挤，红色动作长期抢视觉。</div></div></footer>
+      </article>
+
+      <article class="option" data-option="b">
+        <header class="option-head">
+          <div class="option-kicker"><span>Option B / Context menu</span><span class="badge">最安静</span></div>
+          <h2>右键菜单扩展批量动作</h2>
+          <p>不新增任何常驻控件；在现有右键菜单里补“关闭其他”和“关闭全部”。</p>
+          <div class="metrics"><span class="metric">关闭单个 <b>2 次</b></span><span class="metric">关闭全部 <b>3 次</b></span><span class="metric">栏宽 <b>不变</b></span></div>
+        </header>
+        <div class="demo-shell">
+          <div class="plot"><span class="plot-label">View 3 + View 7 · 对比中</span><svg viewBox="0 0 640 100" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 74 C60 68 70 23 125 44 S211 77 269 34 375 83 425 39 533 76 640 25"/><path d="M0 68 C46 71 85 39 121 55 S190 24 237 57 316 77 367 31 445 66 506 44 562 52 640 18"/></svg></div>
+          <div class="rail"><div class="anchor"><span class="wave-icon">⌁</span><span>时域</span></div><div class="tabs" data-tabs></div><div class="tools"><button class="icon-btn" type="button" title="新建 View">+</button></div><div class="menu" data-context-menu><button type="button">重命名</button><button type="button">复制此 View</button><hr><button type="button" data-menu-close>关闭此 View <kbd>右键</kbd></button><button type="button" data-menu-others>关闭其他 View</button><button class="destructive" type="button" data-close-all>关闭全部 View</button></div></div>
+          <div class="hintline"><span>在任意标签上右键；这里也可直接演示。</span><button type="button" data-open-context>右键 View 7</button><button type="button" data-reset>重置演示</button></div>
+          <div class="toast" data-toast><span></span><button type="button" data-undo>撤销</button></div>
+          <div class="confirm" data-confirm><div class="dialog"><h3>关闭全部 View？</h3><p>将关闭其余 View，并把最后一个重置为空白。当前对比会结束。</p><div class="dialog-actions"><button type="button" data-cancel>取消</button><button class="destructive" type="button" data-confirm-all>关闭全部</button></div></div></div>
+        </div>
+        <footer class="option-foot"><div class="tradeoff"><div><b>优势</b>与现有行为最接近，产品外观完全不变。</div><div><b>代价</b>触控板和新用户不易发现；批量关闭仍偏慢。</div></div></footer>
+      </article>
+
+      <article class="option" data-option="c">
+        <header class="option-head">
+          <div class="option-kicker"><span>Option C / View manager</span><span class="badge">批量最强</span></div>
+          <h2>固定 View 管理器</h2>
+          <p>右侧“≡”打开全部 View 清单。既能逐行关闭，也能关闭其他或全部，溢出的 View 也不会丢。</p>
+          <div class="metrics"><span class="metric">关闭单个 <b>2 次</b></span><span class="metric">关闭全部 <b>3 次</b></span><span class="metric">总览 <b>最好</b></span></div>
+        </header>
+        <div class="demo-shell">
+          <div class="plot"><span class="plot-label">View 3 + View 7 · 对比中</span><svg viewBox="0 0 640 100" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 74 C60 68 70 23 125 44 S211 77 269 34 375 83 425 39 533 76 640 25"/><path d="M0 68 C46 71 85 39 121 55 S190 24 237 57 316 77 367 31 445 66 506 44 562 52 640 18"/></svg></div>
+          <div class="rail"><div class="anchor"><span class="wave-icon">⌁</span><span>时域</span></div><div class="tabs" data-tabs></div><div class="tools"><button class="icon-btn" type="button" data-manager-toggle title="管理 Views">≡</button><button class="icon-btn" type="button" title="新建 View">+</button></div><div class="manager" data-manager><div class="manager-title"><span>全部 View</span><span data-count>8 个</span></div><div class="manager-list" data-manager-list></div><div class="manager-footer"><button type="button" data-manager-others>关闭其他</button><button class="destructive" type="button" data-close-all>关闭全部</button></div></div></div>
+          <div class="hintline"><span>点击“≡”查看完整 View 清单。</span><button type="button" data-reset>重置演示</button></div>
+          <div class="toast" data-toast><span></span><button type="button" data-undo>撤销</button></div>
+          <div class="confirm" data-confirm><div class="dialog"><h3>关闭全部 View？</h3><p>将关闭其余 View，并把最后一个重置为空白。当前对比会结束。</p><div class="dialog-actions"><button type="button" data-cancel>取消</button><button class="destructive" type="button" data-confirm-all>关闭全部</button></div></div></div>
+        </div>
+        <footer class="option-foot"><div class="tradeoff"><div><b>优势</b>多 View 与溢出场景最清楚，批量操作集中。</div><div><b>代价</b>单个关闭多一次点击，并永久占用 28px。</div></div></footer>
+      </article>
+
+      <article class="option recommended" data-option="d">
+        <header class="option-head">
+          <div class="option-kicker"><span>Option D / Dual channel</span><span class="badge">推荐</span></div>
+          <h2>悬停 × + View 管理器</h2>
+          <p>一个入口服务高频单关，一个入口服务批量整理。× 只在悬停、焦点或当前 View 出现，避免每个标签一直变宽。</p>
+          <div class="metrics"><span class="metric">关闭单个 <b>1 次</b></span><span class="metric">关闭全部 <b>3 次</b></span><span class="metric">可恢复 <b>是</b></span></div>
+        </header>
+        <div class="demo-shell">
+          <div class="plot"><span class="plot-label">View 3 + View 7 · 对比中</span><svg viewBox="0 0 640 100" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 74 C60 68 70 23 125 44 S211 77 269 34 375 83 425 39 533 76 640 25"/><path d="M0 68 C46 71 85 39 121 55 S190 24 237 57 316 77 367 31 445 66 506 44 562 52 640 18"/></svg></div>
+          <div class="rail"><div class="anchor"><span class="wave-icon">⌁</span><span>时域</span></div><div class="tabs" data-tabs></div><div class="tools"><button class="icon-btn" type="button" data-manager-toggle title="管理 Views">≡</button><button class="icon-btn" type="button" title="新建 View">+</button></div><div class="manager" data-manager><div class="manager-title"><span>全部 View</span><span data-count>8 个</span></div><div class="manager-list" data-manager-list></div><div class="manager-footer"><button type="button" data-manager-others>关闭其他</button><button class="destructive" type="button" data-close-all>关闭全部</button></div></div></div>
+          <div class="hintline"><span>悬停标签看 ×；点击“≡”做批量整理。</span><button type="button" data-reset>重置演示</button></div>
+          <div class="toast" data-toast><span></span><button type="button" data-undo>撤销</button></div>
+          <div class="confirm" data-confirm><div class="dialog"><h3>关闭全部 View？</h3><p>将关闭其余 View，并把最后一个重置为空白。当前对比会结束。</p><div class="dialog-actions"><button type="button" data-cancel>取消</button><button class="destructive" type="button" data-confirm-all>关闭全部</button></div></div></div>
+        </div>
+        <footer class="option-foot"><div class="tradeoff"><div><b>优势</b>高频动作最快，批量与溢出也有完整入口。</div><div><b>约束</b>单关必须支持撤销；批量仍需一次明确确认。</div></div></footer>
+      </article>
+    </section>
+
+    <section class="matrix" aria-label="方案对比结论">
+      <h2>对比结论</h2>
+      <table>
+        <thead><tr><th>方案</th><th>单个关闭</th><th>关闭全部</th><th>多 View / 溢出</th><th>误触保护</th><th>改造量</th></tr></thead>
+        <tbody>
+          <tr><td>A · 全可见</td><td class="good">最快</td><td class="good">最快</td><td class="bad">拥挤</td><td class="warn">中</td><td>中</td></tr>
+          <tr><td>B · 右键</td><td class="warn">一般</td><td class="bad">偏慢</td><td class="warn">一般</td><td class="good">高</td><td class="good">最低</td></tr>
+          <tr><td>C · 管理器</td><td class="warn">一般</td><td class="good">清楚</td><td class="good">最好</td><td class="good">高</td><td>中</td></tr>
+          <tr class="reco"><td>D · 双通道</td><td>最快</td><td>清楚</td><td>最好</td><td>高</td><td>较高</td></tr>
+        </tbody>
+      </table>
+      <p class="decision"><b>推荐规则：</b>单个 View 点击 × 后不弹窗，底部短时提供“撤销”；“关闭其他 / 关闭全部”只弹一次确认。关闭的是主 View 或对比 View 时，确认文案明确提示“当前对比会结束”。最后保留一个已重置的空白 View，符合现有 ViewManager 不允许零 View 的状态约束。</p>
+    </section>
+  </main>
+
+  <script>
+    const COLORS = ['#0b83ef', '#f04a00', '#0b994f', '#a82bb7', '#eb0029', '#1493a5', '#f28a00', '#d00063'];
+    const INITIAL = () => Array.from({ length: 8 }, (_, index) => ({ id: index + 1, color: COLORS[index] }));
+
+    document.querySelectorAll('.option').forEach((option) => {
+      const tabsHost = option.querySelector('[data-tabs]');
+      const demo = option.querySelector('.demo-shell');
+      const supportsInlineClose = ['a', 'd'].includes(option.dataset.option);
+      let views = INITIAL();
+      let active = 3;
+      let paired = 7;
+      let contextTarget = 7;
+      let undoState = null;
+
+      const closePopups = () => {
+        option.querySelector('[data-context-menu]')?.classList.remove('open');
+        option.querySelector('[data-manager]')?.classList.remove('open');
+      };
+
+      const showToast = (message, previous) => {
+        const toast = option.querySelector('[data-toast]');
+        undoState = previous;
+        toast.querySelector('span').textContent = message;
+        toast.classList.add('show');
+      };
+
+      const renderManager = () => {
+        const list = option.querySelector('[data-manager-list]');
+        if (!list) return;
+        list.innerHTML = '';
+        views.forEach((view) => {
+          const row = document.createElement('div');
+          row.className = `manager-row${view.id === active ? ' current' : ''}`;
+          row.style.setProperty('--dot', view.color);
+          row.innerHTML = `<i class="mini-dot"></i><span>View ${view.id}${view.id === paired ? ' · 对比' : ''}</span><button type="button" aria-label="关闭 View ${view.id}" title="关闭 View ${view.id}">×</button>`;
+          row.querySelector('button').addEventListener('click', () => closeOne(view.id));
+          list.append(row);
+        });
+        list.scrollTop = 0;
+        const count = option.querySelector('[data-count]');
+        if (count) count.textContent = `${views.length} 个`;
+      };
+
+      const render = () => {
+        tabsHost.innerHTML = '';
+        views.forEach((view) => {
+          const tab = document.createElement('div');
+          tab.setAttribute('role', 'tab');
+          tab.tabIndex = 0;
+          tab.className = `tab${view.id === active ? ' active' : ''}${view.id === paired ? ' paired' : ''}`;
+          tab.style.setProperty('--dot', view.color);
+          tab.dataset.id = String(view.id);
+          tab.setAttribute('aria-label', `View ${view.id}${view.id === active ? '，当前' : ''}`);
+          tab.innerHTML = `<i class="dot"></i><span class="tab-label">${view.id}</span>${supportsInlineClose ? `<button class="close-x" type="button" aria-label="关闭 View ${view.id}" title="关闭 View ${view.id}">×</button>` : ''}`;
+          tab.addEventListener('click', (event) => {
+            if (event.target.closest('.close-x')) return;
+            active = view.id;
+            render();
+          });
+          tab.addEventListener('contextmenu', (event) => {
+            if (option.dataset.option !== 'b') return;
+            event.preventDefault();
+            contextTarget = view.id;
+            option.querySelector('[data-context-menu]').classList.add('open');
+          });
+          tab.addEventListener('keydown', (event) => {
+            if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('.close-x')) {
+              event.preventDefault(); active = view.id; render();
+            }
+          });
+          const close = tab.querySelector('.close-x');
+          close?.addEventListener('click', (event) => { event.stopPropagation(); closeOne(view.id); });
+          close?.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); closeOne(view.id); }
+          });
+          tabsHost.append(tab);
+        });
+        renderManager();
+      };
+
+      const closeOne = (id) => {
+        if (views.length <= 1) return;
+        const previous = { views: views.map(v => ({ ...v })), active, paired };
+        const wasPaired = id === paired || id === active;
+        views = views.filter((view) => view.id !== id);
+        if (id === active) active = views[0].id;
+        if (wasPaired) paired = null;
+        render();
+        closePopups();
+        showToast(`已关闭 View ${id}${wasPaired ? '，对比已结束' : ''}`, previous);
+      };
+
+      const closeOthers = () => {
+        if (views.length <= 1) return;
+        const previous = { views: views.map(v => ({ ...v })), active, paired };
+        views = views.filter((view) => view.id === active);
+        paired = null;
+        render();
+        closePopups();
+        showToast(`已关闭其他 ${previous.views.length - 1} 个 View`, previous);
+      };
+
+      option.querySelectorAll('[data-close-all]').forEach((button) => button.addEventListener('click', () => {
+        closePopups();
+        option.querySelector('[data-confirm]').classList.add('open');
+      }));
+      option.querySelector('[data-cancel]').addEventListener('click', () => option.querySelector('[data-confirm]').classList.remove('open'));
+      option.querySelector('[data-confirm-all]').addEventListener('click', () => {
+        const previous = { views: views.map(v => ({ ...v })), active, paired };
+        const closed = Math.max(0, views.length - 1);
+        views = [{ id: 1, color: COLORS[0] }];
+        active = 1;
+        paired = null;
+        option.querySelector('[data-confirm]').classList.remove('open');
+        render();
+        showToast(`已关闭 ${closed} 个 View，View 1 已重置`, previous);
+      });
+      option.querySelector('[data-undo]').addEventListener('click', () => {
+        if (!undoState) return;
+        views = undoState.views.map(v => ({ ...v }));
+        active = undoState.active;
+        paired = undoState.paired;
+        undoState = null;
+        option.querySelector('[data-toast]').classList.remove('show');
+        render();
+      });
+      option.querySelector('[data-reset]').addEventListener('click', () => {
+        views = INITIAL(); active = 3; paired = 7; undoState = null;
+        option.querySelector('[data-toast]').classList.remove('show');
+        option.querySelector('[data-confirm]').classList.remove('open');
+        closePopups(); render();
+      });
+      option.querySelector('[data-manager-toggle]')?.addEventListener('click', () => {
+        const manager = option.querySelector('[data-manager]');
+        const opening = !manager.classList.contains('open');
+        closePopups();
+        manager.classList.toggle('open', opening);
+      });
+      option.querySelector('[data-manager-others]')?.addEventListener('click', closeOthers);
+      option.querySelector('[data-open-context]')?.addEventListener('click', () => {
+        contextTarget = 7;
+        option.querySelector('[data-context-menu]').classList.add('open');
+      });
+      option.querySelector('[data-menu-close]')?.addEventListener('click', () => closeOne(contextTarget));
+      option.querySelector('[data-menu-others]')?.addEventListener('click', closeOthers);
+      render();
+    });
+  </script>
+</body>
+</html>

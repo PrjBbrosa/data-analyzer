@@ -405,6 +405,30 @@ def test_delete_inactive_before_active_captures_current_view(
     assert _checked_pairs(w) == [(fid, "speed")]
 
 
+def test_overflow_view_delete_skips_confirm_and_tab_delete_still_prompts(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    prompts = []
+    monkeypatch.setattr(
+        w, "_confirm_view_delete", lambda name: prompts.append(name) or True
+    )
+    w._on_view_new()
+    qapp.processEvents()
+    w._on_overflow_view_delete(0)
+    qapp.processEvents()
+    assert prompts == []
+    assert len(w.view_manager.views) == 1
+
+    w._on_view_new()
+    qapp.processEvents()
+    tab_name = w.view_manager.get(0).name
+    w._on_view_delete(0)
+    qapp.processEvents()
+    assert prompts == [tab_name]
+    assert len(w.view_manager.views) == 1
+
+
 def test_delete_view_cancel_keeps_view(qtbot, qapp, loaded_csv, monkeypatch):
     w = _make_loaded_window(qtbot, qapp, loaded_csv)
     prompts = []
@@ -590,3 +614,85 @@ def test_overlay_round_trip_keeps_ink_and_buckets(qtbot, qapp):
         )
         w._switch_view(1)
         qapp.processEvents()
+
+
+def test_close_others_keeps_current_view_id_after_one_confirm(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    monkeypatch.setattr(w, "_confirm_close_other_views", lambda *_a: True)
+    w._on_view_new()
+    qapp.processEvents()
+    w._on_view_new()
+    qapp.processEvents()
+    keep = w.view_manager.get(w.view_manager.active)
+    keep_id = keep.view_id
+    views_events = []
+    w.view_manager.views_changed.connect(lambda: views_events.append(1))
+
+    w._on_view_close_others(keep_id)
+    qapp.processEvents()
+
+    assert len(w.view_manager.views) == 1
+    assert w.view_manager.views[0] is keep
+    assert w.view_manager.views[0].view_id == keep_id
+    assert views_events == [1]
+
+
+def test_close_others_cancel_is_zero_mutation(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    w._on_view_new()
+    qapp.processEvents()
+    ids = [view.view_id for view in w.view_manager.views]
+    monkeypatch.setattr(w, "_confirm_close_other_views", lambda *_a: False)
+    w._on_view_close_others(ids[0])
+    qapp.processEvents()
+    assert [view.view_id for view in w.view_manager.views] == ids
+
+
+def test_close_all_resets_to_a_blank_view(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    from mf4_analyzer.ui.view_state import is_reusable_blank_view
+
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    monkeypatch.setattr(w, "_confirm_close_all_views", lambda *_a: True)
+    w._on_view_new()
+    qapp.processEvents()
+    old_ids = [view.view_id for view in w.view_manager.views]
+    views_events = []
+    w.view_manager.views_changed.connect(lambda: views_events.append(1))
+
+    w._on_view_close_all()
+    qapp.processEvents()
+
+    assert len(w.view_manager.views) == 1
+    assert w.view_manager.views[0].view_id not in old_ids
+    assert is_reusable_blank_view(w.view_manager.views[0])
+    assert views_events == [1]
+
+
+def test_bulk_close_dialog_copy_matches_spec(qtbot, qapp, loaded_csv):
+    from PyQt5.QtWidgets import QMessageBox
+
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    boxes = []
+    orig_exec = QMessageBox.exec_
+    try:
+        QMessageBox.exec_ = lambda box: boxes.append(box) or 0
+        assert w._confirm_close_other_views(3, 2, "Road load") is False
+        assert w._confirm_close_all_views(4) is False
+    finally:
+        QMessageBox.exec_ = orig_exec
+
+    others, close_all = boxes
+    assert others.text() == "将只保留当前的 View 2「Road load」。"
+    assert "其他 View 保存的范围、split 和附件关系会一并移除。" in others.informativeText()
+    assert close_all.text() == (
+        "完成后保留一个已重置的空白 View，工作区不会变成无 View 状态。"
+    )
+    assert "全部 View 保存的范围、split 和附件关系会一并移除。" in close_all.informativeText()
+    assert {b.text() for b in others.buttons()} >= {"关闭其他", "取消"}
+    assert {b.text() for b in close_all.buttons()} >= {"关闭全部", "取消"}

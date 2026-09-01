@@ -6,7 +6,18 @@ the integration layer.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QRectF, QSettings, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import (
+    QDateTime,
+    QEvent,
+    QPointF,
+    QRect,
+    QRectF,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -18,7 +29,10 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionTab,
     QTabBar,
+    QToolTip,
     QWidget,
 )
 
@@ -26,6 +40,13 @@ from . import hints
 from ..ui_kit.icons import Icons, icon_device_pixel_ratio
 from ..ui_kit.menus import apply_rounded_menu_chrome
 from .view_state import MAX_VIEWS
+from .widgets.view_overflow_popup import ViewOverflowPopup, ViewOverflowRow
+
+_KEEP_ONE_VIEW_TIP = "至少保留一个 View"
+_CLOSE_INK = QColor("#bf3447")
+_CLOSE_SOFT = QColor("#fff0f2")
+_CLOSE_BORDER = QColor("#e5a8b0")
+_CLOSE_PRESSED = QColor("#ffe3e7")
 
 # Shared bottom-rail band (TimeDomain dock + analysis compare row). The
 # 26px tab strip is vertically centered inside this; the left navigator's
@@ -44,10 +65,225 @@ _SECTION_ANCHORS = {
 }
 
 
+def tab_icon_slot_rect(tabbar: QTabBar, index: int) -> QRect:
+    """Return the live icon slot for ``index`` from the current style option.
+
+    PyQt5 does not wrap ``SE_TabBarTabIcon``. The slot is the ``iconSize``
+    band reserved immediately left of ``SE_TabBarTabText`` (falling back to
+    ``PM_TabBarTabHSpace``), intersected with ``tabRect`` so hit-testing stays
+    inside the tab and never uses a hardcoded toolbar coordinate.
+    """
+    if index < 0 or index >= tabbar.count():
+        return QRect()
+    opt = QStyleOptionTab()
+    tabbar.initStyleOption(opt, index)
+    tab_rect = tabbar.tabRect(index)
+    if not tab_rect.isValid():
+        return QRect()
+    icon_size = QSize(opt.iconSize) if opt.iconSize.isValid() else QSize(tabbar.iconSize())
+    if icon_size.width() <= 0 or icon_size.height() <= 0:
+        icon_size = QSize(
+            tabbar.style().pixelMetric(QStyle.PM_TabBarIconSize, opt, tabbar),
+            tabbar.style().pixelMetric(QStyle.PM_TabBarIconSize, opt, tabbar),
+        )
+    style = tabbar.style()
+    text_rect = style.subElementRect(QStyle.SE_TabBarTabText, opt, tabbar)
+    if text_rect.isValid() and text_rect.left() >= tab_rect.left() + icon_size.width():
+        x = text_rect.left() - icon_size.width()
+    else:
+        hspace = style.pixelMetric(QStyle.PM_TabBarTabHSpace, opt, tabbar)
+        x = tab_rect.left() + max(0, hspace // 2)
+    y = tab_rect.center().y() - icon_size.height() // 2
+    return QRect(x, y, icon_size.width(), icon_size.height()).intersected(tab_rect)
+
+
+class _ViewTabs(QTabBar):
+    """Owns icon-slot hover/armed state and consumes close-slot mouse events."""
+
+    close_slot_clicked = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_Hover, True)
+        self._hover_index = -1
+        self._armed_view_id = None
+        self._last_close_view_id = None
+        self._last_close_msecs = 0
+
+    def clear_interaction_state(self) -> None:
+        old_hover = self._hover_index
+        self._hover_index = -1
+        self._armed_view_id = None
+        if old_hover >= 0:
+            bar = self._bar()
+            if bar is not None:
+                bar._refresh_tab_icon(old_hover)
+
+    def hover_index(self) -> int:
+        return self._hover_index
+
+    def armed_view_id(self):
+        return self._armed_view_id
+
+    def event(self, event):
+        etype = event.type()
+        if etype in (QEvent.HoverMove, QEvent.HoverEnter):
+            self._update_hover(event.pos())
+        elif etype == QEvent.HoverLeave:
+            self._update_hover(None)
+        elif etype == QEvent.ToolTip:
+            if self._handle_close_tooltip(event):
+                return True
+        elif etype == QEvent.MouseButtonDblClick:
+            if self._consume_close_double_click(event):
+                return True
+        return super().event(event)
+
+    def leaveEvent(self, event):
+        self._update_hover(None)
+        super().leaveEvent(event)
+
+    def hideEvent(self, event):
+        self.clear_interaction_state()
+        super().hideEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            idx, in_slot = self._hit_close_slot(event.pos())
+            if in_slot:
+                bar = self._bar()
+                if bar is not None and bar._views_closable():
+                    view_id = bar._view_id_at(idx)
+                    if view_id and not self._is_double_close_repeat(view_id):
+                        self._armed_view_id = view_id
+                        self._hover_index = idx
+                        bar._refresh_tab_icon(idx)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        self._update_hover(event.pos())
+        if self._armed_view_id is not None:
+            idx, in_slot = self._hit_close_slot(event.pos())
+            bar = self._bar()
+            if not in_slot or (
+                bar is not None and bar._view_id_at(idx) != self._armed_view_id
+            ):
+                self._armed_view_id = None
+                if idx >= 0 and bar is not None:
+                    bar._refresh_tab_icon(idx)
+                elif self._hover_index >= 0 and bar is not None:
+                    bar._refresh_tab_icon(self._hover_index)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._armed_view_id is not None:
+            idx, in_slot = self._hit_close_slot(event.pos())
+            view_id = self._armed_view_id
+            self._armed_view_id = None
+            bar = self._bar()
+            if (
+                in_slot
+                and bar is not None
+                and bar._view_id_at(idx) == view_id
+                and bar._views_closable()
+            ):
+                self._last_close_view_id = view_id
+                self._last_close_msecs = QDateTime.currentMSecsSinceEpoch()
+                self.close_slot_clicked.emit(idx)
+            elif bar is not None and idx >= 0:
+                bar._refresh_tab_icon(idx)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _consume_close_double_click(self, event) -> bool:
+        idx, in_slot = self._hit_close_slot(event.pos())
+        recent_close = bool(
+            self._last_close_view_id
+            and self._is_double_close_repeat(self._last_close_view_id)
+        )
+        if not (in_slot or recent_close):
+            return False
+        bar = self._bar()
+        if (
+            bar is not None
+            and bar._views_closable()
+            and event.button() == Qt.LeftButton
+            and in_slot
+        ):
+            view_id = bar._view_id_at(idx)
+            if view_id and not self._is_double_close_repeat(view_id):
+                self._last_close_view_id = view_id
+                self._last_close_msecs = QDateTime.currentMSecsSinceEpoch()
+                self.close_slot_clicked.emit(idx)
+        return True
+
+    def _bar(self):
+        parent = self.parentWidget()
+        return parent if isinstance(parent, ViewTabBar) else None
+
+    def _hit_close_slot(self, pos) -> tuple[int, bool]:
+        idx = self.tabAt(pos)
+        if idx < 0:
+            return -1, False
+        slot = tab_icon_slot_rect(self, idx)
+        return idx, slot.contains(pos)
+
+    def _update_hover(self, pos) -> None:
+        bar = self._bar()
+        new_index = -1
+        if pos is not None and bar is not None and bar._views_closable():
+            idx, in_slot = self._hit_close_slot(pos)
+            if in_slot:
+                new_index = idx
+        if new_index == self._hover_index:
+            return
+        old = self._hover_index
+        self._hover_index = new_index
+        if bar is None:
+            return
+        if old >= 0:
+            bar._refresh_tab_icon(old)
+        if new_index >= 0:
+            bar._refresh_tab_icon(new_index)
+
+    def _handle_close_tooltip(self, event) -> bool:
+        idx, in_slot = self._hit_close_slot(event.pos())
+        if not in_slot:
+            return False
+        bar = self._bar()
+        if bar is None:
+            return False
+        name = bar._view_name(idx)
+        text = (
+            f"关闭 View「{name}」"
+            if bar._views_closable()
+            else _KEEP_ONE_VIEW_TIP
+        )
+        QToolTip.showText(event.globalPos(), text, self, tab_icon_slot_rect(self, idx))
+        return True
+
+    def _is_double_close_repeat(self, view_id: str) -> bool:
+        if self._last_close_view_id != view_id:
+            return False
+        interval = QApplication.doubleClickInterval()
+        return (
+            QDateTime.currentMSecsSinceEpoch() - self._last_close_msecs
+        ) <= interval
+
+
 class ViewTabBar(QWidget):
     switch_requested = pyqtSignal(int)
     new_requested = pyqtSignal()
     delete_requested = pyqtSignal(int)
+    overflow_delete_requested = pyqtSignal(int)
+    close_others_requested = pyqtSignal(str)
+    close_all_requested = pyqtSignal()
     rename_requested = pyqtSignal(int, str)
     duplicate_requested = pyqtSignal(int)
     color_requested = pyqtSignal(int)
@@ -101,6 +337,8 @@ class ViewTabBar(QWidget):
         # One QSettings write per session for the view.compact_tabs footer hint
         # — see _mark_compact_tabs_discovered.
         self._compact_tabs_discovered = False
+        self._overflow_popup = None
+        self._overflow_popup_closed_msecs = 0
         self.setFixedHeight(RAIL_HEIGHT)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -114,7 +352,7 @@ class ViewTabBar(QWidget):
             self._section_anchor = self._make_section_anchor(section)
             layout.addWidget(self._section_anchor, 0, Qt.AlignVCenter)
 
-        self._tabs = QTabBar(self)
+        self._tabs = _ViewTabs(self)
         self._tabs.setObjectName("viewTabs")
         self._tabs.setMovable(True)
         self._tabs.setExpanding(False)
@@ -132,6 +370,7 @@ class ViewTabBar(QWidget):
         self._tabs.tabBarDoubleClicked.connect(self._on_double_clicked)
         self._tabs.tabMoved.connect(self._on_tab_moved)
         self._tabs.customContextMenuRequested.connect(self._on_context_menu)
+        self._tabs.close_slot_clicked.connect(self.delete_requested.emit)
         # Watched for the mouse release that ends a drag-reorder; see eventFilter.
         self._tabs.installEventFilter(self)
         layout.addWidget(self._tabs, 0, Qt.AlignVCenter)
@@ -263,10 +502,46 @@ class ViewTabBar(QWidget):
             return
         count = min(self._tabs.count(), len(self._manager.views))
         for idx in range(count):
-            view = self._manager.views[idx]
-            self._tabs.setTabIcon(
-                idx, _tab_color_icon(view.tab_color, self._partner_color_for(idx))
+            self._refresh_tab_icon(idx)
+
+    def _refresh_tab_icon(self, idx: int) -> None:
+        if idx < 0 or idx >= self._tabs.count() or idx >= len(self._manager.views):
+            return
+        self._tabs.setTabIcon(idx, self._icon_for_tab(idx))
+
+    def _icon_for_tab(self, idx: int) -> QIcon:
+        view = self._manager.views[idx]
+        show_close = (
+            self._views_closable()
+            and (
+                self._tabs.hover_index() == idx
+                or (
+                    self._tabs.armed_view_id() is not None
+                    and self._view_id_at(idx) == self._tabs.armed_view_id()
+                )
             )
+        )
+        if show_close:
+            pressed = self._tabs.armed_view_id() == self._view_id_at(idx)
+            return _tab_close_icon(pressed=pressed)
+        return _tab_color_icon(view.tab_color, self._partner_color_for(idx))
+
+    def _views_closable(self) -> bool:
+        return len(self._manager.views) > 1
+
+    def _view_id_at(self, idx: int) -> str:
+        if 0 <= idx < len(self._manager.views):
+            return str(self._manager.views[idx].view_id)
+        return ""
+
+    def _index_for_view_id(self, view_id: str) -> int:
+        target = str(view_id or "")
+        if not target:
+            return -1
+        for idx, view in enumerate(self._manager.views):
+            if str(view.view_id) == target:
+                return idx
+        return -1
 
     def count(self) -> int:
         return self._tabs.count()
@@ -298,14 +573,13 @@ class ViewTabBar(QWidget):
             # a use-after-free on the tab still held by the live drag → hard
             # crash (闪退). Skip the rebuild; nothing visible needs it.
             return
+        self._tabs.clear_interaction_state()
         self._suppress = True
         try:
             while self._tabs.count():
                 self._tabs.removeTab(0)
             for view_idx, view in enumerate(self._manager.views):
-                icon = _tab_color_icon(
-                    view.tab_color, self._partner_color_for(view_idx)
-                )
+                icon = self._icon_for_tab(view_idx)
                 idx = self._tabs.addTab(icon, view.name)
                 self._tabs.setTabData(idx, view.tab_color)
             self._set_current_index(self._manager.active)
@@ -317,6 +591,7 @@ class ViewTabBar(QWidget):
         # measured width out of the tab budget.
         self._update_split_chip()
         self._sync_tabbar_width()
+        self._sync_overflow_popup()
 
     def _sync_tabbar_width(self) -> None:
         """Fit the tab strip to the row, degrading only when MEASURED too wide.
@@ -501,6 +776,7 @@ class ViewTabBar(QWidget):
         self._overflow_indices = list(hidden)
         count = len(self._overflow_indices)
         if count <= 0:
+            self._close_overflow_popup()
             self._overflow.setText("»")
             self._overflow.setToolTip("")
             self._overflow.setVisible(False)
@@ -536,40 +812,103 @@ class ViewTabBar(QWidget):
         hints.mark_discovered(QSettings(), "view.compact_tabs")
 
     def _on_overflow_clicked(self) -> None:
+        if self._overflow_popup is not None and self._overflow_popup.isVisible():
+            self._close_overflow_popup()
+            return
+        if (
+            QDateTime.currentMSecsSinceEpoch() - self._overflow_popup_closed_msecs
+            < 250
+        ):
+            return
         if not self._overflow_indices:
             return
-        # The » menu below lists every View by its FULL name, so opening it is
-        # one of the two ways the user learns where the names went.
         self._mark_compact_tabs_discovered()
-        # Checkable rows need the wider QSS right gutter (gutter="check").
-        menu = apply_rounded_menu_chrome(QMenu(self), gutter="check")
-        current = self._tabs.currentIndex()
-        # Every View, not just the retired ones: the button only exists while
-        # something overflowed, and the current View is never among the hidden
-        # (see _retire_tail_tabs), so a hidden-only menu could never render the
-        # selected state the design calls for. Listing all of them keeps the
-        # checkmark live and gives one complete View list.
-        targets = {}
+        popup = ViewOverflowPopup(self)
+        popup.switch_requested.connect(self._on_overflow_switch)
+        popup.close_requested.connect(self._on_overflow_row_close)
+        popup.close_others_requested.connect(self._on_overflow_close_others)
+        popup.close_all_requested.connect(self._on_overflow_close_all)
+        popup.closed.connect(self._on_overflow_popup_closed)
+        self._overflow_popup = popup
+        self._set_overflow_expanded(True)
+        popup.populate(self._overflow_rows())
+        popup.show_at(self._overflow)
+
+    def _overflow_rows(self) -> list[ViewOverflowRow]:
+        current_id = self._view_id_at(self._tabs.currentIndex())
+        closable = self._views_closable()
+        rows = []
         for idx, view in enumerate(self._manager.views):
-            action = menu.addAction(
-                _tab_color_icon(view.tab_color, self._partner_color_for(idx)),
-                view.name,
+            partner = self._partner_color_for(idx)
+            rows.append(
+                ViewOverflowRow(
+                    view_id=str(view.view_id),
+                    name=view.name,
+                    ordinal=idx + 1,
+                    color=view.tab_color,
+                    partner_color=partner,
+                    current=str(view.view_id) == current_id,
+                    closable=closable,
+                )
             )
-            action.setCheckable(True)
-            action.setChecked(idx == current)
-            targets[action] = idx
-        chosen = menu.exec_(
-            self._overflow.mapToGlobal(self._overflow.rect().bottomLeft())
-        )
-        if chosen is None:
+        return rows
+
+    def _set_overflow_expanded(self, expanded: bool) -> None:
+        self._overflow.setProperty("expanded", "true" if expanded else "false")
+        style = self._overflow.style()
+        style.unpolish(self._overflow)
+        style.polish(self._overflow)
+        self._overflow.update()
+
+    def _close_overflow_popup(self) -> None:
+        popup = self._overflow_popup
+        if popup is None:
+            self._set_overflow_expanded(False)
             return
-        idx = targets.get(chosen)
-        if idx is None or idx == current:
+        self._overflow_popup = None
+        popup.hide()
+        popup.deleteLater()
+        self._set_overflow_expanded(False)
+
+    def _on_overflow_popup_closed(self) -> None:
+        self._overflow_popup = None
+        self._overflow_popup_closed_msecs = QDateTime.currentMSecsSinceEpoch()
+        self._set_overflow_expanded(False)
+        self._overflow.setFocus(Qt.PopupFocusReason)
+
+    def _on_overflow_switch(self, view_id: str) -> None:
+        self._close_overflow_popup()
+        idx = self._index_for_view_id(view_id)
+        if idx < 0 or idx == self._tabs.currentIndex():
             return
-        # Intent only, like every other signal here. The host switches the
-        # manager, whose active_changed lands in _sync_active → _sync_tabbar_width,
-        # which pulls the newly active tab back onto the strip.
         self.switch_requested.emit(idx)
+
+    def _on_overflow_row_close(self, view_id: str) -> None:
+        idx = self._index_for_view_id(view_id)
+        if idx < 0 or not self._views_closable():
+            return
+        self.overflow_delete_requested.emit(idx)
+
+    def _sync_overflow_popup(self) -> None:
+        popup = self._overflow_popup
+        if popup is None or not popup.isVisible():
+            return
+        if not self._overflow_indices:
+            self._close_overflow_popup()
+            return
+        popup.populate(self._overflow_rows())
+
+    def _on_overflow_close_others(self, keep_view_id: str) -> None:
+        self._close_overflow_popup()
+        if not self._views_closable() or self._index_for_view_id(keep_view_id) < 0:
+            return
+        self.close_others_requested.emit(keep_view_id)
+
+    def _on_overflow_close_all(self) -> None:
+        self._close_overflow_popup()
+        if not self._views_closable():
+            return
+        self.close_all_requested.emit()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -577,6 +916,18 @@ class ViewTabBar(QWidget):
         # during __init__'s refresh, where the row has no geometry yet) is
         # corrected against the real styled widths.
         self._sync_tabbar_width()
+
+    def hideEvent(self, event):
+        self._close_overflow_popup()
+        self._tabs.clear_interaction_state()
+        super().hideEvent(event)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.WindowDeactivate, QEvent.ActivationChange):
+            window = self.window()
+            if window is not None and not window.isActiveWindow():
+                self._tabs.clear_interaction_state()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -724,6 +1075,12 @@ class ViewTabBar(QWidget):
             if event.type() == QEvent.FocusOut:
                 self._finish_inline_rename(accepted=True)
                 return False
+        if (
+            watched is self._tabs
+            and event.type() == QEvent.MouseButtonDblClick
+            and self._tabs._consume_close_double_click(event)
+        ):
+            return True
         if (
             watched is self._tabs
             and event.type() == QEvent.MouseButtonRelease
@@ -944,3 +1301,37 @@ def _tab_color_pixmap(hex_color: str, ratio=None, partner_color=None) -> QPixmap
 
 def _tab_color_icon(hex_color: str, partner_color=None) -> QIcon:
     return QIcon(_tab_color_pixmap(hex_color, partner_color=partner_color))
+
+
+def _tab_close_pixmap(ratio=None, *, pressed=False) -> QPixmap:
+    """HiDPI close glyph painted in the same 12×12 logical slot as the swatch."""
+    if ratio is None:
+        ratio = icon_device_pixel_ratio()
+    side = max(1, round(12 * ratio))
+    pixmap = QPixmap(side, side)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    rect = QRectF(1, 3, 10, 6)
+    fill = _CLOSE_PRESSED if pressed else _CLOSE_SOFT
+    painter.setPen(QPen(_CLOSE_BORDER, 1))
+    painter.setBrush(fill)
+    painter.drawRoundedRect(rect, 2, 2)
+    center = rect.center()
+    arm = 2.35
+    painter.setPen(QPen(_CLOSE_INK, 1.15, Qt.SolidLine, Qt.RoundCap))
+    painter.drawLine(
+        QPointF(center.x() - arm, center.y() - arm),
+        QPointF(center.x() + arm, center.y() + arm),
+    )
+    painter.drawLine(
+        QPointF(center.x() + arm, center.y() - arm),
+        QPointF(center.x() - arm, center.y() + arm),
+    )
+    painter.end()
+    return pixmap
+
+
+def _tab_close_icon(*, pressed=False) -> QIcon:
+    return QIcon(_tab_close_pixmap(pressed=pressed))

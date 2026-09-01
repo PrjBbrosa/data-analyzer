@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QPoint, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QCursor, QHoverEvent
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -19,7 +21,17 @@ from mf4_analyzer.ui.view_state import (
     ViewManager,
     ViewState,
 )
-from mf4_analyzer.ui.view_tabbar import ViewTabBar
+from mf4_analyzer.ui.view_tabbar import (
+    ViewTabBar,
+    _tab_close_pixmap,
+    tab_icon_slot_rect,
+)
+from mf4_analyzer.ui.widgets.view_overflow_popup import (
+    PANEL_MAX_WIDTH,
+    PANEL_MIN_WIDTH,
+    ViewOverflowPopup,
+    ViewOverflowRow,
+)
 
 
 def _manager_with_views(count=2, active=0):
@@ -618,6 +630,33 @@ def _resize_to_budget(bar, budget):
     QApplication.processEvents()
 
 
+def _visible_overflow_rows(popup):
+    return [
+        row
+        for row in popup.findChildren(QWidget, "viewOverflowRow")
+        if row.isVisible()
+    ]
+
+
+def _visible_overflow_close_buttons(popup):
+    return [
+        btn
+        for btn in popup.findChildren(QPushButton, "viewOverflowRowClose")
+        if btn.isVisible()
+    ]
+
+
+def _open_overflow_popup(bar):
+    bar._on_overflow_clicked()
+    QApplication.processEvents()
+    popup = bar.findChild(QWidget, "viewOverflowPopup")
+    if popup is None:
+        popup = bar._overflow_popup
+    assert popup is not None
+    assert popup.isVisible()
+    return popup
+
+
 def test_tab_strip_is_max_clamped_not_fixed_width(qtbot):
     """setFixedWidth told Qt the strip could never overflow, which is what kept
     the setUsesScrollButtons(True) configured in __init__ permanently inert."""
@@ -774,11 +813,14 @@ def test_overflow_menu_pick_emits_switch_requested_with_the_view_index(
     seen = []
     bar.switch_requested.connect(seen.append)
 
-    def fake_exec(menu, *_args):
-        return next(a for a in menu.actions() if a.text() == target_name)
-
-    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
-    bar._on_overflow_clicked()
+    popup = _open_overflow_popup(bar)
+    name_btn = next(
+        btn
+        for btn in popup.findChildren(QPushButton, "viewOverflowRowName")
+        if btn.text() == target_name
+    )
+    qtbot.mouseClick(name_btn, Qt.LeftButton)
+    QApplication.processEvents()
 
     # The emitted index must address the VIEW, proving setTabVisible left the
     # tab<->view index identity intact.
@@ -791,20 +833,21 @@ def test_overflow_menu_lists_every_view_and_checks_the_current_one(
     manager, bar = _wide_bar(qtbot, count=14)
     _roomy, compact, _overhead = _measure(bar)
     _resize_to_budget(bar, compact // 2)
-    captured = {}
 
-    def fake_exec(menu, *_args):
-        captured["menu"] = menu
-        return None
-
-    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
-    bar._on_overflow_clicked()
-
-    actions = captured["menu"].actions()
+    popup = _open_overflow_popup(bar)
+    names = [
+        btn.text()
+        for btn in popup.findChildren(QPushButton, "viewOverflowRowName")
+    ]
     # Full names from the manager, not the ordinal the compact tab carries.
-    assert [a.text() for a in actions] == [v.name for v in manager.views]
-    assert [a.isChecked() for a in actions].count(True) == 1
-    assert actions[bar.tabBar().currentIndex()].isChecked()
+    assert names == [view.name for view in manager.views]
+    chips = [
+        chip
+        for chip in popup.findChildren(QLabel, "viewOverflowCurrentChip")
+        if chip.isVisible() and chip.text() == "当前"
+    ]
+    assert len(chips) == 1
+    bar._close_overflow_popup()
 
 
 def test_switching_to_an_overflowed_view_pulls_it_back_onto_the_strip(qtbot):
@@ -1045,18 +1088,19 @@ def test_time_domain_cap_overflow_keeps_active_visible_and_lists_all(
     assert bar._overflow.isVisible()
     assert bar._overflow.text().startswith("»")
 
-    captured = {}
-
-    def fake_exec(menu, *_args):
-        captured["menu"] = menu
-        return None
-
-    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
-    bar._on_overflow_clicked()
-
-    actions = captured["menu"].actions()
-    assert [action.text() for action in actions] == [view.name for view in manager.views]
-    assert actions[last].isChecked()
+    popup = _open_overflow_popup(bar)
+    names = [
+        btn.text()
+        for btn in popup.findChildren(QPushButton, "viewOverflowRowName")
+    ]
+    assert names == [view.name for view in manager.views]
+    chips = [
+        chip
+        for chip in popup.findChildren(QLabel, "viewOverflowCurrentChip")
+        if chip.isVisible() and chip.text() == "当前"
+    ]
+    assert len(chips) == 1
+    bar._close_overflow_popup()
 
 
 def test_time_domain_cap_reorder_duplicate_and_delete(qtbot):
@@ -1119,3 +1163,578 @@ def test_context_menu_without_section_omits_add_to_ultraview(qtbot, monkeypatch)
     monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
     bar._on_context_menu(_tab_point(bar, 0))
     assert "加入总览" not in labels
+
+
+def _shown_bar(qtbot, count=3, active=0):
+    manager, bar = _bar(qtbot, count=count, active=active)
+    bar.resize(900, 30)
+    bar.show()
+    QApplication.processEvents()
+    return manager, bar
+
+
+def _geometry_snapshot(bar):
+    tabs = bar.tabBar()
+    return {
+        "tab_rects": [tabs.tabRect(i) for i in range(tabs.count())],
+        "size_hint": tabs.sizeHint(),
+        "icon_slots": [tab_icon_slot_rect(tabs, i) for i in range(tabs.count())],
+        "rail": bar.width(),
+        "tabs_max": tabs.maximumWidth(),
+    }
+
+
+def _hover_icon_slot(tabs, idx):
+    slot = tab_icon_slot_rect(tabs, idx)
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, slot.center(), slot.center()),
+    )
+    QApplication.processEvents()
+    return slot
+
+
+def _signal_lists(bar):
+    deleted, switched, renamed, reordered = [], [], [], []
+    bar.delete_requested.connect(deleted.append)
+    bar.switch_requested.connect(switched.append)
+    bar.rename_requested.connect(lambda idx, text: renamed.append((idx, text)))
+    bar.reorder_requested.connect(lambda a, b: reordered.append((a, b)))
+    return deleted, switched, renamed, reordered
+
+
+def test_hovering_swatch_replaces_only_icon_without_changing_tab_geometry(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3)
+    tabs = bar.tabBar()
+    before = _geometry_snapshot(bar)
+    slot = _hover_icon_slot(tabs, 1)
+    after = _geometry_snapshot(bar)
+
+    assert after["tab_rects"] == before["tab_rects"]
+    assert after["size_hint"] == before["size_hint"]
+    assert after["icon_slots"] == before["icon_slots"]
+    assert after["rail"] == before["rail"]
+    assert after["tabs_max"] == before["tabs_max"]
+    assert tabs.hover_index() == 1
+    assert slot.contains(slot.center())
+
+
+def test_close_slot_click_emits_delete_once_without_switch_or_rename(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3, active=0)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, reordered = _signal_lists(bar)
+    slot = tab_icon_slot_rect(tabs, 1)
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert deleted == [1]
+    assert switched == []
+    assert renamed == []
+    assert reordered == []
+    assert bar.tabBar().currentIndex() == 0
+
+
+def test_close_slot_double_click_never_enters_inline_rename_or_double_deletes(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, _reordered = _signal_lists(bar)
+    slot = tab_icon_slot_rect(tabs, 0)
+
+    QTest.mouseDClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert deleted == [0]
+    assert renamed == []
+    assert switched == []
+    assert bar.findChild(QLineEdit, "viewTabRenameEditor") is None
+
+
+def test_drag_from_close_slot_cancels_without_reorder(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3)
+    tabs = bar.tabBar()
+    deleted, switched, _renamed, reordered = _signal_lists(bar)
+    slot = tab_icon_slot_rect(tabs, 1)
+    outside = tabs.tabRect(1).center()
+
+    QTest.mousePress(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.sendEvent(
+        tabs, QHoverEvent(QEvent.HoverMove, outside, slot.center())
+    )
+    QTest.mouseMove(tabs, outside)
+    QTest.mouseRelease(tabs, Qt.LeftButton, Qt.NoModifier, outside)
+    QApplication.processEvents()
+
+    assert deleted == []
+    assert reordered == []
+    assert switched == []
+
+
+def test_tab_body_click_and_double_click_keep_existing_switch_and_rename_routes(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3, active=0)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, _reordered = _signal_lists(bar)
+    body = _tab_point(bar, 1)
+    slot = tab_icon_slot_rect(tabs, 1)
+    assert not slot.contains(body)
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, body)
+    QApplication.processEvents()
+    assert switched == [1]
+    assert deleted == []
+
+    QTest.mouseDClick(tabs, Qt.LeftButton, Qt.NoModifier, _tab_point(bar, 1))
+    QApplication.processEvents()
+    editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
+    assert editor is not None
+    assert deleted == []
+
+
+def test_right_click_on_swatch_keeps_existing_context_menu(qtbot, monkeypatch):
+    _manager, bar = _shown_bar(qtbot, count=2)
+    labels = []
+
+    def fake_exec(menu, *_args):
+        labels.extend(action.text() for action in menu.actions())
+        return None
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_context_menu(tab_icon_slot_rect(bar.tabBar(), 0).center())
+
+    assert "重命名" in labels
+    assert "复制此 View" in labels
+    assert "改标签颜色..." in labels
+    assert "删除" in labels
+
+
+def test_close_ink_is_centered_in_the_existing_icon_slot_at_each_dpr():
+    for dpr in (1.0, 2.0):
+        pixmap = _tab_close_pixmap(dpr)
+        image = pixmap.toImage()
+        xs, ys = [], []
+        ink = QColor("#bf3447")
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = QColor(image.pixel(x, y))
+                if color.alpha() < 80:
+                    continue
+                if abs(color.red() - ink.red()) < 40 and color.blue() < 120:
+                    xs.append(x)
+                    ys.append(y)
+        assert xs and ys
+        cx = (min(xs) + max(xs)) / 2 / dpr
+        cy = (min(ys) + max(ys)) / 2 / dpr
+        assert abs(cx - 6.0) <= 0.5
+        assert abs(cy - 6.0) <= 0.5
+
+
+def test_single_view_keeps_swatch_and_has_no_actionable_close_slot(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=1)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, reordered = _signal_lists(bar)
+    slot = _hover_icon_slot(tabs, 0)
+
+    assert tabs.hover_index() == -1
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+    assert deleted == []
+    assert switched == []
+    assert renamed == []
+    assert reordered == []
+
+
+def test_close_slot_armed_rebuild_fails_closed(qtbot):
+    manager, bar = _shown_bar(qtbot, count=3)
+    tabs = bar.tabBar()
+    deleted, switched, _renamed, _reordered = _signal_lists(bar)
+    slot = tab_icon_slot_rect(tabs, 1)
+    QTest.mousePress(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    manager.new_view()
+    QApplication.processEvents()
+    QTest.mouseRelease(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+    assert deleted == []
+    assert switched == []
+
+
+def test_overflow_popup_lists_all_views_and_marks_current_by_view_id(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    manager.set_active(3)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    popup = _open_overflow_popup(bar)
+    rows = popup.findChildren(QWidget, "viewOverflowRow")
+    assert len(rows) == len(manager.views)
+    current_rows = [row for row in rows if row.property("current") == "true"]
+    assert len(current_rows) == 1
+    assert current_rows[0].property("viewId") == manager.get(3).view_id
+    bar._close_overflow_popup()
+
+
+def test_popup_row_name_switches_without_emitting_delete(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    deleted, switched, _renamed, _reordered = _signal_lists(bar)
+    popup = _open_overflow_popup(bar)
+    target = manager.views[-1]
+    name_btn = next(
+        btn
+        for btn in popup.findChildren(QPushButton, "viewOverflowRowName")
+        if btn.text() == target.name
+    )
+    qtbot.mouseClick(name_btn, Qt.LeftButton)
+    QApplication.processEvents()
+    assert switched == [len(manager.views) - 1]
+    assert deleted == []
+
+
+def test_popup_row_close_emits_overflow_delete_without_switch(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    deleted, switched, _renamed, _reordered = _signal_lists(bar)
+    overflow_deleted = []
+    bar.overflow_delete_requested.connect(overflow_deleted.append)
+    popup = _open_overflow_popup(bar)
+    close_btn = _visible_overflow_close_buttons(popup)[2]
+    qtbot.mouseClick(close_btn, Qt.LeftButton)
+    QApplication.processEvents()
+    assert overflow_deleted == [2]
+    assert deleted == []
+    assert switched == []
+    assert bar._overflow_popup is popup
+    assert popup.isVisible()
+
+
+def test_popup_row_close_reprojects_and_allows_another_close(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    bar.overflow_delete_requested.connect(manager.delete_view)
+    popup = _open_overflow_popup(bar)
+    first_id = manager.get(2).view_id
+    qtbot.mouseClick(_visible_overflow_close_buttons(popup)[2], Qt.LeftButton)
+    QApplication.processEvents()
+    popup = bar._overflow_popup
+    assert popup is not None and popup.isVisible()
+    rows = _visible_overflow_rows(popup)
+    assert len(rows) == 13
+    assert first_id not in [row.property("viewId") for row in rows]
+    assert popup.findChild(QLabel, "viewOverflowCount").text() == "13 个"
+    second_id = manager.get(2).view_id
+    qtbot.mouseClick(_visible_overflow_close_buttons(popup)[2], Qt.LeftButton)
+    QApplication.processEvents()
+    popup = bar._overflow_popup
+    assert popup is not None and popup.isVisible()
+    rows = _visible_overflow_rows(popup)
+    assert len(rows) == 12
+    assert second_id not in [row.property("viewId") for row in rows]
+
+
+def test_overflow_popup_omits_help_copy_and_paints_list_separators(qtbot):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    popup.populate(
+        [
+            ViewOverflowRow(
+                view_id="a",
+                name="View 1",
+                ordinal=1,
+                color="#2d7ff9",
+                partner_color=None,
+                current=True,
+                closable=True,
+            ),
+            ViewOverflowRow(
+                view_id="b",
+                name="View 2",
+                ordinal=2,
+                color="#e8590c",
+                partner_color=None,
+                current=False,
+                closable=True,
+            ),
+        ]
+    )
+    assert popup.findChild(QLabel, "viewOverflowHelp") is None
+    assert popup.findChild(QLabel, "viewOverflowBulkHint") is None
+    assert popup.findChild(QLabel, "viewOverflowInfoIcon") is None
+    popup._apply_panel_size(max(popup._fitted_width, PANEL_MIN_WIDTH))
+    popup.show()
+    QApplication.processEvents()
+    well = popup.findChild(QWidget, "viewOverflowListWell")
+    image = well.grab().toImage()
+    mid_y = image.height() // 2
+    mid_x = image.width() // 2
+    inset = well.contentsRect().left()
+
+    def _has_ink(x, y, band=2):
+        for dx in range(-band, band + 1):
+            px = max(0, min(image.width() - 1, x + dx))
+            color = QColor(image.pixel(px, y))
+            if color.red() < 245 or color.green() < 245:
+                return True
+        return False
+
+    assert inset >= 8
+    assert _has_ink(inset, mid_y)
+    assert _has_ink(image.width() - inset, mid_y)
+    assert _has_ink(mid_x, 0)
+    assert _has_ink(mid_x, image.height() - 1)
+    popup.hide()
+
+
+def test_popup_bulk_buttons_emit_typed_intents_and_never_mutate_manager(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    others, alls = [], []
+    bar.close_others_requested.connect(others.append)
+    bar.close_all_requested.connect(lambda: alls.append(True))
+    before = [view.view_id for view in manager.views]
+    popup = _open_overflow_popup(bar)
+    qtbot.mouseClick(popup.findChild(QPushButton, "viewOverflowCloseOthers"), Qt.LeftButton)
+    QApplication.processEvents()
+    assert others == [manager.get(0).view_id]
+    assert [view.view_id for view in manager.views] == before
+    qtbot.wait(300)
+    _resize_to_budget(bar, compact // 2)
+    popup = _open_overflow_popup(bar)
+    qtbot.mouseClick(popup.findChild(QPushButton, "viewOverflowCloseAll"), Qt.LeftButton)
+    QApplication.processEvents()
+    assert alls == [True]
+    assert [view.view_id for view in manager.views] == before
+
+
+def test_popup_single_view_disables_all_close_actions(qtbot):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    popup.populate(
+        [
+            ViewOverflowRow(
+                view_id="only",
+                name="View 1",
+                ordinal=1,
+                color="#2d7ff9",
+                partner_color=None,
+                current=True,
+                closable=False,
+            )
+        ]
+    )
+    close_btn = popup.findChild(QPushButton, "viewOverflowRowClose")
+    others = popup.findChild(QPushButton, "viewOverflowCloseOthers")
+    close_all = popup.findChild(QPushButton, "viewOverflowCloseAll")
+    assert not close_btn.isEnabled()
+    assert not others.isEnabled()
+    assert not close_all.isEnabled()
+    assert close_btn.toolTip() == "至少保留一个 View"
+    assert others.toolTip() == "至少保留一个 View"
+
+
+def test_popup_escape_outside_click_and_destroy_restore_trigger_state(qtbot):
+    _manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    popup = _open_overflow_popup(bar)
+    assert bar._overflow.property("expanded") == "true"
+    QTest.keyClick(popup, Qt.Key_Escape)
+    QApplication.processEvents()
+    assert bar._overflow_popup is None or not bar._overflow_popup.isVisible()
+    assert bar._overflow.property("expanded") in ("false", False, None)
+
+
+def _overflow_rows(count, name_fmt="View {i}"):
+    return [
+        ViewOverflowRow(
+            view_id=f"v{i}",
+            name=name_fmt.format(i=i + 1),
+            ordinal=i + 1,
+            color="#2d7ff9",
+            partner_color=None,
+            current=i == 0,
+            closable=True,
+        )
+        for i in range(count)
+    ]
+
+
+def test_overflow_popup_width_sits_between_footer_floor_and_name_ceiling(qtbot):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    popup.populate(_overflow_rows(6))
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.setGeometry(40, 80, 40, 22)
+    host.show()
+    popup.show_at(host)
+    QApplication.processEvents()
+    assert PANEL_MIN_WIDTH <= popup.width() <= PANEL_MAX_WIDTH
+    assert popup.width() <= 300
+    others = popup.findChild(QPushButton, "viewOverflowCloseOthers")
+    close_all = popup.findChild(QPushButton, "viewOverflowCloseAll")
+    assert others.height() == 24
+    assert close_all.height() == 24
+    assert others.width() >= 100
+    assert close_all.width() >= 100
+    popup.hide()
+
+    popup.populate(
+        _overflow_rows(4, name_fmt="方向盘扭矩 / 电机转速 overlay {i}")
+    )
+    popup.show_at(host)
+    QApplication.processEvents()
+    assert PANEL_MIN_WIDTH <= popup.width() <= PANEL_MAX_WIDTH
+    name = next(
+        btn
+        for btn in popup.findChildren(QPushButton, "viewOverflowRowName")
+        if btn.isVisible()
+    )
+    assert name.toolTip().startswith("方向盘扭矩")
+    popup.hide()
+
+
+def test_close_column_does_not_shift_when_scrollbar_is_idle(qtbot):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.setGeometry(40, 80, 40, 22)
+    host.show()
+    popup.populate(_overflow_rows(24))
+    popup.show_at(host)
+    QApplication.processEvents()
+    many_x = _visible_overflow_close_buttons(popup)[0].mapTo(popup, QPoint(0, 0)).x()
+    popup.populate(_overflow_rows(4))
+    QApplication.processEvents()
+    few_x = _visible_overflow_close_buttons(popup)[0].mapTo(popup, QPoint(0, 0)).x()
+    assert many_x == few_x
+    assert popup.width() == PANEL_MIN_WIDTH or popup.width() >= PANEL_MIN_WIDTH
+    popup.hide()
+
+
+def test_reproject_restores_hover_on_close_button_under_cursor(qtbot, monkeypatch):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    popup.populate(_overflow_rows(4))
+    popup.show()
+    popup._apply_panel_size(popup._fitted_width or PANEL_MIN_WIDTH)
+    QApplication.processEvents()
+    first = _visible_overflow_close_buttons(popup)[0]
+    cursor = first.mapToGlobal(first.rect().center())
+    monkeypatch.setattr(QCursor, "pos", staticmethod(lambda: cursor))
+    popup.populate(_overflow_rows(3))
+    QApplication.processEvents()
+    qtbot.wait(20)
+    hit = popup._chrome_at(cursor)
+    assert hit is not None
+    assert hit.objectName() == "viewOverflowRowClose"
+    assert hit.isVisible()
+    assert hit._hovered is True
+    image = hit.grab().toImage()
+    sample = QColor(image.pixel(image.width() // 2, 4))
+    # Hover fill is #fff0f2, not idle white and not the × glyph at center.
+    assert sample.red() >= 240
+    assert 220 <= sample.green() <= 248
+    popup.hide()
+
+
+def test_popup_clamps_to_available_screen_and_keeps_footer_visible(qtbot, monkeypatch):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    rows = [
+        ViewOverflowRow(
+            view_id=f"v{i}",
+            name=f"View {i + 1}",
+            ordinal=i + 1,
+            color="#2d7ff9",
+            partner_color=None,
+            current=i == 0,
+            closable=True,
+        )
+        for i in range(24)
+    ]
+    popup.populate(rows)
+    from PyQt5.QtCore import QRect
+
+    monkeypatch.setattr(
+        ViewOverflowPopup,
+        "_available_geometry_for",
+        lambda _self, _anchor: QRect(0, 0, 400, 280),
+    )
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.setGeometry(20, 200, 50, 22)
+    host.show()
+    popup.show_at(host)
+    QApplication.processEvents()
+    geo = popup.geometry()
+    assert geo.left() >= 8
+    assert geo.right() <= 400 - 8
+    assert geo.top() >= 8
+    assert geo.bottom() <= 280 - 8
+    footer = popup.findChild(QWidget, "viewOverflowFooter")
+    assert footer is not None
+    assert footer.isVisible()
+    popup.hide()
+
+
+def test_popup_round_surface_paints_an_opaque_center(qtbot):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    popup.populate(
+        [
+            ViewOverflowRow(
+                view_id="a",
+                name="View 1",
+                ordinal=1,
+                color="#2d7ff9",
+                partner_color=None,
+                current=True,
+                closable=True,
+            ),
+            ViewOverflowRow(
+                view_id="b",
+                name="View 2",
+                ordinal=2,
+                color="#e8590c",
+                partner_color=None,
+                current=False,
+                closable=True,
+            ),
+        ]
+    )
+    popup._apply_panel_size(max(popup._fitted_width, PANEL_MIN_WIDTH))
+    popup.show()
+    QApplication.processEvents()
+    from mf4_analyzer.ui_kit.popup_shell import POPUP_SHELL_FLAGS
+
+    assert popup.testAttribute(Qt.WA_TranslucentBackground)
+    assert int(popup.windowFlags()) & int(POPUP_SHELL_FLAGS) == int(POPUP_SHELL_FLAGS)
+    surface = popup.findChild(QFrame, "viewOverflowSurface")
+    header = popup.findChild(QWidget, "viewOverflowHeader")
+    footer = popup.findChild(QWidget, "viewOverflowFooter")
+    image = surface.grab().toImage()
+    x = min(image.width() // 2, max(24, image.width() - 24))
+    y = header.geometry().bottom() + 6
+    if footer is not None:
+        y = min(y, max(header.geometry().bottom() + 2, footer.geometry().top() - 6))
+    sample = QColor(image.pixel(x, y))
+    assert sample.alpha() == 255
+    assert sample.red() > 230 and sample.green() > 230 and sample.blue() > 230
+    popup.hide()
+
+
+def test_section_bars_share_the_overflow_popup(qtbot):
+    for section in ("time", "fft", "fft_time", "frf", "order"):
+        _manager, bar = _section_bar(qtbot, section=section, count=14)
+        bar.resize(4000, 30)
+        bar.show()
+        QApplication.processEvents()
+        _roomy, compact, _overhead = _measure(bar)
+        _resize_to_budget(bar, compact // 2)
+        popup = _open_overflow_popup(bar)
+        assert popup.objectName() == "viewOverflowPopup"
+        assert popup.findChild(QLabel, "viewOverflowTitle").text() == "全部 View"
+        bar._close_overflow_popup()

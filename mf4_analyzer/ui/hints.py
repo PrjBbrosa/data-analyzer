@@ -339,6 +339,14 @@ _HINTS = (
         priority=65,
     ),
     Hint(
+        id="view.quick_close",
+        text="悬停色标可快速关闭，名称区仍切换",
+        surface="discovery",
+        modes=frozenset({"time", "fft", "fft_time", "frf", "order"}),
+        retire_on="view_tab_close_seen",
+        priority=64,
+    ),
+    Hint(
         id="markup.capabilities",
         text="箭头移动标注 · 双击编辑文本 · 单键切换工具",
         surface="discovery",

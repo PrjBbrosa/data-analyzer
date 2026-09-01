@@ -321,6 +321,16 @@ def _discovery_walk(**state_kwargs):
     return seen
 
 
+def test_view_quick_close_discovery_hint_fits_and_does_not_imply_undo():
+    hint = next(h for h in hints.all_hints() if h.id == "view.quick_close")
+    assert hint.surface == "discovery"
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+    assert "色标" in hint.text
+    assert "关闭" in hint.text
+    assert "撤销" not in hint.text
+    assert "零" not in hint.text
+
+
 def test_view_compact_tabs_is_a_shipped_time_scoped_discovery_hint():
     hint = next(h for h in hints.all_hints() if h.id == "view.compact_tabs")
     assert hint.surface == "discovery"
@@ -354,6 +364,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         # Same priority 65 as view.compact_tabs; registry order wins.
         "file.wwt_create_views",
         "view.compact_tabs",
+        "view.quick_close",
         "ultraview.view_rail",
         "ultraview.unplaced_badge",
         "ultraview.add_from_tab",
@@ -498,13 +509,15 @@ def test_overflow_menu_open_retires_the_view_compact_tabs_discovery(
 ):
     """The » menu renders every View's FULL name -- opening it is the other way
     the user finds where the names went."""
+    from PyQt5.QtWidgets import QApplication
+
     recorded = _spy_mark_discovered(monkeypatch)
-    monkeypatch.setattr(
-        "mf4_analyzer.ui.view_tabbar.QMenu.exec_", lambda *_a, **_k: None
-    )
     _manager, bar = _fit_bar(qtbot, 14, lambda _roomy, compact: compact // 2)
     assert bar.overflow_indices()  # premise: we really are in the overflow regime
 
     bar._on_overflow_clicked()
+    QApplication.processEvents()
 
     assert recorded == ["view.compact_tabs"]
+    if bar._overflow_popup is not None:
+        bar._close_overflow_popup()

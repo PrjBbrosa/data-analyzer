@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab — 溢出 View 快速关闭面板</title>
+  <style>
+    :root {
+      --ink: #142238;
+      --ink-2: #34475f;
+      --muted: #708198;
+      --line: #d4dfeb;
+      --line-strong: #bfcede;
+      --surface: #ffffff;
+      --chrome: #f7f9fc;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --blue-line: #a7bfea;
+      --danger: #bf3447;
+      --danger-soft: #fff0f2;
+      --green: #15945a;
+      --shadow: 0 22px 58px rgba(34, 53, 78, .16);
+      --sans: "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", system-ui, sans-serif;
+      --utility: "SF Mono", Menlo, ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      color: var(--ink);
+      font: 13px/1.5 var(--sans);
+      background:
+        radial-gradient(920px 460px at 8% -12%, #fff 0, transparent 62%),
+        linear-gradient(180deg, #f5f8fc 0, #e7eef6 100%);
+    }
+    button { font: inherit; }
+    button:focus-visible, [role="tab"]:focus-visible {
+      outline: 3px solid rgba(37, 99, 235, .26);
+      outline-offset: 2px;
+    }
+
+    .page { width: min(1180px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 52px; }
+    .intro { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 28px; align-items: end; }
+    .eyebrow { margin-bottom: 8px; color: #8a9aaf; font: 750 10px/1 var(--utility); letter-spacing: .09em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 800px; font-size: clamp(25px, 3.2vw, 35px); line-height: 1.12; letter-spacing: -.035em; }
+    .lede { max-width: 74ch; margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+    .decision {
+      padding: 13px 15px; border: 1px solid #b8cff2; border-radius: 12px;
+      background: rgba(239,245,255,.9); color: #536d8c; font-size: 12px;
+    }
+    .decision b { display: block; margin-bottom: 3px; color: #174da8; }
+
+    .prototype { margin-top: 22px; border: 1px solid #c6d3e1; border-radius: 18px; background: #f7f9fc; box-shadow: var(--shadow); overflow: hidden; }
+    .windowbar { display: flex; align-items: center; height: 37px; padding: 0 14px; border-bottom: 1px solid #d8e1eb; background: linear-gradient(#fbfcfe, #f1f4f8); }
+    .traffic { display: flex; gap: 6px; }
+    .traffic i { width: 10px; height: 10px; border-radius: 50%; }
+    .traffic i:nth-child(1) { background: #ff6058; }
+    .traffic i:nth-child(2) { background: #ffbd2e; }
+    .traffic i:nth-child(3) { background: #28c941; }
+    .window-title { flex: 1; text-align: center; color: #8492a5; font-size: 11px; }
+
+    .workspace { position: relative; height: 724px; background: linear-gradient(#fff 0 238px, #f8fafc 238px 100%); }
+    .plot { position: absolute; inset: 0 0 auto; height: 190px; overflow: hidden; background: #fbfdff; }
+    .plot::before {
+      position: absolute; inset: 0; content: "";
+      background-image: linear-gradient(rgba(111,133,160,.10) 1px, transparent 1px), linear-gradient(90deg, rgba(111,133,160,.10) 1px, transparent 1px);
+      background-size: 54px 42px;
+    }
+    .plot svg { position: absolute; inset: 48px 38px 37px 42px; width: calc(100% - 80px); height: calc(100% - 85px); }
+    .plot path { fill: none; stroke: #2d72dc; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .plot .ghost { stroke: #8ba4bd; stroke-width: 1.35; opacity: .55; }
+    .plot-label { position: absolute; left: 19px; top: 15px; color: #718299; font-size: 11px; }
+    .axis-label { position: absolute; right: 18px; bottom: 8px; color: #93a0b1; font-size: 10px; }
+
+    .view-rail {
+      position: absolute; z-index: 5; inset: 190px 0 auto; display: flex; align-items: center;
+      height: 48px; padding: 7px 12px; border-top: 1px solid #cad6e3; background: rgba(251,252,254,.97);
+    }
+    .section-anchor { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; height: 30px; margin-right: 12px; padding-right: 14px; border-right: 1px solid #c6d1df; color: #3d5068; font-size: 13px; font-weight: 700; }
+    .mode-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: #e8f0ff; color: var(--blue); font-size: 16px; font-weight: 850; }
+    .tabs { display: flex; align-items: center; gap: 4px; }
+    .view-tab {
+      position: relative; display: flex; align-items: center; gap: 7px; width: 94px; height: 31px;
+      padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: transparent;
+      color: #43556d; cursor: pointer; font-size: 13px; font-weight: 680;
+    }
+    .view-tab:hover { border-color: #c4d5ef; background: #edf4ff; color: #1f3b68; }
+    .view-tab.active { border-color: var(--blue-line); border-bottom: 2px solid var(--blue); background: var(--blue-soft); color: #173262; }
+    .swatch-slot { position: relative; flex: 0 0 27px; width: 27px; height: 17px; }
+    .swatch, .rail-close {
+      position: absolute; inset: 0; display: grid; place-items: center; width: 27px; height: 17px;
+      border-radius: 5px;
+    }
+    .swatch { background: var(--dot); box-shadow: inset 0 -1px 0 rgba(0,0,0,.18); transition: opacity 110ms ease; }
+    .rail-close {
+      padding: 0; border: 1px solid #e5a8b0; background: var(--danger-soft); color: var(--danger);
+      cursor: pointer; opacity: 0; font-size: 15px; font-weight: 760; line-height: 1;
+      transition: opacity 110ms ease, background-color 110ms ease;
+    }
+    .view-tab:hover .swatch, .view-tab:focus-within .swatch { opacity: 0; }
+    .view-tab:hover .rail-close, .view-tab:focus-within .rail-close { opacity: 1; }
+    .rail-close:hover { background: #ffe3e7; }
+    .view-tab.last-only:hover .swatch, .view-tab.last-only:focus-within .swatch { opacity: 1; }
+    .view-tab.last-only .rail-close { display: none; }
+    .view-no { min-width: 11px; text-align: center; }
+
+    .overflow-button, .plus-button {
+      display: grid; place-items: center; flex: 0 0 auto; height: 31px; margin-left: 5px; border: 1px solid #c7d3e0;
+      border-radius: 7px; background: #fff; color: #25364d; cursor: pointer; font-weight: 750;
+    }
+    .overflow-button { min-width: 50px; padding: 0 9px; font-size: 12px; }
+    .plus-button { width: 34px; font-size: 18px; }
+    .overflow-button:hover, .overflow-button[aria-expanded="true"], .plus-button:hover { border-color: var(--blue-line); background: var(--blue-soft); color: #173262; }
+    .overflow-button[hidden] { display: none; }
+    .rail-spacer { flex: 1; min-width: 18px; }
+    .ultraview { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; height: 31px; padding-left: 18px; border-left: 1px solid #c7d2df; color: #4857d9; font-size: 16px; font-weight: 730; }
+    .uv-icon { position: relative; display: grid; grid-template-columns: repeat(2, 7px); grid-template-rows: repeat(2, 7px); gap: 3px; padding: 5px; border: 1px solid #c9c9f4; border-radius: 8px; background: #f4f1ff; }
+    .uv-icon i:nth-child(1) { background: #2879f2; }.uv-icon i:nth-child(2) { background: #7d38e9; }.uv-icon i:nth-child(3) { background: #b229d6; }.uv-icon i:nth-child(4) { background: #6a41df; }
+    .uv-icon i { width: 7px; height: 7px; border-radius: 2px; }
+    .uv-dot { position: absolute; right: -3px; top: -4px; width: 9px; height: 9px; border: 2px solid #fff; border-radius: 50%; background: #18a35c; }
+
+    .tooltip {
+      position: absolute; z-index: 30; display: none; padding: 6px 8px; border: 1px solid #c9d5e2;
+      border-radius: 6px; background: #182638; color: #fff; box-shadow: 0 8px 22px rgba(25,37,55,.2);
+      pointer-events: none; white-space: nowrap; font-size: 10px;
+    }
+    .view-tab:hover .tooltip { display: block; left: 2px; bottom: 37px; }
+    .overflow-wrap { position: relative; }
+    .overflow-wrap:hover > .tooltip { display: block; left: 3px; bottom: 38px; }
+    .overflow-wrap:has(.overflow-panel.open) > .tooltip { display: none; }
+
+    .overflow-panel {
+      position: absolute; z-index: 20; left: 0; top: 39px; display: none; width: 560px;
+      border: 1px solid #bfcfe1; border-radius: 15px; background: #fff; box-shadow: 0 24px 56px rgba(31,48,72,.22);
+      overflow: hidden;
+    }
+    .overflow-panel.open { display: block; }
+    .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 15px 11px; border-bottom: 1px solid #e1e8f0; }
+    .panel-head h2 { margin: 0; font-size: 15px; letter-spacing: -.015em; }
+    .panel-head p { margin: 3px 0 0; color: #718299; font-size: 10px; }
+    .view-count { padding: 4px 7px; border-radius: 6px; background: #edf4ff; color: #2358a6; font: 750 10px/1.2 var(--utility); }
+    .panel-list { max-height: 349px; overflow-y: auto; padding: 6px 7px; }
+    .panel-row { display: grid; grid-template-columns: 35px minmax(0, 1fr) auto 31px; align-items: center; gap: 7px; min-height: 42px; padding: 3px 4px 3px 10px; border-radius: 8px; }
+    .panel-row:hover { background: #f3f7fc; }
+    .panel-row.current { background: #edf4ff; }
+    .panel-swatch { width: 28px; height: 16px; border-radius: 5px; background: var(--dot); box-shadow: inset 0 -1px 0 rgba(0,0,0,.16); }
+    .row-main { min-width: 0; padding: 0; border: 0; background: transparent; color: #17243a; cursor: pointer; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .row-main:hover { color: #164fae; }
+    .current-chip { padding: 3px 6px; border-radius: 5px; background: #dce9ff; color: #2259aa; font-size: 9px; font-weight: 750; }
+    .row-close { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #7a899d; cursor: pointer; font-size: 17px; line-height: 1; }
+    .panel-row:hover .row-close { border-color: #e8c2c7; background: #fff; color: var(--danger); }
+    .row-close:hover { border-color: #dfa0a9 !important; background: var(--danger-soft) !important; }
+    .row-close:disabled { cursor: default; opacity: .25; }
+
+    .panel-foot { padding: 10px 12px 12px; border-top: 1px solid #e1e8f0; background: #f8fafc; }
+    .bulk-hint { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; color: #65778e; font-size: 10px; }
+    .info-icon { display: grid; place-items: center; flex: 0 0 17px; width: 17px; height: 17px; border-radius: 50%; background: #e4eeff; color: #215db8; font-size: 10px; font-weight: 800; }
+    .bulk-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .bulk-actions button { height: 34px; border: 1px solid #c6d2df; border-radius: 7px; background: #fff; color: #344860; cursor: pointer; font-size: 12px; font-weight: 680; }
+    .bulk-actions button:hover { border-color: #9eb8df; background: #edf4ff; color: #174f9f; }
+    .bulk-actions .close-all { border-color: #e2aeb5; color: var(--danger); }
+    .bulk-actions .close-all:hover { border-color: #d88691; background: var(--danger-soft); color: #a62537; }
+    .bulk-actions button:disabled { border-color: #dde4ec; background: #f2f5f8; color: #a6b0be; cursor: default; }
+
+    .toast {
+      position: absolute; z-index: 35; left: 50%; bottom: 61px; display: none; align-items: center; gap: 13px;
+      transform: translateX(-50%); padding: 8px 9px 8px 12px; border-radius: 8px; background: #1d2b3d;
+      color: #fff; box-shadow: 0 12px 26px rgba(20,31,47,.24); white-space: nowrap; font-size: 11px;
+    }
+    .toast.show { display: flex; }
+    .toast button { padding: 3px 6px; border: 0; border-radius: 4px; background: rgba(255,255,255,.13); color: #b9d4ff; cursor: pointer; font-weight: 750; }
+
+    .confirm-layer { position: absolute; z-index: 40; inset: 0; display: none; place-items: center; background: rgba(25,38,55,.22); backdrop-filter: blur(1px); }
+    .confirm-layer.open { display: grid; }
+    .dialog { width: 370px; padding: 17px; border: 1px solid #c8d4e1; border-radius: 12px; background: #fff; box-shadow: 0 22px 50px rgba(26,39,56,.24); }
+    .dialog h3 { margin: 0 0 5px; font-size: 16px; }
+    .dialog p { margin: 0; color: #677991; font-size: 12px; }
+    .dialog-note { margin-top: 10px; padding: 8px 9px; border-radius: 7px; background: #f2f6fb; color: #586b83; font-size: 10px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 15px; }
+    .dialog-actions button { padding: 7px 12px; border: 1px solid #cbd6e2; border-radius: 7px; background: #fff; color: #43566e; cursor: pointer; }
+    .dialog-actions .confirm-danger { border-color: var(--danger); background: var(--danger); color: #fff; }
+
+    .annotation-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; border-top: 1px solid #d7e0ea; background: #d7e0ea; }
+    .annotation { min-height: 91px; padding: 14px 16px; background: #f8fafc; }
+    .annotation b { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; color: #30445d; font-size: 12px; }
+    .annotation i { display: grid; place-items: center; width: 19px; height: 19px; border-radius: 6px; background: #e5eeff; color: #235db5; font: 800 10px/1 var(--utility); font-style: normal; }
+    .annotation p { margin: 0; color: #708198; font-size: 11px; }
+    .same-slot { display: inline-grid; grid-template-columns: 30px auto 30px; align-items: center; gap: 6px; margin-top: 8px; color: #60738b; font-size: 10px; }
+    .slot-demo { display: grid; place-items: center; width: 27px; height: 17px; border-radius: 5px; }
+    .slot-demo.color { background: #1496a5; }
+    .slot-demo.close { border: 1px solid #e5a8b0; background: var(--danger-soft); color: var(--danger); font-size: 14px; }
+
+    .prototype-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: #718198; font-size: 11px; }
+    .prototype-controls button { padding: 6px 10px; border: 1px solid #c7d3e0; border-radius: 7px; background: #fff; color: #41556e; cursor: pointer; }
+    .prototype-controls button:hover { border-color: var(--blue-line); background: var(--blue-soft); color: #174f9f; }
+
+    @media (max-width: 820px) {
+      .page { width: calc(100vw - 18px); padding-top: 18px; }
+      .intro { grid-template-columns: 1fr; gap: 13px; }
+      .decision { width: auto; }
+      .prototype { overflow-x: auto; }
+      .windowbar, .workspace, .annotation-strip { min-width: 820px; }
+      .ultraview { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .swatch, .rail-close { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div>
+        <div class="eyebrow">TraceLab / View overflow close interaction / 2026-09-01</div>
+        <h1>关闭操作进入现有 »N 面板，不新增入口。</h1>
+        <p class="lede">点击底栏的“»6”展开全部 View；悬停底栏标签时，原色标原位变成 ×。面板内可以连续逐项关闭，底部集中处理“关闭其他”和“关闭全部”。</p>
+      </div>
+      <aside class="decision"><b>本版严格按你的交互约束</b>色标槽位固定 27 × 17 px，切换为 × 时不改变标签宽度，也不会推动编号。</aside>
+    </header>
+
+    <section class="prototype" aria-label="View 快速关闭交互原型">
+      <div class="windowbar"><span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">TraceLab · WinWert steering measurement</span></div>
+      <div class="workspace">
+        <div class="plot">
+          <span class="plot-label" data-plot-label>当前：WinWert 6 · Wheel input torque Symmetry</span>
+          <svg viewBox="0 0 960 230" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 176 C82 170 118 49 192 94 S318 184 405 83 573 178 647 74 827 168 960 54"/><path d="M0 164 C74 179 123 95 201 124 S332 54 402 133 537 180 614 71 742 145 831 99 905 121 960 45"/></svg>
+          <span class="axis-label">Steering angle [deg]</span>
+        </div>
+
+        <div class="view-rail">
+          <div class="section-anchor"><span class="mode-icon">⌁</span><span>时域</span></div>
+          <div class="tabs" data-visible-tabs role="tablist" aria-label="可见 View"></div>
+          <div class="overflow-wrap">
+            <button class="overflow-button" type="button" data-overflow aria-expanded="true" aria-controls="view-panel">»6</button>
+            <span class="tooltip" data-overflow-tip>另有 6 个 View；点击展开完整清单</span>
+            <section class="overflow-panel open" id="view-panel" data-panel aria-label="全部 View 管理面板">
+              <header class="panel-head">
+                <div><h2>全部 View</h2><p>点击名称切换 · 点击右侧 × 关闭</p></div>
+                <span class="view-count" data-view-count>8 个</span>
+              </header>
+              <div class="panel-list" data-panel-list></div>
+              <footer class="panel-foot">
+                <div class="bulk-hint"><span class="info-icon">i</span><span data-bulk-hint>“关闭其他”将保留当前 View 6；批量关闭前会再次确认。</span></div>
+                <div class="bulk-actions"><button type="button" data-close-others>关闭其他</button><button class="close-all" type="button" data-close-all>关闭全部</button></div>
+              </footer>
+            </section>
+          </div>
+          <button class="plus-button" type="button" title="新建 View">+</button>
+          <span class="rail-spacer"></span>
+          <div class="ultraview" aria-label="UltraView"><span class="uv-icon"><i></i><i></i><i></i><i></i><span class="uv-dot"></span></span><span>UltraView</span></div>
+        </div>
+
+        <div class="toast" data-toast role="status"><span data-toast-text></span><button type="button" data-undo>撤销</button></div>
+        <div class="confirm-layer" data-confirm-layer>
+          <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+            <h3 id="confirm-title" data-confirm-title></h3>
+            <p data-confirm-text></p>
+            <div class="dialog-note" data-confirm-note></div>
+            <div class="dialog-actions"><button type="button" data-cancel>取消</button><button class="confirm-danger" type="button" data-confirm-action></button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="annotation-strip">
+        <article class="annotation"><b><i>01</i>底栏不增宽</b><p>× 与色标共用固定槽位，只有显示内容切换。</p><span class="same-slot"><span class="slot-demo color"></span><span>悬停 →</span><span class="slot-demo close">×</span></span></article>
+        <article class="annotation"><b><i>02</i>面板可连续整理</b><p>逐项 × 后面板保持打开；计数和“»N”立即更新，适合一次关闭多个 View。</p></article>
+        <article class="annotation"><b><i>03</i>危险程度分层</b><p>单关直接执行并可撤销；“关闭其他 / 全部”说明保留对象并确认一次。</p></article>
+      </div>
+    </section>
+
+    <div class="prototype-controls"><span>建议先悬停底栏 View 6，再在展开面板中关闭任意一项。</span><button type="button" data-reset>恢复初始状态</button></div>
+  </main>
+
+  <script>
+    const INITIAL_VIEWS = [
+      { id: 1, name: 'WinWert 1 · Steering angle', color: '#1187ef' },
+      { id: 2, name: 'WinWert 1 · Wheel input torque', color: '#f04a00' },
+      { id: 3, name: 'WinWert 2 · Wheel input torque', color: '#0a9b4d' },
+      { id: 4, name: 'WinWert 3 · Motor torque A', color: '#a52bb7' },
+      { id: 5, name: 'WinWert 4 · Motor torque B', color: '#ed0028' },
+      { id: 6, name: 'WinWert 5 · Motor torque A+B', color: '#1497a6' },
+      { id: 7, name: 'WinWert 6 · Wheel input torque Symmetry', color: '#f18700' },
+      { id: 8, name: 'WinWert 7 · Wheel input torque Hysteresis', color: '#d00063' }
+    ];
+
+    const cloneViews = (source) => source.map((view) => ({ ...view }));
+    const visibleHost = document.querySelector('[data-visible-tabs]');
+    const overflowButton = document.querySelector('[data-overflow]');
+    const panel = document.querySelector('[data-panel]');
+    const panelList = document.querySelector('[data-panel-list]');
+    const toast = document.querySelector('[data-toast]');
+    const confirmLayer = document.querySelector('[data-confirm-layer]');
+    let views = cloneViews(INITIAL_VIEWS);
+    let activeId = 6;
+    let undoSnapshot = null;
+    let pendingBulk = null;
+
+    function currentView() {
+      return views.find((view) => view.id === activeId) || views[0];
+    }
+
+    function snapshotState() {
+      return { views: cloneViews(views), activeId };
+    }
+
+    function showToast(message, snapshot) {
+      undoSnapshot = snapshot;
+      document.querySelector('[data-toast-text]').textContent = message;
+      toast.classList.add('show');
+    }
+
+    function visibleViews() {
+      const current = currentView();
+      const firstOther = views.find((view) => view.id !== current.id);
+      return firstOther ? [firstOther, current] : [current];
+    }
+
+    function makeTab(view) {
+      const tab = document.createElement('div');
+      tab.className = `view-tab${view.id === activeId ? ' active' : ''}${views.length <= 1 ? ' last-only' : ''}`;
+      tab.style.setProperty('--dot', view.color);
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', view.id === activeId ? 'true' : 'false');
+      tab.setAttribute('aria-label', `${view.name}${view.id === activeId ? '，当前' : ''}`);
+      tab.tabIndex = 0;
+      const tip = views.length <= 1 ? '至少保留一个 View' : `关闭 View ${view.id} · 色标槽位保持不变`;
+      tab.innerHTML = `<span class="swatch-slot"><span class="swatch"></span><button class="rail-close" type="button" aria-label="关闭 ${view.name}">×</button></span><span class="view-no">${view.id}</span><span class="tooltip">${tip}</span>`;
+      tab.addEventListener('click', (event) => {
+        if (event.target.closest('.rail-close')) return;
+        activeId = view.id;
+        render();
+      });
+      tab.addEventListener('keydown', (event) => {
+        if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('.rail-close')) {
+          event.preventDefault(); activeId = view.id; render();
+        }
+      });
+      tab.querySelector('.rail-close').addEventListener('click', (event) => {
+        event.stopPropagation(); closeOne(view.id, { keepPanel: false });
+      });
+      return tab;
+    }
+
+    function makePanelRow(view) {
+      const row = document.createElement('div');
+      row.className = `panel-row${view.id === activeId ? ' current' : ''}`;
+      row.style.setProperty('--dot', view.color);
+      row.innerHTML = `<span class="panel-swatch"></span><button class="row-main" type="button" title="切换到 ${view.name}">${view.name}</button>${view.id === activeId ? '<span class="current-chip">当前</span>' : '<span></span>'}<button class="row-close" type="button" title="关闭此 View" aria-label="关闭 ${view.name}">×</button>`;
+      row.querySelector('.row-main').addEventListener('click', () => {
+        activeId = view.id;
+        panel.classList.remove('open');
+        overflowButton.setAttribute('aria-expanded', 'false');
+        render();
+      });
+      const close = row.querySelector('.row-close');
+      close.disabled = views.length <= 1;
+      close.addEventListener('click', () => closeOne(view.id, { keepPanel: true }));
+      return row;
+    }
+
+    function render() {
+      const current = currentView();
+      if (!current) return;
+      activeId = current.id;
+      visibleHost.innerHTML = '';
+      visibleViews().forEach((view) => visibleHost.append(makeTab(view)));
+
+      const hiddenCount = Math.max(0, views.length - visibleViews().length);
+      overflowButton.hidden = hiddenCount === 0;
+      overflowButton.textContent = `»${hiddenCount}`;
+      overflowButton.setAttribute('aria-label', `另有 ${hiddenCount} 个 View，点击展开完整清单`);
+      document.querySelector('[data-overflow-tip]').textContent = `另有 ${hiddenCount} 个 View；点击展开完整清单`;
+
+      panelList.innerHTML = '';
+      views.forEach((view) => panelList.append(makePanelRow(view)));
+      document.querySelector('[data-view-count]').textContent = `${views.length} 个`;
+      document.querySelector('[data-bulk-hint]').textContent = `“关闭其他”将保留当前 View ${activeId}；批量关闭前会再次确认。`;
+      document.querySelector('[data-plot-label]').textContent = `当前：${current.name}`;
+      document.querySelector('[data-close-others]').disabled = views.length <= 1;
+      document.querySelector('[data-close-all]').disabled = views.length <= 1;
+    }
+
+    function closeOne(id, { keepPanel }) {
+      if (views.length <= 1) return;
+      const target = views.find((view) => view.id === id);
+      if (!target) return;
+      const before = snapshotState();
+      const index = views.findIndex((view) => view.id === id);
+      views = views.filter((view) => view.id !== id);
+      if (id === activeId) {
+        activeId = views[Math.min(index, views.length - 1)].id;
+      }
+      render();
+      if (keepPanel && !overflowButton.hidden) {
+        panel.classList.add('open');
+        overflowButton.setAttribute('aria-expanded', 'true');
+      } else {
+        panel.classList.remove('open');
+        overflowButton.setAttribute('aria-expanded', 'false');
+      }
+      showToast(`已关闭 ${target.name}`, before);
+    }
+
+    function openConfirm(kind) {
+      const current = currentView();
+      pendingBulk = kind;
+      if (kind === 'others') {
+        document.querySelector('[data-confirm-title]').textContent = `关闭其他 ${views.length - 1} 个 View？`;
+        document.querySelector('[data-confirm-text]').textContent = `将只保留当前的 View ${current.id}「${current.name}」。`;
+        document.querySelector('[data-confirm-note]').textContent = '其余 View 的通道范围、分屏关系与已加入文件将一并移除。';
+        document.querySelector('[data-confirm-action]').textContent = '关闭其他';
+      } else {
+        document.querySelector('[data-confirm-title]').textContent = `关闭全部 ${views.length} 个 View？`;
+        document.querySelector('[data-confirm-text]').textContent = '完成后保留一个已重置的空白 View，工作区不会变成无 View 状态。';
+        document.querySelector('[data-confirm-note]').textContent = '所有 View 的通道范围、分屏关系与已加入文件将一并移除。';
+        document.querySelector('[data-confirm-action]').textContent = '关闭全部';
+      }
+      confirmLayer.classList.add('open');
+    }
+
+    overflowButton.addEventListener('click', () => {
+      const opening = !panel.classList.contains('open');
+      panel.classList.toggle('open', opening);
+      overflowButton.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    });
+    document.querySelector('[data-close-others]').addEventListener('click', () => openConfirm('others'));
+    document.querySelector('[data-close-all]').addEventListener('click', () => openConfirm('all'));
+    document.querySelector('[data-cancel]').addEventListener('click', () => { pendingBulk = null; confirmLayer.classList.remove('open'); });
+    document.querySelector('[data-confirm-action]').addEventListener('click', () => {
+      if (!pendingBulk) return;
+      const before = snapshotState();
+      if (pendingBulk === 'others') {
+        const keep = currentView();
+        const removed = views.length - 1;
+        views = [{ ...keep }];
+        activeId = keep.id;
+        showToast(`已关闭其他 ${removed} 个 View`, before);
+      } else {
+        const removed = views.length;
+        views = [{ id: 1, name: '空白 View', color: '#7f8da0' }];
+        activeId = 1;
+        showToast(`已关闭 ${removed} 个 View，并保留空白 View`, before);
+      }
+      pendingBulk = null;
+      confirmLayer.classList.remove('open');
+      panel.classList.remove('open');
+      overflowButton.setAttribute('aria-expanded', 'false');
+      render();
+    });
+    document.querySelector('[data-undo]').addEventListener('click', () => {
+      if (!undoSnapshot) return;
+      views = cloneViews(undoSnapshot.views);
+      activeId = undoSnapshot.activeId;
+      undoSnapshot = null;
+      toast.classList.remove('show');
+      render();
+    });
+    document.querySelector('[data-reset]').addEventListener('click', () => {
+      views = cloneViews(INITIAL_VIEWS);
+      activeId = 6;
+      undoSnapshot = null;
+      toast.classList.remove('show');
+      confirmLayer.classList.remove('open');
+      panel.classList.add('open');
+      overflowButton.setAttribute('aria-expanded', 'true');
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

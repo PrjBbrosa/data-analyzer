@@ -3482,6 +3482,172 @@ QWidget#viewTabBar QPushButton#viewTabOverflow:hover {
     color: #173262;
 }
 
+QWidget#viewTabBar QPushButton#viewTabOverflow[expanded="true"] {
+    background-color: #e8f0ff;
+    border-color: #a7bfea;
+    color: #173262;
+}
+
+QFrame#viewOverflowPopup {
+    background-color: transparent;
+}
+
+QFrame#viewOverflowSurface {
+    background-color: transparent;
+}
+
+QWidget#viewOverflowHeader {
+    background-color: transparent;
+}
+
+QLabel#viewOverflowTitle {
+    color: #142238;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#viewOverflowCount {
+    padding: 4px 7px;
+    border-radius: 6px;
+    background-color: #edf4ff;
+    color: #2358a6;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QScrollArea#viewOverflowList {
+    background-color: transparent;
+}
+
+QScrollArea#viewOverflowList QScrollBar:vertical {
+    width: 8px;
+    margin: 4px 1px 4px 0;
+    background-color: transparent;
+}
+
+QScrollArea#viewOverflowList QScrollBar::handle:vertical {
+    min-height: 20px;
+    border-radius: 4px;
+    background-color: #c5d0dc;
+}
+
+QScrollArea#viewOverflowList QScrollBar::add-line:vertical,
+QScrollArea#viewOverflowList QScrollBar::sub-line:vertical {
+    height: 0px;
+    background-color: transparent;
+}
+
+QScrollArea#viewOverflowList QScrollBar::add-page:vertical,
+QScrollArea#viewOverflowList QScrollBar::sub-page:vertical {
+    background-color: transparent;
+}
+
+QWidget#viewOverflowListWell {
+    background-color: transparent;
+}
+
+QWidget#viewOverflowListHost {
+    background-color: #ffffff;
+}
+
+QWidget#viewOverflowRow {
+    min-height: 36px;
+    border-radius: 8px;
+    background-color: transparent;
+}
+
+QWidget#viewOverflowRow[current="true"] {
+    background-color: #edf4ff;
+}
+
+QPushButton#viewOverflowRowName {
+    padding: 4px 2px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background-color: transparent;
+    color: #17243a;
+    text-align: left;
+}
+
+QPushButton#viewOverflowRowName:hover {
+    color: #164fae;
+}
+
+QPushButton#viewOverflowRowName:focus {
+    border-color: #a7bfea;
+}
+
+QLabel#viewOverflowCurrentChip {
+    padding: 3px 6px;
+    border-radius: 5px;
+    background-color: #dce9ff;
+    color: #2259aa;
+    font-size: 9px;
+    font-weight: 700;
+}
+
+QPushButton#viewOverflowRowClose {
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background-color: transparent;
+    color: #7a899d;
+    font-size: 16px;
+}
+
+QPushButton#viewOverflowRowClose:hover {
+    border-color: #dfa0a9;
+    background-color: #fff0f2;
+    color: #bf3447;
+}
+
+QPushButton#viewOverflowRowClose:focus {
+    border-color: #e5a8b0;
+}
+
+QPushButton#viewOverflowRowClose:disabled {
+    color: #c5ced8;
+}
+
+QWidget#viewOverflowFooter {
+    background-color: transparent;
+}
+
+QPushButton#viewOverflowCloseOthers,
+QPushButton#viewOverflowCloseAll {
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0 8px;
+    border: 1px solid #c6d2df;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #344860;
+    font-size: 11px;
+}
+
+QPushButton#viewOverflowCloseOthers:hover {
+    border-color: #9eb8df;
+    background-color: #edf4ff;
+    color: #174f9f;
+}
+
+QPushButton#viewOverflowCloseAll {
+    border-color: #e2aeb5;
+    color: #bf3447;
+}
+
+QPushButton#viewOverflowCloseAll:hover {
+    border-color: #d88691;
+    background-color: #fff0f2;
+    color: #a62537;
+}
+
+QPushButton#viewOverflowCloseOthers:disabled,
+QPushButton#viewOverflowCloseAll:disabled {
+    border-color: #dde4ec;
+    background-color: #f2f5f8;
+    color: #a6b0be;
+}
+
 /* Cancel-merge button (right side of the View tab bar).
  * The merge relation lives in the button tooltip/accessibility text, not as a
  * persistent status sentence. The button still needs an explicit QSS

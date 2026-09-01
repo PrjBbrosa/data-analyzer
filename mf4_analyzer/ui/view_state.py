@@ -355,14 +355,16 @@ class ViewManager(QObject):
             self.set_active(idx)
         return idx
 
-    def reset_to_single_default(self) -> None:
+    def reset_to_single_default(self) -> tuple[str, ...]:
         """Replace every View with a fresh default empty View 1.
 
         Used when the workspace becomes empty so leftover View skeletons
         (purged channel tables, stale ``axis_opts``) cannot survive into the
         next file load. Replacement avoids filtering composite-key tables
-        in place.
+        in place. Returns the stable ids that disappeared so section hosts
+        can clean caches without a second walk of the old list.
         """
+        removed = tuple(str(view.view_id) for view in self.views)
         old_split = self.split_with
         self.views = [self._make(0)]
         self.active = 0
@@ -373,6 +375,44 @@ class ViewManager(QObject):
             self.split_changed.emit(None)
         # Always emit so the host re-projects even when the index stays 0.
         self.active_changed.emit(0)
+        return removed
+
+    def retain_only_view(self, view_id: str) -> tuple[str, ...]:
+        """Keep the exact View object identified by ``view_id``.
+
+        Fail closed: a missing/stale id is a zero-mutation no-op. Observers
+        never see an empty View list. Split pairs that pointed at a removed
+        View are dropped in the same transaction. Returns removed ids.
+        """
+        keep = None
+        keep_idx = -1
+        target = str(view_id or "")
+        if not target:
+            return ()
+        for idx, view in enumerate(self.views):
+            if str(view.view_id) == target:
+                keep = view
+                keep_idx = idx
+                break
+        if keep is None:
+            return ()
+        if len(self.views) == 1:
+            return ()
+        removed = tuple(
+            str(view.view_id) for view in self.views if view is not keep
+        )
+        old_split = self.split_with
+        old_active = self.active
+        self.views = [keep]
+        self.active = 0
+        self.split_with = None
+        self._split_pairs = {}
+        self.views_changed.emit()
+        if old_split is not None:
+            self.split_changed.emit(None)
+        if old_active != 0 or keep_idx != 0:
+            self.active_changed.emit(0)
+        return removed
 
     def reset_view_to_default(
         self, idx: int, *, preserve_view_id: bool = True, emit: bool = True,
