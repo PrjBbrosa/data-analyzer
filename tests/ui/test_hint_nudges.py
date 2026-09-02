@@ -348,7 +348,8 @@ def test_view_compact_tabs_is_a_shipped_time_scoped_discovery_hint():
 
 def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export():
     # Exact-match queue order: a discovery hint's priority IS its rotation
-    # position, so pin it. (view.history is ship="later" -> absent.)
+    # position, so pin it. view.history (priority 60) ships the Alt+Left
+    # camera-migration sentence at the old chart-hint slot.
     assert _discovery_walk(mode="time", plot_mode="overlay") == [
         "toolbar.shortcuts_exist",
         "chart.copy_image",
@@ -365,6 +366,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "file.wwt_create_views",
         "view.compact_tabs",
         "view.quick_close",
+        "view.history",
         "ultraview.view_rail",
         "ultraview.unplaced_badge",
         "ultraview.add_from_tab",

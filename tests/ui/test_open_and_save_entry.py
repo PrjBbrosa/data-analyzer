@@ -44,8 +44,7 @@ def test_open_replace_confirm_cancel_aborts(qapp, tmp_path, monkeypatch):
     mw._load_one(str(b))
     monkeypatch.setattr(QFileDialog, "getOpenFileNames",
                         lambda *a_, **k: ([str(proj)], ""))
-    monkeypatch.setattr(QMessageBox, "question",
-                        lambda *a_, **k: QMessageBox.No)
+    monkeypatch.setattr(mw, "_prompt_unsaved_project", lambda: "cancel")
     before = [fd.filename for fd in mw.files.values()]
     mw.open_files_or_project()
     assert [fd.filename for fd in mw.files.values()] == before  # unchanged

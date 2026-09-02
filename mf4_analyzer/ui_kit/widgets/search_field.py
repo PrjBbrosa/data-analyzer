@@ -1,7 +1,7 @@
 """One shared search-input primitive for Analyzer and Cockpit surfaces."""
 from __future__ import annotations
 
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QLineEdit, QToolButton
 
@@ -20,7 +20,15 @@ class SearchField(QLineEdit):
     Windows inside the 32px base track, and the old 12px qtawesome magnifier
     looked coarse. This control paints its own leading/trailing tool buttons
     and reserves text margins so the glyphs stay on the optical midline.
+
+    Esc is layered: non-empty text clears and stays focused; empty text emits
+    ``escape_requested`` so the host can close and restore opener focus.
+    Return/Enter is consumed here so a parent ``QDialog`` default button is
+    not clicked (QLineEdit otherwise ignores Return after emitting
+    ``returnPressed``).
     """
+
+    escape_requested = pyqtSignal()
 
     _cached_search_icon: QIcon | None = None
     _cached_clear_icon: QIcon | None = None
@@ -73,6 +81,27 @@ class SearchField(QLineEdit):
     def showEvent(self, event):
         super().showEvent(event)
         self._relayout_side_buttons()
+
+    def keyPressEvent(self, event):  # noqa: N802
+        key = event.key()
+        if key == Qt.Key_Escape:
+            self._handle_escape()
+            event.accept()
+            return
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            # QLineEdit emits returnPressed then ignores Return, which lets a
+            # parent QDialog click its default button. Consume it in the search
+            # domain: hosts may still listen to returnPressed for next-match.
+            super().keyPressEvent(event)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _handle_escape(self) -> None:
+        if self.text():
+            self.clear()
+            return
+        self.escape_requested.emit()
 
     def _relayout_side_buttons(self) -> None:
         y = max(0, (self.height() - _BUTTON_PX) // 2)

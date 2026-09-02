@@ -60,6 +60,8 @@ class _ElidedLabel(QLabel):
 class _FileRow(QFrame):
     activated = pyqtSignal(str)       # emits primary fid
     close_requested = pyqtSignal(str)  # emits rows_key (filepath_str or fid)
+    # Keyboard equivalent of drag-reorder: rows_key, "up"|"down".
+    reorder_requested = pyqtSignal(str, str)
     MIME_TYPE = INTERNAL_FILE_FIDS_MIME
 
     def __init__(self, fid, fd, parent=None):
@@ -70,6 +72,7 @@ class _FileRow(QFrame):
         self.fid = fid  # primary fid (backwards compat)
         self._rows_key = fid  # default key; caller may override via _set_rows_key
         self.setObjectName("fileRow")
+        self.setFocusPolicy(Qt.StrongFocus)
         self._active = False
         self._drag_start = None
 
@@ -90,6 +93,8 @@ class _FileRow(QFrame):
             full_name = getattr(fd, "filename", "") or getattr(fd, "short_name", "")
         self._lbl_name = _ElidedLabel(full_name)
         self._lbl_name.setObjectName("fileRowName")
+        self._lbl_name.setFocusPolicy(Qt.NoFocus)
+        self.setAccessibleName(full_name)
         top.addWidget(self._lbl_name, stretch=1)
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) on the file-row
         # close button. The icon stays 16x16 but the outer chrome was
@@ -102,6 +107,7 @@ class _FileRow(QFrame):
         self._btn_close.setAccessibleName("关闭文件")
         self._btn_close.setProperty("role", "icon")
         self._btn_close.setAutoRaise(True)
+        self._btn_close.setFocusPolicy(Qt.StrongFocus)
         self._btn_close.clicked.connect(
             lambda: self.close_requested.emit(self._rows_key)
         )
@@ -109,6 +115,7 @@ class _FileRow(QFrame):
         lay.addLayout(top)
         self._lbl_meta = QLabel("")
         self._lbl_meta.setObjectName("fileRowMeta")
+        self._lbl_meta.setFocusPolicy(Qt.NoFocus)
         lay.addWidget(self._lbl_meta)
         outer.addLayout(lay, stretch=1)
         self._refresh_meta()
@@ -188,6 +195,38 @@ class _FileRow(QFrame):
             json.dumps([str(fid) for fid in self._fids]).encode("utf-8"),
         )
         return mime
+
+    def keyPressEvent(self, event):  # noqa: N802
+        key = event.key()
+        mods = event.modifiers()
+        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.activated.emit(self.fid)
+            event.accept()
+            return
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            self.close_requested.emit(self._rows_key)
+            event.accept()
+            return
+        if (mods & Qt.AltModifier) and key in (Qt.Key_Up, Qt.Key_Down):
+            direction = "up" if key == Qt.Key_Up else "down"
+            self.reorder_requested.emit(self._rows_key, direction)
+            event.accept()
+            return
+        if key in (Qt.Key_Up, Qt.Key_Down) and not (mods & Qt.AltModifier):
+            delta = -1 if key == Qt.Key_Up else 1
+            self._move_neighbor_focus(delta)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _move_neighbor_focus(self, delta):
+        nav = self.parent()
+        while nav is not None:
+            move = getattr(nav, "_move_file_row_focus", None)
+            if callable(move):
+                move(self._rows_key, delta)
+                return
+            nav = nav.parent()
 
     def set_active(self, active):
         self._active = active
@@ -411,6 +450,7 @@ class FileNavigator(QWidget):
                 row._set_rows_key(fp_str)
                 row.activated.connect(self._activate)
                 row.close_requested.connect(self._request_close_group)
+                row.reorder_requested.connect(self._on_row_reorder_requested)
                 insert_pos = self._file_layout.count() - 1  # before the stretch
                 self._file_layout.insertWidget(insert_pos, row)
                 self._rows[fp_str] = row
@@ -421,6 +461,7 @@ class FileNavigator(QWidget):
             row._set_rows_key(fid)
             row.activated.connect(self._activate)
             row.close_requested.connect(self._request_close_group)
+            row.reorder_requested.connect(self._on_row_reorder_requested)
             insert_pos = self._file_layout.count() - 1  # before the stretch
             self._file_layout.insertWidget(insert_pos, row)
             self._rows[fid] = row
@@ -540,6 +581,44 @@ class FileNavigator(QWidget):
         if self._file_order_is_noop(source_fids, target_fids, placement):
             return
         self.file_order_requested.emit(source_fids, target_fids, placement)
+
+    def _on_row_reorder_requested(self, rows_key, direction):
+        """Alt+Up/Down keyboard equivalent of file-card drag reorder."""
+        if direction not in ("up", "down"):
+            return
+        rows = self._ordered_file_rows()
+        row = self._rows.get(rows_key)
+        if row is None:
+            return
+        try:
+            idx = rows.index(row)
+        except ValueError:
+            return
+        neighbor_idx = idx - 1 if direction == "up" else idx + 1
+        if not (0 <= neighbor_idx < len(rows)):
+            return
+        neighbor = rows[neighbor_idx]
+        placement = (
+            _FILE_ORDER_BEFORE if direction == "up" else _FILE_ORDER_AFTER
+        )
+        source_fids = tuple(str(fid) for fid in row._fids)
+        target_fids = tuple(str(fid) for fid in neighbor._fids)
+        if self._file_order_is_noop(source_fids, target_fids, placement):
+            return
+        self.file_order_requested.emit(source_fids, target_fids, placement)
+
+    def _move_file_row_focus(self, rows_key, delta):
+        rows = self._ordered_file_rows()
+        row = self._rows.get(rows_key)
+        if row is None:
+            return
+        try:
+            idx = rows.index(row)
+        except ValueError:
+            return
+        nxt = idx + int(delta)
+        if 0 <= nxt < len(rows):
+            rows[nxt].setFocus(Qt.TabFocusReason)
 
     def _holder_pos(self, event, watched):
         pos = event.pos()

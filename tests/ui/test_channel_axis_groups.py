@@ -97,15 +97,19 @@ class TestAxisGroupModel:
 
     def test_restored_group_uses_normal_badge_and_split_action(self, qapp):
         w = MultiFileChannelWidget()
+        seen = []
+        w.axis_groups_changed.connect(lambda: seen.append(1))
         w.set_restored_axis_group_projection({
             '["f1","a"]': "window-0-axis-2",
         })
 
+        assert seen == []
         assert w.axis_group_for("f1", "a") == "window-0-axis-2"
         assert w._axis_group_menu_plan([("f1", "a")]) == (False, True)
 
         w.split_axis_group([("f1", "a")])
 
+        assert seen == [1]
         assert w.axis_group_for("f1", "a") is None
         assert w.restored_axis_group_projection() == {}
 

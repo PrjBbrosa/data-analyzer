@@ -218,6 +218,22 @@ def _own_chartstacks(qapp, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _auto_discard_unsaved_project_on_close(monkeypatch):
+    """Shown MainWindow teardown must not block on the Save/Discard/Cancel box.
+
+    Instance-level monkeypatches in dirty-guard tests still win. Unshown
+    windows skip the prompt in closeEvent; this covers ``mw.show()`` cases.
+    """
+    from mf4_analyzer.ui.main_window._project_io_mixin import ProjectIOMixin
+
+    monkeypatch.setattr(
+        ProjectIOMixin,
+        "_prompt_unsaved_project",
+        lambda self: "discard",
+    )
+
+
+@pytest.fixture(autouse=True)
 def _collect_mpl_cycles_between_tests():
     # matplotlib Figure/FigureCanvasQTAgg hold strong reference cycles
     # (figure.canvas <-> canvas.figure plus mpl_connect lambdas capturing

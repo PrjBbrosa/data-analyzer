@@ -550,6 +550,9 @@ class AnalysisMixin:
         params_getter = getattr(ctx, 'current_params', ctx.get_params)
         state = mgr.get(mgr.active)
         state.params = dict(params_getter())
+        holder = getattr(self, "_project_dirty", None)
+        if holder is not None:
+            holder.mark_user_mutation()
         return state
 
     def _on_analysis_compute_params_changed(self, section, _params):
@@ -598,6 +601,9 @@ class AnalysisMixin:
         state = mgr.get(idx)
         page = self._analysis_page(section)
         self._applying_analysis_view = True
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is not None:
+            dirty.begin_restore()
         try:
             # 1. Align the pane structure to the view (1 or 2 panes).
             if len(state.panes) == 2 and page.pane_count() == 1:
@@ -633,6 +639,8 @@ class AnalysisMixin:
             self._apply_analysis_overlay(section, state)
         finally:
             self._applying_analysis_view = False
+            if dirty is not None:
+                dirty.end_restore()
         # 5. Render from cache only (spec §4: switching never auto-computes).
         if render:
             self._render_analysis_view_from_cache(section, state)
@@ -692,6 +700,9 @@ class AnalysisMixin:
         mgr = self.analysis_managers[section]
         state = mgr.get(mgr.active)
         state.compare[key] = bool(on)
+        holder = getattr(self, "_project_dirty", None)
+        if holder is not None:
+            holder.mark_user_mutation()
 
     def _on_analysis_levels_dragged(self, section, pane_idx, lo, hi):
         """User dragged a heatmap colorbar → echo (lo, hi) into the inspector

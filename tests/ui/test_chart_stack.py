@@ -1145,8 +1145,8 @@ def test_chart_nav_actions_have_chart_area_shortcuts(qapp, qtbot):
 
     expected = {
         "home": "Ctrl+R",
-        "back": "Ctrl+Z",
-        "forward": "Ctrl+Shift+Z",
+        "back": "Alt+Left",
+        "forward": "Alt+Right",
         "pan": "Ctrl+G",
         "zoom": "Ctrl+B",
     }

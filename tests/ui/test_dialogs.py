@@ -716,3 +716,125 @@ def test_chart_options_log_axis_positive_range_ok_button_accepts(qapp, monkeypat
     assert dlg.result() == QDialog.Accepted, (
         f"dialog must be accepted on valid log range, got result={dlg.result()}"
     )
+
+
+def _assert_unique_default(dialog, confirm):
+    from PyQt5.QtWidgets import QPushButton
+
+    defaults = [btn for btn in dialog.findChildren(QPushButton) if btn.isDefault()]
+    assert defaults == [confirm], (
+        f"expected unique default {confirm.text()!r}, got "
+        f"{[btn.text() for btn in defaults]}"
+    )
+    for btn in dialog.findChildren(QPushButton):
+        if btn is confirm:
+            continue
+        assert btn.autoDefault() is False, (
+            f"{btn.text()!r} must not be autoDefault when {confirm.text()!r} is default"
+        )
+
+
+def test_channel_editor_has_one_explicit_confirm_default(qapp, tmp_path):
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+
+    dlg = ChannelEditorDialog(None, _channel_editor_files(tmp_path), "f0")
+    _assert_unique_default(dlg, dlg.btn_ok)
+
+
+def test_chart_options_has_one_explicit_ok_default(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
+    _assert_unique_default(dlg, dlg.btn_ok)
+    assert dlg.btn_curve_color.autoDefault() is False
+
+
+def test_validation_failure_keeps_dialog_open_and_focuses_first_error(
+    qapp, qtbot, monkeypatch
+):
+    from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_handle_with_one_curve(qapp)
+    qtbot.addWidget(canvas)
+    dlg = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dlg)
+    dlg.combo_y_scale.setCurrentText("对数")
+    dlg.chk_y_auto.setChecked(False)
+    dlg.spin_y_min.setValue(-1.0)
+    dlg.spin_y_max.setValue(10.0)
+    dlg.show()
+    qtbot.waitExposed(dlg)
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.dialogs.QMessageBox.warning",
+        staticmethod(lambda *args, **kwargs: QMessageBox.Ok),
+    )
+    dlg._accept_with_apply()
+    qapp.processEvents()
+
+    assert dlg.isVisible()
+    assert dlg.result() != QDialog.Accepted
+    assert "y" in dlg._invalid_axes
+    focus = QApplication.focusWidget()
+    assert focus is dlg.spin_y_min or dlg.spin_y_min.isAncestorOf(focus)
+
+
+def test_dangerous_confirmation_escape_and_return_are_safe(
+    qapp, qtbot, tmp_path, monkeypatch
+):
+    from PyQt5.QtCore import QTimer, Qt
+    from PyQt5.QtWidgets import QMessageBox as _QMessageBox
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+    from mf4_analyzer.ui.dialogs import channel_editor as channel_editor_mod
+
+    dlg = ChannelEditorDialog(None, _channel_editor_files(tmp_path), "f0")
+    qtbot.addWidget(dlg)
+    dlg.show()
+    qtbot.waitExposed(dlg)
+    dlg._create_single()
+    created = dict(dlg.new_channels)
+    assert created
+    for item in dlg._iter_export_items():
+        if item.text() in created:
+            item.setCheckState(Qt.Checked)
+
+    seen = {}
+
+    def fake_question(
+        parent,
+        title,
+        text,
+        buttons=_QMessageBox.Yes | _QMessageBox.No,
+        defaultButton=_QMessageBox.NoButton,
+    ):
+        box = _QMessageBox(parent)
+        box.setIcon(_QMessageBox.Question)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setStandardButtons(buttons)
+        box.setDefaultButton(defaultButton)
+
+        def _inspect_and_return():
+            yes = box.button(_QMessageBox.Yes)
+            no = box.button(_QMessageBox.No)
+            seen["yes_is_default"] = bool(yes is not None and yes.isDefault())
+            seen["no_is_default"] = bool(no is not None and no.isDefault())
+            qtbot.keyClick(box, Qt.Key_Return)
+
+        QTimer.singleShot(0, _inspect_and_return)
+        result = box.exec_()
+        box.hide()
+        box.setParent(None)
+        box.deleteLater()
+        qapp.processEvents()
+        return result
+
+    monkeypatch.setattr(channel_editor_mod.QMessageBox, "question", fake_question)
+    dlg.btn_delete.click()
+    qapp.processEvents()
+
+    assert seen.get("no_is_default")
+    assert not seen.get("yes_is_default")
+    assert dlg.new_channels == created

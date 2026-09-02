@@ -108,7 +108,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("BLF / CANoe ASC 报文解码", sub="选择 DBC；界面会标注「完整匹配」或「抽样解码」。ASC 进度只增不减。"),
             QuickRow(
                 "把文件加入当前 View",
-                sub="上方是全局已打开，下方是当前 View；打开后拖入才能画图或分析。",
+                sub="上方是全局已打开，下方是当前 View；打开后拖入才能画图或分析。Enter/Space 激活当前行，F2 重命名。",
                 gesture="从文件列表拖到通道树",
             ),
             QuickRow(
@@ -118,12 +118,12 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "保存会话",
-                sub="主按钮保存当前工程；箭头展开另存为",
+                sub="主按钮保存当前工程；箭头展开另存为。有未保存更改时可保存、不保存或取消。",
                 gesture="工具栏「保存」",
             ),
             QuickRow(
                 "操作速查",
-                sub="底栏默认只留问号；滚动文字提示可在本面板打开「底部提示」",
+                sub="底栏默认只留问号；滚动文字提示可在本面板打开「底部提示」。Esc 先清空搜索，再按一次关闭。",
                 gesture="底栏「?」或键盘 ?",
             ),
             QuickRow("软件说明书", gesture="状态栏右侧书本图标"),
@@ -219,14 +219,18 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="X 轴回到图面已绘通道的最长全程，不是全局最长文件；不勾选过滤",
                 gesture="Inspector「全部」",
             ),
-            QuickRow("后退 / 前进视图", keys=(_sc("back"),)),
+            QuickRow(
+                "视角后退 / 前进",
+                keys=(_sc("back"), _sc("forward")),
+                sub="Alt+Left / Alt+Right：视角后退 / 前进；Ctrl/Cmd+Z 保留给编辑撤销。",
+            ),
             QuickRow(
                 "时域 View",
                 sub="最多 24 个；窄窗口先显示编号，悬停看全名；用「»」展开全部 View，面板内 × 直接关且保持打开，关闭其他/全部会确认",
             ),
             QuickRow(
                 "View 标签关闭",
-                sub="悬停色标出现 ×，只关这一项并会确认；名称区仍用于切换和双击重命名。面板内 × 直接关闭。至少保留一个 View；关闭其他保留当前，关闭全部后留下一个空白 View。",
+                sub="悬停色标出现 ×，只关这一项并会确认；名称区仍用于切换和双击重命名，F2 也可重命名。面板内 × 直接关闭。至少保留一个 View；关闭其他保留当前，关闭全部后留下一个空白 View。",
             ),
             QuickRow(
                 "图表角落的质量小圆点",
@@ -253,9 +257,18 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow("复位主视图", keys=(_sc("home"),)),
             QuickRow(
+                "撤销 / 重做",
+                sub="只作用于当前编辑区域（标注 / 总览）；无历史时不回退图表。Ctrl/Cmd+Z 保留给编辑撤销。",
+            ),
+            QuickRow(
                 "切换当前分区 View",
                 keys=("Alt+1…9",),
                 sub="第 10–24 个走标签栏或 » 溢出菜单",
+            ),
+            QuickRow(
+                "重命名当前行",
+                keys=("F2",),
+                sub="View、配置或列表中的当前可编辑行",
             ),
             QuickRow("顶部按钮的快捷键", sub="悬停按钮即显示"),
             QuickRow(
@@ -268,7 +281,12 @@ QUICKREF: Tuple[QuickGroup, ...] = (
     QuickGroup(
         title="通道树（左侧）",
         rows=(
-            QuickRow("绘制 / 取消通道", gesture="勾选复选框"),
+            QuickRow(
+                "绘制 / 取消通道",
+                sub="鼠标勾选仍可用；Enter/Space 切换当前行。",
+                keys=("Enter", "Space"),
+                gesture="勾选复选框",
+            ),
             QuickRow(
                 "WinWert 原始辅助线",
                 sub="所属文件下的 WinWert 原始记录；眼睛只隐藏当前时域 View 的辅助线，不改普通通道或源文件；关闭/移除后同步消失。",
@@ -276,7 +294,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "调整文件 / 通道顺序",
-                sub="拖文件卡片或通道树文件根节点排整个文件块；拖通道只改同源顺序。分屏/叠加跟左侧顺序，画布内不能拖行。",
+                sub="拖文件卡片或通道树文件根节点排整个文件块；拖通道只改同源顺序。Alt+Up/Down 亦可调文件顺序。分屏/叠加跟左侧顺序，画布内不能拖行。",
                 gesture="左侧拖动",
             ),
             QuickRow("设为叠加图左轴", gesture="右键通道"),
@@ -603,7 +621,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "撤销 / 重做",
-                sub="移动、调整或移除可 Ctrl/Cmd+Z / Ctrl+Shift+Z；移除不删除源 View。一次智能排版或紧凑排列都可撤销。",
+                sub="只作用于当前编辑区域；无历史时不回退图表。移动、调整或移除可 Ctrl/Cmd+Z / Ctrl+Shift+Z；移除不删除源 View。一次智能排版或紧凑排列都可撤销。",
                 keys=("Ctrl+Z", "Ctrl+Shift+Z"),
             ),
             QuickRow(

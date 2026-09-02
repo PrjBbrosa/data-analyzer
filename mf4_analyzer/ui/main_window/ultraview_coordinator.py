@@ -104,6 +104,7 @@ class UltraViewCoordinator(QObject):
             page=self.page,
             preview_fit_image_size=self._preview_fit_image_size,
             on_active_board_changed=self._capture.prioritize_sidecar_queue,
+            on_semantic_mutation=self._note_board_semantic_mutation,
         )
         self._page_hooks: list[tuple[Any, Any, Any]] = []
         self._stack_hooks: list[tuple[Any, Any, Any]] = []
@@ -696,6 +697,15 @@ class UltraViewCoordinator(QObject):
 
     def _inactive(self) -> bool:
         return self._shutdown or not _alive(self)
+
+    def _note_board_semantic_mutation(self) -> None:
+        """Successful Board/history edit is persistable project intent."""
+        window = self._window
+        if window is None:
+            return
+        holder = getattr(window, "_project_dirty", None)
+        if holder is not None:
+            holder.mark_user_mutation()
 
     @property
     def _window(self):

@@ -132,8 +132,8 @@ class HintState:
 
 NAV_SHORTCUTS = {
     "home": "Ctrl+R",
-    "back": "Ctrl+Z",
-    "forward": "Ctrl+Shift+Z",
+    "back": "Alt+Left",
+    "forward": "Alt+Right",
     "pan": "Ctrl+G",
     "zoom": "Ctrl+B",
 }
@@ -309,11 +309,11 @@ _HINTS = (
     ),
     Hint(
         id="view.history",
-        text="图表可后退/前进到上一个视图（Ctrl+Z）",
+        text=f"视角后退已改为 {NAV_SHORTCUTS['back']}",
         surface="discovery",
         retire_on="view_history",
         priority=60,
-        ship="later",
+        ship="now",
     ),
     # ---- 时域 View 标签栏紧凑态 (12-View 扩容 4abd5f4, shipped 2026-07-16) ----
     # Narrowing the window flips the tab bar to dot + ordinal labels
@@ -826,7 +826,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.undo",
-        text="移动、调整或移除可用 Ctrl/Cmd+Z 撤销",
+        text="Ctrl/Cmd+Z 只撤当前编辑，不退图表",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=86,

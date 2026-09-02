@@ -65,9 +65,14 @@ class ViewMixin:
             yield
             return
         gate.enter()
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is not None:
+            dirty.begin_restore()
         try:
             yield
         finally:
+            if dirty is not None:
+                dirty.end_restore()
             gate.leave()
             if not gate.busy:
                 self._schedule_pending_view_switch()
@@ -280,12 +285,17 @@ class ViewMixin:
         canvas = self._canvas_for_view_index(idx) or self.canvas_time
         old_applying_view = getattr(self, '_applying_view', False)
         self._applying_view = True
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is not None:
+            dirty.begin_restore()
         try:
             self._view_bridge.apply_controls_from_state(
                 self.view_manager.get(idx), self, canvas
             )
         finally:
             self._applying_view = old_applying_view
+            if dirty is not None:
+                dirty.end_restore()
         # Analysis pickers follow each analysis View's own attachments
         # (Stage 1 source isolation). Time View projection must not rebuild
         # analysis candidates — that would re-couple the two scopes.
@@ -559,6 +569,9 @@ class ViewMixin:
         restore_idx = self._focused_view_idx
         old_applying_view = getattr(self, '_applying_view', False)
         self._applying_view = True
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is not None:
+            dirty.begin_restore()
         rendered = None
         try:
             self._view_bridge.apply_controls_from_state(state, self, canvas)
@@ -611,6 +624,8 @@ class ViewMixin:
                 self._sync_record_curve_tree(state)
         finally:
             self._applying_view = old_applying_view
+            if dirty is not None:
+                dirty.end_restore()
             # F8: secondary-pane restore must not project time controls while
             # an analysis section owns the shared navigator.
             if (

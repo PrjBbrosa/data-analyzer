@@ -234,6 +234,18 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
     assert nxt is None or nxt.id != "chart.custom_action_slot"
 
 
+def test_view_history_hint_migrates_camera_off_ctrl_z():
+    hint = next(h for h in hints.all_hints() if h.id == "view.history")
+    back = hints.NAV_SHORTCUTS["back"]
+    assert hint.ship == "now"
+    assert "视角后退已改为" in hint.text
+    assert back in hint.text
+    assert "图表可后退" not in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+    assert back != "Ctrl+Z"
+    assert hints.NAV_SHORTCUTS["forward"] != "Ctrl+Shift+Z"
+
+
 def test_shortcut_tooltip_returns_exact_registered_key():
     assert hints.shortcut_tooltip("pan") == "Ctrl+G"
     assert hints.shortcut_tooltip("btn_overlay") == "Ctrl+2"
@@ -670,6 +682,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "右键拖" in by_id["ultraview.pan"].text
     assert "不删" in by_id["ultraview.remove"].text
     assert "Ctrl/Cmd+Z" in by_id["ultraview.undo"].text
+    assert "当前编辑" in by_id["ultraview.undo"].text
+    assert "不退图表" in by_id["ultraview.undo"].text
     assert "空白" in by_id["ultraview.board_menu"].text
     assert "智能排版" in by_id["ultraview.board_menu"].text
     assert "紧凑排列" in by_id["ultraview.board_menu"].text

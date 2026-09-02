@@ -416,6 +416,28 @@ def test_published_guide_removes_hidden_controls_and_explains_frf_range():
     assert "使用选定时间范围" in text
 
 
+def test_cheat_sheet_matches_runtime_desktop_shortcuts():
+    cheat = next(slide for slide in _deck_data()["slides"] if slide.get("id") == "cheat")
+    blob = json.dumps(cheat, ensure_ascii=False)
+    for phrase in (
+        "Alt+Left",
+        "Alt+Right",
+        "视角后退",
+        "Ctrl/Cmd+Z 保留给编辑撤销",
+        "视角后退已改为 Alt+Left",
+        "Esc 先清空搜索",
+        "有未保存更改时可保存、不保存或取消",
+        "Enter / Space",
+        "F2",
+        "Alt+Up/Down",
+    ):
+        assert phrase in blob, f"cheat sheet missing {phrase!r}"
+    project = next(slide for slide in _deck_data()["slides"] if slide.get("id") == "project")
+    project_blob = json.dumps(project, ensure_ascii=False)
+    assert "有未保存更改时可保存、不保存或取消" in project_blob
+    assert "全局撤销栈" not in project_blob
+
+
 def test_ultraview_p3_surfaces_drop_alt_drag_copy():
     """UV-P3-A15: product hints / quickref / help must not keep Alt+拖."""
     root = Path(__file__).resolve().parents[1]

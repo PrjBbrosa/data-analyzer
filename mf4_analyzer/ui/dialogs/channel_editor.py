@@ -23,13 +23,14 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 
 from ...signal import ChannelMath
 from ...signal.expression import ExpressionError
 from ...signal.expression import evaluate as eval_expression
 from ...signal.expression import normalize as normalize_expression
 from ...signal.expression import referenced_names as expression_names
+from ...ui_kit.dialog_button_defaults import set_unique_default_button
 from ...ui_kit.widgets import SearchField
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..expression_help import (
@@ -213,7 +214,6 @@ class ChannelEditorDialog(QDialog):
         self.edit_expr.setObjectName("channelExprEdit")
         self.edit_expr.setPlaceholderText("例: sqrt(A^2 + B^2) * 0.5")
         self.edit_expr.setToolTip(EXPR_TOOLTIP)
-        self.edit_expr.returnPressed.connect(self._create_dual)
         self.edit_expr.setMinimumWidth(self.INPUT_WIDTH - 24)
         self.edit_expr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         erl.addWidget(self.edit_expr, 1)
@@ -379,8 +379,26 @@ class ChannelEditorDialog(QDialog):
         ft.addWidget(self.btn_ok)
         root.addWidget(footer)
 
+        self.edit_expr.installEventFilter(self)
+        self.export_search.installEventFilter(self)
+        set_unique_default_button(self.btn_ok, self)
+
         self._populate_channels()
         QTimer.singleShot(0, self._sync_file_bar_right_edge)
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if event.type() == QEvent.KeyPress and event.key() in (
+            Qt.Key_Return,
+            Qt.Key_Enter,
+        ):
+            if obj is self.edit_expr:
+                self._create_dual()
+                event.accept()
+                return True
+            if obj is self.export_search:
+                event.accept()
+                return True
+        return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -819,6 +837,7 @@ class ChannelEditorDialog(QDialog):
         if QMessageBox.question(
             self, "确认", f"删除 {len(sel)} 通道?",
             QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         ) != QMessageBox.Yes:
             return
         self.removed_channels.update(sel)

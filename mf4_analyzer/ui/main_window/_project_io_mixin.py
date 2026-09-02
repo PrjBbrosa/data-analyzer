@@ -82,6 +82,99 @@ class ProjectIOMixin:
     #: attribute so the guard has exactly one owning file (spec D-E2).
     _restoring_project = False
 
+    def _note_user_project_mutation(self, token=None):
+        """Publish one persistable user mutation. No-op while restoring."""
+        holder = getattr(self, "_project_dirty", None)
+        if holder is None:
+            return False
+        return holder.mark_user_mutation(token)
+
+    def _on_project_semantic_views_changed(self):
+        self._note_user_project_mutation()
+
+    def _on_project_filter_changed(self):
+        self._note_user_project_mutation()
+
+    def _project_session_is_dirty(self):
+        holder = getattr(self, "_project_dirty", None)
+        if holder is None:
+            return False
+        digest = None
+        if not holder.is_dirty and holder.saved_digest is not None:
+            try:
+                digest = self._canonical_session_digest()
+            except Exception:
+                return True
+        return holder.session_needs_guard(digest)
+
+    def _canonical_session_digest(self):
+        """Canonical payload hash at a leave decision. Not for paint/replot."""
+        from .. import project_io as pio
+        holder = getattr(self, "_project_dirty", None)
+        path = getattr(self, "_project_path", None)
+        if path is None and holder is not None:
+            path = holder.path
+        if path is None:
+            return None
+        doc = self._assemble_project_document(path)
+        return pio.canonical_project_digest(doc)
+
+    def _unsaved_project_prompt_buttons(self):
+        """Build the shared Save / Don't Save / Cancel box. Does not exec."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("未保存的项目")
+        box.setText("项目有未保存的更改。是否保存？")
+        save_btn = box.addButton("保存", QMessageBox.AcceptRole)
+        discard_btn = box.addButton("不保存", QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(save_btn)
+        box.setEscapeButton(cancel_btn)
+        fit_message_box_buttons_to_text(box)
+        return box, save_btn, discard_btn, cancel_btn
+
+    def _prompt_unsaved_project(self):
+        """Return ``'save'``, ``'discard'``, or ``'cancel'``."""
+        box, save_btn, discard_btn, _cancel_btn = (
+            self._unsaved_project_prompt_buttons()
+        )
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is save_btn:
+            return "save"
+        if clicked is discard_btn:
+            return "discard"
+        return "cancel"
+
+    def confirm_leave_unsaved_project(self):
+        """Shared Save / Don't Save / Cancel guard. Does not destroy the window."""
+        from .project_dirty import DirtyGuardResult
+
+        holder = getattr(self, "_project_dirty", None)
+        if holder is not None and holder.guard_open:
+            return DirtyGuardResult.CANCELLED
+        if not self._project_session_is_dirty():
+            return DirtyGuardResult.PROCEED_DISCARDED
+        if holder is not None:
+            holder.guard_open = True
+        try:
+            choice = self._prompt_unsaved_project()
+            if choice == "save":
+                try:
+                    ok = bool(self.save_project_via_dialog())
+                except (OSError, TypeError, ValueError):
+                    logger.exception("unsaved-project save failed")
+                    ok = False
+                if ok:
+                    return DirtyGuardResult.PROCEED_SAVED
+                return DirtyGuardResult.CANCELLED
+            if choice == "discard":
+                return DirtyGuardResult.PROCEED_DISCARDED
+            return DirtyGuardResult.CANCELLED
+        finally:
+            if holder is not None:
+                holder.guard_open = False
+
     def open_files_or_project(self):
         """统一打开入口：文件对话框同时接受数据文件和 .tlproj。"""
         import sys as _sys
@@ -106,14 +199,10 @@ class ProjectIOMixin:
             return
 
         if projects:
-            if self.files:
-                resp = QMessageBox.question(
-                    self, "打开项目",
-                    f"打开项目将关闭当前 {len(self.files)} 个文件，是否继续？",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-                )
-                if resp != QMessageBox.Yes:
-                    return
+            from .project_dirty import DirtyGuardResult
+            result = self.confirm_leave_unsaved_project()
+            if result is DirtyGuardResult.CANCELLED:
+                return
             self.open_project(projects[0])
             self._open_data_paths(data_files)
             return
@@ -352,9 +441,8 @@ class ProjectIOMixin:
         """「保存」handler: overwrite the current .tlproj if one is open,
         otherwise fall back to Save-As."""
         if self._project_path is not None:
-            self.save_project(self._project_path)
-            return
-        self.save_project_as_via_dialog()
+            return bool(self.save_project(self._project_path))
+        return bool(self.save_project_as_via_dialog())
 
     def save_project_as_via_dialog(self):
         """「另存为」handler: always prompt for a new .tlproj path."""
@@ -363,10 +451,10 @@ class ProjectIOMixin:
         start = str(self._project_path) if self._project_path is not None else ""
         fp, _ = QFileDialog.getSaveFileName(self, "另存为项目", start, "TraceLab 项目 (*.tlproj)")
         if not fp:
-            return
+            return False
         if not fp.lower().endswith(".tlproj"):
             fp = fp + ".tlproj"
-        self.save_project(Path(fp))
+        return bool(self.save_project(Path(fp)))
 
     def _confirm_degraded_project_save(self, health):
         """Confirm overwrite/save-as after a degraded project restore.
@@ -492,6 +580,7 @@ class ProjectIOMixin:
             self.inspector.top.set_range_limits(0, new_hi)
             if len(self.files) == 1:
                 self.inspector.top.spin_end.setValue(fd.time_array[-1])
+        self._note_user_project_mutation()
         return fd
 
     def _toast_io_load_diagnostics(self, *source_metadatas):
@@ -1735,6 +1824,7 @@ class ProjectIOMixin:
         del self.files[fid]
         self.navigator_order.remove_fid(fid)
         self.navigator.remove_file(fid, emit=False)
+        self._note_user_project_mutation()
         return name
 
     def _ultraview_time_view_ids_to_preserve(self):
@@ -1992,6 +2082,46 @@ class ProjectIOMixin:
             self._capture_active_analysis_view(
                 sec, capture_sources=(sec == current_mode))
 
+        doc = self._assemble_project_document(path, saved_mode=saved_mode)
+        # Preview pixels are an optional acceleration layer.  Publish the
+        # complete sidecar before atomically replacing the authoritative JSON;
+        # on failure, keep semantic Board state saveable and surface it.
+        sidecar_warnings = []
+        uv = getattr(self, "_ultraview", None)
+        if uv is not None:
+            sidecar_warnings = uv.save_preview_sidecar(path)
+            doc.ultraview = uv.to_project_payload()
+        self._write_project_document(doc, path)
+        self._project_path = path
+        if health is not None:
+            health.clear()
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is not None:
+            dirty.mark_saved(path, digest=pio.canonical_project_digest(doc))
+        self.statusBar.showMessage(f"已保存项目: {path.name}")
+        self.toast("已保存项目", "success")
+        if sidecar_warnings:
+            self.toast("项目已保存，预览未保存", "warning")
+        return True
+
+    def _assemble_project_document(self, path, saved_mode=None):
+        """Build the save-path ``ProjectDocument`` without writing it.
+
+        Used by ``save_project`` and by the leave-guard digest. Does not
+        capture live inspector/canvas state; callers that persist must flush
+        first. Guard-time digest skips that capture so Cancel is zero mutation.
+        """
+        from pathlib import Path
+        from .. import project_io as pio
+
+        path = Path(path)
+        if saved_mode is None:
+            current_mode = self.chart_stack.current_mode()
+            if current_mode in self.analysis_managers or current_mode == "time":
+                saved_mode = current_mode
+            else:
+                saved_mode = "time"
+        uv = getattr(self, "_ultraview", None)
         file_refs = []
         ordered_fids = [
             fid for fid in self.navigator_order.file_fids() if fid in self.files
@@ -2023,7 +2153,7 @@ class ProjectIOMixin:
                 for host, src in self.view_manager._split_pairs.items()
             },
         }
-        doc = pio.ProjectDocument(
+        return pio.ProjectDocument(
             active_file=self._active,
             current_mode=saved_mode,
             files=file_refs,
@@ -2039,22 +2169,6 @@ class ProjectIOMixin:
             filter=self._project_filter_payload(),
             ultraview=None if uv is None else uv.to_project_payload(),
         )
-        # Preview pixels are an optional acceleration layer.  Publish the
-        # complete sidecar before atomically replacing the authoritative JSON;
-        # on failure, keep semantic Board state saveable and surface it.
-        sidecar_warnings = []
-        if uv is not None:
-            sidecar_warnings = uv.save_preview_sidecar(path)
-            doc.ultraview = uv.to_project_payload()
-        self._write_project_document(doc, path)
-        self._project_path = path
-        if health is not None:
-            health.clear()
-        self.statusBar.showMessage(f"已保存项目: {path.name}")
-        self.toast("已保存项目", "success")
-        if sidecar_warnings:
-            self.toast("项目已保存，预览未保存", "warning")
-        return True
 
     def _restore_project_file_refs(self, doc, path, pio):
         from ._state_holders import ProjectFileRestoreResult
@@ -2114,12 +2228,22 @@ class ProjectIOMixin:
         files (skipping missing ones), reinstall saved Views with fids remapped
         to freshly minted ids, and select the saved active file / mode."""
         from pathlib import Path
-        from PyQt5.QtWidgets import QMessageBox
         from .. import project_io as pio
-        from ..view_state import ViewState
         path = Path(path)
 
         doc = pio.load_project_from_json(path)
+        dirty = getattr(self, "_project_dirty", None)
+        if dirty is not None:
+            dirty.begin_restore()
+        try:
+            self._open_project_restoring(doc, path, pio, dirty)
+        finally:
+            if dirty is not None:
+                dirty.end_restore()
+
+    def _open_project_restoring(self, doc, path, pio, dirty):
+        from PyQt5.QtWidgets import QMessageBox
+        from ..view_state import ViewState
         # Hold the restore guard across close_all so the empty-workspace
         # session reset does not collapse Views that the project is about
         # to reinstall. Auto-attach stays suppressed for the file-ref
@@ -2264,6 +2388,8 @@ class ProjectIOMixin:
             # hiccup doesn't leave 保存项目 prompting Save-As for an
             # already-open project.
             self._project_path = path
+            if dirty is not None:
+                dirty.mark_saved(path)
 
             try:
                 self._apply_active_view(self.view_manager.active)

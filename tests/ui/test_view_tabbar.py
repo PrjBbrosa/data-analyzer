@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QEvent, QObject, QPoint, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QPoint, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QHoverEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
@@ -24,6 +24,8 @@ from mf4_analyzer.ui.view_state import (
 from mf4_analyzer.ui.view_tabbar import (
     ViewTabBar,
     _tab_close_pixmap,
+    tab_close_hit_rect,
+    tab_close_visual_rect,
     tab_icon_slot_rect,
 )
 from mf4_analyzer.ui.widgets.view_overflow_popup import (
@@ -1179,13 +1181,14 @@ def _geometry_snapshot(bar):
         "tab_rects": [tabs.tabRect(i) for i in range(tabs.count())],
         "size_hint": tabs.sizeHint(),
         "icon_slots": [tab_icon_slot_rect(tabs, i) for i in range(tabs.count())],
+        "close_targets": [tab_close_hit_rect(tabs, i) for i in range(tabs.count())],
         "rail": bar.width(),
         "tabs_max": tabs.maximumWidth(),
     }
 
 
 def _hover_icon_slot(tabs, idx):
-    slot = tab_icon_slot_rect(tabs, idx)
+    slot = tab_close_hit_rect(tabs, idx)
     QApplication.sendEvent(
         tabs,
         QHoverEvent(QEvent.HoverMove, slot.center(), slot.center()),
@@ -1223,7 +1226,7 @@ def test_close_slot_click_emits_delete_once_without_switch_or_rename(qtbot):
     _manager, bar = _shown_bar(qtbot, count=3, active=0)
     tabs = bar.tabBar()
     deleted, switched, renamed, reordered = _signal_lists(bar)
-    slot = tab_icon_slot_rect(tabs, 1)
+    slot = tab_close_hit_rect(tabs, 1)
 
     QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
     QApplication.processEvents()
@@ -1239,7 +1242,7 @@ def test_close_slot_double_click_never_enters_inline_rename_or_double_deletes(qt
     _manager, bar = _shown_bar(qtbot, count=3)
     tabs = bar.tabBar()
     deleted, switched, renamed, _reordered = _signal_lists(bar)
-    slot = tab_icon_slot_rect(tabs, 0)
+    slot = tab_close_hit_rect(tabs, 0)
 
     QTest.mouseDClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
     QApplication.processEvents()
@@ -1254,7 +1257,7 @@ def test_drag_from_close_slot_cancels_without_reorder(qtbot):
     _manager, bar = _shown_bar(qtbot, count=3)
     tabs = bar.tabBar()
     deleted, switched, _renamed, reordered = _signal_lists(bar)
-    slot = tab_icon_slot_rect(tabs, 1)
+    slot = tab_close_hit_rect(tabs, 1)
     outside = tabs.tabRect(1).center()
 
     QTest.mousePress(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
@@ -1275,7 +1278,7 @@ def test_tab_body_click_and_double_click_keep_existing_switch_and_rename_routes(
     tabs = bar.tabBar()
     deleted, switched, renamed, _reordered = _signal_lists(bar)
     body = _tab_point(bar, 1)
-    slot = tab_icon_slot_rect(tabs, 1)
+    slot = tab_close_hit_rect(tabs, 1)
     assert not slot.contains(body)
 
     QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, body)
@@ -1307,7 +1310,7 @@ def test_right_click_on_swatch_keeps_existing_context_menu(qtbot, monkeypatch):
     assert "删除" in labels
 
 
-def test_close_ink_is_centered_in_the_existing_icon_slot_at_each_dpr():
+def test_close_ink_is_centered_in_the_square_at_each_dpr():
     for dpr in (1.0, 2.0):
         pixmap = _tab_close_pixmap(dpr)
         image = pixmap.toImage()
@@ -1324,8 +1327,98 @@ def test_close_ink_is_centered_in_the_existing_icon_slot_at_each_dpr():
         assert xs and ys
         cx = (min(xs) + max(xs)) / 2 / dpr
         cy = (min(ys) + max(ys)) / 2 / dpr
-        assert abs(cx - 6.0) <= 0.5
-        assert abs(cy - 6.0) <= 0.5
+        assert abs(cx - 9.0) <= 0.5
+        assert abs(cy - 9.0) <= 0.5
+
+
+def test_close_button_renders_as_a_large_square_instead_of_a_swatch_pill():
+    for dpr in (1.0, 2.0):
+        pixmap = _tab_close_pixmap(dpr)
+        image = pixmap.toImage()
+        assert pixmap.width() / dpr == 18
+        assert pixmap.height() / dpr == 18
+
+        pixels = []
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = QColor(image.pixel(x, y))
+                if color.alpha() >= 80:
+                    pixels.append((x / dpr, y / dpr))
+        assert pixels
+        width = max(x for x, _y in pixels) - min(x for x, _y in pixels) + 1 / dpr
+        height = max(y for _x, y in pixels) - min(y for _x, y in pixels) + 1 / dpr
+        assert width >= 17
+        assert height >= 17
+        assert abs(width - height) <= 0.5
+
+
+def test_close_visual_and_hit_target_share_one_center_without_growing_the_tab(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3)
+    tabs = bar.tabBar()
+    before = _geometry_snapshot(bar)
+    hit = tab_close_hit_rect(tabs, 1)
+    visual = tab_close_visual_rect(tabs, 1)
+
+    assert hit.size() == QSize(20, 20)
+    assert visual.size() == QSize(18, 18)
+    assert hit.center() == visual.center()
+    assert hit.contains(visual.topLeft())
+    assert hit.contains(visual.bottomRight())
+
+    _hover_icon_slot(tabs, 1)
+    after = _geometry_snapshot(bar)
+    assert after == before
+
+
+def test_close_hit_target_edges_work_from_every_direction(qtbot):
+    for edge in ("left", "right", "top", "bottom"):
+        _manager, bar = _shown_bar(qtbot, count=3, active=0)
+        tabs = bar.tabBar()
+        deleted, switched, renamed, reordered = _signal_lists(bar)
+        hit = tab_close_hit_rect(tabs, 1)
+        points = {
+            "left": QPoint(hit.left(), hit.center().y()),
+            "right": QPoint(hit.right(), hit.center().y()),
+            "top": QPoint(hit.center().x(), hit.top()),
+            "bottom": QPoint(hit.center().x(), hit.bottom()),
+        }
+
+        QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, points[edge])
+        QApplication.processEvents()
+
+        assert deleted == [1]
+        assert switched == []
+        assert renamed == []
+        assert reordered == []
+
+
+def test_rendered_close_square_is_fully_contained_by_the_hit_target(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3)
+    tabs = bar.tabBar()
+    hit = _hover_icon_slot(tabs, 1)
+    pixmap = tabs.grab()
+    image = pixmap.toImage()
+    dpr = pixmap.devicePixelRatioF()
+    tab = tabs.tabRect(1)
+    pixels = []
+    for y in range(round(tab.top() * dpr), round((tab.bottom() + 1) * dpr)):
+        for x in range(round(tab.left() * dpr), round((tab.right() + 1) * dpr)):
+            color = QColor(image.pixel(x, y))
+            if color.red() > 145 and color.red() > color.green() + 28:
+                pixels.append((x / dpr, y / dpr))
+
+    assert pixels
+    left = min(x for x, _y in pixels)
+    right = max(x for x, _y in pixels)
+    top = min(y for _x, y in pixels)
+    bottom = max(y for _x, y in pixels)
+    assert left >= hit.left()
+    assert right <= hit.right() + 1
+    assert top >= hit.top()
+    assert bottom <= hit.bottom() + 1
+    assert right - left >= 16
+    assert bottom - top >= 16
+    assert abs((right - left) - (bottom - top)) <= 1
 
 
 def test_single_view_keeps_swatch_and_has_no_actionable_close_slot(qtbot):
@@ -1347,7 +1440,7 @@ def test_close_slot_armed_rebuild_fails_closed(qtbot):
     manager, bar = _shown_bar(qtbot, count=3)
     tabs = bar.tabBar()
     deleted, switched, _renamed, _reordered = _signal_lists(bar)
-    slot = tab_icon_slot_rect(tabs, 1)
+    slot = tab_close_hit_rect(tabs, 1)
     QTest.mousePress(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
     manager.new_view()
     QApplication.processEvents()
@@ -1785,3 +1878,55 @@ def test_section_bars_share_the_overflow_popup(qtbot):
         assert popup.objectName() == "viewOverflowPopup"
         assert popup.findChild(QLabel, "viewOverflowTitle").text() == "全部 View"
         bar._close_overflow_popup()
+
+
+def test_ctrl_tab_cycles_current_section_views_and_f2_renames(qtbot):
+    manager, bar = _bar(qtbot, count=3, active=0)
+    bar.show()
+    QApplication.processEvents()
+    ids = [view.view_id for view in manager.views]
+    switched = []
+    bar.switch_requested.connect(switched.append)
+    tabs = bar.tabBar()
+    tabs.setFocus(Qt.TabFocusReason)
+    QApplication.processEvents()
+
+    qtbot.keyClick(tabs, Qt.Key_Tab, Qt.ControlModifier)
+    QApplication.processEvents()
+    assert switched == [1]
+    assert tabs.currentIndex() == 1
+    assert [view.view_id for view in manager.views] == ids
+
+    qtbot.keyClick(tabs, Qt.Key_Tab, Qt.ControlModifier | Qt.ShiftModifier)
+    QApplication.processEvents()
+    assert switched[-1] == 0
+    assert tabs.currentIndex() == 0
+
+    qtbot.keyClick(tabs, Qt.Key_F2)
+    QApplication.processEvents()
+    editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
+    assert editor is not None
+    assert not editor.isHidden()
+    assert editor.text() == manager.views[0].name
+    assert editor.text() == bar._view_name(0)
+
+
+def test_alt_up_down_reorders_current_view_by_stable_index(qtbot):
+    manager, bar = _bar(qtbot, count=3, active=1)
+    bar.show()
+    QApplication.processEvents()
+    ids = [view.view_id for view in manager.views]
+    bar.reorder_requested.connect(manager.reorder)
+    tabs = bar.tabBar()
+    tabs.setFocus(Qt.TabFocusReason)
+    QApplication.processEvents()
+
+    qtbot.keyClick(tabs, Qt.Key_Down, Qt.AltModifier)
+    QApplication.processEvents()
+    assert [view.view_id for view in manager.views] == [ids[0], ids[2], ids[1]]
+    assert manager.views[manager.active].view_id == ids[1]
+
+    qtbot.keyClick(tabs, Qt.Key_Up, Qt.AltModifier)
+    QApplication.processEvents()
+    assert [view.view_id for view in manager.views] == ids
+    assert manager.views[manager.active].view_id == ids[1]

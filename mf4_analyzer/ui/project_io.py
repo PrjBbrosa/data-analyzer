@@ -4,9 +4,49 @@ Reference-only: stores file *paths* (+ per-file fs/time_source overrides) and
 the full View list — never parsed data. Mirrors ``batch_preset_io.py``'s
 versioned save/load shape. Pure (no Qt, no MainWindow) so it round-trips
 through tests without a running app.
+
+Canonical dirty digest (Task 5A) hashes :func:`project_document_to_payload`,
+the same object :func:`save_project_to_json` writes. Do not maintain a
+parallel "approximate" serializer for close/replace review.
+
+Field inventory
+---------------
+Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
+
+* ``schema_version`` — codec version (currently 3); not user content.
+* ``active_file`` — navigator active fid.
+* ``current_mode`` — persisted chart mode (``time`` / analysis sections;
+  UltraView is not a source workspace and falls back to ``time`` on load).
+* ``files`` — ``ProjectFileRef`` rows: ``fid``, ``path_abs``, ``path_rel``,
+  ``fs``, ``time_source``, ``dbc_refs[{path_abs, path_rel}]``,
+  ``channel_order`` (navigator order is semantic).
+* ``views`` — TimeDomain ``ViewState.to_dict()`` rows (name, tab_color,
+  view_id, attached_file_ids, checked, hidden_channels, colors, plot_mode,
+  cursor_mode, xlim, ylims, overlay_primary, axis_opts, remarks,
+  cursor_placement, curve_bindings, hidden_curve_binding_ids). Retired WWT
+  display keys ``x_viewport_intent`` / ``native_ticks`` are stripped.
+* ``view_manager`` — ``{active, split_pairs}``.
+* ``analysis_views`` — per section ``{active, views: AnalysisViewState.to_dict()}``
+  (schema, name, tab_color, view_id, attached_file_ids, panes, params,
+  compare). Pane rows persist sources / rpm / FRF io / time_range / xlim /
+  ylim / ylims / effective_time_range / cursor_mode / remarks /
+  cursor_placement. ``PaneState.source_time_view_id`` is **not** written.
+* ``filter`` — Inspector filter panel: ``enabled``, ``spec`` (FilterSpec),
+  ``show_original``, ``show_filtered``. Absent in schema v1.
+* ``ultraview`` — ``workspace_to_payload`` Board/workspace blob (schema,
+  workspace.{active_board_id, show_card_actions, boards}, optional
+  ``preview_sidecar`` descriptor). Preview **pixels** live in a sidecar
+  file, not this JSON.
+
+Runtime-only (never in the payload; must not mark dirty): selection, focus,
+hover, popup, render/envelope cache, analysis numeric results, job progress,
+toast, QWidget/QImage objects, restore/open guards, UltraView presentation
+digest / captured preview buffers. User preferences (QSettings) are also
+outside ``.tlproj``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field, replace
@@ -19,6 +59,49 @@ from .view_overlay_state import remap_remarks
 SCHEMA_VERSION = 3
 SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3}
 _SOURCE_MODES = frozenset({"time", "fft", "fft_time", "frf", "order"})
+
+# Top-level keys of the object ``save_project_to_json`` writes. List order
+# here is documentation; digest canonicalization sorts dict keys.
+PROJECT_PAYLOAD_KEYS = (
+    "schema_version",
+    "active_file",
+    "current_mode",
+    "files",
+    "views",
+    "view_manager",
+    "analysis_views",
+    "filter",
+    "ultraview",
+)
+
+# Keys that are session/runtime and must never appear in the canonical
+# payload (top-level or nested). ``filter`` is a stable top-level project
+# field; it is intentionally absent from this set.
+PROJECT_RUNTIME_ONLY_KEYS = frozenset({
+    "selection",
+    "selected",
+    "focus",
+    "hover",
+    "popup",
+    "render_cache",
+    "envelope_cache",
+    "job_progress",
+    "toast",
+    "preview_pixels",
+    "qwidget",
+    "qimage",
+    "image",
+    "presentation",
+    "captured_digest",
+    "runtime",
+    "lru",
+    "restore_pending",
+    "opening_project",
+    "restoring_project",
+    "snapshot",
+    "left_snapshot",
+    "inspector_snapshot",
+})
 
 
 class UnsupportedProjectVersion(ValueError):
@@ -55,9 +138,13 @@ class ProjectDocument:
     ultraview: dict | None = None
 
 
-def save_project_to_json(doc: ProjectDocument, path) -> None:
-    path = Path(path)
-    payload = {
+def project_document_to_payload(doc: ProjectDocument) -> dict:
+    """Qt-free JSON object written by :func:`save_project_to_json`.
+
+    This is the canonical persistable snapshot. Dirty digest and close/replace
+    review must hash this object, not a second hand-built mapping.
+    """
+    return {
         "schema_version": SCHEMA_VERSION,
         "active_file": doc.active_file,
         "current_mode": doc.current_mode,
@@ -88,6 +175,36 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
         "filter": doc.filter,
         "ultraview": doc.ultraview,
     }
+
+
+def canonical_project_digest(source) -> str:
+    """SHA-256 of the save-path payload with dict keys sorted.
+
+    List order is semantic (file / View / channel order) and is preserved.
+    ``source`` is a :class:`ProjectDocument` or an already-built payload dict.
+    """
+    if isinstance(source, ProjectDocument):
+        payload = project_document_to_payload(source)
+    elif isinstance(source, dict):
+        payload = source
+    else:
+        raise TypeError(
+            f"canonical digest expects ProjectDocument or dict, "
+            f"not {type(source).__name__}"
+        )
+    blob = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def save_project_to_json(doc: ProjectDocument, path) -> None:
+    path = Path(path)
+    payload = project_document_to_payload(doc)
     _write_text_atomic(
         path,
         json.dumps(payload, indent=2, ensure_ascii=False),

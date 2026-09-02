@@ -455,6 +455,24 @@ class Toolbar(QWidget):
     def _emit_save_project_as(self, _checked=False):
         self.save_project_as_requested.emit()
 
+    def bind_command_actions(self, open_action, save_action, save_as_action):
+        """Route file chips through the window's command QActions.
+
+        Clicks still emit the existing ``*_requested`` signals so standalone
+        toolbar tests keep working. The window must not *also* connect those
+        signals to the same named slots — that would double-fire.
+        """
+        self.btn_add.clicked.connect(open_action.trigger)
+        self.btn_save_project.clicked.connect(save_action.trigger)
+        self.btn_save_project_as.triggered.connect(save_as_action.trigger)
+        if open_action.toolTip():
+            self.btn_add.setToolTip(open_action.toolTip())
+        if save_action.toolTip():
+            self.btn_save_project.setToolTip(save_action.toolTip())
+        if save_as_action.toolTip():
+            self.btn_save_project_as.setToolTip(save_as_action.toolTip())
+            self.btn_save_caret.setToolTip(save_as_action.toolTip())
+
     def _wire(self):
         self.btn_add.clicked.connect(self.open_requested)
         self.btn_save_project.clicked.connect(self.save_project_requested)

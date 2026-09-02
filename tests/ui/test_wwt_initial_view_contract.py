@@ -7,7 +7,11 @@ import numpy as np
 
 from mf4_analyzer.io.wwt_document import load_wwt_document
 from mf4_analyzer.ui.time_curve_bindings import bound_time_plot_rows
-from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+from mf4_analyzer.ui.time_xaxis import (
+    CHANNEL_MODE,
+    PER_SOURCE_NAME,
+    CustomXAxisSpec,
+)
 from mf4_analyzer.ui.view_state import ViewState
 from mf4_analyzer.ui.wwt_view_import import (
     build_wwt_view_proposals,
@@ -143,6 +147,44 @@ def test_channel_backed_wwt_custom_x_change_is_not_binding_pinned(
     changed = np.asarray(_ordinary_rack_row(window._build_time_plot_data().rows)[2])
     assert not np.array_equal(changed, original)
     np.testing.assert_allclose(changed, window.files[state.checked[0][0]].time_array)
+
+
+def test_mixed_initial_axis_groups_do_not_overwrite_wwt_custom_x_on_open(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """Programmatic axis-group restore must not masquerade as a user edit."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = wwt.speed_unit_alias_shared_axis(tmp_path / "mixed-axis-custom-x.wwt")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(
+        window._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
+    )
+
+    window._load_one(str(path))
+    qapp.processEvents()
+
+    state = window.view_manager.get(window.view_manager.active)
+    spec = CustomXAxisSpec.from_axis_opts(state.axis_opts.get("x_axis"))
+    assert state.axis_opts.get("channel_axis_groups")
+    assert spec.mode == CHANNEL_MODE
+    assert spec.resolver == PER_SOURCE_NAME
+    assert spec.channel == wwt.CHAN_X
+
+    result = window._build_time_plot_data()
+    assert result.issues == []
+    matched = 0
+    for row in result.rows:
+        if row[6] not in window.files or row[0] not in {
+            window.files[row[6]].get_prefixed_channel(wwt.SPEED_ALIAS_TORQUE),
+            window.files[row[6]].get_prefixed_channel(wwt.SPEED_ALIAS_STEER),
+        }:
+            continue
+        matched += 1
+        expected_x = window.files[row[6]].data[wwt.CHAN_X].to_numpy(copy=False)
+        np.testing.assert_array_equal(row[2], expected_x)
+    assert matched == 2
 
 
 def test_record_only_and_independent_xy_still_render_exact_arrays(tmp_path):

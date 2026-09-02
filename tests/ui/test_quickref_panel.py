@@ -1,10 +1,18 @@
 """Smoke + behavior tests for the QuickRefPanel widget (offscreen Qt)."""
 import pytest
 from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QLineEdit,
+    QVBoxLayout,
+)
 
 from mf4_analyzer.ui import quickref_panel as quickref_panel_module
 from mf4_analyzer.ui.quickref_panel import QuickRefPanel
 from mf4_analyzer.ui import quickref
+from mf4_analyzer.ui_kit.widgets import SearchField
 
 
 @pytest.fixture
@@ -96,6 +104,88 @@ def test_escape_hides_unpinned(panel):
     ev = QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
     panel.keyPressEvent(ev)
     assert not panel.isVisible()
+
+
+def test_search_escape_clears_before_host_close(panel, qtbot, qapp):
+    """SDI-A05: first Esc with search text clears and keeps the panel open."""
+    panel.set_pinned(True)
+    panel.show_panel()
+    qtbot.waitExposed(panel)
+    search = panel._search
+    search.setFocus(Qt.OtherFocusReason)
+    qtbot.keyClicks(search, "view")
+    qapp.processEvents()
+    assert search.text()
+    visible_before = [c.group.title for c in panel._group_cards if c.isVisible()]
+
+    qtbot.keyClick(search, Qt.Key_Escape)
+    qapp.processEvents()
+    assert panel.isVisible()
+    assert search.text() == ""
+    assert search.hasFocus() or QApplication.focusWidget() is search
+    visible_after = [c.group.title for c in panel._group_cards if c.isVisible()]
+    assert visible_after == [g.title for g in quickref.QUICKREF]
+    assert len(visible_after) >= len(visible_before)
+
+
+def test_search_second_escape_closes_and_returns_focus_to_opener(qtbot, qapp):
+    """SDI-A05: empty-search Esc closes QuickRef and restores the opener."""
+    opener = QLineEdit()
+    opener.setObjectName("quickrefOpener")
+    opener.setText("opener")
+    qtbot.addWidget(opener)
+    opener.show()
+    qtbot.waitExposed(opener)
+    opener.setFocus(Qt.OtherFocusReason)
+
+    panel = QuickRefPanel()
+    qtbot.addWidget(panel)
+    panel.set_pinned(True)
+    panel.show_panel(anchor_widget=opener)
+    qtbot.waitExposed(panel)
+    panel._search.setFocus(Qt.OtherFocusReason)
+    qtbot.keyClicks(panel._search, "view")
+    qapp.processEvents()
+
+    qtbot.keyClick(panel._search, Qt.Key_Escape)
+    qapp.processEvents()
+    assert panel.isVisible()
+    assert panel._search.text() == ""
+
+    qtbot.keyClick(panel._search, Qt.Key_Escape)
+    qapp.processEvents()
+    assert not panel.isVisible()
+    assert opener.hasFocus() or QApplication.focusWidget() is opener
+
+
+def test_search_return_does_not_click_dialog_default(qtbot, qapp):
+    """Search Enter is consumed; empty results are a no-op, not dialog accept."""
+    dialog = QDialog()
+    qtbot.addWidget(dialog)
+    layout = QVBoxLayout(dialog)
+    field = SearchField("搜索操作…")
+    layout.addWidget(field)
+    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    ok = buttons.button(QDialogButtonBox.Ok)
+    ok.setDefault(True)
+    ok.setAutoDefault(True)
+    buttons.accepted.connect(dialog.accept)
+    layout.addWidget(buttons)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    field.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+
+    qtbot.keyClick(field, Qt.Key_Return)
+    qapp.processEvents()
+    assert dialog.isVisible()
+    assert dialog.result() != QDialog.Accepted
+
+    field.setText("no-such-match")
+    qtbot.keyClick(field, Qt.Key_Enter)
+    qapp.processEvents()
+    assert dialog.isVisible()
+    assert dialog.result() != QDialog.Accepted
 
 
 def test_footer_open_guide_callback(qtbot):

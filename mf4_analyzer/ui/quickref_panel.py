@@ -23,7 +23,7 @@ the RebuildTimePopover (``QFrame#PopoverSurface``).
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QPoint, Qt
+from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtGui import QColor, QPainter, QPainterPath
 from PyQt5.QtWidgets import (
     QFrame,
@@ -409,6 +409,7 @@ class QuickRefPanel(QWidget):
         self._open_guide = open_guide
         self._pinned = False
         self._drag_offset = None
+        self._opener = None
         self._group_cards = []
         self._set_bottom_hints_visible = set_bottom_hints_visible
         self._bottom_hints_visible = bool(bottom_hints_visible)
@@ -477,7 +478,7 @@ class QuickRefPanel(QWidget):
         self._search.setObjectName("quickrefSearch")
         self._search.setFixedWidth(220)
         self._search.textChanged.connect(self._on_search)
-        self._search.installEventFilter(self)
+        self._search.escape_requested.connect(self._close_and_restore_opener)
         lay.addWidget(self._search, 0, Qt.AlignVCenter)
 
         self._bottom_hints_toggle = QToolButton()
@@ -667,6 +668,7 @@ class QuickRefPanel(QWidget):
             self.show_panel(anchor_widget)
 
     def show_panel(self, anchor_widget=None):
+        self._opener = anchor_widget
         self._search.clear()
         self._on_search("")
         self._position(anchor_widget)
@@ -733,20 +735,27 @@ class QuickRefPanel(QWidget):
         return rect.contains(pos)
 
     # -- close semantics ---------------------------------------------------
+    def _close_and_restore_opener(self):
+        """Hide the panel and return focus to the widget that opened it."""
+        opener = self._opener
+        self.hide()
+        if opener is None:
+            return
+        try:
+            host = opener.window()
+            if host is not None:
+                host.raise_()
+                host.activateWindow()
+            opener.setFocus(Qt.OtherFocusReason)
+        except RuntimeError:
+            pass
+
     def keyPressEvent(self, ev):  # noqa: N802
         if ev.key() == Qt.Key_Escape:
-            self.hide()
+            self._close_and_restore_opener()
             ev.accept()
             return
         super().keyPressEvent(ev)
-
-    def eventFilter(self, obj, ev):  # noqa: N802
-        # Esc inside the search box also closes (search owns focus there).
-        if obj is getattr(self, "_search", None) and ev.type() == QEvent.KeyPress:
-            if ev.key() == Qt.Key_Escape:
-                self.hide()
-                return True
-        return super().eventFilter(obj, ev)
 
     def focusOutEvent(self, ev):  # noqa: N802
         # Unpinned = lightweight peek: close on focus-out (click-away). Pinned

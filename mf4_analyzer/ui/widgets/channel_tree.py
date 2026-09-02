@@ -2776,7 +2776,12 @@ class MultiFileChannelWidget(QWidget):
         if projected == self._restored_axis_group_projection:
             return
         self._restored_axis_group_projection = projected
-        self.axis_groups_changed.emit()
+        # This setter projects persisted/imported View state.  It is not an
+        # interactive merge/split intent, so publishing ``axis_groups_changed``
+        # would re-enter MainWindow's user-edit path while the rest of the View
+        # controls are still being restored.  Repaint the badge presentation
+        # directly; real merge/split operations continue to emit the signal.
+        self.tree.viewport().update()
 
     def restored_axis_group_projection(self):
         """Return the focused View's persisted-ready composite-key map."""

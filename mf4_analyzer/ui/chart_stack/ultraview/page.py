@@ -295,6 +295,25 @@ _GLOBAL_PANELS = frozenset({"display", "export"})
 _EDGE_HINT_DWELL_S = 0.4
 
 
+def _unique_standard_bindings(standard_key):
+    """De-duplicated ``QKeySequence.keyBindings`` for a standard key."""
+    seen = []
+    texts = set()
+    for seq in QKeySequence.keyBindings(standard_key):
+        if seq.isEmpty():
+            continue
+        portable = seq.toString(QKeySequence.PortableText)
+        if not portable or portable in texts:
+            continue
+        texts.add(portable)
+        seen.append(QKeySequence(seq))
+    if not seen:
+        fallback = QKeySequence(standard_key)
+        if not fallback.isEmpty():
+            seen.append(fallback)
+    return seen
+
+
 def _qrect(rect: FloatingRect) -> QRect:
     """Map the Qt-free floating-layout rectangle at the Page boundary."""
     return QRect(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
@@ -694,10 +713,10 @@ class UltraViewPage(QWidget):
 
         self._esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._esc.setContext(Qt.WidgetWithChildrenShortcut)
-        self._grid_undo = QShortcut(QKeySequence.Undo, self)
-        self._grid_undo.setContext(Qt.WidgetWithChildrenShortcut)
-        self._grid_redo = QShortcut(QKeySequence.Redo, self)
-        self._grid_redo.setContext(Qt.WidgetWithChildrenShortcut)
+        self._grid_undo_shortcuts = self._make_standard_shortcuts(QKeySequence.Undo)
+        self._grid_redo_shortcuts = self._make_standard_shortcuts(QKeySequence.Redo)
+        self._grid_undo = self._grid_undo_shortcuts[0]
+        self._grid_redo = self._grid_redo_shortcuts[0]
         self._select_tool_shortcut = QShortcut(QKeySequence(Qt.Key_V), self)
         self._select_tool_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self._sticky_tool_shortcut = QShortcut(QKeySequence(Qt.Key_N), self)
@@ -933,12 +952,22 @@ class UltraViewPage(QWidget):
         self._tray.drag_started.connect(self._on_drag_started)
         self._tray.drag_finished.connect(self._on_drag_finished)
 
+    def _make_standard_shortcuts(self, standard_key):
+        shortcuts = []
+        for seq in _unique_standard_bindings(standard_key):
+            shortcut = QShortcut(seq, self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcuts.append(shortcut)
+        return shortcuts
+
     def _connect_shortcuts(self) -> None:
         if self._already_wired("shortcuts"):
             return
         self._esc.activated.connect(self._on_escape_shortcut)
-        self._grid_undo.activated.connect(self._on_grid_undo_shortcut)
-        self._grid_redo.activated.connect(self._on_grid_redo_shortcut)
+        for shortcut in self._grid_undo_shortcuts:
+            shortcut.activated.connect(self._on_grid_undo_shortcut)
+        for shortcut in self._grid_redo_shortcuts:
+            shortcut.activated.connect(self._on_grid_redo_shortcut)
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
@@ -2797,8 +2826,8 @@ class UltraViewPage(QWidget):
         in_edit = is_text_input_widget(now)
         for shortcut in (
             self._esc,
-            self._grid_undo,
-            self._grid_redo,
+            *self._grid_undo_shortcuts,
+            *self._grid_redo_shortcuts,
             self._select_tool_shortcut,
             self._sticky_tool_shortcut,
             getattr(self, "_text_tool_shortcut", None),

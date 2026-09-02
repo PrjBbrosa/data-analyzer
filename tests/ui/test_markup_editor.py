@@ -1,5 +1,5 @@
 from PyQt5.QtCore import QEvent, QPointF, QRectF, QSettings, Qt
-from PyQt5.QtGui import QColor, QMouseEvent, QPainterPath, QPixmap
+from PyQt5.QtGui import QColor, QKeySequence, QMouseEvent, QPainterPath, QPixmap
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import (
     QAbstractButton,
@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsSimpleTextItem,
     QGraphicsTextItem,
+    QShortcut,
     QToolButton,
     QWidget,
 )
@@ -1146,6 +1147,51 @@ def test_toolbar_buttons_expose_their_shortcuts(qtbot):
     assert tips["markupUndoButton"] == "撤销 (Ctrl+Z)"
     assert tips["markupRedoButton"] == "重做 (Ctrl+Y)"
     assert tips["markupStyleButton"] == "样式（颜色 / 线宽） · [ ] 调线宽"
+
+
+def _standard_binding_texts(standard_key):
+    texts = set()
+    for seq in QKeySequence.keyBindings(standard_key):
+        if seq.isEmpty():
+            continue
+        portable = seq.toString(QKeySequence.PortableText)
+        if portable:
+            texts.add(portable)
+    return texts
+
+
+def test_markup_registers_every_qt_undo_redo_binding_once(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    wanted = _standard_binding_texts(QKeySequence.Undo) | _standard_binding_texts(
+        QKeySequence.Redo
+    )
+    found = {}
+    for shortcut in editor.findChildren(QShortcut):
+        text = shortcut.key().toString(QKeySequence.PortableText)
+        if text in wanted:
+            found.setdefault(text, []).append(shortcut)
+    assert set(found) == wanted
+    assert all(len(shortcuts) == 1 for shortcuts in found.values())
+
+
+def test_markup_text_edit_disables_history_shortcuts(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.show()
+    QApplication.processEvents()
+    for shortcut in (*editor._undo_shortcuts, *editor._redo_shortcuts):
+        assert shortcut.isEnabled()
+
+    text_item = editor.add_text_item(QPointF(20, 20), "peak")
+    assert text_item.textInteractionFlags() & Qt.TextEditorInteraction
+    for shortcut in (*editor._undo_shortcuts, *editor._redo_shortcuts):
+        assert not shortcut.isEnabled()
+
+    text_item.clearFocus()
+    QApplication.processEvents()
+    for shortcut in (*editor._undo_shortcuts, *editor._redo_shortcuts):
+        assert shortcut.isEnabled()
 
 
 def _temp_hint_settings(tmp_path):

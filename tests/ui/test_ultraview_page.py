@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, QSize, Qt
-from PyQt5.QtGui import QColor, QContextMenuEvent, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
+from PyQt5.QtGui import QColor, QContextMenuEvent, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QKeySequence, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QShortcut,
     QToolButton,
     QWidget,
 )
@@ -3575,8 +3576,42 @@ def test_line_edit_focus_disables_board_shortcuts_and_clears_space_pan(qtbot):
     assert not harness.page.board_viewport().space_down()
     assert not harness.page._esc.isEnabled()
     assert not harness.page._grid_undo.isEnabled()
+    for shortcut in (*harness.page._grid_undo_shortcuts, *harness.page._grid_redo_shortcuts):
+        assert not shortcut.isEnabled()
     harness.page._on_app_focus_changed(search, harness.page)
     assert harness.page._esc.isEnabled()
+    for shortcut in (*harness.page._grid_undo_shortcuts, *harness.page._grid_redo_shortcuts):
+        assert shortcut.isEnabled()
+
+
+def test_ultraview_registers_every_qt_undo_redo_binding_once(qtbot):
+    harness = _Harness(qtbot)
+    page = harness.page
+
+    def _wanted(standard_key):
+        texts = set()
+        for seq in QKeySequence.keyBindings(standard_key):
+            if seq.isEmpty():
+                continue
+            portable = seq.toString(QKeySequence.PortableText)
+            if portable:
+                texts.add(portable)
+        return texts
+
+    wanted = _wanted(QKeySequence.Undo) | _wanted(QKeySequence.Redo)
+    found = {}
+    for shortcut in page.findChildren(QShortcut):
+        text = shortcut.key().toString(QKeySequence.PortableText)
+        if text in wanted:
+            found.setdefault(text, []).append(shortcut)
+    assert set(found) == wanted
+    assert all(len(shortcuts) == 1 for shortcuts in found.values())
+    assert page._grid_undo in page._grid_undo_shortcuts
+    assert page._grid_redo in page._grid_redo_shortcuts
+    for shortcut in page._grid_undo_shortcuts:
+        assert shortcut.context() == Qt.WidgetWithChildrenShortcut
+    for shortcut in page._grid_redo_shortcuts:
+        assert shortcut.context() == Qt.WidgetWithChildrenShortcut
 
 
 def test_arm_replacement_opens_library_search(qtbot):

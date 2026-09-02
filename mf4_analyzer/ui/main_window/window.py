@@ -63,6 +63,7 @@ from ._state_holders import (
     TimeRenderGate,
     ViewFocusState,
 )
+from .project_dirty import DirtyGuardResult, ProjectDirtyState
 from ._analysis_mixin import AnalysisMixin
 from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
@@ -262,6 +263,9 @@ class MainWindow(
         # Stage 1 degraded-save guard: missing project sources / dropped pane
         # refs. Mutations go through the holder (not multi-file rebinds).
         self._project_restore_health = ProjectRestoreHealth()
+        # Spec §9 single owner: mixins call methods on this holder and must
+        # never rebind ``self._project_dirty``.
+        self._project_dirty = ProjectDirtyState()
         try:
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:
@@ -325,6 +329,10 @@ class MainWindow(
         self._ultraview = UltraViewCoordinator(self, parent=self)
         from .wwt_import_coordinator import WwtImportCoordinator
         self._wwt_import = WwtImportCoordinator(self)
+        from .command_coordinator import CommandCoordinator
+        self._command_coordinator = CommandCoordinator(self)
+        self._command_coordinator.publish_quit(self._on_quit)
+        self._command_coordinator.install_menus()
         self._init_drop_import()
         self._connect()
 
@@ -1083,9 +1091,9 @@ class MainWindow(
         )
         self._frf_coordinator.failed.connect(self._on_frf_failed)
         self._frf_coordinator.job_queued.connect(self._on_frf_job_queued)
-        self.toolbar.open_requested.connect(self.open_files_or_project)
-        self.toolbar.save_project_requested.connect(self.save_project_via_dialog)
-        self.toolbar.save_project_as_requested.connect(self.save_project_as_via_dialog)
+        # File/Save share CommandCoordinator QActions; do not also connect
+        # toolbar ``*_requested`` signals to the same slots (would double-fire).
+        self._command_coordinator.bind_toolbar(self.toolbar)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.chart_stack.open_ultraview_requested.connect(self.open_ultraview)
         self.chart_stack.open_ultraview_unplaced_requested.connect(
@@ -1163,6 +1171,7 @@ class MainWindow(
         # original must NOT tear the axis down.
         fp = getattr(self.inspector, "filter_panel", None)
         if fp is not None:
+            fp.filter_changed.connect(self._on_project_filter_changed)
             fp.original_visibility_changed.connect(self._on_show_original_toggled)
             fp.filtered_visibility_changed.connect(self._on_show_filtered_toggled)
         self.inspector.fft_requested.connect(self.do_fft)
@@ -1294,6 +1303,9 @@ class MainWindow(
         self.view_tabbar.clear_split_requested.connect(self._on_view_clear_split)
         self.view_manager.active_changed.connect(self._apply_active_view)
         self.view_manager.split_changed.connect(self._on_view_split)
+        self.view_manager.views_changed.connect(
+            self._on_project_semantic_views_changed
+        )
         self._install_view_shortcuts()
 
         # V7 Step 2: per-section analysis tab bars ↔ managers. The ViewTabBar
@@ -1335,6 +1347,7 @@ class MainWindow(
                 lambda _idx, s=sec: self._on_analysis_split(s, True))
             bar.clear_split_requested.connect(
                 lambda _idx, s=sec: self._on_analysis_split(s, False))
+            mgr.views_changed.connect(self._on_project_semantic_views_changed)
             mgr.active_changed.connect(
                 lambda idx, s=sec: self._on_analysis_view_switched(s, idx))
             page.focus_changed.connect(
@@ -3514,6 +3527,14 @@ class MainWindow(
         return "time"
 
     def _ch_changed(self):
+        # Programmatic View projection can update several ChannelTree models
+        # before Inspector controls (notably Custom-X) have been restored.  A
+        # signal delivered in that transaction is not user intent; capturing
+        # the half-applied controls would overwrite the incoming ViewState and
+        # recursively replot it.  Keep the same transaction guard used by the
+        # other Time View capture paths.
+        if self._time_render_busy() or getattr(self, '_applying_view', False):
+            return
         role = self._projection_role()
         if role == "analysis_candidates":
             # Candidate-tree checkboxes are non-editable; ignore defensive
@@ -3526,6 +3547,7 @@ class MainWindow(
             self._sync_fft_source_summary()
             self._resolve_and_apply_db_reference("fft")
             self._refresh_fft_time_preview(clear_spectrum=False)
+            self._note_user_project_mutation()
             return
 
         # Time projection: capture into the focused TimeDomain View only.
@@ -3541,6 +3563,7 @@ class MainWindow(
             self._view_bridge.capture_controls_into(
                 self.view_manager.get(idx), self, focused
             )
+            self._note_user_project_mutation()
         if self.files and self.chart_stack.current_mode() == "time":
             self._replot_canvas_for_view(idx, focused)
         self._refresh_channel_config_context()
@@ -3557,6 +3580,7 @@ class MainWindow(
         # window and can restore it when the eye is opened again.
         self._view_bridge.capture_canvas_ranges_into(state, focused)
         self._view_bridge.capture_controls_into(state, self, focused)
+        self._note_user_project_mutation()
         if self.chart_stack.current_mode() != 'time':
             return
         rendered = self._replot_canvas_for_view(idx, focused)
@@ -3658,6 +3682,7 @@ class MainWindow(
         """显示原始 live toggle: hide/show the solid originals on the built
         chart WITHOUT a re-plot. Falls back to a full plot only if nothing was
         toggled (e.g. nothing plotted yet) so the chart still appears."""
+        self._note_user_project_mutation()
         if self.chart_stack.current_mode() != 'time':
             return
         any_toggled = False
@@ -3673,6 +3698,7 @@ class MainWindow(
         the built chart WITHOUT a re-plot. If no companion exists yet (filter
         just enabled but not plotted), fall back to a full plot so the overlay
         appears."""
+        self._note_user_project_mutation()
         if self.chart_stack.current_mode() != 'time':
             return
         any_toggled = False
@@ -5301,9 +5327,29 @@ class MainWindow(
     # Order analysis methods (compute, service submission, callbacks, render, etc.)
     # live in _order_mixin.OrderMixin — composed into MainWindow via its base list.
 
+    def _on_quit(self, checked=False):
+        """File → Quit. closeEvent is the single leave-decision point."""
+        self.close()
+
     def closeEvent(self, event):
-        """Drain all analysis jobs before the window is destroyed."""
+        """Dirty guard first; only then drain jobs and destroy tool windows."""
         from PyQt5 import sip
+
+        holder = getattr(self, "_project_dirty", None)
+        if holder is not None and (holder.guard_open or holder.close_teardown_started):
+            event.ignore()
+            return
+        # Interactive close/Quit is always a visible window. Pytest teardown
+        # (and tests that ``monkeypatch.undo()`` the autouse discard patch)
+        # must not block on a modal.
+        import os
+        if self.isVisible() and not os.environ.get("PYTEST_CURRENT_TEST"):
+            result = self.confirm_leave_unsaved_project()
+            if result is DirtyGuardResult.CANCELLED:
+                event.ignore()
+                return
+        if holder is not None:
+            holder.close_teardown_started = True
 
         batch = getattr(self, "_batch_sheet", None)
         if batch is not None:
@@ -5316,6 +5362,8 @@ class MainWindow(
                 if callable(is_running) and is_running():
                     confirm = getattr(batch, "confirm_stop_and_wait", None)
                     if not callable(confirm) or not confirm(parent=self):
+                        if holder is not None:
+                            holder.close_teardown_started = False
                         event.ignore()
                         return
         for attr in ("_ultraview_sheet", "_batch_sheet"):

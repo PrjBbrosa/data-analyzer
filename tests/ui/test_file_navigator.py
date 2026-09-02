@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import QMimeData, QPoint, QPointF, Qt
 from PyQt5.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
-from PyQt5.QtWidgets import QToolButton
+from PyQt5.QtWidgets import QApplication, QToolButton
 
 from mf4_analyzer.ui.file_navigator import FileNavigator, _FileRow
 from tests._helpers.wwt_record_tree import (
@@ -1077,3 +1077,118 @@ def test_file_navigator_forwards_record_curve_rows_and_visibility_signal(qapp, q
     nav.clear_record_curve_rows()
     qtbot.wait(0)
     assert record_binding_roles(nav) == []
+
+
+def test_file_rows_are_keyboard_reachable_and_use_existing_intents(qapp, qtbot):
+    nav = _shown_file_nav(
+        qtbot,
+        ("f0", FakeFd(filename="alpha.csv")),
+        ("f1", FakeFd(filename="beta.csv")),
+    )
+    nav.activateWindow()
+    rows = nav._ordered_file_rows()
+    first, second = rows
+    assert first.focusPolicy() & Qt.TabFocus
+    assert first.accessibleName() == "alpha.csv"
+    assert first._btn_close.focusPolicy() & Qt.TabFocus
+    assert first._btn_close.focusPolicy() != Qt.NoFocus
+
+    first.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    with qtbot.waitSignal(nav.file_activated, timeout=200) as activated:
+        qtbot.keyClick(first, Qt.Key_Return)
+    assert activated.args == ["f0"]
+
+    second.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    with qtbot.waitSignal(nav.file_activated, timeout=200) as activated:
+        qtbot.keyClick(second, Qt.Key_Space)
+    assert activated.args == ["f1"]
+
+    first.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    qtbot.keyClick(first, Qt.Key_Down)
+    qapp.processEvents()
+    focused = QApplication.focusWidget()
+    assert second.hasFocus() or focused is second
+
+    with qtbot.waitSignal(nav.file_group_close_requested, timeout=200) as closer:
+        qtbot.keyClick(second, Qt.Key_Delete)
+    assert closer.args[0] == ["f1"]
+    assert nav.ordered_file_fids() == ["f0", "f1"]
+    assert nav.file_list_count() == 2
+
+
+def test_file_delete_cancel_is_zero_mutation(qapp, qtbot):
+    nav = _shown_file_nav(qtbot, ("f0", FakeFd(filename="keep.csv")))
+    row = nav._ordered_file_rows()[0]
+    row.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    before = nav.ordered_file_fids()
+    with qtbot.waitSignal(nav.file_group_close_requested, timeout=200) as closer:
+        with qtbot.assertNotEmitted(nav.file_order_requested):
+            with qtbot.assertNotEmitted(nav.channels_changed):
+                qtbot.keyClick(row, Qt.Key_Delete)
+    assert closer.args[0] == ["f0"]
+    assert nav.ordered_file_fids() == before
+    assert nav.file_list_count() == 1
+    assert "f0" in nav._rows or nav._fid_to_key.get("f0") in nav._rows
+
+
+def test_alt_up_down_reorder_preserves_stable_identity(qapp, qtbot):
+    nav = _shown_file_nav(
+        qtbot,
+        ("fid-aaa", FakeFd(filename="zeta.csv", short_name="zeta")),
+        ("fid-bbb", FakeFd(filename="alpha.csv", short_name="alpha")),
+        ("fid-ccc", FakeFd(filename="mid.csv", short_name="mid")),
+    )
+    captured = []
+
+    def _capture(fids, target, placement):
+        captured.append((list(fids), list(target), placement))
+
+    nav.file_order_requested.connect(_capture)
+    rows = nav._ordered_file_rows()
+    assert [row.fid for row in rows] == ["fid-aaa", "fid-bbb", "fid-ccc"]
+    rows[0].setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+
+    qtbot.keyClick(rows[0], Qt.Key_Down, Qt.AltModifier)
+    qapp.processEvents()
+    assert captured == [(["fid-aaa"], ["fid-bbb"], "after")]
+    assert nav.ordered_file_fids() == ["fid-aaa", "fid-bbb", "fid-ccc"]
+
+    nav.project_file_order(["fid-bbb", "fid-aaa", "fid-ccc"])
+    assert nav.ordered_file_fids() == ["fid-bbb", "fid-aaa", "fid-ccc"]
+    moved = {row.fid: row._rows_key for row in nav._ordered_file_rows()}
+    assert moved["fid-aaa"] == "fid-aaa"
+    assert moved["fid-bbb"] == "fid-bbb"
+
+    captured.clear()
+    source = "C:/data/grouped.hdf"
+    grouped = _shown_file_nav(
+        qtbot,
+        ("g0", FakeFd(filepath=source, label_suffix="1 kHz")),
+        ("g1", FakeFd(filepath=source, label_suffix="2 kHz")),
+        ("g2", FakeFd(filename="other.csv")),
+    )
+    grouped.file_order_requested.connect(_capture)
+    group_row = grouped._ordered_file_rows()[0]
+    group_row.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    qtbot.keyClick(group_row, Qt.Key_Down, Qt.AltModifier)
+    qapp.processEvents()
+    assert captured == [(["g0", "g1"], ["g2"], "after")]
+    assert grouped.ordered_file_fids() == ["g0", "g1", "g2"]
+
+
+def test_focus_ring_is_visible_for_keyboard_focus(qapp):
+    row = _FileRow("f0", FakeFd(filename="focus-me.csv"))
+    assert row.focusPolicy() & Qt.TabFocus
+    assert row.accessibleName() == "focus-me.csv"
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    focus_idx = qss.find("#fileRow:focus")
+    assert focus_idx != -1
+    focus_block = qss[focus_idx:focus_idx + 240]
+    assert "border-color:" in focus_block
+    assert "border:" not in focus_block.split("{", 1)[1].split("}", 1)[0]

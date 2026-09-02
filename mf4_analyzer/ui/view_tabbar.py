@@ -47,6 +47,8 @@ _CLOSE_INK = QColor("#bf3447")
 _CLOSE_SOFT = QColor("#fff0f2")
 _CLOSE_BORDER = QColor("#e5a8b0")
 _CLOSE_PRESSED = QColor("#ffe3e7")
+_CLOSE_VISUAL_SIZE = 18
+_CLOSE_HIT_SIZE = 20
 
 # Shared bottom-rail band (TimeDomain dock + analysis compare row). The
 # 26px tab strip is vertically centered inside this; the left navigator's
@@ -66,12 +68,13 @@ _SECTION_ANCHORS = {
 
 
 def tab_icon_slot_rect(tabbar: QTabBar, index: int) -> QRect:
-    """Return the live icon slot for ``index`` from the current style option.
+    """Return the stable icon-cell anchor for ``index``.
 
     PyQt5 does not wrap ``SE_TabBarTabIcon``. The slot is the ``iconSize``
     band reserved immediately left of ``SE_TabBarTabText`` (falling back to
-    ``PM_TabBarTabHSpace``), intersected with ``tabRect`` so hit-testing stays
-    inside the tab and never uses a hardcoded toolbar coordinate.
+    ``PM_TabBarTabHSpace``). It is an anchor only: the close visual and its hit
+    target are both derived from :func:`tab_close_hit_rect` so platform icon
+    painting can never drift away from pointer routing.
     """
     if index < 0 or index >= tabbar.count():
         return QRect()
@@ -97,6 +100,44 @@ def tab_icon_slot_rect(tabbar: QTabBar, index: int) -> QRect:
     return QRect(x, y, icon_size.width(), icon_size.height()).intersected(tab_rect)
 
 
+def _centered_square(center, side: int) -> QRect:
+    rect = QRect(0, 0, int(side), int(side))
+    rect.moveCenter(center)
+    return rect
+
+
+def _centered_rect(center, width: int, height: int) -> QRect:
+    rect = QRect(0, 0, int(width), int(height))
+    rect.moveCenter(center)
+    return rect
+
+
+def tab_close_hit_rect(tabbar: QTabBar, index: int) -> QRect:
+    """Return the single 20×20 pointer target used by every close event."""
+    anchor = tab_icon_slot_rect(tabbar, index)
+    if not anchor.isValid():
+        return QRect()
+    return _centered_square(anchor.center(), _CLOSE_HIT_SIZE).intersected(
+        tabbar.tabRect(index)
+    )
+
+
+def tab_close_visual_rect(tabbar: QTabBar, index: int) -> QRect:
+    """Return the 18×18 rounded-square paint rect centered in the hit target."""
+    hit = tab_close_hit_rect(tabbar, index)
+    if not hit.isValid():
+        return QRect()
+    return _centered_square(hit.center(), _CLOSE_VISUAL_SIZE)
+
+
+def tab_swatch_visual_rect(tabbar: QTabBar, index: int) -> QRect:
+    """Return the normal 10×6 swatch rect using the close target's center."""
+    hit = tab_close_hit_rect(tabbar, index)
+    if not hit.isValid():
+        return QRect()
+    return _centered_rect(hit.center(), 10, 6)
+
+
 class _ViewTabs(QTabBar):
     """Owns icon-slot hover/armed state and consumes close-slot mouse events."""
 
@@ -116,9 +157,7 @@ class _ViewTabs(QTabBar):
         self._hover_index = -1
         self._armed_view_id = None
         if old_hover >= 0:
-            bar = self._bar()
-            if bar is not None:
-                bar._refresh_tab_icon(old_hover)
+            self._update_close_region(old_hover)
 
     def hover_index(self) -> int:
         return self._hover_index
@@ -148,6 +187,32 @@ class _ViewTabs(QTabBar):
         self.clear_interaction_state()
         super().hideEvent(event)
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        bar = self._bar()
+        if bar is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        for idx in range(min(self.count(), len(bar._manager.views))):
+            if not self.isTabVisible(idx):
+                continue
+            tab_rect = self.tabRect(idx)
+            if not tab_rect.isValid() or not event.rect().intersects(tab_rect):
+                continue
+            if idx == self._hover_index and bar._views_closable():
+                rect = tab_close_visual_rect(self, idx)
+                pressed = self._armed_view_id == bar._view_id_at(idx)
+                _paint_tab_close_button(painter, QRectF(rect), pressed=pressed)
+                continue
+            _paint_tab_swatch(
+                painter,
+                QRectF(tab_swatch_visual_rect(self, idx)),
+                self.tabData(idx),
+                bar._partner_color_for(idx),
+            )
+        painter.end()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             idx, in_slot = self._hit_close_slot(event.pos())
@@ -158,7 +223,7 @@ class _ViewTabs(QTabBar):
                     if view_id and not self._is_double_close_repeat(view_id):
                         self._armed_view_id = view_id
                         self._hover_index = idx
-                        bar._refresh_tab_icon(idx)
+                        self._update_close_region(idx)
                 event.accept()
                 return
         super().mousePressEvent(event)
@@ -171,11 +236,9 @@ class _ViewTabs(QTabBar):
             if not in_slot or (
                 bar is not None and bar._view_id_at(idx) != self._armed_view_id
             ):
+                armed_idx = self._index_for_view_id(self._armed_view_id)
                 self._armed_view_id = None
-                if idx >= 0 and bar is not None:
-                    bar._refresh_tab_icon(idx)
-                elif self._hover_index >= 0 and bar is not None:
-                    bar._refresh_tab_icon(self._hover_index)
+                self._update_close_region(armed_idx)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -186,6 +249,7 @@ class _ViewTabs(QTabBar):
             view_id = self._armed_view_id
             self._armed_view_id = None
             bar = self._bar()
+            self._update_close_region(idx)
             if (
                 in_slot
                 and bar is not None
@@ -195,8 +259,6 @@ class _ViewTabs(QTabBar):
                 self._last_close_view_id = view_id
                 self._last_close_msecs = QDateTime.currentMSecsSinceEpoch()
                 self.close_slot_clicked.emit(idx)
-            elif bar is not None and idx >= 0:
-                bar._refresh_tab_icon(idx)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -231,8 +293,24 @@ class _ViewTabs(QTabBar):
         idx = self.tabAt(pos)
         if idx < 0:
             return -1, False
-        slot = tab_icon_slot_rect(self, idx)
+        slot = tab_close_hit_rect(self, idx)
         return idx, slot.contains(pos)
+
+    def _index_for_view_id(self, view_id) -> int:
+        if not view_id:
+            return -1
+        bar = self._bar()
+        if bar is None:
+            return -1
+        for idx in range(self.count()):
+            if bar._view_id_at(idx) == view_id:
+                return idx
+        return -1
+
+    def _update_close_region(self, idx: int) -> None:
+        if idx < 0 or idx >= self.count():
+            return
+        self.update(tab_close_hit_rect(self, idx).adjusted(-1, -1, 1, 1))
 
     def _update_hover(self, pos) -> None:
         bar = self._bar()
@@ -245,12 +323,10 @@ class _ViewTabs(QTabBar):
             return
         old = self._hover_index
         self._hover_index = new_index
-        if bar is None:
-            return
         if old >= 0:
-            bar._refresh_tab_icon(old)
+            self._update_close_region(old)
         if new_index >= 0:
-            bar._refresh_tab_icon(new_index)
+            self._update_close_region(new_index)
 
     def _handle_close_tooltip(self, event) -> bool:
         idx, in_slot = self._hit_close_slot(event.pos())
@@ -265,7 +341,7 @@ class _ViewTabs(QTabBar):
             if bar._views_closable()
             else _KEEP_ONE_VIEW_TIP
         )
-        QToolTip.showText(event.globalPos(), text, self, tab_icon_slot_rect(self, idx))
+        QToolTip.showText(event.globalPos(), text, self, tab_close_hit_rect(self, idx))
         return True
 
     def _is_double_close_repeat(self, view_id: str) -> bool:
@@ -304,6 +380,7 @@ class ViewTabBar(QWidget):
     ):
         super().__init__(parent)
         self.setObjectName("viewTabBar")
+        self.setFocusPolicy(Qt.StrongFocus)
         self._manager = manager
         self._section_key = None
         self._section_anchor = None
@@ -339,6 +416,7 @@ class ViewTabBar(QWidget):
         self._compact_tabs_discovered = False
         self._overflow_popup = None
         self._overflow_popup_closed_msecs = 0
+        self._tab_spacer_icon = _tab_spacer_icon()
         self.setFixedHeight(RAIL_HEIGHT)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -508,23 +586,11 @@ class ViewTabBar(QWidget):
         if idx < 0 or idx >= self._tabs.count() or idx >= len(self._manager.views):
             return
         self._tabs.setTabIcon(idx, self._icon_for_tab(idx))
+        self._tabs.update(self._tabs.tabRect(idx))
 
     def _icon_for_tab(self, idx: int) -> QIcon:
-        view = self._manager.views[idx]
-        show_close = (
-            self._views_closable()
-            and (
-                self._tabs.hover_index() == idx
-                or (
-                    self._tabs.armed_view_id() is not None
-                    and self._view_id_at(idx) == self._tabs.armed_view_id()
-                )
-            )
-        )
-        if show_close:
-            pressed = self._tabs.armed_view_id() == self._view_id_at(idx)
-            return _tab_close_icon(pressed=pressed)
-        return _tab_color_icon(view.tab_color, self._partner_color_for(idx))
+        del idx
+        return self._tab_spacer_icon
 
     def _views_closable(self) -> bool:
         return len(self._manager.views) > 1
@@ -1028,6 +1094,57 @@ class ViewTabBar(QWidget):
             return
         self._begin_inline_rename(idx)
 
+    def keyPressEvent(self, event):  # noqa: N802
+        if self._handle_view_keyboard(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _handle_view_keyboard(self, event) -> bool:
+        if self._rename_editor is not None:
+            return False
+        key = event.key()
+        mods = int(event.modifiers())
+        ctrl = bool(mods & int(Qt.ControlModifier)) or bool(mods & int(Qt.MetaModifier))
+        shift = bool(mods & int(Qt.ShiftModifier))
+        alt = bool(mods & int(Qt.AltModifier))
+        if ctrl and key in (Qt.Key_Tab, Qt.Key_Backtab) and not alt:
+            delta = -1 if key == Qt.Key_Backtab or shift else 1
+            self._cycle_section_views(delta)
+            return True
+        if key == Qt.Key_F2:
+            self._rename_current_view()
+            return True
+        if alt and key in (Qt.Key_Up, Qt.Key_Down) and not ctrl:
+            self._reorder_current_view(-1 if key == Qt.Key_Up else 1)
+            return True
+        return False
+
+    def _cycle_section_views(self, delta: int) -> None:
+        count = self._tabs.count()
+        if count <= 1:
+            return
+        current = self._tabs.currentIndex()
+        if current < 0:
+            current = 0
+        target = (current + delta) % count
+        if target == current:
+            return
+        self._tabs.setCurrentIndex(target)
+
+    def _rename_current_view(self) -> None:
+        idx = self._tabs.currentIndex()
+        if not self._is_valid_tab(idx):
+            return
+        self._begin_inline_rename(idx)
+
+    def _reorder_current_view(self, delta: int) -> None:
+        from_idx = self._tabs.currentIndex()
+        to_idx = from_idx + delta
+        if not self._is_valid_tab(from_idx) or not self._is_valid_tab(to_idx):
+            return
+        self._emit_reorder(from_idx, to_idx)
+
     def _begin_inline_rename(self, idx: int) -> None:
         self._finish_inline_rename(accepted=False)
         self._rename_index = idx
@@ -1075,6 +1192,12 @@ class ViewTabBar(QWidget):
             if event.type() == QEvent.FocusOut:
                 self._finish_inline_rename(accepted=True)
                 return False
+        if (
+            watched is self._tabs
+            and event.type() == QEvent.KeyPress
+            and self._handle_view_keyboard(event)
+        ):
+            return True
         if (
             watched is self._tabs
             and event.type() == QEvent.MouseButtonDblClick
@@ -1267,11 +1390,29 @@ def _tab_color_pixmap(hex_color: str, ratio=None, partner_color=None) -> QPixmap
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing, True)
+    _paint_tab_swatch(painter, QRectF(1, 3, 10, 6), color, partner_color)
+    painter.end()
+    return pixmap
 
-    # Logical coordinates; the painter is scaled by devicePixelRatio.
-    partner = QColor(partner_color) if partner_color else None
+
+def _tab_spacer_icon() -> QIcon:
+    """Reserve QTabBar's existing icon cell without delegating its painting."""
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.transparent)
+    return QIcon(pixmap)
+
+
+def _paint_tab_swatch(
+    painter: QPainter,
+    rect: QRectF,
+    color_value,
+    partner_value=None,
+) -> None:
+    color = color_value if isinstance(color_value, QColor) else QColor(color_value)
+    if not color.isValid():
+        color = QColor("#2d7ff9")
+    partner = QColor(partner_value) if partner_value else None
     if partner is not None and partner.isValid():
-        rect = QRectF(1, 3, 10, 6)
         clip = QPainterPath()
         clip.addRoundedRect(rect, 2, 2)
         painter.save()
@@ -1283,7 +1424,6 @@ def _tab_color_pixmap(hex_color: str, ratio=None, partner_color=None) -> QPixmap
         painter.fillRect(
             QRectF(mid, rect.top(), rect.right() - mid, rect.height()), partner
         )
-        # Thin white gap so the two halves read as distinct (not fully joined).
         painter.fillRect(
             QRectF(mid - 0.5, rect.top(), 1.0, rect.height()), QColor("#ffffff")
         )
@@ -1291,36 +1431,22 @@ def _tab_color_pixmap(hex_color: str, ratio=None, partner_color=None) -> QPixmap
         painter.setPen(QPen(QColor(0, 0, 0, 60), 1))
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(rect, 2, 2)
-    else:
-        painter.setPen(QPen(color.darker(115), 1))
-        painter.setBrush(color)
-        painter.drawRoundedRect(1, 3, 10, 6, 2, 2)
-    painter.end()
-    return pixmap
+        return
+    painter.setPen(QPen(color.darker(115), 1))
+    painter.setBrush(color)
+    painter.drawRoundedRect(rect, 2, 2)
 
 
-def _tab_color_icon(hex_color: str, partner_color=None) -> QIcon:
-    return QIcon(_tab_color_pixmap(hex_color, partner_color=partner_color))
-
-
-def _tab_close_pixmap(ratio=None, *, pressed=False) -> QPixmap:
-    """HiDPI close glyph painted in the same 12×12 logical slot as the swatch."""
-    if ratio is None:
-        ratio = icon_device_pixel_ratio()
-    side = max(1, round(12 * ratio))
-    pixmap = QPixmap(side, side)
-    pixmap.setDevicePixelRatio(ratio)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, True)
-    rect = QRectF(1, 3, 10, 6)
+def _paint_tab_close_button(painter: QPainter, rect: QRectF, *, pressed=False) -> None:
+    """Paint the product close affordance; callers own the target geometry."""
     fill = _CLOSE_PRESSED if pressed else _CLOSE_SOFT
+    border_rect = QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5)
     painter.setPen(QPen(_CLOSE_BORDER, 1))
     painter.setBrush(fill)
-    painter.drawRoundedRect(rect, 2, 2)
+    painter.drawRoundedRect(border_rect, 4, 4)
     center = rect.center()
-    arm = 2.35
-    painter.setPen(QPen(_CLOSE_INK, 1.15, Qt.SolidLine, Qt.RoundCap))
+    arm = 4.0
+    painter.setPen(QPen(_CLOSE_INK, 1.5, Qt.SolidLine, Qt.RoundCap))
     painter.drawLine(
         QPointF(center.x() - arm, center.y() - arm),
         QPointF(center.x() + arm, center.y() + arm),
@@ -1329,9 +1455,22 @@ def _tab_close_pixmap(ratio=None, *, pressed=False) -> QPixmap:
         QPointF(center.x() + arm, center.y() - arm),
         QPointF(center.x() - arm, center.y() + arm),
     )
+
+
+def _tab_close_pixmap(ratio=None, *, pressed=False) -> QPixmap:
+    """Render the 18×18 HiDPI square used by close-button paint tests."""
+    if ratio is None:
+        ratio = icon_device_pixel_ratio()
+    side = max(1, round(_CLOSE_VISUAL_SIZE * ratio))
+    pixmap = QPixmap(side, side)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    _paint_tab_close_button(
+        painter,
+        QRectF(0, 0, _CLOSE_VISUAL_SIZE, _CLOSE_VISUAL_SIZE),
+        pressed=pressed,
+    )
     painter.end()
     return pixmap
-
-
-def _tab_close_icon(*, pressed=False) -> QIcon:
-    return QIcon(_tab_close_pixmap(pressed=pressed))

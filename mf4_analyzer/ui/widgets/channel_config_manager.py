@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
 
 from ..channel_config import ChannelConfigPreview, ChannelSelectionConfig
 from ...ui_kit.control_style import CONTROL_HEIGHTS
+from ...ui_kit.dialog_button_defaults import set_unique_default_button
 from ...ui_kit.menus import apply_rounded_menu_chrome
 from ...ui_kit.widgets import SearchField
 from ..channel_config_transfer import (
@@ -55,6 +56,7 @@ class _ConfigRow(QFrame):
 
     clicked = pyqtSignal(str)
     batch_toggled = pyqtSignal(str, bool)
+    delete_requested = pyqtSignal(str)
 
     def __init__(
         self,
@@ -70,6 +72,8 @@ class _ConfigRow(QFrame):
         self.setObjectName("channelConfigHtmlConfigRow")
         self.setProperty("active", bool(active))
         self.setProperty("batch", bool(batch_mode))
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(config.name)
         self.setMinimumHeight(64)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout = QHBoxLayout(self)
@@ -81,16 +85,18 @@ class _ConfigRow(QFrame):
             self.checkbox.setObjectName("channelConfigHtmlCheck")
             self.checkbox.setAccessibleName(f"批量选择 {config.name}")
             self.checkbox.setFixedSize(20, 20)
-            self.checkbox.setFocusPolicy(Qt.NoFocus)
+            self.checkbox.setFocusPolicy(Qt.StrongFocus)
             self.checkbox.setChecked(checked)
             self.checkbox.toggled.connect(
                 lambda selected, config_id=config.config_id: self.batch_toggled.emit(
                     config_id, selected
                 )
             )
+            self.checkbox.installEventFilter(self)
             layout.addWidget(self.checkbox, 0, Qt.AlignVCenter)
         copy = QWidget(self)
         copy.setObjectName("channelConfigHtmlConfigCopy")
+        copy.setFocusPolicy(Qt.NoFocus)
         copy_layout = QVBoxLayout(copy)
         copy_layout.setContentsMargins(0, 0, 0, 0)
         copy_layout.setSpacing(4)
@@ -106,6 +112,64 @@ class _ConfigRow(QFrame):
         self.count_label = QLabel(f"{len(config.channel_names)} CH", self)
         self.count_label.setObjectName("channelConfigHtmlConfigCount")
         layout.addWidget(self.count_label, 0, Qt.AlignVCenter)
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj is self.checkbox and event.type() == QEvent.KeyPress:
+            key = event.key()
+            if key in (
+                Qt.Key_Delete,
+                Qt.Key_Backspace,
+                Qt.Key_Up,
+                Qt.Key_Down,
+                Qt.Key_Return,
+                Qt.Key_Enter,
+            ):
+                self.keyPressEvent(event)
+                return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        key = event.key()
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            self.clicked.emit(self.config_id)
+            event.accept()
+            return
+        if key == Qt.Key_Space:
+            if self.checkbox is not None:
+                self.checkbox.toggle()
+            else:
+                self.clicked.emit(self.config_id)
+            event.accept()
+            return
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            self.delete_requested.emit(self.config_id)
+            event.accept()
+            return
+        if key in (Qt.Key_Up, Qt.Key_Down):
+            self._move_neighbor_focus(-1 if key == Qt.Key_Up else 1)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _move_neighbor_focus(self, delta: int) -> None:
+        host = self.parentWidget()
+        if host is None:
+            return
+        layout = host.layout()
+        if layout is None:
+            return
+        rows = []
+        for index in range(layout.count()):
+            widget = layout.itemAt(index).widget()
+            if isinstance(widget, _ConfigRow):
+                rows.append(widget)
+        try:
+            current = rows.index(self)
+        except ValueError:
+            return
+        target = current + delta
+        if 0 <= target < len(rows):
+            rows[target].setFocus(Qt.TabFocusReason)
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton:
@@ -165,6 +229,18 @@ class ChannelConfigManagerDialog(QDialog):
         root.addWidget(self._build_workspace(), 1)
         self._build_toast()
         self._rebuild_all()
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and obj in (
+                self.config_search,
+                self.channel_search,
+            ):
+                event.accept()
+                return True
+            if self._handle_channel_table_key(obj, event):
+                return True
+        return super().eventFilter(obj, event)
 
     @staticmethod
     def _fallback_id() -> str:
@@ -255,6 +331,7 @@ class ChannelConfigManagerDialog(QDialog):
         self.config_search = SearchField("搜索配置…", tools)
         self.config_search.setObjectName("channelConfigHtmlConfigSearch")
         self.config_search.textChanged.connect(self._rebuild_config_rows)
+        self.config_search.installEventFilter(self)
         tools_layout.addWidget(self.config_search)
         layout.addWidget(tools)
 
@@ -388,6 +465,7 @@ class ChannelConfigManagerDialog(QDialog):
         self.channel_search.setObjectName("channelConfigHtmlChannelSearch")
         self.channel_search.setMaximumWidth(280)
         self.channel_search.textChanged.connect(self._rebuild_channel_rows)
+        self.channel_search.installEventFilter(self)
         tools_layout.addWidget(self.channel_search)
         self.btn_select_channels = QPushButton("全选", tools)
         self._control(self.btn_select_channels)
@@ -435,7 +513,7 @@ class ChannelConfigManagerDialog(QDialog):
         self.master_channel.setAutoFillBackground(False)
         self.master_channel.setAccessibleName("全选当前筛选通道")
         self.master_channel.setFixedSize(20, 20)
-        self.master_channel.setFocusPolicy(Qt.NoFocus)
+        self.master_channel.setFocusPolicy(Qt.StrongFocus)
         self.master_channel.toggled.connect(self._toggle_visible_channels)
         check_host_layout.addWidget(self.master_channel, 0, Qt.AlignCenter)
         channel_head_layout.addWidget(check_host, 0, Qt.AlignVCenter)
@@ -456,9 +534,12 @@ class ChannelConfigManagerDialog(QDialog):
         self.channel_table.setObjectName("channelConfigHtmlChannelTable")
         self.channel_table.setFrameShape(QFrame.NoFrame)
         self.channel_table.setShowGrid(False)
-        self.channel_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.channel_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.channel_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.channel_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.channel_table.setFocusPolicy(Qt.NoFocus)
+        self.channel_table.setFocusPolicy(Qt.StrongFocus)
+        self.channel_table.setTabKeyNavigation(False)
+        self.channel_table.installEventFilter(self)
         self.channel_table.horizontalHeader().setVisible(False)
         self.channel_table.verticalHeader().setVisible(False)
         self.channel_table.verticalHeader().setDefaultSectionSize(49)
@@ -613,6 +694,7 @@ class ChannelConfigManagerDialog(QDialog):
         self._rebuild_config_rows()
         self._rebuild_detail()
         self._sync_chrome()
+        set_unique_default_button(self.btn_save, self)
 
     def _clear_config_list(self) -> None:
         while self.config_list_layout.count():
@@ -640,6 +722,7 @@ class ChannelConfigManagerDialog(QDialog):
             )
             row.clicked.connect(self._on_config_row_clicked)
             row.batch_toggled.connect(self._set_batch_config_checked)
+            row.delete_requested.connect(self._delete_config)
             self._config_rows[config.config_id] = row
             self.config_list_layout.addWidget(row)
         if not visible:
@@ -685,11 +768,14 @@ class ChannelConfigManagerDialog(QDialog):
         self.missing_chip.setVisible(bool(missing))
         self._rebuild_channel_rows()
 
-    def _check_cell(self, checked: bool, callback, accessible_name: str) -> QWidget:
+    def _check_cell(
+        self, checked: bool, callback, accessible_name: str, channel: str
+    ) -> QWidget:
         cell = QWidget(self.channel_table)
         cell.setObjectName("channelConfigHtmlCheckCell")
         cell.setAttribute(Qt.WA_StyledBackground, True)
         cell.setAutoFillBackground(False)
+        cell.setFocusPolicy(Qt.NoFocus)
         cell.setProperty("chosen", bool(checked))
         layout = QHBoxLayout(cell)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -700,9 +786,11 @@ class ChannelConfigManagerDialog(QDialog):
         check.setAutoFillBackground(False)
         check.setAccessibleName(accessible_name)
         check.setFixedSize(20, 20)
-        check.setFocusPolicy(Qt.NoFocus)
+        check.setFocusPolicy(Qt.StrongFocus)
+        check.setProperty("channelName", channel)
         check.setChecked(checked)
         check.toggled.connect(callback)
+        check.installEventFilter(self)
         layout.addWidget(check, 0, Qt.AlignCenter)
         return cell
 
@@ -711,6 +799,12 @@ class ChannelConfigManagerDialog(QDialog):
         if config is None:
             self.channel_table.setRowCount(0)
             return
+        focused = self.focusWidget()
+        restore_focus = focused is not None and (
+            focused is self.channel_table or self.channel_table.isAncestorOf(focused)
+        )
+        current_item = self.channel_table.item(self.channel_table.currentRow(), 1)
+        restore_name = current_item.text() if current_item is not None else None
         visible = self._visible_channels(config)
         self._chosen_channels.intersection_update(config.channel_names)
         self.channel_table.setRowCount(len(visible))
@@ -722,14 +816,17 @@ class ChannelConfigManagerDialog(QDialog):
                     channel in self._chosen_channels,
                     lambda checked, name=channel: self._set_channel_chosen(name, checked),
                     f"选择 {channel}",
+                    channel,
                 ),
             )
             name = QTableWidgetItem(channel)
+            name.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             name.setToolTip(channel)
             name.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             self.channel_table.setItem(row, 1, name)
             hint = config.unit_hint(channel) or self._preview.unit_for(channel)
             unit = QTableWidgetItem(hint or "—")
+            unit.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             unit.setTextAlignment(Qt.AlignCenter)
             if channel in self._preview.inconsistent_unit_names:
                 unit.setToolTip("当前 View 中该通道单位不一致，显示第一个非空单位")
@@ -741,11 +838,13 @@ class ChannelConfigManagerDialog(QDialog):
             else:
                 status, color = "●  缺失", "#956012"
             match = QTableWidgetItem(status)
+            match.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             match.setForeground(QColor(color))
             match.setTextAlignment(Qt.AlignCenter)
             self.channel_table.setItem(row, 3, match)
             remove_cell = QWidget(self.channel_table)
             remove_cell.setObjectName("channelConfigHtmlRemoveCell")
+            remove_cell.setFocusPolicy(Qt.NoFocus)
             remove_cell.setProperty("chosen", channel in self._chosen_channels)
             remove_layout = QHBoxLayout(remove_cell)
             remove_layout.setContentsMargins(6, 6, 6, 6)
@@ -753,10 +852,14 @@ class ChannelConfigManagerDialog(QDialog):
             remove = QPushButton("×", remove_cell)
             remove.setObjectName("channelConfigHtmlRemoveOne")
             remove.setAccessibleName(f"从配置移除 {channel}")
+            remove.setProperty("channelName", channel)
             remove.setFixedSize(self.ICON_SIZE, self.ICON_SIZE)
+            remove.setAutoDefault(False)
+            remove.setDefault(False)
             remove.clicked.connect(
                 lambda _checked=False, name=channel: self._remove_channels((name,))
             )
+            remove.installEventFilter(self)
             remove_layout.addWidget(remove)
             self.channel_table.setCellWidget(row, 4, remove_cell)
             if channel in self._chosen_channels:
@@ -768,6 +871,51 @@ class ChannelConfigManagerDialog(QDialog):
         previous = self.master_channel.blockSignals(True)
         self.master_channel.setChecked(bool(visible) and selected_visible == len(visible))
         self.master_channel.blockSignals(previous)
+        if restore_name in visible:
+            blocked = self.channel_table.blockSignals(True)
+            self.channel_table.setCurrentCell(visible.index(restore_name), 1)
+            self.channel_table.blockSignals(blocked)
+            if restore_focus:
+                self.channel_table.setFocus(Qt.OtherFocusReason)
+        set_unique_default_button(self.btn_save, self)
+
+    def _channel_name_for_widget(self, obj) -> str | None:
+        widget = obj
+        table = getattr(self, "channel_table", None)
+        if table is None:
+            return None
+        while widget is not None and widget is not table:
+            name = widget.property("channelName")
+            if name:
+                return str(name)
+            widget = widget.parentWidget()
+        item = table.item(table.currentRow(), 1)
+        return item.text() if item is not None else None
+
+    def _handle_channel_table_key(self, obj, event) -> bool:
+        table = getattr(self, "channel_table", None)
+        if table is None or obj is None:
+            return False
+        if obj is not table and not table.isAncestorOf(obj):
+            return False
+        key = event.key()
+        channel = self._channel_name_for_widget(obj)
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            return True
+        if key == Qt.Key_Space and obj is table:
+            if not channel:
+                return False
+            self._set_channel_chosen(channel, channel not in self._chosen_channels)
+            event.accept()
+            return True
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            if not channel:
+                return False
+            self._remove_channels((channel,))
+            event.accept()
+            return True
+        return False
 
     def _sync_chrome(self) -> None:
         dirty = self.is_dirty()
@@ -1024,6 +1172,7 @@ class ChannelConfigManagerDialog(QDialog):
         layout.addLayout(actions)
         cancel.clicked.connect(dialog.reject)
         confirm.clicked.connect(dialog.accept)
+        set_unique_default_button(confirm, dialog)
         edit.returnPressed.connect(dialog.accept)
         edit.selectAll()
         if dialog.exec_() == QDialog.Accepted:
@@ -1053,15 +1202,23 @@ class ChannelConfigManagerDialog(QDialog):
         self._rebuild_all()
 
     def _delete_active_config(self) -> None:
-        config = self._active_config()
+        self._delete_config(self._active_id)
+
+    def _delete_config(self, config_id: str | None) -> None:
+        config = next(
+            (item for item in self._drafts if item.config_id == config_id), None
+        )
         if config is None:
             return
         if len(self._drafts) <= 1:
             self._flash("至少需要保留一个配置", None)
             return
+        previous_active = self._active_id
         self._drafts = [item for item in self._drafts if item.config_id != config.config_id]
-        self._active_id = self._drafts[0].config_id
-        self._chosen_channels.clear()
+        remaining_ids = {item.config_id for item in self._drafts}
+        if previous_active == config.config_id or previous_active not in remaining_ids:
+            self._active_id = self._drafts[0].config_id
+            self._chosen_channels.clear()
         self._flash(f"已将“{config.name}”标记为删除，保存后生效", None)
         self._rebuild_all()
 
@@ -1187,6 +1344,7 @@ class ChannelConfigManagerDialog(QDialog):
         layout.addLayout(actions)
         cancel.clicked.connect(dialog.reject)
         confirm.clicked.connect(dialog.accept)
+        set_unique_default_button(confirm, dialog)
         return dialog, combo
 
     def _export_to_file(self, *, current_only: bool) -> None:
@@ -1279,6 +1437,7 @@ class ChannelConfigManagerDialog(QDialog):
         layout.addLayout(actions)
         keep.clicked.connect(dialog.reject)
         discard.clicked.connect(dialog.accept)
+        set_unique_default_button(keep, dialog)
         return dialog.exec_() == QDialog.Accepted
 
     def reject(self) -> None:

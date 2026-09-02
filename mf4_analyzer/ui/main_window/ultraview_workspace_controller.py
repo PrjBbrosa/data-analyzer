@@ -301,6 +301,7 @@ class UltraViewWorkspaceController:
         page: Callable[[], Any],
         preview_fit_image_size: Callable[[UltraViewRef], tuple[int, int] | None],
         on_active_board_changed: Callable[[], None],
+        on_semantic_mutation: Callable[[], None] | None = None,
     ) -> None:
         self._workspace = workspace
         self._is_inactive = is_inactive
@@ -309,6 +310,7 @@ class UltraViewWorkspaceController:
         self._page_impl = page
         self._preview_fit_image_size_impl = preview_fit_image_size
         self._on_active_board_changed = on_active_board_changed
+        self._on_semantic_mutation = on_semantic_mutation
         self._grid_histories: dict[str, _GridHistory] = {}
         self._pending_auto_aspect: dict[tuple[str, UltraViewRef], _PendingAutoAspect] = {}
         self._layout_revision: dict[str, int] = {}
@@ -383,6 +385,9 @@ class UltraViewWorkspaceController:
         if self._inactive():
             return
         mark_workspace_mutated(self._workspace)
+        notify = self._on_semantic_mutation
+        if callable(notify):
+            notify()
         self.refresh_page()
 
     def _apply_add_ref(

@@ -43,7 +43,7 @@ _MDI_NAV_ICONS = {
     'save':    'mdi.content-save-outline',
 }
 
-# Chart nav shortcuts use Ctrl.
+# Chart camera history is Alt+Left / Alt+Right; other nav keys stay Ctrl.
 # The wheel modifiers (Ctrl+wheel / Shift+wheel) intentionally STAY Ctrl/Shift.
 _NAV_SHORTCUTS = hints.NAV_SHORTCUTS
 

@@ -1,6 +1,14 @@
 from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QCheckBox, QFrame, QLabel, QWidget
+from PyQt5.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDialog,
+    QFrame,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
 
 from mf4_analyzer.ui.channel_config import ChannelConfigPreview, ChannelSelectionConfig
 from mf4_analyzer.ui.channel_config_transfer import parse_transfer, serialize_transfer
@@ -391,3 +399,138 @@ def test_channel_checkbox_cell_remains_centered_for_selected_rows(qtbot):
     assert check.isChecked()
     assert abs(check.geometry().center().x() - selected_cell.rect().center().x()) <= 1
     assert selected_cell.property("chosen") is True
+
+
+def _assert_unique_default(dialog, confirm):
+    from PyQt5.QtWidgets import QPushButton
+
+    defaults = [btn for btn in dialog.findChildren(QPushButton) if btn.isDefault()]
+    assert defaults == [confirm], (
+        f"expected unique default {confirm.text()!r}, got "
+        f"{[btn.text() for btn in defaults]}"
+    )
+    for btn in dialog.findChildren(QPushButton):
+        if btn is confirm:
+            continue
+        assert btn.autoDefault() is False, (
+            f"{btn.text()!r} must not be autoDefault when {confirm.text()!r} is default"
+        )
+
+
+def test_channel_config_manager_has_one_explicit_save_default(qtbot):
+    dialog = _dialog(
+        qtbot,
+        [_config("drive", "动力分析", ("EPS_CRC", "Torque"))],
+        "drive",
+    )
+    _assert_unique_default(dialog, dialog.btn_save)
+    assert dialog.btn_import.autoDefault() is False
+
+
+def test_dangerous_confirmation_escape_and_return_are_safe(qapp, qtbot):
+    from PyQt5.QtCore import QTimer, Qt
+    from PyQt5.QtTest import QSignalSpy
+
+    dialog = ChannelConfigManagerDialog(
+        [_config("drive", "动力分析", ("EPS_CRC",))],
+        selected_id="drive",
+        preview=_preview(),
+        id_factory=iter(("new-1", "new-2")).__next__,
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    dialog.btn_copy.click()
+    qapp.processEvents()
+    assert dialog.is_dirty()
+    drafts_before = dialog.drafts
+    save_spy = QSignalSpy(dialog.save_requested)
+
+    for key in (Qt.Key_Escape, Qt.Key_Return):
+        seen = {}
+
+        def _inspect_and_key(target_key=key, bucket=seen):
+            box = next(
+                widget
+                for widget in dialog.findChildren(QDialog)
+                if widget.objectName() == "channelConfigHtmlDiscardDialog"
+                and widget.isVisible()
+            )
+            keep = next(
+                btn for btn in box.findChildren(QPushButton) if btn.text() == "继续编辑"
+            )
+            discard = next(
+                btn for btn in box.findChildren(QPushButton) if btn.text() == "放弃修改"
+            )
+            bucket["keep_default"] = keep.isDefault()
+            bucket["discard_default"] = discard.isDefault()
+            bucket["discard_auto"] = discard.autoDefault()
+            qtbot.keyClick(box, target_key)
+
+        QTimer.singleShot(0, _inspect_and_key)
+        dialog.reject()
+        qapp.processEvents()
+        assert seen.get("keep_default")
+        assert not seen.get("discard_default")
+        assert seen.get("discard_auto") is False
+        assert dialog.isVisible()
+        assert dialog.is_dirty()
+        assert dialog.drafts == drafts_before
+        assert len(save_spy) == 0
+
+    dialog._confirm_discard_changes = lambda: True
+
+
+def test_channel_table_space_and_delete_modify_draft_only(qapp, qtbot):
+    original = _config("drive", "动力分析", ("EPS_CRC", "Torque", "Temp"))
+    dialog = _dialog(
+        qtbot,
+        [original, _config("thermal", "温度", ("Temp",))],
+        "drive",
+    )
+    qtbot.waitExposed(dialog)
+    table = dialog.channel_table
+    row = dialog.config_row_widget("drive")
+    check = table.cellWidget(0, 0).findChild(QCheckBox)
+    baseline = dialog.drafts
+
+    assert table.focusPolicy() & Qt.TabFocus
+    assert table.selectionMode() != 0
+    assert row is not None
+    assert row.focusPolicy() & Qt.TabFocus
+    assert row.accessibleName() == "动力分析"
+    assert check is not None
+    assert check.focusPolicy() & Qt.TabFocus
+    assert check.isChecked() is False
+    assert dialog.master_channel.focusPolicy() & Qt.TabFocus
+
+    table.setCurrentCell(0, 1)
+    table.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    qtbot.keyClick(table, Qt.Key_Space)
+    qapp.processEvents()
+
+    assert dialog._chosen_channels == {"EPS_CRC"}
+    assert dialog.drafts == baseline
+    assert original.channel_names == ("EPS_CRC", "Torque", "Temp")
+    assert dialog.is_dirty() is False
+
+    table.setCurrentCell(0, 1)
+    table.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    qtbot.keyClick(table, Qt.Key_Delete)
+    qapp.processEvents()
+
+    assert dialog.drafts[0].config_id == "drive"
+    assert dialog.drafts[0].channel_names == ("Torque", "Temp")
+    assert original.channel_names == ("EPS_CRC", "Torque", "Temp")
+    assert dialog.is_dirty() is True
+    assert dialog.btn_save.isDefault()
+
+    dialog.config_search.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    before = dialog.drafts[0].channel_names
+    qtbot.keyClick(dialog.config_search, Qt.Key_Delete)
+    qapp.processEvents()
+    assert dialog.drafts[0].channel_names == before
+    assert QApplication.focusWidget() is dialog.config_search or dialog.config_search.hasFocus()

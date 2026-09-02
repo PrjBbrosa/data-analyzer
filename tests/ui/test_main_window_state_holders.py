@@ -195,8 +195,15 @@ def win(qapp, qtbot):
 
 
 def test_window_starts_with_a_cleared_holder(win):
+    from mf4_analyzer.ui.command_registry import CommandId
+    from mf4_analyzer.ui.main_window.project_dirty import ProjectDirtyState
+
     assert win._custom_xaxis.spec == CustomXAxisSpec()
     assert (win._custom_xaxis.fid, win._custom_xaxis.ch) == (None, None)
+    assert isinstance(win._project_dirty, ProjectDirtyState)
+    assert not win._project_dirty.is_dirty
+    quit_act = win._command_coordinator.action(CommandId.QUIT)
+    assert quit_act.isEnabled()
 
 
 @pytest.mark.parametrize(

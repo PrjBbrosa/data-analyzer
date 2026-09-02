@@ -1793,6 +1793,13 @@ QLabel#paneCount {
     border-color: #b7c4d3;
     background-color: #f5f8ff;
 }
+#fileRow:focus,
+#fileRow[active="true"]:focus {
+    border-color: {{CONTROL_ACCENT}};
+}
+#fileRow QToolButton[role="icon"]:focus {
+    border-color: {{CONTROL_ACCENT}};
+}
 
 QLabel#fileRowName {
     color: #111827;
@@ -3890,6 +3897,10 @@ QFrame#channelConfigHtmlConfigRow {
     background-color: transparent;
 }
 QFrame#channelConfigHtmlConfigRow:hover { background-color: #f2f6fb; }
+QFrame#channelConfigHtmlConfigRow:focus,
+QFrame#channelConfigHtmlConfigRow[active="true"]:focus {
+    border-color: {{CONTROL_ACCENT}};
+}
 QFrame#channelConfigHtmlConfigRow[active="true"] {
     border-color: #bfd7f7;
     border-left: 3px solid #0a6de7;
@@ -3970,6 +3981,9 @@ QTableWidget#channelConfigHtmlChannelTable::item {
     background-color: #ffffff;
 }
 QTableWidget#channelConfigHtmlChannelTable::item:hover { background-color: #f8fbff; }
+QTableWidget#channelConfigHtmlChannelTable::item:selected {
+    background-color: #e8f1fb;
+}
 QWidget#channelConfigHtmlCheckCell[chosen="true"] { background-color: {{CONTROL_ACCENT_WASH}}; }
 QWidget#channelConfigHtmlRemoveCell[chosen="true"] { background-color: {{CONTROL_ACCENT_WASH}}; }
 QPushButton#channelConfigHtmlRemoveOne {
@@ -4085,6 +4099,9 @@ QCheckBox#channelConfigHtmlCheck::indicator:checked {
     border-color: #0a6de7;
     background-color: #0a6de7;
     image: url("{{ICON_CHECKBOX_CHECKED}}");
+}
+QCheckBox#channelConfigHtmlCheck::indicator:focus {
+    border-color: {{CONTROL_ACCENT}};
 }
 QFrame#channelConfigHtmlToast {
     border: 1px solid #2a3f5b;

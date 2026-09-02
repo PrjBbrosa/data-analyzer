@@ -8,6 +8,7 @@ from PyQt5.QtGui import (
     QColor,
     QIcon,
     QImage,
+    QKeySequence,
     QPainter,
     QPen,
     QPixmap,
@@ -26,6 +27,7 @@ from PyQt5.QtWidgets import (
     QGraphicsSimpleTextItem,
     QGraphicsTextItem,
     QGraphicsView,
+    QShortcut,
     QUndoStack,
     QVBoxLayout,
     QWidget,
@@ -64,6 +66,25 @@ from .view import _MarkupGraphicsView
 _HIT_TOLERANCE = 12.0
 _HIT_SCREEN_PX = 8.0
 _HANDLE_HIT_SCREEN_PX = 14.0
+
+
+def _unique_standard_bindings(standard_key):
+    """De-duplicated ``QKeySequence.keyBindings`` for a standard key."""
+    seen = []
+    texts = set()
+    for seq in QKeySequence.keyBindings(standard_key):
+        if seq.isEmpty():
+            continue
+        portable = seq.toString(QKeySequence.PortableText)
+        if not portable or portable in texts:
+            continue
+        texts.add(portable)
+        seen.append(QKeySequence(seq))
+    if not seen:
+        fallback = QKeySequence(standard_key)
+        if not fallback.isEmpty():
+            seen.append(fallback)
+    return seen
 
 
 def _pixmap_as_device_pixels(pixmap: QPixmap) -> QPixmap:
@@ -153,6 +174,7 @@ class MarkupEditor(QWidget):
         layout.addWidget(self._view, 1)
         self.resize(960, 640)
         self.setFocusPolicy(Qt.StrongFocus)
+        self._install_history_shortcuts()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -260,9 +282,11 @@ class MarkupEditor(QWidget):
         self._view.setFocus(Qt.MouseFocusReason)
         item.setFocus(Qt.MouseFocusReason)
         self._scene.setFocusItem(item, Qt.MouseFocusReason)
+        self._set_history_shortcuts_enabled(False)
 
     def _on_text_focus_out(self, item) -> None:
         # Defer so we never mutate the scene from inside the item's own event.
+        self._set_history_shortcuts_enabled(True)
         QTimer.singleShot(0, lambda: self._finalize_text_item(item))
 
     def _finalize_text_item(self, item) -> None:
@@ -934,6 +958,40 @@ class MarkupEditor(QWidget):
         painter.end()
         return QIcon(pix)
 
+    def _install_history_shortcuts(self) -> None:
+        self._undo_shortcuts = []
+        self._redo_shortcuts = []
+        for seq in _unique_standard_bindings(QKeySequence.Undo):
+            shortcut = QShortcut(seq, self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._on_undo_shortcut)
+            self._undo_shortcuts.append(shortcut)
+        for seq in _unique_standard_bindings(QKeySequence.Redo):
+            shortcut = QShortcut(seq, self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._on_redo_shortcut)
+            self._redo_shortcuts.append(shortcut)
+
+    def _set_history_shortcuts_enabled(self, enabled: bool) -> None:
+        for shortcut in (*self._undo_shortcuts, *self._redo_shortcuts):
+            shortcut.setEnabled(enabled)
+
+    def _text_item_is_editing(self) -> bool:
+        focused = self._scene.focusItem()
+        if not isinstance(focused, QGraphicsTextItem):
+            return False
+        return bool(focused.textInteractionFlags() & Qt.TextEditorInteraction)
+
+    def _on_undo_shortcut(self) -> None:
+        if self._text_item_is_editing():
+            return
+        self._undo_stack.undo()
+
+    def _on_redo_shortcut(self) -> None:
+        if self._text_item_is_editing():
+            return
+        self._undo_stack.redo()
+
     def keyPressEvent(self, event):
         key = event.key()
         modifiers = event.modifiers()
@@ -958,14 +1016,6 @@ class MarkupEditor(QWidget):
                 event.accept()
                 return
             super().keyPressEvent(event)
-            return
-        if command and key == Qt.Key_Z:
-            self._undo_stack.undo()
-            event.accept()
-            return
-        if command and key == Qt.Key_Y:
-            self._undo_stack.redo()
-            event.accept()
             return
         if command and key == Qt.Key_A:
             self.select_all_annotations()

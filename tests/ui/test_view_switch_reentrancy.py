@@ -246,6 +246,42 @@ def test_capture_is_suppressed_while_a_render_is_in_flight(three_view_window):
     assert _state_channels(state) == ["motor_speed", "steer_torque"]
 
 
+def test_channel_change_signal_is_ignored_while_applying_a_view(
+    three_view_window, monkeypatch,
+):
+    """A restore-time widget signal is not a user edit and must not re-enter."""
+    window, _fid = three_view_window
+    calls = []
+    monkeypatch.setattr(
+        window._view_bridge,
+        "capture_canvas_ranges_into",
+        lambda *_args, **_kwargs: calls.append("ranges"),
+    )
+    monkeypatch.setattr(
+        window._view_bridge,
+        "capture_controls_into",
+        lambda *_args, **_kwargs: calls.append("controls"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_replot_canvas_for_view",
+        lambda *_args, **_kwargs: calls.append("replot"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_refresh_channel_config_context",
+        lambda *_args, **_kwargs: calls.append("refresh"),
+    )
+
+    window._applying_view = True
+    try:
+        window._ch_changed()
+    finally:
+        window._applying_view = False
+
+    assert calls == []
+
+
 def test_view_window_outside_its_data_is_reframed_not_blanked(
     qtbot, qapp, tmp_path
 ):

@@ -119,6 +119,39 @@ def test_keyboard_chips_match_shortcut_registry():
     assert "Ctrl+3" in chips
     assert "Ctrl+G" in chips
     assert "Ctrl+B" in chips
+    assert hints.shortcut_tooltip("back") == "Alt+Left"
+    assert hints.shortcut_tooltip("forward") == "Alt+Right"
+    assert "Alt+Left" in chips
+    assert "Alt+Right" in chips
+
+
+def test_quickref_standard_desktop_copy_matches_runtime():
+    """Chart / undo / search / save copy follows the desktop interaction contract."""
+    camera = _row_by_desc("视角后退 / 前进")
+    assert camera.keys == (hints.shortcut_tooltip("back"), hints.shortcut_tooltip("forward"))
+    assert "Alt+Left / Alt+Right：视角后退 / 前进" in camera.sub
+    assert "Ctrl/Cmd+Z 保留给编辑撤销" in camera.sub
+    undo_rows = [
+        row for _group, row in _all_rows() if row.desc == "撤销 / 重做"
+    ]
+    assert len(undo_rows) == 2
+    joined = " ".join(f"{row.sub} {' '.join(row.keys)}" for row in undo_rows)
+    assert "只作用于当前编辑区域" in joined
+    assert "无历史" in joined
+    assert "不回退图表" in joined
+    assert "Ctrl+Z" in joined
+    search = _row_by_desc("操作速查")
+    assert "Esc 先清空搜索，再按一次关闭" in search.sub
+    save = _row_by_desc("保存会话")
+    assert "有未保存更改时可保存、不保存或取消" in save.sub
+    files = _row_by_desc("把文件加入当前 View")
+    assert "Enter/Space" in files.sub
+    assert "F2" in files.sub
+    order = _row_by_desc("调整文件 / 通道顺序")
+    assert "Alt+Up/Down" in (order.sub or "")
+    draw = _row_by_desc("绘制 / 取消通道")
+    assert draw.gesture == "勾选复选框"
+    assert "Enter" in draw.keys and "Space" in draw.keys
 
 
 def test_sc_helper_surfaces_missing_key():

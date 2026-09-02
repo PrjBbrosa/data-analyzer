@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 
+from ...ui_kit.dialog_button_defaults import set_unique_default_button
 from .._axis_handle import make_handle
 from .._color_utils import is_color_like as _is_color_like
 from .._color_utils import to_hex as _to_hex
@@ -104,6 +105,7 @@ class ChartOptionsDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_apply.clicked.connect(self.apply_changes)
         self.btn_ok.clicked.connect(self._accept_with_apply)
+        set_unique_default_button(self.btn_ok, self)
         self.chk_x_auto.toggled.connect(self._sync_auto_fields)
         self.chk_y_auto.toggled.connect(self._sync_auto_fields)
         self.chk_color_auto.toggled.connect(self._sync_auto_fields)
@@ -483,6 +485,7 @@ class ChartOptionsDialog(QDialog):
                 "对数刻度下 X/Y 范围必须 > 0",
             )
             self._applied = False
+            self._focus_first_invalid_axis()
             return
         self._applied = True
 
@@ -644,6 +647,15 @@ class ChartOptionsDialog(QDialog):
             if channel_line is line:
                 return name
         return None
+
+    def _focus_first_invalid_axis(self):
+        if not self._invalid_axes:
+            return
+        axis = self._invalid_axes[0]
+        self.tabs.setCurrentIndex(0)
+        field = getattr(self, f"spin_{axis}_min", None)
+        if field is not None:
+            field.setFocus(Qt.OtherFocusReason)
 
     def _accept_with_apply(self):
         self.apply_changes()
