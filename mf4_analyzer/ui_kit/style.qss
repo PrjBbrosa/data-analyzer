@@ -3481,13 +3481,12 @@ QWidget#viewTabBar QPushButton#viewTabPlus:disabled {
     color: #b8c2d0;
 }
 
-/* Overflow chevron "»N" — only on the row once the compact strip still cannot
- * fit, where N is how many tail Views were retired into its menu. Those tabs are
- * hidden with setTabVisible, never removeTab: the QTabBar index IS the
- * ViewManager index for switch/reorder/rename/context-menu, so removing tabs
- * would renumber all of them silently. Sized from its own label (no fixed width)
- * because _tabs_budget reserves the measured hint; it belongs to the fixed right
- * group with + and never compresses. */
+/* Permanent View-management entry: "⋯" while every tab fits and "»N" once N
+ * tail Views are retired into the same popup. Retired tabs use setTabVisible,
+ * never removeTab: the QTabBar index IS the ViewManager index for
+ * switch/reorder/rename/context-menu. Its measured minimum width covers both
+ * labels, and _tabs_budget permanently reserves that hint in the fixed right
+ * group with + so the entry never jitters or compresses. */
 QWidget#viewTabBar QPushButton#viewTabOverflow {
     min-height: 22px;
     max-height: 22px;

@@ -89,7 +89,7 @@ def test_plus_button_emits_new_requested(qtbot):
         bar._on_plus_clicked()
 
 
-def test_initial_plus_button_hugs_first_tab(qtbot):
+def test_initial_management_entry_and_plus_hug_first_tab(qtbot):
     _manager, bar = _bar(qtbot, count=1)
     bar.resize(260, 28)
     bar.show()
@@ -97,9 +97,11 @@ def test_initial_plus_button_hugs_first_tab(qtbot):
 
     first_tab = bar.tabBar().tabRect(0)
     tab_right = bar.tabBar().mapTo(bar, first_tab.topRight()).x()
-    gap = bar._plus.geometry().left() - tab_right - 1
+    entry_gap = bar._overflow.geometry().left() - tab_right - 1
+    plus_gap = bar._plus.geometry().left() - bar._overflow.geometry().right() - 1
 
-    assert gap <= 3
+    assert entry_gap <= 3
+    assert plus_gap <= 3
 
 
 def test_view_tabbar_chrome_is_shared_outside_time_domain_dock():
@@ -686,8 +688,23 @@ def test_ten_views_stay_flat_visible_with_zero_clicks(qtbot):
     tabs = bar.tabBar()
 
     assert bar.overflow_indices() == []
-    assert not bar._overflow.isVisible()
+    assert bar._overflow.isVisible()
+    assert bar._overflow.text() == "⋯"
     assert sum(tabs.isTabVisible(i) for i in range(tabs.count())) == 10
+
+
+def test_view_management_entry_is_visible_and_opens_when_all_tabs_fit(qtbot):
+    manager, bar = _wide_bar(qtbot, count=6)
+
+    assert bar.overflow_indices() == []
+    assert bar._overflow.isVisible()
+    assert bar._overflow.text() == "⋯"
+    assert bar._overflow.accessibleName() == "管理全部 View"
+    assert f"管理全部 {len(manager.views)} 个 View" in bar._overflow.toolTip()
+
+    popup = _open_overflow_popup(bar)
+    assert len(_visible_overflow_rows(popup)) == len(manager.views)
+    bar._close_overflow_popup()
 
 
 def test_narrow_row_compacts_labels_to_ordinals_and_moves_name_to_tooltip(qtbot):
@@ -706,6 +723,22 @@ def test_narrow_row_compacts_labels_to_ordinals_and_moves_name_to_tooltip(qtbot)
     # The full name must come from the manager: the widget only holds the
     # ordinal now, so a read-back would put "7" in the tooltip.
     assert tabs.tabToolTip(6) == manager.views[6].name
+
+
+def test_compact_row_without_hidden_tabs_keeps_management_entry(qtbot):
+    manager, bar = _wide_bar(qtbot, count=10)
+    roomy, compact, _overhead = _measure(bar)
+    assert compact < roomy
+
+    _resize_to_budget(bar, (roomy + compact) // 2)
+
+    assert bar.is_compact()
+    assert bar.overflow_indices() == []
+    assert bar._overflow.isVisible()
+    assert bar._overflow.text() == "⋯"
+    popup = _open_overflow_popup(bar)
+    assert len(_visible_overflow_rows(popup)) == len(manager.views)
+    bar._close_overflow_popup()
 
 
 def test_widening_the_row_restores_roomy_names_and_clears_tooltips(qtbot):
@@ -755,6 +788,36 @@ def test_overflow_count_matches_the_hidden_tabs(qtbot):
     assert bar.overflow_indices() == hidden
     assert bar._overflow.isVisible()
     assert bar._overflow.text() == f"»{len(hidden)}"
+    assert f"另有 {len(hidden)} 个未显示" in bar._overflow.toolTip()
+
+
+def test_view_management_entry_has_stable_measured_reserve(qtbot):
+    _manager, bar = _wide_bar(qtbot, count=14)
+    entry_width = bar._overflow.width()
+    plain_budget = bar._tabs_budget(include_overflow=False)
+    measured_reserve = bar._measure_management_entry_reserve()
+
+    assert bar._overflow.minimumWidth() == measured_reserve
+    bar._set_overflow(range(9))
+    QApplication.processEvents()
+    assert bar._overflow.text() == "»9"
+    assert bar._overflow.width() == entry_width
+    bar._set_overflow(range(10))
+    QApplication.processEvents()
+    assert bar._overflow.text() == "»10"
+    assert bar._overflow.width() == entry_width
+    bar._sync_tabbar_width()
+
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+
+    assert bar.overflow_indices()
+    assert bar._overflow.width() == entry_width
+    assert bar._overflow.minimumWidth() > 0
+    assert bar._tabs_budget(include_overflow=True) == bar._tabs_budget(
+        include_overflow=False
+    )
+    assert plain_budget is not None
 
 
 def test_narrowing_never_hides_the_current_tab_nor_switches_views(qtbot):
@@ -1594,6 +1657,14 @@ def test_popup_row_close_reprojects_and_allows_another_close(qtbot):
     assert len(rows) == 13
     assert first_id not in [row.property("viewId") for row in rows]
     assert popup.findChild(QLabel, "viewOverflowCount").text() == "13 个"
+    assert (
+        popup.findChild(QPushButton, "viewOverflowCloseOthers").text()
+        == "关闭其他 12 个…"
+    )
+    assert (
+        popup.findChild(QPushButton, "viewOverflowCloseAll").text()
+        == "关闭全部 13 个…"
+    )
     second_id = manager.get(2).view_id
     qtbot.mouseClick(_visible_overflow_close_buttons(popup)[2], Qt.LeftButton)
     QApplication.processEvents()
@@ -1602,6 +1673,35 @@ def test_popup_row_close_reprojects_and_allows_another_close(qtbot):
     rows = _visible_overflow_rows(popup)
     assert len(rows) == 12
     assert second_id not in [row.property("viewId") for row in rows]
+    assert (
+        popup.findChild(QPushButton, "viewOverflowCloseOthers").text()
+        == "关闭其他 11 个…"
+    )
+    assert (
+        popup.findChild(QPushButton, "viewOverflowCloseAll").text()
+        == "关闭全部 12 个…"
+    )
+
+
+def test_popup_stays_open_when_row_close_clears_overflow(qtbot):
+    _reference_manager, reference = _wide_bar(qtbot, count=3)
+    compact_three = _measure(reference)[1]
+    manager, bar = _wide_bar(qtbot, count=4)
+    _roomy, compact_four, _overhead = _measure(bar)
+    assert compact_three < compact_four
+    _resize_to_budget(bar, (compact_three + compact_four) // 2)
+    assert bar.overflow_indices()
+
+    bar.overflow_delete_requested.connect(manager.delete_view)
+    popup = _open_overflow_popup(bar)
+    qtbot.mouseClick(_visible_overflow_close_buttons(popup)[-1], Qt.LeftButton)
+    QApplication.processEvents()
+
+    assert bar.overflow_indices() == []
+    assert bar._overflow.text() == "⋯"
+    assert bar._overflow_popup is popup
+    assert popup.isVisible()
+    assert len(_visible_overflow_rows(popup)) == 3
 
 
 def test_overflow_popup_omits_help_copy_and_paints_list_separators(qtbot):
@@ -1759,6 +1859,44 @@ def test_popup_single_view_disables_all_close_actions(qtbot):
     assert others.toolTip() == "至少保留一个 View"
 
 
+def test_single_view_management_popup_disables_all_close_actions(qtbot):
+    _manager, bar = _wide_bar(qtbot, count=1)
+
+    assert bar.overflow_indices() == []
+    assert bar._overflow.isVisible()
+    assert bar._overflow.text() == "⋯"
+    popup = _open_overflow_popup(bar)
+    row_close = _visible_overflow_close_buttons(popup)[0]
+    others = popup.findChild(QPushButton, "viewOverflowCloseOthers")
+    close_all = popup.findChild(QPushButton, "viewOverflowCloseAll")
+    assert not row_close.isEnabled()
+    assert not others.isEnabled()
+    assert not close_all.isEnabled()
+    assert "0 个" not in others.text()
+    assert "0 个" not in close_all.text()
+
+
+def test_popup_bulk_labels_project_exact_counts_and_dialog_ellipsis(qtbot):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    others = popup.findChild(QPushButton, "viewOverflowCloseOthers")
+    close_all = popup.findChild(QPushButton, "viewOverflowCloseAll")
+
+    popup.populate(_overflow_rows(6))
+    assert others.text() == "关闭其他 5 个…"
+    assert close_all.text() == "关闭全部 6 个…"
+
+    popup.populate(_overflow_rows(3))
+    assert others.text() == "关闭其他 2 个…"
+    assert close_all.text() == "关闭全部 3 个…"
+
+    popup.populate(_overflow_rows(1))
+    assert others.text() == "关闭其他"
+    assert close_all.text() == "关闭全部"
+    assert not others.isEnabled()
+    assert not close_all.isEnabled()
+
+
 def test_popup_escape_outside_click_and_destroy_restore_trigger_state(qtbot):
     _manager, bar = _wide_bar(qtbot, count=14)
     _roomy, compact, _overhead = _measure(bar)
@@ -1769,6 +1907,23 @@ def test_popup_escape_outside_click_and_destroy_restore_trigger_state(qtbot):
     QApplication.processEvents()
     assert bar._overflow_popup is None or not bar._overflow_popup.isVisible()
     assert bar._overflow.property("expanded") in ("false", False, None)
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Space, Qt.Key_Return])
+def test_view_management_entry_keyboard_opens_and_escape_restores_focus(qtbot, key):
+    _manager, bar = _wide_bar(qtbot, count=6)
+    assert bar.overflow_indices() == []
+    bar._overflow.setFocus(Qt.TabFocusReason)
+
+    QTest.keyClick(bar._overflow, key)
+    QApplication.processEvents()
+    popup = bar._overflow_popup
+    assert popup is not None and popup.isVisible()
+
+    QTest.keyClick(popup, Qt.Key_Escape)
+    QApplication.processEvents()
+    assert bar._overflow_popup is None or not bar._overflow_popup.isVisible()
+    assert bar._overflow.hasFocus()
 
 
 def _overflow_rows(count, name_fmt="View {i}"):

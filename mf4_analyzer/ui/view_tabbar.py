@@ -457,8 +457,9 @@ class ViewTabBar(QWidget):
         self._reordering = False
         # Fit state, recomputed by _sync_tabbar_width from MEASURED widths.
         # _density_compact: labels are the ordinal only, full name in tooltip.
-        # _overflow_indices: View indices retired into the » menu (tabs still
-        # exist, they are only setTabVisible(False) — see _retire_tail_tabs).
+        # _overflow_indices: View indices whose tabs are retired into overflow;
+        # the permanent management entry still lists every View. Tabs continue
+        # to exist and are only setTabVisible(False) — see _retire_tail_tabs.
         self._density_compact = False
         self._overflow_indices: list[int] = []
         # Set by _on_tab_moved, consumed on the drag's mouse release: a drag
@@ -514,15 +515,20 @@ class ViewTabBar(QWidget):
             if label is not None:
                 label.setFont(self._tabs.font())
 
-        # Part of the fixed right-hand group: like _plus it never compresses,
-        # it is only shown when tabs had to be retired. Hidden widgets are
-        # skipped by QHBoxLayout, so it costs nothing while everything fits.
-        self._overflow = QPushButton("»", self)
+        # Permanent View-management entry.  Keep the historical private name
+        # and objectName as compatibility seams for QSS and host tests.  Its
+        # measured minimum width reserves the widest label this manager can
+        # show, so ⋯ <-> »H and the 9 -> 10 digit transition cannot move the
+        # neighbouring + button or feed a second fit pass.
+        self._overflow = QPushButton("⋯", self)
         self._overflow.setObjectName("viewTabOverflow")
         self._overflow.setCursor(Qt.PointingHandCursor)
-        self._overflow.setVisible(False)
+        self._overflow.setAccessibleName("管理全部 View")
+        self._overflow.setVisible(True)
         self._overflow.clicked.connect(self._on_overflow_clicked)
+        self._overflow.installEventFilter(self)
         layout.addWidget(self._overflow, 0, Qt.AlignVCenter)
+        self._overflow.setMinimumWidth(self._measure_management_entry_reserve())
 
         self._plus = QPushButton("+", self)
         self._plus.setObjectName("viewTabPlus")
@@ -758,8 +764,9 @@ class ViewTabBar(QWidget):
             self._clamp_tabs_width(natural)
             return
 
-        # Pass 3 — compact still overflows: retire the tail into the » menu.
-        # Reserving the button costs width, so the budget shrinks again here.
+        # Pass 3 — compact still overflows: retire the tail into the permanent
+        # management entry.  The entry was already reserved in passes 1/2, so
+        # this pass uses the identical measured budget.
         budget = self._tabs_budget(include_overflow=True)
         hidden = self._retire_tail_tabs(budget)
         self._set_overflow(hidden)
@@ -789,11 +796,16 @@ class ViewTabBar(QWidget):
     def _tabs_budget(self, *, include_overflow: bool) -> int | None:
         """Width the tab strip may occupy, measured off the live row.
 
-        Everything right of the strip (», +, and the split action) is fixed and
-        must never compress, so the budget is this bar's own width minus those
-        siblings' real hints plus the layout's margins/spacing. Returns None
-        while the bar has no realised geometry — measuring an unshown widget
-        yields a phantom width and would compact a strip that has plenty of room.
+        ``include_overflow`` remains as a compatibility keyword for existing
+        probes; the management entry is now permanent and therefore reserved
+        in every pass.
+
+        Everything right of the strip (management, +, and split action) is
+        fixed and must never compress, so the budget is this bar's own width
+        minus those siblings' real hints plus the layout's margins/spacing.
+        Returns None while the bar has no realised geometry — measuring an
+        unshown widget yields a phantom width and would compact a strip that
+        has plenty of room.
         """
         if not self.isVisible():
             return None
@@ -805,16 +817,12 @@ class ViewTabBar(QWidget):
         if avail <= 0:
             return None
         spacing = max(0, layout.spacing())
-        siblings = [self._plus]
+        del include_overflow
+        siblings = [self._overflow, self._plus]
         # Quiet section anchor is a fixed left sibling: same reserve formula as
         # + / » / split actions. It never compresses; tabs yield first.
         if self._section_anchor is not None and not self._section_anchor.isHidden():
             siblings.append(self._section_anchor)
-        if include_overflow:
-            # Measure at the widest label this bar could ever show ("»" + every
-            # View retired) so the reserve cannot jitter as the count changes.
-            self._overflow.setText(f"»{self._tabs.count()}")
-            siblings.append(self._overflow)
         if not self._split_chip.isHidden():
             siblings.append(self._split_chip)
         if not self._split_clear.isHidden():
@@ -826,6 +834,26 @@ class ViewTabBar(QWidget):
             )
             reserved += hint + spacing
         return avail - reserved
+
+    def _measure_management_entry_reserve(self) -> int:
+        """Measure the widest management label without a literal px budget."""
+        current_text = self._overflow.text()
+        current_minimum = self._overflow.minimumWidth()
+        cap = max(1, int(getattr(self._manager, "max_views", MAX_VIEWS)))
+        self._overflow.setMinimumWidth(0)
+        self._overflow.ensurePolished()
+        widths = []
+        for label in ("⋯", f"»{cap}"):
+            self._overflow.setText(label)
+            widths.append(
+                max(
+                    self._overflow.sizeHint().width(),
+                    self._overflow.minimumSizeHint().width(),
+                )
+            )
+        self._overflow.setText(current_text)
+        self._overflow.setMinimumWidth(current_minimum)
+        return max(widths)
 
     def _show_all_tabs(self) -> None:
         for idx in range(self._tabs.count()):
@@ -895,14 +923,16 @@ class ViewTabBar(QWidget):
     def _set_overflow(self, hidden) -> None:
         self._overflow_indices = list(hidden)
         count = len(self._overflow_indices)
+        total = len(self._manager.views)
         if count <= 0:
-            self._close_overflow_popup()
-            self._overflow.setText("»")
-            self._overflow.setToolTip("")
-            self._overflow.setVisible(False)
+            self._overflow.setText("⋯")
+            self._overflow.setToolTip(f"管理全部 {total} 个 View")
+            self._overflow.setVisible(True)
             return
         self._overflow.setText(f"»{count}")
-        self._overflow.setToolTip(f"另有 {count} 个 View 放不下，点击选择")
+        self._overflow.setToolTip(
+            f"管理全部 {total} 个 View；另有 {count} 个未显示"
+        )
         self._overflow.setVisible(True)
 
     def overflow_indices(self) -> list[int]:
@@ -940,9 +970,8 @@ class ViewTabBar(QWidget):
             < 250
         ):
             return
-        if not self._overflow_indices:
-            return
-        self._mark_compact_tabs_discovered()
+        if self._density_compact:
+            self._mark_compact_tabs_discovered()
         popup = ViewOverflowPopup(self)
         popup.switch_requested.connect(self._on_overflow_switch)
         popup.close_requested.connect(self._on_overflow_row_close)
@@ -1012,9 +1041,6 @@ class ViewTabBar(QWidget):
     def _sync_overflow_popup(self) -> None:
         popup = self._overflow_popup
         if popup is None or not popup.isVisible():
-            return
-        if not self._overflow_indices:
-            self._close_overflow_popup()
             return
         popup.populate(self._overflow_rows())
 
@@ -1243,6 +1269,13 @@ class ViewTabBar(QWidget):
             self.rename_requested.emit(idx, text)
 
     def eventFilter(self, watched, event):
+        if (
+            watched is self._overflow
+            and event.type() == QEvent.KeyPress
+            and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+        ):
+            self._overflow.click()
+            return True
         if watched is self._rename_editor:
             if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
                 self._finish_inline_rename(accepted=False)

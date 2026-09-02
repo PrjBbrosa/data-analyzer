@@ -187,6 +187,12 @@ class ViewOverflowPopup(QFrame):
             )
         self._close_others.setEnabled(closable)
         self._close_all.setEnabled(closable)
+        if len(rows) > 1:
+            self._close_others.setText(f"关闭其他 {len(rows) - 1} 个…")
+            self._close_all.setText(f"关闭全部 {len(rows)} 个…")
+        else:
+            self._close_others.setText("关闭其他")
+            self._close_all.setText("关闭全部")
         keep_tip = "" if closable else _KEEP_ONE_TIP
         self._close_others.setToolTip(keep_tip)
         self._close_all.setToolTip(keep_tip)

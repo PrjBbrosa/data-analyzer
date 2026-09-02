@@ -226,7 +226,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "时域 View",
-                sub="最多 24 个；窄窗口先显示编号，悬停看全名；用「»」展开全部 View，面板内 × 直接关且保持打开，关闭其他/全部会确认",
+                sub="最多 24 个；窄窗口先显示编号，悬停看全名；「⋯」始终可管理全部 View，变为「»N」时 N 是未显示的 View 数；面板可逐项关闭、关闭其他或关闭全部",
             ),
             QuickRow(
                 "View 标签关闭",
@@ -263,7 +263,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "切换当前分区 View",
                 keys=("Alt+1…9",),
-                sub="第 10–24 个走标签栏或 » 溢出菜单",
+                sub="第 10–24 个走标签栏或「⋯」管理面板；显示「»N」时 N 是未显示数",
             ),
             QuickRow(
                 "重命名当前行",

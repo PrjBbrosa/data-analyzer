@@ -440,7 +440,10 @@ def test_catalog_channel_editor_create_and_param_help():
     time_views = _row_by_desc("时域 View")
     assert "悬停" in time_views.sub and "全名" in time_views.sub
     assert "24" in time_views.sub
+    assert "⋯" in time_views.sub
+    assert "始终" in time_views.sub
     assert "»" in time_views.sub
+    assert "未显示" in time_views.sub
     assert "关闭其他" in time_views.sub or "全部 View" in time_views.sub
     close_row = _row_by_desc("View 标签关闭")
     assert "色标" in close_row.sub
@@ -449,6 +452,7 @@ def test_catalog_channel_editor_create_and_param_help():
     assert "空白 View" in close_row.sub
     alt_views = _row_by_desc("切换当前分区 View")
     assert "10–24" in alt_views.sub
+    assert "⋯" in alt_views.sub
     assert "»" in alt_views.sub
 
 
