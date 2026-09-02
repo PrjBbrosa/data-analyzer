@@ -5338,11 +5338,10 @@ class MainWindow(
         if holder is not None and (holder.guard_open or holder.close_teardown_started):
             event.ignore()
             return
-        # Interactive close/Quit is always a visible window. Pytest teardown
-        # (and tests that ``monkeypatch.undo()`` the autouse discard patch)
-        # must not block on a modal.
-        import os
-        if self.isVisible() and not os.environ.get("PYTEST_CURRENT_TEST"):
+        # Hidden construction/teardown widgets have no interactive leave
+        # decision. Every visible window follows the same production guard;
+        # tests control the prompt owner instead of changing this code path.
+        if self.isVisible():
             result = self.confirm_leave_unsaved_project()
             if result is DirtyGuardResult.CANCELLED:
                 event.ignore()

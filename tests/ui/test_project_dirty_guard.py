@@ -457,6 +457,77 @@ def test_reentrant_close_shows_one_prompt_and_tears_down_once():
     assert host._project_dirty.close_teardown_started
 
 
+def test_real_main_window_close_cancel_stops_before_teardown(
+    qapp, qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window._project_dirty.mark_user_mutation()
+    monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "cancel")
+
+    window.close()
+    qapp.processEvents()
+
+    assert window.isVisible()
+    assert window._project_dirty.is_dirty
+    assert not window._project_dirty.close_teardown_started
+
+    monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "discard")
+    window.close()
+
+
+def test_real_main_window_close_discard_uses_production_teardown(
+    qapp, qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window._project_dirty.mark_user_mutation()
+    monkeypatch.setattr(window, "_prompt_unsaved_project", lambda: "discard")
+
+    window.close()
+    qapp.processEvents()
+
+    assert not window.isVisible()
+    assert window._project_dirty.close_teardown_started
+
+
+def test_real_main_window_reentrant_close_prompts_once(
+    qapp, qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window._project_dirty.mark_user_mutation()
+    prompt_calls = []
+
+    def _prompt():
+        prompt_calls.append("prompt")
+        assert window._project_dirty.guard_open
+        window.close()
+        assert window.isVisible()
+        return "discard"
+
+    monkeypatch.setattr(window, "_prompt_unsaved_project", _prompt)
+
+    window.close()
+    qapp.processEvents()
+
+    assert prompt_calls == ["prompt"]
+    assert not window.isVisible()
+    assert window._project_dirty.close_teardown_started
+
+
 def test_unsaved_prompt_defaults_to_save_not_discard(qapp, qtbot):
     from PyQt5.QtWidgets import QWidget
     from mf4_analyzer.ui.main_window._project_io_mixin import ProjectIOMixin

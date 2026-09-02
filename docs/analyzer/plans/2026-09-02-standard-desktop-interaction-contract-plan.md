@@ -1,5 +1,10 @@
 # TraceLab 常规桌面交互与快捷键统一实施计划
 
+> 2026-09-02 review 状态：本 Plan 已由 Grok 执行，但顶部 File / Edit / View / Help
+> 菜单栏产品决定已撤销，且 review 发现 dirty baseline、Undo/save-point、Esc 和 Ctrl+Tab
+> 缺陷。后续修复以 `2026-09-02-standard-desktop-interaction-review-remediation-plan.md`
+> 为准；本文保留为原始实施记录，不再作为完成证明。
+
 - 日期：2026-09-02
 - 状态：READY FOR IMPLEMENTATION（本轮只新增 Spec/Plan，未改产品代码）
 - 计划基线：f07b6a7c

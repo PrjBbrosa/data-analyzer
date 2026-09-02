@@ -1,10 +1,14 @@
 # TraceLab 常规桌面交互与快捷键统一 Spec
 
 - 日期：2026-09-02
-- 状态：READY FOR IMPLEMENTATION
+- 状态：IMPLEMENTED（Cocoa 核心交互通过；Windows frozen 与完整前台矩阵仍 UNVERIFIED）
 - 冻结分析基线：f07b6a7c
 - 配套计划：[实施计划](../plans/2026-09-02-standard-desktop-interaction-contract-plan.md)
 - 适用范围：主窗口、标准对话框、View/图表、Markup、UltraView、文件导航、搜索和配置管理界面
+
+> 2026-09-02 review 修订：主窗口不增加 File / Edit / View / Help 顶部菜单栏。
+> command registry 与 QAction 仍作为工具栏和快捷键的单一 owner；原“顶部菜单”要求
+> 由 `2026-09-02-standard-desktop-interaction-review-remediation-plan.md` 取代。
 
 ## 0. 决策结论
 
@@ -20,7 +24,7 @@
    隐式 autoDefault 抢走 Enter。
 5. 增加项目级未保存状态与“保存 / 不保存 / 取消”保护，覆盖退出应用和打开另一个项目；
    程序化 View 恢复、投影和重绘不算用户修改。
-6. 所有仅能拖拽或点击的小部件增加键盘等价操作和可见焦点；帮助、tooltip、菜单和
+6. 所有仅能拖拽或点击的小部件增加键盘等价操作和可见焦点；帮助、tooltip、现有入口和
    实际绑定共同读取一套命令定义，避免平台显示和运行行为漂移。
 
 ## 1. 目标与非目标
@@ -55,7 +59,7 @@
 | Channel Config Manager 的隐式默认按钮是“导入” | ui/widgets/channel_config_manager.py | “保存更改”是唯一 default；搜索 Enter 留在搜索域 |
 | DB reference 主动关闭所有 autoDefault | ui/dialogs/db_reference_dialog.py | 保留例外：表格内 Enter 提交单元格，不接受 dialog |
 | UltraViewSheet 主动吞掉 Return | ui/drawers/ultraview/sheet.py | 保留例外：独立工具窗口不能被 Return 关闭 |
-| 主工具栏已有打开/保存 signal，但没有统一 QAction/菜单 | ui/toolbar.py | 建立 File/Edit/View/Help 命令面，并复用现有 slots |
+| 主工具栏已有打开/保存 signal，但没有统一 QAction owner | ui/toolbar.py | 建立无可见顶部菜单的命令面，并复用现有 slots |
 | 主窗口关闭未检查项目级 dirty | ui/main_window/window.py | 先决策 dirty，再停止任务和销毁窗口 |
 | 打开新项目只按“是否已加载文件”判断替换 | ui/main_window/_project_io_mixin.py | 未保存项目先走同一保护事务 |
 | QuickRef 搜索内按 Esc 直接关闭面板 | ui/quickref_panel.py | 有文本时先清空；再次 Esc 才关闭并恢复焦点 |
@@ -99,7 +103,7 @@ REDO、FIND、QUICK_REFERENCE、NEXT_VIEW、PREVIOUS_VIEW、VIEW_BACK、VIEW_FOR
 RESET_VIEW 和 RENAME。
 
 注册表保存 command id、中文标签、Qt standard key/fallback、scope 和 help 文案；不保存
-QWidget、MainWindow 或运行时 QUndoStack。菜单、toolbar tooltip、hints 和 quickref 从
+QWidget、MainWindow 或运行时 QUndoStack。toolbar tooltip、hints、quickref 和快捷键从
 该定义投影，不能各自硬编码第二份快捷键文本。
 
 ## 4. Enter / Return 合同
@@ -157,7 +161,7 @@ Esc 明确禁止：退出应用、关闭项目、删除对象、回退已提交�
   mutation 必须阻断 Board history。
 - 配置管理器已有草稿撤销入口的操作应进入同一局部 history；一次批量操作是一条原子
   entry，不拆成 N 次撤销。
-- 当前上下文无可撤销内容时 Edit 菜单动作 disabled；快捷键 no-op，不转而执行别的命令。
+- 当前上下文无可撤销内容时快捷键 no-op，不转而执行别的命令；不得显示无 owner 的 enabled 命令入口。
 - selection、focus、hover、打开 popup、图表视角移动和程序化 projection 不写编辑历史。
 
 本轮不要求把所有主窗口参数变化纳入一个全局 QUndoStack。没有可靠 command/owner 的
@@ -182,7 +186,7 @@ Esc 明确禁止：退出应用、关闭项目、删除对象、回退已提交�
 | 撤销 | Qt Undo bindings | 平台 NativeText | 当前 edit owner |
 | 重做 | Ctrl+Y、Ctrl+Shift+Z 等 Qt bindings | 平台 NativeText | 当前 edit owner |
 | 查找 | Ctrl+F | Command+F | 当前可搜索 surface；否则聚焦 QuickRef 搜索 |
-| 快速参考 | ? | ? | 保留现有入口；Help 菜单同时可达 |
+| 快速参考 | ? | ? | 保留现有入口；不增加顶部 Help 菜单 |
 | 下/上一个 View | Ctrl+Tab / Ctrl+Shift+Tab | Control+Tab / Control+Shift+Tab | 当前 section 的 ViewManager |
 | 视角后退/前进 | Alt+Left/Right | Option+Left/Right | 当前 focused chart |
 | 视角复位 | Home | 平台映射 | 当前 focused chart |
@@ -245,11 +249,11 @@ dirty 只表示“当前可持久化项目语义与最后一次成功保存不�
 guard 通过后才停止 worker/timer、关闭工具窗口和销毁 Qt 对象。重复 close event、应用菜单
 Quit 和系统窗口关闭必须收敛到一次 decision，不弹多个 dialog。
 
-## 10. 菜单、提示与发现性
+## 10. 命令、提示与发现性
 
-- 增加平台标准 File / Edit / View / Help 菜单；按钮和菜单复用同一个 QAction 或同一
-  named slot，不能各自执行一次。
-- Edit 菜单的 Undo/Redo 标签随 active owner 更新；没有历史时 disabled。
+- 不增加 File / Edit / View / Help 顶部菜单栏；现有紧凑工具栏和页面层级保持不变。
+- 工具栏、快捷键和帮助复用同一个 QAction 或同一 named slot，不复制业务逻辑。
+- 没有 active owner 的 Undo/Redo/View 命令不显示为可用入口；快捷键安全 no-op。
 - tooltip 使用 Qt NativeText 显示当前平台按键，不直接拼 Ctrl/Cmd 充当运行时事实。
 - ui/hints.py 与 ui/quickref.py 仍是必须同步的用户可见面，但快捷键 token 来自统一
   command registry；测试禁止同一 command 出现冲突硬编码。
@@ -262,7 +266,7 @@ Quit 和系统窗口关闭必须收敛到一次 decision，不弹多个 dialog�
 | 层 | 职责 | 禁止 |
 | --- | --- | --- |
 | ui/command_registry.py（建议新增） | command metadata、Qt bindings、NativeText | import MainWindow、保存 QWidget/QUndoStack |
-| MainWindow command coordinator / holder | 全局 QAction、active owner、dirty guard、菜单 enablement | 在多个 mixin 复制快捷键与 dirty 状态 |
+| MainWindow command coordinator / holder | 全局 QAction、active owner、dirty guard、工具栏/快捷键 enablement | 在多个 mixin 复制快捷键与 dirty 状态 |
 | dialog owner | default/autoDefault、字段验证、accept/reject | 依赖创建顺序决定 Enter |
 | chart card/toolbar | camera back/forward/reset | 抢占 Undo/Redo |
 | Markup editor | 自己的 QUndoStack、工具 Esc、文本保护 | 写 UltraView/MainWindow history |
@@ -285,9 +289,9 @@ Qt wrapper 在 owner destroyed 后清理；快捷键随 surface show/activate �
 - SDI-A06：文本焦点 Undo/Redo 不穿透 Markup、UltraView 或 chart。
 - SDI-A07：Markup/UltraView 接受 Qt 提供的全部 Undo/Redo bindings，且一次输入只执行一次。
 - SDI-A08：图表 Alt+Left/Right 维护既有 camera history；任何 Undo/Redo binding 不导航。
-- SDI-A09：Open/Save/SaveAs/Quit 只有一个 QAction owner，toolbar/menu/shortcut 不双执行。
+- SDI-A09：Open/Save/SaveAs/Quit 只有一个 QAction owner，toolbar/shortcut 不双执行，且不创建顶部菜单栏。
 - SDI-A10：SaveAs 在 Qt 返回空 standard binding 时仍有 Ctrl+Shift+S fallback。
-- SDI-A11：菜单、tooltip、hints、quickref 对同一 command 的 NativeText 一致。
+- SDI-A11：tooltip、hints、quickref 对同一 command 的 NativeText 一致。
 - SDI-A12：View 切换、F2 rename、列表导航、Space、Alt+Up/Down 有完整 keyboard path。
 - SDI-A13：文件行和配置表有 visible focus，键盘行为与鼠标行为使用同一 mutation owner。
 - SDI-A14：真实用户项目 mutation 置 dirty；保存成功清除；保存取消/失败不清除。
@@ -300,7 +304,7 @@ Qt wrapper 在 owner destroyed 后清理；快捷键随 surface show/activate �
 
 macOS Cocoa 和 Windows Full/Lite frozen 分开记录：
 
-- 菜单显示平台原生符号；按键与 tooltip/QuickRef 一致；
+- 主窗口无新增顶部菜单栏；按键与 tooltip/QuickRef 一致；
 - 中文 IME、单行/多行文本中 Enter、Esc、Undo/Redo 不被工作区抢走；
 - dialog default focus ring 与真实 Enter 结果一致；
 - 连续打开/关闭 popup、Markup、UltraView 和主窗口，无快捷键泄漏或重复触发；
@@ -317,6 +321,6 @@ Offscreen Qt 结果不能代替 Cocoa 或 frozen Windows 输入分发证据。
 2. Ctrl/Cmd+Z 不再承担图表后退，图表 camera history 完整迁移且不丢能力；
 3. dirty guard 覆盖退出和项目替换，程序化 projection 不产生假 dirty；
 4. 鼠标关键流程均有键盘等价操作和 visible focus；
-5. runtime、菜单、tooltip、hints、quickref 对快捷键没有漂移；
+5. runtime、tooltip、hints、quickref 对快捷键没有漂移，且无可见死命令；
 6. owner tests、边界门禁、Cocoa 与 Windows frozen 验收有稳定 snapshot 证据；
 7. 未修改本 Spec 非目标中的数据、计算、WWT、Batch 和持久化 schema 行为。

@@ -231,6 +231,26 @@ def _auto_discard_unsaved_project_on_close(monkeypatch):
         "_prompt_unsaved_project",
         lambda self: "discard",
     )
+    yield
+
+    # Close every surviving MainWindow while the discard patch is still live.
+    # Individual tests may temporarily replace the prompt with Cancel; teardown
+    # must not depend on fixture-finalizer ordering or a product-code pytest
+    # escape hatch.
+    app = QApplication.instance()
+    if app is None:
+        return
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.main_window.project_dirty import DirtyGuardResult
+
+    for widget in app.topLevelWidgets():
+        if not isinstance(widget, MainWindow):
+            continue
+        widget.confirm_leave_unsaved_project = (
+            lambda: DirtyGuardResult.PROCEED_DISCARDED
+        )
+        widget.close()
+    app.processEvents()
 
 
 @pytest.fixture(autouse=True)
