@@ -329,6 +329,8 @@ class ViewMixin:
         from PyQt5.QtWidgets import QShortcut
         from PyQt5.QtGui import QKeySequence
         from PyQt5.QtCore import Qt
+        from ..command_registry import CommandId, bindings_for
+
         self._view_shortcuts = []
         for i in range(9):
             sc = QShortcut(QKeySequence(f"Alt+{i + 1}"), self)
@@ -337,6 +339,129 @@ class ViewMixin:
             sc.activated.connect(
                 lambda bound=idx: self._switch_view_for_active_section(bound))
             self._view_shortcuts.append(sc)
+
+        for command_id, delta in (
+            (CommandId.NEXT_VIEW, 1),
+            (CommandId.PREVIOUS_VIEW, -1),
+        ):
+            for sequence in bindings_for(command_id):
+                shortcut = QShortcut(sequence, self)
+                # QuickRef is a non-modal Qt.Tool child of MainWindow, so a
+                # WindowShortcut would stop working as soon as its search box
+                # owns focus. The handler below validates the active/focused
+                # surface and fails closed before routing any intent.
+                shortcut.setContext(Qt.ApplicationShortcut)
+                shortcut.activated.connect(
+                    partial(self._cycle_view_for_active_section, delta)
+                )
+                self._view_shortcuts.append(shortcut)
+
+    def _active_view_surface(self):
+        """Return ``(mode, tabbar, manager)`` for the shown chart section."""
+        chart_stack = getattr(self, "chart_stack", None)
+        if chart_stack is None or sip.isdeleted(chart_stack):
+            return None
+        if not chart_stack.isVisible():
+            return None
+        mode = chart_stack.current_mode()
+        if mode in ("fft", "fft_time", "frf", "order"):
+            page = getattr(chart_stack, f"page_{mode}", None)
+            managers = getattr(self, "analysis_managers", {})
+            manager = managers.get(mode)
+            tabbar = getattr(page, "tabbar", None)
+        else:
+            mode = "time"
+            manager = getattr(self, "view_manager", None)
+            tabbar = getattr(self, "view_tabbar", None)
+        if manager is None or tabbar is None or sip.isdeleted(tabbar):
+            return None
+        if not tabbar.isVisible():
+            return None
+        return mode, tabbar, manager
+
+    @staticmethod
+    def _focus_has_view_switch_transaction(focus) -> bool:
+        """Whether a focused native/editor owner must retain Ctrl+Tab."""
+        from PyQt5.QtWidgets import QAbstractItemView
+
+        current = focus
+        while current is not None:
+            composing = getattr(current, "is_ime_composing", None)
+            if callable(composing) and composing():
+                return True
+            if (
+                isinstance(current, QAbstractItemView)
+                and current.state() == QAbstractItemView.EditingState
+            ):
+                return True
+            if bool(current.property("viewSwitchTransactionActive")):
+                return True
+            current = current.parentWidget()
+        return False
+
+    def _view_cycle_surface(self):
+        """Resolve a safe section target for a window-level cycle intent."""
+        from PyQt5.QtWidgets import QApplication, QDialog
+
+        if sip.isdeleted(self) or not self.isVisible():
+            return None
+        app = QApplication.instance()
+        if (
+            app is None
+            or app.activeModalWidget() is not None
+            or app.activePopupWidget() is not None
+        ):
+            return None
+        focus = app.focusWidget()
+        active = app.activeWindow()
+        quickref = getattr(self, "_quickref_panel", None)
+        quickref_focus = bool(
+            quickref is not None
+            and not sip.isdeleted(quickref)
+            and quickref.isVisible()
+            and focus is not None
+            and (focus is quickref or quickref.isAncestorOf(focus))
+        )
+        if isinstance(active, QDialog):
+            return None
+        if (
+            active is not None
+            and active is not self
+            and not self.isAncestorOf(active)
+            and not quickref_focus
+        ):
+            return None
+        if (
+            focus is not None
+            and not self.isAncestorOf(focus)
+            and not quickref_focus
+        ):
+            return None
+        surface = self._active_view_surface()
+        if surface is None:
+            return None
+        _mode, tabbar, _manager = surface
+        rename_active = getattr(tabbar, "is_inline_rename_active", None)
+        if callable(rename_active) and rename_active():
+            return None
+        if focus is not None and self._focus_has_view_switch_transaction(focus):
+            return None
+        return surface
+
+    def _cycle_view_for_active_section(self, delta: int) -> None:
+        surface = self._view_cycle_surface()
+        if surface is None:
+            return
+        _mode, _tabbar, manager = surface
+        count = len(manager.views)
+        if count <= 1:
+            return
+        current = manager.active
+        if not (0 <= current < count):
+            return
+        target = (current + int(delta)) % count
+        if target != current:
+            self._switch_view_for_active_section(target)
 
     def _switch_view_for_active_section(self, idx):
         """Alt+i: switch the view of whatever section is currently shown.

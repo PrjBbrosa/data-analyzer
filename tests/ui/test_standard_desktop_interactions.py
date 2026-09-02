@@ -1115,17 +1115,18 @@ def _install_coordinator(host):
     from mf4_analyzer.ui.main_window.command_coordinator import CommandCoordinator
 
     coord = CommandCoordinator(host)
-    coord.install_menus()
     coord.bind_toolbar(host.toolbar)
     return coord
 
 
-def test_toolbar_and_menu_trigger_same_named_slot_once(qapp, qtbot):
-    """SDI-A09: toolbar chip and File menu share one named slot; one click → one call."""
-    from mf4_analyzer.ui.command_registry import CommandId
+def test_toolbar_and_owned_actions_trigger_same_named_slot_once(qapp, qtbot):
+    """SDI-A09: toolbar chips reuse the coordinator's single QAction owners."""
+    from mf4_analyzer.ui.command_registry import CommandId, bindings_for
 
     host = _FakeCommandHost()
     qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
     host.toolbar.set_enabled_for_mode("time", has_file=True)
     coord = _install_coordinator(host)
 
@@ -1154,7 +1155,7 @@ def test_toolbar_and_menu_trigger_same_named_slot_once(qapp, qtbot):
         command="file.open",
         extra=f"calls={host.calls} action={open_act.objectName()!r}",
     )
-    assert host.calls == ["open_files_or_project"], f"menu Open must hit the same slot once; {ctx}"
+    assert host.calls == ["open_files_or_project"], f"Open QAction must hit the same slot once; {ctx}"
 
     host.calls.clear()
     host.toolbar.btn_save_project.click()
@@ -1168,7 +1169,7 @@ def test_toolbar_and_menu_trigger_same_named_slot_once(qapp, qtbot):
     save_act.trigger()
     qapp.processEvents()
     assert host.calls == ["save_project_via_dialog"], (
-        f"menu Save must hit the same slot once; calls={host.calls}"
+        f"Save QAction must hit the same slot once; calls={host.calls}"
     )
 
     host.calls.clear()
@@ -1183,8 +1184,177 @@ def test_toolbar_and_menu_trigger_same_named_slot_once(qapp, qtbot):
     save_as_act.trigger()
     qapp.processEvents()
     assert host.calls == ["save_project_as_via_dialog"], (
-        f"menu Save As must hit the same slot once; calls={host.calls}"
+        f"Save As QAction must hit the same slot once; calls={host.calls}"
     )
+
+    host.calls.clear()
+    quickref_binding = bindings_for(CommandId.QUICK_REFERENCE)[0]
+    _key_click_sequence(qtbot, host, quickref_binding)
+    qapp.processEvents()
+    assert host.calls == ["toggle_quickref_panel"], (
+        "the QuickRef QAction must retain its window shortcut without a menu; "
+        f"calls={host.calls} binding={quickref_binding.toString(QKeySequence.PortableText)!r}"
+    )
+
+
+def test_ctrl_tab_routes_current_section_from_ordinary_focus_once(qapp, qtbot):
+    """Ctrl+Tab is section navigation even when the ViewTabBar lacks focus."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1400, 850)
+    win.show()
+    qtbot.waitExposed(win)
+    win.view_manager.new_view(activate=False)
+    qapp.processEvents()
+
+    calls = []
+    original = win._switch_view
+    set_active_calls = []
+    original_set_active = win.view_manager.set_active
+
+    def _spy(idx):
+        calls.append(idx)
+        original(idx)
+
+    def _set_active_spy(idx):
+        set_active_calls.append(idx)
+        original_set_active(idx)
+
+    win._switch_view = _spy
+    win.view_manager.set_active = _set_active_spy
+    ordinary_focus_targets = (
+        win.canvas_time,
+        win.inspector.top.edit_xlabel,
+        win.channel_list.tree,
+        win.channel_list.search,
+        win.view_tabbar.tabBar(),
+    )
+    for target in ordinary_focus_targets:
+        win.view_manager.set_active(0)
+        calls.clear()
+        set_active_calls.clear()
+        target.setFocus(Qt.TabFocusReason)
+        qapp.processEvents()
+        qtbot.keyClick(target, Qt.Key_Tab, Qt.ControlModifier)
+        qapp.processEvents()
+        assert calls == [1], _focus_ctx(
+            target,
+            command="view.next",
+            extra=f"calls={calls} active={win.view_manager.active}",
+        )
+        assert set_active_calls == [1], "the View switch owner must run once"
+        assert win.view_manager.active == 1
+
+    calls.clear()
+    set_active_calls.clear()
+    qtbot.keyClick(
+        win.channel_list.search,
+        Qt.Key_Tab,
+        Qt.ControlModifier | Qt.ShiftModifier,
+    )
+    qapp.processEvents()
+    assert calls == [0]
+    assert set_active_calls == [0]
+    assert win.view_manager.active == 0
+
+    win.toggle_quickref_panel()
+    panel = win._quickref_panel
+    panel._search.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    calls.clear()
+    set_active_calls.clear()
+    qtbot.keyClick(panel._search, Qt.Key_Tab, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == [1], "QuickRef search remains a valid ordinary search focus"
+    assert set_active_calls == [1]
+    panel.hide()
+
+
+def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
+    qapp, qtbot
+):
+    """Analysis uses its owner once; modal/rename/IME/hidden bars block routing."""
+    from PyQt5 import sip
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1400, 850)
+    win.show()
+    qtbot.waitExposed(win)
+    win._on_mode_changed("fft")
+    manager = win.analysis_managers["fft"]
+    manager.new_view(activate=False)
+    qapp.processEvents()
+
+    calls = []
+    original = win._on_analysis_switch
+
+    def _spy(section, idx):
+        calls.append((section, idx))
+        original(section, idx)
+
+    win._on_analysis_switch = _spy
+    focus = win.chart_stack.page_fft.pane_canvas(0)
+    focus.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    qtbot.keyClick(focus, Qt.Key_Tab, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == [("fft", 1)]
+    assert manager.active == 1
+
+    bar = win.chart_stack.page_fft.tabbar
+    bar._begin_inline_rename(manager.active)
+    editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
+    assert editor is not None
+    calls.clear()
+    qtbot.keyClick(editor, Qt.Key_Tab, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == [], "an inline View rename owns the keyboard transaction"
+    bar._finish_inline_rename(accepted=False)
+
+    dialog = QDialog(win)
+    dialog.setModal(True)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    calls.clear()
+    qtbot.keyClick(dialog, Qt.Key_Tab, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == [], "a modal dialog must block section navigation"
+    dialog.hide()
+
+    ime = QLineEdit(win.centralWidget())
+    ime.is_ime_composing = lambda: True
+    ime.setGeometry(12, 12, 180, 28)
+    ime.show()
+    ime.raise_()
+    win.activateWindow()
+    ime.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    assert QApplication.focusWidget() is ime
+    calls.clear()
+    qtbot.keyClick(ime, Qt.Key_Tab, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == [], "an active IME composition must keep keyboard ownership"
+
+    bar.hide()
+    focus.setFocus(Qt.TabFocusReason)
+    qapp.processEvents()
+    calls.clear()
+    qtbot.keyClick(focus, Qt.Key_Tab, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == [], "a hidden section bar must not switch its manager"
+
+    dead_bar = QWidget(win)
+    sip.delete(dead_bar)
+    win.chart_stack.page_fft.tabbar = dead_bar
+    calls.clear()
+    qtbot.keyClick(focus, Qt.Key_Tab, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == [], "a destroyed section bar must fail closed"
 
 
 def test_global_commands_do_not_fire_through_modal_dialog(qapp, qtbot):

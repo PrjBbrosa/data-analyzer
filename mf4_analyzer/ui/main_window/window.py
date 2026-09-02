@@ -332,7 +332,6 @@ class MainWindow(
         from .command_coordinator import CommandCoordinator
         self._command_coordinator = CommandCoordinator(self)
         self._command_coordinator.publish_quit(self._on_quit)
-        self._command_coordinator.install_menus()
         self._init_drop_import()
         self._connect()
 

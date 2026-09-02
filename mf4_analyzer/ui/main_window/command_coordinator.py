@@ -1,4 +1,4 @@
-"""MainWindow owner of global QActions, File/Edit/View/Help menus, and toolbar wiring.
+"""MainWindow owner of global QActions and compact-toolbar wiring.
 
 The registry stays Qt-metadata-only. This coordinator owns the *live* QActions
 and connects them to existing named slots. It does not copy project IO, and it
@@ -30,28 +30,6 @@ _INSTALL_WINDOW_SHORTCUTS = frozenset({
     CommandId.QUICK_REFERENCE,
 })
 
-_FILE_COMMANDS = (
-    CommandId.OPEN_PROJECT,
-    CommandId.SAVE_PROJECT,
-    CommandId.SAVE_PROJECT_AS,
-    CommandId.QUIT,
-)
-_EDIT_COMMANDS = (
-    CommandId.UNDO,
-    CommandId.REDO,
-    CommandId.FIND,
-)
-_VIEW_COMMANDS = (
-    CommandId.NEXT_VIEW,
-    CommandId.PREVIOUS_VIEW,
-    CommandId.VIEW_BACK,
-    CommandId.VIEW_FORWARD,
-    CommandId.RESET_VIEW,
-    CommandId.RENAME,
-)
-_HELP_COMMANDS = (CommandId.QUICK_REFERENCE,)
-
-
 class CommandCoordinator(QObject):
     """One QAction per global command, owned by the host window."""
 
@@ -59,11 +37,11 @@ class CommandCoordinator(QObject):
         super().__init__(parent if parent is not None else host)
         self._host = host
         self._actions: dict[CommandId, QAction] = {}
-        self._menus_installed = False
         self._toolbar_bound = False
         self._quit_published = False
         self._build_actions()
         self._connect_host_slots()
+        self._claim_quickref_shortcut()
 
     def action(self, command_id: CommandId) -> QAction:
         return self._actions[command_id]
@@ -91,6 +69,12 @@ class CommandCoordinator(QObject):
                 # before Task 5's dirty guard exists.
                 action.setMenuRole(QAction.NoRole)
             self._actions[command_id] = action
+            if command_id in _INSTALL_WINDOW_SHORTCUTS:
+                # A parented QAction does not participate in shortcut
+                # dispatch until a widget owns it. Register only the live
+                # window commands; contextual registry entries remain inert
+                # metadata/actions and never become invisible dead commands.
+                host.addAction(action)
 
     def _connect_host_slots(self) -> None:
         self._actions[CommandId.OPEN_PROJECT].triggered.connect(self._on_open)
@@ -161,42 +145,8 @@ class CommandCoordinator(QObject):
         if hasattr(search, "selectAll"):
             search.selectAll()
 
-    def install_menus(self) -> None:
-        """Build File / Edit / View / Help on the host menu bar. Idempotent."""
-        if self._menus_installed:
-            return
-        host = self._host
-        menu_bar = host.menuBar()
-        self._add_menu(menu_bar, "menuFile", "文件", _FILE_COMMANDS, (CommandId.QUIT,))
-        self._add_menu(
-            menu_bar,
-            "menuEdit",
-            "编辑",
-            _EDIT_COMMANDS,
-            (CommandId.FIND,),
-        )
-        self._add_menu(
-            menu_bar,
-            "menuView",
-            "视图",
-            _VIEW_COMMANDS,
-            (CommandId.VIEW_BACK, CommandId.RENAME),
-        )
-        self._add_menu(menu_bar, "menuHelp", "帮助", _HELP_COMMANDS, ())
-        self._claim_quickref_shortcut()
-        self._menus_installed = True
-
-    def _add_menu(self, menu_bar, object_name, title, command_ids, separators_before):
-        menu = menu_bar.addMenu(title)
-        menu.setObjectName(object_name)
-        for command_id in command_ids:
-            if command_id in separators_before and menu.actions():
-                menu.addSeparator()
-            menu.addAction(self._actions[command_id])
-        return menu
-
     def _claim_quickref_shortcut(self) -> None:
-        """Drop the legacy ``?`` QShortcut so only the Help QAction owns it."""
+        """Drop the legacy ``?`` QShortcut so only its QAction owns it."""
         shortcut = getattr(self._host, "_quickref_shortcut", None)
         if shortcut is None:
             return

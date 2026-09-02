@@ -1,6 +1,6 @@
 # tests/ui/test_open_and_save_entry.py
 import csv
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
+from PyQt5.QtWidgets import QFileDialog, QMenuBar, QMessageBox
 
 
 def _csv(path, n=30):
@@ -8,6 +8,20 @@ def _csv(path, n=30):
         w = csv.writer(f); w.writerow(["time", "rpm"])
         for i in range(n):
             w.writerow([i / 100.0, float(i)])
+
+
+def test_main_window_does_not_create_a_top_menu_bar(qapp, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(1200, 760)
+    window.show()
+    qtbot.waitExposed(window)
+    qapp.processEvents()
+
+    assert window.findChildren(QMenuBar) == []
+    assert window.centralWidget().geometry().top() == 0
 
 
 def test_open_data_files_appends(qapp, tmp_path, monkeypatch):

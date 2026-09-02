@@ -1138,6 +1138,10 @@ class ViewTabBar(QWidget):
             return
         self._begin_inline_rename(idx)
 
+    def is_inline_rename_active(self) -> bool:
+        """Whether this bar currently owns a View-name edit transaction."""
+        return self._rename_editor is not None
+
     def _reorder_current_view(self, delta: int) -> None:
         from_idx = self._tabs.currentIndex()
         to_idx = from_idx + delta
