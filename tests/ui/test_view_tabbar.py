@@ -1557,12 +1557,12 @@ def test_overflow_popup_omits_help_copy_and_paints_list_separators(qtbot):
     popup.show()
     QApplication.processEvents()
     well = popup.findChild(QWidget, "viewOverflowListWell")
+    surface = popup.findChild(QFrame, "viewOverflowSurface")
     image = well.grab().toImage()
     mid_y = image.height() // 2
     mid_x = image.width() // 2
     dpr = image.devicePixelRatio()
     margins = well.contentsMargins()
-    inset = margins.left()
     separator = QColor("#c9d5e3")
 
     def _has_separator(x, y, x_band=None, y_band=None):
@@ -1604,13 +1604,20 @@ def test_overflow_popup_omits_help_copy_and_paints_list_separators(qtbot):
 
     top_y = _separator_y_near(0)
     bottom_y = _separator_y_near(image.height() - 1)
-    left_x = _separator_x_near(round(inset * dpr))
-    right_x = _separator_x_near(image.width() - 1 - round(inset * dpr))
+    left_x = _separator_x_near(0)
+    right_x = _separator_x_near(image.width() - 1)
 
-    assert (margins.left(), margins.right()) == (8, 8)
-    # The scroll child needs a one-pixel guard on every edge. Otherwise it can
-    # cover the horizontal strokes on Cocoa and leave two unmatched side lines.
-    assert (margins.top(), margins.bottom()) == (1, 1)
+    assert surface is not None
+    assert well.mapTo(surface, QPoint(0, 0)).x() == 0
+    assert well.width() == surface.width()
+    # A one-pixel paint guard protects every stroke from the scroll child while
+    # keeping the body frame on the same x-coordinate as the outer shell.
+    assert (
+        margins.left(),
+        margins.top(),
+        margins.right(),
+        margins.bottom(),
+    ) == (1, 1, 1, 1)
     assert top_y is not None
     assert bottom_y is not None
     assert left_x is not None

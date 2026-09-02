@@ -32,7 +32,7 @@ _SURFACE_BORDER = QColor("#bfcfe1")
 _SEPARATOR = QColor("#c9d5e3")
 _FOOTER_BG = QColor("#f8fafc")
 _KEEP_ONE_TIP = "至少保留一个 View"
-_WELL_INSET = 8.0
+_FRAME_GUARD = 1
 # Floor: two compact 「关闭其他 / 关闭全部」 stay clickable. Ceiling: long
 # names elide instead of stretching the panel into empty space.
 PANEL_MIN_WIDTH = 280
@@ -120,12 +120,11 @@ class ViewOverflowPopup(QFrame):
         self._scroll.setWidget(self._list_host)
         self._list_well = _OverflowListWell(self._surface)
         self._list_well.setObjectName("viewOverflowListWell")
-        # Widget contentsMargins (not layout margins) shrink contentsRect so
-        # every edge of the well stroke sits in protected padding, inside the
-        # clip and outside the opaque scroll child. The 1px top/bottom guards
-        # keep both side strokes joined to the same horizontal endpoints.
+        # Keep one protected paint pixel on every edge. The body frame must
+        # share the outer shell's left/right x-coordinate; a larger horizontal
+        # inset creates the visible step between header, body, and footer.
         self._list_well.setContentsMargins(
-            int(_WELL_INSET), 1, int(_WELL_INSET), 1
+            _FRAME_GUARD, _FRAME_GUARD, _FRAME_GUARD, _FRAME_GUARD
         )
         well_lay = QVBoxLayout(self._list_well)
         well_lay.setContentsMargins(0, 0, 0, 0)
@@ -286,7 +285,7 @@ class ViewOverflowPopup(QFrame):
             + longest_name
             + chip
             + self._scrollbar_gutter()
-            + 2 * int(_WELL_INSET)
+            + 2 * _FRAME_GUARD
         )
         header_w = 14 + fm.horizontalAdvance("全部 View") + 12 + 52 + 14
         footer_w = 10 + 118 + 8 + 118 + 10
