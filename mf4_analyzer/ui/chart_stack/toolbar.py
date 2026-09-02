@@ -4,8 +4,8 @@ from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAbstractButton, QAbstractSpinBox, QAction, QButtonGroup, QFileDialog,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QSlider, QSpinBox, QToolBar, QVBoxLayout,
-    QWidget,
+    QScrollArea, QSizePolicy, QSlider, QSpinBox, QToolBar, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from ..chart_defaults import DEFAULT_CHART_TICK_DENSITY
@@ -183,12 +183,14 @@ class ToolbarScrollHost(QScrollArea):
 
     The inner bar always lays out at its natural ``sizeHint()`` (or the
     viewport width, whichever is larger), so Qt never creates the QToolBar
-    extension/overflow button. Dragging empty chrome past
-    ``PAN_START_PX`` pans; smaller motion stays a normal click. Horizontal
-    wheel/trackpad delta scrolls; vertical delta is ignored.
+    extension/overflow button. Edge buttons and a discrete mouse wheel keep
+    every action reachable when no empty drag chrome remains. Empty-chrome
+    dragging and horizontal wheel/trackpad deltas remain supported.
     """
 
     PAN_START_PX = 8
+    EDGE_BUTTON_WIDTH = 28
+    EDGE_SCROLL_STEP_PX = 128
 
     def __init__(self, toolbar, parent=None):
         super().__init__(parent)
@@ -210,20 +212,19 @@ class ToolbarScrollHost(QScrollArea):
         self._press_global = None
         self._press_offset = 0
         self._panning = False
-        self._hint_left = QLabel("‹", self)
-        self._hint_right = QLabel("›", self)
-        for hint in (self._hint_left, self._hint_right):
-            hint.setObjectName("chartToolbarEdgeHint")
-            hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            hint.setAlignment(Qt.AlignCenter)
-            hint.setFixedWidth(14)
-            hint.setStyleSheet(
-                "color:#94a3b8;background:transparent;font-size:16px;"
-            )
-            hint.hide()
+        self._hint_left = self._make_edge_button(
+            "‹", "向左查看更多工具", "向左滚动工具栏"
+        )
+        self._hint_right = self._make_edge_button(
+            "›", "向右查看更多工具", "向右滚动工具栏"
+        )
+        self._hint_left.clicked.connect(self._scroll_left)
+        self._hint_right.clicked.connect(self._scroll_right)
         self._install_filters(toolbar)
         self.viewport().installEventFilter(self)
         self.installEventFilter(self)
+        self._hint_left.installEventFilter(self)
+        self._hint_right.installEventFilter(self)
         self.horizontalScrollBar().valueChanged.connect(self._sync_edge_hints)
 
     def sizeHint(self):
@@ -274,7 +275,11 @@ class ToolbarScrollHost(QScrollArea):
             return False
         if etype == QEvent.Wheel:
             if self._is_descended_from_toolbar(obj) or obj in (
-                self, self.viewport(), self.widget(),
+                self,
+                self.viewport(),
+                self.widget(),
+                self._hint_left,
+                self._hint_right,
             ):
                 if self._apply_horizontal_wheel(event):
                     return True
@@ -297,6 +302,14 @@ class ToolbarScrollHost(QScrollArea):
         if bar is None:
             return
         hint = bar.sizeHint()
+        edge_width = (
+            self.EDGE_BUTTON_WIDTH
+            if hint.width() > max(0, self.contentsRect().width())
+            else 0
+        )
+        margins = self.viewportMargins()
+        if margins.left() != edge_width or margins.right() != edge_width:
+            self.setViewportMargins(edge_width, 0, edge_width, 0)
         viewport_w = max(0, self.viewport().width())
         viewport_h = max(0, self.viewport().height())
         target_w = max(hint.width(), viewport_w)
@@ -311,7 +324,19 @@ class ToolbarScrollHost(QScrollArea):
         if widget is None:
             return
         self.fit_inner_toolbar()
-        self.ensureWidgetVisible(widget, xmargin, 0)
+        bar = self.widget()
+        if bar is None:
+            return
+        scroll = self.horizontalScrollBar()
+        widget_left = widget.mapTo(bar, QPoint(0, 0)).x()
+        wanted_left = max(0, widget_left - xmargin)
+        wanted_right = widget_left + widget.width() + xmargin
+        visible_left = scroll.value()
+        visible_right = visible_left + self.viewport().width()
+        if wanted_left < visible_left:
+            scroll.setValue(wanted_left)
+        elif wanted_right > visible_right:
+            scroll.setValue(wanted_right - self.viewport().width())
         self._sync_edge_hints()
 
     def _install_filters(self, widget):
@@ -367,26 +392,69 @@ class ToolbarScrollHost(QScrollArea):
         pixel = event.pixelDelta()
         dx = pixel.x()
         if dx == 0:
-            dx = event.angleDelta().x()
+            angle = event.angleDelta()
+            dx = angle.x()
+            # A conventional Windows mouse wheel reports only angleDelta().y().
+            # Reuse it only for discrete wheel events; a touchpad's vertical
+            # pixel gesture remains vertical and is not unexpectedly hijacked.
+            if dx == 0 and pixel.isNull():
+                dx = angle.y()
         if dx == 0:
             return False
         bar = self.horizontalScrollBar()
+        before = bar.value()
         bar.setValue(bar.value() - dx)
         self._sync_edge_hints()
-        return True
+        return bar.value() != before
+
+    def _make_edge_button(self, text, accessible_name, tooltip):
+        button = QToolButton(self)
+        button.setObjectName("chartToolbarEdgeButton")
+        button.setText(text)
+        button.setAccessibleName(accessible_name)
+        button.setToolTip(tooltip)
+        button.setCursor(Qt.PointingHandCursor)
+        # The scroll host itself is mouse-only; keeping these overlays out of
+        # the focus chain also prevents disabling the end arrow from making
+        # QScrollArea auto-scroll to an unrelated focused toolbar action.
+        button.setFocusPolicy(Qt.NoFocus)
+        button.setAutoRepeat(True)
+        button.setAutoRepeatDelay(320)
+        button.setAutoRepeatInterval(90)
+        button.setFixedWidth(self.EDGE_BUTTON_WIDTH)
+        button.hide()
+        return button
+
+    def _scroll_left(self, _checked=False):
+        self._scroll_by(-self.EDGE_SCROLL_STEP_PX)
+
+    def _scroll_right(self, _checked=False):
+        self._scroll_by(self.EDGE_SCROLL_STEP_PX)
+
+    def _scroll_by(self, delta):
+        bar = self.horizontalScrollBar()
+        bar.setValue(bar.value() + int(delta))
+        self._sync_edge_hints()
 
     def _sync_edge_hints(self, *_args):
         bar = self.horizontalScrollBar()
-        height = max(1, self.viewport().height())
-        width = self.viewport().width()
-        self._hint_left.setGeometry(0, 0, 14, height)
-        self._hint_right.setGeometry(max(0, width - 14), 0, 14, height)
+        rect = self.contentsRect()
+        height = max(1, rect.height())
+        edge_width = self.EDGE_BUTTON_WIDTH
+        self._hint_left.setGeometry(rect.left(), rect.top(), edge_width, height)
+        self._hint_right.setGeometry(
+            max(rect.left(), rect.right() - edge_width + 1),
+            rect.top(),
+            edge_width,
+            height,
+        )
         overflow = bar.maximum() > 0
-        self._hint_left.setVisible(overflow and bar.value() > 0)
-        self._hint_right.setVisible(overflow and bar.value() < bar.maximum())
-        if self._hint_left.isVisible():
+        self._hint_left.setVisible(overflow)
+        self._hint_right.setVisible(overflow)
+        self._hint_left.setEnabled(overflow and bar.value() > 0)
+        self._hint_right.setEnabled(overflow and bar.value() < bar.maximum())
+        if overflow:
             self._hint_left.raise_()
-        if self._hint_right.isVisible():
             self._hint_right.raise_()
 
 

@@ -211,6 +211,8 @@ def test_quickref_documents_narrow_toolbar_pan():
     group = next(g for g in quickref.QUICKREF if g.title == "快捷键")
     row = next(row for row in group.rows if row.desc == "窄窗口工具栏")
     assert "滑动" in row.sub
+    assert "箭头" in row.sub
+    assert "滚轮" in row.sub
     assert "顺序" in row.sub
 
 

@@ -65,6 +65,19 @@ class TestFmtTick:
             "100003.94",
         ]
 
+    @pytest.mark.parametrize(("value", "expected"), [
+        (2.2147, "2.215"),
+        (0.7147, "0.715"),
+        (0.1147, "0.115"),
+        (-0.1853, "-0.185"),
+        (-2.2853, "-2.285"),
+    ])
+    def test_ordinary_offset_ticks_prefer_truthful_fixed_labels(
+        self, value, expected,
+    ):
+        """A 0.3 grid with a file-restored phase stays readable without e±00."""
+        assert _fmt_tick(value, per_div=0.3) == expected
+
     def test_step_aware_labels_are_truthful_and_distinct_across_nice_ladder(self):
         steps = sorted({
             mantissa * (10.0 ** exponent)
@@ -346,6 +359,23 @@ class TestRepinTicks:
 
         after = [handle.get_ylim() for handle in canvas.axes_list]
         assert after == pytest.approx(before, rel=1e-12, abs=1e-12)
+
+    def test_restore_projection_keeps_offset_range_with_fixed_labels(self, qapp):
+        canvas = self._overlay(qapp)
+        canvas.set_tick_density(10, 15)
+        handle = canvas.axes_list[0]
+        handle.set_ylim(-2.2853, 2.2147)
+
+        canvas._repin_overlay_channel_ticks(reframe=False)
+
+        assert handle.get_ylim() == pytest.approx((-2.2853, 2.2147))
+        labels = [label for _value, label in handle.y_axis_item()._tickLevels[0]]
+        assert labels == [
+            "-2.285", "-1.985", "-1.685", "-1.385",
+            "-1.085", "-0.785", "-0.485", "-0.185",
+            "0.115", "0.415", "0.715", "1.015",
+            "1.315", "1.615", "1.915", "2.215",
+        ]
 
     def test_repin_keeps_nice_step_with_relative_float_noise(self, qapp):
         canvas = self._overlay(qapp)

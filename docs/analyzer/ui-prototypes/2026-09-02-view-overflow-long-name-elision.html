@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab · View 长名称固定关闭列</title>
+  <style>
+    :root {
+      --ink: #142238;
+      --muted: #6f8198;
+      --line: #c8d7e7;
+      --line-soft: #e2eaf3;
+      --surface: #ffffff;
+      --canvas: #edf3f9;
+      --blue: #1169d7;
+      --blue-soft: #edf4ff;
+      --blue-chip: #dbeaff;
+      --danger: #d51f3d;
+      --danger-soft: #fff0f2;
+      --scroll: #c2cfdd;
+      --shadow: 0 22px 54px rgba(31, 55, 83, .14);
+      --sans: "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      color: var(--ink);
+      font: 14px/1.45 var(--sans);
+      background:
+        linear-gradient(rgba(255,255,255,.67), rgba(255,255,255,0) 280px),
+        var(--canvas);
+    }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid rgba(17,105,215,.22); outline-offset: 2px; }
+
+    .page {
+      width: min(1020px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 44px;
+    }
+    .intro {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 28px;
+      margin-bottom: 20px;
+    }
+    .eyebrow {
+      margin-bottom: 7px;
+      color: #66809e;
+      font: 750 11px/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: clamp(25px, 4vw, 38px); line-height: 1.12; letter-spacing: -.035em; }
+    .lede { max-width: 680px; margin: 8px 0 0; color: var(--muted); }
+    .verdict {
+      flex: 0 0 auto;
+      padding: 8px 11px;
+      border: 1px solid #b8cde4;
+      border-radius: 9px;
+      background: rgba(255,255,255,.7);
+      color: #46617f;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .workbench {
+      display: grid;
+      grid-template-columns: minmax(430px, 1fr) 300px;
+      min-height: 720px;
+      overflow: hidden;
+      border: 1px solid #c3d2e1;
+      border-radius: 18px;
+      background: rgba(255,255,255,.64);
+      box-shadow: var(--shadow);
+    }
+    .stage {
+      display: grid;
+      place-items: center;
+      min-width: 0;
+      padding: 26px;
+      background:
+        linear-gradient(rgba(111,137,165,.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(111,137,165,.08) 1px, transparent 1px),
+        #f7fafd;
+      background-size: 24px 24px;
+    }
+
+    .panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      width: 316px;
+      height: 650px;
+      overflow: hidden;
+      border: 1px solid #b9cde2;
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: 0 18px 42px rgba(29,54,82,.17);
+      transition: width 180ms ease;
+    }
+    .panel[data-width="compact"] { width: 280px; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 44px;
+      padding: 10px 13px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h2 { margin: 0; font-size: 18px; line-height: 1; letter-spacing: -.02em; }
+    .count {
+      min-width: 42px;
+      padding: 5px 7px;
+      border-radius: 8px;
+      background: var(--blue-soft);
+      color: #155aa9;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .list-well { min-width: 0; min-height: 0; overflow: hidden; }
+    .view-list {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      margin: 0;
+      padding: 5px 10px 6px 7px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-color: var(--scroll) transparent;
+      scrollbar-width: thin;
+    }
+    .view-list::-webkit-scrollbar { width: 8px; }
+    .view-list::-webkit-scrollbar-track { background: transparent; }
+    .view-list::-webkit-scrollbar-thumb { border-radius: 6px; background: var(--scroll); }
+    .view-row {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto 27px;
+      align-items: center;
+      column-gap: 7px;
+      width: 100%;
+      min-width: 0;
+      min-height: 38px;
+      padding: 3px 3px 3px 7px;
+      border-radius: 9px;
+    }
+    .view-row + .view-row { margin-top: 2px; }
+    .view-row:hover { background: #f5f8fc; }
+    .view-row.current { background: var(--blue-soft); }
+    .swatch {
+      width: 28px;
+      height: 16px;
+      border-radius: 5px;
+      background: var(--row-color);
+      box-shadow: inset 0 -1px 0 rgba(0,0,0,.17);
+    }
+    .name {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      padding: 4px 0;
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 690;
+    }
+    .name:hover { color: #0759b7; }
+    .current-chip {
+      padding: 3px 6px;
+      border-radius: 7px;
+      background: var(--blue-chip);
+      color: #135ba9;
+      font-size: 10px;
+      font-weight: 760;
+    }
+    .close {
+      display: grid;
+      place-items: center;
+      width: 27px;
+      height: 27px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: #7b8da2;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: 670;
+      line-height: 1;
+    }
+    .close:hover {
+      border-color: #e49aa6;
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    .close:disabled { cursor: default; opacity: .28; }
+
+    .panel-foot {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 8px 10px 10px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+    .panel-foot button {
+      height: 30px;
+      border: 1px solid #c1d1e2;
+      border-radius: 8px;
+      background: #fff;
+      color: #334a65;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 720;
+    }
+    .panel-foot button:hover { border-color: #92b2d8; background: var(--blue-soft); }
+    .panel-foot .danger { border-color: #eca6b0; color: var(--danger); }
+    .panel-foot .danger:hover { background: var(--danger-soft); }
+
+    .inspector {
+      padding: 28px 24px;
+      border-left: 1px solid var(--line-soft);
+      background: #fff;
+    }
+    .inspector h3 { margin: 0; font-size: 15px; }
+    .inspector p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+    .controls { display: grid; gap: 9px; margin-top: 20px; }
+    .control-label { color: #71849a; font: 700 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; border: 1px solid #d5e0eb; border-radius: 10px; background: #f3f7fb; }
+    .segmented button, .stress, .reset {
+      min-height: 33px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: #52677f;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .segmented button.active { border-color: #bdd1e9; background: #fff; color: #155cad; box-shadow: 0 2px 6px rgba(32,66,104,.08); }
+    .stress { border-color: #b9cee7; background: #edf4ff; color: #155cad; }
+    .stress.active { border-color: #82aad8; background: #dceaff; }
+    .reset { border-color: #d3dde8; background: #fff; }
+    .status {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 9px 10px;
+      margin-top: 24px;
+      padding: 14px;
+      border: 1px solid #c5d9cf;
+      border-radius: 11px;
+      background: #f0f8f3;
+    }
+    .status-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #1b9b58; box-shadow: 0 0 0 4px rgba(27,155,88,.10); }
+    .status b { display: block; color: #226142; font-size: 12px; }
+    .status code { color: #518069; font: 10px/1.4 var(--mono); }
+    .rules { display: grid; gap: 13px; margin-top: 24px; }
+    .rule { display: grid; grid-template-columns: 22px 1fr; gap: 9px; }
+    .rule-no { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: #e9f1fb; color: #2a66a9; font: 750 10px/1 var(--mono); }
+    .rule b { display: block; margin-top: 1px; font-size: 12px; }
+    .rule span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .tooltip {
+      position: fixed;
+      z-index: 20;
+      display: none;
+      max-width: 420px;
+      padding: 7px 9px;
+      border-radius: 7px;
+      background: #172538;
+      color: #fff;
+      box-shadow: 0 8px 24px rgba(17,34,55,.22);
+      pointer-events: none;
+      font-size: 11px;
+    }
+
+    @media (max-width: 780px) {
+      .intro { display: block; }
+      .verdict { display: inline-block; margin-top: 13px; }
+      .workbench { grid-template-columns: 1fr; }
+      .inspector { border-top: 1px solid var(--line-soft); border-left: 0; }
+      .stage { min-height: 710px; padding: 18px 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .panel { transition: none; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div>
+        <div class="eyebrow">TraceLab / View overflow / fixed action rail</div>
+        <h1>名称可以很长，关闭按钮不能消失。</h1>
+        <p class="lede">保留完整 View 名称，只压缩屏幕上的名称列。右侧“当前”和 × 始终固定，面板只允许纵向滚动。</p>
+      </div>
+      <div class="verdict">建议：限制显示宽度，不限制真实名称</div>
+    </header>
+
+    <section class="workbench" aria-label="View 长名称交互原型">
+      <div class="stage">
+        <section class="panel" data-panel data-width="normal" aria-label="全部 View">
+          <header class="panel-head">
+            <h2>全部 View</h2>
+            <span class="count" data-count>14 个</span>
+          </header>
+          <div class="list-well">
+            <div class="view-list" data-list></div>
+          </div>
+          <footer class="panel-foot">
+            <button type="button">关闭其他</button>
+            <button class="danger" type="button">关闭全部</button>
+          </footer>
+        </section>
+      </div>
+
+      <aside class="inspector">
+        <h3>交互压力测试</h3>
+        <p>切换到极长名称或缩到 280px，观察右侧关闭列是否仍然固定。</p>
+        <div class="controls">
+          <span class="control-label">面板宽度</span>
+          <div class="segmented" aria-label="面板宽度">
+            <button class="active" type="button" data-width="normal">316 px</button>
+            <button type="button" data-width="compact">280 px</button>
+          </div>
+          <span class="control-label">名称内容</span>
+          <button class="stress" type="button" data-stress aria-pressed="false">模拟极长 View 名称</button>
+          <button class="reset" type="button" data-reset>恢复 14 个 View</button>
+        </div>
+
+        <div class="status" data-status>
+          <span class="status-dot"></span>
+          <div><b data-status-title>关闭列固定可见</b><code data-status-code>horizontal overflow = 0 px</code></div>
+        </div>
+
+        <div class="rules">
+          <div class="rule"><span class="rule-no">01</span><div><b>名称只在视觉上省略</b><span>完整值仍用于保存、重命名和识别。</span></div></div>
+          <div class="rule"><span class="rule-no">02</span><div><b>悬停查看完整名称</b><span>省略不会让工程语义丢失。</span></div></div>
+          <div class="rule"><span class="rule-no">03</span><div><b>× 是固定操作列</b><span>无需横向拖动，也不随名称长度漂移。</span></div></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <div class="tooltip" data-tooltip role="tooltip"></div>
+
+  <script>
+    const BASE = [
+      ['WinWert 1 · Wheel input torque', '#0e83ee'],
+      ['WinWert 2 · Wheel input torque', '#fb4b00'],
+      ['WinWert 3 · Motor torque A', '#079d42'],
+      ['WinWert 4 · Motor torque B', '#a92bb7'],
+      ['WinWert 5 · Motor torque A+B', '#f3002d'],
+      ['WinWert 6 · Wheel input torque Symmetry', '#149aa9'],
+      ['WinWert 7 · Wheel input torque Hysteresis', '#ff8500'],
+      ['WinWert 1 · Wheel input torque', '#ce0060'],
+      ['WinWert 2 · Wheel input torque', '#3c9600'],
+      ['WinWert 3 · Wheel input torque Symmetrie', '#6540c8'],
+      ['WinWert 5 · (x) Hysterese Md–Lenkr.', '#06a879'],
+      ['WinWert 6 · Hysterese', '#505b66'],
+      ['WinWert 7 · Motor output torque', '#0e83ee'],
+      ['WinWert 9 · Wheel input torque', '#fb4b00'],
+    ];
+    const SUFFIX = ' / steering-system endurance validation / left-and-right comparison / final measurement';
+    const panel = document.querySelector('[data-panel]');
+    const list = document.querySelector('[data-list]');
+    const count = document.querySelector('[data-count]');
+    const stress = document.querySelector('[data-stress]');
+    const tooltip = document.querySelector('[data-tooltip]');
+    const statusTitle = document.querySelector('[data-status-title]');
+    const statusCode = document.querySelector('[data-status-code]');
+    let rows = BASE.map((item, index) => ({ id: index + 1, name: item[0], color: item[1] }));
+    let current = 10;
+    let stressed = false;
+
+    function fullName(row) {
+      if (!stressed) return row.name;
+      return row.name + SUFFIX + ` / dataset-${String(row.id).padStart(2, '0')}`;
+    }
+
+    function render() {
+      list.replaceChildren();
+      rows.forEach((row) => {
+        const item = document.createElement('div');
+        item.className = 'view-row' + (row.id === current ? ' current' : '');
+        item.style.setProperty('--row-color', row.color);
+
+        const swatch = document.createElement('span');
+        swatch.className = 'swatch';
+
+        const name = document.createElement('button');
+        name.className = 'name';
+        name.type = 'button';
+        name.textContent = fullName(row);
+        name.dataset.full = fullName(row);
+        name.setAttribute('aria-label', `切换到 ${fullName(row)}`);
+        name.addEventListener('click', () => { current = row.id; render(); });
+        name.addEventListener('mouseenter', showTooltip);
+        name.addEventListener('mousemove', moveTooltip);
+        name.addEventListener('mouseleave', hideTooltip);
+
+        const chip = document.createElement('span');
+        chip.className = 'current-chip';
+        chip.textContent = row.id === current ? '当前' : '';
+        chip.hidden = row.id !== current;
+
+        const close = document.createElement('button');
+        close.className = 'close';
+        close.type = 'button';
+        close.textContent = '×';
+        close.setAttribute('aria-label', `关闭 ${fullName(row)}`);
+        close.disabled = rows.length === 1;
+        close.addEventListener('click', () => {
+          const wasCurrent = row.id === current;
+          rows = rows.filter((candidate) => candidate.id !== row.id);
+          if (wasCurrent && rows.length) current = rows[0].id;
+          render();
+        });
+
+        item.append(swatch, name, chip, close);
+        list.append(item);
+      });
+      count.textContent = `${rows.length} 个`;
+      requestAnimationFrame(updateOverflowStatus);
+    }
+
+    function updateOverflowStatus() {
+      const overflow = Math.max(0, list.scrollWidth - list.clientWidth);
+      statusTitle.textContent = overflow === 0 ? '关闭列固定可见' : '检测到横向溢出';
+      statusCode.textContent = `horizontal overflow = ${overflow} px`;
+      document.querySelector('[data-status]').style.borderColor = overflow === 0 ? '#c5d9cf' : '#e3a6ae';
+    }
+
+    function showTooltip(event) {
+      tooltip.textContent = event.currentTarget.dataset.full;
+      tooltip.style.display = 'block';
+      moveTooltip(event);
+    }
+    function moveTooltip(event) {
+      tooltip.style.left = `${Math.min(window.innerWidth - tooltip.offsetWidth - 12, event.clientX + 12)}px`;
+      tooltip.style.top = `${Math.min(window.innerHeight - tooltip.offsetHeight - 12, event.clientY + 14)}px`;
+    }
+    function hideTooltip() { tooltip.style.display = 'none'; }
+
+    document.querySelectorAll('[data-width]').forEach((button) => {
+      if (button === panel) return;
+      button.addEventListener('click', () => {
+        panel.dataset.width = button.dataset.width;
+        document.querySelectorAll('.segmented button').forEach((candidate) => candidate.classList.toggle('active', candidate === button));
+        requestAnimationFrame(updateOverflowStatus);
+      });
+    });
+    stress.addEventListener('click', () => {
+      stressed = !stressed;
+      stress.classList.toggle('active', stressed);
+      stress.setAttribute('aria-pressed', String(stressed));
+      stress.textContent = stressed ? '正在显示极长名称' : '模拟极长 View 名称';
+      render();
+    });
+    document.querySelector('[data-reset]').addEventListener('click', () => {
+      rows = BASE.map((item, index) => ({ id: index + 1, name: item[0], color: item[1] }));
+      current = 10;
+      render();
+    });
+    window.addEventListener('resize', updateOverflowStatus);
+    render();
+  </script>
+</body>
+</html>

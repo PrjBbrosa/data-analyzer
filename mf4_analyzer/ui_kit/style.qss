@@ -2547,9 +2547,27 @@ QScrollArea#chartToolbarScrollHost {
     background: transparent;
     border: none;
 }
-QLabel#chartToolbarEdgeHint {
-    color: #94a3b8;
-    background: transparent;
+QToolButton#chartToolbarEdgeButton {
+    padding: 0;
+    border: 1px solid #d5e0ec;
+    border-radius: 7px;
+    background-color: #f8fbff;
+    color: #58708f;
+    font-size: 17px;
+    font-weight: 700;
+}
+QToolButton#chartToolbarEdgeButton:hover {
+    border-color: #a9c5ea;
+    background-color: #edf5ff;
+    color: #175db5;
+}
+QToolButton#chartToolbarEdgeButton:pressed {
+    background-color: #dfeeff;
+}
+QToolButton#chartToolbarEdgeButton:disabled {
+    border-color: transparent;
+    background-color: transparent;
+    color: #c4ceda;
 }
 QToolBar#chartToolbar,
 QWidget#chartToolbar {

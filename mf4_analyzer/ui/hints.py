@@ -216,7 +216,7 @@ _HINTS = (
     ),
     Hint(
         id="chart.toolbar_pan",
-        text="窄工具栏可横滑查看更多",
+        text="窄工具栏：点左右箭头或滚轮查看更多",
         surface="discovery",
         modes=frozenset({"time", "fft", "fft_time", "order", "frf"}),
         priority=41,

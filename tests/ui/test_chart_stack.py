@@ -3855,3 +3855,71 @@ def test_toolbar_scroll_host_pan_threshold_and_horizontal_wheel(qapp, qtbot):
     QApplication.sendEvent(host.viewport(), vertical)
     qapp.processEvents()
     assert host.horizontalScrollBar().value() == after_h
+
+
+def test_toolbar_scroll_host_windows_wheel_and_edge_buttons_need_no_blank_chrome(
+    qapp, qtbot
+):
+    from PyQt5.QtCore import QPoint, QPointF
+    from PyQt5.QtGui import QWheelEvent
+    from PyQt5.QtWidgets import QApplication, QPushButton, QToolBar
+
+    from mf4_analyzer.ui.chart_stack.toolbar import ToolbarScrollHost
+    from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+
+    load_stylesheet(qapp)
+
+    bar = QToolBar()
+    button = QPushButton("Go", bar)
+    bar.addWidget(button)
+    for index in range(16):
+        bar.addAction(f"Act{index}")
+    host = ToolbarScrollHost(bar)
+    qtbot.addWidget(host)
+    host.resize(180, 40)
+    host.show()
+    qtbot.waitExposed(host)
+    qapp.processEvents()
+    host.fit_inner_toolbar()
+    qapp.processEvents()
+
+    scroll = host.horizontalScrollBar()
+    assert scroll.maximum() > 0
+    assert host._hint_left.isVisible()
+    assert host._hint_right.isVisible()
+    assert host._hint_left.width() >= 24
+    assert host._hint_right.width() >= 24
+    assert not host._hint_left.isEnabled()
+    assert host._hint_right.isEnabled()
+    viewport_rect = host.viewport().geometry()
+    assert host._hint_left.geometry().right() < viewport_rect.left()
+    assert host._hint_right.geometry().left() > viewport_rect.right()
+
+    # A Windows mouse wheel normally has only angleDelta().y(). It must work
+    # even when the pointer is over a real toolbar button rather than blank
+    # toolbar chrome.
+    pos = QPointF(button.rect().center())
+    vertical_mouse_wheel = QWheelEvent(
+        pos,
+        button.mapToGlobal(pos.toPoint()),
+        QPoint(0, 0),
+        QPoint(0, -120),
+        Qt.NoButton,
+        Qt.NoModifier,
+        Qt.ScrollUpdate,
+        False,
+    )
+    QApplication.sendEvent(button, vertical_mouse_wheel)
+    qapp.processEvents()
+    assert scroll.value() > 0
+
+    scroll.setValue(0)
+    qtbot.mouseClick(host._hint_right, Qt.LeftButton)
+    assert scroll.value() > 0
+
+    scroll.setValue(scroll.maximum())
+    assert host._hint_left.isEnabled()
+    assert not host._hint_right.isEnabled()
+    before = scroll.value()
+    qtbot.mouseClick(host._hint_left, Qt.LeftButton)
+    assert scroll.value() < before

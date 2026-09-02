@@ -167,7 +167,8 @@ def test_time_hint_documents_cursor_display_settings_and_custom_x_single_values(
 
 def test_chart_toolbar_pan_hint_documents_horizontal_scroll():
     hint = next(item for item in hints.all_hints() if item.id == "chart.toolbar_pan")
-    assert "横滑" in hint.text
+    assert "箭头" in hint.text
+    assert "滚轮" in hint.text
     assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
 
 

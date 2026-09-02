@@ -231,11 +231,22 @@ def _fmt_tick(value, per_div=None):
             if value == 0.0 or abs(value) < step * 1e-6:
                 return "0"
             decimals = max(0, math.ceil(-math.log10(step)) + 1)
-            fixed = f"{value:.{decimals}f}"
-            if "." in fixed:
-                fixed = fixed.rstrip("0").rstrip(".")
-            if fixed == "-0":
-                fixed = "0"
+
+            def _fixed_label(places):
+                label = f"{value:.{places}f}"
+                if "." in label:
+                    label = label.rstrip("0").rstrip(".")
+                return "0" if label == "-0" else label
+
+            fixed_labels = [_fixed_label(decimals)]
+            # A free-phase/restored grid can need one more decimal than its
+            # step alone suggests: 0.7147 on a 0.3 grid is not truthful as
+            # 0.71, but 0.715 is both truthful and shorter than 7.147e-01.
+            # Keep the extra fixed candidate to ordinary engineering-scale
+            # values; genuinely tiny/large values retain the existing
+            # scientific-notation behavior.
+            if 1e-4 <= abs(value) < 1e6:
+                fixed_labels.append(_fixed_label(decimals + 1))
 
             # Resolve one hundredth of a division without forming value/step,
             # whose intermediate result can overflow or underflow.
@@ -249,7 +260,7 @@ def _fmt_tick(value, per_div=None):
             error_limit = 0.01 * step
             numeric_epsilon = 4.0 * math.ulp(error_limit)
             candidates = []
-            for preference, label in enumerate((fixed, scientific)):
+            for preference, label in enumerate((*fixed_labels, scientific)):
                 if abs(float(label) - value) <= error_limit + numeric_epsilon:
                     candidates.append((len(label), preference, label))
             if candidates:

@@ -7,7 +7,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    QTimer,
+    Qt,
+    pyqtSignal,
+)
 from PyQt5.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QFrame,
@@ -186,6 +197,11 @@ class ViewOverflowPopup(QFrame):
             self._fitted_width = self._preferred_panel_width(rows)
         if self.isVisible():
             self._apply_panel_size(self._fitted_width)
+            # QScrollArea defers its widget-resizable pass on Cocoa. Flush only
+            # this scroll area's pending layout request so the reserved
+            # scrollbar gutter, name budget, and close-button hit geometry all
+            # describe the same frame after a visible list rebuild.
+            QCoreApplication.sendPostedEvents(self._scroll, QEvent.LayoutRequest)
             self._elide_visible_names()
             self._restore_pointer_chrome()
             QTimer.singleShot(0, self._after_reproject)
@@ -355,7 +371,13 @@ class ViewOverflowPopup(QFrame):
         name.setObjectName("viewOverflowRowName")
         name.setCursor(Qt.PointingHandCursor)
         name.setAttribute(Qt.WA_Hover, True)
-        name.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        # The name is the row's only compressible column. ``Preferred`` lets a
+        # long imported View name become the list host's minimum width, leaving
+        # a hidden horizontal scroll range that can push the fixed × column off
+        # screen. Ignore the text size hint and elide to the width left after
+        # the swatch/current chip/close controls instead.
+        name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        name.setMinimumWidth(0)
         name.setProperty("fullName", row.name)
         name.setToolTip(row.name)
         name.setProperty("viewId", row.view_id)
