@@ -95,6 +95,36 @@ class ProjectDirtyState:
             self.saved_digest = str(digest)
         self._last_mutation_token = None
 
+    def adopt_restored_session(self, *, path=None, digest=None) -> None:
+        """Atomically adopt a restored project as a fresh clean session.
+
+        Project open is a session replacement, not an ordinary save point in
+        the previous session.  Reset the monotonic revision domain together
+        with its path, canonical baseline, and mutation-token coalescer while
+        preserving the active restore guard and leave/teardown guards.
+        """
+        self.revision = 0
+        self.save_point = 0
+        self.path = None if path is None else str(path)
+        self.saved_digest = None if digest is None else str(digest)
+        self._last_mutation_token = None
+
+    def reconcile_saved_digest(self, current_digest) -> bool:
+        """Move the save point to ``revision`` when payload equals the save.
+
+        This is intentionally a low-frequency history/leave operation.  The
+        caller owns canonical serialization; paint and replot paths must not
+        call it.  A mismatch changes nothing, so the next accepted mutation or
+        the guard-time digest comparison continues to report dirty.
+        """
+        if current_digest is None or self.saved_digest is None:
+            return False
+        if str(current_digest) != self.saved_digest:
+            return False
+        self.save_point = self.revision
+        self._last_mutation_token = None
+        return True
+
     def begin_restore(self) -> None:
         self.restore_depth += 1
 

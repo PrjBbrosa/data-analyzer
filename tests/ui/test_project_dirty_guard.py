@@ -108,6 +108,41 @@ def test_successful_save_sets_clean_save_point():
     assert holder.path == "/tmp/session.tlproj"
 
 
+def test_adopt_restored_session_replaces_prior_revision_digest_and_token():
+    holder = ProjectDirtyState()
+    holder.mark_user_mutation(token="session-a")
+    holder.mark_saved(path="a.tlproj", digest="digest-a")
+    holder.mark_user_mutation(token="session-b")
+    holder.begin_restore()
+
+    holder.adopt_restored_session(path="b.tlproj", digest="digest-b")
+
+    assert holder.revision == 0
+    assert holder.save_point == 0
+    assert holder.path == "b.tlproj"
+    assert holder.saved_digest == "digest-b"
+    assert holder.restore_depth == 1
+    assert not holder.is_dirty
+    holder.end_restore()
+    assert holder.mark_user_mutation(token="session-b") is True
+
+
+def test_canonical_reconciliation_can_return_to_saved_payload_then_leave_it():
+    holder = ProjectDirtyState()
+    holder.mark_user_mutation()
+    holder.mark_saved(path="session.tlproj", digest="saved")
+
+    holder.mark_user_mutation()
+    assert holder.is_dirty
+    assert holder.reconcile_saved_digest("saved") is True
+    assert not holder.is_dirty
+
+    holder.mark_user_mutation()
+    assert holder.is_dirty
+    assert holder.reconcile_saved_digest("different") is False
+    assert holder.is_dirty
+
+
 def test_failed_or_cancelled_save_keeps_dirty():
     holder = ProjectDirtyState()
     holder.mark_user_mutation()
@@ -461,6 +496,156 @@ def test_successful_save_sets_clean_save_point_on_window(qapp, tmp_path):
     assert mw._project_dirty.saved_digest
 
 
+def test_save_a_then_open_b_replaces_digest_and_project_session(
+    qapp, qtbot, tmp_path,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    project_a = tmp_path / "a.tlproj"
+    project_b = tmp_path / "b.tlproj"
+    target = MainWindow()
+    source_b = MainWindow()
+    qtbot.addWidget(target)
+    qtbot.addWidget(source_b)
+    target.view_manager.rename(0, "项目 A")
+    source_b.view_manager.rename(0, "项目 B")
+    assert target.save_project(project_a) is True
+    assert source_b.save_project(project_b) is True
+    digest_a = target._project_dirty.saved_digest
+    digest_b_on_source = source_b._project_dirty.saved_digest
+    assert digest_a != digest_b_on_source
+
+    target.open_project(project_b)
+
+    assert target._project_dirty.path == str(project_b)
+    assert target._project_dirty.saved_digest != digest_a
+    assert target._project_dirty.saved_digest == target._canonical_session_digest()
+    assert target._project_dirty.revision == 0
+    assert target._project_dirty.save_point == 0
+    assert not target._project_dirty.is_dirty
+
+
+def test_fresh_open_seeds_canonical_baseline_and_leave_is_clean(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    project = tmp_path / "fresh.tlproj"
+    source = MainWindow()
+    restored = MainWindow()
+    qtbot.addWidget(source)
+    qtbot.addWidget(restored)
+    source.view_manager.rename(0, "已保存")
+    assert source.save_project(project) is True
+
+    restored.open_project(project)
+
+    holder = restored._project_dirty
+    assert holder.saved_digest is not None
+    assert holder.saved_digest == restored._canonical_session_digest()
+    assert holder.revision == 0
+    assert holder.save_point == 0
+    assert not holder.is_dirty
+    monkeypatch.setattr(
+        restored,
+        "_prompt_unsaved_project",
+        lambda: (_ for _ in ()).throw(AssertionError("clean open prompted")),
+    )
+    assert (
+        restored.confirm_leave_unsaved_project()
+        is DirtyGuardResult.PROCEED_DISCARDED
+    )
+
+
+def test_ultraview_undo_to_saved_payload_is_clean_and_redo_is_dirty(
+    qapp, qtbot, tmp_path,
+):
+    from mf4_analyzer.ui import ultraview_state as uvs
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    project = tmp_path / "history.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    uv = window._ultraview
+    board = uv.board
+    saved_edit = uvs.create_author_object(
+        board,
+        uvs.StickyObject(
+            object_id="saved",
+            kind="sticky",
+            box=uvs.BoardBox(0, 0, 2, 2),
+            text="saved",
+            palette="yellow",
+            shape="square",
+            font_size="auto",
+        ),
+    )
+    assert uv._commit_author_mutation(board, saved_edit, label="create")
+    assert window.save_project(project) is True
+
+    later_edit = uvs.create_author_object(
+        board,
+        uvs.StickyObject(
+            object_id="later",
+            kind="sticky",
+            box=uvs.BoardBox(3, 0, 2, 2),
+            text="later",
+            palette="yellow",
+            shape="square",
+            font_size="auto",
+        ),
+    )
+    assert uv._commit_author_mutation(board, later_edit, label="create")
+    assert window._project_dirty.is_dirty
+
+    uv._on_free_grid_undo()
+    assert [item.object_id for item in board.author_objects] == ["saved"]
+    assert not window._project_dirty.is_dirty
+
+    uv._on_free_grid_redo()
+    assert [item.object_id for item in board.author_objects] == ["saved", "later"]
+    assert window._project_dirty.is_dirty
+
+
+def test_empty_and_rejected_ultraview_undo_do_not_advance_dirty_revision(
+    qapp, qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui import ultraview_state as uvs
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.main_window import ultraview_workspace_controller as uwc
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    uv = window._ultraview
+    holder = window._project_dirty
+    before_empty = holder.revision
+    uv._on_free_grid_undo()
+    assert holder.revision == before_empty
+    assert not holder.is_dirty
+
+    board = uv.board
+    mutation = uvs.create_author_object(
+        board,
+        uvs.StickyObject(
+            object_id="blocked",
+            kind="sticky",
+            box=uvs.BoardBox(0, 0, 2, 2),
+            text="blocked",
+            palette="yellow",
+            shape="square",
+            font_size="auto",
+        ),
+    )
+    assert uv._commit_author_mutation(board, mutation, label="create")
+    before_rejected = holder.revision
+    monkeypatch.setattr(uwc, "apply_board_edit_entry", lambda *_a, **_k: False)
+
+    uv._on_free_grid_undo()
+
+    assert holder.revision == before_rejected
+    assert holder.is_dirty
+
+
 def test_open_replacement_guard_on_real_window(qapp, tmp_path, monkeypatch):
     import csv
     from mf4_analyzer.ui.main_window import MainWindow
@@ -487,4 +672,3 @@ def test_open_replacement_guard_on_real_window(qapp, tmp_path, monkeypatch):
     mw._open_paths([str(proj)])
     assert list(mw.files) == before
     assert mw._project_dirty.is_dirty
-

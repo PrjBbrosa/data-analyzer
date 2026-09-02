@@ -100,12 +100,30 @@ class ProjectIOMixin:
         if holder is None:
             return False
         digest = None
-        if not holder.is_dirty and holder.saved_digest is not None:
+        if holder.saved_digest is not None:
             try:
                 digest = self._canonical_session_digest()
             except Exception:
                 return True
+            holder.reconcile_saved_digest(digest)
         return holder.session_needs_guard(digest)
+
+    def _reconcile_project_dirty_with_canonical_session(self):
+        """Reconcile explicit history navigation against the saved payload.
+
+        This is called only after a successful Undo/Redo-style semantic
+        transition.  It deliberately stays out of plot, paint, and preview
+        capture paths.
+        """
+        holder = getattr(self, "_project_dirty", None)
+        if holder is None or holder.saved_digest is None:
+            return False
+        try:
+            digest = self._canonical_session_digest()
+        except Exception:
+            logger.exception("project dirty digest reconciliation failed")
+            return False
+        return holder.reconcile_saved_digest(digest)
 
     def _canonical_session_digest(self):
         """Canonical payload hash at a leave decision. Not for paint/replot."""
@@ -2389,7 +2407,11 @@ class ProjectIOMixin:
             # already-open project.
             self._project_path = path
             if dirty is not None:
-                dirty.mark_saved(path)
+                baseline = self._assemble_project_document(path)
+                dirty.adopt_restored_session(
+                    path=path,
+                    digest=pio.canonical_project_digest(baseline),
+                )
 
             try:
                 self._apply_active_view(self.view_manager.active)

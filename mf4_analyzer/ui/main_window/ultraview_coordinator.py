@@ -105,6 +105,7 @@ class UltraViewCoordinator(QObject):
             preview_fit_image_size=self._preview_fit_image_size,
             on_active_board_changed=self._capture.prioritize_sidecar_queue,
             on_semantic_mutation=self._note_board_semantic_mutation,
+            on_history_reconciled=self._reconcile_project_dirty_after_history,
         )
         self._page_hooks: list[tuple[Any, Any, Any]] = []
         self._stack_hooks: list[tuple[Any, Any, Any]] = []
@@ -706,6 +707,17 @@ class UltraViewCoordinator(QObject):
         holder = getattr(window, "_project_dirty", None)
         if holder is not None:
             holder.mark_user_mutation()
+
+    def _reconcile_project_dirty_after_history(self) -> None:
+        """Undo/Redo may return the canonical project payload to its save point."""
+        window = self._window
+        if window is None:
+            return
+        reconcile = getattr(
+            window, "_reconcile_project_dirty_with_canonical_session", None
+        )
+        if callable(reconcile):
+            reconcile()
 
     @property
     def _window(self):

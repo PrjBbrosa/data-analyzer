@@ -302,6 +302,7 @@ class UltraViewWorkspaceController:
         preview_fit_image_size: Callable[[UltraViewRef], tuple[int, int] | None],
         on_active_board_changed: Callable[[], None],
         on_semantic_mutation: Callable[[], None] | None = None,
+        on_history_reconciled: Callable[[], None] | None = None,
     ) -> None:
         self._workspace = workspace
         self._is_inactive = is_inactive
@@ -311,6 +312,7 @@ class UltraViewWorkspaceController:
         self._preview_fit_image_size_impl = preview_fit_image_size
         self._on_active_board_changed = on_active_board_changed
         self._on_semantic_mutation = on_semantic_mutation
+        self._on_history_reconciled = on_history_reconciled
         self._grid_histories: dict[str, _GridHistory] = {}
         self._pending_auto_aspect: dict[tuple[str, UltraViewRef], _PendingAutoAspect] = {}
         self._layout_revision: dict[str, int] = {}
@@ -381,13 +383,16 @@ class UltraViewWorkspaceController:
     def _prioritize_sidecar_queue(self) -> None:
         self._on_active_board_changed()
 
-    def _after_board_mutation(self) -> None:
+    def _after_board_mutation(self, *, history_reconciled: bool = False) -> None:
         if self._inactive():
             return
         mark_workspace_mutated(self._workspace)
         notify = self._on_semantic_mutation
         if callable(notify):
             notify()
+        reconcile = self._on_history_reconciled
+        if history_reconciled and callable(reconcile):
+            reconcile()
         self.refresh_page()
 
     def _apply_add_ref(
@@ -1341,7 +1346,7 @@ class UltraViewWorkspaceController:
             return
         self._cancel_pending_for_board(board.board_id)
         self._push_history_redo(history, entry)
-        self._after_board_mutation()
+        self._after_board_mutation(history_reconciled=True)
 
     def _on_free_grid_redo(self) -> None:
         """Restore the next snapshot. Does not re-solve or re-zoom."""
@@ -1360,7 +1365,7 @@ class UltraViewWorkspaceController:
             return
         self._cancel_pending_for_board(board.board_id)
         self._push_history_undo(history, entry)
-        self._after_board_mutation()
+        self._after_board_mutation(history_reconciled=True)
 
     def _insert_span_for_ref(
         self, board: UltraViewBoardState, ref: UltraViewRef
