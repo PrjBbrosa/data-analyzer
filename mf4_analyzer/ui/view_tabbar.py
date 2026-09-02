@@ -139,7 +139,7 @@ def tab_swatch_visual_rect(tabbar: QTabBar, index: int) -> QRect:
 
 
 class _ViewTabs(QTabBar):
-    """Owns icon-slot hover/armed state and consumes close-slot mouse events."""
+    """Own close intent without turning an inactive-View switch into delete."""
 
     close_slot_clicked = pyqtSignal(int)
 
@@ -148,6 +148,7 @@ class _ViewTabs(QTabBar):
         self.setMouseTracking(True)
         self.setAttribute(Qt.WA_Hover, True)
         self._hover_index = -1
+        self._pointer_slot_view_id = None
         self._armed_view_id = None
         self._last_close_view_id = None
         self._last_close_msecs = 0
@@ -155,6 +156,7 @@ class _ViewTabs(QTabBar):
     def clear_interaction_state(self) -> None:
         old_hover = self._hover_index
         self._hover_index = -1
+        self._pointer_slot_view_id = None
         self._armed_view_id = None
         if old_hover >= 0:
             self._update_close_region(old_hover)
@@ -164,6 +166,14 @@ class _ViewTabs(QTabBar):
 
     def armed_view_id(self):
         return self._armed_view_id
+
+    def current_index_changed(self, _index: int) -> None:
+        """Fail closed until the pointer leaves and re-enters the swatch slot."""
+        old_hover = self._hover_index
+        self._hover_index = -1
+        self._armed_view_id = None
+        if old_hover >= 0:
+            self._update_close_region(old_hover)
 
     def event(self, event):
         etype = event.type()
@@ -200,7 +210,7 @@ class _ViewTabs(QTabBar):
             tab_rect = self.tabRect(idx)
             if not tab_rect.isValid() or not event.rect().intersects(tab_rect):
                 continue
-            if idx == self._hover_index and bar._views_closable():
+            if self._close_slot_actionable(idx):
                 rect = tab_close_visual_rect(self, idx)
                 pressed = self._armed_view_id == bar._view_id_at(idx)
                 _paint_tab_close_button(painter, QRectF(rect), pressed=pressed)
@@ -218,14 +228,24 @@ class _ViewTabs(QTabBar):
             idx, in_slot = self._hit_close_slot(event.pos())
             if in_slot:
                 bar = self._bar()
-                if bar is not None and bar._views_closable():
+                if self._close_slot_actionable(idx):
                     view_id = bar._view_id_at(idx)
                     if view_id and not self._is_double_close_repeat(view_id):
                         self._armed_view_id = view_id
                         self._hover_index = idx
                         self._update_close_region(idx)
-                event.accept()
-                return
+                    event.accept()
+                    return
+                if bar is not None:
+                    # The first press on an inactive View remains an ordinary
+                    # tab switch. Retain the pointer's slot identity so the
+                    # currentChanged repaint cannot create a destructive
+                    # target underneath the still-pressed pointer.
+                    self._pointer_slot_view_id = bar._view_id_at(idx)
+                    old_hover = self._hover_index
+                    self._hover_index = -1
+                    if old_hover >= 0:
+                        self._update_close_region(old_hover)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -254,7 +274,7 @@ class _ViewTabs(QTabBar):
                 in_slot
                 and bar is not None
                 and bar._view_id_at(idx) == view_id
-                and bar._views_closable()
+                and self._close_slot_actionable(idx)
             ):
                 self._last_close_view_id = view_id
                 self._last_close_msecs = QDateTime.currentMSecsSinceEpoch()
@@ -273,10 +293,8 @@ class _ViewTabs(QTabBar):
             return False
         bar = self._bar()
         if (
-            bar is not None
-            and bar._views_closable()
+            self._close_slot_actionable(idx)
             and event.button() == Qt.LeftButton
-            and in_slot
         ):
             view_id = bar._view_id_at(idx)
             if view_id and not self._is_double_close_repeat(view_id):
@@ -296,6 +314,17 @@ class _ViewTabs(QTabBar):
         slot = tab_close_hit_rect(self, idx)
         return idx, slot.contains(pos)
 
+    def _close_slot_actionable(self, idx: int) -> bool:
+        bar = self._bar()
+        if bar is None or not bar._views_closable():
+            return False
+        return (
+            idx >= 0
+            and idx == self.currentIndex()
+            and idx == self._hover_index
+            and self._pointer_slot_view_id == bar._view_id_at(idx)
+        )
+
     def _index_for_view_id(self, view_id) -> int:
         if not view_id:
             return -1
@@ -314,11 +343,33 @@ class _ViewTabs(QTabBar):
 
     def _update_hover(self, pos) -> None:
         bar = self._bar()
-        new_index = -1
-        if pos is not None and bar is not None and bar._views_closable():
+        slot_index = -1
+        slot_view_id = None
+        if pos is not None and bar is not None:
             idx, in_slot = self._hit_close_slot(pos)
             if in_slot:
-                new_index = idx
+                slot_index = idx
+                slot_view_id = bar._view_id_at(idx)
+        entered_slot = bool(
+            slot_view_id and slot_view_id != self._pointer_slot_view_id
+        )
+        if not slot_view_id:
+            new_index = -1
+        elif entered_slot:
+            new_index = (
+                slot_index
+                if slot_index == self.currentIndex() and bar._views_closable()
+                else -1
+            )
+        else:
+            new_index = self._hover_index
+            if (
+                new_index != slot_index
+                or slot_index != self.currentIndex()
+                or not bar._views_closable()
+            ):
+                new_index = -1
+        self._pointer_slot_view_id = slot_view_id
         if new_index == self._hover_index:
             return
         old = self._hover_index
@@ -334,6 +385,8 @@ class _ViewTabs(QTabBar):
             return False
         bar = self._bar()
         if bar is None:
+            return False
+        if bar._views_closable() and not self._close_slot_actionable(idx):
             return False
         name = bar._view_name(idx)
         text = (
@@ -444,6 +497,7 @@ class ViewTabBar(QWidget):
         # (_set_density flips it); the roomy box lives in the unqualified
         # ::tab rule, so "roomy" simply matches nothing extra.
         self._tabs.setProperty("density", "roomy")
+        self._tabs.currentChanged.connect(self._tabs.current_index_changed)
         self._tabs.currentChanged.connect(self._on_current_changed)
         self._tabs.tabBarDoubleClicked.connect(self._on_double_clicked)
         self._tabs.tabMoved.connect(self._on_tab_moved)

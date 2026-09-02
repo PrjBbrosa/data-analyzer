@@ -1,7 +1,9 @@
 # View 快速关闭与溢出面板实施计划
 
 - 日期：2026-09-01
-- 状态：READY FOR IMPLEMENTATION（本轮仅产出 Spec/Plan，未改产品代码）
+- 交互修订：2026-09-02（仅当前 View 可快速关闭；切换后须移出再进入）
+- 状态：IMPLEMENTED IN CURRENT WORKTREE（2026-09-02 geometry 与 active-only re-entry 已通过聚焦验证；
+  完整 feature 交付仍按 T6 门禁）
 - 计划基线：`f07b6a7c`
 - 对应规格：
   [`2026-09-01-view-overflow-close-interaction-spec.md`](../specs/2026-09-01-view-overflow-close-interaction-spec.md)
@@ -59,8 +61,10 @@ T0 冻结现有行为与红测
    宽度；模拟 normal/hover/press/release 后比较。
 3. 新增 signal spy 事件矩阵，分别点击标签 body 与当前色标槽位，覆盖 single、double、
    drag、right click。
-4. 新增 stable identity 场景：armed 后 reorder/rebuild/delete，release 必须 fail closed。
-5. 新增唯一 View、merge-host 双颜色色标、compact、overflow active relocation 场景。
+4. 新增误触场景：从非当前色标切换 View，press/release 意图保持为 switch；指针不动
+   和连续第二击都不得删除，移出再进入后才允许关闭。
+5. 新增 stable identity 场景：armed 后 reorder/rebuild/delete，release 必须 fail closed。
+6. 新增唯一 View、merge-host 双颜色色标、compact、overflow active relocation 场景。
 
 **现有回归基线**
 
@@ -78,7 +82,10 @@ T0 冻结现有行为与红测
 **新增红测（建议名称）**
 
 - `test_hovering_swatch_replaces_only_icon_without_changing_tab_geometry`
-- `test_close_slot_click_emits_delete_once_without_switch_or_rename`
+- `test_inactive_swatch_click_switches_without_delete`
+- `test_switched_swatch_requires_pointer_reentry_before_close`
+- `test_active_close_slot_click_emits_delete_once_without_switch_or_rename`
+- `test_inactive_swatch_double_click_cannot_turn_the_second_click_into_close`
 - `test_close_slot_double_click_never_enters_inline_rename_or_double_deletes`
 - `test_drag_from_close_slot_cancels_without_reorder`
 - `test_tab_body_click_and_double_click_keep_existing_switch_and_rename_routes`
@@ -109,14 +116,20 @@ T0 冻结现有行为与红测
 
 1. 用 private `QTabBar` subclass 或等价的窄 collaborator 统一拥有 icon-slot hit-test、
    hover index、armed `view_id`、paint/icon refresh 和事件消费。
-2. 保留 `setIconSize(QSize(12, 12))` 的现有逻辑尺寸；新增 HiDPI-aware close pixmap，
-   以 slot center 计算 `×` strokes，不用手调平台 offset。
-3. `MouseMove` 只更新受影响 tab 的 icon/paint；不得 rebuild tabs 或改变 density。
-4. press 在 slot 内即消费并 arm stable `view_id`；release 只有仍命中同一有效 View
-   时才把当下 index 交给既有 `delete_requested`。
-5. double-click/right-click/drag 按 Spec 事件表路由；在 leave、focus loss、rebuild、
+2. 用透明 icon spacer 保留原布局占位；正常色标与 hover/pressed 方形均由
+   `QTabBar` 在同一个 authoritative center 上局部绘制，不再调用 `setTabIcon()`
+   切换状态，也不把平台 QStyle 的 icon paint rect 当作命中真相。
+3. 同一 center 派生 20 × 20 hit rect；hover、paint、tooltip、press/release 全部复用，
+   可见方形必须完整包含于命中区，`×` 约 8 × 8、线宽 1.5 px。
+4. `MouseMove` 只 `update()` 受影响的局部 rect；只有进入时已经 active 的 View 才把
+   色标变为 `×`，不得 rebuild tabs、repolish icon 或改变 density。
+5. 非当前 slot 的 press 走默认 tab switch，并保留 pointer-slot stable identity；
+   `currentChanged` 清空 actionable hover，但不把指针下方立刻升级为关闭。
+6. 只有 pointer leave 后重新进入当前 slot，press 才消费并 arm stable `view_id`；release
+   只有仍命中同一有效当前 View 时才把当下 index 交给既有 `delete_requested`。
+7. double-click/right-click/drag 按 Spec 事件表路由；在 leave、focus loss、rebuild、
    destroy 时清空 hover/armed 状态。
-6. 唯一 View 禁止 actionable `×`；保留色标和“至少保留一个 View”提示。
+8. 唯一 View 禁止 actionable `×`；保留色标和“至少保留一个 View”提示。
 
 **关键禁止项**
 
@@ -137,8 +150,12 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest \
 **完成证据**
 
 - T0 新增 event matrix 全绿；
+- 非当前色标首击只切换；currentChanged 后不动、连续第二击、双击均零 delete；移出并
+  重新进入后当前色标才恢复快速关闭；
 - hover/pressed 前后所有 tab geometry byte-for-byte 相等；
-- DPR 参数化图像中 `×` ink center 误差 ≤ 0.5 logical px；
+- DPR 参数化图像中方形为 18 × 18、命中区为 20 × 20、`×` ink center 误差
+  ≤ 0.5 logical px；
+- 左右边缘和四向扫入都只进入同一个 hit rect，可见像素不得落到默认 switch 路径；
 - body 的单击切换、双击 rename 和拖拽排序现有测试不变。
 
 **停线条件**
@@ -296,7 +313,7 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest \
 
 **建议 copy**
 
-- 更新/新增 hint：`悬停 View 色标可快速关闭；名称区仍用于切换和双击重命名`
+- 更新/新增 hint：`当前 View 色标可关闭，其他 View 首击只切换`
 - 更新时域 View quickref：`最多 24 个；窄窗口先显示编号，悬停看全名；用「»」展开全部 View，可逐项关闭或关闭其他/全部`
 - 保留既有 `View 标签右键` 条目，不把复制、颜色、split 等操作从帮助中删掉。
 - 明示：`至少保留一个 View；关闭其他保留当前，关闭全部后留下一个空白 View。`
@@ -402,7 +419,8 @@ order/teardown 污染、跨边界重构或发版验收时，才由单一 coordin
 
 ### Definition of Done
 
-- [ ] `×` 只在色标槽位出现，居中，normal/hover/pressed geometry 不变；
+- [ ] `×` 只在当前 View 色标重新进入后出现，居中，normal/hover/pressed geometry 不变；
+- [ ] 非当前色标首击、切换后不动与连续第二击均不关闭；
 - [ ] 单击切换、双击重命名、拖拽排序、右键菜单现有用例全绿；
 - [ ] `×` 的 press/release/double-click/drag 事件无 switch/rename/reorder 泄漏；
 - [ ] popup 列出全部 View，行主区/关闭按钮/bulk actions 命中互斥；
@@ -412,4 +430,3 @@ order/teardown 污染、跨边界重构或发版验收时，才由单一 coordin
 - [ ] hints 与 quickref 同步，未删除既有右键和 overflow 能力说明；
 - [ ] owner/boundary tests、`git diff --check` 与 Cocoa 前台验收均有稳定 snapshot 证据；
 - [ ] 交付 diff 只含本 feature，未覆盖或提交任何预先存在的 unrelated dirty change。
-

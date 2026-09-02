@@ -1207,7 +1207,7 @@ def _signal_lists(bar):
 
 
 def test_hovering_swatch_replaces_only_icon_without_changing_tab_geometry(qtbot):
-    _manager, bar = _shown_bar(qtbot, count=3)
+    _manager, bar = _shown_bar(qtbot, count=3, active=1)
     tabs = bar.tabBar()
     before = _geometry_snapshot(bar)
     slot = _hover_icon_slot(tabs, 1)
@@ -1222,11 +1222,72 @@ def test_hovering_swatch_replaces_only_icon_without_changing_tab_geometry(qtbot)
     assert slot.contains(slot.center())
 
 
-def test_close_slot_click_emits_delete_once_without_switch_or_rename(qtbot):
+def test_inactive_swatch_click_switches_without_delete(qtbot):
     _manager, bar = _shown_bar(qtbot, count=3, active=0)
     tabs = bar.tabBar()
     deleted, switched, renamed, reordered = _signal_lists(bar)
-    slot = tab_close_hit_rect(tabs, 1)
+    slot = _hover_icon_slot(tabs, 1)
+
+    assert tabs.hover_index() == -1
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert deleted == []
+    assert switched == [1]
+    assert renamed == []
+    assert reordered == []
+    assert tabs.currentIndex() == 1
+    assert tabs.hover_index() == -1
+
+
+def test_switched_swatch_requires_pointer_reentry_before_close(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3, active=0)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, reordered = _signal_lists(bar)
+    slot = _hover_icon_slot(tabs, 1)
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, slot.center(), slot.center()),
+    )
+    QApplication.processEvents()
+
+    assert tabs.currentIndex() == 1
+    assert tabs.hover_index() == -1
+
+    # A second click under an unchanged pointer is still non-destructive.
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+    assert deleted == []
+
+    body = tabs.tabRect(1).center()
+    assert not slot.contains(body)
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, body, slot.center()),
+    )
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, slot.center(), body),
+    )
+    QApplication.processEvents()
+    assert tabs.hover_index() == 1
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert deleted == [1]
+    assert switched == [1]
+    assert renamed == []
+    assert reordered == []
+
+
+def test_active_close_slot_click_emits_delete_once_without_switch_or_rename(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3, active=1)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, reordered = _signal_lists(bar)
+    slot = _hover_icon_slot(tabs, 1)
 
     QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
     QApplication.processEvents()
@@ -1235,14 +1296,14 @@ def test_close_slot_click_emits_delete_once_without_switch_or_rename(qtbot):
     assert switched == []
     assert renamed == []
     assert reordered == []
-    assert bar.tabBar().currentIndex() == 0
+    assert bar.tabBar().currentIndex() == 1
 
 
 def test_close_slot_double_click_never_enters_inline_rename_or_double_deletes(qtbot):
     _manager, bar = _shown_bar(qtbot, count=3)
     tabs = bar.tabBar()
     deleted, switched, renamed, _reordered = _signal_lists(bar)
-    slot = tab_close_hit_rect(tabs, 0)
+    slot = _hover_icon_slot(tabs, 0)
 
     QTest.mouseDClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
     QApplication.processEvents()
@@ -1253,11 +1314,29 @@ def test_close_slot_double_click_never_enters_inline_rename_or_double_deletes(qt
     assert bar.findChild(QLineEdit, "viewTabRenameEditor") is None
 
 
+def test_inactive_swatch_double_click_cannot_turn_the_second_click_into_close(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3, active=0)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, reordered = _signal_lists(bar)
+    slot = _hover_icon_slot(tabs, 1)
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QTest.mouseDClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert tabs.currentIndex() == 1
+    assert tabs.hover_index() == -1
+    assert deleted == []
+    assert switched == [1]
+    assert renamed == []
+    assert reordered == []
+
+
 def test_drag_from_close_slot_cancels_without_reorder(qtbot):
-    _manager, bar = _shown_bar(qtbot, count=3)
+    _manager, bar = _shown_bar(qtbot, count=3, active=1)
     tabs = bar.tabBar()
     deleted, switched, _renamed, reordered = _signal_lists(bar)
-    slot = tab_close_hit_rect(tabs, 1)
+    slot = _hover_icon_slot(tabs, 1)
     outside = tabs.tabRect(1).center()
 
     QTest.mousePress(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
@@ -1372,10 +1451,10 @@ def test_close_visual_and_hit_target_share_one_center_without_growing_the_tab(qt
 
 def test_close_hit_target_edges_work_from_every_direction(qtbot):
     for edge in ("left", "right", "top", "bottom"):
-        _manager, bar = _shown_bar(qtbot, count=3, active=0)
+        _manager, bar = _shown_bar(qtbot, count=3, active=1)
         tabs = bar.tabBar()
         deleted, switched, renamed, reordered = _signal_lists(bar)
-        hit = tab_close_hit_rect(tabs, 1)
+        hit = _hover_icon_slot(tabs, 1)
         points = {
             "left": QPoint(hit.left(), hit.center().y()),
             "right": QPoint(hit.right(), hit.center().y()),
@@ -1393,7 +1472,7 @@ def test_close_hit_target_edges_work_from_every_direction(qtbot):
 
 
 def test_rendered_close_square_is_fully_contained_by_the_hit_target(qtbot):
-    _manager, bar = _shown_bar(qtbot, count=3)
+    _manager, bar = _shown_bar(qtbot, count=3, active=1)
     tabs = bar.tabBar()
     hit = _hover_icon_slot(tabs, 1)
     pixmap = tabs.grab()
@@ -1437,10 +1516,10 @@ def test_single_view_keeps_swatch_and_has_no_actionable_close_slot(qtbot):
 
 
 def test_close_slot_armed_rebuild_fails_closed(qtbot):
-    manager, bar = _shown_bar(qtbot, count=3)
+    manager, bar = _shown_bar(qtbot, count=3, active=1)
     tabs = bar.tabBar()
     deleted, switched, _renamed, _reordered = _signal_lists(bar)
-    slot = tab_close_hit_rect(tabs, 1)
+    slot = _hover_icon_slot(tabs, 1)
     QTest.mousePress(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
     manager.new_view()
     QApplication.processEvents()
@@ -1739,6 +1818,50 @@ def test_overflow_popup_width_sits_between_footer_floor_and_name_ceiling(qtbot):
         if btn.isVisible()
     )
     assert name.toolTip().startswith("方向盘扭矩")
+    popup.hide()
+
+
+def test_overflow_popup_long_names_elide_without_hiding_close_column(qtbot):
+    popup = ViewOverflowPopup()
+    qtbot.addWidget(popup)
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.setGeometry(40, 80, 40, 22)
+    host.show()
+    popup.populate(
+        _overflow_rows(
+            14,
+            name_fmt=(
+                "WinWert {i} · Wheel input torque Symmetry / steering-system "
+                "endurance validation / left-and-right comparison"
+            ),
+        )
+    )
+
+    popup.show_at(host)
+    QApplication.processEvents()
+
+    viewport = popup._scroll.viewport()
+    horizontal = popup._scroll.horizontalScrollBar()
+    assert horizontal.maximum() == 0
+    assert popup._list_host.width() == viewport.width()
+
+    close_buttons = _visible_overflow_close_buttons(popup)
+    close_lefts = []
+    for close in close_buttons:
+        rect = close.rect().translated(close.mapTo(viewport, QPoint(0, 0)))
+        assert rect.left() >= viewport.rect().left()
+        assert rect.right() <= viewport.rect().right()
+        close_lefts.append(rect.left())
+    assert len(set(close_lefts)) == 1
+
+    names = [
+        button
+        for button in popup.findChildren(QPushButton, "viewOverflowRowName")
+        if button.isVisible()
+    ]
+    assert all(button.text() != button.property("fullName") for button in names)
+    assert all(button.toolTip() == button.property("fullName") for button in names)
     popup.hide()
 
 

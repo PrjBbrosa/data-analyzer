@@ -340,7 +340,7 @@ _HINTS = (
     ),
     Hint(
         id="view.quick_close",
-        text="悬停色标可快速关闭，名称区仍切换",
+        text="当前 View 色标可关闭，其他 View 首击只切换",
         surface="discovery",
         modes=frozenset({"time", "fft", "fft_time", "frf", "order"}),
         retire_on="view_tab_close_seen",

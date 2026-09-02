@@ -223,6 +223,7 @@ lesson by default.
 | [Programmatic View Projection Is Not User Intent](programmatic-view-projection-is-not-user-intent.md) | Changing View restore/application, a widget model projected from | See lesson |
 | [Translucent Popup Chrome Must Self-Paint](translucent-popup-chrome-must-self-paint.md) | Drawing inner frames or hover fills on a `Qt.Popup` with | See lesson |
 | [Qt Inner Frame Needs Four Edge Paint Guards](qt-inner-frame-needs-four-edge-paint-guards.md) | Custom-painting an inner frame around an opaque scroll area or other | See lesson |
+| [View Close Hover Requires Current Re-entry](view-close-hover-requires-current-reentry.md) | Changing a tab color-swatch hover action, current-View switching, or | See lesson |
 
 ## Selection Rules
 

@@ -1,7 +1,8 @@
 # View 快速关闭与溢出面板交互 Spec
 
 - 日期：2026-09-01
-- 状态：DESIGN APPROVED / READY FOR IMPLEMENTATION
+- 交互修订：2026-09-02（仅当前 View 可快速关闭；切换后须移出再进入）
+- 状态：DESIGN APPROVED / IMPLEMENTED IN CURRENT WORKTREE
 - 冻结分析基线：`f07b6a7c`
 - 配套计划：
   [`2026-09-01-view-overflow-close-interaction-plan.md`](../plans/2026-09-01-view-overflow-close-interaction-plan.md)
@@ -13,10 +14,10 @@
 
 本功能是对现有 View 栏的**增量增强**，不重定义现有 View 操作：
 
-1. View 标签已有的色标槽位在悬停时原位显示 `×`；`×` 必须在原槽位内水平、
-   垂直居中，不增加任何标签宽度或额外像素占位。
-2. 只有色标/`×` 命中区触发关闭。标签其余区域继续保持：单击切换 View、
-   双击重命名、拖拽排序、右键打开既有菜单。
+1. 只有**当前 View** 的既有色标槽位在一次合格进入后原位显示 `×`；`×` 必须在原
+   槽位内水平、垂直居中，不增加任何标签宽度或额外像素占位。
+2. 非当前 View 的色标保持普通色标，第一次点击与标签主体一致，只切换 View。若切换
+   时指针仍位于色标槽位，必须先移出再重新进入，才允许显示并触发 `×`。
 3. 点击现有 `»N` 溢出入口后，展开“全部 View”面板；每行可单独关闭，底部提供
    “关闭其他”和“关闭全部”。不增加第二个全局入口。
 4. 底栏色标 `×` 与右键删除继续发出既有 `delete_requested`，因此时域的既有确认、
@@ -35,7 +36,7 @@ Qt 产品合同；实际实现以本 Spec 和现有 owner 语义为准。
 | 标签单击通过 `currentChanged` 发出 `switch_requested(index)` | `ui/view_tabbar.py` | 原样保留 |
 | 标签双击通过 `tabBarDoubleClicked` 进入 inline rename | `ui/view_tabbar.py` | 原样保留，关闭命中区不得进入此路径 |
 | 标签拖拽通过 `tabMoved` 发出 reorder intent | `ui/view_tabbar.py` | 原样保留，关闭命中区不得启动拖拽 |
-| 色标由 12 × 12 logical icon pixmap 绘制，merge host 可显示双颜色 | `ui/view_tabbar.py` | 共用同一 icon slot，不新增 close widget 宽度 |
+| 色标由 logical icon 绘制，merge host 可显示双颜色 | `ui/view_tabbar.py` | 色标继续保留布局占位；关闭方形局部覆盖绘制，不新增 tab 宽度 |
 | `»N` 当前列出全部 View，选行切换，隐藏标签使用 `setTabVisible()` | `ui/view_tabbar.py` | 保留入口、索引映射、测量式 roomy/compact/overflow 布局 |
 | 最后一个 View 的删除被禁止 | `ViewManager.delete_view()` 与 UI | 所有新入口都必须遵守 |
 | 时域单删先确认，分析单删同时清理 restore/pin/FRF cache | `_view_mixin.py` / `_analysis_mixin.py` | 新单删只复用既有路径，不复制语义 |
@@ -48,7 +49,7 @@ Qt 产品合同；实际实现以本 Spec 和现有 owner 语义为准。
 
 ### 2.1 本次范围
 
-- 标签色标悬停替换为居中的 `×`，并提供精确关闭命中区。
+- 当前标签色标悬停替换为居中的 `×`，并提供精确关闭命中区；非当前标签优先切换。
 - 将现有 `»N` 菜单升级为可管理全部 View 的 popup。
 - popup 行内单项关闭、关闭其他、关闭全部及批量确认。
 - 时域与分析 View 共享同一呈现和意图合同，但各自保留现有删除副作用。
@@ -71,50 +72,66 @@ Qt 产品合同；实际实现以本 Spec 和现有 owner 语义为准。
 ### 3.1 几何与绘制
 
 1. 正常态继续绘制现有色标，包括 merge host 的双颜色色标。
-2. 仅当指针位于某个可关闭标签的**色标槽位**时，该色标原位替换为 `×`；
-   悬停标签的名称、编号或空白区域不得显示 `×`。
-3. `×` 复用当前 12 × 12 logical icon slot；`QTabBar.iconSize()`、标签 padding、
+2. 仅当指针进入**已经处于当前状态**且可关闭标签的色标槽位时，该色标原位替换为
+   `×`；非当前标签以及标签的名称、编号或空白区域不得显示 `×`。
+3. 可见按钮是 **18 × 18 logical px** 的圆角方形，圆角 4 px；其中心与色标 anchor
+   对齐，但不受原色标 10 × 6 胶囊尺寸限制。`QTabBar.iconSize()`、标签 padding、
    `sizeHint()` 与每个 `tabRect()` 的宽度在 normal/hover/pressed 状态完全相同。
-4. `×` 的可见 ink bounding box 中心与色标槽位中心对齐。允许因奇偶像素产生不超过
+4. 有效命中区是同中心的 **20 × 20 logical px**；18 × 18 可见方形必须完整落在
+   命中区内。`×` ink 约 8 × 8、线宽 1.5 px，其中心与方形中心的偏差不超过
    0.5 logical px 的栅格偏差；不得靠肉眼偏移常量补偿某一 DPR。
-5. pixmap 必须 HiDPI-aware；在 DPR 1、2 和 macOS Cocoa 的实际 DPR 下仍居中、清晰。
+5. 绘制必须 HiDPI-aware；在 DPR 1、2 和 macOS Cocoa 的实际 DPR 下仍居中、清晰。
 6. 关闭 hover/pressed 使用现有危险色体系；不得改变 active tab 的背景、下划线或尺寸。
 7. 只有一个 View 时保留普通色标，不显示 actionable `×`。
+8. 在色标槽位内完成 View 切换时，指针不动不得在其下方生成 `×`；必须离开该槽位
+   并重新进入，新的关闭意图才成立。
 
-HTML 中较宽的 27 × 17 色块表达“同槽替换”关系，不是 Qt 必须采用的新尺寸。
-产品实现继续服从当前 Qt icon slot 的真实测量几何。
+HTML 表达的是“同一 leading 区域替换”关系，不是 Qt 像素来源。产品以 18 × 18
+可见方形和 20 × 20 命中区为冻结目标，且不扩张 tab 布局宽度。
 
 ### 3.2 命中区
 
-- 命中区等于从当前 style option / tab rect 推导出的真实 icon slot rect，不使用写死的
-  toolbar 坐标或网页像素。
+- 20 × 20 命中区与 18 × 18 可见方形必须由同一个 authoritative rect/center 派生；
+  hover、paint、tooltip、press 和 release 全部使用该 rect，不得分别反推。
+- 透明 icon spacer 只负责保持原布局；正常色标和 hover 方形均由 `QTabBar` 在同一
+  center 上局部绘制，不通过 `setTabIcon()` 往返切换视觉态，也不让平台 QStyle
+  另画一份可能错位的色标。
 - 命中区不得覆盖编号、名称、tab 间隙或相邻标签。
+- 非当前 View 的同一几何区域是普通 tab switch 区域，不是关闭区。press 开始时的意图
+  必须锁定到 release，不能因 `currentChanged` 在按下与释放之间发生而改写成关闭。
+- 从色标槽位切换到该 View 后，保持 pointer-slot stable identity；只有 pointer leave 后
+  的下一次 re-entry 才能把当前 View 的槽位重新变为 actionable。
 - popup 行末 `×` 是独立明确按钮；“色标替换为 `×`”只适用于底栏 tab。
 - 命中测试必须在 resize、compact、active-tab relocation、overflow 后重新基于当前几何计算。
 
 ### 3.3 事件优先级（硬合同）
 
-事件按下表路由，关闭槽位优先于 `QTabBar` 默认行为：
+事件按下表路由；只有已经合格进入的当前 View 关闭槽位优先于 `QTabBar` 默认行为：
 
 | 输入 | 目标 | 唯一结果 | 明确禁止 |
 | --- | --- | --- | --- |
-| `MouseMove` | 色标槽位 | 仅切换色标/`×` 绘制并显示 tooltip | 不发 signal、不改 current、不重排布局 |
-| 左键 press | 可关闭槽位 | 记录 stable `view_id` 的 armed 状态并消费事件 | 不调用 tab 默认 press，不切换、不重命名、不启动拖拽 |
+| `MouseMove` | 当前 View 色标槽位（进入时已是 current） | 切换色标/`×` 绘制并显示 tooltip | 不发 signal、不改 current、不重排布局 |
+| `MouseMove` | 非当前 View 色标槽位 | 保持普通色标 | 不显示/激活 `×` |
+| 左键 press | 非当前 View 色标槽位 | 锁定普通 tab switch 意图并走默认 press | 不 arm 关闭；currentChanged 后不得改写意图 |
+| 左键 press | actionable 当前槽位 | 记录 stable `view_id` 的 armed 状态并消费事件 | 不调用 tab 默认 press，不切换、不重命名、不启动拖拽 |
 | 左键 release | 同一 View 的同一槽位 | 发出一次既有 `delete_requested(index)` | 不额外发 `switch_requested` |
 | 左键 release | 槽位外、目标已移动或失效 | 取消 armed 状态 | 不关闭、不切换、不重排 |
-| 双击 | 可关闭槽位 | 消费事件；最多形成一次单删意图 | 不进入 inline rename，不产生双删 |
+| 双击 | actionable 当前槽位 | 消费事件；最多形成一次单删意图 | 不进入 inline rename，不产生双删 |
+| 双击 | 刚由非当前切为当前的槽位 | 保持非破坏状态并消费 double-click | 不让第二击关闭或进入 inline rename |
 | 左键单击 | 标签非槽位区域 | 走现有切换路径 | 不关闭 |
 | 双击 | 标签非槽位区域 | 走现有 inline rename | 不关闭、不额外切换到别的 View |
 | 左键拖动 | 标签非槽位区域 | 走现有 reorder 路径 | 不改变既有 reorder/current 抑制规则 |
 | 从 `×` 起拖 | 关闭槽位 | armed 后移出即取消 | 不启动 reorder |
 | 右键 | 标签任意区域（含色标） | 走现有 context menu | 不显示/触发快速关闭 |
 
-实现必须在 press/release 两端消费关闭事件，不能只在 click 后补偿已经发生的 View
-切换。armed 状态在 tab rebuild、View 删除、popup 关闭、窗口失焦和对象销毁时对称清空。
+实现必须在 press/release 两端消费 actionable 关闭事件；非当前槽位的 press 则必须交给
+默认切换路径，并锁定为非破坏意图直到 pointer leave。armed/hover/pointer-slot 状态在
+tab rebuild、View 删除、popup 关闭、窗口失焦和对象销毁时对称清空。
 
 ### 3.4 提示
 
-- 可关闭色标槽位 hover tooltip：`关闭 View「<完整名称>」`
+- 当前且 actionable 色标槽位 hover tooltip：`关闭 View「<完整名称>」`
+- 非当前色标槽位不显示关闭 tooltip，继续服从完整名称发现路径。
 - 唯一 View 的色标 tooltip：`至少保留一个 View`
 - compact/overflow 的既有“完整名称”提示继续可用；关闭提示不得永久覆盖名称发现路径。
 
@@ -244,6 +261,9 @@ close、destroy 路径对称清理；不得新增跨多个 MainWindow mixin 的�
 ### 8.1 不回归硬门禁
 
 - normal → hover → pressed：每个 tab 的 `tabRect().width()` 和 rail 总宽不变。
+- 非当前色标第一次点击只发一次 switch、零 delete；currentChanged 后指针不动和连续
+  第二击仍为零 delete，移出并重新进入后才允许当前 View 关闭。
+- 非当前色标上的双击不得把第二击变为关闭，也不得进入 inline rename。
 - 点击非色标区域仍只发一次 switch；双击非色标区域仍只打开一次 rename editor。
 - 点击/双击/拖动 `×` 不发 switch、rename、reorder；有效 release 只发一次 delete。
 - 右键色标仍出现既有 context menu；原菜单文字和 enablement 不变。
@@ -263,8 +283,10 @@ close、destroy 路径对称清理；不得新增跨多个 MainWindow mixin 的�
 
 ### 8.3 视觉证据
 
-- Qt offscreen 图像断言：`×` ink center 与 icon slot center 对齐，误差不超过 0.5 logical px；
-  hover 前后 tab geometry 完全一致。
+- Qt offscreen 图像断言：18 × 18 方形完整包含于 20 × 20 命中区，`×` ink center
+  误差不超过 0.5 logical px；hover 前后 tab geometry 完全一致。
+- 对当前 View 从左/右/上/下扫入的边界关于同一中心对称；非当前 View 的同一区域始终
+  保持普通色标和 switch 语义。
 - macOS Cocoa 前台：录制/截图 normal、hover、pressed、popup、confirm 五态；量测 `×`
   居中、底板不透、popup 不越屏。HTML 截图只能作为视觉目标，不能替代 Qt 证据。
 
@@ -272,10 +294,9 @@ close、destroy 路径对称清理；不得新增跨多个 MainWindow mixin 的�
 
 只有同时满足以下条件才可宣称实现完成：
 
-1. 标签关闭只占用现有色标槽位，`×` 居中且无任何布局变化；
+1. 只有当前 View 可在重新进入色标槽位后关闭，`×` 居中且无任何布局变化；
 2. 单击切换、双击重命名、拖拽排序、右键菜单均由自动化证明不回归；
 3. popup 行内关闭与两项批量动作符合本 Spec 文案、确认和原子性；
 4. 时域/分析的现有 owner 副作用分别闭环，唯一 View 永不被删除；
 5. hints/quickref 同步；offscreen owner/boundary 测试和 Cocoa 前台验收均有证据；
 6. 未修改本 Spec 列为非目标的 View 行为、持久化或 UltraView 语义。
-
