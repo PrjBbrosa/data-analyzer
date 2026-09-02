@@ -53,6 +53,33 @@ def test_picker_popup_collapses_on_escape(qtbot):
     assert p.is_popup_visible() is False
 
 
+def test_picker_search_escape_clears_then_collapses_popup(qapp, qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["sig_a", "sig_b"])
+    qtbot.addWidget(p)
+    p.show()
+    qtbot.waitExposed(p)
+    p.show_popup()
+    qtbot.wait(20)
+    qtbot.keyClicks(p._search, "sig")
+    qapp.processEvents()
+
+    qtbot.keyClick(p._search, Qt.Key_Escape)
+    qapp.processEvents()
+
+    assert p.is_popup_visible() is True
+    assert p._search.text() == ""
+    assert p._search.hasFocus() is True
+
+    qtbot.keyClick(p._search, Qt.Key_Escape)
+    qapp.processEvents()
+
+    assert p.is_popup_visible() is False
+    assert p._trigger.hasFocus() is True
+
+
 def test_picker_popup_collapses_on_focus_out(qtbot):
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
     p = SignalPickerPopup(available_signals=["a", "b"])

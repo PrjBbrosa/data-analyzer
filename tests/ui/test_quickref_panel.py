@@ -108,8 +108,13 @@ def test_escape_hides_unpinned(panel):
 
 def test_search_escape_clears_before_host_close(panel, qtbot, qapp):
     """SDI-A05: first Esc with search text clears and keeps the panel open."""
+    opener = QLineEdit()
+    qtbot.addWidget(opener)
+    opener.show()
+    qtbot.waitExposed(opener)
+    opener.setFocus(Qt.OtherFocusReason)
     panel.set_pinned(True)
-    panel.show_panel()
+    panel.show_panel(anchor_widget=opener)
     qtbot.waitExposed(panel)
     search = panel._search
     search.setFocus(Qt.OtherFocusReason)

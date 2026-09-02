@@ -100,6 +100,7 @@ class SearchField(QLineEdit):
     def _handle_escape(self) -> None:
         if self.text():
             self.clear()
+            self.setFocus(Qt.OtherFocusReason)
             return
         self.escape_requested.emit()
 

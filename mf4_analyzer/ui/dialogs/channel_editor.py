@@ -267,6 +267,7 @@ class ChannelEditorDialog(QDialog):
         self.export_search = SearchField("搜索通道…")
         self.export_search.setObjectName("channelExportSearch")
         self.export_search.textChanged.connect(self._apply_export_filters)
+        self.export_search.escape_requested.connect(self.reject)
         gxl.addWidget(self.export_search)
         export_tools = QHBoxLayout()
         export_tools.setContentsMargins(0, 0, 0, 0)

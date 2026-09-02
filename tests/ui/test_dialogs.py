@@ -273,6 +273,57 @@ def _channel_editor_files(tmp_path):
     return {"f0": fd}
 
 
+def test_channel_editor_empty_export_search_escape_rejects(qapp, qtbot, tmp_path):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy
+    from mf4_analyzer.ui import dialogs
+
+    dlg = dialogs.ChannelEditorDialog(
+        None, _channel_editor_files(tmp_path), "f0"
+    )
+    qtbot.addWidget(dlg)
+    dlg.show()
+    qtbot.waitExposed(dlg)
+    dlg.export_search.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+    rejected = QSignalSpy(dlg.rejected)
+
+    qtbot.keyClick(dlg.export_search, Qt.Key_Escape)
+    qapp.processEvents()
+
+    assert len(rejected) == 1
+    assert dlg.result() == dlg.Rejected
+    assert not dlg.isVisible()
+
+
+def test_channel_editor_export_search_return_does_not_accept_or_create(
+    qapp, qtbot, tmp_path
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy
+    from mf4_analyzer.ui import dialogs
+
+    dlg = dialogs.ChannelEditorDialog(
+        None, _channel_editor_files(tmp_path), "f0"
+    )
+    qtbot.addWidget(dlg)
+    dlg.show()
+    qtbot.waitExposed(dlg)
+    dlg.export_search.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+    accepted = QSignalSpy(dlg.accepted)
+    ok_clicked = QSignalSpy(dlg.btn_ok.clicked)
+    create_clicked = QSignalSpy(dlg.btn_create_single.clicked)
+
+    qtbot.keyClick(dlg.export_search, Qt.Key_Return)
+    qapp.processEvents()
+
+    assert len(accepted) == 0
+    assert len(ok_clicked) == 0
+    assert len(create_clicked) == 0
+    assert dlg.isVisible()
+
+
 def test_single_channel_missing_source_warns(qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui import dialogs
 

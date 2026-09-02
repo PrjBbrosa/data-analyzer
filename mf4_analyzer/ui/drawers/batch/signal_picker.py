@@ -328,6 +328,7 @@ class SignalPickerPopup(QWidget):
         self._search = SearchField("搜索信号…", self._surface)
         self._search.setObjectName("SignalPickerSearch")
         self._search.textChanged.connect(self._on_search_text_changed)
+        self._search.escape_requested.connect(self._close_search_surface)
         self._search.installEventFilter(self)
         pop_lay.addWidget(self._search)
         # Focus proxy: any code (or Qt itself) that focuses the popup lands on
@@ -513,6 +514,10 @@ class SignalPickerPopup(QWidget):
         else:
             self._set_expanded(False)
             self._reset_search()
+
+    def _close_search_surface(self) -> None:
+        self.hide_popup()
+        self._trigger.setFocus(Qt.PopupFocusReason)
 
     def is_popup_visible(self) -> bool:
         return self._popup.isVisible()
@@ -985,10 +990,6 @@ class SignalPickerPopup(QWidget):
     def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
         event_type = event.type()
         if obj is self._search:
-            if event_type == QEvent.KeyPress and event.key() == Qt.Key_Escape:
-                self.hide_popup()
-                self._trigger.setFocus(Qt.PopupFocusReason)
-                return True
             if event_type == QEvent.FocusOut:
                 self._hide_if_focus_left_popup()
         elif obj is self._popup:

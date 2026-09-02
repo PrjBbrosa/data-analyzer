@@ -5,21 +5,25 @@ import inspect
 from pathlib import Path
 import re
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # FileNavigator renders the same MultiFileChannelWidget search instance as the
-# ChannelTree; the remaining seven source constructions cover eight visible
-# surfaces from the specification.
+# ChannelTree.  Keep every current construction in this inventory, including
+# the modal Channel Editor and the normally hidden UltraView library.
 _SEARCH_CALL_SITES = {
     "mf4_analyzer/ui/widgets/channel_tree.py": (
         ("self.search", "搜索通道…"),
     ),
     "mf4_analyzer/ui/quickref_panel.py": (
         ("self._search", "搜索操作…"),
+    ),
+    "mf4_analyzer/ui/dialogs/channel_editor.py": (
+        ("self.export_search", "搜索通道…"),
     ),
     "mf4_analyzer/ui/drawers/batch/signal_picker.py": (
         ("self._search", "搜索信号…"),
@@ -36,6 +40,9 @@ _SEARCH_CALL_SITES = {
     ),
     "mf4_analyzer/acquisition_ui/history_tab.py": (
         ("self._search_box", "搜索记录…"),
+    ),
+    "mf4_analyzer/ui/chart_stack/ultraview/library_widgets.py": (
+        ("self._search", "搜索 View、信号或分析类型…"),
     ),
 }
 
@@ -118,6 +125,32 @@ def test_search_field_reuses_cached_painter_icons(qapp, monkeypatch):
     assert calls == {"search": 1, "clear": 1}
     assert first._search_button.icon().cacheKey() == second._search_button.icon().cacheKey()
     assert first._clear_button.icon().cacheKey() == second._clear_button.icon().cacheKey()
+
+
+def test_empty_search_escape_without_closeable_host_is_safe_noop(qapp, qtbot):
+    from PyQt5.QtTest import QSignalSpy
+    from mf4_analyzer.ui_kit.widgets import SearchField
+
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    field = SearchField("搜索通道…", host)
+    destructive = QPushButton("删除", host)
+    destructive.setDefault(True)
+    clicks = QSignalSpy(destructive.clicked)
+    layout.addWidget(field)
+    layout.addWidget(destructive)
+    qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    field.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+
+    qtbot.keyClick(field, Qt.Key_Escape)
+    qapp.processEvents()
+
+    assert host.isVisible()
+    assert field.text() == ""
+    assert len(clicks) == 0
 
 
 def test_eight_visible_search_surfaces_render_on_the_base_track(qapp, qtbot):

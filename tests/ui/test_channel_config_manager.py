@@ -1,3 +1,5 @@
+import pytest
+
 from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
@@ -89,6 +91,28 @@ def test_normal_config_switch_clears_channel_filter_and_selection(qtbot):
     assert dialog.channel_search.text() == ""
     assert dialog._chosen_channels == set()
     assert dialog.detail_title.text() == "温度"
+
+
+@pytest.mark.parametrize("search_name", ["config_search", "channel_search"])
+def test_empty_search_escape_rejects_manager(qapp, qtbot, search_name):
+    from PyQt5.QtTest import QSignalSpy
+
+    dialog = _dialog(
+        qtbot,
+        [_config("drive", "动力分析", ("EPS_CRC", "Torque"))],
+        "drive",
+    )
+    search = getattr(dialog, search_name)
+    search.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+    rejected = QSignalSpy(dialog.rejected)
+
+    qtbot.keyClick(search, Qt.Key_Escape)
+    qapp.processEvents()
+
+    assert len(rejected) == 1
+    assert dialog.result() == QDialog.Rejected
+    assert not dialog.isVisible()
 
 
 def test_batch_selection_is_separate_from_active_config_and_exits_cleanly(qtbot):
