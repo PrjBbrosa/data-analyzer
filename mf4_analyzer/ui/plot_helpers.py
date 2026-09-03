@@ -16,6 +16,7 @@ import re
 import numpy as np
 
 from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, TIME_MODE
+from mf4_analyzer.ui.cursor_display_model import enabled_value_fields
 
 _DUAL_TABLE_OPEN = (
     '<table cellspacing="0" cellpadding="0" '
@@ -295,18 +296,9 @@ def _unpack_time_dual_row(row):
     return ch, mn, mx, avg, delta, u, color
 
 
-def _enabled_cursor_value_fields(options):
-    if options is None:
-        return (("Min", "min_value"), ("Max", "max_value"), ("Avg", "avg"))
-    return tuple(
-        item for item, enabled in (
-            (("Min", "min_value"), getattr(options, "show_min_value", True)),
-            (("Max", "max_value"), getattr(options, "show_max_value", True)),
-            (("Avg", "avg"), getattr(options, "show_avg_value", True)),
-            (("Δ", "delta"), getattr(options, "show_delta_value", True)),
-        )
-        if enabled
-    )
+def _cursor_value_attr(attr):
+    """Map the neutral DTO name to the legacy compatibility-row attribute."""
+    return "avg" if attr == "avg_value" else attr
 
 
 def _format_dual_stat_text(value, unit):
@@ -353,8 +345,13 @@ def _format_time_dual_block(
             f'</tr>'
         )
         return
-    values = {"min_value": mn, "max_value": mx, "avg": avg, "delta": delta}
-    for label, attr in _enabled_cursor_value_fields(options):
+    values = {
+        "min_value": mn,
+        "max_value": mx,
+        "avg_value": avg,
+        "delta": delta,
+    }
+    for label, attr in enabled_value_fields(options):
         display = "△" if label == "Δ" else label
         parts.append(
             f'<tr><td style="{lab}">{display}</td>'
@@ -381,7 +378,7 @@ def _format_custom_x_dual_block(parts, *, index, row, options=None):
             f'<tr><td colspan="4" style="{lab}">{escape(row.status)}</td></tr>'
         )
         return
-    enabled = _enabled_cursor_value_fields(options)
+    enabled = enabled_value_fields(options)
     for branch in row.branches:
         label = branch.branch_label
         if options is None:
@@ -406,7 +403,7 @@ def _format_custom_x_dual_block(parts, *, index, row, options=None):
             parts.append(
                 f'<tr><td style="{lab}">{escape(label)} {escape(value_label)}</td>'
                 f'<td style="{cell}" align="right">'
-                f'{_format_dual_stat_text(getattr(branch, attr, None), unit)}</td></tr>'
+                f'{_format_dual_stat_text(getattr(branch, _cursor_value_attr(attr), None), unit)}</td></tr>'
             )
     if row.status and row.branches:
         parts.append(
@@ -486,7 +483,7 @@ def _format_dual_mini_html(rows, options=None):
                     )
                 continue
             unit = getattr(row, "unit_suffix", "") or ""
-            enabled = _enabled_cursor_value_fields(options)
+            enabled = enabled_value_fields(options)
             priority = next(
                 (item for wanted in ("Δ", "Avg", "Max", "Min")
                  for item in enabled if item[0] == wanted),
@@ -498,7 +495,7 @@ def _format_dual_mini_html(rows, options=None):
                     value_label, attr = priority
                     value_html = (
                         f'{escape(value_label)}&nbsp;'
-                        f'{_format_dual_stat_text(getattr(branch, attr, None), unit)}'
+                        f'{_format_dual_stat_text(getattr(branch, _cursor_value_attr(attr), None), unit)}'
                     )
                 if options is None:
                     parts.append(
@@ -538,11 +535,16 @@ def _format_dual_mini_html(rows, options=None):
         if ']' in ch and ch.startswith('['):
             ch = ch.split(']', 1)[-1].strip()
         top_pad = '5px' if i > 0 else '0'
-        values = {"min_value": mn, "max_value": mx, "avg": avg, "delta": delta}
+        values = {
+            "min_value": mn,
+            "max_value": mx,
+            "avg_value": avg,
+            "delta": delta,
+        }
         if options is None:
             metric_html = f'△&nbsp;{_format_dual_stat_text(delta, u)}'
         else:
-            enabled = _enabled_cursor_value_fields(options)
+            enabled = enabled_value_fields(options)
             priority = next(
                 (item for wanted in ("Δ", "Avg", "Max", "Min")
                  for item in enabled if item[0] == wanted),
@@ -586,12 +588,12 @@ def format_dual_rows_tooltip(rows, options=None) -> str:
         if name:
             lines.append(name)
         unit = row.unit_suffix or ""
-        enabled = _enabled_cursor_value_fields(options)
+        enabled = enabled_value_fields(options)
         for branch in row.branches:
             role = branch.tooltip_role
             role_bit = f" {role}" if role else ""
             values = "  ".join(
-                f"{label}={_format_dual_stat_text(getattr(branch, attr, None), unit)}"
+                f"{label}={_format_dual_stat_text(getattr(branch, _cursor_value_attr(attr), None), unit)}"
                 for label, attr in enabled
             )
             lines.append(f"{branch.branch_label}{role_bit}  {values}".rstrip())

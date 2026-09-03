@@ -30,7 +30,9 @@ _LEGACY = _ROOT / "testdoc" / "wwt" / "YP_SS_000089.wwt"
 @pytest.fixture
 def template():
     if not _TEMPLATE.is_file():
-        pytest.skip("bundled WWT export template missing")
+        if _TEMPLATE.parent.is_dir():
+            pytest.fail("bundled WWT export template missing from checkout")
+        pytest.skip("bundled WWT export template missing from packaged install")
     return _TEMPLATE
 
 

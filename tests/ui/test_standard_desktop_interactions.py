@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QShortcut,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -1198,7 +1199,8 @@ def test_toolbar_and_owned_actions_trigger_same_named_slot_once(qapp, qtbot):
 
 
 def test_ctrl_tab_routes_current_section_from_ordinary_focus_once(qapp, qtbot):
-    """Ctrl+Tab is section navigation even when the ViewTabBar lacks focus."""
+    """The platform View-cycle binding works outside the ViewTabBar."""
+    from mf4_analyzer.ui.command_registry import CommandId, bindings_for
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -1237,7 +1239,7 @@ def test_ctrl_tab_routes_current_section_from_ordinary_focus_once(qapp, qtbot):
         set_active_calls.clear()
         target.setFocus(Qt.TabFocusReason)
         qapp.processEvents()
-        qtbot.keyClick(target, Qt.Key_Tab, Qt.ControlModifier)
+        _key_click_sequence(qtbot, target, bindings_for(CommandId.NEXT_VIEW)[0])
         qapp.processEvents()
         assert calls == [1], _focus_ctx(
             target,
@@ -1249,10 +1251,10 @@ def test_ctrl_tab_routes_current_section_from_ordinary_focus_once(qapp, qtbot):
 
     calls.clear()
     set_active_calls.clear()
-    qtbot.keyClick(
+    _key_click_sequence(
+        qtbot,
         win.channel_list.search,
-        Qt.Key_Tab,
-        Qt.ControlModifier | Qt.ShiftModifier,
+        bindings_for(CommandId.PREVIOUS_VIEW)[0],
     )
     qapp.processEvents()
     assert calls == [0]
@@ -1265,11 +1267,128 @@ def test_ctrl_tab_routes_current_section_from_ordinary_focus_once(qapp, qtbot):
     qapp.processEvents()
     calls.clear()
     set_active_calls.clear()
-    qtbot.keyClick(panel._search, Qt.Key_Tab, Qt.ControlModifier)
+    _key_click_sequence(
+        qtbot, panel._search, bindings_for(CommandId.NEXT_VIEW)[0]
+    )
     qapp.processEvents()
     assert calls == [1], "QuickRef search remains a valid ordinary search focus"
     assert set_active_calls == [1]
     panel.hide()
+
+
+def test_view_cycle_bindings_never_use_command_tab_on_darwin(monkeypatch):
+    """C2: Qt's Meta modifier is physical Control on macOS, never Command."""
+    import sys
+
+    from mf4_analyzer.ui.command_registry import CommandId, bindings_for
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert [
+        sequence.toString(QKeySequence.PortableText)
+        for sequence in bindings_for(CommandId.NEXT_VIEW)
+    ] == ["Meta+Tab"]
+    assert [
+        sequence.toString(QKeySequence.PortableText)
+        for sequence in bindings_for(CommandId.PREVIOUS_VIEW)
+    ] == ["Meta+Shift+Tab"]
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert [
+        sequence.toString(QKeySequence.PortableText)
+        for sequence in bindings_for(CommandId.NEXT_VIEW)
+    ] == ["Ctrl+Tab"]
+    assert [
+        sequence.toString(QKeySequence.PortableText)
+        for sequence in bindings_for(CommandId.PREVIOUS_VIEW)
+    ] == ["Ctrl+Shift+Tab"]
+
+
+def test_view_cycle_shortcut_is_window_scoped_and_quickref_has_its_own(
+    qapp, qtbot
+):
+    """C4: cycle shortcuts stay in their active top-level window."""
+    from mf4_analyzer.ui.command_registry import CommandId, bindings_for
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1400, 850)
+    win.show()
+    qtbot.waitExposed(win)
+    cycle_bindings = {
+        sequence.toString(QKeySequence.PortableText)
+        for command_id in (CommandId.NEXT_VIEW, CommandId.PREVIOUS_VIEW)
+        for sequence in bindings_for(command_id)
+    }
+    main_shortcuts = [
+        shortcut
+        for shortcut in win._view_shortcuts
+        if shortcut.key().toString(QKeySequence.PortableText) in cycle_bindings
+    ]
+    assert main_shortcuts
+    assert all(
+        shortcut.context() == Qt.WindowShortcut for shortcut in main_shortcuts
+    )
+
+    win.toggle_quickref_panel()
+    panel = win._quickref_panel
+    assert panel is not None
+    assert panel._view_cycle_shortcuts
+    assert {
+        shortcut.key().toString(QKeySequence.PortableText)
+        for shortcut in panel._view_cycle_shortcuts
+    } == cycle_bindings
+    assert all(
+        shortcut.context() == Qt.WindowShortcut
+        for shortcut in panel._view_cycle_shortcuts
+    )
+
+
+def test_reset_view_metadata_matches_live_binding():
+    """C5: metadata cannot advertise a chart reset key that no card installs."""
+    from mf4_analyzer.ui.chart_stack._helpers import _NAV_SHORTCUTS
+    from mf4_analyzer.ui.command_registry import (
+        CommandId,
+        bindings_for,
+        metadata_for,
+        native_text_for,
+    )
+
+    assert metadata_for(CommandId.RESET_VIEW).fallback == "Ctrl+R"
+    assert [
+        sequence.toString(QKeySequence.PortableText)
+        for sequence in bindings_for(CommandId.RESET_VIEW)
+    ] == ["Ctrl+R"]
+    assert _NAV_SHORTCUTS["home"] == native_text_for(CommandId.RESET_VIEW)
+
+
+def test_find_focuses_visible_search_field_before_quickref(qapp, qtbot):
+    """C8: Find must prefer the active window's visible local search field."""
+    from mf4_analyzer.ui.main_window.command_coordinator import CommandCoordinator
+    from mf4_analyzer.ui_kit.widgets import SearchField
+
+    host = _FakeCommandHost()
+    qtbot.addWidget(host)
+    body = QWidget(host)
+    layout = QVBoxLayout(body)
+    search = SearchField("筛选当前列表")
+    other = QLineEdit()
+    layout.addWidget(search)
+    layout.addWidget(other)
+    host.setCentralWidget(body)
+    host.show()
+    qtbot.waitExposed(host)
+    host.raise_()
+    host.activateWindow()
+    qapp.processEvents()
+    other.setFocus(Qt.TabFocusReason)
+    coordinator = CommandCoordinator(host)
+
+    coordinator._on_find()
+    qapp.processEvents()
+
+    assert QApplication.focusWidget() is search
+    assert host.calls == []
 
 
 def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
@@ -1277,6 +1396,7 @@ def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
 ):
     """Analysis uses its owner once; modal/rename/IME/hidden bars block routing."""
     from PyQt5 import sip
+    from mf4_analyzer.ui.command_registry import CommandId, bindings_for
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -1300,7 +1420,7 @@ def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
     focus = win.chart_stack.page_fft.pane_canvas(0)
     focus.setFocus(Qt.TabFocusReason)
     qapp.processEvents()
-    qtbot.keyClick(focus, Qt.Key_Tab, Qt.ControlModifier)
+    _key_click_sequence(qtbot, focus, bindings_for(CommandId.NEXT_VIEW)[0])
     qapp.processEvents()
     assert calls == [("fft", 1)]
     assert manager.active == 1
@@ -1310,7 +1430,7 @@ def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
     editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
     assert editor is not None
     calls.clear()
-    qtbot.keyClick(editor, Qt.Key_Tab, Qt.ControlModifier)
+    _key_click_sequence(qtbot, editor, bindings_for(CommandId.NEXT_VIEW)[0])
     qapp.processEvents()
     assert calls == [], "an inline View rename owns the keyboard transaction"
     bar._finish_inline_rename(accepted=False)
@@ -1321,7 +1441,7 @@ def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
     dialog.show()
     qtbot.waitExposed(dialog)
     calls.clear()
-    qtbot.keyClick(dialog, Qt.Key_Tab, Qt.ControlModifier)
+    _key_click_sequence(qtbot, dialog, bindings_for(CommandId.NEXT_VIEW)[0])
     qapp.processEvents()
     assert calls == [], "a modal dialog must block section navigation"
     dialog.hide()
@@ -1336,7 +1456,7 @@ def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
     qapp.processEvents()
     assert QApplication.focusWidget() is ime
     calls.clear()
-    qtbot.keyClick(ime, Qt.Key_Tab, Qt.ControlModifier)
+    _key_click_sequence(qtbot, ime, bindings_for(CommandId.NEXT_VIEW)[0])
     qapp.processEvents()
     assert calls == [], "an active IME composition must keep keyboard ownership"
 
@@ -1344,7 +1464,7 @@ def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
     focus.setFocus(Qt.TabFocusReason)
     qapp.processEvents()
     calls.clear()
-    qtbot.keyClick(focus, Qt.Key_Tab, Qt.ControlModifier)
+    _key_click_sequence(qtbot, focus, bindings_for(CommandId.NEXT_VIEW)[0])
     qapp.processEvents()
     assert calls == [], "a hidden section bar must not switch its manager"
 
@@ -1352,7 +1472,7 @@ def test_ctrl_tab_routes_analysis_and_fails_closed_for_transient_owners(
     sip.delete(dead_bar)
     win.chart_stack.page_fft.tabbar = dead_bar
     calls.clear()
-    qtbot.keyClick(focus, Qt.Key_Tab, Qt.ControlModifier)
+    _key_click_sequence(qtbot, focus, bindings_for(CommandId.NEXT_VIEW)[0])
     qapp.processEvents()
     assert calls == [], "a destroyed section bar must fail closed"
 
@@ -1488,7 +1608,7 @@ def test_project_dirty_holder_is_the_single_owner():
 
 
 def test_view_and_list_keyboard_paths_cover_sdi_a12(qapp, qtbot):
-    """SDI-A12: Ctrl+Tab cycles this bar's views; F2 starts the existing rename."""
+    """SDI-A12: F2 starts the existing rename; MainWindow owns View cycling."""
     from mf4_analyzer.ui.view_state import ViewManager
     from mf4_analyzer.ui.view_tabbar import ViewTabBar
 
@@ -1507,12 +1627,12 @@ def test_view_and_list_keyboard_paths_cover_sdi_a12(qapp, qtbot):
     qapp.processEvents()
     qtbot.keyClick(bar.tabBar(), Qt.Key_Tab, Qt.ControlModifier)
     qapp.processEvents()
-    assert switched == [1], _focus_ctx(bar, command="view.next")
+    assert switched == [], _focus_ctx(bar, command="view.next")
     assert [view.view_id for view in manager.views] == ids
     qtbot.keyClick(bar.tabBar(), Qt.Key_F2)
     qapp.processEvents()
     editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
-    assert editor is not None and editor.text() == manager.views[1].name
+    assert editor is not None and editor.text() == manager.views[0].name
 
 
 def test_file_and_config_focus_share_mutation_owner_sdi_a13(qapp, qtbot):

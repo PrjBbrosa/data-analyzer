@@ -953,7 +953,7 @@
     </figure>
     <figure class="real-ui-figure">
       <img src="../../../mf4_analyzer/help/assets/imports-panel.png" alt="TraceLab v8.2.0 载入 WWT、ZFD、MAT 的真机截图">
-      <figcaption>使用仓库内真实样本同时载入 WWT、ZFD、MAT；文件卡片和 WWT 曲线均为实际渲染。含多个窗口的 WWT 会同步到以文件名命名的独立 Board，导入完成会报告已放置 / 未放置数量；单窗口只生成时域 View，不自动加入 UltraView。一次打开多个 WWT 时可勾选「对本次剩余 WWT 使用此选择」，只作用于这一次打开或拖入。WinWert View 的查看全部 / Home 回到文件原生 X 图面，不是数据并集。所属文件下的 WinWert 原始记录可用眼睛单独隐藏当前时域 View 的辅助线，不改普通通道也不改源文件；关闭文件或从当前 View 移除后，这些记录会从树里同步消失。公式警告里的「未生成」不等于整个 WWT 导入失败。</figcaption>
+      <figcaption>使用仓库内真实样本同时载入 WWT、ZFD、MAT；文件卡片和 WWT 曲线均为实际渲染。WWT 文件里的窗口会生成普通时域 View，不会新建单独的 Board 或自动加入 UltraView。一次打开多个 WWT 时可勾选「对本次剩余 WWT 使用此选择」，只作用于这一次打开或拖入。WinWert View 的查看全部 / Home 回到当前数据范围；手动缩放会随 View 保存。所属文件下的 WinWert 原始记录可用眼睛单独隐藏当前时域 View 的辅助线，不改普通通道也不改源文件；关闭文件或从当前 View 移除后，这些记录会从树里同步消失。公式警告里的「未生成」不等于整个 WWT 导入失败。</figcaption>
     </figure>
   </section>
 
@@ -1398,11 +1398,24 @@
     </div>
   </section>
 
-  <!-- 8. ULTRAVIEW ──────────────────────────────────────── -->
+  <!-- 8. VIEW INTERACTION ───────────────────────────────── -->
+  <section class="card" id="view-interaction">
+    <h2>8 · View 与图表交互</h2>
+    <div class="h2-sub">跨时域和分析页面通用的 View 管理、快捷键与退出规则。</div>
+    <ul>
+      <li><b>View 色标关闭</b>：当前 View 悬停色标时出现 ×；其他 View 的色标首次点击只切换，移出再进入后才能关闭，避免切换时误删。</li>
+      <li><b>⋯ 管理</b>：View 栏右侧入口始终可用；窗口变窄后显示为「»N」，N 是当前未显示的 View 数。面板可切换、重命名或关闭 View。</li>
+      <li><b>标准快捷键</b>：Windows/Linux 用 Ctrl+Tab / Ctrl+Shift+Tab 切换 View；macOS 显示 Meta+Tab（⌃⇥）/ Meta+Shift+Tab（⌃⇧⇥）。图表复位是 Ctrl+R。</li>
+      <li><b>Esc 分层</b>：每次只关闭最内层的菜单、弹层或临时编辑；不会退出应用、删除 View 或跨层清空状态。</li>
+      <li><b>游标显示设置</b>：时域游标旁的设置可分别开关最小值点、最大值点及双游标 Min / Max / Avg / 差值；− 可收成 mini，完整内容仍在提示中。</li>
+    </ul>
+  </section>
+
+  <!-- 9. ULTRAVIEW ──────────────────────────────────────── -->
   <section class="card" id="ultraview">
-    <h2>8 · UltraView 总览</h2>
+    <h2>9 · UltraView 总览</h2>
     <div class="h2-sub">只读对照板：把已有 View 预览摆在一起，不重新计算。</div>
-    <p>View 栏最右侧打开 UltraView。含多个窗口的 WWT 会同步到以文件名命名的独立 Board；导入后的一次智能排版可用撤销恢复，保存后重开不会再自动重排。</p>
+    <p>View 栏最右侧打开 UltraView。WWT 导入只创建普通时域 View，不会自动创建或切换 Board；把已有 View 加入总览后，导入后的一次智能排版可用撤销恢复，保存后重开不会再自动重排。</p>
     <ul>
       <li><b>智能排版</b>：重新计算大小与位置，完成后一次适应内容。已是最优状态时不写撤销。</li>
       <li><b>紧凑排列</b>：保留每张卡片尺寸，只消除空洞。</li>
@@ -1412,9 +1425,9 @@
     <p>卡片更多菜单可<b>锁定 / 解锁</b>；锁定后智能排版保留其位置。锁定卡片占用空间时布局未改变。晚到预览只更新图像，不自动改几何；预览分辨率偏低时，打开源 View 后可更新。</p>
   </section>
 
-  <!-- 9. FAQ ───────────────────────────────────────────── -->
+  <!-- 10. FAQ ──────────────────────────────────────────── -->
   <section class="card" id="faq">
-    <h2>9 · 常见问题</h2>
+    <h2>10 · 常见问题</h2>
     <div class="h2-sub">点开看答案。</div>
 
     <details class="faq">

@@ -73,11 +73,6 @@ def _stub_wwt_ui(
         return _AskLayoutDecision(accepted, apply_to_remaining)
 
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
-    monkeypatch.setattr(
-        mw._ultraview,
-        "add_time_views_from_native_layout",
-        lambda items, **_kwargs: (),
-    )
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     return asked
@@ -274,11 +269,6 @@ def test_project_restore_asks_zero_times_via_restoring_project_seam(
 
     monkeypatch.setattr(restored._wwt_import, "_ask_layout", fail_if_asked)
     monkeypatch.setattr(restored, "_load_one", _load_one_recording)
-    monkeypatch.setattr(
-        restored._ultraview,
-        "add_time_views_from_native_layout",
-        lambda items, **_kwargs: (),
-    )
     monkeypatch.setattr(restored, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(restored, "_apply_active_view", lambda *a, **k: None)
     restored.open_project(proj)

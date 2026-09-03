@@ -93,6 +93,7 @@ _BOARD_PAYLOAD_KEYS = frozenset(
         "primary_ratio",
         "free_grid",
         "placements",
+        "locked_refs",
         "author_objects",
     }
 )
@@ -257,6 +258,12 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
                 for item in board.free_grid
             ],
         }
+        locked_refs = sorted(
+            (item.ref for item in board.free_grid if item.ref in board.locked_refs),
+            key=lambda item: (item.section, item.view_id),
+        )
+        if locked_refs:
+            payload["locked_refs"] = [ref.to_dict() for ref in locked_refs]
     else:
         payload["placements"] = [
             {"slot_id": item.slot_id, **item.ref.to_dict()} for item in board.placements
@@ -272,6 +279,26 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
 
 def board_to_payload(board: UltraViewBoardState) -> dict[str, Any]:
     return {"schema": ULTRAVIEW_SCHEMA, "board": _board_payload(board)}
+
+
+def _restore_locked_refs(
+    board: UltraViewBoardState,
+    raw: Any,
+    warnings: list[str],
+) -> None:
+    """Recover optional free-grid lock intent without inventing membership."""
+    if raw is None:
+        return
+    if not isinstance(raw, list):
+        warnings.append(_warn("illegal_locked_refs"))
+        return
+    placed = {item.ref for item in board.free_grid}
+    for item in raw:
+        ref = parse_ref_payload(item if isinstance(item, Mapping) else None)
+        if ref is None or ref not in placed:
+            warnings.append(_warn("illegal_locked_ref"))
+            continue
+        board.locked_refs.add(ref)
 
 
 def normalize_board_payload(
@@ -364,6 +391,7 @@ def normalize_board_payload(
                 warnings.append(_warn("illegal_ref"))
             elif _take_membership(seen_refs, ref, warnings):
                 board.unplaced.append(ref)
+        _restore_locked_refs(board, board_raw.get("locked_refs"), warnings)
         board.author_objects = _normalize_author_objects(
             board_raw.get("author_objects"),
             placed_cards=placed_ref_set(board),

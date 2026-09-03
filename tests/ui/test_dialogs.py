@@ -933,3 +933,32 @@ def test_dangerous_confirmation_escape_and_return_are_safe(
     assert seen.get("no_is_default")
     assert not seen.get("yes_is_default")
     assert dlg.new_channels == created
+
+
+def test_empty_ultraview_search_escape_bubbles_to_sheet_reject(qapp, qtbot):
+    """C7: a hostless SearchField must not swallow its sheet's Esc close."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy
+    from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
+    from mf4_analyzer.ui.drawers.ultraview import UltraViewSheet
+    from mf4_analyzer.ui_kit.widgets import SearchField
+
+    page = QWidget()
+    page_layout = QVBoxLayout(page)
+    field = SearchField("搜索 View、信号或分析类型…", page)
+    page_layout.addWidget(field)
+    sheet = UltraViewSheet(None, page)
+    qtbot.addWidget(page)
+    qtbot.addWidget(sheet)
+    sheet.present()
+    qtbot.waitExposed(sheet)
+    field.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+
+    rejected = QSignalSpy(sheet.rejected)
+    qtbot.keyClick(field, Qt.Key_Escape)
+    qapp.processEvents()
+
+    assert len(rejected) == 1
+    assert sheet.result() == QDialog.Rejected
+    assert not sheet.isVisible()

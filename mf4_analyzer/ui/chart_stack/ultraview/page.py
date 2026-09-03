@@ -38,6 +38,7 @@ from PyQt5.QtWidgets import (
 )
 
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui.command_registry import _unique_key_bindings
 from mf4_analyzer.ui.ultraview_state import (
     COMPARE_FILTER_ALL,
     STATUS_ORPHANED,
@@ -293,25 +294,6 @@ _FEEDBACK_NO_STALE = "没有需要更新的预览"
 _RAIL_PANELS = frozenset({PANEL_LIBRARY, PANEL_LAYOUT, PANEL_FILTER, PANEL_UNPLACED})
 _GLOBAL_PANELS = frozenset({"display", "export"})
 _EDGE_HINT_DWELL_S = 0.4
-
-
-def _unique_standard_bindings(standard_key):
-    """De-duplicated ``QKeySequence.keyBindings`` for a standard key."""
-    seen = []
-    texts = set()
-    for seq in QKeySequence.keyBindings(standard_key):
-        if seq.isEmpty():
-            continue
-        portable = seq.toString(QKeySequence.PortableText)
-        if not portable or portable in texts:
-            continue
-        texts.add(portable)
-        seen.append(QKeySequence(seq))
-    if not seen:
-        fallback = QKeySequence(standard_key)
-        if not fallback.isEmpty():
-            seen.append(fallback)
-    return seen
 
 
 def _qrect(rect: FloatingRect) -> QRect:
@@ -954,7 +936,9 @@ class UltraViewPage(QWidget):
 
     def _make_standard_shortcuts(self, standard_key):
         shortcuts = []
-        for seq in _unique_standard_bindings(standard_key):
+        for seq in _unique_key_bindings(
+            standard_key, fallback_to_standard=True
+        ):
             shortcut = QShortcut(seq, self)
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcuts.append(shortcut)

@@ -41,6 +41,47 @@ def _preview_image():
     return image
 
 
+def test_card_lock_survives_save_reload(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "locked-card.csv"
+    _write_csv(csv_a)
+    project = tmp_path / "locked-card.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._load_one(str(csv_a))
+    ref = UltraViewRef("time", str(window.view_manager.get(0).view_id))
+    uv = window._ultraview
+    uv._apply_add_ref(ref)
+    uv._on_free_grid_lock(ref.section, ref.view_id)
+
+    assert uv._free_grid_card_locked(ref.section, ref.view_id)
+    assert window.save_project(project) is True
+    payload = json.loads(project.read_text(encoding="utf-8"))
+    assert payload["ultraview"]["workspace"]["boards"][0]["locked_refs"] == [
+        ref.to_dict()
+    ]
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+    QCoreApplication.processEvents()
+    assert restored._ultraview._free_grid_card_locked(ref.section, ref.view_id)
+
+
+def test_old_workspace_without_locked_refs_defaults_to_empty_lock_set():
+    workspace = default_workspace()
+    ref = UltraViewRef("time", "legacy-unlocked")
+    assert add_ref(workspace.boards[0], ref) == []
+    payload = workspace_to_payload(workspace)
+    board_payload = payload["workspace"]["boards"][0]
+    assert "locked_refs" not in board_payload
+
+    restored, warnings = normalize_workspace_payload(payload)
+
+    assert warnings == []
+    assert restored.boards[0].locked_refs == set()
+    assert "locked_refs" not in workspace_to_payload(restored)["workspace"]["boards"][0]
+
+
 def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_path):
     csv_a = tmp_path / "a.csv"
     _write_csv(csv_a)
@@ -637,5 +678,4 @@ def test_reopen_keeps_exact_grid_rects_without_smart_layout(
     QCoreApplication.processEvents()
     ruv = restored._ultraview
     assert {item.ref: item.rect for item in ruv.board.free_grid} == original
-    assert ruv._workspace_controller._pending_smart_layout_group is None
-    assert ruv._workspace_controller._locked_free_grid_refs == {}
+    assert ruv.board.locked_refs == set()

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from dataclasses import dataclass
 from typing import AbstractSet, Any, Iterable, Literal, Mapping, Sequence
 
@@ -407,6 +408,7 @@ def migrate_legacy_channel_bindings(state: Any, files: Mapping[str, Any]) -> lis
     colors = dict(getattr(state, "colors", None) or {})
     ylims = dict(getattr(state, "ylims", None) or {})
     groups = _channel_axis_groups(axis_opts.get("channel_axis_groups"))
+    migrated_axis_ids: set[str] = set()
     for binding in migrated:
         assert binding.y_ref.channel is not None
         key = (str(binding.y_ref.fid), str(binding.y_ref.channel))
@@ -418,6 +420,27 @@ def migrate_legacy_channel_bindings(state: Any, files: Mapping[str, Any]) -> lis
         _preserve_binding_ylim(ylims, binding, files)
         if binding.axis_id:
             groups[_encode_channel_key(key)] = binding.axis_id
+            migrated_axis_ids.add(str(binding.axis_id))
+
+    # A persisted map carries normal Navigator members only.  A migrated
+    # ordinary binding must not manufacture a one-member group unless a
+    # retained exact binding or another persisted normal member proves the
+    # same axis still has a partner.
+    group_counts = Counter(groups.values())
+    retained_axis_counts = Counter(
+        str(binding.axis_id)
+        for binding in kept
+        if str(binding.axis_id or "").strip()
+    )
+    singleton_migrations = {
+        axis_id for axis_id in migrated_axis_ids
+        if group_counts[axis_id] + retained_axis_counts[axis_id] < 2
+    }
+    if singleton_migrations:
+        groups = {
+            key: axis_id for key, axis_id in groups.items()
+            if axis_id not in singleton_migrations
+        }
 
     state.checked = checked
     state.colors = colors

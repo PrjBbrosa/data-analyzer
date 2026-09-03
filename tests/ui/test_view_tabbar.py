@@ -1,7 +1,15 @@
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QEvent, QObject, QPoint, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QObject,
+    QPoint,
+    QSize,
+    Qt,
+    pyqtSignal,
+)
 from PyQt5.QtGui import QColor, QCursor, QHoverEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
@@ -12,6 +20,7 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QToolButton,
     QWidget,
 )
 
@@ -661,15 +670,26 @@ def _open_overflow_popup(bar):
     return popup
 
 
-def test_tab_strip_is_max_clamped_not_fixed_width(qtbot):
-    """setFixedWidth told Qt the strip could never overflow, which is what kept
-    the setUsesScrollButtons(True) configured in __init__ permanently inert."""
+def test_tab_strip_is_max_clamped_without_native_scroll_buttons(qtbot):
+    """The managed ``»N`` popup, never Qt's anonymous arrows, owns overflow."""
     _manager, bar = _wide_bar(qtbot, count=3)
     tabs = bar.tabBar()
 
     assert tabs.minimumWidth() == 0
     assert tabs.maximumWidth() == tabs.sizeHint().width()
-    assert tabs.usesScrollButtons()
+    assert not tabs.usesScrollButtons()
+
+
+def test_narrow_tab_strip_never_exposes_native_scroll_button_shells(qtbot):
+    """Cocoa renders these as two blank rounded tab-like outlines."""
+    _manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+
+    _resize_to_budget(bar, compact // 2)
+
+    tabs = bar.tabBar()
+    assert bar.overflow_indices()
+    assert not any(button.isVisible() for button in tabs.findChildren(QToolButton))
 
 
 def test_roomy_row_shows_every_tab_with_full_names(qtbot):
@@ -1377,6 +1397,37 @@ def test_close_slot_double_click_never_enters_inline_rename_or_double_deletes(qt
     assert bar.findChild(QLineEdit, "viewTabRenameEditor") is None
 
 
+def test_close_slot_double_click_with_jitter_deletes_exactly_one_view(qtbot):
+    """A deleted View must not expose its successor's close slot mid-click."""
+    manager, bar = _shown_bar(qtbot, count=3, active=0)
+    tabs = bar.tabBar()
+    initial_ids = [view.view_id for view in manager.views]
+    bar.delete_requested.connect(manager.delete_view)
+    slot = _hover_icon_slot(tabs, 0)
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QTest.mouseMove(tabs, slot.center() + QPoint(1, 0))
+    QTest.mouseDClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center() + QPoint(1, 0))
+    QApplication.processEvents()
+
+    assert len(manager.views) == 2
+    assert [view.view_id for view in manager.views] == initial_ids[1:]
+
+
+def test_refresh_does_not_rearm_close_slot_under_pointer(qtbot):
+    manager, bar = _shown_bar(qtbot, count=3, active=1)
+    tabs = bar.tabBar()
+    slot = _hover_icon_slot(tabs, 1)
+
+    assert tabs.hover_index() == 1  # premise: the close target was armed
+    manager.rename(1, "Renamed while hovering")
+    QTest.mouseMove(tabs, slot.center() + QPoint(1, 0))
+    QApplication.processEvents()
+
+    assert tabs.hover_index() == -1
+    assert not tabs._close_slot_actionable(1)
+
+
 def test_inactive_swatch_double_click_cannot_turn_the_second_click_into_close(qtbot):
     _manager, bar = _shown_bar(qtbot, count=3, active=0)
     tabs = bar.tabBar()
@@ -1909,6 +1960,23 @@ def test_popup_escape_outside_click_and_destroy_restore_trigger_state(qtbot):
     assert bar._overflow.property("expanded") in ("false", False, None)
 
 
+def test_overflow_popup_is_released_after_escape(qtbot):
+    _manager, bar = _wide_bar(qtbot, count=6)
+
+    for _ in range(5):
+        bar._on_overflow_clicked()
+        QApplication.processEvents()
+        popup = bar._overflow_popup
+        assert popup is not None and popup.isVisible()
+        QTest.keyClick(popup, Qt.Key_Escape)
+        QApplication.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QApplication.processEvents()
+        qtbot.wait(260)
+
+    assert len(bar.findChildren(ViewOverflowPopup)) <= 1
+
+
 @pytest.mark.parametrize("key", [Qt.Key_Space, Qt.Key_Return])
 def test_view_management_entry_keyboard_opens_and_escape_restores_focus(qtbot, key):
     _manager, bar = _wide_bar(qtbot, count=6)
@@ -2165,7 +2233,8 @@ def test_section_bars_share_the_overflow_popup(qtbot):
         bar._close_overflow_popup()
 
 
-def test_ctrl_tab_cycles_current_section_views_and_f2_renames(qtbot):
+def test_tabbar_no_longer_handles_ctrl_tab_itself(qtbot):
+    """D4: section cycling has exactly one owner in MainWindow."""
     manager, bar = _bar(qtbot, count=3, active=0)
     bar.show()
     QApplication.processEvents()
@@ -2178,13 +2247,13 @@ def test_ctrl_tab_cycles_current_section_views_and_f2_renames(qtbot):
 
     qtbot.keyClick(tabs, Qt.Key_Tab, Qt.ControlModifier)
     QApplication.processEvents()
-    assert switched == [1]
-    assert tabs.currentIndex() == 1
+    assert switched == []
+    assert tabs.currentIndex() == 0
     assert [view.view_id for view in manager.views] == ids
 
     qtbot.keyClick(tabs, Qt.Key_Tab, Qt.ControlModifier | Qt.ShiftModifier)
     QApplication.processEvents()
-    assert switched[-1] == 0
+    assert switched == []
     assert tabs.currentIndex() == 0
 
     qtbot.keyClick(tabs, Qt.Key_F2)

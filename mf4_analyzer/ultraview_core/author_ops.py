@@ -489,6 +489,13 @@ def _placement_snapshot_payload(snapshot: BoardPlacementSnapshot) -> dict[str, A
             for ref, rect in snapshot.free_grid
         ],
         "unplaced": [ref.to_dict() for ref in snapshot.unplaced],
+        "locked_refs": [
+            ref.to_dict()
+            for ref in sorted(
+                snapshot.locked_refs,
+                key=lambda item: (item.section, item.view_id),
+            )
+        ],
     }
 
 
@@ -529,6 +536,7 @@ def apply_board_edit_entry(
         placements=[CardPlacement(item.slot_id, item.ref) for item in board.placements],
         unplaced=list(board.unplaced),
         free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
+        locked_refs=set(board.locked_refs),
         author_objects=_clone_author_objects(board.author_objects),
     )
     snapshot = entry.placement_after if forward else entry.placement_before
@@ -545,6 +553,7 @@ def apply_board_edit_entry(
         board.placements = staged.placements
         board.free_grid = staged.free_grid
         board.unplaced = staged.unplaced
+        board.locked_refs = staged.locked_refs
     if entry.object_patches:
         board.author_objects = staged.author_objects
     return True

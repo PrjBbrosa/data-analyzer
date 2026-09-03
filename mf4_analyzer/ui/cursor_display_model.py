@@ -65,6 +65,7 @@ class CursorDisplayRow:
 class CursorDisplayBlock:
     identity: object
     qualified_label: str
+    channel_label: str
     color: str
     visible_rows: tuple[CursorDisplayRow, ...]
     tooltip_rows: tuple[CursorDisplayRow, ...]
@@ -83,12 +84,19 @@ class CursorPresentation:
     omit_visible_source_prefix: bool = False
 
 
-def enabled_value_fields(options: CursorDisplayOptions):
+def enabled_value_fields(options: CursorDisplayOptions | None):
     """Return enabled value fields in the product order Min, Max, Avg, Δ.
 
     Δ maps to time-X channel field ``delta``; custom-X branch rows remap
-    that token to ``delta_value``.
+    that token to ``delta_value``.  ``None`` keeps the legacy compatibility
+    formatter's historical Min/Max/Avg-only result.
     """
+    if options is None:
+        return (
+            ("Min", "min_value"),
+            ("Max", "max_value"),
+            ("Avg", "avg_value"),
+        )
     return tuple(
         item for item, enabled in (
             (("Min", "min_value"), options.show_min_value),

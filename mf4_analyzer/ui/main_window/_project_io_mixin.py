@@ -95,6 +95,10 @@ class ProjectIOMixin:
     def _on_project_filter_changed(self):
         self._note_user_project_mutation()
 
+    def _on_markup_revision_changed(self):
+        """Mark a persistent chart annotation without delaying its signal."""
+        self._note_user_project_mutation(token="markup")
+
     def _project_session_is_dirty(self):
         holder = getattr(self, "_project_dirty", None)
         if holder is None:
@@ -104,6 +108,7 @@ class ProjectIOMixin:
             try:
                 digest = self._canonical_session_digest()
             except Exception:
+                logger.exception("project dirty digest calculation failed")
                 return True
             holder.reconcile_saved_digest(digest)
         return holder.session_needs_guard(digest)
@@ -127,6 +132,7 @@ class ProjectIOMixin:
 
     def _canonical_session_digest(self):
         """Canonical payload hash at a leave decision. Not for paint/replot."""
+        snapshot = self._snapshot_focused_view_readonly()
         from .. import project_io as pio
         holder = getattr(self, "_project_dirty", None)
         path = getattr(self, "_project_path", None)
@@ -135,7 +141,35 @@ class ProjectIOMixin:
         if path is None:
             return None
         doc = self._assemble_project_document(path)
+        idx = getattr(self, "_focused_view_idx", None)
+        if snapshot is not None and isinstance(idx, int) and (
+            0 <= idx < len(doc.views)
+        ):
+            doc.views[idx] = snapshot.to_dict()
         return pio.canonical_project_digest(doc)
+
+    def _snapshot_focused_view_readonly(self):
+        """Copy the focused time View and capture live controls into the copy.
+
+        Leave-guard review must see the on-screen camera and remarks, but
+        Cancel must not persist them, emit ``views_changed``, or alter the
+        ViewState instance owned by the manager.
+        """
+        from copy import deepcopy
+
+        idx = getattr(self, "_focused_view_idx", None)
+        views = getattr(getattr(self, "view_manager", None), "views", ())
+        if not isinstance(idx, int) or not (0 <= idx < len(views)):
+            return None
+        snapshot = deepcopy(self.view_manager.get(idx))
+        if self.chart_stack.current_mode() != "time":
+            return snapshot
+        if self._time_render_busy() or getattr(self, "_applying_view", False):
+            return snapshot
+        canvas = self._canvas_for_view_index(idx) or self.canvas_time
+        self._view_bridge.capture_controls_into(snapshot, self, canvas)
+        self._view_bridge.capture_canvas_ranges_into(snapshot, canvas)
+        return snapshot
 
     def _unsaved_project_prompt_buttons(self):
         """Build the shared Save / Don't Save / Cancel box. Does not exec."""
@@ -1877,7 +1911,7 @@ class ProjectIOMixin:
         filter, and a cleared cursor pill. Project load/restore intermediate
         empties must not run this (``_restoring_project`` / ``_opening_project``
         / ``_applying_view``). Does not touch QSettings, recent files, presets,
-        or the five global cursor-display preference bits.
+        or the six global cursor-display preference bits.
         """
         if self.files:
             return False
@@ -1899,20 +1933,7 @@ class ProjectIOMixin:
                 # leave each referenced View as a fresh empty View with the
                 # same id, so the Board can show a stale/missing card instead
                 # of silently turning it into an orphan.
-                old_split = view_manager.split_with
-                view_manager.views = [
-                    view_manager._make(index)
-                    for index, _view_id in enumerate(preserved_ids)
-                ]
-                for state, view_id in zip(view_manager.views, preserved_ids):
-                    state.view_id = view_id
-                view_manager.active = 0
-                view_manager.split_with = None
-                view_manager._split_pairs = {}
-                view_manager.views_changed.emit()
-                if old_split is not None:
-                    view_manager.split_changed.emit(None)
-                view_manager.active_changed.emit(0)
+                view_manager.reset_to_defaults_preserving_ids(preserved_ids)
         for manager in (getattr(self, "analysis_managers", None) or {}).values():
             reset = getattr(manager, "reset_to_single_default", None)
             if callable(reset):
@@ -2109,13 +2130,14 @@ class ProjectIOMixin:
         if uv is not None:
             sidecar_warnings = uv.save_preview_sidecar(path)
             doc.ultraview = uv.to_project_payload()
+        digest = pio.canonical_project_digest(doc)
         self._write_project_document(doc, path)
         self._project_path = path
         if health is not None:
             health.clear()
         dirty = getattr(self, "_project_dirty", None)
         if dirty is not None:
-            dirty.mark_saved(path, digest=pio.canonical_project_digest(doc))
+            dirty.mark_saved(path, digest=digest)
         self.statusBar.showMessage(f"已保存项目: {path.name}")
         self.toast("已保存项目", "success")
         if sidecar_warnings:

@@ -523,3 +523,27 @@ def test_overflow_menu_open_retires_the_view_compact_tabs_discovery(
     assert recorded == ["view.compact_tabs"]
     if bar._overflow_popup is not None:
         bar._close_overflow_popup()
+
+
+def test_quick_close_hint_retires_after_first_actual_close(qapp, qtbot, monkeypatch):
+    from PyQt5.QtCore import QEvent, Qt
+    from PyQt5.QtGui import QHoverEvent
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QApplication
+    from mf4_analyzer.ui.view_tabbar import tab_close_hit_rect
+
+    recorded = _spy_mark_discovered(monkeypatch)
+    manager, bar = _fit_bar(qtbot, 3, lambda roomy, _compact: roomy * 4)
+    tabs = bar.tabBar()
+    bar.delete_requested.connect(manager.delete_view)
+    slot = tab_close_hit_rect(tabs, 0)
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, slot.center(), slot.center()),
+    )
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert len(manager.views) == 2
+    assert recorded == ["view.quick_close"]

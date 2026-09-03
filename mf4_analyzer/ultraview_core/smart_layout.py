@@ -577,7 +577,6 @@ def solve_smart_layout(
                 require_min,
                 metrics,
                 ratio=_ratio_cap(mode),
-                current_rect=fact.current_rect,
             )
         works.append(
             _Work(
@@ -607,10 +606,9 @@ def solve_smart_layout(
 
     used_fallback = False
     if hit_cap:
-        diagnostics.append("search_budget_fallback")
-        used_fallback = True
-        best = None
+        diagnostics.append("search_budget_exhausted")
     if best is None:
+        used_fallback = True
         reduced_best = _greedy_pack(
             _with_reduced_candidates(works),
             pack_order,
@@ -673,20 +671,44 @@ def solve_smart_layout(
     if not _validate_fixed_point:
         return result
     canonical = canonicalize_smart_card_facts(frozen, placements=placements)
-    probe = solve_smart_layout(
+    second = solve_smart_layout(
         canonical, policy, _validate_fixed_point=False
     )
-    if not probe.accepted or probe.placements != result.placements:
-        diagnostics = list(result.diagnostics) + ["fixed_point_failure"]
-        return _result(
-            False,
-            (),
-            "fixed_point_failure",
-            diagnostics,
-            visits,
-            used_fallback,
+    if second.accepted and second.placements == result.placements:
+        return result
+
+    # Current geometry is only a movement tie-break.  A first solve can
+    # therefore prefer a different equally valid layout from the canonical
+    # facts rebuilt from it.  Treat the second solve as the candidate result,
+    # then prove it is stable instead of rejecting the user's whole command.
+    if second.accepted:
+        settled = canonicalize_smart_card_facts(
+            canonical,
+            placements=second.placements,
         )
-    return result
+        third = solve_smart_layout(
+            settled, policy, _validate_fixed_point=False
+        )
+        if third.accepted and third.placements == second.placements:
+            diagnostics = list(second.diagnostics) + ["fixed_point_settled_in_2"]
+            return _result(
+                True,
+                second.placements,
+                None,
+                diagnostics,
+                second.search_visits,
+                second.used_fallback,
+            )
+
+    diagnostics = list(result.diagnostics) + ["fixed_point_failure"]
+    return _result(
+        False,
+        (),
+        "fixed_point_failure",
+        diagnostics,
+        visits,
+        used_fallback,
+    )
 
 
 def _result(
@@ -937,8 +959,8 @@ def _span_candidates(
     metrics: GridMetrics,
     *,
     ratio: float,
-    current_rect: GridRect | None = None,
 ) -> tuple[tuple[int, int], ...]:
+    """Return density/aspect candidates independent of existing geometry."""
     spans = _legal_spans(min_w, min_h, require_min, metrics)
     if not spans:
         return ((GRID_MIN_COLUMN_SPAN, GRID_MIN_ROW_SPAN),)
@@ -962,24 +984,15 @@ def _span_candidates(
     density_hug = _hug_span_from(aspect, density_virtual, metrics)
     if density_hug is not None and density_hug not in legal_set:
         density_hug = None
-    current_key = None
-    current_hug = None
-    if current_rect is not None:
-        current_key = (int(current_rect.column_span), int(current_rect.row_span))
-        if current_key not in legal_set:
-            current_key = None
-        current_hug = _hug_span_from(aspect, current_rect, metrics)
-        if current_hug is not None and current_hug not in legal_set:
-            current_hug = None
 
     pinned: list[tuple[int, int]] = []
-    for key in (density_hug, current_hug, current_key, density_key):
+    for key in (density_hug, density_key):
         if key is None or key in pinned:
             continue
         pinned.append(key)
 
-    # Adjacent quantized spans around the density hug so the neighborhood
-    # does not drift when current_rect is filled in after the first solve.
+    # Adjacent quantized spans around the density hug retain viable choices
+    # without making candidate membership depend on the existing placement.
     center = density_hug if density_hug is not None else density_key
     adjacent: list[tuple[int, int]] = []
     for distance in range(1, 3):
@@ -1014,7 +1027,7 @@ def _span_candidates(
         if len(chosen) >= MAX_SPAN_CANDIDATES:
             break
     # Density hug must survive the cap: pinned prefix is never dropped.
-    hug_key = density_hug if density_hug is not None else current_hug
+    hug_key = density_hug
     if hug_key is not None and hug_key not in chosen[:MAX_SPAN_CANDIDATES]:
         chosen = [hug_key] + [key for key in chosen if key != hug_key]
     rest = chosen[len(pinned):]
@@ -1171,7 +1184,19 @@ def _beam_search(
         if not beam:
             break
 
-    if not hit_cap:
+    if hit_cap:
+        best = _complete_beam(
+            works,
+            pack_order,
+            beam,
+            metrics,
+            viewport,
+            min_w,
+            min_h,
+            require_min,
+            mode,
+        )
+    else:
         for rects, _occupied, _last, _origin in beam:
             if any(rects[index] is None for index in range(n)):
                 continue
@@ -1191,6 +1216,105 @@ def _beam_search(
             if best is None or evaluated[1] < best[1]:
                 best = evaluated
     return best, visits, hit_cap
+
+
+def _complete_beam(
+    works: Sequence[_Work],
+    pack_order: Sequence[int],
+    beam: Sequence[tuple[list[GridRect | None], list[GridRect], GridRect | None, int]],
+    metrics: GridMetrics,
+    viewport: tuple[int, int],
+    min_w: int,
+    min_h: int,
+    require_min: bool,
+    mode: str,
+) -> tuple[tuple[GridRect, ...], _Score] | None:
+    """Finish the last fully formed beam level without widening the search."""
+    best: tuple[tuple[GridRect, ...], _Score] | None = None
+    for rects, occupied, last, origin_row in beam:
+        placed = _finish_beam_candidate(
+            works,
+            pack_order,
+            rects,
+            occupied,
+            last,
+            origin_row,
+        )
+        if placed is None:
+            continue
+        evaluated = _evaluate(
+            works,
+            placed,
+            metrics,
+            viewport,
+            min_w,
+            min_h,
+            require_min,
+            mode,
+        )
+        if evaluated is not None and (best is None or evaluated[1] < best[1]):
+            best = evaluated
+    return best
+
+
+def _finish_beam_candidate(
+    works: Sequence[_Work],
+    pack_order: Sequence[int],
+    rects: Sequence[GridRect | None],
+    occupied: Sequence[GridRect],
+    last: GridRect | None,
+    origin_row: int,
+) -> tuple[GridRect, ...] | None:
+    """Deterministically complete one already-ranked, contiguous beam state."""
+    placed = list(rects)
+    complete_steps = 0
+    for index in pack_order:
+        if placed[index] is None:
+            break
+        complete_steps += 1
+    if any(placed[index] is not None for index in pack_order[complete_steps:]):
+        return None
+
+    packed = list(occupied)
+    previous_group: object = (
+        works[pack_order[complete_steps - 1]].group_key
+        if complete_steps
+        else object()
+    )
+    for step in range(complete_steps, len(pack_order)):
+        index = pack_order[step]
+        work = works[index]
+        if work.group_key != previous_group:
+            last = None
+            origin_row = _packed_origin(placed, pack_order, step)
+            previous_group = work.group_key
+        if work.locked is not None:
+            locked = work.locked
+            if last is not None and (locked.row, locked.column) < (last.row, last.column):
+                return None
+            placed[index] = locked
+            last = locked
+            continue
+        next_rect: GridRect | None = None
+        for column_span, row_span in work.candidates:
+            candidate = _place_after(
+                column_span,
+                row_span,
+                last,
+                packed,
+                origin_row,
+            )
+            if candidate is not None:
+                next_rect = candidate
+                break
+        if next_rect is None:
+            return None
+        placed[index] = next_rect
+        packed.append(next_rect)
+        last = next_rect
+    if any(rect is None for rect in placed):
+        return None
+    return tuple(placed)  # type: ignore[return-value]
 
 
 def _partial_rank(

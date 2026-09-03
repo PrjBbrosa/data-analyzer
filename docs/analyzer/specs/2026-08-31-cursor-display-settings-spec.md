@@ -165,3 +165,11 @@ The feature is accepted when:
 - No FFT, FRF, preview, batch-render, acquisition, or project-file schema change.
 - No new MainWindow state, raw display-name identity map, parallel rendering policy, or duplicated custom-X calculation.
 - No redesign of cursor dragging, snapping, or dual-cursor interval semantics.
+
+## 14. 2026-09-03 erratum (current implementation of §3 only)
+
+This erratum does not rewrite the 2026-08-31 historical contract. The current
+product has **six** application-global booleans, not the five listed in §3:
+the five recorded settings plus `show_delta_value` (default on), which controls
+the dual-cursor difference value. The preference remains global and is not
+stored in ViewState, project/session state, presets, or analysis results.

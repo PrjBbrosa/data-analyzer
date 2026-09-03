@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
 import qtawesome as qta
 
 from ...ui_kit.icons import icon_device_pixel_ratio
+from ..command_registry import _unique_key_bindings
 from ..image_utils import pixmap_as_device_pixels as _shared_pixmap_as_device_pixels
 
 # Back-imports so that ``import mf4_analyzer.ui.markup.editor as editor_mod``
@@ -66,25 +67,6 @@ from .view import _MarkupGraphicsView
 _HIT_TOLERANCE = 12.0
 _HIT_SCREEN_PX = 8.0
 _HANDLE_HIT_SCREEN_PX = 14.0
-
-
-def _unique_standard_bindings(standard_key):
-    """De-duplicated ``QKeySequence.keyBindings`` for a standard key."""
-    seen = []
-    texts = set()
-    for seq in QKeySequence.keyBindings(standard_key):
-        if seq.isEmpty():
-            continue
-        portable = seq.toString(QKeySequence.PortableText)
-        if not portable or portable in texts:
-            continue
-        texts.add(portable)
-        seen.append(QKeySequence(seq))
-    if not seen:
-        fallback = QKeySequence(standard_key)
-        if not fallback.isEmpty():
-            seen.append(fallback)
-    return seen
 
 
 def _pixmap_as_device_pixels(pixmap: QPixmap) -> QPixmap:
@@ -961,12 +943,16 @@ class MarkupEditor(QWidget):
     def _install_history_shortcuts(self) -> None:
         self._undo_shortcuts = []
         self._redo_shortcuts = []
-        for seq in _unique_standard_bindings(QKeySequence.Undo):
+        for seq in _unique_key_bindings(
+            QKeySequence.Undo, fallback_to_standard=True
+        ):
             shortcut = QShortcut(seq, self)
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcut.activated.connect(self._on_undo_shortcut)
             self._undo_shortcuts.append(shortcut)
-        for seq in _unique_standard_bindings(QKeySequence.Redo):
+        for seq in _unique_key_bindings(
+            QKeySequence.Redo, fallback_to_standard=True
+        ):
             shortcut = QShortcut(seq, self)
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcut.activated.connect(self._on_redo_shortcut)

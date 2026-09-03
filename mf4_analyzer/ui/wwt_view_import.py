@@ -191,8 +191,8 @@ def _initial_xlim(
     if initial is None:
         return None
     span = None
-    if 0 <= int(x_row.record_index) < len(records):
-        span = _record_finite_span(records[x_row.record_index])
+    if 0 <= int(x_row.x_record_index) < len(records):
+        span = _record_finite_span(records[x_row.x_record_index])
     if span is not None and not _ranges_overlap(initial, span):
         warnings.append(f"native_x_range_no_overlap: window {window_index + 1}")
         return None

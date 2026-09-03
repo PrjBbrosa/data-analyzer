@@ -553,6 +553,26 @@ def test_dual_formatters_filter_value_columns_with_immutable_options():
     assert "△" in full and "△" in mini
 
 
+def test_compat_formatters_share_the_neutral_value_field_contract():
+    from mf4_analyzer.ui.cursor_display_model import (
+        CursorDisplayOptions,
+        enabled_value_fields,
+    )
+    import mf4_analyzer.ui.plot_helpers as plot_helpers
+
+    options = CursorDisplayOptions(
+        show_max_value=False,
+        show_min_value=True,
+        show_avg_value=False,
+        show_delta_value=True,
+    )
+    assert enabled_value_fields(options) == (
+        ("Min", "min_value"),
+        ("Δ", "delta"),
+    )
+    assert not hasattr(plot_helpers, "_enabled_cursor_value_fields")
+
+
 @pytest.mark.parametrize("enabled", ("min", "max", "avg", "none"))
 def test_time_compat_formatter_options_never_emit_placeholder_cells(enabled):
     from mf4_analyzer.ui.chart_stack.cursor_display import CursorDisplayOptions

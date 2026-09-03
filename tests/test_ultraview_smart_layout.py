@@ -28,6 +28,7 @@ from mf4_analyzer.ultraview_core.grid_geometry import (
     rects_overlap,
 )
 from mf4_analyzer.ultraview_core.model import (
+    FREE_GRID_PRESETS,
     FreeGridPlacement,
     GridRect,
     UltraViewRef,
@@ -38,6 +39,7 @@ from mf4_analyzer.ultraview_core.smart_layout import (
     SmartLayoutPolicy,
     SmartLayoutResult,
     solve_smart_layout,
+    smart_layout_facts_from_placements,
 )
 from tests._helpers.wwt_factory import UCAN_SEMANTIC_MM
 
@@ -161,6 +163,27 @@ def _as_placements(
     pairs: Sequence[tuple[UltraViewRef, GridRect]],
 ) -> tuple[FreeGridPlacement, ...]:
     return tuple(FreeGridPlacement(ref, rect) for ref, rect in pairs)
+
+
+def _manual_preset_placements(
+    card_count: int,
+    per_row: int,
+    span: tuple[int, int],
+) -> tuple[FreeGridPlacement, ...]:
+    """Build an existing free-grid layout with a current rect for every card."""
+    column_span, row_span = span
+    return tuple(
+        FreeGridPlacement(
+            UltraViewRef("time", f"manual-{index}"),
+            GridRect(
+                (index % per_row) * column_span,
+                (index // per_row) * row_span,
+                column_span,
+                row_span,
+            ),
+        )
+        for index in range(card_count)
+    )
 
 
 def _scale_metrics(metrics: GridMetrics, scale: float) -> GridMetrics:
@@ -554,13 +577,13 @@ def test_locked_unsolvable_rejects_without_mutating_input():
 
 
 # ---------------------------------------------------------------------------
-# 8. 4096 visit cap → deterministic equal-grid fallback
+# 8. 4096 visit cap → retain the best completed beam
 # ---------------------------------------------------------------------------
 
 
-def test_search_budget_caps_at_4096_with_equal_grid_fallback():
+def _budget_exhaustion_facts() -> tuple[SmartCardFact, ...]:
     aspects = (1.0, 4.0 / 3.0, 16.0 / 9.0, 9.0 / 16.0, 3.5, 0.3, 21.0 / 9.0, 0.4)
-    facts = tuple(
+    return tuple(
         _card_fact(
             f"explode{index}",
             index,
@@ -571,6 +594,11 @@ def test_search_budget_caps_at_4096_with_equal_grid_fallback():
         )
         for index in range(24)
     )
+
+
+def test_search_budget_exhaustion_keeps_completed_beam_result():
+    """B3: a capped 24-card search retains its completed beam candidate."""
+    facts = _budget_exhaustion_facts()
     policy = _policy(mode="preserve_salience", density="comfortable")
     first = solve_smart_layout(facts, policy)
     second = solve_smart_layout(facts, policy)
@@ -580,17 +608,30 @@ def test_search_budget_caps_at_4096_with_equal_grid_fallback():
     assert first.used_fallback == second.used_fallback
     assert first.accepted == second.accepted
     tokens = " ".join(first.diagnostics)
-    if first.used_fallback:
-        assert "search_budget_fallback" in tokens or "search_budget_fallback" in first.diagnostics
-        if first.accepted:
-            _assert_legal_solve(first, facts, require_min_reading_box=True)
-        else:
-            assert first.reason
-            assert "no_legal_layout" in first.reason
-    else:
-        assert first.accepted is False
-        assert first.reason
-        assert "no_legal_layout" in first.reason
+    assert "search_budget_exhausted" in tokens
+    assert "equal_grid_fallback" not in tokens
+    assert first.used_fallback is False
+    _assert_legal_solve(first, facts, require_min_reading_box=True)
+
+
+def test_plan_smart_layout_propagates_solver_diagnostics(monkeypatch):
+    """The controller must receive B3 diagnostics without parsing a reason string."""
+    from mf4_analyzer.ui.chart_stack.ultraview import free_grid
+
+    placements = _manual_preset_placements(2, 2, (8, 6))
+    result = SmartLayoutResult(
+        accepted=True,
+        placements=tuple((item.ref, item.rect) for item in placements),
+        reason=None,
+        diagnostics=("search_budget_exhausted",),
+        search_visits=SEARCH_VISIT_CAP,
+        used_fallback=False,
+    )
+    monkeypatch.setattr(free_grid, "solve_smart_layout", lambda *_args: result)
+
+    plan = free_grid.plan_smart_layout(placements, policy=_policy())
+
+    assert plan.diagnostics == result.diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -679,20 +720,6 @@ def test_result_exposes_search_diagnostics_not_a_scalar_score():
 # ---------------------------------------------------------------------------
 
 
-def _ucan_native_items():
-    from mf4_analyzer.ultraview_core.native_layout import NativeLayoutRect
-
-    return tuple(
-        (
-            UltraViewRef("time", view_id),
-            NativeLayoutRect(x, y, width, height),
-        )
-        for (view_id, _order, _row, _column), (x, y, width, height) in zip(
-            UCAN_SOURCE, UCAN_MM, strict=True
-        )
-    )
-
-
 def _semantic_identity(facts: Sequence[SmartCardFact]):
     """Compare import vs manual facts without GridRect / current_rect."""
     return tuple(
@@ -766,45 +793,6 @@ def _material_probe_is_noop(delta) -> bool:
     return one_axis_micro and fill < 0.03
 
 
-def test_import_and_manual_paths_build_equivalent_semantic_facts():
-    """UFP-03/04: native WWT facts and placements-rebuilt facts share ordinals."""
-    from mf4_analyzer.ultraview_core.native_layout import (
-        native_layout_facts,
-        plan_native_layout,
-    )
-    from mf4_analyzer.ultraview_core.smart_layout import (
-        SmartLayoutInputSnapshot,
-        facts_digest,
-        smart_layout_facts_from_placements,
-    )
-
-    items = _ucan_native_items()
-    native_facts = native_layout_facts(items)
-    assert native_facts
-    plan = plan_native_layout(items, policy=_balanced_ucan_policy())
-    assert plan.placed
-    placements = _as_placements(plan.placed)
-    manual_facts = smart_layout_facts_from_placements(placements)
-    assert _semantic_identity(manual_facts) == _semantic_identity(native_facts)
-
-    native_digest = facts_digest(native_facts)
-    manual_digest = facts_digest(manual_facts)
-    assert native_digest == manual_digest
-    native_snap = SmartLayoutInputSnapshot(
-        facts=tuple(native_facts),
-        policy=_balanced_ucan_policy(),
-        facts_digest=native_digest,
-        provenance="wwt-import",
-    )
-    manual_snap = SmartLayoutInputSnapshot(
-        facts=tuple(manual_facts),
-        policy=_balanced_ucan_policy(),
-        facts_digest=manual_digest,
-        provenance="manual-board",
-    )
-    assert native_snap.facts_digest == manual_snap.facts_digest
-
-
 def test_manual_fact_builder_uses_row_ordinal_not_absolute_column():
     """UFP-04: gappy absolute Grid X must canonicalize to source_column 0,1,2."""
     from mf4_analyzer.ultraview_core.smart_layout import (
@@ -829,6 +817,90 @@ def test_manual_fact_builder_uses_row_ordinal_not_absolute_column():
     assert len(rows) == 1
     for name in ("a", "b", "c"):
         assert by_id[name].source_column != by_id[name].current_rect.column
+
+
+@pytest.mark.parametrize("card_count", range(4, 13), ids=lambda value: f"count{value}")
+@pytest.mark.parametrize("per_row", (2, 3, 4), ids=lambda value: f"per-row{value}")
+@pytest.mark.parametrize("preset", tuple(FREE_GRID_PRESETS))
+@pytest.mark.parametrize(
+    "aspect",
+    (16.0 / 9.0, 4.0 / 3.0, None),
+    ids=("16by9", "4by3", "fallback"),
+)
+def test_manual_path_with_current_rect_matrix_is_accepted(
+    card_count: int,
+    per_row: int,
+    preset: str,
+    aspect: float | None,
+):
+    """Manual current rects are movement hints, never candidate membership."""
+    placements = _manual_preset_placements(
+        card_count,
+        per_row,
+        FREE_GRID_PRESETS[preset],
+    )
+    facts = smart_layout_facts_from_placements(
+        placements,
+        preview_aspect={item.ref: aspect for item in placements},
+    )
+
+    result = solve_smart_layout(
+        facts,
+        _policy(target_viewport=CANONICAL_VIEWPORT),
+    )
+
+    assert result.accepted, (card_count, per_row, preset, aspect, result)
+
+
+def test_fixed_point_accepts_second_layout_after_third_confirms_it(monkeypatch):
+    """L1→L2 drift settles when a third solve repeats L2 exactly."""
+    import mf4_analyzer.ultraview_core.smart_layout as smart_layout
+
+    facts = (_card_fact("fixed-point", 0),)
+    policy = _policy(target_viewport=CANONICAL_VIEWPORT)
+    ref = facts[0].ref
+    settled_placements = ((ref, GridRect(12, 0, 8, 6)),)
+    second = SmartLayoutResult(
+        accepted=True,
+        placements=settled_placements,
+        reason=None,
+        diagnostics=("second-layout",),
+        search_visits=17,
+        used_fallback=False,
+    )
+    third = SmartLayoutResult(
+        accepted=True,
+        placements=settled_placements,
+        reason=None,
+        diagnostics=("third-layout",),
+        search_visits=19,
+        used_fallback=False,
+    )
+    canonical_inputs = []
+
+    def canonicalize(*args, **kwargs):
+        canonical_inputs.append((args, kwargs))
+        return ("after-first",) if len(canonical_inputs) == 1 else ("after-second",)
+
+    def solve_canonical(facts_arg, policy_arg, *, _validate_fixed_point=True):
+        assert policy_arg == policy
+        assert _validate_fixed_point is False
+        if facts_arg == ("after-first",):
+            return second
+        assert facts_arg == ("after-second",)
+        return third
+
+    original_solve = smart_layout.solve_smart_layout
+    monkeypatch.setattr(smart_layout, "canonicalize_smart_card_facts", canonicalize)
+    monkeypatch.setattr(smart_layout, "solve_smart_layout", solve_canonical)
+
+    result = original_solve(facts, policy)
+
+    assert result.accepted is True
+    assert result.placements == settled_placements
+    assert result.diagnostics == ("second-layout", "fixed_point_settled_in_2")
+    assert result.search_visits == 17
+    assert len(canonical_inputs) == 2
 
 
 def test_balanced_layout_has_no_unforced_internal_row_holes():

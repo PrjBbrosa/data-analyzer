@@ -726,10 +726,12 @@ class OverlayAxisManager(_CanvasBackref):
         for axis in list(self._overlay_aux_axes)[1:]:
             try:
                 self._seed_overlay_axis_auto_width(axis)
-            except Exception:
+            except RuntimeError:
+                # A deferred Qt delete can invalidate the sip AxisItem between
+                # the restore pass and this final layout realization.
                 try:
                     axis.setWidth(None)
-                except Exception:
+                except RuntimeError:
                     pass
         owners = [self._overlay_plot_item()]
         try:

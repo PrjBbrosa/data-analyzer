@@ -2382,6 +2382,9 @@ class TimeDomainCanvasPG(QWidget):
         Independent handles still fit a newly plotted channel that has no
         saved ylim. A sibling on a *shared* handle must not overwrite a
         persisted or initial range already applied to that handle.
+
+        Return only handles that received a persisted or initial range;
+        data-fitted handles stay absent so the caller can nice-reframe them.
         """
         view_state_lines = getattr(self, "_channel_view_state_lines", None) or {}
         legacy_lines = getattr(self, "_channel_lines", None) or {}
@@ -2479,6 +2482,7 @@ class TimeDomainCanvasPG(QWidget):
             n_y = 10
 
         changed = False
+        restored_handles = set()
         any_persisted_applied = False
         pending_fit = []
         for hid, (handle, keys) in handle_members.items():
@@ -2486,6 +2490,7 @@ class TimeDomainCanvasPG(QWidget):
             union = _union_y_ranges(rng for _key, rng in persisted)
             if union is not None and _apply_ylim(handle, union[0], union[1], keys):
                 any_persisted_applied = True
+                restored_handles.add(handle)
                 changed = True
                 continue
             initial = _finite_y_range(
@@ -2493,6 +2498,7 @@ class TimeDomainCanvasPG(QWidget):
                 require_span=True,
             )
             if initial is not None and _apply_ylim(handle, initial[0], initial[1], keys):
+                restored_handles.add(handle)
                 changed = True
                 continue
             pending_fit.append((handle, keys))
@@ -2507,6 +2513,7 @@ class TimeDomainCanvasPG(QWidget):
                 "y-range-restored", delay_ms=self._INTERACTION_SETTLE_MS,
             )
             self.visible_range_changed.emit()
+        return restored_handles
 
     def _fit_channel_y_to_visible_x(
         self,
@@ -3157,6 +3164,9 @@ class TimeDomainCanvasPG(QWidget):
 
     def set_cursor_x_axis_context(self, context):
         return CursorController.set_x_axis_context(self._cursor, context)
+
+    def cursor_x_mode(self):
+        return CursorController._is_custom_x_cursor(self._cursor)
 
     def set_cursor_display_options(self, options):
         return CursorController.set_cursor_display_options(self._cursor, options)

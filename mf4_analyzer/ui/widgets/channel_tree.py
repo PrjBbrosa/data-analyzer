@@ -2681,6 +2681,41 @@ class MultiFileChannelWidget(QWidget):
         keys = [(str(f), str(c)) for (f, c) in keys]
         if len(keys) < 2:
             return None
+
+        # A ViewState-projected group is the persistent owner for imported
+        # WWT channels.  Promoting it into the generic session-only model
+        # would make a subsequent capture lose the edit (capture deliberately
+        # serializes this projection, not ``_axis_groups``).  Keep the entire
+        # merged component in that View-owned map instead, including any
+        # ordinary session group that joins an imported member.
+        persisted = self._restored_axis_group_projection
+        persisted_ids = {
+            persisted[key] for key in keys if key in persisted
+        }
+        if persisted_ids:
+            gid = next(persisted[key] for key in keys if key in persisted)
+            persistent_keys = {
+                key for key, group in persisted.items()
+                if group in persisted_ids
+            }
+            session_ids = {
+                self._axis_groups[key] for key in keys
+                if key in self._axis_groups
+            }
+            for key, group in self._axis_groups.items():
+                if group in session_ids:
+                    persistent_keys.add(key)
+            persistent_keys.update(keys)
+
+            updated = dict(persisted)
+            for key in persistent_keys:
+                updated[key] = gid
+                self._axis_groups.pop(key, None)
+            self._prune_axis_groups()
+            self.set_restored_axis_group_projection(updated)
+            self.axis_groups_changed.emit()
+            return gid
+
         existing = sorted({self._axis_groups[k] for k in keys if k in self._axis_groups})
         gid = existing[0] if existing else self._new_axis_group_id()
         fold = set(existing[1:])
@@ -2698,16 +2733,18 @@ class MultiFileChannelWidget(QWidget):
     def split_axis_group(self, keys):
         """Remove ``keys`` from their groups; dissolve any group left < 2."""
         changed = False
+        persisted = dict(self._restored_axis_group_projection)
         for (f, c) in keys:
             k = (str(f), str(c))
             if k in self._axis_groups:
                 del self._axis_groups[k]
                 changed = True
-            if k in self._restored_axis_group_projection:
-                del self._restored_axis_group_projection[k]
+            if k in persisted:
+                del persisted[k]
                 changed = True
         if changed:
             self._prune_axis_groups()
+            self.set_restored_axis_group_projection(persisted)
             self.axis_groups_changed.emit()
 
     def _prune_axis_groups(self):
@@ -2747,13 +2784,13 @@ class MultiFileChannelWidget(QWidget):
         return effective
 
     def set_restored_axis_group_projection(self, raw_groups) -> None:
-        """Project persisted ViewState groups for the currently focused View.
+        """Set the focused View's persistent axis-group membership.
 
         The persisted JSON map uses composite ``[fid, channel]`` keys and an
-        opaque axis id.  It is deliberately separate from ``_axis_groups``:
-        that interactive model drops one-channel groups, while a View can
-        share its remaining ordinary channel with an exceptional binding that
-        has no Navigator row.
+        opaque axis id.  ``_axis_groups`` is intentionally reserved for
+        non-imported, session-level grouping; a persistent View member must
+        not also live there.  A View may retain one normal Navigator row when
+        its other shared-axis member is an exceptional record-only binding.
         """
         projected = {}
         if isinstance(raw_groups, Mapping):
@@ -2776,6 +2813,9 @@ class MultiFileChannelWidget(QWidget):
         if projected == self._restored_axis_group_projection:
             return
         self._restored_axis_group_projection = projected
+        for key in projected:
+            self._axis_groups.pop(key, None)
+        self._prune_axis_groups()
         # This setter projects persisted/imported View state.  It is not an
         # interactive merge/split intent, so publishing ``axis_groups_changed``
         # would re-enter MainWindow's user-edit path while the rest of the View

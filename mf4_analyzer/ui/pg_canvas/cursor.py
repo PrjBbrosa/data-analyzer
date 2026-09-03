@@ -22,6 +22,7 @@ from mf4_analyzer.signal.custom_x_paths import (
     REASON_UNIDIRECTIONAL,
     CustomXCursorResult,
     analyze_custom_x_paths,
+    clip_paths,
     sample_custom_x_cursor_from_paths,
     sample_custom_x_dual_delta_from_paths,
 )
@@ -302,12 +303,7 @@ class CursorController(_CanvasBackref):
         return (n, float(tf[0]), float(tf[-1]), y0, y1)
 
     def _custom_x_paths_for_channel(self, channel_key, tf, sf, x_range=None):
-        """Return analyzed Custom-X paths, memoized when ``x_range`` is None.
-
-        Dual-cursor clipping still calls the analyzer with an A/B window
-        because that window is not part of the ``(data_id, channel)`` memo
-        key. Single-cursor sampling always uses the unclipped cached plan.
-        """
+        """Return memoized full paths, then apply any cursor A/B clip."""
         try:
             tf_array = np.asarray(tf, dtype=float)
             sf_array = np.asarray(sf, dtype=float)
@@ -319,16 +315,15 @@ class CursorController(_CanvasBackref):
             or tf_array.size != sf_array.size
         ):
             return None
-        if x_range is not None:
-            return analyze_custom_x_paths(tf_array, sf_array, x_range=x_range)
         key = (self._custom_x_path_data_id(channel_key), channel_key)
         version = self._custom_x_path_version(tf_array, sf_array)
         cached = self._custom_x_path_cache.get(key)
         if cached is not None and cached[0] == version:
-            return cached[1]
-        paths = analyze_custom_x_paths(tf_array, sf_array)
-        self._custom_x_path_cache[key] = (version, paths)
-        return paths
+            paths = cached[1]
+        else:
+            paths = analyze_custom_x_paths(tf_array, sf_array)
+            self._custom_x_path_cache[key] = (version, paths)
+        return clip_paths(paths, x_range)
 
     def _sample_custom_x_cursor_cached(self, channel_key, tf, sf, x_value):
         paths = self._custom_x_paths_for_channel(channel_key, tf, sf)
@@ -1076,12 +1071,10 @@ class CursorController(_CanvasBackref):
         branches = ()
         stats = None
         delta_by_dir = {}
-        cached_paths = self._custom_x_paths_for_channel(channel_key, tf_array, sf_array)
-        if cached_paths is not None:
-            for direction, delta in sample_custom_x_dual_delta_from_paths(
-                cached_paths, self._ax, self._bx,
-            ):
-                delta_by_dir[int(direction)] = delta
+        for direction, delta in sample_custom_x_dual_delta_from_paths(
+            result, self._ax, self._bx,
+        ):
+            delta_by_dir[int(direction)] = delta
         if result.unique_pair:
             ordered = sorted(result.accepted, key=lambda item: -int(item.direction))
             branch_rows = []

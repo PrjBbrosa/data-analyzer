@@ -676,6 +676,7 @@ class BoardPlacementSnapshot:
     placements: tuple[tuple[str, UltraViewRef], ...]
     free_grid: tuple[tuple[UltraViewRef, GridRect], ...]
     unplaced: tuple[UltraViewRef, ...]
+    locked_refs: frozenset[UltraViewRef] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -771,6 +772,9 @@ class UltraViewBoardState:
     layout_mode: str = LAYOUT_MODE_FREE_GRID
     free_grid: list[FreeGridPlacement] = field(default_factory=list)
     free_grid_default_size: str = "standard"
+    # Free-grid locks are persisted user intent.  They are carried by
+    # placement snapshots so undo/redo cannot detach a lock from its card.
+    locked_refs: set[UltraViewRef] = field(default_factory=set)
     # Additive schema-5 authoring content.  List order is the author z-order.
     author_objects: list[AuthorObject] = field(default_factory=list)
     passthrough: dict[str, Any] = field(default_factory=dict)
@@ -900,4 +904,3 @@ class FreeGridRectPlan:
     @property
     def accepted(self) -> bool:
         return not self.warnings
-

@@ -345,9 +345,6 @@ def test_wwt_view_color_seed_does_not_pollute_other_views(
         state.view_id for state in window.view_manager.views
     }
     monkeypatch.setattr(window._wwt_import, "_ask_layout", lambda *_a, **_k: True)
-    monkeypatch.setattr(
-        window._ultraview, "add_time_views_from_native_layout", lambda items: ()
-    )
     monkeypatch.setattr(window, "plot_time", lambda *_a, **_k: None)
     monkeypatch.setattr(window, "_apply_active_view", lambda *_a, **_k: None)
     monkeypatch.setattr(window, "_plot_time_on_canvas", lambda *_a, **_k: None)

@@ -52,6 +52,7 @@ import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 import tempfile
+from collections.abc import Mapping
 
 from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
 from .view_overlay_state import remap_remarks
@@ -102,6 +103,73 @@ PROJECT_RUNTIME_ONLY_KEYS = frozenset({
     "left_snapshot",
     "inspector_snapshot",
 })
+
+
+def _project_json_default(value):
+    """Encode the small set of scalar-like values admitted by project state.
+
+    The same fallback is deliberately shared by the on-disk and canonical
+    encoders.  Unknown runtime objects remain errors instead of becoming a
+    silently persisted representation.
+    """
+    if isinstance(value, Path):
+        return str(value)
+    item = getattr(value, "item", None)
+    if callable(item):
+        scalar = item()
+        if scalar is not value:
+            return scalar
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not JSON serializable"
+    )
+
+
+def _json_object_key(key) -> str:
+    """Mirror JSON's supported mapping-key spelling before canonical sorting."""
+    if isinstance(key, str):
+        return key
+    if key is None:
+        return "null"
+    if isinstance(key, bool):
+        return "true" if key else "false"
+    if isinstance(key, float):
+        if key != key:
+            return "NaN"
+        if key == float("inf"):
+            return "Infinity"
+        if key == float("-inf"):
+            return "-Infinity"
+    return str(key)
+
+
+def _json_ready(value):
+    """Normalize mapping keys using the same representation the disk uses.
+
+    ``json.dumps(sort_keys=True)`` cannot compare an otherwise valid mixture
+    such as ``{7: ..., "axis": ...}``.  The normal form keeps disk and digest
+    semantics aligned while retaining list order as user intent.
+    """
+    if isinstance(value, Mapping):
+        return {
+            _json_object_key(key): _json_ready(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    return value
+
+
+def _project_json_dumps(payload, *, sort_keys=False, indent=None) -> str:
+    """Single JSON codec for project files and their canonical digest."""
+    return json.dumps(
+        _json_ready(payload),
+        ensure_ascii=False,
+        default=_project_json_default,
+        allow_nan=True,
+        sort_keys=sort_keys,
+        indent=indent,
+        separators=(",", ":") if indent is None else None,
+    )
 
 
 class UnsupportedProjectVersion(ValueError):
@@ -192,13 +260,7 @@ def canonical_project_digest(source) -> str:
             f"canonical digest expects ProjectDocument or dict, "
             f"not {type(source).__name__}"
         )
-    blob = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-        allow_nan=False,
-    )
+    blob = _project_json_dumps(payload, sort_keys=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
@@ -207,7 +269,7 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
     payload = project_document_to_payload(doc)
     _write_text_atomic(
         path,
-        json.dumps(payload, indent=2, ensure_ascii=False),
+        _project_json_dumps(payload, indent=2),
     )
 
 

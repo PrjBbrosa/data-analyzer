@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import logging
 import math
-import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
 from PyQt5 import sip
-from PyQt5.QtCore import QObject, QTimer
 from PyQt5.QtWidgets import QWidget
 
 from ...ultraview_core.author_ops import (
@@ -26,9 +24,7 @@ from ...ultraview_core.board_ops import (
     active_board,
     add_ref,
     apply_board_placement,
-    apply_native_layout,
     apply_free_grid_preset,
-    board_is_empty,
     capture_board_placement,
     create_board,
     delete_board,
@@ -59,7 +55,6 @@ from ...ultraview_core.board_ops import (
     set_workspace_show_card_actions,
     swap_slots,
     template_to_free_grid,
-    unique_board_name,
 )
 from ...ultraview_core.model import (
     DEFAULT_BOARD_NAME,
@@ -77,12 +72,7 @@ from ...ultraview_core.model import (
     layout_slots,
     parse_ref_payload,
 )
-from ...ultraview_core.native_layout import (
-    NATIVE_LAYOUT_NON_DEGRADED_CODES as _NATIVE_LAYOUT_SILENT_CODES,
-    NativeLayoutRect,
-)
 from ...ultraview_core.smart_layout import (
-    SmartCardFact,
     SmartLayoutPolicy,
 )
 from ..ultraview_edits import (
@@ -145,19 +135,8 @@ from ..chart_stack.ultraview.layouts import (
 
 logger = logging.getLogger(__name__)
 
-# Native-layout projection codes already explained by the WWT confirm dialog
-# (or not user-facing). ``_toast_grid_warnings`` must not dump them raw.
-# ``_NATIVE_LAYOUT_SILENT_CODES`` is the shared set imported from native_layout.
 _PENDING_AUTO_ASPECT = "auto_aspect"
-_PENDING_NATIVE_CARD_FIT = "native_card_fit"
-_SMART_LAYOUT_QUIET_MS = 250
-_SMART_LAYOUT_DEADLINE_MS = 1200
 _SMART_LAYOUT_DEFAULT_VIEWPORT = (1200, 750)
-_SOURCE_ROW_OVERLAP_EPS = 1e-6
-_BOARD_LIMIT_TOAST = (
-    "时域 View 已创建，但 Board 已达 20 个上限，未加入 UltraView。"
-    "请删除一个 Board 后手动加入。"
-)
 
 
 def _alive(obj) -> bool:
@@ -198,88 +177,6 @@ class _PendingAutoAspect:
     layout_revision: int
     merge_add: bool = True
     kind: str = _PENDING_AUTO_ASPECT
-    group_id: str = ""
-    sequence: int = 0
-    group_refs: tuple[UltraViewRef, ...] = ()
-    source_rect: NativeLayoutRect | None = None
-
-
-@dataclass
-class _PendingSmartLayoutGroup:
-    """Import-time aspect tracker. Must not mutate GridRect after first paint."""
-
-    board_id: str
-    refs: tuple[UltraViewRef, ...]
-    import_revision: int
-    target_viewport: tuple[int, int]
-    facts: tuple[SmartCardFact, ...]
-    token: str
-    workspace_id: int
-    merge_import: bool = True
-    cancelled: bool = False
-    settled: bool = False
-
-    @property
-    def active(self) -> bool:
-        return not self.cancelled and not self.settled
-
-
-def _stash_smart_card_facts(
-    items: Sequence[tuple[UltraViewRef, NativeLayoutRect]],
-    live_rects: Mapping[UltraViewRef, GridRect],
-) -> tuple[SmartCardFact, ...]:
-    """Build group facts from import-time mm sources + provisional geometry."""
-    slots: list[tuple[int, UltraViewRef, NativeLayoutRect, float, float]] = []
-    for order, (ref, rect) in enumerate(items):
-        top = float(rect.y) - float(rect.height)
-        bottom = float(rect.y)
-        slots.append((order, ref, rect, top, bottom))
-    ordered = sorted(slots, key=lambda slot: (slot[3], slot[2].x, slot[0]))
-    rows: list[list[int]] = []
-    bounds: list[list[float]] = []
-    row_of: dict[int, int] = {}
-    for index, slot in enumerate(ordered):
-        top, bottom = slot[3], slot[4]
-        matched: int | None = None
-        for row_index, band in enumerate(bounds):
-            if (
-                top < band[1] - _SOURCE_ROW_OVERLAP_EPS
-                and bottom > band[0] + _SOURCE_ROW_OVERLAP_EPS
-            ):
-                matched = row_index
-                break
-        if matched is None:
-            matched = len(rows)
-            rows.append([])
-            bounds.append([top, bottom])
-        rows[matched].append(index)
-        bounds[matched][0] = min(bounds[matched][0], top)
-        bounds[matched][1] = max(bounds[matched][1], bottom)
-        row_of[index] = matched
-    col_of: dict[int, int] = {}
-    for row in rows:
-        ranked = sorted(row, key=lambda item: (ordered[item][2].x, ordered[item][0]))
-        for column, index in enumerate(ranked):
-            col_of[index] = column
-    by_ordered_index = {slot[1]: index for index, slot in enumerate(ordered)}
-    facts: list[SmartCardFact] = []
-    for order, ref, rect, _top, _bottom in slots:
-        index = by_ordered_index[ref]
-        area = abs(float(rect.width) * float(rect.height))
-        facts.append(
-            SmartCardFact(
-                ref=ref,
-                source_order=order,
-                source_row=row_of[index],
-                source_column=col_of[index],
-                source_salience=area if area > 0.0 else None,
-                preview_aspect=None,
-                preview_confidence="fallback",
-                current_rect=live_rects.get(ref),
-                locked_rect=None,
-            )
-        )
-    return tuple(facts)
 
 
 def _visible_widget_height(widget) -> int:
@@ -316,19 +213,6 @@ class UltraViewWorkspaceController:
         self._grid_histories: dict[str, _GridHistory] = {}
         self._pending_auto_aspect: dict[tuple[str, UltraViewRef], _PendingAutoAspect] = {}
         self._layout_revision: dict[str, int] = {}
-        self._pending_smart_layout_group: _PendingSmartLayoutGroup | None = None
-        self._locked_free_grid_refs: dict[str, set[UltraViewRef]] = {}
-        self._smart_layout_timer_host = QObject()
-        quiet = QTimer(self._smart_layout_timer_host)
-        quiet.setSingleShot(True)
-        quiet.setInterval(_SMART_LAYOUT_QUIET_MS)
-        quiet.timeout.connect(self._on_smart_layout_quiet_timeout)
-        self._smart_layout_quiet_timer = quiet
-        deadline = QTimer(self._smart_layout_timer_host)
-        deadline.setSingleShot(True)
-        deadline.setInterval(_SMART_LAYOUT_DEADLINE_MS)
-        deadline.timeout.connect(self._on_smart_layout_deadline_timeout)
-        self._smart_layout_deadline_timer = deadline
 
     @property
     def board(self) -> UltraViewBoardState:
@@ -349,19 +233,12 @@ class UltraViewWorkspaceController:
         return self._pending_auto_aspect
 
     @property
-    def pending_smart_layout_group(self):
-        """Pending WWT/native group settle holder (D7–D9 / D13)."""
-        return self._pending_smart_layout_group
-
-    @property
     def layout_revision(self):
         """Compatibility view owned by this controller."""
         return self._layout_revision
 
     def replace_workspace(self, workspace: UltraViewWorkspaceState) -> None:
         """Swap the live workspace object. Does not copy history or Board state."""
-        self._cancel_pending_smart_layout_group()
-        self._clear_all_card_locks()
         self._workspace = workspace
 
     def _inactive(self) -> bool:
@@ -430,118 +307,6 @@ class UltraViewWorkspaceController:
             item = free_grid_placement_for(board, ref)
             if item is not None:
                 self._register_pending_auto_aspect(board, ref, item.rect)
-
-    def apply_native_layout_plan(
-        self,
-        plan,
-        *,
-        board_name: str | None = None,
-        dedicated_board: bool = False,
-        reuse_empty_board: bool = True,
-    ) -> "NativeLayoutProjection":
-        """Commit a native layout plan through the single mutation funnel.
-
-        Returns a ``NativeLayoutProjection`` that still unpacks as
-        ``(placed_view_ids_this_call, warnings)``.  Ids are the time refs
-        actually landed on the free-grid this call, not every time card
-        already on the Board.
-
-        ``dedicated_board=True`` resolves the target Board once from a
-        workspace snapshot: reuse the current empty Board or ``create_board``.
-        A 20-Board cap returns ``board_limit`` and mutates nothing.
-        """
-        from ...ultraview_core.native_layout import (
-            NativeLayoutProjection,
-            generated_ids_from_plan,
-        )
-
-        generated_ids = generated_ids_from_plan(plan)
-        if self._inactive():
-            return NativeLayoutProjection(generated_ids=generated_ids)
-        workspace = self._workspace
-        current = next(
-            (
-                board
-                for board in workspace.boards
-                if board.board_id == workspace.active_board_id
-            ),
-            None,
-        )
-        if current is None:
-            current = active_board(workspace)
-        target = current
-        if dedicated_board:
-            reuse = bool(reuse_empty_board) and board_is_empty(current)
-            unique = unique_board_name(
-                workspace,
-                board_name or "WinWert",
-                ignore_board_id=current.board_id if reuse else None,
-            )
-            if reuse:
-                rename_board(workspace, current.board_id, unique)
-                if current.layout_mode != LAYOUT_MODE_FREE_GRID:
-                    template_to_free_grid(current)
-                target = current
-            else:
-                created = create_board(workspace, name=unique)
-                if created is None:
-                    self._toast(_BOARD_LIMIT_TOAST, "warning")
-                    return NativeLayoutProjection(
-                        warnings=("board_limit",),
-                        generated_ids=generated_ids,
-                    )
-                target = created
-            set_active_board(workspace, target.board_id)
-        before = self._placement_snapshot(target)
-        if target.layout_mode == LAYOUT_MODE_FREE_GRID:
-            already_placed = {
-                item.ref.view_id
-                for item in target.free_grid
-                if item.ref.section == "time"
-            }
-        else:
-            already_placed = {
-                item.ref.view_id
-                for item in target.placements
-                if item.ref.section == "time"
-            }
-        warnings = apply_native_layout(target, plan)
-        # ``apply_native_layout`` can place every usable card and still return
-        # diagnostics (exact-overlap relocation, invalid rects).  Commit that
-        # complete Board result before reporting the warnings; routing them
-        # through ``_commit_grid_change`` would return early after the mutation
-        # and skip history/dirty/refresh.
-        self._commit_grid_change(target, before, [])
-        logger.debug(
-            "ultraview event kind=layout_commit board=%s source=native-import",
-            target.board_id,
-        )
-        self._zoom_fit_after_smart_layout_settle()
-        if warnings:
-            self._toast_grid_warnings(warnings)
-        placed_this_call = tuple(
-            item.ref.view_id
-            for item in target.free_grid
-            if item.ref.section == "time" and item.ref.view_id not in already_placed
-        )
-        self._register_pending_smart_layout_group(target, plan, placed_this_call)
-        placed_ids = set(placed_this_call)
-        unplaced_now = {
-            ref.view_id
-            for ref in target.unplaced
-            if getattr(ref, "section", "") == "time"
-        }
-        unplaced_ids = tuple(
-            vid for vid in generated_ids
-            if vid not in placed_ids and vid in unplaced_now
-        )
-        return NativeLayoutProjection(
-            placed_view_ids=placed_this_call,
-            warnings=tuple(warnings),
-            board_id=str(target.board_id),
-            generated_ids=generated_ids,
-            unplaced_ids=unplaced_ids,
-        )
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
         if self._inactive():
@@ -736,21 +501,15 @@ class UltraViewWorkspaceController:
         if ref is None:
             return
         board = active_board(self._workspace)
-        group = self._pending_smart_layout_group
-        if (
-            group is not None
-            and group.active
-            and str(group.board_id) == str(board.board_id)
-            and ref in group.refs
-        ):
-            self._cancel_pending_smart_layout_group()
+        before = self._placement_snapshot(board)
         self._cancel_pending_for_ref(board.board_id, ref)
         if self._free_grid_ref_is_locked(board.board_id, ref):
             self._unlock_free_grid_ref(board.board_id, ref)
+        elif free_grid_placement_for(board, ref) is not None:
+            self._lock_free_grid_ref(board.board_id, ref)
+        else:
             return
-        if free_grid_placement_for(board, ref) is None:
-            return
-        self._lock_free_grid_ref(board.board_id, ref)
+        self._record_grid_transition(board, before, kind="lock")
 
     def _free_grid_card_locked(self, section: str, view_id: str) -> bool:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -759,32 +518,21 @@ class UltraViewWorkspaceController:
         return self._free_grid_ref_is_locked(active_board(self._workspace).board_id, ref)
 
     def _free_grid_ref_is_locked(self, board_id: str, ref: UltraViewRef) -> bool:
-        locked = self._locked_free_grid_refs.get(str(board_id))
-        return bool(locked) and ref in locked
+        board = self._board_by_id(str(board_id))
+        return board is not None and ref in board.locked_refs
 
     def _lock_free_grid_ref(self, board_id: str, ref: UltraViewRef) -> None:
-        self._locked_free_grid_refs.setdefault(str(board_id), set()).add(ref)
+        board = self._board_by_id(str(board_id))
+        if board is not None:
+            board.locked_refs.add(ref)
 
     def _unlock_free_grid_ref(self, board_id: str, ref: UltraViewRef) -> None:
-        key = str(board_id)
-        locked = self._locked_free_grid_refs.get(key)
-        if locked is None:
-            return
-        locked.discard(ref)
-        if not locked:
-            self._locked_free_grid_refs.pop(key, None)
+        board = self._board_by_id(str(board_id))
+        if board is not None:
+            board.locked_refs.discard(ref)
 
     def _locked_refs_for_board(self, board: UltraViewBoardState) -> dict[UltraViewRef, GridRect]:
-        locked = self._locked_free_grid_refs.get(str(board.board_id))
-        if not locked:
-            return {}
-        return locked_rects_for(board.free_grid, locked)
-
-    def _clear_locks_for_board(self, board_id: str) -> None:
-        self._locked_free_grid_refs.pop(str(board_id), None)
-
-    def _clear_all_card_locks(self) -> None:
-        self._locked_free_grid_refs.clear()
+        return locked_rects_for(board.free_grid, board.locked_refs)
 
     def _on_free_grid_group_geometry(self, updates) -> None:
         board = active_board(self._workspace)
@@ -968,7 +716,7 @@ class UltraViewWorkspaceController:
         )
         if not plan.accepted:
             detail = f"{plan.solver_reason or ''} {plan.reason.value if plan.reason is not None else ''}"
-            if "locked" in detail:
+            if detail.startswith("locked:"):
                 self._toast("锁定卡片占用空间，布局未改变", "warning")
             else:
                 self._toast("无法排入安全区", "warning")
@@ -985,8 +733,10 @@ class UltraViewWorkspaceController:
         self._bump_layout_revision(board.board_id)
         self._commit_grid_change(board, before, [], kind=LAYOUT_ARRANGE)
         self._zoom_fit_after_smart_layout_settle()
-        if plan.used_fallback:
+        if "equal_grid_fallback" in plan.diagnostics:
             self._toast("已使用等大网格完成降级排版", "info")
+        elif "search_budget_exhausted" in plan.diagnostics:
+            self._toast("搜索预算耗尽，已用已完成候选完成排版", "info")
         else:
             self._toast("已排版", "info")
 
@@ -1436,122 +1186,6 @@ class UltraViewWorkspaceController:
             merge_add=True,
         )
 
-    def _register_pending_smart_layout_group(
-        self, board: UltraViewBoardState, plan, placed_view_ids: tuple[str, ...]
-    ) -> None:
-        placed_ids = set(placed_view_ids)
-        refs = tuple(
-            item.ref
-            for item in board.free_grid
-            if item.ref.section == "time" and item.ref.view_id in placed_ids
-        )
-        if not refs:
-            return
-        self._cancel_pending_smart_layout_group()
-        facts = self._smart_card_facts_for_native_group(plan, board, placed_ids)
-        if not facts:
-            return
-        fact_refs = tuple(fact.ref for fact in facts)
-        group = _PendingSmartLayoutGroup(
-            board_id=str(board.board_id),
-            refs=fact_refs,
-            import_revision=self._current_layout_revision(board.board_id),
-            target_viewport=self._freeze_smart_layout_viewport(),
-            facts=facts,
-            token=uuid.uuid4().hex,
-            workspace_id=id(self._workspace),
-            merge_import=True,
-        )
-        self._pending_smart_layout_group = group
-        self._start_smart_layout_deadline_timer()
-        for ref in fact_refs:
-            if self._preview_fit_image_size(ref) is not None:
-                self.record_smart_layout_aspect(ref)
-
-    def record_smart_layout_aspect(self, ref: UltraViewRef) -> None:
-        """Update pending group facts only; restart the 250 ms quiet timer."""
-        if self._inactive():
-            return
-        group = self._pending_smart_layout_group
-        if group is None or not group.active:
-            return
-        if ref not in group.refs:
-            return
-        size = self._preview_fit_image_size(ref)
-        aspect: float | None = None
-        if size is not None:
-            try:
-                width = float(size[0])
-                height = float(size[1])
-            except (TypeError, ValueError, IndexError):
-                width = 0.0
-                height = 0.0
-            if math.isfinite(width) and math.isfinite(height) and width > 0.0 and height > 0.0:
-                aspect = width / height
-        if aspect is None:
-            return
-        group.facts = tuple(
-            replace(fact, preview_aspect=aspect, preview_confidence="captured")
-            if fact.ref == ref
-            else fact
-            for fact in group.facts
-        )
-        self._restart_smart_layout_quiet_timer()
-        if self._smart_layout_group_all_ready(group):
-            self._settle_pending_smart_layout()
-
-    def _smart_card_facts_for_native_group(
-        self,
-        plan,
-        board: UltraViewBoardState,
-        placed_ids: set[str],
-    ) -> tuple[SmartCardFact, ...]:
-        live = {
-            item.ref: item.rect
-            for item in board.free_grid
-            if item.ref.view_id in placed_ids
-        }
-        source_items = [
-            (ref, rect)
-            for ref, rect in getattr(plan, "sources", ()) or ()
-            if ref.view_id in placed_ids
-        ]
-        from ...ultraview_core import native_layout as native_layout_mod
-
-        builder = getattr(native_layout_mod, "native_layout_facts", None)
-        if callable(builder) and source_items:
-            try:
-                built = tuple(builder(source_items))
-            except TypeError:
-                built = tuple(builder(source_items, aspects=None))
-            facts = tuple(
-                replace(fact, current_rect=live.get(fact.ref, fact.current_rect))
-                for fact in built
-                if fact.ref in live
-            )
-            if facts:
-                return facts
-        if source_items:
-            return _stash_smart_card_facts(source_items, live)
-        fallback: list[SmartCardFact] = []
-        for order, item in enumerate(board.free_grid):
-            if item.ref.view_id not in placed_ids:
-                continue
-            fallback.append(
-                SmartCardFact(
-                    ref=item.ref,
-                    source_order=order,
-                    source_row=None,
-                    source_column=None,
-                    source_salience=None,
-                    preview_aspect=None,
-                    preview_confidence="fallback",
-                    current_rect=item.rect,
-                    locked_rect=None,
-                )
-            )
-        return tuple(fallback)
-
     def freeze_smart_layout_policy(self) -> SmartLayoutPolicy:
         """Freeze QSettings + current viewport for one import/manual command."""
         return load_smart_layout_policy(
@@ -1593,101 +1227,11 @@ class UltraViewWorkspaceController:
             return default
         return (width_i, height_i)
 
-    def _smart_layout_group_all_ready(self, group: _PendingSmartLayoutGroup) -> bool:
-        if not group.refs:
-            return False
-        captured = {
-            fact.ref
-            for fact in group.facts
-            if fact.preview_confidence == "captured" and fact.preview_aspect is not None
-        }
-        return all(ref in captured for ref in group.refs)
-
     def _board_by_id(self, board_id: str):
         key = str(board_id)
         return next(
             (item for item in self._workspace.boards if str(item.board_id) == key),
             None,
-        )
-
-    def _stop_smart_layout_timers(self) -> None:
-        quiet = getattr(self, "_smart_layout_quiet_timer", None)
-        deadline = getattr(self, "_smart_layout_deadline_timer", None)
-        if quiet is not None:
-            quiet.stop()
-        if deadline is not None:
-            deadline.stop()
-
-    def _restart_smart_layout_quiet_timer(self) -> None:
-        timer = self._smart_layout_quiet_timer
-        timer.stop()
-        timer.start()
-
-    def _start_smart_layout_deadline_timer(self) -> None:
-        timer = self._smart_layout_deadline_timer
-        timer.stop()
-        timer.start()
-
-    def _on_smart_layout_quiet_timeout(self) -> None:
-        group = self._pending_smart_layout_group
-        if group is None or not group.active:
-            return
-        if not any(fact.preview_confidence == "captured" for fact in group.facts):
-            return
-        self._settle_pending_smart_layout()
-
-    def _on_smart_layout_deadline_timeout(self) -> None:
-        group = self._pending_smart_layout_group
-        if group is None or not group.active:
-            return
-        self._settle_pending_smart_layout()
-
-    def _cancel_pending_smart_layout_group(self) -> None:
-        group = self._pending_smart_layout_group
-        self._stop_smart_layout_timers()
-        if group is None:
-            return
-        group.cancelled = True
-
-    def _smart_layout_settle_preconditions(
-        self, group: _PendingSmartLayoutGroup, token: str
-    ) -> bool:
-        if self._inactive():
-            return False
-        live_group = self._pending_smart_layout_group
-        if live_group is None or live_group.token != token:
-            return False
-        if id(self._workspace) != group.workspace_id:
-            return False
-        board = self._board_by_id(group.board_id)
-        if board is None or board.layout_mode != LAYOUT_MODE_FREE_GRID:
-            return False
-        if str(self._workspace.active_board_id) != str(group.board_id):
-            return False
-        if self._current_layout_revision(group.board_id) != group.import_revision:
-            return False
-        live_refs = {item.ref for item in board.free_grid}
-        return all(ref in live_refs for ref in group.refs)
-
-    def _settle_pending_smart_layout(self) -> None:
-        """Close the import aspect group. Never writes GridRect or history (UFP-08)."""
-        group = self._pending_smart_layout_group
-        if group is None or not group.active:
-            return
-        token = group.token
-        self._stop_smart_layout_timers()
-        if not self._smart_layout_settle_preconditions(group, token):
-            group.cancelled = True
-            return
-        group.settled = True
-        captured = sum(
-            1 for fact in group.facts if fact.preview_confidence == "captured"
-        )
-        logger.debug(
-            "ultraview pending aspects closed without geometry board=%s captured=%s/%s",
-            group.board_id,
-            captured,
-            len(group.refs),
         )
 
     def _zoom_fit_after_smart_layout_settle(self) -> None:
@@ -1700,22 +1244,10 @@ class UltraViewWorkspaceController:
             zoom()
 
     def shutdown(self) -> None:
-        """Stop settle timers, disconnect signals, and drop pending/lock holders."""
-        self._stop_smart_layout_timers()
-        quiet = getattr(self, "_smart_layout_quiet_timer", None)
-        deadline = getattr(self, "_smart_layout_deadline_timer", None)
-        if quiet is not None:
-            try:
-                quiet.timeout.disconnect(self._on_smart_layout_quiet_timeout)
-            except TypeError:
-                pass
-        if deadline is not None:
-            try:
-                deadline.timeout.disconnect(self._on_smart_layout_deadline_timeout)
-            except TypeError:
-                pass
-        self._pending_smart_layout_group = None
-        self._clear_all_card_locks()
+        """Drop non-persisted placement history and pending auto-aspect work."""
+        self._grid_histories.clear()
+        self._pending_auto_aspect.clear()
+        self._layout_revision.clear()
 
     def _cancel_pending_after_rect_write(
         self,
@@ -1725,63 +1257,15 @@ class UltraViewWorkspaceController:
         *,
         span_changed: bool,
     ) -> None:
-        group = self._pending_smart_layout_group
-        if (
-            group is not None
-            and group.active
-            and str(group.board_id) == str(board_id)
-            and ref in group.refs
-        ):
-            provisional = next(
-                (fact.current_rect for fact in group.facts if fact.ref == ref),
-                None,
-            )
-            if provisional is None or new_rect != provisional:
-                self._cancel_pending_smart_layout_group()
         token = self._pending_auto_aspect.get((str(board_id), ref))
-        if token is None:
-            return
-        if token.kind == _PENDING_NATIVE_CARD_FIT:
-            if new_rect != token.inserted_rect:
-                self._cancel_pending_native_group(token)
-            return
-        if span_changed:
+        if token is not None and span_changed:
             self._cancel_pending_for_ref(board_id, ref)
 
-    def _cancel_pending_native_group(self, token: _PendingAutoAspect) -> None:
-        group_id = str(token.group_id or "")
-        if not group_id:
-            self._pending_auto_aspect.pop((token.board_id, token.ref), None)
-            return
-        self._pending_auto_aspect = {
-            key: other
-            for key, other in self._pending_auto_aspect.items()
-            if not (
-                other.kind == _PENDING_NATIVE_CARD_FIT
-                and other.group_id == group_id
-            )
-        }
-
     def _cancel_pending_for_ref(self, board_id: str, ref: UltraViewRef) -> None:
-        group = self._pending_smart_layout_group
-        if (
-            group is not None
-            and group.active
-            and str(group.board_id) == str(board_id)
-            and ref in group.refs
-        ):
-            self._cancel_pending_smart_layout_group()
-        token = self._pending_auto_aspect.get((str(board_id), ref))
-        if token is not None and token.kind == _PENDING_NATIVE_CARD_FIT:
-            self._cancel_pending_native_group(token)
-            return
         self._pending_auto_aspect.pop((str(board_id), ref), None)
 
     def _cancel_pending_for_board(self, board_id: str) -> None:
         key = str(board_id)
-        group = self._pending_smart_layout_group
-        if group is not None and str(group.board_id) == key:
-            self._cancel_pending_smart_layout_group()
         self._pending_auto_aspect = {
             token_key: token
             for token_key, token in self._pending_auto_aspect.items()
@@ -1789,18 +1273,12 @@ class UltraViewWorkspaceController:
         }
 
     def _clear_pending_merge_flags(self) -> None:
-        group = self._pending_smart_layout_group
-        if group is not None and group.active:
-            group.merge_import = False
         self._pending_auto_aspect = {
             token_key: replace(token, merge_add=False) if token.merge_add else token
             for token_key, token in self._pending_auto_aspect.items()
         }
 
     def _clear_placement_runtime(self) -> None:
-        self._stop_smart_layout_timers()
-        self._pending_smart_layout_group = None
-        self._clear_all_card_locks()
         self._grid_histories.clear()
         self._pending_auto_aspect.clear()
         self._layout_revision.clear()
@@ -1809,23 +1287,17 @@ class UltraViewWorkspaceController:
         key = str(board_id)
         self._grid_histories.pop(key, None)
         self._layout_revision.pop(key, None)
-        self._clear_locks_for_board(key)
         self._cancel_pending_for_board(key)
 
     def _maybe_apply_pending_auto_aspect(self, ref: UltraViewRef) -> None:
         if self._inactive():
             return
-        group = self._pending_smart_layout_group
-        if group is not None and group.active and ref in group.refs:
-            self.record_smart_layout_aspect(ref)
         matching = [
             token
             for token in tuple(self._pending_auto_aspect.values())
             if token.ref == ref
         ]
         for token in matching:
-            if token.kind == _PENDING_NATIVE_CARD_FIT:
-                continue
             self._apply_one_pending_auto_aspect(token)
 
     def _apply_one_pending_auto_aspect(self, token: _PendingAutoAspect) -> None:
@@ -1935,13 +1407,6 @@ class UltraViewWorkspaceController:
             self._after_board_mutation()
 
     def _on_select_board(self, board_id: str) -> None:
-        group = self._pending_smart_layout_group
-        if (
-            group is not None
-            and group.active
-            and str(board_id) != str(group.board_id)
-        ):
-            self._cancel_pending_smart_layout_group()
         if not set_active_board(self._workspace, board_id):
             self._prioritize_sidecar_queue()
             self._after_board_mutation()

@@ -1,6 +1,7 @@
 """Custom-X path-analysis memo on the canvas cursor collaborator."""
 from __future__ import annotations
 
+from dataclasses import replace
 import inspect
 from types import SimpleNamespace
 
@@ -90,6 +91,15 @@ def _emit_single(canvas, x):
     QCoreApplication.processEvents()
 
 
+def _emit_dual(canvas, x_a, x_b):
+    canvas.set_cursor_visible(True)
+    canvas.set_dual_cursor_mode(True)
+    canvas._cursor._ax = float(x_a)
+    canvas._cursor._bx = float(x_b)
+    canvas._emit_dual_cursor_html()
+    QCoreApplication.processEvents()
+
+
 def _counting_analyze(monkeypatch):
     import mf4_analyzer.ui.pg_canvas.cursor as cursor_mod
 
@@ -121,6 +131,25 @@ def test_second_sample_on_same_channel_does_not_reanalyze(qapp, monkeypatch):
 
     assert len(calls) == 1
     assert canvas._cursor._custom_x_path_cache
+
+
+def test_dual_emit_and_value_toggle_reuse_hot_cache(qapp, monkeypatch):
+    canvas, series = _plotted_canvas(qapp)
+    calls = _counting_analyze(monkeypatch)
+    x_a = float(series.x[series.x.size // 5])
+    x_b = float(series.x[series.x.size * 2 // 5])
+
+    _emit_single(canvas, x_a)
+    assert len(calls) == 1
+    calls.clear()
+
+    _emit_dual(canvas, x_a, x_b)
+    options = canvas._cursor.cursor_display_options()
+    canvas._cursor.set_cursor_display_options(
+        replace(options, show_avg_value=not options.show_avg_value)
+    )
+
+    assert calls == []
 
 
 def test_invalidate_monotonicity_cache_forces_reanalyze(qapp, monkeypatch):

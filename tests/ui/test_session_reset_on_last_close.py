@@ -1,6 +1,8 @@
 """Empty-workspace session reset when the last logical source is closed (R6)."""
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -217,6 +219,42 @@ def test_close_one_wwt_file_resets_only_its_now_empty_view(
     assert win.inspector.top.choice_xaxis.buttons()[1].text() == "指定通道"
     assert win.inspector.top.choice_xaxis.isEnabled()
     assert win.inspector.top.btn_apply_xaxis.isEnabled()
+
+
+def test_merged_imported_axis_group_survives_project_reload(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from tests._helpers import wwt_factory as wwt
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True)
+    win._load_one(str(wwt.speed_unit_alias_shared_axis(tmp_path / "axis.wwt")))
+    qapp.processEvents()
+
+    state = win.view_manager.get(win.view_manager.active)
+    assert len(state.checked) == 2
+    win.channel_list.merge_axis_group(state.checked)
+    qapp.processEvents()
+    expected_axis = next(iter(
+        state.axis_opts["channel_axis_groups"].values()
+    ))
+    project = tmp_path / "axis-groups.tlproj"
+    win.save_project(project)
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+
+    reloaded = restored.view_manager.get(restored.view_manager.active)
+    groups = reloaded.axis_opts["channel_axis_groups"]
+    assert {channel for _fid, channel in reloaded.checked} == {
+        channel for _fid, channel in state.checked
+    }
+    assert set(groups.values()) == {expected_axis}
+    assert {json.loads(key)[1] for key in groups} == {
+        channel for _fid, channel in state.checked
+    }
 
 
 @pytest.mark.parametrize("flag", ("_restoring_project", "_opening_project", "_applying_view"))

@@ -170,12 +170,7 @@ def _custom_rows(channel, options, cursor_mode, mini):
 
 
 def _channel_face_name(block: CursorDisplayBlock) -> str:
-    qualified = str(block.qualified_label or "").strip()
-    if " / " in qualified:
-        channel = qualified.split(" / ", 1)[-1].strip()
-        if channel:
-            return channel
-    return qualified
+    return str(block.channel_label or block.qualified_label or "").strip()
 
 
 def visible_block_label(block: CursorDisplayBlock, omit_source_prefix: bool) -> str:
@@ -516,6 +511,7 @@ def build_cursor_presentation(
         blocks.append(CursorDisplayBlock(
             identity=channel.identity,
             qualified_label=channel.qualified_label,
+            channel_label=channel.channel_label,
             color=channel.color,
             visible_rows=visible,
             tooltip_rows=tooltip,

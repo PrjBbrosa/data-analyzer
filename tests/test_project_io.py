@@ -37,6 +37,24 @@ def test_schema_version_written(tmp_path):
     assert raw["schema_version"] == pio.SCHEMA_VERSION
 
 
+def test_digest_and_disk_encoding_agree_on_nan_and_mixed_keys(tmp_path):
+    """The dirty digest must accept exactly the JSON the save path writes."""
+    path = tmp_path / "mixed.tlproj"
+    doc = _doc()
+    doc.views[0]["axis_opts"] = {
+        7: "numeric-key",
+        "plain": float("nan"),
+    }
+
+    pio.save_project_to_json(doc, path)
+
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["views"][0]["axis_opts"]["7"] == "numeric-key"
+    assert pio.canonical_project_digest(doc) == pio.canonical_project_digest(
+        on_disk
+    )
+
+
 def test_project_save_is_same_directory_atomic_replace(tmp_path, monkeypatch):
     path = tmp_path / "session.tlproj"
     replaced = []

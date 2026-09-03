@@ -93,6 +93,25 @@ def test_channel_xy_proposal_uses_only_registered_y_and_winwert_color(tmp_path):
     assert all(channel != wwt.LIMIT_HI for _fid, channel in registered.record_channels.values())
 
 
+def test_initial_xlim_uses_x_record_not_zeit(tmp_path):
+    """The header X span is compared with its real Custom-X record, not Zeit."""
+    kept, _registered, _loaded = _proposals(
+        wwt.channel_xy_with_auxiliaries(
+            tmp_path / "x-overlap.wwt", initial_xlim=(20.0, 80.0),
+        )
+    )
+    assert kept[0].state.xlim == (20.0, 80.0)
+    assert "native_x_range_no_overlap: window 1" not in kept[0].warnings
+
+    dropped, _registered, _loaded = _proposals(
+        wwt.channel_xy_with_auxiliaries(
+            tmp_path / "x-outside.wwt", initial_xlim=(200.0, 300.0),
+        )
+    )
+    assert dropped[0].state.xlim is None
+    assert "native_x_range_no_overlap: window 1" in dropped[0].warnings
+
+
 def test_measurement_proposal_binds_record_only_tolerance_y(tmp_path):
     proposals, registered, _loaded = _proposals(
         wwt.measurement_plus_record_only_tolerance(path=tmp_path / "tol.wwt")

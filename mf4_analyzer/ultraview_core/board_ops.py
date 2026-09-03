@@ -162,6 +162,7 @@ def _copy_board(board: UltraViewBoardState) -> UltraViewBoardState:
         layout_mode=board.layout_mode,
         free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
         free_grid_default_size=board.free_grid_default_size,
+        locked_refs=set(board.locked_refs),
         author_objects=_clone_author_objects(board.author_objects),
         # Unknown future fields may contain nested authoring payloads.  A Board
         # duplicate is independently editable, so a shallow outer dict here
@@ -336,6 +337,7 @@ def _remove_ref_everywhere(board: UltraViewBoardState, ref: UltraViewRef) -> Non
     board.placements = [p for p in board.placements if p.ref != ref]
     board.free_grid = [p for p in board.free_grid if p.ref != ref]
     board.unplaced = [item for item in board.unplaced if item != ref]
+    board.locked_refs.discard(ref)
 
 
 def _append_unplaced(board: UltraViewBoardState, ref: UltraViewRef) -> None:
@@ -518,6 +520,7 @@ def set_layout(board: UltraViewBoardState, layout_id: str) -> list[str]:
     ordered_refs = all_refs(board)
     board.layout_mode = LAYOUT_MODE_TEMPLATE
     board.free_grid.clear()
+    board.locked_refs.clear()
     board.unplaced.clear()
     new_slots = layout_slots(layout_id)
     board.layout_id = layout_id
@@ -751,6 +754,9 @@ def capture_board_placement(board: UltraViewBoardState) -> BoardPlacementSnapsho
         placements=tuple((item.slot_id, item.ref) for item in board.placements),
         free_grid=tuple((item.ref, item.rect) for item in board.free_grid),
         unplaced=tuple(board.unplaced),
+        locked_refs=frozenset(
+            item.ref for item in board.free_grid if item.ref in board.locked_refs
+        ),
     )
 
 
@@ -790,6 +796,8 @@ def apply_board_placement(
         FreeGridPlacement(ref, rect) for ref, rect in snapshot.free_grid
     ]
     board.unplaced = list(snapshot.unplaced)
+    placed_refs = {item.ref for item in board.free_grid}
+    board.locked_refs = set(snapshot.locked_refs) & placed_refs
     return True
 
 
@@ -877,6 +885,7 @@ def free_grid_to_template(
     )
     tray_refs = list(board.unplaced)
     board.free_grid.clear()
+    board.locked_refs.clear()
     board.unplaced.clear()
     board.layout_mode = LAYOUT_MODE_TEMPLATE
     board.layout_id = layout_id if layout_id in LAYOUT_SLOTS else DEFAULT_LAYOUT_ID
@@ -1014,63 +1023,6 @@ def organize_free_grid(board: UltraViewBoardState) -> list[str]:
         return [_warn("not_free_grid")]
     board.free_grid = organized_placements(board.free_grid)
     return []
-
-
-def apply_native_layout(board: UltraViewBoardState, plan) -> list[str]:
-    """Apply a native layout plan in one Board mutation. No dirty/refresh."""
-    # Duck-type the plan so this module does not import native_layout.
-    # native_layout already lazy-imports nearest_unoccupied_origin from here;
-    # a reverse import would be an AST cycle (test_ultraview_core_import_graph).
-    placed = getattr(plan, "placed", None)
-    plan_warnings = getattr(plan, "warnings", None)
-    if not isinstance(placed, tuple) or not isinstance(plan_warnings, tuple):
-        return [_warn("invalid_native_plan")]
-    warnings = list(plan_warnings)
-    if board.layout_mode != LAYOUT_MODE_FREE_GRID:
-        template_to_free_grid(board)
-    members = membership_set(board)
-    remaining_membership = MAX_BOARD_MEMBERSHIP - len(members)
-    remaining_placed = MAX_PLACED_CARDS - len(board.free_grid)
-    for ref, rect in plan.placed:
-        if ref in members:
-            warnings.append("duplicate_ref")
-            continue
-        if remaining_membership <= 0:
-            warnings.append("membership_limit")
-            continue
-        if remaining_placed <= 0:
-            warnings.append("placed_limit")
-            _append_unplaced(board, ref)
-            remaining_membership -= 1
-            members.add(ref)
-            continue
-        if any(_grid_overlaps(rect, item.rect) for item in board.free_grid):
-            moved = nearest_unoccupied_origin(
-                tuple(item.rect for item in board.free_grid),
-                (rect.column_span, rect.row_span),
-                rect,
-            )
-            if moved is None:
-                warnings.append(_warn("grid_collision"))
-                _append_unplaced(board, ref)
-                remaining_membership -= 1
-                members.add(ref)
-                continue
-            rect = moved
-        board.free_grid.append(FreeGridPlacement(ref, rect))
-        members.add(ref)
-        remaining_membership -= 1
-        remaining_placed -= 1
-    for ref in plan.unplaced:
-        if ref in members:
-            continue
-        if remaining_membership <= 0:
-            warnings.append("membership_limit")
-            continue
-        _append_unplaced(board, ref)
-        members.add(ref)
-        remaining_membership -= 1
-    return warnings
 
 
 def _template_grid_rects(layout_id: str) -> list[GridRect]:

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from mf4_analyzer.ui.main_window.project_dirty import (
     DirtyGuardResult,
     ProjectDirtyState,
@@ -565,6 +567,107 @@ def test_successful_save_sets_clean_save_point_on_window(qapp, tmp_path):
     assert not mw._project_dirty.is_dirty
     assert mw._project_dirty.path == str(proj)
     assert mw._project_dirty.saved_digest
+
+
+def test_remark_after_save_marks_dirty(qapp, qtbot, tmp_path, loaded_csv, monkeypatch):
+    """A real time-domain remark is persistable user intent after save."""
+    from PyQt5.QtCore import QPoint
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    project = tmp_path / "remark.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window._load_one(loaded_csv)
+    fid = next(iter(window.files))
+    window.navigator.set_checked_channels([(fid, "speed")])
+    window.plot_time()
+    qapp.processEvents()
+    assert window.save_project(project) is True
+    assert not window._project_session_is_dirty()
+
+    annotations = window.canvas_time._annotations
+    monkeypatch.setattr(
+        annotations,
+        "_nearest_data_point",
+        lambda _pos: ("speed", 0.5, 1.0, "#1769e0", "", (fid, "speed")),
+    )
+    annotations._add_remark(QPoint(120, 100))
+
+    assert annotations.snapshot_remarks()
+    assert window._project_session_is_dirty()
+
+
+def test_camera_change_after_save_is_caught_by_guard_digest(
+    qapp, qtbot, tmp_path, loaded_csv,
+):
+    """Guard-time capture observes the canvas without mutating View ownership."""
+    from PyQt5.QtCore import QSignalBlocker
+    from PyQt5.QtTest import QSignalSpy
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    project = tmp_path / "camera.tlproj"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window._load_one(loaded_csv)
+    fid = next(iter(window.files))
+    window.navigator.set_checked_channels([(fid, "speed")])
+    window.plot_time()
+    qapp.processEvents()
+    assert window.save_project(project) is True
+
+    views = window.view_manager.views
+    view_identities = tuple(id(view) for view in views)
+    state_before = views[window.view_manager.active].to_dict()
+    changed = QSignalSpy(window.view_manager.views_changed)
+    blocker = QSignalBlocker(window.canvas_time)
+    try:
+        window.canvas_time.set_xlim(0.2, 0.8)
+    finally:
+        del blocker
+    qapp.processEvents()
+
+    assert window.canvas_time.get_visible_xlim() == pytest.approx((0.2, 0.8))
+    assert views is window.view_manager.views
+    assert tuple(id(view) for view in window.view_manager.views) == view_identities
+    assert views[window.view_manager.active].to_dict() == state_before
+    assert len(changed) == 0
+    assert window._project_session_is_dirty()
+    assert views[window.view_manager.active].to_dict() == state_before
+    assert len(changed) == 0
+
+
+def test_save_computes_digest_before_writing(qapp, tmp_path, monkeypatch):
+    """A writer failure cannot leave an unbaselined project file behind."""
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    project = tmp_path / "write-fails.tlproj"
+    window = MainWindow()
+    window._project_dirty.mark_user_mutation()
+    digest_calls = []
+    real_digest = pio.canonical_project_digest
+
+    def capture_digest(document):
+        digest_calls.append(document)
+        return real_digest(document)
+
+    def reject_write(document, path):
+        assert digest_calls == [document]
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(pio, "canonical_project_digest", capture_digest)
+    monkeypatch.setattr(window, "_write_project_document", reject_write)
+
+    with pytest.raises(OSError, match="simulated write failure"):
+        window.save_project(project)
+
+    assert not project.exists()
+    assert window._project_dirty.is_dirty
+    assert window._project_dirty.save_point == 0
 
 
 def test_save_a_then_open_b_replaces_digest_and_project_session(

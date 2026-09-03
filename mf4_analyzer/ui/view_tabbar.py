@@ -149,14 +149,34 @@ class _ViewTabs(QTabBar):
         self.setAttribute(Qt.WA_Hover, True)
         self._hover_index = -1
         self._pointer_slot_view_id = None
+        self._pointer_slot_locked = False
         self._armed_view_id = None
-        self._last_close_view_id = None
         self._last_close_msecs = 0
+
+    def minimumSizeHint(self) -> QSize:
+        """Let the owner compact/retire tabs instead of widening the window.
+
+        With native scroll buttons disabled, Qt otherwise reports the sum of
+        every tab as its minimum width.  That blocks a narrow host before
+        :class:`ViewTabBar` can apply its measured compact/overflow policy.
+        """
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
 
     def clear_interaction_state(self) -> None:
         old_hover = self._hover_index
         self._hover_index = -1
         self._pointer_slot_view_id = None
+        self._pointer_slot_locked = False
+        self._armed_view_id = None
+        if old_hover >= 0:
+            self._update_close_region(old_hover)
+
+    def lock_pointer_slot(self) -> None:
+        """Fail closed across a tab rebuild without fabricating a re-entry."""
+        old_hover = self._hover_index
+        self._hover_index = -1
+        self._pointer_slot_locked = self._pointer_slot_view_id is not None
         self._armed_view_id = None
         if old_hover >= 0:
             self._update_close_region(old_hover)
@@ -224,13 +244,16 @@ class _ViewTabs(QTabBar):
         painter.end()
 
     def mousePressEvent(self, event):
+        idx, in_slot = self._hit_close_slot(event.pos())
+        if in_slot and self._is_recent_close():
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
-            idx, in_slot = self._hit_close_slot(event.pos())
             if in_slot:
                 bar = self._bar()
                 if self._close_slot_actionable(idx):
                     view_id = bar._view_id_at(idx)
-                    if view_id and not self._is_double_close_repeat(view_id):
+                    if view_id:
                         self._armed_view_id = view_id
                         self._hover_index = idx
                         self._update_close_region(idx)
@@ -276,7 +299,6 @@ class _ViewTabs(QTabBar):
                 and bar._view_id_at(idx) == view_id
                 and self._close_slot_actionable(idx)
             ):
-                self._last_close_view_id = view_id
                 self._last_close_msecs = QDateTime.currentMSecsSinceEpoch()
                 self.close_slot_clicked.emit(idx)
             event.accept()
@@ -285,20 +307,17 @@ class _ViewTabs(QTabBar):
 
     def _consume_close_double_click(self, event) -> bool:
         idx, in_slot = self._hit_close_slot(event.pos())
-        recent_close = bool(
-            self._last_close_view_id
-            and self._is_double_close_repeat(self._last_close_view_id)
-        )
-        if not (in_slot or recent_close):
+        if not in_slot:
             return False
+        if self._is_recent_close():
+            return True
         bar = self._bar()
         if (
             self._close_slot_actionable(idx)
             and event.button() == Qt.LeftButton
         ):
             view_id = bar._view_id_at(idx)
-            if view_id and not self._is_double_close_repeat(view_id):
-                self._last_close_view_id = view_id
+            if view_id:
                 self._last_close_msecs = QDateTime.currentMSecsSinceEpoch()
                 self.close_slot_clicked.emit(idx)
         return True
@@ -343,6 +362,21 @@ class _ViewTabs(QTabBar):
 
     def _update_hover(self, pos) -> None:
         bar = self._bar()
+        if self._pointer_slot_locked:
+            current_idx = self.currentIndex()
+            current_rect = self.tabRect(current_idx)
+            if (
+                pos is not None
+                and current_idx >= 0
+                and current_rect.isValid()
+                and current_rect.contains(pos)
+            ):
+                return
+            # Moving within the close target (even by one pixel) is not a
+            # re-entry. Only leaving the widget or the current tab unlocks a
+            # slot retained through refresh().
+            self._pointer_slot_locked = False
+            self._pointer_slot_view_id = None
         slot_index = -1
         slot_view_id = None
         if pos is not None and bar is not None:
@@ -397,8 +431,8 @@ class _ViewTabs(QTabBar):
         QToolTip.showText(event.globalPos(), text, self, tab_close_hit_rect(self, idx))
         return True
 
-    def _is_double_close_repeat(self, view_id: str) -> bool:
-        if self._last_close_view_id != view_id:
+    def _is_recent_close(self) -> bool:
+        if not self._last_close_msecs:
             return False
         interval = QApplication.doubleClickInterval()
         return (
@@ -465,9 +499,9 @@ class ViewTabBar(QWidget):
         # Set by _on_tab_moved, consumed on the drag's mouse release: a drag
         # scrambles the compact ordinals and refresh() is banned mid-drag.
         self._pending_reorder_resync = False
-        # One QSettings write per session for the view.compact_tabs footer hint
-        # — see _mark_compact_tabs_discovered.
+        # One QSettings write per session for each View discovery hint.
         self._compact_tabs_discovered = False
+        self._quick_close_discovered = False
         self._overflow_popup = None
         self._overflow_popup_closed_msecs = 0
         self._tab_spacer_icon = _tab_spacer_icon()
@@ -488,7 +522,10 @@ class ViewTabBar(QWidget):
         self._tabs.setObjectName("viewTabs")
         self._tabs.setMovable(True)
         self._tabs.setExpanding(False)
-        self._tabs.setUsesScrollButtons(True)
+        # Compact labels and the managed ``»N`` popup are this bar's only
+        # overflow policy.  Native QTabBar arrows form a second, anonymous
+        # route; on Cocoa they can render as two blank tab-like shells.
+        self._tabs.setUsesScrollButtons(False)
         self._tabs.setDrawBase(False)
         self._tabs.setShape(QTabBar.RoundedSouth)
         self._tabs.setFixedHeight(26)
@@ -503,7 +540,7 @@ class ViewTabBar(QWidget):
         self._tabs.tabBarDoubleClicked.connect(self._on_double_clicked)
         self._tabs.tabMoved.connect(self._on_tab_moved)
         self._tabs.customContextMenuRequested.connect(self._on_context_menu)
-        self._tabs.close_slot_clicked.connect(self.delete_requested.emit)
+        self._tabs.close_slot_clicked.connect(self._on_close_slot_clicked)
         # Watched for the mouse release that ends a drag-reorder; see eventFilter.
         self._tabs.installEventFilter(self)
         layout.addWidget(self._tabs, 0, Qt.AlignVCenter)
@@ -699,7 +736,7 @@ class ViewTabBar(QWidget):
             # a use-after-free on the tab still held by the live drag → hard
             # crash (闪退). Skip the rebuild; nothing visible needs it.
             return
-        self._tabs.clear_interaction_state()
+        self._tabs.lock_pointer_slot()
         self._suppress = True
         try:
             while self._tabs.count():
@@ -783,12 +820,11 @@ class ViewTabBar(QWidget):
         return max(1, self._tabs.sizeHint().width())
 
     def _clamp_tabs_width(self, width: int) -> None:
-        # setMaximumWidth, NOT setFixedWidth. A fixed width tells Qt the strip
-        # can never overflow, which is exactly what kept the setUsesScrollButtons
-        # (see __init__) permanently inert. The strip's Maximum size policy makes
-        # the layout hand it min(sizeHint, maximumWidth), so pinning the natural
-        # width as the *maximum* still hugs _plus against the last tab, while a
-        # narrow row now genuinely compresses the strip and nothing else.
+        # setMaximumWidth, NOT setFixedWidth. The strip's Maximum size policy
+        # makes the layout hand it min(sizeHint, maximumWidth), so pinning the
+        # natural width as the *maximum* still hugs _plus against the last tab.
+        # A narrow row is handled by compact labels and tail retirement above,
+        # not by QTabBar's native scroll controls.
         # setMinimumWidth(0) undoes any earlier fixed width.
         self._tabs.setMinimumWidth(0)
         self._tabs.setMaximumWidth(max(0, int(width)))
@@ -961,6 +997,16 @@ class ViewTabBar(QWidget):
         self._compact_tabs_discovered = True
         hints.mark_discovered(QSettings(), "view.compact_tabs")
 
+    def _mark_quick_close_discovered(self) -> None:
+        if self._quick_close_discovered:
+            return
+        self._quick_close_discovered = True
+        hints.mark_discovered(QSettings(), "view.quick_close")
+
+    def _on_close_slot_clicked(self, idx: int) -> None:
+        self.delete_requested.emit(idx)
+        self._mark_quick_close_discovered()
+
     def _on_overflow_clicked(self) -> None:
         if self._overflow_popup is not None and self._overflow_popup.isVisible():
             self._close_overflow_popup()
@@ -1016,11 +1062,14 @@ class ViewTabBar(QWidget):
             return
         self._overflow_popup = None
         popup.hide()
-        popup.deleteLater()
         self._set_overflow_expanded(False)
 
     def _on_overflow_popup_closed(self) -> None:
-        self._overflow_popup = None
+        popup = self.sender()
+        if popup is self._overflow_popup:
+            self._overflow_popup = None
+        if isinstance(popup, ViewOverflowPopup):
+            popup.deleteLater()
         self._overflow_popup_closed_msecs = QDateTime.currentMSecsSinceEpoch()
         self._set_overflow_expanded(False)
         self._overflow.setFocus(Qt.PopupFocusReason)
@@ -1185,13 +1234,10 @@ class ViewTabBar(QWidget):
             return False
         key = event.key()
         mods = int(event.modifiers())
-        ctrl = bool(mods & int(Qt.ControlModifier)) or bool(mods & int(Qt.MetaModifier))
-        shift = bool(mods & int(Qt.ShiftModifier))
+        ctrl = bool(mods & int(Qt.ControlModifier)) or bool(
+            mods & int(Qt.MetaModifier)
+        )
         alt = bool(mods & int(Qt.AltModifier))
-        if ctrl and key in (Qt.Key_Tab, Qt.Key_Backtab) and not alt:
-            delta = -1 if key == Qt.Key_Backtab or shift else 1
-            self._cycle_section_views(delta)
-            return True
         if key == Qt.Key_F2:
             self._rename_current_view()
             return True
@@ -1199,18 +1245,6 @@ class ViewTabBar(QWidget):
             self._reorder_current_view(-1 if key == Qt.Key_Up else 1)
             return True
         return False
-
-    def _cycle_section_views(self, delta: int) -> None:
-        count = self._tabs.count()
-        if count <= 1:
-            return
-        current = self._tabs.currentIndex()
-        if current < 0:
-            current = 0
-        target = (current + delta) % count
-        if target == current:
-            return
-        self._tabs.setCurrentIndex(target)
 
     def _rename_current_view(self) -> None:
         idx = self._tabs.currentIndex()

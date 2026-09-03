@@ -251,6 +251,50 @@ def test_time_x_single_missing_current_value_never_falls_back_to_statistics():
 
 @pytest.mark.parametrize("cursor_mode", ("single", "dual"))
 @pytest.mark.parametrize("x_mode", ("time", "custom"))
+@pytest.mark.parametrize("mini", (False, True))
+def test_channel_label_with_separator_survives_single_source_headers(
+    cursor_mode, x_mode, mini,
+):
+    channel_label = "Rack Force / N"
+    channel = CursorDisplayChannel(
+        identity=("source-a", channel_label),
+        source_label="",
+        channel_label=channel_label,
+        color="#1769e0",
+        unit_suffix=" N",
+        current_value=3.25,
+        delta=1.5,
+        min_value=1.0,
+        max_value=5.0,
+        avg_value=3.0,
+        branches=(
+            CursorDisplayBranch(
+                label="X↑",
+                current_value=3.25,
+                min_value=1.0,
+                max_value=5.0,
+                avg_value=3.0,
+                delta_value=1.5,
+            ),
+        ),
+    )
+    projection = build_cursor_presentation(
+        (channel,),
+        CursorDisplayOptions(),
+        cursor_mode=cursor_mode,
+        x_mode=x_mode,
+        mini=mini,
+    )
+
+    block = projection.blocks[0]
+    assert block.channel_label == channel_label
+    assert channel_label in projection.tooltip
+    if not (cursor_mode == "single" and mini):
+        assert channel_label in projection.html
+
+
+@pytest.mark.parametrize("cursor_mode", ("single", "dual"))
+@pytest.mark.parametrize("x_mode", ("time", "custom"))
 @pytest.mark.parametrize(
     "options",
     (
@@ -438,6 +482,39 @@ def test_cursor_pill_restores_original_right_anchor_after_width_changes_while_av
     pill.restore_after_avoidance()
     assert abs(pill.geometry().right() - original_right) <= 1
     assert pill.y() == original_top
+
+
+def test_pill_keeps_avoidance_across_projection_update(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    parent.resize(720, 380)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    pill.set_display_projection(build_cursor_presentation(
+        _time_rows(2), CursorDisplayOptions(),
+        cursor_mode="dual", x_mode="time", mini=False,
+    ))
+    parent.show()
+    pill.show()
+    qapp.processEvents()
+    anchor_right = pill.geometry().right()
+    anchor_top = pill.y()
+    obstacle = QRect(pill.x() + pill.width() - 24, pill.y(), 180, 220)
+    padded = obstacle.adjusted(-8, -8, 8, 8)
+
+    pill.avoid_rect(obstacle, gap=8)
+    assert not pill.geometry().intersects(padded)
+    pill.set_display_projection(build_cursor_presentation(
+        _time_rows(3), CursorDisplayOptions(False, False, True, True, True),
+        cursor_mode="dual", x_mode="time", mini=False,
+    ))
+
+    assert not pill.geometry().intersects(padded)
+    pill.restore_after_avoidance()
+    assert abs(pill.geometry().right() - anchor_right) <= 1
+    assert pill.y() == anchor_top
 
 
 def test_cursor_pill_extremely_short_host_shows_only_fitting_summary(qapp, qtbot):

@@ -27,8 +27,8 @@ def test_deck_data_valid_and_version_bumped():
     assert d["meta"]["version"] == "v8.2.0"
     assert d["meta"]["updated"] == "2026-08-30"
     assert d["meta"]["docVersion"] == "3.0"
-    assert [c["v"] for c in d["changelog"]][:5] == [
-        "v8.2.0", "v8.1.0", "v8.0.1", "v8.0.0", "v7.9.9",
+    assert [c["v"] for c in d["changelog"]][:6] == [
+        "2026-09-03", "v8.2.0", "v8.1.0", "v8.0.1", "v8.0.0", "v7.9.9",
     ]
     current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
         '  "changelog": [', 1,
@@ -47,6 +47,17 @@ def test_v820_changelog_covers_stability_closure():
         "紧凑排列", "按原图比例", "适应内容", "保存重开",
     ):
         assert keyword in description
+
+
+def test_20260903_changelog_covers_each_visible_interaction_once():
+    entry = next(
+        entry for entry in _deck_data()["changelog"] if entry["date"] == "2026-09-03"
+    )
+    description = " ".join(entry["items"])
+    for keyword in (
+        "游标显示设置", "View 色标关闭", "标准快捷键", "Esc 分层", "⋯ 常驻", "WWT 初始视图",
+    ):
+        assert description.count(keyword) == 1, keyword
 
 
 def test_v800_changelog_covers_ultraview_workspace_and_restore():
@@ -246,8 +257,10 @@ def test_live_time_domain_view_cap_is_24_not_12():
     )
     assert "最多新建 24 个 View" in current_manual
     assert "最多新建 12 个 View" not in current_manual
-    assert "独立 Board" in current_manual
-    assert "单窗口只生成时域 View" in current_manual
+    assert "独立 Board" not in current_manual
+    assert "普通时域 View" in current_manual
+    assert "原生范围" not in current_manual
+    assert "查看全部 / Home 回到当前数据范围" in current_manual
     assert "时域工作区扩容至 <b>12 个 View</b>" in changelog
 
     time_guide = (HELP / "time-domain-guide.html").read_text(encoding="utf-8")
@@ -259,8 +272,9 @@ def test_live_time_domain_view_cap_is_24_not_12():
     published = PUBLISHED_GUIDE.read_text(encoding="utf-8")
     assert "最多 24 个时域 View" in published
     assert "最多 12 个时域 View" not in published
-    assert "独立 Board" in published
-    assert "单窗口只生成时域 View" in published
+    assert "独立 Board" not in published
+    assert "普通时域 View" in published
+    assert "查看全部 / Home 回到当前数据范围" in published
 
 
 def test_wwt_record_tree_copy_matches_left_tree_control_surface():
@@ -299,10 +313,10 @@ def test_help_has_no_developer_jargon():
 
 def test_panel_guides_cover_new_topics():
     checks = {
-        "time-domain-guide.html": ["滤波", "框选", "Shift", "原始辅助线"],
-        "fft-guide.html": ["A 计权", "查看全部"],
-        "ffttime-guide.html": ["A 计权"],
-        "order-analysis-guide.html": ["加权", "采样率"],
+        "time-domain-guide.html": ["滤波", "框选", "Shift", "原始辅助线", "游标显示设置", "色标", "⋯"],
+        "fft-guide.html": ["A 计权", "查看全部", "游标显示设置", "色标", "⋯"],
+        "ffttime-guide.html": ["A 计权", "游标显示设置", "色标", "⋯"],
+        "order-analysis-guide.html": ["加权", "采样率", "游标显示设置", "色标", "⋯"],
     }
     for fname, kws in checks.items():
         text = (HELP / fname).read_text(encoding="utf-8")

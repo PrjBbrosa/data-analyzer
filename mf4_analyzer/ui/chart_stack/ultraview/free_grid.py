@@ -101,6 +101,7 @@ class LayoutPlan:
     search_visits: int = 0
     used_fallback: bool = False
     solver_reason: str | None = None
+    diagnostics: tuple[str, ...] = ()
 
     def committed_updates(self) -> tuple[tuple[UltraViewRef, GridRect], ...]:
         if not self.accepted:
@@ -726,6 +727,7 @@ def _empty_plan(
     search_visits: int = 0,
     used_fallback: bool = False,
     solver_reason: str | None = None,
+    diagnostics: tuple[str, ...] = (),
 ) -> LayoutPlan:
     return LayoutPlan(
         accepted=accepted,
@@ -739,6 +741,7 @@ def _empty_plan(
         search_visits=search_visits,
         used_fallback=bool(used_fallback),
         solver_reason=solver_reason,
+        diagnostics=diagnostics,
     )
 
 
@@ -986,6 +989,9 @@ def plan_smart_layout(
     )
     result = solve_smart_layout(facts, active)
     if not result.accepted:
+        solver_reason = result.reason
+        if locked and not str(solver_reason or "").startswith("locked:"):
+            solver_reason = f"locked:{solver_reason or 'no_legal_layout'}"
         return _empty_plan(
             accepted=False,
             reason=_smart_reject_reason(result.reason),
@@ -993,7 +999,8 @@ def plan_smart_layout(
             layout_revision=revision,
             search_visits=result.search_visits,
             used_fallback=result.used_fallback,
-            solver_reason=result.reason,
+            solver_reason=solver_reason,
+            diagnostics=result.diagnostics,
         )
     by_ref = dict(result.placements)
     displaced: list[RectTransition] = []
@@ -1022,6 +1029,7 @@ def plan_smart_layout(
         search_visits=result.search_visits,
         used_fallback=result.used_fallback,
         solver_reason=result.reason,
+        diagnostics=result.diagnostics,
     )
 
 

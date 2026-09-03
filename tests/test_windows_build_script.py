@@ -152,7 +152,7 @@ def test_vector_runbook_uses_default_build_name_and_separate_evidence_files():
         ROOT / "docs/analyzer/acquisition/runbooks/stage-8-pr4-bench.md"
     ).read_text(encoding="utf-8")
 
-    assert r".\dist\TraceLab8.0.0\TraceLab8.0.0.exe" in runbook
+    assert r".\dist\TraceLab8.2.0\TraceLab8.2.0.exe" in runbook
     assert "build-api-contract.json" in runbook
     assert "packaged-runtime-smoke.json" in runbook
     assert "MF4DataAnalyzer" not in runbook

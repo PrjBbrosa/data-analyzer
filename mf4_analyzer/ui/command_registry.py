@@ -7,6 +7,7 @@ explicit SaveAs fallback when the platform table is empty.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from enum import Enum
 
@@ -125,7 +126,7 @@ _register(CommandMeta(
     CommandId.NEXT_VIEW,
     "下一个 View",
     None,
-    "Ctrl+Tab",
+    None,
     CommandScope.VIEW,
     "切换到当前分区的下一个 View",
 ))
@@ -133,7 +134,7 @@ _register(CommandMeta(
     CommandId.PREVIOUS_VIEW,
     "上一个 View",
     None,
-    "Ctrl+Shift+Tab",
+    None,
     CommandScope.VIEW,
     "切换到当前分区的上一个 View",
 ))
@@ -157,7 +158,7 @@ _register(CommandMeta(
     CommandId.RESET_VIEW,
     "复位视角",
     None,
-    "Home",
+    "Ctrl+R",
     CommandScope.CHART,
     "复位当前图表视角",
 ))
@@ -181,7 +182,15 @@ def object_name_for(command_id: CommandId) -> str:
     )
 
 
-def _unique_key_bindings(standard_key) -> list[QKeySequence]:
+def _unique_key_bindings(
+    standard_key, *, fallback_to_standard: bool = False
+) -> list[QKeySequence]:
+    """Return de-duplicated standard bindings, optionally with Qt fallback.
+
+    Markup and UltraView retain the historical fallback when their platform
+    table is empty. Command metadata deliberately opts out, except where its
+    explicit ``fallback`` says otherwise.
+    """
     seen: list[QKeySequence] = []
     texts: set[str] = set()
     for seq in QKeySequence.keyBindings(standard_key):
@@ -192,7 +201,22 @@ def _unique_key_bindings(standard_key) -> list[QKeySequence]:
             continue
         texts.add(portable)
         seen.append(QKeySequence(seq))
+    if not seen and fallback_to_standard:
+        fallback = QKeySequence(standard_key)
+        if not fallback.isEmpty():
+            seen.append(fallback)
     return seen
+
+
+def _fallback_for(meta: CommandMeta) -> str | None:
+    """Return the platform-specific fallback declared by command semantics."""
+    if meta.command_id == CommandId.NEXT_VIEW:
+        # Qt maps Meta to the physical Control key on macOS. ``Ctrl+Tab``
+        # instead means Command+Tab and is claimed by the app switcher.
+        return "Meta+Tab" if sys.platform == "darwin" else "Ctrl+Tab"
+    if meta.command_id == CommandId.PREVIOUS_VIEW:
+        return "Meta+Shift+Tab" if sys.platform == "darwin" else "Ctrl+Shift+Tab"
+    return meta.fallback
 
 
 def bindings_for(command_id: CommandId) -> list[QKeySequence]:
@@ -206,8 +230,9 @@ def bindings_for(command_id: CommandId) -> list[QKeySequence]:
     seqs: list[QKeySequence] = []
     if meta.standard_key is not None:
         seqs = _unique_key_bindings(meta.standard_key)
-    if not seqs and meta.fallback:
-        fallback = QKeySequence(meta.fallback)
+    fallback_text = _fallback_for(meta)
+    if not seqs and fallback_text:
+        fallback = QKeySequence(fallback_text)
         if not fallback.isEmpty():
             seqs = [fallback]
     return seqs

@@ -329,3 +329,30 @@ def test_legacy_native_axis_opts_are_dropped_and_groups_are_canonical():
     payload = state.to_dict()
     assert "native_ticks" not in payload["axis_opts"]
     assert "x_viewport_intent" not in payload["axis_opts"]
+
+
+def test_reset_to_defaults_preserving_ids_emits_once_and_normalizes_split_pairs(qapp):
+    manager = ViewManager()
+    manager.new_view()
+    manager.new_view()
+    preserved = [manager.views[2].view_id, manager.views[0].view_id]
+    removed_id = manager.views[1].view_id
+    manager.set_active(1)
+    manager.set_split(2)
+
+    emissions = []
+    manager.views_changed.connect(lambda: emissions.append("views"))
+    manager.active_changed.connect(lambda index: emissions.append(("active", index)))
+    manager.split_changed.connect(lambda index: emissions.append(("split", index)))
+
+    removed = manager.reset_to_defaults_preserving_ids(preserved)
+
+    assert removed == (removed_id,)
+    assert [state.view_id for state in manager.views] == preserved
+    assert [state.name for state in manager.views] == ["View 1", "View 2"]
+    assert manager.active == 0
+    assert manager.split_with is None
+    assert manager._split_pairs == {}
+    assert emissions.count("views") == 1
+    assert emissions.count(("active", 0)) == 1
+    assert emissions.count(("split", None)) == 1

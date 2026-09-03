@@ -104,7 +104,10 @@ def test_every_keyboard_chip_resolves():
 
 def test_keyboard_chips_match_shortcut_registry():
     """Spot-check that registry-derived chips equal hints.shortcut_tooltip."""
-    assert hints.shortcut_tooltip("home") == "Ctrl+R"
+    from mf4_analyzer.ui.command_registry import CommandId, native_text_for
+
+    home = native_text_for(CommandId.RESET_VIEW)
+    assert hints.shortcut_tooltip("home") == home
     assert hints.shortcut_tooltip("btn_subplot") == "Ctrl+1"
     assert hints.shortcut_tooltip("btn_overlay") == "Ctrl+2"
     assert hints.shortcut_tooltip("cursor_off") == "Ctrl+3"
@@ -114,22 +117,27 @@ def test_keyboard_chips_match_shortcut_registry():
     assert hints.shortcut_tooltip("zoom") == "Ctrl+B"
     # The catalog's helper must reflect those exact strings.
     chips = {chip for _g, row in _all_rows() for chip in row.keys}
-    assert "Ctrl+R" in chips
+    assert home in chips
     assert "Ctrl+1" in chips
     assert "Ctrl+3" in chips
     assert "Ctrl+G" in chips
     assert "Ctrl+B" in chips
-    assert hints.shortcut_tooltip("back") == "Alt+Left"
-    assert hints.shortcut_tooltip("forward") == "Alt+Right"
-    assert "Alt+Left" in chips
-    assert "Alt+Right" in chips
+    back = native_text_for(CommandId.VIEW_BACK)
+    forward = native_text_for(CommandId.VIEW_FORWARD)
+    assert hints.shortcut_tooltip("back") == back
+    assert hints.shortcut_tooltip("forward") == forward
+    assert back in chips
+    assert forward in chips
 
 
 def test_quickref_standard_desktop_copy_matches_runtime():
     """Chart / undo / search / save copy follows the desktop interaction contract."""
     camera = _row_by_desc("视角后退 / 前进")
     assert camera.keys == (hints.shortcut_tooltip("back"), hints.shortcut_tooltip("forward"))
-    assert "Alt+Left / Alt+Right：视角后退 / 前进" in camera.sub
+    assert (
+        f"{hints.shortcut_tooltip('back')} / {hints.shortcut_tooltip('forward')}："
+        "视角后退 / 前进"
+    ) in camera.sub
     assert "Ctrl/Cmd+Z 保留给编辑撤销" in camera.sub
     undo_rows = [
         row for _group, row in _all_rows() if row.desc == "撤销 / 重做"

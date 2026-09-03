@@ -19,6 +19,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
 )
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.ultraview_state import (
+    FreeGridPlacement,
     MAX_BOARD_MEMBERSHIP,
     MAX_PLACED_CARDS,
     PreviewMeta,
@@ -69,6 +70,42 @@ def _fitted_span(board, image_size: tuple[int, int]) -> tuple[int, int]:
         screen_grid_metrics(board.free_grid),
     )
     return wanted.column_span, wanted.row_span
+
+
+def test_card_lock_toggle_is_one_undo(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    uv._apply_add_ref(ref)
+    history = uv._grid_history(uv.board)
+    before = len(history.undo)
+
+    uv._on_free_grid_lock(ref.section, ref.view_id)
+
+    assert uv._free_grid_card_locked(ref.section, ref.view_id)
+    assert len(history.undo) == before + 1
+    uv._on_free_grid_undo()
+    assert not uv._free_grid_card_locked(ref.section, ref.view_id)
+    uv._on_free_grid_redo()
+    assert uv._free_grid_card_locked(ref.section, ref.view_id)
+
+
+def test_locked_no_legal_layout_reason_mentions_locked():
+    left = UltraViewRef("time", "locked-left")
+    right = UltraViewRef("time", "locked-right")
+    rect = _legacy_rect(0, 0, 4, 3)
+    plan = plan_smart_layout(
+        (
+            FreeGridPlacement(left, rect),
+            FreeGridPlacement(right, rect),
+        ),
+        locked_refs={left: rect, right: rect},
+    )
+
+    assert plan.accepted is False
+    assert plan.solver_reason is not None
+    assert plan.solver_reason.startswith("locked:")
 
 
 def test_add_with_preview_shrinks_on_first_insert(qapp, qtbot):
@@ -504,7 +541,7 @@ def test_locked_reject_is_zero_mutation_and_skips_camera(qapp, qtbot, monkeypatc
             displaced_before_after=(),
             operation=LAYOUT_ARRANGE,
             based_on_layout_revision=0,
-            solver_reason="locked cards occupy space",
+            solver_reason="locked:no_legal_layout",
         )
 
     monkeypatch.setattr(

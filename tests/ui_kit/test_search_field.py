@@ -153,6 +153,37 @@ def test_empty_search_escape_without_closeable_host_is_safe_noop(qapp, qtbot):
     assert len(clicks) == 0
 
 
+def test_empty_search_escape_with_listener_stays_in_search_domain(qapp, qtbot):
+    from PyQt5.QtTest import QSignalSpy
+    from PyQt5.QtWidgets import QDialog, QVBoxLayout
+    from mf4_analyzer.ui_kit.widgets import SearchField
+
+    dialog = QDialog()
+    layout = QVBoxLayout(dialog)
+    field = SearchField("搜索通道…", dialog)
+    layout.addWidget(field)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    field.setFocus(Qt.OtherFocusReason)
+    qapp.processEvents()
+
+    escapes = []
+
+    def record_escape():
+        escapes.append(True)
+
+    field.escape_requested.connect(record_escape)
+    rejected = QSignalSpy(dialog.rejected)
+
+    qtbot.keyClick(field, Qt.Key_Escape)
+    qapp.processEvents()
+
+    assert escapes == [True]
+    assert len(rejected) == 0
+    assert dialog.isVisible()
+
+
 def test_eight_visible_search_surfaces_render_on_the_base_track(qapp, qtbot):
     from mf4_analyzer.acquisition_ui.history_tab import HistoryTab
     from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane

@@ -203,10 +203,12 @@ class FakeCanvas(QWidget):
     def restore_visible_xlim(self, xlim, *, flush=True) -> None:
         return None
 
-    def restore_visible_ylims(self, ylims, native_axis_ranges=None, **kwargs) -> None:
-        return None
+    def restore_visible_ylims(self, ylims, native_axis_ranges=None, **kwargs):
+        # Match TimeDomainCanvasPG: this double has no persisted/initial Y
+        # range, so restore leaves the nice-reframe path enabled.
+        return set()
 
-    def set_tick_density(self, x, y) -> None:
+    def set_tick_density(self, x, y, *, reframe_overlay_y=True) -> None:
         return None
 
     def settle_view_restore(self) -> None:

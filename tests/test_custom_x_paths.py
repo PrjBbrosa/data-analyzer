@@ -21,6 +21,7 @@ from mf4_analyzer.signal.custom_x_paths import (
     REASON_UNIDIRECTIONAL,
     REASON_UNIQUE_PAIR,
     PathContribution,
+    clip_paths,
     sample_custom_x_cursor,
     sample_custom_x_cursor_from_paths,
     sample_custom_x_dual_delta_from_paths,
@@ -482,6 +483,74 @@ print(json.dumps({'blocked': blocked, 'marker': 'clean'}))
     payload = json.loads(result.stdout)
     assert payload["marker"] == "clean"
     assert payload["blocked"] == []
+
+
+@pytest.mark.parametrize(
+    "x_range",
+    (
+        (-83.0, 83.0),
+        (200.0, 300.0),
+        (-math.inf, math.inf),
+        (math.nan, 83.0),
+    ),
+    ids=("full", "empty", "unbounded", "nonfinite"),
+)
+def test_clip_paths_matches_inline_clipping(x_range):
+    """The memo's post-analysis clip preserves the retired inline result."""
+    x = _out_and_back(n=101)
+    y = np.arange(x.size, dtype=float)
+
+    unclipped = analyze_custom_x_paths(x, y)
+    expected = analyze_custom_x_paths(x, y, x_range=x_range)
+    actual = clip_paths(unclipped, x_range)
+
+    assert actual.reason == expected.reason
+    for actual_group, expected_group in (
+        (actual.accepted, expected.accepted),
+        (actual.contributions, expected.contributions),
+    ):
+        assert len(actual_group) == len(expected_group)
+        for actual_item, expected_item in zip(actual_group, expected_group, strict=True):
+            assert actual_item.direction == expected_item.direction
+            np.testing.assert_array_equal(actual_item.x, expected_item.x)
+            np.testing.assert_array_equal(actual_item.y, expected_item.y)
+            np.testing.assert_array_equal(actual_item.indices, expected_item.indices)
+
+
+def test_path_contribution_caches_range_and_monotonicity(monkeypatch):
+    """Sampling uses the extrema and oriented monotonicity fixed at analysis."""
+    from mf4_analyzer.signal import custom_x_paths as module
+
+    rising = PathContribution(
+        x=np.asarray([0.0, 1.0, 1.0, 2.0, 3.0]),
+        y=np.asarray([10.0, 20.0, 21.0, 30.0, 40.0]),
+        indices=np.arange(5),
+        direction=1,
+    )
+    falling = PathContribution(
+        x=np.asarray([3.0, 2.0, 2.0, 1.0, 0.0]),
+        y=np.asarray([4.0, 3.0, 2.5, 1.0, 0.0]),
+        indices=np.arange(5),
+        direction=-1,
+    )
+    chatter = PathContribution(
+        x=np.asarray([0.0, 1.0, 0.9, 2.0]),
+        y=np.asarray([0.0, 1.0, 0.9, 2.0]),
+        indices=np.arange(4),
+        direction=1,
+    )
+
+    assert (rising.x_min, rising.x_max, rising.is_monotonic_oriented) == (0.0, 3.0, True)
+    assert (falling.x_min, falling.x_max, falling.is_monotonic_oriented) == (0.0, 3.0, True)
+    assert (chatter.x_min, chatter.x_max, chatter.is_monotonic_oriented) == (0.0, 2.0, False)
+
+    def _already_cached(*_args, **_kwargs):
+        raise AssertionError("sampling recomputed a PathContribution analysis fact")
+
+    monkeypatch.setattr(module.np, "min", _already_cached)
+    monkeypatch.setattr(module.np, "max", _already_cached)
+    monkeypatch.setattr(module.np, "diff", _already_cached)
+    assert module._sample_path_contribution(rising, 1.5) == pytest.approx(25.5)
 
 
 def _sample_path_contribution_loop_oracle(contribution, x_value):

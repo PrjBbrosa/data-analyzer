@@ -346,11 +346,7 @@ class ViewMixin:
         ):
             for sequence in bindings_for(command_id):
                 shortcut = QShortcut(sequence, self)
-                # QuickRef is a non-modal Qt.Tool child of MainWindow, so a
-                # WindowShortcut would stop working as soon as its search box
-                # owns focus. The handler below validates the active/focused
-                # surface and fails closed before routing any intent.
-                shortcut.setContext(Qt.ApplicationShortcut)
+                shortcut.setContext(Qt.WindowShortcut)
                 shortcut.activated.connect(
                     partial(self._cycle_view_for_active_section, delta)
                 )
@@ -726,7 +722,7 @@ class ViewMixin:
             )
             axis_opts = state.axis_opts or {}
             initial_axis_ranges = self._exceptional_initial_axis_ranges(state)
-            canvas.restore_visible_ylims(
+            restored_axis_handles = canvas.restore_visible_ylims(
                 state.ylims,
                 initial_axis_ranges=initial_axis_ranges,
             )
@@ -737,9 +733,7 @@ class ViewMixin:
             canvas.set_tick_density(
                 xt,
                 yt,
-                reframe_overlay_y=not bool(
-                    state.xlim or state.ylims or initial_axis_ranges
-                ),
+                reframe_overlay_y=not bool(restored_axis_handles),
             )
             canvas.settle_view_restore()
             restore_placement = getattr(canvas, "restore_cursor_placement", None)

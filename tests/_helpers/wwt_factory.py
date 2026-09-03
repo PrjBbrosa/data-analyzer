@@ -471,10 +471,15 @@ def _y_curve(
     )
 
 
-def channel_xy_with_auxiliaries(path=None) -> Path | bytes:
+def channel_xy_with_auxiliaries(
+    path=None,
+    *,
+    initial_xlim: tuple[float, float] | None = None,
+) -> Path | bytes:
     """One window: channel X/Y plus invisible limit/line auxiliary records."""
     n = CHANNEL_N
     aux = AUX_N
+    initial_x_lo, initial_x_hi = initial_xlim or (CHAN_X_LO, CHAN_X_HI)
     records = (
         WwtRecordSpec("Zeit", TIME_NAME, "s", n=n, dt=DT, t0=T0),
         WwtRecordSpec("Real", CHAN_X, CHAN_X_UNIT, n=n, values=_linspace(CHAN_X_LO, CHAN_X_HI, n)),
@@ -489,7 +494,7 @@ def channel_xy_with_auxiliaries(path=None) -> Path | bytes:
             rect_mm=RECT_WIN_A,
             global_x=1,
             x_axis=_axis_curve(
-                f"{CHAN_X} [{CHAN_X_UNIT}]", CHAN_X_LO, CHAN_X_HI,
+                f"{CHAN_X} [{CHAN_X_UNIT}]", initial_x_lo, initial_x_hi,
                 x_record_index=1, tick=CHAN_X_TICK, grid=CHAN_X_GRID,
             ),
             curves=(

@@ -24,6 +24,11 @@ class _LegacyCursorSource(QObject):
     dual_cursor_info = pyqtSignal(str)
 
 
+class _PublicCursorModeSource:
+    def cursor_x_mode(self):
+        return True
+
+
 def _plot_speed(canvas):
     canvas.plot_channels(
         [
@@ -89,6 +94,30 @@ def test_live_single_emit_projects_once_without_legacy_detail(qapp, qtbot):
     assert cs._pill.has_detail()
     assert "t=0.5000s" in cs._pill.primary_text()
     assert "speed" in cs._pill.detail_text()
+
+
+def test_single_move_applies_projection_exactly_once(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode("time")
+    cs.set_cursor_mode_for_canvas(cs.canvas_time, "single")
+    _plot_speed(cs.canvas_time)
+    qapp.processEvents()
+
+    calls = {"apply": 0}
+    original = cs._pill._apply_display_projection
+
+    def apply_projection(*args, **kwargs):
+        calls["apply"] += 1
+        return original(*args, **kwargs)
+
+    cs._pill._apply_display_projection = apply_projection
+    cs.canvas_time._emit_single_cursor_html(0.5)
+    qapp.processEvents()
+
+    assert calls["apply"] == 1
 
 
 def test_live_dual_emit_projects_once_without_legacy_detail(qapp, qtbot):
@@ -195,6 +224,13 @@ def test_dto_import_paths_share_the_same_class():
 
     assert ReexportOptions is ModelOptions
     assert ReexportOptions() == ModelOptions()
+
+
+def test_chart_stack_uses_the_canvas_public_cursor_x_mode(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    assert cs._cursor_x_mode(_PublicCursorModeSource(), ()) == "custom"
 
 
 def test_pg_canvas_cursor_imports_neutral_model_not_chart_stack():

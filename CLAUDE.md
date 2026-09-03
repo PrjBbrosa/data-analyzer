@@ -2,7 +2,7 @@
 
 **Project:** TraceLab / MF4 Data Analyzer — PyQt5 桌面 GUI，做工程测量数据的导入、
 时域/频域/阶次分析、批处理，以及 CAN/XCP 采集回放。版本单一事实源是
-`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v8.0.0），别在别处硬编码版本号。
+`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v8.2.0），别在别处硬编码版本号。
 升版本要同步的扇出面：`README.md` · `docs/analyzer/README.md` 的 Current Product
 Baseline · `mf4_analyzer/help/` 下使用说明（`meta.version`/`versionLabel`/`updated`
 + changelog 新增条目）与四个分析指南 · `docs/analyzer/user-guide/user-guide.html` ·
@@ -144,7 +144,7 @@ spec 再改测试，并在提交里写清为什么。
   扫描含 `#id[attr]`（按 objectName 反查 `setObjectName` 所属类）和
   `::sub-control:state`。
 - **`.connect(lambda` 棘轮** `tests/ui/test_no_lambda_signal_connections.py`：AST 冻结
-  `ui/` + `acquisition_ui/` 的 lambda 信号连接数，只许缩小。`window.py` 在 F6 后为 33。
+  `ui/` + `acquisition_ui/` 的 lambda 信号连接数，只许缩小。`window.py` 在 F6 后为 30。
   新连接改 bound method / `functools.partial`，不要把 `self` 关进 lambda。
 - **paint 计时器哨兵** `tests/ui/test_pg_timedomain_canvas.py` 的
   `test_frame_paint_backstop_is_installed_on_real_canvas`：真画布必须装上

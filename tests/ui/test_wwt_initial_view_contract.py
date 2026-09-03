@@ -32,11 +32,6 @@ def _load_rack_initial_view(qapp, qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(
         window._wwt_import, "_ask_layout", lambda *_args, **_kwargs: True,
     )
-    monkeypatch.setattr(
-        window._ultraview,
-        "add_time_views_from_native_layout",
-        lambda *_args, **_kwargs: (),
-    )
     window._load_one(str(path))
     qapp.processEvents()
     window._apply_active_view(window.view_manager.active)

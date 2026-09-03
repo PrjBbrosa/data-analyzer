@@ -1734,8 +1734,7 @@ class ChartStack(QWidget):
     def _cursor_x_mode(self, source, channels):
         if any(getattr(channel, "branches", ()) for channel in channels):
             return "custom"
-        cursor = getattr(source, "_cursor", None)
-        checker = getattr(cursor, "_is_custom_x_cursor", None)
+        checker = getattr(source, "cursor_x_mode", None)
         return "custom" if callable(checker) and checker() else "time"
 
     def _cursor_display_channel_from_dual(self, row):

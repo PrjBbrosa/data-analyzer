@@ -12,7 +12,7 @@ the batch renderer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Sequence
 
@@ -36,6 +36,10 @@ class PathContribution:
     y: np.ndarray
     indices: np.ndarray
     direction: int
+    _minimum_support: int | None = field(default=None, repr=False, compare=False)
+    x_min: float = field(init=False)
+    x_max: float = field(init=False)
+    is_monotonic_oriented: bool = field(init=False)
 
     def __post_init__(self) -> None:
         x = np.asarray(self.x, dtype=float)
@@ -48,6 +52,23 @@ class PathContribution:
         object.__setattr__(self, "x", x)
         object.__setattr__(self, "y", y)
         object.__setattr__(self, "indices", indices)
+        if x.size:
+            x_min = float(np.min(x))
+            x_max = float(np.max(x))
+        else:
+            x_min = math.nan
+            x_max = math.nan
+        direction = int(self.direction)
+        if direction not in (-1, 1) and x.size >= 2:
+            delta = float(x[-1]) - float(x[0])
+            direction = 1 if delta > 0.0 else -1 if delta < 0.0 else 0
+        x_oriented = x[::-1] if direction < 0 else x
+        is_monotonic_oriented = bool(
+            x_oriented.size >= 2 and not np.any(np.diff(x_oriented) < 0.0)
+        )
+        object.__setattr__(self, "x_min", x_min)
+        object.__setattr__(self, "x_max", x_max)
+        object.__setattr__(self, "is_monotonic_oriented", is_monotonic_oriented)
 
     @property
     def sample_count(self) -> int:
@@ -272,7 +293,13 @@ def _major_contributions(
 
 def _public_contribution(item: _RangeContribution) -> PathContribution:
     return PathContribution(
-        x=item.x, y=item.y, indices=item.indices, direction=item.direction,
+        x=item.x,
+        y=item.y,
+        indices=item.indices,
+        direction=item.direction,
+        _minimum_support=(
+            None if item.policy is None else int(item.policy.min_support)
+        ),
     )
 
 
@@ -299,6 +326,67 @@ def _selection_bounds(
     return float(lo), float(hi)
 
 
+def _clip_path_contribution(
+    contribution: PathContribution,
+    lo: float,
+    hi: float,
+) -> PathContribution | None:
+    selected = (contribution.x >= lo) & (contribution.x <= hi)
+    if not np.any(selected):
+        return None
+    return PathContribution(
+        x=contribution.x[selected],
+        y=contribution.y[selected],
+        indices=contribution.indices[selected],
+        direction=contribution.direction,
+        _minimum_support=contribution._minimum_support,
+    )
+
+
+def _public_major_contributions(
+    contributions: Sequence[PathContribution],
+) -> tuple[PathContribution, ...]:
+    """Apply the analysis-time major-leg policy after range clipping."""
+    if not contributions:
+        return ()
+    maximum_travel = max(item.x_max - item.x_min for item in contributions)
+    travel_floor = 0.5 * maximum_travel
+    return tuple(
+        item for item in contributions
+        if (
+            item._minimum_support is not None
+            and item.sample_count >= item._minimum_support
+            and item.x_max - item.x_min >= travel_floor
+        )
+    )
+
+
+def clip_paths(
+    paths: SeriesPathResult,
+    x_range: tuple[float, float] | None,
+) -> SeriesPathResult:
+    """Clip an already-analyzed Custom-X plan without reclassifying its legs.
+
+    Leg recognition and its turn policy are properties of the full finite
+    acquisition segments.  Only contribution membership and the existing
+    major-leg threshold vary with the cursor A/B range.
+    """
+    lo, hi = _selection_bounds(x_range)
+    if lo is None or hi is None:
+        return paths
+    contributions = tuple(
+        clipped
+        for item in paths.contributions
+        if (clipped := _clip_path_contribution(item, lo, hi)) is not None
+    )
+    accepted = _public_major_contributions(contributions)
+    return SeriesPathResult(
+        accepted=accepted,
+        contributions=contributions,
+        reason=_classify_reason(accepted, bool(contributions)),
+    )
+
+
 def analyze_custom_x_paths(
     x,
     y,
@@ -313,7 +401,6 @@ def analyze_custom_x_paths(
     y = np.asarray(y, dtype=float)
     if x.ndim != 1 or y.ndim != 1 or x.size != y.size:
         raise ValueError("custom-X path X/Y must be aligned one-dimensional arrays")
-    selected_lo, selected_hi = _selection_bounds(x_range)
     contributions: list[_RangeContribution] = []
     for segment in _acquisition_segments(x, y):
         segment_x = x[segment.start:segment.stop]
@@ -325,7 +412,7 @@ def analyze_custom_x_paths(
             legs = _merge_short_legs(_raw_legs(segment_x, policy), segment_x, policy)
         for leg in legs:
             clipped = _clip_major_leg(
-                leg, segment_x, segment_y, selected_lo, selected_hi,
+                leg, segment_x, segment_y, None, None,
                 index_offset=segment.start,
             )
             if clipped is not None:
@@ -333,11 +420,12 @@ def analyze_custom_x_paths(
     major = _major_contributions(contributions)
     public_contributions = tuple(_public_contribution(item) for item in contributions)
     accepted = tuple(_public_contribution(item) for item in major)
-    return SeriesPathResult(
+    paths = SeriesPathResult(
         accepted=accepted,
         contributions=public_contributions,
         reason=_classify_reason(accepted, bool(public_contributions)),
     )
+    return clip_paths(paths, x_range)
 
 
 def _leg_search_direction(contribution: PathContribution) -> int:
@@ -413,7 +501,7 @@ def _sample_path_contribution(
     """
     x = contribution.x
     y = contribution.y
-    if not x.size or x_value < float(np.min(x)) or x_value > float(np.max(x)):
+    if not x.size or x_value < contribution.x_min or x_value > contribution.x_max:
         return None
     exact = np.flatnonzero(x == x_value)
     if exact.size:
@@ -425,7 +513,7 @@ def _sample_path_contribution(
     else:
         x_mono = x
         y_mono = y
-    if x_mono.size >= 2 and not np.any(np.diff(x_mono) < 0.0):
+    if contribution.is_monotonic_oriented:
         return _interpolate_sorted_neighbors(x_mono, y_mono, x_value)
     return _interpolate_first_bracket(x, y, x_value)
 
@@ -537,6 +625,7 @@ __all__ = [
     "REASON_UNIQUE_PAIR",
     "SeriesPathResult",
     "analyze_custom_x_paths",
+    "clip_paths",
     "sample_custom_x_cursor",
     "sample_custom_x_cursor_from_paths",
     "sample_custom_x_dual_delta_from_paths",

@@ -23,20 +23,25 @@ the RebuildTimePopover (``QFrame#PopoverSurface``).
 """
 from __future__ import annotations
 
+from functools import partial
+
+from PyQt5 import sip
 from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtGui import QColor, QPainter, QPainterPath
+from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPainterPath
 from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QShortcut,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from . import quickref
+from .command_registry import CommandId, bindings_for
 from ..ui_kit.widgets import SearchField
 
 
@@ -413,6 +418,8 @@ class QuickRefPanel(QWidget):
         self._group_cards = []
         self._set_bottom_hints_visible = set_bottom_hints_visible
         self._bottom_hints_visible = bool(bottom_hints_visible)
+        self._view_cycle_shortcuts = []
+        self._host_view_cycle_shortcut_states = []
 
         # Translucency on the OUTER window only — the inner card carries QSS.
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -424,8 +431,50 @@ class QuickRefPanel(QWidget):
         self.setStyleSheet(_qss())
 
         self._build()
+        self._install_view_cycle_shortcuts()
         self.resize(940, 660)
         self._apply_window_flags()
+
+    def _install_view_cycle_shortcuts(self) -> None:
+        """Own View-cycle bindings while this ``Qt.Tool`` window is active."""
+        host = self.parentWidget()
+        handler = getattr(host, "_cycle_view_for_active_section", None)
+        if not callable(handler):
+            return
+        for command_id, delta in (
+            (CommandId.NEXT_VIEW, 1),
+            (CommandId.PREVIOUS_VIEW, -1),
+        ):
+            for sequence in bindings_for(command_id):
+                shortcut = QShortcut(QKeySequence(sequence), self)
+                shortcut.setContext(Qt.WindowShortcut)
+                shortcut.activated.connect(partial(handler, delta))
+                self._view_cycle_shortcuts.append(shortcut)
+
+    def _set_host_view_cycle_shortcuts_enabled(self, enabled: bool) -> None:
+        """Avoid a WindowShortcut ambiguity while this ``Qt.Tool`` is active."""
+        if enabled:
+            states = self._host_view_cycle_shortcut_states
+            self._host_view_cycle_shortcut_states = []
+            for shortcut, was_enabled in states:
+                if not sip.isdeleted(shortcut):
+                    shortcut.setEnabled(was_enabled)
+            return
+        if self._host_view_cycle_shortcut_states:
+            return
+        host = self.parentWidget()
+        host_shortcuts = getattr(host, "_view_shortcuts", ())
+        cycle_texts = {
+            sequence.toString(QKeySequence.PortableText)
+            for command_id in (CommandId.NEXT_VIEW, CommandId.PREVIOUS_VIEW)
+            for sequence in bindings_for(command_id)
+        }
+        for shortcut in host_shortcuts:
+            if shortcut.key().toString(QKeySequence.PortableText) in cycle_texts:
+                self._host_view_cycle_shortcut_states.append(
+                    (shortcut, shortcut.isEnabled())
+                )
+                shortcut.setEnabled(enabled)
 
     # -- construction ------------------------------------------------------
     def _build(self):
@@ -679,6 +728,14 @@ class QuickRefPanel(QWidget):
         # FocusOut; give visible keyboard focus to the search box afterwards.
         self.setFocus(Qt.OtherFocusReason)
         self._search.setFocus(Qt.OtherFocusReason)
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        self._set_host_view_cycle_shortcuts_enabled(False)
+
+    def hideEvent(self, event):  # noqa: N802
+        self._set_host_view_cycle_shortcuts_enabled(True)
+        super().hideEvent(event)
 
     def _position(self, anchor_widget):
         """Center over the anchor's top-level window (or the screen)."""

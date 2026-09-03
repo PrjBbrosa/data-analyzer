@@ -1,8 +1,28 @@
 """共轴组数据模型 + 组色板测试。"""
+from types import SimpleNamespace
+
 import pytest
 
+from mf4_analyzer.ui.view_bridge import capture_axis_opts
+from mf4_analyzer.ui.view_state import ViewState
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
+
+
+class _AxisCaptureTop:
+    """Minimal Inspector surface consumed by ``capture_axis_opts``."""
+
+    def range_values(self):
+        return (0.0, 0.0)
+
+    def range_enabled(self):
+        return False
+
+    def tick_density(self):
+        return (10, 6)
+
+    def xaxis_label(self):
+        return ""
 
 
 class TestAxisGroupPalette:
@@ -112,6 +132,28 @@ class TestAxisGroupModel:
         assert seen == [1]
         assert w.axis_group_for("f1", "a") is None
         assert w.restored_axis_group_projection() == {}
+
+    def test_merged_imported_axis_group_is_captured_into_view_state(self, qapp):
+        w = MultiFileChannelWidget()
+        w.set_restored_axis_group_projection({
+            '["f1","imported"]': "wwt-axis-3",
+        })
+
+        w.merge_axis_group([("f1", "imported"), ("f1", "ordinary")])
+        state = ViewState(
+            name="WWT",
+            tab_color="#2d7ff9",
+            axis_opts=capture_axis_opts(SimpleNamespace(
+                inspector=SimpleNamespace(top=_AxisCaptureTop()),
+                channel_list=w,
+            )),
+        )
+
+        assert state.axis_opts["channel_axis_groups"] == {
+            '["f1","imported"]': "wwt-axis-3",
+            '["f1","ordinary"]': "wwt-axis-3",
+        }
+        assert w._axis_groups == {}
 
     def test_collect_selected_channel_keys_then_merge(self, qapp):
         # 直接驱动数据模型，模拟 _on_context_menu 收集到的 sel_keys → 合并

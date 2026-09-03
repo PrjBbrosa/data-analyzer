@@ -85,6 +85,11 @@ class SearchField(QLineEdit):
     def keyPressEvent(self, event):  # noqa: N802
         key = event.key()
         if key == Qt.Key_Escape:
+            if not self.text() and self.receivers(self.escape_requested) == 0:
+                # No explicit search-domain owner remains. Let the containing
+                # dialog or popup apply its normal Esc close behavior.
+                event.ignore()
+                return
             self._handle_escape()
             event.accept()
             return

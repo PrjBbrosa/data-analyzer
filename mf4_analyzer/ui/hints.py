@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 
 from PyQt5.QtCore import QSettings
 
+from .command_registry import CommandId, native_text_for
+
 
 DISCOVERED_SETTINGS_KEY = "chartHints/discovered"
 ROTATION_START_KEY = "chartHints/rotationStart"
@@ -130,10 +132,17 @@ class HintState:
     db_reference_source_resolvable: bool = False
 
 
+def command_shortcut_text(command_id: CommandId) -> str:
+    """Project an installed command's platform text from the registry."""
+    return native_text_for(command_id)
+
+
 NAV_SHORTCUTS = {
-    "home": "Ctrl+R",
-    "back": "Alt+Left",
-    "forward": "Alt+Right",
+    "home": command_shortcut_text(CommandId.RESET_VIEW),
+    "back": command_shortcut_text(CommandId.VIEW_BACK),
+    "forward": command_shortcut_text(CommandId.VIEW_FORWARD),
+    "next_view": command_shortcut_text(CommandId.NEXT_VIEW),
+    "previous_view": command_shortcut_text(CommandId.PREVIOUS_VIEW),
     "pan": "Ctrl+G",
     "zoom": "Ctrl+B",
 }

@@ -1067,9 +1067,6 @@ def test_retained_auxiliary_does_not_toast_skipped(qapp, tmp_path, monkeypatch):
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: True)
-    monkeypatch.setattr(
-        mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
-    )
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
     mw._load_one(str(path))
@@ -1594,7 +1591,7 @@ def test_project_restore_rebuilds_wwt_record_rows_and_hidden_ids(
 def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
     qapp, tmp_path, monkeypatch,
 ):
-    """Legacy binding conversion waits for the reopened WWT source arrays."""
+    """Live-proven legacy conversion drops a singleton axis group on reload."""
     from mf4_analyzer.ui.main_window import MainWindow
     from tests._helpers import wwt_factory as wwt
 
@@ -1648,9 +1645,7 @@ def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
         wwt.CHAN_Y_COLOR,
     )
     assert state.hidden_curve_binding_ids == []
-    assert state.axis_opts["channel_axis_groups"] == {
-        f'["{fresh_fid}","{wwt.CHAN_Y}"]': "legacy-axis",
-    }
+    assert "channel_axis_groups" not in state.axis_opts
     assert "native_ticks" not in state.axis_opts
     assert "x_viewport_intent" not in state.axis_opts
 
@@ -1659,6 +1654,7 @@ def test_project_restore_migrates_live_proven_legacy_wwt_channel_binding(
     saved = json.loads(rewritten.read_text(encoding="utf-8"))["views"][0]
     assert "x_viewport_intent" not in saved
     assert "native_ticks" not in saved["axis_opts"]
+    assert "channel_axis_groups" not in saved["axis_opts"]
     assert saved["curve_bindings"] == []
 
 

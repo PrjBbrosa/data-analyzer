@@ -377,6 +377,44 @@ class ViewManager(QObject):
         self.active_changed.emit(0)
         return removed
 
+    def reset_to_defaults_preserving_ids(self, ids) -> tuple[str, ...]:
+        """Reset selected stable View slots to fresh defaults in one mutation.
+
+        ``ids`` is ordered by the caller's surviving external references.
+        The replacement states deliberately retain only those identities;
+        stale source state, split pairs, and the prior active selection cannot
+        leak into the empty workspace.  An empty or invalid selection follows
+        the established one-default reset contract.
+        """
+        preserved_ids: list[str] = []
+        seen: set[str] = set()
+        for raw_id in ids or ():
+            view_id = str(raw_id or "").strip()
+            if view_id and view_id not in seen:
+                preserved_ids.append(view_id)
+                seen.add(view_id)
+        if not preserved_ids:
+            return self.reset_to_single_default()
+
+        removed = tuple(
+            str(view.view_id) for view in self.views
+            if str(view.view_id) not in seen
+        )
+        old_split = self.split_with
+        self.views = [self._make(index) for index in range(len(preserved_ids))]
+        for state, view_id in zip(self.views, preserved_ids):
+            state.view_id = view_id
+        self.active = 0
+        self.split_with = None
+        self._split_pairs = {}
+        self.views_changed.emit()
+        if old_split is not None:
+            self.split_changed.emit(None)
+        # As in ``reset_to_single_default``, an explicit emission forces the
+        # host to project the fresh active slot even when its index stayed 0.
+        self.active_changed.emit(0)
+        return removed
+
     def retain_only_view(self, view_id: str) -> tuple[str, ...]:
         """Keep the exact View object identified by ``view_id``.
 

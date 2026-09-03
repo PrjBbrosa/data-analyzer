@@ -253,6 +253,17 @@ def test_shortcut_tooltip_returns_exact_registered_key():
     assert hints.shortcut_tooltip("missing") is None
 
 
+def test_registry_hints_quickref_shortcut_texts_agree():
+    """C5: every command's help projection is generated from the registry."""
+    from mf4_analyzer.ui import quickref
+    from mf4_analyzer.ui.command_registry import CommandId, native_text_for
+
+    for command_id in CommandId:
+        expected = native_text_for(command_id)
+        assert hints.command_shortcut_text(command_id) == expected
+        assert quickref.command_shortcut_text(command_id) == expected
+
+
 def test_hint_scope_defaults_to_chart():
     assert all(
         hint.scope == "chart"

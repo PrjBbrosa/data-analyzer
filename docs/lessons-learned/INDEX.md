@@ -225,6 +225,7 @@ lesson by default.
 | [Qt Inner Frame Needs Four Edge Paint Guards](qt-inner-frame-needs-four-edge-paint-guards.md) | Custom-painting an inner frame around an opaque scroll area or other | See lesson |
 | [View Close Hover Requires Current Re-entry](view-close-hover-requires-current-reentry.md) | Changing a tab color-swatch hover action, current-View switching, or | See lesson |
 | [Axis Adapter Range Commits Must Settle The Owner Envelope](axis-adapter-range-commit-must-settle-owner-envelope.md) | Changing a generic chart-options or axis-adapter path that mutates a | See lesson |
+| [ViewTabBar Managed Overflow Has No Native Scroll Controls](viewtabbar-managed-overflow-no-native-scroll.md) | Changing ViewTabBar width budgeting, compact labels, or overflow | See lesson |
 
 ## Selection Rules
 

@@ -428,6 +428,142 @@ class TestRepinTicks:
 
         assert handle.get_ylim() == pytest.approx((0.0, 12.0))
 
+    def test_xlim_only_view_restores_nice_y_ticks(self, qapp):
+        """A restored X-only View must reframe data-fit overlay Y to nice ticks."""
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 256)
+        rows = [
+            (
+                "signal", True, t, np.linspace(0.317, 8.42, t.size),
+                "#1769e0", "u", "fid-0",
+            ),
+            (
+                "reference", True, t, np.linspace(-4.18, 2.73, t.size),
+                "#e07b17", "u", "fid-1",
+            ),
+        ]
+        canvas.plot_channels(rows, mode="overlay", defer_first_frame=True)
+        canvas.restore_visible_xlim((0.0, 1.0), flush=False)
+
+        restored_handles = canvas.restore_visible_ylims({})
+
+        assert restored_handles == set()
+        canvas.set_tick_density(
+            10, 8, reframe_overlay_y=not bool(restored_handles),
+        )
+        canvas.settle_view_restore()
+        major = canvas.axes_list[0].y_axis_item()._tickLevels[0]
+        values = [value for value, _label in major]
+        per_div = values[1] - values[0]
+        assert _nice_per_div(per_div) == pytest.approx(per_div)
+        assert np.diff(values) == pytest.approx([per_div] * 8)
+
+    def test_xlim_only_view_passes_data_fit_handles_to_overlay_reframe(self):
+        """View projection distinguishes a fitted Y from a restored Y range."""
+        from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
+        from mf4_analyzer.ui.view_state import ViewState
+
+        state = ViewState(name="X only", tab_color="", xlim=(0.0, 1.0))
+
+        class _ViewManager:
+            views = [state]
+
+            @staticmethod
+            def get(index):
+                assert index == 0
+                return state
+
+        class _ChartStack:
+            @staticmethod
+            def cursor_pill_snapshot():
+                return None
+
+        class _Bridge:
+            @staticmethod
+            def apply_controls_from_state(*_args):
+                return None
+
+        class _Window(ViewMixin):
+            def __init__(self):
+                self.view_manager = _ViewManager()
+                self.chart_stack = _ChartStack()
+                self._view_bridge = _Bridge()
+                self._focused_view_idx = None
+
+            @staticmethod
+            def _plot_time_on_canvas(*_args, **_kwargs):
+                return True
+
+        class _Canvas:
+            def __init__(self):
+                self.reframe_overlay_y = None
+
+            @staticmethod
+            def restore_visible_xlim(*_args, **_kwargs):
+                return None
+
+            @staticmethod
+            def restore_visible_ylims(*_args, **_kwargs):
+                return set()
+
+            def set_tick_density(self, *_args, **kwargs):
+                self.reframe_overlay_y = kwargs["reframe_overlay_y"]
+
+            @staticmethod
+            def settle_view_restore():
+                return None
+
+        canvas = _Canvas()
+        _Window()._render_view_onto_canvas(0, canvas, update_primary_ui=False)
+
+        assert canvas.reframe_overlay_y is True
+
+    def test_restore_visible_ylims_reports_explicitly_restored_handles(self, qapp):
+        """Only persisted/initial ranges suppress the restore nice-reframe."""
+        canvas = self._overlay(qapp)
+        channel_key = next(iter(canvas._channel_view_state_lines))
+        handle = canvas._channel_view_state_lines[channel_key][0]
+
+        restored_handles = canvas.restore_visible_ylims(
+            {channel_key: (-2.0, 2.0)},
+        )
+
+        assert restored_handles == {handle}
+
+    def test_deferred_plot_channels_skips_overlay_build_axis_finalization(
+        self, qapp, monkeypatch,
+    ):
+        """Restore owns the one final overlay density/tick projection."""
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 128)
+        rows = [
+            ("signal", True, t, np.sin(2.0 * np.pi * t), "#1769e0", "u", "fid-0"),
+            ("reference", True, t, np.cos(2.0 * np.pi * t), "#e07b17", "u", "fid-1"),
+        ]
+        density_calls = []
+        repin_calls = []
+        monkeypatch.setattr(
+            canvas._tick_density_controller,
+            "_apply_tick_density_to_all_axes",
+            lambda: density_calls.append(True),
+        )
+        monkeypatch.setattr(
+            canvas,
+            "_repin_overlay_channel_ticks",
+            lambda *args, **kwargs: repin_calls.append((args, kwargs)),
+        )
+
+        canvas.plot_channels(
+            rows, mode="overlay", defer_axis_finalize=True,
+        )
+
+        assert density_calls == []
+        assert repin_calls == []
+
 
 def _overlay_scene_pos_at_fraction(canvas, frac):
     view_box = canvas._x_master_handle.view_box

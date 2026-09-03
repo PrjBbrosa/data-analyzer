@@ -128,7 +128,9 @@ class WwtWindowRectMm:
 
 @dataclass(frozen=True)
 class WwtCurveDisplay:
+    # The display-header X row keeps WinWert's Zeit placeholder (normally 0).
     record_index: int
+    # The actual source record for that header X row's values.
     x_record_index: int
     selected: bool
     visible: bool

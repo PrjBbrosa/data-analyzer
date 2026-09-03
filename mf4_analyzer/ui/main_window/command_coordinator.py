@@ -8,8 +8,9 @@ Task 3 / Task 4 owners).
 from __future__ import annotations
 
 from PyQt5.QtCore import QObject, Qt
-from PyQt5.QtWidgets import QAction
+from PyQt5.QtWidgets import QAction, QApplication
 
+from ...ui_kit.widgets import SearchField
 from ..command_registry import (
     CommandId,
     bindings_for,
@@ -118,8 +119,15 @@ class CommandCoordinator(QObject):
             method()
 
     def _on_find(self, checked=False) -> None:
-        """Focus QuickRef search, or show QuickRef when no search surface is open."""
+        """Focus the active search surface, else open QuickRef's search."""
+        focus = QApplication.focusWidget()
         host = self._host
+        search_window = focus.window() if focus is not None else host
+        for search in search_window.findChildren(SearchField):
+            if search.isVisible():
+                search.setFocus(Qt.ShortcutFocusReason)
+                search.selectAll()
+                return
         panel = getattr(host, "_quickref_panel", None)
         if panel is not None and panel.isVisible():
             self._focus_quickref_search(panel)

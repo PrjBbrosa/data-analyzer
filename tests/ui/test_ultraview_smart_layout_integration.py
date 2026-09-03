@@ -7,6 +7,8 @@ is the directory autouse fixture; policy is frozen explicitly where possible.
 """
 from __future__ import annotations
 
+import pytest
+
 from mf4_analyzer.ultraview_core.smart_layout import SmartLayoutPolicy
 from tests._helpers import wwt_factory as wwt
 
@@ -82,14 +84,6 @@ def _page(mw):
     return page
 
 
-def _hold_pending_settle(controller) -> None:
-    """Stop quiet/deadline so wall-clock cannot flush pending during Fit/resize."""
-    for name in ("_smart_layout_quiet_timer", "_smart_layout_deadline_timer"):
-        timer = getattr(controller, name, None)
-        if timer is not None:
-            timer.stop()
-
-
 class _ZoomFitCount:
     """Bound-method wrapper; do not connect Qt signals with a lambda."""
 
@@ -100,6 +94,23 @@ class _ZoomFitCount:
     def zoom_fit(self):
         self.calls += 1
         return self._original()
+
+
+class _StubSmartLayoutPlan:
+    """Accepted plan double that exposes the solver diagnostics to the controller."""
+
+    accepted = True
+    reason = None
+    search_visits = 4096
+    used_fallback = False
+    solver_reason = None
+
+    def __init__(self, update, diagnostics: tuple[str, ...]) -> None:
+        self._update = update
+        self.diagnostics = diagnostics
+
+    def committed_updates(self):
+        return (self._update,)
 
 
 def _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp):
@@ -126,7 +137,6 @@ def _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp):
     assert {item.ref.view_id for item in board.free_grid} == set(view_ids)
     assert len(board.free_grid) == wwt.UCAN_SEMANTIC_WINDOW_COUNT
     assert board.unplaced == []
-    _hold_pending_settle(_controller(mw))
     return board
 
 
@@ -146,11 +156,6 @@ def test_wwt_import_then_manual_board_fit_keeps_exact_placement_digest(
         before = _placement_digest(board, revision)
         undo_before = list(_history_undo(mw, board.board_id))
         dirty_before = mw._ultraview.workspace.opaque_payload
-        pending_before = getattr(controller, "pending_smart_layout_group", None)
-        pending_was_active = bool(
-            pending_before is not None
-            and getattr(pending_before, "active", False)
-        )
         for _ in range(3):
             page.zoom_fit()
             qapp.processEvents()
@@ -159,10 +164,6 @@ def test_wwt_import_then_manual_board_fit_keeps_exact_placement_digest(
         assert list(_history_undo(mw, board.board_id)) == undo_before
         assert after_revision == revision
         assert mw._ultraview.workspace.opaque_payload == dirty_before
-        pending_after = getattr(controller, "pending_smart_layout_group", None)
-        if pending_was_active:
-            assert pending_after is not None
-            assert getattr(pending_after, "active", False) is True
     finally:
         mw.close()
         mw.deleteLater()
@@ -174,6 +175,7 @@ def test_manual_smart_layout_reaches_a_fixed_point(
 ):
     """One manual Smart Layout makes a subsequent command a strict no-op."""
     from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.main_window import ultraview_workspace_controller
 
     mw = MainWindow()
     qapp.processEvents()
@@ -181,8 +183,23 @@ def test_manual_smart_layout_reaches_a_fixed_point(
         board = _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp)
         controller = _controller(mw)
         page = _page(mw)
+        plans = []
+        original_plan = ultraview_workspace_controller.plan_smart_layout
+
+        def record_plan(*args, **kwargs):
+            plan = original_plan(*args, **kwargs)
+            plans.append(plan)
+            return plan
+
+        monkeypatch.setattr(
+            ultraview_workspace_controller,
+            "plan_smart_layout",
+            record_plan,
+        )
         page.auto_arrange_requested.emit()
         qapp.processEvents()
+        assert plans
+        assert plans[-1].accepted and plans[-1].committed_updates()
         revision = controller._current_layout_revision(board.board_id)
         after_first = _placement_digest(board, revision)
         page.auto_arrange_requested.emit()
@@ -190,6 +207,50 @@ def test_manual_smart_layout_reaches_a_fixed_point(
         after_revision = controller._current_layout_revision(board.board_id)
         assert _placement_digest(board, after_revision) == after_first
         assert after_revision == revision
+    finally:
+        mw.close()
+        mw.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "expected"),
+    (
+        ((), "已排版"),
+        (("search_budget_exhausted",), "搜索预算耗尽，已用已完成候选完成排版"),
+        (("search_budget_exhausted", "equal_grid_fallback"), "已使用等大网格完成降级排版"),
+    ),
+    ids=("normal", "budget-exhausted", "equal-grid"),
+)
+def test_manual_smart_layout_toast_distinguishes_solver_diagnostics(
+    qapp, tmp_path, monkeypatch, diagnostics, expected,
+):
+    """B3: controller feedback must project the solver's exact fallback state."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.main_window import ultraview_workspace_controller
+
+    mw = MainWindow()
+    qapp.processEvents()
+    try:
+        board = _open_ucan_views_then_add_to_board(mw, monkeypatch, tmp_path, qapp)
+        controller = _controller(mw)
+        first = board.free_grid[0]
+        plan = _StubSmartLayoutPlan((first.ref, first.rect), diagnostics)
+        notices = []
+        monkeypatch.setattr(
+            ultraview_workspace_controller,
+            "plan_smart_layout",
+            lambda *args, **kwargs: plan,
+        )
+        monkeypatch.setattr(
+            controller,
+            "_toast",
+            lambda message, level: notices.append((message, level)),
+        )
+
+        controller._on_auto_arrange_free_grid()
+
+        assert notices[-1] == (expected, "info")
     finally:
         mw.close()
         mw.deleteLater()

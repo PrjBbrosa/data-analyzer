@@ -284,11 +284,31 @@ def test_legacy_channel_binding_migrates_only_after_live_custom_x_proof():
     assert state.checked == [("f1", "ChanY")]
     assert state.colors[("f1", "ChanY")] == ordinary.color
     assert state.ylims['["f1","ChanY"]'] == ordinary.y_range
-    assert state.axis_opts["channel_axis_groups"] == {
-        '["f1","ChanY"]': ordinary.axis_id,
-    }
+    assert "channel_axis_groups" not in state.axis_opts
     assert state.curve_bindings == [record_only]
     assert state.hidden_curve_binding_ids == [record_only.binding_id]
+
+
+def test_legacy_binding_migration_filters_singleton_axis_groups():
+    ordinary = _channel_binding()
+    state = ViewState(
+        name="Legacy WWT",
+        tab_color="#2d7ff9",
+        axis_opts={
+            "x_axis": {
+                "mode": "channel",
+                "resolver": "per_source_name",
+                "fid": None,
+                "channel": "ChanX",
+            },
+        },
+        curve_bindings=[ordinary],
+    )
+
+    assert migrate_legacy_channel_bindings(state, {"f1": _owner()}) == [
+        ordinary.binding_id,
+    ]
+    assert "channel_axis_groups" not in state.axis_opts
 
 
 def test_legacy_channel_binding_stays_exact_when_current_x_is_not_identical():
@@ -367,9 +387,6 @@ def test_live_restore_prunes_axis_groups_for_missing_channels_only():
 
 def _stub_wwt_ui(mw, monkeypatch, accept=True):
     monkeypatch.setattr(mw._wwt_import, "_ask_layout", lambda *a, **k: accept)
-    monkeypatch.setattr(
-        mw._ultraview, "add_time_views_from_native_layout", lambda items: ()
-    )
     monkeypatch.setattr(mw, "plot_time", lambda *a, **k: None)
     monkeypatch.setattr(mw, "_apply_active_view", lambda *a, **k: None)
 

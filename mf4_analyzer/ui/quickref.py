@@ -24,6 +24,12 @@ from dataclasses import dataclass, field
 from typing import Tuple
 
 from . import hints
+from .command_registry import CommandId
+
+
+def command_shortcut_text(command_id: CommandId) -> str:
+    """Project command shortcut copy through the shared hints adapter."""
+    return hints.command_shortcut_text(command_id)
 
 
 def _sc(action_key: str) -> str:
@@ -222,7 +228,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "视角后退 / 前进",
                 keys=(_sc("back"), _sc("forward")),
-                sub="Alt+Left / Alt+Right：视角后退 / 前进；Ctrl/Cmd+Z 保留给编辑撤销。",
+                sub=(
+                    f"{_sc('back')} / {_sc('forward')}：视角后退 / 前进；"
+                    "Ctrl/Cmd+Z 保留给编辑撤销。"
+                ),
             ),
             QuickRow(
                 "时域 View",
@@ -262,8 +271,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "切换当前分区 View",
-                keys=("Alt+1…9",),
-                sub="第 10–24 个走标签栏或「⋯」管理面板；显示「»N」时 N 是未显示数",
+                keys=(_sc("next_view"), _sc("previous_view"), "Alt+1…9"),
+                sub="前/后切当前分区；第 10–24 个走标签栏或「⋯」管理面板；显示「»N」时 N 是未显示数",
             ),
             QuickRow(
                 "重命名当前行",

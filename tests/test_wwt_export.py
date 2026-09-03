@@ -27,6 +27,15 @@ def _require_assets():
         pytest.skip("bundled WinWert display trailer missing")
 
 
+@pytest.fixture
+def template():
+    if not _TEMPLATE.is_file():
+        if _TEMPLATE.parent.is_dir():
+            pytest.fail("bundled WWT export template missing from checkout")
+        pytest.skip("bundled WWT export template missing from packaged install")
+    return _TEMPLATE
+
+
 def _series(n=600, dt=0.002):
     t = np.arange(n, dtype=np.float64) * dt
     return t, {
@@ -200,9 +209,7 @@ def test_missing_trailer_asset_reports_packaging_problem(tmp_path):
                    trailer_path=tmp_path / "nope.bin")
 
 
-def test_template_mode_still_available(tmp_path):
-    if not _TEMPLATE.is_file():
-        pytest.skip("bundled WWT export template missing")
+def test_template_mode_still_available(tmp_path, template):
     t, channels, units = _series()
     out = tmp_path / "template.wwt"
     result = export_wwt(out, t, channels, units=units, mode=MODE_TEMPLATE)

@@ -324,3 +324,10 @@ Offscreen Qt 结果不能代替 Cocoa 或 frozen Windows 输入分发证据。
 5. runtime、tooltip、hints、quickref 对快捷键没有漂移，且无可见死命令；
 6. owner tests、边界门禁、Cocoa 与 Windows frozen 验收有稳定 snapshot 证据；
 7. 未修改本 Spec 非目标中的数据、计算、WWT、Batch 和持久化 schema 行为。
+
+## 14. 2026-09-03 勘误（仅更正 §7 的已实施绑定）
+
+本勘误不重写 2026-09-02 的历史决策。当前实现中，§7「下/上一个 View」的 macOS
+显示和绑定为 `Meta+Tab（⌃⇥）` / `Meta+Shift+Tab（⌃⇧⇥）`；Qt 在 macOS 将
+`Meta` 映射为物理 Control，因此不会与系统 Command+Tab 应用切换冲突。§7「视角复位」
+实际绑定为 `Ctrl+R`，不是 `Home`；`Home` 未作为该 registry 命令绑定。

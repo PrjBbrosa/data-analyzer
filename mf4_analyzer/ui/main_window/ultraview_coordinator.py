@@ -244,53 +244,6 @@ class UltraViewCoordinator(QObject):
     def capture_leaving_source(self, section: str) -> None:
         return self._capture.capture_leaving_source(section)
 
-    def add_time_views_from_native_layout(
-        self,
-        items,
-        *,
-        board_name: str | None = None,
-        dedicated_board: bool = False,
-        reuse_empty_board: bool = True,
-    ) -> "NativeLayoutProjection":
-        """Add stable time view ids to a Board in one mutation.
-
-        The items-only call writes the current active Board. Dedicated WWT
-        projection may reuse an empty Board or create one named ``board_name``.
-
-        Returns a ``NativeLayoutProjection`` that unpacks as
-        ``(placed_view_ids_this_call, warnings)``.
-        """
-        from ...ultraview_core.model import UltraViewRef
-        from ...ultraview_core.native_layout import (
-            NativeLayoutProjection,
-            NativeLayoutRect,
-            plan_native_layout,
-        )
-
-        if self._inactive():
-            return NativeLayoutProjection()
-        planned = []
-        for view_id, rect in items:
-            planned.append((
-                UltraViewRef("time", str(view_id)),
-                NativeLayoutRect(
-                    float(rect.x),
-                    float(rect.y),
-                    float(rect.width),
-                    float(rect.height),
-                ),
-            ))
-        plan = plan_native_layout(
-            planned,
-            policy=self._workspace_controller.freeze_smart_layout_policy(),
-        )
-        return self._workspace_controller.apply_native_layout_plan(
-            plan,
-            board_name=board_name,
-            dedicated_board=dedicated_board,
-            reuse_empty_board=reuse_empty_board,
-        )
-
     def open_unplaced_tray(self) -> None:
         """Open the active Board's unplaced tray and focus the first item."""
         page = self.page()

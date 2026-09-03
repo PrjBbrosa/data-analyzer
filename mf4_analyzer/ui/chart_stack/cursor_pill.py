@@ -280,6 +280,7 @@ class CursorPill(QFrame):
         self._display_layout_category = "natural"
         self._visible_channel_count = 0
         self._avoidance_restore_anchor = None
+        self._avoidance_obstacle = None
         # Free-floating child pinned to the top-right corner. Repositioned from
         # adjustSize() (every content/width change funnels through it) and
         # resizeEvent, so it stays in the corner without depending on event
@@ -330,11 +331,7 @@ class CursorPill(QFrame):
         old_top = self.y()
         self._primary.setText(text)
         self.adjustSize()
-        if self._display_projection is not None:
-            self.reflow_to_parent(
-                preserved_right=old_right if self._user_placed else None,
-                preserved_top=old_top if self._user_placed else None,
-            )
+        self.move_preserving_right_edge(old_right, old_top)
 
     def set_detail_html(self, html):
         self._clear_display_projection()
@@ -436,6 +433,7 @@ class CursorPill(QFrame):
         self._display_layout_category = "natural"
         self._visible_channel_count = 0
         self._avoidance_restore_anchor = None
+        self._avoidance_obstacle = None
 
     def safe_rect(self):
         parent = self.parentWidget()
@@ -540,6 +538,7 @@ class CursorPill(QFrame):
             preserved_top = self.y()
 
         self._detail.setMaximumWidth(16777215)
+        self.layout().setContentsMargins(10, 7, 10, 8)
         self._apply_display_projection("natural", len(projection.blocks))
         hint = self.sizeHint()
         category = (
@@ -551,28 +550,36 @@ class CursorPill(QFrame):
             detail_width = max(20, safe.width() - 20)
             self._detail.setMaximumWidth(detail_width)
             self.layout().setContentsMargins(10, 1, 10, 1)
-            chosen = 0
-            for count in range(len(projection.blocks), -1, -1):
+            low = 0
+            high = len(projection.blocks)
+            last_count = None
+            while low < high:
+                count = (low + high + 1) // 2
                 self._apply_display_projection("constrained", count)
+                last_count = count
                 if self.sizeHint().height() <= safe.height():
-                    chosen = count
-                    break
-            self._apply_display_projection("constrained", chosen)
+                    low = count
+                else:
+                    high = count - 1
+            chosen = low
+            if last_count != chosen:
+                self._apply_display_projection("constrained", chosen)
             target = self.sizeHint()
             self.resize(
                 min(target.width(), safe.width()),
                 min(target.height(), safe.height()),
             )
-        else:
-            self._detail.setMaximumWidth(16777215)
-            self.layout().setContentsMargins(10, 7, 10, 8)
-            self._apply_display_projection("natural", len(projection.blocks))
-
         if preserved_right is not None:
             self.move_preserving_right_edge(preserved_right, preserved_top or safe.top())
         elif not self._user_placed:
             self.move(safe.right() - self.width() + 1, safe.top())
         self._clamp_to_safe_rect()
+        if (
+            self._avoidance_restore_anchor is not None
+            and self._avoidance_obstacle is not None
+        ):
+            obstacle, gap = self._avoidance_obstacle
+            self.avoid_rect(obstacle, gap=gap)
 
     def _clamp_to_safe_rect(self):
         safe = self.safe_rect()
@@ -584,10 +591,13 @@ class CursorPill(QFrame):
         """Displace away from a parent-coordinate obstacle without drift."""
         obstacle = QRect(obstacle)
         padded = obstacle.adjusted(-gap, -gap, gap, gap)
+        if self._avoidance_restore_anchor is not None:
+            self._avoidance_obstacle = (QRect(obstacle), int(gap))
         if not self.geometry().intersects(padded):
             return
         if self._avoidance_restore_anchor is None:
             self._avoidance_restore_anchor = (self.geometry().right(), self.y())
+            self._avoidance_obstacle = (QRect(obstacle), int(gap))
         safe = self.safe_rect()
         left_x = padded.left() - self.width() - 1
         right_x = padded.right() + 1
@@ -616,6 +626,7 @@ class CursorPill(QFrame):
             return
         right, top = self._avoidance_restore_anchor
         self._avoidance_restore_anchor = None
+        self._avoidance_obstacle = None
         safe = self.safe_rect()
         x = int(right) - self.width() + 1
         x = max(safe.left(), min(x, safe.right() - self.width() + 1))

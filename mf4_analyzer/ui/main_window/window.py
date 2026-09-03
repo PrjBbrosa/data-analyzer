@@ -530,6 +530,16 @@ class MainWindow(
         self.canvas_order = self.chart_stack.canvas_order
         self.canvas_fft_time = self.chart_stack.canvas_fft_time
         self.canvas_frf = self.chart_stack.canvas_frf
+        for canvas in (
+            self.canvas_time,
+            self.canvas_fft,
+            self.canvas_order,
+            self.canvas_fft_time,
+            self.canvas_frf,
+        ):
+            signal = getattr(canvas, "markup_revision_changed", None)
+            if signal is not None:
+                signal.connect(self._on_markup_revision_changed)
         self.channel_list = self.navigator.channel_list
         self.navigator.set_projection_role("time")
         # Time-domain cap is TIME_DOMAIN_MAX_VIEWS; analysis managers keep

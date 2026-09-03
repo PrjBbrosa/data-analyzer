@@ -218,39 +218,43 @@ def _own_chartstacks(qapp, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _auto_discard_unsaved_project_on_close(monkeypatch):
+def _auto_discard_unsaved_project_on_close():
     """Shown MainWindow teardown must not block on the Save/Discard/Cancel box.
 
     Instance-level monkeypatches in dirty-guard tests still win. Unshown
     windows skip the prompt in closeEvent; this covers ``mw.show()`` cases.
+    This uses an independent ``pytest.MonkeyPatch.context()`` rather than the
+    test's shared ``monkeypatch`` fixture: ``monkeypatch.undo()`` must not tear
+    down the suite-level discard guard before a shown window closes.
     """
     from mf4_analyzer.ui.main_window._project_io_mixin import ProjectIOMixin
 
-    monkeypatch.setattr(
-        ProjectIOMixin,
-        "_prompt_unsaved_project",
-        lambda self: "discard",
-    )
-    yield
-
-    # Close every surviving MainWindow while the discard patch is still live.
-    # Individual tests may temporarily replace the prompt with Cancel; teardown
-    # must not depend on fixture-finalizer ordering or a product-code pytest
-    # escape hatch.
-    app = QApplication.instance()
-    if app is None:
-        return
-    from mf4_analyzer.ui.main_window import MainWindow
-    from mf4_analyzer.ui.main_window.project_dirty import DirtyGuardResult
-
-    for widget in app.topLevelWidgets():
-        if not isinstance(widget, MainWindow):
-            continue
-        widget.confirm_leave_unsaved_project = (
-            lambda: DirtyGuardResult.PROCEED_DISCARDED
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            ProjectIOMixin,
+            "_prompt_unsaved_project",
+            lambda self: "discard",
         )
-        widget.close()
-    app.processEvents()
+        yield
+
+        # Close every surviving MainWindow while the discard patch is still
+        # live. Individual tests may temporarily replace the prompt with
+        # Cancel; teardown must not depend on fixture-finalizer ordering or a
+        # product-code pytest escape hatch.
+        app = QApplication.instance()
+        if app is None:
+            return
+        from mf4_analyzer.ui.main_window import MainWindow
+        from mf4_analyzer.ui.main_window.project_dirty import DirtyGuardResult
+
+        for widget in app.topLevelWidgets():
+            if not isinstance(widget, MainWindow):
+                continue
+            widget.confirm_leave_unsaved_project = (
+                lambda: DirtyGuardResult.PROCEED_DISCARDED
+            )
+            widget.close()
+        app.processEvents()
 
 
 @pytest.fixture(autouse=True)
