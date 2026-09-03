@@ -163,6 +163,50 @@ def test_chart_options_dialog_applies_axis_values_and_legend(qapp):
     assert handle.plot_item.legend is not None
 
 
+def test_pg_chart_options_x_range_flushes_viewport_envelope(qapp):
+    """A programmatic range commit must not paint the old clipped curve."""
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_handle_with_one_curve(qapp)
+    canvas.set_xlim(1.8, 2.2)
+    line = handle.get_lines()[0].plot_data_item
+    clipped_x, _ = line.getData()
+    assert float(np.min(clipped_x)) > 1.0
+    assert float(np.max(clipped_x)) < 3.0
+
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.chk_x_auto.setChecked(False)
+    dlg.spin_x_min.setValue(1.0)
+    dlg.spin_x_max.setValue(3.0)
+    dlg.apply_changes()
+
+    rendered_x, _ = line.getData()
+    assert handle.get_xlim() == pytest.approx((1.0, 3.0))
+    assert (float(np.min(rendered_x)), float(np.max(rendered_x))) == pytest.approx(
+        (1.0, 3.0)
+    )
+    assert canvas._refresh_pending is False
+    assert canvas._refresh_timer.isActive() is False
+
+
+def test_pg_chart_options_x_autorange_starts_from_full_data_extent(qapp):
+    """Auto-X must not derive its new range from the old clipped envelope."""
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas, handle = _pg_handle_with_one_curve(qapp)
+    canvas.set_xlim(1.8, 2.2)
+
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.chk_x_auto.setChecked(True)
+    dlg.apply_changes()
+
+    rendered_x, _ = handle.get_lines()[0].plot_data_item.getData()
+    assert (float(np.min(rendered_x)), float(np.max(rendered_x))) == pytest.approx(
+        (1.0, 3.0)
+    )
+    assert handle.is_autorange("x") is True
+
+
 def test_chart_options_dialog_reset_restores_opening_values(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 

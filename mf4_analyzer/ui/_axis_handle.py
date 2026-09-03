@@ -303,6 +303,17 @@ class PgAxisHandle:
         if not hasattr(vb, "enableAutoRange"):
             return
         if axis == "x":
+            # TimeDomain PlotDataItems hold only the current viewport envelope.
+            # Prime them from the owner's raw X union before asking pyqtgraph to
+            # calculate auto bounds, otherwise Auto-X expands iteratively from
+            # the already-clipped curve and briefly paints only its middle.
+            owner = self._owner_canvas
+            get_union = getattr(owner, "get_data_x_union", None)
+            restore = getattr(owner, "restore_visible_xlim", None)
+            if callable(get_union) and callable(restore):
+                x_union = get_union()
+                if x_union is not None:
+                    restore(x_union, flush=True)
             vb.enableAutoRange(axis="x")
         elif axis == "y":
             vb.enableAutoRange(axis="y")
@@ -654,6 +665,15 @@ class PgAxisHandle:
 
     # Redraw ----------------------------------------------------------------
     def request_redraw(self) -> None:
+        # ChartOptionsDialog applies every scale/range/label mutation before
+        # reaching this tail.  A TimeDomain PlotDataItem contains only the
+        # current viewport envelope, so finish any X-range refresh now instead
+        # of briefly repainting that stale envelope against the new ViewBox.
+        # Ordering is load-bearing: mutate first, then flush once.
+        owner = self._owner_canvas
+        flush = getattr(owner, "_flush_pending_refresh", None)
+        if callable(flush) and bool(getattr(owner, "_refresh_pending", False)):
+            flush()
         pi = self._plot_item
         if pi is None:
             return
