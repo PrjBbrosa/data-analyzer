@@ -963,9 +963,13 @@ class FFTTimeContextual(QWidget):
         self._apply_preset(self._builtin_preset_full_params(key))
 
     def set_recommended_for_unit(self, unit):
-        """Highlight the preset slot recommended for ``unit`` (or clear)."""
-        if unit is None:
+        """Highlight the preset slot recommended for ``unit`` (or clear).
+
+        Missing or unrecognized units clear the highlight rather than
+        picking a default slot.
+        """
+        key = recommend_preset_for_unit(unit)
+        if key is None:
             self.preset_bar.set_recommended(None)
             return
-        key = recommend_preset_for_unit(unit)
-        self.preset_bar.set_recommended(_PRESET_KEY_TO_SLOT[key])
+        self.preset_bar.set_recommended(_PRESET_KEY_TO_SLOT[key], unit=unit)

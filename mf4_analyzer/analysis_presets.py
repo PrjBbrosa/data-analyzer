@@ -293,14 +293,19 @@ def list_builtin_presets(method: str) -> tuple[BuiltinAnalysisPreset, ...]:
     return tuple(get_builtin_preset(token, key) for key in keys)
 
 
-def recommend_builtin_preset(unit: object) -> str:
-    """Recommend a signal-type key by exact normalized unit match."""
+def recommend_builtin_preset(unit: object) -> str | None:
+    """Recommend a signal-type key by exact normalized unit match.
+
+    Returns ``"torque"`` or ``"vibration"`` when ``unit`` matches a known
+    alias set. Missing and unrecognized units return ``None`` rather than
+    guessing a default.
+    """
     norm = normalize_unit(unit)
     if norm in _TORQUE_UNITS:
         return "torque"
     if norm in _VIBRATION_UNITS:
         return "vibration"
-    return "vibration"
+    return None
 
 
 __all__ = [

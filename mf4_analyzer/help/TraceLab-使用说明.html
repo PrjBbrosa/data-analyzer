@@ -431,7 +431,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "cols", "align": "start",
           "left": [ { "type": "steps", "items": [
             "在参数面板挑一个<b>信号类型预设</b>：扭矩、振动、启停…",
-            "软件按通道<b>单位</b>自动<b>推荐</b>合适的预设，并把推荐项标出来。",
+            "仅当通道单位可识别（N·m / Nm 系列 → 扭矩；g / m/s² 系列 → 振动）时显示「荐」徽标；单位缺失或不可识别时不做推荐，请按分析目的手动选择。",
             "采样率、频率范围等会<b>自动适配</b>，不用手算；想微调随时改。"
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "为什么省心", "h": "先用推荐起步，再按需要微调",

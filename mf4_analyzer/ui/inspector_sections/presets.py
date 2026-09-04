@@ -443,6 +443,8 @@ class PresetBar(QWidget):
         self._hover_slot = None
         # Slot currently flagged as the unit-推荐 highlight (None => none).
         self._recommended_slot = None
+        # Display-only unit cited on the recommended button tooltip.
+        self._recommended_unit = None
         # Slot that currently describes the live parameters — set by a
         # left-click load, by an explicit save, and by :meth:`sync_match`'s
         # reverse match. A unit recommendation can also set the visual
@@ -625,6 +627,7 @@ class PresetBar(QWidget):
         """
         if clear_recommendation:
             self._recommended_slot = None
+            self._recommended_unit = None
         self._selected_slot = self._matching_slot()
         self._refresh_states()
 
@@ -669,6 +672,8 @@ class PresetBar(QWidget):
             btn.setProperty("recommended", "true" if recommended else "false")
             applied = self._selected_slot == n
             btn.setProperty("applied", "true" if applied else "false")
+            if recommended and self._recommended_unit:
+                btn.setToolTip(f"按单位「{self._recommended_unit}」推荐")
             self._set_recommend_badge(n, recommended)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
@@ -686,13 +691,15 @@ class PresetBar(QWidget):
             self._position_recommend_badge(slot)
             badge.raise_()
 
-    def set_recommended(self, slot):
+    def set_recommended(self, slot, *, unit=None):
         """Mark ``slot`` as the unit-推荐 preset (corner badge only).
 
         ``slot`` is 1-based to match the visible preset slots, or
-        ``None`` to clear every highlight. Manual interaction is unaffected —
-        this is a visual hint only. The recommendation badge is separate from
-        the ``applied`` property that marks a preset the user actually loaded.
+        ``None`` to clear every highlight. ``unit`` is display-only and is
+        cited on the recommended button tooltip; the badge itself has no
+        tooltip. Manual interaction is unaffected — this is a visual hint
+        only. The recommendation badge is separate from the ``applied``
+        property that marks a preset the user actually loaded.
         """
         if slot is not None and slot not in self._slots:
             slot = None
@@ -701,6 +708,7 @@ class PresetBar(QWidget):
         if slot != self._selected_slot:
             self._selected_slot = None
         self._recommended_slot = slot
+        self._recommended_unit = None if slot is None else unit
         self._refresh_states()
 
     def set_custom_active(self):
@@ -711,6 +719,7 @@ class PresetBar(QWidget):
         slot only when no preset actually describes the state.
         """
         self._recommended_slot = None
+        self._recommended_unit = None
         self._selected_slot = self._custom_slot()
         self._refresh_states()
 

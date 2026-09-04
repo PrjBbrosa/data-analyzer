@@ -6051,7 +6051,7 @@ def test_order_fixed_nfft_params_and_legacy_preset_still_return_int(qtbot):
 # ---- Signal-type built-in presets + per-unit 推荐 highlight ----
 
 def test_recommend_preset_for_unit_exact_match(qapp):
-    """Unit -> preset key uses EXACT alias matching with vibration fallback."""
+    """Unit -> preset key uses EXACT alias matching; unknown units are None."""
     from mf4_analyzer.ui.inspector_sections import recommend_preset_for_unit
 
     # Torque-family aliases.
@@ -6066,10 +6066,10 @@ def test_recommend_preset_for_unit_exact_match(qapp):
     assert recommend_preset_for_unit('m/s^2') == 'vibration'
     assert recommend_preset_for_unit('m/s2') == 'vibration'
     assert recommend_preset_for_unit('mm/s') == 'vibration'
-    # Fallback (unrecognized / empty -> vibration).
-    assert recommend_preset_for_unit('rpm') == 'vibration'
-    assert recommend_preset_for_unit('') == 'vibration'
-    assert recommend_preset_for_unit(None) == 'vibration'
+    # Unrecognized / empty / missing units are not guessed.
+    assert recommend_preset_for_unit('rpm') is None
+    assert recommend_preset_for_unit('') is None
+    assert recommend_preset_for_unit(None) is None
 
 
 def test_recommend_preset_for_unit_no_substring_false_positive(qapp):
@@ -6079,15 +6079,15 @@ def test_recommend_preset_for_unit_no_substring_false_positive(qapp):
         _TORQUE_UNITS, _VIBRATION_UNITS,
     )
 
-    # 'kg' is unknown -> fallback (vibration), but must NOT be an alias.
-    assert recommend_preset_for_unit('kg') == 'vibration'
+    # 'kg' is unknown -> no recommendation, and must NOT be an alias.
+    assert recommend_preset_for_unit('kg') is None
     assert _normalize_unit('kg') not in _VIBRATION_UNITS
     assert _normalize_unit('kg') not in _TORQUE_UNITS
     # 'kPa' is explicitly torque and must not be reclassified by a 'pa' hit.
     assert recommend_preset_for_unit('kPa') == 'torque'
     # Longer strings containing torque aliases must not match by substring.
-    assert recommend_preset_for_unit('kPa/s') == 'vibration'
-    assert recommend_preset_for_unit('foobar') == 'vibration'
+    assert recommend_preset_for_unit('kPa/s') is None
+    assert recommend_preset_for_unit('foobar') is None
 
 
 def test_preset_bar_set_recommended_toggles_property(qapp):
@@ -6095,7 +6095,7 @@ def test_preset_bar_set_recommended_toggles_property(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     bar = PresetBar('test_kind_recommend', lambda: {}, lambda d: None)
-    bar.set_recommended(2)
+    bar.set_recommended(2, unit='g')
     assert bar._load_btns[1].property('recommended') == 'false'
     assert bar._load_btns[2].property('recommended') == 'true'
     assert bar._load_btns[3].property('recommended') == 'false'
@@ -6106,18 +6106,23 @@ def test_preset_bar_set_recommended_toggles_property(qapp):
     assert bar._recommend_badges[2].height() == 14
     assert not bar._recommend_badges[2].isHidden()
     assert bar._recommend_badges[1].isHidden()
+    assert '按单位' in bar._load_btns[2].toolTip()
+    assert 'g' in bar._load_btns[2].toolTip()
+    assert bar._recommend_badges[2].toolTip() == ''
 
     bar.set_recommended(3)
     assert bar._load_btns[2].property('recommended') == 'false'
     assert bar._load_btns[3].property('recommended') == 'true'
     assert bar._recommend_badges[2].isHidden()
     assert not bar._recommend_badges[3].isHidden()
+    assert bar._load_btns[2].toolTip() == ''
 
     bar.set_recommended(None)
     for n in (1, 2, 3):
         assert bar._load_btns[n].property('recommended') == 'false'
         assert not bar._load_btns[n].text().startswith('★ ')
         assert bar._recommend_badges[n].isHidden()
+        assert bar._load_btns[n].toolTip() == ''
 
 
 def test_builtin_preset_second_left_click_restores_default_params(qapp):
@@ -6416,37 +6421,50 @@ def test_order_builtin_presets_respect_order_nyquist(qapp):
 
 
 def test_set_recommended_for_unit_highlights_correct_slot(qapp, qtbot):
-    """set_recommended_for_unit maps unit -> slot (torque=1/vibration=2/transient=3)."""
+    """set_recommended_for_unit maps unit -> slot (torque=1/vibration=2)."""
     from mf4_analyzer.ui.inspector_sections import (
         FFTContextual, FFTTimeContextual, OrderContextual,
     )
+
+    def _assert_no_recommendation(ctx):
+        for n in (1, 2, 3):
+            assert ctx.preset_bar._load_btns[n].property('recommended') == 'false'
+            assert ctx.preset_bar._recommend_badges[n].isHidden()
+            assert ctx.preset_bar._load_btns[n].toolTip() == ''
+
     fc = FFTContextual()
     qtbot.addWidget(fc)
     fc.set_recommended_for_unit('Nm')  # torque -> slot 1
     assert fc.preset_bar._load_btns[1].property('recommended') == 'true'
+    assert '按单位' in fc.preset_bar._load_btns[1].toolTip()
+    assert 'Nm' in fc.preset_bar._load_btns[1].toolTip()
+    assert fc.preset_bar._recommend_badges[1].toolTip() == ''
     fc.set_recommended_for_unit('g')  # vibration -> slot 2
     assert fc.preset_bar._load_btns[2].property('recommended') == 'true'
-    fc.set_recommended_for_unit('rpm')  # fallback vibration -> slot 2
-    assert fc.preset_bar._load_btns[2].property('recommended') == 'true'
-    fc.set_recommended_for_unit('')  # empty unit also falls back to vibration
-    assert fc.preset_bar._load_btns[2].property('recommended') == 'true'
+    assert '按单位' in fc.preset_bar._load_btns[2].toolTip()
+    fc.set_recommended_for_unit('rpm')  # unknown -> no recommendation
+    _assert_no_recommendation(fc)
+    fc.set_recommended_for_unit('')  # empty unit is not a guess
+    _assert_no_recommendation(fc)
     fc.set_recommended_for_unit(None)  # clear
-    for n in (1, 2, 3):
-        assert fc.preset_bar._load_btns[n].property('recommended') == 'false'
+    _assert_no_recommendation(fc)
 
     oc = OrderContextual()
     qtbot.addWidget(oc)
     oc.set_recommended_for_unit('°')  # torque -> slot 1
     assert oc.preset_bar._load_btns[1].property('recommended') == 'true'
+    assert '按单位' in oc.preset_bar._load_btns[1].toolTip()
     oc.set_recommended_for_unit('m/s²')  # vibration -> slot 2
     assert oc.preset_bar._load_btns[2].property('recommended') == 'true'
+    assert '按单位' in oc.preset_bar._load_btns[2].toolTip()
 
     tc = FFTTimeContextual()
     qtbot.addWidget(tc)
     tc.set_recommended_for_unit('Nm')  # torque -> slot 1
     assert tc.preset_bar._load_btns[1].property('recommended') == 'true'
-    tc.set_recommended_for_unit('unknown-unit')  # fallback vibration -> slot 2
-    assert tc.preset_bar._load_btns[2].property('recommended') == 'true'
+    assert '按单位' in tc.preset_bar._load_btns[1].toolTip()
+    tc.set_recommended_for_unit('unknown-unit')  # unknown -> no recommendation
+    _assert_no_recommendation(tc)
 
 
 # ---- Task 2: Built-in preset hover card shows blurb, not '已保存参数快照' ----

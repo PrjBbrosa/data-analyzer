@@ -81,10 +81,11 @@ def _dynamic_to_floor(dynamic):
 def recommend_preset_for_unit(unit):
     """Return the recommended built-in preset key for a channel unit.
 
-    Returns one of ``'torque'`` / ``'vibration'`` / ``'transient'``.
-    Unknown / unrecognized units fall back to ``'vibration'`` (the default).
-    Matching is on the normalized form (see :func:`_normalize_unit`) with an
-    EXACT alias lookup so 'kg' is not mistaken for 'g' nor 'kpa' for 'pa'.
+    Returns ``'torque'`` or ``'vibration'`` when the unit is a recognized
+    alias, otherwise ``None``. Missing and unrecognized units are not
+    guessed. Matching is on the normalized form (see :func:`_normalize_unit`)
+    with an EXACT alias lookup so 'kg' is not mistaken for 'g' nor 'kpa'
+    for 'pa'.
     """
     return recommend_builtin_preset(unit)
 

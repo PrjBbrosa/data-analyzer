@@ -265,9 +265,15 @@ def test_alias_get_and_unit_recommendation_contract():
     assert resolve_builtin_preset_alias("fft_time", "high_frequency") == "transient"
     assert get_builtin_preset("fft_time", "diagnostic").key == "vibration"
     assert recommend_builtin_preset("Nm") == "torque"
+    assert recommend_builtin_preset("N·m") == "torque"
     assert recommend_builtin_preset("m/s^2") == "vibration"
-    assert recommend_builtin_preset("kg") == "vibration"
-    assert recommend_builtin_preset(None) == "vibration"
+    assert recommend_builtin_preset("g") == "vibration"
+    # ``bar`` is a torque-family pressure alias, not an unknown unit.
+    assert recommend_builtin_preset("bar") == "torque"
+    assert recommend_builtin_preset("kg") is None
+    assert recommend_builtin_preset("") is None
+    assert recommend_builtin_preset(None) is None
+    assert recommend_builtin_preset("rpm") is None
 
 
 def test_builtin_patches_never_own_runtime_output_or_db_state():
