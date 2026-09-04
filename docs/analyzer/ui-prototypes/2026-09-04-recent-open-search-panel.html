@@ -1,0 +1,951 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab · 最近打开搜索面板</title>
+  <style>
+    :root {
+      --tray: #f2f4f7;
+      --surface: #ffffff;
+      --surface-subtle: #f8fafd;
+      --ink: #111827;
+      --ink-soft: #253247;
+      --muted: #64748b;
+      --quiet: #94a3b8;
+      --line: #d3dbe6;
+      --line-soft: #e8edf4;
+      --accent: #1769e0;
+      --accent-hi: #2d7ff9;
+      --accent-dark: #135abd;
+      --accent-wash: #edf5ff;
+      --accent-ink: #0f3f8f;
+      --mark: #d8e9ff;
+      --danger: #b42335;
+      --sans: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", "SF Pro Text", system-ui, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --shadow-window: 0 24px 70px rgba(37, 50, 71, .17);
+      --shadow-popup: 0 20px 46px rgba(24, 45, 77, .20), 0 3px 10px rgba(24, 45, 77, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; min-width: 760px; height: 100%; min-height: 650px; margin: 0; }
+    body {
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, .54), transparent 42%),
+        #e3e9f0;
+      font: 13px/1.42 var(--sans);
+    }
+
+    button,
+    input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible,
+    input:focus-visible {
+      outline: 3px solid rgba(23, 105, 224, .20);
+      outline-offset: 2px;
+    }
+
+    .app-window {
+      position: relative;
+      width: min(1400px, calc(100vw - 28px));
+      height: min(860px, calc(100vh - 28px));
+      min-height: 620px;
+      overflow: hidden;
+      border: 1px solid #c8d2df;
+      border-radius: 14px;
+      background: var(--tray);
+      box-shadow: var(--shadow-window);
+    }
+
+    .app-toolbar {
+      position: relative;
+      z-index: 4;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      height: 64px;
+      padding: 0 18px;
+      border-bottom: 1px solid #dbe3ed;
+      background: rgba(255, 255, 255, .98);
+    }
+
+    .toolbar-group { display: flex; align-items: center; gap: 10px; }
+    .toolbar-separator { width: 1px; height: 26px; background: #e3e9f1; }
+
+    .split-button {
+      display: inline-flex;
+      height: 38px;
+      overflow: hidden;
+      border-radius: 10px;
+      box-shadow: 0 1px 1px rgba(15, 35, 62, .08);
+    }
+
+    .split-button button,
+    .toolbar-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 38px;
+      padding: 0 14px;
+      border: 1px solid #c9d8e9;
+      border-radius: 10px;
+      background: #fff;
+      color: #40546d;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .split-button button { border-radius: 0; }
+    .split-button .main { border-right: 0; }
+    .split-button .caret { width: 38px; padding: 0; border-left-color: #e4eaf2; }
+    .split-button.primary .main,
+    .split-button.primary .caret {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    .split-button.primary .caret { border-left-color: rgba(255,255,255,.40); }
+    .split-button.primary button:hover { background: var(--accent-hi); }
+    .split-button.primary button:active { background: var(--accent-dark); }
+    .split-button.primary .caret[aria-expanded="true"] { background: var(--accent-dark); }
+    .toolbar-button:hover,
+    .split-button:not(.primary) button:hover { border-color: #a9bfd8; background: #f4f8fd; }
+    .toolbar-button.strong { border-color: #a7c7f2; color: #075ac1; }
+    .toolbar-button:disabled,
+    .split-button button:disabled { cursor: default; color: #91a0b3; background: #f5f7fa; border-color: #e0e6ee; }
+
+    .tool-icon { width: 20px; height: 20px; flex: 0 0 20px; }
+    .caret-icon { width: 16px; height: 16px; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 235px minmax(0, 1fr) 270px;
+      gap: 3px;
+      height: calc(100% - 64px);
+      padding: 8px;
+      background: var(--tray);
+    }
+    .ghost-pane {
+      overflow: hidden;
+      border: 1px solid #dce4ed;
+      border-radius: 9px;
+      background: rgba(255,255,255,.74);
+    }
+    .ghost-head { height: 40px; border-bottom: 1px solid #e8edf3; background: rgba(255,255,255,.9); }
+    .ghost-lines { padding: 13px; }
+    .ghost-line { height: 9px; margin-bottom: 12px; border-radius: 5px; background: #e8edf3; }
+    .ghost-line:nth-child(2n) { width: 72%; }
+    .ghost-line:nth-child(3n) { width: 88%; }
+    .chart-ghost {
+      position: relative;
+      background:
+        linear-gradient(rgba(142, 157, 177, .10) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(142, 157, 177, .10) 1px, transparent 1px),
+        #fff;
+      background-size: 46px 42px;
+    }
+    .chart-ghost::after {
+      content: "";
+      position: absolute;
+      inset: 38% 8% auto 7%;
+      height: 90px;
+      border-top: 3px solid rgba(23,105,224,.24);
+      border-radius: 50%;
+      transform: skewY(-5deg);
+    }
+
+    .recent-panel {
+      position: absolute;
+      z-index: 10;
+      top: 58px;
+      left: 18px;
+      display: grid;
+      grid-template-rows: 70px 32px minmax(0, 1fr) 48px;
+      width: min(640px, calc(100vw - 76px));
+      height: min(700px, calc(100vh - 90px));
+      min-height: 500px;
+      overflow: hidden;
+      border: 1px solid #b9cbe0;
+      border-radius: 13px;
+      background: rgba(255, 255, 255, .985);
+      box-shadow: var(--shadow-popup);
+      transform-origin: 96px 0;
+      animation: panel-in 130ms cubic-bezier(.2, .8, .2, 1) both;
+    }
+    .recent-panel[hidden] { display: none; }
+
+    @keyframes panel-in {
+      from { opacity: 0; transform: translateY(-4px) scale(.994); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .recent-panel { animation: none; }
+      .toast { transition: none !important; }
+    }
+
+    .search-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+    }
+
+    .search-field {
+      position: relative;
+      display: flex;
+      align-items: center;
+      height: 42px;
+      overflow: hidden;
+      border: 1px solid #a8c5e8;
+      border-radius: 9px;
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(23, 105, 224, .08);
+    }
+    .search-field:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(23, 105, 224, .13);
+    }
+    .search-glyph {
+      width: 18px;
+      height: 18px;
+      margin-left: 12px;
+      color: #526d8d;
+      flex: 0 0 18px;
+    }
+    .search-field input {
+      width: 100%;
+      min-width: 0;
+      height: 100%;
+      padding: 0 84px 0 9px;
+      border: 0;
+      outline: 0;
+      appearance: none;
+      -webkit-appearance: none;
+      background: transparent;
+      color: var(--ink);
+      font-size: 14px;
+    }
+    .search-field input::-webkit-search-cancel-button,
+    .search-field input::-webkit-search-decoration {
+      display: none;
+      -webkit-appearance: none;
+    }
+    .search-field input::placeholder { color: #7d8da1; }
+    .search-hint {
+      position: absolute;
+      right: 10px;
+      display: inline-flex;
+      align-items: center;
+      height: 23px;
+      padding: 0 6px;
+      border: 1px solid #d9e1eb;
+      border-radius: 5px;
+      background: #f8fafc;
+      color: #78889d;
+      font: 11px/1 var(--sans);
+      pointer-events: none;
+    }
+    .search-clear {
+      position: absolute;
+      right: 9px;
+      display: none;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: #edf2f7;
+      color: #63768d;
+      cursor: pointer;
+      font-size: 17px;
+      line-height: 1;
+    }
+    .search-clear:hover { background: #dfe8f2; color: #30465f; }
+    .search-field.has-value .search-hint { display: none; }
+    .search-field.has-value .search-clear { display: grid; }
+
+    .result-summary {
+      min-width: 74px;
+      color: var(--muted);
+      text-align: right;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .result-summary strong { color: var(--ink-soft); font-size: 13px; }
+
+    .column-head,
+    .recent-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 46%) minmax(240px, 1fr);
+    }
+    .column-head {
+      align-items: center;
+      padding: 0 12px 0 16px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #f8fafd;
+      color: #687b93;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .column-head > span:first-child {
+      padding-left: 32px;
+      border-right: 1px solid #dfe6ef;
+    }
+    .column-head > span:last-child { padding-left: 14px; }
+    .column-head .visible-count {
+      float: right;
+      margin-right: 10px;
+      color: #8a99aa;
+      font-weight: 500;
+    }
+
+    .results-viewport {
+      min-width: 0;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: #c5d0de transparent;
+      scrollbar-width: thin;
+      background: #fff;
+    }
+    .results-viewport::-webkit-scrollbar { width: 9px; }
+    .results-viewport::-webkit-scrollbar-track { background: transparent; }
+    .results-viewport::-webkit-scrollbar-thumb {
+      border: 2px solid #fff;
+      border-radius: 8px;
+      background: #c5d0de;
+    }
+    .results-viewport::-webkit-scrollbar-thumb:hover { background: #aab8c8; }
+
+    .recent-list { min-width: 0; padding: 4px 7px 5px; }
+    .recent-row {
+      position: relative;
+      width: 100%;
+      min-width: 0;
+      height: 40px;
+      padding: 0 5px 0 9px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .recent-row:hover { background: #f3f7fc; }
+    .recent-row.selected { background: var(--accent-wash); }
+    .recent-row.selected::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 7px;
+      bottom: 7px;
+      width: 3px;
+      border-radius: 3px;
+      background: var(--accent);
+    }
+    .recent-row.is-missing { cursor: default; }
+    .recent-row.is-missing .file-name,
+    .recent-row.is-missing .folder-path { color: var(--quiet); }
+    .recent-row.is-missing .type-icon { color: #a9b6c6; background: #f4f6f8; }
+
+    .name-cell,
+    .path-cell {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      height: 100%;
+    }
+    .name-cell {
+      gap: 10px;
+      padding-right: 13px;
+      border-right: 1px solid #e5ebf2;
+    }
+    .path-cell { gap: 8px; padding: 0 8px 0 14px; }
+    .type-icon {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      flex: 0 0 24px;
+      border-radius: 6px;
+      background: #f0f4f9;
+      color: #58728f;
+    }
+    .recent-row[data-kind="project"] .type-icon {
+      background: #eaf3ff;
+      color: #1263c7;
+    }
+    .type-icon svg { width: 15px; height: 15px; }
+    .file-name,
+    .folder-path {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-name {
+      color: #172033;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .folder-path { color: #64758b; font-size: 12px; }
+    .kind-label,
+    .missing-label {
+      flex: 0 0 auto;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 5px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 20px;
+    }
+    .kind-label { background: #eaf3ff; color: #1459a8; }
+    .missing-label { background: #f3f5f8; color: #8594a7; }
+
+    mark {
+      padding: 0;
+      border-radius: 2px;
+      background: var(--mark);
+      color: #074f9f;
+      font-weight: 750;
+    }
+
+    .empty-state {
+      display: grid;
+      place-items: center;
+      min-height: 100%;
+      padding: 36px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .empty-state[hidden] { display: none; }
+    .empty-glyph {
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 11px;
+      border: 1px solid #d9e3ee;
+      border-radius: 12px;
+      background: #f7fafd;
+      color: #6f8299;
+    }
+    .empty-state strong { display: block; margin-bottom: 4px; color: var(--ink-soft); font-size: 14px; }
+    .empty-state p { margin: 0; font-size: 12px; }
+
+    .panel-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 12px 0 16px;
+      border-top: 1px solid var(--line);
+      background: #fafbfd;
+    }
+    .key-help {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: #718198;
+      white-space: nowrap;
+      font-size: 11px;
+    }
+    kbd {
+      display: inline-grid;
+      place-items: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 5px;
+      border: 1px solid #d5dee9;
+      border-bottom-color: #bdc9d7;
+      border-radius: 5px;
+      background: #fff;
+      box-shadow: 0 1px 0 #e3e8ef;
+      color: #53667d;
+      font: 10px/1 var(--sans);
+    }
+    .clear-history {
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: #52677f;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .clear-history:hover { border-color: #dfabb2; background: #fff4f5; color: var(--danger); }
+    .clear-history:disabled { cursor: default; color: #a6b1bf; background: transparent; border-color: transparent; }
+
+    .toast {
+      position: absolute;
+      z-index: 20;
+      left: 50%;
+      bottom: 22px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      max-width: min(620px, calc(100% - 40px));
+      padding: 10px 14px;
+      border: 1px solid #adc6e5;
+      border-radius: 9px;
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 12px 30px rgba(30,54,83,.17);
+      color: #29425f;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 8px);
+      transition: opacity 130ms ease, transform 130ms ease;
+      font-size: 12px;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast svg { width: 17px; height: 17px; color: var(--accent); flex: 0 0 17px; }
+    .toast span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .prototype-note {
+      position: absolute;
+      right: 18px;
+      top: 14px;
+      z-index: 5;
+      color: #7c8da2;
+      font-size: 11px;
+      pointer-events: none;
+    }
+
+    @media (max-width: 1020px) {
+      .recent-panel { width: min(640px, calc(100vw - 64px)); }
+      .column-head,
+      .recent-row { grid-template-columns: minmax(220px, 46%) minmax(220px, 1fr); }
+      .workspace { grid-template-columns: 190px minmax(0, 1fr); }
+      .workspace > :last-child { display: none; }
+      .prototype-note { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app-window" aria-label="TraceLab 最近打开交互原型">
+    <header class="app-toolbar">
+      <div class="toolbar-group">
+        <div class="split-button primary" aria-label="打开">
+          <button class="main" type="button" title="打开数据文件或项目">
+            <svg class="tool-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="4.5" y="3.5" width="13" height="17" rx="2" stroke="currentColor" stroke-width="2"/>
+              <path d="M8 8h6M8 12h6M8 16h4M20 7v7M16.5 10.5h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            打开
+          </button>
+          <button id="recent-toggle" class="caret" type="button" aria-label="最近打开的项目和文件" aria-expanded="true" aria-controls="recent-panel">
+            <svg class="caret-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="m5.5 7.5 4.5 5 4.5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="split-button">
+          <button class="main" type="button" disabled>
+            <svg class="tool-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+            保存
+          </button>
+          <button class="caret" type="button" disabled aria-label="保存选项">
+            <svg class="caret-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="m5.5 7.5 4.5 5 4.5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <button class="toolbar-button strong" type="button">
+          <svg class="tool-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M10 6h10M10 12h10M10 18h10M4 5.5h2v2H4zM4 11h2v2H4zM4 17h2v2H4z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          批处理
+        </button>
+      </div>
+      <div class="toolbar-separator" aria-hidden="true"></div>
+      <div class="toolbar-group" aria-hidden="true">
+        <button class="toolbar-button" type="button">时域</button>
+        <button class="toolbar-button" type="button">频谱</button>
+        <button class="toolbar-button" type="button">阶次</button>
+      </div>
+      <span class="prototype-note">交互原型 · 输入可即时筛选</span>
+    </header>
+
+    <div class="workspace" aria-hidden="true">
+      <section class="ghost-pane">
+        <div class="ghost-head"></div>
+        <div class="ghost-lines">
+          <div class="ghost-line"></div><div class="ghost-line"></div><div class="ghost-line"></div>
+          <div class="ghost-line"></div><div class="ghost-line"></div><div class="ghost-line"></div>
+        </div>
+      </section>
+      <section class="ghost-pane chart-ghost"></section>
+      <section class="ghost-pane">
+        <div class="ghost-head"></div>
+        <div class="ghost-lines">
+          <div class="ghost-line"></div><div class="ghost-line"></div><div class="ghost-line"></div>
+          <div class="ghost-line"></div><div class="ghost-line"></div>
+        </div>
+      </section>
+    </div>
+
+    <section id="recent-panel" class="recent-panel" aria-label="最近打开" role="dialog">
+      <div class="search-bar">
+        <label class="search-field" id="search-shell">
+          <svg class="search-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="2"/>
+            <path d="m15.5 15.5 4.3 4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <input id="recent-search" type="search" autocomplete="off" spellcheck="false" aria-label="搜索最近打开的文件名或路径" placeholder="搜索文件名或所在位置，例如 250 lowfri、P166 tlproj">
+          <span class="search-hint">⌘ K</span>
+          <button id="search-clear" class="search-clear" type="button" aria-label="清空搜索">×</button>
+        </label>
+        <div id="result-summary" class="result-summary" aria-live="polite"><strong>28</strong> 条记录</div>
+      </div>
+
+      <div class="column-head" aria-hidden="true">
+        <span>文件名 <span id="visible-count" class="visible-count">最近优先</span></span>
+        <span>所在位置</span>
+      </div>
+
+      <div id="results-viewport" class="results-viewport">
+        <div id="recent-list" class="recent-list" role="listbox" aria-label="最近打开记录"></div>
+        <div id="empty-state" class="empty-state" hidden>
+          <div>
+            <div class="empty-glyph">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="1.8"/>
+                <path d="m15.5 15.5 4 4M7.8 10.5h5.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <strong id="empty-title">没有匹配项</strong>
+            <p id="empty-copy">试试缩短关键词，或搜索目录名。</p>
+          </div>
+        </div>
+      </div>
+
+      <footer class="panel-footer">
+        <div class="key-help" aria-label="键盘操作说明">
+          <kbd>↑</kbd><kbd>↓</kbd><span>选择</span>
+          <kbd>Enter</kbd><span>打开</span>
+          <kbd>Esc</kbd><span>清空 / 关闭</span>
+        </div>
+        <button id="clear-history" class="clear-history" type="button">清除最近记录</button>
+      </footer>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M5 4.5h11l3 3V20H5zM16 4.5V8h3M8.5 13h7M8.5 16.5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span id="toast-copy"></span>
+    </div>
+  </main>
+
+  <script>
+    const initialRecords = [
+      { kind: 'project', name: 'P166_连续转向共振_路试分析.tlproj', folder: '~/Documents/TraceLab/Projects/P166/连续转向共振', opened: '刚刚' },
+      { kind: 'file', name: 'whole ±250deg_LowFri.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '2 分钟前' },
+      { kind: 'file', name: 'whole ±90deg_LowFri.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '5 分钟前' },
+      { kind: 'project', name: 'P166_盐城调试_对比.tlproj', folder: '~/Documents/TraceLab/Projects/P166/盐城调试', opened: '12 分钟前' },
+      { kind: 'file', name: 'whole ±45deg_LowFri.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '18 分钟前' },
+      { kind: 'file', name: 'whole ±45deg_LowFri_Offcenter.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '24 分钟前' },
+      { kind: 'file', name: 'whole ±5deg_LowFri.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '31 分钟前' },
+      { kind: 'file', name: 'Right360±45deg.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '今天 22:18' },
+      { kind: 'file', name: 'Left360±45deg.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '今天 22:14' },
+      { kind: 'file', name: 'CenterwithVehSpd_LowFri2.MF4', folder: '~/Downloads/data analyzer/testdoc/LPD02T08_0526', opened: '今天 21:57' },
+      { kind: 'file', name: 'SFNS_10_P166_0062.wwt', folder: '~/Downloads/P166/连续转向/盐城路试/原始数据', opened: '今天 20:46' },
+      { kind: 'project', name: '低频摩擦_台架复测.tlproj', folder: '~/Documents/TraceLab/Projects/Bench/2026-09', opened: '今天 19:20' },
+      { kind: 'file', name: 'SFNS_40_X04-CSER_000009.wwt', folder: '~/Downloads/P166/testdoc/2024_3_17', opened: '今天 17:08' },
+      { kind: 'file', name: 'SFNS_40_X04-CSER_000010.wwt', folder: '~/Downloads/P166/testdoc/2024_3_17', opened: '今天 16:51' },
+      { kind: 'file', name: 'steering_rack_force_250deg_run03.mf4', folder: '/Volumes/TESTDATA/P166/road/2026-08-31', opened: '昨天 23:40' },
+      { kind: 'file', name: 'EPS_Current_SineSweep_0p2Hz_03.mf4', folder: '/Volumes/TESTDATA/P166/bench/sine-sweep', opened: '昨天 22:15' },
+      { kind: 'project', name: 'X04_CSER_低速异响.tlproj', folder: '~/Documents/TraceLab/Projects/X04/CSER', opened: '昨天 18:33' },
+      { kind: 'file', name: 'left_turn_45deg_vehicle_speed_10kph.mf4', folder: '~/Data/P166/vehicle/left-turn/10kph', opened: '昨天 16:09' },
+      { kind: 'file', name: 'right_turn_45deg_vehicle_speed_10kph.mf4', folder: '~/Data/P166/vehicle/right-turn/10kph', opened: '昨天 16:06' },
+      { kind: 'file', name: 'park_assist_low_frequency_ramp.mf4', folder: '~/Data/X04/parking/low-frequency', opened: '周三 14:22' },
+      { kind: 'file', name: 'EPSDP_characteristic_SUM.wwt', folder: '~/Downloads/multi_station_mapping/CSER_DP_FA', opened: '周三 11:48' },
+      { kind: 'file', name: 'run_0312_missing_source.mf4', folder: '/Volumes/DATA/P166/archive', opened: '周二 20:14', missing: true },
+      { kind: 'file', name: 'summer_test_ambient_42C_steering.mf4', folder: '~/Data/Climate/2026-summer/vehicle-03', opened: '周二 16:30' },
+      { kind: 'file', name: 'winter_test_minus20C_returnability.mf4', folder: '~/Data/Climate/2026-winter/vehicle-08', opened: '周一 09:12' },
+      { kind: 'file', name: 'parking_lot_static_friction_left.mf4', folder: '~/Data/P166/static-friction/session-A', opened: '8 月 30 日' },
+      { kind: 'file', name: 'parking_lot_static_friction_right.mf4', folder: '~/Data/P166/static-friction/session-B', opened: '8 月 30 日' },
+      { kind: 'file', name: 'vehicle_speed_5kph_center_return.mf4', folder: '~/Data/P166/returnability/5kph', opened: '8 月 29 日' },
+      { kind: 'file', name: 'vehicle_speed_20kph_center_return.mf4', folder: '~/Data/P166/returnability/20kph', opened: '8 月 29 日' }
+    ];
+
+    let records = [...initialRecords];
+    let filteredRecords = [];
+    let selectedIndex = 0;
+    let toastTimer = 0;
+
+    const panel = document.getElementById('recent-panel');
+    const toggle = document.getElementById('recent-toggle');
+    const search = document.getElementById('recent-search');
+    const searchShell = document.getElementById('search-shell');
+    const searchClear = document.getElementById('search-clear');
+    const recentList = document.getElementById('recent-list');
+    const viewport = document.getElementById('results-viewport');
+    const resultSummary = document.getElementById('result-summary');
+    const emptyState = document.getElementById('empty-state');
+    const emptyTitle = document.getElementById('empty-title');
+    const emptyCopy = document.getElementById('empty-copy');
+    const clearHistory = document.getElementById('clear-history');
+    const visibleCount = document.getElementById('visible-count');
+    const toast = document.getElementById('toast');
+    const toastCopy = document.getElementById('toast-copy');
+
+    const fileIcon = `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="5.5" y="3.5" width="13" height="17" rx="2" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M9 8h6M9 12h6M9 16h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>`;
+    const projectIcon = `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 7.5h6l1.7 2H20v8.8a1.7 1.7 0 0 1-1.7 1.7H5.7A1.7 1.7 0 0 1 4 18.3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M4 8V5.7A1.7 1.7 0 0 1 5.7 4h4.1l1.7 2H18a1.7 1.7 0 0 1 1.7 1.7" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      </svg>`;
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>'"]/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      })[char]);
+    }
+
+    function findToken(text, token) {
+      const source = text.toLocaleLowerCase('zh-CN');
+      const target = token.toLocaleLowerCase('zh-CN');
+      const exact = source.indexOf(target);
+      if (exact !== -1) {
+        return {
+          score: 220 - exact * .5 - Math.max(0, source.length - target.length) * .02,
+          positions: Array.from({ length: target.length }, (_, index) => exact + index)
+        };
+      }
+
+      const positions = [];
+      let cursor = 0;
+      let gaps = 0;
+      for (const char of target) {
+        const found = source.indexOf(char, cursor);
+        if (found === -1) return null;
+        if (positions.length) gaps += found - positions[positions.length - 1] - 1;
+        positions.push(found);
+        cursor = found + 1;
+      }
+      return {
+        score: 105 - gaps * 2.2 - positions[0] * .35,
+        positions
+      };
+    }
+
+    function matchRecord(record, query) {
+      const tokens = query.trim().toLocaleLowerCase('zh-CN').split(/\s+/).filter(Boolean);
+      if (!tokens.length) return { score: 0, namePositions: [], folderPositions: [] };
+
+      let score = 0;
+      const namePositions = new Set();
+      const folderPositions = new Set();
+      for (const token of tokens) {
+        const inName = findToken(record.name, token);
+        const inFolder = findToken(record.folder, token);
+        if (!inName && !inFolder) return null;
+        if (inName && (!inFolder || inName.score + 16 >= inFolder.score)) {
+          score += inName.score + 24;
+          inName.positions.forEach(position => namePositions.add(position));
+        } else {
+          score += inFolder.score;
+          inFolder.positions.forEach(position => folderPositions.add(position));
+        }
+      }
+      return { score, namePositions: [...namePositions], folderPositions: [...folderPositions] };
+    }
+
+    function highlight(value, positions) {
+      if (!positions.length) return escapeHtml(value);
+      const marks = new Set(positions);
+      let html = '';
+      let markOpen = false;
+      Array.from(value).forEach((char, index) => {
+        const shouldMark = marks.has(index);
+        if (shouldMark && !markOpen) { html += '<mark>'; markOpen = true; }
+        if (!shouldMark && markOpen) { html += '</mark>'; markOpen = false; }
+        html += escapeHtml(char);
+      });
+      if (markOpen) html += '</mark>';
+      return html;
+    }
+
+    function render() {
+      const query = search.value.trim();
+      searchShell.classList.toggle('has-value', Boolean(query));
+
+      filteredRecords = records
+        .map((record, sourceIndex) => ({ record, sourceIndex, match: matchRecord(record, query) }))
+        .filter(item => item.match)
+        .sort((a, b) => query ? (b.match.score - a.match.score || a.sourceIndex - b.sourceIndex) : a.sourceIndex - b.sourceIndex);
+
+      if (selectedIndex >= filteredRecords.length) selectedIndex = Math.max(0, filteredRecords.length - 1);
+      if (selectedIndex < 0) selectedIndex = 0;
+      recentList.replaceChildren();
+
+      filteredRecords.forEach((item, index) => {
+        const { record, match } = item;
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = `recent-row${index === selectedIndex ? ' selected' : ''}${record.missing ? ' is-missing' : ''}`;
+        row.dataset.kind = record.kind;
+        row.dataset.index = String(index);
+        row.setAttribute('role', 'option');
+        row.setAttribute('aria-selected', index === selectedIndex ? 'true' : 'false');
+        row.title = `${record.name}\n${record.folder}\n最近打开：${record.opened}`;
+        row.innerHTML = `
+          <span class="name-cell">
+            <span class="type-icon">${record.kind === 'project' ? projectIcon : fileIcon}</span>
+            <span class="file-name">${highlight(record.name, match.namePositions)}</span>
+            ${record.kind === 'project' ? '<span class="kind-label">项目</span>' : ''}
+          </span>
+          <span class="path-cell">
+            <span class="folder-path">${highlight(record.folder, match.folderPositions)}</span>
+            ${record.missing ? '<span class="missing-label">未找到</span>' : ''}
+          </span>`;
+        row.addEventListener('mousemove', () => selectIndex(index, false));
+        row.addEventListener('click', () => openRecord(index));
+        recentList.append(row);
+      });
+
+      const count = filteredRecords.length;
+      resultSummary.innerHTML = query
+        ? `<strong>${count}</strong> / ${records.length} 条匹配`
+        : `<strong>${records.length}</strong> 条记录`;
+      visibleCount.textContent = query ? '按匹配度排序' : '最近优先';
+      emptyState.hidden = count > 0;
+      recentList.hidden = count === 0;
+      clearHistory.disabled = records.length === 0;
+      if (!records.length) {
+        emptyTitle.textContent = '暂无最近记录';
+        emptyCopy.textContent = '打开文件或项目后，会显示在这里。';
+      } else {
+        emptyTitle.textContent = '没有匹配项';
+        emptyCopy.textContent = '试试缩短关键词，或搜索目录名。';
+      }
+    }
+
+    function selectIndex(index, ensureVisible = true) {
+      if (!filteredRecords.length) return;
+      selectedIndex = Math.max(0, Math.min(index, filteredRecords.length - 1));
+      const rows = [...recentList.querySelectorAll('.recent-row')];
+      rows.forEach((row, rowIndex) => {
+        const selected = rowIndex === selectedIndex;
+        row.classList.toggle('selected', selected);
+        row.setAttribute('aria-selected', selected ? 'true' : 'false');
+      });
+      if (ensureVisible) rows[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+    }
+
+    function showToast(copy) {
+      window.clearTimeout(toastTimer);
+      toastCopy.textContent = copy;
+      toast.classList.add('show');
+      toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    function openRecord(index) {
+      const item = filteredRecords[index];
+      if (!item) return;
+      if (item.record.missing) {
+        showToast(`文件未找到：${item.record.name}`);
+        return;
+      }
+      showToast(`准备打开：${item.record.name}`);
+    }
+
+    function openPanel() {
+      panel.hidden = false;
+      toggle.setAttribute('aria-expanded', 'true');
+      window.requestAnimationFrame(() => search.focus());
+    }
+
+    function closePanel() {
+      panel.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.focus();
+    }
+
+    toggle.addEventListener('click', () => {
+      if (panel.hidden) openPanel(); else closePanel();
+    });
+
+    search.addEventListener('input', () => {
+      selectedIndex = 0;
+      viewport.scrollTop = 0;
+      render();
+    });
+
+    searchClear.addEventListener('click', event => {
+      event.preventDefault();
+      search.value = '';
+      selectedIndex = 0;
+      viewport.scrollTop = 0;
+      render();
+      search.focus();
+    });
+
+    clearHistory.addEventListener('click', () => {
+      records = [];
+      search.value = '';
+      selectedIndex = 0;
+      render();
+      showToast('最近打开记录已清除（刷新页面可恢复演示数据）');
+    });
+
+    document.addEventListener('keydown', event => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase('zh-CN') === 'k') {
+        event.preventDefault();
+        if (panel.hidden) openPanel(); else search.focus();
+        return;
+      }
+      if (panel.hidden) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        selectIndex(selectedIndex + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        selectIndex(selectedIndex - 1);
+      } else if (event.key === 'Enter' && document.activeElement === search) {
+        event.preventDefault();
+        openRecord(selectedIndex);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        if (search.value) {
+          search.value = '';
+          selectedIndex = 0;
+          viewport.scrollTop = 0;
+          render();
+          search.focus();
+        } else {
+          closePanel();
+        }
+      }
+    });
+
+    render();
+    window.requestAnimationFrame(() => search.focus());
+  </script>
+</body>
+</html>

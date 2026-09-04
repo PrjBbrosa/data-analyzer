@@ -24,6 +24,7 @@ from ..command_registry import (
 # the chart card (Alt+Left) or steal View identity (Ctrl+Tab / F2).
 _INSTALL_WINDOW_SHORTCUTS = frozenset({
     CommandId.OPEN_PROJECT,
+    CommandId.OPEN_RECENT,
     CommandId.SAVE_PROJECT,
     CommandId.SAVE_PROJECT_AS,
     CommandId.QUIT,
@@ -79,6 +80,7 @@ class CommandCoordinator(QObject):
 
     def _connect_host_slots(self) -> None:
         self._actions[CommandId.OPEN_PROJECT].triggered.connect(self._on_open)
+        self._actions[CommandId.OPEN_RECENT].triggered.connect(self._on_open_recent)
         self._actions[CommandId.SAVE_PROJECT].triggered.connect(self._on_save)
         self._actions[CommandId.SAVE_PROJECT_AS].triggered.connect(self._on_save_as)
         self._actions[CommandId.FIND].triggered.connect(self._on_find)
@@ -107,6 +109,14 @@ class CommandCoordinator(QObject):
         method = getattr(self._host, "open_files_or_project", None)
         if callable(method):
             method()
+
+    def _on_open_recent(self, checked=False) -> None:
+        toolbar = getattr(self._host, "toolbar", None)
+        if toolbar is None:
+            return
+        show = getattr(toolbar, "show_recent_popup", None)
+        if callable(show):
+            show()
 
     def _on_save(self, checked=False) -> None:
         method = getattr(self._host, "save_project_via_dialog", None)
@@ -174,5 +184,6 @@ class CommandCoordinator(QObject):
                 self._actions[CommandId.OPEN_PROJECT],
                 self._actions[CommandId.SAVE_PROJECT],
                 self._actions[CommandId.SAVE_PROJECT_AS],
+                self._actions[CommandId.OPEN_RECENT],
             )
         self._toolbar_bound = True

@@ -358,14 +358,18 @@ def _recent_entry(path, kind, opened_at="2026-09-04T21:32:00"):
     return RecentEntry(path=str(path), kind=kind, opened_at=opened_at)
 
 
-def _visible_recent_actions(tb):
-    return [action for action in tb._recent_menu.actions() if not action.isSeparator()]
+def _recent_popup(tb):
+    from mf4_analyzer.ui.widgets.recent_open_popup import RecentOpenPopup
+
+    popups = tb.findChildren(RecentOpenPopup)
+    assert len(popups) == 1
+    return popups[0]
 
 
-def test_set_recent_entries_orders_projects_then_files_and_footer(qtbot, tmp_path):
+def test_set_recent_entries_projects_global_mru_into_single_popup(qtbot, tmp_path):
     from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QTableView
 
-    from mf4_analyzer.ui.recent_files import format_recent_label, missing_recent_label
     from mf4_analyzer.ui.toolbar import Toolbar
 
     proj = tmp_path / "p.tlproj"
@@ -375,72 +379,101 @@ def test_set_recent_entries_orders_projects_then_files_and_footer(qtbot, tmp_pat
     present.write_text("x", encoding="utf-8")
     tb = Toolbar()
     qtbot.addWidget(tb)
-    tb.set_recent_entries(
-        (_recent_entry(proj, "project"),),
-        (_recent_entry(present, "file"), _recent_entry(missing, "file")),
-    )
-    actions = tb._recent_menu.actions()
-    texts = [action.text() for action in actions]
-    assert texts[0] == format_recent_label(proj)
-    assert actions[1].isSeparator()
-    assert texts[2] == format_recent_label(present)
-    assert texts[3] == missing_recent_label(format_recent_label(missing))
-    assert not actions[3].isEnabled()
-    assert actions[4].isSeparator()
-    assert texts[5] == "清除最近记录"
-    assert actions[5].isEnabled()
-    assert tb._recent_menu.testAttribute(Qt.WA_TranslucentBackground)
+    tb.set_recent_entries((
+        _recent_entry(present, "file"),
+        _recent_entry(proj, "project"),
+        _recent_entry(missing, "file"),
+    ))
+    popup = _recent_popup(tb)
+    names = [match.filename for match in popup._matches]
+    assert names == [present.name, proj.name, missing.name]
+    assert popup.testAttribute(Qt.WA_TranslucentBackground)
+    table = popup.findChild(QTableView, "recentOpenTable")
+    assert table is not None
+    assert popup.findChild(QWidget, "recentOpenClear").isEnabled()
 
 
 def test_set_recent_entries_empty_disables_footer(qtbot):
     tb = Toolbar()
     qtbot.addWidget(tb)
-    tb.set_recent_entries((), ())
-    visible = _visible_recent_actions(tb)
-    assert [action.text() for action in visible] == ["暂无最近记录", "清除最近记录"]
-    assert not visible[0].isEnabled()
-    assert not visible[1].isEnabled()
+    tb.set_recent_entries(())
+    popup = _recent_popup(tb)
+    assert popup.findChild(QWidget, "recentOpenEmptyTitle").text() == "暂无最近记录"
+    assert not popup.findChild(QWidget, "recentOpenClear").isEnabled()
 
 
-def test_recent_menu_item_click_emits_open_requested(qtbot, tmp_path):
+def test_recent_row_click_emits_open_requested(qtbot, tmp_path):
+    from PyQt5.QtWidgets import QTableView
+
     present = tmp_path / "run.wwt"
     present.write_text("x", encoding="utf-8")
     tb = Toolbar()
     qtbot.addWidget(tb)
-    tb.set_recent_entries((), (_recent_entry(present, "file"),))
-    with qtbot.waitSignal(tb.recent_open_requested, timeout=200) as blocker:
-        _visible_recent_actions(tb)[0].trigger()
+    tb.show()
+    qtbot.waitExposed(tb)
+    tb.set_recent_entries((_recent_entry(present, "file"),))
+    popup = _recent_popup(tb)
+    table = popup.findChild(QTableView, "recentOpenTable")
+    with qtbot.waitSignal(tb.recent_open_requested, timeout=400) as blocker:
+        table.clicked.emit(table.model().index(0, 0))
     assert blocker.args == [str(present)]
 
 
-def test_recent_menu_footer_emits_clear_requested(qtbot, tmp_path):
+def test_recent_footer_emits_clear_requested(qtbot, tmp_path):
     present = tmp_path / "run.wwt"
     present.write_text("x", encoding="utf-8")
     tb = Toolbar()
     qtbot.addWidget(tb)
-    tb.set_recent_entries((), (_recent_entry(present, "file"),))
+    tb.set_recent_entries((_recent_entry(present, "file"),))
     with qtbot.waitSignal(tb.recent_clear_requested, timeout=200):
-        tb._recent_clear_action.trigger()
+        _recent_popup(tb).findChild(QWidget, "recentOpenClear").click()
 
 
 def test_missing_recent_row_does_not_emit_open(qtbot, tmp_path):
+    from PyQt5.QtWidgets import QTableView
+
     missing = tmp_path / "gone.mf4"
     tb = Toolbar()
     qtbot.addWidget(tb)
     opened = []
     tb.recent_open_requested.connect(opened.append)
-    tb.set_recent_entries((), (_recent_entry(missing, "file"),))
-    action = _visible_recent_actions(tb)[0]
-    assert not action.isEnabled()
-    action.trigger()
+    tb.set_recent_entries((_recent_entry(missing, "file"),))
+    popup = _recent_popup(tb)
+    table = popup.findChild(QTableView, "recentOpenTable")
+    table.clicked.emit(table.model().index(0, 0))
     assert opened == []
 
 
 def test_open_caret_does_not_emit_open_requested(qtbot):
     tb = Toolbar()
     qtbot.addWidget(tb)
+    tb.show()
+    qtbot.waitExposed(tb)
     opened = []
     tb.open_requested.connect(lambda: opened.append("open"))
     tb.btn_open_caret.click()
     assert opened == []
-    tb._recent_menu.close()
+    popup = _recent_popup(tb)
+    if popup.isVisible():
+        popup.close()
+
+
+def test_show_recent_popup_is_single_instance_and_refocuses(qtbot, tmp_path):
+    present = tmp_path / "run.wwt"
+    present.write_text("x", encoding="utf-8")
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.show()
+    qtbot.waitExposed(tb)
+    shown = []
+    tb.recent_menu_about_to_show.connect(lambda: shown.append("show"))
+    tb.set_recent_entries((_recent_entry(present, "file"),))
+    tb.show_recent_popup()
+    popup = _recent_popup(tb)
+    assert popup.isVisible()
+    assert shown == ["show"]
+    tb.show_recent_popup()
+    assert popup.isVisible()
+    assert shown == ["show"]
+    assert popup._search.hasFocus()
+    popup.close()

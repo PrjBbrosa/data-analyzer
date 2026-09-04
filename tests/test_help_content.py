@@ -92,6 +92,8 @@ def test_manual_load_slide_mentions_recent_open_menu():
     text = json.dumps(load, ensure_ascii=False)
     assert "旁边箭头" in text
     assert "最近打开" in text
+    assert "10" in text and "40" in text
+    assert "搜索" in text
     preset = next(slide for slide in data["slides"] if slide.get("id") == "preset")
     preset_text = json.dumps(preset, ensure_ascii=False)
     assert "单位" in preset_text

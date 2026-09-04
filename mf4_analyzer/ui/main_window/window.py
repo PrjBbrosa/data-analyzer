@@ -1087,13 +1087,11 @@ class MainWindow(
             self._on_order_job_progress(done, total)
 
     def _populate_recent_menu(self):
-        self.toolbar.set_recent_entries(
-            self._recent_files.entries("project"),
-            self._recent_files.entries("file"),
-        )
+        self.toolbar.set_recent_entries(self._recent_files.all_entries())
 
     def _clear_recent_files(self):
         self._recent_files.clear()
+        self.toolbar.set_recent_entries(())
 
     def _open_recent_path(self, path):
         path = str(path)

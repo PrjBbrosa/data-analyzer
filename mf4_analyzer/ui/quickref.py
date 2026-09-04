@@ -100,7 +100,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         rows=(
             QuickRow(
                 "打开数据 / 项目",
-                sub="箭头展开最近 4 个项目与 8 个文件；不存在的条目灰显；可一键清除记录。",
+                sub="箭头可搜索最近 10 个项目与 40 个文件；按文件名或路径筛选；缺失项灰显不可打开；可清除记录。",
+                keys=(command_shortcut_text(CommandId.OPEN_RECENT),),
                 gesture="工具栏「打开」",
             ),
             QuickRow(

@@ -880,6 +880,7 @@ def test_each_global_command_has_exactly_one_qaction_owner():
 
     required = (
         CommandId.OPEN_PROJECT,
+        CommandId.OPEN_RECENT,
         CommandId.SAVE_PROJECT,
         CommandId.SAVE_PROJECT_AS,
         CommandId.QUIT,
@@ -1584,6 +1585,64 @@ def test_quit_action_exists_but_is_disabled_until_dirty_guard(qapp, qtbot):
     qapp.processEvents()
     assert closed == [], f"disabled Quit must not close the window; closed={closed} {ctx}"
     assert host.isVisible(), f"Quit must not hide the window; {ctx}"
+
+
+def test_open_recent_command_is_unique_window_shortcut(qapp, qtbot):
+    from mf4_analyzer.ui.command_registry import (
+        CommandId,
+        bindings_for,
+        metadata_for,
+        native_text_for,
+        tooltip_for,
+    )
+
+    host = _FakeCommandHost()
+    qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    coord = _install_coordinator(host)
+    action = coord.action(CommandId.OPEN_RECENT)
+    meta = metadata_for(CommandId.OPEN_RECENT)
+    seqs = bindings_for(CommandId.OPEN_RECENT)
+    ctx = (
+        f"command=file.open_recent fallback={meta.fallback!r} "
+        f"native={native_text_for(CommandId.OPEN_RECENT)!r} "
+        f"shortcut_context={action.shortcutContext()}"
+    )
+    assert meta.fallback == "Ctrl+K", ctx
+    assert seqs, ctx
+    assert action.shortcutContext() == Qt.WindowShortcut, ctx
+    assert native_text_for(CommandId.OPEN_RECENT) == seqs[0].toString(
+        QKeySequence.NativeText
+    ), ctx
+    assert action.toolTip() == tooltip_for(CommandId.OPEN_RECENT), ctx
+    assert host.toolbar.btn_open_caret.toolTip() == action.toolTip(), ctx
+
+    host.calls.clear()
+    opened = []
+    host.toolbar.open_requested.connect(lambda: opened.append("open"))
+    action.trigger()
+    qapp.processEvents()
+    assert host.calls == [], f"OPEN_RECENT must not fire Open; {ctx} calls={host.calls}"
+    assert opened == [], f"OPEN_RECENT must not emit toolbar open_requested; {ctx}"
+    popup = host.toolbar._recent_popup
+    assert popup.isVisible(), ctx
+    action.trigger()
+    qapp.processEvents()
+    assert popup.isVisible(), "repeat shortcut must keep the popup open"
+    assert popup._search.hasFocus(), "repeat shortcut must focus search"
+    find_action = coord.action(CommandId.FIND)
+    find_portables = {
+        seq.toString(QKeySequence.PortableText) for seq in find_action.shortcuts()
+    }
+    recent_portables = {
+        seq.toString(QKeySequence.PortableText) for seq in action.shortcuts()
+    }
+    assert find_portables.isdisjoint(recent_portables), (
+        f"OPEN_RECENT must not share FIND bindings; find={find_portables} "
+        f"recent={recent_portables}"
+    )
+    popup.close()
 
 
 # ---------------------------------------------------------------------------

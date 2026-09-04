@@ -1124,6 +1124,12 @@ Toolbar QPushButton#toolbarOpenCaret:pressed {
     background-color: {{CONTROL_ACCENT_DARK}};
     border-left: 1px solid rgba(255,255,255,0.35);
 }
+Toolbar QPushButton#toolbarOpenCaret[expanded="true"] {
+    background-color: {{CONTROL_ACCENT_DARK}};
+    border-left-width: 1px;
+    border-left-style: solid;
+    border-left-color: rgba(255,255,255,0.35);
+}
 Toolbar QPushButton[role="panel-toggle"] {
     min-width: 0;
     min-height: 0;
@@ -5417,4 +5423,113 @@ QToolButton#ultraViewZoomInButton:focus,
 QToolButton#ultraViewZoomFitButton:focus,
 QToolButton#ultraViewZoomResetButton:focus {
     border-color: #3e709c;
+}
+
+/* Recent-open searchable popup. Keep selectors #recentOpen* only so this
+ * chrome cannot restyle global QMenu / QTableView / QToolButton families.
+ * SearchField icons stay under the existing high-specificity role=search
+ * rules; do not retarget #searchFieldIconButton here. */
+QFrame#recentOpenPopup,
+QFrame#recentOpenSurface,
+QWidget#recentOpenSearchBar,
+QWidget#recentOpenFooter,
+QWidget#recentOpenEmpty {
+    background-color: transparent;
+}
+QLabel#recentOpenCount {
+    min-width: 74px;
+    background-color: transparent;
+    color: #64748b;
+    font-size: 12px;
+}
+QTableView#recentOpenTable {
+    background-color: transparent;
+    border-width: 0px;
+    border-style: none;
+    outline: none;
+    gridline-color: transparent;
+}
+QTableView#recentOpenTable::item {
+    background-color: transparent;
+    border-width: 0px;
+    border-style: none;
+    padding: 0px;
+}
+QTableView#recentOpenTable::item:selected,
+QTableView#recentOpenTable::item:hover,
+QTableView#recentOpenTable::item:focus {
+    background-color: transparent;
+    border-width: 0px;
+    border-style: none;
+    outline: none;
+}
+QTableView#recentOpenTable QScrollBar:vertical {
+    width: 8px;
+    margin: 4px 1px 4px 0;
+    background-color: transparent;
+}
+QTableView#recentOpenTable QScrollBar::handle:vertical {
+    min-height: 20px;
+    border-radius: 4px;
+    background-color: #c5d0dc;
+}
+QTableView#recentOpenTable QScrollBar::add-line:vertical,
+QTableView#recentOpenTable QScrollBar::sub-line:vertical {
+    height: 0px;
+    background-color: transparent;
+}
+QTableView#recentOpenTable QScrollBar::add-page:vertical,
+QTableView#recentOpenTable QScrollBar::sub-page:vertical {
+    background-color: transparent;
+}
+QHeaderView#recentOpenHeader {
+    background-color: #f8fafd;
+    border-width: 0px;
+    border-style: none;
+}
+QHeaderView#recentOpenHeader::section {
+    background-color: transparent;
+    border-width: 0px;
+    border-style: none;
+    padding: 0px;
+}
+QLabel#recentOpenKeyHelp {
+    background-color: transparent;
+    color: #718198;
+    font-size: 11px;
+}
+QPushButton#recentOpenClear {
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0 10px;
+    border-width: 1px;
+    border-style: solid;
+    border-color: transparent;
+    border-radius: 7px;
+    background-color: transparent;
+    color: #52677f;
+    font-size: 12px;
+    font-weight: 650;
+}
+QPushButton#recentOpenClear:hover {
+    border-color: #dfabb2;
+    background-color: #fff4f5;
+    color: #b42335;
+}
+QPushButton#recentOpenClear:disabled {
+    border-color: transparent;
+    background-color: transparent;
+    color: #a6b1bf;
+}
+QLabel#recentOpenEmptyTitle {
+    background-color: transparent;
+    color: #253247;
+    font-size: 14px;
+    min-height: 20px;
+}
+QLabel#recentOpenEmptyCopy {
+    background-color: transparent;
+    color: #64748b;
+    font-size: 12px;
+    min-height: 16px;
 }

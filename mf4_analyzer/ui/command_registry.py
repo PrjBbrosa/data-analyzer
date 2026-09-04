@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import QAction
 
 class CommandId(Enum):
     OPEN_PROJECT = "open_project"
+    OPEN_RECENT = "open_recent"
     SAVE_PROJECT = "save_project"
     SAVE_PROJECT_AS = "save_project_as"
     QUIT = "quit"
@@ -65,6 +66,14 @@ _register(CommandMeta(
     None,
     CommandScope.WINDOW,
     "打开数据文件或项目（.tlproj）",
+))
+_register(CommandMeta(
+    CommandId.OPEN_RECENT,
+    "打开最近…",
+    None,
+    "Ctrl+K",
+    CommandScope.WINDOW,
+    "搜索最近打开的项目和文件",
 ))
 _register(CommandMeta(
     CommandId.SAVE_PROJECT,

@@ -35,6 +35,9 @@ _SEARCH_CALL_SITES = {
         ("self.config_search", "搜索配置…"),
         ("self.channel_search", "搜索通道…"),
     ),
+    "mf4_analyzer/ui/widgets/recent_open_popup.py": (
+        ("self._search", "搜索文件名或所在位置，例如 250 lowfri、P166 tlproj"),
+    ),
     "mf4_analyzer/acquisition_ui/widgets/left_pane.py": (
         ("self._search", "搜索测量…"),
     ),

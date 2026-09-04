@@ -1,0 +1,119 @@
+{
+  "platform": "offscreen",
+  "visual_acceptance": "UNVERIFIED",
+  "popup_outer": {
+    "w": 800,
+    "h": 700,
+    "x": 40,
+    "y": 83
+  },
+  "search_bar": {
+    "x": 1,
+    "y": 1,
+    "w": 798,
+    "h": 70
+  },
+  "search": {
+    "x": 16,
+    "y": 19,
+    "w": 677,
+    "h": 32
+  },
+  "header": {
+    "x": 0,
+    "y": 0,
+    "w": 779,
+    "h": 32
+  },
+  "viewport": {
+    "x": 0,
+    "y": 32,
+    "w": 779,
+    "h": 548
+  },
+  "footer": {
+    "x": 1,
+    "y": 651,
+    "w": 798,
+    "h": 48
+  },
+  "column_widths": {
+    "name": 327,
+    "path": 452
+  },
+  "divider_x": 327,
+  "row_height": 40,
+  "full_row_count": 13,
+  "h_scrollbar_max": 0,
+  "v_scrollbar_policy": 2,
+  "max_width_contract": 800,
+  "target_height_contract": 700,
+  "clamp_normal": {
+    "w": 800,
+    "h": 700
+  },
+  "clamp_narrow": {
+    "avail": [
+      0,
+      0,
+      500,
+      900
+    ],
+    "geom": [
+      8,
+      83,
+      484,
+      700
+    ],
+    "w": 484,
+    "h": 700,
+    "left_ok": true,
+    "top_ok": true,
+    "right_ok": true,
+    "bottom_ok": true
+  },
+  "clamp_short": {
+    "avail": [
+      0,
+      0,
+      1600,
+      360
+    ],
+    "geom": [
+      40,
+      8,
+      800,
+      344
+    ],
+    "w": 800,
+    "h": 344,
+    "left_ok": true,
+    "top_ok": true,
+    "right_ok": true,
+    "bottom_ok": true
+  },
+  "clamp_negative": {
+    "avail": [
+      -1920,
+      80,
+      1440,
+      800
+    ],
+    "geom": [
+      -1288,
+      83,
+      800,
+      700
+    ],
+    "w": 800,
+    "h": 700,
+    "left_ok": true,
+    "top_ok": true,
+    "right_ok": true,
+    "bottom_ok": true
+  },
+  "lifecycle": {
+    "owned_children_after_20": 1,
+    "closed_emits": 20
+  }
+}

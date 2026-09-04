@@ -170,7 +170,7 @@ def test_recent_menu_discovery_hint_stays_in_budget():
     assert hint.surface == "discovery"
     assert hint.retire_on == "recent_open"
     assert hint.priority == 40
-    assert hint.text == "打开旁箭头可快速打开最近的项目和文件"
+    assert hint.text == "打开旁箭头可搜索最近的项目和文件"
     assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
 
 

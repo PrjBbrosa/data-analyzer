@@ -1,6 +1,6 @@
 # tests/ui/test_open_and_save_entry.py
 import csv
-from PyQt5.QtWidgets import QFileDialog, QMenuBar, QMessageBox
+from PyQt5.QtWidgets import QFileDialog, QMenuBar, QMessageBox, QWidget
 
 
 def _csv(path, n=30):
@@ -192,7 +192,6 @@ def test_save_project_records_recent_project_on_top(qapp, tmp_path):
 
 def test_populate_recent_menu_matches_store(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
-    from mf4_analyzer.ui.recent_files import format_recent_label
 
     a = tmp_path / "a.csv"; _csv(a)
     proj = tmp_path / "p.tlproj"
@@ -200,14 +199,10 @@ def test_populate_recent_menu_matches_store(qapp, tmp_path):
     mw._open_paths([str(a)])
     mw.save_project(proj)
     mw._populate_recent_menu()
-    texts = [
-        action.text()
-        for action in mw.toolbar._recent_menu.actions()
-        if not action.isSeparator()
-    ]
-    assert format_recent_label(proj) in texts
-    assert format_recent_label(a) in texts
-    assert texts[-1] == "清除最近记录"
+    names = [match.filename for match in mw.toolbar._recent_popup._matches]
+    assert proj.name in names
+    assert a.name in names
+    assert names[0] == proj.name
 
 
 def test_recent_open_requested_reaches_open_paths(qapp, tmp_path, monkeypatch):
@@ -221,6 +216,21 @@ def test_recent_open_requested_reaches_open_paths(qapp, tmp_path, monkeypatch):
     target.write_text("time,rpm\n0,1\n", encoding="utf-8")
     mw.toolbar.recent_open_requested.emit(str(target))
     assert seen == [[str(target)]]
+
+
+def test_clear_recent_files_projects_empty_popup(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"; _csv(a)
+    mw = MainWindow()
+    mw._open_paths([str(a)])
+    mw._populate_recent_menu()
+    assert mw.toolbar._recent_popup._entries
+    mw._clear_recent_files()
+    assert mw._recent_files.all_entries() == ()
+    assert mw.toolbar._recent_popup._entries == ()
+    title = mw.toolbar._recent_popup.findChild(QWidget, "recentOpenEmptyTitle")
+    assert title.text() == "暂无最近记录"
 
 
 def test_missing_recent_path_is_removed_after_open(qapp, tmp_path, monkeypatch):

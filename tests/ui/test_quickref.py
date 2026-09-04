@@ -79,11 +79,15 @@ def test_secondary_copy_stays_scannable():
 
 
 def test_quickref_open_row_documents_recent_menu():
+    from mf4_analyzer.ui.command_registry import CommandId
+
     start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
     row = next(r for r in start.rows if r.desc == "打开数据 / 项目")
-    assert "4" in row.sub and "8" in row.sub
+    assert "10" in row.sub and "40" in row.sub
+    assert "搜索" in row.sub
     assert "灰显" in row.sub
     assert "清除" in row.sub
+    assert row.keys == (quickref.command_shortcut_text(CommandId.OPEN_RECENT),)
 
 
 def test_supported_formats_include_v77_imports():

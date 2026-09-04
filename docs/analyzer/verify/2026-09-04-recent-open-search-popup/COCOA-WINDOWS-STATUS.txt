@@ -1,0 +1,14 @@
+cocoa_probe_platform=cocoa
+popup_visible=True
+popup_size=800x700
+grab=cocoa-popup-grab.png
+offscreen=offscreen-probe.json
+
+cocoa_interactive=UNVERIFIED
+# A production-stylesheet Toolbar+RecentOpenPopup was shown on the Cocoa
+# QPA and grabbed at 800x700. That is a first-frame geometry/chrome probe,
+# not a full foreground pass of typing, Up/Down/Enter, two-stage Esc,
+# outside-click, or ⌘K. Do not treat the grab as visual acceptance.
+
+windows_foreground=UNVERIFIED
+windows_frozen=UNVERIFIED

@@ -189,7 +189,7 @@ _HINTS = (
     ),
     Hint(
         id="toolbar.recent_menu",
-        text="打开旁箭头可快速打开最近的项目和文件",
+        text="打开旁箭头可搜索最近的项目和文件",
         surface="discovery",
         retire_on="recent_open",
         priority=40,
