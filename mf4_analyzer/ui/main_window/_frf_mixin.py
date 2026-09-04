@@ -290,7 +290,22 @@ class FrfMixin:
         if not np.isfinite(suggested) or suggested <= 0:
             raise FrfPreflightError("无法自动重建：建议采样率无效")
         old_max = float(fd.time_array[-1]) if len(fd.time_array) else 0.0
-        fd.rebuild_time_axis(suggested)
+        try:
+            old_fs = float(fd.fs)
+        except (TypeError, ValueError):
+            old_fs = 0.0
+        if relative_jitter is None:
+            jitter_fn = getattr(fd, "time_axis_relative_jitter", None)
+            if callable(jitter_fn):
+                relative_jitter = jitter_fn()
+        invoke = getattr(self, "_invoke_rebuild_time_axis", None)
+        if callable(invoke):
+            invoke(fd, suggested, reason="auto_nonuniform")
+        else:
+            try:
+                fd.rebuild_time_axis(suggested, reason="auto_nonuniform")
+            except TypeError:
+                fd.rebuild_time_axis(suggested)
         new_max = float(fd.time_array[-1]) if len(fd.time_array) else 0.0
         if hasattr(self, "_invalidate_all_analysis_caches_for_fid"):
             self._invalidate_all_analysis_caches_for_fid(fid)
@@ -310,11 +325,19 @@ class FrfMixin:
         )
         if hasattr(self, "toast"):
             self.toast(message, "warning")
+        jitter_txt = "—"
+        if relative_jitter is not None and np.isfinite(relative_jitter):
+            jitter_txt = f"{float(relative_jitter):.3g}"
+        orig_fs_txt = f"{old_fs:g}" if np.isfinite(old_fs) and old_fs > 0 else "—"
         if hasattr(self, "statusBar"):
             self.statusBar.showMessage(
                 f"频响 · 已自动重建时间轴 · Fs={suggested:g} | "
-                f"{old_max:.1f}s → {new_max:.3f}s"
+                f"{old_max:.1f}s → {new_max:.3f}s | "
+                f"原 Fs≈{orig_fs_txt} · 抖动 {jitter_txt}"
             )
+        refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
+        if callable(refresh_chip):
+            refresh_chip()
         return suggested
 
     def _frf_source_arrays(self, source, role):

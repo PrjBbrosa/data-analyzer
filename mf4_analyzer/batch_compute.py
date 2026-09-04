@@ -32,6 +32,7 @@ from .signal.analysis_defaults import (
     normalize_overlap_fraction,
 )
 from .signal.fft import FFTAnalyzer
+from .io.file_data import build_time_axis_provenance, time_axis_spacing_stats
 from .signal.frf import (
     FrfCancelled,
     FrfParams,
@@ -71,6 +72,21 @@ class BatchFrfDataError(ValueError):
 
 
 @dataclass(frozen=True)
+class UniformTimeAxisResult:
+    """Spectrogram-safe axis plus optional auto-rebuild provenance."""
+
+    time: np.ndarray
+    fs: float
+    warnings: tuple[str, ...] = ()
+    time_axis: dict[str, Any] | None = None
+
+    def __iter__(self):
+        yield self.time
+        yield self.fs
+        yield self.warnings
+
+
+@dataclass(frozen=True)
 class PreparedBatchFrf:
     """Fully loaded, data-preflighted FRF inputs; no artifact is reserved."""
 
@@ -85,6 +101,7 @@ class PreparedBatchFrf:
     input_unit: str = ""
     output_unit: str = ""
     warnings: tuple[str, ...] = ()
+    time_axis: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +207,7 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
         raise BatchFrfDataError("FRF fs must be finite and > 0")
 
     adapter_warnings: list[str] = []
+    time_axis_facts: dict[str, Any] | None = None
 
     # Build exactly one mask from the unmodified physical time array, then
     # apply it to t/x/y together. Finiteness, monotonicity and uniformity are
@@ -226,26 +244,36 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
 
     from .signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
 
-    nominal_dt = 1.0 / fs
-    relative_jitter = float(
-        np.max(np.abs(np.diff(time) - nominal_dt)) / nominal_dt
-    )
+    spacing = time_axis_spacing_stats(time, fs)
+    if spacing is None:
+        raise BatchFrfDataError("FRF time must be strictly increasing")
+    relative_jitter, _dt_min, _dt_max = spacing
     if relative_jitter > DEFAULT_TIME_JITTER_TOLERANCE:
         suggested = suggest_fs_from_time_axis(time, fs)
         if not (np.isfinite(suggested) and suggested > 0.0):
             raise BatchFrfDataError(
                 "FRF time is non-uniform and no valid Fs could be suggested"
             )
+        time_axis_facts = build_time_axis_provenance(
+            time,
+            fs,
+            suggested,
+            reason="auto_nonuniform",
+            original_time_source=time_source,
+            n_samples=int(time.size),
+        ).to_dict()
         time = np.arange(len(time), dtype=float) / float(suggested)
         fs = float(suggested)
         adapter_warnings.append(
             "时间轴已按建议 Fs 自动重建为均匀网格（"
             f"relative_jitter={relative_jitter:.6g} → Fs={fs:g}）"
         )
-        nominal_dt = 1.0 / fs
-        relative_jitter = float(
-            np.max(np.abs(np.diff(time) - nominal_dt)) / nominal_dt
-        )
+        rebuilt_spacing = time_axis_spacing_stats(time, fs)
+        if rebuilt_spacing is None:
+            raise BatchFrfDataError(
+                "FRF time is non-uniform and no valid Fs could be suggested"
+            )
+        relative_jitter, _dt_min, _dt_max = rebuilt_spacing
         if relative_jitter > DEFAULT_TIME_JITTER_TOLERANCE:
             raise BatchFrfDataError(
                 "FRF time is non-uniform: relative_jitter="
@@ -290,6 +318,7 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
         input_unit=_frf_channel_unit(fd, input_channel),
         output_unit=_frf_channel_unit(fd, output_channel),
         warnings=tuple(adapter_warnings),
+        time_axis=time_axis_facts,
     )
 
 
@@ -474,10 +503,12 @@ def uniform_time_axis_for_spectrogram(time, fs, length):
     """
     fs = float(fs)
     if time is None:
-        return np.arange(int(length), dtype=float) / fs, fs, ()
+        return UniformTimeAxisResult(
+            np.arange(int(length), dtype=float) / fs, fs, (),
+        )
     time_arr = np.asarray(time, dtype=float)
     if time_arr.size < 2:
-        return time_arr, fs, ()
+        return UniformTimeAxisResult(time_arr, fs, ())
 
     from .signal.spectrogram import (
         DEFAULT_TIME_JITTER_TOLERANCE,
@@ -488,15 +519,16 @@ def uniform_time_axis_for_spectrogram(time, fs, length):
         SpectrogramAnalyzer._validate_time_axis(
             time_arr, fs, DEFAULT_TIME_JITTER_TOLERANCE,
         )
-        return time_arr, fs, ()
+        return UniformTimeAxisResult(time_arr, fs, ())
     except ValueError as exc:
         if 'non-uniform time axis' not in str(exc):
             raise
 
-    nominal_dt = 1.0 / fs
-    relative_jitter = float(
-        np.max(np.abs(np.diff(time_arr) - nominal_dt)) / nominal_dt
-    )
+    spacing = time_axis_spacing_stats(time_arr, fs)
+    if spacing is None:
+        relative_jitter = float("nan")
+    else:
+        relative_jitter, _dt_min, _dt_max = spacing
     suggested = suggest_fs_from_time_axis(time_arr, fs)
     if not (np.isfinite(suggested) and suggested > 0):
         suggested = fs
@@ -505,10 +537,19 @@ def uniform_time_axis_for_spectrogram(time, fs, length):
         "时间轴已按建议 Fs 自动重建为均匀网格（"
         f"relative_jitter={relative_jitter:.6g} → Fs={suggested:g}）"
     )
-    return (
+    time_axis = build_time_axis_provenance(
+        time_arr,
+        fs,
+        suggested,
+        reason="auto_nonuniform",
+        original_time_source="",
+        n_samples=int(time_arr.size),
+    ).to_dict()
+    return UniformTimeAxisResult(
         np.arange(len(time_arr), dtype=float) / suggested,
         suggested,
         (warning,),
+        time_axis,
     )
 
 
@@ -877,7 +918,8 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
     """
     from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
     sig, _spec = apply_filter_if_enabled(sig, fs, params)
-    time, fs, axis_warnings = uniform_time_axis_for_spectrogram(time, fs, len(sig))
+    axis = uniform_time_axis_for_spectrogram(time, fs, len(sig))
+    time, fs, axis_warnings = axis
     sp = SpectrogramParams(
         fs=float(fs),
         nfft=int(params.get('nfft', 1024)),
@@ -897,6 +939,9 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
     metadata['effective_fs'] = float(fs)
     if axis_warnings:
         metadata['axis_warnings'] = tuple(axis_warnings)
+    time_axis = getattr(axis, 'time_axis', None)
+    if time_axis:
+        metadata['time_axis'] = dict(time_axis)
     return _Spectro2D(
         x=np.asarray(result.times, dtype=float),
         y=np.asarray(result.frequencies, dtype=float),

@@ -2595,7 +2595,7 @@ class MainWindow(
         if pop.exec_() == QDialog.Accepted:
             new_fs = pop.new_fs()
             old_max = fd.time_array[-1] if len(fd.time_array) else 0
-            fd.rebuild_time_axis(new_fs)
+            self._invoke_rebuild_time_axis(fd, new_fs, reason='manual')
             new_max = fd.time_array[-1] if len(fd.time_array) else 0
             current_hi = self.inspector.top.spin_end.maximum()
             self.inspector.top.set_range_limits(0, max(current_hi, new_max))
@@ -2623,6 +2623,7 @@ class MainWindow(
                 f"已重建时间轴 · Fs={new_fs}",
                 "success",
             )
+            self._refresh_time_axis_provenance_chips()
             return True
         return False
 
@@ -5274,6 +5275,136 @@ class MainWindow(
             representative = amp
         return (0.0, energy_band_fmax(freq, representative))
 
+    def _invoke_rebuild_time_axis(self, fd, fs, *, reason='manual'):
+        """Call ``rebuild_time_axis`` with ``reason`` when the object accepts it."""
+        rebuild = getattr(fd, 'rebuild_time_axis', None)
+        if not callable(rebuild):
+            return
+        try:
+            rebuild(fs, reason=reason)
+        except TypeError:
+            rebuild(fs)
+
+    @staticmethod
+    def _format_time_axis_provenance_chip(provenance):
+        if provenance is None:
+            return None, None
+        if isinstance(provenance, dict):
+            estimated_fs = provenance.get('estimated_fs')
+            original_fs = provenance.get('original_fs')
+            jitter = provenance.get('relative_jitter')
+            method = provenance.get('method') or 'median_dt'
+            applied_at = provenance.get('applied_at') or ''
+            dt_min = provenance.get('dt_min')
+            dt_max = provenance.get('dt_max')
+            n_samples = provenance.get('n_samples')
+            original_time_source = provenance.get('original_time_source') or ''
+        else:
+            estimated_fs = getattr(provenance, 'estimated_fs', None)
+            original_fs = getattr(provenance, 'original_fs', None)
+            jitter = getattr(provenance, 'relative_jitter', None)
+            method = getattr(provenance, 'method', None) or 'median_dt'
+            applied_at = getattr(provenance, 'applied_at', '') or ''
+            dt_min = getattr(provenance, 'dt_min', None)
+            dt_max = getattr(provenance, 'dt_max', None)
+            n_samples = getattr(provenance, 'n_samples', None)
+            original_time_source = (
+                getattr(provenance, 'original_time_source', '') or ''
+            )
+        if estimated_fs is None:
+            return None, None
+        try:
+            estimated = float(estimated_fs)
+        except (TypeError, ValueError):
+            return None, None
+        if not np.isfinite(estimated):
+            return None, None
+        text = f"已重采样 Fs≈{estimated:g} Hz"
+        orig_txt = "—"
+        if original_fs is not None:
+            try:
+                orig_val = float(original_fs)
+            except (TypeError, ValueError):
+                orig_val = None
+            if orig_val is not None and np.isfinite(orig_val):
+                orig_txt = f"{orig_val:g} Hz"
+        jitter_txt = "—"
+        if jitter is not None:
+            try:
+                jitter_val = float(jitter)
+            except (TypeError, ValueError):
+                jitter_val = None
+            if jitter_val is not None and np.isfinite(jitter_val):
+                jitter_txt = f"{jitter_val:.3g}"
+        dt_txt = "—"
+        if dt_min is not None and dt_max is not None:
+            try:
+                dt_txt = f"{float(dt_min):.6g} … {float(dt_max):.6g} s"
+            except (TypeError, ValueError):
+                dt_txt = "—"
+        samples_txt = "—" if n_samples is None else str(int(n_samples))
+        tooltip = (
+            f"原 Fs≈{orig_txt}\n"
+            f"原时间源 {original_time_source or '—'}\n"
+            f"抖动 {jitter_txt}\n"
+            f"dt {dt_txt}\n"
+            f"样本数 {samples_txt}\n"
+            f"方法 {method}\n"
+            f"时间 {applied_at or '—'}\n"
+            f"影响：本文件所有通道"
+        )
+        return text, tooltip
+
+    def _auto_nonuniform_provenances(self, files):
+        provenances = []
+        for fd in files:
+            provenance = getattr(fd, 'time_axis_provenance', None)
+            if provenance is None:
+                continue
+            reason = (
+                provenance.get('reason')
+                if isinstance(provenance, dict)
+                else getattr(provenance, 'reason', None)
+            )
+            if reason == 'auto_nonuniform':
+                provenances.append(provenance)
+        return provenances
+
+    def _time_axis_provenance_chip_payload(self, files):
+        provenances = self._auto_nonuniform_provenances(files)
+        if not provenances:
+            return None, None
+        text, tooltip = self._format_time_axis_provenance_chip(provenances[0])
+        if text is None:
+            return None, None
+        if len(provenances) == 1:
+            return text, tooltip
+        extra = [
+            self._format_time_axis_provenance_chip(item)[1]
+            for item in provenances[1:]
+        ]
+        extra = [item for item in extra if item]
+        if extra:
+            tooltip = "\n\n".join([tooltip, *extra])
+        return text, tooltip
+
+    def _refresh_time_axis_provenance_chips(self):
+        stack = getattr(self, 'chart_stack', None)
+        if stack is None:
+            return
+        all_cards = getattr(stack, '_all_cards', None)
+        cards = list(all_cards()) if callable(all_cards) else []
+        if not cards:
+            card = getattr(stack, '_time_card', None)
+            if card is not None:
+                cards = [card]
+        files = list(getattr(self, 'files', {}).values())
+        text, tooltip = self._time_axis_provenance_chip_payload(files)
+        for card in cards:
+            setter = getattr(card, 'set_time_axis_provenance', None)
+            if callable(setter):
+                setter(text, tooltip)
+
     def _check_uniform_or_prompt(self, fd, mode):
         """Pre-flight non-uniform time-axis check before worker dispatch.
 
@@ -5314,7 +5445,15 @@ class MainWindow(
 
         old_max = fd.time_array[-1] if getattr(fd, 'time_array', None) is not None and len(fd.time_array) else 0.0
         new_fs = float(suggested)
-        fd.rebuild_time_axis(new_fs)
+        try:
+            old_fs = float(getattr(fd, 'fs', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            old_fs = 0.0
+        jitter = None
+        relative_jitter = getattr(fd, 'time_axis_relative_jitter', None)
+        if callable(relative_jitter):
+            jitter = relative_jitter()
+        self._invoke_rebuild_time_axis(fd, new_fs, reason='auto_nonuniform')
         new_max = fd.time_array[-1] if getattr(fd, 'time_array', None) is not None and len(fd.time_array) else 0.0
 
         if target_fid is not None:
@@ -5348,13 +5487,24 @@ class MainWindow(
             pass
 
         short_name = getattr(fd, 'short_name', '') or getattr(fd, 'filename', '当前文件')
+        jitter_txt = "—"
+        if jitter is not None:
+            try:
+                jitter_val = float(jitter)
+            except (TypeError, ValueError):
+                jitter_val = None
+            if jitter_val is not None and np.isfinite(jitter_val):
+                jitter_txt = f"{jitter_val:.3g}"
+        orig_fs_txt = f"{old_fs:g}" if np.isfinite(old_fs) and old_fs > 0 else "—"
         self.statusBar.showMessage(
-            f"时间轴已自动重建: {short_name} | Fs={new_fs:g} | {old_max:.1f}s → {new_max:.3f}s"
+            f"时间轴已自动重建: {short_name} | Fs={new_fs:g} | "
+            f"{old_max:.1f}s → {new_max:.3f}s | 原 Fs≈{orig_fs_txt} · 抖动 {jitter_txt}"
         )
         self.toast(
             f"时间轴非均匀，已按 Fs={new_fs:g} 自动处理。",
             "info",
         )
+        self._refresh_time_axis_provenance_chips()
         return True
 
     # FFT compute methods (do_fft, _do_fft_single, _fft_compute_arrays, etc.)

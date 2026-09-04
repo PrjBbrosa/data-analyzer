@@ -262,6 +262,21 @@ class _ChartCard(QWidget):
             self.toolbar.insertWidget(first_action, self._toolbar_leading_spacer)
             if first_action is not None else self.toolbar.addWidget(self._toolbar_leading_spacer)
         )
+        # Lasting time-axis rebuild chip. Lives in the header/toolbar row
+        # rather than the canvas corner: quality-dot and time diagnostics
+        # already occupy the plot overlay.
+        self._time_axis_chip = QLabel("", self.toolbar)
+        self._time_axis_chip.setObjectName("timeAxisProvenanceChip")
+        self._time_axis_chip.setAttribute(Qt.WA_StyledBackground, True)
+        self._time_axis_chip.setAlignment(Qt.AlignCenter)
+        self._time_axis_chip.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self._time_axis_chip.hide()
+        self._insert_toolbar_widget_after(
+            self._toolbar_leading_spacer_action, self._time_axis_chip
+        )
+        chip_action = self._toolbar_action_for_widget(self._time_axis_chip)
+        if chip_action is not None:
+            chip_action.setVisible(False)
         # TimeChartCard detaches this host onto a sibling row, so the card's
         # own resizeEvent can see a stale toolbar width. Sync off the host.
         self.toolbar.installEventFilter(self)
@@ -507,6 +522,25 @@ class _ChartCard(QWidget):
         except RuntimeError:
             # A queued reposition can outlive the card during application exit.
             pass
+
+    def set_time_axis_provenance(self, text, tooltip=None):
+        """Show or hide the header resample chip. Presentation only."""
+        chip = getattr(self, "_time_axis_chip", None)
+        if chip is None:
+            return
+        action = self._toolbar_action_for_widget(chip)
+        if not text:
+            chip.clear()
+            chip.setToolTip("")
+            chip.hide()
+            if action is not None:
+                action.setVisible(False)
+            return
+        chip.setText(str(text))
+        chip.setToolTip("" if tooltip is None else str(tooltip))
+        chip.show()
+        if action is not None:
+            action.setVisible(True)
 
     def set_time_plot_diagnostics(self, *, attempted, successful, details):
         """Show a partial-render summary, or clear it after full success."""

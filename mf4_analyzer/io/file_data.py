@@ -1,6 +1,12 @@
 """FileData: per-file in-memory channel container."""
-import numpy as np
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+
+import numpy as np
 
 from .._palette import FILE_PALETTES
 from .channel_frame import frame_get_column, frame_row_count
@@ -26,6 +32,13 @@ _SHORT_NAME_BUDGET_WITH_SUFFIX = 14
 # Single code-point ellipsis used as the middle marker (NOT three dots) so the
 # elided label stays exactly ``budget`` code points wide.
 _MIDDLE_ELLIPSIS = "…"  # …
+
+TIME_AXIS_REBUILD_REASONS = frozenset({
+    "auto_nonuniform",
+    "manual",
+    "project_restore",
+})
+TIME_AXIS_PROVENANCE_METHOD = "median_dt"
 
 
 def middle_ellipsis(text, budget):
@@ -63,6 +76,134 @@ def middle_ellipsis(text, budget):
     return f"{s[:head]}{_MIDDLE_ELLIPSIS}{s[-tail:] if tail else ''}"
 
 
+def _utc_now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z",
+    )
+
+
+def _optional_float(value):
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def time_axis_spacing_stats(time_array, fs):
+    """Return ``(relative_jitter, dt_min, dt_max)`` or ``None``.
+
+    ``relative_jitter`` is ``max|dt - 1/fs| / (1/fs)``, the same quantity
+    ``FileData.is_time_axis_uniform`` compares to the spectrogram tolerance.
+    """
+    if time_array is None:
+        return None
+    arr = np.asarray(time_array, dtype=float)
+    if arr.ndim != 1 or arr.size < 2:
+        return None
+    sample_rate = _optional_float(fs)
+    if sample_rate is None or sample_rate <= 0:
+        return None
+    dt = np.diff(arr)
+    if dt.size == 0:
+        return None
+    nominal_dt = 1.0 / sample_rate
+    relative_jitter = float(np.max(np.abs(dt - nominal_dt)) / nominal_dt)
+    return relative_jitter, float(np.min(dt)), float(np.max(dt))
+
+
+@dataclass(frozen=True)
+class TimeAxisProvenance:
+    """Frozen snapshot of the axis that was replaced by a rebuild."""
+
+    reason: str
+    method: str
+    original_fs: float | None
+    original_time_source: str
+    estimated_fs: float | None
+    relative_jitter: float | None
+    dt_min: float | None
+    dt_max: float | None
+    n_samples: int
+    applied_at: str
+
+    def to_dict(self):
+        return {
+            "reason": self.reason,
+            "method": self.method,
+            "original_fs": self.original_fs,
+            "original_time_source": self.original_time_source,
+            "estimated_fs": self.estimated_fs,
+            "relative_jitter": self.relative_jitter,
+            "dt_min": self.dt_min,
+            "dt_max": self.dt_max,
+            "n_samples": int(self.n_samples),
+            "applied_at": self.applied_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload):
+        if payload is None:
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        try:
+            n_samples = int(payload.get("n_samples") or 0)
+        except (TypeError, ValueError):
+            n_samples = 0
+        return cls(
+            reason=str(payload.get("reason") or ""),
+            method=str(payload.get("method") or TIME_AXIS_PROVENANCE_METHOD),
+            original_fs=_optional_float(payload.get("original_fs")),
+            original_time_source=str(payload.get("original_time_source") or ""),
+            estimated_fs=_optional_float(payload.get("estimated_fs")),
+            relative_jitter=_optional_float(payload.get("relative_jitter")),
+            dt_min=_optional_float(payload.get("dt_min")),
+            dt_max=_optional_float(payload.get("dt_max")),
+            n_samples=n_samples,
+            applied_at=str(payload.get("applied_at") or ""),
+        )
+
+
+def build_time_axis_provenance(
+    time_array,
+    original_fs,
+    estimated_fs,
+    *,
+    reason,
+    original_time_source,
+    n_samples=None,
+    applied_at=None,
+):
+    """Snapshot the current axis before ``fs`` / ``time_array`` are overwritten."""
+    stats = time_axis_spacing_stats(time_array, original_fs)
+    if stats is None:
+        relative_jitter = dt_min = dt_max = None
+    else:
+        relative_jitter, dt_min, dt_max = stats
+    if n_samples is None:
+        if time_array is None:
+            n_samples = 0
+        else:
+            n_samples = int(np.asarray(time_array).size)
+    return TimeAxisProvenance(
+        reason=str(reason),
+        method=TIME_AXIS_PROVENANCE_METHOD,
+        original_fs=_optional_float(original_fs),
+        original_time_source=str(original_time_source or ""),
+        estimated_fs=_optional_float(estimated_fs),
+        relative_jitter=relative_jitter,
+        dt_min=dt_min,
+        dt_max=dt_max,
+        n_samples=int(n_samples),
+        applied_at=str(applied_at or _utc_now_iso()),
+    )
+
+
 class FileData:
     def __init__(self, fp, df, chs, units, idx=0, *, fs=None,
                  source_metadata=None, channel_metadata=None, label_suffix=""):
@@ -89,6 +230,7 @@ class FileData:
         self.time_array = None
         self.fs = 1000.0
         self._time_source = 'auto'  # 'auto', 'column', 'generated'
+        self.time_axis_provenance = None
 
         if fs is not None:
             self.fs = float(fs)
@@ -113,12 +255,31 @@ class FileData:
                 self.time_array = np.arange(frame_row_count(df), dtype=float) / self.fs
                 self._time_source = 'generated'
 
-    def rebuild_time_axis(self, fs):
-        """根据新的采样率重建时间轴"""
-        self.fs = fs
+    def rebuild_time_axis(self, fs, *, reason='manual'):
+        """Rebuild ``time_array`` as ``arange(n) / fs``.
+
+        ``reason`` is keyword-only so duck-typed fakes that only accept
+        ``(self, new_fs)`` keep working at call sites that inspect the
+        signature or catch ``TypeError``. Snapshot provenance from the
+        current axis *before* overwrite so two consecutive rebuilds record
+        the immediate neighbor, not the original original.
+        """
         n = len(self.data)
+        snapshot = build_time_axis_provenance(
+            self.time_array,
+            self.fs,
+            fs,
+            reason=reason,
+            original_time_source=str(self._time_source or ""),
+            n_samples=n,
+        )
+        self.fs = fs
         self.time_array = np.arange(n, dtype=float) / fs
-        self._time_source = 'manual'
+        if reason == 'manual':
+            self._time_source = 'manual'
+        elif reason == 'auto_nonuniform':
+            self._time_source = 'auto_rebuilt'
+        self.time_axis_provenance = snapshot
 
     def is_audio_source(self):
         """True iff this file was imported from an audio/video track."""
@@ -162,16 +323,24 @@ class FileData:
         arr = np.asarray(t, dtype=float)
         if arr.ndim != 1 or arr.size < 2:
             return True
-        fs = float(self.fs)
-        if not np.isfinite(fs) or fs <= 0:
+        fs = _optional_float(self.fs)
+        if fs is None or fs <= 0:
             # No nominal_dt is meaningful; defer rebuild to the caller.
             return False
-        nominal_dt = 1.0 / fs
-        dt = np.diff(arr)
-        if np.any(dt <= 0):
+        stats = time_axis_spacing_stats(arr, fs)
+        if stats is None:
+            return True
+        relative_jitter, dt_min, _dt_max = stats
+        if dt_min <= 0:
             return False
-        relative_jitter = float(np.max(np.abs(dt - nominal_dt)) / nominal_dt)
         return relative_jitter <= float(tolerance)
+
+    def time_axis_relative_jitter(self):
+        """Return ``max|dt-1/fs|/(1/fs)`` for the current axis, or ``None``."""
+        stats = time_axis_spacing_stats(self.time_array, self.fs)
+        if stats is None:
+            return None
+        return stats[0]
 
     def suggested_fs_from_time_axis(self):
         """Best-effort Fs estimate from the existing ``time_array``.

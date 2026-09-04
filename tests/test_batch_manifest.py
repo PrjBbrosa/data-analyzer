@@ -339,6 +339,43 @@ def test_manifest_serializes_nonfinite_values_as_strict_json_markers(tmp_path):
     }
 
 
+def test_manifest_accepts_additive_time_axis_effective_facts(tmp_path):
+    source_path = tmp_path / "source.csv"
+    artifact_path = tmp_path / "out.csv"
+    source_path.write_text("time,sig\n0,1\n", encoding="utf-8")
+    artifact_path.write_text("frequency_hz,amplitude\n0,1\n", encoding="utf-8")
+    entry = _done_entry(source_path, artifact_path)
+    entry["effective_facts"]["time_axis"] = {
+        "reason": "auto_nonuniform",
+        "method": "median_dt",
+        "original_fs": 500.0,
+        "original_time_source": "column",
+        "estimated_fs": 498.0,
+        "relative_jitter": 0.2,
+        "dt_min": 0.0016,
+        "dt_max": 0.0024,
+        "n_samples": 128,
+        "applied_at": "2026-09-04T00:00:00.000Z",
+    }
+    recorder = BatchManifestRecorder(
+        tmp_path,
+        preset_name="FFT batch",
+        normalized_recipe={"method": "fft_time", "params": {}},
+        recipe_fingerprint="recipe-time-axis",
+        requested_outputs={},
+        run_id="run-time-axis",
+        app_version="v-test",
+    )
+    recorder.start()
+    recorder.record(entry)
+    final_path = recorder.finish(run_status="done", blocked_reasons=[])
+    manifest = load_batch_manifest(final_path)
+    facts = manifest["entries"][0]["effective_facts"]["time_axis"]
+    assert facts["reason"] == "auto_nonuniform"
+    assert facts["method"] == "median_dt"
+    assert facts["estimated_fs"] == pytest.approx(498.0)
+
+
 def test_manifest_finish_on_cancel_keeps_completed_and_cancelled_facts(tmp_path):
     recorder = BatchManifestRecorder(
         tmp_path,

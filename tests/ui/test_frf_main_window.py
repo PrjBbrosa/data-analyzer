@@ -205,7 +205,7 @@ def test_frf_manual_range_auto_rebuilds_time_jitter_inside_selected_samples(qtbo
 
     lo, hi = candidate["time_range"]
     assert 0.1 <= lo <= hi <= 0.9
-    assert win.files[fid]._time_source == "manual"
+    assert win.files[fid]._time_source == "auto_rebuilt"
     assert win.files[fid].is_time_axis_uniform()
     assert float(win.files[fid].fs) == pytest.approx(
         win.files[fid].suggested_fs_from_time_axis()
@@ -265,6 +265,19 @@ def test_frf_preflight_rejects_uniform_but_generated_timebase(qtbot):
 
     with pytest.raises(FrfPreflightError, match="真实时间轴"):
         win._build_frf_candidate(state, 0)
+
+
+def test_frf_preflight_accepts_auto_rebuilt_timebase(qtbot):
+    win, fid, state, _time = _window_with_pair(qtbot)
+    win.files[fid]._time_source = "auto_rebuilt"
+    win.inspector.frf_ctx.spin_t_win.setValue(0.5)
+
+    arrays = win._frf_source_arrays(state.panes[0].input_source, "输入")
+    candidate = win._build_frf_candidate(state, 0)
+
+    assert arrays[0][0] == fid
+    assert candidate is not None
+    assert candidate["input_source"][0] == fid
 
 
 @pytest.mark.parametrize(

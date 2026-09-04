@@ -4112,6 +4112,96 @@ def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch
     assert abs(seen['dt'] - (1.0 / 250.0)) < 1e-12
 
 
+def _write_time_csv(path, time, values, *, extra=None):
+    import csv
+
+    channels = ["time", "sig"]
+    rows = list(zip(time, values))
+    if extra is not None:
+        channels.append("out")
+        rows = [
+            (stamp, value, other)
+            for (stamp, value), other in zip(rows, extra)
+        ]
+    with open(path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(channels)
+        for row in rows:
+            writer.writerow([float(item) for item in row])
+
+
+def test_nonuniform_auto_rebuild_shows_provenance_chip(qtbot, tmp_path):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    n = 64
+    fs = 500.0
+    nominal_dt = 1.0 / fs
+    dts = np.resize(np.array([1.2 * nominal_dt, 0.8 * nominal_dt]), n - 1)
+    jittered_time = np.concatenate(([0.0], np.cumsum(dts)))
+    jittered = tmp_path / "jittered.csv"
+    _write_time_csv(jittered, jittered_time, np.arange(n, dtype=float))
+    uniform = tmp_path / "uniform.csv"
+    _write_time_csv(
+        uniform,
+        np.arange(n, dtype=float) / fs,
+        np.arange(n, dtype=float),
+    )
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(jittered))
+    fd = next(iter(win.files.values()))
+    assert fd.is_time_axis_uniform() is False
+    assert win._check_uniform_or_prompt(fd, "fft") is True
+    assert fd._time_source == "auto_rebuilt"
+    chip = win.chart_stack._time_card._time_axis_chip
+    assert not chip.isHidden()
+    assert "Fs≈" in chip.text()
+    assert "Hz" in chip.text()
+    assert "原 Fs≈" in chip.toolTip()
+    assert "抖动" in win.statusBar.currentMessage()
+
+    win.close_all(force=True)
+    win._load_one(str(uniform))
+    fd2 = next(iter(win.files.values()))
+    assert fd2.is_time_axis_uniform() is True
+    win._check_uniform_or_prompt(fd2, "fft")
+    assert win.chart_stack._time_card._time_axis_chip.isHidden()
+
+
+def test_frf_auto_rebuild_shows_provenance_chip(qtbot, tmp_path):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    n = 2000
+    fs = 1000.0
+    time = np.arange(n, dtype=float) / fs
+    jittered = time.copy()
+    jittered[500:] += 0.1
+    path = tmp_path / "frf_jitter.csv"
+    _write_time_csv(
+        path,
+        jittered,
+        np.sin(2 * np.pi * 20.0 * time),
+        extra=2.0 * np.sin(2 * np.pi * 20.0 * time - 0.2),
+    )
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(path))
+    fid = next(iter(win.files))
+    fd = win.files[fid]
+    fd._time_source = "column"
+    win._frf_auto_rebuild_source_time_axis(fid, relative_jitter=0.1)
+    assert fd._time_source == "auto_rebuilt"
+    chip = win.chart_stack._time_card._time_axis_chip
+    assert not chip.isHidden()
+    assert "Fs≈" in chip.text()
+    assert "原 Fs≈" in win.statusBar.currentMessage()
+    assert "抖动" in win.statusBar.currentMessage()
+
+
 def test_fft_panel_keeps_signal_selection_across_channel_edit(
     qapp, qtbot, loaded_csv, tmp_path
 ):

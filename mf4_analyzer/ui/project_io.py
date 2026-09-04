@@ -18,7 +18,8 @@ Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
 * ``current_mode`` — persisted chart mode (``time`` / analysis sections;
   UltraView is not a source workspace and falls back to ``time`` on load).
 * ``files`` — ``ProjectFileRef`` rows: ``fid``, ``path_abs``, ``path_rel``,
-  ``fs``, ``time_source``, ``dbc_refs[{path_abs, path_rel}]``,
+  ``fs``, ``time_source``, optional ``time_axis_provenance`` (additive;
+  absent in older v3 documents), ``dbc_refs[{path_abs, path_rel}]``,
   ``channel_order`` (navigator order is semantic).
 * ``views`` — TimeDomain ``ViewState.to_dict()`` rows (name, tab_color,
   view_id, attached_file_ids, checked, hidden_channels, colors, plot_mode,
@@ -191,6 +192,7 @@ class ProjectFileRef:
     time_source: str
     dbc_refs: list = field(default_factory=list)  # list[ProjectPathRef]
     channel_order: list[str] = field(default_factory=list)
+    time_axis_provenance: dict | None = None
 
 
 @dataclass
@@ -223,6 +225,9 @@ def project_document_to_payload(doc: ProjectDocument) -> dict:
                 "path_rel": r.path_rel,
                 "fs": float(r.fs),
                 "time_source": r.time_source,
+                "time_axis_provenance": getattr(
+                    r, "time_axis_provenance", None,
+                ),
                 "dbc_refs": [
                     {
                         "path_abs": d.path_abs,
@@ -331,6 +336,11 @@ def load_project_from_json(path) -> ProjectDocument:
             path_rel=f.get("path_rel"),
             fs=float(f.get("fs", 1000.0)),
             time_source=str(f.get("time_source", "generated")),
+            time_axis_provenance=(
+                f.get("time_axis_provenance")
+                if isinstance(f.get("time_axis_provenance"), dict)
+                else None
+            ),
             dbc_refs=[
                 ProjectPathRef(
                     path_abs=str(d["path_abs"]),

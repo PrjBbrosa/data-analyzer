@@ -71,6 +71,97 @@ def _drain_analysis_restore(qapp, win, rounds=80):
     raise AssertionError("analysis restore did not finish")
 
 
+def _write_jittered_csv(path, n=64, fs=500.0):
+    import numpy as np
+
+    nominal_dt = 1.0 / fs
+    dts = np.resize(np.array([1.2 * nominal_dt, 0.8 * nominal_dt]), n - 1)
+    time = np.concatenate(([0.0], np.cumsum(dts)))
+    with open(path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "sig"])
+        for index in range(n):
+            writer.writerow([float(time[index]), float(index)])
+
+
+def test_project_roundtrip_preserves_time_axis_provenance(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui import project_io as pio
+
+    csv_path = tmp_path / "jittered.csv"
+    _write_jittered_csv(csv_path)
+    proj = tmp_path / "prov.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_path))
+    fd = next(iter(mw.files.values()))
+    assert fd.is_time_axis_uniform() is False
+    mw._check_uniform_or_prompt(fd, "fft")
+    assert fd._time_source == "auto_rebuilt"
+    saved = fd.time_axis_provenance.to_dict()
+    mw.save_project(proj)
+
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 3
+    assert raw["files"][0]["time_source"] == "auto_rebuilt"
+    assert raw["files"][0]["time_axis_provenance"]["reason"] == "auto_nonuniform"
+
+    loaded = pio.load_project_from_json(proj)
+    assert loaded.files[0].time_source == "auto_rebuilt"
+    assert loaded.files[0].time_axis_provenance["reason"] == "auto_nonuniform"
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+    restored = next(iter(mw2.files.values()))
+    assert restored._time_source == "auto_rebuilt"
+    assert restored.time_axis_provenance is not None
+    assert restored.time_axis_provenance.reason == "auto_nonuniform"
+    assert restored.time_axis_provenance.estimated_fs == pytest.approx(
+        saved["estimated_fs"]
+    )
+    assert restored.time_axis_provenance.original_fs == pytest.approx(
+        saved["original_fs"]
+    )
+    chip = mw2.chart_stack._time_card._time_axis_chip
+    assert not chip.isHidden()
+    assert "Fs≈" in chip.text()
+
+
+def test_old_v3_project_without_time_axis_provenance_still_loads(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui import project_io as pio
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a)
+    raw = {
+        "schema_version": 3,
+        "active_file": "f0",
+        "current_mode": "time",
+        "files": [
+            {
+                "fid": "f0",
+                "path_abs": str(csv_a.resolve()),
+                "path_rel": "a.csv",
+                "fs": 100.0,
+                "time_source": "column",
+            }
+        ],
+        "views": [],
+        "view_manager": {"active": 0, "split_pairs": {}},
+        "analysis_views": {},
+    }
+    proj = tmp_path / "old-v3.tlproj"
+    proj.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = pio.load_project_from_json(proj)
+    assert loaded.files[0].time_axis_provenance is None
+
+    mw = MainWindow()
+    mw.open_project(proj)
+    fd = next(iter(mw.files.values()))
+    assert fd.time_axis_provenance is None
+    assert mw.chart_stack._time_card._time_axis_chip.isHidden()
+
+
 def test_save_project_writes_file(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui import project_io as pio

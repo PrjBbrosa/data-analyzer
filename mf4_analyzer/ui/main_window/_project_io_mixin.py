@@ -24,6 +24,7 @@ from ...blf_dbc_candidates import (
 from ...io import (
     DEFAULT_SOURCE_ADAPTER_REGISTRY, DataLoader, FileData, HAS_ASAMMDF,
 )
+from ...io.file_data import TimeAxisProvenance
 from ...io.loader import (
     AUDIO_VIDEO_EXTS,
     NO_CAN_FRAMES_MESSAGE,
@@ -639,6 +640,9 @@ class ProjectIOMixin:
             if len(self.files) == 1:
                 self.inspector.top.spin_end.setValue(fd.time_array[-1])
         self._note_user_project_mutation()
+        refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
+        if callable(refresh_chip):
+            refresh_chip()
         return fd
 
     def _toast_io_load_diagnostics(self, *source_metadatas):
@@ -2007,6 +2011,9 @@ class ProjectIOMixin:
         self._refresh_analysis_candidates()
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
+        refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
+        if callable(refresh_chip):
+            refresh_chip()
 
     def _invalidate_ultraview_previews_for_time_views(self, view_ids):
         """Drop stored UltraView pixels for Time Views; keep View/Board identity."""
@@ -2183,6 +2190,11 @@ class ProjectIOMixin:
                 pio.make_path_ref(str(Path(dbc).resolve()), path)
                 for dbc in fd.source_metadata.get("dbc_paths", [])
             ]
+            provenance = getattr(fd, "time_axis_provenance", None)
+            if provenance is not None and hasattr(provenance, "to_dict"):
+                provenance = provenance.to_dict()
+            elif not isinstance(provenance, dict):
+                provenance = None
             file_refs.append(pio.ProjectFileRef(
                 fid=fid,
                 path_abs=abs_p,
@@ -2191,6 +2203,7 @@ class ProjectIOMixin:
                 time_source=fd._time_source,
                 dbc_refs=dbc_refs,
                 channel_order=list(self.navigator_order.channel_order(fid)),
+                time_axis_provenance=provenance,
             ))
 
         vm = {
@@ -2245,14 +2258,27 @@ class ProjectIOMixin:
             fid_map[ref.fid] = new_fid
             fd = self.files[new_fid]
             fd.fs = float(ref.fs)
-            if ref.time_source in ("generated", "manual"):
-                fd.rebuild_time_axis(float(ref.fs))
-                # ``rebuild_time_axis`` records an interactive user override as
-                # ``manual``.  During project restore, however, the persisted
-                # provenance remains authoritative: a loader-generated axis
-                # must not be promoted to a real/manual axis merely because we
-                # reconstructed it at the saved sampling rate.
+            if ref.time_source in ("generated", "manual", "auto_rebuilt"):
+                try:
+                    fd.rebuild_time_axis(
+                        float(ref.fs), reason="project_restore",
+                    )
+                except TypeError:
+                    fd.rebuild_time_axis(float(ref.fs))
+                # ``rebuild_time_axis(reason='manual')`` would stamp an
+                # interactive override. During project restore the persisted
+                # ``time_source`` remains authoritative: a loader-generated
+                # axis must not be promoted merely because we reconstructed
+                # it at the saved sampling rate, and ``auto_rebuilt`` must
+                # stay distinguishable from a popover Accept.
                 fd._time_source = ref.time_source
+            raw_provenance = getattr(ref, "time_axis_provenance", None)
+            if raw_provenance:
+                fd.time_axis_provenance = TimeAxisProvenance.from_dict(
+                    raw_provenance,
+                )
+            else:
+                fd.time_axis_provenance = None
             if getattr(ref, "channel_order", None):
                 self.navigator_order.apply_channel_order(new_fid, ref.channel_order)
         desired = [
@@ -2264,6 +2290,9 @@ class ProjectIOMixin:
             self.navigator.channel_list.project_channel_order(
                 fid, self.navigator_order.channel_order(fid)
             )
+        refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
+        if callable(refresh_chip):
+            refresh_chip()
         return ProjectFileRestoreResult(
             fid_map=fid_map,
             missing_paths=missing_paths,
@@ -2558,3 +2587,6 @@ class ProjectIOMixin:
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")
         self.toast(f"已关闭全部 {n} 个文件", "info")
+        refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
+        if callable(refresh_chip):
+            refresh_chip()

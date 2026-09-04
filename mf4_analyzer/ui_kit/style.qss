@@ -2610,6 +2610,14 @@ QWidget#chartToolbar {
     spacing: 1px;
     padding: 1px;
 }
+QLabel#timeAxisProvenanceChip {
+    padding: 2px 8px;
+    border-radius: 9px;
+    color: #33425c;
+    background-color: #eef2f7;
+    font-size: 9px;
+    font-weight: 700;
+}
 QToolBar#chartToolbar QToolButton,
 QWidget#chartToolbar QToolButton {
     padding: 2px 4px;

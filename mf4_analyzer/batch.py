@@ -733,6 +733,9 @@ class BatchRunner:
             'input_unit': computed.input_unit,
             'output_unit': computed.output_unit,
         })
+        time_axis = getattr(prepared, 'time_axis', None)
+        if time_axis:
+            facts['time_axis'] = dict(time_axis)
         return facts
 
     @staticmethod
@@ -5491,6 +5494,8 @@ class BatchRunner:
                     warnings.extend(axis_warnings)
                 if 'effective_fs' in spectro_meta:
                     effective_params['fs'] = float(spectro_meta['effective_fs'])
+                if spectro_meta.get('time_axis'):
+                    effective_params['time_axis'] = dict(spectro_meta['time_axis'])
                 image_payload = ('fft_time', spectro)
             else:
                 if method == 'order_time':
