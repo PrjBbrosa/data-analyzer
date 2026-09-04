@@ -242,6 +242,27 @@ def _preview_lookup(
     return number, "host-estimate"
 
 
+def salience_from_area(area: float, median_area: float) -> float:
+    """Compress a card's area relative to the board median.
+
+    Spec D4: ``clamp(exp(0.35 * ln(area / median)), 0.75, PRESERVE_AREA_RATIO)``.
+    Non-finite or non-positive ``median_area`` yields ``1.0``.
+    """
+    try:
+        median = float(median_area)
+        value = float(area)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(median) or median <= 0.0:
+        return 1.0
+    if not math.isfinite(value) or value <= 0.0:
+        return 1.0
+    ratio = value / median
+    if not math.isfinite(ratio) or ratio <= 0.0:
+        return 1.0
+    return min(PRESERVE_AREA_RATIO, max(0.75, math.exp(0.35 * math.log(ratio))))
+
+
 def _merge_continuation_rows(
     items: Sequence[tuple[UltraViewRef, GridRect, int]],
     row_ids: Sequence[int],
@@ -329,6 +350,10 @@ def smart_layout_facts_from_placements(
     pairs = _placement_pairs(placements)
     if not pairs:
         return ()
+    cell_areas = tuple(
+        float(rect.column_span) * float(rect.row_span) for _ref, rect in pairs
+    )
+    median_area = sorted(cell_areas)[len(cell_areas) // 2]
     prior_by_ref = {fact.ref: fact for fact in (prior_facts or ())}
     reading = sorted(
         pairs,
@@ -386,7 +411,8 @@ def smart_layout_facts_from_placements(
             salience = prior.source_salience
             source_order = prior.source_order
         else:
-            salience = None
+            cell_area = float(rect.column_span) * float(rect.row_span)
+            salience = salience_from_area(cell_area, median_area)
             source_order = order
         if aspect is None:
             confidence = "fallback"

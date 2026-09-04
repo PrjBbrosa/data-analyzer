@@ -35,9 +35,11 @@ from mf4_analyzer.ultraview_core.model import (
     grid_rect_in_safety,
 )
 from mf4_analyzer.ultraview_core.smart_layout import (
+    PRESERVE_AREA_RATIO,
     SmartCardFact,
     SmartLayoutPolicy,
     SmartLayoutResult,
+    salience_from_area,
     solve_smart_layout,
     smart_layout_facts_from_placements,
 )
@@ -98,11 +100,6 @@ def _card_fact(
     )
 
 
-def _compressed_salience(area: float, median_area: float) -> float:
-    ratio = area / median_area
-    return min(1.80, max(0.75, math.exp(0.35 * math.log(ratio))))
-
-
 def _ucan_facts(
     *,
     aspects: Sequence[float | None] | None = None,
@@ -127,7 +124,7 @@ def _ucan_facts(
                 order,
                 source_row=row,
                 source_column=column,
-                source_salience=_compressed_salience(area, median),
+                source_salience=salience_from_area(area, median),
                 preview_aspect=preview,
                 preview_confidence=conf,
             )
@@ -548,6 +545,107 @@ def test_policy_mode_and_density_solve_four_cards(mode: str, density: str):
     facts = _facts_for_count(4)
     result = solve_smart_layout(facts, _policy(mode=mode, density=density))
     _assert_legal_solve(result, facts, require_min_reading_box=density != "compact")
+
+
+def _cell_area(rect: GridRect) -> int:
+    return int(rect.column_span) * int(rect.row_span)
+
+
+def test_salience_from_area_is_monotonic_and_clamped():
+    from mf4_analyzer.ultraview_core.smart_layout import _ratio_cap
+
+    assert _ratio_cap("preserve_salience") == PRESERVE_AREA_RATIO
+    median = 100.0
+    previous = None
+    for area in (0.01, 1.0, 10.0, 44.0, 100.0, 200.0, 600.0, 10_000.0):
+        value = salience_from_area(area, median)
+        assert 0.75 <= value <= PRESERVE_AREA_RATIO
+        if previous is not None:
+            assert value >= previous
+        previous = value
+    assert salience_from_area(median, median) == pytest.approx(1.0)
+    assert salience_from_area(1e9, median) == PRESERVE_AREA_RATIO
+    assert salience_from_area(1e-9, median) == 0.75
+    for bad_median in (0.0, -4.0, float("nan"), float("inf"), float("-inf")):
+        assert salience_from_area(50.0, bad_median) == 1.0
+
+
+def test_facts_from_placements_stamps_salience_without_prior():
+    placements = _as_placements(
+        (
+            (UltraViewRef("time", "small"), GridRect(0, 0, 6, 6)),
+            (UltraViewRef("time", "mid"), GridRect(6, 0, 8, 8)),
+            (UltraViewRef("time", "large"), GridRect(14, 0, 12, 12)),
+        )
+    )
+    facts = smart_layout_facts_from_placements(placements)
+    by_id = {fact.ref.view_id: fact for fact in facts}
+    for fact in facts:
+        assert fact.source_salience is not None
+        assert 0.75 <= fact.source_salience <= PRESERVE_AREA_RATIO
+    assert by_id["mid"].source_salience == pytest.approx(1.0)
+    assert by_id["small"].source_salience == pytest.approx(
+        salience_from_area(36.0, 64.0)
+    )
+    assert by_id["large"].source_salience == pytest.approx(
+        salience_from_area(144.0, 64.0)
+    )
+
+    locked_hero = UltraViewRef("time", "locked-hero")
+    with_locked = _as_placements(
+        (
+            (UltraViewRef("time", "a"), GridRect(0, 0, 6, 6)),
+            (UltraViewRef("time", "b"), GridRect(6, 0, 6, 6)),
+            (locked_hero, GridRect(12, 0, 12, 12)),
+        )
+    )
+    locked_facts = smart_layout_facts_from_placements(
+        with_locked,
+        locked_refs={locked_hero: GridRect(12, 0, 12, 12)},
+    )
+    locked_by_id = {fact.ref.view_id: fact for fact in locked_facts}
+    assert locked_by_id["a"].source_salience == pytest.approx(1.0)
+    assert locked_by_id["b"].source_salience == pytest.approx(1.0)
+    assert locked_by_id["locked-hero"].source_salience == pytest.approx(
+        salience_from_area(144.0, 36.0)
+    )
+
+    single = smart_layout_facts_from_placements(
+        _as_placements(((UltraViewRef("time", "only"), GridRect(0, 0, 12, 12)),))
+    )
+    assert single[0].source_salience == pytest.approx(1.0)
+
+
+def test_preserve_salience_snapshot_keeps_dominant_card_larger():
+    """12×12 hero + two small cards; preserve-salience keeps the hero larger."""
+    hero = UltraViewRef("time", "hero")
+    aux_a = UltraViewRef("time", "aux-a")
+    aux_b = UltraViewRef("time", "aux-b")
+    placements = _as_placements(
+        (
+            (hero, GridRect(0, 0, 12, 12)),
+            (aux_a, GridRect(12, 0, 6, 4)),
+            (aux_b, GridRect(12, 4, 6, 4)),
+        )
+    )
+    facts = smart_layout_facts_from_placements(placements)
+    by_id = {fact.ref.view_id: fact for fact in facts}
+    assert by_id["hero"].source_salience is not None
+    assert by_id["hero"].source_salience > by_id["aux-a"].source_salience
+    assert by_id["hero"].source_salience > by_id["aux-b"].source_salience
+
+    preserve = solve_smart_layout(facts, _policy(mode="preserve_salience"))
+    balanced = solve_smart_layout(facts, _policy(mode="balanced"))
+    preserve_by = _assert_legal_solve(preserve, facts)
+    balanced_by = _assert_legal_solve(balanced, facts)
+
+    hero_area = _cell_area(preserve_by[hero])
+    assert hero_area > _cell_area(preserve_by[aux_a])
+    assert hero_area > _cell_area(preserve_by[aux_b])
+
+    balanced_areas = [_cell_area(rect) for rect in balanced_by.values()]
+    assert max(balanced_areas) - min(balanced_areas) <= 1
+    assert preserve.placements != balanced.placements
 
 
 # ---------------------------------------------------------------------------
