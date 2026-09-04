@@ -20,6 +20,9 @@ def test_toolbar_mode_changed_emits(qapp, qtbot):
 def test_toolbar_enabled_matrix(qapp):
     tb = Toolbar()
     # Construction is the empty-session row: 保存 stays off until a file lands.
+    # Recent-open caret does not depend on the current session.
+    assert tb.btn_add.isEnabled()
+    assert tb.btn_open_caret.isEnabled()
     assert not tb.btn_save_project.isEnabled()
     assert not tb.btn_save_caret.isEnabled()
     assert not tb.btn_save_project_as.isEnabled()
@@ -203,9 +206,16 @@ def test_toolbar_mode_zone_recenters_when_top_actions_change(qtbot, qapp):
 
 
 def test_toolbar_open_save_split_and_no_export(qtbot):
-    from mf4_analyzer.ui.toolbar import Toolbar
+    from mf4_analyzer.ui.toolbar import Toolbar, _SAVE_CARET_WIDTH
     tb = Toolbar(); qtbot.addWidget(tb)
     assert tb.btn_add.text() == "打开"
+    assert tb.btn_add.objectName() == "toolbarOpenMain"
+    assert tb._open_split.objectName() == "toolbarOpenSplit"
+    assert tb.btn_open_caret.objectName() == "toolbarOpenCaret"
+    assert tb.btn_open_caret.text() == ""
+    assert tb.btn_open_caret.width() == _SAVE_CARET_WIDTH
+    assert tb.btn_add.property("role") == "primary"
+    assert tb.btn_open_caret.property("role") == "primary"
     assert hasattr(tb, "btn_save_project")
     assert tb.btn_save_project.text() == "保存"
     assert hasattr(tb, "btn_save_caret")
@@ -215,6 +225,9 @@ def test_toolbar_open_save_split_and_no_export(qtbot):
     assert tb.btn_save_project_as.parent() is tb._save_menu
     assert not hasattr(tb, "btn_export")
     assert hasattr(tb, "open_requested")
+    assert hasattr(tb, "recent_menu_about_to_show")
+    assert hasattr(tb, "recent_open_requested")
+    assert hasattr(tb, "recent_clear_requested")
     assert hasattr(tb, "save_project_requested")
     assert hasattr(tb, "save_project_as_requested")
     assert not hasattr(tb, "export_requested")
@@ -225,6 +238,7 @@ def test_toolbar_open_keeps_primary_entry_cue_and_other_file_actions_are_seconda
     qtbot.addWidget(tb)
 
     assert tb.btn_add.property("role") == "primary"
+    assert tb.btn_open_caret.property("role") == "primary"
     assert [button.property("role") for button in (
         tb.btn_save_project, tb.btn_save_caret, tb.btn_batch,
     )] == ["secondary"] * 3
@@ -243,10 +257,12 @@ def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
 
     assert (
         tb.btn_add.height()
+        == tb.btn_open_caret.height()
         == tb.btn_save_project.height()
         == tb.btn_save_caret.height()
         == tb.btn_batch.height()
     )
+    assert abs(tb._open_split.height() - tb._save_split.height()) <= 2
     assert abs(tb._save_split.height() - tb.btn_batch.height()) <= 2
     assert tb.btn_save_caret.width() < tb.btn_save_project.width()
 
@@ -263,10 +279,12 @@ def test_toolbar_open_stays_content_sized_and_secondary_file_actions_match(qtbot
     tb.show()
     qtbot.wait(20)
 
-    assert tb.btn_add.width() <= tb.btn_batch.width()
-    assert tb.btn_add.width() <= tb._save_split.width()
-    assert tb.btn_add.width() <= tb.btn_add.sizeHint().width() + 1
+    assert tb._open_split.width() <= tb.btn_batch.width()
+    assert abs(tb._open_split.height() - tb.btn_batch.height()) <= 2
+    assert abs(tb._open_split.height() - tb._save_split.height()) <= 2
+    assert tb._open_split.width() <= tb._open_split.sizeHint().width() + 1
     assert abs(tb._save_split.width() - tb.btn_batch.width()) <= 1
+    assert tb.btn_open_caret.width() == _SAVE_CARET_WIDTH
     assert tb.btn_save_caret.width() == _SAVE_CARET_WIDTH
     assert tb.btn_save_caret.width() < tb.btn_save_project.width()
 
@@ -333,3 +351,96 @@ def test_toolbar_five_modes_go_icon_only_when_narrow_and_restore_labels_when_wid
     assert [button.text() for button in buttons] == [
         "时域", "频谱", "时频", "阶次", "频响",
     ]
+
+
+def _recent_entry(path, kind, opened_at="2026-09-04T21:32:00"):
+    from mf4_analyzer.ui.recent_files import RecentEntry
+    return RecentEntry(path=str(path), kind=kind, opened_at=opened_at)
+
+
+def _visible_recent_actions(tb):
+    return [action for action in tb._recent_menu.actions() if not action.isSeparator()]
+
+
+def test_set_recent_entries_orders_projects_then_files_and_footer(qtbot, tmp_path):
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.ui.recent_files import format_recent_label, missing_recent_label
+    from mf4_analyzer.ui.toolbar import Toolbar
+
+    proj = tmp_path / "p.tlproj"
+    present = tmp_path / "run.wwt"
+    missing = tmp_path / "gone.mf4"
+    proj.write_text("{}", encoding="utf-8")
+    present.write_text("x", encoding="utf-8")
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.set_recent_entries(
+        (_recent_entry(proj, "project"),),
+        (_recent_entry(present, "file"), _recent_entry(missing, "file")),
+    )
+    actions = tb._recent_menu.actions()
+    texts = [action.text() for action in actions]
+    assert texts[0] == format_recent_label(proj)
+    assert actions[1].isSeparator()
+    assert texts[2] == format_recent_label(present)
+    assert texts[3] == missing_recent_label(format_recent_label(missing))
+    assert not actions[3].isEnabled()
+    assert actions[4].isSeparator()
+    assert texts[5] == "清除最近记录"
+    assert actions[5].isEnabled()
+    assert tb._recent_menu.testAttribute(Qt.WA_TranslucentBackground)
+
+
+def test_set_recent_entries_empty_disables_footer(qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.set_recent_entries((), ())
+    visible = _visible_recent_actions(tb)
+    assert [action.text() for action in visible] == ["暂无最近记录", "清除最近记录"]
+    assert not visible[0].isEnabled()
+    assert not visible[1].isEnabled()
+
+
+def test_recent_menu_item_click_emits_open_requested(qtbot, tmp_path):
+    present = tmp_path / "run.wwt"
+    present.write_text("x", encoding="utf-8")
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.set_recent_entries((), (_recent_entry(present, "file"),))
+    with qtbot.waitSignal(tb.recent_open_requested, timeout=200) as blocker:
+        _visible_recent_actions(tb)[0].trigger()
+    assert blocker.args == [str(present)]
+
+
+def test_recent_menu_footer_emits_clear_requested(qtbot, tmp_path):
+    present = tmp_path / "run.wwt"
+    present.write_text("x", encoding="utf-8")
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.set_recent_entries((), (_recent_entry(present, "file"),))
+    with qtbot.waitSignal(tb.recent_clear_requested, timeout=200):
+        tb._recent_clear_action.trigger()
+
+
+def test_missing_recent_row_does_not_emit_open(qtbot, tmp_path):
+    missing = tmp_path / "gone.mf4"
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    opened = []
+    tb.recent_open_requested.connect(opened.append)
+    tb.set_recent_entries((), (_recent_entry(missing, "file"),))
+    action = _visible_recent_actions(tb)[0]
+    assert not action.isEnabled()
+    action.trigger()
+    assert opened == []
+
+
+def test_open_caret_does_not_emit_open_requested(qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    opened = []
+    tb.open_requested.connect(lambda: opened.append("open"))
+    tb.btn_open_caret.click()
+    assert opened == []
+    tb._recent_menu.close()

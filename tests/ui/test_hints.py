@@ -165,6 +165,15 @@ def test_time_hint_documents_cursor_display_settings_and_custom_x_single_values(
     assert "X↑/X↓" in hint.text
 
 
+def test_recent_menu_discovery_hint_stays_in_budget():
+    hint = next(h for h in hints.all_hints() if h.id == "toolbar.recent_menu")
+    assert hint.surface == "discovery"
+    assert hint.retire_on == "recent_open"
+    assert hint.priority == 40
+    assert hint.text == "打开旁箭头可快速打开最近的项目和文件"
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
 def test_chart_toolbar_pan_hint_documents_horizontal_scroll():
     hint = next(item for item in hints.all_hints() if item.id == "chart.toolbar_pan")
     assert "箭头" in hint.text

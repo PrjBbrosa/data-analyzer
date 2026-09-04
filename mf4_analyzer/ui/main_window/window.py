@@ -53,6 +53,7 @@ from ..time_xaxis import (
     spec_from_selection,
 )
 from ..navigator_order import NavigatorOrderState
+from ..recent_files import RecentFilesStore
 from .. import hints
 
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
@@ -266,6 +267,8 @@ class MainWindow(
         # Spec §9 single owner: mixins call methods on this holder and must
         # never rebind ``self._project_dirty``.
         self._project_dirty = ProjectDirtyState()
+        # Isolatable factory: never construct QSettings(org, app) here.
+        self._recent_files = RecentFilesStore(self._db_reference_settings)
         try:
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:
@@ -1083,6 +1086,27 @@ class MainWindow(
         elif section == 'order':
             self._on_order_job_progress(done, total)
 
+    def _populate_recent_menu(self):
+        self.toolbar.set_recent_entries(
+            self._recent_files.entries("project"),
+            self._recent_files.entries("file"),
+        )
+
+    def _clear_recent_files(self):
+        self._recent_files.clear()
+
+    def _open_recent_path(self, path):
+        path = str(path)
+        try:
+            self._open_paths([path])
+        except (OSError, ValueError):
+            self._recent_files.remove(path)
+            return
+        if not Path(path).exists():
+            self._recent_files.remove(path)
+            return
+        self.chart_stack.mark_discovered("toolbar.recent_menu")
+
     def _connect(self):
         # --- New-module wiring ---
         self._analysis_jobs.finished.connect(self._on_analysis_job_finished)
@@ -1103,6 +1127,9 @@ class MainWindow(
         # File/Save share CommandCoordinator QActions; do not also connect
         # toolbar ``*_requested`` signals to the same slots (would double-fire).
         self._command_coordinator.bind_toolbar(self.toolbar)
+        self.toolbar.recent_menu_about_to_show.connect(self._populate_recent_menu)
+        self.toolbar.recent_open_requested.connect(self._open_recent_path)
+        self.toolbar.recent_clear_requested.connect(self._clear_recent_files)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.chart_stack.open_ultraview_requested.connect(self.open_ultraview)
         self.chart_stack.open_ultraview_unplaced_requested.connect(

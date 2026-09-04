@@ -433,6 +433,7 @@ class ProjectIOMixin:
                 if self._is_can_log_path(path)
             ]
             if len(can_log_paths) >= 2:
+                before_fids = set(self.files)
                 self._load_blf_batch(
                     can_log_paths,
                     ordered_paths=data_files,
@@ -440,6 +441,10 @@ class ProjectIOMixin:
                         input_index, fraction, phase,
                     ),
                 )
+                for fid in self.files:
+                    if fid in before_fids:
+                        continue
+                    self._recent_files.record_file(str(self.files[fid].filepath))
                 return
 
             # Multi-file batch: suppress per-file success / analysis-attach
@@ -465,6 +470,7 @@ class ProjectIOMixin:
                 )
                 if added:
                     loaded_files += 1
+                    self._recent_files.record_file(fp)
                 if batch_load:
                     batch_attached.extend(
                         getattr(self, "_last_source_load_attached", ()) or ()
@@ -2142,6 +2148,7 @@ class ProjectIOMixin:
         self.toast("已保存项目", "success")
         if sidecar_warnings:
             self.toast("项目已保存，预览未保存", "warning")
+        self._recent_files.record_project(str(path))
         return True
 
     def _assemble_project_document(self, path, saved_mode=None):
@@ -2428,6 +2435,7 @@ class ProjectIOMixin:
             # hiccup doesn't leave 保存项目 prompting Save-As for an
             # already-open project.
             self._project_path = path
+            self._recent_files.record_project(str(path))
             if dirty is not None:
                 baseline = self._assemble_project_document(path)
                 dirty.adopt_restored_session(

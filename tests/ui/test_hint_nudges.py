@@ -378,6 +378,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "time.custom_x_paths",
         "chart.toolbar_pan",
         "toolbar.save_as_menu",
+        "toolbar.recent_menu",
     ]
 
 

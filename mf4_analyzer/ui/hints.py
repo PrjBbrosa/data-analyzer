@@ -188,6 +188,13 @@ _HINTS = (
         priority=40,
     ),
     Hint(
+        id="toolbar.recent_menu",
+        text="打开旁箭头可快速打开最近的项目和文件",
+        surface="discovery",
+        retire_on="recent_open",
+        priority=40,
+    ),
+    Hint(
         id="chart.copy_image",
         text="复制按钮导出带游标读数的图片并标注",
         surface="discovery",

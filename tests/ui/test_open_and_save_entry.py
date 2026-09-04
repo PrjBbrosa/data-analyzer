@@ -163,3 +163,74 @@ def test_open_project_sets_path_even_if_render_fails(qapp, tmp_path, monkeypatch
     monkeypatch.setattr(mw2, "_apply_active_view", _boom)
     mw2.open_project(proj)
     assert str(mw2._project_path) == str(proj)
+
+
+def test_open_two_files_records_recent_in_newest_first_order(qapp, tmp_path):
+    from pathlib import Path
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"; _csv(a)
+    b = tmp_path / "b.csv"; _csv(b)
+    mw = MainWindow()
+    mw._open_paths([str(a), str(b)])
+    names = [Path(entry.path).name for entry in mw._recent_files.entries("file")]
+    assert names == ["b.csv", "a.csv"]
+
+
+def test_save_project_records_recent_project_on_top(qapp, tmp_path):
+    from pathlib import Path
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"; _csv(a)
+    proj = tmp_path / "p.tlproj"
+    mw = MainWindow()
+    mw._load_one(str(a))
+    mw.save_project(proj)
+    entries = mw._recent_files.entries("project")
+    assert Path(entries[0].path) == proj.resolve()
+
+
+def test_populate_recent_menu_matches_store(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.recent_files import format_recent_label
+
+    a = tmp_path / "a.csv"; _csv(a)
+    proj = tmp_path / "p.tlproj"
+    mw = MainWindow()
+    mw._open_paths([str(a)])
+    mw.save_project(proj)
+    mw._populate_recent_menu()
+    texts = [
+        action.text()
+        for action in mw.toolbar._recent_menu.actions()
+        if not action.isSeparator()
+    ]
+    assert format_recent_label(proj) in texts
+    assert format_recent_label(a) in texts
+    assert texts[-1] == "清除最近记录"
+
+
+def test_recent_open_requested_reaches_open_paths(qapp, tmp_path, monkeypatch):
+    from pathlib import Path
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mw = MainWindow()
+    seen = []
+    monkeypatch.setattr(mw, "_open_paths", lambda paths: seen.append(list(paths)))
+    target = tmp_path / "x.csv"
+    target.write_text("time,rpm\n0,1\n", encoding="utf-8")
+    mw.toolbar.recent_open_requested.emit(str(target))
+    assert seen == [[str(target)]]
+
+
+def test_missing_recent_path_is_removed_after_open(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    missing = tmp_path / "gone.csv"
+    mw = MainWindow()
+    mw._recent_files.record_file(str(missing))
+    called = []
+    monkeypatch.setattr(mw, "_open_paths", lambda paths: called.append(list(paths)))
+    mw._open_recent_path(str(missing))
+    assert called == [[str(missing)]]
+    assert mw._recent_files.entries("file") == ()

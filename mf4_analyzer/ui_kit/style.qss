@@ -1090,6 +1090,40 @@ Toolbar QPushButton#toolbarSaveCaret {
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
 }
+/* Open + recent-files share one primary chip. Hover/pressed rewrite only
+ * background-color so Qt does not reset the split radii via border:. */
+Toolbar QWidget#toolbarOpenSplit {
+    background-color: transparent;
+    border: none;
+}
+Toolbar QPushButton#toolbarOpenMain {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-left: 10px;
+    padding-right: 4px;
+    border-right-width: 0;
+}
+Toolbar QPushButton#toolbarOpenCaret {
+    min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
+    padding: 2px 2px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-left: 1px solid rgba(255,255,255,0.35);
+}
+Toolbar QPushButton#toolbarOpenMain:hover {
+    background-color: {{CONTROL_ACCENT_HI}};
+}
+Toolbar QPushButton#toolbarOpenMain:pressed {
+    background-color: {{CONTROL_ACCENT_DARK}};
+}
+Toolbar QPushButton#toolbarOpenCaret:hover {
+    background-color: {{CONTROL_ACCENT_HI}};
+    border-left: 1px solid rgba(255,255,255,0.35);
+}
+Toolbar QPushButton#toolbarOpenCaret:pressed {
+    background-color: {{CONTROL_ACCENT_DARK}};
+    border-left: 1px solid rgba(255,255,255,0.35);
+}
 Toolbar QPushButton[role="panel-toggle"] {
     min-width: 0;
     min-height: 0;

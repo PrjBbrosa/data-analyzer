@@ -78,6 +78,14 @@ def test_secondary_copy_stays_scannable():
         )
 
 
+def test_quickref_open_row_documents_recent_menu():
+    start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
+    row = next(r for r in start.rows if r.desc == "打开数据 / 项目")
+    assert "4" in row.sub and "8" in row.sub
+    assert "灰显" in row.sub
+    assert "清除" in row.sub
+
+
 def test_supported_formats_include_v77_imports():
     start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
     formats = next(r for r in start.rows if r.desc == "支持格式")

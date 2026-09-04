@@ -1,4 +1,6 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
+from functools import partial
+
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
@@ -9,6 +11,12 @@ from PyQt5.QtWidgets import (
 from .. import app_meta
 from ..ui_kit.icons import Icons
 from ..ui_kit.menus import apply_rounded_menu_chrome
+from .recent_files import (
+    RecentFilesStore,
+    format_recent_label,
+    format_recent_tooltip,
+    missing_recent_label,
+)
 
 _MODE_LABELS = {
     "time": "时域",
@@ -92,6 +100,9 @@ class _LogoLabel(QLabel):
 class Toolbar(QWidget):
     # Left segment
     open_requested = pyqtSignal()
+    recent_menu_about_to_show = pyqtSignal()
+    recent_open_requested = pyqtSignal(str)
+    recent_clear_requested = pyqtSignal()
     save_project_requested = pyqtSignal()
     save_project_as_requested = pyqtSignal()
     batch_requested = pyqtSignal()
@@ -133,12 +144,7 @@ class Toolbar(QWidget):
         self.btn_toggle_inspector.setFixedSize(28, 22)
 
         # ── left group ──────────────────────────────────────────────────────
-        self.btn_add = QPushButton("打开", self)
-        self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
-        # Opening data is the primary entry point; retain its filled cue while
-        # save/save-as/batch remain secondary file actions.
-        self.btn_add.setProperty("role", "primary")
-        self.btn_add.setToolTip("打开数据文件或项目（.tlproj）")
+        self._open_split = self._make_open_split()
         self._save_split = self._make_save_split()
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
@@ -170,13 +176,14 @@ class Toolbar(QWidget):
                   self.btn_mode_frf, self.btn_mode_order):
             b.setIconSize(QSize(16, 16))
         self.btn_save_caret.setIconSize(QSize(12, 12))
+        self.btn_open_caret.setIconSize(QSize(12, 12))
 
         # left layout
         left = QHBoxLayout()
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(10)
         for b in (
-            self.btn_add,
+            self._open_split,
             self._save_split,
             self.btn_batch,
         ):
@@ -413,6 +420,91 @@ class Toolbar(QWidget):
             chip.setMinimumWidth(target)
             chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
+    def _make_open_split(self):
+        """One primary chip: 打开 runs now; the caret lists recent paths."""
+        host = QWidget(self)
+        host.setObjectName("toolbarOpenSplit")
+        host.setAttribute(Qt.WA_StyledBackground, True)
+        host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+
+        self.btn_add = QPushButton("打开", host)
+        self.btn_add.setObjectName("toolbarOpenMain")
+        self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
+        # Opening data is the primary entry point; retain its filled cue while
+        # save/save-as/batch remain secondary file actions.
+        self.btn_add.setProperty("role", "primary")
+        self.btn_add.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.btn_add.setToolTip("打开数据文件或项目（.tlproj）")
+
+        self.btn_open_caret = QPushButton(host)
+        self.btn_open_caret.setObjectName("toolbarOpenCaret")
+        self.btn_open_caret.setIcon(Icons.chevron_down(QColor("#ffffff")))
+        self.btn_open_caret.setProperty("role", "primary")
+        self.btn_open_caret.setFixedWidth(_SAVE_CARET_WIDTH)
+        self.btn_open_caret.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_open_caret.setToolTip("最近打开的项目和文件")
+        self.btn_open_caret.setAccessibleName("最近打开的项目和文件")
+
+        self._recent_menu = apply_rounded_menu_chrome(QMenu(host))
+        self._recent_menu.aboutToShow.connect(self._emit_recent_menu_about_to_show)
+        self._recent_clear_action = None
+        self.set_recent_entries((), ())
+
+        row.addWidget(self.btn_add, 1)
+        row.addWidget(self.btn_open_caret, 0)
+        return host
+
+    def _open_recent_menu(self):
+        host = self._open_split
+        self._recent_menu.popup(host.mapToGlobal(host.rect().bottomLeft()))
+
+    def _emit_recent_menu_about_to_show(self):
+        self.recent_menu_about_to_show.emit()
+
+    def _emit_recent_open(self, path, _checked=False):
+        self.recent_open_requested.emit(path)
+
+    def _emit_recent_clear(self, _checked=False):
+        self.recent_clear_requested.emit()
+
+    def set_recent_entries(self, projects, files):
+        """Rebuild the recent-open menu from store snapshots."""
+        menu = self._recent_menu
+        menu.clear()
+        projects = tuple(projects or ())
+        files = tuple(files or ())
+        if not projects and not files:
+            empty = menu.addAction("暂无最近记录")
+            empty.setEnabled(False)
+        else:
+            for entry in projects:
+                self._add_recent_action(menu, entry, Icons.save_disk())
+            if projects and files:
+                menu.addSeparator()
+            for entry in files:
+                self._add_recent_action(menu, entry, Icons.file())
+        menu.addSeparator()
+        clear = menu.addAction("清除最近记录")
+        clear.setEnabled(bool(projects or files))
+        clear.triggered.connect(self._emit_recent_clear)
+        self._recent_clear_action = clear
+
+    def _add_recent_action(self, menu, entry, icon):
+        label = format_recent_label(entry.path)
+        missing = not RecentFilesStore.exists(entry)
+        if missing:
+            label = missing_recent_label(label)
+        action = menu.addAction(label)
+        action.setIcon(icon)
+        action.setToolTip(format_recent_tooltip(entry))
+        if missing:
+            action.setEnabled(False)
+            return
+        action.triggered.connect(partial(self._emit_recent_open, entry.path))
+
     def _make_save_split(self):
         """One secondary chip: 保存 runs now; the caret opens 另存为."""
         host = QWidget(self)
@@ -475,6 +567,7 @@ class Toolbar(QWidget):
 
     def _wire(self):
         self.btn_add.clicked.connect(self.open_requested)
+        self.btn_open_caret.clicked.connect(self._open_recent_menu)
         self.btn_save_project.clicked.connect(self.save_project_requested)
         self.btn_save_caret.clicked.connect(self._open_save_menu)
         self.btn_save_project_as.triggered.connect(self._emit_save_project_as)

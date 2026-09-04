@@ -86,6 +86,17 @@ def test_v810_changelog_covers_ultraview_authoring_and_persistence():
         assert keyword in description
 
 
+def test_manual_load_slide_mentions_recent_open_menu():
+    data = _deck_data()
+    load = next(slide for slide in data["slides"] if slide.get("id") == "load")
+    text = json.dumps(load, ensure_ascii=False)
+    assert "旁边箭头" in text
+    assert "最近打开" in text
+    preset = next(slide for slide in data["slides"] if slide.get("id") == "preset")
+    preset_text = json.dumps(preset, ensure_ascii=False)
+    assert "按通道" in preset_text and "单位" in preset_text
+
+
 def test_manual_splits_detailed_wwt_guidance_from_the_load_slide():
     data = _deck_data()
     load = next(slide for slide in data["slides"] if slide.get("id") == "load")
