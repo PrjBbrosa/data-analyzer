@@ -54,6 +54,7 @@ _CLOSE_HIT_SIZE = 20
 # 26px tab strip is vertically centered inside this; the left navigator's
 # 28px config controls plus a 2px host inset match the same 30px band.
 RAIL_HEIGHT = 30
+_VIEW_ACTION_SIZE = QSize(28, 28)
 
 # Quiet section identity for the shared ViewTabBar. Keys match ChartStack /
 # AnalysisSectionPage mode ids; display lives here so callers never assemble
@@ -553,26 +554,28 @@ class ViewTabBar(QWidget):
                 label.setFont(self._tabs.font())
 
         # Permanent View-management entry.  Keep the historical private name
-        # and objectName as compatibility seams for QSS and host tests.  Its
-        # measured minimum width reserves the widest label this manager can
-        # show, so ⋯ <-> »H and the 9 -> 10 digit transition cannot move the
-        # neighbouring + button or feed a second fit pass.
+        # and objectName as compatibility seams for QSS and host tests.  It
+        # deliberately shares the compact fixed geometry of the neighbouring
+        # + button; the supported »N labels fit without changing that reserve.
         self._overflow = QPushButton("⋯", self)
         self._overflow.setObjectName("viewTabOverflow")
         self._overflow.setCursor(Qt.PointingHandCursor)
         self._overflow.setAccessibleName("管理全部 View")
         self._overflow.setVisible(True)
+        overflow_font = self._overflow.font()
+        overflow_font.setPixelSize(10)
+        self._overflow.setFont(overflow_font)
         self._overflow.clicked.connect(self._on_overflow_clicked)
         self._overflow.installEventFilter(self)
-        layout.addWidget(self._overflow, 0, Qt.AlignVCenter)
-        self._overflow.setMinimumWidth(self._measure_management_entry_reserve())
+        self._overflow.setFixedSize(_VIEW_ACTION_SIZE)
 
         self._plus = QPushButton("+", self)
         self._plus.setObjectName("viewTabPlus")
         self._plus.setToolTip("新建 View")
-        self._plus.setFixedSize(24, 22)
+        self._plus.setFixedSize(_VIEW_ACTION_SIZE)
         self._plus.clicked.connect(self._on_plus_clicked)
         layout.addWidget(self._plus, 0, Qt.AlignVCenter)
+        layout.addWidget(self._overflow, 0, Qt.AlignVCenter)
         layout.addStretch(1)
 
         self._split_chip = QLabel(self)
@@ -872,24 +875,8 @@ class ViewTabBar(QWidget):
         return avail - reserved
 
     def _measure_management_entry_reserve(self) -> int:
-        """Measure the widest management label without a literal px budget."""
-        current_text = self._overflow.text()
-        current_minimum = self._overflow.minimumWidth()
-        cap = max(1, int(getattr(self._manager, "max_views", MAX_VIEWS)))
-        self._overflow.setMinimumWidth(0)
-        self._overflow.ensurePolished()
-        widths = []
-        for label in ("⋯", f"»{cap}"):
-            self._overflow.setText(label)
-            widths.append(
-                max(
-                    self._overflow.sizeHint().width(),
-                    self._overflow.minimumSizeHint().width(),
-                )
-            )
-        self._overflow.setText(current_text)
-        self._overflow.setMinimumWidth(current_minimum)
-        return max(widths)
+        """Compatibility probe for the fixed management-action reserve."""
+        return _VIEW_ACTION_SIZE.width()
 
     def _show_all_tabs(self) -> None:
         for idx in range(self._tabs.count()):

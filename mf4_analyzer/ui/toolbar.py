@@ -232,7 +232,7 @@ class Toolbar(QWidget):
         right.addStretch(1)
 
         self._logo_label = _LogoLabel(self)
-        self._logo_label.setToolTip("博世华域转向系统有限公司")
+        self._logo_label.setToolTip("博世华域转向系统有限公司\n仅限公司内使用")
         _logo_src = QPixmap(str(app_meta.asset_path("branding", "bosch_hasco_logo.png")))
         if not _logo_src.isNull():
             _app = QApplication.instance()

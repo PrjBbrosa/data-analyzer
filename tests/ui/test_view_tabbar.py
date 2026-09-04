@@ -37,6 +37,7 @@ from mf4_analyzer.ui.view_tabbar import (
     tab_close_visual_rect,
     tab_icon_slot_rect,
 )
+from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui.widgets.view_overflow_popup import (
     PANEL_MAX_WIDTH,
     PANEL_MIN_WIDTH,
@@ -98,7 +99,7 @@ def test_plus_button_emits_new_requested(qtbot):
         bar._on_plus_clicked()
 
 
-def test_initial_management_entry_and_plus_hug_first_tab(qtbot):
+def test_initial_plus_and_management_entry_hug_first_tab_in_action_order(qtbot):
     _manager, bar = _bar(qtbot, count=1)
     bar.resize(260, 28)
     bar.show()
@@ -106,11 +107,37 @@ def test_initial_management_entry_and_plus_hug_first_tab(qtbot):
 
     first_tab = bar.tabBar().tabRect(0)
     tab_right = bar.tabBar().mapTo(bar, first_tab.topRight()).x()
-    entry_gap = bar._overflow.geometry().left() - tab_right - 1
-    plus_gap = bar._plus.geometry().left() - bar._overflow.geometry().right() - 1
+    plus_gap = bar._plus.geometry().left() - tab_right - 1
+    entry_gap = bar._overflow.geometry().left() - bar._plus.geometry().right() - 1
 
-    assert entry_gap <= 3
     assert plus_gap <= 3
+    assert entry_gap <= 3
+    assert bar._plus.geometry().left() < bar._overflow.geometry().left()
+
+
+def test_management_entry_matches_plus_compact_square_geometry(qtbot, qapp):
+    previous_stylesheet = qapp.styleSheet()
+    load_stylesheet(qapp)
+    try:
+        manager, bar = _bar(qtbot, count=1)
+        bar.resize(260, 30)
+        bar.show()
+        QApplication.processEvents()
+
+        assert bar._overflow.size() == QSize(28, 28)
+        assert bar._plus.size() == QSize(28, 28)
+        assert bar._overflow.minimumSize() == bar._plus.minimumSize()
+        assert bar._overflow.maximumSize() == bar._plus.maximumSize()
+
+        bar._set_overflow(range(manager.max_views))
+        QApplication.processEvents()
+        assert bar._overflow.text() == f"»{manager.max_views}"
+        assert (
+            bar._overflow.fontMetrics().horizontalAdvance(bar._overflow.text())
+            <= bar._overflow.contentsRect().width()
+        )
+    finally:
+        qapp.setStyleSheet(previous_stylesheet)
 
 
 def test_view_tabbar_chrome_is_shared_outside_time_domain_dock():
@@ -811,7 +838,7 @@ def test_overflow_count_matches_the_hidden_tabs(qtbot):
     assert f"另有 {len(hidden)} 个未显示" in bar._overflow.toolTip()
 
 
-def test_view_management_entry_has_stable_measured_reserve(qtbot):
+def test_view_management_entry_has_stable_fixed_reserve(qtbot):
     _manager, bar = _wide_bar(qtbot, count=14)
     entry_width = bar._overflow.width()
     plain_budget = bar._tabs_budget(include_overflow=False)

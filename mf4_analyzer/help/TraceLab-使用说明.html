@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v8.2.0 · 使用说明</title>
+<title>TraceLab v8.2.1 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -170,7 +170,7 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 .slide.compact .card{padding:24px 26px;}
 .slide.compact .card h3{font-size:29px;margin-bottom:9px;}
 .slide.compact .card p{font-size:22px;line-height:1.43;}
-.slide.compact .kv .row{padding:11px 0;}
+.slide.compact .kv .row{padding:8px 0;}
 .slide.compact .kv .k{font-size:22px;}
 .slide.compact .kv .v{font-size:23px;line-height:1.35;}
 .slide.compact .tip{padding:18px 24px;}
@@ -255,11 +255,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v8.2.0",
-    "versionLabel": "使用说明 · V8.2.0",
-    "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
+    "version": "v8.2.1",
+    "versionLabel": "使用说明 · V8.2.1",
+    "subtitle": "从导入数据到分析与导出，一份可直接照做的操作指南",
     "docVersion": "3.0",
-    "updated": "2026-08-30",
+    "updated": "2026-09-04",
     "credit": "GC02689"
   },
   "slides": [
@@ -270,9 +270,9 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 
     { "id": "overview", "sec": "开始之前", "kicker": "OVERVIEW", "title": "它能帮你做<c>什么</c>", "foot": "TraceLab",
       "blocks": [
-        { "type": "lead", "html": "TraceLab 把「打开测量数据 → 看图分析 → 导出结果」连成一条龙；还能直接连设备，边录边看。下面六件事，是你最常用到的。" },
+        { "type": "lead", "html": "TraceLab 把「导入测量数据 → 查看与分析 → 导出结果」串成完整工作流，也支持连接采集设备，边采边看。以下六项覆盖最常用的工作。" },
         { "type": "cards", "cols": 3, "items": [
-          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4、MDF、WWT、ZFD、MAT、ASCII、TDMS、表格、BLF、HEAD .hdf 和音视频等；拖进来就能用。" },
+          { "no": "01", "h": "导入工程数据", "p": "支持 MF4、MDF、WWT、ZFD、MAT、ASCII、TDMS、表格、BLF、HEAD .hdf 和音视频等；选择文件或直接拖入即可。" },
           { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看；最多新建 24 个 View，随手拖动、放大查看细节。" },
           { "no": "03", "h": "看信号里的频率", "p": "一键 FFT，找出振动或噪声里主要是哪些频率。" },
           { "no": "04", "h": "看转速相关的振动", "p": "阶次分析，专为发动机、电机这类会转的设备准备。", "accent": "teal" },
@@ -282,7 +282,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       ] },
 
     { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
-      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v8.2.0 时域主界面的真实截图'><div class='shotcap reveal'>当前 v8.2.0 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
+      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v8.2.1 时域主界面的真机截图'><div class='shotcap reveal'>v8.2.1 真机界面：左侧管理文件与通道，中间查看与操作图表，右侧集中设置当前图表。</div>" } ] },
 
     { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab", "density": "compact",
       "blocks": [
@@ -290,11 +290,22 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           "left": [ { "type": "steps", "items": [
             "点工具栏左边的 <span class='mono'>添加文件</span>。",
             "选一个或<b>多个</b>文件（按住可多选）。",
-            "软件自动读出里面的<b>所有通道</b>，列在左侧；同时显示文件的行数、采样率、时长。"
+            "软件列出文件中<b>可识别的通道</b>；元数据可用时，同时显示采样率、时长等信息。"
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "先认准常用格式",
             "pills": [".mf4", ".mdf", ".wwt", ".zfd", ".mat", ".csv", ".xlsx", ".xls"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。文件里的窗口会生成普通时域 View，不会新建单独的 Board 或自动加入 UltraView；单窗口同样只生成普通时域 View。一次打开多个 WWT 时可勾选「对本次剩余 WWT 使用此选择」，只作用于这一次打开或拖入。自动生成的 WinWert View 使用当前数据的普通初始视图；查看全部 / Home 回到当前数据范围，手动缩放会随 View 保存。当前时域 View 的原始辅助线出现在所属文件下的 WinWert 原始记录分组；眼睛只隐藏该 View 的辅助线，不改普通通道也不改源文件。关闭文件或从当前 View 移除后，记录会从树里同步消失。公式警告里的「未生成」不等于整个文件导入失败。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。" ] } ] }
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>使用文件里的 Zeit 时基，并保留通道单位、比例和偏置；导入后的 View 与原始记录操作见下一页。", "<b>ZFD</b>优先使用文件时基；时基无效时会明确标记采样率为估算值。<b>MAT</b>只使用明确的时间变量建轴；文件未提供可靠工程单位时保持为空。" ] } ] }
+      ] },
+
+    { "id": "wwt-workflow", "sec": "WinWert", "kicker": "WWT · AFTER IMPORT", "title": "导入 WWT 后，<c>继续查看与整理</c>", "foot": "普通时域 View · 原始记录 · 明确诊断", "density": "compact",
+      "blocks": [
+        { "type": "cards", "cols": 3, "items": [
+          { "no": "显示窗口", "h": "生成普通时域 View", "p": "文件里的显示窗口会生成普通时域 View；不会新建单独的 Board，也不会自动加入 UltraView。只有一个窗口时规则相同。" },
+          { "no": "视图范围", "h": "保留各曲线坐标意图", "p": "各曲线按文件内绑定的横坐标、纵坐标、单位和缩放恢复。<b>查看全部 / Home 回到当前数据范围</b>，手动缩放会随 View 保存。", "accent": "teal" },
+          { "no": "辅助线", "h": "在原始记录中管理", "p": "辅助线位于<b>所属文件下的 WinWert 原始记录</b>；眼睛只影响当前时域 View，不修改普通通道或源文件。", "accent": "teal" }
+        ] },
+        { "type": "tip", "label": "批量打开", "html": "一次打开多个 WWT 时，可勾选「<b>对本次剩余 WWT 使用此选择</b>」；该选择只作用于本次打开或拖入。" },
+        { "type": "tip", "label": "诊断", "html": "关闭文件或从当前 View 移除后，相关原始记录会同步消失。公式警告中的「<b>未生成</b>」只表示对应公式未生成，不等于整个文件导入失败。" }
       ] },
 
     { "id": "load-more-formats", "sec": "第一步", "kicker": "STEP 1 · MORE FILES", "title": "更多格式，按<c>可靠时基</c>读取", "foot": "支持的文件（续）", "density": "compact",
@@ -306,9 +317,9 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
       ] },
 
-    { "id": "imports", "sec": "真实导入", "kicker": "V8.2.0 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
+    { "id": "imports", "sec": "真实导入", "kicker": "REAL FILES", "title": "三种格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
       "blocks": [
-        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v8.2.0 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
+        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v8.2.1 同时载入 WWT、ZFD 和 MAT 的真机界面'><div class='shotcap reveal'>v8.2.1 真机界面：三个文件卡片分别由可解析的 WWT、ZFD、MAT 示例生成；中间显示 WWT 的 Steering torque 曲线。</div>" }
       ] },
 
     { "id": "project", "sec": "存工程", "kicker": "PROJECT · .tlproj", "title": "把整个分析存成<c>工程</c>", "foot": "保存项目 → 下次一键还原",
@@ -350,7 +361,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           { "no": "读数", "h": "光标取值", "p": "把光标移到某个时刻，直接读出每个通道的数值。" },
           { "no": "量差值", "h": "双光标", "p": "开两条光标，自动算出两点之间的差。", "accent": "teal" },
           { "no": "布局", "h": "分开 / 叠加", "p": "每个通道单独一行，或全部叠在一起对比。", "accent": "teal" },
-          { "no": "大数据", "h": "依然顺滑", "p": "数据量很大时自动简化显示，拖动不卡。", "accent": "teal" }
+          { "no": "大数据", "h": "按屏幕优化显示", "p": "数据量很大时按当前屏幕分辨率优化绘制，分析所用的原始数据保持不变。", "accent": "teal" }
         ] }
       ] },
 
@@ -423,20 +434,20 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "软件按通道<b>单位</b>自动<b>推荐</b>合适的预设，并把推荐项标出来。",
             "采样率、频率范围等会<b>自动适配</b>，不用手算；想微调随时改。"
           ] } ],
-          "right": [ { "type": "card", "accent": "teal", "no": "为什么省心", "h": "照着选就对，不用懂原理",
-            "paras": [ "每个预设是一套<b>取舍已经替你定好</b>的参数（要分辨率还是要速度，都帮你权衡过）。", "每个参数旁都有<b>说明气泡</b>，鼠标停上去就告诉你它管什么。" ] } ] },
+          "right": [ { "type": "card", "accent": "teal", "no": "为什么省心", "h": "先用推荐起步，再按需要微调",
+            "paras": [ "每个预设提供一组经过整理的<b>常用参数起点</b>；仍应结合分析目标，在分辨率、速度和结果稳定性之间取舍。", "每个参数旁都有<b>说明气泡</b>，鼠标停上去即可查看用途。" ] } ] },
         { "type": "tip", "label": "联动批处理", "html": "调好的这套设置可以<b>存成预设</b>，在「批处理」里套给一批文件用 —— 详见后面的批处理页。" }
       ] },
 
     { "id": "order", "sec": "看阶次", "kicker": "ORDER ANALYSIS", "title": "看转速相关的振动 · <c>阶次</c>分析", "foot": "先选转速通道，再做阶次",
       "blocks": [
-        { "type": "when", "html": "设备会转（发动机、电机、变速箱…），振动随转速变化时用它——普通频率分析会「糊掉」，阶次分析能跟着转速对齐。" },
+        { "type": "when", "html": "设备会转（发动机、电机、变速箱等），振动随转速变化时用它。普通频率分析中的峰值可能变宽或难以追踪，阶次分析可按转速对齐。" },
         { "type": "cols", "align": "start",
           "left": [ { "type": "steps", "items": [
             "顶部切到 <span class='mono'>阶次</span> 视图。",
             "选一个<b>转速（RPM）通道</b> —— 这是阶次分析的关键，必须有。",
             "设最大阶次、分辨率等参数。",
-            "读图：哪一阶最突出，往往就是问题所在的那一阶。"
+            "读图：优先关注突出的阶次，再结合转速、结构与工况判断原因。"
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "「几阶」是什么意思", "h": "阶次 = 转速的倍数", "paras": [
             "「第 N 阶」指的是振动频率正好是转速的 N 倍。比如某结构每转一圈撞击一次，就体现在第 1 阶；旋转部件不平衡也常落在固定阶次上。",
@@ -479,7 +490,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "when", "html": "有很多文件要做同样的分析，不想一个个手点的时候。" },
         { "type": "cards", "cols": 2, "items": [
           { "no": "方式一", "h": "把当前分析存成预设", "p": "先手动把一个文件分析好，点 <b>批处理 → 存为预设</b>，再把这个预设套用到其它文件。适合「就照这个设置来」。" },
-          { "no": "方式二", "h": "按规则自动匹配", "p": "设定通道规则；频响（FRF）按同一来源内的输入/输出配对展开。common 要求所有来源完整配对，available_per_source 会明确记录缺通道跳过。", "accent": "teal" }
+          { "no": "方式二", "h": "按规则自动匹配", "p": "设定通道规则；频响（FRF）按同一来源内的输入/输出配对展开。「所有来源共有」要求每个来源完整配对；「按来源可用」会明确记录缺通道并跳过。", "accent": "teal" }
         ] },
         { "type": "tip", "label": "输出", "html": "跑完自动导出：<b>数据</b>（CSV / Excel）+ <b>图片</b>（PNG）。时频图 / 阶次图可以另外开<b>切片</b>：选一个维度、中英文逗号分隔最多 4 个位置，数据文件从完整谱图长表变成一张几百行的切片表，图上也多一行切片曲线；关掉切片则数据文件与现状一致，仍是完整长表。预设还能导出、分享给同事，下次直接导入复用。" }
       ] },
@@ -536,30 +547,37 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.2.0 · 使用说明", "density": "compact",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.2.1 · 使用说明", "density": "compact",
       "blocks": [
         { "type": "flow", "height": 550, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v8.2.0" }
+        { "type": "lead", "center": true, "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.2.1" }
       ] }
   ],
 
   "changelog": [
-    { "v": "2026-09-03", "date": "2026-09-03", "items": [
-      "新增<b>游标显示设置</b>：可独立控制极值点，以及双游标的 Min / Max / Avg / 差值；mini 会把未显示的细节保留在提示中。",
+    { "v": "v8.2.1", "date": "2026-09-04", "items": [
+      "新增<b>游标显示设置</b>：可独立控制极值点，以及双游标的 Min / Max / Avg / 差值；紧凑结果会把未展开的细节保留在提示中。",
       "<b>View 色标关闭</b>遵循防误触规则；<b>⋯ 常驻</b>入口可管理全部 View，窗口窄时显示未显示数量。",
-      "统一<b>标准快捷键</b>：macOS 的 View 切换显示 Meta+Tab（⌃⇥），图表复位使用 Ctrl+R；<b>Esc 分层</b>每次只退出最内层临时状态。",
+      "统一<b>标准快捷键</b>：macOS 的 View 切换在界面中显示为 Meta+Tab（实际按 Control+Tab，⌃⇥），图表复位使用 Ctrl+R；<b>Esc 分层</b>每次只退出最内层临时状态。",
+      "关闭、打开或切换项目前会统一检查<b>未保存更改</b>，可选择保存、不保存或取消，避免静默丢失本次编辑。",
       "<b>WWT 初始视图</b>改为普通时域 View：不建独立 Board，查看全部 / Home 回到当前数据范围。"
     ] },
     { "v": "v8.2.0", "date": "2026-08-30", "items": [
+      "WinWert 导入从读取测量数据扩展到显示窗口与公式：恢复文件内窗口，并保留<b>每条曲线</b>绑定的横坐标、纵坐标、单位、比例和颜色。",
+      "时域工作区扩展到 <b>24 个 View</b>；WinWert 多窗口可以批量生成视图，原始记录、原生刻度和多轴范围随 View 恢复。",
       "WinWert 原始记录的眼睛开关只影响当前聚焦的时域 View；切换分屏或点击旧行都不会改到另一 View。",
-      "UltraView 拖动结束会安全完成卡片更新；智能排版、紧凑排列、按原图比例和适应内容各自保持职责，保存重开后的布局更稳定。"
+      "UltraView 新增<b>智能排版</b>与紧凑排列，能按卡片比例和实际内容重排；按原图比例、卡片适应和 Board 适应内容保持各自职责。",
+      "UltraView 拖动结束会安全完成卡片更新；布局意图、卡片位置和视口随工程保存，保存重开后不发生额外重排。"
     ] },
     { "v": "v8.1.0", "date": "2026-08-23", "items": [
-      "发布基线更新为 <b>TraceLab v8.1.0</b>；应用标题、帮助说明和 Windows 完整版 / 分析版包名保持一致。"
+      "UltraView 增加便笺、文本、图形、画笔和激光笔等演示工具，可在 Board 上直接补充说明与标记。",
+      "选择、框选、成组移动和批量编辑改为一致的操作路径；移动 / 缩放反馈、撤销 / 重做和工具切换更稳定。",
+      "Board 视口、minimap、临时聚焦和卡片适应逻辑收口，保存工程后会恢复 Board 视口与编辑内容。",
+      "完善 UltraView 的卡片库、工具栏、捕获流程和高分屏反馈，并同步 Windows 完整版 / 分析版发布入口。"
     ] },
     { "v": "v8.0.1", "date": "2026-08-18", "items": [
       "UltraView 的自由网格导出会贴合已放置卡片，去掉没有内容的空白底板。",
@@ -777,7 +795,7 @@ function renderCover(m){
       <path class="trace" d="M0,210 C80,120 130,40 210,90 C300,150 320,330 410,300 C500,275 520,120 610,150 C720,190 740,360 850,330 C950,305 980,90 1080,120 C1180,150 1210,340 1320,300 C1430,265 1460,110 1560,150 C1650,185 1700,260 1760,210"/>
       <line class="cursor" x1="1080" y1="0" x2="1080" y2="420"/><circle class="cdot" cx="1080" cy="120" r="9"/></svg></div>
     <div class="fft" id="coverFft"></div>
-    <div class="hero"><p class="kick">MF4 测量数据 · 操作指南</p>
+    <div class="hero"><p class="kick">工程测量数据 · 操作指南</p>
       <h1 class="title">${m.title.replace('Trace','Trace<b>').replace('Lab','Lab</b>')||m.title}<span class="v">${m.version}</span></h1>
       ${ed(['meta','subtitle'],m.subtitle,'p','sub')}
       <p class="docstamp">文档版本 ${m.docVersion} · 更新于 ${m.updated}${m.credit ? ` · ${m.credit}` : ''}</p></div>

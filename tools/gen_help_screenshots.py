@@ -25,7 +25,7 @@ positions don't move. Still give the rendered guide a browser eyeball after
 promoting; only nudge pins if a control actually relocated.
 
 Usage:
-    .venv/bin/python tools/gen_help_screenshots.py                 # all 4 -> staging
+    .venv/bin/python tools/gen_help_screenshots.py                 # all 5 -> staging
     .venv/bin/python tools/gen_help_screenshots.py --only time
     .venv/bin/python tools/gen_help_screenshots.py --only imports
     .venv/bin/python tools/gen_help_screenshots.py --platform offscreen
@@ -197,20 +197,31 @@ def _check_channels(win, names) -> None:
                 leaf.setCheckState(0, Qt.Checked)
 
 
-def _wait_for_analysis(trigger, section: str, win, timeout_ms=60_000) -> bool:
-    """Run one section and wait for current ``AnalysisJobService`` cleanup."""
+def _wait_for_analysis(
+    trigger, section: str, win, ready, timeout_ms=60_000,
+) -> bool:
+    """Run one section and wait for its result to be rendered and settled."""
     from PyQt5.QtCore import QEventLoop, QTimer
     loop = QEventLoop()
-    state = {"failed": "", "timed_out": False}
+    state = {"failed": "", "timed_out": False, "settled": False}
+
+    def poll():
+        running = win._analysis_jobs.is_running(section)
+        busy = win._analysis_jobs.is_busy(section)
+        if state["failed"] or (not running and not busy and ready()):
+            state["settled"] = True
+            loop.quit()
+
+    def on_finished(finished_section, _ctx, _result):
+        if finished_section == section:
+            poll()
 
     def on_failed(failed_section, _ctx, message):
         if failed_section == section:
             state["failed"] = str(message)
+            poll()
 
-    def poll():
-        if not win._analysis_jobs.is_running(section):
-            loop.quit()
-
+    win._analysis_jobs.finished.connect(on_finished)
     win._analysis_jobs.failed.connect(on_failed)
     poller = QTimer()
     poller.timeout.connect(poll)
@@ -221,14 +232,26 @@ def _wait_for_analysis(trigger, section: str, win, timeout_ms=60_000) -> bool:
     wd.start(timeout_ms)
     trigger()
     poll()
-    if win._analysis_jobs.is_running(section):
+    if not state["settled"]:
         loop.exec_()
     poller.stop()
     wd.stop()
+    win._analysis_jobs.finished.disconnect(on_finished)
     win._analysis_jobs.failed.disconnect(on_failed)
     if state["failed"]:
         print(f"FAIL: {section} analysis: {state['failed']}", file=sys.stderr)
-    return not state["timed_out"] and not state["failed"]
+    if state["timed_out"]:
+        counts = win._analysis_jobs.progress_counts(section)
+        print(
+            f"FAIL: {section} render timeout; progress={counts}; "
+            f"status={win.statusBar.currentMessage()!r}",
+            file=sys.stderr,
+        )
+    return (
+        not state["timed_out"]
+        and not state["failed"]
+        and bool(ready())
+    )
 
 
 def _drive_imports(win, app, samples: tuple[Path, Path, Path]) -> None:
@@ -254,42 +277,60 @@ def _drive_imports(win, app, samples: tuple[Path, Path, Path]) -> None:
 def _drive_mode(win, app, mode: str) -> None:
     win.toolbar._set_mode(mode)
     app.processEvents()
+    if mode in win.analysis_managers:
+        # Analysis Views own their file scope and start empty. Drive the same
+        # attach path as a user dropping/adding the loaded file into the
+        # active analysis View before selecting its signal.
+        win._attach_files_to_active_context(list(win.files))
+        app.processEvents()
     if mode == "time":
         _check_channels(win, {CH_SIGNAL, CH_TORQUE})
         app.processEvents()
         return
     if mode == "fft":
-        _select_combo_by_channel(win.inspector.fft_ctx.combo_sig, CH_SIGNAL)
+        if not _select_combo_by_channel(
+                win.inspector.fft_ctx.combo_sig, CH_SIGNAL):
+            raise RuntimeError(f"FFT signal selector is missing {CH_SIGNAL}")
         app.processEvents()
         win.do_fft()  # FFT renders synchronously
         for _ in range(5):
             app.processEvents()
         return
     if mode == "fft_time":
-        _select_combo_by_channel(win.inspector.fft_time_ctx.combo_sig, CH_SIGNAL)
+        if not _select_combo_by_channel(
+                win.inspector.fft_time_ctx.combo_sig, CH_SIGNAL):
+            raise RuntimeError(
+                f"FFT-vs-Time signal selector is missing {CH_SIGNAL}"
+            )
         app.processEvents()
+        canvas = win.chart_stack.page_fft_time.pane_canvas(0)
         if not _wait_for_analysis(
-                lambda: win.do_fft_time(force=True), "fft_time", win):
+                lambda: win.do_fft_time(force=True), "fft_time", win,
+                canvas.has_result):
             raise RuntimeError("FFT-vs-Time render did not complete")
         for _ in range(5):
             app.processEvents()
-        if not win.chart_stack.page_fft_time.pane_canvas(0).has_result():
+        if not canvas.has_result():
             raise RuntimeError("FFT-vs-Time completed without a rendered result")
         return
     if mode == "order":
         ctx = win.inspector.order_ctx
-        _select_combo_by_channel(ctx.combo_sig, CH_SIGNAL)
-        _select_combo_by_channel(ctx.combo_rpm, CH_RPM)
+        if not _select_combo_by_channel(ctx.combo_sig, CH_SIGNAL):
+            raise RuntimeError(f"Order signal selector is missing {CH_SIGNAL}")
+        if not _select_combo_by_channel(ctx.combo_rpm, CH_RPM):
+            raise RuntimeError(f"Order RPM selector is missing {CH_RPM}")
         ctx.set_fs(8000.0)
         ctx.apply_params({"max_order": 6, "order_res": 0.05, "time_res": 0.05,
                           "nfft": 4096, "amplitude_mode": "Amplitude",
                           "x_auto": True, "y_auto": True, "z_auto": True})
         app.processEvents()
-        if not _wait_for_analysis(win.do_order_time, "order", win):
+        canvas = win.chart_stack.page_order.pane_canvas(0)
+        if not _wait_for_analysis(
+                win.do_order_time, "order", win, canvas.has_result):
             raise RuntimeError("Order render did not complete")
         for _ in range(5):
             app.processEvents()
-        if not win.chart_stack.page_order.pane_canvas(0).has_result():
+        if not canvas.has_result():
             raise RuntimeError("Order completed without a rendered result")
         return
     if mode == "ultraview":
@@ -361,6 +402,11 @@ def main() -> int:
             shutil.copy2(src, dst)
             print(f"promoted: {dst}")
 
+    # Loading the synthetic/demo files mutates the temporary project session.
+    # The screenshot process owns no user project, so mark that throwaway
+    # session clean before closing instead of blocking on the production
+    # unsaved-project confirmation dialog.
+    win._project_dirty.mark_saved()
     win.close()
     app.processEvents()
     settings_tmp.cleanup()

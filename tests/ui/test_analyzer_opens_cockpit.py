@@ -114,7 +114,9 @@ def test_analyzer_toolbar_opens_cockpit_when_none_open(qapp, qtbot, monkeypatch)
     window = MainWindow()
     qtbot.addWidget(window)
     # Hidden entry: the logo keeps the company tooltip, no Cockpit button.
-    assert window.toolbar._logo_label.toolTip() == "博世华域转向系统有限公司"
+    assert window.toolbar._logo_label.toolTip() == (
+        "博世华域转向系统有限公司\n仅限公司内使用"
+    )
     assert not hasattr(window.toolbar, "btn_acquisition_cockpit")
 
     _triple_click_logo(qtbot, window)

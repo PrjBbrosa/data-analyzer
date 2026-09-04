@@ -52,6 +52,8 @@ def test_analysis_wait_uses_job_service_not_retired_window_callbacks():
               "gen_help_screenshots.py").read_text(encoding="utf-8")
 
     assert "_analysis_jobs.is_running(section)" in source
+    assert "_analysis_jobs.finished.connect(on_finished)" in source
+    assert "_attach_files_to_active_context" in source
     assert "_on_fft_time_finished" not in source
     assert "_on_order_finished" not in source
 
@@ -62,3 +64,12 @@ def test_screenshot_generator_isolates_persistent_settings():
 
     assert "_install_isolated_qsettings" in source
     assert "QSettings.IniFormat" in source
+
+
+def test_screenshot_generator_marks_demo_session_clean_before_close():
+    source = (Path(__file__).resolve().parents[1] / "tools" /
+              "gen_help_screenshots.py").read_text(encoding="utf-8")
+
+    mark_clean = source.index("win._project_dirty.mark_saved()")
+    close_window = source.index("win.close()")
+    assert mark_clean < close_window

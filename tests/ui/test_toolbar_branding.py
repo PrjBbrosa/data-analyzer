@@ -29,3 +29,4 @@ def test_toolbar_shows_logo(qapp):
     assert tb._logo_label.parentWidget() is tb._right_widget
     pm = tb._logo_label.pixmap()
     assert pm is not None and not pm.isNull()
+    assert tb._logo_label.toolTip() == "博世华域转向系统有限公司\n仅限公司内使用"
