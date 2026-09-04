@@ -398,7 +398,7 @@ def test_split_secondary_single_cursor_mini_detail_stays_on_secondary_pill(
     assert "secondary_speed" not in secondary_detail
     assert "5 rpm" in secondary_detail
     assert "=" not in cs._strip_html(secondary_detail)
-    assert "secondary_speed=5 rpm" in cs._pill_secondary._detail.toolTip()
+    assert cs._pill_secondary._detail.toolTip() == ""
     assert "t=9.0s" in cs.cursor_pill_text()
 
 

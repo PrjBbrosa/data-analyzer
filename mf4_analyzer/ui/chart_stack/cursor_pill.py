@@ -2,8 +2,9 @@
 
 The formatting half of this module is pure text processing: it turns the
 separator-joined HTML the canvases emit on ``cursor_info`` into the pill's
-primary line, its full and mini detail tables, and the mini-mode tooltip.
-It knows nothing about Qt, so it is unit-testable on its own.
+primary line and its full and mini detail tables. It knows nothing about Qt,
+so it is unit-testable on its own. The result panel itself never attaches a
+hover tooltip; the visible face and the +/- toggle are the only readouts.
 """
 import logging
 import re
@@ -167,8 +168,11 @@ def mini_single_cursor_part(part, top_pad):
 
 
 def plain_single_cursor_tooltip_line(part):
-    """Flatten one readout segment to ``name=value`` plain text for the tooltip
-    shown while the pill is collapsed to values only."""
+    """Flatten one readout segment to ``name=value`` plain text.
+
+    Kept as a formatter helper for snapshot/compat callers. The result panel
+    does not attach this string as a hover tooltip.
+    """
     plain = strip_html(part).replace('\xa0', ' ').strip()
     plain = re.sub(r'\s+', ' ', plain)
     if not plain:
@@ -186,9 +190,10 @@ def format_single_cursor_variants(text):
 
     The first separator-delimited segment is the time readout and stays on the
     pill's primary line; the rest become one detail row each, rendered twice —
-    full (name and value) and mini (value only) — plus a plain-text tooltip that
-    restores the names the mini variant drops. Text with no separator has no
-    per-channel detail and passes straight through as the primary line.
+    full (name and value) and mini (value only). The fourth return value is a
+    plain-text identity dump kept for snapshot/compat callers; the pill does
+    not show it as a hover tooltip. Text with no separator has no per-channel
+    detail and passes straight through as the primary line.
     """
     parts = [part for part in (text or '').split(_CURSOR_HTML_SEP) if part]
     if len(parts) <= 1:
@@ -267,6 +272,7 @@ class CursorPill(QFrame):
         self._detail.setTextFormat(Qt.RichText)
         self._detail.setTextInteractionFlags(Qt.NoTextInteraction)
         self._detail.setVisible(False)
+        self._clear_content_tooltip()
         lay.addWidget(self._primary)
         lay.addWidget(self._detail)
         self._drag_offset = None
@@ -336,6 +342,12 @@ class CursorPill(QFrame):
         self.adjustSize()
         self.move_preserving_right_edge(old_right, old_top)
 
+    def _clear_content_tooltip(self):
+        """The result panel never uses a hover tooltip for readout content."""
+        self.setToolTip("")
+        self._primary.setToolTip("")
+        self._detail.setToolTip("")
+
     def set_detail_html(self, html):
         self._clear_display_projection()
         self._dual_rows = []
@@ -345,11 +357,11 @@ class CursorPill(QFrame):
         self._single_tooltip = ""
         if html:
             self._detail.setText(html)
-            self._detail.setToolTip("")
+            self._clear_content_tooltip()
             self._detail.setVisible(True)
         else:
             self._detail.clear()
-            self._detail.setToolTip("")
+            self._clear_content_tooltip()
             self._detail.setVisible(False)
         self.adjustSize()
 
@@ -401,11 +413,11 @@ class CursorPill(QFrame):
             detail = snapshot.get("detail") if snapshot.get("detail_visible") else ""
             if detail:
                 self._detail.setText(detail)
-                self._detail.setToolTip(snapshot.get("detail_tooltip") or "")
+                self._clear_content_tooltip()
                 self._detail.setVisible(True)
             else:
                 self._detail.clear()
-                self._detail.setToolTip("")
+                self._clear_content_tooltip()
                 self._detail.setVisible(False)
         self.adjustSize()
 
@@ -415,7 +427,7 @@ class CursorPill(QFrame):
     def clear(self):
         self._primary.clear()
         self._detail.clear()
-        self._detail.setToolTip("")
+        self._clear_content_tooltip()
         self._detail.setVisible(False)
         self._dual_rows = []
         self._frequency_dual_rows = []
@@ -467,7 +479,7 @@ class CursorPill(QFrame):
         self._display_projection = projection
         self._mode = "mini" if bool(getattr(projection, "mini", False)) else "full"
         self._update_toggle_button()
-        self._detail.setToolTip(getattr(projection, "tooltip", "") or "")
+        self._clear_content_tooltip()
         self.reflow_to_parent(
             preserved_right=old_right if self._user_placed and had_geometry else None,
             preserved_top=old_top if self._user_placed and had_geometry else None,
@@ -522,7 +534,7 @@ class CursorPill(QFrame):
             visible_count=self._visible_channel_count,
             header_overrides=header_overrides,
         ))
-        self._detail.setToolTip(projection.tooltip or "")
+        self._clear_content_tooltip()
         self._detail.setVisible(bool(projection.blocks))
         self._detail.updateGeometry()
         if self.layout() is not None:
@@ -737,19 +749,11 @@ class CursorPill(QFrame):
 
     def _refresh_detail(self):
         if self._dual_rows:
-            from ..plot_helpers import (
-                _format_dual_html,
-                format_dual_rows_tooltip,
-            )
+            from ..plot_helpers import _format_dual_html
             html = (
                 _format_dual_html(self._dual_rows)
                 if self._mode == "full"
                 else _format_mini_html(self._dual_rows)
-            )
-            tooltip = (
-                format_dual_rows_tooltip(self._dual_rows)
-                if self._mode == "mini"
-                else ""
             )
         elif self._frequency_dual_rows:
             html = (
@@ -757,24 +761,21 @@ class CursorPill(QFrame):
                 if self._mode == "full"
                 else _format_frequency_mini_html(self._frequency_dual_rows)
             )
-            tooltip = ""
         elif self._single_full_detail:
             html = (
                 self._single_mini_detail
                 if self._mode == "mini" and self._single_mini_detail
                 else self._single_full_detail
             )
-            tooltip = self._single_tooltip if self._mode == "mini" else ""
         else:
             html = ""
-            tooltip = ""
         if html:
             self._detail.setText(html)
-            self._detail.setToolTip(tooltip)
+            self._clear_content_tooltip()
             self._detail.setVisible(True)
         else:
             self._detail.clear()
-            self._detail.setToolTip("")
+            self._clear_content_tooltip()
             self._detail.setVisible(False)
 
 

@@ -609,7 +609,7 @@ def test_single_cursor_pill_toggle_shows_value_only_mini_detail(qapp, qtbot):
     assert 'Rte_PA_mAtMotorTorque_xds16' not in detail
     assert '[taiyaok]' not in detail
     assert '=' not in cs._strip_html(detail)
-    assert 'Rte_PA_mAtMotorTorque_xds16=-1.841 Nm' in cs._pill._detail.toolTip()
+    assert cs._pill._detail.toolTip() == ""
 
 
 def test_cursor_pill_empty_dual_rows_clear_single_detail_state(qapp, qtbot):
@@ -624,7 +624,7 @@ def test_cursor_pill_empty_dual_rows_clear_single_detail_state(qapp, qtbot):
     )
     pill._toggle_mode()
     assert "1 Nm" in pill._detail.text()
-    assert pill._detail.toolTip() == "name=1 Nm"
+    assert pill._detail.toolTip() == ""
 
     pill.set_dual_rows([])
 
@@ -907,7 +907,7 @@ def test_cursor_pill_snapshot_restore_preserves_single_mini_variants(qapp, qtbot
     assert "Rte_PA_mAtMotorTorque_xds16" not in detail
     assert "[taiyaok]" not in detail
     assert "=" not in cs._strip_html(detail)
-    assert "Rte_PA_mAtMotorTorque_xds16=-1.841 Nm" in cs._pill._detail.toolTip()
+    assert cs._pill._detail.toolTip() == ""
 
     cs._pill._toggle_mode()
 
@@ -3493,20 +3493,22 @@ def test_split_single_cursor_rows_share_options_without_crossing_results(
     secondary.single_cursor_rows.emit(right)
     qapp.processEvents()
 
-    # Each pane is a single-source batch (D1): visible face is channel-only;
-    # tooltip keeps the qualified name. Crossing is forbidden on both faces.
+    # Each pane is a single-source batch (D1): visible face is channel-only.
+    # Crossing is forbidden on the visible face. The result panel does not
+    # attach a hover tooltip; identity remains on the projection.
     assert "force" in cs._pill.detail_text()
     assert "X↑" in cs._pill.detail_text()
     assert "left-source" not in cs._pill.detail_text()
-    assert "left-source" in cs._pill._detail.toolTip()
+    assert cs._pill._detail.toolTip() == ""
     assert "right-source" not in cs._pill.detail_text()
-    assert "right-source" not in cs._pill._detail.toolTip()
+    assert "left-source" in cs._pill._display_projection.tooltip
+    assert "right-source" not in cs._pill._display_projection.tooltip
     assert "force" in cs._pill_secondary.detail_text()
     assert "X↓" in cs._pill_secondary.detail_text()
     assert "right-source" not in cs._pill_secondary.detail_text()
-    assert "right-source" in cs._pill_secondary._detail.toolTip()
-    assert "left-source" not in cs._pill_secondary.detail_text()
-    assert "left-source" not in cs._pill_secondary._detail.toolTip()
+    assert cs._pill_secondary._detail.toolTip() == ""
+    assert "right-source" in cs._pill_secondary._display_projection.tooltip
+    assert "left-source" not in cs._pill_secondary._display_projection.tooltip
     assert cs._pill._display_projection.blocks[0].identity == ("left", "force")
     assert cs._pill_secondary._display_projection.blocks[0].identity == (
         "right", "force"
@@ -3687,9 +3689,10 @@ def test_live_custom_x_diagnostic_survives_legacy_then_structured_projection(
     assert legacy_seen
     assert structured_seen
     assert expected in cs._pill.detail_text()
-    assert expected in cs._pill._detail.toolTip()
-    assert "Rack Force" in cs._pill._detail.toolTip()
-    assert "fid-a" not in cs._pill._detail.toolTip()
+    assert cs._pill._detail.toolTip() == ""
+    assert expected in cs._pill._display_projection.tooltip
+    assert "Rack Force" in cs._pill._display_projection.tooltip
+    assert "fid-a" not in cs._pill._display_projection.tooltip
 
 
 def test_direct_canvas_clear_clears_legacy_and_structured_cursor_pill(

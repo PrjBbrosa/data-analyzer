@@ -431,7 +431,7 @@ def test_custom_x_pill_full_mode_has_branch_subrows_without_delta(qapp, qtbot):
     assert "N" in html
 
 
-def test_custom_x_pill_mini_keeps_direction_avg_and_tooltip_minmax(qapp, qtbot):
+def test_custom_x_pill_mini_keeps_direction_avg_without_hover_tooltip(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import CursorPill
 
     pill = CursorPill()
@@ -441,6 +441,4 @@ def test_custom_x_pill_mini_keeps_direction_avg_and_tooltip_minmax(qapp, qtbot):
     html = pill.detail_text()
     assert "X↑" in html and "X↓" in html
     assert "Avg" in html
-    tooltip = pill._detail.toolTip()
-    assert "升程" in tooltip and "回程" in tooltip
-    assert "Min=" in tooltip and "Max=" in tooltip
+    assert pill._detail.toolTip() == ""

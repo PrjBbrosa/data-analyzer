@@ -378,7 +378,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "游标显示设置",
-                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；− 把读数收成 mini，丢掉的进 tooltip。全局同步所有分屏。",
+                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；− 把读数收成 mini。读数面板本身不弹出 tooltip。全局同步所有分屏。",
             ),
             QuickRow(
                 "频谱 / 频响游标",

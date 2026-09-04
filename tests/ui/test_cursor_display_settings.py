@@ -415,7 +415,8 @@ def test_cursor_pill_natural_then_constrained_width_and_whole_block_truncation(q
     assert pill.height() <= parent.height() - 16
     assert 0 < pill.visible_channel_count() < 5
     assert "+" in pill.detail_text() and "channels" in pill.detail_text()
-    assert "run_4 / Speed 5" in pill._detail.toolTip()
+    assert pill._detail.toolTip() == ""
+    assert "run_4 / Speed 5" in projection.tooltip
 
 
 def test_cursor_pill_user_anchor_and_popover_collision_restore_without_drift(qapp, qtbot):
@@ -540,7 +541,7 @@ def test_cursor_pill_extremely_short_host_shows_only_fitting_summary(qapp, qtbot
     assert pill.height() <= pill.safe_rect().height()
 
 
-def test_cursor_pill_middle_elides_constrained_identity_but_tooltip_keeps_full_text(qapp, qtbot):
+def test_cursor_pill_middle_elides_constrained_identity_without_hover_tooltip(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import CursorPill
 
     parent = QWidget()
@@ -582,8 +583,52 @@ def test_cursor_pill_middle_elides_constrained_identity_but_tooltip_keeps_full_t
     assert displayed_identity in visible
     assert displayed_identity.startswith(source[0])
     assert displayed_identity.endswith(channel[-1])
-    assert pill._detail.toolTip().splitlines()[0] == full_identity
+    assert pill._detail.toolTip() == ""
+    assert projection.tooltip.splitlines()[0] == full_identity
     assert pill.width() <= pill.safe_rect().width()
+
+
+def test_cursor_pill_never_attaches_a_content_tooltip(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    parent.resize(760, 420)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    parent.show()
+    for mini in (False, True):
+        projection = build_cursor_presentation(
+            _time_rows(3), CursorDisplayOptions(),
+            cursor_mode="dual", x_mode="time", mini=mini,
+        )
+        pill.set_display_projection(projection)
+        qapp.processEvents()
+        assert pill.toolTip() == ""
+        assert pill._primary.toolTip() == ""
+        assert pill._detail.toolTip() == ""
+        assert "Speed 1" in projection.tooltip
+    parent.resize(250, 110)
+    pill.reflow_to_parent()
+    qapp.processEvents()
+    assert pill._detail.toolTip() == ""
+    pill.set_single_detail_html(
+        "<table><tr><td>name=<b>1 Nm</b></td></tr></table>",
+        "<table><tr><td>1 Nm</td></tr></table>",
+        "name=1 Nm",
+    )
+    pill._toggle_mode()
+    assert pill._detail.toolTip() == ""
+    leftover = pill.snapshot()
+    leftover["detail_tooltip"] = "stale tooltip"
+    leftover["dual_rows"] = []
+    leftover["frequency_dual_rows"] = []
+    leftover["single_full_detail"] = ""
+    leftover["detail"] = "<b>kept</b>"
+    leftover["detail_visible"] = True
+    pill.restore_snapshot(leftover)
+    assert pill._detail.toolTip() == ""
+    assert pill.toolTip() == ""
 
 
 def test_single_source_projection_omits_visible_prefix_but_keeps_tooltip(qapp):

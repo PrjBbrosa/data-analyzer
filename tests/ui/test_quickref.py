@@ -219,7 +219,7 @@ def test_quickref_documents_time_cursor_display_settings():
     assert "Min / Max / Avg" in row.sub
     assert "差值" in row.sub
     assert "mini" in row.sub
-    assert "tooltip" in row.sub
+    assert "不弹出 tooltip" in row.sub
     assert "全局" in row.sub
 
 
