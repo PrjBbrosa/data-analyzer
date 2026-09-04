@@ -1154,7 +1154,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """
         judged = self._amp_curves or self._time_curves
         if not judged:
-            return {"state": "red", "tooltip": "抗锯齿未激活：无曲线"}
+            return {"state": "idle", "tooltip": "无曲线"}
 
         def _aa(curve):
             try:
@@ -1164,9 +1164,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         actual_on = all(_aa(c) for c in judged)
         if self._aa_on and actual_on:
-            return {"state": "green", "tooltip": "抗锯齿已完成"}
+            return {"state": "green", "tooltip": "精细显示"}
         if self._aa_settle_pending():
-            return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
+            return {"state": "yellow", "tooltip": "正在细化：等待空闲刷新"}
         # Measured backstop first: it OVERRIDES both predictions. When it has
         # fired, "why is AA off" is no longer a budget question — this
         # geometry was timed and it did not fit. Guarded on a non-empty
@@ -1176,7 +1176,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return {
                 "state": "red",
                 "block_reason": "aa-backstop",
-                "tooltip": "抗锯齿未激活：实测帧超时",
+                "tooltip": "绘制异常：实测帧超时",
             }
         # Then ink, then point count — reported in the SAME order the decision
         # is made in _spectrum_aa_allowed / _time_preview_aa_allowed, so the
@@ -1187,9 +1187,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 and self._spectrum_aa_ink_seeded
                 and not self._spectrum_aa_ink_allowed):
             return {
-                "state": "red",
+                "state": "preview",
                 "block_reason": "high-ink",
-                "tooltip": "抗锯齿未激活：谱线填满绘图区，绘制量超预算",
+                "tooltip": (
+                    "流畅预览：谱线填满绘图区，绘制量超预算"
+                    "（已按墨迹预算关闭抗锯齿）"
+                ),
             }
         if (self._aa_on and not self._amp_curves and self._time_curves
                 and self._time_aa_ink_seeded
@@ -1198,22 +1201,26 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             # the preview curves ARE the judged set here, so their ink is the
             # reader-facing reason.
             return {
-                "state": "red",
+                "state": "preview",
                 "block_reason": "high-ink",
-                "tooltip": "抗锯齿未激活：波形填满绘图区，绘制量超预算",
+                "tooltip": (
+                    "流畅预览：波形填满绘图区，绘制量超预算"
+                    "（已按墨迹预算关闭抗锯齿）"
+                ),
             }
         if (self._aa_on and self._amp_curves
                 and not self._spectrum_aa_density_allowed):
             total = self._spectrum_drawn_point_total()
             if total is not None:
                 return {
-                    "state": "red",
+                    "state": "preview",
                     "tooltip": (
-                        "抗锯齿已按性能策略关闭："
+                        "流畅预览："
                         f"频谱叠加密度 {total} > {_SPECTRUM_AA_SEGMENT_OFF}"
+                        "（已按墨迹预算关闭抗锯齿）"
                     ),
                 }
-        return {"state": "red", "tooltip": "抗锯齿未激活"}
+        return {"state": "red", "tooltip": "绘制异常：抗锯齿未激活"}
 
     def _emit_quality_status(self):
         """Emit quality_status_changed only when the status actually changes."""

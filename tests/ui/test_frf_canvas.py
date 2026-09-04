@@ -897,7 +897,7 @@ def test_frf_noise_phase_and_coherence_are_rejected_by_the_ink_gate(
     assert canvas._frf_point_total() <= frf_canvas._FRF_POINT_AA_ON
     assert canvas._aa_on is False
     status = canvas.quality_status()
-    assert status["state"] == "red"
+    assert status["state"] == "preview"
     assert status["block_reason"] == "high-ink"
     assert "绘制量超预算" in status["tooltip"]
 
@@ -918,7 +918,7 @@ def test_frf_point_leg_rejects_a_clean_but_dense_grid(qtbot, monkeypatch):
     assert canvas._frf_point_total() > frf_canvas._FRF_POINT_AA_OFF
     assert canvas._aa_on is False
     status = canvas.quality_status()
-    assert status["state"] == "red"
+    assert status["state"] == "preview"
     assert status["block_reason"] == "high-density"
     assert "曲线密度" in status["tooltip"]
 

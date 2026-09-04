@@ -1192,8 +1192,8 @@ class QualityManager(_CanvasBackref):
         if not items:
             return {
                 **base,
-                "state": "red",
-                "tooltip": "抗锯齿未激活：无曲线",
+                "state": "idle",
+                "tooltip": "无曲线",
             }
         if raster_cost["blocked"]:
             if dense_raster["state"] == "green":
@@ -1202,7 +1202,7 @@ class QualityManager(_CanvasBackref):
                     "state": "green",
                     "render_path": "dense-raster",
                     "high_raster_curve_count": raster_cost["count"],
-                    "tooltip": "平滑曲线已完成（高分辨率缓存）",
+                    "tooltip": "精细显示：平滑曲线已完成（高分辨率缓存）",
                 }
             if dense_raster["state"] == "yellow":
                 return {
@@ -1210,7 +1210,7 @@ class QualityManager(_CanvasBackref):
                     "state": "yellow",
                     "render_path": "dense-raster",
                     "high_raster_curve_count": raster_cost["count"],
-                    "tooltip": "平滑曲线正在生成（高分辨率缓存）",
+                    "tooltip": "正在细化：平滑曲线正在生成（高分辨率缓存）",
                 }
             def _preview(names):
                 text = "、".join(names[:2])
@@ -1234,13 +1234,16 @@ class QualityManager(_CanvasBackref):
                 )
             return {
                 **base,
-                "state": "red",
+                "state": "preview",
                 "render_path": "native-non-aa",
                 "block_reason": "high-raster-cost",
                 "high_raster_curve_count": raster_cost["count"],
                 "high_raster_dense_count": len(raster_cost["dense_labels"]),
                 "high_raster_ink_count": len(raster_cost["ink_labels"]),
-                "tooltip": "抗锯齿未激活：" + "；".join(parts),
+                "tooltip": (
+                    "流畅预览：" + "；".join(parts)
+                    + "（已按墨迹预算关闭抗锯齿）"
+                ),
             }
         # Ink gate (spec §4.2), reported in the SAME order the decision is
         # made in _idle_aa_density_ok: after the raster-cost block, before
@@ -1254,12 +1257,15 @@ class QualityManager(_CanvasBackref):
         if self.ink_seeded and not self.ink_allowed:
             return {
                 **base,
-                "state": "red",
+                "state": "preview",
                 "render_path": "native-non-aa",
                 "block_reason": "high-ink",
                 "frame_ink": int(self._frame_native_ink_total()),
                 "ink_budget": int(_INK_AA_OFF),
-                "tooltip": "抗锯齿未激活：波形填满绘图区，绘制量超预算",
+                "tooltip": (
+                    "流畅预览：波形填满绘图区，绘制量超预算"
+                    "（已按墨迹预算关闭抗锯齿）"
+                ),
             }
         # density["error"] AFTER raster-cost and ink — matches
         # _idle_aa_density_ok decision order (B7).
@@ -1267,16 +1273,17 @@ class QualityManager(_CanvasBackref):
             return {
                 **base,
                 "state": "red",
-                "tooltip": "抗锯齿未激活：曲线密度不可读取",
+                "tooltip": "绘制异常：曲线密度不可读取",
             }
         label = "叠加密度" if density["overlay"] else "曲线密度"
         if density["metric"] > density["off_budget"]:
             return {
                 **base,
-                "state": "red",
+                "state": "preview",
                 "tooltip": (
-                    f"抗锯齿未激活：{label} "
+                    f"流畅预览：{label} "
                     f"{density['metric']} > {density['off_budget']}"
+                    "（已按墨迹预算关闭抗锯齿）"
                 ),
             }
         actual_on = bool(native_items)
@@ -1291,26 +1298,26 @@ class QualityManager(_CanvasBackref):
                     **base,
                     "state": "green",
                     "render_path": "dense-raster+native-aa",
-                    "tooltip": "高分辨率平滑缓存；其他曲线抗锯齿已完成",
+                    "tooltip": "精细显示：高分辨率平滑缓存；其他曲线抗锯齿已完成",
                 }
             return {
                 **base,
                 "state": "green",
-                "tooltip": "抗锯齿已完成",
+                "tooltip": "精细显示",
             }
         if dense_raster["state"] == "green" and not native_items:
             return {
                 **base,
                 "state": "green",
                 "render_path": "dense-raster",
-                "tooltip": "平滑曲线已完成（高分辨率缓存）",
+                "tooltip": "精细显示：平滑曲线已完成（高分辨率缓存）",
             }
         if dense_raster["state"] == "yellow":
             return {
                 **base,
                 "state": "yellow",
                 "render_path": "dense-raster",
-                "tooltip": "平滑曲线正在生成（高分辨率缓存）",
+                "tooltip": "正在细化：平滑曲线正在生成（高分辨率缓存）",
             }
         try:
             timer_active = self.timer.isActive()
@@ -1320,12 +1327,12 @@ class QualityManager(_CanvasBackref):
             return {
                 **base,
                 "state": "yellow",
-                "tooltip": "抗锯齿等待空闲刷新",
+                "tooltip": "正在细化：等待空闲刷新",
             }
         return {
             **base,
             "state": "red",
-            "tooltip": "抗锯齿未激活",
+            "tooltip": "绘制异常：抗锯齿未激活",
         }
 
     def _emit_quality_status_changed(self):

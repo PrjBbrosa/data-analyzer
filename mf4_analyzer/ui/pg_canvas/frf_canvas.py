@@ -768,8 +768,8 @@ class PgFrfCanvas(QWidget):
         """Return the ``{state, tooltip}`` dict consumed by the quality dot."""
         if self._result is None or not self._draw_frequencies.size:
             return {
-                "state": "red",
-                "tooltip": "抗锯齿未激活：无曲线",
+                "state": "idle",
+                "tooltip": "无曲线",
                 "block_reason": "no-curves",
             }
         judged = []
@@ -780,40 +780,46 @@ class PgFrfCanvas(QWidget):
             except (AttributeError, RuntimeError, TypeError):
                 judged.append(False)
         if self._aa_on and judged and all(judged):
-            return {"state": "green", "tooltip": "抗锯齿已完成"}
+            return {"state": "green", "tooltip": "精细显示"}
         if self._aa_timers_active():
-            return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
+            return {"state": "yellow", "tooltip": "正在细化：等待空闲刷新"}
         reason = self._aa_block_reason
         if reason == "high-ink":
             return {
-                "state": "red",
+                "state": "preview",
                 "tooltip": (
-                    "抗锯齿未激活：相位翻转/相干填满绘图区，绘制量超预算"
+                    "流畅预览：相位翻转/相干填满绘图区，绘制量超预算"
+                    "（已按墨迹预算关闭抗锯齿）"
                 ),
                 "block_reason": "high-ink",
             }
         if reason == "high-density":
             return {
-                "state": "red",
+                "state": "preview",
                 "tooltip": (
-                    f"抗锯齿未激活：曲线密度 {self._frf_last_point_total} "
+                    f"流畅预览：曲线密度 {self._frf_last_point_total} "
                     f"> {_FRF_POINT_AA_OFF}"
+                    "（已按墨迹预算关闭抗锯齿）"
                 ),
                 "block_reason": "high-density",
             }
         if reason == "aa-backstop":
             return {
                 "state": "red",
-                "tooltip": "抗锯齿未激活：实测帧超时",
+                "tooltip": "绘制异常：实测帧超时",
                 "block_reason": "aa-backstop",
             }
         if reason == "unknown-ink":
             return {
                 "state": "red",
-                "tooltip": "抗锯齿未激活：绘制量无法测量",
+                "tooltip": "绘制异常：绘制量无法测量",
                 "block_reason": "unknown-ink",
             }
-        return {"state": "red", "tooltip": "抗锯齿未激活", "block_reason": None}
+        return {
+            "state": "red",
+            "tooltip": "绘制异常：抗锯齿未激活",
+            "block_reason": None,
+        }
 
     def _emit_quality_status(self) -> None:
         """Emit ``quality_status_changed`` only when the status changes."""

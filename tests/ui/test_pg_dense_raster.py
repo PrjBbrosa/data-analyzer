@@ -131,7 +131,7 @@ def test_dense_single_uses_smooth_pixmap_but_keeps_raw_pdi_semantics(qapp):
     status = canvas.quality_status()
     assert status["state"] == "green"
     assert status["render_path"] == "dense-raster"
-    assert status["tooltip"] == "平滑曲线已完成（高分辨率缓存）"
+    assert status["tooltip"] == "精细显示：平滑曲线已完成（高分辨率缓存）"
 
 
 @pytest.mark.crc_dense_discrete_policy
@@ -406,7 +406,7 @@ def test_overlay_and_memory_limit_fall_back_to_native_non_aa(qapp):
     assert single._dense_raster.entry_for("EPS_CRC1") is None
     assert pdi.curve.isVisible() is True
     status = single.quality_status()
-    assert status["state"] == "red"
+    assert status["state"] == "preview"
     assert status["block_reason"] == "high-raster-cost"
 
     single._dense_raster.max_item_bytes = 16 * 1024 * 1024
@@ -448,7 +448,7 @@ def test_log_axis_production_setter_falls_back_with_latest_pen(qapp, scale_axis)
     assert line.plot_data_item.opts["pen"].color().name() == "#dc2626"
     assert line.plot_data_item.opts["pen"].widthF() == initial_width
     assert not line.plot_data_item.curve.opts.get("antialias", False)
-    assert canvas.quality_status()["state"] == "red"
+    assert canvas.quality_status()["state"] == "preview"
 
 
 def test_scale_setter_does_not_invalidate_ordinary_curve(qapp, monkeypatch):
@@ -490,7 +490,7 @@ def test_mixed_subplot_uses_raster_for_dense_and_native_aa_for_smooth(
     status = canvas.quality_status()
     assert status["state"] == "green"
     assert status["render_path"] == "dense-raster+native-aa"
-    assert status["tooltip"] == "高分辨率平滑缓存；其他曲线抗锯齿已完成"
+    assert status["tooltip"] == "精细显示：高分辨率平滑缓存；其他曲线抗锯齿已完成"
 
     observed = []
     original_grab = canvas._grab_widget_scaled
@@ -859,7 +859,8 @@ def test_full_row_raster_image_fits_the_item_cap(qapp):
 
 def test_legacy_16mib_item_cap_rejects_the_row_and_stays_native_non_aa(qapp):
     """The rejection path is unchanged by the widening: native non-AA plus a
-    red dot — never a fallback into the vector AA the ink budget just refused.
+    preview (blue) dot — never a fallback into the vector AA the ink budget
+    just refused.
     """
     canvas, ck = _ink_admitted_canvas(qapp)
     pdi = canvas._channel_lines[ck][1].plot_data_item
@@ -876,7 +877,7 @@ def test_legacy_16mib_item_cap_rejects_the_row_and_stays_native_non_aa(qapp):
     assert bool(pdi.curve.opts.get("antialias", False)) is aa_before
     assert canvas._quality.aa_on is False
     status = canvas.quality_status()
-    assert status["state"] == "red"
+    assert status["state"] == "preview"
     assert status["render_path"] == "native-non-aa"
     assert status["block_reason"] == "high-raster-cost"
 

@@ -803,7 +803,7 @@ class TestInkBudget:
         """An analog high-ink line must be named for what it is."""
         canvas, _t, _sig = self._oscillating_canvas(qapp)
         canvas.fit_y_to_visible_x()
-        # Deny the raster upgrade so the report falls to the red branch.
+        # Deny the raster upgrade so the report falls to the preview branch.
         canvas._dense_raster.max_item_bytes = 0
         canvas._dense_raster.deactivate_channel("ch0")
         canvas._flush_pending_refresh()
@@ -821,7 +821,7 @@ class TestInkBudget:
         assert raster_cost["dense_labels"] == ()
 
         status = canvas.quality_status()
-        assert status["state"] == "red"
+        assert status["state"] == "preview"
         assert status["block_reason"] == "high-raster-cost"
         assert "密集离散跳变" not in status["tooltip"]
         assert "满幅振荡曲线 ch0" in status["tooltip"]
@@ -856,7 +856,7 @@ class TestInkBudget:
             },
         )
         status = canvas.quality_status()
-        assert status["state"] == "red"
+        assert status["state"] == "preview"
         assert status["block_reason"] == "high-raster-cost"
         assert "曲线密度不可读取" not in status["tooltip"]
 
@@ -894,7 +894,7 @@ class TestInkBudget:
         assert canvas._quality._idle_aa_density_ok() is False
 
         status = canvas.quality_status()
-        assert status["state"] == "red"
+        assert status["state"] == "preview"
         assert status["block_reason"] == "high-ink"
         assert status["frame_ink"] > status["ink_budget"]
         assert "波形填满绘图区" in status["tooltip"]
@@ -7790,6 +7790,41 @@ class _BrokenCurveData:
         raise RuntimeError("boom")
 
 
+def test_quality_dot_vocabulary_is_closed(qapp, caplog):
+    """The chart quality dot has a closed five-state color table."""
+    import logging
+
+    from PyQt5.QtGui import QColor
+
+    from mf4_analyzer.ui.chart_stack.cursor_pill import _QualityStatusIndicator
+
+    host = QWidget()
+    indicator = _QualityStatusIndicator(host)
+    expected = {
+        "idle": "#9ca3af",
+        "preview": "#60a5fa",
+        "yellow": "#f59e0b",
+        "green": "#22c55e",
+        "red": "#ef4444",
+    }
+    assert set(indicator._COLORS) == set(expected)
+    for state, hex_color in expected.items():
+        color = indicator._COLORS[state]
+        assert color == QColor(hex_color), state
+        indicator.set_quality_status({"state": state, "tooltip": state})
+        assert indicator.property("qualityState") == state
+        assert indicator._state == state
+
+    caplog.set_level(logging.WARNING, logger="mf4_analyzer.ui.chart_stack.cursor_pill")
+    indicator.set_quality_status({"state": "purple", "tooltip": "unknown"})
+    assert indicator.property("qualityState") == "idle"
+    assert indicator._state == "idle"
+    assert any(
+        "unknown quality-dot state" in rec.message and "purple" in rec.message
+        for rec in caplog.records
+    )
+
+
 class TestAutoIdleAA:
     """2026-05-30 Auto Idle AA: enable curve antialiasing after the
     last interaction settles, while preserving AA-off interaction paths.
@@ -7858,7 +7893,7 @@ class TestAutoIdleAA:
 
         status = canvas.quality_status()
 
-        assert status["state"] == "red"
+        assert status["state"] == "preview"
         assert status["metric"] == 15000
         assert status["budget"] == canvas._AA_OVERLAY_SEGMENT_OFF
         assert "叠加密度" in status["tooltip"]
@@ -7903,7 +7938,7 @@ class TestAutoIdleAA:
         status = canvas.quality_status()
         assert status["state"] == "green"
         assert status["render_path"] == "dense-raster"
-        assert status["tooltip"] == "平滑曲线已完成（高分辨率缓存）"
+        assert status["tooltip"] == "精细显示：平滑曲线已完成（高分辨率缓存）"
         assert "block_reason" not in status
 
     @pytest.mark.crc_dense_discrete_policy

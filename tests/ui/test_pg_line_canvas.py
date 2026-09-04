@@ -864,14 +864,14 @@ def test_disable_interactive_quality_drops_aa_on_rendered_child(canvas):
 def test_fft_quality_status_traffic_light_tracks_aa_state(canvas, qapp):
     """The FFT canvas exposes the same AA traffic-light contract as the
     time-domain canvas so _ChartCard renders the bottom-right quality dot:
-    red when there are no curves, green when the spectrum is settled+crisp,
+    idle when there are no curves, green when the spectrum is settled+crisp,
     red during an interactive pan, yellow while waiting for the idle refresh,
     and green again once idle restores AA. Each transition emits the signal."""
     emissions = []
     canvas.quality_status_changed.connect(lambda st: emissions.append(st))
 
-    # No curves yet → red.
-    assert canvas.quality_status()["state"] == "red"
+    # No curves yet → idle.
+    assert canvas.quality_status()["state"] == "idle"
 
     canvas.show()
     qapp.processEvents()
@@ -3416,7 +3416,7 @@ def test_spectrum_density_quality_tooltip_uses_off_budget(canvas):
     canvas._aa_on = True
     assert canvas._spectrum_aa_allowed() is False
     status = canvas.quality_status()
-    assert status['state'] == 'red'
+    assert status['state'] == 'preview'
     total = canvas._spectrum_drawn_point_total()
     assert f'频谱叠加密度 {total} > {_SPECTRUM_AA_SEGMENT_OFF}' in status['tooltip']
 
@@ -3550,7 +3550,7 @@ def test_spectrum_ink_gate_blocks_noise_floor_and_allows_peaks(qapp):
         assert noisy._aa_on is True
         assert all(not x.opts.get('antialias') for x in noisy._amp_curves)
         status = noisy.quality_status()
-        assert status['state'] == 'red'
+        assert status['state'] == 'preview'
         assert status['block_reason'] == 'high-ink'
         assert '谱线填满' in status['tooltip']
     finally:
@@ -3598,7 +3598,7 @@ def test_point_budget_leg_still_ands_with_ink(qapp):
         assert c._spectrum_ink_total() < _SPECTRUM_INK_AA_ON
         assert all(not x.opts.get('antialias') for x in c._amp_curves)
         status = c.quality_status()
-        assert status['state'] == 'red'
+        assert status['state'] == 'preview'
         assert 'block_reason' not in status
         assert f'频谱叠加密度 {total} > {_SPECTRUM_AA_SEGMENT_OFF}' in status['tooltip']
     finally:
@@ -3619,7 +3619,7 @@ def test_time_preview_ink_gate(qapp):
 
         assert all(not x.opts.get('antialias') for x in filled._time_curves)
         status = filled.quality_status()
-        assert status['state'] == 'red'
+        assert status['state'] == 'preview'
         assert status['block_reason'] == 'high-ink'
         assert '波形填满' in status['tooltip']
     finally:
@@ -3685,7 +3685,7 @@ def test_backstop_trips_and_blacklists_spectrum_signature(qapp):
         status = c.quality_status()
         assert status['state'] == 'red'
         assert status['block_reason'] == 'aa-backstop'
-        assert status['tooltip'] == '抗锯齿未激活：实测帧超时'
+        assert status['tooltip'] == '绘制异常：实测帧超时'
     finally:
         c.deleteLater()
 

@@ -5,6 +5,7 @@ separator-joined HTML the canvases emit on ``cursor_info`` into the pill's
 primary line, its full and mini detail tables, and the mini-mode tooltip.
 It knows nothing about Qt, so it is unit-testable on its own.
 """
+import logging
 import re
 from html import escape, unescape
 
@@ -42,6 +43,8 @@ _TAG_RE = re.compile(r'<[^>]+>')
 _CURSOR_PREFIX_COLORS = {"#64748b"}
 
 _MINI_VALUE_FONT = "font-family:'SF Mono',Menlo,Consolas,monospace;"
+
+logger = logging.getLogger(__name__)
 
 
 def _frequency_cursor_label(label):
@@ -779,6 +782,8 @@ class _QualityStatusIndicator(QFrame):
     """Small hoverable AA status dot overlaid on the chart card chrome."""
 
     _COLORS = {
+        "idle": QColor("#9ca3af"),
+        "preview": QColor("#60a5fa"),
         "green": QColor("#22c55e"),
         "yellow": QColor("#f59e0b"),
         "red": QColor("#ef4444"),
@@ -790,16 +795,21 @@ class _QualityStatusIndicator(QFrame):
         self.setFixedSize(20, 20)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._state = "red"
+        self._state = "idle"
         self.set_quality_status({
-            "state": "red",
-            "tooltip": "抗锯齿未激活：无曲线",
+            "state": "idle",
+            "tooltip": "无曲线",
         })
 
     def set_quality_status(self, status):
-        state = str((status or {}).get("state") or "red")
+        raw = (status or {}).get("state")
+        state = str(raw) if raw else "idle"
         if state not in self._COLORS:
-            state = "red"
+            logger.warning(
+                "unknown quality-dot state %r; falling back to idle",
+                state,
+            )
+            state = "idle"
         self._state = state
         self.setProperty("qualityState", state)
         self.setToolTip(str((status or {}).get("tooltip") or "抗锯齿状态未知"))
@@ -810,7 +820,7 @@ class _QualityStatusIndicator(QFrame):
         try:
             painter.setRenderHint(QPainter.Antialiasing, True)
             rect = QRectF(self.rect()).adjusted(5.0, 5.0, -5.0, -5.0)
-            painter.setBrush(self._COLORS.get(self._state, self._COLORS["red"]))
+            painter.setBrush(self._COLORS.get(self._state, self._COLORS["idle"]))
             painter.setPen(QPen(QColor(255, 255, 255, 230), 1.0))
             painter.drawEllipse(rect)
         finally:
