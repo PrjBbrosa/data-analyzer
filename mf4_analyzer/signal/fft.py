@@ -25,6 +25,7 @@ test suite.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -164,6 +165,185 @@ def one_sided_amplitude(frame, fs, win='hanning', nfft=None, remove_mean=True):
         # and Nyquist — neither is interior, so leave both single.
         pass
     return freq, amp
+
+
+def infer_nfft_from_freq(freq, *, rfft: bool = False):
+    """Recover the FFT length from a computed frequency axis.
+
+    ``compute_fft`` / ``compute_averaged_fft`` return ``nfft // 2`` bins
+    (first half of ``fftfreq``). Peak-hold uses :func:`one_sided_amplitude`
+    which returns ``rfftfreq`` (``nfft // 2 + 1``). Empty axes yield
+    ``None`` — callers must not invent an NFFT.
+    """
+    n = int(np.asarray(freq).shape[0]) if freq is not None else 0
+    if n <= 0:
+        return None
+    if rfft:
+        return int(2 * (n - 1)) if n >= 2 else None
+    return int(2 * n)
+
+
+def _finite_positive(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def unconstrained_window_nfft(fs, t_win_s, *, floor=64, ceil=8192):
+    """NFFT implied by ``fs × t_win_s`` before min-frames / length shrink.
+
+    Used as the "requested" side of the facts card. Returns ``None`` when
+    ``fs`` or ``t_win_s`` is missing or non-finite so callers cannot invent
+    a sampling rate.
+    """
+    fs_val = _finite_positive(fs)
+    t_win = _finite_positive(t_win_s)
+    if fs_val is None or t_win is None:
+        return None
+    from .adaptive import ceil_pow2
+
+    try:
+        nfft = ceil_pow2(fs_val * t_win)
+    except ValueError:
+        return None
+    floor = int(floor)
+    ceil = int(ceil)
+    return int(min(max(nfft, floor), ceil))
+
+
+def _fft_frame_count(n_samples, nfft, overlap, avg_mode):
+    mode = str(avg_mode or "单帧")
+    if mode == "单帧":
+        return 1
+    n = int(n_samples)
+    length = int(nfft)
+    if n <= 0 or length <= 0:
+        return 1
+    hop = int(length * (1.0 - float(overlap)))
+    if hop <= 0:
+        hop = length // 2
+    if hop <= 0:
+        hop = 1
+    if n < length:
+        return 1
+    return max((n - length) // hop + 1, 1)
+
+
+def build_fft_effective_facts(
+    sig,
+    fs,
+    *,
+    window,
+    nfft,
+    avg_mode="单帧",
+    overlap=0.0,
+    weighting="None",
+    nfft_requested=None,
+    freq=None,
+    time=None,
+    min_frames=None,
+    nan_count=0,
+    is_constant=False,
+    time_axis=None,
+    fs_conflict=False,
+):
+    """Construct :class:`FftEffectiveFacts` from a completed compute.
+
+    Does not re-run DSP. ``nfft`` is the value ``compute_*`` actually used
+    (pass ``infer_nfft_from_freq(freq)`` when the caller has the axis).
+    Empty or non-finite ``fs`` returns ``None`` rather than inventing a
+    sampling rate.
+    """
+    n_samples = int(np.asarray(sig).shape[0]) if sig is not None else 0
+    if n_samples <= 0:
+        return None
+    fs_val = _finite_positive(fs)
+    if fs_val is None:
+        return None
+    mode = str(avg_mode or "单帧")
+    inferred = None
+    if freq is not None and mode != "单帧":
+        inferred = infer_nfft_from_freq(freq, rfft=mode == "峰值保持")
+    if inferred is not None:
+        nfft_actual = int(inferred)
+    elif nfft is None or int(nfft) <= 0:
+        nfft_actual = n_samples
+    else:
+        nfft_actual = int(nfft)
+        if mode == "线性平均":
+            nfft_actual = min(nfft_actual, n_samples)
+    if nfft_actual <= 0:
+        return None
+    if nfft_requested is None:
+        requested = nfft_actual
+    else:
+        try:
+            requested = int(nfft_requested)
+        except (TypeError, ValueError):
+            requested = nfft_actual
+        if requested <= 0:
+            requested = nfft_actual
+    frames = _fft_frame_count(n_samples, nfft_actual, overlap, avg_mode)
+    shortened = nfft_actual < requested
+    if (
+        min_frames is not None
+        and str(avg_mode or "单帧") != "单帧"
+        and int(frames) < int(min_frames)
+    ):
+        shortened = True
+    time_start = time_end = None
+    if time is not None:
+        t_arr = np.asarray(time, dtype=float).reshape(-1)
+        finite_t = t_arr[np.isfinite(t_arr)]
+        if finite_t.size:
+            time_start = float(finite_t[0])
+            time_end = float(finite_t[-1])
+    return FftEffectiveFacts(
+        fs=fs_val,
+        nfft_requested=requested,
+        nfft=nfft_actual,
+        df=fs_val / float(nfft_actual),
+        window=str(window or "hanning"),
+        window_s=float(nfft_actual) / fs_val,
+        frames=int(frames),
+        overlap=float(overlap or 0.0),
+        n_samples=n_samples,
+        weighting=str(weighting or "None"),
+        shortened=bool(shortened),
+        time_start=time_start,
+        time_end=time_end,
+        nan_count=int(nan_count or 0),
+        is_constant=bool(is_constant),
+        time_axis=time_axis,
+        fs_conflict=bool(fs_conflict),
+    )
+
+
+@dataclass(frozen=True)
+class FftEffectiveFacts:
+    """Numerical parameters and measured facts for one completed FFT run."""
+
+    fs: float
+    nfft_requested: int
+    nfft: int
+    df: float
+    window: str
+    window_s: float
+    frames: int
+    overlap: float
+    n_samples: int
+    weighting: str
+    shortened: bool
+    time_start: float | None = None
+    time_end: float | None = None
+    nan_count: int = 0
+    is_constant: bool = False
+    time_axis: dict | None = None
+    fs_conflict: bool = False
 
 
 class FFTAnalyzer:

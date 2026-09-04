@@ -5473,8 +5473,22 @@ class BatchRunner:
                 compute_params = dict(effective_params)
                 compute_params['nfft'] = effective_nfft
                 compute_params['filter'] = {'enabled': False}
+                orig_nfft = effective_params.get('nfft')
+                if (
+                    orig_nfft is None
+                    or str(orig_nfft).strip().lower() in ('', 'auto', '自动')
+                    or effective_params.get('nfft_mode') == 'auto'
+                ):
+                    compute_params['nfft_mode'] = 'auto'
                 self._check_cancel(cancel_token, "compute")
                 fft_df = self._compute_fft_dataframe(sig, fs, compute_params)
+                facts_obj = fft_df.attrs.get('effective_facts') if hasattr(fft_df, 'attrs') else None
+                if facts_obj is not None:
+                    payload = asdict(facts_obj)
+                    if payload.get('time_axis') is None:
+                        payload.pop('time_axis', None)
+                    effective_params.update(payload)
+                    effective_params['nfft_effective'] = facts_obj.nfft
                 image_payload = ('fft', fft_df)
             elif method == 'fft_time':
                 effective_nfft = self._resolve_effective_nfft(
@@ -5484,6 +5498,13 @@ class BatchRunner:
                 compute_params = dict(effective_params)
                 compute_params['nfft'] = effective_nfft
                 compute_params['filter'] = {'enabled': False}
+                orig_nfft = effective_params.get('nfft')
+                if (
+                    orig_nfft is None
+                    or str(orig_nfft).strip().lower() in ('', 'auto', '自动')
+                    or effective_params.get('nfft_mode') == 'auto'
+                ):
+                    compute_params['nfft_mode'] = 'auto'
                 self._check_cancel(cancel_token, "compute")
                 spectro = self._compute_fft_time_spectro(
                     sig, time, fs, compute_params, channel_name=signal_name,
@@ -5496,6 +5517,12 @@ class BatchRunner:
                     effective_params['fs'] = float(spectro_meta['effective_fs'])
                 if spectro_meta.get('time_axis'):
                     effective_params['time_axis'] = dict(spectro_meta['time_axis'])
+                if spectro_meta.get('effective_facts'):
+                    for key, value in spectro_meta['effective_facts'].items():
+                        if value is not None:
+                            effective_params[key] = value
+                    if spectro_meta.get('time_axis'):
+                        effective_params['time_axis'] = dict(spectro_meta['time_axis'])
                 image_payload = ('fft_time', spectro)
             else:
                 if method == 'order_time':
@@ -5512,10 +5539,22 @@ class BatchRunner:
                     compute_params = dict(effective_params)
                     compute_params['nfft'] = effective_nfft
                     compute_params['filter'] = {'enabled': False}
+                    orig_nfft = effective_params.get('nfft')
+                    if (
+                        orig_nfft is None
+                        or str(orig_nfft).strip().lower() in ('', 'auto', '自动')
+                        or effective_params.get('nfft_mode') == 'auto'
+                    ):
+                        compute_params['nfft_mode'] = 'auto'
                     self._check_cancel(cancel_token, "compute")
                     spectro = self._compute_order_time_spectro(
                         sig, rpm, time, fs, compute_params,
                     )
+                    order_meta = dict(getattr(spectro, 'metadata', None) or {})
+                    if order_meta.get('effective_facts'):
+                        for key, value in order_meta['effective_facts'].items():
+                            if value is not None:
+                                effective_params[key] = value
                     image_payload = ('order_time', spectro)
                 else:  # pragma: no cover - guarded by _expand_tasks
                     raise ValueError(f"unsupported method: {method}")

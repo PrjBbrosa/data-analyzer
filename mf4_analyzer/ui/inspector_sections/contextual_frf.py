@@ -38,6 +38,10 @@ from ._helpers import (
     _make_group_header,
     _no_buttons,
 )
+from ._effective_facts import (  # noqa: F401  — re-exported below
+    format_effective_facts,
+    normalize_effective_warnings,
+)
 from .presets import PresetBar
 
 
@@ -90,66 +94,6 @@ def _install_combo_tooltips(combo: QComboBox, item_tooltips) -> None:
 
     combo.currentIndexChanged.connect(sync)
     sync(combo.currentIndex())
-
-
-def _fact(facts, name):
-    """Read one field off ``FrfEffectiveFacts`` or an equivalent mapping."""
-    if isinstance(facts, Mapping):
-        return facts.get(name)
-    return getattr(facts, name, None)
-
-
-def _fact_number(facts, name, spec):
-    value = _fact(facts, name)
-    if value is None:
-        return None
-    try:
-        return format(float(value), spec)
-    except (TypeError, ValueError):
-        return None
-
-
-def format_effective_facts(facts) -> list[str]:
-    """Render the resident "有效事实" rows for one completed FRF run.
-
-    Pure, UI-free formatting so the MainWindow adapter can hand over the raw
-    :class:`~mf4_analyzer.signal.frf.FrfEffectiveFacts` (or any mapping with
-    the same field names) without knowing how it is presented.  Fields that a
-    caller cannot supply are dropped rather than printed as ``None``.
-    """
-    rows: list[tuple[str, str]] = []
-    fs_text = _fact_number(facts, "fs", "g")
-    if fs_text is not None:
-        rows.append(("实际 Fs", f"{fs_text} Hz"))
-    df_text = _fact_number(facts, "df", "g")
-    if df_text is not None:
-        rows.append(("频率分辨率 df", f"{df_text} Hz"))
-    segments = _fact(facts, "segments")
-    if segments is not None:
-        rows.append(("完整段数", f"{int(segments)}"))
-    start = _fact_number(facts, "time_start", "g")
-    end = _fact_number(facts, "time_end", "g")
-    if start is not None and end is not None:
-        rows.append(("有效时间范围", f"{start} – {end} s"))
-    jitter_text = _fact_number(facts, "max_time_jitter", ".3g")
-    if jitter_text is not None:
-        # The numeric core reports jitter relative to the nominal sample step,
-        # so the row must not read as seconds.
-        rows.append(("最大时间抖动", f"{jitter_text}（相对 dt）"))
-    invalid_bins = _fact(facts, "invalid_bins")
-    if invalid_bins is not None:
-        rows.append(("无效频点", f"{int(invalid_bins)} 个"))
-    return [f"{label}：{value}" for label, value in rows]
-
-
-def normalize_effective_warnings(warnings) -> list[str]:
-    """De-duplicate warning lines, keeping first-appearance order."""
-    seen: list[str] = []
-    for raw in warnings or ():
-        text = str(raw).strip()
-        if text and text not in seen:
-            seen.append(text)
-    return seen
 
 
 class FrfContextual(QWidget):

@@ -112,6 +112,109 @@ class SpectrogramResult:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SpectrogramEffectiveFacts:
+    """Numerical parameters and measured facts for one completed spectrogram."""
+
+    fs: float
+    nfft_requested: int
+    nfft: int
+    df: float
+    window: str
+    window_s: float
+    hop_s: float
+    frames: int
+    overlap: float
+    n_samples: int
+    shortened: bool
+    nan_count: int = 0
+    is_constant: bool = False
+    time_axis: dict | None = None
+    fs_conflict: bool = False
+
+
+def _finite_positive(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def spectrogram_facts_from_result(
+    result,
+    *,
+    nfft_requested=None,
+    n_samples=None,
+    nan_count=0,
+    is_constant=False,
+    time_axis=None,
+    fs_conflict=False,
+):
+    """Build :class:`SpectrogramEffectiveFacts` from a completed result.
+
+    Reads ``result.params`` and ``result.metadata`` only — does not copy
+    the analyzer's frame/hop clamp. Empty or non-finite ``fs`` returns
+    ``None``.
+    """
+    if result is None:
+        return None
+    params = getattr(result, "params", None)
+    if params is None:
+        return None
+    fs_val = _finite_positive(getattr(params, "fs", None))
+    if fs_val is None:
+        return None
+    nfft = int(getattr(params, "nfft", 0) or 0)
+    if nfft <= 1:
+        return None
+    metadata = dict(getattr(result, "metadata", None) or {})
+    try:
+        n_samples = int(n_samples or 0)
+    except (TypeError, ValueError):
+        n_samples = 0
+    if n_samples <= 0:
+        return None
+    if nfft_requested is None:
+        requested = nfft
+    else:
+        try:
+            requested = int(nfft_requested)
+        except (TypeError, ValueError):
+            requested = nfft
+        if requested <= 0:
+            requested = nfft
+    overlap = float(getattr(params, "overlap", 0.0) or 0.0)
+    hop = metadata.get("hop")
+    if hop is None:
+        hop = int(nfft * (1.0 - overlap))
+    hop_s = float(hop) / fs_val
+    frames = metadata.get("frames")
+    if frames is None:
+        amplitude = getattr(result, "amplitude", None)
+        frames = int(np.asarray(amplitude).shape[1]) if amplitude is not None else 0
+    axis = time_axis if time_axis is not None else metadata.get("time_axis")
+    return SpectrogramEffectiveFacts(
+        fs=fs_val,
+        nfft_requested=int(requested),
+        nfft=nfft,
+        df=fs_val / float(nfft),
+        window=str(getattr(params, "window", "hanning") or "hanning"),
+        window_s=float(nfft) / fs_val,
+        hop_s=hop_s,
+        frames=int(frames),
+        overlap=overlap,
+        n_samples=n_samples,
+        shortened=nfft < int(requested),
+        nan_count=int(nan_count or 0),
+        is_constant=bool(is_constant),
+        time_axis=axis,
+        fs_conflict=bool(fs_conflict),
+    )
+
+
 class SpectrogramAnalyzer:
     """GUI-free analyzer for the FFT vs Time 2D mode.
 

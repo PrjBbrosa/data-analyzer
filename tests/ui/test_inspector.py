@@ -680,6 +680,173 @@ def test_frf_facts_card_stale_mark_on_an_empty_card_stays_empty(qtbot):
     assert not ctx.effective_facts_is_stale()
 
 
+def _fft_effective_facts(**overrides):
+    from mf4_analyzer.signal.fft import FftEffectiveFacts
+
+    values = dict(
+        fs=1000.0,
+        nfft_requested=4096,
+        nfft=1024,
+        df=1000.0 / 1024.0,
+        window="hanning",
+        window_s=1024.0 / 1000.0,
+        frames=3,
+        overlap=0.5,
+        n_samples=2048,
+        weighting="None",
+        shortened=True,
+        time_start=0.0,
+        time_end=2.047,
+    )
+    values.update(overrides)
+    return FftEffectiveFacts(**values)
+
+
+def test_fft_facts_card_lists_every_required_effective_fact(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    placeholder = ctx.findChild(QLabel, "fftFactsPlaceholder")
+    assert placeholder is not None and placeholder.text()
+
+    ctx.set_effective_facts(_fft_effective_facts(), ())
+
+    text = ctx.effective_facts_text()
+    assert "1000 Hz" in text
+    assert "4096 → 1024" in text
+    assert "Δf" in text
+    assert "完整帧数" in text
+    assert "0 – 2.047 s" in text
+    assert ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert not placeholder.isVisibleTo(ctx)
+    assert "已缩短" in ctx._fft_summary_text()
+    assert "数据过短：请求 NFFT 4096" in ctx.effective_warnings_text()
+
+
+def test_fft_facts_card_none_hides_facts(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_effective_facts(_fft_effective_facts(), ("some warning",))
+    ctx.set_effective_facts(None)
+
+    assert ctx.effective_facts_text() == ""
+    assert ctx.effective_warnings_text() == ""
+    assert not ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert ctx.findChild(QLabel, "fftFactsPlaceholder").isVisibleTo(ctx)
+    assert "已缩短" not in ctx._fft_summary_text()
+
+
+def _fft_time_effective_facts(**overrides):
+    from mf4_analyzer.signal.spectrogram import SpectrogramEffectiveFacts
+
+    values = dict(
+        fs=1000.0,
+        nfft_requested=2048,
+        nfft=256,
+        df=1000.0 / 256.0,
+        window="hanning",
+        window_s=0.256,
+        hop_s=0.128,
+        frames=12,
+        overlap=0.5,
+        n_samples=2048,
+        shortened=True,
+    )
+    values.update(overrides)
+    return SpectrogramEffectiveFacts(**values)
+
+
+def test_fft_time_facts_card_lists_every_required_effective_fact(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    placeholder = ctx.findChild(QLabel, "fftTimeFactsPlaceholder")
+    assert placeholder is not None and placeholder.text()
+
+    ctx.set_effective_facts(_fft_time_effective_facts(), ())
+
+    text = ctx.effective_facts_text()
+    assert "实际 Fs" in text and "1000 Hz" in text
+    assert "2048 → 256" in text
+    assert "完整帧数" in text
+    assert ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert not placeholder.isVisibleTo(ctx)
+
+
+def test_fft_time_facts_card_none_hides_facts(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_effective_facts(_fft_time_effective_facts())
+    ctx.set_effective_facts(None)
+    assert ctx.effective_facts_text() == ""
+    assert not ctx.lbl_effective_facts.isVisibleTo(ctx)
+
+
+def _order_effective_facts(**overrides):
+    from mf4_analyzer.signal.order import OrderEffectiveFacts
+
+    values = dict(
+        fs=1000.0,
+        nfft=256,
+        order_res_requested=0.1,
+        order_res=0.1,
+        max_order=20.0,
+        samples_per_rev=256,
+        revolutions=12.5,
+        rpm_min=600.0,
+        rpm_max=1800.0,
+        n_samples=4000,
+        shortened=True,
+    )
+    values.update(overrides)
+    return OrderEffectiveFacts(**values)
+
+
+def test_order_facts_card_lists_every_required_effective_fact(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+    placeholder = ctx.findChild(QLabel, "orderFactsPlaceholder")
+    assert placeholder is not None and placeholder.text()
+
+    ctx.set_effective_facts(_order_effective_facts(), ())
+
+    text = ctx.effective_facts_text()
+    assert "实际 Fs" in text
+    assert "阶次分辨率" in text
+    assert "累计转数" in text
+    assert "600" in text and "1800" in text
+    assert ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert not placeholder.isVisibleTo(ctx)
+    assert "已缩短" in ctx._order_summary_text()
+
+
+def test_order_facts_card_none_hides_facts(qtbot):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_effective_facts(_order_effective_facts())
+    ctx.clear_effective_facts()
+    assert ctx.effective_facts_text() == ""
+    assert not ctx.lbl_effective_facts.isVisibleTo(ctx)
+
+
 
 # ---- Task 2.3: PersistentTop ----
 

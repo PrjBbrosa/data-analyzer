@@ -180,8 +180,10 @@ def test_sc_helper_surfaces_missing_key():
 def test_modes_group_has_five_workspaces_plus_readonly_overview():
     modes = next(g for g in quickref.QUICKREF if g.title == "五个分析工作区 + 总览")
     assert [row.desc for row in modes.rows] == [
-        "时域", "频谱", "时频", "阶次", "频响", "总览",
+        "时域", "频谱", "时频", "阶次", "频响", "有效事实卡", "总览",
     ]
+    facts = next(row for row in modes.rows if row.desc == "有效事实卡")
+    assert "NFFT" in facts.sub and "已缩短" in facts.sub
     for row in modes.rows:
         assert row.sub, f"mode row {row.desc!r} missing a one-line sub/purpose"
     frf = next(row for row in modes.rows if row.desc == "频响")
@@ -219,7 +221,7 @@ def test_quickref_documents_time_cursor_display_settings():
     assert "Min / Max / Avg" in row.sub
     assert "差值" in row.sub
     assert "mini" in row.sub
-    assert "不弹出 tooltip" in row.sub
+    assert "tooltip" in row.sub
     assert "全局" in row.sub
 
 

@@ -38,6 +38,127 @@ class OrderTimeResult:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class OrderEffectiveFacts:
+    """Numerical parameters and measured facts for one completed order run."""
+
+    fs: float
+    nfft: int
+    order_res_requested: float
+    order_res: float
+    max_order: float
+    samples_per_rev: int
+    revolutions: float
+    rpm_min: float | None
+    rpm_max: float | None
+    n_samples: int
+    shortened: bool
+    nan_count: int = 0
+    is_constant: bool = False
+    time_axis: dict | None = None
+    fs_conflict: bool = False
+
+
+def _finite_positive(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def order_facts_from_result(
+    result,
+    rpm=None,
+    *,
+    n_samples=None,
+    order_res_requested=None,
+    nfft_requested=None,
+    nan_count=0,
+    is_constant=False,
+    time_axis=None,
+    fs_conflict=False,
+):
+    """Build :class:`OrderEffectiveFacts` from a COT / time-order result.
+
+    Reads ``result.params`` and ``result.metadata``; does not copy the
+    analyzer's window-placement clamp. Empty or non-finite ``fs`` returns
+    ``None``.
+    """
+    if result is None:
+        return None
+    params = getattr(result, "params", None)
+    if params is None:
+        return None
+    fs_val = _finite_positive(getattr(params, "fs", None))
+    if fs_val is None:
+        return None
+    nfft = int(getattr(params, "nfft", 0) or 0)
+    if nfft <= 1:
+        return None
+    metadata = dict(getattr(result, "metadata", None) or {})
+    try:
+        n_samples = int(n_samples or 0)
+    except (TypeError, ValueError):
+        n_samples = 0
+    if n_samples <= 0:
+        return None
+    order_res = float(getattr(params, "order_res", 0.0) or 0.0)
+    if order_res_requested is None:
+        requested_res = order_res
+    else:
+        try:
+            requested_res = float(order_res_requested)
+        except (TypeError, ValueError):
+            requested_res = order_res
+        if not np.isfinite(requested_res) or requested_res <= 0:
+            requested_res = order_res
+    if nfft_requested is None:
+        requested_nfft = nfft
+    else:
+        try:
+            requested_nfft = int(nfft_requested)
+        except (TypeError, ValueError):
+            requested_nfft = nfft
+        if requested_nfft <= 0:
+            requested_nfft = nfft
+    revs = metadata.get("theta_max_rev")
+    try:
+        revs = float(revs) if revs is not None else 0.0
+    except (TypeError, ValueError):
+        revs = 0.0
+    rpm_min = rpm_max = None
+    if rpm is not None:
+        rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
+        finite = rpm_arr[np.isfinite(rpm_arr)]
+        if finite.size:
+            abs_rpm = np.abs(finite)
+            rpm_min = float(np.min(abs_rpm))
+            rpm_max = float(np.max(abs_rpm))
+    shortened = nfft < requested_nfft
+    if requested_res > 0 and order_res > requested_res:
+        shortened = True
+    return OrderEffectiveFacts(
+        fs=fs_val,
+        nfft=nfft,
+        order_res_requested=float(requested_res),
+        order_res=order_res,
+        max_order=float(getattr(params, "max_order", 0.0) or 0.0),
+        samples_per_rev=int(getattr(params, "samples_per_rev", 0) or 0),
+        revolutions=revs,
+        rpm_min=rpm_min,
+        rpm_max=rpm_max,
+        n_samples=n_samples,
+        shortened=bool(shortened),
+        nan_count=int(nan_count or 0),
+        is_constant=bool(is_constant),
+        time_axis=time_axis,
+        fs_conflict=bool(fs_conflict),
+    )
+
+
 class OrderAnalyzer:
     @staticmethod
     def _as_float_vector(name, values):

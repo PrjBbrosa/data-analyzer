@@ -15,7 +15,7 @@ should import this module directly instead of going through those aliases.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
 import logging
 
@@ -31,7 +31,11 @@ from .signal.analysis_defaults import (
     DEFAULT_ORDER_RES,
     normalize_overlap_fraction,
 )
-from .signal.fft import FFTAnalyzer
+from .signal.fft import (
+    FFTAnalyzer,
+    build_fft_effective_facts,
+    unconstrained_window_nfft,
+)
 from .io.file_data import build_time_axis_provenance, time_axis_spacing_stats
 from .signal.frf import (
     FrfCancelled,
@@ -658,6 +662,43 @@ def compute_preprocessed_time_dataframe(
     return pd.concat(frames, ignore_index=True)
 
 
+def _fft_nfft_requested(params, n_samples, fs, resolved_nfft):
+    avg_mode = str(params.get('avg_mode', '单帧'))
+    raw = params.get('nfft')
+    auto = raw is None or params.get('nfft_mode') == 'auto'
+    if isinstance(raw, str):
+        auto = raw.strip().lower() in ('', 'auto', '自动')
+    if avg_mode == '单帧':
+        return int(n_samples if auto else resolved_nfft or n_samples)
+    if auto:
+        target = unconstrained_window_nfft(
+            fs, params.get('t_win_s', DEFAULT_FFT_T_WIN_S),
+        )
+        return int(target if target is not None else resolved_nfft or n_samples)
+    return int(resolved_nfft or n_samples)
+
+
+def fft_effective_facts_from_compute(sig, fs, params, freq):
+    """Build FFT facts from the same inputs ``compute_fft_dataframe`` used."""
+    n_samples = len(np.asarray(sig))
+    avg_mode = str(params.get('avg_mode', '单帧'))
+    resolved = resolve_fft_nfft(n_samples, fs, params)
+    overlap = avg_overlap_fraction(params) if avg_mode != '单帧' else float(
+        params.get('overlap', 0.0) or 0.0
+    )
+    return build_fft_effective_facts(
+        sig, fs,
+        window=params.get('window', params.get('win', 'hanning')),
+        nfft=resolved,
+        avg_mode=avg_mode,
+        overlap=overlap,
+        weighting=str(params.get('weighting', 'None')),
+        nfft_requested=_fft_nfft_requested(params, n_samples, fs, resolved),
+        freq=freq,
+        min_frames=24 if avg_mode != '单帧' else None,
+    )
+
+
 def compute_fft_dataframe(sig, fs, params):
     sig, _spec = apply_filter_if_enabled(sig, fs, params)
     nfft = resolve_fft_nfft(len(sig), fs, params)
@@ -687,7 +728,11 @@ def compute_fft_dataframe(sig, fs, params):
         avg_mode=avg_mode,
         requested=params.get('amplitude_definition', 'native'),
     )
-    return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
+    frame = pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
+    facts = fft_effective_facts_from_compute(sig, fs, params, freq)
+    if facts is not None:
+        frame.attrs['effective_facts'] = facts
+    return frame
 
 
 def convert_fft_amplitude_definition(amp, *, avg_mode, requested):
@@ -882,13 +927,43 @@ def compute_order_time_spectro(sig, rpm, time, fs, params) -> "_Spectro2D":
         weighting=str(params.get('weighting', 'None')),
     )
     result = COTOrderAnalyzer.compute(sig, rpm, time_arr, cot_params)
+    metadata = dict(getattr(result, 'metadata', {}) or {})
+    from .signal.order import order_facts_from_result
+    nfft_raw = params.get('nfft')
+    auto = (
+        nfft_raw is None
+        or str(nfft_raw).strip().lower() in ('', 'auto', '自动')
+        or str(params.get('nfft_mode', '')).lower() == 'auto'
+    )
+    samples_per_rev = int(cot_params.samples_per_rev)
+    order_res = float(cot_params.order_res)
+    if auto:
+        nfft_requested = unconstrained_window_nfft(
+            samples_per_rev, 1.0 / order_res, floor=256, ceil=16384,
+        )
+        if nfft_requested is None:
+            nfft_requested = int(cot_params.nfft)
+    else:
+        nfft_requested = int(cot_params.nfft)
+    facts = order_facts_from_result(
+        result, rpm,
+        n_samples=len(sig),
+        order_res_requested=order_res,
+        nfft_requested=nfft_requested,
+    )
+    if facts is not None:
+        payload = asdict(facts)
+        if payload.get('time_axis') is None:
+            payload.pop('time_axis', None)
+        metadata['effective_facts'] = payload
+        result.effective = facts
     return _Spectro2D(
         x=np.asarray(result.times, dtype=float),
         y=np.asarray(result.orders, dtype=float),
         matrix=np.asarray(result.amplitude, dtype=float),
         x_name='time_s',
         y_name='order',
-        metadata=dict(getattr(result, 'metadata', {}) or {}),
+        metadata=metadata,
     )
 
 
@@ -942,6 +1017,33 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
     time_axis = getattr(axis, 'time_axis', None)
     if time_axis:
         metadata['time_axis'] = dict(time_axis)
+    from .signal.spectrogram import spectrogram_facts_from_result
+    nfft_raw = params.get('nfft')
+    auto = (
+        nfft_raw is None
+        or str(nfft_raw).strip().lower() in ('', 'auto', '自动')
+        or str(params.get('nfft_mode', '')).lower() == 'auto'
+    )
+    if auto:
+        nfft_requested = unconstrained_window_nfft(
+            fs, params.get('t_win_s', DEFAULT_FFT_T_WIN_S),
+        )
+        if nfft_requested is None:
+            nfft_requested = int(sp.nfft)
+    else:
+        nfft_requested = int(sp.nfft)
+    facts = spectrogram_facts_from_result(
+        result,
+        nfft_requested=nfft_requested,
+        n_samples=len(sig),
+        time_axis=dict(time_axis) if time_axis else None,
+    )
+    if facts is not None:
+        payload = asdict(facts)
+        if payload.get('time_axis') is None:
+            payload.pop('time_axis', None)
+        metadata['effective_facts'] = payload
+        result.effective = facts
     return _Spectro2D(
         x=np.asarray(result.times, dtype=float),
         y=np.asarray(result.frequencies, dtype=float),

@@ -48,6 +48,7 @@ from ._helpers import (
     make_db_reference_control,
     recommend_preset_for_unit,
 )
+from ._effective_facts import attach_effective_facts_card
 from .collapsible import _CollapsibleParamSection
 from .presets import PresetBar
 
@@ -295,6 +296,13 @@ class FFTTimeContextual(QWidget):
         params_lay.addWidget(self.btn_compute)
 
         root.addWidget(params_card)
+        attach_effective_facts_card(
+            self,
+            root,
+            prefix="fftTime",
+            placeholder="尚无计算结果；点击『计算时频图』后在此显示实际参数。",
+            summary_refresh=self._refresh_tf_summary,
+        )
         root.addStretch()
 
         # 2026-04-27 fix-4: unify label-column width across the sig_card
@@ -325,10 +333,12 @@ class FFTTimeContextual(QWidget):
         nfft_text = self.combo_nfft.currentText()
         if nfft_text == self._AUTO_NFFT_LABEL:
             nfft_text = f"{self._AUTO_NFFT_LABEL}({self._nfft_preview()})"
+        suffix = " · 已缩短" if getattr(self, "_facts_shortened", False) else ""
         return (
             f"{nfft_text} · "
             f"{self.combo_win.currentText()} · "
             f"{self.spin_overlap.value()}%"
+            f"{suffix}"
         )
 
     def _refresh_tf_summary(self):

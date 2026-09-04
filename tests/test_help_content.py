@@ -94,7 +94,9 @@ def test_manual_load_slide_mentions_recent_open_menu():
     assert "最近打开" in text
     preset = next(slide for slide in data["slides"] if slide.get("id") == "preset")
     preset_text = json.dumps(preset, ensure_ascii=False)
-    assert "按通道" in preset_text and "单位" in preset_text
+    assert "单位" in preset_text
+    assert "荐" in preset_text
+    assert "不做推荐" in preset_text
 
 
 def test_manual_splits_detailed_wwt_guidance_from_the_load_slide():

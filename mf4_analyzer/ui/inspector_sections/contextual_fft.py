@@ -40,6 +40,7 @@ from ._helpers import (
     make_db_reference_control,
     recommend_preset_for_unit,
 )
+from ._effective_facts import attach_effective_facts_card
 from .collapsible import _CollapsibleParamSection
 from .presets import PresetBar
 
@@ -295,6 +296,13 @@ class FFTContextual(QWidget):
         self.btn_fft.setProperty("role", "primary")
         params_lay.addWidget(self.btn_fft)
         root.addWidget(params_card)
+        attach_effective_facts_card(
+            self,
+            root,
+            prefix="fft",
+            placeholder="尚无计算结果；点击『计算 FFT』后在此显示实际参数。",
+            summary_refresh=self._refresh_fft_summary,
+        )
         root.addStretch()
 
         # 2026-04-27 fix-4: unify the label-column width across the
@@ -397,10 +405,12 @@ class FFTContextual(QWidget):
             mode_bit = avg_mode
         else:
             mode_bit = f"{avg_mode} {int(self.spin_avg_overlap.value())}%"
+        suffix = " · 已缩短" if getattr(self, "_facts_shortened", False) else ""
         return (
             f"{nfft_text} · "
             f"{self.combo_win.currentText()} · "
             f"{mode_bit}"
+            f"{suffix}"
         )
 
     def _refresh_fft_summary(self):

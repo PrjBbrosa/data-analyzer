@@ -2090,7 +2090,10 @@ Inspector QFrame#orderParamsCard,
 Inspector QFrame#frfSignalCard,
 Inspector QFrame#frfParamsCard,
 Inspector QFrame#frfDisplayCard,
-Inspector QFrame#frfFactsCard {
+Inspector QFrame#frfFactsCard,
+Inspector QFrame#fftFactsCard,
+Inspector QFrame#fftTimeFactsCard,
+Inspector QFrame#orderFactsCard {
     background-color: #ffffff;
     border: 1px solid #dbe2eb;
     border-radius: 6px;
@@ -2102,20 +2105,32 @@ Inspector QFrame#frfFactsCard {
  * drop to the project's existing muted token. The warning list reuses the
  * batch preview's amber trio (batchPreviewWarnings) — same meaning, same
  * colours, no new token. */
-Inspector QLabel#frfEffectiveFacts {
+Inspector QLabel#frfEffectiveFacts,
+Inspector QLabel#fftEffectiveFacts,
+Inspector QLabel#fftTimeEffectiveFacts,
+Inspector QLabel#orderEffectiveFacts {
     color: #334155;
     font-size: 11px;
     background: transparent;
 }
-Inspector QLabel#frfFactsPlaceholder {
+Inspector QLabel#frfFactsPlaceholder,
+Inspector QLabel#fftFactsPlaceholder,
+Inspector QLabel#fftTimeFactsPlaceholder,
+Inspector QLabel#orderFactsPlaceholder {
     color: #94a3b8;
     font-size: 11px;
     background: transparent;
 }
-Inspector QLabel#frfEffectiveFacts[factsState="stale"] {
+Inspector QLabel#frfEffectiveFacts[factsState="stale"],
+Inspector QLabel#fftEffectiveFacts[factsState="stale"],
+Inspector QLabel#fftTimeEffectiveFacts[factsState="stale"],
+Inspector QLabel#orderEffectiveFacts[factsState="stale"] {
     color: #94a3b8;
 }
-Inspector QFrame#frfFactsCard QLabel[factsRole="warning"] {
+Inspector QFrame#frfFactsCard QLabel[factsRole="warning"],
+Inspector QFrame#fftFactsCard QLabel[factsRole="warning"],
+Inspector QFrame#fftTimeFactsCard QLabel[factsRole="warning"],
+Inspector QFrame#orderFactsCard QLabel[factsRole="warning"] {
     background-color: #fffbeb;
     border: 1px solid #fde68a;
     border-radius: 6px;
@@ -2126,7 +2141,10 @@ Inspector QFrame#frfFactsCard QLabel[factsRole="warning"] {
 /* A stale warning describes numbers that are no longer current, so it drops
  * out of the live amber alongside the facts it belongs to — otherwise it
  * keeps competing for attention with whatever the next run reports. */
-Inspector QFrame#frfFactsCard QLabel[factsRole="warning"][factsState="stale"] {
+Inspector QFrame#frfFactsCard QLabel[factsRole="warning"][factsState="stale"],
+Inspector QFrame#fftFactsCard QLabel[factsRole="warning"][factsState="stale"],
+Inspector QFrame#fftTimeFactsCard QLabel[factsRole="warning"][factsState="stale"],
+Inspector QFrame#orderFactsCard QLabel[factsRole="warning"][factsState="stale"] {
     background-color: #f8fafc;
     border-color: #e2e8f0;
     color: #94a3b8;

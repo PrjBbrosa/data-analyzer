@@ -171,6 +171,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 accent=_MODE_FRF,
             ),
             QuickRow(
+                "有效事实卡",
+                sub="计算后显示实际生效的 Fs / NFFT / Δf；数据过短会标明已缩短。",
+            ),
+            QuickRow(
                 "总览",
                 sub="独立只读面板，对照已有预览、不计算；右上可让当前工程所有 Board 的卡片操作常驻（保存项目后保留）。停手后更新图面，保留游标与标注。",
                 gesture="各工作区 View 栏最右侧 UltraView",
@@ -378,7 +382,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "游标显示设置",
-                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；− 把读数收成 mini。读数面板本身不弹出 tooltip。全局同步所有分屏。",
+                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；− 把读数收成 mini，丢掉的进 tooltip。全局同步所有分屏。",
             ),
             QuickRow(
                 "频谱 / 频响游标",

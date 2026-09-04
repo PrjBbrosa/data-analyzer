@@ -40,6 +40,7 @@ from ._helpers import (
     make_db_reference_control,
     recommend_preset_for_unit,
 )
+from ._effective_facts import attach_effective_facts_card
 from .collapsible import _CollapsibleParamSection
 from .presets import PresetBar
 
@@ -299,6 +300,13 @@ class OrderContextual(QWidget):
         params_lay.addWidget(self.lbl_progress)
 
         root.addWidget(params_card)
+        attach_effective_facts_card(
+            self,
+            root,
+            prefix="order",
+            placeholder="尚无计算结果；点击『计算阶次图』后在此显示实际参数。",
+            summary_refresh=self._refresh_order_summary,
+        )
         root.addStretch()
 
         self.btn_ot.clicked.connect(self.order_time_requested)
@@ -331,10 +339,12 @@ class OrderContextual(QWidget):
         nfft_text = self.combo_nfft.currentText()
         if nfft_text == self._AUTO_NFFT_LABEL:
             nfft_text = f"{self._AUTO_NFFT_LABEL}({self._order_nfft_preview()})"
+        suffix = " · 已缩短" if getattr(self, "_facts_shortened", False) else ""
         return (
             f"≤{self.spin_mo.value()}阶 · "
             f"{self.spin_order_res.value():g} · "
             f"{nfft_text}"
+            f"{suffix}"
         )
 
     def _refresh_order_summary(self):

@@ -5,6 +5,8 @@ import numpy as np
 from ... import db_reference
 from ...signal import resolve_nfft
 from ...signal.analysis_defaults import DEFAULT_FFT_T_WIN_S
+from ...signal.fft import unconstrained_window_nfft
+from ...signal.spectrogram import spectrogram_facts_from_result
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -111,6 +113,10 @@ class FFTTimeMixin:
                     coordinator.invalidate_fid(fid)
                     continue
             cache.invalidate_fid(fid)
+        for section in ('fft', 'fft_time', 'order'):
+            sync = getattr(self, f'_sync_{section}_effective_facts', None)
+            if callable(sync):
+                sync()
 
     def _get_fft_time_signal(self):
         """Resolve the (fid, channel, time, signal, file_data) tuple
@@ -494,13 +500,33 @@ class FFTTimeMixin:
         unit = ''
         if fd is not None and hasattr(fd, 'channel_units'):
             unit = fd.channel_units.get(ch, '') or ''
-        def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
+        auto = raw_params.get('nfft') is None or raw_params.get('nfft_mode') == 'auto'
+        if auto:
+            nfft_requested = unconstrained_window_nfft(
+                p.get('fs'), p.get('t_win_s', DEFAULT_FFT_T_WIN_S),
+            )
+            if nfft_requested is None:
+                nfft_requested = int(p['nfft_effective'])
+        else:
+            nfft_requested = int(p['nfft_effective'])
+        n_samples = len(sig)
+
+        def job(
+            worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit,
+            _requested=nfft_requested, _n_samples=n_samples,
+        ):
             from ...signal import SpectrogramAnalyzer
-            return SpectrogramAnalyzer.compute(
+            result = SpectrogramAnalyzer.compute(
                 _sig, _t, _params, channel_name=_ch, unit=_unit,
                 progress_callback=worker.progress.emit,
                 cancel_token=worker.cancelled,
             )
+            result.effective = spectrogram_facts_from_result(
+                result,
+                nfft_requested=_requested,
+                n_samples=_n_samples,
+            )
+            return result
 
         render_params = {**p, **dict(display_params or {})}
         return job, {
@@ -672,6 +698,61 @@ class FFTTimeMixin:
                 f"FFT vs Time 完成 · {result.metadata.get('frames', 0)} frames"
                 f"{suffix}"
             )
+        self._sync_fft_time_effective_facts()
+
+    def _sync_fft_time_effective_facts(self, state=None):
+        """Re-fill the Inspector facts card from the focused spectrogram."""
+        ctx = self.inspector.fft_time_ctx
+        if state is None:
+            mgr = self.analysis_managers.get('fft_time')
+            if mgr is None or not mgr.views:
+                ctx.clear_effective_facts()
+                return
+            state = mgr.get(mgr.active)
+        page = self._analysis_page('fft_time')
+        idx = page.focused_index()
+        if state is None or not (0 <= idx < len(state.panes)):
+            ctx.clear_effective_facts()
+            return
+        pane = state.panes[idx]
+        sources = list(pane.sources)
+        if not sources:
+            ctx.clear_effective_facts()
+            return
+        fid, ch = sources[0]
+        time_range = self._pane_time_range_for('fft_time', idx)
+        prepared = self._fft_time_effective_params_for_source(
+            self.inspector.fft_time_ctx.compute_params()
+            if hasattr(self.inspector.fft_time_ctx, 'compute_params')
+            else self.inspector.fft_time_ctx.get_params(),
+            fid, ch, time_range,
+        )
+        if prepared is None:
+            ctx.clear_effective_facts()
+            return
+        effective_p, _rng = prepared
+        key = self._fft_time_analysis_cache_key(
+            fid, ch, effective_p, time_range,
+        )
+        result = self.analysis_caches['fft_time'].get(key)
+        facts = getattr(result, 'effective', None) if result is not None else None
+        if facts is None and result is not None:
+            nfft_requested = unconstrained_window_nfft(
+                getattr(getattr(result, 'params', None), 'fs', None),
+                DEFAULT_FFT_T_WIN_S,
+            )
+            _fid, _ch, _t, sig, _fd = self._fft_time_signal_for((fid, ch))
+            n_samples = int(len(sig)) if sig is not None else 0
+            facts = spectrogram_facts_from_result(
+                result, nfft_requested=nfft_requested, n_samples=n_samples,
+            )
+        if facts is None:
+            ctx.clear_effective_facts()
+            return
+        _fid, _ch, _t, sig, _fd = self._fft_time_signal_for((fid, ch))
+        self._publish_analysis_effective_facts(
+            ctx, facts, sig=sig, fid=fid, sources=sources,
+        )
 
     def _on_fft_time_failed(self, _ctx, message):
         """Coordinator failure — keep the previous chart on screen.

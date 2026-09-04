@@ -558,6 +558,81 @@ class AnalysisMixin:
     def _on_analysis_compute_params_changed(self, section, _params):
         """Record a compute edit without implicitly submitting a new job."""
         self._sync_active_analysis_params(section)
+        self._mark_section_effective_facts_stale(section)
+
+    def _effective_facts_health(self, sig, fid=None, sources=None):
+        """Caller-filled health fields for an effective-facts dataclass."""
+        arr = np.asarray(sig, dtype=float) if sig is not None else np.array([])
+        nan_count = int(arr.size - np.count_nonzero(np.isfinite(arr))) if arr.size else 0
+        finite = arr[np.isfinite(arr)] if arr.size else arr
+        is_constant = bool(finite.size > 0 and float(np.ptp(finite)) == 0.0)
+        time_axis = None
+        fd = self.files.get(fid) if fid is not None else None
+        prov = getattr(fd, "time_axis_provenance", None) if fd is not None else None
+        if prov is not None and getattr(prov, "reason", None) == "auto_nonuniform":
+            time_axis = prov.to_dict() if hasattr(prov, "to_dict") else dict(prov)
+        fs_values = []
+        for src in sources or ():
+            if not src:
+                continue
+            sfd = self.files.get(src[0])
+            if sfd is None:
+                continue
+            try:
+                fs_v = float(sfd.fs)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(fs_v) and fs_v > 0:
+                fs_values.append(fs_v)
+        fs_conflict = False
+        if len(fs_values) > 1:
+            ref = fs_values[0]
+            scale = max(abs(ref), 1.0)
+            fs_conflict = any(
+                abs(v - ref) > 1e-9 * max(scale, abs(v)) for v in fs_values[1:]
+            )
+        return {
+            "nan_count": nan_count,
+            "is_constant": is_constant,
+            "time_axis": time_axis,
+            "fs_conflict": fs_conflict,
+        }, fs_values
+
+    def _publish_analysis_effective_facts(
+        self, ctx, facts, *, sig=None, fid=None, sources=(), extra_warnings=(),
+    ):
+        """Stamp health onto ``facts`` and push to the Inspector card."""
+        if ctx is None or not hasattr(ctx, "set_effective_facts"):
+            return
+        if facts is None:
+            ctx.clear_effective_facts()
+            return
+        from dataclasses import replace
+
+        health, fs_values = self._effective_facts_health(
+            sig, fid=fid, sources=sources,
+        )
+        try:
+            facts = replace(facts, **health)
+        except TypeError:
+            pass
+        warnings = list(extra_warnings)
+        if getattr(facts, "fs_conflict", False) and fs_values:
+            pretty = ", ".join(f"{v:g} Hz" for v in fs_values)
+            warnings.append(f"多源 Fs 冲突：{pretty}")
+        ctx.set_effective_facts(facts, warnings)
+
+    def _sync_section_effective_facts(self, section, state=None):
+        sync = getattr(self, f"_sync_{section}_effective_facts", None)
+        if callable(sync):
+            sync(state)
+
+    def _mark_section_effective_facts_stale(self, section):
+        ctx_name = "fft_time_ctx" if section == "fft_time" else f"{section}_ctx"
+        ctx = getattr(self.inspector, ctx_name, None)
+        marker = getattr(ctx, "mark_effective_facts_stale", None)
+        if callable(marker):
+            marker()
 
     def _on_analysis_display_params_changed(self, section, _params):
         """Record a display edit and redraw only the visible active View."""
@@ -644,6 +719,7 @@ class AnalysisMixin:
         # 5. Render from cache only (spec §4: switching never auto-computes).
         if render:
             self._render_analysis_view_from_cache(section, state)
+        self._sync_section_effective_facts(section, state)
 
     def _project_analysis_attachments(self, section, state):
         """Project one analysis View's file range onto the shared navigator."""
@@ -689,6 +765,7 @@ class AnalysisMixin:
         self._apply_analysis_time_range(section, state)
         if section in {'fft', 'frf'}:
             self._apply_frequency_cursor_controls(section, state)
+        self._sync_section_effective_facts(section, state)
 
     def _on_analysis_compare_toggled(self, section, key, on):
         """A page compare toggle (联动缩放 / 锁定色阶) flipped → persist it onto
@@ -1415,6 +1492,7 @@ class AnalysisMixin:
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
         notify_ultraview_plot(self, section, "analysis-restore-plot")
+        self._sync_section_effective_facts(section, state)
 
     def _rebind_pane_overlay(self, canvas, pane) -> None:
         from ..analysis_view_bridge import apply_overlay_to_canvas

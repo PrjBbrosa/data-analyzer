@@ -12,6 +12,8 @@ from ...signal import (
     revolutions_from_rpm,
 )
 from ...signal.analysis_defaults import DEFAULT_ANALYSIS_WINDOW, DEFAULT_ORDER_RES
+from ...signal.fft import unconstrained_window_nfft
+from ...signal.order import order_facts_from_result
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP, DEFAULT_HEATMAP_INTERP
 from ...qt_analysis_shared import amplitude_mode_is_db
@@ -479,6 +481,11 @@ class OrderMixin:
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(sig), dtype=float) / float(fs)
+        orig_auto = (
+            op.get('nfft') is None
+            or op.get('nfft_mode') == 'auto'
+            or str(op.get('nfft')) == '自动'
+        )
         op = self._resolve_order_effective_params(op, rpm, t_arr)
         try:
             p = COTParams(
@@ -514,8 +521,23 @@ class OrderMixin:
             'view_id': view_id,
         }
 
-        def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
-            return COTOrderAnalyzer.compute(
+        samples_per_rev = int(op.get('samples_per_rev', 256))
+        order_res = float(op['order_res'])
+        if orig_auto:
+            nfft_requested = unconstrained_window_nfft(
+                samples_per_rev, 1.0 / order_res, floor=256, ceil=16384,
+            )
+            if nfft_requested is None:
+                nfft_requested = int(op.get('nfft_effective', op['nfft']))
+        else:
+            nfft_requested = int(op.get('nfft_effective', op['nfft']))
+        n_samples = len(sig)
+
+        def job(
+            worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p,
+            _req=nfft_requested, _n=n_samples, _order_res=order_res,
+        ):
+            result = COTOrderAnalyzer.compute(
                 _sig,
                 _rpm,
                 _t,
@@ -523,6 +545,14 @@ class OrderMixin:
                 progress_callback=worker.progress.emit,
                 cancel_token=worker.cancelled,
             )
+            result.effective = order_facts_from_result(
+                result,
+                _rpm,
+                n_samples=_n,
+                order_res_requested=_order_res,
+                nfft_requested=_req,
+            )
+            return result
 
         return job, ctx
 
@@ -699,6 +729,9 @@ class OrderMixin:
         canvas.set_tick_density(xt, yt)
         notify_ultraview_plot(self, "order", "order-plot")
         self._restore_analysis_canvas_viewport("order", canvas)
+        page = self._analysis_page("order")
+        if canvas is page.pane_canvas(page.focused_index()):
+            self._sync_order_effective_facts()
 
     def _render_order_time(self, result, *, emit_feedback=True, source=None):
         # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the
@@ -759,6 +792,51 @@ class OrderMixin:
         else:
             self._render_order_time(
                 result, emit_feedback=outcome is None, source=source)
+
+    def _sync_order_effective_facts(self, state=None):
+        """Re-fill the Inspector facts card from the focused order result."""
+        ctx = self.inspector.order_ctx
+        if state is None:
+            mgr = self.analysis_managers.get('order')
+            if mgr is None or not mgr.views:
+                ctx.clear_effective_facts()
+                return
+            state = mgr.get(mgr.active)
+        page = self._analysis_page('order')
+        idx = page.focused_index()
+        if state is None or not (0 <= idx < len(state.panes)):
+            ctx.clear_effective_facts()
+            return
+        pane = state.panes[idx]
+        sources = list(pane.sources)
+        if not sources:
+            ctx.clear_effective_facts()
+            return
+        fid, ch = sources[0]
+        time_range = self._pane_time_range_for('order', idx)
+        rpm_source = pane.rpm_source
+        params = self.inspector.order_ctx.compute_params()
+        effective = self._order_effective_params_for_source(
+            params, fid, ch, rpm_source, time_range,
+        )
+        if effective is None:
+            ctx.clear_effective_facts()
+            return
+        key = self._order_analysis_cache_key(
+            fid, ch, effective,
+            rpm_source=tuple(rpm_source) if rpm_source else None,
+            time_range=time_range,
+        )
+        result = self.analysis_caches['order'].get(key)
+        facts = getattr(result, 'effective', None) if result is not None else None
+        if facts is None:
+            ctx.clear_effective_facts()
+            return
+        _t, sig = self._order_sig_for((fid, ch), time_range=time_range)
+        self._publish_analysis_effective_facts(
+            ctx, facts, sig=sig, fid=fid, sources=sources,
+        )
+
     def _on_order_job_failed(self, _ctx, message):
         # A single pane's failure must not abort the service FIFO batch.
         #

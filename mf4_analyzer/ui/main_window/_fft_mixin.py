@@ -13,10 +13,24 @@ from ...signal.analysis_defaults import (
     DEFAULT_FFT_T_WIN_S,
     normalize_overlap_fraction,
 )
+from ...signal.fft import build_fft_effective_facts, unconstrained_window_nfft
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from .ultraview_coordinator import notify_ultraview_plot
+
+
+class _FftComputeResult(tuple):
+    """``(freq, amp, psd)`` plus a frozen facts payload.
+
+    Subclassing tuple keeps ``freq, amp, psd = result`` and
+    ``_fft_entry_from_cache`` unpacking working for cached 3-tuples.
+    """
+
+    def __new__(cls, freq, amp, psd, effective=None):
+        obj = tuple.__new__(cls, (freq, amp, psd))
+        obj.effective = effective
+        return obj
 
 
 class FFTMixin:
@@ -143,10 +157,12 @@ class FFTMixin:
             return out
         return self._resolve_fft_effective_params(fft_params, len(sig), fs)
 
-    def _fft_compute_arrays(self, sig, fs, fft_params):
+    def _fft_compute_arrays(self, sig, fs, fft_params, *, time=None):
         """Run the FFT compute branch (Welch avg / peak-hold / single-frame)
         on a single signal, returning raw display-independent ``(freq, amp,
-        psd)``. Algorithm calls are byte-identical to the legacy do_fft."""
+        psd)`` plus frozen effective facts. Algorithm calls are byte-identical
+        to the legacy do_fft; the extra facts payload rides on a tuple
+        subclass so existing 3-unpack sites keep working."""
         fft_params = self._resolve_fft_effective_params(
             fft_params, len(sig), fs)
         win = fft_params['window']
@@ -173,7 +189,66 @@ class FFTMixin:
             _, psd = self._call_fft_analyzer(
                 FFTAnalyzer.compute_psd, sig, fs, win, nfft,
                 weighting=weighting)
-        return freq, amp, psd
+        auto = fft_params.get('nfft_mode') == 'auto' or nfft is None
+        if avg_mode == '单帧':
+            nfft_requested = len(sig) if auto else int(nfft)
+        elif auto:
+            nfft_requested = unconstrained_window_nfft(
+                fs, fft_params.get('t_win_s', DEFAULT_FFT_T_WIN_S),
+            )
+            if nfft_requested is None:
+                nfft_requested = nfft
+        else:
+            nfft_requested = int(nfft)
+        facts = build_fft_effective_facts(
+            sig, fs,
+            window=win,
+            nfft=nfft,
+            avg_mode=avg_mode,
+            overlap=avg_overlap,
+            weighting=weighting,
+            nfft_requested=nfft_requested,
+            freq=freq,
+            time=time,
+            min_frames=24 if avg_mode != '单帧' else None,
+        )
+        return _FftComputeResult(freq, amp, psd, facts)
+
+    def _sync_fft_effective_facts(self, state=None):
+        """Re-fill the Inspector facts card from the focused pane's result."""
+        ctx = self.inspector.fft_ctx
+        if state is None:
+            mgr = self.analysis_managers.get('fft')
+            if mgr is None or not mgr.views:
+                ctx.clear_effective_facts()
+                return
+            state = mgr.get(mgr.active)
+        page = self._analysis_page('fft')
+        idx = page.focused_index()
+        if state is None or not (0 <= idx < len(state.panes)):
+            ctx.clear_effective_facts()
+            return
+        pane = state.panes[idx]
+        sources = list(pane.sources)
+        if not sources:
+            ctx.clear_effective_facts()
+            return
+        fid, ch = sources[0]
+        time_range = self._pane_time_range_for('fft', idx)
+        params = self._fft_effective_params_for_source(
+            self.inspector.fft_ctx.compute_params(),
+            fid, ch, time_range,
+        )
+        key = self._fft_analysis_cache_key(fid, ch, params, time_range)
+        result = self.analysis_caches['fft'].get(key)
+        facts = getattr(result, 'effective', None) if result is not None else None
+        if facts is None:
+            ctx.clear_effective_facts()
+            return
+        sig, _fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+        self._publish_analysis_effective_facts(
+            ctx, facts, sig=sig, fid=fid, sources=sources,
+        )
 
     def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE):
         """Fetch + range-gate a single FFT source's signal. Returns
@@ -277,6 +352,8 @@ class FFTMixin:
             if plot_live and pane_idx < page.pane_count() and entries:
                 self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
                 notify_ultraview_plot(self, "fft", "fft-plot")
+        if plot_live:
+            self._sync_fft_effective_facts(state)
 
     def do_fft(self):
         """Compute the ACTIVE FFT view: every source of every pane.
@@ -361,6 +438,7 @@ class FFTMixin:
             if entries:
                 self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
                 notify_ultraview_plot(self, "fft", "fft-plot")
+        self._sync_fft_effective_facts(state)
 
         if any_multi:
             if not self._emit_compute_feedback(outcome, section_label="FFT"):
@@ -417,7 +495,15 @@ class FFTMixin:
             # pyqt-ui/2026-08-15-progress-pump-makes-the-render-reentrant).
             QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
-            freq, amp, _psd = self._fft_compute_arrays(sig, fs, fft_params)
+            result = self._fft_compute_arrays(sig, fs, fft_params, time=t)
+            freq, amp, _psd = result
+            self._publish_analysis_effective_facts(
+                self.inspector.fft_ctx,
+                getattr(result, 'effective', None),
+                sig=sig,
+                fid=fid,
+                sources=(sig_data,) if sig_data else (),
+            )
 
             display_params = self.inspector.fft_ctx.display_params()
             x_auto = bool(display_params.get('x_auto', display_params.get('autoscale', True)))
