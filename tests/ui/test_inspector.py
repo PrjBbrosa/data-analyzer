@@ -727,19 +727,21 @@ def test_fft_facts_card_lists_every_required_effective_fact(qtbot):
 
 
 def test_fft_facts_card_none_hides_facts(qtbot):
-    from PyQt5.QtWidgets import QLabel
+    from PyQt5.QtWidgets import QFrame
 
     from mf4_analyzer.ui.inspector_sections import FFTContextual
 
     ctx = FFTContextual()
     qtbot.addWidget(ctx)
+    card = ctx.findChild(QFrame, "fftFactsCard")
     ctx.set_effective_facts(_fft_effective_facts(), ("some warning",))
+    assert card.isVisibleTo(ctx)
     ctx.set_effective_facts(None)
 
     assert ctx.effective_facts_text() == ""
     assert ctx.effective_warnings_text() == ""
     assert not ctx.lbl_effective_facts.isVisibleTo(ctx)
-    assert ctx.findChild(QLabel, "fftFactsPlaceholder").isVisibleTo(ctx)
+    assert not card.isVisibleTo(ctx)
     assert "已缩短" not in ctx._fft_summary_text()
 
 
@@ -784,14 +786,19 @@ def test_fft_time_facts_card_lists_every_required_effective_fact(qtbot):
 
 
 def test_fft_time_facts_card_none_hides_facts(qtbot):
+    from PyQt5.QtWidgets import QFrame
+
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
 
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
+    card = ctx.findChild(QFrame, "fftTimeFactsCard")
     ctx.set_effective_facts(_fft_time_effective_facts())
+    assert card.isVisibleTo(ctx)
     ctx.set_effective_facts(None)
     assert ctx.effective_facts_text() == ""
     assert not ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert not card.isVisibleTo(ctx)
 
 
 def _order_effective_facts(**overrides):
@@ -837,14 +844,19 @@ def test_order_facts_card_lists_every_required_effective_fact(qtbot):
 
 
 def test_order_facts_card_none_hides_facts(qtbot):
+    from PyQt5.QtWidgets import QFrame
+
     from mf4_analyzer.ui.inspector_sections import OrderContextual
 
     ctx = OrderContextual()
     qtbot.addWidget(ctx)
+    card = ctx.findChild(QFrame, "orderFactsCard")
     ctx.set_effective_facts(_order_effective_facts())
+    assert card.isVisibleTo(ctx)
     ctx.clear_effective_facts()
     assert ctx.effective_facts_text() == ""
     assert not ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert not card.isVisibleTo(ctx)
 
 
 

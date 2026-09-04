@@ -237,7 +237,12 @@ def attach_effective_facts_card(
     lbl_warnings.hide()
     facts_layout.addWidget(lbl_warnings)
     root_layout.addWidget(facts_card)
+    # Empty card stays out of the layout budget so FFT/time/order first-open
+    # sizeHint does not grow by the placeholder chrome (FRF keeps its own
+    # always-visible card). Plan: set_effective_facts(None) hides the card.
+    facts_card.hide()
 
+    host._facts_card = facts_card
     host.lbl_facts_placeholder = lbl_placeholder
     host.lbl_effective_facts = lbl_facts
     host.lbl_effective_warnings = lbl_warnings
@@ -258,6 +263,7 @@ def attach_effective_facts_card(
         )
         lbl_warnings.setVisible(bool(host._effective_warnings))
         lbl_placeholder.setVisible(not has_content)
+        facts_card.setVisible(has_content)
         state = "stale" if host._effective_facts_stale else "fresh"
         for widget in (lbl_facts, lbl_warnings, lbl_placeholder):
             if widget.property("factsState") == state:
