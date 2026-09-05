@@ -312,7 +312,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "WinWert 原始辅助线",
-                sub="所属文件下的 WinWert 原始记录；眼睛只隐藏当前时域 View 的辅助线，不改普通通道或源文件；关闭/移除后同步消失。",
+                sub="所属文件下的 WinWert 原始记录；眼睛只隐藏当前时域 View 的辅助线，不改普通通道或源文件；关闭/移除后同步消失。WWT 共轴拆分后，可右键所属普通通道恢复。",
                 gesture="左侧树眼睛",
             ),
             QuickRow(

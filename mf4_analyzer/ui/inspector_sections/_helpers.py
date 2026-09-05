@@ -214,7 +214,7 @@ def _make_group_header(title, action_button=None, parent=None):
     Layout: [QLabel(title)] addStretch [optional action_button].
 
     Used in place of ``QGroupBox::title`` when a group needs an inline
-    action button (R3 #9 — rebuild_time icon moved out of the Fs row).
+    action button.
     The frame carries ``objectName='inspectorGroupHeader'`` so the QSS
     rule defined in ``style.qss`` (Inspector QFrame#inspectorGroupHeader)
     paints the same hairline underline that ``QGroupBox::title`` uses

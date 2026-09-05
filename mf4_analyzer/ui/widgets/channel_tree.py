@@ -793,7 +793,9 @@ class _CheckTolerantTree(QTreeWidget):
         gid = owner.axis_group_for(data[1], data[2])
         if not gid:
             return
-        self._paint_group_badge(painter, rect, gid)
+        self._paint_group_badge(
+            painter, rect, gid, owner.axis_group_badge_label(data[1], data[2]),
+        )
 
     def _paint_selected_expander(self, painter, rect, expanded):
         """Repaint a dark chevron so the selected tint does not swallow it.
@@ -833,7 +835,7 @@ class _CheckTolerantTree(QTreeWidget):
         painter.drawPolyline(points)
         painter.restore()
 
-    def _paint_group_badge(self, painter, rect, gid):
+    def _paint_group_badge(self, painter, rect, gid, label):
         """在缩进槽右端（紧贴勾选框前）画组徽标：组色圆角方块 + 白色组号。
         画在 rect 右端，与树深度无关，规避多层缩进导致的错位。"""
         side = 12
@@ -850,7 +852,7 @@ class _CheckTolerantTree(QTreeWidget):
         f.setPointSizeF(7.5)
         f.setBold(True)
         painter.setFont(f)
-        painter.drawText(badge, Qt.AlignCenter, str(gid))
+        painter.drawText(badge, Qt.AlignCenter, str(label))
         painter.restore()
 
 
@@ -982,6 +984,10 @@ class MultiFileChannelWidget(QWidget):
         # channel plus an exceptional record-only binding, so it must not go
         # through the ordinary singleton-pruning model above.
         self._restored_axis_group_projection = {}
+        # WWT keeps an opaque axis ID so ordinary channels can share an axis
+        # with a record-only curve. A split must not make that relationship
+        # impossible to restore just because the record row is read-only.
+        self._imported_axis_group_seed = {}
         # Per-TimeDomain-View projection. The persisted owner is ViewState;
         # this set is the live channel-tree copy for the currently focused View.
         self._hidden_channels = set()
@@ -2305,6 +2311,7 @@ class MultiFileChannelWidget(QWidget):
         if (fid, ch) not in sel_keys:
             sel_keys = [(fid, ch)]
         can_merge, can_split = self._axis_group_menu_plan(sel_keys)
+        can_restore_wwt_axis = self._can_restore_imported_axis_group(sel_keys)
 
         self.channel_context_menu_requested.emit()
         menu = QMenu(self.tree)
@@ -2318,6 +2325,9 @@ class MultiFileChannelWidget(QWidget):
         act_primary = menu.addAction("设为左轴")
         act_merge = menu.addAction("合并为共轴") if can_merge else None
         act_split = menu.addAction("拆分共轴组") if can_split else None
+        act_restore_wwt = (
+            menu.addAction("恢复 WinWert 共轴") if can_restore_wwt_axis else None
+        )
         if act_merge is not None:
             # The axis-group menu is actually opening with the 合并为共轴 item
             # present (multi-select) — retire the coaxis.merge discovery hint so
@@ -2333,6 +2343,8 @@ class MultiFileChannelWidget(QWidget):
             self.merge_axis_group(sel_keys)
         elif act_split is not None and chosen is act_split:
             self.split_axis_group(sel_keys)
+        elif act_restore_wwt is not None and chosen is act_restore_wwt:
+            self.restore_imported_axis_group(sel_keys)
 
     def remove_file(self, fid, *, emit=True):
         # Clean up colors and files dict
@@ -2668,6 +2680,50 @@ class MultiFileChannelWidget(QWidget):
             key, self._restored_axis_group_projection.get(key)
         )
 
+    def axis_group_badge_label(self, fid, ch):
+        """Return the compact, human-facing number for a shared-axis badge.
+
+        WWT uses opaque IDs such as ``window-0-axis-7`` to keep its ordinary
+        channel and record-only curve on the same axis. Those IDs are state
+        identity, not UI text: painting them in a 12px badge was unreadable.
+        """
+        group = self.axis_group_for(fid, ch)
+        if group is None:
+            return None
+        return self._axis_group_badge_labels().get(group, str(group))
+
+    def _axis_group_badge_labels(self):
+        """Map all current group identities to stable, contiguous labels."""
+        ordinary = sorted({
+            int(group)
+            for group in self._axis_groups.values()
+            if isinstance(group, int) and not isinstance(group, bool) and group > 0
+        })
+        labels = {group: str(group) for group in ordinary}
+        next_label = (ordinary[-1] if ordinary else 0) + 1
+        imported = sorted({
+            str(group)
+            for group in self._restored_axis_group_projection.values()
+            if str(group).strip() and str(group) not in labels
+        })
+        for group in imported:
+            labels[group] = str(next_label)
+            next_label += 1
+        return labels
+
+    @staticmethod
+    def _is_imported_axis_group(group):
+        text = str(group or "").strip()
+        return text.startswith("window-") and "-axis-" in text
+
+    def _can_restore_imported_axis_group(self, keys):
+        for fid, channel in keys:
+            key = (str(fid), str(channel))
+            seeded = self._imported_axis_group_seed.get(key)
+            if seeded and self._restored_axis_group_projection.get(key) != seeded:
+                return True
+        return False
+
     def _new_axis_group_id(self):
         self._axis_group_seq += 1
         return self._axis_group_seq
@@ -2712,7 +2768,9 @@ class MultiFileChannelWidget(QWidget):
                 updated[key] = gid
                 self._axis_groups.pop(key, None)
             self._prune_axis_groups()
-            self.set_restored_axis_group_projection(updated)
+            self.set_restored_axis_group_projection(
+                updated, preserve_imported_axis_seed=True,
+            )
             self.axis_groups_changed.emit()
             return gid
 
@@ -2744,8 +2802,32 @@ class MultiFileChannelWidget(QWidget):
                 changed = True
         if changed:
             self._prune_axis_groups()
-            self.set_restored_axis_group_projection(persisted)
+            self.set_restored_axis_group_projection(
+                persisted, preserve_imported_axis_seed=True,
+            )
             self.axis_groups_changed.emit()
+
+    def restore_imported_axis_group(self, keys):
+        """Restore a WWT shared axis that a user just split in this View."""
+        requested = {(str(fid), str(channel)) for fid, channel in keys}
+        target_ids = {
+            self._imported_axis_group_seed[key]
+            for key in requested
+            if key in self._imported_axis_group_seed
+        }
+        if not target_ids:
+            return False
+        restored = dict(self._restored_axis_group_projection)
+        for key, group in self._imported_axis_group_seed.items():
+            if group in target_ids:
+                restored[key] = group
+                self._axis_groups.pop(key, None)
+        self._prune_axis_groups()
+        self.set_restored_axis_group_projection(
+            restored, preserve_imported_axis_seed=True,
+        )
+        self.axis_groups_changed.emit()
+        return True
 
     def _prune_axis_groups(self):
         counts = Counter(self._axis_groups.values())
@@ -2783,7 +2865,9 @@ class MultiFileChannelWidget(QWidget):
         effective.update(self._effective_groups(self._axis_groups, checked))
         return effective
 
-    def set_restored_axis_group_projection(self, raw_groups) -> None:
+    def set_restored_axis_group_projection(
+        self, raw_groups, *, preserve_imported_axis_seed=False,
+    ) -> None:
         """Set the focused View's persistent axis-group membership.
 
         The persisted JSON map uses composite ``[fid, channel]`` keys and an
@@ -2812,6 +2896,12 @@ class MultiFileChannelWidget(QWidget):
                 projected[(str(fid), str(channel))] = group
         if projected == self._restored_axis_group_projection:
             return
+        if not preserve_imported_axis_seed:
+            self._imported_axis_group_seed = {
+                key: group
+                for key, group in projected.items()
+                if self._is_imported_axis_group(group)
+            }
         self._restored_axis_group_projection = projected
         for key in projected:
             self._axis_groups.pop(key, None)

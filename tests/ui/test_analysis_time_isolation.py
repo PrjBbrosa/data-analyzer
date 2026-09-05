@@ -1,9 +1,9 @@
-"""Source data remains original across analysis jobs, facts and manual settings."""
+"""Source data remains original across analysis jobs and effective facts."""
 from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
-from PyQt5.QtWidgets import QDialog
 
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.ui.main_window import MainWindow
@@ -65,25 +65,44 @@ def test_spectrogram_job_preserves_source_origin_and_cached_facts(source_window)
     assert_original(fd, original_t, original_y)
 
 
-@pytest.mark.parametrize('section', ['fft', 'fft_time', 'order'])
-def test_manual_setting_is_view_intent_not_source_mutation(source_window, monkeypatch, section):
+def test_manual_analysis_time_axis_is_not_exposed_or_restored(source_window):
+    """Time repairs are automatic; legacy manual Fs must not survive in a View."""
     win, fd, original_t, original_y = source_window
-    ctx = win._analysis_ctx(section)
-    monkeypatch.setattr(ctx, 'current_signal', lambda: ('f1', 'sig'))
-    monkeypatch.setattr(win.chart_stack, 'current_mode', lambda: section)
-    monkeypatch.setattr('mf4_analyzer.ui.drawers.rebuild_time_popover.RebuildTimePopover',
-                        lambda *_: SimpleNamespace(show_at=lambda *_: None, exec_=lambda: QDialog.Accepted, new_fs=lambda: 200.))
-    assert win._show_rebuild_popover(None, section)
-    assert ctx.compute_params()['analysis_time_fs'] == 200
-    win._capture_active_analysis_view(section, capture_sources=False)
-    state = win.analysis_managers[section].get(win.analysis_managers[section].active)
-    assert state.params['analysis_time_fs'] == 200
-    ctx.apply_params({})
-    assert ctx.compute_params()['analysis_time_fs'] == 200
-    ctx.reset_to_defaults()
-    assert ctx.compute_params()['analysis_time_fs'] is None
-    ctx.apply_params(state.params)
-    assert ctx.compute_params()['analysis_time_fs'] == 200
+    for section in ('fft', 'fft_time', 'order'):
+        ctx = win._analysis_ctx(section)
+        assert not hasattr(ctx, 'btn_rebuild')
+        assert 'analysis_time_fs' not in ctx.compute_params()
+        # Old projects may carry this retired field. Restoring them must not
+        # retain a hidden frequency override in subsequent calculations.
+        ctx.apply_params({'analysis_time_fs': 200.0})
+        assert 'analysis_time_fs' not in ctx.compute_params()
+    assert not hasattr(win.inspector, 'rebuild_time_requested')
+    assert_original(fd, original_t, original_y)
+
+
+def test_order_effective_params_use_local_time_axis_frequency(source_window, monkeypatch):
+    """Order cache facts use the same automatic time-axis repair as compute."""
+    win, fd, original_t, original_y = source_window
+    captured = {}
+    monkeypatch.setattr(
+        win, '_order_sig_for', lambda *_args, **_kwargs: (fd.time_array, original_y),
+    )
+    monkeypatch.setattr(
+        win, '_order_rpm_for',
+        lambda *_args, **_kwargs: np.full(len(original_y), 1200.0),
+    )
+    monkeypatch.setattr(
+        win, '_resolve_order_effective_params',
+        lambda params, _rpm, _time: captured.setdefault('params', params),
+    )
+
+    result = win._order_effective_params_for_source(
+        {'fs': 200.0}, 'f1', 'sig', None, None,
+    )
+
+    expected_fs = 1.0 / np.median(np.diff(original_t))
+    assert result['fs'] == pytest.approx(expected_fs)
+    assert captured['params']['fs'] == pytest.approx(expected_fs)
     assert_original(fd, original_t, original_y)
 
 

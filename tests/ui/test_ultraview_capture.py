@@ -618,6 +618,83 @@ def test_time_switch_captures_old_binding_before_deferred_render(qapp):
     coord.deleteLater()
 
 
+def test_leaving_unstable_canvas_keeps_preview_and_logs_debug(qapp, monkeypatch, caplog):
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    window, coord = _make_coord()
+    manager = window.view_manager
+    manager.get(0).view_id = "view-a"
+    idx_b = manager.new_view()
+    manager.get(idx_b).view_id = "view-b"
+    canvas = FakeCanvas()
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    coord.bind_canvas(canvas, ref_a)
+    coord.request_capture(ref_a, canvas, "seed")
+    _flush()
+    old_digest = coord.store.get(ref_a).captured_digest
+    old_image = coord.store.get(ref_a).image.copy()
+    grabs = canvas.grab_calls
+    canvas.markup_revision += 1
+    canvas._refresh_pending = True
+
+    with caplog.at_level(logging.DEBUG, logger=_CAPTURE_LOGGER):
+        coord.offer_capture_bound_canvas(canvas, incoming_ref=ref_b)
+    skips = [r for r in caplog.records if "leaving-bound-canvas/unstable" in r.getMessage()]
+    assert [r.levelno for r in skips] == [logging.DEBUG]
+    assert canvas.grab_calls == grabs
+    assert coord.store.get(ref_a).captured_digest == old_digest
+    assert coord.store.get(ref_a).image == old_image
+    # The synchronous offer does not schedule a retry of the outgoing scene.
+    assert not coord._capture._unstable
+    coord.bind_canvas(canvas, ref_b)
+    canvas._refresh_pending = False
+    _flush()
+    assert canvas.grab_calls == grabs
+    assert coord.store.get(ref_b) is None
+
+    coord.request_capture(ref_b, canvas, "new-view-stable")
+    _flush()
+    assert coord.store.get(ref_b).captured_digest == coord.current_digest_for(ref_b)
+    assert coord.store.get(ref_a).captured_digest == old_digest
+    assert coord.store.get(ref_a).image == old_image
+
+    coord.bind_canvas(canvas, ref_a)
+    coord.request_capture(ref_a, canvas, "reopened-view-stable")
+    _flush()
+    assert coord.store.get(ref_a).captured_digest == coord.current_digest_for(ref_a)
+    assert coord.store.get(ref_a).captured_digest != old_digest
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_leaving_capture_fault_and_other_unstable_reason_keep_warning(qapp, monkeypatch, caplog):
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    canvas._refresh_pending = True
+    with caplog.at_level(logging.DEBUG, logger=_CAPTURE_LOGGER):
+        for _ in range(diagnostics.BURST):
+            coord.offer_capture_bound_canvas(canvas)
+        assert coord._try_publish_now(ref, canvas, "explicit-probe") is False
+        monkeypatch.setattr(coord._capture, "current_digest_for", lambda _ref: None)
+        coord.offer_capture_bound_canvas(canvas)
+    records = [
+        r for r in caplog.records
+        if r.name == _CAPTURE_LOGGER and r.levelno >= logging.WARNING
+    ]
+    assert [r.levelno for r in records] == [logging.WARNING, logging.WARNING]
+    assert "explicit-probe/unstable" in records[0].getMessage()
+    assert "leaving-bound-canvas/digest-unavailable" in records[1].getMessage()
+    assert canvas.grab_calls == 0
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 def test_replot_same_view_does_not_publish_under_another_ref(qapp):
     window, coord = _make_coord()
     manager = window.view_manager
@@ -2054,7 +2131,9 @@ def test_idle_cursor_info_does_not_project_each_signal(qapp):
     coord.deleteLater()
 
 
-def test_digest_changed_requeues_and_publishes(qapp):
+def test_digest_changed_requeues_and_publishes(qapp, monkeypatch, caplog):
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    caplog.set_level(logging.DEBUG, logger=_CAPTURE_LOGGER)
     window, coord = _make_coord()
     window.view_manager.get(0).view_id = "view-a"
     canvas = FakeCanvas()
@@ -2075,12 +2154,17 @@ def test_digest_changed_requeues_and_publishes(qapp):
     assert record is not None
     assert record.captured_digest == live
     assert canvas.grab_calls == grabs + 1
+    skips = [r for r in caplog.records if "digest-changed" in r.getMessage()]
+    assert [r.levelno for r in skips] == [logging.DEBUG]
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
     canvas.deleteLater()
     coord.clear()
     coord.deleteLater()
 
 
-def test_digest_changed_retry_is_capped(qapp):
+def test_digest_changed_retry_is_capped(qapp, monkeypatch, caplog):
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    caplog.set_level(logging.DEBUG, logger=_CAPTURE_LOGGER)
     window, coord = _make_coord()
     window.view_manager.get(0).view_id = "view-a"
     canvas = FakeCanvas()
@@ -2108,6 +2192,13 @@ def test_digest_changed_retry_is_capped(qapp):
     _flush(24)
     assert details.count("digest-changed") == _DIGEST_RETRY_LIMIT + 1
     assert "digest-retry-exhausted" in details
+    warnings = [
+        r for r in caplog.records
+        if r.name == _CAPTURE_LOGGER and r.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert "digest-retry-exhausted" in warnings[0].getMessage()
+    assert warnings[0].levelno == logging.WARNING
     after = list(details)
     _flush(12)
     assert details == after

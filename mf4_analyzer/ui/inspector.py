@@ -111,7 +111,6 @@ class Inspector(QWidget):
     order_time_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
     xaxis_drop_hint_dismissed = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order'|'fft_time')
     tick_density_changed = pyqtSignal(int, int)
     remark_toggled = pyqtSignal(bool)
     # Fs auto-sync: relayed from fft_ctx/order_ctx combo_sig change
@@ -285,13 +284,9 @@ class Inspector(QWidget):
         self.top.tick_density_changed.connect(self.tick_density_changed)
         self.time_ctx.plot_time_requested.connect(self.plot_time_requested)
         self.fft_ctx.fft_requested.connect(self.fft_requested)
-        # Ctx signals carry the mode tag themselves (E8); signal-to-signal
-        # direct connect avoids a lambda that would keep Inspector↔ctx cycles.
-        self.fft_ctx.rebuild_time_requested.connect(self.rebuild_time_requested)
         self.fft_ctx.remark_toggled.connect(self.remark_toggled)
         self.fft_ctx.signal_changed.connect(self.signal_changed)
         self.order_ctx.order_time_requested.connect(self.order_time_requested)
-        self.order_ctx.rebuild_time_requested.connect(self.rebuild_time_requested)
         self.order_ctx.signal_changed.connect(self.signal_changed)
         self.fft_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
         self.order_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
@@ -299,11 +294,6 @@ class Inspector(QWidget):
         self.fft_time_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
         # FFT vs Time primary compute relay.
         self.fft_time_ctx.fft_time_requested.connect(self.fft_time_requested)
-        # T6 reviewer Important #2: relay rebuild_time_requested and
-        # signal_changed from the fft_time contextual. Mirrors the
-        # fft_ctx / order_ctx wiring above; the rebuild relay tags the
-        # mode string so MainWindow can route to the correct ctx.
-        self.fft_time_ctx.rebuild_time_requested.connect(self.rebuild_time_requested)
         self.fft_time_ctx.signal_changed.connect(self.fft_time_signal_changed)
         self.frf_ctx.frf_requested.connect(self.frf_requested)
         self.frf_ctx.view_in_time_requested.connect(

@@ -1285,7 +1285,6 @@ class MainWindow(
         self.inspector.xaxis_drop_hint_dismissed.connect(
             self._on_xaxis_drop_hint_dismissed
         )
-        self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
         self.chart_stack.tick_density_changed.connect(self._update_all_tick_density_pair)
         self.inspector.remark_toggled.connect(
@@ -2559,44 +2558,6 @@ class MainWindow(
         ):
             for pane_idx in range(page.pane_count()):
                 page.pane_canvas(pane_idx).set_tick_density(xt, yt)
-
-    def _show_rebuild_popover(self, anchor, mode='fft'):
-        """Set explicit time-grid intent on the active analysis View.
-
-        Accept changes analysis parameters only. Original source samples,
-        time-domain plots, and other analysis sections are untouched.
-        """
-        from PyQt5.QtWidgets import QDialog
-        if mode == 'fft':
-            sig_data = self.inspector.fft_ctx.current_signal()
-        elif mode == 'fft_time':
-            # T5 flagged: fft_time_ctx is the source of truth for the
-            # FFT vs Time panel's 重建时间轴 button. Without this branch
-            # the popover would query order_ctx (wrong selection) when
-            # the relay fires with mode='fft_time'.
-            sig_data = self.inspector.fft_time_ctx.current_signal()
-        else:
-            sig_data = self.inspector.order_ctx.current_signal()
-        target_fid = sig_data[0] if sig_data and sig_data[0] in self.files else self._active
-        if not target_fid or target_fid not in self.files:
-            self.toast("请先选择信号", "warning")
-            return False
-        fd = self.files[target_fid]
-        from ..drawers.rebuild_time_popover import RebuildTimePopover
-        ctx = self._analysis_ctx(mode)
-        configured_fs = ctx.compute_params().get('analysis_time_fs')
-        pop = RebuildTimePopover(self, fd.filename, configured_fs or fd.fs)
-        pop.show_at(anchor)
-        if pop.exec_() == QDialog.Accepted:
-            new_fs = pop.new_fs()
-            ctx.set_analysis_time_fs(new_fs)
-            self._mark_section_effective_facts_stale(mode)
-            self.statusBar.showMessage(
-                f"分析时间轴设置为 {new_fs:g} Hz · 仅当前分析 View，时域保持原始时间"
-            )
-            self.toast("分析采样率已设置，重新计算后生效。", "success")
-            return True
-        return False
 
     def _unit_for_signal(self, data):
         """Resolve the channel unit for a ``(fid, ch)`` signal payload.
@@ -5245,16 +5206,6 @@ class MainWindow(
         else:
             representative = amp
         return (0.0, energy_band_fmax(freq, representative))
-
-    def _invoke_rebuild_time_axis(self, fd, fs, *, reason='manual'):
-        """Call ``rebuild_time_axis`` with ``reason`` when the object accepts it."""
-        rebuild = getattr(fd, 'rebuild_time_axis', None)
-        if not callable(rebuild):
-            return
-        try:
-            rebuild(fs, reason=reason)
-        except TypeError:
-            rebuild(fs)
 
     @staticmethod
     def _format_time_axis_provenance_chip(provenance):

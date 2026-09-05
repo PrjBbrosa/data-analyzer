@@ -189,7 +189,7 @@ def parse_head_hdf(path) -> HeadHdfFile:
     n = int(str(n_scans_raw).strip() or 0)
     if per_scan and n:
         floats = np.frombuffer(raw[start:start + n * per_scan * 4], dtype="<f4")
-        mat = floats.reshape(n, per_scan).astype(np.float64)
+        mat = floats.reshape(n, per_scan)
         col = 0
         offsets = {}
         for ch, f in ch_order:        # storage order
@@ -199,12 +199,12 @@ def parse_head_hdf(path) -> HeadHdfFile:
             o, f = offsets.get(i, (None, c.factor))
             if o is None:
                 continue
-            # Skip non-FLOAT32 channels: demux reads everything as <f4, so
-            # other dtypes (UINT32, INT16, DOUBLE…) would produce garbage.
+            # Skip non-FLOAT32 channels before numeric conversion: their
+            # raw words may look like signaling NaNs when viewed as <f4.
             # Leave samples=None; loader will drop and record the reason.
             if c.impl_type and c.impl_type != "FLOAT32":
                 continue
-            c.samples = mat[:, o:o + f].reshape(-1)
+            c.samples = mat[:, o:o + f].astype(np.float64).reshape(-1)
 
     return HeadHdfFile(
         version=int(top.get("version", "0") or 0),

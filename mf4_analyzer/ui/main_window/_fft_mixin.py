@@ -186,7 +186,6 @@ class FFTMixin:
             # _resolve_fft_effective_params from fd.fs; keyed here so a Fs change
             # in single-frame mode (nfft=None) still invalidates the cache.
             'fs': fft_params.get('fs'),
-            'analysis_time_fs': fft_params.get('analysis_time_fs'),
             'avg_mode': fft_params.get('avg_mode', '单帧'),
             'avg_overlap': fft_params.get('avg_overlap', 50),
             'weighting': str(fft_params.get('weighting', 'None')),
@@ -417,7 +416,7 @@ class FFTMixin:
         if time_range is not None:
             t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return prepare_analysis_time_axis(
-            t, fd.fs, target_fs=params.get('analysis_time_fs'),
+            t, fd.fs,
             time_source=getattr(fd, '_time_source', 'column'), materialize=False,
         )[2]
 
@@ -442,7 +441,7 @@ class FFTMixin:
         if params is None:
             params = self.inspector.fft_ctx.compute_params()
         _axis, fs, _facts = prepare_analysis_time_axis(
-            t, fd.fs, target_fs=params.get('analysis_time_fs'), materialize=False)
+            t, fd.fs, materialize=False)
         return sig, fs
 
     def _fft_preview_sources(self):
@@ -709,7 +708,7 @@ class FFTMixin:
         from ...analysis_time_axis import prepare_analysis_time_axis
         fft_params = self.inspector.fft_ctx.compute_params()
         t, fs, time_facts = prepare_analysis_time_axis(
-            t, fs, target_fs=fft_params.get('analysis_time_fs'))
+            t, fs)
         fft_params = self._resolve_fft_effective_params(
             fft_params, len(sig), fs)
         fft_params['analysis_time_axis'] = time_facts

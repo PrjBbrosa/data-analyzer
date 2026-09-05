@@ -1047,28 +1047,6 @@ class Icons:
         return QIcon(pix)
 
     @classmethod
-    def rebuild_time(cls):
-        with _painting() as (pix, p):
-            p.setPen(_pen(BLUE, 1.5))
-            p.setBrush(Qt.NoBrush)
-            # circular arrow
-            p.drawArc(QRectF(3, 3, 14, 14), 30 * 16, 270 * 16)
-            # arrowhead
-            path = QPainterPath()
-            path.moveTo(14, 2)
-            path.lineTo(17, 5)
-            path.lineTo(12, 6)
-            path.closeSubpath()
-            p.setBrush(QBrush(BLUE))
-            p.setPen(Qt.NoPen)
-            p.drawPath(path)
-            # clock hand
-            p.setPen(_pen(BLUE, 1.3))
-            p.drawLine(QPointF(10, 10), QPointF(10, 6))
-            p.drawLine(QPointF(10, 10), QPointF(13, 10))
-        return QIcon(pix)
-
-    @classmethod
     def annotate(cls, color=None):
         """Label + leader-line annotation icon.
 

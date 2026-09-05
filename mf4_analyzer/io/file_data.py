@@ -307,11 +307,10 @@ class FileData:
         threshold here -- the whole point of this predicate is that the
         UI pre-flight and the worker's validator agree.
 
-        Used by ``MainWindow.do_fft`` and ``MainWindow.do_fft_time`` to
-        route non-uniform inputs through ``_show_rebuild_popover``
-        BEFORE dispatching the FFT worker, eliminating the
-        worker-failed -> popover -> retry round-trip (lesson 2026-04-26
-        non-uniform fft pre-flight).
+        Analysis entry points use this predicate for diagnostics; valid
+        non-uniform axes are reconstructed locally by
+        :func:`mf4_analyzer.analysis_time_axis.prepare_analysis_time_axis`
+        before dispatching their worker.  The source time axis is preserved.
         """
         if tolerance is None:
             # Imported here to avoid a hard dep at import-time / cycle risk.

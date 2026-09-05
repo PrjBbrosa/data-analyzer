@@ -18,8 +18,7 @@ Rounded corners + drop shadow WITHOUT ``WA_TranslucentBackground`` on the panel
 itself (that breaks the widget's own QSS background → gray box on macOS, per
 CLAUDE.md). Instead the translucency lives on the OUTER frameless window and the
 white card surface rides on an inner ``QFrame#quickrefCard`` child whose QSS
-background therefore stays intact — the same split used by ``glass_tooltip`` and
-the RebuildTimePopover (``QFrame#PopoverSurface``).
+background therefore stays intact — the same split used by ``glass_tooltip``.
 """
 from __future__ import annotations
 

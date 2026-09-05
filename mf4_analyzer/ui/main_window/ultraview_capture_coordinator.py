@@ -94,7 +94,10 @@ _PIXEL_AFFECTING_SIGNALS = frozenset(
     }
 )
 _HTML_TAG = re.compile(r"<[^>]+>")
-_CAPTURE_SKIP_LEVELS = {"no-result": logging.DEBUG}
+_CAPTURE_SKIP_LEVELS = {
+    "no-result": logging.DEBUG,
+    "digest-changed": logging.DEBUG,
+}
 _SECTION_X_UNIT = {
     "time": "s",
     "fft": "Hz",
@@ -1732,10 +1735,15 @@ class UltraViewCaptureCoordinator(QObject):
 
     def _warn_capture(self, ref, widget, reason, detail) -> None:
         canvas_type = type(widget).__name__ if widget is not None else "none"
+        level = _CAPTURE_SKIP_LEVELS.get(detail, logging.WARNING)
+        if reason == "leaving-bound-canvas" and detail == "unstable":
+            # Best-effort outgoing capture must not grab an unfinished scene.
+            level = logging.DEBUG
         throttled(
             logger,
-            f"ultraview-capture:{ref.section}:{ref.view_id}:{detail}",
-            _CAPTURE_SKIP_LEVELS.get(detail, logging.WARNING),
+            # Expected skips must not consume the burst budget for a fault.
+            f"ultraview-capture:{ref.section}:{ref.view_id}:{detail}:{level}",
+            level,
             "UltraView capture skipped (%s/%s) section=%s view_id=%s canvas=%s",
             reason,
             detail,

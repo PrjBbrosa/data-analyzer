@@ -657,7 +657,7 @@ _HINTS = (
     ),
     Hint(
         id="coaxis.gesture",
-        text="Ctrl/Shift 多选通道，右键合并为共轴",
+        text="多选通道右键共轴；WWT 拆分可恢复",
         surface="context",
         tier="A",
         modes=frozenset({"time"}),

@@ -180,42 +180,32 @@ class TestNonUniformRecovery:
             )
 
     def test_before_rebuild_suggested_fs_is_in_order(self, nonuniform_fd):
-        # The popover seeds spin_fs with this estimate so the user only
-        # confirms rather than retypes. The median-dt estimator is best
+        # The automatic analysis repair uses this estimate. The median-dt
+        # estimator is best
         # effort -- on alternating-gap fixtures it locks onto the larger
         # gap and may underestimate the nominal by ~3x; that is by design
         # (median-of-positive-gaps drops the rare large gaps that would
         # otherwise pull a mean estimate). What we do require is:
         #   * the value is finite and positive (no NaN/Inf/zero crash);
-        #   * the value lives inside the QDoubleSpinBox range
-        #     [1, 1e6] used by ``RebuildTimePopover.spin_fs`` so the
-        #     popover can actually seed the spin without being clamped.
+        #   * the value stays within a practical engineering range.
         nominal = nonuniform_fd.fs
         suggested = nonuniform_fd.suggested_fs_from_time_axis()
         assert np.isfinite(suggested)
         assert suggested > 0
-        # Same range RebuildTimePopover.spin_fs accepts (drawers/rebuild_time_popover.py).
         assert 1.0 <= suggested <= 1e6
-        # Order-of-magnitude sanity: must be within 10x of the nominal
-        # so the popover seed does not shock the user into 4-digit edits
-        # for a well-behaved file. The 10x band is generous; the user's
-        # mf4 (jitter 2.36) lands inside this on the median estimator.
+        # Order-of-magnitude sanity: must be within 10x of the nominal.
         assert 0.1 * nominal <= suggested <= 10.0 * nominal
 
     def test_rebuild_with_suggested_fs_then_recompute_succeeds(
         self, nonuniform_fd
     ):
-        # Simulates the popover Accept side-effect (the only writer of
-        # fd.time_array post construction, per T1 diagnosis) using the
-        # popover's seed value -- the median-dt estimate. Even when the
+        # Exercises the same uniform grid built locally by analysis using the
+        # median-dt estimate. Even when the
         # estimate underestimates the nominal Fs (typical of
         # alternating-gap MF4 streams), the rebuild MUST still produce a
         # strictly-uniform axis the analyzer accepts. This is the
-        # weakest-link guarantee: the user clicks Accept without
-        # touching spin_fs, and the FFT vs Time button goes from "做不出"
-        # to "正常出图". Tone fidelity is exercised in the
-        # ``test_rebuild_with_user_typed_fs_recovers_synthetic_tone``
-        # case below where the user types the actual nominal Fs.
+        # FFT vs Time computation can continue. Tone fidelity is exercised in
+        # the nominal-Fs case below.
         suggested = nonuniform_fd.suggested_fs_from_time_axis()
         nonuniform_fd.rebuild_time_axis(suggested)
 
@@ -244,9 +234,8 @@ class TestNonUniformRecovery:
     def test_rebuild_with_user_typed_fs_recovers_synthetic_tone(
         self, nonuniform_fd
     ):
-        # User-typed Fs path: the user looks at their MF4 metadata,
-        # types the actual nominal Fs into spin_fs, clicks Accept. After
-        # rebuild, the spectrogram must locate the injected tone -- if
+        # Nominal-Fs reference path. After rebuilding, the spectrogram must
+        # locate the injected tone -- if
         # the recovered axis silently aliases or drops samples, the peak
         # would land elsewhere.
         nominal_fs = nonuniform_fd.fs  # 500 Hz, matches fixture

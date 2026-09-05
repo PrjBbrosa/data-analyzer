@@ -33,23 +33,11 @@ _EXPECTED_CALL_SITE_ROLES = {
         ("self._btn_kebab", "icon"),
     ),
     "mf4_analyzer/ui/widgets/stats.py": (("self._btn_expand", "icon"),),
-    "mf4_analyzer/ui/inspector_sections/contextual_fft.py": (
-        ("self.btn_rebuild", "icon"),
-    ),
-    "mf4_analyzer/ui/inspector_sections/contextual_fft_time.py": (
-        ("self.btn_rebuild", "icon"),
-    ),
-    "mf4_analyzer/ui/inspector_sections/contextual_order.py": (
-        ("self.btn_rebuild", "icon"),
-    ),
     "mf4_analyzer/ui/widgets/channel_tree.py": (
         ("self.btn_all", "quiet"),
         ("self.btn_none", "quiet"),
         ("self.btn_selected_only", "quiet"),
         ("self.btn_edit", "quiet"),
-    ),
-    "mf4_analyzer/ui/drawers/rebuild_time_popover.py": (
-        ("self.btn_cancel", "quiet"),
     ),
     "mf4_analyzer/ui/drawers/batch/frf_pair_editor.py": (
         ("self._add_button", "quiet"),
@@ -123,7 +111,6 @@ def test_quiet_text_actions_keep_full_height_and_text_with_production_qss(
 ):
     """Textual rail actions must never inherit the compact icon geometry."""
     from mf4_analyzer.ui.drawers.batch.frf_pair_editor import FrfPairEditor
-    from mf4_analyzer.ui.drawers.rebuild_time_popover import RebuildTimePopover
     from mf4_analyzer.ui_kit import load_stylesheet
     from mf4_analyzer.ui.widgets.channel_tree import MultiFileChannelWidget
 
@@ -150,15 +137,6 @@ def test_quiet_text_actions_keep_full_height_and_text_with_production_qss(
         assert all(action.isVisibleTo(channel_host) for action in text_actions)
         for action in text_actions:
             _assert_text_button_fits(action)
-
-        popover = RebuildTimePopover(
-            parent=channel_host, target_filename="x.mf4", current_fs=1000.0,
-        )
-        qtbot.addWidget(popover)
-        popover.show()
-        qtbot.wait(20)
-        assert popover.btn_cancel.property("role") == "quiet"
-        _assert_text_button_fits(popover.btn_cancel)
 
         pair_editor = FrfPairEditor()
         qtbot.addWidget(pair_editor)

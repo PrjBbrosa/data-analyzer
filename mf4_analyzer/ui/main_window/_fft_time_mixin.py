@@ -89,7 +89,6 @@ class FFTTimeMixin:
         nfft = p.get('nfft_effective', p.get('nfft'))
         params = {
             'fs': p.get('fs'),
-            'analysis_time_fs': p.get('analysis_time_fs'),
             'nfft': None if nfft is None else int(nfft),
             'window': p.get('window'),
             'overlap': p.get('overlap'),
@@ -122,7 +121,7 @@ class FFTTimeMixin:
         try:
             _axis, fs, _facts = prepare_analysis_time_axis(
                 t, float(getattr(_fd, 'fs', p['fs'])),
-                target_fs=p.get('analysis_time_fs'), materialize=False,
+                materialize=False,
             )
         except ValueError:
             return None
@@ -432,7 +431,7 @@ class FFTTimeMixin:
         try:
             _axis, analysis_fs, _facts = prepare_analysis_time_axis(
                 t, float(getattr(fd, 'fs', compute_p['fs'])),
-                target_fs=compute_p.get('analysis_time_fs'), materialize=False,
+                materialize=False,
             )
         except ValueError as issue:
             self.toast(str(issue), "warning")
@@ -525,7 +524,6 @@ class FFTTimeMixin:
         try:
             t, analysis_fs, time_facts = prepare_analysis_time_axis(
                 t, float(getattr(fd, 'fs', raw_params['fs'])),
-                target_fs=raw_params.get('analysis_time_fs'),
                 time_source=getattr(fd, '_time_source', 'column'),
             )
         except ValueError as issue:

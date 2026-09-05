@@ -125,6 +125,7 @@ class TestAxisGroupModel:
 
         assert seen == []
         assert w.axis_group_for("f1", "a") == "window-0-axis-2"
+        assert w.axis_group_badge_label("f1", "a") == "1"
         assert w._axis_group_menu_plan([("f1", "a")]) == (False, True)
 
         w.split_axis_group([("f1", "a")])
@@ -132,6 +133,28 @@ class TestAxisGroupModel:
         assert seen == [1]
         assert w.axis_group_for("f1", "a") is None
         assert w.restored_axis_group_projection() == {}
+
+    def test_split_wwt_group_can_restore_record_only_axis(self, qapp):
+        w = MultiFileChannelWidget()
+        w.set_restored_axis_group_projection({
+            '["f1","measurement"]': "window-0-axis-2",
+        })
+
+        w.split_axis_group([("f1", "measurement")])
+
+        assert w._can_restore_imported_axis_group([("f1", "measurement")])
+        assert w.restore_imported_axis_group([("f1", "measurement")]) is True
+        assert w.axis_group_for("f1", "measurement") == "window-0-axis-2"
+
+    def test_opaque_wwt_groups_receive_compact_distinct_badge_numbers(self, qapp):
+        w = MultiFileChannelWidget()
+        w.set_restored_axis_group_projection({
+            '["f1","a"]': "window-0-axis-9",
+            '["f1","b"]': "window-0-axis-3",
+        })
+
+        assert w.axis_group_badge_label("f1", "b") == "1"
+        assert w.axis_group_badge_label("f1", "a") == "2"
 
     def test_merged_imported_axis_group_is_captured_into_view_state(self, qapp):
         w = MultiFileChannelWidget()

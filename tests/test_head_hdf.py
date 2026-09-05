@@ -108,6 +108,54 @@ def test_non_float32_channel_skipped_not_fatal(tmp_path):
     assert can_ch.samples is None
 
 
+@pytest.mark.parametrize("n_scans", [0, 1, 3])
+@pytest.mark.parametrize("raw_channel", [0, 1, 2])
+def test_uint32_bits_are_not_converted_to_float64(tmp_path, n_scans, raw_channel):
+    """Unsupported words may look like signaling NaNs, including between floats."""
+    factors = [2, 1, 3]
+    channels = [
+        {"name": f"channel_{i}", "factor": factor, "quantity": "raw",
+         "unit": "", "calibration": 1.0,
+         "impl_type": "UINT32" if i == raw_channel else "FLOAT32",
+         "samples": np.arange(n_scans * factor, dtype=float) + i * 10}
+        for i, factor in enumerate(factors)
+    ]
+    p = write_head_hdf(tmp_path / "raw_bits.hdf", n_scans=n_scans,
+                       channels=channels)
+    raw = bytearray(p.read_bytes())
+    words = np.frombuffer(raw, dtype="<u4", offset=4096).reshape(n_scans, sum(factors))
+    offset = sum(factors[:raw_channel])
+    words[:, offset:offset + factors[raw_channel]] = 0x7F800001
+    p.write_bytes(raw)
+
+    with np.errstate(invalid="raise"):
+        hf = parse_head_hdf(p)
+
+    for i, channel in enumerate(hf.channels):
+        if i == raw_channel or n_scans == 0:
+            assert channel.samples is None
+        else:
+            assert channel.samples.dtype == np.float64
+            assert channel.samples.shape == (n_scans * factors[i],)
+            np.testing.assert_array_equal(channel.samples, channels[i]["samples"])
+
+
+def test_float32_nonfinite_values_remain_observable(tmp_path):
+    p = write_head_hdf(
+        tmp_path / "nonfinite.hdf", n_scans=4,
+        channels=[{"name": "L", "factor": 1, "quantity": "raw", "unit": "",
+                   "calibration": 1.0, "samples": np.zeros(4)}],
+    )
+    # Patch bytes directly: the factory's own float cast would quiet an sNaN.
+    bits = np.array([0x7F800001, 0x7FC00000, 0x7F800000, 0xFF800000], dtype="<u4")
+    p.write_bytes(p.read_bytes()[:4096] + bits.tobytes())
+    with np.errstate(invalid="warn"), pytest.warns(RuntimeWarning, match="invalid value"):
+        hf = parse_head_hdf(p)
+    samples = hf.channels[0].samples
+    assert samples.dtype == np.float64
+    np.testing.assert_array_equal(samples, [np.nan, np.nan, np.inf, -np.inf])
+
+
 def test_all_non_float32_channels_parse_without_error(tmp_path):
     """A file where ALL channels are non-FLOAT32 still parses (samples all None).
 

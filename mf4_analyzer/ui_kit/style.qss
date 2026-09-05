@@ -2883,8 +2883,8 @@ QDialog#SheetSurface {
     border-radius: 12px;
     background-color: #ffffff;
 }
-/* RebuildTimePopover: the rounded fill rides on an inner QFrame so the
- * translucent shell dialog shows transparent (not boxed) corners. */
+/* A rounded popover fill can ride on an inner QFrame so a translucent shell
+ * keeps transparent (not boxed) corners. */
 QFrame#PopoverSurface {
     border: 1px solid #dfe5ee;
     border-radius: 12px;

@@ -230,7 +230,6 @@ class OrderMixin:
         # recompute instead of reusing a result built with the old window.
         return {
             'nfft': int(nfft),
-            'analysis_time_fs': p.get('analysis_time_fs'),
             'nfft_mode': p.get('nfft_mode', 'fixed'),
             'window': p.get('window', DEFAULT_ANALYSIS_WINDOW),
             'max_order': p.get('max_order'),
@@ -273,12 +272,13 @@ class OrderMixin:
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(sig), dtype=float) / float(fs)
-        if p.get('analysis_time_fs') is not None:
-            from ...analysis_time_axis import prepare_analysis_time_axis
-            t_arr, fs, _facts = prepare_analysis_time_axis(
-                t, fs, target_fs=p['analysis_time_fs'])
-            p = dict(p, fs=fs)
-        return self._resolve_order_effective_params(p, rpm, t_arr)
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        _axis, analysis_fs, _facts = prepare_analysis_time_axis(
+            t_arr, fs, materialize=False,
+        )
+        return self._resolve_order_effective_params(
+            dict(p, fs=analysis_fs), rpm, t_arr,
+        )
 
     def _warn_if_order_speed_unsuitable(self, rpm):
         ok, message = assess_speed_for_order(rpm)
@@ -487,11 +487,8 @@ class OrderMixin:
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(sig), dtype=float) / float(fs)
-        time_facts = None
-        if op.get('analysis_time_fs') is not None:
-            from ...analysis_time_axis import prepare_analysis_time_axis
-            t_arr, fs, time_facts = prepare_analysis_time_axis(
-                t, fs, target_fs=op['analysis_time_fs'])
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        t_arr, fs, time_facts = prepare_analysis_time_axis(t_arr, fs)
         op = dict(op, fs=fs)
         orig_auto = (
             op.get('nfft') is None

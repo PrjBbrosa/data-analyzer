@@ -1,7 +1,7 @@
 """OrderContextual widget."""
 import math
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -58,7 +58,6 @@ class OrderContextual(QWidget):
     _AUTO_NFFT_LABEL = "自动"
 
     order_time_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode)
     signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
@@ -81,20 +80,7 @@ class OrderContextual(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        # R3 #9: build btn_rebuild before the signal-source group so we
-        # can dock it on the group's header row.
-        # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24).
-        self._analysis_time_fs = None
-        self.btn_rebuild = QPushButton("")
-        self.btn_rebuild.setIcon(Icons.rebuild_time())
-        self.btn_rebuild.setIconSize(QSize(16, 16))
-        self.btn_rebuild.setFixedSize(QSize(24, 24))
-        self.btn_rebuild.setProperty("role", "icon")
-        self.btn_rebuild.setToolTip("设置分析时间轴（不影响时域）")
-        self.btn_rebuild.setAccessibleName("设置分析时间轴")
-        self.btn_rebuild.clicked.connect(self._emit_rebuild_time_requested)
-
-        # ---- 信号源 (custom header w/ rebuild button) ----
+        # ---- 信号源 ----
         # 2026-04-26 R3 紧凑化 fix-2: WA_StyledBackground intentionally OFF.
         sig_card = QFrame(self)
         sig_card.setObjectName("orderSignalCard")
@@ -102,7 +88,7 @@ class OrderContextual(QWidget):
         # 2026-06-13 split: sig_card carries its own 10px inner padding.
         sig_lay.setContentsMargins(10, 8, 10, 10)
         sig_lay.setSpacing(4)
-        sig_lay.addWidget(_make_group_header("信号源 + 时间", self.btn_rebuild))
+        sig_lay.addWidget(_make_group_header("信号源 + 时间"))
         fl = QFormLayout()
         _configure_form(fl)
         self.combo_sig = SearchableComboBox()
@@ -471,9 +457,6 @@ class OrderContextual(QWidget):
         self._auto_nfft_provider = as_weak_callable(provider)
         self._refresh_order_summary()
 
-    def _emit_rebuild_time_requested(self, *_args):
-        self.rebuild_time_requested.emit(self.btn_rebuild, 'order')
-
     def _order_nfft_preview(self):
         from ...signal import ceil_pow2, resolve_order_nfft
 
@@ -727,12 +710,6 @@ class OrderContextual(QWidget):
         self.spin_rf.setEnabled(not manual)
         self.spin_manual_rpm.setEnabled(manual)
 
-    def set_analysis_time_fs(self, fs):
-        """Persist explicit time reconstruction intent in this analysis View."""
-        self._analysis_time_fs = float(fs)
-        self.set_fs(fs)
-        self.compute_params_changed.emit(self.compute_params())
-
     def fs(self):
         return self.spin_fs.value()
 
@@ -761,7 +738,6 @@ class OrderContextual(QWidget):
             nfft_effective = nfft
             nfft_preview = nfft
         return dict(
-            analysis_time_fs=self._analysis_time_fs,
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
@@ -822,8 +798,6 @@ class OrderContextual(QWidget):
         through this method; emitting ``display_params_changed`` here would
         replot the heatmap and rewrite ColorBarItem.lo_prv mid-drag.
         """
-        if 'analysis_time_fs' in d:
-            self._analysis_time_fs = d['analysis_time_fs']
         self._applying_preset = True
         try:
             self._apply_params_unlocked(d)
@@ -932,7 +906,6 @@ class OrderContextual(QWidget):
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""
-        self._analysis_time_fs = None
         bar = getattr(self, 'preset_bar', None)
         defaults = getattr(bar, '_default_params', None) if bar is not None else None
         if isinstance(defaults, dict) and defaults:

@@ -3507,24 +3507,6 @@ def test_fft_time_analysis_cache_lru_eviction(qtbot):
     assert cache.get(second_key) is not None
 
 
-def test_fft_time_inspector_relays_signal_changed_and_rebuild(qtbot):
-    """Reviewer Important #2: Inspector must relay fft_time_ctx
-    rebuild_time_requested and signal_changed."""
-    from mf4_analyzer.ui.inspector import Inspector
-
-    insp = Inspector()
-    qtbot.addWidget(insp)
-
-    rebuild_seen = []
-    sig_seen = []
-    insp.rebuild_time_requested.connect(lambda anchor, mode: rebuild_seen.append(mode))
-    insp.fft_time_signal_changed.connect(lambda d: sig_seen.append(d))
-
-    insp.fft_time_ctx.btn_rebuild.click()
-    assert rebuild_seen == ['fft_time']
-
-    insp.fft_time_ctx.signal_changed.emit(('f1', 'ch'))
-    assert sig_seen == [('f1', 'ch')]
 
 
 # ---------------------------------------------------------------------------
@@ -3572,79 +3554,6 @@ def test_fft_time_analysis_cache_clears_for_fid_on_rebuild(qtbot):
     assert cache.get(f2_key) is not None
 
 
-def test_fft_time_rebuild_popover_resolves_signal_via_fft_time_ctx(
-    qtbot, monkeypatch
-):
-    """T5 flagged: ``_show_rebuild_popover(anchor, mode='fft_time')``
-    must read the signal from ``inspector.fft_time_ctx.current_signal()``,
-    not from ``order_ctx`` (the previous else-branch fallback). Confirm
-    by spying on each ctx's ``current_signal`` and asserting only
-    ``fft_time_ctx`` was queried for selection on a fft_time dispatch.
-    """
-    from PyQt5.QtWidgets import QDialog
-    from mf4_analyzer.ui import main_window as mw_mod
-    from mf4_analyzer.ui.main_window import MainWindow
-
-    win = MainWindow()
-    qtbot.addWidget(win)
-
-    # Wire one fake file so the post-accept branch can run.
-    class _StubFD:
-        filename = 'stub'
-        short_name = 'stub'
-        fs = 1000.0
-        time_array = []
-        def rebuild_time_axis(self, new_fs):
-            self.fs = new_fs
-
-    fd = _StubFD()
-    win.files['fX'] = fd
-
-    # Spy each ctx's current_signal.
-    calls = {'fft': 0, 'fft_time': 0, 'order': 0}
-
-    def make_spy(name, retval):
-        def spy():
-            calls[name] += 1
-            return retval
-        return spy
-
-    win.inspector.fft_ctx.current_signal = make_spy('fft', None)
-    win.inspector.fft_time_ctx.current_signal = make_spy(
-        'fft_time', ('fX', 'ch_a')
-    )
-    win.inspector.order_ctx.current_signal = make_spy('order', None)
-
-    # Stub the popover so exec_() returns Rejected — keeps the test
-    # from blocking on a modal and lets the signal-resolution branch
-    # be the only thing exercised.
-    class _StubPopover:
-        def __init__(self, parent, fname, fs):
-            pass
-            self._fs = fs
-        def show_at(self, anchor):
-            pass
-        def exec_(self):
-            return QDialog.Rejected
-        def new_fs(self):
-            return 500
-
-    monkeypatch.setattr(
-        'mf4_analyzer.ui.drawers.rebuild_time_popover.RebuildTimePopover',
-        _StubPopover,
-    )
-
-    # Suppress toast so a missing-signal fallthrough surfaces as an
-    # assertion failure rather than a UI side effect.
-    win.toast = lambda *a, **kw: None
-
-    win._show_rebuild_popover(anchor=None, mode='fft_time')
-
-    # fft_time_ctx must have been the source. Other ctxs must not be
-    # queried for the fft_time mode dispatch.
-    assert calls['fft_time'] >= 1
-    assert calls['fft'] == 0
-    assert calls['order'] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -4079,7 +3988,7 @@ def _stub_fft_time_signal_nonuniform(win, monkeypatch):
     return p, fake_fd
 
 
-def test_fft_time_non_uniform_auto_rebuilds_without_popover(qtbot, monkeypatch):
+def test_fft_time_non_uniform_auto_rebuilds_locally(qtbot, monkeypatch):
     """Non-uniform single-file FFT-vs-Time should auto-rebuild and compute."""
     import numpy as np
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
@@ -4090,13 +3999,6 @@ def test_fft_time_non_uniform_auto_rebuilds_without_popover(qtbot, monkeypatch):
     qtbot.addWidget(win)
 
     _, fake_fd = _stub_fft_time_signal_nonuniform(win, monkeypatch)
-    monkeypatch.setattr(
-        win,
-        '_show_rebuild_popover',
-        lambda *a, **kw: (_ for _ in ()).throw(
-            AssertionError('auto path must not open rebuild popover')
-        ),
-    )
 
     good = SpectrogramResult(
         times=np.linspace(0.0, 1.0, 4),
@@ -4166,13 +4068,6 @@ def test_fft_time_non_uniform_auto_dispatches_worker_once(qtbot, monkeypatch):
         spectrogram_mod.SpectrogramAnalyzer, 'compute', staticmethod(fake_compute)
     )
 
-    monkeypatch.setattr(
-        win,
-        '_show_rebuild_popover',
-        lambda *a, **kw: (_ for _ in ()).throw(
-            AssertionError('auto path must not open rebuild popover')
-        ),
-    )
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
     invocations = {'count': 0}
@@ -4199,8 +4094,8 @@ def test_fft_time_non_uniform_auto_dispatches_worker_once(qtbot, monkeypatch):
     assert fake_fd.rebuilt_with is None
 
 
-def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch):
-    """The automatic path should use suggested_fs_from_time_axis()."""
+def test_fft_time_non_uniform_auto_rebuilds_with_median_time_spacing(qtbot, monkeypatch):
+    """The automatic path uses the timestamp median spacing."""
     import numpy as np
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
     from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
@@ -4209,8 +4104,6 @@ def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch
     win = MainWindow()
     qtbot.addWidget(win)
     _, fake_fd = _stub_fft_time_signal_nonuniform(win, monkeypatch)
-    fake_fd.suggested_fs_from_time_axis = lambda: 250.0
-
     good = SpectrogramResult(
         times=np.linspace(0.0, 1.0, 4),
         frequencies=np.linspace(0.0, 50.0, 3),
@@ -4230,13 +4123,6 @@ def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch
         spectrogram_mod.SpectrogramAnalyzer,
         'compute',
         staticmethod(fake_compute),
-    )
-    monkeypatch.setattr(
-        win,
-        '_show_rebuild_popover',
-        lambda *a, **kw: (_ for _ in ()).throw(
-            AssertionError('auto path must not open rebuild popover')
-        ),
     )
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 

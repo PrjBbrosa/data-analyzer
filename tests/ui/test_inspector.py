@@ -1221,7 +1221,7 @@ def test_fft_relocated_amplitude_unit_keeps_288px_axis_geometry(qapp, qtbot):
         assert abs(unit_right - row_right) <= 1
         assert abs(unit_right - weighting_right) <= 2
         assert unit_right <= ctx.width()
-        assert ctx.sizeHint().height() == 740
+        assert ctx.sizeHint().height() == 736
     finally:
         qapp.setStyleSheet(old_sheet)
 
@@ -2723,45 +2723,10 @@ def test_tooltip_qss_does_not_draw_square_outer_frame(qapp):
 
 # ---- R3 #9: rebuild button moved to group header ----
 
-def test_fft_rebuild_lives_in_header_not_fs_row(qapp):
-    """btn_rebuild must NOT be a child of the Fs form row (R3 #9).
-
-    The new layout puts btn_rebuild on the group's header bar (right
-    side), not on the Fs spinner row.
-    """
-    from PyQt5.QtWidgets import QHBoxLayout
-    from mf4_analyzer.ui.inspector_sections import FFTContextual
-    fc = FFTContextual()
-    # btn_rebuild must still exist (signal contract preserved).
-    assert hasattr(fc, "btn_rebuild")
-    # Walk parents — the immediate parent layout MUST NOT include spin_fs.
-    rebuild_parent = fc.btn_rebuild.parentWidget()
-    spin_fs_parent = fc.spin_fs.parentWidget()
-    # The two should now live in distinct parent widgets, since the Fs row
-    # no longer contains the rebuild button.
-    assert rebuild_parent is not spin_fs_parent, \
-        "btn_rebuild and spin_fs must no longer share a parent widget (R3 #9)"
 
 
-def test_order_rebuild_lives_in_header_not_fs_row(qapp):
-    from mf4_analyzer.ui.inspector_sections import OrderContextual
-    oc = OrderContextual()
-    assert hasattr(oc, "btn_rebuild")
-    rebuild_parent = oc.btn_rebuild.parentWidget()
-    spin_fs_parent = oc.spin_fs.parentWidget()
-    assert rebuild_parent is not spin_fs_parent, \
-        "btn_rebuild and spin_fs must no longer share a parent widget (R3 #9)"
 
 
-def test_fft_time_rebuild_lives_in_header_not_fs_row(qtbot):
-    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
-    ctx = FFTTimeContextual()
-    qtbot.addWidget(ctx)
-    assert hasattr(ctx, "btn_rebuild")
-    rebuild_parent = ctx.btn_rebuild.parentWidget()
-    spin_fs_parent = ctx.spin_fs.parentWidget()
-    assert rebuild_parent is not spin_fs_parent, \
-        "btn_rebuild and spin_fs must no longer share a parent widget (R3 #9)"
 
 
 # ---- R3 B: OrderContextual labels stay on a single line ----
@@ -3518,29 +3483,6 @@ def test_checkbox_indicator_has_visible_checked_state():
     assert "image:" in checked_block
 
 
-def test_btn_rebuild_outer_size_compact(qapp):
-    """fix-4 — btn_rebuild outer chrome must shrink to ~24x24 (icon stays
-    16x16). Previously setMaximumWidth(30) + default min-height 26 left
-    excess padding around the icon.
-    """
-    from mf4_analyzer.ui.inspector_sections import (
-        FFTContextual,
-        FFTTimeContextual,
-        OrderContextual,
-    )
-    for ctx_cls in (FFTContextual, OrderContextual, FFTTimeContextual):
-        ctx = ctx_cls()
-        btn = ctx.btn_rebuild
-        # Width axis: <=24px.
-        assert btn.maximumWidth() <= 24, (
-            f"{ctx_cls.__name__}.btn_rebuild maxWidth={btn.maximumWidth()} "
-            "> 24 (R3 紧凑化 fix-4)."
-        )
-        # Height axis: <=24px.
-        assert btn.maximumHeight() <= 24, (
-            f"{ctx_cls.__name__}.btn_rebuild maxHeight={btn.maximumHeight()} "
-            "> 24 (R3 紧凑化 fix-4)."
-        )
 
 
 # ---- Signal-type builtin preset labels → 频率/均衡/时间, plus 自定义 ----

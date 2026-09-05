@@ -68,7 +68,6 @@ class FFTContextual(QWidget):
     """FFT contextual: signal/Fs/params/options + compute button."""
 
     fft_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode)
     remark_toggled = pyqtSignal(bool)
     signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
     compute_params_changed = pyqtSignal(object)
@@ -97,22 +96,7 @@ class FFTContextual(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        # R3 #9: build btn_rebuild *before* the analyse-signal group so we
-        # can hand it off to the group's header row instead of attaching
-        # it to the Fs form field.
-        # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) replaces the
-        # earlier setMaximumWidth(30) — the icon stays 16x16 but the outer
-        # chrome is no longer big enough to hold two icons side-by-side.
-        self._analysis_time_fs = None
-        self.btn_rebuild = QPushButton("")
-        self.btn_rebuild.setIcon(Icons.rebuild_time())
-        self.btn_rebuild.setIconSize(QSize(16, 16))
-        self.btn_rebuild.setFixedSize(QSize(24, 24))
-        self.btn_rebuild.setProperty("role", "icon")
-        self.btn_rebuild.setToolTip("设置分析时间轴（不影响时域）")
-        self.btn_rebuild.setAccessibleName("设置分析时间轴")
-
-        # ---- 分析信号 (custom header so btn_rebuild docks top-right) ----
+        # ---- 分析信号 ----
         # 2026-04-26 R3 紧凑化 fix-2: do NOT enable WA_StyledBackground on
         # this QFrame. Without a paired QSS rule it would render with the
         # default white QFrame fill and break the tinted contextual card
@@ -127,7 +111,7 @@ class FFTContextual(QWidget):
         # with the params_card below.
         sig_lay.setContentsMargins(10, 8, 10, 10)
         sig_lay.setSpacing(4)
-        sig_lay.addWidget(_make_group_header("分析信号 + 时间", self.btn_rebuild))
+        sig_lay.addWidget(_make_group_header("分析信号 + 时间"))
         fl = QFormLayout()
         _configure_form(fl)
         self.lbl_source_summary = QWidget()
@@ -336,7 +320,6 @@ class FFTContextual(QWidget):
         _enforce_label_widths(self, unify_columns=True)
 
         self.btn_fft.clicked.connect(self.fft_requested)
-        self.btn_rebuild.clicked.connect(self._emit_rebuild_time_requested)
         self.chk_remark.toggled.connect(self.remark_toggled)
         self._connect_preset_param_signals()
         self._refresh_fft_summary()
@@ -365,9 +348,6 @@ class FFTContextual(QWidget):
 
     def _sync_avg_overlap_enabled(self, txt):
         self.spin_avg_overlap.setEnabled(txt != '单帧')
-
-    def _emit_rebuild_time_requested(self, *_args):
-        self.rebuild_time_requested.emit(self.btn_rebuild, 'fft')
 
     def _fft_provider_payload(self):
         if self._auto_nfft_provider is None:
@@ -876,7 +856,6 @@ class FFTContextual(QWidget):
         auto = nfft_text == self._AUTO_NFFT_LABEL
         nfft = None if auto else int(nfft_text)
         return dict(
-            analysis_time_fs=self._analysis_time_fs,
             window=self.combo_win.currentText(),
             nfft=nfft,
             nfft_mode='auto' if auto else 'fixed',
@@ -904,12 +883,6 @@ class FFTContextual(QWidget):
             remark=self.chk_remark.isChecked(),
             amp_y=self.combo_amp_y.currentText(),
         )
-
-    def set_analysis_time_fs(self, fs):
-        """Persist explicit time reconstruction intent in this analysis View."""
-        self._analysis_time_fs = float(fs)
-        self.set_fs(fs)
-        self.compute_params_changed.emit(self.compute_params())
 
     def fs(self):
         return self.spin_fs.value()
@@ -944,8 +917,6 @@ class FFTContextual(QWidget):
         Same contract as FRF / FFT-Time / Order: View restore and live
         colorbar echo must not replot via ``display_params_changed``.
         """
-        if 'analysis_time_fs' in d:
-            self._analysis_time_fs = d['analysis_time_fs']
         self._applying_preset = True
         try:
             self._apply_params_unlocked(d)
@@ -1004,7 +975,6 @@ class FFTContextual(QWidget):
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""
-        self._analysis_time_fs = None
         bar = getattr(self, 'preset_bar', None)
         defaults = getattr(bar, '_default_params', None) if bar is not None else None
         if isinstance(defaults, dict) and defaults:
