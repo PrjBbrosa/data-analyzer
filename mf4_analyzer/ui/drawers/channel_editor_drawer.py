@@ -1,7 +1,14 @@
 """Channel editor as a left-anchored slide-in drawer (v1 baseline: fixed panel)."""
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QApplication, QDialog, QVBoxLayout
+from PyQt5.QtWidgets import QDialog, QVBoxLayout
 
+from ...ui_kit.dialog_geometry import (
+    SCREEN_MARGIN,
+    clamp_frame_rect,
+    fit_window,
+    frame_insets_of,
+    resolve_available_rect,
+)
 from ..dialogs import ChannelEditorDialog
 from ..widgets.toast import Toast
 
@@ -49,23 +56,31 @@ class ChannelEditorDrawer(QDialog):
         self._inner.accepted.connect(self._on_applied)
         self._inner.rejected.connect(self.reject)
         self._inner.export_requested.connect(self.export_requested)
-        h = max(520, parent.height() - 80) if parent else 520
-        self.resize(self.PANEL_WIDTH, h)
+        self._inner.setMinimumWidth(0)
+        preferred_h = (parent.height() - 80) if parent is not None else 520
+        fit_window(
+            self,
+            (self.PANEL_WIDTH, max(preferred_h, 240)),
+            parent=parent,
+            content_minimum=(240, 240),
+            clamp_width_to_parent=False,
+        )
 
     def showEvent(self, event):
         parent = self.parent()
         if parent is not None:
             pr = parent.geometry()
+            available = resolve_available_rect(widget=self, parent=parent)
+            insets = frame_insets_of(self)
             x = pr.left() + self.LEFT_OFFSET
             y = pr.top() + 40
-            # Clamp to the available screen so the drawer never spills off the
-            # left/right or below the screen bottom.
-            screen = QApplication.screenAt(pr.center()) or QApplication.primaryScreen()
-            if screen is not None:
-                avail = screen.availableGeometry()
-                x = max(avail.left(), min(x, avail.right() - self.width()))
-                y = max(avail.top(), min(y, avail.bottom() - self.height()))
-            self.move(x, y)
+            frame = clamp_frame_rect(
+                (x, y, self.width() + insets.horizontal, self.height() + insets.vertical),
+                available,
+                SCREEN_MARGIN,
+            )
+            self.resize(frame.width - insets.horizontal, frame.height - insets.vertical)
+            self.move(frame.x, frame.y)
         super().showEvent(event)
 
     def toast(self, text: str, kind: str = "info") -> None:

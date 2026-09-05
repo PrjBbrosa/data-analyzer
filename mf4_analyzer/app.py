@@ -90,6 +90,9 @@ def main():
         app.setWindowIcon(icon)
     load_stylesheet(app)
     install_glass_tooltips(app)
+    if os.environ.get("TRACELAB_LAYOUT_PROBE") == "1":
+        from mf4_analyzer.ui.layout_probe import run_layout_probe
+        sys.exit(run_layout_probe(app))
     window = MainWindow()
     install_excepthooks(on_error=lambda text: window.toast(text, "error"))
     window.show()

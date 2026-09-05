@@ -540,9 +540,10 @@ def test_unsaved_prompt_defaults_to_save_not_discard(qapp, qtbot):
         ProjectIOMixin._unsaved_project_prompt_buttons.__get__(widget)
     )
     box, save_btn, discard_btn, cancel_btn = widget._unsaved_project_prompt_buttons()
-    assert box.defaultButton() is save_btn
-    assert box.escapeButton() is cancel_btn
-    assert box.defaultButton() is not discard_btn
+    qtbot.addWidget(box)
+    assert box.default_button() is save_btn
+    assert box.escape_button() is cancel_btn
+    assert box.default_button() is not discard_btn
     assert save_btn.text() == "保存"
     assert discard_btn.text() == "不保存"
     assert cancel_btn.text() == "取消"

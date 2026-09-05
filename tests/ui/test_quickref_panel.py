@@ -232,3 +232,31 @@ def test_coaxis_row_renders_without_soon_badge(panel):
         if w.objectName() == "quickrefSoon"
     ]
     assert soon_labels == []
+
+
+def test_quickref_compact_work_area_keeps_search_and_close(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui_kit.dialog_geometry import FrameInsets, IntRect, SCREEN_MARGIN
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_available_rect",
+        lambda **_kwargs: IntRect(0, 0, 640, 360),
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.frame_insets_of",
+        lambda _widget: FrameInsets(),
+    )
+    host = QWidget()
+    host.setGeometry(0, 0, 640, 360)
+    qtbot.addWidget(host)
+    host.show()
+    panel = QuickRefPanel()
+    qtbot.addWidget(panel)
+    panel._position(host)
+    panel.show()
+    qtbot.waitExposed(panel)
+    assert panel.width() <= 640 - 2 * SCREEN_MARGIN
+    assert panel.height() <= 360 - 2 * SCREEN_MARGIN
+    assert panel._search.isVisible()
+    assert panel._close_btn.isVisible()
+    assert panel.rect().contains(panel._close_btn.geometry())

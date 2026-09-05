@@ -31,7 +31,6 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -361,38 +360,16 @@ class DbReferenceDefaultsDialog(QDialog):
     # -- layout helpers ----------------------------------------------------
 
     def _fit_to_available_screen(self, parent, target_w, target_h):
-        """Clamp the ~800-880px target size (spec §17.1) to whatever screen
-        the dialog will actually open on, AND to the host app window's own
-        width (translation checklist: "no modal wider than the app").
+        """Clamp the ~800-880px target to the shared work-area budget."""
+        from mf4_analyzer.ui_kit.dialog_geometry import fit_window
 
-        Offscreen Qt's default screen is only 800x600 -- a bare
-        ``self.resize(860, 560)`` would silently request a WIDER-than-screen
-        dialog every render-probe run, which is exactly the "dialog fits
-        available screen" invariant spec §17.3/Task 10 checks. A floor keeps
-        the table/footer usable even on a small screen.
-        """
-        screen = None
-        if parent is not None:
-            try:
-                screen = QApplication.screenAt(parent.geometry().center())
-            except Exception:
-                screen = None
-        if screen is None:
-            app = QApplication.instance()
-            screen = app.primaryScreen() if app is not None else None
-
-        margin = 32
-        max_w, max_h = target_w, target_h
-        if screen is not None:
-            avail = screen.availableGeometry()
-            max_w = min(max_w, avail.width() - margin)
-            max_h = min(max_h, avail.height() - margin)
-        if parent is not None and parent.width() > 0:
-            max_w = min(max_w, parent.width() - 24)
-
-        max_w = max(360, max_w)
-        max_h = max(320, max_h)
-        self.resize(max_w, max_h)
+        fit_window(
+            self,
+            (int(target_w), int(target_h)),
+            parent=parent,
+            content_minimum=(280, 240),
+            clamp_width_to_parent=True,
+        )
 
     def _toggle_row(self, title, description, switch):
         row = QWidget(self)

@@ -6,6 +6,7 @@ import json
 from PyQt5.QtCore import Qt
 
 from mf4_analyzer.ui_kit import load_stylesheet
+from mf4_analyzer.ui_kit.dialog_geometry import SCREEN_MARGIN
 
 
 def _show_at(qtbot, widget, width: int, height: int) -> None:
@@ -340,8 +341,8 @@ def test_batch_sheet_initial_size_fits_available_screen(qapp, qtbot):
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
 
-    assert sheet.height() <= avail.height() - 40
-    assert sheet.width() <= avail.width() - 24
+    assert sheet.height() <= avail.height() - 2 * SCREEN_MARGIN
+    assert sheet.width() <= avail.width() - 2 * SCREEN_MARGIN
 
 
 def test_batch_preview_dialog_fits_available_screen(qapp, qtbot):
@@ -355,8 +356,8 @@ def test_batch_preview_dialog_fits_available_screen(qapp, qtbot):
     dialog = BatchPreviewDialog(None)
     qtbot.addWidget(dialog)
 
-    assert dialog.height() <= avail.height() - 40
-    assert dialog.width() <= avail.width() - 24
+    assert dialog.height() <= avail.height() - 2 * SCREEN_MARGIN
+    assert dialog.width() <= avail.width() - 2 * SCREEN_MARGIN
 
 
 def test_batch_preview_dialog_has_no_context_help_button(qtbot):

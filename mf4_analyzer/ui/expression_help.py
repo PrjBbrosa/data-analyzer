@@ -12,10 +12,10 @@ two surfaces cannot drift apart.
 """
 from PyQt5.QtCore import QPoint, QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -211,8 +211,7 @@ class ReferenceHelpPopup(QWidget):
         self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.setStyleSheet(_QSS)
         self._build()
-        self.setFixedWidth(self.WIDTH)
-        self.adjustSize()
+        self.resize(self.WIDTH, self.sizeHint().height())
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -259,7 +258,18 @@ class ReferenceHelpPopup(QWidget):
             subtitle.setObjectName("exprHelpSubtitle")
             lay.addWidget(subtitle)
         lay.addWidget(self._rule(card))
-        self._fill_body(lay, card)
+        body = QWidget(card)
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(6)
+        self._fill_body(body_lay, body)
+        scroll = QScrollArea(card)
+        scroll.setObjectName("exprHelpScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(body)
+        lay.addWidget(scroll, 1)
 
     def _fill_body(self, lay, card):
         raise NotImplementedError
@@ -315,22 +325,38 @@ class ReferenceHelpPopup(QWidget):
         when the screen has no room.
         """
         self.adjustSize()
+        from mf4_analyzer.ui_kit.dialog_geometry import (
+            SCREEN_MARGIN,
+            clamp_frame_rect,
+            client_budget,
+            frame_insets_of,
+            resolve_available_rect,
+        )
+
         host = anchor.window() if anchor is not None else None
+        available = resolve_available_rect(
+            widget=self,
+            parent=host,
+            anchor_global=anchor.mapToGlobal(anchor.rect().center()) if anchor is not None else None,
+        )
+        budget = client_budget(available, frame_insets_of(self))
+        width = min(self.WIDTH, max(160, budget.width))
+        height = min(max(self.sizeHint().height(), 160), max(120, budget.height))
+        self.setMaximumSize(max(1, budget.width), max(1, budget.height))
+        self.resize(width, height)
         if host is not None:
             frame = host.frameGeometry()
             x = frame.right() + self.GAP
             y = anchor.mapToGlobal(QPoint(0, 0)).y() - 40
-            screen = (
-                QApplication.screenAt(frame.center())
-                or QApplication.primaryScreen()
+            if x + self.width() - 1 > available.right:
+                x = frame.left() - self.width() - self.GAP
+            placed = clamp_frame_rect(
+                (x, y, self.width(), self.height()),
+                available,
+                SCREEN_MARGIN,
             )
-            if screen is not None:
-                avail = screen.availableGeometry()
-                if x + self.width() > avail.right():
-                    x = frame.left() - self.width() - self.GAP
-                x = max(avail.left() + 4, min(x, avail.right() - self.width()))
-                y = max(avail.top() + 4, min(y, avail.bottom() - self.height()))
-            self.move(x, y)
+            self.resize(placed.width, placed.height)
+            self.move(placed.x, placed.y)
         self.show()
         self.raise_()
 

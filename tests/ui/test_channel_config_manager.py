@@ -1,6 +1,6 @@
 import pytest
 
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtCore import QPoint, QRect, Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication,
@@ -9,12 +9,19 @@ from PyQt5.QtWidgets import (
     QFrame,
     QLabel,
     QPushButton,
+    QScrollArea,
     QWidget,
 )
 
 from mf4_analyzer.ui.channel_config import ChannelConfigPreview, ChannelSelectionConfig
 from mf4_analyzer.ui.channel_config_transfer import parse_transfer, serialize_transfer
 from mf4_analyzer.ui_kit.control_style import CONTROL_HEIGHTS
+from mf4_analyzer.ui_kit.dialog_geometry import (
+    SCREEN_MARGIN,
+    FrameInsets,
+    IntRect,
+    as_rect,
+)
 from mf4_analyzer.ui.widgets.channel_config_manager import ChannelConfigManagerDialog
 
 
@@ -50,6 +57,33 @@ def _dialog(qtbot, configs, selected_id=None, checked=None):
     dialog._confirm_discard_changes = lambda: True
     dialog.show()
     return dialog
+
+
+def _patch_available_work_area(monkeypatch, width, height, *, insets=None):
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_available_rect",
+        lambda **_kwargs: IntRect(0, 0, int(width), int(height)),
+    )
+    frame = insets if insets is not None else FrameInsets()
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.frame_insets_of",
+        lambda _widget: frame,
+    )
+
+
+def _widget_rect_in(host, widget):
+    top_left = widget.mapTo(host, QPoint(0, 0))
+    return QRect(top_left, widget.size())
+
+
+def _assert_frame_in_safe_area(widget, available: IntRect):
+    safe = available.adjusted(
+        SCREEN_MARGIN, SCREEN_MARGIN, -SCREEN_MARGIN, -SCREEN_MARGIN
+    )
+    frame = as_rect(widget.frameGeometry())
+    assert safe.contains_rect(frame), f"{frame} not in safe {safe}"
+    assert widget.width() <= available.width - 2 * SCREEN_MARGIN
+    assert widget.height() <= available.height - 2 * SCREEN_MARGIN
 
 
 def test_manager_matches_html_sidebar_detail_and_preview_structure(qtbot):
@@ -205,7 +239,6 @@ def test_import_preview_exposes_file_conflict_and_two_counts(qtbot):
     )
     qtbot.addWidget(preview)
 
-    assert preview.minimumWidth() == 460
     assert conflict_mode.currentData() == "keep"
     file_meta = preview.findChild(QLabel, "channelConfigHtmlImportFile")
     assert "shared.tracelab-config.json" in file_meta.text()
@@ -236,7 +269,8 @@ def test_dirty_reject_uses_one_confirm_seam(qtbot, monkeypatch):
     assert not dialog.isVisible()
 
 
-def test_manager_geometry_preserves_html_controls_at_minimum_size(qtbot):
+def test_manager_geometry_preserves_html_controls_at_minimum_size(qtbot, monkeypatch):
+    _patch_available_work_area(monkeypatch, 1920, 1080)
     dialog = _dialog(
         qtbot,
         [_config("drive", "动力分析", ("EPS_CRC", "Torque", "Long_Channel_Name"))],
@@ -244,8 +278,6 @@ def test_manager_geometry_preserves_html_controls_at_minimum_size(qtbot):
     )
     assert dialog.size().width() == 1180
     assert dialog.size().height() == 680
-    assert dialog.minimumSize().width() == 940
-    assert dialog.minimumSize().height() == 680
 
     dialog.resize(940, 680)
     qtbot.wait(20)
@@ -275,6 +307,99 @@ def test_manager_geometry_preserves_html_controls_at_minimum_size(qtbot):
     assert dialog.channel_table.columnWidth(1) >= 240
     assert dialog.channel_table.rowHeight(0) == 49
     assert dialog.btn_save.geometry().bottom() <= dialog.height() - 10
+
+
+@pytest.mark.parametrize("work", [(800, 600), (640, 360)])
+def test_manager_fits_compact_work_area_with_visible_actions(qtbot, monkeypatch, qapp, work):
+    width, height = work
+    _patch_available_work_area(monkeypatch, width, height)
+    dialog = _dialog(
+        qtbot,
+        [_config("drive", "动力分析", ("EPS_CRC", "Torque", "Long_Channel_Name"))],
+        "drive",
+    )
+    qtbot.waitExposed(dialog)
+    qapp.processEvents()
+
+    available = IntRect(0, 0, width, height)
+    _assert_frame_in_safe_area(dialog, available)
+    assert dialog.minimumWidth() <= dialog.width()
+    assert dialog.minimumHeight() <= dialog.height()
+    assert isinstance(dialog.body_scroll, QScrollArea)
+    assert dialog.channel_table.verticalScrollBarPolicy() != Qt.ScrollBarAlwaysOff
+    assert dialog.config_scroll is not None
+
+    assert dialog.btn_save.isVisible()
+    assert dialog.btn_close.isVisible()
+    host = dialog.rect()
+    save_rect = _widget_rect_in(dialog, dialog.btn_save)
+    close_rect = _widget_rect_in(dialog, dialog.btn_close)
+    assert host.contains(save_rect)
+    assert host.contains(close_rect)
+    assert save_rect.width() > 0 and save_rect.height() > 0
+    assert close_rect.width() > 0 and close_rect.height() > 0
+    assert dialog.btn_save.height() == CONTROL_HEIGHTS["base"]
+    assert dialog.btn_close.height() == CONTROL_HEIGHTS["base"]
+
+
+def test_inline_dialogs_fit_injected_compact_budget(qtbot, monkeypatch, qapp):
+    _patch_available_work_area(monkeypatch, 640, 360)
+    dialog = _dialog(
+        qtbot,
+        [_config("drive", "动力分析", ("EPS_CRC", "Torque"))],
+        "drive",
+    )
+    qtbot.waitExposed(dialog)
+    qapp.processEvents()
+    available = IntRect(0, 0, 640, 360)
+    incoming = _config("incoming", "动力分析", ("Torque",), {"Torque": "Nm"})
+
+    rename, edit = dialog._build_rename_dialog("动力分析")
+    qtbot.addWidget(rename)
+    rename.show()
+    qtbot.waitExposed(rename)
+    qapp.processEvents()
+    _assert_frame_in_safe_area(rename, available)
+    confirm = next(btn for btn in rename.findChildren(QPushButton) if btn.text() == "保存名称")
+    cancel = next(btn for btn in rename.findChildren(QPushButton) if btn.text() == "取消")
+    _assert_unique_default(rename, confirm)
+    assert rename.rect().contains(_widget_rect_in(rename, confirm))
+    assert rename.rect().contains(_widget_rect_in(rename, cancel))
+    assert edit.returnPressed is not None
+
+    preview, combo = dialog._build_import_preview_dialog(
+        "shared.tracelab-config.json", parse_transfer(serialize_transfer([incoming]))
+    )
+    qtbot.addWidget(preview)
+    preview.show()
+    qtbot.waitExposed(preview)
+    qapp.processEvents()
+    _assert_frame_in_safe_area(preview, available)
+    assert preview.minimumWidth() <= preview.width() <= 640 - 2 * SCREEN_MARGIN
+    import_confirm = next(
+        btn for btn in preview.findChildren(QPushButton) if btn.text() == "导入配置"
+    )
+    import_cancel = next(
+        btn for btn in preview.findChildren(QPushButton) if btn.text() == "取消"
+    )
+    _assert_unique_default(preview, import_confirm)
+    assert preview.rect().contains(_widget_rect_in(preview, import_confirm))
+    assert preview.rect().contains(_widget_rect_in(preview, import_cancel))
+    assert combo.currentData() == "keep"
+
+    discard = dialog._build_discard_dialog()
+    qtbot.addWidget(discard)
+    discard.show()
+    qtbot.waitExposed(discard)
+    qapp.processEvents()
+    _assert_frame_in_safe_area(discard, available)
+    keep = next(btn for btn in discard.findChildren(QPushButton) if btn.text() == "继续编辑")
+    abandon = next(btn for btn in discard.findChildren(QPushButton) if btn.text() == "放弃修改")
+    _assert_unique_default(discard, keep)
+    assert not abandon.isDefault()
+    assert abandon.autoDefault() is False
+    assert discard.rect().contains(_widget_rect_in(discard, keep))
+    assert discard.rect().contains(_widget_rect_in(discard, abandon))
 
 
 def test_manager_ordinary_controls_render_on_base_track_with_production_qss(qapp, qtbot):

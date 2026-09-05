@@ -998,6 +998,59 @@ QMessageBox QPushButton[messageBoxRole="danger"]:hover {
     color: {{CONTROL_DANGER}};
 }
 
+/* App-owned message dialog: same role colors as QMessageBox, 32px base
+ * track from the global QPushButton rule. Do not inherit QMessageBox's
+ * 24px min-height override. Selectors stay on #appMessageDialog. */
+QDialog#appMessageDialog {
+    background-color: {{CONTROL_SURFACE_TOP}};
+}
+QDialog#appMessageDialog QLabel#appMessageText {
+    font-weight: 600;
+    color: {{CONTROL_TEXT}};
+}
+QDialog#appMessageDialog QLabel#appMessageInformative,
+QDialog#appMessageDialog QLabel#appMessageDetailed {
+    font-weight: 400;
+    color: {{CONTROL_TEXT_MUTED}};
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="neutral"] {
+    background-color: #ffffff;
+    border-color: #dfe5ee;
+    color: #111827;
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="neutral"]:hover {
+    background-color: #f5f7fb;
+    border-color: #b7c4d3;
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="primary"] {
+    background-color: {{CONTROL_ACCENT}};
+    border-color: {{CONTROL_ACCENT_BORDER}};
+    color: {{CONTROL_SURFACE_TOP}};
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="primary"]:hover {
+    background-color: {{CONTROL_ACCENT_DARK}};
+    border-color: {{CONTROL_ACCENT_DARK}};
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="warning"] {
+    background-color: #d97706;
+    border-color: #d97706;
+    color: #ffffff;
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="warning"]:hover {
+    background-color: #b45309;
+    border-color: #b45309;
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="danger"] {
+    background-color: {{CONTROL_DANGER}};
+    border-color: {{CONTROL_DANGER}};
+    color: {{CONTROL_SURFACE_TOP}};
+}
+QDialog#appMessageDialog QPushButton[messageBoxRole="danger"]:hover {
+    background-color: {{CONTROL_DANGER_WASH}};
+    border-color: {{CONTROL_DANGER}};
+    color: {{CONTROL_DANGER}};
+}
+
 /* 2026-04-26 R3 紧凑化 fix-4: tool buttons are icon-only chrome
  * around 16x16 icons; outer chrome must hug the icon, not pad to a
  * full 30x30 button. We let setFixedSize(24, 24) on the host widget

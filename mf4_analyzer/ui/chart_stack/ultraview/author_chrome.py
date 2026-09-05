@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from mf4_analyzer.ui_kit.dialog_geometry import SCREEN_MARGIN
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.popup_shell import apply_popup_shell
 
@@ -246,7 +247,8 @@ class ToolFlyoutSurface(QFrame):
         height = natural.height()
         if parent is not None:
             avail = parent.rect()
-            max_h = max(120, avail.height() - 24)
+            width = min(width, max(1, avail.width()))
+            max_h = max(1, avail.height() - 2 * SCREEN_MARGIN)
             use_scroll = height > max_h
             if use_scroll:
                 height = max_h
@@ -262,14 +264,21 @@ class ToolFlyoutSurface(QFrame):
         else:
             screen = self.screen() or QApplication.primaryScreen()
             avail = screen.availableGeometry() if screen is not None else QRect(0, 0, 1280, 720)
-            max_h = max(160, avail.bottom() - pos.y() - 8)
+            width = min(width, max(1, avail.width() - 2 * SCREEN_MARGIN))
+            max_h = max(1, avail.height() - 2 * SCREEN_MARGIN)
             if height > max_h:
                 height = max_h
                 self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             else:
                 self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            left = min(max(avail.left() + 8, pos.x()), avail.right() - width - 8)
-            top = min(max(avail.top() + 8, pos.y()), avail.bottom() - height - 8)
+            left = min(
+                max(avail.left() + SCREEN_MARGIN, pos.x()),
+                avail.right() - width - SCREEN_MARGIN,
+            )
+            top = min(
+                max(avail.top() + SCREEN_MARGIN, pos.y()),
+                avail.bottom() - height - SCREEN_MARGIN,
+            )
             self.setGeometry(left, top, width, height)
         self.show()
         self.raise_()

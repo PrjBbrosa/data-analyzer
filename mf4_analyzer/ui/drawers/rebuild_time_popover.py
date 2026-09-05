@@ -1,9 +1,21 @@
 """Rebuild-time popover: frameless QDialog with focus-out auto-close."""
-from PyQt5.QtCore import Qt, QEvent, QPoint
-from PyQt5.QtGui import QGuiApplication
+from PyQt5.QtCore import QEvent, QSize, Qt
+from PyQt5.QtGui import QTextOption
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QVBoxLayout,
+    QAbstractSpinBox, QDialog, QFrame, QHBoxLayout, QLabel,
+    QPushButton, QSizePolicy, QTextEdit, QVBoxLayout,
+)
+
+from mf4_analyzer.ui_kit.dialog_geometry import (
+    FrameInsets,
+    IntRect,
+    Size,
+    apply_plan,
+    client_budget,
+    constrain_client_size,
+    frame_insets_of,
+    plan_geometry,
+    resolve_available_rect,
 )
 
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
@@ -13,6 +25,61 @@ from ..widgets.compact_spinbox import CompactDoubleSpinBox
 # flipping above the anchor because below would overflow.
 MARGIN = 8
 GAP = 4
+_SURFACE_H_MARGINS = 24
+_PREFERRED_WRAP_WIDTH = 360
+
+
+class _SelectableWrapLabel(QTextEdit):
+    """Filename line that wraps anywhere and stays fully selectable."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self.setObjectName("PopoverTargetName")
+        self.setReadOnly(True)
+        self.setAcceptRichText(False)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapAnywhere)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setTabChangesFocus(True)
+        self.setFocusPolicy(Qt.ClickFocus)
+        self.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        self.document().setDocumentMargin(0)
+        self.setViewportMargins(0, 0, 0, 0)
+        self.viewport().setAutoFillBackground(False)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet(
+            "QTextEdit#PopoverTargetName {"
+            " background: transparent; color: #334155;"
+            " border: none; padding: 0;"
+            "}"
+        )
+        self.setPlainText(text)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        width = max(1, int(width))
+        self.document().setTextWidth(width)
+        return max(
+            self.fontMetrics().lineSpacing(),
+            int(self.document().size().height()) + 2,
+        )
+
+    def sizeHint(self):
+        cap = self.maximumWidth()
+        ideal = max(1, int(self.document().idealWidth()) + 2)
+        width = ideal if cap >= 16777215 else min(ideal, cap)
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self):
+        fm = self.fontMetrics()
+        return QSize(fm.averageCharWidth() * 8, fm.lineSpacing())
 
 
 class RebuildTimePopover(QDialog):
@@ -61,7 +128,10 @@ class RebuildTimePopover(QDialog):
         root = QVBoxLayout(self._surface)
         root.setContentsMargins(12, 10, 12, 10)
         root.addWidget(QLabel("重建时间轴"))
-        root.addWidget(QLabel(f"目标：[{target_filename}]"))
+        self._target = _SelectableWrapLabel(
+            f"目标：[{target_filename}]", self._surface,
+        )
+        root.addWidget(self._target)
         h = QHBoxLayout()
         h.addWidget(QLabel("Fs:"))
         self.spin_fs = CompactDoubleSpinBox()
@@ -75,10 +145,12 @@ class RebuildTimePopover(QDialog):
         btns.addStretch()
         self.btn_cancel = QPushButton("取消")
         self.btn_cancel.setProperty("role", "quiet")
+        self.btn_cancel.setProperty("controlSize", "base")
         self.btn_cancel.clicked.connect(self.reject)
         btns.addWidget(self.btn_cancel)
         self.btn_ok = QPushButton("确定")
         self.btn_ok.setProperty("role", "primary")
+        self.btn_ok.setProperty("controlSize", "base")
         self.btn_ok.setDefault(True)
         self.btn_ok.clicked.connect(self.accept)
         btns.addWidget(self.btn_ok)
@@ -87,68 +159,55 @@ class RebuildTimePopover(QDialog):
     def new_fs(self):
         return self.spin_fs.value()
 
-    def _available_geometry_for(self, anchor_widget):
-        """Pick the screen the anchor is sitting on; fallback to primary."""
-        try:
-            anchor_center_global = anchor_widget.mapToGlobal(
-                anchor_widget.rect().center()
-            )
-            screen = QGuiApplication.screenAt(anchor_center_global)
-        except Exception:
-            screen = None
-        if screen is None:
-            screen = QApplication.primaryScreen()
-        if screen is None:
-            # Extreme fallback: invent a generous rect so we never crash.
-            from PyQt5.QtCore import QRect
-            return QRect(0, 0, 1920, 1080)
-        return screen.availableGeometry()
+    def _prepare_content_width(self, budget_width):
+        inner = max(1, min(_PREFERRED_WRAP_WIDTH, int(budget_width) - _SURFACE_H_MARGINS))
+        self._target.setMaximumWidth(inner)
+        self.setMaximumWidth(max(1, int(budget_width)))
 
     def show_at(self, anchor_widget):
-        # Force layout/sizeHint resolution before reading frameGeometry.
-        self.adjustSize()
-        size = self.sizeHint()
-        w = max(size.width(), self.width())
-        h = max(size.height(), self.height())
-
-        anchor_top_global = anchor_widget.mapToGlobal(anchor_widget.rect().topLeft())
-        anchor_bot_global = anchor_widget.mapToGlobal(
-            anchor_widget.rect().bottomLeft()
+        try:
+            center = anchor_widget.mapToGlobal(anchor_widget.rect().center())
+            top_left = anchor_widget.mapToGlobal(anchor_widget.rect().topLeft())
+            anchor_h = max(1, anchor_widget.height())
+        except RuntimeError:
+            return
+        available = resolve_available_rect(
+            anchor_global=center, widget=self, parent=anchor_widget,
         )
-        avail = self._available_geometry_for(anchor_widget)
-
-        # Default: anchor.bottomLeft.
-        x = anchor_bot_global.x()
-        y = anchor_bot_global.y()
-
-        # Horizontal clipping: keep within [avail.left+M, avail.right-M].
-        # Qt's ``right()`` is inclusive (left + width - 1), so the constraint
-        # is ``x + w - 1 <= right_limit``.
-        right_limit = avail.right() - MARGIN
-        left_limit = avail.left() + MARGIN
-        if x + w - 1 > right_limit:
-            x = right_limit - w + 1
-        if x < left_limit:
-            x = left_limit
-
-        # Vertical clipping: if placing below overflows, flip above the
-        # anchor; if above also overflows, clamp to top margin. Use
-        # exclusive max-y bounds (right/bottom in Qt are inclusive, so
-        # the constraint is ``y + h - 1 <= bottom_limit``).
-        bottom_limit = avail.bottom() - MARGIN
-        top_limit = avail.top() + MARGIN
-        if y + h - 1 > bottom_limit:
-            flipped_y = anchor_top_global.y() - h - GAP
-            if flipped_y >= top_limit and flipped_y + h - 1 <= bottom_limit:
-                y = flipped_y
-            else:
-                # Anchor is in a corner where neither below nor above fits
-                # cleanly; clamp so the bottom edge sits at bottom_limit.
-                y = bottom_limit - h + 1
-        if y < top_limit:
-            y = top_limit
-
-        self.move(QPoint(x, y))
+        insets = frame_insets_of(self)
+        budget = client_budget(available, insets, MARGIN)
+        self._prepare_content_width(budget.width)
+        if self.layout() is not None:
+            self.layout().activate()
+        self.adjustSize()
+        hint = self.sizeHint().expandedTo(self.minimumSizeHint())
+        preferred = Size(
+            min(max(hint.width(), self.width()), max(1, budget.width)),
+            max(hint.height(), self.height()),
+        )
+        fitted, _compact, needs_scroll = constrain_client_size(
+            preferred, budget, content_minimum=preferred,
+        )
+        if needs_scroll:
+            self._target.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # Synthetic same-width anchor keeps the historical left/bottom-left
+        # default. ``fit_popover`` right-aligns, which would fail the
+        # below-widget contract in ``tests/ui/test_drawers.py``.
+        anchor = IntRect(
+            top_left.x(), top_left.y(),
+            max(1, fitted.width + insets.horizontal), anchor_h,
+        )
+        plan = plan_geometry(
+            available,
+            fitted,
+            frame=insets,
+            margin=MARGIN,
+            content_minimum=preferred,
+            anchor=anchor,
+            position="below",
+            gap=0,
+        )
+        apply_plan(self, plan)
         self.show()
         self.spin_fs.setFocus()
         self.activateWindow()

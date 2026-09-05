@@ -501,28 +501,9 @@ class BatchSheet(QDialog):
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
         clear_tool_window_transient_parent(self)
-        # Belt-and-suspenders: Qt can still reposition/resize a modal after
-        # the constructor's clamp (e.g. centering it over ``parent``), which
-        # on a small screen can push the bottom back off-screen even though
-        # __init__ sized it correctly. Clamp the actual frame geometry back
-        # into the available screen once more, now that a real screen is
-        # guaranteed to be associated with the window.
-        screen = None
-        try:
-            screen = QApplication.screenAt(self.geometry().center())
-        except Exception:
-            screen = None
-        if screen is None:
-            app = QApplication.instance()
-            screen = app.primaryScreen() if app is not None else None
-        if screen is None:
-            return
-        avail = screen.availableGeometry()
-        frame = self.frameGeometry()
-        x = max(avail.left(), min(frame.left(), avail.right() - frame.width()))
-        y = max(avail.top(), min(frame.top(), avail.bottom() - frame.height()))
-        if x != frame.left() or y != frame.top():
-            self.move(x, y)
+        from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
+
+        nudge_into_work_area(self, parent=self.parentWidget())
 
     def _apply_compact_mode(self, compact: bool) -> None:
         compact = bool(compact)

@@ -5,7 +5,9 @@ from __future__ import annotations
 from html import escape
 import json
 from typing import Iterable
+import weakref
 
+from PyQt5 import sip
 from PyQt5.QtCore import QRectF, QSettings, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
@@ -14,6 +16,8 @@ from PyQt5.QtWidgets import (
     QLabel,
     QVBoxLayout,
 )
+
+from ...ui_kit.dialog_geometry import fit_popover
 
 from ..cursor_display_model import (
     CursorDisplayBlock,
@@ -591,6 +595,7 @@ class CursorDisplayPopover(QFrame):
         layout.addWidget(self._note)
         self._options = CursorDisplayOptions()
         self._refit_pending = False
+        self._anchor_ref = None
         self.set_options(self._options)
 
     def options(self) -> CursorDisplayOptions:
@@ -618,10 +623,10 @@ class CursorDisplayPopover(QFrame):
         self._schedule_refit()
 
     def show_for(self, anchor, cursor_mode: str) -> None:
+        self._bind_anchor(anchor)
         self.set_cursor_mode(cursor_mode)
-        self.adjustSize()
-        anchor_global = anchor.mapToGlobal(anchor.rect().bottomRight())
-        self.move(anchor_global.x() - self.width(), anchor_global.y() + 8)
+        if not self._apply_final_geometry():
+            return
         self.show()
         self.raise_()
         self.visibility_changed.emit(self.frameGeometry())
@@ -659,12 +664,90 @@ class CursorDisplayPopover(QFrame):
 
     def _deferred_refit(self):
         self._refit_pending = False
+        try:
+            if sip.isdeleted(self):
+                return
+            if not self._apply_final_geometry():
+                return
+            if self.isVisible():
+                self.visibility_changed.emit(self.frameGeometry())
+        except RuntimeError:
+            return
+
+    def _bind_anchor(self, anchor) -> None:
+        self._release_anchor()
+        if anchor is None:
+            return
+        try:
+            if sip.isdeleted(anchor):
+                return
+        except RuntimeError:
+            return
+        self._anchor_ref = weakref.ref(anchor)
+        anchor.destroyed.connect(self._on_anchor_destroyed)
+
+    def _release_anchor(self) -> None:
+        previous = None
+        if self._anchor_ref is not None:
+            try:
+                previous = self._anchor_ref()
+            except RuntimeError:
+                previous = None
+        self._anchor_ref = None
+        if previous is None:
+            return
+        try:
+            if sip.isdeleted(previous):
+                return
+            previous.destroyed.disconnect(self._on_anchor_destroyed)
+        except (RuntimeError, TypeError):
+            return
+
+    def _live_anchor(self):
+        if self._anchor_ref is None:
+            return None
+        try:
+            anchor = self._anchor_ref()
+        except RuntimeError:
+            self._anchor_ref = None
+            return None
+        if anchor is None:
+            return None
+        try:
+            if sip.isdeleted(anchor):
+                self._anchor_ref = None
+                return None
+        except RuntimeError:
+            self._anchor_ref = None
+            return None
+        return anchor
+
+    def _on_anchor_destroyed(self, *_args):
+        self._anchor_ref = None
+        try:
+            if sip.isdeleted(self):
+                return
+            self.hide()
+        except RuntimeError:
+            return
+
+    def _apply_final_geometry(self) -> bool:
+        """Layout to the final size, then place from the stored anchor."""
+        if sip.isdeleted(self):
+            return False
         if self.layout() is not None:
             self.layout().activate()
         hint = self.sizeHint().expandedTo(self.minimumSizeHint())
-        self.resize(max(hint.width(), 252), hint.height())
-        if self.isVisible():
-            self.visibility_changed.emit(self.frameGeometry())
+        preferred = (max(hint.width(), 252), hint.height())
+        if self._anchor_ref is None:
+            self.resize(preferred[0], preferred[1])
+            return True
+        anchor = self._live_anchor()
+        if anchor is None:
+            self.hide()
+            return False
+        fit_popover(self, anchor, preferred=preferred, prefer_below=True)
+        return True
 
 
 __all__ = [

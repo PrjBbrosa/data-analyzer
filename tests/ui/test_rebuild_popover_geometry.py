@@ -11,7 +11,7 @@ above the anchor when below would overflow. These tests run under
 the offscreen platform exposes valid screen geometry, so geometry assertions
 are reliable in headless CI.
 """
-from PyQt5.QtCore import QPoint
+from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import QMainWindow, QPushButton
 
@@ -176,3 +176,19 @@ def test_popover_uses_anchor_bottom_when_room_available(qapp, qtbot):
     actual = pop.pos()
     assert abs(actual.x() - expected.x()) <= 2
     assert abs(actual.y() - expected.y()) <= 2
+
+
+def test_long_target_name_wraps_and_stays_selectable(qapp, qtbot):
+    win, btn = _build_window_with_anchor(qtbot, (40, 40))
+    name = "方向盘扭矩_" + ("很长文件名" * 12) + ".mf4"
+    pop = RebuildTimePopover(parent=win, target_filename=name, current_fs=1000.0)
+    qtbot.addWidget(pop)
+    pop.show_at(btn)
+    qtbot.waitExposed(pop)
+    assert name in pop._target.toPlainText()
+    assert pop._target.textInteractionFlags() & Qt.TextSelectableByMouse
+    assert pop.btn_ok.height() == pop.btn_cancel.height()
+    avail = _avail()
+    fg = pop.frameGeometry()
+    assert fg.right() <= avail.right() - MARGIN + 1
+    assert fg.bottom() <= avail.bottom() - MARGIN + 1

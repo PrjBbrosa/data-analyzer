@@ -82,7 +82,9 @@ class UltraViewSheet(QDialog):
         super().showEvent(event)
         clear_tool_window_transient_parent(self)
         self._silence_dialog_buttons()
-        self._fit_page_on_open()
+        from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
+
+        nudge_into_work_area(self, parent=self.parentWidget())
 
     def _fit_page_on_open(self) -> None:
         if not _alive(self):

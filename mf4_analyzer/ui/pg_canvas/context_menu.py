@@ -983,15 +983,14 @@ class _PgCustomActionButton(QWidget):
         # and never repaints (verified on-device). Float a frameless popup
         # anchored under the caret instead. It stays a QObject child of the
         # panel (findable / styled); Qt.Popup nests above the open menu.
-        from PyQt5.QtCore import QPoint
-
         host.setParent(
             panel,
             Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
         )
         host.adjustSize()
-        anchor = self._caret.mapToGlobal(QPoint(0, self._caret.height() + 2))
-        host.move(anchor)
+        from mf4_analyzer.ui_kit.dialog_geometry import fit_popover
+
+        fit_popover(host, self._caret, gap=2)
         host.show()
         host.raise_()
 

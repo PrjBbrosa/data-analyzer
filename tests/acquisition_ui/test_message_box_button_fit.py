@@ -71,7 +71,10 @@ def test_discard_confirm_fits_delete_button(qtbot, tmp_path):
     assert box is not None
     labels = {btn.text(): btn for btn in box.buttons()}
     assert "确认删除" in labels
-    assert "min-width:" in (labels["确认删除"].styleSheet() or "")
+    delete = labels["确认删除"]
+    text_width = delete.fontMetrics().horizontalAdvance(delete.text())
+    assert delete.minimumWidth() >= text_width + 8 + 20 + 2
+    assert "min-width:" not in (delete.styleSheet() or "")
     box.done(0)
 
 
@@ -83,7 +86,9 @@ def test_dropped_frames_prompt_fits_action_buttons(qapp):
         prompt = window._dropped_prompt
         assert prompt is not None
         for btn in prompt.buttons():
-            assert "min-width:" in (btn.styleSheet() or ""), btn.text()
+            text_width = btn.fontMetrics().horizontalAdvance(btn.text())
+            assert btn.minimumWidth() >= text_width + 8 + 20 + 2, btn.text()
+            assert "min-width:" not in (btn.styleSheet() or ""), btn.text()
         prompt.done(0)
         qapp.processEvents()
     finally:
@@ -96,9 +101,8 @@ def test_fit_helper_expands_stop_and_review_label(qapp):
         stop = box.addButton("停止并复盘", QMessageBox.DestructiveRole)
         box.addButton("继续录制", QMessageBox.AcceptRole)
         fit_message_box_buttons_to_text(box)
-        assert "min-width:" in (stop.styleSheet() or "")
-        width = int(stop.styleSheet().split("min-width:")[1].split("px")[0].strip())
+        assert "min-width:" not in (stop.styleSheet() or "")
         text_width = stop.fontMetrics().horizontalAdvance(stop.text())
-        assert width >= text_width
+        assert stop.minimumWidth() >= text_width + 8 + 20 + 2
     finally:
         box.deleteLater()

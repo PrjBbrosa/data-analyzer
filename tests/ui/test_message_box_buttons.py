@@ -173,3 +173,27 @@ def test_long_chinese_accept_button_fits_view_remove_label(qapp):
         box.close()
         box.deleteLater()
         qapp.setStyleSheet(previous)
+
+
+def test_fit_helper_keeps_existing_stylesheet_and_tracks_font(qapp):
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    box = QMessageBox()
+    try:
+        confirm = box.addButton("统一选择 DBC", QMessageBox.AcceptRole)
+        confirm.setStyleSheet("color: #111827;")
+        fit_message_box_buttons_to_text(box)
+        assert "color: #111827" in confirm.styleSheet()
+        assert "min-width" not in confirm.styleSheet()
+        first = confirm.minimumWidth()
+        font = confirm.font()
+        font.setPointSize(24)
+        confirm.setFont(font)
+        fit_message_box_buttons_to_text(box)
+        text_width = confirm.fontMetrics().horizontalAdvance(confirm.text())
+        assert confirm.minimumWidth() >= first
+        assert confirm.minimumWidth() >= text_width + 8 + 20 + 2
+    finally:
+        box.close()
+        box.deleteLater()
+        qapp.setStyleSheet(previous)

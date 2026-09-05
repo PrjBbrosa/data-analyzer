@@ -174,30 +174,26 @@ class ProjectIOMixin:
 
     def _unsaved_project_prompt_buttons(self):
         """Build the shared Save / Don't Save / Cancel box. Does not exec."""
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("未保存的项目")
-        box.setText("项目有未保存的更改。是否保存？")
-        save_btn = box.addButton("保存", QMessageBox.AcceptRole)
-        discard_btn = box.addButton("不保存", QMessageBox.DestructiveRole)
-        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
-        box.setDefaultButton(save_btn)
-        box.setEscapeButton(cancel_btn)
-        fit_message_box_buttons_to_text(box)
-        return box, save_btn, discard_btn, cancel_btn
+        from ...ui_kit.message_dialog import build_unsaved_project_dialog
+
+        dialog = build_unsaved_project_dialog(self)
+        return (
+            dialog,
+            dialog.button("save"),
+            dialog.button("discard"),
+            dialog.button("cancel"),
+        )
 
     def _prompt_unsaved_project(self):
         """Return ``'save'``, ``'discard'``, or ``'cancel'``."""
-        box, save_btn, discard_btn, _cancel_btn = (
+        dialog, _save_btn, _discard_btn, _cancel_btn = (
             self._unsaved_project_prompt_buttons()
         )
-        box.exec_()
-        clicked = box.clickedButton()
-        if clicked is save_btn:
-            return "save"
-        if clicked is discard_btn:
-            return "discard"
-        return "cancel"
+        dialog.exec_()
+        result = dialog.message_result
+        if result is None or result.action_id not in {"save", "discard", "cancel"}:
+            return "cancel"
+        return result.action_id
 
     def confirm_leave_unsaved_project(self):
         """Shared Save / Don't Save / Cancel guard. Does not destroy the window."""

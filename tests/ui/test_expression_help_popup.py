@@ -148,3 +148,30 @@ def test_tooltip_text_is_generated_from_the_same_data():
     for _label, funcs in expression_help.FUNCTION_GROUPS:
         assert funcs.split()[0] in tip
     assert max(len(line) for line in tip.splitlines()) <= 52
+
+
+def test_help_card_scrolls_and_keeps_close_on_compact_work_area(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QScrollArea
+    from mf4_analyzer.ui_kit.dialog_geometry import FrameInsets, IntRect, SCREEN_MARGIN
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_available_rect",
+        lambda **_kwargs: IntRect(0, 0, 640, 360),
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.frame_insets_of",
+        lambda _widget: FrameInsets(),
+    )
+    dlg = _editor(tmp_path)
+    qtbot.addWidget(dlg)
+    dlg.show()
+    dlg.btn_expr_help.click()
+    popup = dlg._expr_help_popup
+    assert popup is not None
+    qtbot.waitExposed(popup)
+    assert popup.height() <= 360 - 2 * SCREEN_MARGIN
+    assert popup.findChildren(QScrollArea, "exprHelpScroll")
+    assert popup._close_btn.isVisible()
+    assert popup.rect().contains(popup._close_btn.geometry())

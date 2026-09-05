@@ -19,6 +19,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...ui_kit.dialog_geometry import (
+    FrameInsets,
+    IntRect,
+    SCREEN_MARGIN,
+    apply_plan,
+    client_budget,
+    plan_geometry,
+    resolve_available_rect,
+)
 from ...ui_kit.menus import apply_rounded_menu_chrome
 from ..analysis_preset_slots import notify_slot_changed, preset_slot_bus
 from .. import hints
@@ -49,6 +58,8 @@ class _PresetHoverCard(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setWindowOpacity(1.0)
         self.setFixedWidth(self.WIDTH)
+        self._chip_rows = []
+        self._overflow = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 8, 10, 14)
         outer.setSpacing(0)
@@ -122,6 +133,9 @@ class _PresetHoverCard(QFrame):
     def set_summary(self, *, name, params, kind, label_map, current_params=None,
                     builtin=False, blurb=''):
         self._clear()
+        self._chip_rows = []
+        self.setFixedWidth(self.WIDTH)
+        self.setMaximumHeight(16777215)
         params = params if isinstance(params, dict) else {}
         current_params = current_params if isinstance(current_params, dict) else {}
 
@@ -133,10 +147,12 @@ class _PresetHoverCard(QFrame):
         title_box.setSpacing(2)
         title = QLabel(str(name), self._panel)
         title.setObjectName("presetHoverTitle")
+        title.setWordWrap(True)
         title_box.addWidget(title)
         sub_text = blurb if (builtin and blurb) else f"已保存参数快照 · 来源：{self._kind_label(kind)}"
         sub = QLabel(sub_text, self._panel)
         sub.setObjectName("presetHoverSub")
+        sub.setWordWrap(True)
         title_box.addWidget(sub)
         head.addLayout(title_box, 1)
         badge = QLabel("内置" if builtin else "已保存", self._panel)
@@ -157,8 +173,15 @@ class _PresetHoverCard(QFrame):
         if status:
             self._root.addWidget(self._section("状态判断", status))
 
+        self._overflow = QLabel("", self._panel)
+        self._overflow.setObjectName("presetHoverOverflow")
+        self._overflow.setWordWrap(True)
+        self._overflow.hide()
+        self._root.addWidget(self._overflow)
+
         footer = QLabel("左键加载 · 右键保存/重命名/清空        不保存信号与 Fs", self._panel)
         footer.setObjectName("presetHoverFooter")
+        footer.setWordWrap(True)
         self._root.addWidget(footer)
         self.adjustSize()
 
@@ -189,13 +212,15 @@ class _PresetHoverCard(QFrame):
         lbl.setObjectName("presetHoverSectionTitle")
         lay.addWidget(lbl)
         for row_specs in self._rows(chips):
-            row = QHBoxLayout()
+            row_host = QWidget(frame)
+            row = QHBoxLayout(row_host)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(5)
             for label, value, warn in row_specs:
                 row.addWidget(self._chip(label, value, warn), 0)
             row.addStretch(1)
-            lay.addLayout(row)
+            lay.addWidget(row_host)
+            self._chip_rows.append((row_host, len(row_specs)))
         return frame
 
     def _chip(self, label, value, warn=False):
@@ -305,6 +330,44 @@ class _PresetHoverCard(QFrame):
             'frf': '频响（FRF）',
             'order': 'Order Time',
         }.get(kind, kind)
+
+    def _fit_to_budget(self, available):
+        """Cap width/height to the work area; summarize chips that no longer fit."""
+        work = available if isinstance(available, IntRect) else IntRect(
+            int(available.x()), int(available.y()),
+            int(available.width()), int(available.height()),
+        )
+        budget = client_budget(work, FrameInsets(), SCREEN_MARGIN)
+        width = min(self.WIDTH, max(1, budget.width))
+        self.setFixedWidth(width)
+        if self.layout() is not None:
+            self.layout().activate()
+        self.adjustSize()
+        omitted = 0
+        while self.sizeHint().height() > budget.height and self._chip_rows:
+            host, count = self._chip_rows.pop()
+            host.hide()
+            omitted += count
+            if self.layout() is not None:
+                self.layout().activate()
+            self.adjustSize()
+        if omitted and self._overflow is not None:
+            self._overflow.setText(f"另有 {omitted} 项")
+            self._overflow.show()
+            if self.layout() is not None:
+                self.layout().activate()
+            self.adjustSize()
+            while self.sizeHint().height() > budget.height and self._chip_rows:
+                host, count = self._chip_rows.pop()
+                host.hide()
+                omitted += count
+                self._overflow.setText(f"另有 {omitted} 项")
+                if self.layout() is not None:
+                    self.layout().activate()
+                self.adjustSize()
+        target_h = min(max(1, self.sizeHint().height()), max(1, budget.height))
+        self.setMaximumHeight(max(1, budget.height))
+        self.resize(width, target_h)
 
 
 class _PresetLoadButton(QPushButton):
@@ -799,21 +862,31 @@ class PresetBar(QWidget):
             card = self._live_hover_card()
         if card is None:
             return
-        card.adjustSize()
-        size = card.sizeHint()
-        width = max(card.width(), size.width())
-        height = max(card.height(), size.height())
-        screen = QApplication.screenAt(btn.mapToGlobal(btn.rect().center()))
-        available = screen.availableGeometry() if screen else QApplication.primaryScreen().availableGeometry()
-        center = btn.mapToGlobal(btn.rect().center())
-        x = center.x() - width // 2
-        x = max(available.left() + 8, min(x, available.right() - width - 8))
-        top = btn.mapToGlobal(btn.rect().topLeft())
-        bottom = btn.mapToGlobal(btn.rect().bottomLeft())
-        y = top.y() - height - 10
-        if y < available.top() + 8:
-            y = bottom.y() + 10
-        card.move(QPoint(x, y))
+        try:
+            center = btn.mapToGlobal(btn.rect().center())
+            top_left = btn.mapToGlobal(btn.rect().topLeft())
+            anchor_h = max(1, btn.height())
+        except RuntimeError:
+            return
+        available = resolve_available_rect(
+            anchor_global=center, widget=card, parent=btn,
+        )
+        card._fit_to_budget(available)
+        width = max(1, card.width())
+        height = max(1, card.height())
+        anchor = IntRect(
+            center.x() - width // 2, top_left.y(), width, anchor_h,
+        )
+        plan = plan_geometry(
+            available,
+            (width, height),
+            frame=FrameInsets(),
+            margin=SCREEN_MARGIN,
+            anchor=anchor,
+            position="above",
+            gap=10,
+        )
+        apply_plan(card, plan)
 
     def _hide_hover(self):
         self._hover_slot = None

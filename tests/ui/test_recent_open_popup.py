@@ -1,6 +1,7 @@
 """Owner tests for the searchable recent-open popup."""
 from __future__ import annotations
 
+import pytest
 from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
@@ -345,3 +346,33 @@ def test_twenty_reopen_cycles_do_not_grow_instances(qtbot, tmp_path, monkeypatch
     assert after_top == before_top
     assert len(closed) == 20
     assert len(host.findChildren(RecentOpenPopup)) == 1
+
+
+@pytest.mark.parametrize("work", [(640, 360), (480, 320), (300, 240)])
+def test_recent_popup_frame_stays_inside_compact_work_area(qapp, qtbot, monkeypatch, work):
+    from mf4_analyzer.ui_kit.dialog_geometry import SCREEN_MARGIN
+
+    width, height = work
+    host, popup = _make_popup(qtbot)
+    popup.populate([
+        _entry("/very/long/path/to/steering_torque.mf4"),
+        _entry("/tmp/project.tlproj", kind="project"),
+    ])
+    popup.reset_for_show()
+
+    def _avail(_anchor):
+        return QRect(0, 0, width, height)
+
+    monkeypatch.setattr(
+        RecentOpenPopup, "_available_geometry_for", staticmethod(_avail),
+    )
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    qapp.processEvents()
+    frame = popup.frameGeometry()
+    assert frame.width() <= width - 2 * SCREEN_MARGIN
+    assert frame.height() <= height - 2 * SCREEN_MARGIN
+    assert frame.left() >= SCREEN_MARGIN
+    assert frame.top() >= SCREEN_MARGIN
+    assert frame.right() <= width - SCREEN_MARGIN
+    assert frame.bottom() <= height - SCREEN_MARGIN

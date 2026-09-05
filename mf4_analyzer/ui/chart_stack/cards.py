@@ -9,6 +9,7 @@ from PyQt5 import sip
 
 import qtawesome as qta
 
+from ...ui_kit.dialog_geometry import fit_popover
 from ...ui_kit.icons import Icons
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from .. import hints
@@ -823,10 +824,9 @@ class _ChartCard(QWidget):
         if pop.isVisible():
             pop.hide()
             return
-        pos = self._tick_density_btn.mapToGlobal(
-            self._tick_density_btn.rect().bottomLeft()
-        )
-        pop.move(pos.x(), pos.y() + 4)
+        if pop.layout() is not None:
+            pop.layout().activate()
+        fit_popover(pop, self._tick_density_btn, gap=4)
         pop.show()
         pop.raise_()
         self._tick_density_btn.clearFocus()

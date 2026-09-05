@@ -94,6 +94,30 @@ def test_chart_options_dialog_fits_available_height_and_keeps_actions_visible(qa
         assert dlg.rect().contains(button.mapTo(dlg, button.rect().bottomRight()))
 
 
+def test_chart_options_compact_work_area_does_not_keep_430_floor(qapp, monkeypatch):
+    from PyQt5.QtWidgets import QApplication, QScrollArea
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui_kit.dialog_geometry import FrameInsets, IntRect, SCREEN_MARGIN
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_available_rect",
+        lambda **_kwargs: IntRect(0, 0, 640, 360),
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.frame_insets_of",
+        lambda _widget: FrameInsets(),
+    )
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.show()
+    qapp.processEvents()
+    assert dlg.width() <= 640 - 2 * SCREEN_MARGIN
+    assert dlg.height() <= 360 - 2 * SCREEN_MARGIN
+    assert len(dlg.findChildren(QScrollArea, "chartOptionsScroll")) == 3
+    for button in (dlg.btn_reset, dlg.btn_cancel, dlg.btn_apply, dlg.btn_ok):
+        assert dlg.rect().contains(button.mapTo(dlg, button.rect().bottomRight()))
+
+
 def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp):
     """Unused tab-bar strip must match dialog chrome, not a leftover white slab.
 

@@ -434,6 +434,7 @@ class QuickRefPanel(QWidget):
         self._install_view_cycle_shortcuts()
         self.resize(940, 660)
         self._apply_window_flags()
+        self._geometry_fitted = False
 
     def _install_view_cycle_shortcuts(self) -> None:
         """Own View-cycle bindings while this ``Qt.Tool`` window is active."""
@@ -732,26 +733,77 @@ class QuickRefPanel(QWidget):
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
         self._set_host_view_cycle_shortcuts_enabled(False)
+        self._apply_work_area_cap(self._opener)
+
+    def _apply_work_area_cap(self, anchor_widget=None):
+        """Frameless Tool windows can expand to sizeHint on show; recap after."""
+        from mf4_analyzer.ui_kit.dialog_geometry import (
+            client_budget,
+            frame_insets_of,
+            resolve_available_rect,
+        )
+
+        available = resolve_available_rect(widget=self, parent=anchor_widget)
+        insets = frame_insets_of(self)
+        budget = client_budget(available, insets)
+        width = min(max(self.width(), 1), max(1, budget.width))
+        height = min(max(self.height(), 1), max(1, budget.height))
+        self.setFixedSize(width, height)
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(max(1, budget.width), max(1, budget.height))
 
     def hideEvent(self, event):  # noqa: N802
         self._set_host_view_cycle_shortcuts_enabled(True)
         super().hideEvent(event)
 
     def _position(self, anchor_widget):
-        """Center over the anchor's top-level window (or the screen)."""
-        from PyQt5.QtWidgets import QApplication
+        """Fit to the work area, then center over the host and clamp."""
+        from mf4_analyzer.ui_kit.dialog_geometry import (
+            SCREEN_MARGIN,
+            apply_plan,
+            clamp_frame_rect,
+            client_budget,
+            frame_insets_of,
+            plan_for_widget,
+            resolve_available_rect,
+        )
+
+        available = resolve_available_rect(widget=self, parent=anchor_widget)
+        insets = frame_insets_of(self)
+        budget = client_budget(available, insets)
+        self.setMaximumSize(max(1, budget.width), max(1, budget.height))
+        preferred = (940, 660) if not self._geometry_fitted else (self.width(), self.height())
+        plan = plan_for_widget(
+            self,
+            preferred,
+            parent=anchor_widget,
+            content_minimum=(360, 280),
+        )
+        apply_plan(self, plan)
+        self._geometry_fitted = True
         host = None
         if anchor_widget is not None:
             host = anchor_widget.window()
         if host is not None and host.isVisible():
             geo = host.frameGeometry()
         else:
-            screen = QApplication.primaryScreen()
-            geo = screen.availableGeometry() if screen else None
-        if geo is not None:
-            x = geo.center().x() - self.width() // 2
-            y = geo.top() + max(24, (geo.height() - self.height()) // 3)
-            self.move(int(x), int(y))
+            available = resolve_available_rect(widget=self, parent=anchor_widget)
+            geo = available.to_qrect()
+        x = geo.center().x() - self.width() // 2
+        y = geo.top() + max(24, (geo.height() - self.height()) // 3)
+        available = resolve_available_rect(widget=self, parent=anchor_widget)
+        insets = frame_insets_of(self)
+        frame = clamp_frame_rect(
+            (x, y, self.width() + insets.horizontal, self.height() + insets.vertical),
+            available,
+            SCREEN_MARGIN,
+        )
+        self.resize(
+            max(0, frame.width - insets.horizontal),
+            max(0, frame.height - insets.vertical),
+        )
+        self.move(frame.x, frame.y)
+        self._apply_work_area_cap(anchor_widget)
 
     # -- frameless drag by header -----------------------------------------
     def mousePressEvent(self, ev):  # noqa: N802

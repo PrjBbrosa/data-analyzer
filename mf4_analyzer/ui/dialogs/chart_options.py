@@ -3,7 +3,6 @@ import numpy as np
 
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
-    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -25,6 +24,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 
 from ...ui_kit.dialog_button_defaults import set_unique_default_button
+from ...ui_kit.dialog_geometry import fit_window, nudge_into_work_area
 from .._axis_handle import make_handle
 from .._color_utils import is_color_like as _is_color_like
 from .._color_utils import to_hex as _to_hex
@@ -112,12 +112,18 @@ class ChartOptionsDialog(QDialog):
         self.combo_curve.currentIndexChanged.connect(self._sync_curve_color)
         self.btn_curve_color.clicked.connect(self._choose_curve_color)
         self.reset_fields()
+        self._geometry_fitted = False
         self._fit_to_available_height()
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
-        self._fit_to_available_height()
-        self._clamp_to_available_geometry()
+        if not self._geometry_fitted:
+            self._fit_to_available_height()
+            self._geometry_fitted = True
+        else:
+            nudge_into_work_area(
+                self, parent=self.parentWidget(), content_minimum=(240, 200),
+            )
 
     def _scrollable_tab(self, page):
         scroll = QScrollArea(self)
@@ -130,46 +136,15 @@ class ChartOptionsDialog(QDialog):
         scroll.setWidget(page)
         return scroll
 
-    def _available_geometry(self):
-        screen = None
-        screen_getter = getattr(self, "screen", None)
-        if callable(screen_getter):
-            screen = screen_getter()
-        if screen is None and self.parentWidget() is not None:
-            parent_window = self.parentWidget().window()
-            screen_at = getattr(QApplication, "screenAt", None)
-            if callable(screen_at):
-                screen = screen_at(parent_window.frameGeometry().center())
-        if screen is None:
-            screen = QApplication.primaryScreen()
-        return screen.availableGeometry() if screen is not None else None
-
     def _fit_to_available_height(self):
-        available = self._available_geometry()
-        if available is None:
-            return
-        frame_extra = 0
-        if self.isVisible():
-            frame_extra = max(0, self.frameGeometry().height() - self.height())
-        max_height = max(240, available.height() - frame_extra - 24)
-        max_height = min(max_height, available.height())
-        max_width = max(self.minimumWidth(), available.width() - 24)
-        target_width = min(max(self.sizeHint().width(), self.minimumWidth()), max_width)
-        target_height = min(self.sizeHint().height(), max_height)
-        self.setMaximumHeight(max_height)
-        self.resize(target_width, target_height)
-
-    def _clamp_to_available_geometry(self):
-        available = self._available_geometry()
-        if available is None:
-            return
-        frame = self.frameGeometry()
-        max_x = available.right() - frame.width() + 1
-        max_y = available.bottom() - frame.height() + 1
-        x = available.left() if frame.width() >= available.width() else min(max(frame.x(), available.left()), max_x)
-        y = available.top() if frame.height() >= available.height() else min(max(frame.y(), available.top()), max_y)
-        if x != frame.x() or y != frame.y():
-            self.move(int(x), int(y))
+        hint = self.sizeHint()
+        fit_window(
+            self,
+            (max(hint.width(), 430), hint.height()),
+            parent=self.parentWidget(),
+            content_minimum=(430, 240),
+            clamp_width_to_parent=True,
+        )
 
     def _target_summary(self):
         # ``get_label`` is intentionally outside the AxisHandle protocol.

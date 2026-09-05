@@ -111,11 +111,15 @@ def fit_message_box_buttons_to_text(box, *, content_slack: int = 8):
     for button in box.buttons():
         if not isinstance(button, QPushButton):
             continue
-        content_width = max(
-            52,
-            button.fontMetrics().horizontalAdvance(button.text()) + content_slack,
+        text_width = button.fontMetrics().horizontalAdvance(button.text())
+        # Outer minimum: glyph + QSS H padding + border + slack.
+        # Do not write min-width into the widget stylesheet — that would
+        # replace the shared QSS (padding, radius, role colors).
+        outer = max(
+            74,
+            text_width + content_slack + 20 + 2,
         )
-        button.setStyleSheet(f"min-width: {content_width}px;")
+        button.setMinimumWidth(outer)
     return box
 
 

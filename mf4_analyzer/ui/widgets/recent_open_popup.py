@@ -41,6 +41,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...ui_kit.dialog_geometry import SCREEN_MARGIN
 from ...ui_kit.icons import Icons
 from ...ui_kit.popup_shell import apply_popup_shell
 from ...ui_kit.widgets import SearchField
@@ -60,7 +61,6 @@ RECENT_POPUP_SEARCH_HEIGHT = 70
 RECENT_POPUP_HEADER_HEIGHT = 32
 RECENT_POPUP_FOOTER_HEIGHT = 48
 RECENT_NAME_COLUMN_RATIO = 0.46
-_SCREEN_MARGIN = 8
 _ANCHOR_GAP = 4
 _FRAME_GUARD = 1
 _SURFACE_RADIUS = 12.0
@@ -265,8 +265,8 @@ class RecentOpenPopup(QFrame):
 
     def show_at(self, anchor: QWidget) -> None:
         available = self._available_geometry_for(anchor)
-        max_w = max(320, available.width() - 2 * _SCREEN_MARGIN)
-        max_h = max(220, available.height() - 2 * _SCREEN_MARGIN)
+        max_w = max(1, available.width() - 2 * SCREEN_MARGIN)
+        max_h = max(1, available.height() - 2 * SCREEN_MARGIN)
         width = min(RECENT_POPUP_MAX_WIDTH, max_w)
         height = min(RECENT_POPUP_TARGET_HEIGHT, max_h)
         self.setFixedSize(width, height)
@@ -275,12 +275,12 @@ class RecentOpenPopup(QFrame):
 
         anchor_top_left = anchor.mapToGlobal(anchor.rect().topLeft())
         anchor_bottom_left = anchor.mapToGlobal(anchor.rect().bottomLeft())
-        left = available.left() + _SCREEN_MARGIN
-        right = available.right() - _SCREEN_MARGIN - width + 1
+        left = available.left() + SCREEN_MARGIN
+        right = available.right() - SCREEN_MARGIN - width + 1
         x = self._clamp(anchor_top_left.x(), left, right)
 
-        top = available.top() + _SCREEN_MARGIN
-        bottom = available.bottom() - _SCREEN_MARGIN - height + 1
+        top = available.top() + SCREEN_MARGIN
+        bottom = available.bottom() - SCREEN_MARGIN - height + 1
         below = anchor_bottom_left.y() + _ANCHOR_GAP
         above = anchor_top_left.y() - _ANCHOR_GAP - height
         if below <= bottom:

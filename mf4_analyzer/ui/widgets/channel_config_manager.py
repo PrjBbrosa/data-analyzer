@@ -33,6 +33,15 @@ from PyQt5.QtWidgets import (
 from ..channel_config import ChannelConfigPreview, ChannelSelectionConfig
 from ...ui_kit.control_style import CONTROL_HEIGHTS
 from ...ui_kit.dialog_button_defaults import set_unique_default_button
+from ...ui_kit.dialog_geometry import (
+    SCREEN_MARGIN,
+    IntRect,
+    apply_plan,
+    fit_window,
+    install_geometry_relayout,
+    nudge_into_work_area,
+    plan_for_widget,
+)
 from ...ui_kit.menus import apply_rounded_menu_chrome
 from ...ui_kit.widgets import SearchField
 from ..channel_config_transfer import (
@@ -184,6 +193,13 @@ class ChannelConfigManagerDialog(QDialog):
 
     CONTROL_HEIGHT = CONTROL_HEIGHTS["base"]
     ICON_SIZE = 36
+    # Client preference on a normal work area. Not a hard floor: compact
+    # screens cap through dialog_geometry so the frame stays on-screen.
+    PREFERRED_SIZE = (1180, 680)
+    CONTENT_MINIMUM = (640, 280)
+    _INLINE_RENAME_SIZE = (400, 220)
+    _INLINE_IMPORT_SIZE = (460, 420)
+    _INLINE_DISCARD_SIZE = (400, 180)
 
     def __init__(
         self,
@@ -201,8 +217,7 @@ class ChannelConfigManagerDialog(QDialog):
         self.setObjectName("channelConfigManagerHtml")
         self.setWindowTitle("管理通道配置")
         self.setModal(True)
-        self.resize(1180, 680)
-        self.setMinimumSize(940, 680)
+        self.setMinimumSize(0, 0)
 
         self._baseline = list(configs)
         self._drafts = list(configs)
@@ -220,6 +235,7 @@ class ChannelConfigManagerDialog(QDialog):
         self._chosen_channels: set[str] = set()
         self._undo_callback: Callable[[], None] | None = None
         self._closing = False
+        self._geometry_fitted = False
         self._config_rows: dict[str, _ConfigRow] = {}
 
         root = QVBoxLayout(self)
@@ -229,6 +245,8 @@ class ChannelConfigManagerDialog(QDialog):
         root.addWidget(self._build_workspace(), 1)
         self._build_toast()
         self._rebuild_all()
+        install_geometry_relayout(self, self._apply_screen_geometry)
+        self._apply_screen_geometry()
 
     def eventFilter(self, obj, event):  # noqa: N802
         if event.type() == QEvent.KeyPress:
@@ -385,7 +403,13 @@ class ChannelConfigManagerDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        head = QFrame(panel)
+        body = QWidget(panel)
+        body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        head = QFrame(body)
         head.setObjectName("channelConfigHtmlDetailHead")
         head.setMinimumHeight(80)
         head_layout = QHBoxLayout(head)
@@ -431,9 +455,9 @@ class ChannelConfigManagerDialog(QDialog):
         self._control(self.btn_delete_config)
         self.btn_delete_config.clicked.connect(self._delete_active_config)
         head_layout.addWidget(self.btn_delete_config)
-        layout.addWidget(head)
+        body_layout.addWidget(head)
 
-        preview = QFrame(panel)
+        preview = QFrame(body)
         preview.setObjectName("channelConfigHtmlPreview")
         preview.setFixedHeight(58)
         preview_layout = QHBoxLayout(preview)
@@ -454,9 +478,9 @@ class ChannelConfigManagerDialog(QDialog):
         note = QLabel("缺失通道会跳过，不影响其他通道", preview)
         note.setObjectName("channelConfigHtmlPreviewNote")
         preview_layout.addWidget(note)
-        layout.addWidget(preview)
+        body_layout.addWidget(preview)
 
-        tools = QFrame(panel)
+        tools = QFrame(body)
         tools.setObjectName("channelConfigHtmlChannelTools")
         tools.setFixedHeight(61)
         tools_layout = QHBoxLayout(tools)
@@ -488,10 +512,12 @@ class ChannelConfigManagerDialog(QDialog):
         self._control(self.btn_add_current)
         self.btn_add_current.clicked.connect(self._add_current_checked)
         tools_layout.addWidget(self.btn_add_current)
-        layout.addWidget(tools)
+        body_layout.addWidget(tools)
 
-        channel_area = QFrame(panel)
+        channel_area = QFrame(body)
         channel_area.setObjectName("channelConfigHtmlChannelArea")
+        channel_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        channel_area.setMinimumHeight(158)
         channel_layout = QVBoxLayout(channel_area)
         channel_layout.setContentsMargins(0, 0, 0, 0)
         channel_layout.setSpacing(0)
@@ -550,12 +576,26 @@ class ChannelConfigManagerDialog(QDialog):
             header.setSectionResizeMode(column, QHeaderView.Fixed)
             header.resizeSection(column, width)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.channel_table.setMinimumHeight(120)
+        self.channel_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.channel_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.channel_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         channel_layout.addWidget(self.channel_table, 1)
         self.empty_channels = QLabel("此配置中没有符合条件的通道。", channel_area)
         self.empty_channels.setObjectName("channelConfigHtmlEmpty")
         self.empty_channels.setAlignment(Qt.AlignCenter)
         channel_layout.addWidget(self.empty_channels)
-        layout.addWidget(channel_area, 1)
+        body_layout.addWidget(channel_area, 1)
+
+        self.body_scroll = QScrollArea(panel)
+        self.body_scroll.setObjectName("channelConfigHtmlBodyScroll")
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setFrameShape(QFrame.NoFrame)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.body_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.body_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.body_scroll.setWidget(body)
+        layout.addWidget(self.body_scroll, 1)
 
         footer = QFrame(panel)
         footer.setObjectName("channelConfigHtmlDetailFooter")
@@ -615,6 +655,60 @@ class ChannelConfigManagerDialog(QDialog):
     def _control(self, control) -> None:
         control.setFixedHeight(self.CONTROL_HEIGHT)
         control.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+
+    def _apply_screen_geometry(self) -> None:
+        parent = self.parentWidget()
+        if self._geometry_fitted:
+            nudge_into_work_area(self, parent=parent)
+            return
+        plan = plan_for_widget(
+            self,
+            self.PREFERRED_SIZE,
+            parent=parent,
+            content_minimum=self.CONTENT_MINIMUM,
+            margin=SCREEN_MARGIN,
+        )
+        apply_plan(self, plan)
+        self._geometry_fitted = True
+
+    def _fit_inline_dialog(self, dialog: QDialog, preferred: tuple[int, int]) -> None:
+        dialog.setMinimumSize(0, 0)
+        fitted = {"done": False}
+
+        def apply() -> None:
+            if fitted["done"]:
+                nudge_into_work_area(dialog, parent=self)
+                return
+            fit_window(
+                dialog,
+                preferred,
+                parent=self,
+                content_minimum=(0, 0),
+                margin=SCREEN_MARGIN,
+            )
+            fitted["done"] = True
+
+        install_geometry_relayout(dialog, apply)
+        apply()
+
+    def _inline_scroll_body(self, dialog: QDialog):
+        """Body in a scroll area; caller adds the action row to ``root``."""
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(10)
+        body = QWidget(dialog)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(10)
+        scroll = QScrollArea(dialog)
+        scroll.setObjectName("channelConfigHtmlInlineBodyScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+        return root, body_layout
 
     @property
     def drafts(self) -> tuple[ChannelSelectionConfig, ...]:
@@ -1145,23 +1239,29 @@ class ChannelConfigManagerDialog(QDialog):
         config = self._active_config()
         if config is None:
             return
+        dialog, edit = self._build_rename_dialog(config.name)
+        edit.selectAll()
+        if dialog.exec_() == QDialog.Accepted:
+            self._rename_active_to(edit.text())
+
+    def _build_rename_dialog(self, name: str) -> tuple[QDialog, QLineEdit]:
         dialog = QDialog(self)
         dialog.setObjectName("channelConfigHtmlRenameDialog")
         dialog.setWindowTitle("重命名配置")
         dialog.setModal(True)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(10)
+        root, body_layout = self._inline_scroll_body(dialog)
         title = QLabel("重命名配置", dialog)
         title.setObjectName("channelConfigHtmlPopoverTitle")
         copy = QLabel("名称用于配置列表显示，不会修改通道名称。", dialog)
         copy.setObjectName("channelConfigHtmlPopoverCopy")
-        layout.addWidget(title)
-        layout.addWidget(copy)
-        edit = QLineEdit(config.name, dialog)
+        copy.setWordWrap(True)
+        body_layout.addWidget(title)
+        body_layout.addWidget(copy)
+        edit = QLineEdit(name, dialog)
         edit.setMaxLength(80)
         edit.setFixedHeight(self.CONTROL_HEIGHT)
-        layout.addWidget(edit)
+        edit.setMinimumWidth(0)
+        body_layout.addWidget(edit)
         actions = QHBoxLayout()
         actions.addStretch(1)
         cancel = QPushButton("取消", dialog)
@@ -1171,14 +1271,13 @@ class ChannelConfigManagerDialog(QDialog):
         self._control(confirm)
         actions.addWidget(cancel)
         actions.addWidget(confirm)
-        layout.addLayout(actions)
+        root.addLayout(actions)
         cancel.clicked.connect(dialog.reject)
         confirm.clicked.connect(dialog.accept)
         set_unique_default_button(confirm, dialog)
         edit.returnPressed.connect(dialog.accept)
-        edit.selectAll()
-        if dialog.exec_() == QDialog.Accepted:
-            self._rename_active_to(edit.text())
+        self._fit_inline_dialog(dialog, self._INLINE_RENAME_SIZE)
+        return dialog, edit
 
     def _copy_active(self) -> None:
         config = self._active_config()
@@ -1269,17 +1368,14 @@ class ChannelConfigManagerDialog(QDialog):
         dialog.setObjectName("channelConfigHtmlImportDialog")
         dialog.setWindowTitle("确认导入通道配置")
         dialog.setModal(True)
-        dialog.setMinimumWidth(460)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(10)
+        root, body_layout = self._inline_scroll_body(dialog)
         title = QLabel("确认导入通道配置", dialog)
         title.setObjectName("channelConfigHtmlPopoverTitle")
         copy = QLabel("导入前先核对内容；确认后仍需点击主窗口的“保存更改”。", dialog)
         copy.setObjectName("channelConfigHtmlPopoverCopy")
         copy.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(copy)
+        body_layout.addWidget(title)
+        body_layout.addWidget(copy)
         conflict_count = sum(
             1
             for item in parsed.configs
@@ -1295,7 +1391,7 @@ class ChannelConfigManagerDialog(QDialog):
         )
         file_meta.setObjectName("channelConfigHtmlImportFile")
         file_meta.setWordWrap(True)
-        layout.addWidget(file_meta)
+        body_layout.addWidget(file_meta)
         stats = QWidget(dialog)
         stats.setObjectName("channelConfigHtmlImportStats")
         stats_layout = QHBoxLayout(stats)
@@ -1317,23 +1413,25 @@ class ChannelConfigManagerDialog(QDialog):
             stat_layout.addWidget(value_label)
             stat_layout.addWidget(label)
             stats_layout.addWidget(stat, 1)
-        layout.addWidget(stats)
+        body_layout.addWidget(stats)
         label = QLabel("遇到同名配置", dialog)
         label.setObjectName("channelConfigHtmlImportLabel")
-        layout.addWidget(label)
+        body_layout.addWidget(label)
         combo = QComboBox(dialog)
         combo.setFixedHeight(self.CONTROL_HEIGHT)
+        combo.setMinimumWidth(0)
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         combo.addItem("保留两份，并给导入项追加“（导入）”", "keep")
         combo.addItem("用导入内容替换现有配置", "replace")
         combo.addItem("跳过同名配置", "skip")
-        layout.addWidget(combo)
+        body_layout.addWidget(combo)
         note = QLabel(
             "传递文件只保存配置名称、通道名称和单位；当前 View 的匹配状态会在导入后重新计算。",
             dialog,
         )
         note.setObjectName("channelConfigHtmlPopoverCopy")
         note.setWordWrap(True)
-        layout.addWidget(note)
+        body_layout.addWidget(note)
         actions = QHBoxLayout()
         actions.addStretch(1)
         cancel = QPushButton("取消", dialog)
@@ -1343,10 +1441,11 @@ class ChannelConfigManagerDialog(QDialog):
         self._control(confirm)
         actions.addWidget(cancel)
         actions.addWidget(confirm)
-        layout.addLayout(actions)
+        root.addLayout(actions)
         cancel.clicked.connect(dialog.reject)
         confirm.clicked.connect(dialog.accept)
         set_unique_default_button(confirm, dialog)
+        self._fit_inline_dialog(dialog, self._INLINE_IMPORT_SIZE)
         return dialog, combo
 
     def _export_to_file(self, *, current_only: bool) -> None:
@@ -1413,20 +1512,22 @@ class ChannelConfigManagerDialog(QDialog):
         )
 
     def _confirm_discard_changes(self) -> bool:
+        dialog = self._build_discard_dialog()
+        return dialog.exec_() == QDialog.Accepted
+
+    def _build_discard_dialog(self) -> QDialog:
         dialog = QDialog(self)
         dialog.setObjectName("channelConfigHtmlDiscardDialog")
         dialog.setWindowTitle("放弃未保存修改？")
         dialog.setModal(True)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(10)
+        root, body_layout = self._inline_scroll_body(dialog)
         title = QLabel("放弃未保存修改？", dialog)
         title.setObjectName("channelConfigHtmlPopoverTitle")
         copy = QLabel("新建、删除、导入和通道编辑都不会写入本机配置。", dialog)
         copy.setObjectName("channelConfigHtmlPopoverCopy")
         copy.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(copy)
+        body_layout.addWidget(title)
+        body_layout.addWidget(copy)
         actions = QHBoxLayout()
         actions.addStretch(1)
         keep = QPushButton("继续编辑", dialog)
@@ -1436,11 +1537,12 @@ class ChannelConfigManagerDialog(QDialog):
         self._control(discard)
         actions.addWidget(keep)
         actions.addWidget(discard)
-        layout.addLayout(actions)
+        root.addLayout(actions)
         keep.clicked.connect(dialog.reject)
         discard.clicked.connect(dialog.accept)
         set_unique_default_button(keep, dialog)
-        return dialog.exec_() == QDialog.Accepted
+        self._fit_inline_dialog(dialog, self._INLINE_DISCARD_SIZE)
+        return dialog
 
     def reject(self) -> None:
         if self.is_dirty() and not self._confirm_discard_changes():
