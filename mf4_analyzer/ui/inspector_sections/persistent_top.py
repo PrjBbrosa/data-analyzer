@@ -21,6 +21,7 @@ from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from .. import hints
 from ..chart_stack.toolbar import DEFAULT_CHART_TICK_DENSITY
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
+from ..widgets.wrapped_hint import WrappedHintFrame
 from ._helpers import (
     _SHORT_FIELD_MAX_WIDTH,
     _LONG_FIELD_MAX_WIDTH,
@@ -312,7 +313,7 @@ class PersistentTop(QWidget):
 
     def _build_xaxis_drop_hint(self):
         """Dismissible tip under 「应用」: drag a channel onto the X band."""
-        frame = QFrame()
+        frame = WrappedHintFrame()
         frame.setObjectName("xaxisDropHint")
         frame.setAttribute(Qt.WA_StyledBackground, True)
         lay = QHBoxLayout(frame)

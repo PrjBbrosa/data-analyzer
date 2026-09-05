@@ -645,6 +645,11 @@ class OverlayAxisManager(_CanvasBackref):
         row = self.channel_data.get(channel_key)
         if row is not None:
             self.channel_data[channel_key] = (row[0], row[1], color, row[3])
+        pair = self._channel_lines.get(channel_key)
+        if pair is not None and len(self._c._subplot_legend_members(pair[0])) > 1:
+            self._c._recheck_subplot_label_placement()
+            self.draw_idle()
+            return
         # Inside-axis labels are matched by DISPLAY name, so resolve the
         # composite key down to its display label for that comparison.
         display_name = self.channel_data.display_label(channel_key, channel_key)

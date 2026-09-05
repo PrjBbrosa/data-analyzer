@@ -7532,3 +7532,36 @@ def test_preset_hover_card_status_agrees_with_the_highlighted_slot(qtbot):
     other = status_values(1)
     assert any('有差异' in text for text in other)
     ctx.preset_bar._hide_hover()
+
+
+def test_xaxis_hint_resists_vertical_compression_and_remeasures(qapp, qtbot):
+    """A short parent allocation must not clip wrapped hint text."""
+    from PyQt5.QtGui import QFont
+
+    old_sheet = qapp.styleSheet()
+    try:
+        _load_production_stylesheet(qapp)
+        inspector = Inspector()
+        qtbot.addWidget(inspector)
+        inspector.show()
+        qapp.processEvents()
+        hint = inspector.top._xaxis_drop_hint
+        label = inspector.top._xaxis_drop_hint_label
+        original = label.text()
+        for text in (original, original + '；选择另一个通道可以再次替换横坐标。', original):
+            label.setText(text)
+            qapp.processEvents()
+            for width in (180, 250, 400, 250):
+                hint.resize(width, 1)
+                hint.layout().activate()
+                assert label.height() >= label.heightForWidth(label.width())
+                assert hint.height() >= hint.layout().totalHeightForWidth(hint.width())
+        font = QFont(label.font())
+        font.setPixelSize(18)
+        label.setFont(font)
+        qapp.processEvents()
+        hint.resize(250, 1)
+        hint.layout().activate()
+        assert label.height() >= label.heightForWidth(label.width())
+    finally:
+        qapp.setStyleSheet(old_sheet)

@@ -405,3 +405,26 @@ def test_optional_customer_sfns_custom_x_skip_if_missing():
     if not matches:
         pytest.skip("customer testdoc/2024_3_17/SFNS_*.wwt missing")
     assert matches[0].is_file()
+
+
+@pytest.mark.parametrize("a,b", [(24.65, 28.3), (28.3, 24.65), (-1.0, 28.3)])
+def test_dual_delta_interpolates_full_physical_legs_before_statistics_clip(qapp, a, b):
+    canvas = _pg_canvas(qapp)
+    up = np.arange(101, dtype=float)
+    down = np.arange(99, -1, -1, dtype=float)
+    x = np.r_[up, down]
+    y = np.r_[3 * up + 1, 2 * down - 10]
+    _plot_custom_x(canvas, [("torque", True, x, y, "#345678", "Nm", "f1")])
+    _header, _html, rows = _emit_dual(canvas, a, b)
+    branches = {branch.direction: branch for branch in rows[0].branches}
+    assert set(branches) == {1, -1}
+    for direction, slope, offset in ((1, 3, 1), (-1, 2, -10)):
+        branch = branches[direction]
+        if min(a, b) < 0:
+            assert branch.delta is None
+        else:
+            assert branch.delta == pytest.approx(slope * (b - a))
+        selected = np.arange(max(0, np.ceil(min(a, b))), np.floor(max(a, b)) + 1)
+        assert branch.min_value == pytest.approx(slope * selected.min() + offset)
+        assert branch.max_value == pytest.approx(slope * selected.max() + offset)
+    canvas.close()

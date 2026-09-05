@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time as _time
+from dataclasses import replace
 
 import numpy as np
 from PyQt5 import sip
@@ -1064,15 +1065,24 @@ class CursorController(_CanvasBackref):
                 x_unit=x_unit,
                 branches=(),
             ), []
-        result = self._custom_x_paths_for_channel(
-            channel_key, tf_array, sf_array, x_range=(xlo, xhi),
-        )
+        full_paths = self._custom_x_paths_for_channel(channel_key, tf_array, sf_array)
+        result = clip_paths(full_paths, (xlo, xhi))
         status = self._custom_x_status(result.reason)
         branches = ()
         stats = None
         delta_by_dir = {}
+        # Statistics use only in-range samples. Endpoint interpolation needs
+        # the original physical leg, including neighbors outside A/B. Match
+        # acquisition indices, not direction alone (cycles can repeat).
+        sampling_legs = tuple(
+            full for selected in result.accepted
+            for full in full_paths.contributions
+            if full.direction == selected.direction
+            and full.indices[0] <= selected.indices[0]
+            and full.indices[-1] >= selected.indices[-1]
+        )
         for direction, delta in sample_custom_x_dual_delta_from_paths(
-            result, self._ax, self._bx,
+            replace(result, accepted=sampling_legs), self._ax, self._bx,
         ):
             delta_by_dir[int(direction)] = delta
         if result.unique_pair:

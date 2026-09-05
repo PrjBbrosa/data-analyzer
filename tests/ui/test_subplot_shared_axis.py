@@ -4,6 +4,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import QCoreApplication
 
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
+from mf4_analyzer.ui.pg_canvas._shared import _view_state_channel_key
 
 
 def _pg_canvas(qapp):
@@ -178,3 +179,54 @@ class TestSubplotGroupEdges:
         first_ax = canvas.axes_list[0]._ax("bottom")
         assert last_ax is not None and last_ax.style["showValues"] is True
         assert first_ax is not None and first_ax.style["showValues"] is False
+
+
+def test_only_shared_slot_keeps_both_curves_across_rebuilds(qapp):
+    canvas = _pg_canvas(qapp)
+    rows = [_row("a", "#ff0000", "Nm", "f1", gid=1),
+            _row("b", "#00aa00", "Nm", "f1", gid=1)]
+    for selection in (rows, rows + [_row("c", "#0000ff", "rpm", "f2")], rows):
+        canvas.plot_channels(selection, mode="subplot")
+        QCoreApplication.processEvents()
+        handle = canvas.axes_list[0]
+        assert _curve_count(handle.view_box) == 2
+        assert canvas._channel_lines[_view_state_channel_key("f1", "a")][0] is handle
+        assert canvas._channel_lines[_view_state_channel_key("f1", "b")][0] is handle
+        for name in ("a", "b"):
+            pdi = canvas._channel_lines[_view_state_channel_key("f1", name)][1].plot_data_item
+            assert pdi.isVisible()
+            assert len(pdi.getData()[0]) == 200
+    canvas.close()
+
+
+def test_shared_legend_has_one_colored_line_per_curve(qapp):
+    canvas = _pg_canvas(qapp)
+    rows = [_row("[source] a", "#ff0000", "Nm", "f1", gid=1),
+            _row("[source] b", "#00aa00", "Nm", "f1", gid=1),
+            _row("c", "#0000ff", "rpm", "f2")]
+    canvas.plot_channels(rows, mode="subplot")
+    QCoreApplication.processEvents()
+    item = canvas._inside_label_items[0]
+    assert item.toPlainText().splitlines() == ["● [source] a (Nm)", "● [source] b (Nm)"]
+    document = item.textItem.document()
+    block = document.begin()
+    for color in ("#ff0000", "#00aa00"):
+        assert block.isValid()
+        fragment = block.begin().fragment()
+        assert fragment.charFormat().foreground().color().name() == color
+        block = block.next()
+    canvas.close()
+
+
+def test_shared_legend_recolor_preserves_other_member_color(qapp):
+    canvas = _pg_canvas(qapp)
+    canvas.plot_channels([_row("a", "#ff0000", "Nm", "f1", gid=1),
+                          _row("b", "#00aa00", "Nm", "f1", gid=1)], mode="subplot")
+    canvas._overlay_axes._sync_pg_channel_color(_view_state_channel_key("f1", "b"), "#663399")
+    document = canvas._inside_label_items[0].textItem.document()
+    block = document.begin()
+    for color in ("#ff0000", "#663399"):
+        assert block.begin().fragment().charFormat().foreground().color().name() == color
+        block = block.next()
+    assert len(canvas._inside_label_items) == 1
+    canvas.close()

@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.2.1. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.2.2. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -106,6 +106,8 @@ in narrow windows with safer close behavior, and aligns standard desktop
 shortcuts, layered Escape handling, and unsaved-project prompts. WinWert
 windows now open as ordinary Time Views without creating a Board, while
 per-source custom-X ownership and restored ranges remain explicit.
+8.2.2 repairs custom-X branch cursor deltas, shared-axis member rendering and
+per-curve legend colors, and stabilizes bottom-axis space and mode-rebuild presentation.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

@@ -648,7 +648,7 @@ _HINTS = (
     # tip. Both apply to overlay AND subplot (shared Y = compare amplitude).
     Hint(
         id="coaxis.merge",
-        text="多选通道右键可合并为共轴比幅值",
+        text="共轴图例逐行显示，文字跟随曲线颜色",
         surface="discovery",
         modes=frozenset({"time"}),
         plot_modes=frozenset({"overlay", "subplot"}),

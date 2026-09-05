@@ -57,6 +57,7 @@ _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 from collections import OrderedDict
 from contextlib import contextmanager
+from html import escape
 import logging
 from math import ceil, isfinite
 from time import monotonic
@@ -944,7 +945,10 @@ class TimeDomainCanvasPG(QWidget):
                 len(subplot_layout_slots) > 1
                 or (
                     len(subplot_layout_slots) == 1
-                    and subplot_layout_slots[0].get("placeholder")
+                    and (
+                        subplot_layout_slots[0].get("placeholder")
+                        or len(subplot_layout_slots[0]["members"]) > 1
+                    )
                 )
             )
         )
@@ -4393,6 +4397,19 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 pass
 
+    def _subplot_legend_members(self, handle):
+        """Visible primary members, preserving composite identity and color."""
+        members = []
+        for key, name, (owner, line) in self._channel_lines.composite_items():
+            if owner is not handle or key in self._companion_names:
+                continue
+            if not line.plot_data_item.isVisible():
+                continue
+            row = self.channel_data.get(key)
+            if row is not None:
+                members.append((name, row[2], row[3]))
+        return members
+
     def _recheck_subplot_label_placement(self):
         """Place subplot Y labels either OUTSIDE (default AxisItem
         label) or INSIDE (a TextItem at the top-left of each ViewBox).
@@ -4406,8 +4423,10 @@ class TimeDomainCanvasPG(QWidget):
 
         need_inside = self._subplot_ylabels_need_inside_labels()
         for handle, name, color, unit in self._subplot_label_specs:
+            members = self._subplot_legend_members(handle)
+            shared = len(members) > 1
             ax_item = handle._ax("left") if hasattr(handle, "_ax") else None
-            if need_inside:
+            if need_inside or shared:
                 # Hide the outer label by clearing it; install a TextItem
                 # at the top-left of the ViewBox.
                 if ax_item is not None:
@@ -4429,6 +4448,18 @@ class TimeDomainCanvasPG(QWidget):
                     border=pg.mkPen(color=color, width=0.8),
                 )
                 _apply_pg_text_item_font(text_item)
+                if shared:
+                    text_item.setHtml("".join(
+                        '<p style="margin:0; color:{}; white-space:pre">● {}{}</p>'.format(
+                            pg.mkColor(member_color).name(), escape(str(member_name)),
+                            escape(f" ({member_unit})") if member_unit else "",
+                        )
+                        for member_name, member_color, member_unit in members
+                    ))
+                    text_item.setToolTip("\n".join(
+                        f"{member_name} ({member_unit})" if member_unit else str(member_name)
+                        for member_name, _member_color, member_unit in members
+                    ))
                 vb = handle.view_box
                 if vb is not None:
                     try:

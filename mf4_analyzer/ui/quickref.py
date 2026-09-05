@@ -323,7 +323,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("设为叠加图左轴", gesture="右键通道"),
             QuickRow(
                 "合并为共轴比幅值",
-                sub="Ctrl+单击不连续多选；Shift+单击连续范围",
+                sub="Ctrl+单击不连续多选；Shift+单击连续范围。分屏共轴图例每条曲线一行，文字跟随曲线颜色。",
                 gesture="多选后右键",
             ),
             QuickRow(
@@ -387,7 +387,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "游标显示设置",
-                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；− 把读数收成 mini。读数面板本身不弹出 tooltip。全局同步所有分屏。",
+                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；指定通道横坐标时，X↑/X↓ 各算 Y(B)−Y(A)，端点超出该分支则显示 —。− 把读数收成 mini。读数面板本身不弹出 tooltip。全局同步所有分屏。",
             ),
             QuickRow(
                 "频谱 / 频响游标",

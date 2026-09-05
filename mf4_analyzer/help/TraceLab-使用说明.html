@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v8.2.1 · 使用说明</title>
+<title>TraceLab v8.2.2 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -255,11 +255,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v8.2.1",
-    "versionLabel": "使用说明 · V8.2.1",
+    "version": "v8.2.2",
+    "versionLabel": "使用说明 · V8.2.2",
     "subtitle": "从导入数据到分析与导出，一份可直接照做的操作指南",
     "docVersion": "3.0",
-    "updated": "2026-09-04",
+    "updated": "2026-09-05",
     "credit": "GC02689"
   },
   "slides": [
@@ -548,18 +548,24 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.2.1 · 使用说明", "density": "compact",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.2.2 · 使用说明", "density": "compact",
       "blocks": [
         { "type": "flow", "height": 550, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.2.1" }
+        { "type": "lead", "center": true, "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.2.2" }
       ] }
   ],
 
   "changelog": [
+    { "v": "v8.2.2", "date": "2026-09-05", "items": [
+      "修复指定通道横坐标下的<b>双游标差值</b>：X↑ / X↓ 分别计算 Y(B)−Y(A)，游标位于采样点之间时可正常插值。",
+      "修复仅两条曲线<b>共轴</b>时漏绘成员的问题；图例每条曲线一行，文字随曲线颜色同步更新。",
+      "修复分屏取消到单通道后的<b>横轴空间</b>恢复，并避免模式重建时展示空白中间帧。",
+      "横坐标拖放提示按当前换行内容保留足够高度，减少布局挤压时的文字裁切。"
+    ] },
     { "v": "v8.2.1", "date": "2026-09-04", "items": [
       "新增<b>游标显示设置</b>：可独立控制极值点，以及双游标的 Min / Max / Avg / 差值；紧凑结果会把未展开的细节保留在提示中。",
       "<b>View 色标关闭</b>遵循防误触规则；<b>⋯ 常驻</b>入口可管理全部 View，窗口窄时显示未显示数量。",

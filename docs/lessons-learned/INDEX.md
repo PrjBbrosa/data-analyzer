@@ -228,6 +228,8 @@ lesson by default.
 | [ViewTabBar Managed Overflow Has No Native Scroll Controls](viewtabbar-managed-overflow-no-native-scroll.md) | Changing ViewTabBar width budgeting, compact labels, or overflow | See lesson |
 | [Parented Qt Popup Move Needs Native Window](parented-qt-popup-move-needs-native-window.md) | Positioning a parented `Qt.Popup` with screen coordinates, especially | See lesson |
 | [Analysis Time Preparation Preserves Original Source](analysis-time-preparation-preserves-original-source.md) | Changing analysis time reconstruction, sampling settings, original Plot timing, or effective-facts provenance. | See lesson |
+| [Cursor Endpoints Need Unclipped Physical Legs](cursor-endpoints-need-unclipped-physical-legs.md) | Changing Custom-X dual-cursor statistics or endpoint differences. | See lesson |
+| [Wrapped Hint Minimum Follows Current Width](wrapped-hint-minimum-follows-current-width.md) | A wrapped hint inside a nested form is intermittently compressed. | See lesson |
 | [Subplot Bottom Axis Role Must Release Height](subplot-bottom-axis-role-must-release-height.md) | Changing TimeDomain subplot bottom-axis role, selection-delta reuse, | See lesson |
 | [Progress Repaint After Clear Paints An Empty Viewport](progress-repaint-after-clear-paints-empty-viewport.md) | Changing TimeDomain full rebuilds, `canvas.clear()`, `_update_compute_progress(process_events=True)`, or 分屏/叠加 mode switching through MainWindow. | See lesson |
 

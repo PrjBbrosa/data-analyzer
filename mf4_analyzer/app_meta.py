@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "TraceLab"
-APP_VERSION = "v8.2.1"
+APP_VERSION = "v8.2.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION}"
 APP_CREDIT = "GC02689"
 
