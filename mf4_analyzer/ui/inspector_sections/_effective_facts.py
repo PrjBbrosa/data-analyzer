@@ -37,12 +37,52 @@ def _fact_number(facts, name, spec):
         return None
 
 
+def auto_nfft_status_warnings(facts) -> list[str]:
+    """FFT Auto-NFFT status lines. Empty for FRF/Order facts without status."""
+    status = _fact(facts, "nfft_status")
+    if not status or status == "normal":
+        return []
+    codes = tuple(_fact(facts, "nfft_reason_codes") or ())
+    frames = _fact(facts, "frames")
+    lines: list[str] = []
+    if "limited_statistics" in codes:
+        try:
+            n_frames = int(frames) if frames is not None else None
+        except (TypeError, ValueError):
+            n_frames = None
+        if n_frames is not None:
+            lines.append(f"仅 {n_frames} 段，平均/峰值统计有限")
+        else:
+            lines.append("平均/峰值统计段数有限")
+    if "limited_time_frames" in codes:
+        try:
+            n_frames = int(frames) if frames is not None else None
+        except (TypeError, ValueError):
+            n_frames = None
+        if n_frames is not None:
+            lines.append(f"时间帧较少（{n_frames}），重叠帧不是独立观测")
+        else:
+            lines.append("时间帧较少；重叠帧不是独立观测")
+    if "fft_time_frame_guard" in codes and "limited_time_frames" not in codes:
+        lines.append("为保留最少时间帧已减小 NFFT")
+    if "low_fs_duration_guard" in codes:
+        lines.append("低采样率适配：未为凑 4096 点拉长窗口")
+    if status == "blocked" or "insufficient_samples" in codes:
+        if "可用样本不足" not in "".join(lines):
+            lines.append("可用样本不足，无法计算分段 FFT")
+    if "insufficient_time_frames" in codes:
+        lines.append("最短窗口仍不足 4 个时间帧，无法计算时频图")
+    return lines
+
+
 def shortened_nfft_warning(facts) -> str | None:
     """Warning line when the run used a shorter NFFT than requested."""
     if not _fact(facts, "shortened"):
         return None
     nfft_req = _fact(facts, "nfft_requested")
-    nfft = _fact(facts, "nfft")
+    nfft = _fact(facts, "nfft_effective")
+    if nfft is None:
+        nfft = _fact(facts, "nfft")
     fs = _fact(facts, "fs")
     try:
         requested = int(nfft_req) if nfft_req is not None else None
@@ -82,7 +122,9 @@ def format_effective_facts(facts) -> list[str]:
     if fs_text is not None:
         rows.append(("实际 Fs", f"{fs_text} Hz"))
 
-    nfft = _fact(facts, "nfft")
+    nfft = _fact(facts, "nfft_effective")
+    if nfft is None:
+        nfft = _fact(facts, "nfft")
     nfft_req = _fact(facts, "nfft_requested")
     # FRF has ``nfft`` but not ``nfft_requested``; keep its card unchanged.
     if nfft is not None and nfft_req is not None:
@@ -92,12 +134,19 @@ def format_effective_facts(facts) -> list[str]:
         except (TypeError, ValueError):
             actual = requested = None
         if actual is not None:
-            if requested is not None and requested != actual:
+            auto = str(_fact(facts, "nfft_mode") or "") == "auto"
+            if auto and requested is not None and requested != actual:
+                rows.append(("NFFT（请求 → 实际）", f"自动 {requested} → 实际 {actual}"))
+            elif auto:
+                rows.append(("NFFT（请求 → 实际）", f"自动 {actual}"))
+            elif requested is not None and requested != actual:
                 rows.append(("NFFT（请求 → 实际）", f"{requested} → {actual}"))
             else:
                 rows.append(("NFFT（请求 → 实际）", f"{actual}"))
 
-    df_text = _fact_number(facts, "df", "g")
+    df_text = _fact_number(facts, "df_hz", "g")
+    if df_text is None:
+        df_text = _fact_number(facts, "df", "g")
     if df_text is not None:
         # FRF tests pin "频率分辨率 df"; FFT / time cards use Δf.
         if _fact(facts, "segments") is not None:
@@ -272,6 +321,50 @@ def attach_effective_facts_card(
             widget.style().unpolish(widget)
             widget.style().polish(widget)
 
+    def set_effective_facts_groups(groups, warnings=()) -> None:
+        """Publish per-source FFT facts. ``groups`` is ``(header, facts, extra)``."""
+        if not groups:
+            clear_effective_facts()
+            return
+        rows: list[str] = []
+        merged = list(normalize_effective_warnings(warnings))
+        shortened = False
+        multi = len(groups) > 1
+        any_content = False
+        for header, facts, extra in groups:
+            extra_lines = [str(line) for line in (extra or ()) if str(line).strip()]
+            show_header = bool(header) and (multi or facts is None)
+            if show_header:
+                if rows:
+                    rows.append("")
+                rows.append(str(header))
+                any_content = True
+            if facts is not None:
+                body = format_effective_facts(facts)
+                rows.extend(body)
+                any_content = any_content or bool(body)
+                extra_short = shortened_nfft_warning(facts)
+                if extra_short and extra_short not in merged:
+                    merged.append(extra_short)
+                for line in auto_nfft_status_warnings(facts):
+                    if line not in merged:
+                        merged.append(line)
+                if _fact(facts, "shortened"):
+                    shortened = True
+            for line in extra_lines:
+                rows.append(line)
+                any_content = True
+        if not any_content and not merged:
+            clear_effective_facts()
+            return
+        host._effective_facts_rows = rows
+        host._effective_warnings = merged
+        host._effective_facts_stale = False
+        host._facts_shortened = bool(shortened)
+        _refresh_effective_facts()
+        if callable(summary_refresh):
+            summary_refresh()
+
     def set_effective_facts(facts, warnings=()) -> None:
         if facts is None:
             clear_effective_facts()
@@ -281,6 +374,9 @@ def attach_effective_facts_card(
         extra = shortened_nfft_warning(facts)
         if extra and extra not in merged:
             merged.append(extra)
+        for line in auto_nfft_status_warnings(facts):
+            if line not in merged:
+                merged.append(line)
         host._effective_warnings = merged
         host._effective_facts_stale = False
         host._facts_shortened = bool(_fact(facts, "shortened"))
@@ -315,6 +411,7 @@ def attach_effective_facts_card(
         return bool(host._effective_facts_stale)
 
     host.set_effective_facts = set_effective_facts
+    host.set_effective_facts_groups = set_effective_facts_groups
     host.clear_effective_facts = clear_effective_facts
     host.mark_effective_facts_stale = mark_effective_facts_stale
     host.effective_facts_text = effective_facts_text

@@ -200,6 +200,22 @@ def test_schema1_view_without_reference_does_not_inject_hardcoded_value():
     assert v.params["nfft"] == 2048
 
 
+def test_fft_auto_nfft_intent_round_trips_without_freezing_effective():
+    state = AnalysisViewState(name="FFT Auto", tab_color="#2d7ff9")
+    state.params = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "avg_mode": "线性平均",
+        "avg_overlap": 50,
+    }
+    restored = AnalysisViewState.from_dict(state.to_dict())
+    assert restored.params["nfft"] is None
+    assert restored.params["nfft_mode"] == "auto"
+    assert restored.params["t_win_s"] == 1.5
+    assert "nfft_effective" not in restored.params or restored.params["nfft_effective"] is None
+
+
 def test_collect_dropped_analysis_refs_records_missing_pane_roles():
     av = {
         "fft": {

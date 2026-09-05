@@ -52,6 +52,7 @@ from .batch_manifest import (
     ManifestRecipeMismatch,
     RetryScope,
     artifact_facts,
+    auto_nfft_policy_is_current,
     derive_summary,
     find_resumable_entry,
     find_resumable_group,
@@ -204,6 +205,36 @@ def _slice_fact_rows(items) -> list[tuple[str, str]]:
             continue
         rows.append((_SLICE_FACT_LABELS.get(key, key), value))
     return rows
+
+
+def _resume_if_auto_nfft_current(entry, *, requested_params, method):
+    """D11: reject stale Auto-NFFT artifacts at every resume consumer."""
+    if entry is None:
+        return None
+    if not auto_nfft_policy_is_current(
+        entry, requested_params=requested_params, method=method,
+    ):
+        return None
+    return entry
+
+
+def _merge_canonical_analysis_facts(effective_params, payload):
+    """Merge producer facts while keeping requested Auto NFFT separate."""
+    if not payload:
+        return
+    if hasattr(payload, 'to_canonical_dict'):
+        payload = payload.to_canonical_dict()
+    payload = dict(payload)
+    if payload.get('time_axis') is None:
+        payload.pop('time_axis', None)
+    recipe_nfft = effective_params.get('nfft')
+    recipe_mode = effective_params.get('nfft_mode')
+    effective_params.update(payload)
+    effective_params['nfft'] = recipe_nfft
+    if recipe_mode is not None:
+        effective_params['nfft_mode'] = recipe_mode
+    if payload.get('nfft_effective') is not None:
+        effective_params['nfft_effective'] = payload['nfft_effective']
 
 
 def _default_loader(path):
@@ -1823,6 +1854,8 @@ class BatchRunner:
                         effective_plan.effective.get('image', '')
                     ),
                     cancel_token=cancel_token,
+                    requested_params=requested_params,
+                    method=preset.method,
                 )
                 for group in render_groups
             }
@@ -1831,6 +1864,7 @@ class BatchRunner:
                 for member in member_for_task.values()
                 for entry in [self._resumable_group_data_entry(
                     recovery_manifest, member, cancel_token=cancel_token,
+                    requested_params=requested_params, method=preset.method,
                 )]
                 if entry is not None
             }
@@ -2813,15 +2847,21 @@ class BatchRunner:
                 source_path,
                 source_identity=slot['identity'].source_identity,
             )
-            slot['resumed'] = find_resumable_entry(
-                resume_data,
-                recipe_fingerprint=recipe_id,
-                task_id=slot['identity'].task_id,
-                source_id=slot['source_key'],
-                source_identity=slot['identity'].source_identity,
-                source_stat=source_stat,
-                required_artifacts=item_required_artifacts,
-                cancel_token=cancel_token,
+            slot['resumed'] = _resume_if_auto_nfft_current(
+                find_resumable_entry(
+                    resume_data,
+                    recipe_fingerprint=recipe_id,
+                    task_id=slot['identity'].task_id,
+                    source_id=slot['source_key'],
+                    source_identity=slot['identity'].source_identity,
+                    source_stat=source_stat,
+                    required_artifacts=item_required_artifacts,
+                    cancel_token=cancel_token,
+                    requested_params=requested_params,
+                    method=preset.method,
+                ),
+                requested_params=requested_params,
+                method=preset.method,
             )
 
         if resume_data is not None and 'image' in effective_plan.effective:
@@ -2853,6 +2893,8 @@ class BatchRunner:
                     members=tuple(members),
                     image_format=image_extension,
                     cancel_token=cancel_token,
+                    requested_params=requested_params,
+                    method=preset.method,
                 )
 
         # Stage 3: reserve the complete non-resumed, preflighted task universe
@@ -4102,6 +4144,8 @@ class BatchRunner:
         member: RenderTask,
         *,
         cancel_token=None,
+        requested_params: Mapping[str, Any] | None = None,
+        method=None,
     ) -> Mapping[str, Any] | None:
         """Return exact task-data provenance for one grouped member."""
 
@@ -4129,15 +4173,21 @@ class BatchRunner:
             data_format = str(data.get('format', '')).strip().lower().lstrip('.')
             if not data_format:
                 continue
-            matched = find_resumable_entry(
-                manifest,
-                recipe_fingerprint=str(manifest.get('recipe_fingerprint') or ''),
-                task_id=member.identity.task_id,
-                source_id=member.source_key,
-                source_identity=member.identity.source_identity,
-                source_stat=current_source,
-                required_artifacts={'data': data_format},
-                cancel_token=cancel_token,
+            matched = _resume_if_auto_nfft_current(
+                find_resumable_entry(
+                    manifest,
+                    recipe_fingerprint=str(manifest.get('recipe_fingerprint') or ''),
+                    task_id=member.identity.task_id,
+                    source_id=member.source_key,
+                    source_identity=member.identity.source_identity,
+                    source_stat=current_source,
+                    required_artifacts={'data': data_format},
+                    cancel_token=cancel_token,
+                    requested_params=requested_params,
+                    method=method,
+                ),
+                requested_params=requested_params,
+                method=method,
             )
             if matched is candidate:
                 return candidate
@@ -4151,6 +4201,8 @@ class BatchRunner:
         retry_scope: RetryScope | None = None,
         image_format: str = 'png',
         cancel_token=None,
+        requested_params: Mapping[str, Any] | None = None,
+        method=None,
     ) -> GroupRecoveryDecision:
         """Plan grouped data, payload, and image work before source loading."""
 
@@ -4170,6 +4222,7 @@ class BatchRunner:
             for member in group.members
             if self._resumable_group_data_entry(
                 resume_manifest, member, cancel_token=cancel_token,
+                requested_params=requested_params, method=method,
             ) is not None
         )
         data_write_ids = all_task_ids - reusable_data_ids
@@ -4193,6 +4246,8 @@ class BatchRunner:
                 members=members,
                 image_format=canonical_image_format,
                 cancel_token=cancel_token,
+                requested_params=requested_params,
+                method=method,
             )
 
         image_write_required = reusable_group is None
@@ -5484,11 +5539,7 @@ class BatchRunner:
                 fft_df = self._compute_fft_dataframe(sig, fs, compute_params)
                 facts_obj = fft_df.attrs.get('effective_facts') if hasattr(fft_df, 'attrs') else None
                 if facts_obj is not None:
-                    payload = asdict(facts_obj)
-                    if payload.get('time_axis') is None:
-                        payload.pop('time_axis', None)
-                    effective_params.update(payload)
-                    effective_params['nfft_effective'] = facts_obj.nfft
+                    _merge_canonical_analysis_facts(effective_params, facts_obj)
                 image_payload = ('fft', fft_df)
             elif method == 'fft_time':
                 effective_nfft = self._resolve_effective_nfft(
@@ -5518,9 +5569,9 @@ class BatchRunner:
                 if spectro_meta.get('time_axis'):
                     effective_params['time_axis'] = dict(spectro_meta['time_axis'])
                 if spectro_meta.get('effective_facts'):
-                    for key, value in spectro_meta['effective_facts'].items():
-                        if value is not None:
-                            effective_params[key] = value
+                    _merge_canonical_analysis_facts(
+                        effective_params, spectro_meta['effective_facts'],
+                    )
                     if spectro_meta.get('time_axis'):
                         effective_params['time_axis'] = dict(spectro_meta['time_axis'])
                 image_payload = ('fft_time', spectro)
@@ -6141,15 +6192,21 @@ class BatchRunner:
                 source_path,
                 source_identity=identity.source_identity,
             )
-            matched = find_resumable_entry(
-                manifest,
-                recipe_fingerprint=recipe_id,
-                task_id=identity.task_id,
-                source_id=source_key,
-                source_identity=identity.source_identity,
-                source_stat=current_source,
-                required_artifacts=self._required_artifacts(preset.outputs),
-                cancel_token=cancel_token,
+            matched = _resume_if_auto_nfft_current(
+                find_resumable_entry(
+                    manifest,
+                    recipe_fingerprint=recipe_id,
+                    task_id=identity.task_id,
+                    source_id=source_key,
+                    source_identity=identity.source_identity,
+                    source_stat=current_source,
+                    required_artifacts=self._required_artifacts(preset.outputs),
+                    cancel_token=cancel_token,
+                    requested_params=requested_params,
+                    method=preset.method,
+                ),
+                requested_params=requested_params,
+                method=preset.method,
             )
             if matched is None:
                 continue

@@ -16,11 +16,12 @@ def fft_time_compute_cache_params(params: Mapping, time_range) -> dict:
     nfft = params.get("nfft_effective", params.get("nfft"))
     return {
         "fs": params.get("fs"),
-        "nfft": int(nfft),
+        "nfft": None if nfft is None else int(nfft),
         "window": params.get("window"),
         "overlap": params.get("overlap"),
         "remove_mean": params.get("remove_mean"),
         "weighting": str(params.get("weighting", "None")),
+        "nfft_facts_signature": params.get("nfft_facts_signature"),
         "time_range": time_range,
     }
 

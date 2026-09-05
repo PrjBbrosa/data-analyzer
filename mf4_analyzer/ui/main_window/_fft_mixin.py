@@ -8,16 +8,56 @@ from PyQt5.QtCore import QEventLoop
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from ... import db_reference
-from ...signal import FFTAnalyzer, resolve_nfft, energy_band_fmax
+from ...signal import (
+    AutoNfftBlockedError,
+    FFTAnalyzer,
+    energy_band_fmax,
+    nfft_facts_signature,
+    nfft_facts_signature_from_decision,
+    raise_if_auto_nfft_blocked,
+    requested_auto_nfft,
+    resolve_auto_nfft,
+)
 from ...signal.analysis_defaults import (
+    AUTO_NFFT_POLICY_VERSION,
     DEFAULT_FFT_T_WIN_S,
     normalize_overlap_fraction,
 )
-from ...signal.fft import build_fft_effective_facts, unconstrained_window_nfft
+from ...signal.fft import build_fft_effective_facts
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from .ultraview_coordinator import notify_ultraview_plot
+
+_SEGMENTED_AVG_MODES = frozenset({'线性平均', '峰值保持'})
+
+
+def _fft_is_auto_nfft(fft_params):
+    nfft = fft_params.get('nfft')
+    return (
+        nfft is None
+        or fft_params.get('nfft_mode') == 'auto'
+        or str(nfft) == '自动'
+    )
+
+
+def _auto_nfft_skip_reason(error):
+    decision = getattr(error, 'decision', None)
+    codes = tuple(getattr(decision, 'reasons', ()) or ())
+    if 'insufficient_samples' in codes:
+        return "样本不足无法自动确定 NFFT"
+    if 'insufficient_time_frames' in codes:
+        return "时间帧不足无法自动确定 NFFT"
+    return "Auto-NFFT 不可计算"
+
+
+def _blocked_auto_nfft_lines(decision):
+    codes = tuple(getattr(decision, 'reasons', ()) or ())
+    if 'insufficient_samples' in codes:
+        return ("不可计算：可用样本不足 64",)
+    if codes:
+        return (f"不可计算：{', '.join(codes)}",)
+    return ("不可计算：Auto-NFFT 无法给出分段长度",)
 
 
 class _FftComputeResult(tuple):
@@ -71,9 +111,9 @@ class FFTMixin:
     def _resolve_fft_effective_params(fft_params, n_samples, fs):
         """Return FFT spectrum params with effective NFFT when auto is resolvable.
 
-        Averaged and peak-hold spectrum modes need a concrete segment length.
-        Single-frame auto keeps the legacy whole-segment ``nfft=None``
-        semantics, letting ``FFTAnalyzer.compute_fft`` use the signal length.
+        Averaged and peak-hold Auto consume ``resolve_auto_nfft``; they never
+        copy the 4096 formula and never fall back to legacy ``resolve_nfft``.
+        Single-frame auto keeps whole-selection ``nfft=None``.
         """
         out = dict(fft_params)
         # fs is a real compute input (FFTAnalyzer.compute_fft(sig, fs, ...)):
@@ -83,35 +123,58 @@ class FFTMixin:
         # single-frame mode nfft stays None, so without fs in the key a Fs
         # change (e.g. after 重建时间轴) would hit the stale OLD-fs result.
         out['fs'] = float(fs)
-        nfft = out.get('nfft')
-        auto = (
-            nfft is None
-            or out.get('nfft_mode') == 'auto'
-            or str(nfft) == '自动'
-        )
+        n_samples = int(n_samples)
+        auto = _fft_is_auto_nfft(out)
         avg_mode = out.get('avg_mode', '单帧')
+        out['nfft_decision'] = None
         if auto:
             out['nfft_mode'] = 'auto'
             out['t_win_s'] = float(out.get('t_win_s', DEFAULT_FFT_T_WIN_S))
-            if avg_mode in {'线性平均', '峰值保持'}:
+            if avg_mode in _SEGMENTED_AVG_MODES:
                 overlap = normalize_overlap_fraction(
                     out.get('avg_overlap', 50), default=50)
-                effective = resolve_nfft(
+                decision = resolve_auto_nfft(
                     fs,
                     n_samples,
                     out['t_win_s'],
                     overlap,
+                    purpose='fft_segmented',
                 )
-                out['nfft'] = int(effective)
-                out['nfft_effective'] = int(effective)
+                out['nfft_decision'] = decision
+                out['nfft_status'] = decision.status
+                out['nfft_facts_signature'] = nfft_facts_signature_from_decision(
+                    decision,
+                    t_win_s=out['t_win_s'],
+                    policy_version=AUTO_NFFT_POLICY_VERSION,
+                )
+                if decision.status == 'blocked' or decision.effective_nfft is None:
+                    out['nfft'] = None
+                    out['nfft_effective'] = None
+                else:
+                    out['nfft'] = int(decision.effective_nfft)
+                    out['nfft_effective'] = int(decision.effective_nfft)
             else:
                 out['nfft'] = None
                 out['nfft_effective'] = None
+                out['nfft_status'] = None
+                out['nfft_facts_signature'] = nfft_facts_signature(
+                    nfft_mode='auto',
+                    requested_nfft=n_samples,
+                    effective_nfft=n_samples,
+                    n_samples=n_samples,
+                )
         else:
-            effective = int(nfft)
+            effective = int(out.get('nfft'))
             out['nfft'] = effective
             out['nfft_effective'] = effective
             out['nfft_mode'] = 'fixed'
+            out['nfft_status'] = None
+            out['nfft_facts_signature'] = nfft_facts_signature(
+                nfft_mode='fixed',
+                requested_nfft=effective,
+                effective_nfft=effective,
+                n_samples=n_samples,
+            )
         return out
 
     @staticmethod
@@ -126,6 +189,9 @@ class FFTMixin:
             'avg_mode': fft_params.get('avg_mode', '单帧'),
             'avg_overlap': fft_params.get('avg_overlap', 50),
             'weighting': str(fft_params.get('weighting', 'None')),
+            # D8: same effective NFFT with a different t_win_s / Auto vs Fixed
+            # must miss. Display-only knobs stay out of this dict.
+            'nfft_facts_signature': fft_params.get('nfft_facts_signature'),
         }
 
     @staticmethod
@@ -154,6 +220,43 @@ class FFTMixin:
             # sample-rate change on an unavailable source goes undetected).
             if fs is not None:
                 out['fs'] = float(fs)
+            auto = _fft_is_auto_nfft(out)
+            avg_mode = out.get('avg_mode', '单帧')
+            out['nfft_decision'] = None
+            if auto:
+                out['nfft_mode'] = 'auto'
+                out['t_win_s'] = float(out.get('t_win_s', DEFAULT_FFT_T_WIN_S))
+                out['nfft'] = None
+                out['nfft_effective'] = None
+                requested = None
+                if avg_mode in _SEGMENTED_AVG_MODES and fs is not None:
+                    try:
+                        requested = requested_auto_nfft(
+                            float(fs), out['t_win_s'], purpose='fft_segmented',
+                        )
+                    except ValueError:
+                        requested = None
+                    out['nfft_facts_signature'] = nfft_facts_signature(
+                        nfft_mode='auto',
+                        policy_version=AUTO_NFFT_POLICY_VERSION,
+                        t_win_s=out['t_win_s'],
+                        requested_nfft=requested,
+                    )
+                else:
+                    out['nfft_facts_signature'] = nfft_facts_signature(
+                        nfft_mode='auto',
+                    )
+            else:
+                try:
+                    effective = int(out.get('nfft'))
+                except (TypeError, ValueError):
+                    effective = None
+                out['nfft_mode'] = 'fixed'
+                out['nfft_facts_signature'] = nfft_facts_signature(
+                    nfft_mode='fixed',
+                    requested_nfft=effective,
+                    effective_nfft=effective,
+                )
             return out
         return self._resolve_fft_effective_params(fft_params, len(sig), fs)
 
@@ -166,11 +269,26 @@ class FFTMixin:
         fft_params = self._resolve_fft_effective_params(
             fft_params, len(sig), fs)
         win = fft_params['window']
-        nfft = fft_params.get('nfft_effective', fft_params.get('nfft'))
         avg_mode = fft_params.get('avg_mode', '单帧')
         avg_overlap = normalize_overlap_fraction(
             fft_params.get('avg_overlap', 50), default=50)
         weighting = str(fft_params.get('weighting', 'None'))
+        auto = fft_params.get('nfft_mode') == 'auto'
+        decision = fft_params.get('nfft_decision')
+        decision_for_facts = None
+        if auto and avg_mode in _SEGMENTED_AVG_MODES:
+            if decision is None:
+                raise ValueError("Auto-NFFT decision missing for segmented FFT")
+            raise_if_auto_nfft_blocked(decision)
+            nfft = int(decision.effective_nfft)
+            nfft_requested = int(decision.requested_nfft)
+            decision_for_facts = decision
+        else:
+            nfft = fft_params.get('nfft_effective', fft_params.get('nfft'))
+            if avg_mode == '单帧':
+                nfft_requested = len(sig) if auto else int(nfft)
+            else:
+                nfft_requested = int(nfft)
         if avg_mode == '线性平均':
             freq, amp, psd = self._call_fft_analyzer(
                 FFTAnalyzer.compute_averaged_fft,
@@ -189,17 +307,6 @@ class FFTMixin:
             _, psd = self._call_fft_analyzer(
                 FFTAnalyzer.compute_psd, sig, fs, win, nfft,
                 weighting=weighting)
-        auto = fft_params.get('nfft_mode') == 'auto' or nfft is None
-        if avg_mode == '单帧':
-            nfft_requested = len(sig) if auto else int(nfft)
-        elif auto:
-            nfft_requested = unconstrained_window_nfft(
-                fs, fft_params.get('t_win_s', DEFAULT_FFT_T_WIN_S),
-            )
-            if nfft_requested is None:
-                nfft_requested = nfft
-        else:
-            nfft_requested = int(nfft)
         facts = build_fft_effective_facts(
             sig, fs,
             window=win,
@@ -210,12 +317,15 @@ class FFTMixin:
             nfft_requested=nfft_requested,
             freq=freq,
             time=time,
-            min_frames=24 if avg_mode != '单帧' else None,
+            nfft_mode=fft_params.get('nfft_mode'),
+            decision=decision_for_facts,
         )
         return _FftComputeResult(freq, amp, psd, facts)
 
     def _sync_fft_effective_facts(self, state=None):
-        """Re-fill the Inspector facts card from the focused pane's result."""
+        """Re-fill the Inspector facts card from every focused-pane source."""
+        from dataclasses import replace
+
         ctx = self.inspector.fft_ctx
         if state is None:
             mgr = self.analysis_managers.get('fft')
@@ -233,22 +343,62 @@ class FFTMixin:
         if not sources:
             ctx.clear_effective_facts()
             return
-        fid, ch = sources[0]
         time_range = self._pane_time_range_for('fft', idx)
-        params = self._fft_effective_params_for_source(
-            self.inspector.fft_ctx.compute_params(),
-            fid, ch, time_range,
+        fft_params = self.inspector.fft_ctx.compute_params()
+        groups = []
+        extra_warnings = []
+        any_content = False
+        for fid, ch in sources:
+            header = f"{fid} · {ch}"
+            sig, _fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+            params = self._fft_effective_params_for_source(
+                fft_params, fid, ch, time_range,
+            )
+            decision = params.get('nfft_decision')
+            blocked = (
+                params.get('nfft_status') == 'blocked'
+                or getattr(decision, 'status', None) == 'blocked'
+            )
+            if blocked:
+                groups.append((header, None, _blocked_auto_nfft_lines(decision)))
+                any_content = True
+                continue
+            key = self._fft_analysis_cache_key(fid, ch, params, time_range)
+            result = self.analysis_caches['fft'].get(key)
+            facts = getattr(result, 'effective', None) if result is not None else None
+            if facts is None:
+                continue
+            health, _fs_values = self._effective_facts_health(
+                sig, fid=fid, sources=sources,
+            )
+            try:
+                facts = replace(facts, **health)
+            except TypeError:
+                pass
+            groups.append((header, facts, ()))
+            any_content = True
+        groups = [item for item in groups if item[1] is not None or item[2]]
+        _health, fs_values = self._effective_facts_health(
+            None, sources=sources,
         )
-        key = self._fft_analysis_cache_key(fid, ch, params, time_range)
-        result = self.analysis_caches['fft'].get(key)
-        facts = getattr(result, 'effective', None) if result is not None else None
+        if _health.get('fs_conflict') and fs_values:
+            pretty = ", ".join(f"{v:g} Hz" for v in fs_values)
+            extra_warnings.append(f"多源 Fs 冲突：{pretty}")
+        if not any_content or not groups:
+            ctx.clear_effective_facts()
+            return
+        if len(groups) == 1 and groups[0][1] is not None:
+            ctx.set_effective_facts(groups[0][1], extra_warnings)
+            return
+        setter = getattr(ctx, 'set_effective_facts_groups', None)
+        if callable(setter):
+            setter(groups, extra_warnings)
+            return
+        facts = next((item[1] for item in groups if item[1] is not None), None)
         if facts is None:
             ctx.clear_effective_facts()
             return
-        sig, _fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
-        self._publish_analysis_effective_facts(
-            ctx, facts, sig=sig, fid=fid, sources=sources,
-        )
+        ctx.set_effective_facts(facts, extra_warnings)
 
     def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE):
         """Fetch + range-gate a single FFT source's signal. Returns
@@ -269,26 +419,90 @@ class FFTMixin:
             _t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return sig, fd.fs
 
-    def _fft_preview_n_samples(self):
-        """Sample count for the FFT auto-NFFT summary, or ``None``.
+    def _fft_preview_sources(self):
+        """Focused-pane ``(fid, ch)`` identities, else the inspector combo."""
+        sources = []
+        mgr = getattr(self, 'analysis_managers', None)
+        fft_mgr = mgr.get('fft') if isinstance(mgr, dict) else None
+        idx = 0
+        if fft_mgr is not None and getattr(fft_mgr, 'views', None):
+            state = fft_mgr.get(fft_mgr.active)
+            page_fn = getattr(self, '_analysis_page', None)
+            if callable(page_fn):
+                page = page_fn('fft')
+                focused = getattr(page, 'focused_index', None)
+                if callable(focused):
+                    idx = int(focused())
+            if state is not None and 0 <= idx < len(state.panes):
+                sources = list(state.panes[idx].sources)
+        if sources:
+            return sources, idx
+        ctx = getattr(getattr(self, 'inspector', None), 'fft_ctx', None)
+        current = getattr(ctx, 'current_signal', None)
+        source = current() if callable(current) else None
+        if source:
+            return [source], idx
+        return [], idx
 
-        Pull-based hook registered via ``FFTContextual.set_auto_nfft_provider``:
-        returns the (inspector-time-range-gated) length of the representative
-        FFT source so the collapsed 自动(N) tracks ``_resolve_fft_effective_params``
-        (whole-signal length for single-frame; the shared ``resolve_nfft`` segment
-        for averaging). Returns ``None`` when unavailable. Never raises — it feeds
-        a paint path.
+    def _fft_preview_source_rows(self):
+        """Per-source sample/fs rows for Auto-NFFT preview. Paint-path safe."""
+        sources, idx = self._fft_preview_sources()
+        if not sources:
+            return []
+        time_range = _INSPECTOR_TIME_RANGE
+        pane_range = getattr(self, '_pane_time_range_for', None)
+        if callable(pane_range):
+            try:
+                time_range = pane_range('fft', idx)
+            except (TypeError, ValueError, AttributeError):
+                time_range = _INSPECTOR_TIME_RANGE
+        rows = []
+        for source in sources:
+            try:
+                fid, ch = source
+            except (TypeError, ValueError):
+                continue
+            sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+            n_samples = None
+            if sig is not None and len(sig) >= 2:
+                n_samples = int(len(sig))
+            fs_val = None
+            if fs is not None:
+                try:
+                    fs_val = float(fs)
+                except (TypeError, ValueError):
+                    fs_val = None
+                if fs_val is None or not np.isfinite(fs_val) or fs_val <= 0.0:
+                    fs_val = None
+            rows.append({
+                'fid': fid,
+                'ch': ch,
+                'n_samples': n_samples,
+                'fs': fs_val,
+            })
+        return rows
+
+    def _fft_preview_n_samples(self):
+        """Sample count(s) for the FFT auto-NFFT summary, or ``None``.
+
+        Pull-based hook registered via ``FFTContextual.set_auto_nfft_provider``.
+        A single source still returns its (range-gated) integer length so
+        existing callers keep working. Multiple pane sources return a list of
+        ``{fid, ch, n_samples, fs}`` rows so preview can resolve each identity
+        instead of copying the first source's NFFT. Returns ``None`` when
+        unavailable. Never raises — it feeds a paint path.
         """
         try:
-            source = self.inspector.fft_ctx.current_signal()
-            if not source:
+            rows = self._fft_preview_source_rows()
+            if not rows:
                 return None
-            fid, ch = source
-            sig, _fs = self._fft_fetch_signal(fid, ch)
-            if sig is None or len(sig) < 2:
-                return None
-            return int(len(sig))
-        except Exception:
+            if len(rows) == 1:
+                n_samples = rows[0].get('n_samples')
+                if n_samples is None or int(n_samples) < 2:
+                    return None
+                return int(n_samples)
+            return rows
+        except (TypeError, ValueError, AttributeError, KeyError, RuntimeError):
             return None
 
     def _recompute_restored_fft_view(self, view_id):
@@ -423,6 +637,9 @@ class FFTMixin:
                                 sig, fs, effective_params)
                         finally:
                             self._finish_compute_progress(token=progress_token)
+                    except AutoNfftBlockedError as e:
+                        outcome.skipped.append(_auto_nfft_skip_reason(e))
+                        continue
                     except Exception as e:
                         outcome.failed += 1
                         QMessageBox.critical(self, 'FFT错误', str(e))
@@ -488,6 +705,7 @@ class FFTMixin:
 
         progress_token = self._begin_compute_progress("FFT 计算中")
         error = None
+        blocked_error = None
         try:
             self.statusBar.showMessage('计算FFT...');
             # Paint the status message only. A bare pump would run a queued
@@ -575,9 +793,25 @@ class FFTMixin:
             pi = np.argmax(amp[1:]) + 1;
             self.statusBar.showMessage(f'FFT峰值: {freq[pi]:.2f} Hz ({amp[pi]:.4f})')
             self.toast(f"FFT 完成 · 峰值 {freq[pi]:.2f} Hz", "success")
+        except AutoNfftBlockedError as e:
+            blocked_error = e
         except Exception as e:
             error = e
         finally:
             self._finish_compute_progress(token=progress_token)
+        if blocked_error is not None:
+            self.toast(_auto_nfft_skip_reason(blocked_error), "warning")
+            self.statusBar.showMessage(str(blocked_error))
+            ctx = self.inspector.fft_ctx
+            setter = getattr(ctx, 'set_effective_facts_groups', None)
+            header = (
+                f"{sig_data[0]} · {sig_data[1]}" if sig_data else "当前信号"
+            )
+            if callable(setter):
+                setter(
+                    [(header, None, _blocked_auto_nfft_lines(blocked_error.decision))],
+                    (),
+                )
+            return
         if error is not None:
             QMessageBox.critical(self, 'FFT错误', str(error))

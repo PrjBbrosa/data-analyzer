@@ -118,8 +118,9 @@ class FFTTimeContextual(QWidget):
         # count for the current FFT-vs-Time signal (or None when no data is
         # loaded). Set by the main window so the displayed 自动(N) mirrors the
         # data-aware ``resolve_nfft`` the spectrogram compute path uses, instead
-        # of the data-blind ``ceil_pow2(Fs * t_win)`` estimate.
+        # of a data-blind ``ceil_pow2`` estimate pretending to be the actual NFFT.
         self._auto_nfft_provider = None
+        self._auto_nfft_preview_is_target = False
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: transparent host for two
         # full-width cards (sig_card + params_card); spacing is the gutter.
@@ -176,7 +177,8 @@ class FFTTimeContextual(QWidget):
         self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
         self.combo_nfft.setToolTip(
             '越大频率采样越密、计算量越高。\n'
-            '「自动」＝按内部目标时长起步，经最少帧数、数据长度上限与 [64, 8192] 收敛。'
+            '「自动」在普通采样率下优先 4096 点；低 Fs 按目标窗长适配，\n'
+            '且至少保留 4 个真实时间帧。不足则不可计算，不会零填充冒充分辨率。'
         )
         fl.addRow("FFT 点数:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_win = QComboBox()
@@ -332,7 +334,13 @@ class FFTTimeContextual(QWidget):
     def _tf_summary_text(self):
         nfft_text = self.combo_nfft.currentText()
         if nfft_text == self._AUTO_NFFT_LABEL:
-            nfft_text = f"{self._AUTO_NFFT_LABEL}({self._nfft_preview()})"
+            preview = self._nfft_preview()
+            if preview is None:
+                nfft_text = f"{self._AUTO_NFFT_LABEL}(待数据)"
+            elif getattr(self, "_auto_nfft_preview_is_target", False):
+                nfft_text = f"{self._AUTO_NFFT_LABEL}(目标 {preview})"
+            else:
+                nfft_text = f"{self._AUTO_NFFT_LABEL}({preview})"
         suffix = " · 已缩短" if getattr(self, "_facts_shortened", False) else ""
         return (
             f"{nfft_text} · "
@@ -498,8 +506,9 @@ class FFTTimeContextual(QWidget):
         self.rebuild_time_requested.emit(self.btn_rebuild, 'fft_time')
 
     def _nfft_preview(self):
-        from ...signal import ceil_pow2, resolve_nfft
+        from ...signal import requested_auto_nfft, resolve_auto_nfft
 
+        self._auto_nfft_preview_is_target = False
         fs = float(self.spin_fs.value())
         t_win = float(self._t_win_s)
         n_samples = None
@@ -509,13 +518,21 @@ class FFTTimeContextual(QWidget):
             except Exception:
                 n_samples = None
         if n_samples is not None and int(n_samples) > 1:
-            # Data-aware: mirror _fft_time_mixin._resolve_fft_time_effective_params
-            # (same fs / t_win / overlap fraction → same shared resolver).
             overlap = float(self.spin_overlap.value()) / 100.0
-            return int(resolve_nfft(fs, int(n_samples), t_win, overlap))
-        # No data loaded → naive estimate (data-blind, legacy fallback).
-        nfft = ceil_pow2(fs * t_win)
-        return int(min(max(nfft, 64), 8192))
+            try:
+                decision = resolve_auto_nfft(
+                    fs, int(n_samples), t_win, overlap, purpose="fft_time",
+                )
+            except ValueError:
+                return None
+            if decision.status == "blocked" or decision.effective_nfft is None:
+                return None
+            return int(decision.effective_nfft)
+        try:
+            self._auto_nfft_preview_is_target = True
+            return int(requested_auto_nfft(fs, t_win, purpose="fft_time"))
+        except ValueError:
+            return None
 
     def compute_params(self):
         nfft_text = self.combo_nfft.currentText()

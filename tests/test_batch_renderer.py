@@ -139,6 +139,48 @@ def test_facade_renders_exact_size_png_offscreen(tmp_path):
     assert len(sampled_colors) > 1
 
 
+def test_report_facts_use_runner_nfft_effective_not_requested_auto(tmp_path):
+    from mf4_analyzer.batch import AnalysisPreset, BatchOutput, BatchRunner
+    from mf4_analyzer.batch_render_qt._page import effective_fact_items
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.signal import resolve_auto_nfft
+
+    fs = 1000.0
+    n = 60000
+    t = np.arange(n, dtype=float) / fs
+    df = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 40.0 * t)})
+    path = tmp_path / "runner-facts.csv"
+    df.to_csv(path, index=False)
+    fd = FileData(path, df, list(df.columns), {}, idx=0, fs=fs)
+    preset = AnalysisPreset.from_current_single(
+        name="auto facts render",
+        method="fft",
+        signal=(0, "sig"),
+        params={
+            "fs": fs,
+            "nfft": None,
+            "nfft_mode": "auto",
+            "avg_mode": "线性平均",
+            "avg_overlap": 50,
+            "t_win_s": 1.5,
+            "window": "hanning",
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    assert result.status == "done"
+    facts = result.items[0].effective_params
+    expected = resolve_auto_nfft(fs, n, 1.5, 0.5, purpose="fft_segmented")
+    assert facts["nfft"] is None
+    assert facts["nfft_effective"] == expected.effective_nfft
+    assert "effective_nfft" not in facts
+    items = effective_fact_items(facts, facts)
+    text = " ".join(items)
+    assert f"NFFT={expected.effective_nfft}" in text
+    assert "NFFT=auto" not in text.lower()
+    assert "NFFT=None" not in text
+
+
 @pytest.mark.parametrize("illegal_format", ("pdf", "svg"))
 def test_facade_rejects_retired_vector_formats(illegal_format):
     from mf4_analyzer.batch_render import BatchRenderOptions

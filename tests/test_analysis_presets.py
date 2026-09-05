@@ -139,6 +139,15 @@ def test_fft_and_order_values_match_the_existing_contextual_contract():
     assert _params_by_key("order_time") == EXPECTED_ORDER
 
 
+def test_fft_builtin_presets_keep_auto_intent_not_effective_nfft():
+    from mf4_analyzer.analysis_presets import list_builtin_presets
+
+    for preset in list_builtin_presets("fft"):
+        assert preset.params["nfft"] == "自动"
+        assert "nfft_effective" not in preset.params
+        assert preset.params["t_win_s"] > 0
+
+
 def test_order_time_window_is_aligned_with_fft_and_fft_time():
     # C2: order_time presets now declare `window`, matching fft / fft_time
     # one-to-one (torque -> flattop, vibration/transient -> hanning). This

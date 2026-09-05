@@ -24,7 +24,12 @@ import pandas as pd
 
 from . import db_reference
 from .batch_types import _BatchCancelled
-from .signal import order_angle_sample_count, resolve_nfft, resolve_order_nfft
+from .signal import (
+    order_angle_sample_count,
+    raise_if_auto_nfft_blocked,
+    resolve_auto_nfft,
+    resolve_order_nfft,
+)
 from .signal.analysis_defaults import (
     DEFAULT_FFT_TIME_OVERLAP,
     DEFAULT_FFT_T_WIN_S,
@@ -662,27 +667,79 @@ def compute_preprocessed_time_dataframe(
     return pd.concat(frames, ignore_index=True)
 
 
-def _fft_nfft_requested(params, n_samples, fs, resolved_nfft):
-    avg_mode = str(params.get('avg_mode', '单帧'))
+_SEGMENTED_FFT_AVG_MODES = frozenset({'线性平均', '峰值保持'})
+_AUTO_NFFT_TOKENS = frozenset({'', 'auto', '自动'})
+
+
+def recipe_nfft_is_auto(params) -> bool:
+    """Return True when the requested recipe asks for Auto-NFFT."""
+    params = params or {}
+    mode = params.get('nfft_mode')
+    if isinstance(mode, str) and mode.strip().lower() in {'auto', '自动'}:
+        return True
     raw = params.get('nfft')
-    auto = raw is None or params.get('nfft_mode') == 'auto'
+    if raw is None:
+        return True
     if isinstance(raw, str):
-        auto = raw.strip().lower() in ('', 'auto', '自动')
+        return raw.strip().lower() in _AUTO_NFFT_TOKENS
+    if isinstance(raw, bool):
+        return False
+    if isinstance(raw, (int, float, np.integer, np.floating)):
+        return float(raw) <= 0
+    return False
+
+
+def _fft_time_overlap(params):
+    return float(params.get('overlap', DEFAULT_FFT_TIME_OVERLAP))
+
+
+def _require_auto_nfft_inputs(fs, n_samples):
+    if fs is None or n_samples is None:
+        raise ValueError("fs and n_samples are required for Auto-NFFT")
+    return fs, n_samples
+
+
+def _resolve_fft_auto_decision(n_samples, fs, params, *, purpose):
+    """Consume the neutral Auto-NFFT decision; blocked is a user/data failure."""
+    fs, n_samples = _require_auto_nfft_inputs(fs, n_samples)
+    t_win_s = params.get('t_win_s', DEFAULT_FFT_T_WIN_S)
+    if purpose == 'fft_time':
+        overlap = _fft_time_overlap(params)
+    else:
+        overlap = avg_overlap_fraction(params)
+    decision = resolve_auto_nfft(
+        fs, n_samples, t_win_s, overlap, purpose=purpose,
+    )
+    return raise_if_auto_nfft_blocked(decision)
+
+
+def _fft_nfft_requested(params, n_samples, fs, resolved_nfft, *, decision=None):
+    if decision is not None:
+        return int(decision.requested_nfft)
+    avg_mode = str(params.get('avg_mode', '单帧'))
+    auto = recipe_nfft_is_auto(params)
     if avg_mode == '单帧':
         return int(n_samples if auto else resolved_nfft or n_samples)
-    if auto:
-        target = unconstrained_window_nfft(
-            fs, params.get('t_win_s', DEFAULT_FFT_T_WIN_S),
-        )
-        return int(target if target is not None else resolved_nfft or n_samples)
     return int(resolved_nfft or n_samples)
 
 
-def fft_effective_facts_from_compute(sig, fs, params, freq):
+def fft_effective_facts_from_compute(sig, fs, params, freq, *, decision=None):
     """Build FFT facts from the same inputs ``compute_fft_dataframe`` used."""
     n_samples = len(np.asarray(sig))
     avg_mode = str(params.get('avg_mode', '单帧'))
-    resolved = resolve_fft_nfft(n_samples, fs, params)
+    auto = recipe_nfft_is_auto(params)
+    nfft_mode = 'auto' if auto else (
+        None if params.get('nfft_mode') is None else str(params.get('nfft_mode'))
+    )
+    if decision is None and auto and avg_mode in _SEGMENTED_FFT_AVG_MODES:
+        decision = _resolve_fft_auto_decision(
+            n_samples, fs, params, purpose='fft_segmented',
+        )
+    resolved = (
+        int(decision.effective_nfft)
+        if decision is not None
+        else resolve_fft_nfft(n_samples, fs, params)
+    )
     overlap = avg_overlap_fraction(params) if avg_mode != '单帧' else float(
         params.get('overlap', 0.0) or 0.0
     )
@@ -693,18 +750,26 @@ def fft_effective_facts_from_compute(sig, fs, params, freq):
         avg_mode=avg_mode,
         overlap=overlap,
         weighting=str(params.get('weighting', 'None')),
-        nfft_requested=_fft_nfft_requested(params, n_samples, fs, resolved),
+        nfft_requested=_fft_nfft_requested(
+            params, n_samples, fs, resolved, decision=decision,
+        ),
         freq=freq,
-        min_frames=24 if avg_mode != '单帧' else None,
+        nfft_mode=nfft_mode,
+        decision=decision,
     )
 
 
 def compute_fft_dataframe(sig, fs, params):
     sig, _spec = apply_filter_if_enabled(sig, fs, params)
+    avg_mode = str(params.get('avg_mode', '单帧'))
+    decision = None
+    if recipe_nfft_is_auto(params) and avg_mode in _SEGMENTED_FFT_AVG_MODES:
+        decision = _resolve_fft_auto_decision(
+            len(sig), fs, params, purpose='fft_segmented',
+        )
     nfft = resolve_fft_nfft(len(sig), fs, params)
     win = params.get('window', params.get('win', 'hanning'))
     weighting = str(params.get('weighting', 'None'))
-    avg_mode = str(params.get('avg_mode', '单帧'))
     avg_overlap = avg_overlap_fraction(params)
     if avg_mode == '线性平均':
         freq, amp, _psd = FFTAnalyzer.compute_averaged_fft(
@@ -729,7 +794,9 @@ def compute_fft_dataframe(sig, fs, params):
         requested=params.get('amplitude_definition', 'native'),
     )
     frame = pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
-    facts = fft_effective_facts_from_compute(sig, fs, params, freq)
+    facts = fft_effective_facts_from_compute(
+        sig, fs, params, freq, decision=decision,
+    )
     if facts is not None:
         frame.attrs['effective_facts'] = facts
     return frame
@@ -760,21 +827,18 @@ def avg_overlap_fraction(params):
 
 
 def resolve_fft_nfft(n_samples, fs, params):
-    nfft_raw = params.get('nfft')
     avg_mode = str(params.get('avg_mode', '单帧'))
+    if recipe_nfft_is_auto(params):
+        if avg_mode in _SEGMENTED_FFT_AVG_MODES:
+            decision = _resolve_fft_auto_decision(
+                n_samples, fs, params, purpose='fft_segmented',
+            )
+            return int(decision.effective_nfft)
+        return None
+    nfft_raw = params.get('nfft')
     if isinstance(nfft_raw, str):
-        nfft = None if nfft_raw.strip() in ('', '自动', 'auto') else int(nfft_raw)
-    elif nfft_raw is None or nfft_raw <= 0:
-        nfft = None
-    else:
-        nfft = int(nfft_raw)
-    if nfft is None and avg_mode in {'线性平均', '峰值保持'}:
-        t_win_s = float(params.get('t_win_s', DEFAULT_FFT_T_WIN_S))
-        return int(resolve_nfft(
-            float(fs), int(n_samples), t_win_s,
-            avg_overlap_fraction(params),
-        ))
-    return nfft
+        return int(nfft_raw)
+    return int(nfft_raw)
 
 
 def _order_auto_time_axis(time, fs, n_samples):
@@ -866,14 +930,8 @@ def resolve_effective_nfft(
     so the auto branch can size the COT window from the angle domain exactly
     like the interactive path.  Other methods ignore them.
     """
-    raw = params.get('nfft')
-    auto = raw is None or raw == ''
-    if isinstance(raw, str):
-        auto = raw.strip().lower() in {'auto', '自动'}
-    elif isinstance(raw, (int, float, np.integer, np.floating)):
-        auto = float(raw) <= 0
-    if not auto:
-        return int(raw)
+    if not recipe_nfft_is_auto(params):
+        return int(params.get('nfft'))
     if method == 'fft':
         resolved = resolve_fft_nfft(n_samples, fs, params)
         return int(n_samples if resolved is None else resolved)
@@ -889,12 +947,12 @@ def resolve_effective_nfft(
             float(params.get('order_res', DEFAULT_ORDER_RES)),
             n_angle,
         ))
-    return int(resolve_nfft(
-        float(fs),
-        int(n_samples),
-        float(params.get('t_win_s', DEFAULT_FFT_T_WIN_S)),
-        float(params.get('overlap', DEFAULT_FFT_TIME_OVERLAP)),
-    ))
+    if method == 'fft_time':
+        decision = _resolve_fft_auto_decision(
+            n_samples, fs, params, purpose='fft_time',
+        )
+        return int(decision.effective_nfft)
+    raise ValueError(f"unsupported method for auto nfft: {method}")
 
 
 def compute_order_time_spectro(sig, rpm, time, fs, params) -> "_Spectro2D":
@@ -995,14 +1053,28 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
     sig, _spec = apply_filter_if_enabled(sig, fs, params)
     axis = uniform_time_axis_for_spectrogram(time, fs, len(sig))
     time, fs, axis_warnings = axis
+    auto = recipe_nfft_is_auto(params)
+    decision = None
+    nfft_mode = 'auto' if auto else (
+        None if params.get('nfft_mode') is None else str(params.get('nfft_mode'))
+    )
+    if auto:
+        decision = _resolve_fft_auto_decision(
+            len(sig), fs, params, purpose='fft_time',
+        )
+        nfft = int(decision.effective_nfft)
+        nfft_requested = int(decision.requested_nfft)
+    else:
+        nfft = int(params.get('nfft', 1024))
+        nfft_requested = nfft
     sp = SpectrogramParams(
         fs=float(fs),
-        nfft=int(params.get('nfft', 1024)),
+        nfft=nfft,
         window=str(params.get('window', 'hanning')),
-        # Same omitted-key default as the auto-NFFT resolver above: if these
-        # two ever disagree, the resolved window and the frames it is applied
-        # to are sized against different hop lengths.
-        overlap=float(params.get('overlap', DEFAULT_FFT_TIME_OVERLAP)),
+        # Same omitted-key default as the auto-NFFT resolver: one owner for
+        # hop length so the resolved window and the frames it is applied to
+        # cannot drift.
+        overlap=_fft_time_overlap(params),
         remove_mean=bool(params.get('remove_mean', True)),
         weighting=str(params.get('weighting', 'None')),
     )
@@ -1018,28 +1090,16 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
     if time_axis:
         metadata['time_axis'] = dict(time_axis)
     from .signal.spectrogram import spectrogram_facts_from_result
-    nfft_raw = params.get('nfft')
-    auto = (
-        nfft_raw is None
-        or str(nfft_raw).strip().lower() in ('', 'auto', '自动')
-        or str(params.get('nfft_mode', '')).lower() == 'auto'
-    )
-    if auto:
-        nfft_requested = unconstrained_window_nfft(
-            fs, params.get('t_win_s', DEFAULT_FFT_T_WIN_S),
-        )
-        if nfft_requested is None:
-            nfft_requested = int(sp.nfft)
-    else:
-        nfft_requested = int(sp.nfft)
     facts = spectrogram_facts_from_result(
         result,
         nfft_requested=nfft_requested,
         n_samples=len(sig),
         time_axis=dict(time_axis) if time_axis else None,
+        nfft_mode=nfft_mode,
+        decision=decision,
     )
     if facts is not None:
-        payload = asdict(facts)
+        payload = facts.to_canonical_dict()
         if payload.get('time_axis') is None:
             payload.pop('time_axis', None)
         metadata['effective_facts'] = payload

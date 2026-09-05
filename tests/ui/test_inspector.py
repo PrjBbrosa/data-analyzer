@@ -726,6 +726,63 @@ def test_fft_facts_card_lists_every_required_effective_fact(qtbot):
     assert "数据过短：请求 NFFT 4096" in ctx.effective_warnings_text()
 
 
+def test_fft_facts_limited_statistics_are_not_shortened(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_effective_facts(
+        _fft_effective_facts(
+            nfft_requested=4096,
+            nfft=4096,
+            df=1000.0 / 4096.0,
+            window_s=4096.0 / 1000.0,
+            frames=3,
+            n_samples=10000,
+            shortened=False,
+            nfft_status="warning",
+            nfft_reason_codes=("preferred_4096", "limited_statistics"),
+        ),
+        (),
+    )
+    assert "已缩短" not in ctx._fft_summary_text()
+    assert "仅 3 段，平均/峰值统计有限" in ctx.effective_warnings_text()
+    assert "4096 → 4096" not in ctx.effective_facts_text()
+    assert "NFFT（请求 → 实际）：4096" in ctx.effective_facts_text()
+
+
+def test_fft_facts_groups_keep_source_identity(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_effective_facts_groups(
+        [
+            (
+                "f1 · a",
+                _fft_effective_facts(
+                    nfft_requested=4096,
+                    nfft=4096,
+                    shortened=False,
+                    frames=28,
+                    n_samples=60000,
+                ),
+                (),
+            ),
+            (
+                "f2 · b",
+                None,
+                ("不可计算：可用样本不足 64",),
+            ),
+        ],
+        (),
+    )
+    text = ctx.effective_facts_text()
+    assert "f1 · a" in text
+    assert "f2 · b" in text
+    assert "不可计算：可用样本不足 64" in text
+
+
 def test_fft_facts_card_none_hides_facts(qtbot):
     from PyQt5.QtWidgets import QFrame
 
@@ -3575,7 +3632,7 @@ def test_fft_time_defaults_match_requested_screenshot(qtbot):
     assert params['nfft'] is None
     assert params['nfft_mode'] == 'auto'
     assert params['t_win_s'] == 1.5
-    assert params['nfft_preview'] == 2048
+    assert params['nfft_preview'] == 4096
     assert params['window'] == 'hanning'
     assert params['overlap'] == 0.80
     assert params['remove_mean'] is True
@@ -5973,19 +6030,18 @@ def test_fft_time_auto_nfft_params_are_preview_only(qtbot):
     assert p["nfft"] is None
     assert p["nfft_mode"] == "auto"
     assert p["t_win_s"] == 1.5
-    assert p["nfft_preview"] == 2048
-    assert "自动(" in ctx._tf_summary_text()
+    assert p["nfft_preview"] == 4096
+    assert f"{ctx._AUTO_NFFT_LABEL}(目标 4096)" in ctx._tf_summary_text()
 
 
 def test_fft_time_auto_nfft_preview_is_data_aware_when_provider_set(qtbot):
     """FFT-vs-Time auto preview must mirror the data-aware compute resolver.
 
-    Without a provider it keeps the naive ``ceil_pow2(Fs * t_win)`` estimate.
-    Once the main window supplies the available sample count, the preview routes
-    through the same ``resolve_nfft`` (same overlap) the spectrogram compute path
-    uses, so a short capture shrinks the displayed NFFT to what actually fits.
+    Without a provider it shows the requested target, labelled as 目标 so it is
+    not a fake actual. With samples it uses ``resolve_auto_nfft`` purpose
+    ``fft_time``, including the 4-frame guard.
     """
-    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.signal import resolve_auto_nfft
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
 
     ctx = FFTTimeContextual()
@@ -5994,19 +6050,19 @@ def test_fft_time_auto_nfft_preview_is_data_aware_when_provider_set(qtbot):
     ctx._t_win_s = 1.5
     ctx.spin_overlap.setValue(50)
 
-    # No provider → naive estimate, unchanged legacy behaviour.
-    assert ctx._nfft_preview() == 2048
+    assert ctx._nfft_preview() == 4096
+    assert f"{ctx._AUTO_NFFT_LABEL}(目标 4096)" in ctx._tf_summary_text()
 
-    # Provider reports only 3000 samples available.
     ctx.set_auto_nfft_provider(lambda: 3000)
-    expected = int(resolve_nfft(1000.0, 3000, 1.5, 0.5))
-    assert expected == 128  # guards the hand-computed value
+    expected = resolve_auto_nfft(
+        1000.0, 3000, 1.5, 0.5, purpose="fft_time",
+    ).effective_nfft
+    assert expected == 1024
     assert ctx._nfft_preview() == expected
     assert f"{ctx._AUTO_NFFT_LABEL}({expected})" in ctx._tf_summary_text()
 
-    # Plenty of samples → resolver returns the full naive target (no shrink).
     ctx.set_auto_nfft_provider(lambda: 1_000_000)
-    assert ctx._nfft_preview() == 2048
+    assert ctx._nfft_preview() == 4096
 
 
 def test_fft_auto_nfft_summary_is_data_aware_when_provider_set(qtbot):
@@ -6015,10 +6071,10 @@ def test_fft_auto_nfft_summary_is_data_aware_when_provider_set(qtbot):
     The FFT header historically showed a bare ``自动`` with no number. To unify
     the three tabs it now shows ``自动(N)`` once data is available, mirroring
     ``_resolve_fft_effective_params``: single-frame auto = whole-signal FFT
-    length; averaging modes = the shared ``resolve_nfft`` segment length. With no
-    data loaded it stays a bare ``自动`` (no misleading number).
+    length; averaging modes = ``resolve_auto_nfft``. With no data loaded,
+    single-frame stays a bare ``自动``.
     """
-    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.signal import resolve_auto_nfft
     from mf4_analyzer.ui.inspector_sections import FFTContextual
 
     ctx = FFTContextual()
@@ -6028,7 +6084,7 @@ def test_fft_auto_nfft_summary_is_data_aware_when_provider_set(qtbot):
     auto = ctx._AUTO_NFFT_LABEL
     assert ctx.combo_nfft.currentText() == auto
 
-    # No provider → bare "自动" (no parens), unchanged legacy header.
+    # No provider → bare "自动" (no parens) for single-frame.
     assert ctx._fft_nfft_preview() is None
     assert f"{auto}(" not in ctx._fft_summary_text()
     assert ctx._fft_summary_text().startswith(f"{auto} ·")
@@ -6043,22 +6099,25 @@ def test_fft_auto_nfft_summary_is_data_aware_when_provider_set(qtbot):
     ctx.combo_avg_mode.setCurrentText('线性平均')
     ctx.spin_avg_overlap.setValue(50)
     ctx.set_auto_nfft_provider(lambda: 3000)
-    expected = int(resolve_nfft(1000.0, 3000, 1.5, 0.5))
-    assert expected == 128  # guards the hand-computed value
+    expected = resolve_auto_nfft(
+        1000.0, 3000, 1.5, 0.5, purpose="fft_segmented",
+    ).effective_nfft
+    assert expected == 2048  # M8: request 4096, actual 2048
     assert ctx._fft_nfft_preview() == expected
     assert f"{auto}({expected})" in ctx._fft_summary_text()
+    assert "有降级" in ctx._fft_summary_text()
+    assert "已缩短" not in ctx._fft_summary_text()
 
 
 def test_fft_auto_nfft_summary_falls_back_data_blind_for_averaging(qtbot):
-    """Averaging modes preview a segment even with no data loaded.
+    """Averaging modes preview a requested target even with no data loaded.
 
-    An averaging segment is driven by fs × t_win, not by the record, so the
-    data-blind estimate is the same number the compute path would start from
-    — exactly what ``FFTTimeContextual._nfft_preview`` already shows. Only
-    单帧 (whole-signal FFT) genuinely has nothing to preview without data, so
-    it alone keeps the bare ``自动``.
+    The data-blind number is ``requested_auto_nfft``, shown as 目标 so it is
+    not mistaken for an actual computed NFFT. Only 单帧 (whole-signal FFT)
+    genuinely has nothing to preview without data, so it keeps the bare
+    ``自动``.
     """
-    from mf4_analyzer.signal import ceil_pow2
+    from mf4_analyzer.signal import requested_auto_nfft
     from mf4_analyzer.ui.inspector_sections import FFTContextual
 
     ctx = FFTContextual()
@@ -6067,14 +6126,14 @@ def test_fft_auto_nfft_summary_falls_back_data_blind_for_averaging(qtbot):
     ctx._t_win_s = 1.5
     auto = ctx._AUTO_NFFT_LABEL
 
-    expected = int(min(max(ceil_pow2(1000.0 * 1.5), 64), 8192))
-    assert expected == 2048  # guards the hand-computed value
+    expected = requested_auto_nfft(1000.0, 1.5, purpose="fft_segmented")
+    assert expected == 4096
 
     for mode in ('线性平均', '峰值保持'):
         # (a) no provider at all
         ctx.combo_avg_mode.setCurrentText(mode)
         assert ctx._fft_nfft_preview() == expected, mode
-        assert f"{auto}({expected})" in ctx._fft_summary_text()
+        assert f"{auto}(目标 {expected})" in ctx._fft_summary_text()
         # (b) provider wired but yielding nothing (no signal selected yet)
         ctx.set_auto_nfft_provider(lambda: None)
         assert ctx._fft_nfft_preview() == expected, mode
@@ -6083,6 +6142,51 @@ def test_fft_auto_nfft_summary_falls_back_data_blind_for_averaging(qtbot):
     ctx.combo_avg_mode.setCurrentText('单帧')
     assert ctx._fft_nfft_preview() is None
     assert f"{auto}(" not in ctx._fft_summary_text()
+
+
+def test_fft_auto_nfft_summary_reports_per_source_range(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_fs.setValue(1000)
+    ctx._t_win_s = 1.5
+    ctx.combo_avg_mode.setCurrentText('线性平均')
+    ctx.spin_avg_overlap.setValue(50)
+    ctx.set_auto_nfft_provider(lambda: [
+        {"fid": "f1", "ch": "a", "n_samples": 60000, "fs": 1000.0},
+        {"fid": "f2", "ch": "b", "n_samples": 3000, "fs": 1000.0},
+    ])
+    assert ctx._fft_nfft_preview() == (2048, 4096)
+    text = ctx._fft_summary_text()
+    assert "自动(2048–4096 · 每源)" in text
+    assert "有降级" in text
+    assert "已缩短" not in text
+
+    ctx.set_auto_nfft_provider(lambda: [
+        {"fid": "f1", "ch": "a", "n_samples": 60000, "fs": 1000.0},
+        {"fid": "f2", "ch": "b", "n_samples": 5002, "fs": 96.0},
+    ])
+    assert ctx._fft_nfft_preview() == (256, 4096)
+    assert "自动(256–4096 · 每源)" in ctx._fft_summary_text()
+
+
+def test_fft_auto_nfft_summary_m3_warns_without_shortening(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_fs.setValue(1000)
+    ctx._t_win_s = 1.5
+    ctx.combo_avg_mode.setCurrentText('线性平均')
+    ctx.spin_avg_overlap.setValue(50)
+    ctx.set_auto_nfft_provider(lambda: 10000)
+    assert ctx._fft_nfft_preview() == 4096
+    text = ctx._fft_summary_text()
+    assert "自动(4096)" in text
+    assert "有提示" in text
+    assert "有降级" not in text
+    assert "已缩短" not in text
 
 
 def test_order_summary_label_refreshes_on_set_fs(qtbot):
@@ -6132,6 +6236,26 @@ def test_fft_summary_label_refreshes_on_set_fs(qtbot):
     ctx.set_fs(1000.0)
     assert ctx._fft_section.summary_text() == ctx._fft_summary_text()
     assert "自动(4096)" in ctx._fft_section.summary_text()
+
+
+def test_fft_apply_params_keeps_auto_intent_not_effective_nfft(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.combo_avg_mode.setCurrentText('线性平均')
+    ctx.combo_nfft.setCurrentText(ctx._AUTO_NFFT_LABEL)
+    payload = ctx.compute_params()
+    assert payload['nfft'] is None
+    assert payload['nfft_mode'] == 'auto'
+    ctx.combo_nfft.setCurrentText('4096')
+    assert ctx.compute_params()['nfft'] == 4096
+    ctx.apply_params(payload)
+    assert ctx.combo_nfft.currentText() == ctx._AUTO_NFFT_LABEL
+    restored = ctx.compute_params()
+    assert restored['nfft'] is None
+    assert restored['nfft_mode'] == 'auto'
+    assert restored['t_win_s'] == payload['t_win_s']
 
 
 def test_fft_time_fixed_nfft_params_still_return_int(qtbot):

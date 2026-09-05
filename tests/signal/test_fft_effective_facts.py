@@ -54,8 +54,11 @@ def test_normal_signal_single_frame_is_not_shortened():
     assert facts is not None
     assert facts.shortened is False
     assert facts.nfft == 1024
+    assert facts.nfft_effective == 1024
+    assert facts.df_hz == pytest.approx(facts.df)
     assert facts.nfft == infer_nfft_from_freq(freq)
     assert facts.frames == 1
+    assert facts.nfft_policy_version is None
 
 
 def test_empty_signal_returns_no_facts():

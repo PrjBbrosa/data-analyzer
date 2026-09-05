@@ -14,6 +14,7 @@ from mf4_analyzer.batch_manifest import (
     ManifestValidationError,
     RetryScope,
     artifact_facts,
+    auto_nfft_policy_is_current,
     derive_summary,
     find_resumable_entry,
     find_resumable_group,
@@ -21,6 +22,7 @@ from mf4_analyzer.batch_manifest import (
     retry_failed_scope,
     source_file_facts,
 )
+from mf4_analyzer.signal.analysis_defaults import AUTO_NFFT_POLICY_VERSION
 
 
 def _done_entry(source_path, artifact_path):
@@ -1166,3 +1168,146 @@ def test_strict_manifest_loader_accepts_running_partial_schema(tmp_path):
     assert manifest["run_status"] == "running"
     assert manifest["finished_at"] is None
     assert manifest["summary"]["cancelled"] == 1
+
+
+_SEGMENTED_AUTO_PARAMS = {
+    "nfft": None,
+    "nfft_mode": "auto",
+    "avg_mode": "线性平均",
+    "t_win_s": 1.5,
+    "avg_overlap": 50,
+}
+_FFT_TIME_AUTO_PARAMS = {
+    "nfft": None,
+    "nfft_mode": "auto",
+    "t_win_s": 1.5,
+    "overlap": 0.5,
+}
+
+
+def test_auto_nfft_policy_is_current_uses_requested_recipe_not_entry_mode():
+    entry = {
+        "effective_facts": {"nfft_policy_version": AUTO_NFFT_POLICY_VERSION},
+        "method": "fft",
+        "requested_params": {"nfft": 64, "nfft_mode": "fixed"},
+    }
+    assert auto_nfft_policy_is_current(
+        entry, requested_params=_SEGMENTED_AUTO_PARAMS, method="fft",
+    ) is True
+    stale = {
+        "effective_facts": {"nfft_mode": "fixed"},
+        "method": "fft",
+    }
+    assert auto_nfft_policy_is_current(
+        stale, requested_params=_SEGMENTED_AUTO_PARAMS, method="fft",
+    ) is False
+    assert auto_nfft_policy_is_current(
+        stale, requested_params={"nfft": 64}, method="fft",
+    ) is True
+    assert auto_nfft_policy_is_current(
+        stale, requested_params={"nfft": None, "nfft_mode": "auto"}, method="fft",
+    ) is True
+    assert auto_nfft_policy_is_current(
+        stale,
+        requested_params=_FFT_TIME_AUTO_PARAMS,
+        method="fft_time",
+    ) is False
+    assert auto_nfft_policy_is_current(
+        stale, requested_params=_SEGMENTED_AUTO_PARAMS, method="order_time",
+    ) is True
+    assert auto_nfft_policy_is_current(
+        stale, requested_params=_SEGMENTED_AUTO_PARAMS, method="frf",
+    ) is True
+
+
+@pytest.mark.parametrize("version", (None, 1, True, "2", 1.0))
+def test_find_resumable_entry_rejects_stale_auto_nfft_policy(
+    tmp_path, version,
+):
+    source_path = tmp_path / "source.csv"
+    source_path.write_text("source-v1", encoding="utf-8")
+    artifact_path = tmp_path / "result.csv"
+    artifact_path.write_text("result-v1", encoding="utf-8")
+    entry = _done_entry(source_path, artifact_path)
+    entry["requested_params"] = dict(_SEGMENTED_AUTO_PARAMS)
+    if version is None:
+        entry["effective_facts"].pop("nfft_policy_version", None)
+    else:
+        entry["effective_facts"]["nfft_policy_version"] = version
+    manifest = _manifest([entry])
+    kwargs = dict(
+        recipe_fingerprint="recipe-1",
+        task_id="task-1",
+        source_id="source-1",
+        source_identity=str(source_path.resolve()),
+        source_stat=source_file_facts(
+            source_path, source_identity=str(source_path.resolve()),
+        ),
+        required_artifacts={"data": "csv"},
+        requested_params=_SEGMENTED_AUTO_PARAMS,
+        method="fft",
+    )
+    assert find_resumable_entry(manifest, **kwargs) is None
+
+    entry["effective_facts"]["nfft_policy_version"] = AUTO_NFFT_POLICY_VERSION
+    assert find_resumable_entry(_manifest([entry]), **kwargs) is entry
+
+
+def test_find_resumable_group_rejects_one_stale_auto_nfft_member(tmp_path):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source_a = {
+        "identity": "source-a",
+        "path": str(tmp_path / "a.csv"),
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    source_b = {
+        "identity": "source-b",
+        "path": str(tmp_path / "b.csv"),
+        "size": 20,
+        "mtime_ns": 200,
+    }
+    current_a = _task_entry("done", source_id="a")
+    current_a["task_id"] = "task-a"
+    current_a["effective_facts"] = {
+        "nfft_policy_version": AUTO_NFFT_POLICY_VERSION,
+    }
+    stale_b = _task_entry("done", source_id="b")
+    stale_b["task_id"] = "task-b"
+    stale_b["effective_facts"] = {}
+    group = _group_entry(
+        image_path,
+        [("task-a", source_a), ("task-b", source_b)],
+    )
+    manifest = dict(
+        _manifest([current_a, stale_b]),
+        render_groups=[group],
+    )
+    members = (
+        GroupMemberResumeFact("task-a", source_a),
+        GroupMemberResumeFact("task-b", source_b),
+    )
+    kwargs = dict(
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=members,
+        image_format="png",
+        requested_params=_FFT_TIME_AUTO_PARAMS,
+        method="fft_time",
+    )
+    assert find_resumable_group(manifest, **kwargs) is None
+
+    stale_b["effective_facts"]["nfft_policy_version"] = AUTO_NFFT_POLICY_VERSION
+    assert find_resumable_group(
+        dict(_manifest([current_a, stale_b]), render_groups=[group]),
+        **kwargs,
+    ) is group
+
+    assert find_resumable_group(
+        dict(_manifest([current_a, stale_b]), render_groups=[group]),
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=members,
+        image_format="png",
+    ) is group

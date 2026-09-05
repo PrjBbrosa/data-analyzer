@@ -22,12 +22,23 @@ ANALYSIS_WINDOW_CANDIDATES: tuple[str, ...] = (
 
 DEFAULT_COHERENCE_THRESHOLD = 0.8
 
-# Target segment duration (seconds) fed to ``resolve_nfft`` when a spectral
-# analysis runs in auto-NFFT mode and no explicit ``t_win_s`` was stored.
-# Product default for both FFT (averaged / peak-hold) and FFT-vs-Time; the
-# batch FFT-vs-Time resolver previously carried a stray 1.0 here, which made
-# batch and GUI resolve different NFFTs for the same recording.
+# Target segment duration (seconds) fed to ``resolve_nfft`` / ``resolve_auto_nfft``
+# when a spectral analysis runs in auto-NFFT mode and no explicit ``t_win_s``
+# was stored. Product default for both FFT (averaged / peak-hold) and
+# FFT-vs-Time; the batch FFT-vs-Time resolver previously carried a stray 1.0
+# here, which made batch and GUI resolve different NFFTs for the same recording.
 DEFAULT_FFT_T_WIN_S = 1.5
+
+# Practical Auto-NFFT policy (segmented 1D FFT and FFT-vs-Time only).
+# Order / FRF keep their own helpers and must not import these ceilings.
+AUTO_NFFT_PREFERRED = 4096
+AUTO_4096_MAX_WINDOW_S = 10.0
+AUTO_FFT_SEGMENTED_MAX = 16384
+AUTO_FFT_TIME_MAX = 8192
+AUTO_FFT_TIME_MIN_FRAMES = 4
+AUTO_NOTICE_FRAMES = 8
+AUTO_MIN_NFFT = 64
+AUTO_NFFT_POLICY_VERSION = 2
 
 # Frame overlap fraction for FFT-vs-Time when a recipe omits ``overlap``.
 # Matches the inspector's first-open 80% (contextual_fft_time.spin_overlap).
@@ -70,6 +81,14 @@ def normalize_overlap_fraction(value, *, default=0.0):
 
 __all__ = [
     "ANALYSIS_WINDOW_CANDIDATES",
+    "AUTO_4096_MAX_WINDOW_S",
+    "AUTO_FFT_SEGMENTED_MAX",
+    "AUTO_FFT_TIME_MAX",
+    "AUTO_FFT_TIME_MIN_FRAMES",
+    "AUTO_MIN_NFFT",
+    "AUTO_NFFT_POLICY_VERSION",
+    "AUTO_NFFT_PREFERRED",
+    "AUTO_NOTICE_FRAMES",
     "DEFAULT_ANALYSIS_WINDOW",
     "DEFAULT_COHERENCE_THRESHOLD",
     "DEFAULT_FFT_TIME_OVERLAP",

@@ -2,8 +2,21 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from numbers import Integral
 
 import numpy as np
+
+from .analysis_defaults import (
+    AUTO_4096_MAX_WINDOW_S,
+    AUTO_FFT_SEGMENTED_MAX,
+    AUTO_FFT_TIME_MAX,
+    AUTO_FFT_TIME_MIN_FRAMES,
+    AUTO_MIN_NFFT,
+    AUTO_NFFT_PREFERRED,
+    AUTO_NOTICE_FRAMES,
+    OVERLAP_FRACTION_MAX,
+)
 
 
 def ceil_pow2(x):
@@ -25,7 +38,14 @@ def resolve_nfft(
     min_frames=24,
     max_window_frac=0.15,
 ):
-    """Resolve an FFT length from sample rate, data length, and target window."""
+    """Resolve an FFT length from sample rate, data length, and target window.
+
+    Legacy compatibility helper. Segmented FFT and FFT-vs-Time Auto now use
+    :func:`resolve_auto_nfft`. This function keeps the historical 24-frame /
+    15%-window policy and default ``ceil=8192``; do not copy the practical
+    4096-preference rules into it. Order analysis still routes through
+    :func:`resolve_order_nfft`, which calls this helper.
+    """
     fs = float(fs)
     t_win_s = float(t_win_s)
     n_samples = int(n_samples)
@@ -86,6 +106,466 @@ def resolve_order_nfft(
         ceil=ceil,
         min_frames=min_frames,
         max_window_frac=max_window_frac,
+    )
+
+
+_AUTO_NFFT_PURPOSES = ("fft_segmented", "fft_time")
+_AUTO_NFFT_REASON_ORDER = (
+    "preferred_4096",
+    "duration_target",
+    "low_fs_duration_guard",
+    "minimum_nfft_floor",
+    "short_record_clamp",
+    "fft_time_frame_guard",
+    "limited_statistics",
+    "limited_time_frames",
+    "auto_ceiling",
+    "insufficient_samples",
+    "insufficient_time_frames",
+)
+_SEGMENTED_MIN_WARNING_FRAMES = 4
+
+
+@dataclass(frozen=True)
+class AutoNfftDecision:
+    """Frozen Auto-NFFT decision for segmented FFT or FFT-vs-Time.
+
+    Single-frame Auto and Fixed NFFT stay on the analyzer / facts builders;
+    they are not a third purpose of this object.
+    """
+
+    purpose: str
+    preferred_nfft: int
+    duration_target_nfft: int
+    requested_nfft: int
+    effective_nfft: int | None
+    fs: float
+    n_samples: int
+    overlap: float
+    df_hz: float | None
+    window_s: float | None
+    frames: int
+    degraded: bool | None
+    status: str
+    reasons: tuple[str, ...]
+
+
+def segmented_analysis_hop(nfft, overlap):
+    """Integer hop used by averaged / peak-hold 1D FFT (no tail frame)."""
+    length = int(nfft)
+    hop = int(length * (1.0 - float(overlap)))
+    if hop <= 0:
+        hop = length // 2
+    if hop <= 0:
+        hop = 1
+    return hop
+
+
+def spectrogram_analysis_hop(nfft, overlap):
+    """Integer hop used by ``SpectrogramAnalyzer`` (raises if hop is not positive)."""
+    hop = int(int(nfft) * (1.0 - float(overlap)))
+    if hop <= 0:
+        raise ValueError("overlap leaves no positive hop size")
+    return hop
+
+
+def non_tail_frame_count(n_samples, nfft, overlap):
+    """Complete non-tail frames for averaged / peak-hold FFT. O(1)."""
+    n = int(n_samples)
+    length = int(nfft)
+    if n < length or length <= 0:
+        return 0
+    hop = segmented_analysis_hop(length, overlap)
+    return (n - length) // hop + 1
+
+
+def spectrogram_frame_count_from_hop(n_samples, nfft, hop):
+    """O(1) spectrogram frame count for a concrete integer hop, including tail."""
+    n = int(n_samples)
+    length = int(nfft)
+    step = int(hop)
+    if n < length or length <= 0 or step <= 0:
+        return 0
+    span = n - length
+    n_regular = span // step + 1
+    last_regular = (n_regular - 1) * step
+    if last_regular != span:
+        return n_regular + 1
+    return n_regular
+
+
+def spectrogram_frame_starts_from_hop(n_samples, nfft, hop):
+    """Frame starts for a concrete hop, appending a non-duplicate tail start."""
+    n = int(n_samples)
+    length = int(nfft)
+    step = int(hop)
+    if n < length or length <= 0 or step <= 0:
+        return np.array([], dtype=int)
+    starts = np.arange(0, n - length + 1, step, dtype=int)
+    tail_start = n - length
+    if starts.size and int(starts[-1]) != tail_start:
+        starts = np.append(starts, tail_start)
+    return starts
+
+
+def canonical_spectrogram_frame_count(n_samples, nfft, overlap):
+    """Canonical spectrogram frame count, including a tail frame. O(1)."""
+    hop = spectrogram_analysis_hop(nfft, overlap)
+    return spectrogram_frame_count_from_hop(n_samples, nfft, hop)
+
+
+def canonical_spectrogram_frame_starts(n_samples, nfft, overlap):
+    """Frame starts matching ``SpectrogramAnalyzer._frame_starts`` hop rules."""
+    hop = spectrogram_analysis_hop(nfft, overlap)
+    return spectrogram_frame_starts_from_hop(n_samples, nfft, hop)
+
+
+def _largest_pow2_leq(n):
+    n = int(n)
+    if n < 1:
+        return 0
+    return 1 << (n.bit_length() - 1)
+
+
+def _ordered_reasons(codes):
+    wanted = set(codes)
+    return tuple(code for code in _AUTO_NFFT_REASON_ORDER if code in wanted)
+
+
+def _validate_auto_nfft_inputs(fs, n_samples, t_win_s, overlap, purpose):
+    if purpose not in _AUTO_NFFT_PURPOSES:
+        raise ValueError(
+            "purpose must be 'fft_segmented' or 'fft_time'"
+        )
+    try:
+        fs_val = float(fs)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("fs must be finite and greater than 0") from exc
+    if not math.isfinite(fs_val) or fs_val <= 0.0:
+        raise ValueError("fs must be finite and greater than 0")
+    if isinstance(n_samples, bool) or not isinstance(n_samples, Integral):
+        raise ValueError("n_samples must be a non-bool integer greater than 0")
+    n_val = int(n_samples)
+    if n_val <= 0:
+        raise ValueError("n_samples must be a non-bool integer greater than 0")
+    try:
+        t_win = float(t_win_s)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("t_win_s must be finite and greater than 0") from exc
+    if not math.isfinite(t_win) or t_win <= 0.0:
+        raise ValueError("t_win_s must be finite and greater than 0")
+    product = fs_val * t_win
+    if not math.isfinite(product) or product <= 0.0:
+        raise ValueError("fs * t_win_s must be finite and greater than 0")
+    try:
+        overlap_val = float(overlap)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("overlap must be finite and in [0, 0.95]") from exc
+    if not math.isfinite(overlap_val) or not (
+        0.0 <= overlap_val <= OVERLAP_FRACTION_MAX
+    ):
+        raise ValueError("overlap must be finite and in [0, 0.95]")
+    return fs_val, n_val, t_win, overlap_val, product
+
+
+def _blocked_auto_nfft(
+    *,
+    purpose,
+    preferred,
+    duration_target,
+    requested,
+    fs,
+    n_samples,
+    overlap,
+    reasons,
+):
+    return AutoNfftDecision(
+        purpose=purpose,
+        preferred_nfft=int(preferred),
+        duration_target_nfft=int(duration_target),
+        requested_nfft=int(requested),
+        effective_nfft=None,
+        fs=float(fs),
+        n_samples=int(n_samples),
+        overlap=float(overlap),
+        df_hz=None,
+        window_s=None,
+        frames=0,
+        degraded=None,
+        status="blocked",
+        reasons=_ordered_reasons(reasons),
+    )
+
+
+def _success_auto_nfft(
+    *,
+    purpose,
+    preferred,
+    duration_target,
+    requested,
+    effective,
+    fs,
+    n_samples,
+    overlap,
+    frames,
+    reasons,
+    status,
+):
+    nfft = int(effective)
+    return AutoNfftDecision(
+        purpose=purpose,
+        preferred_nfft=int(preferred),
+        duration_target_nfft=int(duration_target),
+        requested_nfft=int(requested),
+        effective_nfft=nfft,
+        fs=float(fs),
+        n_samples=int(n_samples),
+        overlap=float(overlap),
+        df_hz=float(fs) / float(nfft),
+        window_s=float(nfft) / float(fs),
+        frames=int(frames),
+        degraded=bool(nfft < int(requested)),
+        status=status,
+        reasons=_ordered_reasons(reasons),
+    )
+
+
+def requested_auto_nfft(fs, t_win_s, *, purpose):
+    """Requested Auto-NFFT when the sample count is not yet known.
+
+    Used by Inspector previews that must not invent an actual NFFT. Does not
+    apply the real-sample clamp or FFT-vs-Time frame guard.
+    """
+    fs_val, _n_val, _t_win, _overlap, product = _validate_auto_nfft_inputs(
+        fs, 64, t_win_s, 0.0, purpose,
+    )
+    duration_target = ceil_pow2(product)
+    preferred = int(AUTO_NFFT_PREFERRED)
+    baseline_enabled = (float(preferred) / fs_val) <= float(AUTO_4096_MAX_WINDOW_S)
+    baseline = preferred if baseline_enabled else 0
+    ceiling = (
+        AUTO_FFT_SEGMENTED_MAX if purpose == "fft_segmented" else AUTO_FFT_TIME_MAX
+    )
+    raw_requested = max(duration_target, baseline, AUTO_MIN_NFFT)
+    return min(raw_requested, int(ceiling))
+
+
+def resolve_auto_nfft(fs, n_samples, t_win_s, overlap, *, purpose):
+    """Resolve a practical Auto-NFFT decision for segmented FFT or FFT-vs-Time.
+
+    Fail-closed on illegal inputs. Does not zero-pad to reach 4096. Order
+    and FRF must not call this helper.
+    """
+    fs_val, n_val, t_win, overlap_val, product = _validate_auto_nfft_inputs(
+        fs, n_samples, t_win_s, overlap, purpose,
+    )
+    duration_target = ceil_pow2(product)
+    preferred = int(AUTO_NFFT_PREFERRED)
+    baseline_enabled = (float(preferred) / fs_val) <= float(AUTO_4096_MAX_WINDOW_S)
+    baseline = preferred if baseline_enabled else 0
+    ceiling = (
+        AUTO_FFT_SEGMENTED_MAX if purpose == "fft_segmented" else AUTO_FFT_TIME_MAX
+    )
+    reasons = []
+    if baseline_enabled:
+        if duration_target <= preferred:
+            reasons.append("preferred_4096")
+        else:
+            reasons.append("duration_target")
+    else:
+        reasons.append("low_fs_duration_guard")
+    if max(duration_target, baseline) < AUTO_MIN_NFFT:
+        reasons.append("minimum_nfft_floor")
+    raw_requested = max(duration_target, baseline, AUTO_MIN_NFFT)
+    requested = min(raw_requested, int(ceiling))
+    if raw_requested > int(ceiling):
+        reasons.append("auto_ceiling")
+    available = _largest_pow2_leq(n_val)
+    candidate = min(requested, available)
+    if candidate < requested:
+        reasons.append("short_record_clamp")
+    if candidate < AUTO_MIN_NFFT:
+        reasons.append("insufficient_samples")
+        return _blocked_auto_nfft(
+            purpose=purpose,
+            preferred=preferred,
+            duration_target=duration_target,
+            requested=requested,
+            fs=fs_val,
+            n_samples=n_val,
+            overlap=overlap_val,
+            reasons=reasons,
+        )
+
+    if purpose == "fft_segmented":
+        frames = non_tail_frame_count(n_val, candidate, overlap_val)
+        if frames <= 0:
+            reasons.append("insufficient_samples")
+            return _blocked_auto_nfft(
+                purpose=purpose,
+                preferred=preferred,
+                duration_target=duration_target,
+                requested=requested,
+                fs=fs_val,
+                n_samples=n_val,
+                overlap=overlap_val,
+                reasons=reasons,
+            )
+        if frames >= AUTO_NOTICE_FRAMES:
+            status = "normal"
+        elif frames >= _SEGMENTED_MIN_WARNING_FRAMES:
+            status = "notice"
+            reasons.append("limited_statistics")
+        else:
+            status = "warning"
+            reasons.append("limited_statistics")
+        return _success_auto_nfft(
+            purpose=purpose,
+            preferred=preferred,
+            duration_target=duration_target,
+            requested=requested,
+            effective=candidate,
+            fs=fs_val,
+            n_samples=n_val,
+            overlap=overlap_val,
+            frames=frames,
+            reasons=reasons,
+            status=status,
+        )
+
+    reduced = False
+    effective = None
+    frames = 0
+    while candidate >= AUTO_MIN_NFFT:
+        frames = canonical_spectrogram_frame_count(n_val, candidate, overlap_val)
+        if frames >= AUTO_FFT_TIME_MIN_FRAMES:
+            effective = candidate
+            break
+        reduced = True
+        candidate //= 2
+    if effective is None:
+        reasons.append("fft_time_frame_guard")
+        reasons.append("insufficient_time_frames")
+        return _blocked_auto_nfft(
+            purpose=purpose,
+            preferred=preferred,
+            duration_target=duration_target,
+            requested=requested,
+            fs=fs_val,
+            n_samples=n_val,
+            overlap=overlap_val,
+            reasons=reasons,
+        )
+    if reduced:
+        reasons.append("fft_time_frame_guard")
+    if frames >= AUTO_NOTICE_FRAMES:
+        status = "normal"
+    else:
+        status = "notice"
+        reasons.append("limited_time_frames")
+    return _success_auto_nfft(
+        purpose=purpose,
+        preferred=preferred,
+        duration_target=duration_target,
+        requested=requested,
+        effective=effective,
+        fs=fs_val,
+        n_samples=n_val,
+        overlap=overlap_val,
+        frames=frames,
+        reasons=reasons,
+        status=status,
+    )
+
+
+class AutoNfftBlockedError(ValueError):
+    """User/data failure: Auto-NFFT cannot produce a computable segment."""
+
+    def __init__(self, decision: AutoNfftDecision):
+        self.decision = decision
+        codes = ", ".join(decision.reasons) or "blocked"
+        super().__init__(
+            f"Auto-NFFT blocked ({decision.purpose}): {codes}"
+        )
+
+
+def raise_if_auto_nfft_blocked(decision: AutoNfftDecision) -> AutoNfftDecision:
+    """Raise :class:`AutoNfftBlockedError` for a blocked decision; else return it."""
+    if decision.status == "blocked":
+        raise AutoNfftBlockedError(decision)
+    return decision
+
+
+def nfft_facts_signature(
+    *,
+    nfft_mode,
+    policy_version=None,
+    t_win_s=None,
+    duration_target=None,
+    requested_nfft=None,
+    effective_nfft=None,
+    n_samples=None,
+    status=None,
+    degraded=None,
+    reasons=None,
+):
+    """Hashable cache identity for Auto/Fixed NFFT intent plus effective values.
+
+    Localized warning text is not part of the signature. Single-frame and
+    Fixed modes keep unrelated Auto policy fields as ``None``.
+    """
+    mode = None if nfft_mode is None else str(nfft_mode)
+    auto = mode == "auto"
+    version = None
+    target = None
+    window = None
+    if auto:
+        if policy_version is not None:
+            version = int(policy_version)
+        if duration_target is not None:
+            target = int(duration_target)
+        if t_win_s is not None:
+            window_val = float(t_win_s)
+            if not math.isfinite(window_val):
+                raise ValueError("t_win_s must be finite")
+            window = format(window_val, ".12g")
+    reason_codes = tuple(str(code) for code in (reasons or ())) if auto else ()
+    return (
+        mode,
+        version,
+        window,
+        target,
+        None if requested_nfft is None else int(requested_nfft),
+        None if effective_nfft is None else int(effective_nfft),
+        None if n_samples is None else int(n_samples),
+        None if status is None else str(status),
+        None if degraded is None else bool(degraded),
+        reason_codes,
+    )
+
+
+def nfft_facts_signature_from_decision(
+    decision: AutoNfftDecision,
+    *,
+    t_win_s,
+    nfft_mode="auto",
+    policy_version,
+):
+    """Build :func:`nfft_facts_signature` from a segmented Auto decision.
+
+    ``t_win_s`` is the caller's stored intent, not the effective window.
+    """
+    return nfft_facts_signature(
+        nfft_mode=nfft_mode,
+        policy_version=policy_version,
+        t_win_s=t_win_s,
+        duration_target=decision.duration_target_nfft,
+        requested_nfft=decision.requested_nfft,
+        effective_nfft=decision.effective_nfft,
+        n_samples=decision.n_samples,
+        status=decision.status,
+        degraded=decision.degraded,
+        reasons=decision.reasons,
     )
 
 

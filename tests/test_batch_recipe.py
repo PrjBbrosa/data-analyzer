@@ -743,6 +743,21 @@ def test_migration_provenance_does_not_change_png_artifact_fingerprint():
     )
 
 
+def test_normalize_batch_params_does_not_persist_auto_nfft_policy_version():
+    normalized = normalize_batch_params(
+        {
+            "nfft": None,
+            "nfft_mode": "auto",
+            "avg_mode": "线性平均",
+            "t_win_s": 1.5,
+        },
+        "fft",
+    )
+    assert "nfft_policy_version" not in normalized
+    assert normalized["nfft"] is None
+    assert normalized["nfft_mode"] == "auto"
+
+
 def test_normalizers_reject_ambiguous_inputs():
     with pytest.raises(ValueError, match="unsupported batch method"):
         normalize_batch_params({}, "order_track")

@@ -57,6 +57,33 @@ def test_fft_time_effective_auto_nfft_resolves_before_cache_key(qapp, qtbot):
     key = w._fft_time_analysis_cache_key("f1", "speed", effective, 0)
     assert isinstance(json.loads(key[2])["nfft"], int)
     assert json.loads(key[2])["nfft"] == 256
+    assert json.loads(key[2]).get("nfft_facts_signature") is not None
+
+    m4 = w._resolve_fft_time_effective_params(
+        dict(p, fs=1000.0, t_win_s=1.5, overlap=0.5), 10000
+    )
+    assert m4["nfft_effective"] == 4096
+    assert m4["nfft_decision"].frames == 4
+    assert m4["nfft_decision"].status == "notice"
+
+    m5 = w._resolve_fft_time_effective_params(
+        dict(p, fs=1000.0, t_win_s=1.5, overlap=0.5), 8000
+    )
+    assert m5["nfft_effective"] == 2048
+    assert m5["nfft_decision"].requested_nfft == 4096
+    assert "fft_time_frame_guard" in m5["nfft_decision"].reasons
+
+    same_nfft_short = w._resolve_fft_time_effective_params(
+        dict(p, fs=1000.0, t_win_s=1.5, overlap=0.5), 3000
+    )
+    same_nfft_long = w._resolve_fft_time_effective_params(
+        dict(p, fs=1000.0, t_win_s=8.0, overlap=0.5), 3000
+    )
+    assert same_nfft_short["nfft_effective"] == same_nfft_long["nfft_effective"]
+    assert (
+        same_nfft_short["nfft_facts_signature"]
+        != same_nfft_long["nfft_facts_signature"]
+    )
 
     fixed = w._resolve_fft_time_effective_params(
         dict(p, nfft=1024, nfft_mode="fixed"), 5002
@@ -156,7 +183,7 @@ def test_fft_time_dispatch_uses_effective_auto_nfft(qapp, qtbot, monkeypatch):
         seen["nfft"] = params.nfft
         seen["ctx_nfft"] = ctx["render_params"]["nfft"]
         seen["factory_params_nfft"] = ctx["params"]["nfft"]
-        return object()
+        return SimpleNamespace(params=params, metadata={"frames": 1, "hop": 1})
 
     class DummyProgress:
         def emit(self, *args):
@@ -299,15 +326,36 @@ def test_fft_effective_auto_nfft_resolves_for_average_modes(qapp, qtbot):
     assert peak_hold["nfft_effective"] == 256
 
     high_fs = w._resolve_fft_effective_params(base, 60000, 1000.0)
-    assert high_fs["nfft"] == 2048
-    assert high_fs["nfft_effective"] == 2048
+    assert high_fs["nfft"] == 4096
+    assert high_fs["nfft_effective"] == 4096
+    assert high_fs["nfft_status"] == "normal"
+
+    m3 = w._resolve_fft_effective_params(
+        dict(base, avg_overlap=50), 10000, 1000.0
+    )
+    assert m3["nfft"] == 4096
+    assert m3["nfft_effective"] == 4096
+    assert m3["nfft_status"] == "warning"
+    assert m3["nfft_decision"].requested_nfft == 4096
+    assert "limited_statistics" in m3["nfft_decision"].reasons
+    assert m3["nfft_decision"].degraded is False
+
+    m8 = w._resolve_fft_effective_params(
+        dict(base, avg_overlap=50), 3000, 1000.0
+    )
+    assert m8["nfft"] == 2048
+    assert m8["nfft_effective"] == 2048
+    assert m8["nfft_decision"].requested_nfft == 4096
+    assert m8["nfft_status"] == "warning"
 
     single_frame = w._resolve_fft_effective_params(
-        dict(base, avg_mode="单帧"), 5002, 96.0
+        dict(base, avg_mode="单帧"), 3552, 1000.0
     )
     assert single_frame["nfft"] is None
     assert single_frame["nfft_effective"] is None
     assert single_frame["nfft_mode"] == "auto"
+    assert single_frame["nfft_facts_signature"][4] == 3552
+    assert single_frame["nfft_facts_signature"][5] == 3552
 
 
 def test_fft_compute_arrays_uses_effective_nfft_for_auto_average(
@@ -354,6 +402,92 @@ def test_fft_compute_arrays_uses_effective_nfft_for_auto_average(
     w._fft_compute_arrays(sig, 96.0, dict(params, avg_mode="峰值保持"))
 
     assert seen == {"averaged": 256, "peak": 256}
+
+
+def test_fft_compute_arrays_blocked_auto_raises_user_data_error(qapp, qtbot):
+    import numpy as np
+    import pytest
+
+    from mf4_analyzer.signal import AutoNfftBlockedError
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    sig = np.ones(32, dtype=float)
+    params = {
+        "window": "hanning",
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "avg_mode": "线性平均",
+        "avg_overlap": 50,
+    }
+    resolved = w._resolve_fft_effective_params(params, 32, 1000.0)
+    assert resolved["nfft"] is None
+    assert resolved["nfft_effective"] is None
+    assert resolved["nfft_status"] == "blocked"
+    with pytest.raises(AutoNfftBlockedError):
+        w._fft_compute_arrays(sig, 1000.0, params)
+
+
+def test_fft_compute_arrays_m3_facts_keep_4096_and_are_not_shortened(qapp, qtbot):
+    import numpy as np
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    fs = 1000.0
+    sig = np.sin(2.0 * np.pi * 40.0 * np.arange(10000, dtype=float) / fs)
+    params = {
+        "window": "hanning",
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "avg_mode": "线性平均",
+        "avg_overlap": 50,
+        "weighting": "None",
+    }
+    result = w._fft_compute_arrays(sig, fs, params)
+    facts = result.effective
+    assert facts.nfft_effective == 4096
+    assert facts.nfft_requested == 4096
+    assert facts.shortened is False
+    assert facts.nfft_status == "warning"
+    assert "limited_statistics" in facts.nfft_reason_codes
+    assert facts.frames == 3
+
+
+def test_fft_cache_key_separates_same_effective_nfft_different_intent(qapp, qtbot):
+    from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
+
+    base = {
+        "window": "hanning",
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "avg_mode": "线性平均",
+        "avg_overlap": 50,
+        "weighting": "None",
+    }
+    short = FFTMixin._resolve_fft_effective_params(dict(base), 3000, 1000.0)
+    long = FFTMixin._resolve_fft_effective_params(
+        dict(base, t_win_s=8.0), 3000, 1000.0
+    )
+    assert short["nfft_effective"] == long["nfft_effective"] == 2048
+    assert short["nfft_decision"].requested_nfft == 4096
+    assert long["nfft_decision"].requested_nfft == 8192
+    k_short = FFTMixin._fft_compute_cache_params(short)
+    k_long = FFTMixin._fft_compute_cache_params(long)
+    assert k_short != k_long
+    assert k_short["nfft"] == k_long["nfft"] == 2048
+
+    auto_4096 = FFTMixin._resolve_fft_effective_params(
+        dict(base), 60000, 1000.0
+    )
+    fixed_4096 = FFTMixin._resolve_fft_effective_params(
+        dict(base, nfft=4096, nfft_mode="fixed"), 60000, 1000.0
+    )
+    assert auto_4096["nfft_effective"] == fixed_4096["nfft_effective"] == 4096
+    assert FFTMixin._fft_compute_cache_params(auto_4096) != \
+        FFTMixin._fft_compute_cache_params(fixed_4096)
 
 
 def test_plot_fft_entries_auto_xlim_uses_energy_band_and_manual_stays_fixed(
@@ -460,7 +594,9 @@ def test_fft_analysis_cache_key_auto_uses_effective_nfft(qapp, qtbot, monkeypatc
     params_96 = json.loads(key_96[2])
     params_1000 = json.loads(key_1000[2])
     assert params_96["nfft"] == 256
-    assert params_1000["nfft"] == 2048
+    assert params_1000["nfft"] == 4096
+    assert "nfft_facts_signature" in params_96
+    assert "nfft_facts_signature" in params_1000
     assert key_96 != key_1000
 
 
@@ -4843,7 +4979,7 @@ def test_fft_time_nfft_preview_wired_to_loaded_data(qapp, qtbot):
     import numpy as np
     import pandas as pd
 
-    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.signal import resolve_auto_nfft
     from mf4_analyzer.ui.main_window import MainWindow
 
     w = MainWindow()
@@ -4868,10 +5004,12 @@ def test_fft_time_nfft_preview_wired_to_loaded_data(qapp, qtbot):
     assert ftx._auto_nfft_provider is not None
     assert w._fft_time_preview_n_samples() == 3000
 
-    expected = int(resolve_nfft(1000.0, 3000, 1.5, 0.5))
-    assert expected == 128
+    expected = resolve_auto_nfft(
+        1000.0, 3000, 1.5, 0.5, purpose="fft_time",
+    ).effective_nfft
+    assert expected == 1024
     assert ftx._nfft_preview() == expected
-    assert ftx._nfft_preview() != 2048  # not the data-blind ceil_pow2(Fs*t_win)
+    assert ftx._nfft_preview() != 4096
     assert f"{ftx._AUTO_NFFT_LABEL}({expected})" in ftx._tf_summary_text()
 
 

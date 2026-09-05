@@ -635,8 +635,8 @@ class TestAutoNfftFallbackNoTypeError:
 
     def test_auto_nfft_fallback_key_uses_nfft_preview(self):
         """When nfft and nfft_effective are both None, the fallback key must
-        encode nfft_preview (512) as the nfft dimension — not None — so that
-        keys with different nfft_preview values are distinguishable."""
+        still distinguish different requested targets (nfft_preview) via the
+        facts signature — without pretending preview is an actual NFFT."""
         mw = self._make_stub_mw()
         key_512 = mw._analysis_cache_key('fft_time', 'f1', 'ch1', pane_idx=0)
         # Now patch nfft_preview to 1024 and verify the key changes.
@@ -683,3 +683,64 @@ def test_close_all_clears_fft_time_coordinator_pending(qapp, qtbot):
     w.close_all(force=True)
 
     assert w._fft_time_coordinator._pending == {}
+
+
+class TestFftNfftFactsSignatureCacheIdentity:
+    """D8: ordinary FFT cache keys include nfft_facts_signature."""
+
+    def test_same_effective_nfft_different_t_win_misses_cache(self):
+        from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
+
+        base = {
+            "window": "hanning",
+            "nfft": None,
+            "nfft_mode": "auto",
+            "t_win_s": 1.5,
+            "avg_mode": "线性平均",
+            "avg_overlap": 50,
+            "weighting": "None",
+        }
+        short = FFTMixin._resolve_fft_effective_params(dict(base), 3000, 1000.0)
+        long = FFTMixin._resolve_fft_effective_params(
+            dict(base, t_win_s=8.0), 3000, 1000.0
+        )
+        assert short["nfft_effective"] == long["nfft_effective"] == 2048
+        assert short["nfft_decision"].requested_nfft == 4096
+        assert long["nfft_decision"].requested_nfft == 8192
+        assert FFTMixin._fft_compute_cache_params(short) != \
+            FFTMixin._fft_compute_cache_params(long)
+
+    def test_auto_and_fixed_same_nfft_miss_cache(self):
+        from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
+
+        auto = FFTMixin._resolve_fft_effective_params(
+            {
+                "window": "hanning",
+                "nfft": None,
+                "nfft_mode": "auto",
+                "t_win_s": 1.5,
+                "avg_mode": "线性平均",
+                "avg_overlap": 50,
+                "weighting": "None",
+            },
+            60000,
+            1000.0,
+        )
+        fixed = FFTMixin._resolve_fft_effective_params(
+            {
+                "window": "hanning",
+                "nfft": 4096,
+                "nfft_mode": "fixed",
+                "t_win_s": 1.5,
+                "avg_mode": "线性平均",
+                "avg_overlap": 50,
+                "weighting": "None",
+            },
+            60000,
+            1000.0,
+        )
+        assert auto["nfft_effective"] == fixed["nfft_effective"] == 4096
+        assert FFTMixin._fft_compute_cache_params(auto) != \
+            FFTMixin._fft_compute_cache_params(fixed)
+        assert FFTMixin._fft_compute_cache_params(auto)["nfft_facts_signature"]
+        assert FFTMixin._fft_compute_cache_params(fixed)["nfft_facts_signature"]

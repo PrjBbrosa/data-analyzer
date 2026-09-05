@@ -9,6 +9,7 @@ from mf4_analyzer.batch_compute import (
     compute_fft_time_spectro,
     compute_order_time_spectro,
     fft_effective_facts_from_compute,
+    resolve_effective_nfft,
 )
 from mf4_analyzer.signal.analysis_defaults import DEFAULT_FFT_T_WIN_S
 from mf4_analyzer.signal.fft import unconstrained_window_nfft
@@ -25,9 +26,19 @@ def _fields(facts):
     }
 
 
-def test_fft_gui_and_batch_facts_match_for_the_same_signal():
-    fs = 1000.0
-    n = 2048
+@pytest.mark.parametrize(
+    ("fs", "n", "overlap_pct", "expected_nfft", "expected_status"),
+    [
+        (1000.0, 60000, 50, 4096, "normal"),  # M1
+        (1000.0, 10000, 50, 4096, "warning"),  # M3
+        (96.0, 5002, 75, 256, "normal"),  # M7
+        (1000.0, 3000, 50, 2048, "warning"),  # M8
+        (10.0, 6000, 50, 64, "normal"),  # B1 floor
+    ],
+)
+def test_fft_gui_and_batch_facts_match_for_the_same_signal(
+    fs, n, overlap_pct, expected_nfft, expected_status,
+):
     sig = np.sin(2 * np.pi * 40.0 * np.arange(n, dtype=float) / fs)
     params = {
         "window": "hanning",
@@ -35,7 +46,7 @@ def test_fft_gui_and_batch_facts_match_for_the_same_signal():
         "nfft_mode": "auto",
         "t_win_s": DEFAULT_FFT_T_WIN_S,
         "avg_mode": "线性平均",
-        "avg_overlap": 50,
+        "avg_overlap": overlap_pct,
         "weighting": "None",
     }
     dummy = FFTMixin()
@@ -47,8 +58,47 @@ def test_fft_gui_and_batch_facts_match_for_the_same_signal():
     )
     assert gui_facts is not None and batch_facts is not None
     assert _fields(gui_facts) == _fields(batch_facts)
-    assert gui_facts.nfft == batch_facts.nfft
-    assert gui_facts.shortened == batch_facts.shortened
+    assert gui_facts.nfft_effective == expected_nfft
+    assert batch_facts.nfft_effective == expected_nfft
+    assert gui_facts.nfft_status == expected_status
+    assert gui_facts.to_canonical_dict()["nfft"] == expected_nfft
+    assert gui_facts.df_hz == pytest.approx(fs / expected_nfft)
+    assert gui_facts.nfft_mode == "auto"
+
+
+@pytest.mark.parametrize(
+    ("n", "overlap", "expected_nfft", "expected_status"),
+    [
+        (10000, 0.5, 4096, "notice"),  # M4
+        (8000, 0.5, 2048, "notice"),  # M5
+        (10000, 0.8, 4096, "normal"),  # M6
+    ],
+)
+def test_fft_time_gui_and_batch_auto_nfft_match(n, overlap, expected_nfft, expected_status):
+    from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
+
+    fs = 1000.0
+    params = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": DEFAULT_FFT_T_WIN_S,
+        "overlap": overlap,
+        "fs": fs,
+        "window": "hanning",
+        "remove_mean": True,
+        "weighting": "None",
+    }
+    gui = FFTTimeMixin._resolve_fft_time_effective_params(params, n)
+    batch = resolve_effective_nfft("fft_time", n, fs, params)
+    assert gui["nfft_effective"] == batch == expected_nfft
+    assert gui["nfft_decision"].status == expected_status
+    t = np.arange(n, dtype=float) / fs
+    sig = np.sin(2 * np.pi * 40.0 * t)
+    spectro = compute_fft_time_spectro(sig, t, fs, params, channel_name="sig")
+    payload = dict(spectro.metadata.get("effective_facts") or {})
+    assert payload["nfft_effective"] == expected_nfft
+    assert payload["nfft"] == expected_nfft
+    assert payload["nfft_status"] == expected_status
 
 
 def test_spectrogram_gui_builder_and_batch_metadata_match():

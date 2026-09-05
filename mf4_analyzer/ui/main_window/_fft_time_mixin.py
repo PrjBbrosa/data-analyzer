@@ -3,9 +3,15 @@
 import numpy as np
 
 from ... import db_reference
-from ...signal import resolve_nfft
-from ...signal.analysis_defaults import DEFAULT_FFT_T_WIN_S
-from ...signal.fft import unconstrained_window_nfft
+from ...signal import (
+    nfft_facts_signature,
+    nfft_facts_signature_from_decision,
+    resolve_auto_nfft,
+)
+from ...signal.analysis_defaults import (
+    AUTO_NFFT_POLICY_VERSION,
+    DEFAULT_FFT_T_WIN_S,
+)
 from ...signal.spectrogram import spectrogram_facts_from_result
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
@@ -33,21 +39,42 @@ class FFTTimeMixin:
         """
         out = dict(p)
         auto = out.get('nfft') is None or out.get('nfft_mode') == 'auto'
+        t_win_s = float(out.get('t_win_s', DEFAULT_FFT_T_WIN_S))
+        out['t_win_s'] = t_win_s
+        n_samples = int(n_samples)
         if auto:
-            effective = resolve_nfft(
+            out['nfft_mode'] = 'auto'
+            decision = resolve_auto_nfft(
                 out['fs'],
                 n_samples,
-                out.get('t_win_s', DEFAULT_FFT_T_WIN_S),
+                t_win_s,
                 out['overlap'],
+                purpose='fft_time',
             )
-            out['nfft'] = int(effective)
-            out['nfft_effective'] = int(effective)
-            out['nfft_mode'] = 'auto'
+            out['nfft_decision'] = decision
+            out['nfft_facts_signature'] = nfft_facts_signature_from_decision(
+                decision,
+                t_win_s=t_win_s,
+                policy_version=AUTO_NFFT_POLICY_VERSION,
+            )
+            if decision.status == 'blocked':
+                out['nfft'] = None
+                out['nfft_effective'] = None
+                out['nfft_status'] = 'blocked'
+            else:
+                out['nfft'] = int(decision.effective_nfft)
+                out['nfft_effective'] = int(decision.effective_nfft)
         else:
             effective = int(out['nfft'])
             out['nfft'] = effective
             out['nfft_effective'] = effective
             out['nfft_mode'] = 'fixed'
+            out['nfft_facts_signature'] = nfft_facts_signature(
+                nfft_mode='fixed',
+                requested_nfft=effective,
+                effective_nfft=effective,
+                n_samples=n_samples,
+            )
         return out
 
     def _fft_time_analysis_cache_key(self, fid, ch, p, time_range=None):
@@ -59,13 +86,15 @@ class FFTTimeMixin:
         """
         if isinstance(time_range, int):
             time_range = self._pane_time_range_for('fft_time', time_range)
+        nfft = p.get('nfft_effective', p.get('nfft'))
         params = {
             'fs': p.get('fs'),
-            'nfft': int(p.get('nfft_effective', p.get('nfft'))),
+            'nfft': None if nfft is None else int(nfft),
             'window': p.get('window'),
             'overlap': p.get('overlap'),
             'remove_mean': p.get('remove_mean'),
             'weighting': str(p.get('weighting', 'None')),
+            'nfft_facts_signature': p.get('nfft_facts_signature'),
         }
         return make_fft_time_analysis_key(
             self.analysis_caches['fft_time'].make_key,
@@ -113,6 +142,8 @@ class FFTTimeMixin:
                     coordinator.invalidate_fid(fid)
                     continue
             cache.invalidate_fid(fid)
+        if getattr(self, 'inspector', None) is None:
+            return
         for section in ('fft', 'fft_time', 'order'):
             sync = getattr(self, f'_sync_{section}_effective_facts', None)
             if callable(sync):
@@ -157,7 +188,7 @@ class FFTTimeMixin:
         ``FFTTimeContextual.set_auto_nfft_provider``: returns the
         inspector-time-range-gated length of the current spectrogram source so
         the collapsed 自动(N) tracks ``_resolve_fft_time_effective_params`` (same
-        ``resolve_nfft``). Returns ``None`` when unavailable. Never raises — it
+        ``resolve_auto_nfft``). Returns ``None`` when unavailable. Never raises — it
         feeds a paint path.
         """
         try:
@@ -486,6 +517,14 @@ class FFTTimeMixin:
                 self._record_fft_time_skip("样本不足")
                 return None
         p = self._resolve_fft_time_effective_params(raw_params, len(sig))
+        decision = p.get('nfft_decision')
+        if p.get('nfft_effective') is None:
+            if decision is not None and decision.status == 'blocked':
+                codes = ",".join(decision.reasons) or "blocked"
+                self._record_fft_time_skip(f"自动 NFFT 不可计算（{codes}）")
+                return None
+            self._record_fft_time_skip("自动 NFFT 不可计算")
+            return None
         # SpectrogramParams is the cache key on the analyzer side; build
         # it from compute-relevant fields only (db_reference is display-only
         # and lives render-side, so it is intentionally not passed here).
@@ -501,19 +540,19 @@ class FFTTimeMixin:
         if fd is not None and hasattr(fd, 'channel_units'):
             unit = fd.channel_units.get(ch, '') or ''
         auto = raw_params.get('nfft') is None or raw_params.get('nfft_mode') == 'auto'
-        if auto:
-            nfft_requested = unconstrained_window_nfft(
-                p.get('fs'), p.get('t_win_s', DEFAULT_FFT_T_WIN_S),
-            )
-            if nfft_requested is None:
-                nfft_requested = int(p['nfft_effective'])
+        if auto and decision is not None:
+            nfft_requested = int(decision.requested_nfft)
+        elif auto:
+            nfft_requested = int(p['nfft_effective'])
         else:
             nfft_requested = int(p['nfft_effective'])
         n_samples = len(sig)
+        nfft_mode = 'auto' if auto else 'fixed'
 
         def job(
             worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit,
             _requested=nfft_requested, _n_samples=n_samples,
+            _mode=nfft_mode, _decision=decision,
         ):
             from ...signal import SpectrogramAnalyzer
             result = SpectrogramAnalyzer.compute(
@@ -525,6 +564,8 @@ class FFTTimeMixin:
                 result,
                 nfft_requested=_requested,
                 n_samples=_n_samples,
+                nfft_mode=_mode,
+                decision=_decision,
             )
             return result
 
@@ -736,16 +777,6 @@ class FFTTimeMixin:
         )
         result = self.analysis_caches['fft_time'].get(key)
         facts = getattr(result, 'effective', None) if result is not None else None
-        if facts is None and result is not None:
-            nfft_requested = unconstrained_window_nfft(
-                getattr(getattr(result, 'params', None), 'fs', None),
-                DEFAULT_FFT_T_WIN_S,
-            )
-            _fid, _ch, _t, sig, _fd = self._fft_time_signal_for((fid, ch))
-            n_samples = int(len(sig)) if sig is not None else 0
-            facts = spectrogram_facts_from_result(
-                result, nfft_requested=nfft_requested, n_samples=n_samples,
-            )
         if facts is None:
             ctx.clear_effective_facts()
             return

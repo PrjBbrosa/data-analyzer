@@ -580,7 +580,7 @@ class AnalysisMixin:
                 continue
             try:
                 fs_v = float(sfd.fs)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, AttributeError):
                 continue
             if np.isfinite(fs_v) and fs_v > 0:
                 fs_values.append(fs_v)
@@ -1102,20 +1102,38 @@ class AnalysisMixin:
             # which caused A-weighted results to share a cache slot with
             # unweighted ones (问题④).
             #
-            # Auto-nfft guard (Task 4 regression): in auto-nfft mode get_params()
-            # returns nfft=None AND nfft_effective=None because the effective value
-            # cannot be resolved without a concrete sample count.  The primary key
-            # function does int(p.get('nfft_effective', p.get('nfft'))) — both keys
-            # are PRESENT with value None, so .get() returns None and int(None)
-            # raises TypeError.  Resolve via the or-chain before delegating;
-            # nfft_preview is always a positive integer (inspector sets it from the
-            # last sample-count estimate), so it provides a stable fallback.
+            # Auto-nfft without samples: do not disguise nfft_preview as an
+            # actual NFFT. Keep nfft None and put intent on the facts signature
+            # so different targets still miss, and int(None) is no longer used.
             p_fb = dict(p)
-            p_fb['nfft_effective'] = (
-                p.get('nfft_effective')
-                or p.get('nfft')
-                or p.get('nfft_preview')
+            auto_unresolved = (
+                p_fb.get('nfft_mode') == 'auto'
+                and p_fb.get('nfft_effective') is None
+                and p_fb.get('nfft') is None
             )
+            if auto_unresolved and p_fb.get('nfft_facts_signature') is None:
+                from ...signal import nfft_facts_signature, requested_auto_nfft
+                from ...signal.analysis_defaults import (
+                    AUTO_NFFT_POLICY_VERSION,
+                    DEFAULT_FFT_T_WIN_S,
+                )
+                t_win = p_fb.get('t_win_s', DEFAULT_FFT_T_WIN_S)
+                requested = p_fb.get('nfft_preview')
+                if requested is None:
+                    try:
+                        requested = requested_auto_nfft(
+                            p_fb.get('fs'), t_win, purpose='fft_time',
+                        )
+                    except (TypeError, ValueError):
+                        requested = None
+                p_fb['nfft_facts_signature'] = nfft_facts_signature(
+                    nfft_mode='auto',
+                    policy_version=AUTO_NFFT_POLICY_VERSION,
+                    t_win_s=t_win,
+                    requested_nfft=requested,
+                    effective_nfft=None,
+                    n_samples=None,
+                )
             return self._fft_time_analysis_cache_key(fid, ch, p_fb, pane_idx)
         if section == 'fft':
             time_range = self._pane_time_range_for(section, pane_idx)

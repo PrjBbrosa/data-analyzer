@@ -359,6 +359,63 @@ def test_run_routes_the_legacy_progress_callback_through_the_reporter(
     assert funnelled == [("done", 1, 2), ("done", 2, 2)]
 
 
+def test_blocked_auto_nfft_is_recorded_only_through_the_reporter(
+    tmp_path, monkeypatch,
+):
+    n = 32
+    fs = 1000.0
+    t = np.arange(n, dtype=float) / fs
+    df = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 40.0 * t)})
+    path = tmp_path / "blocked.csv"
+    df.to_csv(path, index=False)
+    fd = FileData(path, df, list(df.columns), {}, idx=0, fs=fs)
+
+    emitted = []
+    recorded = []
+    original_emit = batch_module._RunReporter.emit
+    original_record = batch_module._RunReporter.record
+
+    def spy_emit(self, event):
+        emitted.append(event)
+        return original_emit(self, event)
+
+    def spy_record(self, item, source_key, fd=None):
+        recorded.append(item)
+        return original_record(self, item, source_key, fd)
+
+    monkeypatch.setattr(batch_module._RunReporter, "emit", spy_emit)
+    monkeypatch.setattr(batch_module._RunReporter, "record", spy_record)
+
+    seen = []
+    preset = AnalysisPreset.from_current_single(
+        name="blocked auto",
+        method="fft",
+        signal=(0, "sig"),
+        params={
+            "fs": fs,
+            "nfft": None,
+            "nfft_mode": "auto",
+            "avg_mode": "线性平均",
+            "avg_overlap": 50,
+            "t_win_s": 1.5,
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", on_event=seen.append,
+    )
+
+    assert result.items[0].status == "failed"
+    assert "insufficient_samples" in result.items[0].message
+    assert [item.status for item in recorded] == ["failed"]
+    assert any(event.kind == "task_failed" for event in emitted)
+    assert seen == emitted
+    assert not any(
+        event.kind == "task_failed" and event not in emitted
+        for event in seen
+    )
+
+
 def test_reporter_stays_private_to_the_batch_module():
     assert "_RunReporter" not in getattr(batch_module, "__all__", ())
 

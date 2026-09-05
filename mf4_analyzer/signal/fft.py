@@ -219,18 +219,72 @@ def _fft_frame_count(n_samples, nfft, overlap, avg_mode):
     mode = str(avg_mode or "单帧")
     if mode == "单帧":
         return 1
-    n = int(n_samples)
-    length = int(nfft)
-    if n <= 0 or length <= 0:
-        return 1
-    hop = int(length * (1.0 - float(overlap)))
-    if hop <= 0:
-        hop = length // 2
-    if hop <= 0:
-        hop = 1
-    if n < length:
-        return 1
-    return max((n - length) // hop + 1, 1)
+    from .adaptive import non_tail_frame_count
+
+    count = non_tail_frame_count(n_samples, nfft, overlap)
+    return max(int(count), 1)
+
+
+def _segmented_auto_policy_fields(
+    *,
+    avg_mode,
+    nfft_mode,
+    decision,
+    nfft_policy_version,
+    nfft_preferred,
+    nfft_duration_target,
+    nfft_status,
+    nfft_degraded,
+    nfft_reason_codes,
+):
+    """Policy fields apply to segmented Auto only; single-frame/Fixed stay None."""
+    from .analysis_defaults import AUTO_NFFT_POLICY_VERSION
+
+    mode = None if nfft_mode is None else str(nfft_mode)
+    if mode is None and decision is not None:
+        mode = "auto"
+    segmented = str(avg_mode or "单帧") != "单帧"
+    auto_segmented = segmented and mode == "auto"
+    if not auto_segmented:
+        return {
+            "nfft_policy_version": None,
+            "nfft_mode": mode,
+            "nfft_preferred": None,
+            "nfft_duration_target": None,
+            "nfft_status": None,
+            "nfft_degraded": None,
+            "nfft_reason_codes": (),
+        }
+    if decision is not None:
+        return {
+            "nfft_policy_version": int(
+                AUTO_NFFT_POLICY_VERSION
+                if nfft_policy_version is None
+                else nfft_policy_version
+            ),
+            "nfft_mode": "auto",
+            "nfft_preferred": int(decision.preferred_nfft),
+            "nfft_duration_target": int(decision.duration_target_nfft),
+            "nfft_status": str(decision.status),
+            "nfft_degraded": decision.degraded,
+            "nfft_reason_codes": tuple(decision.reasons),
+        }
+    codes = tuple(nfft_reason_codes or ())
+    return {
+        "nfft_policy_version": (
+            None if nfft_policy_version is None else int(nfft_policy_version)
+        ),
+        "nfft_mode": "auto",
+        "nfft_preferred": (
+            None if nfft_preferred is None else int(nfft_preferred)
+        ),
+        "nfft_duration_target": (
+            None if nfft_duration_target is None else int(nfft_duration_target)
+        ),
+        "nfft_status": None if nfft_status is None else str(nfft_status),
+        "nfft_degraded": nfft_degraded,
+        "nfft_reason_codes": codes,
+    }
 
 
 def build_fft_effective_facts(
@@ -250,6 +304,14 @@ def build_fft_effective_facts(
     is_constant=False,
     time_axis=None,
     fs_conflict=False,
+    nfft_mode=None,
+    decision=None,
+    nfft_policy_version=None,
+    nfft_preferred=None,
+    nfft_duration_target=None,
+    nfft_status=None,
+    nfft_degraded=None,
+    nfft_reason_codes=(),
 ):
     """Construct :class:`FftEffectiveFacts` from a completed compute.
 
@@ -288,13 +350,10 @@ def build_fft_effective_facts(
         if requested <= 0:
             requested = nfft_actual
     frames = _fft_frame_count(n_samples, nfft_actual, overlap, avg_mode)
+    # ``min_frames`` remains in the signature for callers; statistics now
+    # live on ``nfft_status`` / reason codes, not ``shortened``.
+    _ = min_frames
     shortened = nfft_actual < requested
-    if (
-        min_frames is not None
-        and str(avg_mode or "单帧") != "单帧"
-        and int(frames) < int(min_frames)
-    ):
-        shortened = True
     time_start = time_end = None
     if time is not None:
         t_arr = np.asarray(time, dtype=float).reshape(-1)
@@ -302,6 +361,17 @@ def build_fft_effective_facts(
         if finite_t.size:
             time_start = float(finite_t[0])
             time_end = float(finite_t[-1])
+    policy = _segmented_auto_policy_fields(
+        avg_mode=avg_mode,
+        nfft_mode=nfft_mode,
+        decision=decision,
+        nfft_policy_version=nfft_policy_version,
+        nfft_preferred=nfft_preferred,
+        nfft_duration_target=nfft_duration_target,
+        nfft_status=nfft_status,
+        nfft_degraded=nfft_degraded,
+        nfft_reason_codes=nfft_reason_codes,
+    )
     return FftEffectiveFacts(
         fs=fs_val,
         nfft_requested=requested,
@@ -320,6 +390,7 @@ def build_fft_effective_facts(
         is_constant=bool(is_constant),
         time_axis=time_axis,
         fs_conflict=bool(fs_conflict),
+        **policy,
     )
 
 
@@ -344,6 +415,56 @@ class FftEffectiveFacts:
     is_constant: bool = False
     time_axis: dict | None = None
     fs_conflict: bool = False
+    nfft_policy_version: int | None = None
+    nfft_mode: str | None = None
+    nfft_preferred: int | None = None
+    nfft_duration_target: int | None = None
+    nfft_status: str | None = None
+    nfft_degraded: bool | None = None
+    nfft_reason_codes: tuple[str, ...] = ()
+
+    @property
+    def nfft_effective(self) -> int:
+        return self.nfft
+
+    @property
+    def df_hz(self) -> float:
+        return self.df
+
+    def to_canonical_dict(self) -> dict:
+        """Canonical facts mapping; legacy ``nfft``/``df`` are the same values."""
+        nfft = int(self.nfft)
+        df = float(self.df)
+        payload = {
+            "nfft_policy_version": self.nfft_policy_version,
+            "nfft_mode": self.nfft_mode,
+            "nfft_preferred": self.nfft_preferred,
+            "nfft_duration_target": self.nfft_duration_target,
+            "nfft_requested": int(self.nfft_requested),
+            "nfft_effective": nfft,
+            "nfft": nfft,
+            "nfft_status": self.nfft_status,
+            "nfft_degraded": self.nfft_degraded,
+            "nfft_reason_codes": tuple(self.nfft_reason_codes or ()),
+            "fs": float(self.fs),
+            "df_hz": df,
+            "df": df,
+            "window": self.window,
+            "window_s": float(self.window_s),
+            "frames": int(self.frames),
+            "overlap": float(self.overlap),
+            "n_samples": int(self.n_samples),
+            "weighting": self.weighting,
+            "shortened": bool(self.shortened),
+            "time_start": self.time_start,
+            "time_end": self.time_end,
+            "nan_count": int(self.nan_count),
+            "is_constant": bool(self.is_constant),
+            "fs_conflict": bool(self.fs_conflict),
+        }
+        if self.time_axis is not None:
+            payload["time_axis"] = self.time_axis
+        return payload
 
 
 class FFTAnalyzer:
@@ -430,12 +551,10 @@ class FFTAnalyzer:
                 UserWarning,
                 stacklevel=2,
             )
-        hop = int(effective_nfft * (1 - overlap))
-        if hop <= 0:
-            hop = effective_nfft // 2
-        if hop <= 0:
-            hop = 1
-        n_segments = max((n - effective_nfft) // hop + 1, 1)
+        from .adaptive import non_tail_frame_count, segmented_analysis_hop
+
+        hop = segmented_analysis_hop(effective_nfft, overlap)
+        n_segments = max(non_tail_frame_count(n, effective_nfft, overlap), 1)
 
         w = get_analysis_window(win, effective_nfft)
         w_sum = float(np.sum(w))
@@ -494,8 +613,10 @@ class FFTAnalyzer:
         weighting = _validate_weighting(weighting)
         sig = np.asarray(sig, dtype=float)
         n = len(sig)
-        hop = max(int(nfft * (1 - overlap)), 1)
-        n_seg = max((n - nfft) // hop + 1, 1)
+        from .adaptive import non_tail_frame_count, segmented_analysis_hop
+
+        hop = segmented_analysis_hop(nfft, overlap)
+        n_seg = max(non_tail_frame_count(n, nfft, overlap), 1)
         peak = None
         freq = None
         for i in range(n_seg):

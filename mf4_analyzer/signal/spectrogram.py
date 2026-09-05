@@ -131,6 +131,53 @@ class SpectrogramEffectiveFacts:
     is_constant: bool = False
     time_axis: dict | None = None
     fs_conflict: bool = False
+    nfft_policy_version: int | None = None
+    nfft_mode: str | None = None
+    nfft_preferred: int | None = None
+    nfft_duration_target: int | None = None
+    nfft_status: str | None = None
+    nfft_degraded: bool | None = None
+    nfft_reason_codes: tuple[str, ...] = ()
+
+    @property
+    def nfft_effective(self) -> int:
+        return self.nfft
+
+    @property
+    def df_hz(self) -> float:
+        return self.df
+
+    def to_canonical_dict(self) -> dict:
+        nfft = int(self.nfft)
+        df = float(self.df)
+        payload = {
+            "nfft_policy_version": self.nfft_policy_version,
+            "nfft_mode": self.nfft_mode,
+            "nfft_preferred": self.nfft_preferred,
+            "nfft_duration_target": self.nfft_duration_target,
+            "nfft_requested": int(self.nfft_requested),
+            "nfft_effective": nfft,
+            "nfft": nfft,
+            "nfft_status": self.nfft_status,
+            "nfft_degraded": self.nfft_degraded,
+            "nfft_reason_codes": tuple(self.nfft_reason_codes or ()),
+            "fs": float(self.fs),
+            "df_hz": df,
+            "df": df,
+            "window": self.window,
+            "window_s": float(self.window_s),
+            "hop_s": float(self.hop_s),
+            "frames": int(self.frames),
+            "overlap": float(self.overlap),
+            "n_samples": int(self.n_samples),
+            "shortened": bool(self.shortened),
+            "nan_count": int(self.nan_count),
+            "is_constant": bool(self.is_constant),
+            "fs_conflict": bool(self.fs_conflict),
+        }
+        if self.time_axis is not None:
+            payload["time_axis"] = self.time_axis
+        return payload
 
 
 def _finite_positive(value):
@@ -152,6 +199,14 @@ def spectrogram_facts_from_result(
     is_constant=False,
     time_axis=None,
     fs_conflict=False,
+    nfft_mode=None,
+    decision=None,
+    nfft_policy_version=None,
+    nfft_preferred=None,
+    nfft_duration_target=None,
+    nfft_status=None,
+    nfft_degraded=None,
+    nfft_reason_codes=(),
 ):
     """Build :class:`SpectrogramEffectiveFacts` from a completed result.
 
@@ -196,6 +251,19 @@ def spectrogram_facts_from_result(
         amplitude = getattr(result, "amplitude", None)
         frames = int(np.asarray(amplitude).shape[1]) if amplitude is not None else 0
     axis = time_axis if time_axis is not None else metadata.get("time_axis")
+    from .fft import _segmented_auto_policy_fields
+
+    policy = _segmented_auto_policy_fields(
+        avg_mode="线性平均",
+        nfft_mode=nfft_mode,
+        decision=decision,
+        nfft_policy_version=nfft_policy_version,
+        nfft_preferred=nfft_preferred,
+        nfft_duration_target=nfft_duration_target,
+        nfft_status=nfft_status,
+        nfft_degraded=nfft_degraded,
+        nfft_reason_codes=nfft_reason_codes,
+    )
     return SpectrogramEffectiveFacts(
         fs=fs_val,
         nfft_requested=int(requested),
@@ -212,6 +280,7 @@ def spectrogram_facts_from_result(
         is_constant=bool(is_constant),
         time_axis=axis,
         fs_conflict=bool(fs_conflict),
+        **policy,
     )
 
 
@@ -225,11 +294,9 @@ class SpectrogramAnalyzer:
 
     @staticmethod
     def _frame_starts(n_samples: int, nfft: int, hop: int) -> np.ndarray:
-        starts = np.arange(0, n_samples - nfft + 1, hop, dtype=int)
-        tail_start = int(n_samples) - int(nfft)
-        if starts.size and int(starts[-1]) != tail_start:
-            starts = np.append(starts, tail_start)
-        return starts
+        from .adaptive import spectrogram_frame_starts_from_hop
+
+        return spectrogram_frame_starts_from_hop(n_samples, nfft, hop)
 
     @staticmethod
     def amplitude_to_db(amplitude, reference: float = 1.0) -> np.ndarray:
@@ -371,9 +438,9 @@ class SpectrogramAnalyzer:
         if sig.size < nfft:
             raise ValueError('signal is shorter than nfft')
 
-        hop = int(nfft * (1.0 - float(params.overlap)))
-        if hop <= 0:
-            raise ValueError('overlap leaves no positive hop size')
+        from .adaptive import spectrogram_analysis_hop
+
+        hop = spectrogram_analysis_hop(nfft, params.overlap)
         starts = SpectrogramAnalyzer._frame_starts(sig.size, nfft, hop)
         total = int(starts.size)
         if total <= 0:

@@ -416,6 +416,14 @@ _HINTS = (
         dwell_ms=8000,
     ),
     Hint(
+        id="fft.auto_nfft",
+        text="自动NFFT优先4096，低Fs按窗长",
+        surface="context",
+        modes=frozenset({"fft", "fft_time"}),
+        priority=80,
+        dwell_ms=4000,
+    ),
+    Hint(
         id="frf.coherence_display_only",
         text="相干阈值只影响显示，不改数据",
         surface="context",

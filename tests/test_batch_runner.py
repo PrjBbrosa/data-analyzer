@@ -3266,12 +3266,11 @@ def test_resolve_effective_nfft_survives_degenerate_rpm(rpm):
 def test_resolve_effective_nfft_fft_time_uses_the_shared_gui_defaults():
     """Omitted t_win_s/overlap must resolve like the inspector, not like 1.0/0.5."""
     from mf4_analyzer.batch_compute import resolve_effective_nfft
-    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.signal import resolve_auto_nfft, resolve_nfft
     from mf4_analyzer.signal.analysis_defaults import (
         DEFAULT_FFT_TIME_OVERLAP,
         DEFAULT_FFT_T_WIN_S,
     )
-    from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
 
     assert DEFAULT_FFT_T_WIN_S == pytest.approx(1.5)
     assert DEFAULT_FFT_TIME_OVERLAP == pytest.approx(0.8)
@@ -3279,16 +3278,11 @@ def test_resolve_effective_nfft_fft_time_uses_the_shared_gui_defaults():
     fs = 2048.0
     n_samples = 40960
     resolved = resolve_effective_nfft("fft_time", n_samples, fs, {"nfft": None})
-
-    assert resolved == resolve_nfft(
+    decision = resolve_auto_nfft(
         fs, n_samples, DEFAULT_FFT_T_WIN_S, DEFAULT_FFT_TIME_OVERLAP,
+        purpose="fft_time",
     )
-    # Same params through the GUI resolver -> same NFFT.
-    gui = FFTTimeMixin._resolve_fft_time_effective_params(
-        {"nfft": None, "fs": fs, "overlap": DEFAULT_FFT_TIME_OVERLAP},
-        n_samples,
-    )
-    assert resolved == gui["nfft_effective"]
+    assert resolved == decision.effective_nfft
     # The retired 1.0 s fallback resolved one octave lower.
     assert resolved != resolve_nfft(fs, n_samples, 1.0, DEFAULT_FFT_TIME_OVERLAP)
 
@@ -3301,7 +3295,313 @@ def test_batch_fft_time_resolver_and_compute_share_one_overlap_default():
 
     source = inspect.getsource(batch_compute)
     assert "params.get('overlap', 0.5)" not in source
-    assert source.count("params.get('overlap', DEFAULT_FFT_TIME_OVERLAP)") == 2
+    assert "def _fft_time_overlap" in source
+    assert source.count("params.get('overlap', DEFAULT_FFT_TIME_OVERLAP)") == 1
+
+
+def _tone(n, fs, freq=40.0):
+    t = np.arange(int(n), dtype=float) / float(fs)
+    return t, np.sin(2 * np.pi * freq * t)
+
+
+def _fd_from_tone(tmp_path, n, fs, name="tone"):
+    t, sig = _tone(n, fs)
+    df = pd.DataFrame({"Time": t, "sig": sig})
+    path = tmp_path / f"{name}.csv"
+    df.to_csv(path, index=False)
+    return FileData(path, df, list(df.columns), {}, idx=0, fs=fs)
+
+
+_SEGMENTED_AUTO = {
+    "nfft": None,
+    "nfft_mode": "auto",
+    "t_win_s": 1.5,
+    "avg_mode": "线性平均",
+    "avg_overlap": 50,
+    "window": "hanning",
+}
+
+
+@pytest.mark.parametrize(
+    "n, fs, overlap, t_win_s, expected_nfft, expected_frames, expected_status",
+    [
+        (60000, 1000.0, 0.5, 1.5, 4096, 28, "normal"),  # M1
+        (10000, 1000.0, 0.5, 1.5, 4096, 3, "warning"),  # M3
+        (5002, 96.0, 0.75, 1.5, 256, 75, "normal"),  # M7
+        (3000, 1000.0, 0.5, 1.5, 2048, 1, "warning"),  # M8
+    ],
+)
+def test_batch_segmented_auto_nfft_matches_resolve_auto_nfft(
+    n, fs, overlap, t_win_s, expected_nfft, expected_frames, expected_status,
+):
+    from mf4_analyzer.batch_compute import (
+        compute_fft_dataframe,
+        resolve_effective_nfft,
+    )
+    from mf4_analyzer.signal import resolve_auto_nfft
+    from mf4_analyzer.signal.analysis_defaults import AUTO_NFFT_POLICY_VERSION
+
+    params = {
+        **_SEGMENTED_AUTO,
+        "t_win_s": t_win_s,
+        "avg_overlap": overlap * 100.0,
+        "fs": fs,
+    }
+    decision = resolve_auto_nfft(
+        fs, n, t_win_s, overlap, purpose="fft_segmented",
+    )
+    assert decision.effective_nfft == expected_nfft
+    assert decision.frames == expected_frames
+    assert decision.status == expected_status
+    assert resolve_effective_nfft("fft", n, fs, params) == decision.effective_nfft
+
+    _, sig = _tone(n, fs)
+    frame = compute_fft_dataframe(sig, fs, params)
+    facts = frame.attrs["effective_facts"]
+    payload = facts.to_canonical_dict()
+    assert payload["nfft_effective"] == decision.effective_nfft
+    assert payload["nfft"] == decision.effective_nfft
+    assert payload["nfft_requested"] == decision.requested_nfft
+    assert payload["df_hz"] == pytest.approx(decision.df_hz)
+    assert payload["df"] == pytest.approx(decision.df_hz)
+    assert payload["frames"] == decision.frames
+    assert payload["nfft_status"] == decision.status
+    assert tuple(payload["nfft_reason_codes"]) == decision.reasons
+    assert payload["nfft_policy_version"] == AUTO_NFFT_POLICY_VERSION
+    assert payload["nfft_mode"] == "auto"
+
+
+@pytest.mark.parametrize(
+    "n, overlap, expected_nfft",
+    [
+        (10000, 0.5, 4096),  # M4
+        (8000, 0.5, 2048),  # M5
+        (10000, 0.8, 4096),  # M6
+    ],
+)
+def test_batch_fft_time_auto_nfft_matches_resolve_auto_nfft(n, overlap, expected_nfft):
+    from mf4_analyzer.batch_compute import (
+        compute_fft_time_spectro,
+        resolve_effective_nfft,
+    )
+    from mf4_analyzer.signal import resolve_auto_nfft
+    from mf4_analyzer.signal.analysis_defaults import AUTO_NFFT_POLICY_VERSION
+
+    fs = 1000.0
+    t_win_s = 1.5
+    params = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": t_win_s,
+        "overlap": overlap,
+        "window": "hanning",
+    }
+    decision = resolve_auto_nfft(
+        fs, n, t_win_s, overlap, purpose="fft_time",
+    )
+    assert decision.effective_nfft == expected_nfft
+    assert resolve_effective_nfft("fft_time", n, fs, params) == decision.effective_nfft
+
+    t, sig = _tone(n, fs)
+    spectro = compute_fft_time_spectro(sig, t, fs, params, channel_name="sig")
+    payload = dict(spectro.metadata["effective_facts"])
+    assert payload["nfft_effective"] == decision.effective_nfft
+    assert payload["nfft"] == decision.effective_nfft
+    assert payload["nfft_requested"] == decision.requested_nfft
+    assert payload["frames"] == decision.frames
+    assert payload["nfft_status"] == decision.status
+    assert tuple(payload["nfft_reason_codes"]) == decision.reasons
+    assert payload["nfft_policy_version"] == AUTO_NFFT_POLICY_VERSION
+
+
+@pytest.mark.parametrize("n", (3552, 3553))
+def test_batch_single_frame_auto_nfft_keeps_odd_and_non_pow2_lengths(n):
+    from mf4_analyzer.batch_compute import (
+        compute_fft_dataframe,
+        resolve_effective_nfft,
+    )
+
+    fs = 1000.0
+    params = {"nfft": None, "nfft_mode": "auto", "avg_mode": "单帧"}
+    assert resolve_effective_nfft("fft", n, fs, params) == n
+    _, sig = _tone(n, fs)
+    frame = compute_fft_dataframe(sig, fs, params)
+    facts = frame.attrs["effective_facts"]
+    payload = facts.to_canonical_dict()
+    assert payload["nfft_effective"] == n
+    assert payload["nfft"] == n
+    assert payload["df_hz"] == pytest.approx(fs / n)
+    assert payload["nfft_policy_version"] is None
+    assert facts.n_samples == n
+
+
+def test_batch_auto_nfft_does_not_forge_missing_fs_or_n():
+    from mf4_analyzer.batch_compute import resolve_effective_nfft
+    from mf4_analyzer.signal import AutoNfftBlockedError
+
+    params = dict(_SEGMENTED_AUTO)
+    with pytest.raises(ValueError, match="required for Auto-NFFT"):
+        resolve_effective_nfft("fft", None, 1000.0, params)
+    with pytest.raises(ValueError, match="required for Auto-NFFT"):
+        resolve_effective_nfft("fft", 1000, None, params)
+    with pytest.raises(AutoNfftBlockedError):
+        resolve_effective_nfft("fft", 32, 1000.0, params)
+
+
+def test_runner_keeps_requested_auto_separate_from_effective_nfft(tmp_path):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+    from mf4_analyzer.signal import resolve_auto_nfft
+    from mf4_analyzer.signal.analysis_defaults import AUTO_NFFT_POLICY_VERSION
+
+    fs = 1000.0
+    n = 60000
+    fd = _fd_from_tone(tmp_path, n, fs, name="m1")
+    params = {**_SEGMENTED_AUTO, "fs": fs}
+    preset = AnalysisPreset.from_current_single(
+        name="auto facts",
+        method="fft",
+        signal=(0, "sig"),
+        params=params,
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    assert result.status == "done"
+    item = result.items[0]
+    decision = resolve_auto_nfft(fs, n, 1.5, 0.5, purpose="fft_segmented")
+    assert item.effective_params["nfft"] is None
+    assert item.effective_params["nfft_mode"] == "auto"
+    assert item.effective_params["nfft_effective"] == decision.effective_nfft
+    assert item.effective_params["nfft_requested"] == decision.requested_nfft
+    assert item.effective_params["nfft_policy_version"] == AUTO_NFFT_POLICY_VERSION
+    assert "nfft_policy_version" not in normalize_batch_params(params, "fft")
+    manifest = load_batch_manifest(result.manifest_path)
+    entry = manifest["entries"][0]
+    assert entry["requested_params"]["nfft"] is None
+    assert entry["effective_facts"]["nfft_effective"] == decision.effective_nfft
+    assert entry["effective_facts"]["nfft_policy_version"] == AUTO_NFFT_POLICY_VERSION
+
+
+def test_runner_refuses_stale_auto_nfft_policy_resume(tmp_path, monkeypatch):
+    import json
+    from dataclasses import replace
+
+    from mf4_analyzer.signal.analysis_defaults import AUTO_NFFT_POLICY_VERSION
+
+    fs = 1000.0
+    fd = _fd_from_tone(tmp_path, 8000, fs, name="resume-auto")
+    params = {**_SEGMENTED_AUTO, "fs": fs}
+    preset = AnalysisPreset.from_current_single(
+        name="auto resume policy",
+        method="fft",
+        signal=(0, "sig"),
+        params=params,
+        outputs=BatchOutput(
+            export_data=True, export_image=False, resume_policy="manifest",
+        ),
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    assert first.status == "done"
+    assert first.items[0].effective_params["nfft_policy_version"] == (
+        AUTO_NFFT_POLICY_VERSION
+    )
+
+    def fail_if_computed(*_args, **_kwargs):
+        pytest.fail("current Auto-NFFT policy must be resumable")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+    current = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", resume_manifest=first.manifest_path,
+    )
+    assert current.items[0].status == "resumed"
+    monkeypatch.undo()
+
+    original = json.loads(
+        Path(first.manifest_path).read_text(encoding="utf-8"),
+    )
+    for label, version in (
+        ("missing", None),
+        ("old", 1),
+        ("bool", True),
+        ("string", "2"),
+    ):
+        stale = json.loads(json.dumps(original))
+        facts = stale["entries"][0]["effective_facts"]
+        if version is None:
+            facts.pop("nfft_policy_version", None)
+        else:
+            facts["nfft_policy_version"] = version
+        stale_path = tmp_path / f"stale-{label}.json"
+        stale_path.write_text(
+            json.dumps(stale), encoding="utf-8",
+        )
+        events = []
+        recomputed = BatchRunner({0: fd}).run(
+            replace(preset, outputs=replace(
+                preset.outputs, resume_policy="manifest",
+            )),
+            tmp_path / f"out-{label}",
+            resume_manifest=stale_path,
+            on_event=events.append,
+        )
+        assert recomputed.items[0].status == "done", label
+        assert "task_resumed" not in [event.kind for event in events], label
+        assert recomputed.items[0].effective_params["nfft_policy_version"] == (
+            AUTO_NFFT_POLICY_VERSION
+        )
+
+
+def test_runner_single_frame_auto_resume_does_not_need_policy_version(
+    tmp_path, monkeypatch,
+):
+    import json
+    from dataclasses import replace
+
+    fd = _fd_from_tone(tmp_path, 512, 1000.0, name="single-frame")
+    preset = AnalysisPreset.from_current_single(
+        name="single-frame auto",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1000.0, "nfft": None, "nfft_mode": "auto", "avg_mode": "单帧"},
+        outputs=BatchOutput(
+            export_data=True, export_image=False, resume_policy="manifest",
+        ),
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    manifest = json.loads(Path(first.manifest_path).read_text(encoding="utf-8"))
+    manifest["entries"][0]["effective_facts"].pop("nfft_policy_version", None)
+    Path(first.manifest_path).write_text(
+        json.dumps(manifest), encoding="utf-8",
+    )
+
+    def fail_if_computed(*_args, **_kwargs):
+        pytest.fail("single-frame Auto resume must not require policy version")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+    resumed = BatchRunner({0: fd}).run(
+        replace(preset, outputs=replace(preset.outputs, resume_policy="manifest")),
+        tmp_path / "out",
+        resume_manifest=first.manifest_path,
+    )
+    assert resumed.items[0].status == "resumed"
+
+
+def test_runner_blocked_segmented_auto_nfft_is_a_user_data_failure(tmp_path):
+    fd = _fd_from_tone(tmp_path, 32, 1000.0, name="blocked")
+    preset = AnalysisPreset.from_current_single(
+        name="blocked auto",
+        method="fft",
+        signal=(0, "sig"),
+        params={**_SEGMENTED_AUTO, "fs": 1000.0},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    events = []
+    result = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", on_event=events.append,
+    )
+    assert result.items[0].status == "failed"
+    assert "insufficient_samples" in result.items[0].message
+    assert any(event.kind == "task_failed" for event in events)
+    assert result.status in {"blocked", "partial"}
 
 
 def test_runner_uses_preprocessed_signal_fs_and_disables_compute_filter(

@@ -16,6 +16,7 @@ import numpy as np
 
 from .app_meta import APP_VERSION
 from .batch_output import atomic_write
+from .signal.analysis_defaults import AUTO_NFFT_POLICY_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -657,6 +658,74 @@ def _artifact_matches(
         return False
 
 
+_AUTO_NFFT_TOKENS = frozenset({"", "auto", "自动"})
+_SEGMENTED_FFT_AVG_MODES = frozenset({"线性平均", "峰值保持"})
+
+
+def _requested_nfft_is_auto(params: Mapping[str, Any]) -> bool:
+    mode = params.get("nfft_mode")
+    if isinstance(mode, str) and mode.strip().lower() in {"auto", "自动"}:
+        return True
+    raw = params.get("nfft")
+    if raw is None:
+        return True
+    if isinstance(raw, str):
+        return raw.strip().lower() in _AUTO_NFFT_TOKENS
+    if isinstance(raw, bool):
+        return False
+    if isinstance(raw, (int, float)):
+        return float(raw) <= 0
+    return False
+
+
+def _recipe_requires_auto_nfft_policy(requested_params, *, method=None) -> bool:
+    """D11 applies only to ordinary segmented FFT Auto and FFT-time Auto."""
+    if not isinstance(requested_params, Mapping):
+        return False
+    method_key = str(method or "").strip()
+    if not _requested_nfft_is_auto(requested_params):
+        return False
+    if method_key == "fft_time":
+        return True
+    if method_key == "fft":
+        avg_mode = str(requested_params.get("avg_mode", "单帧") or "单帧")
+        return avg_mode in _SEGMENTED_FFT_AVG_MODES
+    return False
+
+
+def _entry_nfft_policy_version(entry):
+    if not isinstance(entry, Mapping):
+        return None
+    facts = entry.get("effective_facts")
+    if not isinstance(facts, Mapping):
+        facts = entry.get("effective_params")
+    if not isinstance(facts, Mapping):
+        return None
+    if "nfft_policy_version" not in facts:
+        return None
+    return facts["nfft_policy_version"]
+
+
+def auto_nfft_policy_is_current(
+    entry, *, requested_params, method=None,
+) -> bool:
+    """Return True when *entry* may be reused under the current Auto-NFFT policy.
+
+    Applicability is judged from the canonical requested recipe, not from the
+    stored entry's self-reported mode. Missing, bool, or other-typed versions
+    are not reusable. Single-frame FFT, Fixed, Order, and FRF keep their
+    existing resume eligibility when this check does not apply.
+    """
+    if not _recipe_requires_auto_nfft_policy(
+        requested_params, method=method,
+    ):
+        return True
+    version = _entry_nfft_policy_version(entry)
+    if isinstance(version, bool) or not isinstance(version, int):
+        return False
+    return version == AUTO_NFFT_POLICY_VERSION
+
+
 def find_resumable_entry(
     manifest,
     *,
@@ -667,6 +736,8 @@ def find_resumable_entry(
     source_stat: Mapping,
     required_artifacts: Mapping[str, str],
     cancel_token=None,
+    requested_params: Mapping[str, Any] | None = None,
+    method=None,
 ):
     """Return a checksum-proven done entry, otherwise fail closed with None."""
 
@@ -697,6 +768,10 @@ def find_resumable_entry(
             for kind, fmt in required_artifacts.items()
         ):
             continue
+        if not auto_nfft_policy_is_current(
+            entry, requested_params=requested_params, method=method,
+        ):
+            continue
         return entry
     return None
 
@@ -709,6 +784,8 @@ def find_resumable_group(
     members: Sequence[GroupMemberResumeFact],
     image_format: str,
     cancel_token=None,
+    requested_params: Mapping[str, Any] | None = None,
+    method=None,
 ) -> Mapping[str, Any] | None:
     """Return a checksum-proven complete render group, otherwise ``None``."""
 
@@ -718,6 +795,11 @@ def find_resumable_group(
     expected_format = str(image_format).strip().lower().lstrip(".")
     if expected_format != "png":
         return None
+    entries_by_task = {
+        entry.get("task_id"): entry
+        for entry in raw.get("entries", [])
+        if entry.get("task_id")
+    }
     for group in raw.get("render_groups", []):
         if cancel_token is not None and cancel_token.is_set():
             return None
@@ -741,6 +823,13 @@ def find_resumable_group(
             if any(
                 previous_source[key] != current.source[key]
                 for key in ("identity", "size", "mtime_ns")
+            ):
+                return None
+            member_entry = entries_by_task.get(current.task_id)
+            if not auto_nfft_policy_is_current(
+                member_entry if member_entry is not None else {},
+                requested_params=requested_params,
+                method=method,
             ):
                 return None
         requested = group.get("requested_outputs") or {}
@@ -805,6 +894,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "TERMINAL_TASK_STATUSES",
     "artifact_facts",
+    "auto_nfft_policy_is_current",
     "derive_summary",
     "find_resumable_entry",
     "find_resumable_group",

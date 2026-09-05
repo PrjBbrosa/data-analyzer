@@ -1051,7 +1051,7 @@
         <div class="insp-group">
           <div class="insp-group-title">谱参数</div>
           <div class="insp-row">窗函数 <span class="v">Hanning</span></div>
-          <div class="insp-row">分段长度 <span class="v">8192</span></div>
+          <div class="insp-row">NFFT <span class="v">自动 (4096)</span></div>
           <div class="insp-row">重叠 <span class="v">50%</span></div>
           <div class="insp-row">平均方式 <span class="v">线性平均</span></div>
           <span class="insp-action">▶ 计算 FFT</span>
@@ -1079,8 +1079,8 @@
         <div class="insp-group">
           <div class="insp-group-title">时频参数</div>
           <div class="insp-row">窗函数 <span class="v">Hanning</span></div>
-          <div class="insp-row">分段长度 <span class="v">4096</span></div>
-          <div class="insp-row">步进 <span class="v">2048</span></div>
+          <div class="insp-row">NFFT <span class="v">自动 (4096)</span></div>
+          <div class="insp-row">重叠 <span class="v">50%</span></div>
         </div>
         <div class="insp-group">
           <div class="insp-group-title">幅值 · 色标</div>
@@ -1443,6 +1443,11 @@
     <details class="faq">
       <summary>Fs（采样率）显示和我预期不一样？</summary>
       <div class="faq-body">Fs 从所选通道自动同步。换了通道，Fs 跟着变。FFT vs Time / 阶次模式下，换信号时 Fs 字段会自动更新。</div>
+    </details>
+
+    <details class="faq">
+      <summary>自动 NFFT 为什么有时不是 4096？</summary>
+      <div class="faq-body">普通采样率且数据够长时，分段 FFT 与 FFT vs Time 优先 4096 点。低 Fs 按目标窗长适配（例如 96 Hz 默认约 256 点），短记录可能缩短实际点数或提示统计/时间帧不足。自动不会用零填充把短段撑到 4096 再声称分辨率提高。计算后看有效事实里的实际 NFFT、Δf、窗长和帧数。</div>
     </details>
 
     <details class="faq">

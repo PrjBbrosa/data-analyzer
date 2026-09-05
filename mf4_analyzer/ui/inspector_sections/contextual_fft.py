@@ -1,4 +1,11 @@
 """FFTContextual widget."""
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping
+from dataclasses import dataclass
+from numbers import Integral
+
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -12,9 +19,11 @@ from PyQt5.QtWidgets import (
 )
 
 from ...analysis_presets import list_builtin_presets
+from ...signal.adaptive import requested_auto_nfft, resolve_auto_nfft
 from ...signal.analysis_defaults import (
     ANALYSIS_WINDOW_CANDIDATES,
     DEFAULT_FFT_T_WIN_S,
+    normalize_overlap_fraction,
 )
 from ...ui_kit.icons import Icons
 from ...ui_kit.qt_lifecycle import as_weak_callable
@@ -45,6 +54,16 @@ from .collapsible import _CollapsibleParamSection
 from .presets import PresetBar
 
 
+@dataclass(frozen=True)
+class _FftAutoNfftPreview:
+    values: tuple[int, ...] = ()
+    is_target: bool = False
+    pending: bool = False
+    degraded: bool = False
+    notice: bool = False
+    blocked: bool = False
+
+
 class FFTContextual(QWidget):
     """FFT contextual: signal/Fs/params/options + compute button."""
 
@@ -65,10 +84,10 @@ class FFTContextual(QWidget):
         self._source_weighting_default = 'None'
         self._t_win_s = DEFAULT_FFT_T_WIN_S
         # Auto-NFFT preview data hook: a callable returning the available sample
-        # count for the current FFT signal (or None when no data is loaded). Set
-        # by the main window so the collapsed 自动(N) mirrors the data-aware
-        # ``_resolve_fft_effective_params`` (whole-signal length for single-frame,
-        # the shared ``resolve_nfft`` segment for averaging modes).
+        # count for the current FFT signal, a list of per-source rows, or None
+        # when no data is loaded. Set by the main window so the collapsed 自动(N)
+        # mirrors ``_resolve_fft_effective_params`` (whole-signal length for
+        # single-frame; ``resolve_auto_nfft`` for averaging / peak-hold).
         self._auto_nfft_provider = None
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: the contextual is a transparent
@@ -162,8 +181,8 @@ class FFTContextual(QWidget):
         )
         self.combo_nfft.setToolTip(
             '越大频率采样越密、计算量越高。\n'
-            '「自动」：单帧＝整段 FFT；平均/峰值保持＝按内部目标时长起步，'
-            '经最少帧数、数据长度上限与 [64, 8192] 收敛。'
+            '「自动」：单帧＝整段 FFT，不凑 4096；平均/峰值保持＝优先 4096 点，'
+            '再按目标窗长与真实样本适配。零填充不会提高物理分辨率。'
         )
         fl.addRow("NFFT:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = _no_buttons(QSpinBox())
@@ -334,7 +353,8 @@ class FFTContextual(QWidget):
         """Register the available-samples hook for the auto-NFFT summary.
 
         ``provider`` is a zero-arg callable returning the sample count of the
-        current FFT signal (int) or ``None`` when no usable data is loaded.
+        current FFT signal (int), a list of ``{fid, ch, n_samples, fs}`` rows
+        for multi-source panes, or ``None`` when no usable data is loaded.
         Passing ``None`` clears the hook. Refreshes the collapsed summary so the
         displayed 自动(N) updates at once. Bound methods are held weakly so the
         contextual cannot keep MainWindow alive past teardown.
@@ -348,56 +368,183 @@ class FFTContextual(QWidget):
     def _emit_rebuild_time_requested(self, *_args):
         self.rebuild_time_requested.emit(self.btn_rebuild, 'fft')
 
+    def _fft_provider_payload(self):
+        if self._auto_nfft_provider is None:
+            return None
+        try:
+            return self._auto_nfft_provider()
+        except (TypeError, ValueError, AttributeError, KeyError, RuntimeError):
+            return None
+
+    def _fft_auto_nfft_provider_rows(self):
+        payload = self._fft_provider_payload()
+        if payload is None:
+            return []
+        if isinstance(payload, bool):
+            return []
+        if isinstance(payload, Integral):
+            n_samples = int(payload)
+            if n_samples > 1:
+                return [{'n_samples': n_samples, 'fs': None}]
+            return []
+        if isinstance(payload, Mapping):
+            payload = [payload]
+        if isinstance(payload, (list, tuple)):
+            rows = []
+            for item in payload:
+                if isinstance(item, Mapping):
+                    rows.append(item)
+                    continue
+                if isinstance(item, bool) or not isinstance(item, Integral):
+                    continue
+                n_samples = int(item)
+                if n_samples > 1:
+                    rows.append({'n_samples': n_samples, 'fs': None})
+            return rows
+        return []
+
+    def _fft_preview_fs_value(self, row=None):
+        if row is not None and isinstance(row, Mapping):
+            fs = row.get('fs')
+            if fs is not None:
+                try:
+                    fs_val = float(fs)
+                except (TypeError, ValueError):
+                    fs_val = None
+                if fs_val is not None and math.isfinite(fs_val) and fs_val > 0.0:
+                    return fs_val
+            # Identified sources keep their own Fs; never borrow the
+            # representative spin value (D7: do not merge mixed-Fs sources).
+            if row.get('fid') is not None or row.get('ch') is not None:
+                return None
+        try:
+            fs_val = float(self.spin_fs.value())
+        except (TypeError, ValueError):
+            return None
+        if math.isfinite(fs_val) and fs_val > 0.0:
+            return fs_val
+        return None
+
+    def _fft_auto_nfft_preview_state(self):
+        """Resolve Auto-NFFT preview per source; never copies the 4096 formula."""
+        averaging = self.combo_avg_mode.currentText() in ('线性平均', '峰值保持')
+        rows = self._fft_auto_nfft_provider_rows()
+        usable = []
+        missing = False
+        for row in rows:
+            n_samples = row.get('n_samples')
+            try:
+                n_val = int(n_samples) if n_samples is not None else None
+            except (TypeError, ValueError):
+                n_val = None
+            if n_val is not None and n_val > 1:
+                usable.append(row)
+            else:
+                missing = True
+        if averaging:
+            if usable:
+                return self._fft_resolve_segmented_preview_rows(usable, missing=missing)
+            fs = self._fft_preview_fs_value()
+            if fs is None:
+                return _FftAutoNfftPreview(pending=True)
+            try:
+                target = requested_auto_nfft(
+                    fs, float(self._t_win_s), purpose='fft_segmented',
+                )
+            except ValueError:
+                return _FftAutoNfftPreview(pending=True)
+            return _FftAutoNfftPreview(values=(int(target),), is_target=True)
+        if not usable:
+            return _FftAutoNfftPreview()
+        values = tuple(sorted({int(row['n_samples']) for row in usable}))
+        return _FftAutoNfftPreview(values=values, blocked=missing)
+
+    def _fft_resolve_segmented_preview_rows(self, rows, *, missing=False):
+        overlap = normalize_overlap_fraction(
+            self.spin_avg_overlap.value(), default=50,
+        )
+        t_win = float(self._t_win_s)
+        values = []
+        degraded = False
+        notice = False
+        blocked = bool(missing)
+        for row in rows:
+            fs = self._fft_preview_fs_value(row)
+            try:
+                n_samples = int(row['n_samples'])
+            except (TypeError, ValueError, KeyError):
+                blocked = True
+                continue
+            if fs is None:
+                blocked = True
+                continue
+            try:
+                decision = resolve_auto_nfft(
+                    fs, n_samples, t_win, overlap, purpose='fft_segmented',
+                )
+            except ValueError:
+                blocked = True
+                continue
+            if decision.status == 'blocked' or decision.effective_nfft is None:
+                blocked = True
+                continue
+            values.append(int(decision.effective_nfft))
+            if decision.degraded:
+                degraded = True
+            if decision.status in ('notice', 'warning'):
+                notice = True
+        unique = tuple(sorted(set(values)))
+        return _FftAutoNfftPreview(
+            values=unique,
+            degraded=degraded,
+            notice=notice,
+            blocked=blocked,
+        )
+
+    def _format_auto_nfft_summary(self, state):
+        auto = self._AUTO_NFFT_LABEL
+        if state.pending:
+            core = f"{auto}(待数据)"
+        elif state.is_target and state.values:
+            core = f"{auto}(目标 {state.values[0]})"
+        elif not state.values:
+            core = auto
+        elif len(state.values) == 1:
+            core = f"{auto}({state.values[0]})"
+        else:
+            core = f"{auto}({state.values[0]}–{state.values[-1]} · 每源)"
+        bits = []
+        if state.degraded:
+            bits.append("有降级")
+        if state.notice:
+            bits.append("有提示")
+        if state.blocked:
+            bits.append("有来源不可计算")
+        if bits:
+            core = f"{core} · " + " · ".join(bits)
+        return core
+
     def _fft_nfft_preview(self):
         """Data-aware effective NFFT for the auto summary, or None if unknown.
 
         Mirrors ``_fft_mixin._resolve_fft_effective_params``: single-frame auto
         keeps whole-signal semantics (full sample count); averaging / peak-hold
-        modes resolve a segment length via the shared ``resolve_nfft``.
-
-        With no data provider (or one that yields nothing), the two modes
-        differ. Averaging picks its segment from fs × t_win regardless of the
-        record, so a data-blind estimate is honest and matches
-        ``FFTTimeContextual._nfft_preview``. Single-frame auto *is* the record
-        length, so with no record there is nothing to preview — the header then
-        shows a bare 自动 rather than a number the compute path would not use.
+        modes consume ``resolve_auto_nfft``. No-data averaging returns the
+        requested target from ``requested_auto_nfft``, not a fake actual.
         """
-        n_samples = None
-        if self._auto_nfft_provider is not None:
-            try:
-                n_samples = self._auto_nfft_provider()
-            except Exception:
-                n_samples = None
-        averaging = self.combo_avg_mode.currentText() in ('线性平均', '峰值保持')
-        if n_samples is not None and int(n_samples) > 1:
-            n_samples = int(n_samples)
-            if averaging:
-                from ...signal import resolve_nfft
-
-                overlap = float(self.spin_avg_overlap.value()) / 100.0
-                return int(
-                    resolve_nfft(
-                        float(self.spin_fs.value()),
-                        n_samples,
-                        float(self._t_win_s),
-                        overlap,
-                    )
-                )
-            # 单帧 auto = whole-signal FFT → effective length is the data length.
-            return n_samples
-        if averaging:
-            from ...signal import ceil_pow2
-
-            nfft = ceil_pow2(float(self.spin_fs.value()) * float(self._t_win_s))
-            return int(min(max(nfft, 64), 8192))
-        return None
+        state = self._fft_auto_nfft_preview_state()
+        if state.pending or not state.values:
+            return None
+        if len(state.values) == 1:
+            return state.values[0]
+        return (state.values[0], state.values[-1])
 
     def _fft_summary_text(self):
         nfft_text = self.combo_nfft.currentText()
         if nfft_text == self._AUTO_NFFT_LABEL:
-            preview = self._fft_nfft_preview()
-            if preview is not None:
-                nfft_text = f"{self._AUTO_NFFT_LABEL}({preview})"
+            nfft_text = self._format_auto_nfft_summary(
+                self._fft_auto_nfft_preview_state()
+            )
         # Summarize compute-relevant avg mode/overlap — not the legacy display
         # overlap knob (display_params only; see D5 / spin_overlap tooltip).
         avg_mode = self.combo_avg_mode.currentText()
@@ -406,6 +553,8 @@ class FFTContextual(QWidget):
         else:
             mode_bit = f"{avg_mode} {int(self.spin_avg_overlap.value())}%"
         suffix = " · 已缩短" if getattr(self, "_facts_shortened", False) else ""
+        if "有降级" in nfft_text and suffix:
+            suffix = ""
         return (
             f"{nfft_text} · "
             f"{self.combo_win.currentText()} · "
