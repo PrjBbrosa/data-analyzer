@@ -6,6 +6,7 @@ from PyQt5.QtCore import (
     QEvent,
     QObject,
     QPoint,
+    QRectF,
     QSize,
     Qt,
     pyqtSignal,
@@ -36,6 +37,13 @@ from mf4_analyzer.ui.view_tabbar import (
     tab_close_hit_rect,
     tab_close_visual_rect,
     tab_icon_slot_rect,
+    tab_marker_rect,
+)
+from mf4_analyzer.ui_kit.motion import (
+    POLICY_LIGHT,
+    POLICY_OFF,
+    POLICY_REDUCED,
+    duration_ms,
 )
 from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui.widgets.view_overflow_popup import (
@@ -2311,3 +2319,267 @@ def test_alt_up_down_reorders_current_view_by_stable_index(qtbot):
     QApplication.processEvents()
     assert [view.view_id for view in manager.views] == ids
     assert manager.views[manager.active].view_id == ids[1]
+
+
+def _motion_shown_bar(qtbot, count=3, active=0, policy=POLICY_LIGHT):
+    manager, bar = _shown_bar(qtbot, count=count, active=active)
+    bar.set_motion_policy(policy)
+    QApplication.processEvents()
+    return manager, bar
+
+
+def _advance_marker(bar, ms):
+    clock = bar._marker_driver.clock()
+    clock.setCurrentTime(int(ms))
+    QApplication.processEvents()
+
+
+def _between(value, start, end):
+    lo, hi = (start, end) if start <= end else (end, start)
+    return lo <= value <= hi
+
+
+def test_default_policy_has_no_marker_or_active_clock(qtbot):
+    _manager, bar = _shown_bar(qtbot, count=3, active=1)
+
+    assert bar.motion_policy() == POLICY_OFF
+    assert not bar.motion_policy().interpolates()
+    assert not bar._marker_rect.isValid()
+    assert not bar._marker_driver.is_active()
+    assert bar._plus.size() == QSize(28, 28)
+    assert bar._overflow.size() == QSize(28, 28)
+
+
+def test_light_policy_snaps_marker_inside_confirmed_tab(qtbot):
+    manager, bar = _motion_shown_bar(qtbot, count=3, active=1)
+    tab = bar.tabBar().tabRect(1)
+    marker = bar._marker_rect
+
+    assert bar.motion_policy() == POLICY_LIGHT
+    assert bar._marker_view_id == manager.get(1).view_id
+    assert marker == tab_marker_rect(tab)
+    assert marker.height() == 2
+    assert QRectF(tab).contains(marker)
+    assert not bar._marker_driver.is_active()
+
+
+def test_off_and_reduced_remove_marker_and_keep_selected_background(qtbot):
+    manager, bar = _motion_shown_bar(qtbot, count=3, active=1)
+    switches = []
+    bar.switch_requested.connect(switches.append)
+    assert bar._marker_rect.isValid()
+
+    bar.set_motion_policy(POLICY_REDUCED)
+    assert manager.active == 1
+    assert bar.tabBar().currentIndex() == 1
+    assert not bar._marker_rect.isValid()
+    assert not bar._marker_driver.is_active()
+
+    bar.set_motion_policy(POLICY_OFF)
+    assert bar.tabBar().currentIndex() == 1
+    assert not bar._marker_rect.isValid()
+    assert not bar._marker_driver.is_active()
+    assert switches == []
+
+
+def test_marker_follows_fast_a_b_c_from_current_displayed_value(qtbot):
+    manager, bar = _motion_shown_bar(qtbot, count=3, active=0)
+    switches = []
+    bar.switch_requested.connect(switches.append)
+    start = QRectF(bar._marker_rect)
+    mid_target = tab_marker_rect(bar.tabBar().tabRect(1))
+    end_target = tab_marker_rect(bar.tabBar().tabRect(2))
+
+    manager.set_active(1)
+    assert bar._marker_driver.is_active()
+    assert bar._marker_view_id == manager.get(1).view_id
+    assert duration_ms("view_marker", POLICY_LIGHT) == 140
+    assert bar._marker_driver.clock().duration() == 140
+
+    _advance_marker(bar, 35)
+    mid = QRectF(bar._marker_rect)
+    assert mid != start
+    assert mid != mid_target
+    assert _between(mid.x(), start.x(), mid_target.x())
+    assert mid.height() == 2
+
+    manager.set_active(2)
+    assert bar._marker_view_id == manager.get(2).view_id
+    assert QRectF(bar._marker_driver.clock().startValue()) == mid
+    assert bar._marker_driver.target() == end_target
+    assert bar._marker_driver.is_active()
+
+    _advance_marker(bar, 140)
+    assert bar._marker_rect == end_target
+    assert not bar._marker_driver.is_active()
+    assert switches == []
+    assert manager.active == 2
+
+
+def test_deleting_marked_view_snaps_to_confirmed_survivor(qtbot):
+    manager, bar = _motion_shown_bar(qtbot, count=3, active=0)
+    marked_id = manager.get(1).view_id
+    manager.set_active(1)
+    _advance_marker(bar, 35)
+    assert bar._marker_driver.is_active()
+    assert bar._marker_view_id == marked_id
+
+    manager.delete_view(1)
+    QApplication.processEvents()
+
+    assert marked_id not in [view.view_id for view in manager.views]
+    assert bar._marker_view_id == manager.get(manager.active).view_id
+    assert not bar._marker_driver.is_active()
+    expected = tab_marker_rect(bar.tabBar().tabRect(manager.active))
+    assert bar._marker_rect == expected
+
+
+def test_unconfirmed_switch_request_does_not_move_marker(qtbot):
+    manager, bar = _motion_shown_bar(qtbot, count=3, active=0)
+    switches = []
+    bar.switch_requested.connect(switches.append)
+    before_id = bar._marker_view_id
+    before_rect = QRectF(bar._marker_rect)
+
+    bar.tabBar().setCurrentIndex(1)
+    QApplication.processEvents()
+
+    assert switches == [1]
+    assert manager.active == 0
+    assert bar.tabBar().currentIndex() == 1
+    assert bar._marker_view_id == before_id
+    assert bar._marker_rect == before_rect
+    assert not bar._marker_driver.is_active()
+
+
+def test_overflow_activation_snaps_marker_onto_pulled_in_tab(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    bar.set_motion_policy(POLICY_LIGHT)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    QApplication.processEvents()
+
+    hidden = bar.overflow_indices()
+    assert hidden
+    target = hidden[-1]
+    assert not bar.tabBar().isTabVisible(target)
+    assert bar._marker_view_id == manager.get(0).view_id
+    assert bar._marker_rect.isValid()
+    assert not bar._marker_driver.is_active()
+
+    manager.set_active(target)
+    QApplication.processEvents()
+
+    assert target not in bar.overflow_indices()
+    assert bar.tabBar().isTabVisible(target)
+    assert bar._marker_view_id == manager.get(target).view_id
+    assert not bar._marker_driver.is_active()
+    expected = tab_marker_rect(bar.tabBar().tabRect(target))
+    assert bar._marker_rect == expected
+    assert QRectF(bar.tabBar().tabRect(target)).contains(bar._marker_rect)
+
+
+def test_resize_snaps_in_flight_marker_to_confirmed_tab(qtbot):
+    manager, bar = _motion_shown_bar(qtbot, count=3, active=0)
+    manager.set_active(1)
+    _advance_marker(bar, 35)
+    assert bar._marker_driver.is_active()
+
+    bar.resize(bar.width() + 120, bar.height())
+    QApplication.processEvents()
+
+    assert manager.active == 1
+    assert bar._marker_view_id == manager.get(1).view_id
+    assert not bar._marker_driver.is_active()
+    assert bar._marker_rect == tab_marker_rect(bar.tabBar().tabRect(1))
+
+
+def test_motion_instance_inactive_swatch_still_only_switches(qtbot):
+    _manager, bar = _motion_shown_bar(qtbot, count=3, active=0)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, reordered = _signal_lists(bar)
+    slot = _hover_icon_slot(tabs, 1)
+
+    assert tabs.hover_index() == -1
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert deleted == []
+    assert switched == [1]
+    assert renamed == []
+    assert reordered == []
+    assert tabs.currentIndex() == 1
+    assert tabs.hover_index() == -1
+    assert bar._plus.size() == QSize(28, 28)
+
+
+def test_motion_instance_switched_swatch_requires_pointer_reentry(qtbot):
+    _manager, bar = _motion_shown_bar(qtbot, count=3, active=0)
+    tabs = bar.tabBar()
+    deleted, switched, renamed, reordered = _signal_lists(bar)
+    slot = _hover_icon_slot(tabs, 1)
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, slot.center(), slot.center()),
+    )
+    QApplication.processEvents()
+
+    assert tabs.currentIndex() == 1
+    assert tabs.hover_index() == -1
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+    assert deleted == []
+
+    body = tabs.tabRect(1).center()
+    assert not slot.contains(body)
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, body, slot.center()),
+    )
+    QApplication.sendEvent(
+        tabs,
+        QHoverEvent(QEvent.HoverMove, slot.center(), body),
+    )
+    QApplication.processEvents()
+    assert tabs.hover_index() == 1
+
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, slot.center())
+    QApplication.processEvents()
+
+    assert deleted == [1]
+    assert switched == [1]
+    assert renamed == []
+    assert reordered == []
+
+
+def test_motion_instance_keeps_manager_caps_and_action_buttons(qtbot):
+    time_manager = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+    while len(time_manager.views) < TIME_DOMAIN_MAX_VIEWS:
+        time_manager.new_view()
+    time_bar = ViewTabBar(time_manager)
+    qtbot.addWidget(time_bar)
+    time_bar.set_motion_policy(POLICY_LIGHT)
+    time_bar.resize(900, 30)
+    time_bar.show()
+    QApplication.processEvents()
+
+    assert len(time_manager.views) == TIME_DOMAIN_MAX_VIEWS
+    assert not time_bar._plus.isEnabled()
+    assert time_bar._plus.size() == QSize(28, 28)
+    assert time_bar._overflow.size() == QSize(28, 28)
+
+    analysis_manager = ViewManager(max_views=MAX_VIEWS)
+    while len(analysis_manager.views) < MAX_VIEWS:
+        analysis_manager.new_view()
+    analysis_bar = ViewTabBar(analysis_manager)
+    qtbot.addWidget(analysis_bar)
+    analysis_bar.set_motion_policy(POLICY_LIGHT)
+    analysis_bar.show()
+    QApplication.processEvents()
+
+    assert len(analysis_manager.views) == MAX_VIEWS
+    assert not analysis_bar._plus.isEnabled()
+    assert analysis_bar._plus.size() == QSize(28, 28)

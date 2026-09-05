@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import pytest
-from PyQt5.QtCore import QRect, Qt
+from PyQt5 import sip
+from PyQt5.QtCore import QEvent, QRect, Qt
 from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QApplication,
+    QGraphicsOpacityEffect,
     QHeaderView,
     QLabel,
     QTableView,
@@ -20,6 +22,7 @@ from mf4_analyzer.ui.widgets.recent_open_popup import (
     RECENT_POPUP_TARGET_HEIGHT,
     RecentOpenPopup,
 )
+from mf4_analyzer.ui_kit.motion import POLICY_LIGHT, POLICY_OFF, POLICY_REDUCED
 from mf4_analyzer.ui_kit.popup_shell import POPUP_SHELL_FLAGS
 
 
@@ -376,3 +379,216 @@ def test_recent_popup_frame_stays_inside_compact_work_area(qapp, qtbot, monkeypa
     assert frame.top() >= SCREEN_MARGIN
     assert frame.right() <= width - SCREEN_MARGIN
     assert frame.bottom() <= height - SCREEN_MARGIN
+
+
+def _populate_two(popup, tmp_path):
+    first = tmp_path / "a.mf4"
+    second = tmp_path / "b.mf4"
+    first.write_text("x", encoding="utf-8")
+    second.write_text("x", encoding="utf-8")
+    popup.populate((_entry(first), _entry(second)))
+    return first, second
+
+
+def _show_light(qtbot, monkeypatch, popup, host):
+    monkeypatch.setattr(RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen))
+    popup.set_motion_policy(POLICY_LIGHT)
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    return popup._enter_driver
+
+
+def test_motion_defaults_off_and_does_not_attach_effect(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen))
+    host, popup = _make_popup(qtbot)
+    _populate_two(popup, tmp_path)
+    assert popup.motion_policy() == POLICY_OFF
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    assert popup._search.hasFocus()
+    assert popup._enter_driver is None or not popup._enter_driver.is_active()
+    assert popup._surface.graphicsEffect() is None
+    assert popup.enter_opacity_supported()
+    opened, closed = [], []
+    popup.open_requested.connect(opened.append)
+    popup.closed.connect(lambda: closed.append("c"))
+    qtbot.keyClick(popup._search, Qt.Key_Return)
+    assert opened == [str(tmp_path / "a.mf4")]
+    assert closed == ["c"]
+    assert not popup.isVisible()
+
+
+def test_enter_opacity_typing_and_internal_click(qtbot, tmp_path, monkeypatch):
+    host, popup = _make_popup(qtbot)
+    first, second = _populate_two(popup, tmp_path)
+    driver = _show_light(qtbot, monkeypatch, popup, host)
+    assert popup._search.hasFocus()
+    assert driver is not None and driver.is_active()
+    assert driver.current() == pytest.approx(0.0)
+    driver.clock().setCurrentTime(35)
+    mid = float(driver.current())
+    assert 0.0 < mid < 1.0
+    assert popup._enter_effect is not None
+    assert popup._enter_effect.opacity() == pytest.approx(mid)
+
+    qtbot.keyClicks(popup._search, "b")
+    assert not driver.is_active()
+    assert driver.current() == pytest.approx(1.0)
+    assert popup._search.text() == "b"
+    assert popup.isVisible()
+    assert popup._search.hasFocus()
+
+    popup._search.clear()
+    popup.set_motion_policy(POLICY_LIGHT)
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    driver = popup._enter_driver
+    driver.clock().setCurrentTime(40)
+    opened, closed = [], []
+    popup.open_requested.connect(opened.append)
+    popup.closed.connect(lambda: closed.append("c"))
+    table = popup.findChild(QTableView, "recentOpenTable")
+    index = table.model().index(0, 0)
+    qtbot.mouseClick(table.viewport(), Qt.LeftButton, pos=table.visualRect(index).center())
+    assert opened == [str(first)]
+    assert closed == ["c"]
+    assert not popup.isVisible()
+    assert not driver.is_active()
+    assert second is not None
+
+
+def test_enter_escape_outside_click_signals_and_reopen(qtbot, tmp_path, monkeypatch):
+    host, popup = _make_popup(qtbot)
+    first, _second = _populate_two(popup, tmp_path)
+    driver = _show_light(qtbot, monkeypatch, popup, host)
+    driver.clock().setCurrentTime(35)
+    qtbot.keyClicks(popup._search, "a")
+    assert popup._search.text() == "a"
+    qtbot.keyClick(popup._search, Qt.Key_Escape)
+    assert popup._search.text() == ""
+    assert popup.isVisible()
+    qtbot.keyClick(popup._search, Qt.Key_Escape)
+    assert not popup.isVisible()
+    assert not driver.is_active()
+
+    opened, cleared, closed = [], [], []
+    popup.open_requested.connect(opened.append)
+    popup.clear_requested.connect(lambda: cleared.append("clear"))
+    popup.closed.connect(lambda: closed.append("c"))
+
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    driver = popup._enter_driver
+    driver.clock().setCurrentTime(140)
+    assert not driver.is_active()
+    assert driver.current() == pytest.approx(1.0)
+    assert popup.isVisible()
+    assert closed == []
+    assert opened == []
+
+    # Qt.Popup dismisses an outside press by close/hide. Offscreen cannot grab,
+    # so drive that same immediate path here.
+    popup.close()
+    QApplication.processEvents()
+    assert not popup.isVisible()
+    assert closed == ["c"]
+    assert not driver.is_active()
+
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    driver = popup._enter_driver
+    assert driver.is_active()
+    assert driver.current() == pytest.approx(0.0)
+    assert popup.isVisible()
+    driver.clock().setCurrentTime(50)
+    popup.close()
+    assert closed == ["c", "c"]
+
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    assert popup.isVisible()
+    assert popup._enter_driver.is_active()
+    popup.findChild(QWidget, "recentOpenClear").click()
+    assert cleared == ["clear"]
+    assert popup.isVisible()
+    popup.close()
+    assert opened == []
+    assert first is not None
+
+
+def test_enter_parent_destroy_and_resize_snap(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen))
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.setGeometry(80, 80, 160, 40)
+    host.show()
+    qtbot.waitExposed(host)
+    popup = RecentOpenPopup(host)
+    _populate_two(popup, tmp_path)
+    popup.set_motion_policy(POLICY_LIGHT)
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    driver = popup._enter_driver
+    driver.clock().setCurrentTime(40)
+    assert driver.is_active()
+    host.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    QApplication.processEvents()
+    assert sip.isdeleted(host)
+
+    host2, popup2 = _make_popup(qtbot)
+    _populate_two(popup2, tmp_path)
+    driver2 = _show_light(qtbot, monkeypatch, popup2, host2)
+    shown = popup2.geometry()
+    driver2.clock().setCurrentTime(35)
+    assert driver2.is_active()
+    popup2.setFixedSize(popup2.width() - 40, popup2.height() - 40)
+    QApplication.processEvents()
+    assert not driver2.is_active()
+    assert driver2.current() == pytest.approx(1.0)
+    assert popup2.frameGeometry().width() <= shown.width()
+    popup2.close()
+
+
+def test_enter_skips_when_effect_blocked_or_unsupported(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen))
+    host, popup = _make_popup(qtbot)
+    _populate_two(popup, tmp_path)
+    blocker = QGraphicsOpacityEffect(popup._surface)
+    blocker.setOpacity(0.8)
+    popup._surface.setGraphicsEffect(blocker)
+    popup.set_motion_policy(POLICY_LIGHT)
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    assert popup.enter_opacity_supported() is False
+    assert popup._surface.graphicsEffect() is blocker
+    assert blocker.opacity() == pytest.approx(0.8)
+    assert popup._enter_driver is None or not popup._enter_driver.is_active()
+    assert popup.isVisible()
+    assert popup._search.hasFocus()
+    popup.close()
+
+    host2, popup2 = _make_popup(qtbot)
+    _populate_two(popup2, tmp_path)
+    monkeypatch.setattr(
+        RecentOpenPopup, "_opacity_effect_supported", lambda self, host: False,
+    )
+    popup2.set_motion_policy(POLICY_LIGHT)
+    popup2.reset_for_show()
+    popup2.show_at(host2)
+    qtbot.waitExposed(popup2)
+    assert popup2.enter_opacity_supported() is False
+    assert popup2._surface.graphicsEffect() is None
+    assert popup2._enter_driver is None or not popup2._enter_driver.is_active()
+    assert popup2.isVisible()
+    popup2.set_motion_policy(POLICY_REDUCED)
+    assert not popup2.motion_policy().interpolates()
+    popup2.close()

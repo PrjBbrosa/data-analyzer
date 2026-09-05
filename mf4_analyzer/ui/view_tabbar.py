@@ -39,6 +39,7 @@ from PyQt5.QtWidgets import (
 from . import hints
 from ..ui_kit.icons import Icons, icon_device_pixel_ratio
 from ..ui_kit.menus import apply_rounded_menu_chrome
+from ..ui_kit.motion import MotionPolicy, POLICY_OFF, ValueDriver, duration_ms, resolve_policy
 from .view_state import MAX_VIEWS
 from .widgets.view_overflow_popup import ViewOverflowPopup, ViewOverflowRow
 
@@ -49,6 +50,9 @@ _CLOSE_BORDER = QColor("#e5a8b0")
 _CLOSE_PRESSED = QColor("#ffe3e7")
 _CLOSE_VISUAL_SIZE = 18
 _CLOSE_HIT_SIZE = 20
+_MARKER_HEIGHT = 2
+_MARKER_INSET = 3
+_MARKER_COLOR = QColor("#2563eb")
 
 # Shared bottom-rail band (TimeDomain dock + analysis compare row). The
 # 26px tab strip is vertically centered inside this; the left navigator's
@@ -139,6 +143,19 @@ def tab_swatch_visual_rect(tabbar: QTabBar, index: int) -> QRect:
     return _centered_rect(hit.center(), 10, 6)
 
 
+def tab_marker_rect(tab_rect: QRect) -> QRectF:
+    """Return the 2px in-tab bottom marker, or empty when the tab has no room."""
+    if not tab_rect.isValid() or tab_rect.width() <= 2 * _MARKER_INSET:
+        return QRectF()
+    rect = QRectF(
+        tab_rect.left() + _MARKER_INSET,
+        tab_rect.bottom() - _MARKER_HEIGHT + 1,
+        tab_rect.width() - 2 * _MARKER_INSET,
+        _MARKER_HEIGHT,
+    )
+    return rect.intersected(QRectF(tab_rect))
+
+
 class _ViewTabs(QTabBar):
     """Own close intent without turning an inactive-View switch into delete."""
 
@@ -225,6 +242,9 @@ class _ViewTabs(QTabBar):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        marker = bar._marker_display_rect()
+        if marker.isValid() and event.rect().intersects(marker.toAlignedRect()):
+            _paint_tab_marker(painter, marker)
         for idx in range(min(self.count(), len(bar._manager.views))):
             if not self.isTabVisible(idx):
                 continue
@@ -506,6 +526,11 @@ class ViewTabBar(QWidget):
         self._overflow_popup = None
         self._overflow_popup_closed_msecs = 0
         self._tab_spacer_icon = _tab_spacer_icon()
+        self._motion_policy = POLICY_OFF
+        self._marker_rect = QRectF()
+        self._marker_view_id = ""
+        self._marker_layout_key = None
+        self._marker_driver = ValueDriver(self, on_value=self._on_marker_value)
         self.setFixedHeight(RAIL_HEIGHT)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -660,6 +685,7 @@ class ViewTabBar(QWidget):
         # The cancel-merge button just appeared/vanished, which moves the tab
         # strip's measured budget by its whole width.
         self._sync_tabbar_width()
+        self._relocate_marker(interpolate=False)
 
     def _partner_color_for(self, idx: int):
         """Return the partner View's tab color when ``idx`` is a merge host,
@@ -715,6 +741,80 @@ class ViewTabBar(QWidget):
     def tabBar(self) -> QTabBar:
         return self._tabs
 
+    def motion_policy(self) -> MotionPolicy:
+        return self._motion_policy
+
+    def set_motion_policy(self, policy: MotionPolicy | None) -> None:
+        self._motion_policy = resolve_policy(policy)
+        self._relocate_marker(interpolate=False)
+
+    def _confirmed_active_view_id(self) -> str:
+        return self._view_id_at(int(self._manager.active))
+
+    def _tab_layout_key(self):
+        tabs = self._tabs
+        visible = []
+        for idx in range(min(tabs.count(), len(self._manager.views))):
+            visible.append((self._view_id_at(idx), bool(tabs.isTabVisible(idx))))
+        return (
+            tuple(visible),
+            bool(self._density_compact),
+            tuple(self._overflow_indices),
+            tabs.font().toString(),
+            round(float(self.devicePixelRatioF()), 3),
+            int(self.width()),
+            int(self.height()),
+        )
+
+    def _marker_rect_for_view_id(self, view_id: str) -> QRectF:
+        idx = self._index_for_view_id(view_id)
+        if idx < 0 or not self._tabs.isTabVisible(idx):
+            return QRectF()
+        return tab_marker_rect(self._tabs.tabRect(idx))
+
+    def _marker_display_rect(self) -> QRectF:
+        if not self._motion_policy.interpolates():
+            return QRectF()
+        rect = QRectF(self._marker_rect)
+        if not rect.isValid() or rect.width() <= 0 or rect.height() <= 0:
+            return QRectF()
+        return rect.intersected(QRectF(self._tabs.rect()))
+
+    def _on_marker_value(self, value) -> None:
+        rect = QRectF() if value is None else QRectF(value)
+        old = self._marker_rect.toAlignedRect()
+        self._marker_rect = rect
+        region = old.united(rect.toAlignedRect()).adjusted(-2, -2, 2, 2)
+        self._tabs.update(region)
+
+    def _relocate_marker(self, *, interpolate: bool) -> None:
+        view_id = self._confirmed_active_view_id()
+        layout_key = self._tab_layout_key()
+        previous_id = self._marker_view_id
+        previous_key = self._marker_layout_key
+        current = self._marker_driver.current()
+        current_rect = QRectF(current) if current is not None else QRectF()
+        self._marker_view_id = view_id
+        self._marker_layout_key = layout_key
+        if not self._motion_policy.interpolates():
+            self._marker_driver.snap(QRectF())
+            return
+        target = self._marker_rect_for_view_id(view_id)
+        if (
+            interpolate
+            and previous_key == layout_key
+            and previous_id
+            and previous_id != view_id
+            and current_rect.isValid()
+            and target.isValid()
+        ):
+            self._marker_driver.go(
+                target,
+                duration_ms=duration_ms("view_marker", self._motion_policy),
+            )
+            return
+        self._marker_driver.snap(target)
+
     def split_action_labels(self) -> dict:
         return dict(self._split_action_labels)
 
@@ -724,10 +824,12 @@ class ViewTabBar(QWidget):
     def refresh_split_controls(self) -> None:
         self._update_split_chip()
         self._sync_tabbar_width()
+        self._relocate_marker(interpolate=False)
 
     def refresh_fit(self) -> None:
         """Public entry for hosts that changed sibling width (UltraView Dock)."""
         self._sync_tabbar_width()
+        self._relocate_marker(interpolate=False)
 
     def refresh(self) -> None:
         if self._reordering:
@@ -758,6 +860,7 @@ class ViewTabBar(QWidget):
         self._update_split_chip()
         self._sync_tabbar_width()
         self._sync_overflow_popup()
+        self._relocate_marker(interpolate=False)
 
     def _sync_tabbar_width(self) -> None:
         """Fit the tab strip to the row, degrading only when MEASURED too wide.
@@ -1098,18 +1201,24 @@ class ViewTabBar(QWidget):
         # during __init__'s refresh, where the row has no geometry yet) is
         # corrected against the real styled widths.
         self._sync_tabbar_width()
+        self._relocate_marker(interpolate=False)
 
     def hideEvent(self, event):
         self._close_overflow_popup()
         self._tabs.clear_interaction_state()
+        self._relocate_marker(interpolate=False)
         super().hideEvent(event)
 
     def changeEvent(self, event):
         super().changeEvent(event)
-        if event.type() in (QEvent.WindowDeactivate, QEvent.ActivationChange):
+        etype = event.type()
+        if etype in (QEvent.WindowDeactivate, QEvent.ActivationChange):
             window = self.window()
             if window is not None and not window.isActiveWindow():
                 self._tabs.clear_interaction_state()
+                self._relocate_marker(interpolate=False)
+        elif etype in (QEvent.FontChange, QEvent.ApplicationFontChange):
+            self._relocate_marker(interpolate=False)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1117,6 +1226,7 @@ class ViewTabBar(QWidget):
         # fit: narrowing compacts the tabs and then retires them, while the +
         # button and the split action keep their measured reserve throughout.
         self._sync_tabbar_width()
+        self._relocate_marker(interpolate=False)
 
     def _sync_active(self, idx: int) -> None:
         self._secondary_focused = False
@@ -1131,11 +1241,13 @@ class ViewTabBar(QWidget):
         # _retire_tail_tabs never hides the current tab, and pushes some other
         # tail tab into the menu in its place.
         self._sync_tabbar_width()
+        self._relocate_marker(interpolate=True)
 
     def set_split_focus(self, secondary_focused: bool) -> None:
         self._secondary_focused = bool(secondary_focused)
         self._update_split_chip()
         self._sync_tabbar_width()
+        self._relocate_marker(interpolate=False)
 
     def _set_current_index(self, idx: int) -> None:
         if 0 <= idx < self._tabs.count():
@@ -1512,6 +1624,10 @@ def _tab_spacer_icon() -> QIcon:
     pixmap = QPixmap(16, 16)
     pixmap.fill(Qt.transparent)
     return QIcon(pixmap)
+
+
+def _paint_tab_marker(painter: QPainter, rect: QRectF) -> None:
+    painter.fillRect(rect, _MARKER_COLOR)
 
 
 def _paint_tab_swatch(

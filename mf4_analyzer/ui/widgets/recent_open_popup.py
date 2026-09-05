@@ -29,6 +29,7 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -43,6 +44,12 @@ from PyQt5.QtWidgets import (
 
 from ...ui_kit.dialog_geometry import SCREEN_MARGIN
 from ...ui_kit.icons import Icons
+from ...ui_kit.motion import (
+    MotionPolicy,
+    ValueDriver,
+    duration_ms,
+    resolve_policy,
+)
 from ...ui_kit.popup_shell import apply_popup_shell
 from ...ui_kit.widgets import SearchField
 from ..recent_files import (
@@ -117,6 +124,13 @@ class RecentOpenPopup(QFrame):
         self._restore_opener = False
         self._geometry_locked = False
         self._open_emitted = False
+        self._motion_policy = resolve_policy(None)
+        self._enter_driver = None
+        self._enter_effect = None
+        self._enter_generation = 0
+        self._enter_apply_generation = 0
+        self._enter_opacity_ok = True
+        self._enter_locked_size = QSize()
         self._home = str(Path.home())
         self._file_icon = Icons.file()
         self._project_icon = Icons.save_disk()
@@ -231,9 +245,15 @@ class RecentOpenPopup(QFrame):
         self._search.textChanged.connect(self._on_query_changed)
         self._search.returnPressed.connect(self._open_current)
         self._search.escape_requested.connect(self._on_escape_requested)
+        self.installEventFilter(self)
+        self._surface.installEventFilter(self)
         self._search.installEventFilter(self)
+        for child in self._search.findChildren(QWidget):
+            child.installEventFilter(self)
         self._table.viewport().installEventFilter(self)
         self._table.installEventFilter(self)
+        self._clear.installEventFilter(self)
+        self._empty.installEventFilter(self)
 
         self.setMaximumWidth(RECENT_POPUP_MAX_WIDTH)
         self._update_chrome("")
@@ -292,28 +312,49 @@ class RecentOpenPopup(QFrame):
         self._closed_emitted = False
         self._open_emitted = False
         self._geometry_locked = True
+        self._enter_locked_size = QSize(width, height)
+        self._enter_generation += 1
         self.move(QPoint(x, y))
+        self._prepare_enter_effect()
         self.show()
         self.raise_()
         self._sync_column_widths()
         self._sync_empty_geometry()
         self.focus_search(select_all=False)
+        self._start_enter_motion()
 
     def focus_search(self, select_all: bool = False) -> None:
         self._search.setFocus(Qt.ShortcutFocusReason)
         if select_all:
             self._search.selectAll()
 
+    def motion_policy(self) -> MotionPolicy:
+        return self._motion_policy
+
+    def set_motion_policy(self, policy: MotionPolicy | None) -> None:
+        self._motion_policy = resolve_policy(policy)
+        if self.isVisible():
+            self._finish_enter()
+            if not self._motion_policy.interpolates():
+                self._release_enter_effect()
+        elif not self._motion_policy.interpolates():
+            self._cancel_enter()
+
+    def enter_opacity_supported(self) -> bool:
+        return bool(self._enter_opacity_ok)
+
     def sizeHint(self) -> QSize:
         return QSize(RECENT_POPUP_MAX_WIDTH, RECENT_POPUP_TARGET_HEIGHT)
 
     def hideEvent(self, event):
+        self._cancel_enter()
         super().hideEvent(event)
         self._geometry_locked = False
         self._hover_row = -1
         self._emit_closed()
 
     def closeEvent(self, event):
+        self._cancel_enter()
         super().closeEvent(event)
         self._geometry_locked = False
         self._emit_closed()
@@ -322,8 +363,20 @@ class RecentOpenPopup(QFrame):
         super().resizeEvent(event)
         self._sync_column_widths()
         self._sync_empty_geometry()
+        if (
+            self._enter_is_active()
+            and self._enter_locked_size.isValid()
+            and event.size() != self._enter_locked_size
+        ):
+            self._finish_enter()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange and not self.isEnabled():
+            self._finish_enter()
 
     def eventFilter(self, obj, event):
+        self._maybe_finish_enter_for_input(event)
         if obj is self._search and event.type() == QEvent.KeyPress:
             key = event.key()
             if key == Qt.Key_Up:
@@ -514,6 +567,96 @@ class RecentOpenPopup(QFrame):
             return
         self._closed_emitted = True
         self.closed.emit()
+
+    def _enter_is_active(self) -> bool:
+        driver = self._enter_driver
+        return driver is not None and driver.is_active()
+
+    def _ensure_enter_driver(self) -> ValueDriver:
+        if self._enter_driver is None:
+            self._enter_driver = ValueDriver(self, on_value=self._on_enter_opacity)
+        return self._enter_driver
+
+    def _on_enter_opacity(self, value) -> None:
+        if self._enter_apply_generation != self._enter_generation:
+            return
+        effect = self._enter_effect
+        if effect is None:
+            return
+        effect.setOpacity(float(value))
+
+    def _opacity_effect_supported(self, host: QWidget) -> bool:
+        return not host.testAttribute(Qt.WA_PaintOnScreen)
+
+    def _prepare_enter_effect(self) -> None:
+        self._enter_opacity_ok = True
+        if not self._motion_policy.interpolates():
+            self._release_enter_effect()
+            return
+        host = self._surface
+        existing = host.graphicsEffect()
+        if existing is not None and existing is not self._enter_effect:
+            self._enter_opacity_ok = False
+            return
+        if not self._opacity_effect_supported(host):
+            self._enter_opacity_ok = False
+            self._release_enter_effect()
+            return
+        if self._enter_effect is None:
+            effect = QGraphicsOpacityEffect(host)
+            host.setGraphicsEffect(effect)
+            applied = host.graphicsEffect()
+            if applied is not effect:
+                self._enter_opacity_ok = False
+                return
+            self._enter_effect = effect
+        self._enter_effect.setOpacity(0.0)
+        self._ensure_enter_driver().snap(0.0)
+
+    def _start_enter_motion(self) -> None:
+        self._enter_apply_generation = self._enter_generation
+        if not self._motion_policy.interpolates() or not self._enter_opacity_ok:
+            if self._enter_driver is not None:
+                self._enter_driver.snap(1.0)
+            if self._enter_effect is not None:
+                self._enter_effect.setOpacity(1.0)
+            return
+        self._ensure_enter_driver().go(
+            1.0,
+            duration_ms=duration_ms("recent_enter", self._motion_policy),
+        )
+
+    def _finish_enter(self) -> None:
+        if self._enter_driver is not None:
+            self._enter_driver.snap(1.0)
+        if self._enter_effect is not None:
+            self._enter_effect.setOpacity(1.0)
+
+    def _cancel_enter(self) -> None:
+        self._enter_generation += 1
+        driver = self._enter_driver
+        if driver is not None:
+            driver.snap(1.0)
+        self._release_enter_effect()
+
+    def _release_enter_effect(self) -> None:
+        host = self._surface
+        effect = self._enter_effect
+        self._enter_effect = None
+        if effect is None:
+            return
+        if host.graphicsEffect() is effect:
+            host.setGraphicsEffect(None)
+
+    def _maybe_finish_enter_for_input(self, event) -> None:
+        if not self._enter_is_active():
+            return
+        etype = event.type()
+        if etype == QEvent.KeyPress or etype in (
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonDblClick,
+        ):
+            self._finish_enter()
 
     @staticmethod
     def _clamp(value: int, lo: int, hi: int) -> int:
