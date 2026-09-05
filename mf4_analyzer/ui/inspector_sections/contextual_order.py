@@ -84,13 +84,14 @@ class OrderContextual(QWidget):
         # R3 #9: build btn_rebuild before the signal-source group so we
         # can dock it on the group's header row.
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24).
+        self._analysis_time_fs = None
         self.btn_rebuild = QPushButton("")
         self.btn_rebuild.setIcon(Icons.rebuild_time())
         self.btn_rebuild.setIconSize(QSize(16, 16))
         self.btn_rebuild.setFixedSize(QSize(24, 24))
         self.btn_rebuild.setProperty("role", "icon")
-        self.btn_rebuild.setToolTip("重建时间轴")
-        self.btn_rebuild.setAccessibleName("重建时间轴")
+        self.btn_rebuild.setToolTip("设置分析时间轴（不影响时域）")
+        self.btn_rebuild.setAccessibleName("设置分析时间轴")
         self.btn_rebuild.clicked.connect(self._emit_rebuild_time_requested)
 
         # ---- 信号源 (custom header w/ rebuild button) ----
@@ -726,6 +727,12 @@ class OrderContextual(QWidget):
         self.spin_rf.setEnabled(not manual)
         self.spin_manual_rpm.setEnabled(manual)
 
+    def set_analysis_time_fs(self, fs):
+        """Persist explicit time reconstruction intent in this analysis View."""
+        self._analysis_time_fs = float(fs)
+        self.set_fs(fs)
+        self.compute_params_changed.emit(self.compute_params())
+
     def fs(self):
         return self.spin_fs.value()
 
@@ -754,6 +761,7 @@ class OrderContextual(QWidget):
             nfft_effective = nfft
             nfft_preview = nfft
         return dict(
+            analysis_time_fs=self._analysis_time_fs,
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
@@ -814,6 +822,8 @@ class OrderContextual(QWidget):
         through this method; emitting ``display_params_changed`` here would
         replot the heatmap and rewrite ColorBarItem.lo_prv mid-drag.
         """
+        if 'analysis_time_fs' in d:
+            self._analysis_time_fs = d['analysis_time_fs']
         self._applying_preset = True
         try:
             self._apply_params_unlocked(d)
@@ -922,6 +932,7 @@ class OrderContextual(QWidget):
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""
+        self._analysis_time_fs = None
         bar = getattr(self, 'preset_bar', None)
         defaults = getattr(bar, '_default_params', None) if bar is not None else None
         if isinstance(defaults, dict) and defaults:

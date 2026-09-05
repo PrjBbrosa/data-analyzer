@@ -228,7 +228,7 @@ def test_full_flow_accept_dispatches_one_worker_and_caches(qtbot, monkeypatch):
     toasts.clear()
     # The fake FD is now uniform (Accept side-effect ran), so the
     # pre-flight passes without re-prompting.
-    assert fake_fd.is_time_axis_uniform() is True
+    assert fake_fd.is_time_axis_uniform() is False
     win.do_fft_time(force=False)
     # Cache hit: no new service job, no new cache entry.
     assert not win._analysis_jobs.is_running('fft_time')
@@ -268,7 +268,7 @@ def test_full_flow_auto_rebuild_does_not_open_popover(qtbot, monkeypatch):
         lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
     )
 
-    assert fake_fd.is_time_axis_uniform() is True
+    assert fake_fd.is_time_axis_uniform() is False
     assert len(win.analysis_caches['fft_time']._store) == 1
     # No error toast (the pre-flight emitted a warning, not an error).
     assert not any(level == 'error' for _msg, level in toasts)
@@ -435,7 +435,7 @@ def test_popover_frame_geometry_inside_available_when_anchor_in_corner(
 # --- T2 reviewer flag: fd.fs side-effect on Reject ------------------
 
 
-def test_auto_rebuild_uses_suggested_fs(qtbot, monkeypatch):
+def test_auto_rebuild_uses_selected_time_without_mutating_source(qtbot, monkeypatch):
     """The no-prompt path should rebuild with suggested_fs_from_time_axis()."""
     import numpy as np
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
@@ -486,6 +486,7 @@ def test_auto_rebuild_uses_suggested_fs(qtbot, monkeypatch):
         lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
     )
 
-    assert fake_fd.fs == 250.0
-    assert seen['fs'] == 250.0
-    assert seen['dt'] == pytest.approx(1.0 / 250.0)
+    expected_fs = 1.0 / np.median(np.diff(fake_fd.time_array))
+    assert fake_fd.fs == 100.0
+    assert seen['fs'] == pytest.approx(expected_fs)
+    assert seen['dt'] == pytest.approx(1.0 / expected_fs)

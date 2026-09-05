@@ -277,69 +277,6 @@ class FrfMixin:
         nominal_dt = 1.0 / sample_rate
         return float(np.max(np.abs(differences - nominal_dt)) / nominal_dt)
 
-    def _frf_auto_rebuild_source_time_axis(self, fid, *, relative_jitter=None):
-        """Rebuild one logical source onto a uniform median-Fs grid.
-
-        Returns the Fs used. Leaves a toast/status audit trail so the
-        automatic recovery is not silent.
-        """
-        fd = self.files.get(fid)
-        if fd is None or not hasattr(fd, "rebuild_time_axis"):
-            raise FrfPreflightError("无法自动重建：来源已不可用")
-        suggested = float(fd.suggested_fs_from_time_axis())
-        if not np.isfinite(suggested) or suggested <= 0:
-            raise FrfPreflightError("无法自动重建：建议采样率无效")
-        old_max = float(fd.time_array[-1]) if len(fd.time_array) else 0.0
-        try:
-            old_fs = float(fd.fs)
-        except (TypeError, ValueError):
-            old_fs = 0.0
-        if relative_jitter is None:
-            jitter_fn = getattr(fd, "time_axis_relative_jitter", None)
-            if callable(jitter_fn):
-                relative_jitter = jitter_fn()
-        invoke = getattr(self, "_invoke_rebuild_time_axis", None)
-        if callable(invoke):
-            invoke(fd, suggested, reason="auto_nonuniform")
-        else:
-            try:
-                fd.rebuild_time_axis(suggested, reason="auto_nonuniform")
-            except TypeError:
-                fd.rebuild_time_axis(suggested)
-        new_max = float(fd.time_array[-1]) if len(fd.time_array) else 0.0
-        if hasattr(self, "_invalidate_all_analysis_caches_for_fid"):
-            self._invalidate_all_analysis_caches_for_fid(fid)
-        if hasattr(self, "inspector") and hasattr(self.inspector, "top"):
-            current_hi = self.inspector.top.spin_end.maximum()
-            self.inspector.top.set_range_limits(0, max(current_hi, new_max))
-        if hasattr(self, "plot_time"):
-            self.plot_time()
-        if relative_jitter is not None and np.isfinite(relative_jitter):
-            prefix = (
-                f"时间轴不均匀（相对抖动≈{float(relative_jitter):.3g}），"
-            )
-        else:
-            prefix = "时间轴不均匀，"
-        message = (
-            f"{prefix}已按 Fs≈{suggested:g} Hz 自动重建为均匀网格并继续计算。"
-        )
-        if hasattr(self, "toast"):
-            self.toast(message, "warning")
-        jitter_txt = "—"
-        if relative_jitter is not None and np.isfinite(relative_jitter):
-            jitter_txt = f"{float(relative_jitter):.3g}"
-        orig_fs_txt = f"{old_fs:g}" if np.isfinite(old_fs) and old_fs > 0 else "—"
-        if hasattr(self, "statusBar"):
-            self.statusBar.showMessage(
-                f"频响 · 已自动重建时间轴 · Fs={suggested:g} | "
-                f"{old_max:.1f}s → {new_max:.3f}s | "
-                f"原 Fs≈{orig_fs_txt} · 抖动 {jitter_txt}"
-            )
-        refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
-        if callable(refresh_chip):
-            refresh_chip()
-        return suggested
-
     def _frf_source_arrays(self, source, role):
         if source is None:
             raise FrfPreflightError(f"请选择{role}通道")
@@ -380,9 +317,9 @@ class FrfMixin:
     ):
         """Read and validate the directional pair on one common time crop.
 
-        When the *selected* physical range is non-uniform, rebuild the
-        logical source onto a median-Fs grid once and retry. Jitter
-        outside the selected range stays irrelevant (no rebuild).
+        Crop both signals on original physical time first. If that selection
+        is non-uniform, validate pair alignment and prepare one analysis-only
+        grid. Imported sources remain unchanged.
         """
 
         input_key, input_fd, input_time, input_values, input_fs, input_unit = (
@@ -437,6 +374,7 @@ class FrfMixin:
         if len(input_time) == 0 or len(output_time) == 0:
             raise FrfPreflightError("输入和输出在当前范围内没有共同的物理时间样本")
 
+        time_facts = None
         if validate_selected:
             # Selected-data validation intentionally follows the common
             # physical mask so jitter outside an explicitly requested range
@@ -454,18 +392,21 @@ class FrfMixin:
                     or _auto_rebuilt
                 ):
                     raise
-                jitter = self._frf_relative_jitter(input_time, input_fs)
-                if jitter is None:
-                    jitter = self._frf_relative_jitter(output_time, output_fs)
-                self._frf_auto_rebuild_source_time_axis(
-                    input_key[0], relative_jitter=jitter,
+                # Prove original pair alignment before assigning a common grid;
+                # rebuilding independently could conceal a true timing mismatch.
+                if len(input_time) != len(output_time) or not np.allclose(
+                    input_time, output_time, rtol=0,
+                    atol=DEFAULT_TIME_JITTER_TOLERANCE / input_fs,
+                ):
+                    raise FrfPreflightError("输入和输出真实时间轴未逐点对齐")
+                from ...analysis_time_axis import prepare_analysis_time_axis
+                input_time, input_fs, time_facts = prepare_analysis_time_axis(
+                    input_time, input_fs,
+                    time_source=getattr(input_fd, '_time_source', 'column'),
                 )
-                return self._frf_prepare_pair_samples(
-                    state,
-                    pane,
-                    validate_selected=validate_selected,
-                    _auto_rebuilt=True,
-                )
+                output_time = input_time.copy()
+                self._frf_validate_time_axis(input_time, input_values, input_fs, "输入")
+                self._frf_validate_time_axis(output_time, output_values, input_fs, "输出")
             if len(input_time) != len(output_time):
                 raise FrfPreflightError(
                     "应用同一物理范围后输入和输出样本数不一致"
@@ -490,6 +431,7 @@ class FrfMixin:
             "output_unit": output_unit,
             "requested_range": requested_range,
             "effective_range": effective_range,
+            "time_axis": time_facts,
         }
 
     def _frf_display_params_for_state(self, state):
@@ -571,7 +513,7 @@ class FrfMixin:
         output_time_copy = np.array(output_time, dtype=np.float64, copy=True)
 
         def job(worker):
-            return compute_frf(
+            result = compute_frf(
                 input_copy,
                 output_copy,
                 fs=input_fs,
@@ -581,6 +523,11 @@ class FrfMixin:
                 cancel_check=worker.cancelled,
                 progress=worker.progress.emit,
             )
+            if prepared['time_axis'] is not None:
+                from dataclasses import replace
+                result = replace(result, effective=replace(
+                    result.effective, time_axis=prepared['time_axis']))
+            return result
 
         return {
             "view_id": state.view_id,

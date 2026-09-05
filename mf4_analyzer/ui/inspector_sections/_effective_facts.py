@@ -200,11 +200,13 @@ def format_effective_facts(facts) -> list[str]:
     if start is not None and end is not None:
         rows.append(("有效时间范围", f"{start} – {end} s"))
 
-    jitter_text = _fact_number(facts, "max_time_jitter", ".3g")
+    time_axis = _fact(facts, "time_axis")
+    jitter_text = (
+        _fact_number(time_axis, "relative_jitter", ".3g")
+        if isinstance(time_axis, Mapping) else None
+    )
     if jitter_text is None:
-        time_axis = _fact(facts, "time_axis")
-        if isinstance(time_axis, Mapping):
-            jitter_text = _fact_number(time_axis, "relative_jitter", ".3g")
+        jitter_text = _fact_number(facts, "max_time_jitter", ".3g")
     if jitter_text is not None:
         # Numeric core reports jitter relative to the nominal sample step.
         rows.append(("最大时间抖动", f"{jitter_text}（相对 dt）"))
@@ -214,10 +216,12 @@ def format_effective_facts(facts) -> list[str]:
         rows.append(("无效频点", f"{int(invalid_bins)} 个"))
 
     time_axis = _fact(facts, "time_axis")
-    if isinstance(time_axis, Mapping) and time_axis.get("reason") == "auto_nonuniform":
+    if isinstance(time_axis, Mapping) and time_axis.get("reason") in {"auto_nonuniform", "manual"}:
         orig = _fact_number(time_axis, "original_fs", "g")
         orig_bit = f"{orig} Hz" if orig is not None else "—"
-        rows.append(("时间轴", f"已自动重建（原 Fs {orig_bit}）"))
+        action = "已自动重建" if time_axis.get("reason") == "auto_nonuniform" else "已按指定 Fs 重建"
+        scope = " · 仅本次分析" if time_axis.get("scope") == "analysis" else ""
+        rows.append(("时间轴", f"{action}{scope}（原 Fs {orig_bit}）"))
 
     health_parts: list[str] = []
     nan_count = _fact(facts, "nan_count")

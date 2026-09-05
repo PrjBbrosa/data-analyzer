@@ -227,6 +227,7 @@ lesson by default.
 | [Axis Adapter Range Commits Must Settle The Owner Envelope](axis-adapter-range-commit-must-settle-owner-envelope.md) | Changing a generic chart-options or axis-adapter path that mutates a | See lesson |
 | [ViewTabBar Managed Overflow Has No Native Scroll Controls](viewtabbar-managed-overflow-no-native-scroll.md) | Changing ViewTabBar width budgeting, compact labels, or overflow | See lesson |
 | [Parented Qt Popup Move Needs Native Window](parented-qt-popup-move-needs-native-window.md) | Positioning a parented `Qt.Popup` with screen coordinates, especially | See lesson |
+| [Analysis Time Preparation Preserves Original Source](analysis-time-preparation-preserves-original-source.md) | Changing analysis time reconstruction, sampling settings, original Plot timing, or effective-facts provenance. | See lesson |
 
 ## Selection Rules
 

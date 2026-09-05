@@ -127,9 +127,12 @@ class RebuildTimePopover(QDialog):
         shell.addWidget(self._surface)
         root = QVBoxLayout(self._surface)
         root.setContentsMargins(12, 10, 12, 10)
-        root.addWidget(QLabel("重建时间轴"))
+        root.addWidget(QLabel("设置分析时间轴"))
+        explanation = QLabel("仅当前分析 View 生效，时域保持原始时间。")
+        explanation.setWordWrap(True)
+        root.addWidget(explanation)
         self._target = _SelectableWrapLabel(
-            f"目标：[{target_filename}]", self._surface,
+            f"参考数据源：{target_filename}", self._surface,
         )
         root.addWidget(self._target)
         h = QHBoxLayout()

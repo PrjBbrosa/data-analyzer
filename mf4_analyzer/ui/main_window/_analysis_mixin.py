@@ -612,6 +612,7 @@ class AnalysisMixin:
         health, fs_values = self._effective_facts_health(
             sig, fid=fid, sources=sources,
         )
+        health["time_axis"] = getattr(facts, "time_axis", None)
         try:
             facts = replace(facts, **health)
         except TypeError:

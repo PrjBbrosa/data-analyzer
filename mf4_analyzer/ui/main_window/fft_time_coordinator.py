@@ -16,6 +16,7 @@ def fft_time_compute_cache_params(params: Mapping, time_range) -> dict:
     nfft = params.get("nfft_effective", params.get("nfft"))
     return {
         "fs": params.get("fs"),
+        "analysis_time_fs": params.get("analysis_time_fs"),
         "nfft": None if nfft is None else int(nfft),
         "window": params.get("window"),
         "overlap": params.get("overlap"),

@@ -3215,15 +3215,16 @@ def test_fft_time_analysis_cache_hit_status(qtbot, monkeypatch):
         freq_auto=True, freq_min=0.0, freq_max=0.0,
         time_range=(0.0, 0.1),
     )
-    key = win._fft_time_analysis_cache_key('f1', 'ch', p, 0)
+    resolved = win._resolve_fft_time_effective_params(p, n_samples=2)
+    key = win._fft_time_analysis_cache_key('f1', 'ch', resolved, 0)
     win.analysis_caches['fft_time'].put(key, fake)
 
     # Stub _get_fft_time_signal and inspector.get_params so do_fft_time
     # hits the cache branch.
     monkeypatch.setattr(
-        win, '_get_fft_time_signal',
-        lambda: ('f1', 'ch', np.linspace(0, 0.1, 2), np.ones(2), object()),
-    )
+            win, '_get_fft_time_signal',
+            lambda: ('f1', 'ch', np.array([0.0, 0.01]), np.ones(2), object()),
+        )
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params', lambda: p)
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
@@ -3260,7 +3261,8 @@ def test_fft_time_primary_hit_skips_nonuniform_preflight_and_service(
     result = SimpleNamespace(
         metadata={"frames": 2}, params=SimpleNamespace(nfft=8),
     )
-    key = win._fft_time_analysis_cache_key("f1", "ch", p, 0)
+    resolved = win._resolve_fft_time_effective_params(p, n_samples=2)
+    key = win._fft_time_analysis_cache_key("f1", "ch", resolved, 0)
     win.analysis_caches["fft_time"].put(key, result)
     rendered = []
     submitted = []
@@ -4127,8 +4129,8 @@ def test_fft_time_non_uniform_auto_rebuilds_without_popover(qtbot, monkeypatch):
         lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
     )
 
-    assert fake_fd.rebuilt_with == 100.0
-    assert fake_fd.is_time_axis_uniform() is True
+    assert fake_fd.rebuilt_with is None
+    assert fake_fd.is_time_axis_uniform() is False
     assert compute_calls['n'] == 1
     assert len(win.analysis_caches['fft_time']._store) == 1
     assert not any(level == 'warning' and '请重建' in msg for msg, level in captured)
@@ -4194,7 +4196,7 @@ def test_fft_time_non_uniform_auto_dispatches_worker_once(qtbot, monkeypatch):
     assert call_state['compute_calls'] == 1
     # Successful compute pushed exactly one result into the LRU.
     assert len(win.analysis_caches['fft_time']._store) == 1
-    assert fake_fd.rebuilt_with == 100.0
+    assert fake_fd.rebuilt_with is None
 
 
 def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch):
@@ -4243,9 +4245,10 @@ def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch
         lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
     )
 
-    assert fake_fd.rebuilt_with == 250.0
-    assert seen['fs'] == 250.0
-    assert abs(seen['dt'] - (1.0 / 250.0)) < 1e-12
+    expected_fs = 1.0 / np.median(np.diff(fake_fd.time_array))
+    assert fake_fd.rebuilt_with is None
+    assert seen['fs'] == pytest.approx(expected_fs)
+    assert seen['dt'] == pytest.approx(1.0 / expected_fs)
 
 
 def _write_time_csv(path, time, values, *, extra=None):
@@ -4266,7 +4269,7 @@ def _write_time_csv(path, time, values, *, extra=None):
             writer.writerow([float(item) for item in row])
 
 
-def test_nonuniform_auto_rebuild_shows_provenance_chip(qtbot, tmp_path):
+def test_nonuniform_analysis_keeps_plot_provenance_chip_hidden(qtbot, tmp_path):
     import numpy as np
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -4290,13 +4293,10 @@ def test_nonuniform_auto_rebuild_shows_provenance_chip(qtbot, tmp_path):
     fd = next(iter(win.files.values()))
     assert fd.is_time_axis_uniform() is False
     assert win._check_uniform_or_prompt(fd, "fft") is True
-    assert fd._time_source == "auto_rebuilt"
+    assert fd._time_source == "column"
+    assert not fd.is_time_axis_uniform()
     chip = win.chart_stack._time_card._time_axis_chip
-    assert not chip.isHidden()
-    assert "Fs≈" in chip.text()
-    assert "Hz" in chip.text()
-    assert "原 Fs≈" in chip.toolTip()
-    assert "抖动" in win.statusBar.currentMessage()
+    assert chip.isHidden()
 
     win.close_all(force=True)
     win._load_one(str(uniform))
@@ -4306,7 +4306,7 @@ def test_nonuniform_auto_rebuild_shows_provenance_chip(qtbot, tmp_path):
     assert win.chart_stack._time_card._time_axis_chip.isHidden()
 
 
-def test_frf_auto_rebuild_shows_provenance_chip(qtbot, tmp_path):
+def test_frf_analysis_keeps_plot_provenance_chip_hidden(qtbot, tmp_path):
     import numpy as np
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -4329,13 +4329,17 @@ def test_frf_auto_rebuild_shows_provenance_chip(qtbot, tmp_path):
     fid = next(iter(win.files))
     fd = win.files[fid]
     fd._time_source = "column"
-    win._frf_auto_rebuild_source_time_axis(fid, relative_jitter=0.1)
-    assert fd._time_source == "auto_rebuilt"
-    chip = win.chart_stack._time_card._time_axis_chip
-    assert not chip.isHidden()
-    assert "Fs≈" in chip.text()
-    assert "原 Fs≈" in win.statusBar.currentMessage()
-    assert "抖动" in win.statusBar.currentMessage()
+    original = fd.time_array.copy()
+    manager = win.analysis_managers['frf']
+    state = manager.get(manager.active)
+    state.panes[0].input_source = (fid, 'sig')
+    state.panes[0].output_source = (fid, 'out')
+    prepared = win._frf_prepare_pair_samples(state, state.panes[0])
+    assert prepared['time_axis']['scope'] == 'analysis'
+    assert fd._time_source == "column"
+    np.testing.assert_array_equal(fd.time_array, original)
+    win._refresh_time_axis_provenance_chips()
+    assert win.chart_stack._time_card._time_axis_chip.isHidden()
 
 
 def test_fft_panel_keeps_signal_selection_across_channel_edit(

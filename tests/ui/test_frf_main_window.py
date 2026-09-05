@@ -197,7 +197,7 @@ def test_frf_manual_range_auto_rebuilds_time_jitter_inside_selected_samples(qtbo
     jittered[500:] += 0.1
     win.files[fid].time_array = jittered
     win.files[fid]._time_source = "column"
-    win.inspector.frf_ctx.spin_t_win.setValue(0.5)
+    win.inspector.frf_ctx.spin_t_win.setValue(0.3)
     state.params["range_mode"] = "manual"
     state.panes[0].time_range = (0.1, 0.9)
 
@@ -205,12 +205,9 @@ def test_frf_manual_range_auto_rebuilds_time_jitter_inside_selected_samples(qtbo
 
     lo, hi = candidate["time_range"]
     assert 0.1 <= lo <= hi <= 0.9
-    assert win.files[fid]._time_source == "auto_rebuilt"
-    assert win.files[fid].is_time_axis_uniform()
-    assert float(win.files[fid].fs) == pytest.approx(
-        win.files[fid].suggested_fs_from_time_axis()
-    )
-
+    assert win.files[fid]._time_source == "column"
+    np.testing.assert_array_equal(win.files[fid].time_array, jittered)
+    assert not win.files[fid].is_time_axis_uniform()
 
 def test_frf_auto_rebuild_dispatches_on_code_not_chinese_substring(qtbot, monkeypatch):
     """D11: nonuniform recovery keys off FrfPreflightError.code, not message text."""
@@ -235,11 +232,6 @@ def test_frf_auto_rebuild_dispatches_on_code_not_chinese_substring(qtbot, monkey
         return real_validate(*args, **kwargs)
 
     monkeypatch.setattr(win, "_frf_validate_time_axis", validate_once)
-    monkeypatch.setattr(
-        win,
-        "_frf_auto_rebuild_source_time_axis",
-        lambda *_a, **_k: None,
-    )
 
     # Must recover (rebuild path) rather than propagate the English message.
     candidate = win._frf_prepare_pair_samples(state, state.panes[0])

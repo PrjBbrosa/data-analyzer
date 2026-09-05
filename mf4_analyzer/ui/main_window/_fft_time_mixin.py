@@ -89,6 +89,7 @@ class FFTTimeMixin:
         nfft = p.get('nfft_effective', p.get('nfft'))
         params = {
             'fs': p.get('fs'),
+            'analysis_time_fs': p.get('analysis_time_fs'),
             'nfft': None if nfft is None else int(nfft),
             'window': p.get('window'),
             'overlap': p.get('overlap'),
@@ -111,12 +112,21 @@ class FFTTimeMixin:
             return None
         rng = self._normalize_analysis_time_range(time_range)
         if rng is not None:
-            _t, sig = self._mask_time_range(t, sig, time_range=rng)
+            t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
                 return None
             compute_time_range = rng
         else:
             compute_time_range = (float(t[0]), float(t[-1]))
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        try:
+            _axis, fs, _facts = prepare_analysis_time_axis(
+                t, float(getattr(_fd, 'fs', p['fs'])),
+                target_fs=p.get('analysis_time_fs'), materialize=False,
+            )
+        except ValueError:
+            return None
+        p = dict(p, fs=fs)
         return (
             self._resolve_fft_time_effective_params(p, len(sig)),
             compute_time_range,
@@ -418,6 +428,16 @@ class FFTTimeMixin:
         if sig is None or len(sig) < 2:
             self.toast("当前范围内样本不足", "warning")
             return
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        try:
+            _axis, analysis_fs, _facts = prepare_analysis_time_axis(
+                t, float(getattr(fd, 'fs', compute_p['fs'])),
+                target_fs=compute_p.get('analysis_time_fs'), materialize=False,
+            )
+        except ValueError as issue:
+            self.toast(str(issue), "warning")
+            return
+        compute_p = dict(compute_p, fs=analysis_fs)
         effective_compute_p = self._resolve_fft_time_effective_params(
             compute_p, len(sig))
         render_p = {**effective_compute_p, **display_p}
@@ -485,24 +505,9 @@ class FFTTimeMixin:
         if len(sig) < 2:
             self._record_fft_time_skip("信号过短")
             return None
-        preflight_fs = getattr(fd, 'fs', None)
-        # Pre-flight uniformity gate (T2, 2026-04-26): rebuild a non-uniform
-        # time axis BEFORE dispatching the worker. Best-effort per pane —
-        # a failed rebuild skips this job, not the whole queue.
         if not self._check_uniform_or_prompt(fd, 'fft_time'):
-            self._record_fft_time_skip("时间轴非均匀")
+            self._record_fft_time_skip("时间轴无效")
             return None
-        # The rebuild may have rewritten ``fd.time_array``; re-fetch.
-        fid, ch, t, sig, fd = signal_getter()
-        if sig is None:
-            self._record_fft_time_skip("源通道缺失")
-            return None
-        if len(sig) < 2:
-            self._record_fft_time_skip("信号过短")
-            return None
-        rebuilt_fs = getattr(fd, 'fs', None)
-        if rebuilt_fs is not None and rebuilt_fs != preflight_fs:
-            raw_params = dict(raw_params, fs=float(rebuilt_fs))
         if (
             time_range is _INSPECTOR_TIME_RANGE
             and self.inspector.top.range_enabled()
@@ -516,6 +521,17 @@ class FFTTimeMixin:
             if len(sig) < 2:
                 self._record_fft_time_skip("样本不足")
                 return None
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        try:
+            t, analysis_fs, time_facts = prepare_analysis_time_axis(
+                t, float(getattr(fd, 'fs', raw_params['fs'])),
+                target_fs=raw_params.get('analysis_time_fs'),
+                time_source=getattr(fd, '_time_source', 'column'),
+            )
+        except ValueError as issue:
+            self._record_fft_time_skip(str(issue))
+            return None
+        raw_params = dict(raw_params, fs=analysis_fs)
         p = self._resolve_fft_time_effective_params(raw_params, len(sig))
         decision = p.get('nfft_decision')
         if p.get('nfft_effective') is None:
@@ -552,7 +568,7 @@ class FFTTimeMixin:
         def job(
             worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit,
             _requested=nfft_requested, _n_samples=n_samples,
-            _mode=nfft_mode, _decision=decision,
+            _mode=nfft_mode, _decision=decision, _time_facts=time_facts,
         ):
             from ...signal import SpectrogramAnalyzer
             result = SpectrogramAnalyzer.compute(
@@ -567,6 +583,9 @@ class FFTTimeMixin:
                 nfft_mode=_mode,
                 decision=_decision,
             )
+            if _time_facts is not None:
+                from dataclasses import replace
+                result.effective = replace(result.effective, time_axis=_time_facts)
             return result
 
         render_params = {**p, **dict(display_params or {})}

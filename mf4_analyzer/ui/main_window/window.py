@@ -2561,15 +2561,10 @@ class MainWindow(
                 page.pane_canvas(pane_idx).set_tick_density(xt, yt)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
-        """Open the 重建时间轴 modal popover for the active selection.
+        """Set explicit time-grid intent on the active analysis View.
 
-        Returns ``True`` only when the user clicked Accept AND the
-        time-axis rebuild side-effects ran (Fs pushed to contextuals,
-        per-fid FFT vs Time cache cleared, status/toast emitted).
-        Returns ``False`` on early bailout (no selectable signal) and
-        on user cancel (``QDialog.Rejected``). Existing slot callers
-        ignore the return; T11 (non-uniform UX fix) consumes it to
-        decide whether to auto-retry the FFT vs Time compute.
+        Accept changes analysis parameters only. Original source samples,
+        time-domain plots, and other analysis sections are untouched.
         """
         from PyQt5.QtWidgets import QDialog
         if mode == 'fft':
@@ -2588,40 +2583,18 @@ class MainWindow(
             return False
         fd = self.files[target_fid]
         from ..drawers.rebuild_time_popover import RebuildTimePopover
-        pop = RebuildTimePopover(self, fd.filename, fd.fs)
+        ctx = self._analysis_ctx(mode)
+        configured_fs = ctx.compute_params().get('analysis_time_fs')
+        pop = RebuildTimePopover(self, fd.filename, configured_fs or fd.fs)
         pop.show_at(anchor)
         if pop.exec_() == QDialog.Accepted:
             new_fs = pop.new_fs()
-            old_max = fd.time_array[-1] if len(fd.time_array) else 0
-            self._invoke_rebuild_time_axis(fd, new_fs, reason='manual')
-            new_max = fd.time_array[-1] if len(fd.time_array) else 0
-            current_hi = self.inspector.top.spin_end.maximum()
-            self.inspector.top.set_range_limits(0, max(current_hi, new_max))
-            # All per-fid analysis caches must be invalidated when the time axis
-            # is rebuilt: the new Fs changes the frequency-axis scale for cached
-            # FFT / Order results as well as the SpectrogramResult timing for
-            # FFT-vs-Time. Use the single unified entry point so no cache is
-            # silently left with stale data (问题① fix — previously only the
-            # legacy LRU was cleared, leaving analysis_caches['fft'] and
-            # analysis_caches['order'] with stale entries).
-            self._invalidate_all_analysis_caches_for_fid(target_fid)
-            for ctx in (
-                self.inspector.fft_ctx,
-                self.inspector.fft_time_ctx,
-                self.inspector.order_ctx,
-            ):
-                sig_data = ctx.current_signal()
-                if sig_data is not None and sig_data[0] == target_fid:
-                    ctx.set_fs(new_fs)
-            self.plot_time()
+            ctx.set_analysis_time_fs(new_fs)
+            self._mark_section_effective_facts_stale(mode)
             self.statusBar.showMessage(
-                f"时间轴已重建: {fd.short_name} | Fs={new_fs} | {old_max:.1f}s → {new_max:.3f}s"
+                f"分析时间轴设置为 {new_fs:g} Hz · 仅当前分析 View，时域保持原始时间"
             )
-            self.toast(
-                f"已重建时间轴 · Fs={new_fs}",
-                "success",
-            )
-            self._refresh_time_axis_provenance_chips()
+            self.toast("分析采样率已设置，重新计算后生效。", "success")
             return True
         return False
 
@@ -5396,113 +5369,25 @@ class MainWindow(
             card = getattr(stack, '_time_card', None)
             if card is not None:
                 cards = [card]
-        files = list(getattr(self, 'files', {}).values())
-        text, tooltip = self._time_axis_provenance_chip_payload(files)
         for card in cards:
             setter = getattr(card, 'set_time_axis_provenance', None)
             if callable(setter):
-                setter(text, tooltip)
+                setter(None, None)
 
     def _check_uniform_or_prompt(self, fd, mode):
-        """Pre-flight non-uniform time-axis check before worker dispatch.
+        """Compatibility preflight: validate without changing imported data.
 
-        The method name is retained for older call sites/tests, but the
-        current UX no longer opens the rebuild popover automatically.
-        When an MF4 timestamp axis is too jittered for the spectral
-        analyzer, we rebuild it immediately with
-        ``fd.suggested_fs_from_time_axis()`` (median-dt estimate), push
-        that Fs back into the active contextual panel, clear affected FFT
-        vs Time cache entries, and let the compute continue.
+        Each analysis prepares its selected time vector immediately before
+        compute. No cache invalidation, Plot redraw or source mutation here.
         """
-        if fd is None or not hasattr(fd, 'is_time_axis_uniform'):
-            # Either no file selected, or a duck-typed stand-in (test
-            # fakes) that has no axis to validate. Defer to the worker.
+        if fd is None:
             return True
-        if fd.is_time_axis_uniform():
-            return True
-
-        if hasattr(fd, 'suggested_fs_from_time_axis'):
-            suggested = fd.suggested_fs_from_time_axis()
-        else:
-            suggested = getattr(fd, 'fs', 0.0)
-        if not (np.isfinite(suggested) and suggested > 0):
-            self.toast("时间轴非均匀，且无法计算有效采样频率。", "warning")
-            self.statusBar.showMessage("时间轴非均匀，无法自动重建")
-            return False
-
-        if not hasattr(fd, 'rebuild_time_axis'):
-            self.toast("时间轴非均匀，当前文件对象不支持自动重建。", "warning")
-            self.statusBar.showMessage("时间轴非均匀，无法自动重建")
-            return False
-
-        target_fid = None
-        for fid, candidate in self.files.items():
-            if candidate is fd:
-                target_fid = fid
-                break
-
-        old_max = fd.time_array[-1] if getattr(fd, 'time_array', None) is not None and len(fd.time_array) else 0.0
-        new_fs = float(suggested)
-        try:
-            old_fs = float(getattr(fd, 'fs', 0.0) or 0.0)
-        except (TypeError, ValueError):
-            old_fs = 0.0
-        jitter = None
-        relative_jitter = getattr(fd, 'time_axis_relative_jitter', None)
-        if callable(relative_jitter):
-            jitter = relative_jitter()
-        self._invoke_rebuild_time_axis(fd, new_fs, reason='auto_nonuniform')
-        new_max = fd.time_array[-1] if getattr(fd, 'time_array', None) is not None and len(fd.time_array) else 0.0
-
-        if target_fid is not None:
-            # Use the unified entry point: non-uniform time-axis auto-rebuild
-            # also invalidates FFT and Order analysis caches, not just the
-            # legacy LRU (问题① fix).
-            self._invalidate_all_analysis_caches_for_fid(target_fid)
-        try:
-            current_hi = self.inspector.top.spin_end.maximum()
-            self.inspector.top.set_range_limits(0, max(current_hi, new_max))
-        except Exception:  # noqa: BLE001 - range refresh is best-effort UI state
-            pass
-
-        for ctx in (
-            self.inspector.fft_ctx,
-            self.inspector.fft_time_ctx,
-            self.inspector.order_ctx,
-        ):
-            try:
-                sig_data = ctx.current_signal()
-            except Exception:  # noqa: BLE001
-                sig_data = None
-            if target_fid is None or (sig_data is not None and sig_data[0] == target_fid):
-                if hasattr(ctx, 'set_fs'):
-                    ctx.set_fs(new_fs)
-
-        try:
-            if self._restore_progress_token() is None:
-                self.plot_time()
-        except Exception:  # noqa: BLE001 - plot refresh must not block analysis
-            pass
-
-        short_name = getattr(fd, 'short_name', '') or getattr(fd, 'filename', '当前文件')
-        jitter_txt = "—"
-        if jitter is not None:
-            try:
-                jitter_val = float(jitter)
-            except (TypeError, ValueError):
-                jitter_val = None
-            if jitter_val is not None and np.isfinite(jitter_val):
-                jitter_txt = f"{jitter_val:.3g}"
-        orig_fs_txt = f"{old_fs:g}" if np.isfinite(old_fs) and old_fs > 0 else "—"
-        self.statusBar.showMessage(
-            f"时间轴已自动重建: {short_name} | Fs={new_fs:g} | "
-            f"{old_max:.1f}s → {new_max:.3f}s | 原 Fs≈{orig_fs_txt} · 抖动 {jitter_txt}"
-        )
-        self.toast(
-            f"时间轴非均匀，已按 Fs={new_fs:g} 自动处理。",
-            "info",
-        )
-        self._refresh_time_axis_provenance_chips()
+        axis = getattr(fd, 'time_array', None)
+        if axis is not None:
+            arr = np.asarray(axis, dtype=float)
+            if arr.ndim != 1 or not np.all(np.isfinite(arr)):
+                self.toast("分析时间轴包含无效数值。", "warning")
+                return False
         return True
 
     # FFT compute methods (do_fft, _do_fft_single, _fft_compute_arrays, etc.)

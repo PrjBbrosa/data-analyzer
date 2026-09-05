@@ -230,6 +230,7 @@ class OrderMixin:
         # recompute instead of reusing a result built with the old window.
         return {
             'nfft': int(nfft),
+            'analysis_time_fs': p.get('analysis_time_fs'),
             'nfft_mode': p.get('nfft_mode', 'fixed'),
             'window': p.get('window', DEFAULT_ANALYSIS_WINDOW),
             'max_order': p.get('max_order'),
@@ -272,6 +273,11 @@ class OrderMixin:
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(sig), dtype=float) / float(fs)
+        if p.get('analysis_time_fs') is not None:
+            from ...analysis_time_axis import prepare_analysis_time_axis
+            t_arr, fs, _facts = prepare_analysis_time_axis(
+                t, fs, target_fs=p['analysis_time_fs'])
+            p = dict(p, fs=fs)
         return self._resolve_order_effective_params(p, rpm, t_arr)
 
     def _warn_if_order_speed_unsuitable(self, rpm):
@@ -481,6 +487,12 @@ class OrderMixin:
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(sig), dtype=float) / float(fs)
+        time_facts = None
+        if op.get('analysis_time_fs') is not None:
+            from ...analysis_time_axis import prepare_analysis_time_axis
+            t_arr, fs, time_facts = prepare_analysis_time_axis(
+                t, fs, target_fs=op['analysis_time_fs'])
+        op = dict(op, fs=fs)
         orig_auto = (
             op.get('nfft') is None
             or op.get('nfft_mode') == 'auto'
@@ -536,6 +548,7 @@ class OrderMixin:
         def job(
             worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p,
             _req=nfft_requested, _n=n_samples, _order_res=order_res,
+            _time_facts=time_facts,
         ):
             result = COTOrderAnalyzer.compute(
                 _sig,
@@ -552,6 +565,9 @@ class OrderMixin:
                 order_res_requested=_order_res,
                 nfft_requested=_req,
             )
+            if _time_facts is not None:
+                from dataclasses import replace
+                result.effective = replace(result.effective, time_axis=_time_facts)
             return result
 
         return job, ctx

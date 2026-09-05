@@ -129,13 +129,14 @@ class FFTTimeContextual(QWidget):
 
         # ---- 分析信号 (R3 #9: btn_rebuild docked on header bar) ----
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24).
+        self._analysis_time_fs = None
         self.btn_rebuild = QPushButton("")
         self.btn_rebuild.setIcon(Icons.rebuild_time())
         self.btn_rebuild.setIconSize(QSize(16, 16))
         self.btn_rebuild.setFixedSize(QSize(24, 24))
         self.btn_rebuild.setProperty("role", "icon")
-        self.btn_rebuild.setToolTip("重建时间轴")
-        self.btn_rebuild.setAccessibleName("重建时间轴")
+        self.btn_rebuild.setToolTip("设置分析时间轴（不影响时域）")
+        self.btn_rebuild.setAccessibleName("设置分析时间轴")
         self.btn_rebuild.clicked.connect(self._emit_rebuild_time_requested)
         # 2026-04-26 R3 紧凑化 fix-2: WA_StyledBackground intentionally OFF.
         sig_card = QFrame(self)
@@ -480,6 +481,12 @@ class FFTTimeContextual(QWidget):
     def current_signal(self):
         return self.combo_sig.currentData()
 
+    def set_analysis_time_fs(self, fs):
+        """Persist explicit time reconstruction intent in this analysis View."""
+        self._analysis_time_fs = float(fs)
+        self.set_fs(fs)
+        self.compute_params_changed.emit(self.compute_params())
+
     def fs(self):
         return self.spin_fs.value()
 
@@ -547,6 +554,7 @@ class FFTTimeContextual(QWidget):
             nfft_effective = nfft
             nfft_preview = nfft
         return dict(
+            analysis_time_fs=self._analysis_time_fs,
             fs=self.spin_fs.value(),
             nfft=nfft,
             nfft_mode=nfft_mode,
@@ -633,6 +641,8 @@ class FFTTimeContextual(QWidget):
         and trigger a heatmap replot (a live colorbar drag echoes through
         this method).
         """
+        if 'analysis_time_fs' in d:
+            self._analysis_time_fs = d['analysis_time_fs']
         self._applying_preset = True
         try:
             self._apply_params_unlocked(d)
@@ -746,6 +756,7 @@ class FFTTimeContextual(QWidget):
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""
+        self._analysis_time_fs = None
         bar = getattr(self, 'preset_bar', None)
         defaults = getattr(bar, '_default_params', None) if bar is not None else None
         if isinstance(defaults, dict) and defaults:

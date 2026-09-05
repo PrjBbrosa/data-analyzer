@@ -186,6 +186,7 @@ class FFTMixin:
             # _resolve_fft_effective_params from fd.fs; keyed here so a Fs change
             # in single-frame mode (nfft=None) still invalidates the cache.
             'fs': fft_params.get('fs'),
+            'analysis_time_fs': fft_params.get('analysis_time_fs'),
             'avg_mode': fft_params.get('avg_mode', '单帧'),
             'avg_overlap': fft_params.get('avg_overlap', 50),
             'weighting': str(fft_params.get('weighting', 'None')),
@@ -210,7 +211,7 @@ class FFTMixin:
         return self.analysis_caches['fft'].make_key(fid, ch, params)
 
     def _fft_effective_params_for_source(self, fft_params, fid, ch, time_range):
-        sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+        sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range, params=fft_params)
         if sig is None or fs is None or len(sig) <= 0:
             out = dict(fft_params)
             # Stamp fs when available so the fallback key distinguishes signals
@@ -317,6 +318,7 @@ class FFTMixin:
             nfft_requested=nfft_requested,
             freq=freq,
             time=time,
+            time_axis=fft_params.get('analysis_time_axis'),
             nfft_mode=fft_params.get('nfft_mode'),
             decision=decision_for_facts,
         )
@@ -371,6 +373,7 @@ class FFTMixin:
             health, _fs_values = self._effective_facts_health(
                 sig, fid=fid, sources=sources,
             )
+            health["time_axis"] = getattr(facts, "time_axis", None)
             try:
                 facts = replace(facts, **health)
             except TypeError:
@@ -400,7 +403,18 @@ class FFTMixin:
             return
         ctx.set_effective_facts(facts, extra_warnings)
 
-    def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE):
+    def _fft_time_facts_for_source(self, fid, ch, time_range, params):
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        fd = self.files[fid]
+        t, sig = fd.time_array, fd.data[ch].values
+        if time_range is not None:
+            t, sig = self._mask_time_range(t, sig, time_range=time_range)
+        return prepare_analysis_time_axis(
+            t, fd.fs, target_fs=params.get('analysis_time_fs'),
+            time_source=getattr(fd, '_time_source', 'column'), materialize=False,
+        )[2]
+
+    def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE, *, params=None):
         """Fetch + range-gate a single FFT source's signal. Returns
         ``(sig, fs)`` or ``(None, None)`` when unavailable."""
         fd = self.files.get(fid)
@@ -416,8 +430,13 @@ class FFTMixin:
         if time_range is _INSPECTOR_TIME_RANGE:
             time_range = None
         if time_range is not None and t is not None:
-            _t, sig = self._mask_time_range(t, sig, time_range=time_range)
-        return sig, fd.fs
+            t, sig = self._mask_time_range(t, sig, time_range=time_range)
+        from ...analysis_time_axis import prepare_analysis_time_axis
+        if params is None:
+            params = self.inspector.fft_ctx.compute_params()
+        _axis, fs, _facts = prepare_analysis_time_axis(
+            t, fd.fs, target_fs=params.get('analysis_time_fs'), materialize=False)
+        return sig, fs
 
     def _fft_preview_sources(self):
         """Focused-pane ``(fid, ch)`` identities, else the inspector combo."""
@@ -525,18 +544,18 @@ class FFTMixin:
             entries = []
             pane_keys = []
             for fid, ch in sources:
-                sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
-                if sig is None or len(sig) < 10:
-                    continue
                 fd = self.files.get(fid)
                 if not self._check_uniform_or_prompt(fd, "fft"):
                     continue
-                sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+                sig, fs = self._fft_fetch_signal(
+                    fid, ch, time_range=time_range, params=fft_params)
                 if sig is None or len(sig) < 10:
                     continue
                 effective_params = self._resolve_fft_effective_params(
                     fft_params, len(sig), fs
                 )
+                effective_params['analysis_time_axis'] = self._fft_time_facts_for_source(
+                    fid, ch, time_range, fft_params)
                 key = self._fft_analysis_cache_key(
                     fid, ch, effective_params, time_range
                 )
@@ -604,20 +623,12 @@ class FFTMixin:
             entries = []
             time_range = self._pane_time_range_for('fft', pane_idx)
             for fid, ch in sources:
-                sig, fs = self._fft_fetch_signal(
-                    fid, ch, time_range=time_range)
-                if sig is None:
-                    outcome.skipped.append("源通道缺失")
-                    continue
-                if len(sig) < 10:
-                    outcome.skipped.append("信号过短")
-                    continue
                 fd = self.files.get(fid)
                 if not self._check_uniform_or_prompt(fd, 'fft'):
-                    outcome.skipped.append("非均匀且未重建")
+                    outcome.skipped.append("时间轴无效")
                     continue
                 sig, fs = self._fft_fetch_signal(
-                    fid, ch, time_range=time_range)
+                    fid, ch, time_range=time_range, params=fft_params)
                 if sig is None:
                     outcome.skipped.append("源通道缺失")
                     continue
@@ -626,6 +637,8 @@ class FFTMixin:
                     continue
                 effective_params = self._resolve_fft_effective_params(
                     fft_params, len(sig), fs)
+                effective_params['analysis_time_axis'] = self._fft_time_facts_for_source(
+                    fid, ch, time_range, fft_params)
                 key = self._fft_analysis_cache_key(
                     fid, ch, effective_params, time_range)
                 result = cache.get(key)
@@ -668,12 +681,8 @@ class FFTMixin:
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 10:
             self.toast("请选择有效信号", "warning"); return
-        # Pre-flight: route non-uniform axes through the rebuild popover
-        # BEFORE running the FFT. ``compute_fft`` itself does not consume
-        # ``t`` (it samples by index + fs), so the FFT path used to
-        # silently produce garbage from a jittered axis -- this gate
-        # makes the FFT vs Time pre-flight (H1 root cause) consistent
-        # across all spectral entry points (H3 mitigation).
+        # Validate original source timing; reconstruction is local below,
+        # after applying the physical time selection.
         mode = self.toolbar.current_mode()
         ctx_mode = 'fft' if mode == 'fft' else 'order'
         sig_data = (
@@ -685,21 +694,18 @@ class FFTMixin:
         fd = self.files.get(fid) if fid else None
         if not self._check_uniform_or_prompt(fd, ctx_mode):
             return
-        # Re-fetch t/sig: the popover Accept branch rebuilt
-        # ``fd.time_array`` to ``arange(n)/fs``, so the local ``t`` we
-        # captured before the popover is now stale.
-        t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 10:
-            self.toast("请选择有效信号", "warning"); return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
             t = t[m]
             sig = sig[m]
+        from ...analysis_time_axis import prepare_analysis_time_axis
         fft_params = self.inspector.fft_ctx.compute_params()
-        fs = self.inspector.fft_ctx.fs()
+        t, fs, time_facts = prepare_analysis_time_axis(
+            t, fs, target_fs=fft_params.get('analysis_time_fs'))
         fft_params = self._resolve_fft_effective_params(
             fft_params, len(sig), fs)
+        fft_params['analysis_time_axis'] = time_facts
         win = fft_params['window']
         nfft = fft_params['nfft']
 

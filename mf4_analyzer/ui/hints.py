@@ -424,6 +424,14 @@ _HINTS = (
         dwell_ms=4000,
     ),
     Hint(
+        id="analysis.time_axis_scope",
+        text="分析处理见有效事实，时域保留原始时间",
+        surface="context",
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
+        priority=70,
+        dwell_ms=6000,
+    ),
+    Hint(
         id="frf.coherence_display_only",
         text="相干阈值只影响显示，不改数据",
         surface="context",

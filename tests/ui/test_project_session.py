@@ -84,47 +84,39 @@ def _write_jittered_csv(path, n=64, fs=500.0):
             writer.writerow([float(time[index]), float(index)])
 
 
-def test_project_roundtrip_preserves_time_axis_provenance(qapp, tmp_path):
+def test_project_roundtrip_preserves_original_time_after_analysis(qapp, qtbot, tmp_path):
+    import numpy as np
     from mf4_analyzer.ui.main_window import MainWindow
-    from mf4_analyzer.ui import project_io as pio
 
     csv_path = tmp_path / "jittered.csv"
     _write_jittered_csv(csv_path)
     proj = tmp_path / "prov.tlproj"
-
     mw = MainWindow()
+    qtbot.addWidget(mw)
     mw._load_one(str(csv_path))
     fd = next(iter(mw.files.values()))
-    assert fd.is_time_axis_uniform() is False
+    original = fd.time_array.copy()
+    assert not fd.is_time_axis_uniform()
     mw._check_uniform_or_prompt(fd, "fft")
-    assert fd._time_source == "auto_rebuilt"
-    saved = fd.time_axis_provenance.to_dict()
     mw.save_project(proj)
-
     raw = json.loads(proj.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 3
-    assert raw["files"][0]["time_source"] == "auto_rebuilt"
-    assert raw["files"][0]["time_axis_provenance"]["reason"] == "auto_nonuniform"
-
-    loaded = pio.load_project_from_json(proj)
-    assert loaded.files[0].time_source == "auto_rebuilt"
-    assert loaded.files[0].time_axis_provenance["reason"] == "auto_nonuniform"
-
+    assert raw["files"][0]["time_source"] == "column"
+    assert not raw["files"][0].get("time_axis_provenance")
+    # Also exercise old automatic-repair projects: source timing is reloaded.
+    raw["files"][0]["time_source"] = "auto_rebuilt"
+    raw["files"][0]["fs"] = 200
+    raw["files"][0]["time_axis_provenance"] = {
+        "reason": "auto_nonuniform", "estimated_fs": 200,
+    }
+    proj.write_text(json.dumps(raw), encoding="utf-8")
     mw2 = MainWindow()
+    qtbot.addWidget(mw2)
     mw2.open_project(proj)
     restored = next(iter(mw2.files.values()))
-    assert restored._time_source == "auto_rebuilt"
-    assert restored.time_axis_provenance is not None
-    assert restored.time_axis_provenance.reason == "auto_nonuniform"
-    assert restored.time_axis_provenance.estimated_fs == pytest.approx(
-        saved["estimated_fs"]
-    )
-    assert restored.time_axis_provenance.original_fs == pytest.approx(
-        saved["original_fs"]
-    )
-    chip = mw2.chart_stack._time_card._time_axis_chip
-    assert not chip.isHidden()
-    assert "Fs≈" in chip.text()
+    np.testing.assert_array_equal(restored.time_array, original)
+    assert restored._time_source == "column"
+    assert restored.time_axis_provenance is None
+    assert mw2.chart_stack._time_card._time_axis_chip.isHidden()
 
 
 def test_old_v3_project_without_time_axis_provenance_still_loads(qapp, tmp_path):

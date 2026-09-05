@@ -272,6 +272,7 @@ class FrfEffectiveFacts:
     max_time_jitter: float
     max_time_difference: float
     invalid_bins: int
+    time_axis: dict | None = None
 
 
 @dataclass(frozen=True)

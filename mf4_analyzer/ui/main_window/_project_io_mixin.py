@@ -2253,8 +2253,12 @@ class ProjectIOMixin:
             new_fid = pending_by_path[key].pop(0)
             fid_map[ref.fid] = new_fid
             fd = self.files[new_fid]
-            fd.fs = float(ref.fs)
-            if ref.time_source in ("generated", "manual", "auto_rebuilt"):
+            # Older projects persisted automatic analysis repair on the source.
+            # Reload original file timing instead; each analysis now prepares
+            # its own grid. Explicit legacy source calibration stays compatible.
+            if ref.time_source != "auto_rebuilt":
+                fd.fs = float(ref.fs)
+            if ref.time_source in ("generated", "manual"):
                 try:
                     fd.rebuild_time_axis(
                         float(ref.fs), reason="project_restore",
@@ -2269,7 +2273,7 @@ class ProjectIOMixin:
                 # stay distinguishable from a popover Accept.
                 fd._time_source = ref.time_source
             raw_provenance = getattr(ref, "time_axis_provenance", None)
-            if raw_provenance:
+            if raw_provenance and ref.time_source != "auto_rebuilt":
                 fd.time_axis_provenance = TimeAxisProvenance.from_dict(
                     raw_provenance,
                 )
