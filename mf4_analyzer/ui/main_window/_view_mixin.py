@@ -1,6 +1,6 @@
 """ViewMixin: time-domain split-view switch / capture / render pipeline."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from functools import partial
 from math import isfinite
@@ -76,6 +76,13 @@ class ViewMixin:
             gate.leave()
             if not gate.busy:
                 self._schedule_pending_view_switch()
+
+    def _canvas_display_update_scope(self, canvas):
+        """Canvas-owned nested display suppression, or a no-op on test doubles."""
+        suppress = getattr(canvas, "suppress_display_updates", None)
+        if callable(suppress):
+            return suppress()
+        return nullcontext()
 
     def _time_render_busy(self) -> bool:
         gate = self._time_render_gate()
@@ -703,44 +710,48 @@ class ViewMixin:
             restore_remarks = getattr(canvas, "restore_remarks", None)
             if callable(restore_remarks):
                 restore_remarks(state.remarks)
-            rendered = self._plot_time_on_canvas(
-                canvas,
-                update_primary_ui=update_primary_ui,
-                defer_first_frame=(state.xlim is not None),
-                defer_axis_finalize=True,
-            )
-            # Restoring a View is ONE transaction (2026-08-15 view-switch
-            # quality settlement spec §3.1): X, then Y, then ticks, and only
-            # then a single settlement.  _restore_view_xlim keeps the
-            # transaction open; settle_view_restore() below is what flushes.
-            self._restore_view_xlim(
-                canvas,
-                state.xlim,
-                allow_partial_exact_data=bool(
-                    getattr(state, "curve_bindings", None)
-                ),
-            )
-            axis_opts = state.axis_opts or {}
-            initial_axis_ranges = self._exceptional_initial_axis_ranges(state)
-            restored_axis_handles = canvas.restore_visible_ylims(
-                state.ylims,
-                initial_axis_ranges=initial_axis_ranges,
-            )
-            tick_opts = axis_opts.get('tick_density') or {}
-            default_x, default_y = DEFAULT_CHART_TICK_DENSITY
-            xt = int(tick_opts.get('x', default_x))
-            yt = int(tick_opts.get('y', default_y))
-            canvas.set_tick_density(
-                xt,
-                yt,
-                reframe_overlay_y=not bool(restored_axis_handles),
-            )
-            canvas.settle_view_restore()
-            restore_placement = getattr(canvas, "restore_cursor_placement", None)
-            if callable(restore_placement):
-                restore_placement(state.cursor_placement)
-            if update_primary_ui:
-                self._sync_record_curve_tree(state)
+            # C3: keep the just-cleared scene off the viewport until the
+            # restore transaction has settled. Nested-safe with the
+            # plot_channels wrap inside ``_plot_time_on_canvas``.
+            with self._canvas_display_update_scope(canvas):
+                rendered = self._plot_time_on_canvas(
+                    canvas,
+                    update_primary_ui=update_primary_ui,
+                    defer_first_frame=(state.xlim is not None),
+                    defer_axis_finalize=True,
+                )
+                # Restoring a View is ONE transaction (2026-08-15 view-switch
+                # quality settlement spec §3.1): X, then Y, then ticks, and only
+                # then a single settlement.  _restore_view_xlim keeps the
+                # transaction open; settle_view_restore() below is what flushes.
+                self._restore_view_xlim(
+                    canvas,
+                    state.xlim,
+                    allow_partial_exact_data=bool(
+                        getattr(state, "curve_bindings", None)
+                    ),
+                )
+                axis_opts = state.axis_opts or {}
+                initial_axis_ranges = self._exceptional_initial_axis_ranges(state)
+                restored_axis_handles = canvas.restore_visible_ylims(
+                    state.ylims,
+                    initial_axis_ranges=initial_axis_ranges,
+                )
+                tick_opts = axis_opts.get('tick_density') or {}
+                default_x, default_y = DEFAULT_CHART_TICK_DENSITY
+                xt = int(tick_opts.get('x', default_x))
+                yt = int(tick_opts.get('y', default_y))
+                canvas.set_tick_density(
+                    xt,
+                    yt,
+                    reframe_overlay_y=not bool(restored_axis_handles),
+                )
+                canvas.settle_view_restore()
+                restore_placement = getattr(canvas, "restore_cursor_placement", None)
+                if callable(restore_placement):
+                    restore_placement(state.cursor_placement)
+                if update_primary_ui:
+                    self._sync_record_curve_tree(state)
         finally:
             self._applying_view = old_applying_view
             if dirty is not None:

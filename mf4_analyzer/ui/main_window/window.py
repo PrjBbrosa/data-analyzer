@@ -4020,12 +4020,13 @@ class MainWindow(
                 if done_progress is not None:
                     done_progress(1, 1)
                 attempted = len(result.attempted_channel_keys)
-                canvas.show_empty_hint(
-                    f"自定义横坐标无法绘制 · 0/{attempted}"
-                    if applied_x.mode == CHANNEL_MODE
-                    else f"当前时间范围内无可绘制数据 · 0/{attempted}"
-                )
-                canvas.draw()
+                with self._canvas_display_update_scope(canvas):
+                    canvas.show_empty_hint(
+                        f"自定义横坐标无法绘制 · 0/{attempted}"
+                        if applied_x.mode == CHANNEL_MODE
+                        else f"当前时间范围内无可绘制数据 · 0/{attempted}"
+                    )
+                    canvas.draw()
                 if update_primary_ui:
                     self.chart_stack.stats_strip.update_stats(st)
                     self.statusBar.showMessage(
@@ -4102,18 +4103,19 @@ class MainWindow(
                 invalidate = getattr(canvas, "invalidate_envelope_cache", None)
                 if callable(invalidate):
                     invalidate(rebuild_reason)
-                with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
-                    canvas.plot_channels(
-                        data,
-                        mode,
-                        xlabel=xlabel,
-                        defer_first_frame=defer_first_frame,
-                        progress_callback=canvas_progress,
-                        render_context_key=render_context_key,
-                        full_rebuild_reason=rebuild_reason,
-                        x_axis_context=x_axis_context,
-                        defer_axis_finalize=defer_axis_finalize,
-                    )
+                with self._canvas_display_update_scope(canvas):
+                    with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
+                        canvas.plot_channels(
+                            data,
+                            mode,
+                            xlabel=xlabel,
+                            defer_first_frame=defer_first_frame,
+                            progress_callback=canvas_progress,
+                            render_context_key=render_context_key,
+                            full_rebuild_reason=rebuild_reason,
+                            x_axis_context=x_axis_context,
+                            defer_axis_finalize=defer_axis_finalize,
+                        )
             elif canvas_progress is not None:
                 canvas_progress(1, 1)
             finalize_progress = phase_progress(960, 1000, "绘图 · 应用")

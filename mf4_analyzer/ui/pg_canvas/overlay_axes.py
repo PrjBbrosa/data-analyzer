@@ -803,10 +803,19 @@ class OverlayAxisManager(_CanvasBackref):
             _apply_pg_axis_font(bottom)
         except Exception:
             pass
-        if not is_bottom:
+        if is_bottom:
+            try:
+                bottom.setHeight(None)
+            except Exception:
+                pass
+        else:
             try:
                 bottom.setLabel(text="")
                 _apply_pg_axis_font(bottom)
+            except Exception:
+                pass
+            try:
+                bottom.setHeight(1.0)
             except Exception:
                 pass
 

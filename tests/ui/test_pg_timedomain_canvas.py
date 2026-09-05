@@ -2798,6 +2798,11 @@ def _major_tick_labels(axis):
 
 def _drawn_tick_labels(axis):
     """Return the tick strings pyqtgraph would paint for ``axis`` now."""
+    return [str(text) for _rect, _flags, text in _drawn_tick_text_specs(axis)]
+
+
+def _drawn_tick_text_specs(axis):
+    """Return ``(rect, flags, text)`` specs pyqtgraph would paint for ``axis``."""
     from PyQt5.QtGui import QPainter, QPicture
 
     picture = QPicture()
@@ -2807,7 +2812,21 @@ def _drawn_tick_labels(axis):
     finally:
         painter.end()
     assert specs is not None, "expected a realized AxisItem draw specification"
-    return [str(text) for _rect, _flags, text in specs[2]]
+    return list(specs[2])
+
+
+def _numeric_tick_texts(texts):
+    numeric = []
+    for text in texts:
+        raw = str(text).strip().replace("−", "-").replace(",", "")
+        if not raw:
+            continue
+        try:
+            float(raw)
+        except ValueError:
+            continue
+        numeric.append(str(text))
+    return numeric
 
 
 def _label_rects_for_axis(axis, values_and_labels, lo, hi):
@@ -6873,6 +6892,357 @@ class TestTimeDomainCanvasPGSelectionDelta:
             candidate, mode=mode, render_context_key=context
         )
         assert result == {"applied": False, "reason": reason}
+
+    @staticmethod
+    def _close_canvas(canvas, qapp):
+        canvas.close()
+        qapp.processEvents()
+
+    @staticmethod
+    def _settle_shown_canvas(canvas, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        QCoreApplication.processEvents()
+        canvas.grab()
+        QCoreApplication.processEvents()
+
+    def _single_plot_bottom_axis_height(self, qapp, row, context):
+        control = _pg_canvas(qapp)
+        try:
+            control.resize(760, 560)
+            control.plot_channels(
+                [row], mode="subplot", render_context_key=context,
+            )
+            self._settle_shown_canvas(control, qapp)
+            axis = control.axes_list[0].plot_item.getAxis("bottom")
+            return float(axis.height())
+        finally:
+            self._close_canvas(control, qapp)
+
+    def _assert_visible_bottom_axis_geometry(
+        self, canvas, handle, *, control_height=None,
+    ):
+        axis = handle.plot_item.getAxis("bottom")
+        view_box = handle.view_box
+        height = float(axis.height())
+        assert getattr(axis, "fixedHeight", None) is None, (
+            "visible bottom axis must release the 1 px upper-row pin"
+        )
+        assert height > 20.0, (
+            f"visible bottom axis height {height:.1f}px is still collapsed"
+        )
+        if control_height is not None:
+            assert height == pytest.approx(control_height, rel=0.45, abs=10.0)
+
+        text_specs = _drawn_tick_text_specs(axis)
+        numeric = _numeric_tick_texts(text for _rect, _flags, text in text_specs)
+        assert numeric, (
+            f"visible bottom axis must draw at least one X number; "
+            f"specs={[spec[2] for spec in text_specs]!r}"
+        )
+
+        vb_rect = view_box.sceneBoundingRect()
+        viewport = canvas._glw.viewport().rect()
+        for rect, _flags, text in text_specs:
+            scene_rect = axis.mapRectToScene(rect)
+            overlap = scene_rect.intersected(vb_rect)
+            assert overlap.height() <= 2.0, (
+                f"tick {text!r} enters the ViewBox by {overlap.height():.1f}px"
+            )
+            mapped = canvas._glw.mapFromScene(scene_rect).boundingRect()
+            assert viewport.adjusted(-2, -2, 2, 2).intersects(mapped), (
+                f"tick {text!r} is outside the viewport"
+            )
+            assert mapped.intersected(viewport).height() >= min(
+                mapped.height() - 1.0, 1.0
+            ), f"tick {text!r} is clipped by the viewport"
+
+        label = getattr(axis, "label", None)
+        if label is not None and label.isVisible() and str(
+            getattr(axis, "labelText", "")
+        ).strip():
+            title_rect = label.mapRectToScene(label.boundingRect())
+            overlap = title_rect.intersected(vb_rect)
+            assert overlap.height() <= 2.0, (
+                f"X title enters the ViewBox by {overlap.height():.1f}px"
+            )
+            mapped = canvas._glw.mapFromScene(title_rect).boundingRect()
+            assert viewport.adjusted(-2, -2, 2, 2).contains(mapped) or (
+                mapped.intersected(viewport).height() >= mapped.height() - 2.0
+            ), "X title is clipped by the viewport"
+
+    def _assert_upper_bottom_axes_collapsed(self, canvas):
+        handles = list(canvas.axes_list)
+        assert len(handles) >= 2
+        for handle in handles[:-1]:
+            axis = handle.plot_item.getAxis("bottom")
+            assert float(axis.height()) <= 4.0
+            assert axis.fixedHeight == pytest.approx(1.0)
+            assert axis.style.get("showValues") is False
+        visible = handles[-1].plot_item.getAxis("bottom")
+        assert visible.fixedHeight is None
+        assert float(visible.height()) > 20.0
+
+    @pytest.mark.parametrize("keep", ["first", "middle", "last"])
+    @pytest.mark.parametrize("path", ["direct", "via_two"])
+    def test_subplot_collapse_releases_former_upper_bottom_axis(
+        self, qapp, keep, path,
+    ):
+        canvas = _pg_canvas(qapp)
+        try:
+            canvas.resize(760, 560)
+            t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+            a = self._row("a", t, np.sin(t))
+            b = self._row("b", t, np.cos(t))
+            c = self._row("c", t, np.sin(2.0 * t))
+            rows = {"first": a, "middle": b, "last": c}
+            context = ("time", False, None, (False,))
+            canvas.plot_channels(
+                [a, b, c], mode="subplot", render_context_key=context,
+            )
+            self._settle_shown_canvas(canvas, qapp)
+            self._assert_upper_bottom_axes_collapsed(canvas)
+
+            keys = {
+                "first": _view_state_key("fid-1", "a"),
+                "middle": _view_state_key("fid-1", "b"),
+                "last": _view_state_key("fid-1", "c"),
+            }
+            kept_row = rows[keep]
+            kept_key = keys[keep]
+            kept_pdi = canvas._channel_lines[kept_key][1].plot_data_item
+            kept_vb = canvas._channel_lines[kept_key][0].view_box
+            kept_pi = canvas._channel_lines[kept_key][0].plot_item
+            canvas.set_xlim(2.0, 5.0)
+            xlim_before = canvas.get_visible_xlim()
+
+            if path == "via_two":
+                if keep == "first":
+                    intermediate = [a, b]
+                else:
+                    intermediate = [b, c]
+                result_two = canvas.try_apply_selection_delta(
+                    intermediate, mode="subplot", render_context_key=context,
+                )
+                assert result_two == {
+                    "applied": True,
+                    "reason": "subplot-object-reuse",
+                }
+                self._settle_shown_canvas(canvas, qapp)
+                self._assert_upper_bottom_axes_collapsed(canvas)
+
+            result = canvas.try_apply_selection_delta(
+                [kept_row], mode="subplot", render_context_key=context,
+            )
+            assert result == {
+                "applied": True,
+                "reason": "subplot-object-reuse",
+            }
+            self._settle_shown_canvas(canvas, qapp)
+            assert canvas.axes_list == [canvas._channel_lines[kept_key][0]]
+            assert canvas._channel_lines[kept_key][1].plot_data_item is kept_pdi
+            assert canvas._channel_lines[kept_key][0].view_box is kept_vb
+            assert canvas._channel_lines[kept_key][0].plot_item is kept_pi
+            assert canvas._selection_active_keys == {kept_key}
+            assert canvas.get_visible_xlim() == pytest.approx(xlim_before)
+            ylims = canvas.get_visible_ylims()
+            assert kept_key in ylims
+            y_lo, y_hi = ylims[kept_key]
+            assert y_hi > y_lo
+            assert (y_lo, y_hi) != pytest.approx((0.0, 1.0))
+            control_h = self._single_plot_bottom_axis_height(
+                qapp, kept_row, context,
+            )
+            self._assert_visible_bottom_axis_geometry(
+                canvas, canvas.axes_list[0], control_height=control_h,
+            )
+
+            canvas._unify_subplot_bottom_axis_heights()
+            self._settle_shown_canvas(canvas, qapp)
+            released = canvas.axes_list[0].plot_item.getAxis("bottom")
+            first_height = float(released.height())
+            canvas._unify_subplot_bottom_axis_heights()
+            self._settle_shown_canvas(canvas, qapp)
+            assert released.fixedHeight is None
+            assert float(released.height()) == pytest.approx(first_height, abs=2.0)
+        finally:
+            self._close_canvas(canvas, qapp)
+
+    def test_subplot_one_to_three_collapses_upper_axes_and_reuses_first(
+        self, qapp,
+    ):
+        canvas = _pg_canvas(qapp)
+        try:
+            canvas.resize(760, 560)
+            t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+            a = self._row("a", t, np.sin(t))
+            b = self._row("b", t, np.cos(t))
+            c = self._row("c", t, np.sin(2.0 * t))
+            context = ("time", False, None, (False,))
+            canvas.plot_channels([a], mode="subplot", render_context_key=context)
+            self._settle_shown_canvas(canvas, qapp)
+            key_a = _view_state_key("fid-1", "a")
+            a_pdi = canvas._channel_lines[key_a][1].plot_data_item
+            a_vb = canvas._channel_lines[key_a][0].view_box
+            control_h = self._single_plot_bottom_axis_height(qapp, a, context)
+            self._assert_visible_bottom_axis_geometry(
+                canvas, canvas.axes_list[0], control_height=control_h,
+            )
+
+            first = canvas.try_apply_selection_delta(
+                [a, b], mode="subplot", render_context_key=context,
+            )
+            assert first == {"applied": True, "reason": "subplot-object-reuse"}
+            second = canvas.try_apply_selection_delta(
+                [a, b, c], mode="subplot", render_context_key=context,
+            )
+            assert second == {"applied": True, "reason": "subplot-object-reuse"}
+            self._settle_shown_canvas(canvas, qapp)
+            assert canvas._channel_lines[key_a][1].plot_data_item is a_pdi
+            assert canvas._channel_lines[key_a][0].view_box is a_vb
+            assert len(canvas.axes_list) == 3
+            self._assert_upper_bottom_axes_collapsed(canvas)
+            self._assert_visible_bottom_axis_geometry(
+                canvas, canvas.axes_list[-1],
+            )
+        finally:
+            self._close_canvas(canvas, qapp)
+
+    def test_subplot_zero_selection_and_hide_show_restore_bottom_axis(
+        self, qapp,
+    ):
+        canvas = _pg_canvas(qapp)
+        try:
+            canvas.resize(760, 560)
+            t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+            a = self._row("a", t, np.sin(t))
+            b = self._row("b", t, np.cos(t))
+            c = self._row("c", t, np.sin(2.0 * t))
+            context = ("time", False, None, (False,))
+            canvas.plot_channels(
+                [a, b, c], mode="subplot", render_context_key=context,
+            )
+            self._settle_shown_canvas(canvas, qapp)
+            key_a = _view_state_key("fid-1", "a")
+            a_pdi = canvas._channel_lines[key_a][1].plot_data_item
+            a_vb = canvas._channel_lines[key_a][0].view_box
+            active_before = set(canvas._selection_active_keys)
+
+            empty = canvas.try_apply_selection_delta(
+                [], mode="subplot", render_context_key=context,
+            )
+            assert empty == {
+                "applied": False,
+                "reason": "subplot-empty-selection-reset",
+            }
+            assert canvas._selection_active_keys == active_before
+            assert canvas._channel_lines[key_a][1].plot_data_item is a_pdi
+
+            restored = canvas.try_apply_selection_delta(
+                [a, b, c], mode="subplot", render_context_key=context,
+            )
+            assert restored == {
+                "applied": True,
+                "reason": "subplot-object-reuse",
+            }
+            self._settle_shown_canvas(canvas, qapp)
+            self._assert_upper_bottom_axes_collapsed(canvas)
+
+            canvas.hide()
+            qapp.processEvents()
+            hidden = canvas.try_apply_selection_delta(
+                [a], mode="subplot", render_context_key=context,
+            )
+            assert hidden == {
+                "applied": True,
+                "reason": "subplot-object-reuse",
+            }
+            canvas.show()
+            canvas.resize(760, 560)
+            self._settle_shown_canvas(canvas, qapp)
+            assert canvas._channel_lines[key_a][1].plot_data_item is a_pdi
+            assert canvas._channel_lines[key_a][0].view_box is a_vb
+            control_h = self._single_plot_bottom_axis_height(qapp, a, context)
+            self._assert_visible_bottom_axis_geometry(
+                canvas, canvas.axes_list[0], control_height=control_h,
+            )
+
+            shown = canvas.try_apply_selection_delta(
+                [a, b, c], mode="subplot", render_context_key=context,
+            )
+            assert shown == {
+                "applied": True,
+                "reason": "subplot-object-reuse",
+            }
+            self._settle_shown_canvas(canvas, qapp)
+            self._assert_upper_bottom_axes_collapsed(canvas)
+        finally:
+            self._close_canvas(canvas, qapp)
+
+    def test_shared_axis_unique_slot_releases_bottom_axis_height(self, qapp):
+        canvas = _pg_canvas(qapp)
+        try:
+            canvas.resize(760, 560)
+            t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+            a = (
+                "a", True, t, np.sin(t), "#f00", "Nm", "fid-1",
+                {"axis_group": 1},
+            )
+            b = (
+                "b", True, t, np.cos(t), "#0a0", "Nm", "fid-1",
+                {"axis_group": 1},
+            )
+            c = self._row("c", t, np.sin(2.0 * t), data_id="fid-2")
+            context = ("time", False, None, (False,))
+            canvas.plot_channels(
+                [a, b, c], mode="subplot", render_context_key=context,
+            )
+            self._settle_shown_canvas(canvas, qapp)
+            assert len(canvas.axes_list) == 2
+            key_a = _view_state_key("fid-1", "a")
+            key_b = _view_state_key("fid-1", "b")
+            assert canvas._channel_lines[key_a][0] is canvas._channel_lines[key_b][0]
+            self._assert_upper_bottom_axes_collapsed(canvas)
+
+            canvas.plot_channels(
+                [a, b], mode="subplot", render_context_key=context,
+            )
+            self._settle_shown_canvas(canvas, qapp)
+            assert len(canvas.axes_list) == 1
+            handle = canvas.axes_list[0]
+            assert canvas._channel_lines[key_a][0] is handle
+            assert canvas._channel_lines[key_b][0] is handle
+            pdis = [
+                canvas._channel_lines[key_a][1].plot_data_item,
+                canvas._channel_lines[key_b][1].plot_data_item,
+            ]
+            assert all(pdi is not None and pdi.isVisible() for pdi in pdis)
+            assert pdis[0] is not pdis[1]
+            control = _pg_canvas(qapp)
+            try:
+                control.resize(760, 560)
+                control.plot_channels(
+                    [a, b], mode="subplot", render_context_key=context,
+                )
+                self._settle_shown_canvas(control, qapp)
+                control_h = float(
+                    control.axes_list[0].plot_item.getAxis("bottom").height()
+                )
+            finally:
+                self._close_canvas(control, qapp)
+            self._assert_visible_bottom_axis_geometry(
+                canvas, handle, control_height=control_h,
+            )
+
+            axis = handle.plot_item.getAxis("bottom")
+            axis.setHeight(1.0)
+            canvas._settle_subplot_layout()
+            self._settle_shown_canvas(canvas, qapp)
+            self._assert_visible_bottom_axis_geometry(
+                canvas, handle, control_height=control_h,
+            )
+        finally:
+            self._close_canvas(canvas, qapp)
 
 
 class TestTimeDomainCanvasPGVisualStyleDefaults:

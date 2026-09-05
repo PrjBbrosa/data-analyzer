@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 from collections import OrderedDict
+from contextlib import contextmanager
 import logging
 from math import ceil, isfinite
 from time import monotonic
@@ -63,6 +64,7 @@ from typing import Tuple
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt5 import sip
 from PyQt5.QtCore import (
     QEvent,
     QTimer,
@@ -455,6 +457,11 @@ class TimeDomainCanvasPG(QWidget):
         self._subplot_retained_order = []
         self._subplot_retained_handles = {}
         self._subplot_row_constraints = {}
+        # Nested display-update suppression around full rebuilds. Depth is
+        # not reset by clear(): the caller that entered the scope still
+        # owns the restore in finally.
+        self._display_update_suppress_depth = 0
+        self._display_update_saved_enabled = None
 
         # --- viewport refresh wiring ------------------------------------
         # Interaction settle timer. Unlike the former 40 ms periodic refresh,
@@ -3004,6 +3011,50 @@ class TimeDomainCanvasPG(QWidget):
     def _apply_overlay_box_zoom_y(self):
         return OverlayAxisManager._apply_overlay_box_zoom_y(self._overlay_axes)
 
+    @contextmanager
+    def suppress_display_updates(self):
+        """Discard viewport paints until a rebuild can show a complete frame.
+
+        Nested-safe: only the outermost entry captures ``updatesEnabled``.
+        ``finally`` restores it without ``return``, so a nested inner
+        exception still propagates. Tick and title reservation still use
+        font metrics — this scope must not be treated as a measurement
+        barrier. A sip-deleted widget is left alone.
+        """
+        try:
+            alive = not sip.isdeleted(self)
+        except RuntimeError:
+            alive = False
+        if not alive:
+            yield
+            return
+        outermost = self._display_update_suppress_depth == 0
+        if outermost:
+            saved = self.updatesEnabled()
+            self._display_update_saved_enabled = saved
+            if saved:
+                self.setUpdatesEnabled(False)
+        self._display_update_suppress_depth += 1
+        try:
+            yield
+        finally:
+            self._display_update_suppress_depth = max(
+                0, self._display_update_suppress_depth - 1
+            )
+            if self._display_update_suppress_depth == 0:
+                saved = self._display_update_saved_enabled
+                self._display_update_saved_enabled = None
+                try:
+                    deleted = sip.isdeleted(self)
+                except RuntimeError:
+                    deleted = True
+                if not deleted and saved is not None:
+                    try:
+                        self.setUpdatesEnabled(bool(saved))
+                    except RuntimeError:
+                        # Widget destroyed while a rebuild was in flight.
+                        pass
+
     def clear(self):
         """Tear down the chart. Mirrors TimeDomainCanvas.clear."""
         # Invalidate callbacks captured by the previous curve generation
@@ -4561,6 +4612,11 @@ class TimeDomainCanvasPG(QWidget):
         equal values distribute proportionally, so rows stay balanced at any
         canvas size without reading live geometry. See
         docs/superpowers/specs/2026-06-02-subplot-vertical-spacing-design.md.
+
+        A unique remaining row is still the bottom axis: it must release any
+        leftover 1 px pin (``setHeight(None)``) and still activate the layout.
+        Skipping that when ``len(bottom_axes) < 2`` left a former upper row
+        occupying the X-axis band after 3→1 / 2→1 reuse.
         """
         if not self._subplot_label_specs:
             return
@@ -4575,7 +4631,7 @@ class TimeDomainCanvasPG(QWidget):
                 axis = None
             if axis is not None:
                 bottom_axes.append(axis)
-        if len(bottom_axes) < 2:
+        if not bottom_axes:
             return
         for axis in bottom_axes[:-1]:
             try:
