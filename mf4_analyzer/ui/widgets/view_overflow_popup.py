@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...ui_kit.dialog_geometry import move_in_screen
 from ...ui_kit.popup_shell import apply_popup_shell
 
 _SCREEN_MARGIN = 8
@@ -249,9 +250,11 @@ class ViewOverflowPopup(QFrame):
             y = above
         else:
             y = self._clamp(below, top, bottom)
-        self.move(QPoint(x, y))
+        pos = QPoint(x, y)
+        move_in_screen(self, pos)
         self.show()
         self.raise_()
+        move_in_screen(self, pos)
         self._elide_visible_names()
         if self._row_name_buttons:
             self._row_name_buttons[0].setFocus(Qt.PopupFocusReason)

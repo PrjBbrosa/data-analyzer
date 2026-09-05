@@ -4,8 +4,8 @@ from __future__ import annotations
 import os
 
 import pytest
-from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtWidgets import QApplication, QDialog, QLabel, QVBoxLayout
+from PyQt5.QtCore import QPoint, QRect, Qt
+from PyQt5.QtWidgets import QApplication, QDialog, QFrame, QLabel, QVBoxLayout, QWidget
 
 from mf4_analyzer.ui_kit.dialog_geometry import (
     ANCHOR_GAP,
@@ -19,6 +19,7 @@ from mf4_analyzer.ui_kit.dialog_geometry import (
     fit_window,
     frame_insets_of,
     install_geometry_relayout,
+    move_in_screen,
     plan_geometry,
 )
 
@@ -268,3 +269,19 @@ def test_nudge_is_noop_when_frame_already_inside_safe_area(qapp, qtbot, monkeypa
     before = (dialog.x(), dialog.y(), dialog.width(), dialog.height())
     assert nudge_into_work_area(dialog) is None
     assert (dialog.x(), dialog.y(), dialog.width(), dialog.height()) == before
+
+
+def test_move_in_screen_creates_handle_before_first_show(qapp, qtbot):
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    parent.setGeometry(40, 60, 200, 40)
+    parent.show()
+    qtbot.waitExposed(parent)
+    popup = QFrame(parent, Qt.Popup)
+    qtbot.addWidget(popup)
+    popup.resize(120, 80)
+    assert popup.windowHandle() is None
+    move_in_screen(popup, QPoint(88, 120))
+    assert popup.windowHandle() is not None
+    assert popup.pos() == QPoint(88, 120)
+

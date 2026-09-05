@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QRect, Qt
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
 from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QApplication,
@@ -379,6 +379,33 @@ def test_recent_popup_frame_stays_inside_compact_work_area(qapp, qtbot, monkeypa
     assert frame.top() >= SCREEN_MARGIN
     assert frame.right() <= width - SCREEN_MARGIN
     assert frame.bottom() <= height - SCREEN_MARGIN
+
+
+def test_first_show_at_clears_the_anchor_like_the_second_show(qapp, qtbot, monkeypatch):
+    monkeypatch.setattr(
+        RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen),
+    )
+    host, popup = _make_popup(qtbot)
+    popup.populate((_entry("/tmp/steering_torque.mf4"),))
+    popup.reset_for_show()
+    assert popup.windowHandle() is None
+
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    qapp.processEvents()
+    first = QRect(popup.frameGeometry())
+    anchor = QRect(host.mapToGlobal(QPoint(0, 0)), host.size())
+    assert first.top() >= anchor.top() + anchor.height()
+    popup.close()
+    qapp.processEvents()
+
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    qapp.processEvents()
+    second = popup.frameGeometry()
+    assert abs(second.top() - first.top()) <= 1
+    assert abs(second.left() - first.left()) <= 1
+    popup.close()
 
 
 def _populate_two(popup, tmp_path):

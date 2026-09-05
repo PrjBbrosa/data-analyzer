@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ...ui_kit.dialog_geometry import SCREEN_MARGIN
+from ...ui_kit.dialog_geometry import SCREEN_MARGIN, move_in_screen
 from ...ui_kit.icons import Icons
 from ...ui_kit.motion import (
     MotionPolicy,
@@ -314,10 +314,12 @@ class RecentOpenPopup(QFrame):
         self._geometry_locked = True
         self._enter_locked_size = QSize(width, height)
         self._enter_generation += 1
-        self.move(QPoint(x, y))
+        pos = QPoint(x, y)
+        move_in_screen(self, pos)
         self._prepare_enter_effect()
         self.show()
         self.raise_()
+        move_in_screen(self, pos)
         self._sync_column_widths()
         self._sync_empty_geometry()
         self.focus_search(select_all=False)

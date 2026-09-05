@@ -24,6 +24,7 @@ from ....batch_render_style import (
     MIN_FONT_SCALE, MIN_TICK_DENSITY_X, MIN_TICK_DENSITY_Y,
     TICK_DENSITY_PRESETS, RenderStyle,
 )
+from ....ui_kit.dialog_geometry import move_in_screen
 from ....ui_kit.popup_shell import apply_popup_shell
 
 
@@ -264,8 +265,10 @@ class RenderStylePopover(QFrame):
         else:
             y = self._clamp(below, top, bottom)
 
-        self.move(QPoint(x, y))
+        pos = QPoint(x, y)
+        move_in_screen(self, pos)
         self.show()
+        move_in_screen(self, pos)
 
     # ------------------------------------------------------------------
     def _build_row(self, label, minimum, maximum, value, step, *, suffix="", width=38):

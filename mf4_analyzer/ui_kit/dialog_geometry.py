@@ -514,6 +514,21 @@ def _shrink_unaccounted_frame(widget: QWidget, planned_frame: IntRect) -> None:
     widget.setMaximumSize(previous_max)
 
 
+def move_in_screen(widget: QWidget, pos: QPoint) -> None:
+    """Move a window using screen coordinates, including before the first Show.
+
+    Parented ``Qt.Popup`` widgets have no ``windowHandle`` until they are
+    shown or ``winId()`` runs. ``QWidget.move`` in that state is
+    parent-local, so ``move`` then ``show`` lands on the parent the first
+    time and only uses screen coordinates afterwards.
+    """
+    if not _alive(widget):
+        return
+    if widget.isWindow() and widget.windowHandle() is None:
+        widget.winId()
+    widget.move(pos)
+
+
 def apply_plan(
     widget: QWidget,
     plan: GeometryPlan,
@@ -528,7 +543,7 @@ def apply_plan(
         _release_size_conflicts(widget, Size(client.width, client.height))
     before = (widget.x(), widget.y(), widget.width(), widget.height())
     widget.resize(client.width, client.height)
-    widget.move(client.x, client.y)
+    move_in_screen(widget, QPoint(client.x, client.y))
     _shrink_unaccounted_frame(widget, plan.frame)
     after = (widget.x(), widget.y(), widget.width(), widget.height())
     return after != before
