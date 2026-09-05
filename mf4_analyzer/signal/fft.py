@@ -315,10 +315,11 @@ def build_fft_effective_facts(
 ):
     """Construct :class:`FftEffectiveFacts` from a completed compute.
 
-    Does not re-run DSP. ``nfft`` is the value ``compute_*`` actually used
-    (pass ``infer_nfft_from_freq(freq)`` when the caller has the axis).
-    Empty or non-finite ``fs`` returns ``None`` rather than inventing a
-    sampling rate.
+    Does not re-run DSP. ``nfft`` is the FFT length the compute owner
+    actually used. Half-spectrum length cannot recover odd vs even NFFT,
+    so this builder never infers that length from ``freq``. Empty or
+    non-finite ``fs`` returns ``None`` rather than inventing a sampling
+    rate.
     """
     n_samples = int(np.asarray(sig).shape[0]) if sig is not None else 0
     if n_samples <= 0:
@@ -327,12 +328,7 @@ def build_fft_effective_facts(
     if fs_val is None:
         return None
     mode = str(avg_mode or "单帧")
-    inferred = None
-    if freq is not None and mode != "单帧":
-        inferred = infer_nfft_from_freq(freq, rfft=mode == "峰值保持")
-    if inferred is not None:
-        nfft_actual = int(inferred)
-    elif nfft is None or int(nfft) <= 0:
+    if nfft is None or int(nfft) <= 0:
         nfft_actual = n_samples
     else:
         nfft_actual = int(nfft)
@@ -340,6 +336,7 @@ def build_fft_effective_facts(
             nfft_actual = min(nfft_actual, n_samples)
     if nfft_actual <= 0:
         return None
+    _ = freq
     if nfft_requested is None:
         requested = nfft_actual
     else:
@@ -349,6 +346,7 @@ def build_fft_effective_facts(
             requested = nfft_actual
         if requested <= 0:
             requested = nfft_actual
+    window_samples = min(n_samples, nfft_actual)
     frames = _fft_frame_count(n_samples, nfft_actual, overlap, avg_mode)
     # ``min_frames`` remains in the signature for callers; statistics now
     # live on ``nfft_status`` / reason codes, not ``shortened``.
@@ -378,7 +376,7 @@ def build_fft_effective_facts(
         nfft=nfft_actual,
         df=fs_val / float(nfft_actual),
         window=str(window or "hanning"),
-        window_s=float(nfft_actual) / fs_val,
+        window_s=float(window_samples) / fs_val,
         frames=int(frames),
         overlap=float(overlap or 0.0),
         n_samples=n_samples,
@@ -390,6 +388,7 @@ def build_fft_effective_facts(
         is_constant=bool(is_constant),
         time_axis=time_axis,
         fs_conflict=bool(fs_conflict),
+        window_samples=int(window_samples),
         **policy,
     )
 
@@ -422,6 +421,7 @@ class FftEffectiveFacts:
     nfft_status: str | None = None
     nfft_degraded: bool | None = None
     nfft_reason_codes: tuple[str, ...] = ()
+    window_samples: int | None = None
 
     @property
     def nfft_effective(self) -> int:
@@ -454,6 +454,9 @@ class FftEffectiveFacts:
             "frames": int(self.frames),
             "overlap": float(self.overlap),
             "n_samples": int(self.n_samples),
+            "window_samples": (
+                None if self.window_samples is None else int(self.window_samples)
+            ),
             "weighting": self.weighting,
             "shortened": bool(self.shortened),
             "time_start": self.time_start,

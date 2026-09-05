@@ -1,6 +1,6 @@
 """Collapsible parameter section widget for inspector contextuals."""
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QPointF, Qt
+from PyQt5.QtCore import QEvent, QPointF, QSize, Qt
 from PyQt5.QtGui import QIcon, QPainter, QPixmap, QPolygonF, QRegion
 from PyQt5.QtWidgets import (
     QApplication,
@@ -57,6 +57,28 @@ class _BodyInputShield(QWidget):
             event.accept()
             return True
         return super().event(event)
+
+
+class _ElidedSummaryLabel(QLabel):
+    """Header summary that yields width and paints an elided full string."""
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
+
+    def sizeHint(self):
+        return super().sizeHint()
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.setFont(self.font())
+        elided = self.fontMetrics().elidedText(
+            self.text(), Qt.ElideRight, max(0, self.width()),
+        )
+        painter.drawText(
+            self.rect(), int(self.alignment() | Qt.TextSingleLine), elided,
+        )
 
 
 class _CollapsibleParamSection(QWidget):
@@ -119,14 +141,15 @@ class _CollapsibleParamSection(QWidget):
         self.btn_collapser.toggled.connect(self.set_expanded)
         header_lay.addWidget(self.btn_collapser, 1)
 
-        self._summary = QLabel("", header)
+        self._summary = _ElidedSummaryLabel("", header)
         self._summary.setObjectName("inspectorParamSummary")
         self._summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._summary.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self._summary.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._summary.setMinimumWidth(0)
         self._summary.setStyleSheet(
             "QLabel#inspectorParamSummary { color: #64748b; font-size: 11px; }"
         )
-        header_lay.addWidget(self._summary, 0)
+        header_lay.addWidget(self._summary, 1)
         root.addWidget(header)
 
         self._persistent_host = QWidget(self)
@@ -157,7 +180,9 @@ class _CollapsibleParamSection(QWidget):
         self._snap_presentation()
 
     def set_summary(self, text):
-        self._summary.setText(str(text))
+        text = str(text)
+        self._summary.setText(text)
+        self._summary.setToolTip(text if text else "")
 
     def summary_text(self):
         return self._summary.text()
@@ -386,14 +411,14 @@ class _CollapsibleParamSection(QWidget):
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.translate(side / 2.0, side / 2.0)
+        painter.translate(logical / 2.0, logical / 2.0)
         painter.rotate(degrees)
         color = self.btn_collapser.palette().color(
             self.btn_collapser.foregroundRole()
         )
         painter.setBrush(color)
         painter.setPen(Qt.NoPen)
-        span = 3.5 * dpr
+        span = 3.5
         painter.drawPolygon(
             QPolygonF(
                 (

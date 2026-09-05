@@ -336,6 +336,8 @@ def test_open_project_parse_failure_keeps_board(qapp, qtbot, tmp_path):
 
 
 def test_open_project_cancel_keeps_board(qapp, qtbot, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window.project_dirty import DirtyGuardResult
+
     csv_a = tmp_path / "a.csv"
     _write_csv(csv_a)
     win = MainWindow()
@@ -345,8 +347,15 @@ def test_open_project_cancel_keeps_board(qapp, qtbot, tmp_path, monkeypatch):
     view_id = str(win.view_manager.get(0).view_id)
     add_ref(uv.board, UltraViewRef("time", view_id))
     uv.board.name = "取消打开保留"
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    opened = []
+    monkeypatch.setattr(
+        win,
+        "confirm_leave_unsaved_project",
+        lambda: DirtyGuardResult.CANCELLED,
+    )
+    monkeypatch.setattr(win, "open_project", lambda path: opened.append(path))
     win._open_paths([str(tmp_path / "other.tlproj")])
+    assert opened == []
     assert uv.board.name == "取消打开保留"
     assert UltraViewRef("time", view_id) in membership_set(uv.board)
 

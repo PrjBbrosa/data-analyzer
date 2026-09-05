@@ -309,12 +309,76 @@ def test_exists_probe_happens_once_per_snapshot(qtbot, tmp_path, monkeypatch):
 
     monkeypatch.setattr(RecentFilesStore, "exists", staticmethod(counting_exists))
     popup.populate(entries)
+    assert calls["n"] == 0
+    popup.reset_for_show()
     first = calls["n"]
     assert first == 1
     popup._search.setText("run")
     popup._search.setText("r")
     popup.populate(entries)
     assert calls["n"] == first
+
+
+def test_exists_refreshes_missing_then_restored_across_open_sessions(
+    qtbot, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen),
+    )
+    host, popup = _make_popup(qtbot)
+    path = tmp_path / "restored.mf4"
+    entries = (_entry(path),)
+    popup.populate(entries)
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    assert popup._openable_rows() == []
+    popup.close()
+
+    path.write_text("x", encoding="utf-8")
+    popup.populate(entries)
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    assert popup._openable_rows() == [0]
+    popup.close()
+
+    path.unlink()
+    popup.populate(entries)
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    assert popup._openable_rows() == []
+    popup.close()
+
+
+def test_toolbar_parented_popup_first_show_clears_anchor(qapp, qtbot, monkeypatch):
+    monkeypatch.setattr(
+        RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen),
+    )
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.setGeometry(80, 80, 160, 40)
+    host.show()
+    qtbot.waitExposed(host)
+    popup = RecentOpenPopup(host)
+    popup.populate((_entry("/tmp/steering_torque.mf4"),))
+    popup.reset_for_show()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    qapp.processEvents()
+    first = QRect(popup.frameGeometry())
+    anchor = QRect(host.mapToGlobal(QPoint(0, 0)), host.size())
+    assert first.top() >= anchor.top() + anchor.height()
+    popup.close()
+    qapp.processEvents()
+    popup.show_at(host)
+    qtbot.waitExposed(popup)
+    qapp.processEvents()
+    second = popup.frameGeometry()
+    assert abs(second.top() - first.top()) <= 1
+    assert abs(second.left() - first.left()) <= 1
+    popup.close()
 
 
 def test_twenty_reopen_cycles_do_not_grow_instances(qtbot, tmp_path, monkeypatch):

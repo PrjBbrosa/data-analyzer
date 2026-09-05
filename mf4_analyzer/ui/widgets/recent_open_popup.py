@@ -118,6 +118,7 @@ class RecentOpenPopup(QFrame):
         self._entry_snapshot: tuple = ()
         self._matches: tuple[RecentMatch, ...] = ()
         self._exists_by_identity: dict[str, bool] = {}
+        self._exists_session = False
         self._current_identity = ""
         self._hover_row = -1
         self._closed_emitted = False
@@ -263,25 +264,29 @@ class RecentOpenPopup(QFrame):
         snapshot = tuple(
             (entry.path, entry.kind, entry.opened_at) for entry in entries
         )
-        if snapshot != self._entry_snapshot:
-            self._entry_snapshot = snapshot
-            self._entries = entries
-            self._exists_by_identity = {
-                entry.path: RecentFilesStore.exists(entry) for entry in entries
-            }
-        else:
-            self._entries = entries
+        identity_changed = snapshot != self._entry_snapshot
+        self._entry_snapshot = snapshot
+        self._entries = entries
+        if identity_changed and self.isVisible():
+            self._refresh_exists()
         self._refilter(self._search.text())
 
     def reset_for_show(self) -> None:
         self._restore_opener = False
         self._open_emitted = False
         self._hover_row = -1
+        self._refresh_exists()
         if self._search.text():
             self._search.clear()
         else:
             self._refilter("")
         self._select_first_openable()
+
+    def _refresh_exists(self) -> None:
+        self._exists_by_identity = {
+            entry.path: RecentFilesStore.exists(entry) for entry in self._entries
+        }
+        self._exists_session = True
 
     def show_at(self, anchor: QWidget) -> None:
         available = self._available_geometry_for(anchor)
@@ -314,6 +319,10 @@ class RecentOpenPopup(QFrame):
         self._geometry_locked = True
         self._enter_locked_size = QSize(width, height)
         self._enter_generation += 1
+        if not self._exists_session:
+            self._refresh_exists()
+            self._refilter(self._search.text())
+            self._select_first_openable()
         pos = QPoint(x, y)
         move_in_screen(self, pos)
         self._prepare_enter_effect()
@@ -353,12 +362,14 @@ class RecentOpenPopup(QFrame):
         super().hideEvent(event)
         self._geometry_locked = False
         self._hover_row = -1
+        self._exists_session = False
         self._emit_closed()
 
     def closeEvent(self, event):
         self._cancel_enter()
         super().closeEvent(event)
         self._geometry_locked = False
+        self._exists_session = False
         self._emit_closed()
 
     def resizeEvent(self, event):

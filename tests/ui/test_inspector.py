@@ -6217,11 +6217,11 @@ def test_fft_time_summary_label_refreshes_on_set_fs(qtbot):
     qtbot.addWidget(ctx)
     ctx._t_win_s = 1.5
     ctx.spin_overlap.setValue(50)
-    ctx.set_auto_nfft_provider(lambda: 3000)  # data-aware → 128
+    ctx.set_auto_nfft_provider(lambda: 3000)  # data-aware → 1024
     ctx._tf_section.set_summary("STALE")
     ctx.set_fs(1000.0)
     assert ctx._tf_section.summary_text() == ctx._tf_summary_text()
-    assert "自动(128)" in ctx._tf_section.summary_text()
+    assert "自动(1024)" in ctx._tf_section.summary_text()
 
 
 def test_fft_summary_label_refreshes_on_set_fs(qtbot):
@@ -6882,9 +6882,11 @@ def test_guideline_hardening_d5_d7_copy_matches_implementation(qtbot):
     assert "重叠率" in tip
     nfft_tip = fft.combo_nfft.toolTip()
     assert "整段" in nfft_tip
-    assert "最少帧数" in nfft_tip
-    assert "[64, 8192]" in nfft_tip
-    assert "窗长" not in nfft_tip
+    assert "优先 4096" in nfft_tip
+    assert "最少帧数" not in nfft_tip
+    assert "零填充" in nfft_tip
+    assert "目标窗长" in nfft_tip
+    assert "按窗长取" not in nfft_tip
     assert "单帧" in fft._fft_summary_text()
     assert f"{fft.spin_overlap.value()}%" not in fft._fft_summary_text()
     fft.combo_avg_mode.setCurrentText("线性平均")
@@ -6895,9 +6897,9 @@ def test_guideline_hardening_d5_d7_copy_matches_implementation(qtbot):
     fft_time = FFTTimeContextual()
     qtbot.addWidget(fft_time)
     tf_tip = fft_time.combo_nfft.toolTip()
-    assert "最少帧数" in tf_tip
-    assert "[64, 8192]" in tf_tip
-    assert "窗长" not in tf_tip
+    assert "优先 4096" in tf_tip
+    assert "4 个真实时间帧" in tf_tip
+    assert "最少帧数" not in tf_tip
     assert "按窗长取" not in tf_tip
 
     order = OrderContextual()

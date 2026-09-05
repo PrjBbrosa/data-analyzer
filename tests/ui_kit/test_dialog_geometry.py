@@ -13,6 +13,7 @@ from mf4_analyzer.ui_kit.dialog_geometry import (
     IntRect,
     SCREEN_MARGIN,
     Size,
+    apply_plan,
     as_rect,
     client_budget,
     constrain_client_size,
@@ -284,4 +285,150 @@ def test_move_in_screen_creates_handle_before_first_show(qapp, qtbot):
     move_in_screen(popup, QPoint(88, 120))
     assert popup.windowHandle() is not None
     assert popup.pos() == QPoint(88, 120)
+
+
+def _stub_work_area(monkeypatch, work, insets):
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.resolve_available_rect",
+        lambda **_kwargs: work,
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.ui_kit.dialog_geometry.frame_insets_of",
+        lambda _widget: insets,
+    )
+
+
+def test_apply_plan_moves_titled_window_by_frame_origin(qapp, qtbot, monkeypatch):
+    work = IntRect(0, 40, 800, 600)
+    insets = FrameInsets(0, 32, 0, 0)
+    _stub_work_area(monkeypatch, work, insets)
+    dialog = QDialog()
+    dialog.setWindowTitle("titled")
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    plan = fit_window(dialog, (800, 600), content_minimum=(200, 80))
+    qapp.processEvents()
+    safe = work.adjusted(SCREEN_MARGIN, SCREEN_MARGIN, -SCREEN_MARGIN, -SCREEN_MARGIN)
+    assert plan.client.x == plan.frame.x + insets.left
+    assert plan.client.y == plan.frame.y + insets.top
+    assert plan.client.y != plan.frame.y
+    assert safe.contains_rect(plan.frame)
+    assert dialog.pos() == QPoint(plan.frame.x, plan.frame.y)
+    actual = as_rect(dialog.frameGeometry())
+    assert actual.x == plan.frame.x
+    assert actual.y == plan.frame.y
+    assert safe.contains_rect(actual)
+
+
+def test_apply_plan_frameless_frame_equals_client(qapp, qtbot, monkeypatch):
+    work = IntRect(0, 40, 800, 600)
+    _stub_work_area(monkeypatch, work, FrameInsets())
+    dialog = QDialog()
+    dialog.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+    qtbot.addWidget(dialog)
+    plan = fit_window(dialog, (380, 160), content_minimum=(200, 80))
+    assert plan.frame.x == plan.client.x
+    assert plan.frame.y == plan.client.y
+    assert dialog.pos() == QPoint(plan.frame.x, plan.frame.y)
+
+
+def test_apply_plan_embedded_uses_host_local_origin(qapp, qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.setGeometry(10, 20, 200, 160)
+    child = QWidget(host)
+    qtbot.addWidget(child)
+    plan = plan_geometry(
+        host.rect(),
+        (400, 400),
+        position="embedded",
+        margin=4,
+    )
+    apply_plan(child, plan)
+    assert plan.frame.x == plan.client.x
+    assert plan.frame.y == plan.client.y
+    assert child.pos() == QPoint(plan.client.x, plan.client.y)
+    assert as_rect(host.rect()).contains_rect(as_rect(child.geometry()))
+
+
+def test_apply_plan_negative_work_area_keeps_frame_origin(qapp, qtbot, monkeypatch):
+    work = IntRect(-1280, 0, 1280, 680)
+    insets = FrameInsets(8, 32, 8, 8)
+    _stub_work_area(monkeypatch, work, insets)
+    dialog = QDialog()
+    dialog.setWindowTitle("left screen")
+    qtbot.addWidget(dialog)
+    plan = fit_window(dialog, (1040, 720), content_minimum=(200, 80))
+    safe = work.adjusted(SCREEN_MARGIN, SCREEN_MARGIN, -SCREEN_MARGIN, -SCREEN_MARGIN)
+    assert plan.frame.x < 0
+    assert safe.contains_rect(plan.frame)
+    assert dialog.pos() == QPoint(plan.frame.x, plan.frame.y)
+
+
+def test_apply_plan_filling_budget_stays_in_safe_area(qapp, qtbot, monkeypatch):
+    work = IntRect(0, 40, 800, 600)
+    insets = FrameInsets(0, 32, 0, 0)
+    _stub_work_area(monkeypatch, work, insets)
+    dialog = QDialog()
+    dialog.setWindowTitle("full budget")
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    plan = fit_window(dialog, (1180, 680), content_minimum=(640, 280))
+    qapp.processEvents()
+    safe = work.adjusted(SCREEN_MARGIN, SCREEN_MARGIN, -SCREEN_MARGIN, -SCREEN_MARGIN)
+    assert safe.contains_rect(plan.frame)
+    assert dialog.pos() == QPoint(plan.frame.x, plan.frame.y)
+    assert safe.contains_rect(as_rect(dialog.frameGeometry()))
+
+
+def test_apply_plan_same_plan_twice_does_not_drift(qapp, qtbot, monkeypatch):
+    work = IntRect(0, 40, 800, 600)
+    insets = FrameInsets(0, 32, 0, 0)
+    _stub_work_area(monkeypatch, work, insets)
+    dialog = QDialog()
+    dialog.setWindowTitle("stable")
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    first = fit_window(dialog, (800, 600), content_minimum=(200, 80))
+    first_geo = (dialog.x(), dialog.y(), dialog.width(), dialog.height())
+    second = fit_window(dialog, (800, 600), content_minimum=(200, 80))
+    second_geo = (dialog.x(), dialog.y(), dialog.width(), dialog.height())
+    assert first.frame == second.frame
+    assert first_geo == second_geo
+    assert apply_plan(dialog, second) is False
+
+
+def test_nudge_leaves_user_enlarged_window_when_still_legal(qapp, qtbot, monkeypatch):
+    from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
+
+    work = IntRect(0, 40, 800, 600)
+    insets = FrameInsets(0, 32, 0, 0)
+    _stub_work_area(monkeypatch, work, insets)
+    dialog = QDialog()
+    dialog.setWindowTitle("user size")
+    qtbot.addWidget(dialog)
+    fit_window(dialog, (380, 160), content_minimum=(200, 80))
+    dialog.resize(500, 300)
+    dialog.move(40, 80)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    before = (dialog.x(), dialog.y(), dialog.width(), dialog.height())
+    assert nudge_into_work_area(dialog) is None
+    assert (dialog.x(), dialog.y(), dialog.width(), dialog.height()) == before
+
+
+def test_hidden_window_uses_estimated_frame_origin(qapp, qtbot, monkeypatch):
+    work = IntRect(0, 40, 800, 600)
+    insets = FrameInsets(1, 28, 1, 1)
+    _stub_work_area(monkeypatch, work, insets)
+    dialog = QDialog()
+    dialog.setWindowTitle("hidden")
+    qtbot.addWidget(dialog)
+    assert dialog.isVisible() is False
+    plan = fit_window(dialog, (800, 600), content_minimum=(200, 80))
+    assert plan.client.y == plan.frame.y + insets.top
+    assert dialog.pos() == QPoint(plan.frame.x, plan.frame.y)
 

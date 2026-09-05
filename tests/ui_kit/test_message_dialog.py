@@ -322,3 +322,55 @@ def test_mixin_prompt_maps_button_clicks(qapp, qtbot):
         assert widget._prompt_unsaved_project() == "cancel"
     finally:
         qapp.setStyleSheet(previous)
+
+
+def _checkbox_dialog(**kwargs):
+    defaults = dict(
+        prompt_id="checkbox_probe",
+        title="可选",
+        text="记住这次选择",
+        actions=_actions("ok", "cancel"),
+        default_action_id="ok",
+        escape_action_id="cancel",
+    )
+    defaults.update(kwargs)
+    return AppMessageDialog(**defaults)
+
+
+def test_optional_checkbox_stays_visible_after_show(qapp, qtbot):
+    dialog = _checkbox_dialog(checkbox_text="不再提示", checkbox_checked=True)
+    qtbot.addWidget(dialog)
+    assert dialog._checkbox.isHidden() is False
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    assert dialog._checkbox.isVisible() is True
+    assert dialog._checkbox.isChecked() is True
+    dialog._checkbox.setChecked(False)
+    qtbot.mouseClick(dialog.button("ok"), Qt.LeftButton)
+    qapp.processEvents()
+    assert dialog.message_result.checkbox_checked is False
+
+
+def test_optional_checkbox_absent_without_text(qapp, qtbot):
+    dialog = _checkbox_dialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    assert dialog._checkbox.isHidden() is True
+    assert dialog._checkbox.isVisible() is False
+
+
+def test_optional_checkbox_survives_hidden_parent_then_show(qapp, qtbot):
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    dialog = _checkbox_dialog(parent=parent, checkbox_text="不再提示")
+    assert parent.isVisible() is False
+    assert dialog._checkbox.isHidden() is False
+    parent.show()
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    assert dialog._checkbox.isVisible() is True
+    dialog.close()
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    assert dialog._checkbox.isVisible() is True

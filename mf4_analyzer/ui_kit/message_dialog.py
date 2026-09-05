@@ -292,7 +292,7 @@ class AppMessageDialog(QDialog):
         self._root.addWidget(self._scroll, 0, 1)
         self._root.addWidget(self._checkbox, 1, 1)
         self._root.addWidget(self._button_box, 2, 1)
-        if not self._checkbox.isVisible():
+        if not checkbox_text:
             self._checkbox.hide()
 
         self._refresh_icon_pixmap()
@@ -607,7 +607,7 @@ class AppMessageDialog(QDialog):
         height = 0
         visible = 0
         for label in (self._text_label, self._informative_label, self._detailed_label):
-            if not label.isVisible() or not label.text():
+            if label.isHidden() or not label.text():
                 continue
             visible += 1
             height += max(label.heightForWidth(max(1, width)), label.fontMetrics().height())
@@ -633,10 +633,12 @@ class AppMessageDialog(QDialog):
             self._root.setContentsMargins(
                 margin_lr, margin_top, margin_lr, margin_bottom,
             )
-            self._root.setHorizontalSpacing(GAP_ICON_BODY if self._icon_label.isVisible() else 0)
+            self._root.setHorizontalSpacing(
+                GAP_ICON_BODY if not self._icon_label.isHidden() else 0
+            )
             self._root.setVerticalSpacing(GAP_BODY_ACTIONS)
 
-            icon_w = ICON_LOGICAL_PX if self._icon_label.isVisible() else 0
+            icon_w = ICON_LOGICAL_PX if not self._icon_label.isHidden() else 0
             max_client_w = max(1, budget.width)
             soft_max = min(SOFT_WIDTH_MAX, max_client_w)
             preferred = min(PREFERRED_WIDTH, soft_max)
@@ -667,9 +669,9 @@ class AppMessageDialog(QDialog):
 
             body_w = self._body_column_width(width, margin_lr, icon_w)
             body_h = self._body_height_for_width(max(1, body_w))
-            icon_h = ICON_LOGICAL_PX if self._icon_label.isVisible() else 0
+            icon_h = ICON_LOGICAL_PX if not self._icon_label.isHidden() else 0
             checkbox_h = 0
-            if self._checkbox.isVisible():
+            if not self._checkbox.isHidden():
                 checkbox_h = self._checkbox.sizeHint().height() + GAP_BODY_ACTIONS
             actions_h = max(
                 CONTROL_HEIGHTS["base"],

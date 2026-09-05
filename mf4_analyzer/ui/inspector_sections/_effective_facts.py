@@ -104,7 +104,7 @@ def shortened_nfft_warning(facts) -> str | None:
     df_act = fs_val / float(actual)
     return (
         f"数据过短：请求 NFFT {requested}，仅能提供 {actual}；"
-        f"Δf 由 {df_req:g} 降为 {df_act:g}"
+        f"Δf 由 {df_req:g} 增至 {df_act:g} Hz"
     )
 
 
@@ -148,15 +148,26 @@ def format_effective_facts(facts) -> list[str]:
     if df_text is None:
         df_text = _fact_number(facts, "df", "g")
     if df_text is not None:
-        # FRF tests pin "频率分辨率 df"; FFT / time cards use Δf.
+        # FRF tests pin "频率分辨率 df"; FFT / FFT-time Δf is the bin spacing.
         if _fact(facts, "segments") is not None:
             rows.append(("频率分辨率 df", f"{df_text} Hz"))
         else:
-            rows.append(("频率分辨率 Δf", f"{df_text} Hz"))
+            rows.append(("频率 bin 间隔 Δf", f"{df_text} Hz"))
 
     window_s = _fact_number(facts, "window_s", "g")
     if window_s is not None:
         rows.append(("窗口时长", f"{window_s} s"))
+    window_samples = _fact(facts, "window_samples")
+    nfft_for_pad = _fact(facts, "nfft_effective")
+    if nfft_for_pad is None:
+        nfft_for_pad = _fact(facts, "nfft")
+    try:
+        pad_from = int(window_samples) if window_samples is not None else None
+        pad_to = int(nfft_for_pad) if nfft_for_pad is not None else None
+    except (TypeError, ValueError):
+        pad_from = pad_to = None
+    if pad_from is not None and pad_to is not None and pad_from < pad_to:
+        rows.append(("零填充", f"{pad_from} → {pad_to}"))
 
     segments = _fact(facts, "segments")
     if segments is not None:

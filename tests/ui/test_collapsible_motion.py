@@ -328,3 +328,54 @@ def _settings_is_true(settings, key):
     if isinstance(raw, str):
         return raw.strip().lower() in {"1", "true", "yes", "on"}
     return bool(raw)
+
+
+def test_summary_yields_width_and_keeps_full_text_in_tooltip(qtbot, tmp_path):
+    section, *_ = _make_section(qtbot, tmp_path)
+    full = "自动(目标 4096) · hanning · 80%"
+    section.set_summary(full)
+    assert section.summary_text() == full
+    assert section._summary.toolTip() == full
+    assert section._summary.minimumSizeHint().width() == 0
+    section.resize(288, 200)
+    QApplication.processEvents()
+    assert section._summary.width() < section._summary.sizeHint().width()
+
+
+def _alpha_bounds(image):
+    min_x = min_y = image.width()
+    max_x = max_y = -1
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if image.pixelColor(x, y).alpha() > 8:
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+    return None if max_x < 0 else (min_x, min_y, max_x, max_y)
+
+
+@pytest.mark.parametrize("dpr", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("degrees", [0.0, 22.5, 45.0, 67.5, 90.0])
+def test_motion_arrow_icon_stays_inside_logical_pixmap(
+    qtbot, tmp_path, monkeypatch, dpr, degrees,
+):
+    from PyQt5.QtCore import QSize
+    from PyQt5.QtGui import QImage
+
+    section, *_ = _make_section(qtbot, tmp_path)
+    monkeypatch.setattr(section, "devicePixelRatioF", lambda: dpr)
+    icon = section._make_arrow_icon(degrees)
+    pixmap = icon.pixmap(QSize(12, 12))
+    image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+    bounds = _alpha_bounds(image)
+    assert bounds is not None
+    left, top, right, bottom = bounds
+    assert left >= 1
+    assert top >= 1
+    assert right <= image.width() - 2
+    assert bottom <= image.height() - 2
+    cx = 0.5 * (left + right)
+    cy = 0.5 * (top + bottom)
+    assert abs(cx - (image.width() - 1) / 2.0) < image.width() * 0.28
+    assert abs(cy - (image.height() - 1) / 2.0) < image.height() * 0.28

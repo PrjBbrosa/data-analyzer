@@ -291,6 +291,10 @@ class FFTMixin:
             else:
                 nfft_requested = int(nfft)
         if avg_mode == '线性平均':
+            # The Inspector presents the requested/actual NFFT and resolution
+            # change. Pass the real Welch segment length so this expected GUI
+            # adjustment does not also emit the direct-API clamp warning.
+            nfft = min(int(nfft), len(sig))
             freq, amp, psd = self._call_fft_analyzer(
                 FFTAnalyzer.compute_averaged_fft,
                 sig, fs, win, int(nfft), avg_overlap,
@@ -316,7 +320,10 @@ class FFTMixin:
             overlap=avg_overlap,
             weighting=weighting,
             nfft_requested=nfft_requested,
-            freq=freq,
+            # Welch's half-spectrum length cannot distinguish odd and even
+            # segment lengths (1281 and 1280 both yield 640 bins). Its actual
+            # segment length above is authoritative for the displayed facts.
+            freq=None if avg_mode == '线性平均' else freq,
             time=time,
             time_axis=fft_params.get('analysis_time_axis'),
             nfft_mode=fft_params.get('nfft_mode'),

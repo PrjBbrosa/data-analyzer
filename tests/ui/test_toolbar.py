@@ -413,6 +413,7 @@ def test_recent_row_click_emits_open_requested(qtbot, tmp_path):
     qtbot.waitExposed(tb)
     tb.set_recent_entries((_recent_entry(present, "file"),))
     popup = _recent_popup(tb)
+    popup.reset_for_show()
     table = popup.findChild(QTableView, "recentOpenTable")
     with qtbot.waitSignal(tb.recent_open_requested, timeout=400) as blocker:
         table.clicked.emit(table.model().index(0, 0))
@@ -439,6 +440,7 @@ def test_missing_recent_row_does_not_emit_open(qtbot, tmp_path):
     tb.recent_open_requested.connect(opened.append)
     tb.set_recent_entries((_recent_entry(missing, "file"),))
     popup = _recent_popup(tb)
+    popup.reset_for_show()
     table = popup.findChild(QTableView, "recentOpenTable")
     table.clicked.emit(table.model().index(0, 0))
     assert opened == []

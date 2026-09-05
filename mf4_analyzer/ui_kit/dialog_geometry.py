@@ -529,13 +529,31 @@ def move_in_screen(widget: QWidget, pos: QPoint) -> None:
     widget.move(pos)
 
 
+def _plan_move_origin(widget: QWidget, plan: GeometryPlan) -> QPoint:
+    """Choose the origin ``QWidget.move`` expects for this plan.
+
+    Top-level ``move()`` places the outer frame, including native chrome.
+    ``plan.client`` is the inner rectangle after those insets, so using it
+    would stack the decoration offset a second time. Embedded / host-local
+    plans keep ``client == frame`` in parent coordinates.
+    """
+    if widget.isWindow():
+        return QPoint(plan.frame.x, plan.frame.y)
+    return QPoint(plan.client.x, plan.client.y)
+
+
 def apply_plan(
     widget: QWidget,
     plan: GeometryPlan,
     *,
     release_conflicts: bool = True,
 ) -> bool:
-    """Resize then move. Returns True when geometry actually changed."""
+    """Resize the client, then move by the frame origin for top-level windows.
+
+    Returns True when geometry actually changed. Hidden windows and the
+    post-show correction share this convention: estimate insets before the
+    native frame exists, then re-apply with measured ``frameGeometry()``.
+    """
     if not _alive(widget):
         return False
     client = plan.client
@@ -543,7 +561,7 @@ def apply_plan(
         _release_size_conflicts(widget, Size(client.width, client.height))
     before = (widget.x(), widget.y(), widget.width(), widget.height())
     widget.resize(client.width, client.height)
-    move_in_screen(widget, QPoint(client.x, client.y))
+    move_in_screen(widget, _plan_move_origin(widget, plan))
     _shrink_unaccounted_frame(widget, plan.frame)
     after = (widget.x(), widget.y(), widget.width(), widget.height())
     return after != before
