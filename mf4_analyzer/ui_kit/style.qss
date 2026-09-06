@@ -3125,9 +3125,21 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     border-radius: 7px;
     background-color: #ffffff;
     outline: none;
+    color: #111827;
+    selection-background-color: {{CONTROL_ACCENT_WASH}};
+    selection-color: #111827;
 }
 #ChannelEditorDialog QListWidget#channelExportList::item {
     padding: 3px 6px;
+    border-radius: 5px;
+    color: #111827;
+    background-color: transparent;
+}
+#ChannelEditorDialog QListWidget#channelExportList::item:hover,
+#ChannelEditorDialog QListWidget#channelExportList::item:selected,
+#ChannelEditorDialog QListWidget#channelExportList::item:selected:active {
+    background-color: {{CONTROL_ACCENT_WASH}};
+    color: #111827;
     border-radius: 5px;
 }
 #ChannelEditorDialog QPushButton[role="create"] {

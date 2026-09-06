@@ -215,6 +215,56 @@ def test_editor_export_toolbar_search_select_and_invert(qapp, tmp_path):
     assert visible == [dlg.list_export.item(0).text()]
 
 
+def test_export_list_selected_row_keeps_readable_label(qapp, qtbot, tmp_path):
+    from PyQt5.QtGui import QColor, QPalette
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    old_style = qapp.style().objectName()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        dlg = ChannelEditorDialog(None, _make_files(tmp_path), "f0")
+        qtbot.addWidget(dlg)
+        dlg.show()
+        qtbot.waitExposed(dlg)
+
+        export = dlg.list_export
+        assert export.count() >= 2
+        target = export.item(1)
+        export.setCurrentItem(target)
+        target.setSelected(True)
+        qapp.processEvents()
+
+        highlight = export.palette().color(QPalette.HighlightedText)
+        assert highlight.lightness() < 160, (
+            f"selected export-row text palette is too light: {highlight.name()}"
+        )
+        view_highlight = export.viewport().palette().color(QPalette.HighlightedText)
+        assert view_highlight.lightness() < 160
+
+        row = export.visualItemRect(target)
+        image = export.viewport().grab().toImage()
+        ink = QColor("#111827")
+        dark_pixels = []
+        for y in range(row.top() + 2, row.bottom() - 2):
+            for x in range(row.left() + 28, row.right() - 8):
+                color = image.pixelColor(x, y)
+                if color.lightness() < 160:
+                    dark_pixels.append(color)
+        assert dark_pixels, (
+            "selected export-row label vanished against the white list"
+        )
+        assert any(
+            abs(color.lightness() - ink.lightness()) < 80
+            for color in dark_pixels
+        )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+        qapp.setStyle(old_style)
+
+
 def test_editor_has_merged_export_delete_section(qapp, tmp_path):
     from mf4_analyzer.ui.dialogs import ChannelEditorDialog
     from PyQt5.QtWidgets import QGroupBox

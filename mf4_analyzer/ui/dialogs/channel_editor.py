@@ -24,12 +24,14 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QPalette
 
 from ...signal import ChannelMath
 from ...signal.expression import ExpressionError
 from ...signal.expression import evaluate as eval_expression
 from ...signal.expression import normalize as normalize_expression
 from ...signal.expression import referenced_names as expression_names
+from ...ui_kit.control_style import CONTROL_COLORS
 from ...ui_kit.dialog_button_defaults import set_unique_default_button
 from ...ui_kit.widgets import SearchField
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -296,6 +298,7 @@ class ChannelEditorDialog(QDialog):
         self.list_export.setObjectName("channelExportList")
         self.list_export.setMinimumHeight(108)
         self.list_export.setMaximumHeight(140)
+        self._paint_export_list_on_white(self.list_export)
         gxl.addWidget(self.list_export)
         # 兼容旧引用（对齐测试等）：删除与导出共用勾选列表
         self.list_rm = self.list_export
@@ -486,6 +489,29 @@ class ChannelEditorDialog(QDialog):
         for ch in chs:
             self._append_export_item(ch, checked=True)
         self.lbl.setText("新增: 0")
+
+    @staticmethod
+    def _paint_export_list_on_white(list_widget):
+        """Keep selected labels readable on the white export list.
+
+        Cocoa uses ``QPalette.HighlightedText`` (white) for the current row.
+        QSS ``::item:selected`` does not always override that, so a selected
+        channel would vanish against ``#ffffff``.
+        """
+        ink = QColor("#111827")
+        wash = QColor(CONTROL_COLORS["CONTROL_ACCENT_WASH"])
+        white = QColor("#ffffff")
+        for widget in (list_widget, list_widget.viewport()):
+            if widget is None:
+                continue
+            palette = widget.palette()
+            palette.setColor(QPalette.Text, ink)
+            palette.setColor(QPalette.WindowText, ink)
+            palette.setColor(QPalette.Base, white)
+            palette.setColor(QPalette.Window, white)
+            palette.setColor(QPalette.HighlightedText, ink)
+            palette.setColor(QPalette.Highlight, wash)
+            widget.setPalette(palette)
 
     def _append_export_item(self, name, *, checked=True):
         it = QListWidgetItem(str(name))
