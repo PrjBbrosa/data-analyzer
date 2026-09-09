@@ -113,6 +113,29 @@ def test_popover_flips_above_then_clamps_on_bottom_right_anchor():
     assert below.frame.right <= safe.right
 
 
+@pytest.mark.parametrize("screen_x", [0, -1366])
+@pytest.mark.parametrize("edge", ["left", "right"])
+@pytest.mark.parametrize("position", ["above", "below"])
+@pytest.mark.parametrize("must_flip", [False, True])
+def test_horizontal_overflow_does_not_prevent_vertical_popover_placement(
+    screen_x, edge, position, must_flip,
+):
+    available = IntRect(screen_x, 0, 1366, 720)
+    # Preset cards center a 380px anchor on a button near the screen edge.
+    center_x = screen_x + (50 if edge == "left" else 1307)
+    side = ("below" if position == "above" else "above") if must_flip else position
+    anchor = IntRect(center_x - 190, 122 if side == "below" else 560, 380, 32)
+    plan = plan_geometry(
+        available, (380, 299), anchor=anchor, position=position, gap=10,
+    )
+    safe = available.adjusted(8, 8, -8, -8)
+    assert safe.contains_rect(plan.frame)
+    if side == "below":
+        assert plan.frame.top == anchor.bottom + 1 + 10
+    else:
+        assert plan.frame.bottom == anchor.top - 10 - 1
+
+
 def test_parent_partially_off_screen_still_clamps_to_work_area():
     available = QRect(0, 0, 800, 600)
     parent = IntRect(-120, 40, 400, 300)

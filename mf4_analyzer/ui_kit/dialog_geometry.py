@@ -266,6 +266,10 @@ def _popover_frame(
     below_y = anchor.bottom + 1 + gap
     above_y = anchor.top - gap - frame_size.height
     x = anchor.right - frame_size.width + 1
+    # Horizontal overflow must not reject an otherwise valid vertical side.
+    # Clamp X before testing above/below; clamping both axes only at the end
+    # can put a hover popup over its trigger and cause an Enter/Leave loop.
+    x = min(max(x, safe.left), max(safe.left, safe.right - frame_size.width + 1))
     first_y = below_y if prefer == POSITION_BELOW else above_y
     second_y = above_y if prefer == POSITION_BELOW else below_y
     candidate = IntRect(x, first_y, frame_size.width, frame_size.height)
