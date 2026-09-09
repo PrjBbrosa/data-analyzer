@@ -1910,3 +1910,42 @@ def test_stop_confirmation_copy_is_single_sourced():
         encoding="utf-8",
     )
     assert needle not in window_src
+
+
+@pytest.mark.parametrize("method,height", [("time", 760), ("fft_time", 760), ("time", 480)])
+def test_batch_sheet_viewport_widths_settle_before_show_returns(
+    qapp, qtbot, monkeypatch, method, height,
+):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    from mf4_analyzer.ui_kit import dialog_geometry
+
+    # Keep the production window size even on offscreen's 800x600 screen.
+    monkeypatch.setattr(
+        dialog_geometry, "resolve_available_rect",
+        lambda **kwargs: dialog_geometry.IntRect(0, 0, 1920, 1080),
+    )
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._analysis_panel.set_method(method)
+    sheet.resize(1080, height)
+    panes = (sheet._input_scroll, sheet._analysis_scroll, sheet._output_scroll)
+
+    def widths():
+        return tuple(pane.viewport().width() for pane in panes)
+
+    for _ in range(2):
+        sheet.show()
+        initial_widths = widths()
+        qtbot.wait(50)
+        assert widths() == initial_widths
+        for pane in panes:
+            bar = pane.verticalScrollBar()
+            assert pane.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+            assert bar.isVisible() == (bar.maximum() > bar.minimum())
+            bar.setValue(bar.maximum())
+            assert bar.value() == bar.maximum()
+        if height == 480:
+            assert any(pane.verticalScrollBar().maximum() > 0 for pane in panes)
+        sheet.hide()

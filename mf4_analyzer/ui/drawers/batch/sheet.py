@@ -19,7 +19,7 @@ from pathlib import Path
 import tempfile
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QEventLoop, QTimer, Qt, QUrl
+from PyQt5.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer, Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
@@ -627,6 +627,32 @@ class BatchSheet(QDialog):
 
         nudge_into_work_area(self, parent=self.parentWidget())
         self._sync_method_caption_width()
+        self._settle_initial_content_layout()
+
+    def _settle_initial_content_layout(self) -> None:
+        """Resolve nested size hints without dispatching input or timers.
+
+        Method visibility and compact cards invalidate layouts inside the
+        scroll panes. Settle children before their parents, then repeat after
+        the panes have allocated their final widths (including scrollbars).
+        """
+        widgets = [self, *self.findChildren(QWidget)]
+        for widget in reversed(widgets):
+            widget.ensurePolished()
+            if widget.layout() is not None:
+                widget.layout().activate()
+            QCoreApplication.sendPostedEvents(widget, QEvent.LayoutRequest)
+        self._output_panel.db_reference_control.refresh_geometry()
+        for widget in reversed(widgets):
+            QCoreApplication.sendPostedEvents(widget, QEvent.LayoutRequest)
+        # Child scroll areas now have their final viewport geometry. Qt can
+        # still have a queued scrollbar hide from their pre-show size, leaving
+        # an 8px gutter until the next event-loop turn. Reapply the existing
+        # policy to settle that layout synchronously before the window appears.
+        for scroll in (
+            self._input_scroll, self._analysis_scroll, self._output_scroll,
+        ):
+            scroll.setVerticalScrollBarPolicy(scroll.verticalScrollBarPolicy())
 
     def changeEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().changeEvent(event)
