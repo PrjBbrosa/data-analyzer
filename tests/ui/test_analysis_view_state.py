@@ -1,7 +1,21 @@
 """AnalysisViewState/PaneState: model + serialization round-trip."""
+import logging
+
 import pytest
 
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+
+
+def _baseline(**overrides):
+    payload = {
+        "version": 1,
+        "kind": "fft",
+        "slot": 2,
+        "display_name": "均衡",
+        "params": {"window": "hanning", "nfft": 4096, "nested": {"x_auto": True}},
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_default_view_one_empty_pane():
@@ -11,15 +25,19 @@ def test_default_view_one_empty_pane():
     assert v.compare == {"x_linked": True, "levels_locked": True}
     assert isinstance(v.view_id, str) and v.view_id
     assert v.attached_file_ids == []
+    assert v.preset_baseline is None
 
 
 def test_analysis_view_default_attachment_is_explicitly_empty():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert v.attached_file_ids == []
     payload = v.to_dict()
-    assert payload["schema"] == 8
+    assert payload["schema"] == 9
     assert payload["attached_file_ids"] == []
-    assert AnalysisViewState.from_dict(payload).attached_file_ids == []
+    assert payload["preset_baseline"] is None
+    restored = AnalysisViewState.from_dict(payload)
+    assert restored.attached_file_ids == []
+    assert restored.preset_baseline is None
 
 
 def test_schema6_analysis_view_derives_attachment_from_all_pane_roles():
@@ -102,6 +120,7 @@ def test_from_dict_tolerates_missing_fields():
     assert v.panes[0].remarks == []
     assert v.panes[0].cursor_placement is None
     assert v.params == {}
+    assert v.preset_baseline is None
     assert isinstance(v.view_id, str) and v.view_id
 
 
@@ -192,8 +211,9 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
 
     payload = view.to_dict()
 
-    assert payload["schema"] == 8
+    assert payload["schema"] == 9
     assert payload["attached_file_ids"] == []
+    assert payload["preset_baseline"] is None
     legacy = AnalysisViewState.from_dict({
         "schema": 2,
         "name": "Legacy",
@@ -263,3 +283,99 @@ def test_pane_xlim_ylim_roundtrip_as_primary_analysis_viewport():
     restored = AnalysisViewState.from_dict(view.to_dict())
     assert restored.panes[0].xlim == (20.0, 180.0)
     assert restored.panes[0].ylim == (-40.0, 5.0)
+
+
+def test_preset_baseline_round_trip_preserves_fields_and_deep_copies_params():
+    original_params = {"window": "hanning", "nfft": 4096, "nested": {"x_auto": True}}
+    view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
+    view.preset_baseline = _baseline(params=original_params)
+
+    payload = view.to_dict()
+    assert payload["schema"] == 9
+    assert payload["preset_baseline"]["kind"] == "fft"
+    assert payload["preset_baseline"]["slot"] == 2
+    assert payload["preset_baseline"]["display_name"] == "均衡"
+    payload["preset_baseline"]["params"]["nfft"] = 1
+    payload["preset_baseline"]["params"]["nested"]["x_auto"] = False
+    assert original_params["nfft"] == 4096
+    assert original_params["nested"]["x_auto"] is True
+
+    restored = AnalysisViewState.from_dict(view.to_dict())
+    assert restored.preset_baseline["kind"] == "fft"
+    assert restored.preset_baseline["slot"] == 2
+    assert restored.preset_baseline["display_name"] == "均衡"
+    assert restored.preset_baseline["version"] == 1
+    assert restored.preset_baseline["params"] == original_params
+    assert restored.preset_baseline is not view.preset_baseline
+    assert restored.preset_baseline["params"] is not original_params
+    assert restored.preset_baseline["params"] is not view.preset_baseline["params"]
+    restored.preset_baseline["params"]["nfft"] = 1
+    restored.preset_baseline["params"]["nested"]["x_auto"] = False
+    assert original_params["nfft"] == 4096
+    assert original_params["nested"]["x_auto"] is True
+    assert view.preset_baseline["params"]["nfft"] == 4096
+
+
+def test_schema8_payload_missing_preset_baseline_is_none():
+    restored = AnalysisViewState.from_dict({
+        "schema": 8,
+        "name": "Legacy",
+        "tab_color": "#2d7ff9",
+        "panes": [{"sources": [["f1", "a"]]}],
+        "params": {"nfft": 1024},
+    })
+    assert restored.preset_baseline is None
+
+
+def test_null_preset_baseline_is_none():
+    restored = AnalysisViewState.from_dict({
+        "schema": 9,
+        "name": "Empty",
+        "tab_color": "#2d7ff9",
+        "preset_baseline": None,
+    })
+    assert restored.preset_baseline is None
+
+
+@pytest.mark.parametrize("baseline", [
+    "not-a-dict",
+    ["fft", 2],
+    {"version": 1, "kind": "engine", "slot": 2, "display_name": "x", "params": {}},
+    {"version": 1, "kind": "order_time", "slot": 2, "display_name": "x", "params": {}},
+    {"version": 1, "kind": "fft", "slot": 0, "display_name": "x", "params": {}},
+    {"version": 1, "kind": "fft", "slot": 5, "display_name": "x", "params": {}},
+    {"version": 1, "kind": "fft", "slot": "2", "display_name": "x", "params": {}},
+    {"version": 1, "kind": "fft", "slot": True, "display_name": "x", "params": {}},
+    {"version": 2, "kind": "fft", "slot": 1, "display_name": "x", "params": {}},
+    {"version": 1, "kind": "fft", "slot": 1, "display_name": 3, "params": {}},
+    {"version": 1, "kind": "fft", "slot": 1, "display_name": "x", "params": []},
+    {"kind": "fft", "slot": 1, "display_name": "x", "params": {}},
+])
+def test_corrupt_preset_baseline_becomes_none(baseline, caplog):
+    with caplog.at_level(
+        logging.WARNING, logger="mf4_analyzer.ui.analysis_view_state"
+    ):
+        restored = AnalysisViewState.from_dict({
+            "name": "v",
+            "tab_color": "#fff",
+            "preset_baseline": baseline,
+        })
+    assert restored.preset_baseline is None
+    assert "preset_baseline" in caplog.text
+
+
+def test_duplicate_copies_preset_baseline_values_not_identity(qapp):
+    from mf4_analyzer.ui.view_state import ViewManager
+
+    manager = ViewManager(state_factory=AnalysisViewState)
+    original = manager.get(0)
+    original.preset_baseline = _baseline()
+    idx = manager.duplicate(0)
+    copied = manager.get(idx)
+    assert copied.preset_baseline == original.preset_baseline
+    assert copied.preset_baseline is not original.preset_baseline
+    assert copied.preset_baseline["params"] is not original.preset_baseline["params"]
+    copied.preset_baseline["params"]["nfft"] = 1
+    copied.preset_baseline["slot"] = 4
+    assert original.preset_baseline["params"]["nfft"] == 4096
+    assert original.preset_baseline["slot"] == 2

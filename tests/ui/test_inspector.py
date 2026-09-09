@@ -223,7 +223,7 @@ def test_frf_contextual_emits_user_compute_and_display_changes_but_restore_is_si
     ctx.spin_t_win.setValue(3.0)
     assert compute_seen[-1]["t_win_s"] == 3.0
     assert display_seen == []
-    assert ctx.preset_bar._load_btns[4].property("applied") == "true"
+    assert ctx.preset_bar._load_btns[4].property("applied") != "true"
 
     ctx.combo_frequency_scale.setCurrentIndex(1)
     assert display_seen[-1]["frequency_scale"] == "linear"
@@ -1496,6 +1496,7 @@ def test_order_builtin_presets_drive_the_window_picker(qapp):
         assert oc.get_params()['window'] == want
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 def test_order_frequency_preset_window_reaches_the_cot_computation(qapp):
     """End-to-end: clicking 频率 must make the ORDER MATH use flattop.
 
@@ -1942,6 +1943,7 @@ def test_contextual_param_sections_are_merged_collapsed_and_summarized(
         _restore_settings(settings, saved)
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 @pytest.mark.parametrize(
     "kind, cls_name, settings_key",
     [
@@ -2838,9 +2840,7 @@ def test_all_analysis_preset_bars_share_short_builtin_labels_and_custom_slot(qap
 
 
 def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
-    """Builtin-aware PresetBar must surface "重置为默认" in its right-click
-    menu (R3 C). FFT/Order PresetBar (no builtin) must NOT show that entry.
-    """
+    """Builtin-aware PresetBar surfaces 重置此槽为内置 and 恢复面板默认参数."""
     from PyQt5.QtWidgets import QMenu
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual, PresetBar
     ctx = FFTTimeContextual()
@@ -2857,24 +2857,24 @@ def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
     )
     ctx.preset_bar._show_menu(1, ctx.preset_bar._load_btns[1].rect().center())
     actions = captured.get("actions", [])
-    assert any("重置" in a for a in actions), \
-        f"reset-to-default missing from FFTTime preset menu: {actions}"
+    assert "重置此槽为内置" in actions
+    assert "恢复面板默认参数" in actions
     captured.clear()
     ctx.preset_bar._show_menu(4, ctx.preset_bar._load_btns[4].rect().center())
     custom_actions = captured.get("actions", [])
     assert any("清空" in a for a in custom_actions), \
         f"clear missing from custom-slot menu: {custom_actions}"
-    assert not any("重置" in a for a in custom_actions), \
-        f"custom slot must not expose builtin reset: {custom_actions}"
-    # FFT bar (no builtin) must NOT show reset.
+    assert "重置此槽为内置" not in custom_actions
+    assert "恢复面板默认参数" in custom_actions
     captured.clear()
     plain_bar = PresetBar('fft_no_builtin', lambda: {}, lambda d: None)
     plain_bar._show_menu(1, plain_bar._load_btns[1].rect().center())
     plain_actions = captured.get("actions", [])
-    assert not any("重置" in a for a in plain_actions), \
-        f"plain bar must not show reset-to-default: {plain_actions}"
+    assert "重置此槽为内置" not in plain_actions
+    assert "恢复面板默认参数" not in plain_actions
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 def test_fft_time_preset_bar_save_overrides_builtin(qtbot):
     """Saving over a slot persists user values; loading then applies the
     override (not the builtin)."""
@@ -2902,6 +2902,7 @@ def test_fft_time_preset_bar_save_overrides_builtin(qtbot):
     s.remove(f"fft_time/preset_override/1")
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 def test_fft_time_preset_bar_reset_restores_builtin(qtbot):
     """Reset-to-default removes the override; subsequent load applies the
     original builtin params (R3 C)."""
@@ -3532,6 +3533,7 @@ def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     assert bar._load_btns[1].text() == '频率'
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 def test_builtin_preset_bar_custom_slot_saves_and_loads_without_builtin_toggle(qapp):
     """Custom slot 4 is a user snapshot, not an override of builtin slots."""
     from mf4_analyzer.ui.inspector_sections import PresetBar
@@ -3555,10 +3557,12 @@ def test_builtin_preset_bar_custom_slot_saves_and_loads_without_builtin_toggle(q
     bar._on_left_click(4)
     assert bar._read(4) == ('自定义', {'mode': 'current'})
     assert applied == []
-    bar._on_left_click(4)
+    assert bar._load_btns[4].property('applied') == 'true'
+    bar._load(4)
     assert applied[-1] == {'mode': 'current'}
     bar._on_left_click(4)
     assert applied[-1] == {'mode': 'current'}
+    assert len(applied) == 1
     bar.set_recommended(4)
     assert bar._load_btns[4].property('recommended') == 'false'
 
@@ -6370,13 +6374,15 @@ def test_preset_bar_set_recommended_toggles_property(qapp):
         assert bar._load_btns[n].toolTip() == ''
 
 
-def test_builtin_preset_second_left_click_restores_default_params(qapp):
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_builtin_preset_second_left_click_reapplies_or_noops(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     applied = []
+    live = {'mode': 'current'}
     bar = PresetBar(
         'test_kind_builtin_toggle',
-        lambda: {'mode': 'current'},
+        lambda: dict(live),
         lambda d: applied.append(dict(d)),
         builtin_defaults={
             1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
@@ -6390,11 +6396,12 @@ def test_builtin_preset_second_left_click_restores_default_params(qapp):
     assert bar._load_btns[1].property('recommended') == 'false'
 
     bar._on_left_click(1)
-    assert applied[-1] == {'mode': 'default'}
-    assert bar._load_btns[1].property('applied') == 'false'
-    assert bar._load_btns[1].property('recommended') == 'false'
+    assert applied[-1] == {'mode': 'frequency'}
+    assert len(applied) == 1
+    assert bar._load_btns[1].property('applied') == 'true'
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 def test_recommended_only_builtin_click_still_loads_preset(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
@@ -6413,17 +6420,20 @@ def test_recommended_only_builtin_click_still_loads_preset(qapp):
     bar._on_left_click(1)
 
     assert applied[-1] == {'mode': 'frequency'}
-    assert bar._load_btns[1].property('recommended') == 'true'
+    assert bar._load_btns[1].property('recommended') == 'false'
+    assert bar._recommend_badges[1].isHidden()
     assert bar._load_btns[1].property('applied') == 'true'
 
 
-def test_recommendation_change_clears_builtin_toggle_selection(qapp):
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_recommendation_change_does_not_clear_baseline_selection(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     applied = []
+    live = {'mode': 'current'}
     bar = PresetBar(
         'test_kind_builtin_recommendation_change',
-        lambda: {'mode': 'current'},
+        lambda: dict(live),
         lambda d: applied.append(dict(d)),
         builtin_defaults={
             1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
@@ -6434,11 +6444,13 @@ def test_recommendation_change_clears_builtin_toggle_selection(qapp):
 
     bar._on_left_click(1)
     bar.set_recommended(2)
-    bar._on_left_click(1)
+    assert bar._load_btns[1].property('applied') == 'true'
+    assert bar._recommend_badges[1].isHidden()
+    assert not bar._recommend_badges[2].isHidden()
 
+    bar._on_left_click(1)
     assert applied[-1] == {'mode': 'frequency'}
     assert bar._load_btns[1].property('applied') == 'true'
-    assert bar._load_btns[1].property('recommended') == 'false'
     assert bar._load_btns[2].property('recommended') == 'true'
 
 
@@ -6476,7 +6488,8 @@ def test_fft_builtin_presets_apply_through_combos(qapp):
     assert params['t_win_s'] == 2.5
 
 
-def test_fft_builtin_preset_second_click_restores_defaults(qapp):
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_fft_builtin_preset_second_click_reapplies_current_slot(qapp):
     from mf4_analyzer.ui.inspector_sections import FFTContextual
     from mf4_analyzer.ui.inspector_sections._helpers import _preset_settings
 
@@ -6491,11 +6504,13 @@ def test_fft_builtin_preset_second_click_restores_defaults(qapp):
     assert fc.combo_avg_mode.currentText() == '线性平均'
     assert fc.preset_bar._load_btns[1].property('applied') == 'true'
 
+    fc.spin_overlap.setValue(11)
+    assert fc.preset_bar._load_btns[1].property('applied') == 'true'
     fc.preset_bar._on_left_click(1)
-    assert fc.combo_win.currentText() == 'hanning'
-    assert fc.spin_overlap.value() == 50
-    assert fc.combo_avg_mode.currentText() == '单帧'
-    assert fc.preset_bar._load_btns[1].property('applied') == 'false'
+    assert fc.combo_win.currentText() == 'flattop'
+    assert fc.spin_overlap.value() == 75
+    assert fc.combo_avg_mode.currentText() == '线性平均'
+    assert fc.preset_bar._load_btns[1].property('applied') == 'true'
 
 
 def test_order_builtin_presets_apply_through_combos(qapp):
@@ -6534,7 +6549,8 @@ def test_order_builtin_presets_apply_through_combos(qapp):
     assert f"{auto}(8192)" in oc._order_summary_text()
 
 
-def test_order_builtin_preset_second_click_restores_defaults(qapp):
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_order_builtin_preset_second_click_reapplies_current_slot(qapp):
     from mf4_analyzer.ui.inspector_sections import OrderContextual
     from mf4_analyzer.ui.inspector_sections._helpers import _preset_settings
 
@@ -6548,10 +6564,11 @@ def test_order_builtin_preset_second_click_restores_defaults(qapp):
     assert oc.spin_time_res.value() == 0.10
     assert oc.preset_bar._load_btns[1].property('applied') == 'true'
 
+    oc.spin_order_res.setValue(0.25)
     oc.preset_bar._on_left_click(1)
-    assert oc.spin_order_res.value() == 0.10
-    assert oc.spin_time_res.value() == 0.05
-    assert oc.preset_bar._load_btns[1].property('applied') == 'false'
+    assert oc.spin_order_res.value() == 0.05
+    assert oc.spin_time_res.value() == 0.10
+    assert oc.preset_bar._load_btns[1].property('applied') == 'true'
 
 
 def test_fft_time_builtin_presets_apply_through_combos(qtbot):
@@ -6626,7 +6643,8 @@ def test_shared_builtin_preset_apply_never_dispatches_compute(
     assert emitted == []
 
 
-def test_fft_time_builtin_preset_second_click_restores_defaults(qtbot):
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_fft_time_builtin_preset_second_click_reapplies_current_slot(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     from mf4_analyzer.ui.inspector_sections._helpers import _preset_settings
 
@@ -6642,13 +6660,12 @@ def test_fft_time_builtin_preset_second_click_restores_defaults(qtbot):
     assert ctx.chk_z_auto.isChecked() is True
     assert ctx.preset_bar._load_btns[1].property('applied') == 'true'
 
+    ctx.spin_overlap.setValue(40)
     ctx.preset_bar._on_left_click(1)
-    assert ctx.combo_win.currentText() == 'hanning'
-    assert ctx.spin_overlap.value() == 80
-    assert ctx.chk_z_auto.isChecked() is False
-    assert ctx.spin_z_floor.value() == -70.0
-    assert ctx.spin_z_ceiling.value() == -20.0
-    assert ctx.preset_bar._load_btns[1].property('applied') == 'false'
+    assert ctx.combo_win.currentText() == 'flattop'
+    assert ctx.spin_overlap.value() == 75
+    assert ctx.chk_z_auto.isChecked() is True
+    assert ctx.preset_bar._load_btns[1].property('applied') == 'true'
 
 
 def test_order_builtin_presets_respect_order_nyquist(qapp):
@@ -7244,14 +7261,10 @@ def test_fft_time_builtin_preset_preserves_db_reference_state(
     assert changes == []
 
 
-# ---- 2026-08-14 preset reverse match: every parameter state has a name ----
+# ---- 2026-09-09 preset baseline projection --------------------------------
 #
-# Before this batch the bar only remembered which button was last pressed:
-# FFT / Order / FFT-vs-Time cleared the highlight on any edit (so slot 4
-# 自定义 never lit up), while FRF lit 自定义 unconditionally (so dialling a
-# value back onto 稳健 still read as unnamed). The bar now answers "which
-# preset name is this state?" by comparing the live params against every
-# slot's payload.
+# Blue highlight is the current adjustment baseline, not a reverse-match of
+# live parameters onto a slot name. Unmatched states do not light 自定义.
 
 
 def _applied_preset_slots(bar):
@@ -7287,70 +7300,74 @@ def test_preset_value_matching_is_tolerant_on_numbers_and_strict_on_kinds():
     assert not preset_params_match({'a': 1}, {'a': 2})
 
 
-def test_fft_manual_edits_land_on_the_matching_builtin_preset_name(qtbot):
-    """Dialling each field to a builtin's value must light that builtin."""
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_fft_manual_edits_keep_the_loaded_baseline(qtbot):
+    """Dialling fields toward another builtin must not steal the highlight."""
     from mf4_analyzer.ui.inspector_sections import FFTContextual
     from mf4_analyzer.analysis_presets import get_builtin_preset
 
     ctx = FFTContextual()
     qtbot.addWidget(ctx)
+    ctx.preset_bar._on_left_click(1)
     vibration = get_builtin_preset('fft', 'vibration').params_copy()
 
     ctx.combo_avg_mode.setCurrentText(vibration['avg_mode'])
-    assert _applied_preset_slots(ctx.preset_bar) == [4], "partway there is 自定义"
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
 
-    # Switching the amplitude unit resets the Y bounds to the unit's
-    # placeholder window (the dB↔Linear defense), so the user dials those back
-    # exactly as they would any other field.
     ctx.combo_amp_y.setCurrentText(vibration['amp_y'])
     ctx.spin_y_min.setValue(vibration['y_min'])
     ctx.spin_y_max.setValue(vibration['y_max'])
 
-    assert _applied_preset_slots(ctx.preset_bar) == [2]
-    assert ctx.preset_bar._load_btns[2].text() == '均衡'
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
+    assert ctx.preset_bar._load_btns[1].text() == '频率'
+    ctx.spin_overlap.setValue(11)
+    assert ctx.preset_bar._live_diff.params_differ
 
 
-def test_fft_edit_away_from_a_preset_and_back_restores_its_name(qtbot):
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_fft_edit_away_from_a_preset_keeps_its_baseline(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTContextual
-    from mf4_analyzer.analysis_presets import get_builtin_preset
 
     ctx = FFTContextual()
     qtbot.addWidget(ctx)
-    torque = get_builtin_preset('fft', 'torque').params_copy()
-
-    ctx._apply_preset(torque)
+    ctx.preset_bar._on_left_click(1)
     assert _applied_preset_slots(ctx.preset_bar) == [1]
 
-    ctx.spin_overlap.setValue(int(torque['overlap']) - 25)
-    assert _applied_preset_slots(ctx.preset_bar) == [4], "one edit off preset is 自定义"
+    overlap = ctx.spin_overlap.value()
+    ctx.spin_overlap.setValue(overlap - 25)
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
+    assert ctx.preset_bar._live_diff.params_differ
 
-    ctx.spin_overlap.setValue(int(torque['overlap']))
-    assert _applied_preset_slots(ctx.preset_bar) == [1], "editing back re-names the state"
+    ctx.spin_overlap.setValue(overlap)
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
+    assert not ctx.preset_bar._live_diff.params_differ
 
 
-def test_frf_parameter_returning_to_a_builtin_relights_it(qtbot):
-    """New capability: FRF used to pin 自定义 on every edit, forever."""
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_frf_edits_keep_the_loaded_baseline_instead_of_relighting_another(qtbot):
     from mf4_analyzer.ui.inspector_sections import FrfContextual
 
     ctx = FrfContextual()
     qtbot.addWidget(ctx)
-    # The panel's construction defaults already are 稳健.
-    ctx.preset_bar.sync_match()
+    ctx.preset_bar._on_left_click(1)
     assert _applied_preset_slots(ctx.preset_bar) == [1]
     assert ctx.preset_bar._load_btns[1].text() == '稳健'
 
     ctx.spin_t_win.setValue(3.0)
-    assert _applied_preset_slots(ctx.preset_bar) == [4]
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
+    assert ctx.preset_bar._live_diff.params_differ
+    assert ctx.preset_bar._axis_dots[1].isHidden()
 
     ctx.spin_t_win.setValue(2.0)
     assert _applied_preset_slots(ctx.preset_bar) == [1]
+    assert not ctx.preset_bar._live_diff.params_differ
 
-    # A different builtin is reachable the same way (低频 = 8 s / 75 %).
     ctx.spin_t_win.setValue(8.0)
     ctx.spin_overlap.setValue(75)
-    assert _applied_preset_slots(ctx.preset_bar) == [2]
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 @pytest.mark.parametrize(
     "cls_name, method, key, slot",
     [
@@ -7361,27 +7378,42 @@ def test_frf_parameter_returning_to_a_builtin_relights_it(qtbot):
         ("FrfContextual", "frf", "low_frequency", 2),
     ],
 )
-def test_view_restore_payload_names_the_matching_slot(
+def test_view_restore_via_bridge_projects_stored_baseline(
     qtbot, cls_name, method, key, slot,
 ):
-    """A View switch replays current_params() through apply_params()."""
     from mf4_analyzer.ui import inspector_sections
-    from mf4_analyzer.analysis_presets import get_builtin_preset
+    from mf4_analyzer.ui.analysis_view_bridge import (
+        apply_params_from_state,
+        capture_params_to_state,
+    )
+    from mf4_analyzer.ui.analysis_view_state import AnalysisViewState
 
     cls = getattr(inspector_sections, cls_name)
     source = cls()
     qtbot.addWidget(source)
-    source._apply_preset(get_builtin_preset(method, key).params_copy())
-    snapshot = dict(source.current_params())
+    source.preset_bar._on_left_click(slot)
+    state = AnalysisViewState(name="v", tab_color="#fff")
+    capture_params_to_state(source, state)
+    assert state.preset_baseline is not None
+    assert state.preset_baseline["slot"] == slot
 
     restored = cls()
     qtbot.addWidget(restored)
-    restored.apply_params(snapshot)
-
+    apply_params_from_state(restored, state)
     assert _applied_preset_slots(restored.preset_bar) == [slot]
 
 
-def test_view_restore_of_an_unnamed_state_falls_to_the_custom_slot(qtbot):
+def test_apply_params_does_not_reverse_match_or_light_custom(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+
+    restored = FFTContextual()
+    qtbot.addWidget(restored)
+    restored.apply_params(get_builtin_preset("fft", "torque").params_copy())
+    assert _applied_preset_slots(restored.preset_bar) == []
+
+
+def test_view_restore_of_an_unnamed_state_lights_no_slot(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTContextual
 
     source = FFTContextual()
@@ -7393,31 +7425,31 @@ def test_view_restore_of_an_unnamed_state_falls_to_the_custom_slot(qtbot):
     qtbot.addWidget(restored)
     restored.apply_params(snapshot)
 
-    assert _applied_preset_slots(restored.preset_bar) == [4]
+    assert _applied_preset_slots(restored.preset_bar) == []
     assert restored.preset_bar._load_btns[4].text() == '自定义'
 
 
-def test_saving_current_params_to_a_slot_lights_it_and_refreshes_the_cache(qtbot):
+def test_saving_current_params_to_a_slot_claims_it_as_baseline(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTContextual
 
     ctx = FFTContextual()
     qtbot.addWidget(ctx)
     ctx.spin_overlap.setValue(33)
-    assert _applied_preset_slots(ctx.preset_bar) == [4]
+    assert _applied_preset_slots(ctx.preset_bar) == []
 
     ctx.preset_bar._save(2)
     assert _applied_preset_slots(ctx.preset_bar) == [2]
 
     ctx.spin_overlap.setValue(44)
-    assert _applied_preset_slots(ctx.preset_bar) == [4]
+    assert _applied_preset_slots(ctx.preset_bar) == [2]
+    assert ctx.preset_bar._live_diff.params_differ
     ctx.spin_overlap.setValue(33)
-    assert _applied_preset_slots(ctx.preset_bar) == [2], (
-        "the newly saved slot must be visible to the match, not a stale cache"
-    )
+    assert _applied_preset_slots(ctx.preset_bar) == [2]
+    assert not ctx.preset_bar._live_diff.params_differ
 
 
 def test_slot_payload_cache_follows_the_shared_slot_bus(qtbot):
-    """A second bar of the same kind must not match against a stale payload."""
+    """A second bar of the same kind must see rewritten slot payloads."""
     from mf4_analyzer.ui.inspector_sections import FFTContextual
 
     writer = FFTContextual()
@@ -7425,18 +7457,21 @@ def test_slot_payload_cache_follows_the_shared_slot_bus(qtbot):
     reader = FFTContextual()
     qtbot.addWidget(reader)
 
-    reader.spin_overlap.setValue(21)  # populates reader's payload cache
-    assert _applied_preset_slots(reader.preset_bar) == [4]
+    reader.spin_overlap.setValue(21)
+    assert _applied_preset_slots(reader.preset_bar) == []
 
     writer.spin_overlap.setValue(21)
     writer.preset_bar._save(2)
 
     reader.preset_bar.sync_match()
-    assert _applied_preset_slots(reader.preset_bar) == [2]
+    assert _applied_preset_slots(reader.preset_bar) == []
+    payload = reader.preset_bar._slot_payloads().get(2) or {}
+    assert payload.get("overlap") == 21
 
 
-def test_reverse_match_prefers_the_selected_slot_then_the_lowest(qapp):
+def test_baseline_projection_does_not_fall_through_to_custom(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
+    from mf4_analyzer.ui.inspector_sections.preset_state import build_preset_baseline
 
     live = {'mode': 'shared'}
     bar = PresetBar(
@@ -7453,19 +7488,19 @@ def test_reverse_match_prefers_the_selected_slot_then_the_lowest(qapp):
     )
 
     bar.sync_match()
-    assert _applied_preset_slots(bar) == [1], "ties go to the lowest slot"
+    assert _applied_preset_slots(bar) == []
 
-    bar._selected_slot = 2
-    bar.sync_match()
-    assert _applied_preset_slots(bar) == [2], "a still-matching slot keeps the name"
+    bar.set_baseline(build_preset_baseline(
+        'test_kind_match_priority', 2, '均衡', dict(live),
+    ))
+    assert _applied_preset_slots(bar) == [2]
 
     live['mode'] = 'nothing-matches-this'
     bar.sync_match()
-    assert _applied_preset_slots(bar) == [4], "unnamed states land on 自定义"
+    assert _applied_preset_slots(bar) == [2]
 
 
-def test_reverse_match_ignores_slots_that_describe_another_panel(qapp):
-    """An empty slot, or a payload sharing no key, is not a match."""
+def test_sync_match_without_baseline_lights_no_slot(qapp):
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     bar = PresetBar(
@@ -7480,13 +7515,12 @@ def test_reverse_match_ignores_slots_that_describe_another_panel(qapp):
     )
 
     bar.sync_match()
-    assert _applied_preset_slots(bar) == [4]
+    assert _applied_preset_slots(bar) == []
 
 
-def test_reverse_match_does_not_disturb_the_unit_recommendation_badge(qtbot):
-    """The 荐 corner badge stays orthogonal to the applied-slot highlight."""
+@pytest.mark.usefixtures("use_preset_ranges")
+def test_unit_recommendation_badge_stays_orthogonal_to_baseline(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTContextual
-    from mf4_analyzer.analysis_presets import get_builtin_preset
 
     ctx = FFTContextual()
     qtbot.addWidget(ctx)
@@ -7494,29 +7528,28 @@ def test_reverse_match_does_not_disturb_the_unit_recommendation_badge(qtbot):
     ctx.set_recommended_for_unit('Nm')  # torque -> slot 1
     assert ctx.preset_bar._load_btns[1].property('recommended') == 'true'
 
-    # A programmatic restore keeps the recommendation …
-    ctx._apply_preset(get_builtin_preset('fft', 'transient').params_copy())
+    ctx.preset_bar._on_left_click(3)
     assert ctx.preset_bar._load_btns[1].property('recommended') == 'true'
     assert _applied_preset_slots(ctx.preset_bar) == [3]
+    assert ctx.preset_bar._recommend_badges[3].isHidden()
 
-    # … a user edit drops it, exactly as before this change.
     ctx.spin_overlap.setValue(11)
     assert all(
         ctx.preset_bar._load_btns[n].property('recommended') == 'false'
         for n in (1, 2, 3)
     )
-    assert _applied_preset_slots(ctx.preset_bar) == [4]
+    assert _applied_preset_slots(ctx.preset_bar) == [3]
 
 
+@pytest.mark.usefixtures("use_preset_ranges")
 def test_preset_hover_card_status_agrees_with_the_highlighted_slot(qtbot):
-    """Card 状态判断 and the bar's match are one comparison, not two."""
+    """Card 状态判断 and the bar's baseline diff are one comparison."""
     from PyQt5.QtWidgets import QLabel
     from mf4_analyzer.ui.inspector_sections import FFTContextual
-    from mf4_analyzer.analysis_presets import get_builtin_preset
 
     ctx = FFTContextual()
     qtbot.addWidget(ctx)
-    ctx._apply_preset(get_builtin_preset('fft', 'vibration').params_copy())
+    ctx.preset_bar._on_left_click(2)
     assert _applied_preset_slots(ctx.preset_bar) == [2]
 
     def status_values(slot):
@@ -7565,3 +7598,13 @@ def test_xaxis_hint_resists_vertical_compression_and_remeasures(qapp, qtbot):
         assert label.height() >= label.heightForWidth(label.width())
     finally:
         qapp.setStyleSheet(old_sheet)
+
+
+@pytest.fixture
+def use_preset_ranges(monkeypatch):
+    """Existing preset-load checks choose the full incoming preset.
+
+    The one-shot keep/cancel UI is covered by test_preset_axis_preservation.
+    """
+    from mf4_analyzer.ui.inspector_sections.presets import PresetBar
+    monkeypatch.setattr(PresetBar, '_confirm_axis_preservation', lambda *args, **kwargs: 'preset')

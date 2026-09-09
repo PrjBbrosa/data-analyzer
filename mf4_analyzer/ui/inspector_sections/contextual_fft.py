@@ -548,10 +548,6 @@ class FFTContextual(QWidget):
 
     def _on_preset_param_changed(self, *_):
         if not self._applying_preset:
-            # Re-derive which preset name the edited state answers to. Editing
-            # away from a preset lands on 自定义; editing back onto one
-            # re-confirms it. The unit-推荐 badge is dropped because the
-            # recommendation described the untouched signal, not this state.
             self.preset_bar.sync_match(clear_recommendation=True)
         self._refresh_fft_summary()
         if self._applying_preset:
@@ -755,9 +751,8 @@ class FFTContextual(QWidget):
         finally:
             self._applying_preset = False
             self._refresh_fft_summary()
-        # The guard above suppressed the per-widget relay, so the bar has not
-        # seen this change yet; confirm the loaded slot (or fall to 自定义 when
-        # the payload was only a partial patch).
+        # The guard above suppressed the per-widget relay, so refresh the
+        # baseline projection (difference dots) after the atomic apply.
         self.preset_bar.sync_match()
         self._emit_param_deltas(before_compute, before_display)
 

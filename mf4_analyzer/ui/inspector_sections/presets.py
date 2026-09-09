@@ -1,5 +1,8 @@
 """Preset hover card and preset bar widgets."""
+import copy
 import json
+import logging
+from functools import partial
 from html import escape
 
 from PyQt5 import sip
@@ -29,6 +32,7 @@ from ...ui_kit.dialog_geometry import (
     resolve_available_rect,
 )
 from ...ui_kit.menus import apply_rounded_menu_chrome
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ..analysis_preset_slots import notify_slot_changed, preset_slot_bus
 from .. import hints
 from ._helpers import (
@@ -36,8 +40,28 @@ from ._helpers import (
     _PRESET_KEY_TO_SLOT,
     _preset_settings,
     _preset_value_text,
-    preset_params_match,
 )
+from .preset_state import (
+    apply_keep_ranges,
+    apply_preset_ranges,
+    build_preset_baseline,
+    diff_preset_state,
+    incompatible_amplitude_axes,
+    infer_preset_baseline,
+    manual_axis_conflicts,
+    validate_preset_baseline,
+)
+
+_AXIS_LABELS = {
+    "fft": {"x": "频率 X", "y": "幅值 Y"},
+    "fft_time": {"x": "时间 X", "y": "频率 Y", "z": "色阶 Z"},
+    "order": {"x": "时间 X", "y": "阶次 Y", "z": "色阶 Z"},
+}
+_DIFF_PURPLE = "#a28acb"
+_DIFF_AMBER = "#e8ae48"
+_DIFF_DOT_PX = 7
+_DIFF_DOT_GAP = 4
+logger = logging.getLogger(__name__)
 
 
 class _PresetHoverCard(QFrame):
@@ -130,13 +154,20 @@ class _PresetHoverCard(QFrame):
                 background-color: #f1f6fc;
                 font-size: 12px;
             }
-            QLabel#presetChip[warn="true"] {
-                border-color: #d9b56e;
+            QLabel#presetChip[diff="param"] {
+                border-width: 1px;
+                border-style: solid;
+                border-color: #a28acb;
+            }
+            QLabel#presetChip[diff="axis"] {
+                border-width: 1px;
+                border-style: solid;
+                border-color: #e8ae48;
             }
         """)
 
     def set_summary(self, *, name, params, kind, label_map, current_params=None,
-                    builtin=False, blurb=''):
+                    builtin=False, blurb='', status_note='', owned_only=True):
         self._clear()
         self._chip_rows = []
         self.setFixedWidth(self.WIDTH)
@@ -174,7 +205,14 @@ class _PresetHoverCard(QFrame):
         if axes:
             self._root.addWidget(self._section("坐标轴快照", axes))
 
-        status = self._status_specs(params, current_params)
+        status = self._status_specs(
+            params, current_params, kind, owned_only=owned_only,
+        )
+        if status_note:
+            note = QLabel(status_note, self._panel)
+            note.setObjectName("presetHoverSub")
+            note.setWordWrap(True)
+            self._root.addWidget(note)
         if status:
             self._root.addWidget(self._section("状态判断", status))
 
@@ -184,7 +222,7 @@ class _PresetHoverCard(QFrame):
         self._overflow.hide()
         self._root.addWidget(self._overflow)
 
-        footer = QLabel("左键加载 · 右键保存/重命名/清空        不保存信号与 Fs", self._panel)
+        footer = QLabel("左键加载 · 右键保存/重命名/重置或清空        不保存信号与 Fs", self._panel)
         footer.setObjectName("presetHoverFooter")
         footer.setWordWrap(True)
         self._root.addWidget(footer)
@@ -221,17 +259,23 @@ class _PresetHoverCard(QFrame):
             row = QHBoxLayout(row_host)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(5)
-            for label, value, warn in row_specs:
-                row.addWidget(self._chip(label, value, warn), 0)
+            for spec in row_specs:
+                label, value, tone = spec[0], spec[1], spec[2]
+                row.addWidget(self._chip(label, value, tone), 0)
             row.addStretch(1)
             lay.addWidget(row_host)
             self._chip_rows.append((row_host, len(row_specs)))
         return frame
 
-    def _chip(self, label, value, warn=False):
+    def _chip(self, label, value, tone=False):
         chip = QLabel(self._panel)
         chip.setObjectName("presetChip")
-        chip.setProperty("warn", "true" if warn else "false")
+        if tone == "param":
+            chip.setProperty("diff", "param")
+        elif tone == "axis":
+            chip.setProperty("diff", "axis")
+        chip.style().unpolish(chip)
+        chip.style().polish(chip)
         chip.setTextFormat(Qt.RichText)
         chip.setText(
             f'<span style="color:#61708a;font-weight:600;">{escape(str(label))}</span> '
@@ -263,20 +307,23 @@ class _PresetHoverCard(QFrame):
         }
         if kind == 'fft':
             keys = (
-                'window', 'nfft', 'overlap', 'avg_mode', 'avg_overlap',
-                'amp_y',
+                'window', 'nfft', 'nfft_mode', 't_win_s', 'overlap',
+                'avg_mode', 'avg_overlap', 'amp_y', 'db_reference_mode',
+                'db_reference',
             )
         elif kind == 'fft_time':
             keys = (
                 # 不列 ``cmap``：色图不由预设决定（面板恒定发 _FIXED_CMAP，
                 # 应用预设时显式跳过），列出来只会让用户以为改了预设就能换色图。
-                'window', 'nfft', 'overlap', 'amplitude_mode', 'remove_mean',
-                'db_reference', 'dynamic',
+                'window', 'nfft', 'nfft_mode', 't_win_s', 'overlap',
+                'amplitude_mode', 'db_reference_mode', 'db_reference',
             )
         elif kind == 'order':
             keys = (
-                'max_order', 'order_res', 'time_res', 'nfft',
-                'samples_per_rev', 'amplitude_mode',
+                'max_order', 'order_res', 'time_res', 'window', 'nfft',
+                'nfft_mode', 'samples_per_rev', 'amplitude_mode',
+                'rpm_factor', 'rpm_mode', 'manual_rpm',
+                'db_reference_mode', 'db_reference',
             )
         else:
             keys = tuple(k for k in params if k not in axis_keys)
@@ -306,25 +353,23 @@ class _PresetHoverCard(QFrame):
             specs.append((axis.upper(), value, False))
         return specs
 
-    def _status_specs(self, params, current_params):
+    def _status_specs(self, params, current_params, kind, *, owned_only=True):
         specs = []
         if current_params:
-            axis_keys = {
-                'x_auto', 'x_min', 'x_max', 'y_auto', 'y_min', 'y_max',
-                'z_auto', 'z_floor', 'z_ceiling',
-            }
-            saved_analysis = {
-                k: params[k] for k in params
-                if k in current_params and k not in axis_keys
-            }
-            # Same comparison the PresetBar reverse match uses, so a card that
-            # reads 一致 is exactly a card whose slot is highlighted.
-            analysis_same = preset_params_match(saved_analysis, current_params)
-            specs.append(("参数", "一致" if analysis_same else "有差异", not analysis_same))
-            saved_axes = {k: params[k] for k in params if k in current_params and k in axis_keys}
-            if saved_axes:
-                axes_same = preset_params_match(saved_axes, current_params)
-                specs.append(("坐标轴", "一致" if axes_same else "有差异", not axes_same))
+            diff = diff_preset_state(
+                kind, params, current_params, owned_only=owned_only,
+            )
+            param_tone = "param" if diff.params_differ else False
+            specs.append((
+                "参数", "有差异" if diff.params_differ else "一致", param_tone,
+            ))
+            if kind != "frf":
+                axis_tone = "axis" if diff.axes_differ else False
+                specs.append((
+                    "坐标轴",
+                    "有差异" if diff.axes_differ else "一致",
+                    axis_tone,
+                ))
         specs.append(("信号/Fs", "不切换", False))
         return specs
 
@@ -408,6 +453,7 @@ class _PresetLoadButton(QPushButton):
         bar = self._preset_bar()
         if bar is not None and bar.isVisible():
             bar._position_recommend_badge(self._slot)
+            bar._position_diff_dots(self._slot)
         super().resizeEvent(event)
 
 
@@ -440,23 +486,21 @@ class PresetBar(QWidget):
       no user override exists (for signal-type presets this reads as 频率 /
       均衡 / 时间 out of the box).
     - Left-click loads either the user override (if any) or the builtin.
-    - The right-click menu adds a "重置为默认" entry that removes the
-      override and restores the builtin.
+    - The right-click menu adds "重置此槽为内置" (drop the override) and
+      "恢复面板默认参数" (apply construction defaults and clear the baseline).
 
     Storage key in builtin mode: ``{kind}/preset_override/{slot}`` (so the
     namespace is independent from the legacy ``{kind}/preset/{slot}`` used
     by the FFT / Order bars).
 
-    Reverse match (2026-08-14)
-    --------------------------
-    The highlighted slot is not a memory of the last button press — it is a
-    statement about the live parameters. :meth:`sync_match` compares
-    ``collect_fn()`` against every slot's effective payload and highlights the
-    slot that describes it, so editing away from a preset lands on 自定义 and
-    editing back onto one re-confirms its name. Owners must call it after every
-    parameter change they suppress with an ``_applying_preset`` guard (preset
-    load, ``apply_params`` restore); ungated widget edits route through the
-    owner's own change handler.
+    Baseline projection
+    -------------------
+    The highlighted slot is the current adjustment baseline, not a reverse
+    match of live parameters onto a slot name. :meth:`sync_match` projects
+    that baseline (blue highlight plus difference dots) after parameter
+    edits and programmatic ``apply_params`` restores. Unmatched states do
+    not light 自定义. Owners still call it after every change they suppress
+    with an ``_applying_preset`` guard.
     """
 
     SLOTS = (1, 2, 3)
@@ -483,9 +527,9 @@ class PresetBar(QWidget):
             When provided, the bar runs in builtin-aware mode (see class
             docstring).
         default_params : dict | None
-            Baseline params to restore when the currently loaded builtin slot is
-            clicked again. This is distinct from reset-to-default, which edits
-            the slot override stored in QSettings.
+            Construction-time panel defaults restored by the explicit
+            「恢复面板默认参数」 menu action. Distinct from resetting a
+            builtin slot's QSettings override.
         custom_slots : dict[int, str] | None
             Additional user-owned slots. An empty custom slot saves the current
             parameters on left-click; unlike a builtin slot it never receives a
@@ -513,17 +557,16 @@ class PresetBar(QWidget):
         self._recommended_slot = None
         # Display-only unit cited on the recommended button tooltip.
         self._recommended_unit = None
-        # Slot that currently describes the live parameters — set by a
-        # left-click load, by an explicit save, and by :meth:`sync_match`'s
-        # reverse match. A unit recommendation can also set the visual
-        # highlight, but it must not make the next click behave as a toggle-off
-        # before the preset has ever been loaded.
+        # Slot currently projected from the View baseline (None = no baseline
+        # or the source slot is empty). Not a reverse-match of live params.
         self._selected_slot = None
+        self._baseline = None
+        self._loaded_slot_payload = None
+        self._live_diff = diff_preset_state(self._kind, {}, {})
         # slot -> effective payload dict (or None), lazily filled by
-        # _slot_payloads(). sync_match runs on every keystroke-level parameter
-        # edit, so it must not re-read four QSettings keys each time.
+        # _slot_payloads(). project_baseline runs on every keystroke-level
+        # parameter edit, so it must not re-read four QSettings keys each time.
         self._payload_cache = None
-        preset_slot_bus().changed.connect(self._on_shared_slot_changed)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -540,10 +583,8 @@ class PresetBar(QWidget):
             ld.setMinimumWidth(0)
             ld.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             ld.setContextMenuPolicy(Qt.CustomContextMenu)
-            ld.clicked.connect(lambda _=False, slot=n: self._on_left_click(slot))
-            ld.customContextMenuRequested.connect(
-                lambda pos, slot=n: self._show_menu(slot, pos)
-            )
+            ld.clicked.connect(partial(self._on_load_clicked, n))
+            ld.customContextMenuRequested.connect(partial(self._on_slot_menu, n))
             row.addWidget(ld, 1)
             self._load_btns[n] = ld
             badge = QLabel("荐", ld)
@@ -553,7 +594,13 @@ class PresetBar(QWidget):
             badge.setFixedSize(14, 14)
             badge.hide()
             self._recommend_badges[n] = badge
+        self._param_dots = {}
+        self._axis_dots = {}
+        for n, ld in self._load_btns.items():
+            self._param_dots[n] = self._make_diff_dot(ld, _DIFF_PURPLE)
+            self._axis_dots[n] = self._make_diff_dot(ld, _DIFF_AMBER)
         self._refresh_states()
+        preset_slot_bus().changed.connect(self._on_shared_slot_changed)
 
     # ---- naming helpers ----
     def _default_name(self, slot):
@@ -608,7 +655,7 @@ class PresetBar(QWidget):
         self._invalidate_payload_cache()
         notify_slot_changed(self._kind, slot)
 
-    # ---- reverse match: which slot describes the live parameters? ----
+    # ---- baseline projection ----------------------------------------------
     def _invalidate_payload_cache(self):
         self._payload_cache = None
 
@@ -622,6 +669,30 @@ class PresetBar(QWidget):
         """
         if str(kind) == self._kind:
             self._invalidate_payload_cache()
+            if getattr(self, "_load_btns", None):
+                self.sync_match()
+
+    def _on_load_clicked(self, slot, _checked=False):
+        self._on_left_click(slot)
+
+    def _on_slot_menu(self, slot, pos):
+        self._show_menu(slot, pos)
+
+    def _make_diff_dot(self, parent, color):
+        dot = QLabel(parent)
+        dot.setObjectName("presetDiffDot")
+        dot.setAttribute(Qt.WA_StyledBackground, True)
+        dot.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        dot.setFixedSize(_DIFF_DOT_PX, _DIFF_DOT_PX)
+        dot.setStyleSheet(
+            f"QLabel#presetDiffDot {{"
+            f"background-color: {color};"
+            f"border-radius: 4px;"
+            f"border-width: 0px;"
+            f"}}"
+        )
+        dot.hide()
+        return dot
 
     def _slot_payloads(self):
         """Return ``{slot: effective params or None}`` for every slot.
@@ -640,54 +711,100 @@ class PresetBar(QWidget):
             self._payload_cache = payloads
         return self._payload_cache
 
-    def _slot_matches(self, payload, current):
-        if not payload:
-            return False
-        if not any(key in current for key in payload):
-            # A payload sharing no key with the live params describes some
-            # other panel shape; "every compared key agrees" is vacuously
-            # true there and would light the slot up for nothing.
-            return False
-        return preset_params_match(payload, current)
+    def _effective_payload(self, slot):
+        return self._slot_payloads().get(slot)
 
-    def _matching_slot(self):
-        """Return the slot whose payload equals the live params.
+    def _slot_display_name(self, slot):
+        entry = self._read(slot)
+        if entry is not None:
+            return entry[0]
+        return self._default_name(slot)
 
-        Ties are resolved in favour of the slot that is already selected (so a
-        no-op edit never makes the highlight jump), then by slot order. When
-        nothing matches, the method's 自定义 slot is the answer — that name
-        exists precisely to hold every state no preset describes.
-        """
+    def _collect_safe(self):
         try:
             current = self._collect()
-        except Exception:  # pragma: no cover — defensive, collect is panel code
-            # Unreadable state is "no information", not "unnamed": 自定义 is a
-            # positive claim and must not be made on a failed read. Same
-            # tolerance _show_hover applies to the panel-supplied collect_fn.
+        except Exception:
+            return {}
+        return current if isinstance(current, dict) else {}
+
+    def _slot_is_available(self, slot):
+        if slot not in self._slots:
+            return False
+        if self._is_builtin_slot(slot):
+            return True
+        return self._read(slot) is not None
+
+    def _slot_source_changed(self, slot):
+        if self._loaded_slot_payload is None:
+            name = (
+                self._baseline.get("display_name")
+                if isinstance(self._baseline, dict) else None
+            )
+            return bool(name) and self._slot_display_name(slot) != name
+        return self._effective_payload(slot) != self._loaded_slot_payload or (
+            isinstance(self._baseline, dict)
+            and self._slot_display_name(slot) != self._baseline.get("display_name")
+        )
+
+    def _baseline_source_note(self, slot):
+        baseline = self._baseline
+        if not isinstance(baseline, dict) or baseline.get("slot") != slot:
+            return ""
+        if not self._slot_is_available(slot):
+            return "原基准已不可用"
+        if self._slot_source_changed(slot):
+            return "基准快照，槽位已更新"
+        return ""
+
+    def baseline(self):
+        return copy.deepcopy(self._baseline) if isinstance(self._baseline, dict) else None
+
+    def set_baseline(self, value):
+        """Install a View baseline and project highlight / dots from it."""
+        validated = validate_preset_baseline(value, expected_kind=self._kind)
+        self._baseline = validated
+        if validated is None:
+            self._loaded_slot_payload = None
+        else:
+            slot = validated["slot"]
+            payload = self._effective_payload(slot)
+            self._loaded_slot_payload = (
+                copy.deepcopy(payload) if isinstance(payload, dict) else None
+            )
+        self.sync_match()
+
+    def infer_baseline_from_current(self):
+        """Return a baseline only for a complete comparable match, or None."""
+        current = self._collect_safe()
+        if not current:
             return None
-        if not isinstance(current, dict):
+        names = {slot: self._slot_display_name(slot) for slot in self._slots}
+        return infer_preset_baseline(
+            self._kind, current, self._slot_payloads(), names,
+        )
+
+    def _matching_slot(self):
+        """Return the projected baseline slot, or None when unmatched.
+
+        Kept as a compatibility alias for tests. Unmatched states no longer
+        fall through to 自定义.
+        """
+        if not isinstance(self._baseline, dict):
             return None
-        payloads = self._slot_payloads()
-        matches = [
-            slot for slot in self._slots
-            if self._slot_matches(payloads.get(slot), current)
-        ]
-        if not matches:
-            return self._custom_slot()
-        if self._selected_slot in matches:
-            return self._selected_slot
-        return min(matches)
+        slot = self._baseline.get("slot")
+        if self._slot_is_available(slot):
+            return slot
+        return None
 
     def _custom_slot(self):
         return next(iter(self._custom_slots), None)
 
     def sync_match(self, *, clear_recommendation=False):
-        """Re-highlight the slot that matches the current parameters.
+        """Project the current baseline onto highlight and difference dots.
 
-        Call this after ANY parameter change — a user edit, a preset load, a
-        programmatic ``apply_params`` restore — so the bar always answers
-        "which preset name is this state?" rather than only remembering which
-        button was last pressed.
+        Call this after a user edit, a preset load, or a programmatic
+        ``apply_params`` restore. It does not reverse-match live parameters
+        onto another slot.
 
         ``clear_recommendation`` drops the unit-推荐 corner badge; user edits
         pass it (the recommendation was made for the untouched signal), while
@@ -696,8 +813,39 @@ class PresetBar(QWidget):
         if clear_recommendation:
             self._recommended_slot = None
             self._recommended_unit = None
-        self._selected_slot = self._matching_slot()
+        self._project_baseline()
         self._refresh_states()
+
+    def _project_baseline(self):
+        current = self._collect_safe()
+        baseline = self._baseline if isinstance(self._baseline, dict) else None
+        if baseline is None:
+            self._selected_slot = None
+            self._live_diff = diff_preset_state(self._kind, {}, current)
+            return
+        slot = baseline.get("slot")
+        self._selected_slot = slot if self._slot_is_available(slot) else None
+        self._live_diff = diff_preset_state(
+            self._kind, baseline.get("params") or {}, current,
+        )
+
+    def _commit_loaded_slot(self, slot, fallback_params=None):
+        current = self._collect_safe()
+        if not current and isinstance(fallback_params, dict):
+            current = dict(fallback_params)
+        name = self._slot_display_name(slot)
+        self._baseline = build_preset_baseline(self._kind, slot, name, current)
+        payload = self._effective_payload(slot)
+        self._loaded_slot_payload = (
+            copy.deepcopy(payload) if isinstance(payload, dict) else None
+        )
+        self.sync_match()
+
+    def _clear_baseline(self):
+        self._baseline = None
+        self._loaded_slot_payload = None
+        self._selected_slot = None
+        self.sync_match()
 
     def _builtin_params(self, slot):
         if not self._builtins or slot not in self._builtins:
@@ -734,26 +882,84 @@ class PresetBar(QWidget):
                 btn.setText(name)
                 btn.setEnabled(True)
                 btn.setProperty("filled", "true")
-            # Re-stamp visual state on every refresh so both the unit-推荐
-            # badge and the applied button body survive unpolish/polish cycles.
-            recommended = self._recommended_slot == n
-            btn.setProperty("recommended", "true" if recommended else "false")
             applied = self._selected_slot == n
+            recommended = self._recommended_slot == n and not applied
+            btn.setProperty("recommended", "true" if recommended else "false")
             btn.setProperty("applied", "true" if applied else "false")
             if recommended and self._recommended_unit:
                 btn.setToolTip(f"按单位「{self._recommended_unit}」推荐")
             self._set_recommend_badge(n, recommended)
+            self._position_diff_dots(n)
+            self._update_slot_accessible(n, applied)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
     def _position_recommend_badge(self, slot):
-        btn = self._load_btns[slot]
-        badge = self._recommend_badges[slot]
+        load_btns = getattr(self, "_load_btns", None) or {}
+        badges = getattr(self, "_recommend_badges", None) or {}
+        btn = load_btns.get(slot)
+        badge = badges.get(slot)
+        if btn is None or badge is None:
+            return
         badge.move(max(0, btn.width() - badge.width() - 4), 2)
+
+    def _position_diff_dots(self, slot):
+        load_btns = getattr(self, "_load_btns", None) or {}
+        param_dots = getattr(self, "_param_dots", None) or {}
+        axis_dots = getattr(self, "_axis_dots", None) or {}
+        btn = load_btns.get(slot)
+        param = param_dots.get(slot)
+        axis = axis_dots.get(slot)
+        if btn is None or param is None or axis is None:
+            return
+        diff = getattr(self, "_live_diff", None)
+        show_param = (
+            self._selected_slot == slot
+            and diff is not None
+            and diff.params_differ
+        )
+        show_axis = (
+            self._selected_slot == slot
+            and self._kind != "frf"
+            and diff is not None
+            and diff.axes_differ
+        )
+        param.setVisible(show_param)
+        axis.setVisible(show_axis)
+        y = 4
+        right = max(_DIFF_DOT_PX, btn.width() - 4)
+        if show_param and show_axis:
+            axis.move(right - _DIFF_DOT_PX, y)
+            param.move(right - (2 * _DIFF_DOT_PX) - _DIFF_DOT_GAP, y)
+        elif show_axis:
+            axis.move(right - _DIFF_DOT_PX, y)
+        elif show_param:
+            param.move(right - _DIFF_DOT_PX, y)
+        param.raise_()
+        axis.raise_()
+
+    def _update_slot_accessible(self, slot, applied):
+        btn = self._load_btns.get(slot)
+        if btn is None:
+            return
+        name = btn.text()
+        btn.setAccessibleName(name)
+        parts = []
+        if applied:
+            parts.append(f"当前预设基准 {name}")
+        if applied and getattr(self, "_live_diff", None) is not None:
+            if self._live_diff.params_differ:
+                parts.append("分析参数有差异")
+            if self._kind != "frf" and self._live_diff.axes_differ:
+                parts.append("坐标有差异")
+        btn.setAccessibleDescription("，".join(parts))
 
     def _set_recommend_badge(self, slot, recommended):
         """Show recommendation as a small corner badge, not as button body state."""
-        badge = self._recommend_badges[slot]
+        badges = getattr(self, "_recommend_badges", None) or {}
+        badge = badges.get(slot)
+        if badge is None:
+            return
         badge.setVisible(bool(recommended))
         if recommended:
             self._position_recommend_badge(slot)
@@ -767,29 +973,20 @@ class PresetBar(QWidget):
         cited on the recommended button tooltip; the badge itself has no
         tooltip. Manual interaction is unaffected — this is a visual hint
         only. The recommendation badge is separate from the ``applied``
-        property that marks a preset the user actually loaded.
+        property that marks the current baseline. The baseline slot hides
+        the badge so it does not cover difference dots.
         """
         if slot is not None and slot not in self._slots:
             slot = None
         if self._builtins is not None and slot is not None and not self._is_builtin_slot(slot):
             slot = None
-        if slot != self._selected_slot:
-            self._selected_slot = None
         self._recommended_slot = slot
         self._recommended_unit = None if slot is None else unit
         self._refresh_states()
 
     def set_custom_active(self):
-        """Force the method's 自定义 slot without consulting the parameters.
-
-        Kept for callers that already know the state is unnamed. Parameter
-        edits go through :meth:`sync_match` instead, which reaches the same
-        slot only when no preset actually describes the state.
-        """
-        self._recommended_slot = None
-        self._recommended_unit = None
-        self._selected_slot = self._custom_slot()
-        self._refresh_states()
+        """Retired unnamed-state sink. Custom is a saveable slot, not a dump."""
+        return
 
     def hideEvent(self, event):
         self._hide_hover()
@@ -811,21 +1008,38 @@ class PresetBar(QWidget):
         return card
 
     def _show_hover(self, slot):
+        baseline = self._baseline if isinstance(self._baseline, dict) else None
+        is_baseline = baseline is not None and baseline.get("slot") == slot
+        status_note = self._baseline_source_note(slot) if is_baseline else ""
         entry = self._read(slot)
         builtin = False
         if entry is None:
             params = self._builtin_params(slot)
             if params is None:
-                self._hide_hover()
-                return
-            name = self._default_name(slot)
-            builtin = True
+                if is_baseline:
+                    name = baseline.get("display_name") or self._default_name(slot)
+                    params = baseline.get("params") or {}
+                    if not status_note:
+                        status_note = "原基准已不可用"
+                else:
+                    self._hide_hover()
+                    return
+            else:
+                name = self._default_name(slot)
+                builtin = True
         else:
             name, params = entry
         try:
             current_params = self._collect()
         except Exception:
             current_params = {}
+        if not isinstance(current_params, dict):
+            current_params = {}
+        display_params = params
+        owned_only = True
+        if is_baseline:
+            display_params = baseline.get("params") or params
+            owned_only = False
         # Resolve blurb for builtin slots: reverse-map slot index → preset key.
         _SLOT_TO_KEY = {v: k for k, v in _PRESET_KEY_TO_SLOT.items()}
         builtin_blurb = ''
@@ -844,12 +1058,14 @@ class PresetBar(QWidget):
         self._hover_slot = slot
         card.set_summary(
             name=name,
-            params=params,
+            params=display_params,
             kind=self._kind,
             label_map=self._SUMMARY_LABELS,
             current_params=current_params,
             builtin=builtin,
             blurb=builtin_blurb,
+            status_note=status_note,
+            owned_only=owned_only,
         )
         if sip.isdeleted(card):
             self._on_hover_card_destroyed()
@@ -948,6 +1164,9 @@ class PresetBar(QWidget):
         'periodic_window': '周期窗',
         't_win_s': '段长',
         'nfft_mode': 'NFFT 模式',
+        'db_reference_mode': 'dB 参考模式',
+        'rpm_mode': 'RPM 模式',
+        'manual_rpm': '手动 RPM',
         'detrend': '去趋势',
         'magnitude_scale': '幅值',
         'frequency_scale': '频率',
@@ -977,7 +1196,7 @@ class PresetBar(QWidget):
                 '</span>'
             )
         suffix = (
-            "（右键可重命名 / 重置为默认）"
+            "（右键可重命名 / 重置此槽为内置）"
             if self._builtins is not None
             else "（右键可重命名 / 清空）"
         )
@@ -992,20 +1211,117 @@ class PresetBar(QWidget):
         )
 
     # ---- actions ----
+    def _confirm_axis_preservation(
+        self, labels, incompatible, keep_enabled=True, title=None,
+    ):
+        box = QMessageBox(self)
+        restore = title == "恢复默认参数"
+        box.setWindowTitle(title or "切换预设")
+        box.setProperty("messageBoxConfirmRole", "primary")
+        box.setIcon(QMessageBox.Question)
+        box.setText(
+            "恢复默认参数时保留手动坐标范围？"
+            if restore else
+            "切换预设时保留手动坐标范围？"
+        )
+        rest = "面板默认" if restore else "新预设"
+        detail = (
+            "将覆盖：" + "、".join(labels)
+            + f"。\n其余参数按{rest}更新；本次选择仅对这次操作有效。"
+        )
+        if incompatible:
+            detail += (
+                "\n幅值单位或 dB 参考改变，"
+                + "、".join(incompatible)
+                + "将自动调整，不能沿用原数值。"
+            )
+        box.setInformativeText(detail)
+        keep = box.addButton("保留手动范围", QMessageBox.AcceptRole)
+        preset = box.addButton("使用预设范围", QMessageBox.ActionRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        keep.setEnabled(bool(keep_enabled))
+        box.setDefaultButton(keep if keep_enabled else preset)
+        box.setEscapeButton(cancel)
+        box.ensurePolished()
+        for button in box.buttons():
+            button.ensurePolished()
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        clicked = box.clickedButton()
+        box.deleteLater()
+        return 'keep' if clicked is keep else 'preset' if clicked is preset else 'cancel'
+
+    def _axis_label(self, axis):
+        return _AXIS_LABELS.get(self._kind, {}).get(axis, axis.upper())
+
+    def _prepare_user_preset(self, params, *, purpose="switch"):
+        """Protect ranges at user entry points only, never during View restore."""
+        target = dict(params)
+        current = self._collect_safe()
+        conflict_axes = manual_axis_conflicts(self._kind, current, target)
+        incompat_axes = incompatible_amplitude_axes(self._kind, current, target)
+        keepable = [axis for axis in conflict_axes if axis not in incompat_axes]
+        if not conflict_axes:
+            return apply_preset_ranges(self._kind, current, target)
+        labels = [self._axis_label(axis) for axis in conflict_axes]
+        incompat_labels = [self._axis_label(axis) for axis in incompat_axes]
+        choice = self._confirm_axis_preservation(
+            labels,
+            incompat_labels,
+            keep_enabled=bool(keepable),
+            title="恢复默认参数" if purpose == "restore_defaults" else None,
+        )
+        if choice == 'cancel':
+            return None
+        if choice == 'keep':
+            return apply_keep_ranges(self._kind, current, target)
+        return apply_preset_ranges(self._kind, current, target)
+
+    def _is_noop_reapply(self, slot):
+        if self._selected_slot != slot or not isinstance(self._baseline, dict):
+            return False
+        if self._slot_source_changed(slot):
+            return False
+        diff = diff_preset_state(
+            self._kind,
+            self._baseline.get("params") or {},
+            self._collect_safe(),
+        )
+        return not diff.params_differ and not diff.axes_differ
+
+    def _apply_with_rollback(self, params, *, error_prefix):
+        before = self._collect_safe() or None
+        before_baseline = copy.deepcopy(self._baseline)
+        before_loaded = copy.deepcopy(self._loaded_slot_payload)
+        try:
+            self._apply(params)
+        except Exception as e:
+            if before:
+                try:
+                    self._apply(before)
+                except Exception:
+                    logger.exception(
+                        "failed to restore preset params after apply error"
+                    )
+            self._baseline = before_baseline
+            self._loaded_slot_payload = before_loaded
+            self.sync_match()
+            self.acknowledged.emit("error", f"{error_prefix}: {e}")
+            return False
+        return True
+
     def _on_left_click(self, slot):
-        """Slot left-click: load if filled, else save current (legacy
-        mode) or load builtin (builtin mode). Clicking the already-applied
-        builtin slot again restores the contextual's default params.
+        """Load a filled/builtin slot, or save into an empty custom slot.
+
+        Clicking the current baseline again re-applies it. Completely
+        consistent and unchanged slots are a no-op.
         """
-        if self._is_builtin_slot(slot) and self._selected_slot == slot:
-            self._restore_default_params(slot)
+        if self._is_noop_reapply(slot):
             return
         entry = self._read(slot)
         if entry is None and not self._is_builtin_slot(slot):
-            # Empty legacy/custom slot → primary action is "save current".
             self._save(slot)
             return
-        # Filled slot OR builtin fallback → load.
         self._load(slot)
 
     def _save(self, slot):
@@ -1017,17 +1333,12 @@ class PresetBar(QWidget):
         existing = self._read(slot)
         name = existing[0] if existing else self._default_name(slot)
         self._write(slot, name, params)
-        # The slot now holds exactly the live params, so it is by definition a
-        # match; pin it first so the tie-break keeps it over any lower slot
-        # that happens to describe the same state.
-        self._selected_slot = slot
-        self.sync_match()
+        self._commit_loaded_slot(slot, fallback_params=params)
         self.acknowledged.emit("success", f"已保存到「{name}」")
 
     def _load(self, slot):
         entry = self._read(slot)
         if entry is None:
-            # In builtin mode, fall back to the builtin params.
             params = self._builtin_params(slot)
             if params is None:
                 self.acknowledged.emit(
@@ -1037,39 +1348,29 @@ class PresetBar(QWidget):
             name = self._default_name(slot)
         else:
             name, params = entry
-        try:
-            self._apply(params)
-        except Exception as e:
-            self.acknowledged.emit("error", f"加载失败: {e}")
+        prepared = self._prepare_user_preset(params)
+        if prepared is None:
             return
-        self._selected_slot = slot
-        self._refresh_states()
+        if not self._apply_with_rollback(prepared, error_prefix="加载失败"):
+            return
+        self._commit_loaded_slot(slot, fallback_params=prepared)
         self.acknowledged.emit("success", f"已加载「{name}」")
 
-    def _restore_default_params(self, slot):
+    def _restore_default_params(self, slot=None):
+        """Menu path: apply construction defaults and clear the baseline."""
         params = self._default_params
         if not isinstance(params, dict):
-            self._resync_after_cancel()
-            self.acknowledged.emit("info", "已取消预设")
+            self.acknowledged.emit("info", "没有可恢复的面板默认参数")
             return
-        try:
-            self._apply(dict(params))
-        except Exception as e:
-            self.acknowledged.emit("error", f"恢复默认失败: {e}")
+        prepared = self._prepare_user_preset(
+            dict(params), purpose="restore_defaults",
+        )
+        if prepared is None:
             return
-        self._resync_after_cancel()
-        self.acknowledged.emit("info", f"已取消「{self._default_name(slot)}」，恢复默认参数")
-
-    def _resync_after_cancel(self):
-        """Drop the toggled-off selection, then re-derive it from the params.
-
-        Cancelling a preset restores the panel's construction defaults, which
-        are their own state — usually unnamed (→ 自定义), occasionally an
-        exact builtin. Clearing ``_selected_slot`` first keeps the tie-break
-        from re-confirming the slot the user just toggled off.
-        """
-        self._selected_slot = None
-        self.sync_match(clear_recommendation=True)
+        if not self._apply_with_rollback(prepared, error_prefix="恢复默认失败"):
+            return
+        self._clear_baseline()
+        self.acknowledged.emit("info", "已恢复面板默认参数")
 
     def _rename(self, slot):
         entry = self._read(slot)
@@ -1133,7 +1434,7 @@ class PresetBar(QWidget):
         # payload — a different payload to match against (see _clear).
         self.sync_match()
         self.acknowledged.emit(
-            "info", f"已重置为内置「{self._default_name(slot)}」",
+            "info", f"已重置此槽为内置「{self._default_name(slot)}」",
         )
 
     def _show_menu(self, slot, pos):
@@ -1154,21 +1455,21 @@ class PresetBar(QWidget):
         act_save = menu.addAction("保存当前到本槽位")
         act_rename = menu.addAction("重命名…")
         if self._is_builtin_slot(slot):
-            act_reset = menu.addAction("重置为默认")
+            act_reset = menu.addAction("重置此槽为内置")
             act_clear = None
         else:
             act_reset = None
             act_clear = menu.addAction("清空")
+        act_restore = None
+        if isinstance(self._default_params, dict):
+            act_restore = menu.addAction("恢复面板默认参数")
         entry = self._read(slot)
-        # Save is always allowed (it's the primary write path now).
         act_save.setEnabled(True)
-        # Rename works if there's any preset — saved override OR builtin.
         rename_target = entry is not None or self._builtin_params(slot) is not None
         act_rename.setEnabled(rename_target)
         if act_clear is not None:
             act_clear.setEnabled(entry is not None)
         if act_reset is not None:
-            # Reset only makes sense if a user override actually exists.
             act_reset.setEnabled(entry is not None)
         chosen = menu.exec_(btn.mapToGlobal(pos))
         if chosen is act_save:
@@ -1179,3 +1480,5 @@ class PresetBar(QWidget):
             self._clear(slot)
         elif act_reset is not None and chosen is act_reset:
             self._reset_to_default(slot)
+        elif act_restore is not None and chosen is act_restore:
+            self._restore_default_params(slot)

@@ -2610,6 +2610,14 @@ QLabel#presetRecommendBadge {
     font-size: 9px;
     font-weight: 800;
 }
+QLabel#presetDiffDot {
+    min-width: 7px;
+    max-width: 7px;
+    min-height: 7px;
+    max-height: 7px;
+    border-radius: 4px;
+    border-width: 0px;
+}
 QPushButton[role="preset-save"] {
     min-height: 22px;
     padding: 2px 6px;

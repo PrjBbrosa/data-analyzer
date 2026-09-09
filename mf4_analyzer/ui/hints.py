@@ -162,6 +162,18 @@ _SHORTCUTS = {
 
 _HINTS = (
     Hint(
+        id="preset.keep_manual_axes",
+        text="切换预设可保留手动坐标范围",
+        surface="discovery",
+        priority=29,
+    ),
+    Hint(
+        id="preset.baseline_highlight",
+        text="蓝色高亮是当前预设基准",
+        surface="discovery",
+        priority=28,
+    ),
+    Hint(
         id="wheel.zoom_x",
         text="Ctrl + 滚轮 缩放 X",
         surface="persistent",
@@ -1088,7 +1100,7 @@ _FLASH_TIPS = {
     "spectrogram.colorbar": "拖 colorbar 调色阶 · 双击 colorbar 可重置范围",
     "spectrogram.divider": "拖上下分隔条调高度 · 双击重置 · 底部可折叠/展开",
     "fft.preview_source": "已选为时域预览的源 · 平滚轮平移 Y · Shift/Ctrl 缩放 · 右键可设左轴",
-    "preset.right_click": "预设槽右键可保存 / 重命名 / 重置为默认",
+    "preset.right_click": "预设槽右键可保存 / 重命名 / 重置槽位 / 恢复面板默认",
 }
 
 

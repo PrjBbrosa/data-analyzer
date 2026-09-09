@@ -7,27 +7,66 @@ a contextual provides it; older duck-typed contextuals still expose only
 """
 from __future__ import annotations
 
+import copy
+
 from .view_overlay_state import (
     normalize_cursor_placement,
     normalize_remarks,
 )
 
 
+def _copy_preset_baseline(value):
+    return copy.deepcopy(value) if isinstance(value, dict) else None
+
+
+def _preset_bar(ctx):
+    bar = getattr(ctx, "preset_bar", None)
+    return bar if bar is not None and hasattr(bar, "baseline") else None
+
+
+def _read_preset_baseline(ctx):
+    bar = _preset_bar(ctx)
+    if bar is not None:
+        return bar.baseline()
+    return getattr(ctx, "preset_baseline", None)
+
+
+def _write_preset_baseline(ctx, baseline) -> None:
+    bar = _preset_bar(ctx)
+    if bar is not None and hasattr(bar, "set_baseline"):
+        bar.set_baseline(baseline)
+        return
+    ctx.preset_baseline = baseline
+
+
 def capture_params_to_state(ctx, state) -> None:
     current_params = getattr(ctx, "current_params", None)
     params_getter = current_params if callable(current_params) else ctx.get_params
     state.params = dict(params_getter())
+    state.preset_baseline = _copy_preset_baseline(_read_preset_baseline(ctx))
 
 
 def apply_params_from_state(ctx, state) -> None:
+    stored = _copy_preset_baseline(getattr(state, "preset_baseline", None))
+    bar = _preset_bar(ctx)
     if state.params:
+        if bar is not None:
+            bar.set_baseline(stored)
+        else:
+            ctx.preset_baseline = stored
         ctx.apply_params(dict(state.params))
+        if stored is None and bar is not None:
+            inferred = bar.infer_baseline_from_current()
+            if inferred is not None:
+                bar.set_baseline(inferred)
         return
     # Empty params mean a blank View: restore contextual defaults instead of
-    # leaving the previous View's live controls in place.
+    # leaving the previous View's live controls in place. Construction
+    # defaults that happen to equal a builtin still must not claim a baseline.
     reset = getattr(ctx, "reset_to_defaults", None)
     if callable(reset):
         reset()
+    _write_preset_baseline(ctx, None)
 
 
 def capture_overlay_from_canvas(canvas, pane) -> None:

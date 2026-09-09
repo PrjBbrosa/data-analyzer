@@ -343,8 +343,7 @@ class FFTTimeContextual(QWidget):
 
     def _on_preset_param_changed(self, *_):
         if not self._applying_preset:
-            # See FFTContextual._on_preset_param_changed: reverse-match the
-            # edited state onto a preset name instead of only clearing 荐.
+            # Refresh baseline difference dots; do not reverse-match another slot.
             self.preset_bar.sync_match(clear_recommendation=True)
         self._refresh_tf_summary()
         if self._applying_preset:

@@ -156,7 +156,8 @@ def test_analysis_view_schema6_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 8
+    assert d["schema"] == 9
+    assert d["preset_baseline"] is None
 
     v2 = AnalysisViewState.from_dict(d)
     assert v2.params["db_reference_mode"] == "manual"
@@ -214,6 +215,50 @@ def test_fft_auto_nfft_intent_round_trips_without_freezing_effective():
     assert restored.params["nfft_mode"] == "auto"
     assert restored.params["t_win_s"] == 1.5
     assert "nfft_effective" not in restored.params or restored.params["nfft_effective"] is None
+
+
+def test_preset_baseline_round_trips_through_project_json(tmp_path):
+    view = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
+    view.params = {"nfft": 4096, "window": "hanning"}
+    view.preset_baseline = {
+        "version": 1,
+        "kind": "fft",
+        "slot": 2,
+        "display_name": "均衡",
+        "params": {"window": "hanning", "nfft": 4096},
+    }
+    path = tmp_path / "baseline.tlproj"
+    save_project_to_json(
+        ProjectDocument(
+            active_file="f1",
+            current_mode="fft",
+            analysis_views={
+                "fft": {"active": 0, "views": [view.to_dict()]},
+            },
+        ),
+        path,
+    )
+    loaded = load_project_from_json(path)
+    payload = loaded.analysis_views["fft"]["views"][0]
+    assert payload["schema"] == 9
+    assert payload["params"]["nfft"] == 4096
+    assert payload["preset_baseline"]["kind"] == "fft"
+    assert payload["preset_baseline"]["slot"] == 2
+    restored = AnalysisViewState.from_dict(payload)
+    assert restored.preset_baseline["display_name"] == "均衡"
+    assert restored.preset_baseline["params"] == {"window": "hanning", "nfft": 4096}
+    restored.preset_baseline["params"]["nfft"] = 1
+    assert view.preset_baseline["params"]["nfft"] == 4096
+
+
+def test_project_json_without_preset_baseline_loads_as_none(tmp_path):
+    path = tmp_path / "legacy.tlproj"
+    save_project_to_json(_doc(), path)
+    loaded = load_project_from_json(path)
+    payload = loaded.analysis_views["fft"]["views"][0]
+    assert "preset_baseline" not in payload
+    restored = AnalysisViewState.from_dict(payload)
+    assert restored.preset_baseline is None
 
 
 def test_collect_dropped_analysis_refs_records_missing_pane_roles():

@@ -56,7 +56,6 @@ FROZEN_LAMBDA_CONNECT_COUNTS: dict[str, int] = {
     "ui/file_navigator.py": 1,
     "ui/inspector_sections/_helpers.py": 1,
     "ui/inspector_sections/persistent_top.py": 2,
-    "ui/inspector_sections/presets.py": 2,
     "ui/main_window/_analysis_mixin.py": 1,
     "ui/main_window/_channel_scope_mixin.py": 1,
     "ui/main_window/_view_mixin.py": 2,

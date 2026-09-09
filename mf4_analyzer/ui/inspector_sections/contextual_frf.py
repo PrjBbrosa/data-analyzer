@@ -787,9 +787,8 @@ class FrfContextual(QWidget):
         finally:
             self._applying_preset = False
         self._sync_nfft_enabled()
-        # The guard above suppressed the per-widget relay. This covers both
-        # entry points: a preset load (_apply_preset) and a View switch /
-        # project restore, so the highlight always names the restored state.
+        # The guard above suppressed the per-widget relay. Refresh the
+        # baseline projection after preset load or View restore.
         self.preset_bar.sync_match()
         if self.compute_params() != before_compute:
             # A failed preflight can depend on the segment parameters.  Once
@@ -841,8 +840,7 @@ class FrfContextual(QWidget):
     def _on_param_changed(self, *_args) -> None:
         if self._applying_preset:
             return
-        # Reverse-match rather than assuming every edit is unnamed: dialling
-        # 段长 back to 2.0 s returns the state to 稳健 and must say so.
+        # Refresh baseline difference dots after the atomic apply.
         self.preset_bar.sync_match(clear_recommendation=True)
         sender = self.sender()
         display_senders = (

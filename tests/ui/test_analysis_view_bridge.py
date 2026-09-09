@@ -65,6 +65,87 @@ def test_apply_with_empty_params_resets_to_defaults():
     assert ctx.get_params()["nfft"] == 512
 
 
+def _baseline():
+    return {
+        "version": 1,
+        "kind": "fft",
+        "slot": 2,
+        "display_name": "均衡",
+        "params": {"window": "hanning", "nfft": 4096},
+    }
+
+
+def test_capture_copies_ctx_preset_baseline_onto_state():
+    ctx = _StubCtx()
+    ctx.preset_baseline = _baseline()
+    state = AnalysisViewState(name="v", tab_color="#fff")
+    capture_params_to_state(ctx, state)
+    assert state.preset_baseline == ctx.preset_baseline
+    assert state.preset_baseline is not ctx.preset_baseline
+    assert state.preset_baseline["params"] is not ctx.preset_baseline["params"]
+    state.preset_baseline["params"]["nfft"] = 1
+    assert ctx.preset_baseline["params"]["nfft"] == 4096
+
+
+def test_capture_without_ctx_baseline_sets_none():
+    ctx = _StubCtx()
+    state = AnalysisViewState(name="v", tab_color="#fff")
+    state.preset_baseline = _baseline()
+    capture_params_to_state(ctx, state)
+    assert state.preset_baseline is None
+
+
+def test_apply_restores_ctx_preset_baseline():
+    ctx = _StubCtx()
+    ctx.preset_baseline = None
+    state = AnalysisViewState(name="v", tab_color="#fff")
+    state.params = {"nfft": 2048, "window": "hanning"}
+    state.preset_baseline = _baseline()
+    apply_params_from_state(ctx, state)
+    assert ctx.get_params()["nfft"] == 2048
+    assert ctx.preset_baseline == state.preset_baseline
+    assert ctx.preset_baseline is not state.preset_baseline
+    assert ctx.preset_baseline["params"] is not state.preset_baseline["params"]
+    ctx.preset_baseline["params"]["nfft"] = 1
+    assert state.preset_baseline["params"]["nfft"] == 4096
+
+
+def test_apply_empty_params_clears_baseline_for_blank_view():
+    ctx = _StubCtx()
+    ctx.preset_baseline = _baseline()
+    state = AnalysisViewState(name="v", tab_color="#fff")
+    state.preset_baseline = {
+        "version": 1,
+        "kind": "order",
+        "slot": 1,
+        "display_name": "频率",
+        "params": {"window": "hanning"},
+    }
+    apply_params_from_state(ctx, state)
+    assert ctx.reset_calls == 1
+    assert ctx.get_params()["nfft"] == 512
+    assert ctx.preset_baseline is None
+
+
+def test_apply_empty_params_clears_baseline_when_state_has_none():
+    ctx = _StubCtx()
+    ctx.preset_baseline = _baseline()
+    apply_params_from_state(ctx, AnalysisViewState(name="v", tab_color="#fff"))
+    assert ctx.reset_calls == 1
+    assert ctx.preset_baseline is None
+
+
+def test_capture_does_not_inject_baseline_into_state_params():
+    ctx = _StubCtx()
+    ctx.preset_baseline = _baseline()
+    state = AnalysisViewState(name="v", tab_color="#fff")
+    capture_params_to_state(ctx, state)
+    assert state.params == {"nfft": 1024, "window": "hanning"}
+    assert "preset_baseline" not in state.params
+    assert "display_name" not in state.params
+    assert state.preset_baseline["kind"] == "fft"
+
+
 class _StubOverlayCanvas:
     def __init__(self):
         self.remarks = []

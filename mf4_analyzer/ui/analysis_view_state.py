@@ -11,6 +11,8 @@ with one code path.
 """
 from __future__ import annotations
 
+import copy
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 from uuid import uuid4
@@ -21,6 +23,8 @@ from .view_overlay_state import (
     normalize_remarks,
 )
 
+logger = logging.getLogger(__name__)
+
 ChannelKey = tuple[str, str]
 MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for later N
 # dB reference defaults (Task 8, spec §13 S3) introduced nested schema 2;
@@ -30,11 +34,14 @@ MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for late
 # schema 6 removes the obsolete FRF Time-View link from persisted output;
 # schema 7 adds per-analysis-View ``attached_file_ids`` (Stage 1 source isolation).
 # schema 8 adds per-pane point remarks and frequency dual-cursor placement.
+# schema 9 adds optional per-View ``preset_baseline`` (preset source snapshot).
 # The additions are field-presence tolerant -- from_dict() keys the
 # migration off "params has db_reference and no db_reference_mode", NOT this
 # number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
-_SCHEMA = 8
+_SCHEMA = 9
+_PRESET_BASELINE_VERSION = 1
+_PRESET_BASELINE_KINDS = frozenset({"fft", "fft_time", "order", "frf"})
 
 
 def _coerce_key(value: Any) -> ChannelKey:
@@ -61,6 +68,70 @@ def normalize_analysis_attachments(values: Iterable[Any] | None) -> list[str]:
         seen.add(fid)
         out.append(fid)
     return out
+
+
+def _coerce_preset_baseline(value: Any) -> dict[str, Any] | None:
+    """Validate a persisted preset baseline; missing/corrupt → None.
+
+    Structural only: this layer must not import inspector_sections or
+    preset_state. Old or damaged project files log a warning and continue
+    as "no baseline" rather than failing to open.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        logger.warning(
+            "dropping corrupt preset_baseline: expected dict, got %s",
+            type(value).__name__,
+        )
+        return None
+    version = value.get("version")
+    kind = value.get("kind")
+    slot = value.get("slot")
+    display_name = value.get("display_name")
+    params = value.get("params")
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version != _PRESET_BASELINE_VERSION
+    ):
+        logger.warning(
+            "dropping corrupt preset_baseline: invalid version %r", version
+        )
+        return None
+    if kind not in _PRESET_BASELINE_KINDS:
+        logger.warning(
+            "dropping corrupt preset_baseline: unknown kind %r", kind
+        )
+        return None
+    if (
+        not isinstance(slot, int)
+        or isinstance(slot, bool)
+        or not 1 <= slot <= 4
+    ):
+        logger.warning(
+            "dropping corrupt preset_baseline: illegal slot %r", slot
+        )
+        return None
+    if not isinstance(display_name, str):
+        logger.warning(
+            "dropping corrupt preset_baseline: display_name must be str, got %s",
+            type(display_name).__name__,
+        )
+        return None
+    if not isinstance(params, dict):
+        logger.warning(
+            "dropping corrupt preset_baseline: params must be dict, got %s",
+            type(params).__name__,
+        )
+        return None
+    return {
+        "version": version,
+        "kind": kind,
+        "slot": slot,
+        "display_name": display_name,
+        "params": copy.deepcopy(params),
+    }
 
 
 def analysis_view_source_fids(
@@ -195,8 +266,16 @@ class AnalysisViewState:
     # Stage 1 source isolation: per-analysis-View file membership. Kept after
     # ``view_id`` so older positional callers remain valid.
     attached_file_ids: list[str] = field(default_factory=list)
+    # Optional preset source snapshot. Appended after ``attached_file_ids``
+    # so older positional constructors stay valid. None = no baseline.
+    preset_baseline: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        baseline = (
+            copy.deepcopy(self.preset_baseline)
+            if isinstance(self.preset_baseline, dict)
+            else None
+        )
         return {
             "schema": _SCHEMA,
             "name": self.name,
@@ -206,6 +285,7 @@ class AnalysisViewState:
             "panes": [p.to_dict() for p in self.panes],
             "params": dict(self.params),
             "compare": dict(self.compare),
+            "preset_baseline": baseline,
         }
 
     @classmethod
@@ -254,6 +334,7 @@ class AnalysisViewState:
             params=params,
             compare=compare,
             attached_file_ids=attached,
+            preset_baseline=_coerce_preset_baseline(data.get("preset_baseline")),
         )
 
     # -- structure ops -------------------------------------------------
