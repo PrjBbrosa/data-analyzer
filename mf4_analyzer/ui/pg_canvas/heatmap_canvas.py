@@ -99,7 +99,10 @@ from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,
     _WheelDeltaGraphicsLayoutWidget,
 )
-from mf4_analyzer.ui_kit.axis_metrics import left_axis_width_for_ticks
+from mf4_analyzer.ui_kit.axis_metrics import (
+    left_axis_width_for_ticks,
+    pin_value_axis_to_tick_need,
+)
 
 
 # 色图整族的真源在 qt_analysis_shared：批处理渲染器要用同一份解析结果，
@@ -192,6 +195,7 @@ class _HeatmapMappable:
             canvas._cbar.blockSignals(False)
         canvas.levels_changed.emit(lo, hi)
         canvas.layout_geometry_changed.emit()
+        canvas._size_colorbar_value_axis()
 
     def get_array(self):
         return self._canvas._matrix_disp
@@ -889,6 +893,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # Remember the render window so double-click-on-colorbar can restore it.
             self._rendered_levels = (float(vmin), float(vmax))
             applied_levels = True
+        self._size_colorbar_value_axis()
 
         self._plot.setLabel('bottom', self._x_label)
         self._plot.setLabel('left', self._y_label)
@@ -1743,6 +1748,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             )
             self._cbar.setImageItem(self._img, insert_in=self._plot)
             self._cbar.sigLevelsChanged.connect(self._on_cbar_levels)
+            self._cbar.sigLevelsChangeFinished.connect(self._on_cbar_levels_finished)
             self._cbar.blockSignals(True)
             self._cbar.setLevels((-70.0, -20.0))
             self._cbar.blockSignals(False)
@@ -1751,6 +1757,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._cbar.getAxis('left').setLabel(cbar_label)
         _apply_pg_axis_font(self._cbar.getAxis('left'))
         _apply_pg_axis_font(self._cbar.getAxis('right'))
+        for side in ('left', 'right'):
+            self._cbar.getAxis(side).setStyle(maxTickLevel=0)
+        self._size_colorbar_value_axis()
         return self._cbar
 
     def apply_split_layout_alignment(
@@ -2125,6 +2134,28 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 apply_amp(())
         self.levels_changed.emit(lo, hi)
 
+    def _on_cbar_levels_finished(self, bar) -> None:
+        self._size_colorbar_value_axis()
+
+    def _size_colorbar_value_axis(self) -> None:
+        """Release the library's 45 px numeric-axis pin and fit real tick text.
+
+        Vertical ``ColorBarItem`` puts values on the right axis and the title
+        on the left. The colorband column is a separate fixed-width layout
+        cell and must stay untouched.
+        """
+        if self._cbar is None:
+            return
+        self._activate_graphics_layout()
+        axis = getattr(self._cbar, "axis", None)
+        if axis is None:
+            axis = self._cbar.getAxis("right")
+        pin_value_axis_to_tick_need(
+            axis,
+            layout_owners=(self._cbar, self._plot, self._slice_plot, self._glw.ci),
+        )
+        self._activate_graphics_layout()
+
     # ------------------------------------------------------------------
     def _pos_on_colorbar(self, viewport_pos) -> bool:
         """True if a viewport-space point falls inside the colorbar item."""
@@ -2162,6 +2193,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 apply_amp(())
         self.colorbar_restored.emit(float(lo), float(hi))
         self.levels_rebased.emit()
+        self._size_colorbar_value_axis()
         return True
 
     def colorbar_dead(self) -> bool:

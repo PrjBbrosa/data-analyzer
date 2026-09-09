@@ -15,6 +15,7 @@ from mf4_analyzer.ui_kit.axis_metrics import (
     axis_tick_texts,
     left_axis_width_for_ticks,
     pin_left_axes_to_common_width,
+    pin_value_axis_to_tick_need,
 )
 
 
@@ -25,4 +26,5 @@ __all__ = [
     "axis_tick_texts",
     "left_axis_width_for_ticks",
     "pin_left_axes_to_common_width",
+    "pin_value_axis_to_tick_need",
 ]

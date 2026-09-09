@@ -853,6 +853,171 @@ def test_subplot_titles_preserve_each_panel_amplitude_unit(qapp):
         scene.close()
 
 
+def _wide_time_spec(amplitude, n_rows=1, *, positive=False):
+    _, BatchSeries, BatchTimeFigureSpec, *_rest = _qt_api()
+    x = np.linspace(0.0, 9.2, 1000)
+    series = []
+    for index in range(n_rows):
+        wave = np.sin(x + index)
+        y = amplitude * (0.55 + 0.45 * wave) if positive else amplitude * wave
+        series.append(
+            BatchSeries(
+                x=x,
+                y=y,
+                label=f"ch{index + 1}",
+                unit="deg",
+                panel=index,
+            )
+        )
+    return BatchTimeFigureSpec(
+        tuple(series),
+        layout="subplot",
+        panel_titles=tuple(item.label for item in series),
+    )
+
+
+def _interior_tick_texts(axis):
+    from mf4_analyzer.ui_kit.axis_metrics import axis_tick_texts
+
+    levels = [
+        (float(value), str(text))
+        for level in (getattr(axis, "_tickLevels", None) or [])
+        for value, text in level
+        if str(text)
+    ]
+    if levels:
+        lo = min(value for value, _ in levels)
+        hi = max(value for value, _ in levels)
+        interior = [text for value, text in levels if lo < value < hi]
+        if interior:
+            return interior
+    texts = axis_tick_texts(axis)
+    return texts[1:-1] if len(texts) > 2 else texts
+
+
+def _drawn_tick_texts(axis):
+    from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+
+    return [text for _rect, text in _axis_tick_text_records(axis)]
+
+
+def _assert_left_axes_keep_interior_ticks(scene):
+    from mf4_analyzer.ui_kit.axis_metrics import (
+        axis_tick_texts,
+        left_axis_width_for_ticks,
+    )
+
+    lefts = []
+    for index, plot in enumerate(scene.plots):
+        axis = plot.getAxis("left")
+        needed = left_axis_width_for_ticks(axis)
+        realized = float(axis.width())
+        selected = axis_tick_texts(axis)
+        drawn = _drawn_tick_texts(axis)
+        interior = _interior_tick_texts(axis)
+        assert needed <= realized + 0.5, (
+            f"row {index}: ticks {selected!r} need {needed:.1f}px, axis is "
+            f"{realized:.1f}px"
+        )
+        if interior:
+            missing = [text for text in interior if text not in drawn]
+            assert not missing, (
+                f"row {index}: dropped {missing!r}; drawn={drawn!r} selected="
+                f"{selected!r} width={realized:.1f}px need={needed:.1f}px"
+            )
+        else:
+            assert drawn, (
+                f"row {index}: no ticks drawn; selected={selected!r} "
+                f"width={realized:.1f}px"
+            )
+        lefts.append(plot.vb.sceneBoundingRect().left())
+    for left in lefts[1:]:
+        assert left == pytest.approx(lefts[0], abs=1.0)
+    # Eight 250% rows can still collide after the 6 pt title floor; that is
+    # the existing shrink rule, not the axis-width defect under test.
+    if not (len(scene.plots) >= 8 and scene.theme.axis_font_pt >= 20.0):
+        assert scene.adjacent_text_overlaps() == []
+
+
+@pytest.mark.parametrize("n_rows", [1, 2, 8])
+@pytest.mark.parametrize(
+    ("amplitude", "font_scale"),
+    [
+        (510.0, 2.5),
+        (500000.0, 1.0),
+        (0.25, 1.0),
+        (510.0, 1.0),
+    ],
+)
+def test_subplot_left_axis_keeps_interior_ticks_for_wide_and_scaled_labels(
+    qapp, n_rows, amplitude, font_scale,
+):
+    scene = _open_scene(
+        qapp,
+        ("time", _wide_time_spec(amplitude, n_rows)),
+        params={"font_scale": font_scale},
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        _assert_left_axes_keep_interior_ticks(scene)
+    finally:
+        scene.close()
+
+
+def test_subplot_positive_only_wide_ticks_stay_visible_at_250pct_font(qapp):
+    scene = _open_scene(
+        qapp,
+        ("time", _wide_time_spec(510.0, 1, positive=True)),
+        params={"font_scale": 2.5},
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        _assert_left_axes_keep_interior_ticks(scene)
+        lo, hi = scene.plots[0].vb.viewRange()[1]
+        assert lo >= 0.0
+        assert hi > lo
+    finally:
+        scene.close()
+
+
+def test_subplot_manual_y_range_is_kept_and_still_labels_interior_ticks(qapp):
+    scene = _open_scene(
+        qapp,
+        ("time", _wide_time_spec(400.0, 1)),
+        params={
+            "font_scale": 2.5,
+            "y_auto": False,
+            "y_min": -510.0,
+            "y_max": 510.0,
+        },
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        lo, hi = scene.plots[0].vb.viewRange()[1]
+        assert (lo, hi) == pytest.approx((-510.0, 510.0))
+        _assert_left_axes_keep_interior_ticks(scene)
+    finally:
+        scene.close()
+
+
+def test_subplot_repeated_settle_does_not_keep_widening_the_left_axis(qapp):
+    scene = _open_scene(
+        qapp,
+        ("time", _wide_time_spec(500000.0, 2)),
+        params={"font_scale": 1.0},
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        first = [float(plot.getAxis("left").width()) for plot in scene.plots]
+        scene.show_and_settle()
+        qapp.processEvents()
+        second = [float(plot.getAxis("left").width()) for plot in scene.plots]
+        assert second == pytest.approx(first, abs=0.5)
+        _assert_left_axes_keep_interior_ticks(scene)
+    finally:
+        scene.close()
+
+
 def test_save_png_rejects_null_qimage_without_creating_target(tmp_path):
     from mf4_analyzer.batch_render_qt._export import save_png
 

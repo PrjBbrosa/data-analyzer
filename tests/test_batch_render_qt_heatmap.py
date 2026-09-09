@@ -48,12 +48,12 @@ def _context(*, unit="g", method="FFT vs Time"):
     )
 
 
-def _open_scene(qapp, kind, *, payload=None, params=None, warnings_out=None):
+def _open_scene(qapp, kind, *, payload=None, params=None, warnings_out=None, options=None):
     scene = build_batch_scene(
         (kind, _spectro() if payload is None else payload),
         params=params,
         context=_context(method="Order" if kind == "order_time" else "FFT vs Time"),
-        options=BatchRenderOptions(width_px=960, height_px=640),
+        options=options or BatchRenderOptions(width_px=960, height_px=640),
         warnings_out=warnings_out,
     )
     scene.show_and_settle()
@@ -1208,3 +1208,247 @@ def test_slice_amplitude_axis_label_matches_the_colorbar(qapp):
         )
     finally:
         scene.close()
+
+
+def _d4_payload(*, y_name="frequency_hz", x=None, y=None, matrix=None):
+    return SimpleNamespace(
+        x=np.asarray(x if x is not None else [10.0, 20.0, 40.0], dtype=float),
+        y=np.asarray(y if y is not None else [100.0, 480000.0], dtype=float),
+        matrix=np.asarray(
+            matrix if matrix is not None else [
+                [1.0, 200000.0],
+                [50000.0, 300000.0],
+                [100000.0, 480000.0],
+            ],
+            dtype=float,
+        ),
+        x_name="time_s",
+        y_name=y_name,
+        metadata={},
+    )
+
+
+def _drawn_tick_texts(axis):
+    return [text for _rect, text in batch_render_builder._axis_tick_text_records(axis)]
+
+
+def _major_tick_texts(axis):
+    levels = getattr(axis, "_tickLevels", None)
+    if levels:
+        return [str(text) for _value, text in levels[0] if str(text)]
+    try:
+        span = float(axis.boundingRect().height())
+        if span <= 0.0:
+            span = float(axis.boundingRect().width())
+        if span <= 0.0:
+            return []
+        low, high = float(axis.range[0]), float(axis.range[1])
+        scale = float(axis.autoSIPrefixScale) * float(axis.scale)
+        groups = list(axis.tickValues(low, high, span))
+        if not groups:
+            return []
+        spacing, values = groups[0]
+        return [
+            str(text)
+            for text in axis.tickStrings(list(values), scale, spacing)
+            if str(text)
+        ]
+    except Exception:
+        return []
+
+
+def _assert_axis_keeps_selected_interior_ticks(axis, *, tag, page_rect=None):
+    from mf4_analyzer.ui_kit.axis_metrics import left_axis_width_for_ticks
+
+    selected = _major_tick_texts(axis)
+    drawn = _drawn_tick_texts(axis)
+    interior = selected[1:-1] if len(selected) > 2 else selected
+    records = batch_render_builder._axis_tick_text_records(axis)
+    needed = left_axis_width_for_ticks(axis)
+    realized = float(axis.width())
+    if interior:
+        missing = [text for text in interior if text not in drawn]
+        assert not missing, (
+            f"{tag}: selected {selected!r} drawn {drawn!r} missing {missing!r}; "
+            f"axis rect={axis.boundingRect()!r} width={realized:.1f}px "
+            f"need={needed:.1f}px"
+        )
+    else:
+        assert drawn, (
+            f"{tag}: no ticks drawn; selected={selected!r} "
+            f"axis rect={axis.boundingRect()!r}"
+        )
+    if page_rect is not None:
+        for rect, text in records:
+            assert page_rect.contains(rect.center()), (
+                f"{tag}: tick {text!r} at {rect} is outside the page {page_rect}"
+            )
+
+
+def _page_scene_rect(scene):
+    from mf4_analyzer.batch_render_qt._builder import _page_right_limit
+
+    widget_rect = scene.widget.ci.sceneBoundingRect()
+    right = _page_right_limit(scene.widget)
+    widget_rect.setRight(right)
+    return widget_rect
+
+
+@pytest.mark.parametrize("kind", ["fft_time", "order_time"])
+@pytest.mark.parametrize(
+    ("font_scale", "z_floor", "z_ceiling", "with_slice"),
+    [
+        (1.0, 48000.0, 480000.0, True),
+        (1.0, 48000.0, 480000.0, False),
+        (2.5, 0.1, 1.0, True),
+        (2.5, 0.1, 1.0, False),
+    ],
+)
+def test_heatmap_colorbar_keeps_numeric_ticks_inside_the_page(
+    qapp, kind, font_scale, z_floor, z_ceiling, with_slice,
+):
+    from mf4_analyzer.ui_kit.axis_metrics import left_axis_width_for_ticks
+
+    payload = _d4_payload(y_name="order" if kind == "order_time" else "frequency_hz")
+    params = {
+        "amplitude_mode": "amplitude",
+        "font_scale": font_scale,
+        "z_auto": False,
+        "z_floor": z_floor,
+        "z_ceiling": z_ceiling,
+    }
+    if with_slice:
+        params.update(_slice_params("time", [20.0], **params))
+    scene = _open_scene(
+        qapp,
+        kind,
+        payload=payload,
+        params=params,
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        assert tuple(scene.heatmap_levels) == pytest.approx((z_floor, z_ceiling))
+        axis = scene.colorbar.axis
+        needed = left_axis_width_for_ticks(axis)
+        realized = float(axis.width())
+        assert needed <= realized + 0.5, (
+            f"colorbar ticks {_drawn_tick_texts(axis)!r} need {needed:.1f}px, "
+            f"axis is {realized:.1f}px (fixedWidth={axis.fixedWidth!r})"
+        )
+        _assert_axis_keeps_selected_interior_ticks(
+            axis, tag="colorbar", page_rect=_page_scene_rect(scene),
+        )
+        title_axis = scene.colorbar.getAxis("left").sceneBoundingRect()
+        value_axis = axis.sceneBoundingRect()
+        bar_rect = scene.colorbar.bar.sceneBoundingRect()
+        assert title_axis.right() <= value_axis.left() + 1.0
+        for rect, text in batch_render_builder._axis_tick_text_records(axis):
+            assert rect.left() >= bar_rect.right() - 2.0, (
+                f"colorbar tick {text!r} overlaps the colorband"
+            )
+        if with_slice:
+            main = scene.plots[0].vb.sceneBoundingRect()
+            slice_rect = scene.slice_plot.vb.sceneBoundingRect()
+            assert slice_rect.left() == pytest.approx(main.left(), abs=1.0)
+            assert slice_rect.right() == pytest.approx(main.right(), abs=1.0)
+            legend = scene.slice_legend
+            if legend is not None:
+                assert _page_scene_rect(scene).contains(legend.sceneBoundingRect().center())
+    finally:
+        scene.close()
+
+
+@pytest.mark.parametrize("kind", ["fft_time", "order_time"])
+@pytest.mark.parametrize(
+    ("width_px", "height_px", "font_scale", "x_values"),
+    [
+        (1920, 1080, 1.0, [10.0, 20.0, 40.0]),
+        (960, 640, 1.0, [10.0, 20.0, 40.0]),
+        (1920, 1080, 2.5, [10.0, 20.0, 40.0]),
+        (1920, 1080, 1.0, [-40.0, 0.0, 40.0]),
+    ],
+)
+def test_heatmap_slice_x_ticks_are_not_silently_dropped_at_the_edge(
+    qapp, kind, width_px, height_px, font_scale, x_values,
+):
+    payload = _d4_payload(
+        y_name="order" if kind == "order_time" else "frequency_hz",
+        x=x_values,
+    )
+    slice_axis = "y" if min(x_values) < 0.0 else "time"
+    slice_position = x_values[1] if slice_axis == "time" else float(payload.y[0])
+    params = _slice_params(
+        slice_axis,
+        [slice_position],
+        amplitude_mode="amplitude",
+        font_scale=font_scale,
+    )
+    scene = _open_scene(
+        qapp,
+        kind,
+        payload=payload,
+        params=params,
+        options=BatchRenderOptions(width_px=width_px, height_px=height_px),
+    )
+    try:
+        axis = scene.slice_plot.getAxis("bottom")
+        selected = _major_tick_texts(axis)
+        drawn = _drawn_tick_texts(axis)
+        missing = [text for text in selected if text not in drawn]
+        lo, hi = scene.slice_plot.vb.viewRange()[0]
+        extent = float(axis.boundingRect().width())
+        assert not missing, (
+            f"slice X silently dropped {missing!r}; selected={selected!r} "
+            f"drawn={drawn!r} range=({lo}, {hi}) extent={extent:.1f}px "
+            f"axis={axis.boundingRect()!r}"
+        )
+        assert selected, f"slice X installed no ticks on range=({lo}, {hi})"
+        values = [
+            float(value)
+            for level in (axis._tickLevels or [])
+            for value, text in level
+            if str(text)
+        ]
+        span = hi - lo
+        assert max(values) >= hi - 0.25 * span, (
+            f"slice X truncated short of the right edge: ticks={values!r} "
+            f"range=({lo}, {hi})"
+        )
+        _assert_axis_keeps_selected_interior_ticks(
+            axis, tag="slice-x", page_rect=_page_scene_rect(scene),
+        )
+        if scene.slice_plan.axis == "time":
+            assert (lo, hi) == pytest.approx(tuple(scene.plots[0].vb.viewRange()[1]))
+        else:
+            assert (lo, hi) == pytest.approx(tuple(scene.plots[0].vb.viewRange()[0]))
+    finally:
+        scene.close()
+
+
+def test_horizontal_tick_rects_fit_rejects_a_near_edge_interior_label():
+    class StubMetrics:
+        def width(self, text):
+            return 80.0 if text == "475000" else 20.0
+
+        def ascent(self):
+            return 10.0
+
+        def descent(self):
+            return 4.0
+
+    assert not BuiltBatchScene._horizontal_tick_rects_fit(
+        [100.0, 240000.0, 475000.0],
+        ["100", "240000", "475000"],
+        StubMetrics(),
+        200.0,
+        100.0,
+        480000.0,
+    )
+    assert BuiltBatchScene._horizontal_tick_rects_fit(
+        [100.0, 240000.0, 480000.0],
+        ["100", "240000", "480000"],
+        StubMetrics(),
+        200.0,
+        100.0,
+        480000.0,
+    )

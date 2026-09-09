@@ -65,6 +65,8 @@ from ..ui_kit.axis_metrics import (
     axis_tick_font,
     axis_tick_texts,
     left_axis_width_for_ticks,
+    pin_left_axes_to_common_width,
+    pin_value_axis_to_tick_need,
 )
 from ..ui_kit.ticks_math import (
     _DEGENERATE_SPAN_RATIO,
@@ -1017,6 +1019,12 @@ class BuiltBatchScene:
         for callback in self._layout_callbacks:
             if getattr(callback, "runs_after_tick_density", False):
                 callback()
+        # Left-axis pins and colorbar sizing can shrink the plot area after
+        # the first tick pass. Refit on that final extent so a selected
+        # edge-near label is coarsened as a set instead of being dropped by
+        # ``generateDrawSpecs`` (``if br & rect != rect: continue``).
+        self._apply_tick_density()
+        self._fit_axis_labels()
         if app is not None:
             # Two drains, and the second one is load-bearing for stacked
             # subplots: an AxisItem only learns its true height once its tick
@@ -1202,15 +1210,32 @@ class BuiltBatchScene:
         if per_div is None or len(values) < 2:
             return None
         extent = self._axis_extent_px(axis, horizontal)
+        lo_f, hi_f = float(lo), float(hi)
         for _attempt in range(6):
             labels = [_fmt_tick(value, per_div) for value in values]
-            if extent <= 1.0 or self._labels_fit(labels, metrics, extent, horizontal):
-                return list(zip((float(value) for value in values), labels))
+            if extent <= 1.0 or self._ticks_fit(
+                values, labels, metrics, extent, horizontal, lo_f, hi_f
+            ):
+                pairs = list(zip((float(value) for value in values), labels))
+                if horizontal and extent > 1.0:
+                    pairs = self._omit_overflowing_horizontal_endpoints(
+                        pairs, metrics, extent, lo_f, hi_f
+                    )
+                return pairs
             coarser, values = coarsen_nice_step(per_div, lo, hi)
             if coarser is None or len(values) < 2:
                 return None
             per_div = coarser
         return None
+
+    def _ticks_fit(
+        self, values, labels, metrics, extent: float, horizontal: bool, lo: float, hi: float
+    ) -> bool:
+        if not self._labels_fit(labels, metrics, extent, horizontal):
+            return False
+        if not horizontal:
+            return True
+        return self._horizontal_tick_rects_fit(values, labels, metrics, extent, lo, hi)
 
     @staticmethod
     def _labels_fit(labels, metrics, extent: float, horizontal: bool) -> bool:
@@ -1221,6 +1246,68 @@ class BuiltBatchScene:
         else:
             needed = metrics.ascent() + metrics.descent() + 4.0
         return needed * len(labels) <= extent
+
+    @staticmethod
+    def _horizontal_tick_rects_fit(
+        values, labels, metrics, extent: float, lo: float, hi: float
+    ) -> bool:
+        """False when an interior X label would be clipped at the axis edge.
+
+        ``AxisItem.generateDrawSpecs`` centers each label on its tick and
+        drops any rect that is not fully inside ``boundingRect``. Average
+        packing (``_labels_fit``) can still pass while a near-edge interior
+        label such as 475000 on a 100..480000 axis overflows by half its
+        width. Exact view-range endpoints are ignored here: those are the
+        historical vertical/end-cap clip, not this width defect. A failing
+        interior label rejects the whole nice-step so the fitter coarsens
+        uniformly instead of deleting one string.
+        """
+        span = float(hi) - float(lo)
+        if span <= 0.0 or len(values) < 2:
+            return True
+        endpoint_tol = max(span * 1e-9, 1e-12)
+        for value, text in zip(values, labels):
+            width = float(metrics.width(str(text)))
+            x = (float(value) - float(lo)) / span * extent
+            left = x - width / 2.0
+            right = x + width / 2.0
+            if left >= 0.0 and right <= extent:
+                continue
+            if (
+                abs(float(value) - float(lo)) <= endpoint_tol
+                or abs(float(value) - float(hi)) <= endpoint_tol
+            ):
+                continue
+            return False
+        return True
+
+    @staticmethod
+    def _omit_overflowing_horizontal_endpoints(
+        pairs, metrics, extent: float, lo: float, hi: float
+    ):
+        """Drop range-end labels that ``generateDrawSpecs`` would clip.
+
+        Interior overflow already rejected the nice-step. Endpoints sitting
+        on the view edge are the historical clip; installing them would make
+        ``_tickLevels`` claim a label that never paints. Keep the full set
+        when omitting them would leave fewer than two labels.
+        """
+        span = float(hi) - float(lo)
+        if span <= 0.0 or len(pairs) < 2:
+            return pairs
+        endpoint_tol = max(span * 1e-9, 1e-12)
+        kept = []
+        for value, label in pairs:
+            width = float(metrics.width(str(label)))
+            x = (float(value) - float(lo)) / span * extent
+            overflows = (x - width / 2.0) < 0.0 or (x + width / 2.0) > extent
+            if overflows and (
+                abs(float(value) - float(lo)) <= endpoint_tol
+                or abs(float(value) - float(hi)) <= endpoint_tol
+            ):
+                continue
+            kept.append((value, label))
+        return kept if len(kept) >= 2 else pairs
 
     def texts(self) -> list[str]:
         values = [_text_of(item) for item in self.page_labels]
@@ -1969,14 +2056,10 @@ class _SceneBuilder:
                     layout.invalidate()
                     layout.activate()
                 left_axes = [plot.getAxis("left") for plot in self.plots]
-                for axis in left_axes:
-                    axis.setWidth(None)
-                max_width = max((float(axis.width()) for axis in left_axes), default=0.0)
-                if max_width > 0.0:
-                    for axis in left_axes:
-                        axis.setWidth(max_width)
-                layout.invalidate()
-                layout.activate()
+                pin_left_axes_to_common_width(
+                    left_axes,
+                    layout_owners=(*self.plots, self.widget.ci),
+                )
 
             # Denser default Y ticks (GUI 「密」15 vs the old batch 10) change
             # left-axis width after _apply_tick_density. Re-run so stacked
@@ -2241,14 +2324,14 @@ class _SceneBuilder:
             if bottom_height > 1.0:
                 layout.setRowPreferredHeight(5, 100.0 + bottom_height)
             left_axes = [plot.getAxis("left") for plot in plots]
-            for axis in left_axes:
-                axis.setWidth(None)
-            max_width = max(float(axis.width()) for axis in left_axes)
-            for axis in left_axes:
-                axis.setWidth(max_width)
-            layout.invalidate()
-            layout.activate()
+            pin_left_axes_to_common_width(
+                left_axes,
+                layout_owners=(*plots, self.widget.ci),
+            )
 
+        # Final Y strings land in ``_apply_tick_density``. Size the shared
+        # left gutter from those strings, not from a pre-tick ``width()``.
+        settle_frf_layout.runs_after_tick_density = True
         self.layout_callbacks.append(settle_frf_layout)
 
         def sync_frf_x(*_args) -> None:
@@ -2375,6 +2458,19 @@ class _SceneBuilder:
             axis.enableAutoSIPrefix(False)
             axis.setStyle(maxTickLevel=0)
             apply_axis_font(axis, self.theme.axis_font_pt)
+        # Vertical ColorBarItem pins the numeric RIGHT axis at 45 px. That
+        # is the colorband's neighbour, not the colorband itself; releasing
+        # and pinning it to the current tick strings is what keeps 480000
+        # (or 250% "0.2") from being dropped. The left axis stays the title.
+        def settle_colorbar_axis(*_args, _bar=colorbar, _plot=plot):
+            axis = getattr(_bar, "axis", None) or _bar.getAxis("right")
+            owners = [_bar, _plot, self.widget.ci]
+            if self.slice_plot is not None:
+                owners.append(self.slice_plot)
+            pin_value_axis_to_tick_need(axis, layout_owners=owners)
+
+        settle_colorbar_axis.runs_after_tick_density = True
+        self.layout_callbacks.append(settle_colorbar_axis)
 
         if not bool(self.params.get("x_auto", True)) and _valid_pair(
             self.params.get("x_min"), self.params.get("x_max")

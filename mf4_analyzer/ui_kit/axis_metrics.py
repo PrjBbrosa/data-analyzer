@@ -28,6 +28,7 @@ __all__ = [
     "axis_tick_texts",
     "left_axis_width_for_ticks",
     "pin_left_axes_to_common_width",
+    "pin_value_axis_to_tick_need",
 ]
 
 
@@ -199,3 +200,29 @@ def pin_left_axes_to_common_width(axes, *, layout_owners=()) -> float:
             pass
     activate_item_layouts(layout_owners)
     return target
+
+
+def pin_value_axis_to_tick_need(axis, *, layout_owners=()) -> float:
+    """Pin one value axis to the width its current tick strings need.
+
+    Unlike ``pin_left_axes_to_common_width``, this may shrink. Colorbar
+    numeric axes cycle narrow→wide→narrow as levels change; folding in the
+    previous realized width would leave a stale gutter. The colorband column
+    is not an ``AxisItem`` and must not be passed here.
+    """
+    if axis is None:
+        activate_item_layouts(layout_owners)
+        return 0.0
+    try:
+        needed = float(left_axis_width_for_ticks(axis))
+    except Exception:
+        needed = 0.0
+    try:
+        if needed <= 0.0:
+            axis.setWidth(None)
+        else:
+            axis.setWidth(needed)
+    except Exception:
+        pass
+    activate_item_layouts(layout_owners)
+    return needed

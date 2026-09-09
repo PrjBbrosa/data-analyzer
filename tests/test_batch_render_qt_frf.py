@@ -525,3 +525,124 @@ def test_frf_scene_close_deferred_delete_releases_widget(qapp):
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     qapp.processEvents()
     assert sip.isdeleted(widget)
+
+
+def _wide_frf_series():
+    frequency = np.linspace(1.0, 500.0, 1000)
+    transfer = (1.0 + 1000.0 * frequency) * np.exp(
+        1j * np.linspace(-10.0, 10.0, 1000)
+    )
+    coherence = np.linspace(0.05, 0.95, 1000)
+    return BatchFrfSeries(
+        frequency_hz=frequency,
+        transfer=transfer,
+        coherence=coherence,
+        label="Acceleration / Force",
+        source_display_name="Rig A",
+        input_channel="Force",
+        output_channel="Acceleration",
+        input_unit="N",
+        output_unit="m/s²",
+    )
+
+
+def _interior_tick_texts(axis):
+    from mf4_analyzer.ui_kit.axis_metrics import axis_tick_texts
+
+    levels = [
+        (float(value), str(text))
+        for level in (getattr(axis, "_tickLevels", None) or [])
+        for value, text in level
+        if str(text)
+    ]
+    if levels:
+        lo = min(value for value, _ in levels)
+        hi = max(value for value, _ in levels)
+        interior = [text for value, text in levels if lo < value < hi]
+        if interior:
+            return interior
+    texts = axis_tick_texts(axis)
+    return texts[1:-1] if len(texts) > 2 else texts
+
+
+def _drawn_tick_texts(axis):
+    from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+
+    return [text for _rect, text in _axis_tick_text_records(axis)]
+
+
+def _assert_frf_left_axes_keep_ticks(scene):
+    from mf4_analyzer.ui_kit.axis_metrics import (
+        axis_tick_texts,
+        left_axis_width_for_ticks,
+    )
+
+    lefts = []
+    widths = []
+    for index, plot in enumerate(scene.plots):
+        axis = plot.getAxis("left")
+        needed = left_axis_width_for_ticks(axis)
+        realized = float(axis.width())
+        selected = axis_tick_texts(axis)
+        drawn = _drawn_tick_texts(axis)
+        interior = _interior_tick_texts(axis)
+        assert needed <= realized + 0.5, (
+            f"panel {index}: ticks {selected!r} need {needed:.1f}px, axis is "
+            f"{realized:.1f}px"
+        )
+        if interior:
+            missing = [text for text in interior if text not in drawn]
+            assert not missing, (
+                f"panel {index}: dropped {missing!r}; drawn={drawn!r} selected="
+                f"{selected!r} width={realized:.1f}px need={needed:.1f}px"
+            )
+        else:
+            assert drawn, (
+                f"panel {index}: no ticks drawn; selected={selected!r} "
+                f"width={realized:.1f}px"
+            )
+        lefts.append(plot.vb.sceneBoundingRect().left())
+        widths.append(realized)
+    for left in lefts[1:]:
+        assert left == pytest.approx(lefts[0], abs=1.0)
+    for width in widths[1:]:
+        assert width == pytest.approx(widths[0], abs=0.5)
+    assert scene.adjacent_text_overlaps() == []
+
+
+@pytest.mark.parametrize(
+    ("magnitude_scale", "frequency_scale", "phase_mode", "font_scale"),
+    [
+        ("linear", "linear", "unwrapped", 2.5),
+        ("linear", "linear", "wrapped", 1.0),
+        ("db", "linear", "unwrapped", 2.5),
+        ("linear", "log", "unwrapped", 2.5),
+        ("db", "log", "wrapped", 1.0),
+    ],
+)
+def test_frf_left_axes_keep_interior_ticks_across_display_modes(
+    qapp, magnitude_scale, frequency_scale, phase_mode, font_scale,
+):
+    from mf4_analyzer.batch_render_qt._builder import build_batch_scene
+
+    spec = BatchFrfFigureSpec(
+        (_wide_frf_series(),),
+        magnitude_scale=magnitude_scale,
+        frequency_scale=frequency_scale,
+        phase_mode=phase_mode,
+    )
+    scene = build_batch_scene(
+        ("frf", spec),
+        params={"font_scale": font_scale},
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+        context=BatchRenderContext(source_display_name="Rig A", method="frf"),
+    )
+    try:
+        scene.show_and_settle()
+        qapp.processEvents()
+        _assert_frf_left_axes_keep_ticks(scene)
+        if magnitude_scale == "linear":
+            y_hi = scene.plots[0].vb.viewRange()[1][1]
+            assert y_hi >= 100000.0
+    finally:
+        scene.close()
