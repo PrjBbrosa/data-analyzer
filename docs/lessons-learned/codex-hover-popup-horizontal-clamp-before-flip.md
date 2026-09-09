@@ -12,16 +12,19 @@ tests: [tests/ui_kit/test_dialog_geometry.py, tests/ui/test_preset_bar_lifecycle
 
 Trigger: Anchored hover popups flicker near screen edges or in maximized windows.
 
-Past failure: A centered Preset card extended past the right screen edge.
-Both above/below candidates failed full-rectangle containment because of X,
-so final clamping covered the hovered button. Native Windows repeatedly sent
-Enter/Show/Leave/Hide with a stationary cursor (269 events in 1.5 seconds).
+Past failure: Horizontal overflow rejected valid above/below candidates. Fixing
+X passed a short synthetic summary probe but missed full FFT vs Time presets:
+neither vertical side fit, so final clamping still covered the trigger. The
+user reproduced flicker immediately after the fix was published. The real
+main window produced 89-95 hover/show/hide events per second.
 
-Rule: Clamp horizontal placement before choosing an above/below candidate.
-When either vertical side fits, preserve the trigger gap. Screen containment
-alone does not prove correct placement or stable hover behavior.
+Rule: Clamp horizontal placement before choosing above/below. If neither
+vertical side fits, try beside the whole preset row. Pure display cards must
+not intercept native mouse input when a tiny work area forces overlap.
+Screen containment alone does not prove stable hover behavior.
 
-Verification: Cover both horizontal edges, both preferred sides, required flips,
-and negative screen origins. Exercise the real widget with a stationary native
-Windows cursor; the repaired edge case produced only Enter/Show. Keep native
-probes separate from offscreen geometry evidence.
+Verification: Cover both edges, preferred sides, flips, negative origins,
+and real full builtin/custom preset payloads with production styling. Native
+probes must verify that the cursor reaches the enabled target, the card actually
+shows, and no repeated Leave/Hide occurs. Zero events without a visible card is
+not a pass. Keep native foreground and offscreen geometry evidence separate.

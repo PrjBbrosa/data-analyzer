@@ -52,10 +52,15 @@ class _PresetHoverCard(QFrame):
     def __init__(self):
         super().__init__(
             None,
-            Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
+            Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+            | Qt.WindowTransparentForInput,
         )
         self.setObjectName("presetHoverCard")
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # This summary has no interactive controls. Even if a tiny screen
+        # forces overlap, it must not steal hover from its trigger button.
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setWindowOpacity(1.0)
         self.setFixedWidth(self.WIDTH)
         self._chip_rows = []
@@ -886,6 +891,20 @@ class PresetBar(QWidget):
             position="above",
             gap=10,
         )
+        row = self.rect().translated(self.mapToGlobal(self.rect().topLeft()))
+        if plan.frame.to_qrect().intersects(row):
+            # Neither vertical side fits a full summary. Keep the whole
+            # preset row accessible by trying its left and right sides.
+            for x in (row.left() - width - 10, row.right() + 1 + 10):
+                side = plan_geometry(
+                    available, (width, height), frame=FrameInsets(),
+                    margin=SCREEN_MARGIN,
+                    host=IntRect(x, center.y() - height // 2, width, height),
+                    position="center",
+                )
+                if not side.frame.to_qrect().intersects(row):
+                    plan = side
+                    break
         apply_plan(card, plan)
 
     def _hide_hover(self):
