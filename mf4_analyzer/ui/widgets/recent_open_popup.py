@@ -61,12 +61,12 @@ from ..recent_files import (
     match_recent_entries,
 )
 
-RECENT_POPUP_MAX_WIDTH = 640
-RECENT_POPUP_TARGET_HEIGHT = 700
-RECENT_POPUP_ROW_HEIGHT = 40
-RECENT_POPUP_SEARCH_HEIGHT = 70
-RECENT_POPUP_HEADER_HEIGHT = 32
-RECENT_POPUP_FOOTER_HEIGHT = 48
+RECENT_POPUP_MAX_WIDTH = 600
+RECENT_POPUP_TARGET_HEIGHT = 520
+RECENT_POPUP_ROW_HEIGHT = 32
+RECENT_POPUP_SEARCH_HEIGHT = 54
+RECENT_POPUP_HEADER_HEIGHT = 28
+RECENT_POPUP_FOOTER_HEIGHT = 36
 RECENT_NAME_COLUMN_RATIO = 0.46
 _ANCHOR_GAP = 4
 _FRAME_GUARD = 1
@@ -154,7 +154,7 @@ class RecentOpenPopup(QFrame):
         search_bar.setFixedHeight(RECENT_POPUP_SEARCH_HEIGHT)
         search_bar.setAttribute(Qt.WA_StyledBackground, True)
         search_lay = QHBoxLayout(search_bar)
-        search_lay.setContentsMargins(16, 14, 16, 14)
+        search_lay.setContentsMargins(12, 10, 12, 10)
         search_lay.setSpacing(12)
         self._search = SearchField(
             "搜索文件名或所在位置，例如 250 lowfri、P166 tlproj",
@@ -293,7 +293,15 @@ class RecentOpenPopup(QFrame):
         max_w = max(1, available.width() - 2 * SCREEN_MARGIN)
         max_h = max(1, available.height() - 2 * SCREEN_MARGIN)
         width = min(RECENT_POPUP_MAX_WIDTH, max_w)
-        height = min(RECENT_POPUP_TARGET_HEIGHT, max_h)
+        # Size from the unfiltered snapshot once per opening. Searching or
+        # clearing records must not move the popup beneath the pointer.
+        content_height = (
+            RECENT_POPUP_SEARCH_HEIGHT + RECENT_POPUP_HEADER_HEIGHT
+            + RECENT_POPUP_FOOTER_HEIGHT + 2 * _FRAME_GUARD
+            + max(3, len(self._entries)) * RECENT_POPUP_ROW_HEIGHT
+        )
+        height = min(content_height, RECENT_POPUP_TARGET_HEIGHT,
+                     max_h, max(1, int(available.height() * 0.70)))
         self.setFixedSize(width, height)
         self._sync_column_widths()
         self._sync_empty_geometry()
@@ -874,7 +882,7 @@ class _RecentRowDelegate(QStyledItemDelegate):
             color,
             Qt.ElideMiddle,
             bold=True,
-            pixel=13,
+            pixel=12,
         )
         if is_project:
             badge = QRect(rect.right() - 8 - 32, rect.center().y() - 10, 32, 20)
@@ -914,7 +922,7 @@ class _RecentRowDelegate(QStyledItemDelegate):
             color,
             Qt.ElideMiddle,
             bold=False,
-            pixel=12,
+            pixel=11,
         )
 
     def _draw_elided(

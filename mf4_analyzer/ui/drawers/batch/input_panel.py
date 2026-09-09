@@ -23,7 +23,7 @@ import os
 from typing import Iterable
 
 from PyQt5.QtCore import (
-    QEvent, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal,
+    QDateTime, QEvent, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal,
 )
 from PyQt5.QtWidgets import (
     QAbstractScrollArea, QAbstractSpinBox, QAction, QComboBox, QFileDialog,
@@ -40,6 +40,9 @@ from ....io.source_adapters import (
 )
 from ....list_text import split_list_text
 from ....ui_kit.menus import apply_rounded_menu_chrome
+from ....ui_kit.icons import Icons
+from ...recent_files import KIND_FILE, RecentFilesStore
+from ...widgets.recent_open_popup import RecentOpenPopup
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .filter_panel import BatchFilterPanel
@@ -340,7 +343,7 @@ class FileListWidget(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAutoFillBackground(False)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._files_source = files or {}
+        self._files_source = files if files is not None else {}
         self._rows: dict[str, _FileRow] = {}
         self._last_intersection: frozenset = frozenset()
         self._source_registry = (
@@ -373,7 +376,28 @@ class FileListWidget(QWidget):
         self._btn_disk = QPushButton("+ 从磁盘…")
         self._btn_disk.setObjectName("BatchFileAddDisk")
         self._btn_disk.clicked.connect(self._open_disk_dialog)
-        header.addWidget(self._btn_disk)
+        self._disk_split = QWidget(self)
+        self._disk_split.setObjectName("BatchFileDiskSplit")
+        split_layout = QHBoxLayout(self._disk_split)
+        split_layout.setContentsMargins(0, 0, 0, 0)
+        split_layout.setSpacing(0)
+        split_layout.addWidget(self._btn_disk)
+        self._btn_recent = QPushButton(self._disk_split)
+        self._btn_recent.setObjectName("BatchFileRecent")
+        self._btn_recent.setIcon(Icons.chevron_down())
+        self._btn_recent.setFixedWidth(26)
+        self._btn_recent.setToolTip("最近打开的数据文件")
+        self._btn_recent.setAccessibleName("最近打开的数据文件")
+        self._btn_recent.setAutoDefault(False)
+        self._btn_recent.clicked.connect(self._open_recent_popup)
+        split_layout.addWidget(self._btn_recent)
+        self._recent_store = RecentFilesStore()
+        self._recent_popup = RecentOpenPopup(self)
+        self._recent_popup.open_requested.connect(self._add_recent_path)
+        self._recent_popup.clear_requested.connect(self._clear_recent_files)
+        self._recent_popup.closed.connect(self._on_recent_closed)
+        self._recent_closed_msecs = 0
+        header.addWidget(self._disk_split)
         header.addStretch(1)
         outer.addLayout(header)
 
@@ -788,11 +812,32 @@ class FileListWidget(QWidget):
             channels = frozenset()
         self.add_loaded_file(fid, path, channels)
 
-    def _open_disk_dialog(self) -> None:
-        file_glob = self._source_registry.file_dialog_glob
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "选择数据文件", "", f"所有支持的数据 ({file_glob})"
-        )
+    def set_recent_store(self, store: RecentFilesStore) -> None:
+        self._recent_store = store
+
+    def _open_recent_popup(self) -> None:
+        if self._recent_popup.isVisible():
+            self._recent_popup.close()
+            return
+        if QDateTime.currentMSecsSinceEpoch() - self._recent_closed_msecs < 250:
+            return
+        self._recent_popup.populate(self._recent_store.entries(KIND_FILE))
+        self._recent_popup.reset_for_show()
+        self._recent_popup.show_at(self._disk_split)
+
+    def _on_recent_closed(self) -> None:
+        self._recent_closed_msecs = QDateTime.currentMSecsSinceEpoch()
+
+    def _clear_recent_files(self) -> None:
+        # The batch popup contains data files only; preserve recent projects.
+        for entry in self._recent_store.entries(KIND_FILE):
+            self._recent_store.remove(entry.path)
+        self._recent_popup.populate(())
+
+    def _add_recent_path(self, path: str) -> None:
+        self._add_selected_disk_paths([path])
+
+    def _add_selected_disk_paths(self, paths) -> None:
         selected = [str(path) for path in (paths or ()) if path]
         if not selected:
             return
@@ -801,6 +846,13 @@ class FileListWidget(QWidget):
             return
         for path in selected:
             self.add_disk_path(path)
+
+    def _open_disk_dialog(self) -> None:
+        file_glob = self._source_registry.file_dialog_glob
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择数据文件", "", f"所有支持的数据 ({file_glob})"
+        )
+        self._add_selected_disk_paths(paths)
 
 
 # ---------------------------------------------------------------------------

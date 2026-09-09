@@ -56,7 +56,7 @@ def test_recent_open_popup_shell_is_single_transient_instance(qtbot):
     assert host is not None
 
 
-def test_popup_geometry_fits_thirteen_full_rows(qtbot, tmp_path, monkeypatch):
+def test_compact_popup_geometry_fits_twelve_full_rows(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(RecentOpenPopup, "_available_geometry_for", staticmethod(_large_screen))
     host, popup = _make_popup(qtbot)
     entries = []
@@ -72,9 +72,9 @@ def test_popup_geometry_fits_thirteen_full_rows(qtbot, tmp_path, monkeypatch):
     assert abs(popup.height() - RECENT_POPUP_TARGET_HEIGHT) <= 1
     table = popup.findChild(QTableView, "recentOpenTable")
     header = popup.findChild(QHeaderView, "recentOpenHeader")
-    assert header.height() == 32
+    assert header.height() == 28
     assert table.rowHeight(0) == RECENT_POPUP_ROW_HEIGHT
-    assert table.viewport().height() >= 13 * RECENT_POPUP_ROW_HEIGHT
+    assert table.viewport().height() >= 12 * RECENT_POPUP_ROW_HEIGHT
     assert table.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
     assert table.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOn
     assert table.horizontalScrollBar().maximum() == 0
@@ -683,3 +683,33 @@ def test_enter_skips_when_effect_blocked_or_unsupported(qtbot, tmp_path, monkeyp
     popup2.set_motion_policy(POLICY_REDUCED)
     assert not popup2.motion_policy().interpolates()
     popup2.close()
+
+
+@pytest.mark.parametrize("count", [0, 1, 3, 13, 40])
+def test_compact_height_tracks_records_only_when_opening(qtbot, tmp_path, monkeypatch, count):
+    monkeypatch.setattr(RecentOpenPopup, "_available_geometry_for",
+                        staticmethod(lambda anchor: QRect(0, 0, 1280, 800)))
+    host, popup = _make_popup(qtbot)
+    popup.populate([_entry(tmp_path / f"file_{i}.mf4") for i in range(count)])
+    popup.reset_for_show()
+    popup.show_at(host)
+    expected = min(120 + max(3, count) * 32, 520)
+    assert popup.height() == expected
+    assert popup.width() == 600
+    before = popup.geometry()
+    popup._search.setText("no match")
+    assert popup.geometry() == before
+    popup.populate(())
+    assert popup.geometry() == before
+    popup.close()
+
+
+def test_compact_popup_caps_height_on_laptop(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(RecentOpenPopup, "_available_geometry_for",
+                        staticmethod(lambda anchor: QRect(0, 0, 1280, 720)))
+    host, popup = _make_popup(qtbot)
+    popup.populate([_entry(tmp_path / f"file_{i}.mf4") for i in range(40)])
+    popup.show_at(host)
+    assert popup.height() == int(720 * 0.70)
+    assert popup._table.verticalScrollBar().maximum() > 0
+    popup.close()

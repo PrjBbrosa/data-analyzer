@@ -533,6 +533,7 @@ def test_invalid_time_range_text_blocks_run_with_field_error(
 
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
+    sheet._analysis_panel.set_method("fft")
     sheet._input_panel._file_list.add_loaded_file(
         0, "a.mf4", frozenset({"sig"})
     )
@@ -1050,6 +1051,7 @@ def test_batch_sheet_get_preset_includes_output_axis_params(qtbot):
 
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
+    sheet._analysis_panel.set_method("fft")
     assert sheet._output_panel.combo_amp_unit.currentText() == "dB"
     # Per spec §1.4, switching ``combo_amp_unit`` resets ``z_auto`` and the
     # z-range spins to the new unit's defaults. To verify that the user's

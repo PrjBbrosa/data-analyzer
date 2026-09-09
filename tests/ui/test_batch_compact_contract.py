@@ -165,6 +165,7 @@ def test_output_edit_clears_an_applied_analysis_card(qtbot):
 
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
+    sheet._analysis_panel.set_method("fft")
     sheet._analysis_panel._preset_buttons["torque"].click()
     assert sheet._analysis_panel._preset_buttons["torque"].isChecked()
 

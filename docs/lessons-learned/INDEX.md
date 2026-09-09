@@ -238,6 +238,7 @@ lesson by default.
 | [Reparented Batch Controls Must Keep Run Locks and Guidance Ownership](codex-batch-reparented-controls-and-guidance-lifecycle.md) | Moving controls across Qt parents or adding validation-driven guidance. | See lesson |
 | [Wrapped Hint Minimum Follows Current Width](wrapped-hint-minimum-follows-current-width.md) | A wrapped hint inside a nested form is intermittently compressed. | See lesson |
 | [Clamp Hover Popup X Before Selecting Its Vertical Side](codex-hover-popup-horizontal-clamp-before-flip.md) | Anchored hover popups flicker near screen edges or in maximized windows. | See lesson |
+| [Preserve Initially Empty Shared Source Mappings](batch-preserve-empty-source-mapping.md) | A dialog retains a source mapping owned by the main window. | See lesson |
 
 ## Selection Rules
 

@@ -358,7 +358,7 @@ def test_batch_method_buttons_are_compact_tabs_with_full_labels(qtbot):
     assert len({button.font().stretch() for button in group._buttons.values()}) == 1
 
 
-def test_batch_method_tabs_use_underline_not_zone_markers(qtbot, qapp):
+def test_batch_method_tabs_keep_compact_geometry_without_extra_markers(qtbot, qapp):
     from mf4_analyzer.ui_kit import load_stylesheet
     from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
 
@@ -380,14 +380,11 @@ def test_batch_method_tabs_use_underline_not_zone_markers(qtbot, qapp):
             assert button.width() >= metrics.horizontalAdvance(button.text())
             assert button.height() >= 28
 
-        assert group._underlines["fft"].isVisible()
-        assert not group._underlines["time"].isVisible()
+        assert not hasattr(group, "_underlines")
+        assert group._buttons["fft"].isChecked()
         group._buttons["frf"].click()
-        assert group._underlines["frf"].isVisible()
-        assert not group._underlines["fft"].isVisible()
-        underline = group._underlines["frf"]
-        assert underline.height() == 2
-        assert underline.width() < group._buttons["frf"].width()
+        assert group._buttons["frf"].isChecked()
+        assert not group._buttons["fft"].isChecked()
     finally:
         group.close()
         qapp.setStyleSheet(old_stylesheet)

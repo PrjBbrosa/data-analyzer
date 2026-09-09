@@ -283,8 +283,15 @@ _HINTS = (
         priority=49,
     ),
     Hint(
+        id="batch.recent_files",
+        text="批处理从磁盘右侧箭头打开最近文件",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=44,
+    ),
+    Hint(
         id="batch.method_first",
-        text="批处理顶部先选分析方法",
+        text="批处理默认时域，可切换分析方法",
         surface="discovery",
         retire_on="batch_open",
         priority=46,

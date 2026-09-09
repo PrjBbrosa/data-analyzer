@@ -198,7 +198,7 @@ class BatchSheet(QDialog):
         self.setObjectName("SheetSurface")
         self.setWindowTitle("批处理分析")
         configure_independent_tool_window(self)
-        self._files = files or {}
+        self._files = files if files is not None else {}
         self._current_preset = current_preset
         self._prefs_store = (
             prefs_store if prefs_store is not None else BatchPanelPrefsStore()
@@ -362,6 +362,9 @@ class BatchSheet(QDialog):
             self, files=self._files, source_registry=self._source_registry,
             source_context=self._source_context,
         )
+        recent_store = getattr(parent, "_recent_files", None)
+        if recent_store is not None:
+            self._input_panel._file_list.set_recent_store(recent_store)
         # Route through a closure over a *weak* reference, not the bound
         # method directly: ``InputPanel``/``FileListWidget`` store this
         # handler as a plain attribute for the lifetime of the sheet, which
@@ -561,6 +564,10 @@ class BatchSheet(QDialog):
         self._input_panel.channelUniverseChanged.connect(
             self._on_channel_universe_changed
         )
+
+        # A fresh batch starts with time-domain analysis; explicit presets
+        # and single-analysis synchronization can override this later.
+        self._analysis_panel.set_method("time")
 
         # Init-sync (per conditional-visibility-init-sync lesson): seed the
         # RPM row before show() so it doesn't flash visible.

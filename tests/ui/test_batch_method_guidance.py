@@ -18,9 +18,9 @@ def _sheet(qtbot, **kwargs):
     return sheet
 
 
-def test_new_window_shows_start_hint_with_default_fft(qtbot):
+def test_new_window_shows_start_hint_with_default_time(qtbot):
     sheet = _sheet(qtbot)
-    assert sheet._analysis_panel.current_method() == "fft"
+    assert sheet._analysis_panel.current_method() == "time"
     assert sheet._guidance_engaged is False
     assert sheet._method_step_label.text() == "先选分析方法"
     assert sheet._method_hint.full_text() == _METHOD_START_HINT
@@ -70,13 +70,13 @@ def test_clicking_current_method_engages_without_method_change(qtbot):
     params = sheet._analysis_panel.get_params()
     spy = QSignalSpy(sheet._analysis_panel.methodChanged)
 
-    sheet._analysis_panel._method_group._buttons["fft"].click()
+    sheet._analysis_panel._method_group._buttons["time"].click()
 
     assert list(spy) == []
     assert sheet._guidance_engaged is True
     assert sheet._analysis_panel.get_params() == params
     assert sheet._analysis_panel.has_applied_preset() is False
-    assert "已选频谱" in sheet._method_hint.full_text()
+    assert "已选时域" in sheet._method_hint.full_text()
     assert sheet._method_step_label.text() == "分析方法"
     assert sheet._method_row.property("guidance") == "engaged"
 
@@ -101,10 +101,10 @@ def test_adding_files_adopts_the_default_method_without_an_extra_click(qtbot):
     )
     assert sheet._guidance_engaged is True
     hint = sheet._method_hint.full_text()
-    assert "已选频谱" in hint
+    assert "已选时域" in hint
     assert "下一步：添加数据文件" not in hint
     assert "尚未选择分析信号" in hint
-    assert sheet._analysis_panel.current_method() == "fft"
+    assert sheet._analysis_panel.current_method() == "time"
 
 
 def test_probe_callback_does_not_confirm_the_starting_method(qtbot):
@@ -217,5 +217,5 @@ def test_complete_configuration_hint_allows_preview_without_extra_click(qtbot):
         timeout=1000,
     )
     hint = sheet._method_hint.full_text()
-    assert "已选频谱" in hint
+    assert "已选时域" in hint
     assert "下一步：添加数据文件" not in hint

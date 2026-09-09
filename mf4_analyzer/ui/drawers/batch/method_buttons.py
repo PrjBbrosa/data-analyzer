@@ -50,7 +50,6 @@ _METHODS: tuple[tuple[str, str], ...] = (
 _METHOD_TAB_INSET_PX = 11
 _METHOD_TAB_GAP_PX = 4
 _METHOD_TAB_MIN_WIDTH_PX = 58
-_METHOD_UNDERLINE_INSET_PX = 12
 _METHOD_ROW_HEIGHT_PX = 40
 _METHOD_TAB_MIN_HEIGHT_PX = 28
 
@@ -73,7 +72,6 @@ class MethodButtonGroup(QWidget):
         self.setFixedHeight(_METHOD_ROW_HEIGHT_PX)
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self._buttons: dict[str, QPushButton] = {}
-        self._underlines: dict[str, QFrame] = {}
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         lay = QHBoxLayout(self)
@@ -94,16 +92,10 @@ class MethodButtonGroup(QWidget):
             self._group.addButton(btn)
             self._buttons[key] = btn
             lay.addWidget(btn)
-            underline = QFrame(btn)
-            underline.setObjectName("BatchMethodUnderline")
-            underline.setFixedHeight(2)
-            underline.hide()
-            self._underlines[key] = underline
         self._sync_button_widths()
         # Default to FFT.
         self._current = "fft"
         self._buttons["fft"].setChecked(True)
-        self._sync_underlines()
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
         return QSize(self._preferred_width(), _METHOD_ROW_HEIGHT_PX)
@@ -126,16 +118,11 @@ class MethodButtonGroup(QWidget):
             button.setMinimumWidth(width)
             button.setFixedWidth(width)
 
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        super().resizeEvent(event)
-        self._sync_underlines()
-
     def changeEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().changeEvent(event)
         if event.type() == QEvent.FontChange:
             self._sync_button_widths()
             self.updateGeometry()
-            self._sync_underlines()
 
     def eventFilter(self, obj, event):  # noqa: N802 - Qt override
         if (
@@ -169,17 +156,6 @@ class MethodButtonGroup(QWidget):
         self._buttons[next_key].setFocus(Qt.TabFocusReason)
         return True
 
-    def _sync_underlines(self) -> None:
-        for key, button in self._buttons.items():
-            underline = self._underlines[key]
-            width = max(0, button.width() - (2 * _METHOD_UNDERLINE_INSET_PX))
-            underline.setFixedWidth(width)
-            underline.move(
-                _METHOD_UNDERLINE_INSET_PX,
-                max(0, button.height() - underline.height()),
-            )
-            underline.setVisible(button.isChecked())
-
     def _on_button_clicked_from_click(self, key, _checked=False):
         self._on_button_clicked(key)
 
@@ -197,11 +173,9 @@ class MethodButtonGroup(QWidget):
             btn.setChecked(True)
         if method == self._current:
             # Still emit on explicit set so callers/tests observe the call.
-            self._sync_underlines()
             self.methodChanged.emit(method)
             return
         self._current = method
-        self._sync_underlines()
         self.methodChanged.emit(method)
 
     def current_method(self) -> str:

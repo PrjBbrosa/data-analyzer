@@ -29,7 +29,7 @@ class PipelineCard(QFrame):
 
         self.number_label = QLabel(f"{int(stage_def['index']):02d}", self)
         self.number_label.setObjectName("BatchPipelineNumber")
-        self.number_label.setFixedSize(20, 18)
+        self.number_label.setFixedSize(22, 22)
         self.number_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.number_label)
 
