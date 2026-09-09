@@ -101,6 +101,7 @@ lesson by default.
 | [Qt Timer Rate Limits Need A Timeout-Time Guard](qt-timer-rate-limit-recheck-at-timeout.md) | Implementing or reviewing a hard interaction refresh-rate ceiling with | See lesson |
 | [Overlay Wheel Zoom Covers All Tick Densities](codex-overlay-wheel-zoom-covers-all-tick-densities.md) | Changing overlay Y-axis Shift-wheel zoom, nice-step selection, range | See lesson |
 | [Channel Tree Selection Color Has Multiple Painters](codex-channel-tree-selection-color-has-multiple-painters.md) | Changing the selected-row color or painting behavior of the Analyzer | See lesson |
+| [ListWidget On White Needs Dark Highlighted Text](listwidget-on-white-needs-dark-highlighted-text.md) | Styling a QListWidget on a white Analyzer surface, especially Channel | See lesson |
 | [Channel Tree Drag Selection Guard](codex-channel-tree-drag-selection-guard.md) | Changing channel-tree selection modes or mouse press, move, release, | See lesson |
 | [Codex Overlay Wheel Anchor Invariants](codex-overlay-wheel-anchor-invariants.md) | Load when changing overlay wheel zoom, nice-step selection, tick | See lesson |
 | [Overlay Free-Phase Changes Need A Consumer Audit](codex-overlay-free-phase-consumer-audit.md) | Changing an overlay or analysis Y-wheel transform from globally aligned | See lesson |
@@ -226,14 +227,16 @@ lesson by default.
 | [View Close Hover Requires Current Re-entry](view-close-hover-requires-current-reentry.md) | Changing a tab color-swatch hover action, current-View switching, or | See lesson |
 | [Axis Adapter Range Commits Must Settle The Owner Envelope](axis-adapter-range-commit-must-settle-owner-envelope.md) | Changing a generic chart-options or axis-adapter path that mutates a | See lesson |
 | [ViewTabBar Managed Overflow Has No Native Scroll Controls](viewtabbar-managed-overflow-no-native-scroll.md) | Changing ViewTabBar width budgeting, compact labels, or overflow | See lesson |
+| [Binary Channel Type Before Float Cast](binary-channel-type-before-float-cast.md) | Changing mixed-type binary demultiplexing or investigating HEAD HDF invalid-value cast warnings. | See lesson |
+| [Capture Skip Severity Follows Recovery Path](capture-skip-severity-follows-recovery-path.md) | Reducing UltraView capture warning noise or explaining a skipped preview. | See lesson |
 | [Parented Qt Popup Move Needs Native Window](parented-qt-popup-move-needs-native-window.md) | Positioning a parented `Qt.Popup` with screen coordinates, especially | See lesson |
 | [Analysis Time Preparation Preserves Original Source](analysis-time-preparation-preserves-original-source.md) | Changing analysis time reconstruction, sampling settings, original Plot timing, or effective-facts provenance. | See lesson |
 | [Cursor Endpoints Need Unclipped Physical Legs](cursor-endpoints-need-unclipped-physical-legs.md) | Changing Custom-X dual-cursor statistics or endpoint differences. | See lesson |
-| [Wrapped Hint Minimum Follows Current Width](wrapped-hint-minimum-follows-current-width.md) | A wrapped hint inside a nested form is intermittently compressed. | See lesson |
 | [Subplot Bottom Axis Role Must Release Height](subplot-bottom-axis-role-must-release-height.md) | Changing TimeDomain subplot bottom-axis role, selection-delta reuse, | See lesson |
 | [Progress Repaint After Clear Paints An Empty Viewport](progress-repaint-after-clear-paints-empty-viewport.md) | Changing TimeDomain full rebuilds, `canvas.clear()`, `_update_compute_progress(process_events=True)`, or 分屏/叠加 mode switching through MainWindow. | See lesson |
 | [Batch Header Surfaces Must Survive the Global QSS](codex-batch-header-surface-cascade.md) | Styling nested toolbar/method-row widgets or method button states. | See lesson |
 | [Reparented Batch Controls Must Keep Run Locks and Guidance Ownership](codex-batch-reparented-controls-and-guidance-lifecycle.md) | Moving controls across Qt parents or adding validation-driven guidance. | See lesson |
+| [Wrapped Hint Minimum Follows Current Width](wrapped-hint-minimum-follows-current-width.md) | A wrapped hint inside a nested form is intermittently compressed. | See lesson |
 
 ## Selection Rules
 
