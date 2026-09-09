@@ -50,6 +50,13 @@ from .signal_picker import SignalPickerPopup
 # Methods whose backend dispatch consumes RPM. Drives InputPanel.set_method
 # row visibility — fft / fft_time skip the row entirely.
 _RPM_USING_METHODS = frozenset({"order_time"})
+_TARGET_TITLES = {
+    "time": "分析信号",
+    "fft": "分析信号",
+    "fft_time": "分析信号",
+    "order_time": "分析信号与转速",
+    "frf": "输入与输出配对",
+}
 
 
 # The first-level file manager is deliberately a fixed viewport.  File-count
@@ -318,6 +325,7 @@ class FileListWidget(QWidget):
     filesChanged = pyqtSignal()
     intersectionChanged = pyqtSignal(frozenset)
     stateChanged = pyqtSignal(str, str)  # (path, state)
+    userSourceAdded = pyqtSignal()
 
     def __init__(
         self,
@@ -432,6 +440,7 @@ class FileListWidget(QWidget):
         self._render_row(row)
         self.stateChanged.emit(str(source_id), STATE_LOADED)
         self._after_change()
+        self.userSourceAdded.emit()
 
     def add_disk_path(self, path: str) -> None:
         canonical = canonical_source_path(path)
@@ -464,6 +473,7 @@ class FileListWidget(QWidget):
         self._render_row(row)
         self.stateChanged.emit(canonical, state)
         self._after_change()
+        self.userSourceAdded.emit()
         if not availability.is_ready:
             return
         # Schedule probe on the next event-loop tick so callers can
@@ -488,17 +498,34 @@ class FileListWidget(QWidget):
                 self._list.takeItem(self._list.row(item))
         self._after_change()
 
-    def row_state(self, path: str) -> str:
+    def _row_for_path(self, path: str):
         row = self._rows.get(path)
-        if row is None:
-            row = next((item for item in self._rows.values() if item.path == path), None)
+        if row is not None:
+            return row
+        row = next((item for item in self._rows.values() if item.path == path), None)
+        if row is not None:
+            return row
+        try:
+            canonical = canonical_source_path(path)
+        except (OSError, TypeError, ValueError):
+            return None
+        if canonical == path:
+            return None
+        row = self._rows.get(canonical)
+        if row is not None:
+            return row
+        return next(
+            (item for item in self._rows.values() if item.path == canonical),
+            None,
+        )
+
+    def row_state(self, path: str) -> str:
+        row = self._row_for_path(path)
         return row.state if row else ""
 
     def _set_row_state(self, path: str, state: str) -> None:
         """Test/internal hook: explicitly set a row's state."""
-        row = self._rows.get(path)
-        if row is None:
-            row = next((item for item in self._rows.values() if item.path == path), None)
+        row = self._row_for_path(path)
         if row is None:
             # Create a minimal row so tests can drive transitions on
             # paths that were never `add_*`'d (the test fixtures do this).
@@ -841,8 +868,9 @@ class InputPanel(QWidget):
         target_head_lay = QHBoxLayout(target_head)
         target_head_lay.setContentsMargins(0, 0, 0, 0)
         target_head_lay.setSpacing(6)
-        target_title = QLabel("目标", target_head)
+        target_title = QLabel("分析信号", target_head)
         target_title.setObjectName("BatchSectionTitle")
+        self._target_title = target_title
         target_head_lay.addWidget(target_title)
         target_head_lay.addStretch(1)
         target_note = QLabel("文件间匹配", target_head)
@@ -1074,6 +1102,9 @@ class InputPanel(QWidget):
         self._method = str(method)
         self._filter_panel.set_method(method)
         is_frf = self._method == "frf"
+        self._target_title.setText(
+            _TARGET_TITLES.get(self._method, "分析信号")
+        )
         self._target_signal_label.setText("FRF 配对" if is_frf else "目标信号")
         # FRF: pin the form label to the top of the tall field cell, then
         # inset it so its text centers on the first pair-group header row

@@ -376,6 +376,18 @@ def test_quickref_covers_batch_frf_pairing_policy_and_outputs():
         assert label in haystack
 
 
+def test_quickref_covers_batch_method_first_guidance():
+    group = next(g for g in quickref.QUICKREF if g.title == "批处理")
+    method = next(r for r in group.rows if r.desc == "先选分析方法")
+    assert "时域" in method.sub and "频响" in method.sub
+    assert method.gesture == "顶部方法行"
+    targets = next(r for r in group.rows if r.desc == "方法对应目标")
+    assert "转速" in targets.sub and "配对" in targets.sub
+    locate = next(r for r in group.rows if "去添加" in r.desc)
+    assert "不改配置" in locate.sub
+    assert locate.gesture == "底栏"
+
+
 def test_dataclasses_are_frozen():
     import dataclasses
     import pytest

@@ -283,6 +283,13 @@ _HINTS = (
         priority=49,
     ),
     Hint(
+        id="batch.method_first",
+        text="批处理顶部先选分析方法",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=46,
+    ),
+    Hint(
         id="batch.export_options",
         text="切片≤4仅FFT-时间/阶次 · 完成后开输出目录会记住",
         surface="discovery",

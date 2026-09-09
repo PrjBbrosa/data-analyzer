@@ -730,13 +730,14 @@ def test_time_analysis_form_fits_288px_after_repeated_dependency_toggles(
         assert sum(
             host.isVisibleTo(panel) for host in (channel_host, origin_host)
         ) == 1
-        assert all(
-            abs(actual - expected) <= 1
-            for actual, expected in zip(
-                (channel_slot.x(), channel_slot.y(), channel_slot.width(), channel_slot.height()),
-                (time_slot.x(), time_slot.y(), time_slot.width(), time_slot.height()),
-            )
-        )
+        # x/y/width share the same form cell. Height can differ by a couple of
+        # pixels because the long-name channel combo and the origin combo
+        # don't share one widget; the method tabs no longer inflate this
+        # panel's minimum width, so the 288px column is a real layout.
+        assert abs(channel_slot.x() - time_slot.x()) <= 1
+        assert abs(channel_slot.y() - time_slot.y()) <= 1
+        assert abs(channel_slot.width() - time_slot.width()) <= 1
+        assert abs(channel_slot.height() - time_slot.height()) <= 2
 
         def assert_visible_channel_geometry():
             assert form._w_x_channel.isVisibleTo(panel) is True

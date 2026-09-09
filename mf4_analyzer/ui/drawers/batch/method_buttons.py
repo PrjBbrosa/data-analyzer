@@ -19,7 +19,7 @@ from functools import partial
 from collections.abc import Mapping, Sequence
 import math
 
-from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QButtonGroup, QComboBox, QFormLayout,
@@ -47,79 +47,138 @@ _METHODS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _make_method_zone_divider(parent: QWidget) -> QFrame:
-    """Create one compact boundary marker for the batch method zone."""
-    divider = QFrame(parent)
-    divider.setObjectName("BatchMethodZoneDivider")
-    divider.setFixedSize(8, 16)
-    tick = QFrame(divider)
-    tick.setObjectName("BatchMethodZoneDividerTick")
-    tick.setFixedSize(3, 8)
-    tick.move(2, 4)
-    return divider
+_METHOD_TAB_INSET_PX = 11
+_METHOD_TAB_GAP_PX = 4
+_METHOD_TAB_MIN_WIDTH_PX = 58
+_METHOD_UNDERLINE_INSET_PX = 12
+_METHOD_ROW_HEIGHT_PX = 40
+_METHOD_TAB_MIN_HEIGHT_PX = 28
 
 
 class MethodButtonGroup(QWidget):
-    """Five equal-width analysis-mode buttons emitting ``methodChanged(str)``."""
+    """Compact text tabs for the five analysis methods.
+
+    ``methodChanged`` stays the programmatic/user method-switch signal.
+    ``methodActivated`` is a separate user-click notice: it fires even when
+    the already-selected method is clicked, and it never calls ``set_method``
+    on its own.
+    """
 
     methodChanged = pyqtSignal(str)
+    methodActivated = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("BatchMethodGroup")
+        self.setFixedHeight(_METHOD_ROW_HEIGHT_PX)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self._buttons: dict[str, QPushButton] = {}
+        self._underlines: dict[str, QFrame] = {}
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
-        outer = QHBoxLayout(self)
-        # Keep the markers inside the batch column's surface; at zero margin
-        # their hairlines land on the clip edge and look uneven.
-        outer.setContentsMargins(6, 0, 6, 0)
-        outer.setSpacing(12)
-
-        segment = QWidget(self)
-        segment.setObjectName("BatchMethodSegment")
-        lay = QHBoxLayout(segment)
+        lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        lay.setSpacing(_METHOD_TAB_GAP_PX)
 
-        left_divider = _make_method_zone_divider(self)
-        right_divider = _make_method_zone_divider(self)
-        outer.addWidget(left_divider, 0, Qt.AlignVCenter)
-        outer.addWidget(segment, 1)
-        outer.addWidget(right_divider, 0, Qt.AlignVCenter)
-
-        self._mode_segment = segment
-        self._mode_zone_dividers = (left_divider, right_divider)
-        self._mode_active_dots: dict[str, QFrame] = {}
         for key, label in _METHODS:
             btn = QPushButton(label, self)
             btn.setCheckable(True)
-            btn.setMinimumWidth(0)
-            btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            btn.setFocusPolicy(Qt.StrongFocus)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            btn.setMinimumHeight(_METHOD_TAB_MIN_HEIGHT_PX)
+            btn.setFixedHeight(32)
+            btn.setCursor(Qt.PointingHandCursor)
             btn.setProperty("batchMethod", key)
+            btn.installEventFilter(self)
             btn.clicked.connect(partial(self._on_button_clicked_from_click, key))
             self._group.addButton(btn)
             self._buttons[key] = btn
-            lay.addWidget(btn, 1)
-            dot = QFrame(btn)
-            dot.setObjectName("BatchMethodActiveDot")
-            dot.setFixedSize(6, 6)
-            dot.hide()
-            self._mode_active_dots[key] = dot
+            lay.addWidget(btn)
+            underline = QFrame(btn)
+            underline.setObjectName("BatchMethodUnderline")
+            underline.setFixedHeight(2)
+            underline.hide()
+            self._underlines[key] = underline
+        self._sync_button_widths()
         # Default to FFT.
         self._current = "fft"
         self._buttons["fft"].setChecked(True)
-        self._sync_mode_active_dots()
+        self._sync_underlines()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(self._preferred_width(), _METHOD_ROW_HEIGHT_PX)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return self.sizeHint()
+
+    def _tab_width_for(self, button: QPushButton) -> int:
+        text_width = button.fontMetrics().horizontalAdvance(button.text())
+        return max(_METHOD_TAB_MIN_WIDTH_PX, text_width + (2 * _METHOD_TAB_INSET_PX))
+
+    def _preferred_width(self) -> int:
+        widths = [self._tab_width_for(button) for button in self._buttons.values()]
+        gaps = _METHOD_TAB_GAP_PX * max(0, len(widths) - 1)
+        return sum(widths) + gaps
+
+    def _sync_button_widths(self) -> None:
+        for button in self._buttons.values():
+            width = self._tab_width_for(button)
+            button.setMinimumWidth(width)
+            button.setFixedWidth(width)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
-        self._sync_mode_active_dots()
+        self._sync_underlines()
 
-    def _sync_mode_active_dots(self) -> None:
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().changeEvent(event)
+        if event.type() == QEvent.FontChange:
+            self._sync_button_widths()
+            self.updateGeometry()
+            self._sync_underlines()
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt override
+        if (
+            event.type() == QEvent.KeyPress
+            and obj in self._buttons.values()
+            and self._activate_from_key(event.key())
+        ):
+            return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self._activate_from_key(event.key()):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _activate_from_key(self, key: int) -> bool:
+        keys = tuple(self._buttons)
+        current = keys.index(self._current) if self._current in keys else 0
+        if key == Qt.Key_Right:
+            next_key = keys[(current + 1) % len(keys)]
+        elif key == Qt.Key_Left:
+            next_key = keys[(current - 1) % len(keys)]
+        elif key == Qt.Key_Home:
+            next_key = keys[0]
+        elif key == Qt.Key_End:
+            next_key = keys[-1]
+        else:
+            return False
+        self._buttons[next_key].click()
+        self._buttons[next_key].setFocus(Qt.TabFocusReason)
+        return True
+
+    def _sync_underlines(self) -> None:
         for key, button in self._buttons.items():
-            dot = self._mode_active_dots[key]
-            dot.move(max(0, button.width() - dot.width() - 5), 4)
-            dot.setVisible(button.isChecked())
+            underline = self._underlines[key]
+            width = max(0, button.width() - (2 * _METHOD_UNDERLINE_INSET_PX))
+            underline.setFixedWidth(width)
+            underline.move(
+                _METHOD_UNDERLINE_INSET_PX,
+                max(0, button.height() - underline.height()),
+            )
+            underline.setVisible(button.isChecked())
 
     def _on_button_clicked_from_click(self, key, _checked=False):
         self._on_button_clicked(key)
@@ -128,6 +187,7 @@ class MethodButtonGroup(QWidget):
         """Apply a user selection only when it changes the active method."""
         if method != self._current:
             self.set_method(method)
+        self.methodActivated.emit(method)
 
     def set_method(self, method: str) -> None:
         if method not in self._buttons:
@@ -137,11 +197,11 @@ class MethodButtonGroup(QWidget):
             btn.setChecked(True)
         if method == self._current:
             # Still emit on explicit set so callers/tests observe the call.
-            self._sync_mode_active_dots()
+            self._sync_underlines()
             self.methodChanged.emit(method)
             return
         self._current = method
-        self._sync_mode_active_dots()
+        self._sync_underlines()
         self.methodChanged.emit(method)
 
     def current_method(self) -> str:

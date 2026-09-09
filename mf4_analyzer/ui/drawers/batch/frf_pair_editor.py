@@ -247,8 +247,9 @@ class FrfPairEditor(QWidget):
         self._refresh_validation()
         self.changed.emit()
 
-    def _issues(self) -> tuple[str, ...]:
-        issues: list[str] = []
+    def _issues_with_targets(self) -> tuple[tuple[str, QWidget], ...]:
+        """Keep validation text and its current repair control in one owner."""
+        issues: list[tuple[str, QWidget]] = []
         seen: set[tuple[str, str]] = set()
         available = set(self._common)
         if self._policy == "available_per_source":
@@ -257,31 +258,40 @@ class FrfPairEditor(QWidget):
             input_channel = self._input_value(group)
             outputs = self._output_values(group)
             if not input_channel:
-                issues.append(f"配对组 {index}：请选择输入")
+                issues.append((f"配对组 {index}：请选择输入", group.input_picker._trigger))
                 continue
             if not outputs:
-                issues.append(f"配对组 {index}：至少选择一个输出")
+                issues.append((f"配对组 {index}：至少选择一个输出", group.output_picker._trigger))
                 continue
             if self._source_count and input_channel not in available:
-                issues.append(
-                    f"配对组 {index}：输入 {input_channel} 在当前来源不可用"
-                )
+                issues.append((
+                    f"配对组 {index}：输入 {input_channel} 在当前来源不可用",
+                    group.input_picker._trigger,
+                ))
             missing_outputs = tuple(value for value in outputs if value not in available)
             if self._source_count and missing_outputs:
-                issues.append(
+                issues.append((
                     f"配对组 {index}：输出 {', '.join(missing_outputs)} "
-                    "在当前来源不可用"
-                )
+                    "在当前来源不可用", group.output_picker._trigger,
+                ))
             if input_channel in outputs:
-                issues.append(f"配对组 {index}：输入与输出不能相同")
+                issues.append((f"配对组 {index}：输入与输出不能相同", group.output_picker._trigger))
             for output in outputs:
                 pair = (input_channel, output)
                 if pair in seen:
-                    issues.append(
-                        f"配对组 {index}：{output} / {input_channel} 重复"
-                    )
+                    issues.append((
+                        f"配对组 {index}：{output} / {input_channel} 重复",
+                        group.output_picker._trigger,
+                    ))
                 seen.add(pair)
         return tuple(issues)
+
+    def _issues(self) -> tuple[str, ...]:
+        return tuple(message for message, _widget in self._issues_with_targets())
+
+    def validation_target(self) -> QWidget | None:
+        issues = self._issues_with_targets()
+        return issues[0][1] if issues else None
 
     def _refresh_validation(self) -> None:
         issues = self._issues()

@@ -21,7 +21,7 @@ def test_method_button_click_is_idempotent_but_programmatic_set_refreshes(qtbot)
     seen = []
     group.methodChanged.connect(seen.append)
 
-    # A user clicking the already active FFT button is a no-op.
+    # A user clicking the already active FFT button is a no-op for methodChanged.
     group._buttons["fft"].click()
     assert seen == []
 
@@ -29,6 +29,48 @@ def test_method_button_click_is_idempotent_but_programmatic_set_refreshes(qtbot)
     # explicit refresh boundary even when the method is unchanged.
     group.set_method("fft")
     assert seen == ["fft"]
+
+
+def test_method_button_user_activation_does_not_reemit_current_method(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    group = MethodButtonGroup()
+    qtbot.addWidget(group)
+    changed = []
+    activated = []
+    group.methodChanged.connect(changed.append)
+    group.methodActivated.connect(activated.append)
+
+    group._buttons["fft"].click()
+    assert changed == []
+    assert activated == ["fft"]
+
+    group._buttons["order_time"].click()
+    assert changed == ["order_time"]
+    assert activated == ["fft", "order_time"]
+
+
+def test_method_buttons_arrow_keys_switch_once(qtbot):
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    group = MethodButtonGroup()
+    qtbot.addWidget(group)
+    group.show()
+    group._buttons["fft"].setFocus()
+    seen = []
+    group.methodChanged.connect(seen.append)
+
+    qtbot.keyClick(group._buttons["fft"], Qt.Key_Right)
+    assert seen == ["fft_time"]
+    assert group.current_method() == "fft_time"
+    qtbot.keyClick(group._buttons["fft_time"], Qt.Key_Left)
+    assert seen[-1] == "fft"
+    qtbot.keyClick(group._buttons["fft"], Qt.Key_Home)
+    assert seen[-1] == "time"
+    qtbot.keyClick(group._buttons["time"], Qt.Key_End)
+    assert seen[-1] == "frf"
 
 
 def test_param_form_renders_per_method(qtbot):
@@ -296,26 +338,27 @@ def test_batch_method_buttons_include_time_and_user_labels(qtbot):
     )
 
 
-def test_batch_method_buttons_are_equal_and_unclipped_at_narrow_width(qtbot):
+def test_batch_method_buttons_are_compact_tabs_with_full_labels(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
 
     group = MethodButtonGroup()
     qtbot.addWidget(group)
-    group.resize(288, 44)
     group.show()
     qtbot.wait(20)
 
+    hint = group.sizeHint()
+    assert 300 <= hint.width() <= 340
+    assert hint.height() == 40
     widths = [button.width() for button in group._buttons.values()]
-    # Qt distributes indivisible pixels across equal-stretch cells.
     assert max(widths) - min(widths) <= 1
     for button in group._buttons.values():
+        assert button.height() >= 28
         assert button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 8
         assert button.font().stretch() in {0, 100}
     assert len({button.font().stretch() for button in group._buttons.values()}) == 1
 
 
-def test_batch_method_zone_uses_symmetric_markers_and_active_dot(qtbot, qapp):
-    """Batch keeps equal-width modes while sharing the toolbar's mode chrome."""
+def test_batch_method_tabs_use_underline_not_zone_markers(qtbot, qapp):
     from mf4_analyzer.ui_kit import load_stylesheet
     from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
 
@@ -326,24 +369,25 @@ def test_batch_method_zone_uses_symmetric_markers_and_active_dot(qtbot, qapp):
         group = MethodButtonGroup()
         qtbot.addWidget(group)
         group.show()
+        qtbot.wait(20)
 
-        for width in (288, 806):
-            group.resize(width, 44)
-            qtbot.wait(20)
-            left_divider, right_divider = group._mode_zone_dividers
-            segment = group._mode_segment
-            left_gap = segment.x() - (left_divider.x() + left_divider.width())
-            right_gap = right_divider.x() - (segment.x() + segment.width())
-            assert left_gap == right_gap == 12
-            assert left_divider.height() == right_divider.height() == 16
-            widths = [button.width() for button in group._buttons.values()]
-            assert max(widths) - min(widths) <= 1
+        assert not hasattr(group, "_mode_zone_dividers")
+        assert not hasattr(group, "_mode_active_dots")
+        assert group.height() == 40
+        assert 300 <= group.width() <= 340
+        for button in group._buttons.values():
+            metrics = button.fontMetrics()
+            assert button.width() >= metrics.horizontalAdvance(button.text())
+            assert button.height() >= 28
 
-        assert group._mode_active_dots["fft"].isVisible()
-        assert not group._mode_active_dots["time"].isVisible()
+        assert group._underlines["fft"].isVisible()
+        assert not group._underlines["time"].isVisible()
         group._buttons["frf"].click()
-        assert group._mode_active_dots["frf"].isVisible()
-        assert not group._mode_active_dots["fft"].isVisible()
+        assert group._underlines["frf"].isVisible()
+        assert not group._underlines["fft"].isVisible()
+        underline = group._underlines["frf"]
+        assert underline.height() == 2
+        assert underline.width() < group._buttons["frf"].width()
     finally:
         group.close()
         qapp.setStyleSheet(old_stylesheet)
@@ -903,6 +947,14 @@ def test_batch_method_and_preset_selectors_use_distinct_control_types(qtbot):
     )
     assert all(
         isinstance(button, QPushButton)
+        for button in panel._preset_buttons.values()
+    )
+    assert all(
+        button.property("batchMethod")
+        for button in panel._method_group._buttons.values()
+    )
+    assert not any(
+        button.property("batchMethod")
         for button in panel._preset_buttons.values()
     )
     assert not any(button.isChecked() for button in panel._preset_buttons.values())

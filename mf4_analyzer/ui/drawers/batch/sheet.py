@@ -18,7 +18,8 @@ import dataclasses
 from pathlib import Path
 import tempfile
 
-from PyQt5.QtCore import QEventLoop, QTimer, Qt, QUrl
+from PyQt5 import sip
+from PyQt5.QtCore import QEvent, QEventLoop, QTimer, Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
@@ -93,6 +94,42 @@ _PIPELINE_RECOMPUTE_DEBOUNCE_MS = 150
 _STOP_ON_CLOSE_TITLE = "确认关闭"
 _STOP_ON_CLOSE_TEXT = "批量任务正在运行，关闭将取消剩余任务。要继续吗？"
 _STOP_WAIT_TIMEOUT_MS = 30_000
+
+
+_METHOD_CAPTION_START = "先选分析方法"
+_METHOD_CAPTION_ENGAGED = "分析方法"
+_METHOD_START_HINT = "先确定分析方法，下方目标与参数会随之切换。"
+_METHOD_READY_HINT = "配置已完整，可预览或运行"
+_METHOD_ROW_HEIGHT_PX = 40
+
+
+class _ElidingHint(QLabel):
+    """Single-line hint that elides in place and keeps the full text as tooltip."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self.setObjectName("BatchMethodHint")
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+
+    def set_full_text(self, text: str) -> None:
+        self._full = str(text or "")
+        self._apply_elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        elided = self.fontMetrics().elidedText(
+            self._full, Qt.ElideRight, max(0, self.width()),
+        )
+        self.setText(elided)
+        self.setToolTip(self._full)
 
 
 def _analysis_issue_summary(issue: ValidationIssue, method: str) -> str:
@@ -196,6 +233,10 @@ class BatchSheet(QDialog):
         self._running: bool = False
         self._runner_thread: BatchRunnerThread | None = None
         self._last_result = None
+        # Window-local method-first guidance.  Not persisted, not a run gate.
+        self._guidance_engaged: bool = False
+        self._guidance_ready: bool = False
+        self._locate_kind: str | None = None
         # Preview state is deliberately separate from run/preset state.
         self._preview_thread: BatchPreviewThread | None = None
         self._preview_result = None
@@ -225,6 +266,7 @@ class BatchSheet(QDialog):
         #     and save to JSON (spec §6.3).
         self._toolbar_host = QWidget(self)
         self._toolbar_host.setObjectName("BatchCompactToolbar")
+        self._toolbar_host.setAttribute(Qt.WA_StyledBackground, True)
         # 36px, down from 50: the three preset buttons are secondary chrome,
         # so a toolbar-scoped QSS rule drops them to min-height 24 (+4 padding
         # +2 border = 30) and the 3px margins land the row exactly on 36.
@@ -251,8 +293,57 @@ class BatchSheet(QDialog):
         self._btn_export_preset = QPushButton("导出方案…")
         self._btn_export_preset.clicked.connect(self._on_export_preset)
         bar.addWidget(self._btn_export_preset)
+        for button in (
+            self._btn_fill_from_current,
+            self._btn_import_preset,
+            self._btn_export_preset,
+        ):
+            button.setAutoDefault(False)
+            button.setCursor(Qt.PointingHandCursor)
 
         root.addWidget(self._toolbar_host)
+
+        self._method_row = QWidget(self)
+        self._method_row.setObjectName("BatchMethodRow")
+        self._method_row.setAttribute(Qt.WA_StyledBackground, True)
+        self._method_row.setFixedHeight(_METHOD_ROW_HEIGHT_PX)
+        self._method_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        method_row_lay = QHBoxLayout(self._method_row)
+        method_row_lay.setContentsMargins(14, 0, 14, 0)
+        method_row_lay.setSpacing(12)
+
+        self._method_caption = QWidget(self._method_row)
+        self._method_caption.setObjectName("BatchMethodCaption")
+        caption_lay = QHBoxLayout(self._method_caption)
+        caption_lay.setContentsMargins(0, 0, 0, 0)
+        caption_lay.setSpacing(8)
+        self._method_step_number = QLabel("01", self._method_caption)
+        self._method_step_number.setObjectName("BatchMethodStepNumber")
+        self._method_step_number.setAlignment(Qt.AlignCenter)
+        self._method_step_label = QLabel(
+            _METHOD_CAPTION_START, self._method_caption,
+        )
+        self._method_step_label.setObjectName("BatchMethodStepLabel")
+        caption_lay.addWidget(self._method_step_number)
+        caption_lay.addWidget(self._method_step_label)
+        self._method_step_label.setSizePolicy(
+            QSizePolicy.Minimum, QSizePolicy.Fixed,
+        )
+        self._method_caption.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        method_row_lay.addWidget(self._method_caption, 0)
+        self._sync_method_caption_width()
+
+        self._method_tabs_host = QWidget(self._method_row)
+        self._method_tabs_host.setObjectName("BatchMethodTabsHost")
+        self._method_tabs_host.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self._method_tabs_layout = QHBoxLayout(self._method_tabs_host)
+        self._method_tabs_layout.setContentsMargins(0, 0, 0, 0)
+        self._method_tabs_layout.setSpacing(0)
+        method_row_lay.addWidget(self._method_tabs_host, 0)
+
+        self._method_hint = _ElidingHint(self._method_row)
+        method_row_lay.addWidget(self._method_hint, 1)
+        root.addWidget(self._method_row)
 
         # Pipeline strip — its own row, slimmed from 62px to 40px.
         self.strip = PipelineStrip(self)
@@ -296,6 +387,7 @@ class BatchSheet(QDialog):
         self._handoff_notice.hide()
         self._handoff_notice_row_inserted = False
         self._analysis_panel = AnalysisPanel(self)
+        self._analysis_panel.mount_method_selector(self._method_tabs_layout)
         self._analysis_panel.set_weighting_options(
             self._weighting_options_from_parent()
         )
@@ -373,6 +465,14 @@ class BatchSheet(QDialog):
         self._footer_task_summary = QLabel("等待运行", self._footer_host)
         self._footer_task_summary.setObjectName("BatchFooterTaskSummary")
         self._footer_lay.addWidget(self._footer_task_summary, 1)
+        self._footer_locate = QPushButton("", self._footer_host)
+        self._footer_locate.setObjectName("BatchFooterLocate")
+        self._footer_locate.setFlat(True)
+        self._footer_locate.setCursor(Qt.PointingHandCursor)
+        self._footer_locate.setFocusPolicy(Qt.TabFocus)
+        self._footer_locate.clicked.connect(self._on_footer_locate)
+        self._footer_locate.hide()
+        self._footer_lay.addWidget(self._footer_locate)
         self._footer_progress = QProgressBar(self._footer_host)
         self._footer_progress.setObjectName("BatchFooterProgress")
         self._footer_progress.setRange(0, 1)
@@ -442,6 +542,7 @@ class BatchSheet(QDialog):
         )
         self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
         self._analysis_panel.methodChanged.connect(self._schedule_pipeline_recompute)
+        self._analysis_panel.methodActivated.connect(self._on_user_method_activated)
         self._analysis_panel.paramsChanged.connect(self._sync_x_axis_context)
         self._analysis_panel.paramsChanged.connect(self._schedule_pipeline_recompute)
         self._analysis_panel.presetApplied.connect(
@@ -485,6 +586,20 @@ class BatchSheet(QDialog):
         # changes the dialog's own geometry.
         self._fit_to_available_screen(parent, 1080, 760)
         self._init_drop_import()
+        self._guidance_ready = True
+        self._input_panel._file_list.userSourceAdded.connect(
+            self._on_user_configuration
+        )
+        self._input_panel._signal_picker.selectionChanged.connect(
+            self._on_user_configuration
+        )
+        self._input_panel._frf_pair_editor.changed.connect(
+            self._on_user_configuration
+        )
+        self._input_panel._rpm_picker.selectionChanged.connect(
+            self._on_user_configuration
+        )
+        self._analysis_panel.paramsChanged.connect(self._on_user_configuration)
 
     def _fit_to_available_screen(self, parent, target_w: int, target_h: int) -> None:
         """Thin forwarder to the shared clamp so ``BatchSheet`` and
@@ -504,6 +619,33 @@ class BatchSheet(QDialog):
         from mf4_analyzer.ui_kit.dialog_geometry import nudge_into_work_area
 
         nudge_into_work_area(self, parent=self.parentWidget())
+        self._sync_method_caption_width()
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().changeEvent(event)
+        if event.type() in (QEvent.StyleChange, QEvent.FontChange):
+            self._sync_method_caption_width()
+
+    def _sync_method_caption_width(self) -> None:
+        """Reserve the longer caption after QSS fonts apply, never clip CJK."""
+        caption = getattr(self, "_method_caption", None)
+        label = getattr(self, "_method_step_label", None)
+        number = getattr(self, "_method_step_number", None)
+        if caption is None or label is None or number is None:
+            return
+        label.ensurePolished()
+        number.ensurePolished()
+        fm = label.fontMetrics()
+        text_w = max(
+            max(fm.horizontalAdvance(text), fm.boundingRect(text).width())
+            for text in (_METHOD_CAPTION_START, _METHOD_CAPTION_ENGAGED)
+        )
+        # horizontalAdvance is the ink width; QLabel still needs a little
+        # bearing or the last CJK glyph clips against the tabs.
+        label.setMinimumWidth(text_w + 4)
+        number_w = max(21, number.minimumSizeHint().width())
+        # 128px is the HTML prototype floor for 01 + gap + 先选分析方法.
+        caption.setMinimumWidth(max(128, number_w + 8 + text_w + 4))
 
     def _apply_compact_mode(self, compact: bool) -> None:
         compact = bool(compact)
@@ -720,6 +862,211 @@ class BatchSheet(QDialog):
     def _schedule_pipeline_recompute(self) -> None:
         self._recompute_timer.start()
 
+    def _on_user_method_activated(self, _method: str) -> None:
+        """User click on a method tab; never re-applies the current method."""
+        if not self._guidance_ready:
+            return
+        self._guidance_engaged = True
+        if not self._recompute_timer.isActive():
+            self._refresh_method_guidance()
+
+    def _on_user_configuration(self) -> None:
+        if not self._guidance_ready or self._applying_preset:
+            return
+        self._guidance_engaged = True
+        self._refresh_method_guidance()
+
+    def _guidance_problem(
+        self,
+        *,
+        loaded_paths,
+        selected,
+        any_pending: bool,
+        preflight_issues,
+        runnable: bool,
+    ) -> tuple[str | None, str, str]:
+        """Return (locate_kind, message, locate_verb) from already-computed facts."""
+        method = self._analysis_panel.current_method()
+        if any_pending:
+            return "source", "正在解析…", "去检查"
+        for issue in preflight_issues:
+            if issue.field == "source":
+                return "source", issue.message, "去检查"
+        if not loaded_paths:
+            if self._input_panel._file_list.has_probe_failed():
+                return "source", "文件解析失败，请检查文件列表", "去检查"
+            return "files", "尚未添加数据文件", "去添加"
+        if method == "frf":
+            pair_error = self._input_panel.frf_pair_validation_message()
+            if pair_error or not selected:
+                return "frf", pair_error or "尚未完成输入与输出配对", "去选择"
+        elif not selected:
+            return "signals", "尚未选择分析信号", "去选择"
+        if method == "order_time" and not self.rpm_channel():
+            return "rpm", "尚未指定转速通道", "去选择"
+        for issue in preflight_issues:
+            if issue.field == "target_signals":
+                return "signals", issue.message, "去选择"
+            if issue.field == "frf_pair_rules":
+                return "frf", issue.message, "去选择"
+            if issue.field == "rpm_channel":
+                return "rpm", issue.message, "去选择"
+            if issue.field in _OUTPUT_ISSUE_FIELDS:
+                verb = "去选择" if issue.field == "outputs" else "去检查"
+                return f"field:{issue.field}", issue.message, verb
+            return f"field:{issue.field}", issue.message, "去检查"
+        if not self.output_dir():
+            return "output", "尚未填写输出目录", "去填写"
+        if runnable:
+            return None, _METHOD_READY_HINT, ""
+        return "params", "请检查分析参数", "去检查"
+
+    def _refresh_method_guidance(
+        self,
+        *,
+        loaded_paths=None,
+        selected=None,
+        any_pending: bool | None = None,
+        preflight_issues=None,
+        runnable: bool | None = None,
+    ) -> None:
+        if loaded_paths is None:
+            loaded_paths = self._input_panel._file_list.all_loaded_paths()
+        if selected is None:
+            selected = self._input_panel.selected_signals()
+        if any_pending is None:
+            any_pending = self._input_panel._file_list.has_pending_probe()
+        if preflight_issues is None:
+            preflight_issues = self.preflight_issues()
+        if runnable is None:
+            runnable = (not self._running) and self.is_runnable(
+                issues=preflight_issues,
+            )
+        method_name = _METHOD_LABELS.get(
+            self._analysis_panel.current_method(),
+            self._analysis_panel.current_method(),
+        )
+        locate_kind = None
+        locate_verb = ""
+        if self._running:
+            caption = _METHOD_CAPTION_ENGAGED
+            hint = f"已选{method_name}"
+            self._method_row.setProperty("guidance", "engaged")
+        elif not self._guidance_engaged:
+            caption = _METHOD_CAPTION_START
+            hint = _METHOD_START_HINT
+            locate_kind, _message, locate_verb = self._guidance_problem(
+                loaded_paths=loaded_paths,
+                selected=selected,
+                any_pending=any_pending,
+                preflight_issues=preflight_issues,
+                runnable=runnable,
+            )
+            self._method_row.setProperty("guidance", "start")
+        else:
+            caption = _METHOD_CAPTION_ENGAGED
+            locate_kind, message, locate_verb = self._guidance_problem(
+                loaded_paths=loaded_paths,
+                selected=selected,
+                any_pending=any_pending,
+                preflight_issues=preflight_issues,
+                runnable=runnable,
+            )
+            if locate_kind == "files" and not loaded_paths and not any_pending:
+                next_text = "下一步：添加数据文件"
+            elif locate_kind is None:
+                next_text = _METHOD_READY_HINT
+            else:
+                next_text = message
+            hint = f"已选{method_name} · {next_text}"
+            self._method_row.setProperty("guidance", "engaged")
+        self._method_step_label.setText(caption)
+        self._method_hint.set_full_text(hint)
+        self._method_row.style().unpolish(self._method_row)
+        self._method_row.style().polish(self._method_row)
+        self._locate_kind = None if self._running else locate_kind
+        target = self._resolve_locate_widget(self._locate_kind)
+        if (
+            self._running or not locate_kind or not locate_verb
+            or target is None or not target.isVisibleTo(self)
+        ):
+            self._footer_locate.hide()
+            self._footer_locate.setText("")
+        else:
+            self._footer_locate.setText(locate_verb)
+            self._footer_locate.show()
+
+    def _on_footer_locate(self) -> None:
+        widget = self._resolve_locate_widget(self._locate_kind)
+        if widget is None:
+            return
+        try:
+            if sip.isdeleted(widget):
+                return
+        except RuntimeError:
+            return
+        if not widget.isVisible():
+            return
+        scroll = self._scroll_for_widget(widget)
+        if scroll is not None:
+            scroll.ensureWidgetVisible(widget)
+        widget.setFocus(Qt.OtherFocusReason)
+
+    def _scroll_for_widget(self, widget: QWidget) -> QScrollArea | None:
+        for scroll in (
+            self._input_scroll, self._analysis_scroll, self._output_scroll,
+        ):
+            panel = scroll.widget()
+            current = widget
+            while current is not None:
+                if current is panel:
+                    return scroll
+                current = current.parentWidget()
+        return None
+
+    def _resolve_locate_widget(self, kind: str | None) -> QWidget | None:
+        if not kind:
+            return None
+        if kind == "files":
+            return self._input_panel._file_list._btn_loaded
+        if kind == "signals":
+            return self._input_panel._signal_picker._trigger
+        if kind == "frf":
+            return self._input_panel._frf_pair_editor.validation_target()
+        if kind == "rpm":
+            return self._input_panel._rpm_picker._trigger
+        if kind == "source":
+            return self._input_panel._file_list
+        if kind == "params":
+            return self._analysis_panel._param_form
+        if kind == "output":
+            return self._output_panel._dir_edit
+        if kind.startswith("field:"):
+            field = kind.removeprefix("field:")
+            analysis = self._analysis_panel
+            output = self._output_panel
+            if field == "time_range":
+                return (
+                    analysis._source_interval_edit if self.method() == "fft"
+                    else output.spin_x_min if self.method() == "time" else None
+                )
+            if field == "slice_positions":
+                return analysis._slice._positions_edit
+            if field == "rpm_factor":
+                return self._input_panel._rpm_factor_spin
+            if field == "outputs":
+                return output._chk_data
+            if field in _OUTPUT_ISSUE_FIELDS:
+                return output._btn_output_settings
+            if field in {"x_range", "y_range", "z_range"}:
+                return {
+                    "x_range": output.spin_x_min,
+                    "y_range": output.spin_y_min,
+                    "z_range": output.spin_z_floor,
+                }[field]
+            return analysis._param_form._visible_widgets.get(field)
+        return None
+
     def _recompute_pipeline_status(self) -> None:
         self._recompute_timer.stop()
         # INPUT
@@ -858,6 +1205,21 @@ class BatchSheet(QDialog):
                 blocked_reason = _blocked_issue_reason(preflight_issues[0])
             self._present_footer(
                 "ready" if runnable else "blocked", reason=blocked_reason,
+            )
+            self._refresh_method_guidance(
+                loaded_paths=loaded_paths,
+                selected=selected,
+                any_pending=any_pending,
+                preflight_issues=preflight_issues,
+                runnable=runnable,
+            )
+        else:
+            self._refresh_method_guidance(
+                loaded_paths=loaded_paths,
+                selected=selected,
+                any_pending=any_pending,
+                preflight_issues=preflight_issues,
+                runnable=False,
             )
 
     def _weighting_options_from_parent(self) -> tuple[str, ...]:
@@ -1347,6 +1709,8 @@ class BatchSheet(QDialog):
         self._scope_source_paths = self.source_paths()
         self._scope_signals = self.selected_signals()
         self._scope_rpm_channel = self.rpm_channel()
+        self._guidance_engaged = True
+        self._refresh_method_guidance()
         self._schedule_pipeline_recompute()
 
     def _on_recipe_method_changed(self, method: str) -> None:
@@ -1831,6 +2195,7 @@ class BatchSheet(QDialog):
         self._present_footer(
             "running", done=0, total=total, task_count=len(tasks),
         )
+        self._refresh_method_guidance()
 
         # Build runner. We pass the parent's loader contract (BatchRunner
         # default loader walks DataLoader.load_mf4) — main_window owns the
@@ -2168,6 +2533,8 @@ class BatchSheet(QDialog):
 
     def lock_editing(self) -> None:
         """Disable detail panels + swap footer to running mode."""
+        # The method selector is mounted outside the analysis panel.
+        self._method_tabs_host.setEnabled(False)
         self._input_panel.setEnabled(False)
         self._analysis_panel.setEnabled(False)
         self._output_panel.setEnabled(False)
@@ -2188,6 +2555,7 @@ class BatchSheet(QDialog):
         the dialog can never get stuck locked.
         """
         self._running = False
+        self._method_tabs_host.setEnabled(True)
         self._input_panel.setEnabled(True)
         self._analysis_panel.setEnabled(True)
         self._output_panel.setEnabled(True)
@@ -2201,6 +2569,8 @@ class BatchSheet(QDialog):
         # Re-evaluate Run-button enabled state against current config.
         self._btn_run.setEnabled(self.is_runnable())
         self._btn_preview.setEnabled(self.is_runnable())
+        # Refresh only guidance here; keep the completion footer/result intact.
+        self._refresh_method_guidance()
 
     def _open_artifact_location(self, artifact_path: str) -> None:
         """Open an artifact's containing folder after explicit activation."""

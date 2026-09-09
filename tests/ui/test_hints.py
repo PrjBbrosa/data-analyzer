@@ -133,6 +133,15 @@ def test_batch_export_options_discovery_states_slice_and_folder_limits():
     assert hints.discovery_hint(HintState(discovered=seen)) == batch_hint
 
 
+def test_batch_method_first_discovery_hint_stays_short():
+    method_hint = next(
+        hint for hint in hints.all_hints() if hint.id == "batch.method_first"
+    )
+    assert "分析方法" in method_hint.text
+    assert hints.hint_display_width(method_hint.text) <= hints.HINT_MAX_WIDTH
+    assert method_hint.retire_on == "batch_open"
+
+
 def test_frf_hints_cover_cursor_display_and_time_domain_limits():
     frf_hints = {
         hint.id: hint.text

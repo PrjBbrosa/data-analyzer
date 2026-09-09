@@ -1,9 +1,10 @@
-"""Six-family contracts for the shared selected-segment visual signature.
+"""Five-family contracts for the shared selected-segment visual signature.
 
-The former ``frfSegmentChoice`` / ``role="frf-segment"`` family was wired in
-``61053293`` and removed from production in ``79588591`` (global control
-visual system). QSS and this table are deleted together (QSS consolidation
-Task 3 / spec B-class).
+Batch method tabs left this pill family in the 2026-09-09 method-first
+layout: they use compact text + a short underline instead of a filled
+choice pill. The former ``frfSegmentChoice`` / ``role="frf-segment"``
+family was wired in ``61053293`` and removed from production in
+``79588591`` (global control visual system).
 """
 from __future__ import annotations
 
@@ -26,7 +27,6 @@ _FAMILIES = (
     ("tick", 'QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]', "TickDensitySurface", "role", "tick-density-preset"),
     ("slice", 'QWidget#sliceDirToggle QPushButton[role="slice-seg"]', "sliceDirToggle", "role", "slice-seg"),
     ("cockpit", 'QWidget#cockpitModeSegment QPushButton[cockpitMode]', "cockpitModeSegment", "cockpitMode", "time"),
-    ("batch", 'QWidget#BatchMethodGroup QPushButton[batchMethod]', "BatchMethodGroup", "batchMethod", "fft"),
 )
 
 
@@ -155,3 +155,14 @@ def test_batch_grouping_card_keeps_a_one_pixel_border_when_checked():
     assert "border-color: {{CONTROL_SELECT_LINE}}" in checked
     # border: shorthand in a state rule would zero the 9px radius (E2).
     assert "border: 1px" not in checked
+
+
+def test_batch_method_tabs_are_not_in_the_shared_pill_family():
+    qss = _QSS_PATH.read_text(encoding="utf-8")
+    selector = 'QWidget#BatchMethodGroup QPushButton[batchMethod]'
+    checked = _selector_body(qss, selector + ":checked")
+    assert "{{CONTROL_SURFACE_TOP}}" not in checked
+    assert "{{CONTROL_SELECT_LINE}}" not in checked
+    assert "{{CONTROL_ACCENT}}" in checked
+    underline = _selector_body(qss, "QFrame#BatchMethodUnderline")
+    assert "{{CONTROL_ACCENT}}" in underline

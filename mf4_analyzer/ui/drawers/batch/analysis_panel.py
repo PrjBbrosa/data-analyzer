@@ -111,6 +111,7 @@ class AnalysisPanel(QWidget):
     """Method controls, shared spectral slots, and method-owned parameters."""
 
     methodChanged = pyqtSignal(str)
+    methodActivated = pyqtSignal(str)
     paramsChanged = pyqtSignal()
     presetApplied = pyqtSignal(str, object)
     presetStateChanged = pyqtSignal(str)
@@ -134,10 +135,16 @@ class AnalysisPanel(QWidget):
         method_note = QLabel("决定下面的参数", method_head)
         method_note.setObjectName("BatchSectionNote")
         method_head_lay.addWidget(method_note)
+        self._method_head = method_head
         outer.addWidget(method_head)
+        method_head.hide()
 
+        # Owned here, but never laid out in the middle column. BatchSheet
+        # mounts the same object onto the fixed method row so this panel's
+        # minimum width stays within the 288px column contract.
         self._method_group = MethodButtonGroup(self)
-        outer.addWidget(self._method_group)
+        self._method_group.hide()
+        self._method_selector_mounted = False
 
         self._preset_host = QWidget(self)
         preset_layout = QVBoxLayout(self._preset_host)
@@ -248,6 +255,7 @@ class AnalysisPanel(QWidget):
         self._applied_key: str | None = None
         self._applied_snapshot: dict = {}
         self._method_group.methodChanged.connect(self._on_method_changed)
+        self._method_group.methodActivated.connect(self.methodActivated)
         self._param_form.paramsChanged.connect(self._on_params_changed)
         self._frf_grouping_combo.currentIndexChanged.connect(self._on_params_changed)
         self._chart_statistics.changed.connect(self._on_params_changed)
@@ -416,6 +424,28 @@ class AnalysisPanel(QWidget):
         )
 
     # ------------------------------------------------------------------
+    def mount_method_selector(self, host_layout) -> None:
+        """Move the existing method group into ``host_layout``.
+
+        Repeat calls are safe: the same five buttons, exclusive group and
+        already-connected slots stay in place.  The panel does not create a
+        second selector or reconnect ``methodChanged``.
+        """
+        group = self._method_group
+        if host_layout.indexOf(group) >= 0:
+            return
+        self._method_head.hide()
+        current_parent = group.parentWidget()
+        current_layout = current_parent.layout() if current_parent is not None else None
+        if current_layout is not None and current_layout.indexOf(group) >= 0:
+            current_layout.removeWidget(group)
+        host = host_layout.parentWidget()
+        if host is not None:
+            group.setParent(host)
+        host_layout.addWidget(group, 0)
+        group.show()
+        self._method_selector_mounted = True
+
     def current_method(self) -> str:
         return self._method_group.current_method()
 

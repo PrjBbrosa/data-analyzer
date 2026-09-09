@@ -606,16 +606,107 @@ QLabel#batchPreviewWarnings {
     font-size: 12px;
 }
 QWidget#BatchCompactToolbar {
-    border-bottom: 1px solid #e8edf4;
-    background-color: #fbfcfe;
+    border: none;
+    background-color: #ffffff;
 }
 /* The preset buttons are secondary chrome, so they run shorter than the
  * footer's action buttons and let the toolbar row sit at 36px. */
 QWidget#BatchCompactToolbar QPushButton {
     min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
     padding: 2px 10px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background-color: transparent;
+    color: #475569;
 }
-QLabel#BatchToolbarTitle { color: #4b596c; font-size: 12px; font-weight: 700; }
+QWidget#BatchCompactToolbar QPushButton:hover {
+    background-color: #f1f4f8;
+    color: #1e293b;
+}
+QWidget#BatchCompactToolbar QPushButton:pressed {
+    background-color: #e2e8f0;
+    color: #0f172a;
+}
+QWidget#BatchCompactToolbar QPushButton:focus {
+    border-color: {{CONTROL_ACCENT}};
+}
+QWidget#BatchCompactToolbar QPushButton:disabled {
+    background-color: transparent;
+    border-color: transparent;
+    color: #94a3b8;
+}
+QLabel#BatchToolbarTitle { color: #1e293b; font-size: 13px; font-weight: 700; }
+QWidget#BatchMethodRow {
+    background-color: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+}
+QWidget#BatchMethodCaption {
+    min-width: 128px;
+    background-color: transparent;
+}
+QWidget#BatchMethodTabsHost {
+    background-color: transparent;
+}
+QLabel#BatchMethodStepNumber {
+    min-width: 21px;
+    max-width: 21px;
+    min-height: 22px;
+    max-height: 22px;
+    background-color: transparent;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#BatchMethodStepLabel {
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+}
+QLabel#BatchMethodHint {
+    color: #64748b;
+    font-size: 12px;
+}
+QWidget#BatchPipelineStrip {
+    background-color: #f5f7fa;
+    border-bottom: 1px solid #e8edf2;
+}
+QFrame#BatchPipelineStage {
+    background-color: transparent;
+    border: none;
+}
+QFrame#BatchPipelineDivider {
+    background-color: #dce2ea;
+    border: none;
+}
+QLabel#BatchPipelineNumber {
+    background-color: transparent;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#BatchPipelineTitle {
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+}
+QLabel#BatchPipelineFact {
+    color: #64748b;
+    font-size: 11px;
+}
+QWidget#BatchCompactFooter QPushButton#BatchFooterLocate {
+    min-height: 0;
+    min-width: 0;
+    padding: 0 4px;
+    border: none;
+    background-color: transparent;
+    color: #086dda;
+    font-size: 12px;
+    font-weight: 500;
+}
+QWidget#BatchCompactFooter QPushButton#BatchFooterLocate:hover {
+    color: {{CONTROL_ACCENT}};
+    background-color: transparent;
+}
 QLabel#BatchFooterStateDot {
     border-radius: 4px;
     background-color: #0ea875;
@@ -1265,56 +1356,54 @@ Toolbar QFrame#modeActiveDot {
     border-radius: 3px;
 }
 
-/* Batch keeps its equal-width, text-only choices, but uses the same analysis
- * mode language as the top toolbar: a restrained pale-blue zone, symmetrical
- * boundary markers, and one raised active choice. */
+/* Compact method tabs: a restrained selection wash and short underline.
+ * Explicit states prevent generic QPushButton rules repainting this chrome. */
 QWidget#BatchMethodGroup {
-    background-color: {{CONTROL_TRACK}};
-    border: 1px solid {{CONTROL_TRACK_LINE}};
-    border-radius: 7px;
-}
-QWidget#BatchMethodSegment {
     background-color: transparent;
+    border: none;
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod] {
-    /* Retain Batch's existing touch target; only the visual language changes
-     * here, not the vertical rhythm of the analysis panel. */
-    /* Preserve the prior 34px outer button: 24 content + 4px padding × 2
-     * + 1px transparent border × 2.  Checked only swaps colours. */
-    min-height: 24px;
+    min-height: 28px;
+    max-height: 32px;
     margin: 0;
-    padding: 4px 10px;
+    padding: 0 10px;
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: 5px;
     background-color: transparent;
     color: {{CONTROL_TEXT_MUTED}};
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 500;
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod]:hover {
-    background-color: transparent;
-    color: {{CONTROL_TEXT}};
+    background-color: #f1f4f8;
+    color: #334155;
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked {
-    background-color: {{CONTROL_SURFACE_TOP}};
-    color: {{CONTROL_TEXT_ON_SELECT}};
-    border-color: {{CONTROL_SELECT_LINE}};
+    background-color: #eaf2ff;
+    color: {{CONTROL_ACCENT}};
+    font-weight: 600;
 }
-QFrame#BatchMethodZoneDivider {
-    background-color: #fbfcff;
-    border-left: 1px solid #e2e8f0;
-    border-right: 1px solid #e2e8f0;
-    border-radius: 3px;
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:hover {
+    background-color: #dfebff;
 }
-QFrame#BatchMethodZoneDividerTick {
-    background-color: {{CONTROL_ACCENT_HI}};
+QWidget#BatchMethodGroup QPushButton[batchMethod]:pressed,
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:pressed {
+    background-color: #d4e4fc;
+    color: #1254aa;
+}
+QWidget#BatchMethodGroup QPushButton[batchMethod]:focus {
+    border-color: {{CONTROL_ACCENT}};
+}
+QWidget#BatchMethodGroup QPushButton[batchMethod]:disabled {
+    color: #94a3b8;
+    background-color: transparent;
+    border-color: transparent;
+}
+QFrame#BatchMethodUnderline {
+    background-color: {{CONTROL_ACCENT}};
     border: none;
-    border-radius: 2px;
-}
-QFrame#BatchMethodActiveDot {
-    background-color: #1677ff;
-    border: 1px solid #ffffff;
-    border-radius: 3px;
+    border-top-left-radius: 2px;
+    border-top-right-radius: 2px;
 }
 
 /* Acquisition Cockpit v3 shell. These selectors are object-name/property

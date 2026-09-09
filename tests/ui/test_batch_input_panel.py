@@ -156,7 +156,6 @@ def test_limited_source_row_exposes_reason_and_never_runs_probe(qtbot, tmp_path)
 def test_inline_file_manager_keeps_a_250px_viewport_for_all_row_counts(qtbot):
     """Input controls below the file viewport must not move with row count."""
     from PyQt5.QtCore import QPoint
-    from PyQt5.QtWidgets import QLabel
 
     from mf4_analyzer.ui.drawers.batch.input_panel import (
         BATCH_INLINE_FILE_MANAGER_HEIGHT, InputPanel,
@@ -168,9 +167,8 @@ def test_inline_file_manager_keeps_a_250px_viewport_for_all_row_counts(qtbot):
     panel.show()
     qtbot.wait(20)
 
-    target_title = next(
-        label for label in panel.findChildren(QLabel) if label.text() == "目标"
-    )
+    target_title = panel._target_title
+    assert target_title.text() == "分析信号"
     target_y = target_title.mapTo(panel, QPoint(0, 0)).y()
 
     for index in range(8):
@@ -404,6 +402,7 @@ def test_one_file_mutation_emits_one_channel_universe_change(qtbot):
 def test_path_pending_to_loaded_transition(qtbot, tmp_path):
     """Disk-add: state should walk path_pending → probing → loaded
     once probe completes (spec §3.2 file state machine)."""
+    from mf4_analyzer.io.source_adapters import canonical_source_path
     from mf4_analyzer.ui.drawers.batch.input_panel import FileListWidget
     w = FileListWidget()
     qtbot.addWidget(w)
@@ -414,7 +413,8 @@ def test_path_pending_to_loaded_transition(qtbot, tmp_path):
     path = str(tmp_path / "x.mf4")
     w.add_disk_path(path)
     qtbot.waitUntil(lambda: w.row_state(path) == "loaded", timeout=2000)
-    seen_states = [s for p, s in states if p == path]
+    identities = {path, canonical_source_path(path)}
+    seen_states = [s for p, s in states if p in identities]
     assert "path_pending" in seen_states
     assert "loaded" in seen_states
 
@@ -1351,3 +1351,23 @@ def test_non_frf_target_signal_label_is_vertically_centered(qtbot):
         Qt.AlignLeft | Qt.AlignVCenter
     )
     assert panel._target_signal_label.contentsMargins().top() == 0
+
+
+def test_target_section_title_follows_the_current_method(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+
+    panel.set_method("time")
+    assert panel._target_title.text() == "分析信号"
+    panel.set_method("fft")
+    assert panel._target_title.text() == "分析信号"
+    panel.set_method("fft_time")
+    assert panel._target_title.text() == "分析信号"
+    panel.set_method("order_time")
+    assert panel._target_title.text() == "分析信号与转速"
+    panel.set_method("frf")
+    assert panel._target_title.text() == "输入与输出配对"
+    assert panel._signal_picker is panel._target_stack.widget(0)
+    assert panel._frf_pair_editor is panel._target_stack.widget(1)

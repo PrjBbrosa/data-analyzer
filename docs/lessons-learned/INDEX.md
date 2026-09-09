@@ -232,6 +232,8 @@ lesson by default.
 | [Wrapped Hint Minimum Follows Current Width](wrapped-hint-minimum-follows-current-width.md) | A wrapped hint inside a nested form is intermittently compressed. | See lesson |
 | [Subplot Bottom Axis Role Must Release Height](subplot-bottom-axis-role-must-release-height.md) | Changing TimeDomain subplot bottom-axis role, selection-delta reuse, | See lesson |
 | [Progress Repaint After Clear Paints An Empty Viewport](progress-repaint-after-clear-paints-empty-viewport.md) | Changing TimeDomain full rebuilds, `canvas.clear()`, `_update_compute_progress(process_events=True)`, or 分屏/叠加 mode switching through MainWindow. | See lesson |
+| [Batch Header Surfaces Must Survive the Global QSS](codex-batch-header-surface-cascade.md) | Styling nested toolbar/method-row widgets or method button states. | See lesson |
+| [Reparented Batch Controls Must Keep Run Locks and Guidance Ownership](codex-batch-reparented-controls-and-guidance-lifecycle.md) | Moving controls across Qt parents or adding validation-driven guidance. | See lesson |
 
 ## Selection Rules
 

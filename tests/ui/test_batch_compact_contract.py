@@ -189,9 +189,14 @@ def test_batch_shell_matches_html_fixed_rows_and_contiguous_columns(qapp, qtbot)
         _show_at(qtbot, sheet, 1440, 900)
 
         assert sheet._toolbar_host.height() == 36
+        assert sheet._method_row.height() == 40
         assert sheet.strip.height() == 40
         assert sheet._footer_host.height() == 50
         assert sheet._detail_lay.spacing() == 0
+        assert sheet._analysis_panel._method_group.parent() is sheet._method_tabs_host
+        assert sheet._analysis_panel._method_head.isHidden()
+        assert sheet._method_row.parent() is sheet
+        assert sheet._method_row.parent() is not sheet._toolbar_host
 
         panes = (sheet._input_scroll, sheet._analysis_scroll, sheet._output_scroll)
         assert all(pane.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff for pane in panes)
@@ -213,8 +218,10 @@ def test_pipeline_strip_uses_flat_html_stage_summaries(qtbot):
     assert strip.minimumHeight() == 40
     assert strip.maximumHeight() == 40
     assert strip.layout().spacing() == 0
-    assert [card.number_label.text() for card in strip.cards] == ["01", "02", "03"]
-    assert [card.title_label.text() for card in strip.cards] == ["输入", "分析", "输出"]
+    assert [card.number_label.text() for card in strip.cards] == ["02", "03", "04"]
+    assert [card.title_label.text() for card in strip.cards] == [
+        "文件与目标", "分析参数", "输出",
+    ]
 
 
 def test_grouping_cards_expose_html_wave_semantics_and_geometry(qtbot):
@@ -459,11 +466,10 @@ def test_accent_compatibility_role_uses_the_shared_secondary_qss_tokens():
     assert 'role="secondary"' in window
 
 
-def test_batch_header_keeps_two_rows_but_tightened(qtbot):
-    """The toolbar and the pipeline strip stay two separate rows — they
-    carry different things (方案 I/O vs. pipeline state). Only their
-    heights shrink: 50 + 62 + 54 = 166px of chrome becomes 36 + 40 + 50
-    = 126px.
+def test_batch_header_keeps_toolbar_method_row_and_pipeline_strip(qtbot):
+    """Toolbar, method-first row, and pipeline strip stay separate rows.
+
+    Heights: 36 + 40 + 40 + 50 = 166px of chrome.
     """
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
@@ -472,13 +478,38 @@ def test_batch_header_keeps_two_rows_but_tightened(qtbot):
 
     assert sheet.strip.parent() is sheet
     assert sheet.strip.parent() is not sheet._toolbar_host
+    assert sheet._method_row.parent() is sheet
     assert sheet._toolbar_title.text() == "批处理分析"
     chrome = (
         sheet._toolbar_host.height()
+        + sheet._method_row.height()
         + sheet.strip.height()
         + sheet._footer_host.height()
     )
-    assert chrome == 126
+    assert chrome == 166
+
+
+def test_method_selector_mount_keeps_the_same_button_and_form_objects(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    panel = sheet._analysis_panel
+    group = panel._method_group
+    buttons = tuple(group._buttons.values())
+    form = panel._param_form
+
+    assert group.parent() is sheet._method_tabs_host
+    assert panel._method_head.isHidden()
+    assert len(sheet.findChildren(MethodButtonGroup)) == 1
+
+    panel.mount_method_selector(sheet._method_tabs_layout)
+    assert panel._method_group is group
+    assert tuple(group._buttons.values()) == buttons
+    assert panel._param_form is form
+    assert group.parent() is sheet._method_tabs_host
+    assert len(sheet.findChildren(MethodButtonGroup)) == 1
 
 
 def test_batch_toolbar_row_fits_its_preset_buttons(qapp, qtbot):
