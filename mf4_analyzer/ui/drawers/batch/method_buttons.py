@@ -203,15 +203,23 @@ _FRF_DISPLAY_FIELDS = (
 )
 
 
+_RENDER_LAYOUT_NONE_HINT = (
+    "每项单独输出时，图内布局不生效；合并图片后可设置。"
+)
+_FFT_T_WIN_SINGLE_FRAME_HINT = "单帧 FFT 不使用窗长设置"
+_FFT_T_WIN_FIXED_NFFT_HINT = "固定 NFFT 时，窗长由 NFFT 与采样率决定"
+
+
 # Per-method visible field set, taken verbatim from spec §3.3 minus the
-# removed ``order_rpm`` column.
+# removed ``order_rpm`` column. FFT hides ordinary ``overlap``; get_params
+# still emits the hidden widget value for payload compatibility.
 _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     "time": (
         "render_grouping_cards", "render_layout", "x_source", "x_channel",
         "x_origin",
     ),
     "fft": (
-        "window", "nfft_mode", "nfft", "t_win_s", "overlap",
+        "window", "nfft_mode", "nfft", "t_win_s",
         "avg_mode", "avg_overlap", "amplitude_definition", "weighting",
     ),
     "fft_time": (
@@ -957,9 +965,34 @@ class DynamicParamForm(QWidget):
         return out
 
     def _sync_nfft_mode(self, *_args) -> None:
-        self._w_nfft.setEnabled(
-            self._w_nfft_mode.currentData() in {"fixed", "manual"}
-        )
+        self._sync_fft_field_applicability()
+
+    def _sync_avg_mode(self, *_args) -> None:
+        self._sync_fft_field_applicability()
+
+    def _sync_fft_field_applicability(self) -> None:
+        """Project NFFT / window-length / avg-overlap from current modes."""
+        nfft_fixed = self._w_nfft_mode.currentData() in {"fixed", "manual"}
+        self._w_nfft.setEnabled(nfft_fixed)
+        single_frame = self._w_avg_mode.currentText() == "单帧"
+        t_win_label = self._field_labels.get("t_win_s")
+        if getattr(self, "_current", None) == "fft":
+            t_win_enabled = (not single_frame) and (not nfft_fixed)
+            if single_frame:
+                tip = _FFT_T_WIN_SINGLE_FRAME_HINT
+            elif nfft_fixed:
+                tip = _FFT_T_WIN_FIXED_NFFT_HINT
+            else:
+                tip = ""
+            self._w_t_win_s.setEnabled(t_win_enabled)
+            if t_win_label is not None:
+                t_win_label.setToolTip(tip)
+            self._w_avg_overlap.setEnabled(not single_frame)
+            return
+        self._w_t_win_s.setEnabled(True)
+        if t_win_label is not None:
+            t_win_label.setToolTip("")
+        self._w_avg_overlap.setEnabled(not single_frame)
 
     def _configure_nfft_mode_for_method(self, method: str) -> None:
         current = str(self._w_nfft_mode.currentData() or "auto")
@@ -978,9 +1011,6 @@ class DynamicParamForm(QWidget):
         self._choice_nfft_mode.refresh_from_bound_combo()
         self._sync_nfft_mode()
 
-    def _sync_avg_mode(self, *_args) -> None:
-        self._w_avg_overlap.setEnabled(self._w_avg_mode.currentText() != "单帧")
-
     def _sync_render_group_by(self, *_args) -> None:
         self._grouping_cards.set_mode(
             str(self._w_render_group_by.currentData() or "none"), emit=False,
@@ -990,6 +1020,9 @@ class DynamicParamForm(QWidget):
         choice = self._choice_widgets.get("render_layout")
         if choice is not None:
             choice.setEnabled(enabled)
+        label = self._field_labels.get("render_layout")
+        if label is not None:
+            label.setToolTip("" if enabled else _RENDER_LAYOUT_NONE_HINT)
 
     def _on_grouping_card_changed(self, mode: str) -> None:
         index = self._w_render_group_by.findData(str(mode))
@@ -1123,7 +1156,9 @@ class DynamicParamForm(QWidget):
             params["order_res"] = float(self._w_order_res.value())
         if "time_res" in self.visible_field_names():
             params["time_res"] = float(self._w_time_res.value())
-        if "overlap" in self.visible_field_names():
+        if self._current == "fft" or "overlap" in self.visible_field_names():
+            # FFT hides ordinary overlap in the form; the widget value still
+            # round-trips so old payloads and effective_facts stay compatible.
             params["overlap"] = float(self._w_overlap.value())
         if "weighting" in self.visible_field_names():
             params["weighting"] = self._w_weighting.currentText()

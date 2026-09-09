@@ -13,7 +13,8 @@ from PyQt5.QtGui import QGuiApplication, QValidator
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
-    QGroupBox, QPushButton, QScrollArea, QStyle, QStyleOptionSlider, QWidget,
+    QGroupBox, QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOptionSlider,
+    QWidget,
 )
 
 
@@ -987,3 +988,194 @@ def test_export_card_lays_out_at_usable_width(qtbot):
             width, panel._chk_data.geometry(), panel._chk_image.geometry(),
         )
         assert panel._output_summary.width() > 0
+
+
+_LINEAR_DB_REF_REASON = "线性幅值不使用 dB 参考"
+_XLSX_ONLY_PREVIEW_NOTE = (
+    "当前仅导出数据；图片合并、图内布局、图片样式和显示范围仅用于预览，不改变 XLSX 数值。"
+)
+
+
+def _db_reference_reason_surfaces(panel):
+    host = getattr(panel, "_db_reference_label_host", None)
+    label = getattr(panel, "_db_reference_label", None)
+    return (
+        panel.db_reference_control.toolTip() or "",
+        host.toolTip() if host is not None else "",
+        label.toolTip() if label is not None else "",
+    )
+
+
+def test_batch_output_linear_disables_whole_db_reference_group_and_restores(qtbot):
+    panel = _make_panel(qtbot)
+    panel.apply_reference_params({
+        "db_reference_mode": "manual", "db_reference": 2e-5,
+    })
+    control = panel.db_reference_control
+    assert control.mode() == "manual"
+    assert control.editor.value() == pytest.approx(2e-5)
+    assert control.isEnabled() is True
+
+    panel.combo_amp_unit.setCurrentText("Linear")
+
+    assert control.isEnabled() is False
+    assert control.editor.isEnabled() is False
+    assert control.manage_button.isEnabled() is False
+    assert control.mode() == "manual"
+    assert control.editor.value() == pytest.approx(2e-5)
+    for tooltip in _db_reference_reason_surfaces(panel):
+        assert _LINEAR_DB_REF_REASON in tooltip
+
+    panel.combo_amp_unit.setCurrentText("dB")
+
+    assert control.isEnabled() is True
+    assert control.editor.isEnabled() is True
+    assert control.manage_button.isEnabled() is True
+    assert control.mode() == "manual"
+    assert control.editor.value() == pytest.approx(2e-5)
+
+
+def test_batch_output_db_reference_hide_vs_linear_disable_by_method(qtbot):
+    panel = _make_panel(qtbot)
+    panel.apply_reference_params({
+        "db_reference_mode": "manual", "db_reference": 4e-6,
+    })
+    panel.combo_amp_unit.setCurrentText("Linear")
+
+    for method in ("time", "frf"):
+        panel.apply_method_defaults(method)
+        assert panel._db_reference_row.isHidden() is True
+        for tooltip in _db_reference_reason_surfaces(panel):
+            assert _LINEAR_DB_REF_REASON not in tooltip
+
+    panel.apply_method_defaults("fft")
+    assert panel.combo_amp_unit.currentText() == "Linear"
+    assert panel._db_reference_row.isHidden() is False
+    assert panel.db_reference_control.isEnabled() is False
+    assert panel.db_reference_control.mode() == "manual"
+    assert panel.db_reference_control.editor.value() == pytest.approx(4e-6)
+    assert _LINEAR_DB_REF_REASON in panel.db_reference_control.toolTip()
+
+    panel.combo_amp_unit.setCurrentText("dB")
+    assert panel.db_reference_control.isEnabled() is True
+
+    for method in ("fft", "fft_time", "order_time"):
+        panel.apply_method_defaults(method)
+        panel.combo_amp_unit.setCurrentText("Linear")
+        assert panel._db_reference_row.isHidden() is False
+        assert panel.db_reference_control.isEnabled() is False
+        panel.combo_amp_unit.setCurrentText("dB")
+        assert panel.db_reference_control.isEnabled() is True
+
+
+def test_batch_output_apply_axis_params_projects_linear_disable_without_reset(qtbot):
+    panel = _make_panel(qtbot)
+    panel.apply_reference_params({
+        "db_reference_mode": "manual", "db_reference": 3e-4,
+    })
+    handler_calls = []
+    real_handler = panel._on_amp_unit_changed
+
+    def _spy(text):
+        handler_calls.append(text)
+        return real_handler(text)
+
+    panel._on_amp_unit_changed = _spy
+    try:
+        panel.combo_amp_unit.currentTextChanged.disconnect(real_handler)
+    except TypeError:
+        pass
+    panel.combo_amp_unit.currentTextChanged.connect(_spy)
+
+    panel.apply_axis_params({
+        "z_auto": False, "z_floor": 0.05, "z_ceiling": 0.75,
+        "amplitude_mode": "amplitude",
+    })
+
+    assert handler_calls == []
+    assert panel.combo_amp_unit.currentText() == "Linear"
+    assert panel.chk_z_auto.isChecked() is False
+    assert panel.spin_z_floor.value() == pytest.approx(0.05)
+    assert panel.spin_z_ceiling.value() == pytest.approx(0.75)
+    assert panel.db_reference_control.isEnabled() is False
+    assert panel.db_reference_control.mode() == "manual"
+    assert panel.db_reference_control.editor.value() == pytest.approx(3e-4)
+
+
+def test_batch_output_linear_db_reference_survives_ancestor_lock(qtbot):
+    host = QWidget()
+    from mf4_analyzer.ui.drawers.batch.output_panel import OutputPanel
+
+    panel = OutputPanel(host)
+    qtbot.addWidget(host)
+    panel.combo_amp_unit.setCurrentText("Linear")
+    assert panel.db_reference_control.isEnabled() is False
+
+    host.setEnabled(False)
+    panel._sync_db_reference_applicability()
+    assert panel.db_reference_control.isEnabled() is False
+
+    host.setEnabled(True)
+    assert panel.db_reference_control.isEnabled() is False
+    assert panel.db_reference_control.editor.isEnabled() is False
+    assert panel.db_reference_control.manage_button.isEnabled() is False
+
+
+def test_batch_output_data_only_note_four_export_combinations(qtbot):
+    from mf4_analyzer.batch import BatchOutput
+
+    panel = _make_panel(qtbot)
+    note = panel._data_only_note
+
+    assert panel._chk_data.isChecked()
+    assert panel._chk_image.isChecked()
+    assert note.isHidden() is True
+
+    panel._chk_image.setChecked(False)
+    assert note.isHidden() is False
+    assert note.text() == _XLSX_ONLY_PREVIEW_NOTE
+    assert note.wordWrap() is True
+    assert panel._btn_render_style.isEnabled() is True
+    assert panel._axis_group.isEnabled() is True
+    assert panel._combo_image_background.isEnabled() is True
+    tooltip = note.toolTip()
+    assert "FRF" in tooltip
+    assert "幅值显示" in tooltip
+    assert "滤波" not in tooltip
+    assert "切片" not in tooltip
+
+    panel._chk_data.setChecked(False)
+    panel._chk_image.setChecked(True)
+    assert note.isHidden() is True
+    assert "未选择导出内容" not in panel._output_summary.text()
+
+    panel._chk_image.setChecked(False)
+    assert note.isHidden() is True
+    assert "未选择导出内容" in panel._output_summary.text()
+    assert "仅导出数据" not in note.text() or note.isHidden()
+
+    panel.apply_outputs(BatchOutput(export_data=True, export_image=False))
+    assert note.isHidden() is False
+    assert note.text() == _XLSX_ONLY_PREVIEW_NOTE
+
+
+def test_batch_output_data_only_note_wraps_in_288px_column(qtbot):
+    panel = _make_panel(qtbot)
+    panel._chk_image.setChecked(False)
+    panel.resize(288, 1200)
+    panel.show()
+    qtbot.wait(20)
+
+    note = panel._data_only_note
+    assert note.isVisibleTo(panel) is True
+    assert note.wordWrap() is True
+    assert note.sizePolicy().horizontalPolicy() == QSizePolicy.Ignored
+    assert panel.minimumSizeHint().width() <= 288
+    assert note.width() <= 288
+    wrapped = note.fontMetrics().boundingRect(
+        QRect(0, 0, max(note.width(), 1), 4000),
+        Qt.TextWordWrap,
+        note.text(),
+    )
+    assert wrapped.height() > note.fontMetrics().lineSpacing()
+    assert note.height() > note.fontMetrics().lineSpacing()

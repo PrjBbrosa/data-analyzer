@@ -4,9 +4,33 @@ from __future__ import annotations
 
 import numpy as np
 
+from mf4_analyzer.ui import hints
+from mf4_analyzer.ui.inspector_sections import PersistentTop
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.time_xaxis import PER_SOURCE_NAME
 from tests._helpers import wwt_factory as wwt
+
+
+def test_curve_bound_xaxis_puts_reason_on_source_field_label(qtbot):
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    source_label = top._xaxis_source_label
+    assert source_label.text() == "来源:"
+    assert source_label.toolTip() == ""
+    assert top.choice_xaxis.toolTip() == ""
+
+    top.set_curve_bound_xaxis_summary("文件内绑定 · 2 条曲线")
+    assert source_label.toolTip() == hints.XAXIS_CURVE_BOUND_HINT
+    assert top.choice_xaxis.toolTip() == hints.XAXIS_CURVE_BOUND_HINT
+    assert not top.choice_xaxis.isEnabled()
+    assert top.choice_xaxis.buttons()[1].text() == "曲线自带"
+
+    top.set_curve_bound_xaxis_summary("")
+    assert source_label.toolTip() == ""
+    assert top.choice_xaxis.toolTip() == ""
+    assert top.choice_xaxis.isEnabled()
+    assert top.choice_xaxis.buttons()[1].text() == "指定通道"
+    assert top.curve_bound_xaxis_summary() == ""
 
 
 def test_mixed_channel_x_keeps_header_x_editable_and_exact_arrays(
@@ -32,6 +56,7 @@ def test_mixed_channel_x_keeps_header_x_editable_and_exact_arrays(
     assert top.choice_xaxis.isEnabled()
     assert top.btn_apply_xaxis.isEnabled()
     assert top.curve_bound_xaxis_summary() == ""
+    assert top._xaxis_source_label.toolTip() == ""
 
     result = window._build_time_plot_data()
     assert result.issues == []

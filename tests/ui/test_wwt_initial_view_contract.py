@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from mf4_analyzer.io.wwt_document import load_wwt_document
+from mf4_analyzer.ui import hints
 from mf4_analyzer.ui.time_curve_bindings import bound_time_plot_rows
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
@@ -99,12 +100,15 @@ def test_record_only_wwt_first_frame_may_intentionally_clip_data_union(
     assert top._combo_xaxis_ch.currentText() == "文件内绑定 · 2 条曲线"
     assert not top.choice_xaxis.isEnabled()
     assert not top.btn_apply_xaxis.isEnabled()
+    assert top._xaxis_source_label.toolTip() == hints.XAXIS_CURVE_BOUND_HINT
+    assert top.choice_xaxis.toolTip() == hints.XAXIS_CURVE_BOUND_HINT
 
     window._capture_range_change_into_view(state, window.canvas_time)
 
     assert top.choice_xaxis.buttons()[1].text() == "曲线自带"
     assert top._combo_xaxis_ch.currentText() == "文件内绑定 · 2 条曲线"
     assert not top.choice_xaxis.isEnabled()
+    assert top._xaxis_source_label.toolTip() == hints.XAXIS_CURVE_BOUND_HINT
 
 
 def test_channel_backed_wwt_filter_builds_normal_companion(

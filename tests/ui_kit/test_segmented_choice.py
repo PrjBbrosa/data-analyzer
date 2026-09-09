@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QCoreApplication, QEvent, QRect, Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QRect, Qt
+from PyQt5.QtGui import QColor, QHoverEvent, QWheelEvent
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QComboBox, QFormLayout, QWidget
 
@@ -226,6 +226,55 @@ def _background_at(choice: SegmentedChoice, button) -> str:
     point_x = button.x() + button.width() // 2
     point_y = button.y() + button.height() // 2
     return QColor(image.pixel(point_x, point_y)).name()
+
+
+def _token_name(name: str) -> str:
+    return QColor(CONTROL_COLORS[name]).name()
+
+
+def _show_bound_choice_in_parent(qtbot, qapp, *, width=260) -> tuple[QWidget, SegmentedChoice]:
+    parent = QWidget()
+    choice = SegmentedChoice(parent)
+    choice.bind(_binary_combo())
+    choice.setGeometry(0, 0, width, 32)
+    parent.resize(width, 32)
+    qtbot.addWidget(parent)
+    parent.show()
+    qapp.processEvents()
+    return parent, choice
+
+
+def _set_effective_enabled(choice: SegmentedChoice, parent, enabled: bool, via: str) -> None:
+    if via == "ancestor":
+        parent.setEnabled(enabled)
+        return
+    choice.setEnabled(enabled)
+
+
+def _send_wheel(widget, qapp) -> None:
+    pos = QPoint(max(widget.width() // 2, 1), max(widget.height() // 2, 1))
+    event = QWheelEvent(
+        QPointF(pos),
+        QPointF(widget.mapToGlobal(pos)),
+        QPoint(0, 120),
+        QPoint(0, 120),
+        Qt.NoButton,
+        Qt.NoModifier,
+        Qt.NoScrollPhase,
+        False,
+    )
+    qapp.sendEvent(widget, event)
+
+
+def _force_hover_and_focus(widget, qapp) -> None:
+    pos = QPoint(max(widget.width() // 2, 1), 4)
+    widget.setAttribute(Qt.WA_UnderMouse, True)
+    QTest.mouseMove(widget, pos)
+    qapp.sendEvent(widget, QEvent(QEvent.Enter))
+    qapp.sendEvent(widget, QHoverEvent(QEvent.HoverEnter, pos, QPoint(-1, -1)))
+    qapp.sendEvent(widget, QEvent(QEvent.FocusIn))
+    widget.setFocus()
+    qapp.processEvents()
 
 
 def test_motion_policy_defaults_off_and_click_does_not_start_a_clock(qtbot, qapp):
@@ -467,3 +516,188 @@ def test_motion_deferred_delete_owns_pill_driver_and_hidden_combo(qapp):
     assert sip.isdeleted(pill)
     assert sip.isdeleted(driver)
     assert all(sip.isdeleted(button) for button in buttons)
+
+
+@pytest.mark.parametrize("via", ("self", "ancestor"))
+def test_disable_preserves_selection_and_does_not_emit_index_signals(
+    qtbot, production_stylesheet, via,
+):
+    if via == "ancestor":
+        parent, choice = _show_bound_choice_in_parent(qtbot, production_stylesheet)
+    else:
+        parent, choice = None, _show_bound_choice(qtbot, production_stylesheet)
+    choice.setCurrentIndex(1)
+    production_stylesheet.processEvents()
+    first, second = choice.buttons()
+    assert second.isChecked() and not first.isChecked()
+
+    combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+    _set_effective_enabled(choice, parent, False, via)
+    production_stylesheet.processEvents()
+
+    assert choice.currentIndex() == 1
+    assert choice.bound_combo().currentIndex() == 1
+    assert second.isChecked() and not first.isChecked()
+    assert list(combo_spy) == []
+    assert list(choice_spy) == []
+    assert not choice.isEnabled()
+
+    _set_effective_enabled(choice, parent, True, via)
+    production_stylesheet.processEvents()
+
+    assert choice.currentIndex() == 1
+    assert second.isChecked() and not first.isChecked()
+    assert list(combo_spy) == []
+    assert list(choice_spy) == []
+    assert choice.isEnabled()
+
+
+@pytest.mark.parametrize("via", ("self", "ancestor"))
+def test_disabled_mouse_keyboard_and_wheel_do_not_change_index(
+    qtbot, production_stylesheet, via,
+):
+    if via == "ancestor":
+        parent, choice = _show_bound_choice_in_parent(qtbot, production_stylesheet)
+    else:
+        parent, choice = None, _show_bound_choice(qtbot, production_stylesheet)
+    choice.setCurrentIndex(1)
+    production_stylesheet.processEvents()
+    first, second = choice.buttons()
+    _set_effective_enabled(choice, parent, False, via)
+    production_stylesheet.processEvents()
+
+    combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+    QTest.mouseClick(first, Qt.LeftButton)
+    QTest.keyClick(first, Qt.Key_Space)
+    QTest.keyClick(first, Qt.Key_Return)
+    QTest.keyClick(choice, Qt.Key_Left)
+    _send_wheel(choice, production_stylesheet)
+    _send_wheel(first, production_stylesheet)
+    _send_wheel(choice.bound_combo(), production_stylesheet)
+    production_stylesheet.processEvents()
+
+    assert choice.currentIndex() == 1
+    assert second.isChecked() and not first.isChecked()
+    assert list(combo_spy) == []
+    assert list(choice_spy) == []
+
+
+@pytest.mark.parametrize("via", ("self", "ancestor"))
+def test_disabled_hover_and_focus_do_not_restore_white_selected_fill(
+    qtbot, production_stylesheet, via,
+):
+    if via == "ancestor":
+        parent, choice = _show_bound_choice_in_parent(qtbot, production_stylesheet)
+    else:
+        parent, choice = None, _show_bound_choice(qtbot, production_stylesheet)
+    choice.setCurrentIndex(1)
+    production_stylesheet.processEvents()
+    first, second = choice.buttons()
+    _set_effective_enabled(choice, parent, False, via)
+    production_stylesheet.processEvents()
+    _force_hover_and_focus(second, production_stylesheet)
+    choice.repaint()
+
+    assert _background_at(choice, second) == _token_name("CONTROL_DISABLED_BG")
+    assert _background_at(choice, first) == _token_name("CONTROL_TRACK")
+    assert _background_at(choice, second) != _token_name("CONTROL_SURFACE_TOP")
+
+
+@pytest.mark.parametrize("via", ("self", "ancestor"))
+def test_reenable_restores_white_selected_pill_and_original_index(
+    qtbot, production_stylesheet, via,
+):
+    if via == "ancestor":
+        parent, choice = _show_bound_choice_in_parent(qtbot, production_stylesheet)
+    else:
+        parent, choice = None, _show_bound_choice(qtbot, production_stylesheet)
+    choice.setCurrentIndex(1)
+    production_stylesheet.processEvents()
+    first, second = choice.buttons()
+    _set_effective_enabled(choice, parent, False, via)
+    production_stylesheet.processEvents()
+    assert _background_at(choice, second) == _token_name("CONTROL_DISABLED_BG")
+
+    combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+    _set_effective_enabled(choice, parent, True, via)
+    production_stylesheet.processEvents()
+    choice.repaint()
+
+    assert choice.currentIndex() == 1
+    assert second.isChecked() and not first.isChecked()
+    assert list(combo_spy) == []
+    assert list(choice_spy) == []
+    assert _background_at(choice, second) == _token_name("CONTROL_SURFACE_TOP")
+    assert _background_at(choice, first) == _token_name("CONTROL_TRACK")
+
+
+@pytest.mark.parametrize("policy", (None, POLICY_OFF))
+def test_disabled_checked_qss_uses_disabled_tokens_when_motion_off(
+    qtbot, production_stylesheet, policy,
+):
+    choice = _show_bound_choice(qtbot, production_stylesheet)
+    if policy is not None:
+        choice.set_motion_policy(policy)
+    choice.setCurrentIndex(1)
+    production_stylesheet.processEvents()
+    first, second = choice.buttons()
+    assert _background_at(choice, second) == _token_name("CONTROL_SURFACE_TOP")
+
+    choice.setEnabled(False)
+    production_stylesheet.processEvents()
+    choice.repaint()
+
+    assert choice.motion_policy() == POLICY_OFF
+    assert choice._selection_pill is None or choice._selection_pill.isHidden()
+    assert _background_at(choice, second) == _token_name("CONTROL_DISABLED_BG")
+    assert _background_at(choice, first) == _token_name("CONTROL_TRACK")
+    assert _background_at(choice, second) != _token_name("CONTROL_SURFACE_TOP")
+
+
+def test_motion_light_disable_mid_animation_snaps_and_paints_disabled(
+    qtbot, production_stylesheet,
+):
+    choice = _show_bound_choice(qtbot, production_stylesheet)
+    choice.set_motion_policy(POLICY_LIGHT)
+    first, second = choice.buttons()
+    driver = choice._motion_driver
+    pill = choice._selection_pill
+    production_stylesheet.processEvents()
+    assert pill is not None and driver is not None
+
+    choice.setCurrentIndex(1)
+    driver.clock().setCurrentTime(40)
+    mid = QRect(driver.current())
+    assert driver.is_active()
+    assert mid not in (first.geometry(), second.geometry())
+    assert pill.geometry() == mid
+
+    combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+    choice.setEnabled(False)
+    production_stylesheet.processEvents()
+    choice.repaint()
+
+    assert choice.currentIndex() == 1
+    assert second.isChecked() and not first.isChecked()
+    assert list(combo_spy) == []
+    assert list(choice_spy) == []
+    assert not driver.is_active()
+    assert pill.geometry() == second.geometry()
+    assert _background_at(choice, second) == _token_name("CONTROL_DISABLED_BG")
+    assert _background_at(choice, first) == _token_name("CONTROL_TRACK")
+    assert _background_at(choice, second) != _token_name("CONTROL_SURFACE_TOP")
+
+    choice.setEnabled(True)
+    production_stylesheet.processEvents()
+    choice.repaint()
+
+    assert choice.currentIndex() == 1
+    assert choice.motion_policy() == POLICY_LIGHT
+    assert not driver.is_active()
+    assert pill.geometry() == second.geometry()
+    assert _background_at(choice, second) == _token_name("CONTROL_SURFACE_TOP")
+    assert _background_at(choice, first) == _token_name("CONTROL_TRACK")

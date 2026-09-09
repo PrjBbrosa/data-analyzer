@@ -388,6 +388,26 @@ def test_quickref_covers_batch_method_first_guidance():
     assert locate.gesture == "底栏"
 
 
+def test_quickref_covers_batch_control_applicability():
+    group = next(g for g in quickref.QUICKREF if g.title == "批处理")
+    layout = next(r for r in group.rows if r.desc == "图内布局")
+    assert "每项单独" in layout.sub
+    assert "保留" in layout.sub
+    fft_fields = next(r for r in group.rows if r.desc == "频谱字段适用性")
+    assert "单帧" in fft_fields.sub and "窗长" in fft_fields.sub
+    assert "平均重叠" in fft_fields.sub
+    assert "时频" in fft_fields.sub
+    linear = next(r for r in group.rows if r.desc == "线性幅值与 dB 参考")
+    assert "Linear" in linear.sub and "dB 参考" in linear.sub
+    assert "隐藏" in linear.sub
+    data_only = next(r for r in group.rows if r.desc == "仅导出数据")
+    assert "预览" in data_only.sub and "XLSX" in data_only.sub
+    assert "滤波" in data_only.sub and "切片" in data_only.sub
+    assert "不改表格数值" in data_only.sub
+    for row in (layout, fft_fields, linear, data_only):
+        assert len(row.sub) <= 160
+
+
 def test_dataclasses_are_frozen():
     import dataclasses
     import pytest

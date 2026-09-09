@@ -20,11 +20,20 @@ from ..motion import MotionPolicy, ValueDriver, duration_ms, resolve_policy
 
 # Suppress the QSS checked pill while the shared moving plate owns that chrome.
 # Longhand colors only: a ``border:`` shorthand here would zero radius.
-_MOTION_PILL_HOST_QSS = """
-QFrame#segmentedChoice QPushButton[role="choice"]:checked {
+# Disabled checked text is muted here; the plate owns the disabled fill.
+_MOTION_PILL_HOST_QSS = f"""
+QFrame#segmentedChoice QPushButton[role="choice"]:checked {{
     background-color: transparent;
     border-color: transparent;
-}
+}}
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled,
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled:hover,
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled:pressed,
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled:focus {{
+    background-color: transparent;
+    border-color: transparent;
+    color: {CONTROL_COLORS["CONTROL_TEXT_MUTED"]};
+}}
 """
 
 
@@ -39,12 +48,25 @@ class _SelectionPill(QFrame):
         self.setFocusPolicy(Qt.NoFocus)
         self.hide()
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange:
+            self.update()
+
     def paintEvent(self, event) -> None:
         del event
+        host = self.parentWidget()
+        enabled = True if host is None else host.isEnabled()
+        if enabled:
+            fill = CONTROL_COLORS["CONTROL_SURFACE_TOP"]
+            line = CONTROL_COLORS["CONTROL_SELECT_LINE"]
+        else:
+            fill = CONTROL_COLORS["CONTROL_DISABLED_BG"]
+            line = CONTROL_COLORS["CONTROL_DISABLED_LINE"]
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setBrush(QColor(CONTROL_COLORS["CONTROL_SURFACE_TOP"]))
-        painter.setPen(QPen(QColor(CONTROL_COLORS["CONTROL_SELECT_LINE"]), 1))
+        painter.setBrush(QColor(fill))
+        painter.setPen(QPen(QColor(line), 1))
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 5, 5)
 
 
@@ -179,12 +201,21 @@ class SegmentedChoice(QFrame):
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
-        if event.type() in (
+        kind = event.type()
+        if kind in (
             QEvent.FontChange,
             QEvent.EnabledChange,
             QEvent.WindowDeactivate,
         ):
             self._snap_indicator()
+        if kind == QEvent.EnabledChange:
+            self._refresh_enabled_chrome()
+
+    def wheelEvent(self, event) -> None:
+        if not self.isEnabled():
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def _set_checked_index(self, index: int) -> None:
         for button_index, button in enumerate(self._buttons):
@@ -200,10 +231,22 @@ class SegmentedChoice(QFrame):
         self.currentIndexChanged.emit(index)
 
     def _on_button_clicked(self, button: QPushButton) -> None:
+        if not self.isEnabled():
+            if self._combo is not None:
+                self._set_checked_index(self._combo.currentIndex())
+            return
         combo = self.bound_combo()
         index = self._group.id(button)
         if index >= 0 and combo.currentIndex() != index:
             combo.setCurrentIndex(index)
+
+    def _refresh_enabled_chrome(self) -> None:
+        pill = self._selection_pill
+        if pill is not None:
+            pill.update()
+        for button in self._buttons:
+            button.update()
+        self.update()
 
     def _apply_motion_chrome(self) -> None:
         if self._motion_policy.interpolates():
@@ -261,7 +304,12 @@ class SegmentedChoice(QFrame):
             return
         self._ensure_indicator()
         driver = self._ensure_driver()
-        if not animate or not self.isVisible() or driver.current() is None:
+        if (
+            not animate
+            or not self.isVisible()
+            or not self.isEnabled()
+            or driver.current() is None
+        ):
             driver.snap(target)
             return
         driver.go(target, duration_ms=duration_ms("segment", self._motion_policy))

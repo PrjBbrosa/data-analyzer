@@ -322,6 +322,27 @@ _HINTS = (
         priority=45,
     ),
     Hint(
+        id="batch.layout_when_separate",
+        text="每项单独时图内布局不可改",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=43,
+    ),
+    Hint(
+        id="batch.fft_single_frame",
+        text="单帧FFT不用窗长与平均重叠",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=41,
+    ),
+    Hint(
+        id="batch.data_only_preview",
+        text="仅导出数据时图片设置仅预览",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=40,
+    ),
+    Hint(
         id="channel.right_click",
         text="左侧通道右键 → 设为叠加图左轴",
         surface="discovery",

@@ -39,6 +39,14 @@ _GENERIC_DB_Z_RANGE = (-80.0, 0.0)
 _ORDER_TIME_DB_Z_RANGE = (-50.0, -10.0)
 _ORDER_TIME_METHOD = "order_time"
 _BATCH_AXIS_LABEL_W = 72
+_LINEAR_AMP_DB_REF_REASON = "线性幅值不使用 dB 参考"
+_XLSX_ONLY_PREVIEW_NOTE = (
+    "当前仅导出数据；图片合并、图内布局、图片样式和显示范围仅用于预览，不改变 XLSX 数值。"
+)
+_XLSX_ONLY_PREVIEW_TOOLTIP = (
+    "当前仅导出数据。以下设置仅用于预览，不改变 XLSX 数值："
+    "图片合并、图内布局、图片样式、显示范围、FRF 图表组织、幅值显示。"
+)
 
 
 def default_output_dir() -> str:
@@ -127,6 +135,11 @@ QWidget#BatchExportCard {
 QWidget#BatchExportCard QLabel#batchOutputSettingsSummary {
     border-top: 1px solid #edf1f6;
     padding-top: 5px;
+}
+QWidget#BatchExportCard QLabel#batchOutputDataOnlyNote {
+    color: #64748b;
+    font-size: 10px;
+    padding: 1px 0;
 }
 """)
 
@@ -280,6 +293,21 @@ QPushButton#batchOutputSettingsButton:checked {
             "color:#64748b;font-size:10px;padding:1px 0;"
         )
         export_lay.addWidget(self._output_summary)
+
+        self._data_only_note = QLabel(export_host)
+        self._data_only_note.setObjectName("batchOutputDataOnlyNote")
+        self._data_only_note.setText(_XLSX_ONLY_PREVIEW_NOTE)
+        self._data_only_note.setToolTip(_XLSX_ONLY_PREVIEW_TOOLTIP)
+        self._data_only_note.setWordWrap(True)
+        self._data_only_note.setMinimumWidth(0)
+        self._data_only_note.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred,
+        )
+        self._data_only_note.setStyleSheet(
+            "color:#64748b;font-size:10px;padding:1px 0;"
+        )
+        self._data_only_note.hide()
+        export_lay.addWidget(self._data_only_note)
         form.addRow("导出内容", export_host)
 
         self._output_settings = QFrame(self)
@@ -426,6 +454,14 @@ QPushButton#batchOutputSettingsButton:checked {
         )
         self._axis_group = axis_group
         self._db_reference_row = self.db_reference_control.parentWidget()
+        self._db_reference_label_host = (
+            self._db_reference_row.findChild(QWidget, "axisAuxLabelHost")
+            if self._db_reference_row is not None else None
+        )
+        self._db_reference_label = (
+            self._db_reference_label_host.findChild(QLabel)
+            if self._db_reference_label_host is not None else None
+        )
         # Batch line plots may legitimately use negative engineering values
         # and dB amplitudes.  The shared helper's non-negative Y range is for
         # frequency/order axes, not a universal batch-output constraint.
@@ -505,6 +541,7 @@ QPushButton#batchOutputSettingsButton:checked {
             spin.valueChanged.connect(self.changed)
         self._apply_method_axis_context("fft")
         self._sync_axis_enabled()
+        self._sync_db_reference_applicability()
         self._sync_output_controls()
         self._refresh_output_summary()
 
@@ -654,10 +691,52 @@ QPushButton#batchRenderStyleButton:checked {
         suffix = " · 冲突自动编号" if parts else ""
         self._output_summary.setText(" · ".join(parts) + suffix or "未选择导出内容")
 
-    def _sync_output_controls(self) -> None:
+    def _sync_output_controls(self, *_args) -> None:
         # Values are fixed by the compact contract; the two checkboxes alone
-        # select whether each fixed artifact is requested.
-        return
+        # select whether each fixed artifact is requested. Image layout/style
+        # stay editable for preview. Data-only gets a compact purpose note.
+        data_only = (
+            self._chk_data.isChecked() and not self._chk_image.isChecked()
+        )
+        self._data_only_note.setVisible(data_only)
+
+    def _sync_db_reference_applicability(self) -> None:
+        """Disable the dB-reference group for Linear amplitude; keep values.
+
+        Time / FRF hide the row entirely and must not show the Linear reason.
+        Outer ``setEnabled`` is the business lock; Auto/manual child state
+        stays with ``DbReferenceControl``.
+        """
+        row = getattr(self, "_db_reference_row", None)
+        control = getattr(self, "db_reference_control", None)
+        if row is None or control is None:
+            return
+        method = str(getattr(self, "_method", "fft") or "fft")
+        row_visible = method not in {"time", "frf"}
+        linear = self.combo_amp_unit.currentText() == "Linear"
+        apply_linear_disable = row_visible and linear
+        reason = _LINEAR_AMP_DB_REF_REASON if apply_linear_disable else ""
+        # Never enable the group while Linear is selected, including when an
+        # ancestor currently disables this panel.
+        want_enabled = not apply_linear_disable
+        blockers = (
+            QSignalBlocker(row),
+            QSignalBlocker(control),
+            QSignalBlocker(control.editor),
+        )
+        try:
+            row.setEnabled(want_enabled)
+            # Outer business lock only. Do not touch editor/manage/badge
+            # ``setEnabled`` or ``set_mode`` — Auto/manual stays inside
+            # ``DbReferenceControl``.
+            control.setEnabled(want_enabled)
+        finally:
+            del blockers
+        label_host = getattr(self, "_db_reference_label_host", None)
+        label = getattr(self, "_db_reference_label", None)
+        for widget in (row, label_host, label, control):
+            if widget is not None:
+                widget.setToolTip(reason)
 
     def _on_amp_unit_changed(self, text: str) -> None:
         """User toggled dB↔Linear on ``combo_amp_unit``.
@@ -687,6 +766,7 @@ QPushButton#batchRenderStyleButton:checked {
             for w in (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling):
                 w.blockSignals(False)
         self._sync_axis_enabled()
+        self._sync_db_reference_applicability()
         self.changed.emit()
 
     def apply_method_defaults(self, method: str) -> None:
@@ -748,6 +828,7 @@ QPushButton#batchRenderStyleButton:checked {
         self._axis_row_parts["x"]["summary"].setText(context["x_summary"])
         self._axis_row_parts["y"]["label"].setText(context["y_label"])
         self._axis_row_parts["y"]["summary"].setText(context["y_summary"])
+        self._sync_db_reference_applicability()
 
     def set_x_axis_context(self, *, label: str, unit: str = "") -> None:
         """Update the presented X-axis identity without changing the recipe."""
@@ -1230,3 +1311,4 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
                 except (TypeError, ValueError):
                     pass
         self._sync_axis_enabled()
+        self._sync_db_reference_applicability()

@@ -4502,6 +4502,30 @@ QFrame#segmentedChoice QPushButton[role="choice"]:checked {
     border-color: {{CONTROL_SELECT_LINE}};
     color: {{CONTROL_TEXT_ON_SELECT}};
 }
+QFrame#segmentedChoice QPushButton[role="choice"]:disabled {
+    background-color: transparent;
+    border-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
+}
+QFrame#segmentedChoice QPushButton[role="choice"]:disabled:hover,
+QFrame#segmentedChoice QPushButton[role="choice"]:disabled:pressed,
+QFrame#segmentedChoice QPushButton[role="choice"]:disabled:focus {
+    background-color: transparent;
+    border-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
+}
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled {
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
+    color: {{CONTROL_TEXT_MUTED}};
+}
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled:hover,
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled:pressed,
+QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled:focus {
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
+    color: {{CONTROL_TEXT_MUTED}};
+}
 
 /* UltraView page */
 QWidget#ultraViewPage {

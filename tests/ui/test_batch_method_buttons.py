@@ -1045,3 +1045,243 @@ def test_preset_radio_labels_fit_narrow_batch_column_with_production_qss(
     finally:
         panel.close()
         qapp.setStyleSheet(old_stylesheet)
+
+
+_RENDER_LAYOUT_NONE_HINT = "每项单独输出时，图内布局不生效；合并图片后可设置。"
+_FFT_T_WIN_SINGLE_FRAME_HINT = "单帧 FFT 不使用窗长设置"
+_FFT_T_WIN_FIXED_NFFT_HINT = "固定 NFFT 时，窗长由 NFFT 与采样率决定"
+
+
+def test_none_grouping_puts_layout_reason_on_field_label_without_changing_value(
+    qtbot,
+):
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.apply_params({"render_group_by": "source", "render_layout": "subplot"})
+    assert form._w_render_layout.currentData() == "subplot"
+    assert form._choice_render_layout.isEnabled() is True
+    assert form._field_labels["render_layout"].toolTip() == ""
+
+    spy = QSignalSpy(form.paramsChanged)
+    form._w_render_group_by.setCurrentIndex(
+        form._w_render_group_by.findData("none")
+    )
+    assert len(spy) == 1
+    assert form._w_render_layout.currentData() == "subplot"
+    assert form._choice_render_layout.currentIndex() == 1
+    assert form._w_render_layout.isEnabled() is False
+    assert form._choice_render_layout.isEnabled() is False
+    assert form._field_labels["render_layout"].toolTip() == _RENDER_LAYOUT_NONE_HINT
+
+    spy = QSignalSpy(form.paramsChanged)
+    form._sync_render_group_by()
+    assert len(spy) == 0
+    assert form._w_render_layout.currentData() == "subplot"
+
+    form._w_render_group_by.setCurrentIndex(
+        form._w_render_group_by.findData("source")
+    )
+    assert form._w_render_layout.currentData() == "subplot"
+    assert form._choice_render_layout.isEnabled() is True
+    assert form._field_labels["render_layout"].toolTip() == ""
+    assert form.get_params()["render_layout"] == "subplot"
+
+
+def test_batch_run_lock_preserves_layout_business_disable(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    form = sheet._analysis_panel._param_form
+
+    sheet.apply_method("time")
+    form.apply_params({"render_group_by": "none"})
+    assert form._choice_render_layout.isEnabled() is False
+    assert form._w_render_layout.isEnabled() is False
+    assert form._field_labels["render_layout"].toolTip() == _RENDER_LAYOUT_NONE_HINT
+
+    sheet.lock_editing()
+    assert form._choice_render_layout.isEnabled() is False
+    assert form._w_render_layout.isEnabled() is False
+    sheet.unlock_editing()
+    assert form._choice_render_layout.isEnabled() is False
+    assert form._w_render_layout.isEnabled() is False
+    assert form._choice_render_layout.isEnabledTo(sheet._analysis_panel) is False
+    assert form._field_labels["render_layout"].toolTip() == _RENDER_LAYOUT_NONE_HINT
+
+    form.apply_params({"render_group_by": "source"})
+    assert form._choice_render_layout.isEnabled() is True
+    assert form._w_render_layout.isEnabled() is True
+
+    sheet.lock_editing()
+    assert form._choice_render_layout.isEnabled() is False
+    assert form._choice_render_layout.isEnabledTo(sheet._analysis_panel) is True
+    sheet.unlock_editing()
+    assert form._choice_render_layout.isEnabled() is True
+    assert form._w_render_layout.isEnabled() is True
+    assert form._field_labels["render_layout"].toolTip() == ""
+
+
+@pytest.mark.parametrize(
+    ("avg_mode", "nfft_mode", "nfft_enabled", "t_win_enabled", "avg_overlap_enabled", "t_win_tip"),
+    (
+        ("单帧", "auto", False, False, False, _FFT_T_WIN_SINGLE_FRAME_HINT),
+        ("单帧", "fixed", True, False, False, _FFT_T_WIN_SINGLE_FRAME_HINT),
+        ("线性平均", "auto", False, True, True, ""),
+        ("线性平均", "fixed", True, False, True, _FFT_T_WIN_FIXED_NFFT_HINT),
+        ("峰值保持", "auto", False, True, True, ""),
+        ("峰值保持", "fixed", True, False, True, _FFT_T_WIN_FIXED_NFFT_HINT),
+    ),
+)
+def test_fft_field_applicability_matrix(
+    qtbot, avg_mode, nfft_mode, nfft_enabled, t_win_enabled,
+    avg_overlap_enabled, t_win_tip,
+):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("fft")
+    # Auto mode does not write nfft; seed the widget so disablement keeps it.
+    form._w_nfft.setValue(2048)
+    form.apply_params({
+        "avg_mode": avg_mode,
+        "nfft_mode": nfft_mode,
+        "nfft": 2048,
+        "t_win_s": 2.25,
+        "avg_overlap": 75,
+        "overlap": 0.4,
+    })
+
+    assert form._w_nfft.isEnabled() is nfft_enabled
+    assert form._w_t_win_s.isEnabled() is t_win_enabled
+    assert form._w_avg_overlap.isEnabled() is avg_overlap_enabled
+    assert form._field_labels["t_win_s"].toolTip() == t_win_tip
+    assert form._w_nfft.value() == 2048
+    assert form._w_t_win_s.value() == pytest.approx(2.25)
+    assert form._w_avg_overlap.value() == 75
+    assert form._w_overlap.value() == pytest.approx(0.4)
+
+    form.set_method("fft_time")
+    assert form._w_t_win_s.isEnabled() is True
+    assert form._field_labels["t_win_s"].toolTip() == ""
+    assert form._w_t_win_s.value() == pytest.approx(2.25)
+
+    form.set_method("frf")
+    assert form._w_t_win_s.isEnabled() is True
+    assert form._field_labels["t_win_s"].toolTip() == ""
+    assert form._w_t_win_s.value() == pytest.approx(2.25)
+
+    form.set_method("fft")
+    assert form._w_nfft.isEnabled() is nfft_enabled
+    assert form._w_t_win_s.isEnabled() is t_win_enabled
+    assert form._w_avg_overlap.isEnabled() is avg_overlap_enabled
+    assert form._field_labels["t_win_s"].toolTip() == t_win_tip
+    assert form._w_nfft.value() == 2048
+    assert form._w_t_win_s.value() == pytest.approx(2.25)
+    assert form._w_avg_overlap.value() == 75
+    assert form._w_overlap.value() == pytest.approx(0.4)
+
+
+def test_fft_window_applicability_refreshes_from_either_upstream(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("fft")
+    form.apply_params({"avg_mode": "线性平均", "nfft_mode": "auto"})
+    assert form._w_t_win_s.isEnabled() is True
+    assert form._field_labels["t_win_s"].toolTip() == ""
+
+    form._w_nfft_mode.setCurrentIndex(form._w_nfft_mode.findData("fixed"))
+    assert form._w_t_win_s.isEnabled() is False
+    assert form._field_labels["t_win_s"].toolTip() == _FFT_T_WIN_FIXED_NFFT_HINT
+    assert form._w_avg_overlap.isEnabled() is True
+
+    form._w_avg_mode.setCurrentText("单帧")
+    assert form._w_t_win_s.isEnabled() is False
+    assert form._field_labels["t_win_s"].toolTip() == _FFT_T_WIN_SINGLE_FRAME_HINT
+    assert form._w_avg_overlap.isEnabled() is False
+    assert form._w_nfft.isEnabled() is True
+
+    form._w_nfft_mode.setCurrentIndex(form._w_nfft_mode.findData("auto"))
+    assert form._w_t_win_s.isEnabled() is False
+    assert form._field_labels["t_win_s"].toolTip() == _FFT_T_WIN_SINGLE_FRAME_HINT
+    assert form._w_nfft.isEnabled() is False
+
+    form._w_avg_mode.setCurrentText("峰值保持")
+    assert form._w_t_win_s.isEnabled() is True
+    assert form._field_labels["t_win_s"].toolTip() == ""
+    assert form._w_avg_overlap.isEnabled() is True
+
+
+def test_fft_hides_ordinary_overlap_but_round_trips_old_payload(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("fft")
+    assert "overlap" not in form.visible_field_names()
+    assert {
+        "window", "nfft_mode", "nfft", "t_win_s",
+        "avg_mode", "avg_overlap", "amplitude_definition", "weighting",
+    } == form.visible_field_names()
+
+    form.apply_params({
+        "overlap": 0.75,
+        "avg_mode": "单帧",
+        "nfft_mode": "auto",
+        "t_win_s": 2.25,
+    })
+    assert "overlap" not in form.visible_field_names()
+    assert form._w_overlap.isHidden() is True
+    assert form._field_hosts["overlap"].isHidden() is True
+    assert form._w_overlap.value() == pytest.approx(0.75)
+    assert form.get_params()["overlap"] == pytest.approx(0.75)
+    assert form._w_t_win_s.value() == pytest.approx(2.25)
+
+    form.set_method("fft_time")
+    assert "overlap" in form.visible_field_names()
+    assert form._w_overlap.value() == pytest.approx(0.75)
+    assert form.get_params()["overlap"] == pytest.approx(0.75)
+
+    form.set_method("fft")
+    assert "overlap" not in form.visible_field_names()
+    assert form._w_overlap.value() == pytest.approx(0.75)
+    assert form.get_params()["overlap"] == pytest.approx(0.75)
+
+
+def test_single_frame_fft_amplitude_ignores_window_and_overlap():
+    import numpy as np
+
+    from mf4_analyzer.batch_compute import compute_fft_dataframe
+
+    fs = 1000.0
+    sig = np.sin(2.0 * np.pi * 40.0 * np.arange(2048) / fs)
+    base = {
+        "avg_mode": "单帧",
+        "nfft_mode": "auto",
+        "window": "hanning",
+        "t_win_s": 1.0,
+        "overlap": 0.0,
+        "avg_overlap": 50,
+    }
+    changed = {
+        **base,
+        "t_win_s": 3.0,
+        "overlap": 0.75,
+        "avg_overlap": 10,
+    }
+    first = compute_fft_dataframe(sig, fs, base)
+    second = compute_fft_dataframe(sig, fs, changed)
+    np.testing.assert_array_equal(
+        first["amplitude"].to_numpy(), second["amplitude"].to_numpy(),
+    )
+    np.testing.assert_array_equal(
+        first["frequency_hz"].to_numpy(), second["frequency_hz"].to_numpy(),
+    )

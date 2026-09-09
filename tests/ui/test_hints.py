@@ -142,6 +142,22 @@ def test_batch_method_first_discovery_hint_stays_short():
     assert method_hint.retire_on == "batch_open"
 
 
+def test_batch_control_applicability_discovery_hints_stay_short():
+    expected = {
+        "batch.layout_when_separate": ("每项单独", "图内布局"),
+        "batch.fft_single_frame": ("单帧", "窗长"),
+        "batch.data_only_preview": ("仅导出数据", "预览"),
+    }
+    by_id = {hint.id: hint for hint in hints.all_hints()}
+    for hint_id, phrases in expected.items():
+        hint = by_id[hint_id]
+        for phrase in phrases:
+            assert phrase in hint.text
+        assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+        assert hint.retire_on == "batch_open"
+        assert hint.surface == "discovery"
+
+
 def test_frf_hints_cover_cursor_display_and_time_domain_limits():
     frf_hints = {
         hint.id: hint.text
