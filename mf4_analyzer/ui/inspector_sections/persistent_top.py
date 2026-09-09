@@ -1,5 +1,6 @@
 """PersistentTop and _AxisRangeHost widgets."""
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -59,9 +60,26 @@ class PersistentTop(QWidget):
     xaxis_apply_requested = pyqtSignal()
     xaxis_drop_hint_dismissed = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
-    # 「全部」按钮：查看全部（复位到已绘制通道最长全程）；不勾选「使用选定时间范围」。
+    # 「全部」按钮：时域查看全部（复位到已绘制通道最长全程）；分析页回 full。
     # 控件只负责发信号，由 MainWindow 按当前模式复位视口。
     max_range_requested = pyqtSignal()
+    _TIME_RANGE_MAX_TIP = (
+        "查看全部：X 轴回到图面已绘制通道的最长全程"
+        "（不启用「使用选定时间范围」）"
+    )
+    _ANALYSIS_RANGE_MAX_TIP = (
+        "取消勾选、清除待启用草稿，显示当前来源全时段"
+    )
+    _RANGE_STATUS_TEXT = {
+        "full": "",
+        "enabled": "",
+        "draft": "范围已调整，尚未启用",
+        "invalid": "范围无效，无法用于计算",
+        "unavailable": "当前没有可用时间范围",
+    }
+    # User-committed start/end only. Programmatic set_range_values / limits /
+    # checkout / set_range_from_span must not emit this.
+    range_edited = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -180,10 +198,7 @@ class PersistentTop(QWidget):
         self.btn_range_max = QToolButton(self)
         self.btn_range_max.setObjectName("inspectorRangeMax")
         self.btn_range_max.setText("全部")
-        self.btn_range_max.setToolTip(
-            "查看全部：X 轴回到图面已绘制通道的最长全程"
-            "（不启用「使用选定时间范围」）"
-        )
+        self.btn_range_max.setToolTip(self._TIME_RANGE_MAX_TIP)
         self.btn_range_max.setAutoRaise(True)
         self.btn_range_max.setCursor(Qt.PointingHandCursor)
         self.btn_range_max.setStyleSheet(
@@ -223,6 +238,31 @@ class PersistentTop(QWidget):
             self.spin_start, "– 结束", self.spin_end,
         )
         fl.addRow("开始:", self._range_row_host)
+        self._range_status_host = QWidget()
+        self._range_status_host.setAutoFillBackground(False)
+        self._range_status_host.setAttribute(Qt.WA_StyledBackground, False)
+        _status_lay = QHBoxLayout(self._range_status_host)
+        _status_lay.setContentsMargins(0, 0, 0, 0)
+        _status_lay.setSpacing(0)
+        self.lbl_range_status = QLabel("")
+        self.lbl_range_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.lbl_range_status.setWordWrap(False)
+        self.lbl_range_status.setTextInteractionFlags(Qt.NoTextInteraction)
+        _status_color = QColor("#64748b")
+        _status_palette = self.lbl_range_status.palette()
+        _status_palette.setColor(QPalette.WindowText, _status_color)
+        self.lbl_range_status.setPalette(_status_palette)
+        _status_h = max(18, self.lbl_range_status.fontMetrics().height() + 4)
+        self.lbl_range_status.setFixedHeight(_status_h)
+        self._range_status_host.setFixedHeight(_status_h)
+        self._range_status_host.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed,
+        )
+        self.lbl_range_status.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed,
+        )
+        _status_lay.addWidget(self.lbl_range_status)
+        fl.addRow(self._range_status_host)
         range_card_lay.addWidget(g)
         body_lay.addWidget(self._range_card)
 
@@ -251,6 +291,8 @@ class PersistentTop(QWidget):
         # mode keeps its own intent. Defaults to unchecked for every mode.
         self._range_mode = 'time'
         self._range_checked_by_mode = {}
+        self._range_silent = False
+        self._range_committed = None
 
         self._wire()
         self._xaxis_section_visible = True
@@ -269,6 +311,8 @@ class PersistentTop(QWidget):
         # is wired (so a programmatic reset before show() also lands).
         self._update_xaxis_channel_row_visible(self.combo_xaxis.currentIndex())
         self._update_range_rows_visible()
+        self._sync_range_mode_chrome()
+        self._remember_committed_range()
         if _settings_bool(
             _preset_settings(), self._DROP_HINT_DISMISSED_KEY, False,
         ):
@@ -295,6 +339,8 @@ class PersistentTop(QWidget):
         self.chk_range.toggled.connect(self._update_range_rows_visible)
         # 「全部」只转发信号；MainWindow 负责按当前模式复位视口。
         self.btn_range_max.clicked.connect(self.max_range_requested)
+        self.spin_start.editingFinished.connect(self._on_range_editing_finished)
+        self.spin_end.editingFinished.connect(self._on_range_editing_finished)
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.btn_xaxis_drop_hint_close.clicked.connect(
             self._dismiss_xaxis_drop_hint
@@ -394,6 +440,30 @@ class PersistentTop(QWidget):
 
     def set_range_group_embedded(self, embedded):
         self._range_group.setTitle("分析时间" if embedded else "时间范围")
+        self._sync_range_mode_chrome()
+
+    def _sync_range_mode_chrome(self):
+        analysis = self._range_mode != "time"
+        self.btn_range_max.setToolTip(
+            self._ANALYSIS_RANGE_MAX_TIP if analysis else self._TIME_RANGE_MAX_TIP
+        )
+        _set_form_row_visible(
+            self._range_form, self._range_status_host, analysis,
+        )
+
+    def set_range_intent_status(self, kind):
+        """Project reserved-height status from a TimeRangeIntent kind.
+
+        Window projection (``_project_top_from_time_range_intent``) is the
+        only production caller. Switching kinds must not change row height.
+        """
+        key = str(kind or "full")
+        text = self._RANGE_STATUS_TEXT.get(key, "")
+        self.lbl_range_status.setText(text)
+        self.lbl_range_status.setToolTip(text)
+
+    def range_intent_status_text(self):
+        return self.lbl_range_status.text()
 
     def _sync_xlabel_from_channel(self, idx):
         if idx < 0:
@@ -521,7 +591,35 @@ class PersistentTop(QWidget):
     def range_values(self):
         return (self.spin_start.value(), self.spin_end.value())
 
+    def _remember_committed_range(self):
+        self._range_committed = self.range_values()
+
+    def flush_pending_range_edit(self, *, emit=True):
+        """Commit in-progress line-edit text via Qt ``interpretText``.
+
+        Returns ``(lo, hi)`` when the committed pair differs from the last
+        recorded commit, else ``None``. Unchanged focus-out is silent.
+        Programmatic projection must call this only after updating the
+        remembered pair, or with ``emit=False``.
+        """
+        if not self._range_silent:
+            self.spin_start.interpretText()
+            self.spin_end.interpretText()
+        current = self.range_values()
+        if self._range_committed is not None and current == self._range_committed:
+            return None
+        self._range_committed = current
+        if emit and not self._range_silent:
+            self.range_edited.emit(*current)
+        return current
+
+    def _on_range_editing_finished(self):
+        if self._range_silent:
+            return
+        self.flush_pending_range_edit(emit=True)
+
     def set_range_values(self, xmin, xmax):
+        self._range_silent = True
         old_start = self.spin_start.blockSignals(True)
         old_end = self.spin_end.blockSignals(True)
         try:
@@ -530,15 +628,14 @@ class PersistentTop(QWidget):
         finally:
             self.spin_start.blockSignals(old_start)
             self.spin_end.blockSignals(old_end)
+            self._remember_committed_range()
+            self._range_silent = False
 
     def set_range_from_span(self, xmin, xmax):
-        # Explicit arming path (FRF「取时域范围」, compute confirm, tests).
-        # Stages start/end AND enables the range filter so the next analysis
-        # compute (which reads range_enabled()) uses the window. 「全部」/
-        # preview pan/zoom do NOT call this — they only draft via
-        # set_range_values (manual check, same as Time-Domain). The checked
-        # flag is recorded against the CURRENT mode so it does not leak into
-        # Time-Domain on mode switch.
+        # Explicit arming path (compute confirm, tests). Stages start/end AND
+        # enables the range filter. This is not a user spin commit — callers
+        # that persist analysis intent must ``note_enabled`` themselves.
+        # Preview pan/zoom must not call this or ``set_range_values``.
         self.set_range_values(xmin, xmax)
         old = self.chk_range.blockSignals(True)
         try:
@@ -573,17 +670,22 @@ class PersistentTop(QWidget):
             self.chk_range.blockSignals(old)
         self._range_mode = mode
         self._update_range_rows_visible()
+        self._sync_range_mode_chrome()
 
     def set_range_limits(self, lo, hi):
         # F14: setRange may clamp the current value and emit valueChanged.
-        # There is no subscriber today, but the next connected slot would see
-        # a programmatic limit refresh as a user edit — block while applying.
-        for sp in (self.spin_start, self.spin_end):
-            old = sp.blockSignals(True)
-            try:
-                sp.setRange(lo, hi)
-            finally:
-                sp.blockSignals(old)
+        # Treat clamp as programmatic so it cannot look like a user commit.
+        self._range_silent = True
+        try:
+            for sp in (self.spin_start, self.spin_end):
+                old = sp.blockSignals(True)
+                try:
+                    sp.setRange(lo, hi)
+                finally:
+                    sp.blockSignals(old)
+        finally:
+            self._remember_committed_range()
+            self._range_silent = False
 
     def tick_density(self):
         return (self.spin_xt.value(), self.spin_yt.value())

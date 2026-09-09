@@ -437,12 +437,19 @@ def test_fft_preview_hints_match_overlay_wheel_contract():
     assert "Shift" in wheel and "Ctrl" in wheel
     assert "平移 Y" in hints.flash_tip("fft.preview_source")
     manual = by_id["fft.time_range_manual"].text
-    assert "预览" in manual and "起止" in manual
-    assert "勾选" in manual and "计算" in manual
+    assert "预览" in manual and "查看" in manual
+    assert "计算" in manual
+    zoom = by_id["analysis.zoom_view_only"]
+    assert zoom.modes == frozenset({"fft_time", "order", "frf"})
+    assert "缩放" in zoom.text and "查看" in zoom.text
     confirm = by_id["analysis.time_range_confirm"]
     assert confirm.modes == frozenset({"fft", "fft_time", "order", "frf"})
-    assert "局部" in confirm.text and "询问" in confirm.text
-    assert "勾选" in confirm.text
+    assert "待启用" in confirm.text
+    assert "计算" in confirm.text
+    all_hint = by_id["analysis.time_range_all"]
+    assert all_hint.modes == frozenset({"fft", "fft_time", "order", "frf"})
+    assert "未勾选" in all_hint.text and "全时段" in all_hint.text
+    assert "全部" in all_hint.text
 
 
 def test_design_curated_ids_exist_in_registry():

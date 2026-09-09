@@ -215,6 +215,9 @@ class FrfMixin:
         pane.output_source = tuple(output_source) if output_source else None
         self.inspector.frf_ctx.set_validation_message("")
         self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+        apply_range = getattr(self, "_apply_analysis_time_range", None)
+        if callable(apply_range):
+            apply_range("frf", state)
 
     def _on_frf_compute_params_changed(self, params):
         if self._applying_analysis_view:
@@ -576,6 +579,16 @@ class FrfMixin:
         for pane_idx, pane in enumerate(state.panes):
             if pane.input_source is None or pane.output_source is None:
                 continue
+            blocker = getattr(self, "_analysis_restore_time_range_block_reason", None)
+            if callable(blocker):
+                reason = blocker("frf", state, pane_idx)
+                if reason:
+                    self._frf_coordinator.request({
+                        "view_id": state.view_id,
+                        "pane_idx": pane_idx,
+                        "preflight_error": FrfPreflightError(reason),
+                    })
+                    continue
             try:
                 candidate = self._build_frf_candidate(state, pane_idx)
             except FrfPreflightError as issue:

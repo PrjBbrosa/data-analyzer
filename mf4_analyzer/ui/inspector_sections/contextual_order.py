@@ -368,6 +368,7 @@ class OrderContextual(QWidget):
             if signal is None:
                 signal = control.currentTextChanged
             signal.connect(self._on_preset_param_changed)
+        self.combo_rpm.currentIndexChanged.connect(self._on_preset_param_changed)
         self._display_param_widgets = (
             self.combo_amp_unit,
             self.chk_x_auto, self.spin_x_min, self.spin_x_max,

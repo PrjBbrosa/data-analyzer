@@ -1448,6 +1448,7 @@ class MainWindow(
         self.inspector.top.max_range_requested.connect(
             self._on_time_range_max_requested
         )
+        self.inspector.top.range_edited.connect(self._on_user_range_committed)
         xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
@@ -1661,6 +1662,7 @@ class MainWindow(
         # stay owned by the state that was just applied on mode entry.
         if not self._analysis_restore_pending:
             self._capture_analysis_sources('fft', state)
+            self._apply_analysis_time_range('fft', state)
         # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference。
         # rerender=False：只刷识别不重算；Manual View 在 helper 内 no-op。
         self._resolve_and_apply_db_reference('fft')
@@ -2263,6 +2265,11 @@ class MainWindow(
     def _sync_time_range_inputs_from_visible_xlim(self, xlim=None):
         if getattr(self, '_applying_view', False):
             return False
+        # Time-domain viewport sync only. Analysis modes own compute range
+        # through the controller; a leftover time-canvas xlim must not draft
+        # or overwrite an analysis pane.
+        if self.chart_stack.current_mode() != 'time':
+            return False
         # Inspector range values are in acquisition time. If a custom channel
         # is the visible X axis, that viewport is in channel units and must not
         # overwrite the time-range controls.
@@ -2280,12 +2287,10 @@ class MainWindow(
         return True
 
     def _on_fft_preview_range_changed(self, pane_idx, lo, hi):
-        """Sync inspector start/end from the FFT time-preview viewport.
+        """FFT time-preview camera only.
 
-        Aligns with Time-Domain: pan/zoom only drafts the spinboxes. The
-        analysis window is armed only while「使用选定时间范围」is checked
-        (or via explicit arming such as FRF「取时域范围」/ compute confirm).
-        「全部」is view-all only and does not arm the checkbox.
+        Pan/zoom must not write Inspector start/end or ``pane.time_range``.
+        Reset-to-extents stays on the canvas.
         """
         if self.chart_stack.current_mode() != 'fft':
             return False
@@ -2294,15 +2299,17 @@ class MainWindow(
             return False
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             return False
-        top = self.inspector.top
-        top.set_range_values(lo, hi)
-        # Unchecked: leave pane.time_range alone (None = full span on compute).
-        if not top.range_enabled():
-            return True
-        mgr = self.analysis_managers['fft']
-        state = mgr.get(mgr.active)
-        state.panes[pane_idx].time_range = (float(lo), float(hi))
         return True
+
+    def _on_user_range_committed(self, lo, hi):
+        if getattr(self, "_applying_analysis_view", False):
+            return
+        if getattr(self, "_applying_view", False):
+            return
+        mode = self.chart_stack.current_mode()
+        if mode not in getattr(self, "analysis_managers", {}):
+            return
+        self._commit_analysis_user_range(mode, (lo, hi))
 
     def _time_data_extent(self):
         """Return ``(lo, hi)`` covering every loaded file's time base.
@@ -2440,13 +2447,28 @@ class MainWindow(
         return self._time_data_extent()
 
     def _on_time_range_max_requested(self):
-        """「全部」：查看全部 — 复位可见时间轴到**已绘制**通道的最长全程。
+        """「全部」：时域仍是查看全图；分析页明确回到来源 full。
 
-        只草稿 spinbox（与未勾选时的视口同步一致），**不**勾选「使用选定
-        时间范围」，也**不**写入 ``pane.time_range`` / View 过滤窗口。
-        范围取自图面已 plot 的通道（canvas data union / 勾选通道），
-        **不是**通道树里所有已加载文件的最长时基。
+        Time-domain keeps plotted-extent Home and does not convert analysis
+        panes. Analysis clears the focused pane's enabled range and draft,
+        then projects the current source display range.
         """
+        mode = self.chart_stack.current_mode()
+        if mode in getattr(self, "analysis_managers", {}):
+            self._convert_analysis_time_range_to_full(mode)
+            if mode == "fft":
+                page = self._analysis_page(mode)
+                canvas = page.focused_canvas() if page is not None else None
+                if canvas is not None:
+                    reset_preview = getattr(
+                        canvas, "_reset_time_preview_to_extents", None
+                    )
+                    if callable(reset_preview):
+                        reset_preview()
+                    reset = getattr(canvas, "reset_view_to_data_extents", None)
+                    if callable(reset):
+                        reset()
+            return
         top = self.inspector.top
         lo, hi = self._plotted_time_extent()
         if not (hi > lo):          # 还没有数据 / 没有可用的整段范围
@@ -2455,7 +2477,6 @@ class MainWindow(
         # would otherwise clamp the data extent back to the old UI maximum.
         top.set_range_limits(lo, hi)
         top.set_range_values(lo, hi)
-        mode = self.chart_stack.current_mode()
         canvas = self.chart_stack.focused_canvas()
         if mode == 'time':
             # Home to plotted data only — do not expand past drawn curves to a
@@ -2463,13 +2484,6 @@ class MainWindow(
             reset = getattr(canvas, 'reset_view_to_data_extents', None)
             if callable(reset):
                 reset()
-            return
-        if mode == 'fft':
-            reset = getattr(canvas, 'reset_view_to_data_extents', None)
-            if callable(reset):
-                reset()
-            return
-        # fft_time / order / frf: draft-only; compute still uses checkbox.
 
     def _on_time_range_enabled_changed(self, enabled):
         mode = self.chart_stack.current_mode()
@@ -2478,24 +2492,15 @@ class MainWindow(
             state = manager.get(manager.active)
             page = self._analysis_page(mode)
             pane_idx = page.focused_index()
-            before = self._normalize_analysis_time_range(
-                state.panes[pane_idx].time_range
-            )
-            if mode == 'fft' and enabled:
-                # Match Time-Domain: arming the checkbox pulls the current
-                # preview viewport into start/end before capture.
-                canvas = page.pane_canvas(pane_idx)
-                get_xlim = getattr(canvas, 'get_time_preview_xlim', None)
-                if callable(get_xlim):
-                    xlim = get_xlim()
-                    if xlim is not None:
-                        lo, hi = xlim
-                        if (
-                            np.isfinite(lo) and np.isfinite(hi) and hi > lo
-                        ):
-                            self.inspector.top.set_range_values(lo, hi)
-            self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
-            if mode == 'frf' and state.panes[pane_idx].time_range != before:
+            pane = state.panes[pane_idx]
+            before = pane.time_range
+            if enabled:
+                self._enable_focused_analysis_time_range(mode, state, pane_idx)
+            else:
+                self._convert_analysis_time_range_to_full(
+                    mode, state=state, pane_idx=pane_idx,
+                )
+            if mode == 'frf' and pane.time_range != before:
                 self._dirty_frf_pane(state, pane_idx, clear_effective=True)
             if mode == 'fft':
                 self._refresh_fft_time_preview(clear_spectrum=False)
@@ -2622,6 +2627,8 @@ class MainWindow(
         # pane's saved source through this same combo -> signal_changed path.
         if mode in ('fft', 'order'):
             self._resolve_and_apply_db_reference(mode)
+        if mode in ('fft', 'order'):
+            self._commit_live_analysis_sources(mode)
         if not data:
             return
         fid, _ch = data
@@ -2651,6 +2658,7 @@ class MainWindow(
         # dB-reference-defaults Task 5: see the matching comment in
         # _on_inspector_signal_changed.
         self._resolve_and_apply_db_reference('fft_time')
+        self._commit_live_analysis_sources('fft_time')
         if not data:
             return
         fid, _ch = data
@@ -3291,11 +3299,13 @@ class MainWindow(
                 default=0,
             )
             self.inspector.top.set_range_limits(0, max_t)
-            lo, hi = self.inspector.top.range_values()
-            if hi > max_t:
-                self.inspector.top.spin_end.setValue(max_t)
-            if lo > max_t:
-                self.inspector.top.spin_start.setValue(0)
+            mode = self.chart_stack.current_mode()
+            if mode not in getattr(self, "analysis_managers", {}):
+                lo, hi = self.inspector.top.range_values()
+                if hi > max_t:
+                    self.inspector.top.spin_end.setValue(max_t)
+                if lo > max_t:
+                    self.inspector.top.spin_start.setValue(0)
             if self._active in self.files:
                 fs = self.files[self._active].fs
                 self.inspector.fft_ctx.set_fs(fs)
@@ -3512,7 +3522,7 @@ class MainWindow(
         if role == "fft_sources":
             mgr = self.analysis_managers["fft"]
             state = mgr.get(mgr.active)
-            self._capture_analysis_sources("fft", state)
+            self._commit_live_analysis_sources("fft", state)
             self._sync_fft_source_summary()
             self._resolve_and_apply_db_reference("fft")
             self._refresh_fft_time_preview(clear_spectrum=False)
@@ -5404,6 +5414,9 @@ class MainWindow(
         abort = getattr(self, "_abort_analysis_restore", None)
         if callable(abort):
             abort()
+        ctrl = getattr(getattr(self, "_analysis_context", None), "time_range", None)
+        if ctrl is not None:
+            ctrl.clear_all()
         # A View switch parked by the render gate is moot once the window is
         # closing; replaying it would drive a full render through a widget tree
         # that is being torn down.

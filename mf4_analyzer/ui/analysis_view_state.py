@@ -49,6 +49,20 @@ def _coerce_key(value: Any) -> ChannelKey:
     return (str(fid), str(ch))
 
 
+def _coerce_enabled_time_range(value: Any) -> tuple[float, float] | None:
+    """Restore an enabled span without collapsing invalid data to full/None."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 0:
+        return None
+    try:
+        lo = float(value[0])
+        hi = float(value[1])
+    except (TypeError, ValueError, IndexError):
+        return (0.0, 0.0)
+    return (lo, hi)
+
+
 def _cursor_mode_from_data(data: dict[str, Any]) -> str:
     """Read schema-5 mode, migrating the short-lived schema-4 FRF flag."""
     mode = str(data.get("cursor_mode") or "")
@@ -204,7 +218,9 @@ class PaneState:
             "output_source": (
                 list(self.output_source) if self.output_source else None
             ),
-            "time_range": list(self.time_range) if self.time_range else None,
+            "time_range": (
+                list(self.time_range) if self.time_range is not None else None
+            ),
             "xlim": list(self.xlim) if self.xlim else None,
             "ylim": list(self.ylim) if self.ylim else None,
             "ylims": {key: list(value) for key, value in self.ylims.items()},
@@ -231,7 +247,7 @@ class PaneState:
                           if data.get("input_source") else None),
             output_source=(_coerce_key(data["output_source"])
                            if data.get("output_source") else None),
-            time_range=pair(data.get("time_range")),
+            time_range=_coerce_enabled_time_range(data.get("time_range")),
             xlim=pair(data.get("xlim")),
             ylim=pair(data.get("ylim")),
             ylims={

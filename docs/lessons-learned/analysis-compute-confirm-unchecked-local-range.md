@@ -14,20 +14,23 @@ tests:
   - tests/ui/test_analysis_time_range_confirm.py
 ---
 
-# Confirm Unchecked Local Time Range Before Compute
+# Confirm Controller Draft Before Compute
 
 Trigger: Wiring analysis compute entry points (`do_fft` / `do_fft_time` /
 `do_order_time` / `do_frf`) or shared time-range checkbox semantics.
 
-Past failure: After preview zoom only drafted start/end (no auto-check), a
-compute click silently used the full span while the inspector still showed a
-local window — users thought they had selected a window.
+Past failure: After preview zoom drafted start/end without checking, a
+compute click silently used the full span while the inspector still
+showed a local window. The follow-up 1% plotted-extent heuristic then
+false-prompted or swallowed a 1-hour-minus-1-second cut.
 
 Rule: Before `_capture_active_analysis_view` on those four user compute
-entries, call `_offer_analysis_time_range_before_compute`. If unchecked
-start/end is a proper local subset of data extent, ask「用局部范围」/
-「用全时段」/「取消」; local arms via `set_range_from_span`. Do not prompt on
-project-restore auto-recompute or Batch.
+entries, flush pending spin edits and query the controller draft for the
+frozen panes (matching source signature). Do not infer locality from a
+1% camera/spin heuristic. Ask once; default button is 取消; the local
+button is「用选定范围」(disabled when the draft is invalid). Full span
+uses `ActionRole`, never `DestructiveRole`. Cancel submits nothing.
+Project-restore auto-recompute and Batch do not prompt.
 
 Verification:
 ```bash

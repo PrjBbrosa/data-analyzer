@@ -263,6 +263,17 @@ class FFTTimeMixin:
             if not sources:
                 continue
             fid, ch = sources[0]
+            blocker = getattr(self, "_analysis_restore_time_range_block_reason", None)
+            if callable(blocker):
+                reason = blocker("fft_time", state, pane_idx)
+                if reason:
+                    toast = getattr(self, "toast", None)
+                    if callable(toast):
+                        toast(reason, "warning")
+                    status = getattr(self, "statusBar", None)
+                    if status is not None:
+                        status.showMessage(reason)
+                    continue
             time_range = self._normalize_analysis_time_range(pane.time_range)
             prepared = self._fft_time_effective_params_for_source(
                 compute_p, fid, ch, time_range
@@ -417,10 +428,9 @@ class FFTTimeMixin:
         display_p = (
             display_getter() if callable(display_getter) else ctx.get_params()
         )
-        compute_time_range = (
-            self.inspector.top.range_values()
-            if self.inspector.top.range_enabled() else None
-        )
+        compute_time_range = self._pane_time_range_for("fft_time", pane_idx)
+        if compute_time_range is None and self.inspector.top.range_enabled():
+            compute_time_range = self.inspector.top.range_values()
         rng = self._normalize_analysis_time_range(compute_time_range)
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
@@ -507,13 +517,14 @@ class FFTTimeMixin:
         if not self._check_uniform_or_prompt(fd, 'fft_time'):
             self._record_fft_time_skip("时间轴无效")
             return None
-        if (
-            time_range is _INSPECTOR_TIME_RANGE
-            and self.inspector.top.range_enabled()
-        ):
-            time_range = self.inspector.top.range_values()
         if time_range is _INSPECTOR_TIME_RANGE:
-            time_range = None
+            resolver = getattr(self, "_resolve_job_time_range", None)
+            if callable(resolver):
+                time_range = resolver("fft_time", time_range, pane_idx)
+            elif self.inspector.top.range_enabled():
+                time_range = self.inspector.top.range_values()
+            else:
+                time_range = None
         rng = self._normalize_analysis_time_range(time_range)
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)

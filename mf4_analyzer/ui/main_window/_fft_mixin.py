@@ -428,13 +428,14 @@ class FFTMixin:
             return None, None
         sig = fd.data[ch].values
         t = fd.time_array
-        if (
-            time_range is _INSPECTOR_TIME_RANGE
-            and self.inspector.top.range_enabled()
-        ):
-            time_range = self.inspector.top.range_values()
         if time_range is _INSPECTOR_TIME_RANGE:
-            time_range = None
+            resolver = getattr(self, "_resolve_job_time_range", None)
+            if callable(resolver):
+                time_range = resolver("fft", time_range)
+            elif self.inspector.top.range_enabled():
+                time_range = self.inspector.top.range_values()
+            else:
+                time_range = None
         if time_range is not None and t is not None:
             t, sig = self._mask_time_range(t, sig, time_range=time_range)
         from ...analysis_time_axis import prepare_analysis_time_axis
@@ -546,6 +547,17 @@ class FFTMixin:
             sources = list(pane.sources)
             if not sources:
                 continue
+            blocker = getattr(self, "_analysis_restore_time_range_block_reason", None)
+            if callable(blocker):
+                reason = blocker("fft", state, pane_idx)
+                if reason:
+                    toast = getattr(self, "toast", None)
+                    if callable(toast):
+                        toast(reason, "warning")
+                    status = getattr(self, "statusBar", None)
+                    if status is not None:
+                        status.showMessage(reason)
+                    continue
             time_range = self._normalize_analysis_time_range(pane.time_range)
             entries = []
             pane_keys = []
@@ -700,8 +712,14 @@ class FFTMixin:
         fd = self.files.get(fid) if fid else None
         if not self._check_uniform_or_prompt(fd, ctx_mode):
             return
-        if self.inspector.top.range_enabled() and t is not None:
-            lo, hi = self.inspector.top.range_values()
+        rng = None
+        resolver = getattr(self, "_pane_time_range_for", None)
+        if callable(resolver):
+            rng = resolver("fft" if ctx_mode == "fft" else "order")
+        if rng is None and self.inspector.top.range_enabled():
+            rng = self.inspector.top.range_values()
+        if rng is not None and t is not None:
+            lo, hi = rng
             m = (t >= lo) & (t <= hi)
             t = t[m]
             sig = sig[m]

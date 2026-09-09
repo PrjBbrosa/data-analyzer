@@ -124,6 +124,34 @@ def test_from_dict_tolerates_missing_fields():
     assert isinstance(v.view_id, str) and v.view_id
 
 
+def test_none_time_range_round_trip_stays_full():
+    pane = PaneState(sources=[("f1", "sig")], time_range=None)
+    payload = pane.to_dict()
+    assert payload["time_range"] is None
+    assert "draft" not in payload
+    assert "source_signature" not in payload
+    assert "needs_review" not in payload
+    restored = PaneState.from_dict(payload)
+    assert restored.time_range is None
+    view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
+    assert view.to_dict()["schema"] == 9
+    assert AnalysisViewState.from_dict(view.to_dict()).panes[0].time_range is None
+
+
+def test_inverted_time_range_is_not_normalized_to_full():
+    pane = PaneState(sources=[("f1", "sig")], time_range=(8.0, 2.0))
+    payload = pane.to_dict()
+    assert payload["time_range"] == [8.0, 2.0]
+    restored = PaneState.from_dict(payload)
+    assert restored.time_range == (8.0, 2.0)
+    garbage = PaneState.from_dict({
+        "sources": [["f1", "sig"]],
+        "time_range": ["bad"],
+    })
+    assert garbage.time_range is not None
+    assert garbage.time_range[1] <= garbage.time_range[0]
+
+
 def test_from_dict_tolerates_existing_pane_missing_time_range():
     v = AnalysisViewState.from_dict({
         "name": "x",
@@ -255,6 +283,10 @@ def test_duplicate_frf_pane_state_does_not_share_mutable_ylims(qapp):
     assert original.output_source == ("f1", "out")
     assert original.ylims == {"magnitude": (-20.0, 10.0)}
     assert manager.get(duplicate_idx).view_id != original_view_id
+    original.time_range = (1.0, 3.0)
+    enabled_idx = manager.duplicate(0)
+    assert manager.get(enabled_idx).panes[0].time_range == (1.0, 3.0)
+    assert manager.get(enabled_idx).view_id != manager.get(0).view_id
 
 
 def test_duplicate_copies_attached_file_ids_independently(qapp):

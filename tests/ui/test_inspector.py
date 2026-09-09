@@ -4434,9 +4434,8 @@ def test_time_domain_chk_range_survives_round_trip_through_fft(qapp):
 
 
 def test_main_window_fft_preview_path_does_not_auto_check(qapp, qtbot):
-    """Preview pan/zoom drafts start/end but does not arm「使用选定时间范围」
-    (manual check, aligned with Time-Domain). Switching back to time must
-    also remain unchecked (no leak)."""
+    """Preview pan/zoom is viewport-only: it must not write start/end, arm
+    the checkbox, or create a draft. Switching back to time stays unchecked."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -4457,14 +4456,18 @@ def test_main_window_fft_preview_path_does_not_auto_check(qapp, qtbot):
     state = mgr.get(mgr.active)
     pane_idx = page.focused_index()
     assert state.panes[pane_idx].time_range is None
+    top.set_range_values(1.0, 2.0)
 
     handled = win._on_fft_preview_range_changed(pane_idx, 2.0, 4.0)
     assert handled is True
-    assert top.range_values() == (2.0, 4.0)
+    assert top.range_values() == (1.0, 2.0)
     assert not top.range_enabled(), (
         "FFT preview zoom must not auto-check「使用选定时间范围」"
     )
     assert state.panes[pane_idx].time_range is None
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, pane_idx
+    ) is None
 
     # Switch back to time-domain: the shared checkbox must not be checked.
     win.chart_stack.set_mode('time')
@@ -4474,9 +4477,10 @@ def test_main_window_fft_preview_path_does_not_auto_check(qapp, qtbot):
     )
 
 
-def test_fft_preview_zoom_updates_pane_time_range_when_checked(qapp, qtbot):
-    """Once the range checkbox is armed, preview zoom follows into
-    pane.time_range (live window tracking while checked)."""
+def test_fft_preview_zoom_does_not_update_pane_time_range_when_checked(
+    qapp, qtbot
+):
+    """Armed compute range stays put when the FFT time preview pans/zooms."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -4498,8 +4502,11 @@ def test_fft_preview_zoom_updates_pane_time_range_when_checked(qapp, qtbot):
     handled = win._on_fft_preview_range_changed(pane_idx, 3.0, 5.0)
     assert handled is True
     assert top.range_enabled()
-    assert top.range_values() == (3.0, 5.0)
-    assert state.panes[pane_idx].time_range == (3.0, 5.0)
+    assert top.range_values() == (1.0, 2.0)
+    assert state.panes[pane_idx].time_range == (1.0, 2.0)
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, pane_idx
+    ) is None
 
 
 def test_fft_uncheck_range_clears_pane_and_refreshes_preview(qapp, qtbot):

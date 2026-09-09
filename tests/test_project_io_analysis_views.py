@@ -251,6 +251,42 @@ def test_preset_baseline_round_trips_through_project_json(tmp_path):
     assert view.preset_baseline["params"]["nfft"] == 4096
 
 
+def test_project_json_time_range_omits_drafts_and_keeps_none_as_full(tmp_path):
+    full = AnalysisViewState(name="Full", tab_color="#2d7ff9")
+    full.panes[0].sources = [("f1", "vib")]
+    full.panes[0].time_range = None
+    enabled = AnalysisViewState(name="Enabled", tab_color="#2d7ff9")
+    enabled.panes[0].sources = [("f1", "vib")]
+    enabled.panes[0].time_range = (0.25, 0.75)
+    path = tmp_path / "time-range.tlproj"
+    save_project_to_json(
+        ProjectDocument(
+            active_file="f1",
+            current_mode="fft",
+            analysis_views={
+                "fft": {
+                    "active": 0,
+                    "views": [full.to_dict(), enabled.to_dict()],
+                },
+            },
+        ),
+        path,
+    )
+    loaded = load_project_from_json(path)
+    views = loaded.analysis_views["fft"]["views"]
+    assert views[0]["schema"] == 9
+    assert views[0]["panes"][0].get("time_range") in (None, [])
+    assert views[1]["panes"][0]["time_range"] == [0.25, 0.75]
+    for pane in (views[0]["panes"][0], views[1]["panes"][0]):
+        assert "draft" not in pane
+        assert "source_signature" not in pane
+        assert "needs_review" not in pane
+    restored_full = AnalysisViewState.from_dict(views[0])
+    restored_enabled = AnalysisViewState.from_dict(views[1])
+    assert restored_full.panes[0].time_range is None
+    assert restored_enabled.panes[0].time_range == (0.25, 0.75)
+
+
 def test_project_json_without_preset_baseline_loads_as_none(tmp_path):
     path = tmp_path / "legacy.tlproj"
     save_project_to_json(_doc(), path)

@@ -895,3 +895,70 @@ def test_switching_to_a_frf_view_without_results_clears_the_facts_card(qtbot):
     manager.set_active(manager.new_view())
 
     assert ctx.effective_facts_text() == ""
+
+
+def test_frf_restore_blocks_invalid_enabled_without_draft_dialog(
+    qtbot, monkeypatch
+):
+    win, fid, state, _time = _window_with_pair(qtbot)
+    state.add_pane()
+    state.panes[1].input_source = (fid, "input")
+    state.panes[1].output_source = (fid, "output")
+    state.panes[0].time_range = (0.0, 0.0)
+    asked = []
+    monkeypatch.setattr(
+        win,
+        "_ask_use_local_time_range",
+        lambda *a, **k: asked.append(True) or "full",
+    )
+    built = []
+    requested = []
+    monkeypatch.setattr(
+        win,
+        "_build_frf_candidate",
+        lambda candidate_state, pane_idx, **k: built.append(pane_idx) or {
+            "view_id": candidate_state.view_id,
+            "pane_idx": pane_idx,
+        },
+    )
+    monkeypatch.setattr(
+        win._frf_coordinator,
+        "request",
+        lambda candidate: requested.append(candidate) or True,
+    )
+
+    win._recompute_restored_frf_view(state.view_id)
+
+    assert asked == []
+    assert built == [1]
+    assert requested[0]["preflight_error"].message.startswith("已启用时间范围无效")
+    assert [item.get("pane_idx") for item in requested] == [0, 1]
+    assert state.panes[0].time_range == (0.0, 0.0)
+
+
+def test_frf_full_choice_still_runs_pair_preflight(qtbot, monkeypatch):
+    win, _fid, state, _time = _window_with_pair(qtbot)
+    win.chart_stack.set_mode("frf")
+    win.inspector.set_mode("frf")
+    win.inspector.top.chk_range.setChecked(False)
+    win.inspector.top.spin_start.setValue(0.2)
+    win.inspector.top.spin_end.setValue(0.8)
+    win.inspector.top.flush_pending_range_edit(emit=True)
+    monkeypatch.setattr(win, "_ask_use_local_time_range", lambda *a, **k: "full")
+
+    def boom(*_a, **_k):
+        raise FrfPreflightError("输入和输出采样率不一致")
+
+    monkeypatch.setattr(win, "_frf_prepare_pair_samples", boom)
+    routed = []
+    monkeypatch.setattr(
+        win._frf_coordinator,
+        "request",
+        lambda candidate: routed.append(candidate) or True,
+    )
+    assert win.do_frf() is False
+    assert state.panes[0].time_range is None
+    assert routed and isinstance(
+        routed[0].get("preflight_error"), FrfPreflightError
+    )
+    assert "采样率" in str(routed[0]["preflight_error"])

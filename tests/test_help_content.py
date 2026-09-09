@@ -507,6 +507,25 @@ def test_cheat_sheet_matches_runtime_desktop_shortcuts():
     assert "全局撤销栈" not in project_blob
 
 
+def test_current_analysis_help_explains_time_range_draft_rules():
+    current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
+        '  "changelog": [', 1,
+    )
+    for phrase in ("未勾选", "全时段", "待启用", "只查看", "使用选定时间范围"):
+        assert phrase in current_manual, phrase
+    assert "圈定要分析的时间段" not in current_manual
+    assert "圈定分析时间段" not in current_manual
+    for fname in (
+        "fft-guide.html",
+        "ffttime-guide.html",
+        "order-analysis-guide.html",
+        "frf-guide.html",
+    ):
+        text = (HELP / fname).read_text(encoding="utf-8")
+        for phrase in ("未勾选", "全时段", "待启用", "只查看"):
+            assert phrase in text, f"{fname} missing: {phrase}"
+
+
 def test_ultraview_p3_surfaces_drop_alt_drag_copy():
     """UV-P3-A15: product hints / quickref / help must not keep Alt+拖."""
     root = Path(__file__).resolve().parents[1]

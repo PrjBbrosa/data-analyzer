@@ -257,9 +257,8 @@ def _seed_analysis_canvas_x_extent(win, mode, lo, hi):
 def test_max_range_in_analysis_mode_uses_attached_short_file(
     win_two_files, qapp, mode,
 ):
-    """A2/F1: 「全部」in order / fft_time / FRF frames to the analysis canvas
-    plotted extent — not the leftover Time View curve on
-    ``chart_stack.focused_canvas()``."""
+    """Analysis 「全部」projects the pane's source full, not the leftover
+    Time View curve on ``chart_stack.focused_canvas()``."""
     win, long_fid, short_fid = win_two_files
     assert float(win.files[long_fid].time_array[-1]) == pytest.approx(30.0, abs=0.2)
     assert float(win.files[short_fid].time_array[-1]) == pytest.approx(3.0, abs=0.2)
@@ -273,7 +272,13 @@ def test_max_range_in_analysis_mode_uses_attached_short_file(
     assert time_union[1] == pytest.approx(30.0, abs=0.5)
 
     mgr = win.analysis_managers[mode]
-    mgr.get(0).attached_file_ids = [short_fid]
+    state = mgr.get(0)
+    state.attached_file_ids = [short_fid]
+    if mode == "frf":
+        state.panes[0].input_source = (short_fid, "speed")
+        state.panes[0].output_source = (short_fid, "speed")
+    else:
+        state.panes[0].sources = [(short_fid, "speed")]
     win.chart_stack.set_mode(mode)
     win.inspector.set_mode(mode)
     qapp.processEvents()
@@ -294,7 +299,8 @@ def test_max_range_in_analysis_mode_uses_attached_short_file(
     top.set_range_values(0.0, 3.0)
     assert win._analysis_time_range_draft_is_local() is None
     top.set_range_values(0.5, 1.5)
-    assert win._analysis_time_range_draft_is_local() == pytest.approx((0.5, 1.5))
+    # Programmatic projection is not a user draft (1% heuristic is retired).
+    assert win._analysis_time_range_draft_is_local() is None
 
     top.set_range_limits(0.0, 1.0)
     top.set_range_values(0.0, 1.0)

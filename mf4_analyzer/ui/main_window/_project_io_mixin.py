@@ -633,8 +633,10 @@ class ProjectIOMixin:
             current_hi = self.inspector.top.spin_end.maximum()
             new_hi = max(current_hi, fd.time_array[-1])
             self.inspector.top.set_range_limits(0, new_hi)
-            if len(self.files) == 1:
-                self.inspector.top.spin_end.setValue(fd.time_array[-1])
+            # Expanding limits is required so a longer source can display.
+            # Do not write spin values: that leaked the first file's last
+            # timestamp into analysis compute boxes (R1). Time-domain still
+            # syncs from the visible xlim after plot.
         self._note_user_project_mutation()
         refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
         if callable(refresh_chip):
@@ -1928,6 +1930,10 @@ class ProjectIOMixin:
         if getattr(self, "_applying_view", False):
             return False
 
+        ctrl = getattr(getattr(self, "_analysis_context", None), "time_range", None)
+        if ctrl is not None:
+            ctrl.clear_all()
+
         view_manager = getattr(self, "view_manager", None)
         if view_manager is not None:
             preserved_ids = self._ultraview_time_view_ids_to_preserve()
@@ -2005,6 +2011,11 @@ class ProjectIOMixin:
                 self._project_analysis_attachments(mode, mgr.get(mgr.active))
             self._sync_record_curve_tree()
         self._refresh_analysis_candidates()
+        refresh_range = getattr(
+            self, "_refresh_analysis_time_range_after_source_loss", None,
+        )
+        if callable(refresh_range):
+            refresh_range()
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
         refresh_chip = getattr(self, "_refresh_time_axis_provenance_chips", None)
@@ -2546,6 +2557,9 @@ class ProjectIOMixin:
                 uses, files=fids, close_all=True
             ):
                 return
+        ctrl = getattr(getattr(self, "_analysis_context", None), "time_range", None)
+        if ctrl is not None:
+            ctrl.clear_all()
         if uv is not None and not getattr(uv, "is_shutdown", False):
             uv.reset_project_state()
         n = len(self.files)

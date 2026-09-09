@@ -14,25 +14,23 @@ tests:
   - tests/ui/test_analysis_scope_and_xframe.py::test_max_range_in_analysis_mode_uses_attached_short_file
 ---
 
-# 「全部」用图面已绘制通道时长，不用通道树最长加载文件
+# 「全部」按模式分流：时域用已绘时长，分析页回 full
 
 Trigger: Changing Inspector「全部」/ time-range max, `_plotted_time_extent`,
 `_time_data_extent`, analysis-mode framing, or Home/reset-to-full-extent.
 
-Past failure: 「全部」walked every loaded file in the channel tree and framed to
-the longest time base, even when only shorter channels were plotted. Follow-up
-(A2/F1): `_plotted_time_extent` called `chart_stack.focused_canvas()`, which
-always returns a time-domain card, so Heatmap/FRF `get_data_x_union` was dead
-code. Tests that never `plot_time` stayed green via the empty-canvas
-`attached_file_ids` fallback.
+Past failure: 「全部」walked every loaded file in the channel tree and framed
+to the longest time base, even when only shorter channels were plotted.
+A later analysis-mode path still treated「全部」as view-all / plotted
+extent, so an enabled or drafted compute range survived.
 
-Rule: Resolve max extent via `_plotted_time_extent`. In analysis modes read
-`_analysis_page(mode).focused_canvas()`, not `chart_stack.focused_canvas()`
-(that method is a time-domain contract; do not change it). Then canvas data
-union → checked plotted channels → analysis View attached sources →
-`_time_data_extent`. Draft-local checks must go through the same helper. An
-analysis-mode「全部」test must `plot_time` a longer Time View curve first so
-the time canvas is non-empty.
+Rule: Split by mode. Time-domain「全部」and Home still resolve max extent
+via `_plotted_time_extent` (analysis page focused canvas, not
+`chart_stack.focused_canvas()`), then canvas data union → checked plotted
+channels → attached sources → `_time_data_extent`. Do not enable the
+filter. Analysis「全部」cancels the checkbox, clears the controller draft,
+and projects the current source full span (`convert_to_full`). Do not
+reuse plotted-extent Home as analysis compute intent.
 
 Verification: Run
 `tests/ui/test_inspector.py -k max_range`,

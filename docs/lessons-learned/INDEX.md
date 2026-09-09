@@ -158,9 +158,9 @@ lesson by default.
 | [Stateful Icon Buttons Need active QSS And String Attrs](codex-stateful-icon-button-active-qss.md) | Adding or changing a non-checkable icon `QToolButton` whose on/off | See lesson |
 | [Fixed-size bytearray headers must use equal-length slice assigns](codex-bytearray-slice-assign-fixed-size.md) | Packing fixed binary headers with `bytearray(N)` and slice assignment. | See lesson |
 | [QSS Combined qproperty Flags Need Quotes](qss-qproperty-combined-flags-need-quotes.md) | Editing `mf4_analyzer/ui_kit/style.qss` (or any app-wide QSS template), | See lesson |
-| [FFT Preview Zoom Does Not Auto-Arm Time Range](fft-preview-zoom-no-auto-arm-time-range.md) | Changing FFT time-preview pan/zoom wiring, shared `chk_range` | See lesson |
-| [Confirm Unchecked Local Time Range Before Compute](analysis-compute-confirm-unchecked-local-range.md) | Wiring analysis compute entry points (`do_fft` / `do_fft_time` / | See lesson |
-| [「全部」用图面已绘制通道时长，不用通道树最长加载文件](time-range-all-uses-plotted-extent.md) | Changing Inspector「全部」/ `_plotted_time_extent` / analysis-mode framing | See lesson |
+| [FFT Preview Zoom Is View-Only](fft-preview-zoom-no-auto-arm-time-range.md) | Changing FFT time-preview pan/zoom wiring, shared `chk_range` | See lesson |
+| [Confirm Controller Draft Before Compute](analysis-compute-confirm-unchecked-local-range.md) | Wiring analysis compute entry points (`do_fft` / `do_fft_time` / | See lesson |
+| [「全部」按模式分流：时域用已绘时长，分析页回 full](time-range-all-uses-plotted-extent.md) | Changing Inspector「全部」/ `_plotted_time_extent` / analysis-mode framing | See lesson |
 | [ViewState Composite-Key Tables Stay In Sync](codex-viewstate-composite-key-tables-stay-in-sync.md) | Touching `remap_view_fids`, close-file ViewState cleanup, or any | See lesson |
 | [Toast providers stay weak; selected expanders avoid QMacStyle primitives](qt-lifecycle-toast-and-macstyle-expander.md) | ``Toast(margin_provider=bound_method)``; Darwin channel-tree | See lesson |
 | [FFT Time Preview Empty Keeps Y Graticule](fft-time-preview-empty-keeps-y-graticule.md) | Changing `PgLineCanvas` time-preview overlay grid, `_build_time_y_grid`, empty `plot_time_preview([])`, or `full_reset`. | See lesson |

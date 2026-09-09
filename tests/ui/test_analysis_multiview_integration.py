@@ -151,7 +151,7 @@ def test_fft_nonuniform_skip_reason_matches_feedback_contract(
 
     win.do_fft()
 
-    assert calls == [("warning", "无可计算的图：2 个非均匀且未重建")]
+    assert calls == [("warning", "无可计算的图：2 个时间轴无效")]
 
 
 def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
@@ -335,8 +335,7 @@ def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, q
 
 
 def test_fft_time_preview_drag_updates_analysis_time_range(two_file_win, qapp):
-    """Preview pan/zoom drafts start/end; analysis window arms only when
-    「使用选定时间范围」is checked (manual, same as Time-Domain)."""
+    """Preview pan/zoom is a camera change only: no draft, no enabled rewrite."""
     win = two_file_win
     win.toolbar._set_mode("fft")
     _check_speed_in_both(win)
@@ -347,31 +346,32 @@ def test_fft_time_preview_drag_updates_analysis_time_range(two_file_win, qapp):
     mgr = win.analysis_managers["fft"]
     state = mgr.get(mgr.active)
     pane_idx = 0
-    win.inspector.top.chk_range.setChecked(False)
+    top = win.inspector.top
+    top.set_range_from_span(0.10, 0.40)
+    win._capture_analysis_time_range("fft", state, pane_idx=pane_idx)
     qapp.processEvents()
-    assert state.panes[pane_idx].time_range is None
+    assert state.panes[pane_idx].time_range == pytest.approx((0.10, 0.40), abs=1e-6)
 
     canvas._plot_time.setXRange(0.2, 0.6, padding=0)
     canvas._plot_time.vb.sigRangeChangedManually.emit(
         canvas._plot_time.vb.state['mouseEnabled'])
     qapp.processEvents()
 
-    assert win.inspector.top.range_enabled() is False
-    assert win.inspector.top.range_values() == pytest.approx((0.2, 0.6), abs=1e-6)
-    assert state.panes[pane_idx].time_range is None
-
-    win.inspector.top.chk_range.setChecked(True)
-    qapp.processEvents()
-    assert state.panes[pane_idx].time_range == pytest.approx((0.2, 0.6), abs=1e-6)
+    assert top.range_enabled() is True
+    assert top.range_values() == pytest.approx((0.10, 0.40), abs=1e-6)
+    assert state.panes[pane_idx].time_range == pytest.approx((0.10, 0.40), abs=1e-6)
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, pane_idx
+    ) is None
 
     canvas._plot_time.setXRange(0.3, 0.7, padding=0)
     canvas._plot_time.vb.sigRangeChangedManually.emit(
         canvas._plot_time.vb.state['mouseEnabled'])
     qapp.processEvents()
 
-    assert win.inspector.top.range_enabled() is True
-    assert win.inspector.top.range_values() == pytest.approx((0.3, 0.7), abs=1e-6)
-    assert state.panes[pane_idx].time_range == pytest.approx((0.3, 0.7), abs=1e-6)
+    assert top.range_enabled() is True
+    assert top.range_values() == pytest.approx((0.10, 0.40), abs=1e-6)
+    assert state.panes[pane_idx].time_range == pytest.approx((0.10, 0.40), abs=1e-6)
 
 
 def test_fft_split_same_source_different_time_ranges_have_distinct_cache_keys(
@@ -500,6 +500,9 @@ def test_fft_time_dispatch_uses_explicit_time_range(two_file_win, monkeypatch):
 
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
 
+    class DummyResult:
+        pass
+
     def fake_compute(
         sig,
         time,
@@ -510,7 +513,7 @@ def test_fft_time_dispatch_uses_explicit_time_range(two_file_win, monkeypatch):
         cancel_token=None,
     ):
         seen.append((len(sig), float(time[0]), float(time[-1])))
-        return object()
+        return DummyResult()
 
     class DummyProgress:
         def emit(self, *args):
@@ -537,18 +540,27 @@ def test_fft_time_dispatch_uses_explicit_time_range(two_file_win, monkeypatch):
     assert seen == pytest.approx([(len(sig), float(t[0]), float(t[-1]))])
 
 
-def test_fft_time_dispatch_omitted_time_range_uses_inspector_fallback(
+def test_fft_time_dispatch_omitted_time_range_uses_pane_not_shared_spin(
     two_file_win, monkeypatch
 ):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
     _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
+    mgr = win.analysis_managers["fft_time"]
+    state = mgr.get(mgr.active)
+    win._on_analysis_split("fft_time", True)
+    state.panes[0].sources = [(fids[0], "speed")]
+    state.panes[1].sources = [(fids[0], "speed")]
+    state.panes[1].time_range = (0.75, 1.0)
     win.inspector.top.set_range_from_span(0.20, 0.30)
 
     seen = []
 
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
+
+    class DummyResult:
+        pass
 
     def fake_compute(
         sig,
@@ -560,7 +572,7 @@ def test_fft_time_dispatch_omitted_time_range_uses_inspector_fallback(
         cancel_token=None,
     ):
         seen.append((len(sig), float(time[0]), float(time[-1])))
-        return object()
+        return DummyResult()
 
     class DummyProgress:
         def emit(self, *args):
@@ -587,15 +599,21 @@ def test_fft_time_dispatch_omitted_time_range_uses_inspector_fallback(
     )
     assert job(DummyWorker()) is not None
 
-    inspector_t, inspector_sig = _time_range_slice(
-        win.files[fids[0]], "speed", (0.20, 0.30)
+    pane_t, pane_sig = _time_range_slice(
+        win.files[fids[0]], "speed", (0.75, 1.0)
     )
     full_t = np.asarray(win.files[fids[0]].time_array, dtype=float)
     full_sig = np.asarray(
         win.files[fids[0]].data["speed"].to_numpy(copy=False), dtype=float
     )
+    inspector_t, inspector_sig = _time_range_slice(
+        win.files[fids[0]], "speed", (0.20, 0.30)
+    )
     assert len(seen) == 2
     assert seen[0] == pytest.approx(
+        (len(pane_sig), float(pane_t[0]), float(pane_t[-1]))
+    )
+    assert seen[0] != pytest.approx(
         (len(inspector_sig), float(inspector_t[0]), float(inspector_t[-1]))
     )
     assert seen[1] == pytest.approx(
@@ -2817,3 +2835,39 @@ def test_fft_time_and_order_viewport_roundtrip(two_file_win, qtbot, qapp):
     order_restored = order_canvas.capture_xy_viewport()
     assert order_restored[0][0] == pytest.approx(order_zoomed[0][0], abs=1e-3)
     assert order_restored[0][1] == pytest.approx(order_zoomed[0][1], abs=1e-3)
+
+
+def test_duplicate_analysis_view_copies_enabled_range_not_draft(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
+    fids = list(win.files.keys())
+    win.navigator.set_checked_channels([(fids[0], "speed")])
+    win._ch_changed()
+    mgr = win.analysis_managers["fft"]
+    original = mgr.get(mgr.active)
+    top = win.inspector.top
+    top.spin_start.setValue(0.1)
+    top.spin_end.setValue(0.4)
+    top.flush_pending_range_edit(emit=True)
+    assert win._analysis_context.time_range.draft_for(
+        "fft", original.view_id, 0
+    ) is not None
+    win._on_analysis_duplicate("fft", 0)
+    copied = mgr.get(mgr.active)
+    assert copied.view_id != original.view_id
+    assert copied.panes[0].time_range is None
+    assert win._analysis_context.time_range.draft_for(
+        "fft", copied.view_id, 0
+    ) is None
+    assert win._analysis_context.time_range.draft_for(
+        "fft", original.view_id, 0
+    ) is not None
+    original.panes[0].time_range = (0.2, 0.5)
+    mgr.set_active(0)
+    win._on_analysis_duplicate("fft", 0)
+    enabled_copy = mgr.get(mgr.active)
+    assert enabled_copy.panes[0].time_range == pytest.approx((0.2, 0.5))
+    assert win._analysis_context.time_range.draft_for(
+        "fft", enabled_copy.view_id, 0
+    ) is None

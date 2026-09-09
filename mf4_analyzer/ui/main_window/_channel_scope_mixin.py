@@ -283,6 +283,11 @@ class ChannelScopeMixin:
             return False
 
         detach_analysis_files(state, removing)
+        refresh_range = getattr(
+            self, "_refresh_analysis_time_range_after_source_loss", None,
+        )
+        if callable(refresh_range):
+            refresh_range(section, state)
         if self.chart_stack.current_mode() == section:
             self._project_analysis_attachments(section, state)
             self._apply_analysis_sources(section, state)
@@ -625,6 +630,11 @@ class ChannelScopeMixin:
                     ):
                         pane.input_source = None
                         pane.output_source = None
+        refresh_range = getattr(
+            self, "_refresh_analysis_time_range_after_source_loss", None,
+        )
+        if callable(refresh_range):
+            refresh_range()
 
     @staticmethod
     def _filter_time_view_state_for_removed_fids(state, removed):

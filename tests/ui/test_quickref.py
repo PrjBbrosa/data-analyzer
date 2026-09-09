@@ -463,12 +463,18 @@ def test_catalog_says_how_to_read_a_truncated_channel_name():
 
 
 def test_catalog_view_all_frames_plotted_channels_not_longest_file():
-    """Inspector「全部」and Home frame plotted ink, not the longest loaded file."""
-    row = _row_by_desc("时间范围「全部」")
+    """Time-domain「全部」and Home frame plotted ink; analysis「全部」goes full."""
+    row = _row_by_desc("时域「全部」")
     assert "已绘" in row.sub
     assert "最长文件" in row.sub or "全局" in row.sub
     assert "勾选" in row.sub or "过滤" in row.sub
     assert "全部" in row.gesture
+    analysis = _row_by_desc("分析页「全部」")
+    assert "取消勾选" in analysis.sub
+    assert "草稿" in analysis.sub
+    assert "全时段" in analysis.sub
+    assert "只查看" in analysis.sub
+    assert "全部" in analysis.gesture
     home = _row_by_desc("复位视图")
     assert "已绘" in home.sub
     menu = _row_by_desc("图表右键")

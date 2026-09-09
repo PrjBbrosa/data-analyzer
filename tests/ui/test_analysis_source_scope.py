@@ -725,3 +725,35 @@ def test_detach_wwt_source_from_focused_view_keeps_sibling_view_records(
     assert fid in other.attached_file_ids
     assert any(b.y_ref.kind == "wwt_record" for b in other.curve_bindings)
     assert record_binding_count(win.navigator) == 1
+
+
+def test_unrelated_detach_keeps_draft_source_close_clears_it(win_two, monkeypatch):
+    win, fid_a, fid_b = win_two
+    monkeypatch.setattr(
+        win,
+        "_ask_use_local_time_range",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("source pick must not confirm")
+        ),
+    )
+    win.toolbar._set_mode("fft")
+    win._attach_files_to_active_analysis_view("fft", [fid_a, fid_b])
+    win.navigator.set_checked_channels([(fid_a, "sig")])
+    win._ch_changed()
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    top = win.inspector.top
+    top.spin_start.setValue(0.2)
+    top.spin_end.setValue(0.6)
+    top.flush_pending_range_edit(emit=True)
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    ) is not None
+    win._detach_files_from_active_analysis_view("fft", [fid_b], label="b.csv")
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    ) is not None
+    win._close(fid_a, force=True)
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    ) is None

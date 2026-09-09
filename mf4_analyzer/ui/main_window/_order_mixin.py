@@ -43,13 +43,14 @@ class OrderMixin:
             return None, None
         t = fd.time_array
         sig = fd.data[ch].values
-        if (
-            time_range is _INSPECTOR_TIME_RANGE
-            and self.inspector.top.range_enabled()
-        ):
-            time_range = self.inspector.top.range_values()
         if time_range is _INSPECTOR_TIME_RANGE:
-            time_range = None
+            resolver = getattr(self, "_resolve_job_time_range", None)
+            if callable(resolver):
+                time_range = resolver("order", time_range)
+            elif self.inspector.top.range_enabled():
+                time_range = self.inspector.top.range_values()
+            else:
+                time_range = None
         if time_range is not None and t is not None:
             t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return t, sig
@@ -96,13 +97,14 @@ class OrderMixin:
             factor = self.inspector.order_ctx.rpm_factor()
         rpm = fd.data[ch].values.copy() * factor
         t_rpm = fd.time_array
-        if (
-            time_range is _INSPECTOR_TIME_RANGE
-            and self.inspector.top.range_enabled()
-        ):
-            time_range = self.inspector.top.range_values()
         if time_range is _INSPECTOR_TIME_RANGE:
-            time_range = None
+            resolver = getattr(self, "_resolve_job_time_range", None)
+            if callable(resolver):
+                time_range = resolver("order", time_range)
+            elif self.inspector.top.range_enabled():
+                time_range = self.inspector.top.range_values()
+            else:
+                time_range = None
         if time_range is not None and t_rpm is not None:
             t_rpm, rpm = self._mask_time_range(
                 t_rpm, rpm, time_range=time_range)
@@ -305,6 +307,17 @@ class OrderMixin:
                 continue
             fid, ch = sources[0]
             rpm_source = pane.rpm_source
+            blocker = getattr(self, "_analysis_restore_time_range_block_reason", None)
+            if callable(blocker):
+                reason = blocker("order", state, pane_idx)
+                if reason:
+                    toast = getattr(self, "toast", None)
+                    if callable(toast):
+                        toast(reason, "warning")
+                    status = getattr(self, "statusBar", None)
+                    if status is not None:
+                        status.showMessage(reason)
+                    continue
             built = self._build_order_job(
                 pane_idx, fid, ch, rpm_source, state=state, warn=False
             )

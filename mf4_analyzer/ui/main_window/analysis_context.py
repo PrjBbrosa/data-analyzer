@@ -33,6 +33,12 @@ from __future__ import annotations
 import numpy as np
 
 from ... import db_reference
+from .analysis_time_range import (
+    AnalysisTimeRangeController,
+    SourceBounds,
+    as_channel_key,
+    bounds_from_axes,
+)
 
 
 class AnalysisContext:
@@ -72,6 +78,10 @@ class AnalysisContext:
         self._analysis_managers = analysis_managers
         self._db_reference_store = db_reference_store
         self._files_provider = files_provider
+        self.time_range = AnalysisTimeRangeController(
+            bounds_provider=self._source_bounds_from_files,
+            enabled_range_provider=self._raw_pane_time_range,
+        )
 
     # -- section routing ----------------------------------------------------
 
@@ -145,6 +155,91 @@ class AnalysisContext:
         if not (0 <= int(pane_idx) < len(state.panes)):
             return None
         return self.normalize_time_range(state.panes[int(pane_idx)].time_range)
+
+    def source_bounds_for(self, section, view_id, pane_index):
+        """Physical full-span facts for one pane's current sources."""
+        return self.time_range.source_bounds_for(section, view_id, pane_index)
+
+    def _analysis_state_for_id(self, section, view_id):
+        try:
+            mgr = self._analysis_managers[section]
+        except (KeyError, TypeError):
+            return None
+        target = str(view_id or "")
+        for state in getattr(mgr, "views", ()) or ():
+            if str(getattr(state, "view_id", "")) == target:
+                return state
+        return None
+
+    def _pane_state(self, section, view_id, pane_index):
+        state = self._analysis_state_for_id(section, view_id)
+        if state is None:
+            return None
+        try:
+            idx = int(pane_index)
+        except (TypeError, ValueError):
+            return None
+        panes = getattr(state, "panes", None) or ()
+        if not (0 <= idx < len(panes)):
+            return None
+        return panes[idx]
+
+    def _raw_pane_time_range(self, section, view_id, pane_index):
+        pane = self._pane_state(section, view_id, pane_index)
+        if pane is None:
+            return None
+        return getattr(pane, "time_range", None)
+
+    def _file_time_array(self, files, source):
+        key = as_channel_key(source)
+        if key is None or not hasattr(files, "get"):
+            return None
+        fd = files.get(key[0])
+        if fd is None:
+            return None
+        return getattr(fd, "time_array", None)
+
+    def _source_bounds_from_files(self, section, view_id, pane_index):
+        """Read ``FileData.time_array`` first/last for this pane's sources.
+
+        Does not call ``prepare_analysis_time_axis`` and does not scan every
+        loaded file. Missing pane or empty roles are unavailable.
+        """
+        pane = self._pane_state(section, view_id, pane_index)
+        if pane is None:
+            return SourceBounds(
+                status="unavailable",
+                display_range=None,
+                errors=("pane unavailable",),
+            )
+        files = self._files_provider() or {}
+        if str(section) == "frf":
+            named = []
+            for source in (
+                getattr(pane, "input_source", None),
+                getattr(pane, "output_source", None),
+            ):
+                if source is None:
+                    continue
+                named.append((source, self._file_time_array(files, source)))
+            if not named:
+                return SourceBounds(
+                    status="unavailable",
+                    display_range=None,
+                    errors=("no FRF sources",),
+                )
+            return bounds_from_axes(section, named)
+        sources = list(getattr(pane, "sources", None) or ())
+        if not sources:
+            return SourceBounds(
+                status="unavailable",
+                display_range=None,
+                errors=("no sources",),
+            )
+        named = [
+            (source, self._file_time_array(files, source)) for source in sources
+        ]
+        return bounds_from_axes(section, named)
 
     # -- dB reference -------------------------------------------------------
 

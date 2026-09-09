@@ -100,7 +100,7 @@
                 <div class="instr">
                     <div class="blk reveal d2"><span class="k">④</span><p>点<span class="ui">计算 FFT</span> → 出频谱图。右栏「有效事实」显示实际 Fs / NFFT / Δf / 窗长 / 段数。「自动」在普通采样率下优先 4096 点；低 Fs 按目标窗长适配，不会零填充冒充更细分辨率。段数少是统计提示，不等于点数已缩短。</p></div>
                     <div class="blk reveal d3"><span class="k">⑤</span><p>用工具栏的<span class="ui">游标关 / 单游标 / 双游标</span>在峰值上读频率 / 幅值；双游标会显示 fA、fB 和 Δf。</p></div>
-                    <div class="tip reveal d4"><span class="ic">💡</span><p>拖动、滚轮、框选和<span class="ui">查看全部</span>会随当前 FFT View 保存；点<span class="ui">计算 FFT</span>才按 Inspector 重新成图。FFT-vs-Time / 阶次同样。</p></div>
+                    <div class="tip reveal d4"><span class="ic">💡</span><p>拖动、滚轮、框选和<span class="ui">查看全部</span>只查看，会随当前 FFT View 保存，<b>不改计算时间</b>。未勾选<span class="ui">使用选定时间范围</span>用全时段；手动改起止是待启用草稿，分析页<span class="ui">全部</span>清局部，点<span class="ui">计算 FFT</span>才按 Inspector 重新成图并在有草稿时询问。FFT-vs-Time / 阶次同样。</p></div>
                 </div>
                 <div class="viz reveal d2" style="background:#fff;padding:20px">
                     <svg viewBox="0 0 600 280" preserveAspectRatio="none" style="width:100%;height:300px">

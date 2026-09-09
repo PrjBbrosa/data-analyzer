@@ -20,6 +20,7 @@ import pytest
 from mf4_analyzer import db_reference
 from mf4_analyzer.ui.db_reference_settings import DbReferenceCatalogSnapshot
 from mf4_analyzer.ui.main_window.analysis_context import AnalysisContext
+from mf4_analyzer.ui.main_window.analysis_time_range import AnalysisTimeRangeController
 
 
 # -- fakes -------------------------------------------------------------------
@@ -163,6 +164,11 @@ def test_analysis_context_needs_no_main_window():
     assert not [line for line in imports if "MainWindow" in line]
     assert not [line for line in imports if "main_window.window" in line]
     assert not [line for line in imports if line.endswith("import main_window")]
+
+
+def test_analysis_context_holds_one_time_range_controller(ctx):
+    assert isinstance(ctx.time_range, AnalysisTimeRangeController)
+    assert ctx.source_bounds_for("fft", "missing-view", 0).status == "unavailable"
 
 
 # -- time-range normalisation ------------------------------------------------
