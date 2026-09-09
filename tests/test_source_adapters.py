@@ -364,3 +364,48 @@ def test_canoe_asc_probe_and_load_match_blf_frame_sequence(tmp_path, monkeypatch
     assert list(asc_loaded.file_data.data["EngineSpeed"]) == pytest.approx(
         list(blf_loaded.file_data.data["EngineSpeed"])
     )
+
+
+def test_zfd_adapter_probe_and_load_reject_truncated_file(tmp_path):
+    from tests.zfd_fixtures import write_truncated_last_channel
+
+    path = write_truncated_last_channel(tmp_path / "cut.zfd", count=16, drop_bytes=24)
+    adapter = SourceAdapterRegistry.default().adapter_for(path)
+    with pytest.raises(ValueError, match="不完整"):
+        adapter.probe_sources(path)
+    with pytest.raises(ValueError, match="不完整"):
+        adapter.load_sources(path)
+
+
+def test_zfd_adapter_and_filedata_share_verified_axis(tmp_path):
+    from tests.zfd_fixtures import write_minimal_zfd
+
+    path = write_minimal_zfd(
+        tmp_path / "axis.zfd",
+        dt=2.0,
+        count=5,
+        values=[1.0, 2.0, 3.0, 4.0, 5.0],
+        t0=1.5,
+        name="probe",
+    )
+    groups = DataLoader.load_zfd(str(path))
+    g = groups[0]
+    fd = FileData(
+        str(path),
+        g["data"],
+        g["channels"],
+        g["units"],
+        source_metadata=g["source_metadata"],
+        channel_metadata=g["channel_metadata"],
+        label_suffix=g["label_suffix"],
+    )
+    loaded = SourceAdapterRegistry.default().adapter_for(path).load_sources(path)
+    assert len(loaded) == 1
+    other = loaded[0].file_data
+    t = g["data"]["Time"].to_numpy()
+    assert len(fd.time_array) == len(other.time_array) == 5
+    assert fd.time_array[0] == pytest.approx(other.time_array[0]) == pytest.approx(1.5)
+    assert t[1] - t[0] == pytest.approx(2.0)
+    assert fd.fs == pytest.approx(other.fs) == pytest.approx(0.5)
+    assert "zfd:count=5:dt=" in loaded[0].group_id
+    assert "t0=" not in loaded[0].group_id

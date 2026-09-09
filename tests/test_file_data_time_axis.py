@@ -85,3 +85,34 @@ def test_provenance_round_trips_through_dict():
     restored = TimeAxisProvenance.from_dict(fd.time_axis_provenance.to_dict())
     assert restored == fd.time_axis_provenance
     assert TimeAxisProvenance.from_dict(None) is None
+
+
+def test_verified_zfd_fs_keeps_existing_time_and_nonzero_t0():
+    t0, dt, n = 1.5, 2.0, 3
+    time = t0 + np.arange(n, dtype=float) * dt
+    frame = pd.DataFrame({"Time": time, "sig": [1.0, 2.0, 3.0]})
+    fd = FileData(
+        "x.zfd",
+        frame,
+        list(frame.columns),
+        {"sig": ""},
+        source_metadata={"zfd_import": {"time_step_s": dt}},
+    )
+    assert fd.time_array[0] == pytest.approx(1.5)
+    assert fd.time_array[-1] == pytest.approx(5.5)
+    assert fd.fs == pytest.approx(0.5)
+    assert fd._time_source == "column"
+
+
+def test_verified_zfd_fs_applies_to_one_point_time_column():
+    frame = pd.DataFrame({"Time": [3.0], "sig": [7.0]})
+    fd = FileData(
+        "one.zfd",
+        frame,
+        list(frame.columns),
+        {"sig": ""},
+        source_metadata={"zfd_import": {"time_step_s": 0.004}},
+    )
+    assert fd.fs == pytest.approx(250.0)
+    assert fd.time_array[0] == pytest.approx(3.0)
+    assert fd._time_source == "column"

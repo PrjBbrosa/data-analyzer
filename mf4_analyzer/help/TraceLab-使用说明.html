@@ -294,7 +294,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "先认准常用格式",
             "pills": [".mf4", ".mdf", ".wwt", ".zfd", ".mat", ".csv", ".xlsx", ".xls"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>使用文件里的 Zeit 时基，并保留通道单位、比例和偏置；导入后的 View 与原始记录操作见下一页。", "<b>ZFD</b>优先使用文件时基；时基无效时会明确标记采样率为估算值。<b>MAT</b>只使用明确的时间变量建轴；文件未提供可靠工程单位时保持为空。" ] } ] }
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>使用文件里的 Zeit 时基，并保留通道单位、比例和偏置；导入后的 View 与原始记录操作见下一页。", "<b>ZFD</b>按文件声明的时间轴和点数完整读取；时基无效或不完整则明确失败，请在源软件核对并重新导出。<b>MAT</b>只使用明确的时间变量建轴；文件未提供可靠工程单位时保持为空。" ] } ] }
       ] },
 
     { "id": "wwt-workflow", "sec": "WinWert", "kicker": "WWT · AFTER IMPORT", "title": "导入 WWT 后，<c>继续查看与整理</c>", "foot": "普通时域 View · 原始记录 · 明确诊断", "density": "compact",

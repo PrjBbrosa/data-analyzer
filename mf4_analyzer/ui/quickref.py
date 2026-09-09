@@ -113,6 +113,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="按 WinWert 窗口创建时域 View 并绘图，不会自动加入 UltraView 或改变 Board；之后可正常使用 TraceLab Canvas。需要总览时手动把 View 加入 UltraView，再用智能排版；选择「仅加载数据」则不创建 View。",
             ),
             QuickRow(
+                "ZFD ZFGE2 导入",
+                sub="仅支持单一等间隔时间轴与 float32 测量；按声明点数完整读取。时基无效或不完整则失败，请在源软件核对后重新导出。",
+            ),
+            QuickRow(
                 "WinWert 曲线自带横坐标",
                 sub="record-only 或独立 XY 曲线在右侧显示「曲线自带」，使用文件内各自绑定的 X；原始首帧可以裁剪完整数据，点 Home 仍可查看全部。",
             ),

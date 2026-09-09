@@ -239,6 +239,7 @@ lesson by default.
 | [Wrapped Hint Minimum Follows Current Width](wrapped-hint-minimum-follows-current-width.md) | A wrapped hint inside a nested form is intermittently compressed. | See lesson |
 | [Clamp Hover Popup X Before Selecting Its Vertical Side](codex-hover-popup-horizontal-clamp-before-flip.md) | Anchored hover popups flicker near screen edges or in maximized windows. | See lesson |
 | [Preserve Initially Empty Shared Source Mappings](batch-preserve-empty-source-mapping.md) | A dialog retains a source mapping owned by the main window. | See lesson |
+| [Binary count fields keep official width and remaining-byte bounds](zfd-int32-count-before-allocate.md) | Reading a binary measurement format whose records declare a sample count, especially ZFD / ZFGE2 or any format that also has a historical marker-scan parser. | See lesson |
 
 ## Selection Rules
 

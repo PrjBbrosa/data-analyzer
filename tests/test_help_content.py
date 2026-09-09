@@ -280,6 +280,15 @@ def test_manual_covers_new_features():
         assert kw in html, f"manual missing: {kw}"
 
 
+def test_manual_zfd_copy_fails_closed_instead_of_estimating_fs():
+    current, _changelog = MANUAL.read_text(encoding="utf-8").split(
+        '  "changelog": [', 1,
+    )
+    assert "时基无效或不完整则明确失败" in current
+    assert "请在源软件核对并重新导出" in current
+    assert "时基无效时会明确标记采样率为估算值" not in current
+
+
 def test_manual_uses_current_real_ui_assets():
     html = MANUAL.read_text(encoding="utf-8")
     for name in ("time-panel.png", "imports-panel.png"):

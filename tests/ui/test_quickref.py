@@ -587,6 +587,18 @@ def test_ultraview_quickref_describes_released_authoring_tools():
     assert "尚未提供" not in existing.sub
 
 
+def test_zfd_row_documents_supported_profile_and_timebase_failure():
+    start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
+    row = next(r for r in start.rows if r.desc.startswith("ZFD"))
+    joined = f"{row.desc} {row.sub}"
+    assert "ZFGE2" in joined
+    assert "float32" in joined
+    assert "时基" in joined
+    assert "失败" in joined
+    assert "估算" not in joined
+    assert len(row.sub) <= 160
+
+
 def test_wwt_winwert_row_creates_ordinary_views_without_auto_ultraview():
     start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
     row = next(r for r in start.rows if "WinWert" in r.desc)

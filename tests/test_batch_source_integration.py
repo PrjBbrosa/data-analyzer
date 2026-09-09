@@ -652,3 +652,37 @@ def test_channel_rpm_defaults_to_same_target_source(tmp_path):
     )
 
     np.testing.assert_allclose(rpm, source.data["rpm"] * 0.5)
+
+
+def test_zfd_disk_one_bad_one_good_continues_without_success_artifact(tmp_path):
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+    from tests.zfd_fixtures import write_minimal_zfd, write_truncated_last_channel
+
+    good = write_minimal_zfd(
+        tmp_path / "good.zfd",
+        dt=0.001,
+        count=16,
+        name="temp",
+    )
+    bad = write_truncated_last_channel(
+        tmp_path / "bad.zfd", count=16, drop_bytes=24,
+    )
+    adapter = SourceAdapterRegistry.default().adapter_for(good)
+    good_id = adapter.load_sources(good)[0].source_id
+    preset = replace(
+        _free_preset(signals=("temp",), policy="available_per_source"),
+        source_ids=("zfd-bad", good_id),
+        source_paths=(str(bad), str(good)),
+    )
+
+    result = BatchRunner({}).run(preset, tmp_path / "out")
+
+    statuses = {item.file_id: item.status for item in result.items}
+    assert statuses.get("zfd-bad") == "failed"
+    assert statuses.get(good_id) == "done"
+    bad_item = next(item for item in result.items if item.file_id == "zfd-bad")
+    good_item = next(item for item in result.items if item.file_id == good_id)
+    assert not getattr(bad_item, "data_path", None)
+    assert "不完整" in (bad_item.message or "")
+    assert good_item.data_path
+    assert Path(good_item.data_path).exists()

@@ -235,6 +235,12 @@ _HINTS = (
         priority=44,
     ),
     Hint(
+        id="file.zfd_timebase",
+        text="ZFD 时基无效则拒绝导入",
+        surface="discovery",
+        priority=42,
+    ),
+    Hint(
         id="time.custom_x_paths",
         text="游标显示设置管极值点与差值；− 收 mini；X↑/X↓",
         surface="discovery",

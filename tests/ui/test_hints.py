@@ -731,6 +731,14 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     assert "S " in by_id["ultraview.shapes"].text
 
 
+def test_zfd_timebase_hint_stays_in_budget():
+    hint = next(item for item in hints.all_hints() if item.id == "file.zfd_timebase")
+    assert "ZFD" in hint.text
+    assert "时基" in hint.text
+    assert "导入" in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
 def test_wwt_import_hint_mentions_ordinary_view_creation_only():
     hint = next(
         item for item in hints.all_hints() if item.id == "file.wwt_create_views"

@@ -1184,19 +1184,106 @@ def test_retained_auxiliary_does_not_toast_skipped(qapp, tmp_path, monkeypatch):
     assert leaked == [], warn
 
 
-def test_load_zfd_estimated_fs_toasts_estimate_wording(qapp, tmp_path, monkeypatch):
-    """A4 exit: fs_estimated=True must toast with an explicit 估算 label."""
-    from mf4_analyzer.ui.main_window import MainWindow
-    from tests.test_zfd_format import _write_minimal_zfd
+def test_load_zfd_illegal_dt_rejects_and_does_not_register(qapp, tmp_path, monkeypatch):
+    """Illegal ZFD timebase fails closed: no source, no success toast."""
+    from PyQt5.QtWidgets import QMessageBox
 
-    p = _write_minimal_zfd(tmp_path / "est.zfd", dt=7200.0, count=4)
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.zfd_fixtures import write_minimal_zfd
+
+    p = write_minimal_zfd(tmp_path / "bad-dt.zfd", dt=float("nan"), count=4)
+    mw = MainWindow()
+    toasts = []
+    crits = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: crits.append(a))
+    mw._load_one(str(p))
+
+    assert mw.files == {}
+    assert not any(lv == "success" for _m, lv in toasts)
+    assert not any("已加载" in m for m, _lv in toasts)
+    assert crits
+    assert any("时间轴无效" in str(item) for item in crits)
+
+
+def test_load_zfd_slow_dt_loads_without_estimate_toast(qapp, tmp_path, monkeypatch):
+    """Legal slow ZFD keeps declared dt and must not toast 估算."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.zfd_fixtures import write_minimal_zfd
+
+    p = write_minimal_zfd(tmp_path / "slow.zfd", dt=7200.0, count=4)
     mw = MainWindow()
     toasts = []
     monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
     mw._load_one(str(p))
 
+    assert len(mw.files) == 1
+    fd = next(iter(mw.files.values()))
+    assert fd.fs == pytest.approx(1.0 / 7200.0)
+    assert fd.time_array[1] - fd.time_array[0] == pytest.approx(7200.0)
+    assert fd.source_metadata.get("fs_estimated") is False
     warn = [(m, lv) for m, lv in toasts if lv == "warning"]
-    assert any("估算" in m for m, _ in warn), toasts
+    assert not any("估算" in m for m, _ in warn), toasts
+    assert any(lv == "success" and "已加载" in m for m, lv in toasts)
+
+
+def test_load_zfd_truncated_keeps_existing_source(qapp, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QMessageBox
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.zfd_fixtures import write_minimal_zfd, write_truncated_last_channel
+
+    good = write_minimal_zfd(tmp_path / "good.zfd", dt=0.001, count=8)
+    bad = write_truncated_last_channel(tmp_path / "cut.zfd", count=16, drop_bytes=24)
+    mw = MainWindow()
+    toasts = []
+    crits = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: crits.append(a))
+    mw._load_one(str(good))
+    existing = dict(mw.files)
+
+    toasts.clear()
+    mw._load_one(str(bad))
+
+    assert list(mw.files) == list(existing)
+    assert next(iter(mw.files.values())).filename == "good.zfd"
+    assert not any(lv == "success" for _m, lv in toasts)
+    assert crits
+    assert any("不完整" in str(item) for item in crits)
+
+
+def test_open_project_zfd_truncated_file_is_visible_and_unregistered(
+    qapp, tmp_path, monkeypatch,
+):
+    from PyQt5.QtWidgets import QMessageBox
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.zfd_fixtures import write_minimal_zfd, write_truncated_last_channel
+
+    src = tmp_path / "session.zfd"
+    write_minimal_zfd(src, dt=0.001, count=8)
+    proj = tmp_path / "zfd-restore.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(src))
+    mw.save_project(proj)
+    write_truncated_last_channel(src, count=8, drop_bytes=20)
+
+    crits = []
+    warns = []
+    toasts = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: crits.append(a))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warns.append(a))
+    mw2 = MainWindow()
+    monkeypatch.setattr(mw2, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    mw2.open_project(proj)
+
+    assert list(mw2.files) == []
+    health = mw2._project_restore_health
+    visible = bool(crits) or bool(toasts) or bool(getattr(health, "degraded", False))
+    assert visible
+    assert not any("已加载" in m and lv == "success" for m, lv in toasts)
 
 
 def test_load_hdf_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):

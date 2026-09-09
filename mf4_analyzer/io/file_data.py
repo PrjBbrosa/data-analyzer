@@ -1,6 +1,7 @@
 """FileData: per-file in-memory channel container."""
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -204,6 +205,28 @@ def build_time_axis_provenance(
     )
 
 
+def apply_verified_zfd_sampling(fd):
+    """Write verified ZFD Fs onto an existing Time column. Does not rebuild Time.
+
+    ``FileData(..., fs=...)`` rebuilds ``arange(n)/fs`` and drops a non-zero
+    t0. ZFD groups already carry the file time axis; consumers only need the
+    declared interval as Fs, including one-point records that have no diff.
+    """
+    meta = fd.source_metadata.get("zfd_import")
+    if not isinstance(meta, Mapping):
+        return fd
+    try:
+        dt = float(meta.get("time_step_s"))
+    except (TypeError, ValueError):
+        return fd
+    if not math.isfinite(dt) or dt <= 0:
+        return fd
+    fd.fs = 1.0 / dt
+    if fd.time_array is not None:
+        fd._time_source = "column"
+    return fd
+
+
 class FileData:
     def __init__(self, fp, df, chs, units, idx=0, *, fs=None,
                  source_metadata=None, channel_metadata=None, label_suffix=""):
@@ -249,6 +272,8 @@ class FileData:
                             self.fs = 1.0 / dt
                             self._time_source = 'column'
                     break
+
+            apply_verified_zfd_sampling(self)
 
             # 如果没有时间列，根据采样率生成
             if self.time_array is None:
