@@ -9,6 +9,7 @@ the longest loaded file.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -138,6 +139,142 @@ def enabled_covers_sources(per_source, requested):
     return True
 
 
+@dataclass(frozen=True)
+class SpanValidation:
+    ok: bool
+    reason: str  # ok | missing | unparseable | unordered | uncovered | no_sources | unavailable
+    span: tuple[float, float] | None = None
+    errors: tuple[str, ...] = ()
+
+
+def validate_requested_span(
+    per_source,
+    requested,
+    *,
+    bounds_status=None,
+    bounds_errors=(),
+):
+    """Shared draft/enabled check: parse_span then enabled_covers_sources."""
+    if requested is None:
+        return SpanValidation(
+            ok=False,
+            reason="missing",
+            span=None,
+            errors=("missing range",),
+        )
+    parsed, valid = parse_span(requested)
+    if parsed is None:
+        return SpanValidation(
+            ok=False,
+            reason="unparseable",
+            span=None,
+            errors=("invalid range text or non-finite ends",),
+        )
+    if not valid:
+        return SpanValidation(
+            ok=False,
+            reason="unordered",
+            span=parsed,
+            errors=("range must have lo < hi",),
+        )
+    if bounds_status == "unavailable":
+        errors = tuple(bounds_errors) if bounds_errors else ("source range unavailable",)
+        return SpanValidation(
+            ok=False, reason="unavailable", span=parsed, errors=errors,
+        )
+    if not per_source:
+        return SpanValidation(
+            ok=False,
+            reason="no_sources",
+            span=parsed,
+            errors=("no sources",),
+        )
+    if enabled_covers_sources(per_source, parsed):
+        return SpanValidation(ok=True, reason="ok", span=parsed, errors=())
+    errors = []
+    for key, span in per_source.items():
+        src = _finite_pair(span)
+        if src is None:
+            errors.append(f"missing source {key!r}")
+        elif src[0] > parsed[0] or src[1] < parsed[1]:
+            errors.append(f"source {key!r} does not cover requested range")
+    if not errors:
+        errors.append("requested range is not covered by current sources")
+    return SpanValidation(
+        ok=False, reason="uncovered", span=parsed, errors=tuple(errors),
+    )
+
+
+_AXIS_FACT_KEYS = (
+    "t0", "t1", "n", "source_token", "axis_revision", "axis_token",
+)
+
+
+def _coerce_axis_fact(fact):
+    """Require explicit tokens. Do not invent 0/False for omitted fields."""
+    if fact is None:
+        return None
+    if isinstance(fact, Mapping):
+        missing = [key for key in _AXIS_FACT_KEYS if key not in fact]
+        if missing:
+            raise ValueError(
+                f"axis fact must explicitly provide {missing}; "
+                "incomplete facts are not padded"
+            )
+        return (
+            float(fact["t0"]),
+            float(fact["t1"]),
+            int(fact["n"]),
+            fact["source_token"],
+            fact["axis_revision"],
+            fact["axis_token"],
+        )
+    if not isinstance(fact, (tuple, list)) or len(fact) != 6:
+        raise ValueError(
+            "axis fact must explicitly be "
+            "(t0, t1, n, source_token, axis_revision, axis_token); "
+            "incomplete (t0, t1, n) is not padded"
+        )
+    t0, t1, n, source_token, axis_revision, axis_token = fact
+    return (float(t0), float(t1), int(n), source_token, axis_revision, axis_token)
+
+
+def axis_facts_from_files(files, sources):
+    """Build signature facts from loaded FileData-like objects.
+
+    A missing ``time_axis_revision`` is recorded as ``None``, never 0.
+    ``source_instance_token`` falls back to ``id(fd)`` only when the owner
+    does not publish its own token. Axis identity uses ``id(time_array)``.
+    """
+    facts = {}
+    mapping = files if hasattr(files, "get") else {}
+    for source in sources or ():
+        key = as_channel_key(source)
+        if key is None:
+            continue
+        fd = mapping.get(key[0]) if mapping is not None else None
+        if fd is None:
+            facts[key] = None
+            continue
+        axis = getattr(fd, "time_array", None)
+        extent = axis_extent(axis)
+        if extent is None:
+            facts[key] = None
+            continue
+        n = int(np.asarray(axis).size)
+        if hasattr(fd, "source_instance_token"):
+            source_token = fd.source_instance_token
+        else:
+            source_token = id(fd)
+        if hasattr(fd, "time_axis_revision"):
+            revision = fd.time_axis_revision
+        else:
+            revision = None
+        axis_token = id(axis) if axis is not None else None
+        facts[key] = (extent[0], extent[1], n, source_token, revision, axis_token)
+    return facts
+
+
 def make_source_signature(
     section,
     *,
@@ -151,9 +288,11 @@ def make_source_signature(
     """Opaque hashable identity for one pane's compute targets.
 
     Channel keys are sorted so the same collection and roles compare equal
-    after a reorder. Axis facts are ``(t0, t1, n)`` per source — not display
-    names. FRF input/output order is directional; swapping roles changes the
-    signature. Order includes ``rpm_mode`` and ``rpm_source``.
+    after a reorder. Axis facts are
+    ``(t0, t1, n, source_token, axis_revision, axis_token)`` — not display
+    names and not ``(t0, t1, n)`` alone. FRF input/output order is
+    directional; swapping roles changes the signature. Order includes
+    ``rpm_mode`` and ``rpm_source``.
     """
     src_keys = tuple(sorted(
         as_channel_key(item) for item in (sources or ()) if item is not None
@@ -163,11 +302,7 @@ def make_source_signature(
         mapping = axis_facts.items() if hasattr(axis_facts, "items") else axis_facts
         for key, fact in mapping:
             channel = as_channel_key(key)
-            if fact is None:
-                facts_items.append((channel, None))
-            else:
-                t0, t1, n = fact[0], fact[1], fact[2]
-                facts_items.append((channel, (float(t0), float(t1), int(n))))
+            facts_items.append((channel, _coerce_axis_fact(fact)))
         facts_items.sort(key=lambda item: item[0] or ())
     roles = []
     if str(section) == "order" or rpm_mode is not None or rpm_source is not None:
@@ -420,6 +555,18 @@ class AnalysisTimeRangeController:
         notes = tuple(bounds.notes)
         errors = tuple(bounds.errors)
 
+        if draft is not None and (not draft.valid or draft.range is None):
+            return TimeRangeIntent(
+                kind="invalid",
+                range=draft.range,
+                display_range=bounds.display_range,
+                draft=draft,
+                needs_review=review,
+                errors=errors + ("invalid draft range",),
+                notes=notes,
+                source_signature=source_signature or draft.source_signature,
+            )
+
         if enabled is not None:
             parsed, valid = parse_span(enabled)
             return TimeRangeIntent(
@@ -444,16 +591,6 @@ class AnalysisTimeRangeController:
             )
 
         if draft is not None:
-            if not draft.valid or draft.range is None:
-                return TimeRangeIntent(
-                    kind="invalid",
-                    range=draft.range,
-                    display_range=bounds.display_range,
-                    draft=draft,
-                    errors=errors + ("invalid draft range",),
-                    notes=notes,
-                    source_signature=source_signature or draft.source_signature,
-                )
             if (
                 bounds.display_range is not None
                 and display_ranges_equal(draft.range, bounds.display_range)
@@ -465,13 +602,20 @@ class AnalysisTimeRangeController:
                     errors=errors,
                     source_signature=source_signature,
                 )
+            coverage = validate_requested_span(
+                bounds.per_source,
+                draft.range,
+                bounds_status=bounds.status,
+                bounds_errors=bounds.errors,
+            )
+            extra = () if coverage.ok else coverage.errors
             return TimeRangeIntent(
                 kind="draft",
                 range=draft.range,
                 display_range=bounds.display_range,
                 draft=draft,
                 notes=notes,
-                errors=errors,
+                errors=errors + extra,
                 source_signature=source_signature or draft.source_signature,
             )
 

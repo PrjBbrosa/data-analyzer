@@ -277,13 +277,15 @@ def test_target_policy_uses_a_full_width_segmented_choice_at_288px(qapp, qtbot):
         assert combo.isHidden() is True
         assert choice.isVisibleTo(panel) is True
         assert choice.height() == 32
-        # 9683ac2e made batch filter/RPM/target-policy fields share one
-        # QFormLayout label column; the auto-sized label track now starts
-        # the field column one px to the left of the pre-9683ac2e geometry
-        # (72px). 71 is QFormLayout's computed column width, not a named
-        # product constant, so it stays a literal here.
-        assert choice.mapTo(panel, choice.rect().topLeft()).x() == 71
-        assert choice.mapTo(panel, choice.rect().topRight()).x() == 275
+        # Shared QFormLayout label column. The field origin is ~71 under
+        # PingFang and can move 1px when QSS's leading Microsoft YaHei is
+        # substituted. The product contract is a full-width field column,
+        # not that exact origin.
+        field_left = choice.mapTo(panel, choice.rect().topLeft()).x()
+        field_right = choice.mapTo(panel, choice.rect().topRight()).x()
+        assert 70 <= field_left <= 76
+        assert field_right == 275
+        assert choice.width() >= 198
         assert all(
             button.width() >= button.fontMetrics().horizontalAdvance(button.text())
             for button in choice.buttons()

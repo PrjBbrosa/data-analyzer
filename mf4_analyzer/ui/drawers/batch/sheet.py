@@ -14,7 +14,9 @@ arrives via Qt and the dialog re-enables.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import dataclasses
+from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 
@@ -28,6 +30,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner, logger as _batch_logger
+from ....batch_grouping import group_render_tasks
 from ....qt_analysis_shared import amplitude_mode_is_db
 from ....ui_kit.qt_lifecycle import weak_bound
 from ....batch_preset_io import (
@@ -183,6 +186,22 @@ def _blocked_issue_reason(issue: ValidationIssue) -> str:
         "frf_pair_rules": "请检查 FRF 输入/输出配对",
     }.get(issue.field, "请检查分析参数")
 
+
+@dataclass(frozen=True)
+class GroupingCountSnapshot:
+    """One pipeline-recompute fact used by grouping cards, footer, and preview."""
+
+    status: str
+    task_count: int
+    groups_by_mode: dict[str, int]
+    images_enabled: bool
+    artifact_count: int
+    reason: str = ""
+
+
+_EMPTY_GROUP_COUNTS = {"none": 0, "source": 0, "channel": 0}
+
+
 class BatchSheet(QDialog):
     def __init__(self, parent, files, current_preset=None, prefs_store=None):
         """``prefs_store`` is the injection seam for
@@ -237,6 +256,13 @@ class BatchSheet(QDialog):
         self._guidance_engaged: bool = False
         self._guidance_ready: bool = False
         self._locate_kind: str | None = None
+        self._count_snapshot = GroupingCountSnapshot(
+            status="ready",
+            task_count=0,
+            groups_by_mode=dict(_EMPTY_GROUP_COUNTS),
+            images_enabled=True,
+            artifact_count=0,
+        )
         # Preview state is deliberately separate from run/preset state.
         self._preview_thread: BatchPreviewThread | None = None
         self._preview_result = None
@@ -909,6 +935,99 @@ class BatchSheet(QDialog):
         self._guidance_engaged = True
         self._refresh_method_guidance()
 
+    @contextmanager
+    def _suspend_user_configuration(self):
+        """Keep programmatic restore/apply off the first-user-config path."""
+        previous = self._applying_preset
+        self._applying_preset = True
+        try:
+            yield
+        finally:
+            self._applying_preset = previous
+
+    def grouping_count_snapshot(self) -> GroupingCountSnapshot:
+        return self._count_snapshot
+
+    def _empty_count_snapshot(
+        self, *, status: str, images_enabled: bool, reason: str = "",
+    ) -> GroupingCountSnapshot:
+        return GroupingCountSnapshot(
+            status=status,
+            task_count=0,
+            groups_by_mode=dict(_EMPTY_GROUP_COUNTS),
+            images_enabled=images_enabled,
+            artifact_count=0,
+            reason=reason,
+        )
+
+    def _compute_grouping_snapshot(
+        self,
+        *,
+        any_pending: bool,
+        any_failed: bool,
+        pair_error: str,
+    ) -> GroupingCountSnapshot:
+        outputs = self._output_panel.get_outputs()
+        images_enabled = bool(outputs.export_image)
+        if any_pending:
+            return self._empty_count_snapshot(
+                status="pending", images_enabled=images_enabled,
+            )
+        if pair_error:
+            return self._empty_count_snapshot(
+                status="incomplete",
+                images_enabled=images_enabled,
+                reason=str(pair_error),
+            )
+        loaded = self._input_panel._file_list.loaded_rows()
+        selected = self.selected_signals()
+        if any_failed and not loaded:
+            reasons = self._input_panel._file_list.unavailable_reasons()
+            return self._empty_count_snapshot(
+                status="failed",
+                images_enabled=images_enabled,
+                reason=reasons[0] if reasons else "解析失败",
+            )
+        if not loaded or (self.method() != "frf" and not selected):
+            return self._empty_count_snapshot(
+                status="ready", images_enabled=images_enabled,
+            )
+        try:
+            runner = self._make_runner()
+            preset = self.get_preset()
+            tasks = runner.plan_render_tasks(
+                preset,
+                source_channels=self._input_panel.source_channel_sets(),
+            )
+        except (TypeError, ValueError, OSError) as exc:
+            return self._empty_count_snapshot(
+                status="failed",
+                images_enabled=images_enabled,
+                reason=str(exc),
+            )
+        params = normalize_batch_params(dict(preset.params), preset.method)
+        groups_by_mode = {}
+        for mode in ("none", "source", "channel"):
+            mode_params = dict(params)
+            mode_params["render_group_by"] = mode
+            if mode != "none":
+                layout = str(mode_params.get("render_layout") or "overlay").lower()
+                if layout not in {"overlay", "subplot"}:
+                    mode_params["render_layout"] = "overlay"
+            groups_by_mode[mode] = len(group_render_tasks(tasks, mode_params))
+        group_by = str(params.get("render_group_by") or "none").strip().lower()
+        if group_by not in groups_by_mode:
+            group_by = "none"
+        data_count = len(tasks) if outputs.export_data else 0
+        image_count = groups_by_mode[group_by] if images_enabled else 0
+        return GroupingCountSnapshot(
+            status="ready",
+            task_count=len(tasks),
+            groups_by_mode=groups_by_mode,
+            images_enabled=images_enabled,
+            artifact_count=data_count + image_count,
+        )
+
     def _guidance_problem(
         self,
         *,
@@ -1110,9 +1229,13 @@ class BatchSheet(QDialog):
         any_failed = fl.has_probe_failed() or bool(unavailable_reasons)
         selected = self._input_panel.selected_signals()
         pair_error = self._input_panel.frf_pair_validation_message()
-        self._analysis_panel.set_grouping_counts(
-            source_count=len(fl.loaded_rows()), signal_count=len(selected),
+        snapshot = self._compute_grouping_snapshot(
+            any_pending=any_pending,
+            any_failed=any_failed,
+            pair_error=pair_error,
         )
+        self._count_snapshot = snapshot
+        self._analysis_panel.set_grouping_snapshot(snapshot)
         time_error = self._time_range_error()
         if any_pending:
             input_status = "pending"
@@ -1199,16 +1322,14 @@ class BatchSheet(QDialog):
             if export_image:
                 parts.append(outputs.image_format.upper())
             output_summary = " + ".join(parts)
-            if loaded_paths and selected and method:
-                try:
-                    preview = self._make_runner().preview_outputs(
-                        self.get_preset(), directory,
-                    )
-                except (TypeError, ValueError, OSError) as exc:
-                    self._output_panel.set_output_preview(error=str(exc))
-                else:
-                    self._output_panel.set_output_preview(preview)
-                    output_summary += f" · {preview.artifact_count} 个文件"
+            if loaded_paths and selected and method and snapshot.status == "ready":
+                self._output_panel.set_output_preview(snapshot)
+                output_summary += f" · {snapshot.artifact_count} 个文件"
+            elif (
+                loaded_paths and selected and method
+                and snapshot.status == "failed" and snapshot.reason
+            ):
+                self._output_panel.set_output_preview(error=snapshot.reason)
             else:
                 self._output_panel.set_output_preview(None)
             self.strip.set_stage(2, "ok", output_summary)
@@ -1409,10 +1530,12 @@ class BatchSheet(QDialog):
         self._analysis_panel.apply_method(method)
 
     def apply_signals(self, signals: tuple[str, ...]) -> None:
-        self._input_panel.apply_signals(signals)
+        with self._suspend_user_configuration():
+            self._input_panel.apply_signals(signals)
 
     def apply_rpm_channel(self, ch: str) -> None:
-        self._input_panel.apply_rpm_channel(ch)
+        with self._suspend_user_configuration():
+            self._input_panel.apply_rpm_channel(ch)
 
     def set_handoff_notice(self, text: str) -> None:
         """Show a main-window handoff message beside the RPM controls."""
@@ -1455,7 +1578,8 @@ class BatchSheet(QDialog):
                 })
 
     def apply_params(self, params: dict) -> None:
-        self._analysis_panel.apply_params(params)
+        with self._suspend_user_configuration():
+            self._analysis_panel.apply_params(params)
 
     def apply_outputs(self, out: BatchOutput) -> None:
         self._output_panel.apply_outputs(out)
@@ -1470,7 +1594,8 @@ class BatchSheet(QDialog):
                 )
                 if not paths and not file_ids:
                     return
-        self._input_panel.apply_files(file_ids, paths)
+        with self._suspend_user_configuration():
+            self._input_panel.apply_files(file_ids, paths)
 
     def apply_sources(self, source_ids: tuple, source_paths: tuple[str, ...]) -> None:
         paths = tuple(str(path) for path in (source_paths or ()) if path)
@@ -1482,7 +1607,8 @@ class BatchSheet(QDialog):
                 )
                 if not paths:
                     return
-        self._input_panel.apply_sources(source_ids, paths)
+        with self._suspend_user_configuration():
+            self._input_panel.apply_sources(source_ids, paths)
 
     def _on_builtin_analysis_preset(self, _key: str, patch: dict) -> None:
         # AnalysisPanel already applied its owned fields.  OUTPUT owns display

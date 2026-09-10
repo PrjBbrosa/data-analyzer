@@ -1234,6 +1234,15 @@ class MainWindow(
                 lambda params, section=_analysis_section:
                 self._on_analysis_display_params_changed(section, params)
             )
+        for _preset_section, _preset_ctx in (
+            ('fft', self.inspector.fft_ctx),
+            ('fft_time', self.inspector.fft_time_ctx),
+            ('order', self.inspector.order_ctx),
+            ('frf', self.inspector.frf_ctx),
+        ):
+            _preset_ctx.preset_committed.connect(
+                partial(self._on_preset_committed, _preset_section)
+            )
         # dB reference is display-only: changing it while in FFT mode should
         # immediately re-render without recompute. Re-evaluate _fft_render_signature
         # (which now includes db_reference) so the stale-check in _enter_fft_mode
@@ -1449,6 +1458,7 @@ class MainWindow(
             self._on_time_range_max_requested
         )
         self.inspector.top.range_edited.connect(self._on_user_range_committed)
+        self.inspector.top.range_edit_invalid.connect(self._on_user_range_invalid)
         xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
@@ -2302,14 +2312,14 @@ class MainWindow(
         return True
 
     def _on_user_range_committed(self, lo, hi):
-        if getattr(self, "_applying_analysis_view", False):
-            return
-        if getattr(self, "_applying_view", False):
-            return
-        mode = self.chart_stack.current_mode()
-        if mode not in getattr(self, "analysis_managers", {}):
-            return
-        self._commit_analysis_user_range(mode, (lo, hi))
+        self._apply_user_range_commit((lo, hi))
+
+    def _on_user_range_invalid(self):
+        top = self.inspector.top
+        query_fn = getattr(top, "last_range_edit_query", None)
+        query = query_fn() if callable(query_fn) else None
+        span = getattr(query, "span", None) if query is not None else None
+        self._apply_user_range_commit(span)
 
     def _time_data_extent(self):
         """Return ``(lo, hi)`` covering every loaded file's time base.

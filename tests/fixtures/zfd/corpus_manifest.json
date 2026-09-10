@@ -1,0 +1,601 @@
+{
+  "version": 1,
+  "parser_profile": "zfge2-single-time-f32-v1",
+  "value_kind": "float32_le_decoded_as_float64",
+  "value_abs_tol": 1e-06,
+  "time_abs_tol": 1e-12,
+  "license": {
+    "redistributable": false,
+    "binaries_in_repo": false,
+    "kind": "customer_lab_measurements",
+    "note": "The six registered files are licensed lab/customer recordings. They must stay outside git. This manifest only records identity and expected decode facts."
+  },
+  "long_customer_recording": {
+    "status": "unknown",
+    "note": "The original ~1 hour customer ZFD was not available when this manifest was written. The in-repo synthetic 3,608,000-point fixture does not substitute field confirmation and does not extend the supported profile."
+  },
+  "samples": [
+    {
+      "id": "rws-axial-000031",
+      "relative_path": "RWS/Axial_000031.zfd",
+      "sha256": "f86b4cb96e9874727a1c22165776daa523d43c57f0b3168f845da5828239d8ca",
+      "size_bytes": 81266,
+      "profile": "zfge2-single-time-f32-v1",
+      "source_kind": "zfd",
+      "source_count": 1,
+      "label_suffix": "",
+      "title": "Test run",
+      "version": "TestRunPRO Data V15549",
+      "source_filename": "Axial_000031.zfd",
+      "fs_estimated": false,
+      "renamed_channels": [
+        {
+          "original": "Fzyl 1",
+          "renamed": "Fzyl 1 [E3]"
+        }
+      ],
+      "sample_count": 3995,
+      "t0": 0.0,
+      "dt": 0.001,
+      "t_end": 3.994,
+      "channels": [
+        "Fzyl 1",
+        "Fzyl 1 [E3]",
+        "Voltage",
+        "I_Batt",
+        "Rack travel"
+      ],
+      "units": {
+        "Fzyl 1": "KN",
+        "Fzyl 1 [E3]": "KN",
+        "Voltage": "",
+        "I_Batt": "A",
+        "Rack travel": "mm"
+      },
+      "channel_markers": {
+        "Fzyl 1": "A2",
+        "Fzyl 1 [E3]": "E3",
+        "Voltage": "E4",
+        "I_Batt": "E13",
+        "Rack travel": "E19"
+      },
+      "time_name": "t",
+      "time_unit_original": "sec",
+      "time_record_index": 0,
+      "declared_record_count": 6,
+      "parsed_record_count": 6,
+      "value_evidence": {
+        "Fzyl 1": {
+          "first": -0.06567833572626114,
+          "last": 0.0,
+          "mid": 0.00800000037997961,
+          "min": -0.9980000257492065,
+          "max": 0.9980000257492065,
+          "index_1": -0.06564538180828094,
+          "index_n_minus_2": -0.0019999993965029716
+        },
+        "Fzyl 1 [E3]": {
+          "first": -0.06343850493431091,
+          "last": 0.007017798256129026,
+          "mid": -0.008891688659787178,
+          "min": -1.0225533246994019,
+          "max": 1.0263614654541016,
+          "index_1": -0.06684768199920654,
+          "index_n_minus_2": 0.009290582500398159
+        },
+        "Voltage": {
+          "first": 0.835586667060852,
+          "last": 0.7219474911689758,
+          "mid": 0.7719487547874451,
+          "min": 0.6764917969703674,
+          "max": 0.8855879306793213,
+          "index_1": 0.8401322364807129,
+          "index_n_minus_2": 0.7264930605888367
+        },
+        "I_Batt": {
+          "first": -0.014127031899988651,
+          "last": 0.024834977462887764,
+          "mid": -0.02062069997191429,
+          "min": -0.09205105155706406,
+          "max": 0.14172101020812988,
+          "index_1": -0.03360803797841072,
+          "index_n_minus_2": 0.037822313606739044
+        },
+        "Rack travel": {
+          "first": 0.0,
+          "last": -0.010900000110268593,
+          "mid": -0.004699999932199717,
+          "min": -0.06790000200271606,
+          "max": 0.032999999821186066,
+          "index_1": -9.999999747378752e-05,
+          "index_n_minus_2": -0.010700000450015068
+        }
+      }
+    },
+    {
+      "id": "rws-axial-000032",
+      "relative_path": "RWS/Axial_000032.zfd",
+      "sha256": "ee99a349603bd3a414e8ec7679ab197ce489f97742376551e53e153017d3a91a",
+      "size_bytes": 81266,
+      "profile": "zfge2-single-time-f32-v1",
+      "source_kind": "zfd",
+      "source_count": 1,
+      "label_suffix": "",
+      "title": "Test run",
+      "version": "TestRunPRO Data V15549",
+      "source_filename": "Axial_000032.zfd",
+      "fs_estimated": false,
+      "renamed_channels": [
+        {
+          "original": "Fzyl 1",
+          "renamed": "Fzyl 1 [E3]"
+        }
+      ],
+      "sample_count": 3995,
+      "t0": 0.0,
+      "dt": 0.001,
+      "t_end": 3.994,
+      "channels": [
+        "Fzyl 1",
+        "Fzyl 1 [E3]",
+        "Voltage",
+        "I_Batt",
+        "Rack travel"
+      ],
+      "units": {
+        "Fzyl 1": "KN",
+        "Fzyl 1 [E3]": "KN",
+        "Voltage": "",
+        "I_Batt": "A",
+        "Rack travel": "mm"
+      },
+      "channel_markers": {
+        "Fzyl 1": "A2",
+        "Fzyl 1 [E3]": "E3",
+        "Voltage": "E4",
+        "I_Batt": "E13",
+        "Rack travel": "E19"
+      },
+      "time_name": "t",
+      "time_unit_original": "sec",
+      "time_record_index": 0,
+      "declared_record_count": 6,
+      "parsed_record_count": 6,
+      "value_evidence": {
+        "Fzyl 1": {
+          "first": 0.012693388387560844,
+          "last": 0.0,
+          "mid": 0.00800000037997961,
+          "min": -0.9980000257492065,
+          "max": 0.9980000257492065,
+          "index_1": 0.012687020003795624,
+          "index_n_minus_2": -0.0019999993965029716
+        },
+        "Fzyl 1 [E3]": {
+          "first": 0.017245326191186905,
+          "last": -0.004346121102571487,
+          "mid": -0.0020733370911329985,
+          "min": -1.0282353162765503,
+          "max": 1.0263614654541016,
+          "index_1": 0.01497254241257906,
+          "index_n_minus_2": -0.0032097292132675648
+        },
+        "Voltage": {
+          "first": -0.032616760581731796,
+          "last": -0.06443573534488678,
+          "mid": -0.005343354772776365,
+          "min": -0.15989266335964203,
+          "max": 0.003747781040146947,
+          "index_1": -0.05079903081059456,
+          "index_n_minus_2": -0.05079903081059456
+        },
+        "I_Batt": {
+          "first": 13.869336128234863,
+          "last": -16.235313415527344,
+          "mid": 3.180757761001587,
+          "min": -18.41069221496582,
+          "max": 14.051158905029297,
+          "index_1": -18.28731346130371,
+          "index_n_minus_2": 10.362754821777344
+        },
+        "Rack travel": {
+          "first": 0.0006000000284984708,
+          "last": 0.011900000274181366,
+          "mid": 0.0031999999191612005,
+          "min": -0.05590000003576279,
+          "max": 0.04540000110864639,
+          "index_1": 0.0006000000284984708,
+          "index_n_minus_2": 0.012000000104308128
+        }
+      }
+    },
+    {
+      "id": "rws-axial-000033",
+      "relative_path": "RWS/Axial_000033.zfd",
+      "sha256": "727e5152d1a98200fdd705ab0755fa3e3956285c10b2acb0479e256e163e19c2",
+      "size_bytes": 81266,
+      "profile": "zfge2-single-time-f32-v1",
+      "source_kind": "zfd",
+      "source_count": 1,
+      "label_suffix": "",
+      "title": "Test run",
+      "version": "TestRunPRO Data V15549",
+      "source_filename": "Axial_000033.zfd",
+      "fs_estimated": false,
+      "renamed_channels": [
+        {
+          "original": "Fzyl 1",
+          "renamed": "Fzyl 1 [E3]"
+        }
+      ],
+      "sample_count": 3995,
+      "t0": 0.0,
+      "dt": 0.001,
+      "t_end": 3.994,
+      "channels": [
+        "Fzyl 1",
+        "Fzyl 1 [E3]",
+        "Voltage",
+        "I_Batt",
+        "Rack travel"
+      ],
+      "units": {
+        "Fzyl 1": "KN",
+        "Fzyl 1 [E3]": "KN",
+        "Voltage": "",
+        "I_Batt": "A",
+        "Rack travel": "mm"
+      },
+      "channel_markers": {
+        "Fzyl 1": "A2",
+        "Fzyl 1 [E3]": "E3",
+        "Voltage": "E4",
+        "I_Batt": "E13",
+        "Rack travel": "E19"
+      },
+      "time_name": "t",
+      "time_unit_original": "sec",
+      "time_record_index": 0,
+      "declared_record_count": 6,
+      "parsed_record_count": 6,
+      "value_evidence": {
+        "Fzyl 1": {
+          "first": 0.09333675354719162,
+          "last": 0.0,
+          "mid": 0.00800000037997961,
+          "min": -0.9980000257492065,
+          "max": 0.9980000257492065,
+          "index_1": 0.09328992664813995,
+          "index_n_minus_2": -0.0019999993965029716
+        },
+        "Fzyl 1 [E3]": {
+          "first": 0.0956563726067543,
+          "last": 0.0036086225882172585,
+          "mid": -0.0032097292132675648,
+          "min": -1.0293716192245483,
+          "max": 1.0172703266143799,
+          "index_1": 0.09338358789682388,
+          "index_n_minus_2": -0.00548251299187541
+        },
+        "Voltage": {
+          "first": 1.8765217065811157,
+          "last": 1.5492408275604248,
+          "mid": 1.658334493637085,
+          "min": 1.4946939945220947,
+          "max": 1.9310685396194458,
+          "index_1": 1.8810672760009766,
+          "index_n_minus_2": 1.5946965217590332
+        },
+        "I_Batt": {
+          "first": 0.08977165818214417,
+          "last": 0.11574633419513702,
+          "mid": 0.050809651613235474,
+          "min": 0.011847641319036484,
+          "max": 0.2326323688030243,
+          "index_1": 0.1482146680355072,
+          "index_n_minus_2": 0.14172101020812988
+        },
+        "Rack travel": {
+          "first": 0.00019999999494757503,
+          "last": 0.021700000390410423,
+          "mid": 0.004800000227987766,
+          "min": -0.051100000739097595,
+          "max": 0.058800000697374344,
+          "index_1": 0.00019999999494757503,
+          "index_n_minus_2": 0.021800000220537186
+        }
+      }
+    },
+    {
+      "id": "rws-axial-000034",
+      "relative_path": "RWS/Axial_000034.zfd",
+      "sha256": "b4bb1261ea90eb01e386e87c12d8247d39a3b94c280a33164a7b8b497c35c536",
+      "size_bytes": 49142,
+      "profile": "zfge2-single-time-f32-v1",
+      "source_kind": "zfd",
+      "source_count": 1,
+      "label_suffix": "",
+      "title": "Test run",
+      "version": "TestRunPRO Data V15549",
+      "source_filename": "Axial_000034.zfd",
+      "fs_estimated": false,
+      "renamed_channels": [
+        {
+          "original": "Fzyl 1",
+          "renamed": "Fzyl 1 [E3]"
+        }
+      ],
+      "sample_count": 3995,
+      "t0": 0.0,
+      "dt": 0.001,
+      "t_end": 3.994,
+      "channels": [
+        "Fzyl 1",
+        "Fzyl 1 [E3]",
+        "Rack travel"
+      ],
+      "units": {
+        "Fzyl 1": "KN",
+        "Fzyl 1 [E3]": "KN",
+        "Rack travel": "mm"
+      },
+      "channel_markers": {
+        "Fzyl 1": "A2",
+        "Fzyl 1 [E3]": "E3",
+        "Rack travel": "E19"
+      },
+      "time_name": "t",
+      "time_unit_original": "sec",
+      "time_record_index": 0,
+      "declared_record_count": 4,
+      "parsed_record_count": 4,
+      "value_evidence": {
+        "Fzyl 1": {
+          "first": 0.019508320838212967,
+          "last": 0.0,
+          "mid": 0.00800000037997961,
+          "min": -0.9980000257492065,
+          "max": 0.9980000257492065,
+          "index_1": 0.019498532637953758,
+          "index_n_minus_2": -0.0019999993965029716
+        },
+        "Fzyl 1 [E3]": {
+          "first": 0.022927286103367805,
+          "last": 0.002472230698913336,
+          "mid": -0.004346121102571487,
+          "min": -1.0214169025421143,
+          "max": 1.0297706127166748,
+          "index_1": 0.027472853660583496,
+          "index_n_minus_2": 0.004745014477521181
+        },
+        "Rack travel": {
+          "first": 0.0003000000142492354,
+          "last": 0.00430000014603138,
+          "mid": 0.0031999999191612005,
+          "min": -0.0803999975323677,
+          "max": 0.040800001472234726,
+          "index_1": 0.0003000000142492354,
+          "index_n_minus_2": 0.004399999976158142
+        }
+      }
+    },
+    {
+      "id": "rws-axial-000035",
+      "relative_path": "RWS/Axial_000035.zfd",
+      "sha256": "d79041a696822a86b7dd0424208fbf21357fc8686ce91dee9a83d9c3817986a1",
+      "size_bytes": 81266,
+      "profile": "zfge2-single-time-f32-v1",
+      "source_kind": "zfd",
+      "source_count": 1,
+      "label_suffix": "",
+      "title": "Test run",
+      "version": "TestRunPRO Data V15549",
+      "source_filename": "Axial_000035.zfd",
+      "fs_estimated": false,
+      "renamed_channels": [
+        {
+          "original": "Fzyl 1",
+          "renamed": "Fzyl 1 [E3]"
+        }
+      ],
+      "sample_count": 3995,
+      "t0": 0.0,
+      "dt": 0.001,
+      "t_end": 3.994,
+      "channels": [
+        "Fzyl 1",
+        "Fzyl 1 [E3]",
+        "Voltage",
+        "I_Batt",
+        "Rack travel"
+      ],
+      "units": {
+        "Fzyl 1": "KN",
+        "Fzyl 1 [E3]": "KN",
+        "Voltage": "",
+        "I_Batt": "A",
+        "Rack travel": "mm"
+      },
+      "channel_markers": {
+        "Fzyl 1": "A2",
+        "Fzyl 1 [E3]": "E3",
+        "Voltage": "E4",
+        "I_Batt": "E13",
+        "Rack travel": "E19"
+      },
+      "time_name": "t",
+      "time_unit_original": "sec",
+      "time_record_index": 0,
+      "declared_record_count": 6,
+      "parsed_record_count": 6,
+      "value_evidence": {
+        "Fzyl 1": {
+          "first": -0.07930819690227509,
+          "last": 0.0,
+          "mid": 0.00800000037997961,
+          "min": -0.9980000257492065,
+          "max": 0.9980000257492065,
+          "index_1": -0.07926840335130692,
+          "index_n_minus_2": -0.0019999993965029716
+        },
+        "Fzyl 1 [E3]": {
+          "first": -0.07821159809827805,
+          "last": -0.00548251299187541,
+          "mid": -0.0032097292132675648,
+          "min": -1.0225533246994019,
+          "max": 1.0218158960342407,
+          "index_1": -0.07707520574331284,
+          "index_n_minus_2": -0.006618904881179333
+        },
+        "Voltage": {
+          "first": 2.64926815032959,
+          "last": 2.235621452331543,
+          "mid": 2.4265353679656982,
+          "min": 2.181074857711792,
+          "max": 2.676541566848755,
+          "index_1": 2.667450428009033,
+          "index_n_minus_2": 2.235621452331543
+        },
+        "I_Batt": {
+          "first": 0.05730332061648369,
+          "last": 0.07029065489768982,
+          "mid": 0.08327799290418625,
+          "min": -0.027114368975162506,
+          "max": 0.2326323688030243,
+          "index_1": 0.0637969896197319,
+          "index_n_minus_2": 0.0637969896197319
+        },
+        "Rack travel": {
+          "first": 0.0003000000142492354,
+          "last": -0.0027000000700354576,
+          "mid": -0.002199999988079071,
+          "min": -0.08020000159740448,
+          "max": 0.03009999915957451,
+          "index_1": 0.0003000000142492354,
+          "index_n_minus_2": -0.0024999999441206455
+        }
+      }
+    },
+    {
+      "id": "wwt-end-of-travel-1",
+      "relative_path": "wwt/end of travel_1.zfd",
+      "sha256": "a65065c903e415459ca9c340c8afc75e99ce6de7d36dab5a6b3257ba43e69b34",
+      "size_bytes": 211198,
+      "profile": "zfge2-single-time-f32-v1",
+      "source_kind": "zfd",
+      "source_count": 1,
+      "label_suffix": "",
+      "title": "End of Travel",
+      "version": "TestRunPRO Data V15532",
+      "source_filename": "end of travel_1.zfd",
+      "fs_estimated": false,
+      "renamed_channels": [
+        {
+          "original": "Szyl 1",
+          "renamed": "Szyl 1 [E5]"
+        }
+      ],
+      "sample_count": 7487,
+      "t0": 0.0,
+      "dt": 0.001,
+      "t_end": 7.486,
+      "channels": [
+        "Szyl 1",
+        "Fcyl 1",
+        "U_Batt",
+        "Szyl 1 [E5]",
+        "I_Battary",
+        "travel",
+        "travel speed"
+      ],
+      "units": {
+        "Szyl 1": "mm",
+        "Fcyl 1": "kN",
+        "U_Batt": "V",
+        "Szyl 1 [E5]": "mm",
+        "I_Battary": "",
+        "travel": "mm",
+        "travel speed": ""
+      },
+      "channel_markers": {
+        "Szyl 1": "A2",
+        "Fcyl 1": "E3",
+        "U_Batt": "E4",
+        "Szyl 1 [E5]": "E5",
+        "I_Battary": "E7",
+        "travel": "E17",
+        "travel speed": "E18"
+      },
+      "time_name": "t",
+      "time_unit_original": "sec",
+      "time_record_index": 0,
+      "declared_record_count": 8,
+      "parsed_record_count": 8,
+      "value_evidence": {
+        "Szyl 1": {
+          "first": -83.77344512939453,
+          "last": -77.0,
+          "mid": -78.68656921386719,
+          "min": -83.77344512939453,
+          "max": 76.89698791503906,
+          "index_1": -83.77208709716797,
+          "index_n_minus_2": -76.89698791503906
+        },
+        "Fcyl 1": {
+          "first": -0.0005470538162626326,
+          "last": 0.08984480798244476,
+          "mid": 0.25504371523857117,
+          "min": -0.06912019103765488,
+          "max": 66.79940795898438,
+          "index_1": 0.008803828619420528,
+          "index_n_minus_2": 0.06802608072757721
+        },
+        "U_Batt": {
+          "first": 13.714292526245117,
+          "last": 13.681174278259277,
+          "mid": 13.702603340148926,
+          "min": 13.248695373535156,
+          "max": 17.64751625061035,
+          "index_1": 13.714292526245117,
+          "index_n_minus_2": 13.69091510772705
+        },
+        "Szyl 1 [E5]": {
+          "first": -83.76051330566406,
+          "last": -76.71018981933594,
+          "mid": -78.69599151611328,
+          "min": -83.84980010986328,
+          "max": 78.08748626708984,
+          "index_1": -83.79265594482422,
+          "index_n_minus_2": -76.59232330322266
+        },
+        "I_Battary": {
+          "first": -0.0660763755440712,
+          "last": -0.09205105155706406,
+          "mid": -0.07257004827260971,
+          "min": -0.21543075144290924,
+          "max": -0.0011396954068914056,
+          "index_1": -0.053089041262865067,
+          "index_n_minus_2": -0.05958271026611328
+        },
+        "travel": {
+          "first": 83.17699432373047,
+          "last": -40.31614303588867,
+          "mid": 78.4168930053711,
+          "min": -82.3686752319336,
+          "max": 83.17699432373047,
+          "index_1": 83.17699432373047,
+          "index_n_minus_2": -40.31614303588867
+        },
+        "travel speed": {
+          "first": 1.3777300119400024,
+          "last": 2.4971518516540527,
+          "mid": 1.3550653457641602,
+          "min": 0.35114195942878723,
+          "max": 377.2870788574219,
+          "index_1": 1.3777300119400024,
+          "index_n_minus_2": 2.4971518516540527
+        }
+      }
+    }
+  ]
+}

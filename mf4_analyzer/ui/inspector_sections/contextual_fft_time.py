@@ -101,6 +101,7 @@ class FFTTimeContextual(QWidget):
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
+    preset_committed = pyqtSignal(object)
     _AUTO_NFFT_LABEL = "自动"
     # 色图由图表选项管理；此值只为新建画布和旧参数消费者保留默认契约。
     _FIXED_CMAP = "gnuplot2"
@@ -275,6 +276,7 @@ class FFTTimeContextual(QWidget):
             default_params=self._collect_preset(),
             custom_slots=CUSTOM_PRESET_SLOTS,
         )
+        self.preset_bar.preset_committed.connect(self.preset_committed)
         self._tf_section.add_persistent(self.preset_bar)
 
         # ---- 操作 ----

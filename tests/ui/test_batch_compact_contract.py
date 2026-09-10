@@ -351,6 +351,8 @@ def test_batch_sheet_initial_size_fits_available_screen(qapp, qtbot):
 
     assert sheet.height() <= avail.height() - 2 * SCREEN_MARGIN
     assert sheet.width() <= avail.width() - 2 * SCREEN_MARGIN
+    if avail.width() < 1080 + 2 * SCREEN_MARGIN:
+        assert sheet.width() < 1080
 
 
 def test_batch_preview_dialog_fits_available_screen(qapp, qtbot):

@@ -185,10 +185,17 @@ def test_batch_sheet_frf_rules_round_trip_and_invalid_pair_maps_to_input(qtbot):
     assert "输入" in sheet.strip.cards[0].summary_label.text()
 
 
-def test_batch_sheet_narrow_frf_pair_editor_keeps_nonzero_field_geometry(qtbot):
+def test_batch_sheet_narrow_frf_pair_editor_keeps_nonzero_field_geometry(
+    qtbot, monkeypatch,
+):
     from PyQt5.QtWidgets import QSizePolicy
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    from mf4_analyzer.ui_kit import dialog_geometry
 
+    monkeypatch.setattr(
+        dialog_geometry, "resolve_available_rect",
+        lambda **kwargs: dialog_geometry.IntRect(0, 0, 1920, 1080),
+    )
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
     sheet.resize(1040, 760)

@@ -9,12 +9,30 @@ from PyQt5.QtWidgets import QMessageBox
 from mf4_analyzer.ui.main_window import MainWindow
 
 
+def _emit_spin_text_edited(spin, text=None):
+    edit = spin.lineEdit()
+    if edit is None:
+        return
+    if text is not None:
+        edit.setText(text)
+    edit.textEdited.emit(edit.text())
+
+
 def _user_commit_range(top, lo, hi):
     """Typed start/end commit. ``set_range_values`` is not a user draft."""
     top.chk_range.setChecked(False)
     top.spin_start.setValue(float(lo))
     top.spin_end.setValue(float(hi))
+    _emit_spin_text_edited(top.spin_start)
+    _emit_spin_text_edited(top.spin_end)
     return top.flush_pending_range_edit(emit=True)
+
+
+def _user_type_invalid_minus(top):
+    top.set_range_limits(-100.0, 100.0)
+    top.chk_range.setChecked(False)
+    _emit_spin_text_edited(top.spin_start, "-")
+    assert not top.spin_start.hasAcceptableInput()
 
 
 def _register_span(win, name, duration, *, n=None, channel="sig"):
@@ -611,3 +629,360 @@ def test_fft_time_job_omitted_range_uses_pane_not_shared_draft(
     assert seen[-1] == pytest.approx(
         (int(mask.sum()), float(full_t[mask][0]), float(full_t[mask][-1]))
     )
+
+
+# -- T2 coverage / multi-pane transaction (A03/A04) --------------------------
+
+def test_outside_source_draft_cannot_be_offered_as_valid_local(
+    qapp, qtbot, monkeypatch,
+):
+    """Migrated review probe + A03: 0–10 source, 20–30 draft is not local."""
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    top.set_range_limits(-100.0, 100.0)
+    _user_commit_range(top, 20.0, 30.0)
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    seen = []
+
+    def choose(lo, hi, conflicts):
+        seen.extend(conflicts)
+        return "local"
+
+    monkeypatch.setattr(win, "_ask_use_local_time_range", choose)
+    allowed = win._offer_analysis_time_range_before_compute("fft")
+    assert allowed is False, seen
+    assert state.panes[0].time_range is None
+    assert seen
+    assert all(item.get("kind") != "draft" for item in seen)
+    assert any(item.get("kind") == "uncovered_draft" for item in seen)
+    draft = win._analysis_context.time_range.draft_for("fft", state.view_id, 0)
+    assert draft is not None
+    assert draft.range == pytest.approx((20.0, 30.0))
+
+
+def test_outside_source_draft_full_and_cancel(qapp, qtbot, monkeypatch):
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    top.set_range_limits(-100.0, 100.0)
+    _user_commit_range(top, 20.0, 30.0)
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    monkeypatch.setattr(win, "_ask_use_local_time_range", lambda *a, **k: "cancel")
+    assert win._offer_analysis_time_range_before_compute("fft") is False
+    assert state.panes[0].time_range is None
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    ).range == pytest.approx((20.0, 30.0))
+
+    monkeypatch.setattr(win, "_ask_use_local_time_range", lambda *a, **k: "full")
+    assert win._offer_analysis_time_range_before_compute("fft") is True
+    assert state.panes[0].time_range is None
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    ) is None
+    assert top.range_enabled() is False
+
+
+def test_partial_overflow_draft_cannot_be_offered_as_valid_local(
+    qapp, qtbot, monkeypatch,
+):
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    top.set_range_limits(-100.0, 100.0)
+    _user_commit_range(top, 5.0, 15.0)
+    seen = []
+    monkeypatch.setattr(
+        win,
+        "_ask_use_local_time_range",
+        lambda lo, hi, conflicts=None: seen.extend(conflicts or ()) or "local",
+    )
+    assert win._offer_analysis_time_range_before_compute("fft") is False
+    assert seen
+    assert any(item.get("kind") == "uncovered_draft" for item in seen)
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    assert state.panes[0].time_range is None
+
+
+def test_fft_overlay_envelope_does_not_make_shared_local_valid(
+    qapp, qtbot, monkeypatch,
+):
+    win, fid_a = _fft_ready_win(qtbot, hi=10.0)
+    fid_b, _time = _register_span(win, "high", 10.0, n=101)
+    win.files[fid_b].time_array = np.linspace(20.0, 30.0, 101)
+    _enter_fft(win, [fid_a, fid_b])
+    _tick_fft_sources(win, [(fid_a, "sig"), (fid_b, "sig")])
+    top = win.inspector.top
+    top.set_range_limits(-100.0, 100.0)
+    _user_commit_range(top, 8.0, 22.0)
+    seen = []
+    monkeypatch.setattr(
+        win,
+        "_ask_use_local_time_range",
+        lambda lo, hi, conflicts=None: seen.extend(conflicts or ()) or "local",
+    )
+    assert win._offer_analysis_time_range_before_compute("fft") is False
+    assert any(item.get("kind") == "uncovered_draft" for item in seen)
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    assert state.panes[0].time_range is None
+
+
+def test_uncovered_draft_checkbox_does_not_enable(qapp, qtbot):
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    top.set_range_limits(-100.0, 100.0)
+    _user_commit_range(top, 20.0, 30.0)
+    top.chk_range.setChecked(True)
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    assert state.panes[0].time_range is None
+    assert top.range_enabled() is False
+    draft = win._analysis_context.time_range.draft_for("fft", state.view_id, 0)
+    assert draft is not None
+    assert draft.range == pytest.approx((20.0, 30.0))
+
+
+def test_fft_overlay_checkbox_does_not_write_uncovered_envelope(qapp, qtbot):
+    win, fid_a = _fft_ready_win(qtbot, hi=10.0)
+    fid_b, _time = _register_span(win, "high", 10.0, n=101)
+    win.files[fid_b].time_array = np.linspace(20.0, 30.0, 101)
+    _enter_fft(win, [fid_a, fid_b])
+    _tick_fft_sources(win, [(fid_a, "sig"), (fid_b, "sig")])
+    top = win.inspector.top
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    assert win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    ) is None
+    top.chk_range.setChecked(True)
+    assert state.panes[0].time_range is None
+    assert top.range_enabled() is False
+
+
+def test_two_pane_second_invalid_writes_neither(qapp, qtbot):
+    win, fid = _fft_ready_win(qtbot)
+    state, _page = _split_fft_panes(win, fid)
+    sig0 = win._analysis_source_signature_for_pane("fft", state.panes[0], state)
+    sig1 = win._analysis_source_signature_for_pane("fft", state.panes[1], state)
+    ok = win._commit_analysis_time_range_choice(
+        "fft",
+        state,
+        [
+            {
+                "pane_idx": 0,
+                "kind": "draft",
+                "range": (1.0, 2.0),
+                "display_range": (0.0, 10.0),
+                "signature": sig0,
+            },
+            {
+                "pane_idx": 1,
+                "kind": "draft",
+                "range": (8.0, 2.0),
+                "display_range": (0.0, 10.0),
+                "signature": sig1,
+            },
+        ],
+        "local",
+    )
+    assert ok is False
+    assert state.panes[0].time_range is None
+    assert state.panes[1].time_range is None
+
+
+def test_two_pane_second_uncovered_writes_neither(qapp, qtbot):
+    win, fid = _fft_ready_win(qtbot)
+    state, _page = _split_fft_panes(win, fid)
+    sig0 = win._analysis_source_signature_for_pane("fft", state.panes[0], state)
+    sig1 = win._analysis_source_signature_for_pane("fft", state.panes[1], state)
+    ok = win._commit_analysis_time_range_choice(
+        "fft",
+        state,
+        [
+            {
+                "pane_idx": 0,
+                "kind": "draft",
+                "range": (1.0, 2.0),
+                "display_range": (0.0, 10.0),
+                "signature": sig0,
+            },
+            {
+                "pane_idx": 1,
+                "kind": "draft",
+                "range": (20.0, 30.0),
+                "display_range": (0.0, 10.0),
+                "signature": sig1,
+            },
+        ],
+        "local",
+    )
+    assert ok is False
+    assert state.panes[0].time_range is None
+    assert state.panes[1].time_range is None
+
+
+def test_two_pane_offer_mixed_local_writes_neither(qapp, qtbot, monkeypatch):
+    win, fid = _fft_ready_win(qtbot)
+    state, page = _split_fft_panes(win, fid)
+    page.set_focused_index(0)
+    win._apply_analysis_time_range("fft", state)
+    _user_commit_range(win.inspector.top, 1.0, 2.0)
+    sig1 = win._analysis_source_signature_for_pane("fft", state.panes[1], state)
+    win._analysis_context.time_range.apply_user_edit(
+        "fft", state.view_id, 1, (20.0, 30.0), sig1
+    )
+    seen = []
+    monkeypatch.setattr(
+        win,
+        "_ask_use_local_time_range",
+        lambda lo, hi, conflicts=None: seen.extend(conflicts or ()) or "local",
+    )
+    assert win._offer_analysis_time_range_before_compute("fft") is False
+    assert state.panes[0].time_range is None
+    assert state.panes[1].time_range is None
+    assert {item["pane_idx"] for item in seen} == {0, 1}
+
+
+def test_two_pane_source_change_during_dialog_writes_neither(
+    qapp, qtbot, monkeypatch,
+):
+    win, fid = _fft_ready_win(qtbot)
+    other, _time = _register_span(win, "other", 12.0, n=121)
+    _enter_fft(win, [fid, other])
+    state, page = _split_fft_panes(win, fid)
+    page.set_focused_index(0)
+    win._apply_analysis_time_range("fft", state)
+    _user_commit_range(win.inspector.top, 1.0, 2.0)
+    sig1 = win._analysis_source_signature_for_pane("fft", state.panes[1], state)
+    win._analysis_context.time_range.apply_user_edit(
+        "fft", state.view_id, 1, (3.0, 4.0), sig1
+    )
+
+    def _change_then_local(*_a, **_k):
+        state.panes[1].sources = [(other, "sig")]
+        return "local"
+
+    monkeypatch.setattr(win, "_ask_use_local_time_range", _change_then_local)
+    assert win._offer_analysis_time_range_before_compute("fft") is False
+    assert state.panes[0].time_range is None
+    assert state.panes[1].time_range is None
+
+
+def test_ask_dialog_disables_local_for_uncovered_draft(qapp, qtbot, monkeypatch):
+    win, _fid = _fft_ready_win(qtbot)
+    recorded = {}
+
+    def fake_exec(box):
+        recorded["text"] = box.text()
+        recorded["enabled"] = {
+            button.text(): button.isEnabled() for button in box.buttons()
+        }
+        box.defaultButton().click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec_", fake_exec)
+    win._ask_use_local_time_range(
+        20.0,
+        30.0,
+        [
+            {
+                "pane_idx": 0,
+                "kind": "uncovered_draft",
+                "range": (20.0, 30.0),
+                "display_range": (0.0, 10.0),
+                "errors": ("source ('src', 'sig') does not cover requested range",),
+            }
+        ],
+    )
+    assert recorded["enabled"]["用选定范围"] is False
+    assert "20–30" in recorded["text"] or "20-30" in recorded["text"]
+
+
+# -- T1 migrated review probes (real user text / checkbox / capture) ---------
+
+def test_real_user_edit_updates_draft_status(qapp, qtbot):
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    _user_commit_range(top, 2.0, 4.0)
+    assert top.range_intent_status_text() == "范围已调整，尚未启用"
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    draft = win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    )
+    assert draft is not None
+    assert draft.range == pytest.approx((2.0, 4.0))
+
+
+def test_invalid_draft_checkbox_must_not_replace_it_with_full(qapp, qtbot):
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    _user_commit_range(top, 8.0, 2.0)
+    top.chk_range.setChecked(True)
+    state = win.analysis_managers["fft"].get(
+        win.analysis_managers["fft"].active
+    )
+    assert state.panes[0].time_range != (0.0, 10.0)
+    assert state.panes[0].time_range is None
+    assert top.range_enabled() is False
+    draft = win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    )
+    assert draft is not None
+    assert draft.valid is False
+    assert top.range_intent_status_text() == "范围无效，无法用于计算"
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    ("focus_out_then_compute", "compute_direct", "return_then_compute"),
+)
+def test_intermediate_invalid_text_is_not_silently_full(
+    qapp, qtbot, monkeypatch, sequence,
+):
+    win, _fid = _fft_ready_win(qtbot)
+    top = win.inspector.top
+    _user_type_invalid_minus(top)
+    if sequence == "focus_out_then_compute":
+        top.spin_start.editingFinished.emit()
+    elif sequence == "return_then_compute":
+        top.spin_start.editingFinished.emit()
+    asked = []
+    monkeypatch.setattr(
+        win,
+        "_ask_use_local_time_range",
+        lambda *a, **k: asked.append((a, k)) or "local",
+    )
+    assert win._offer_analysis_time_range_before_compute("fft") is False
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    assert state.panes[0].time_range is None
+    draft = win._analysis_context.time_range.draft_for(
+        "fft", state.view_id, 0
+    )
+    assert draft is not None
+    assert draft.valid is False
+    assert "-" in top.spin_start.lineEdit().text()
+    assert not top.spin_start.hasAcceptableInput()
+    if sequence != "compute_direct":
+        assert asked  # dialog may run; local must not proceed
+
+
+def test_enabled_full_precision_survives_no_edit_capture(qapp, qtbot):
+    win, fid = _fft_ready_win(qtbot, hi=10.00049)
+    top = win.inspector.top
+    top.chk_range.setChecked(True)
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    before = state.panes[0].time_range
+    assert before is not None
+    assert before[1] == pytest.approx(10.00049)
+    win._capture_analysis_time_range("fft", state)
+    assert state.panes[0].time_range == before
+    time_axis = np.asarray(win.files[fid].time_array, dtype=float)
+    lo, hi = state.panes[0].time_range
+    kept = time_axis[(time_axis >= lo) & (time_axis <= hi)]
+    assert kept.size
+    assert float(kept[-1]) == pytest.approx(float(time_axis[-1]))

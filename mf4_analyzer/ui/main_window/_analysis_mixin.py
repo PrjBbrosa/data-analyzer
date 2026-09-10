@@ -27,12 +27,11 @@ from ... import db_reference
 from ..compute_feedback import summarize_compute
 from .analysis_context import AnalysisContext
 from .analysis_time_range import (
-    as_channel_key,
-    axis_extent,
     display_ranges_equal,
     enabled_covers_sources,
     make_source_signature,
     parse_span,
+    validate_requested_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -576,6 +575,9 @@ class AnalysisMixin:
             ctx = getattr(self.inspector, f'{section}_ctx')
         if getattr(ctx, '_applying_preset', False):
             return None
+        bar = getattr(ctx, 'preset_bar', None)
+        if getattr(bar, 'is_transaction_open', False):
+            return None
         mgr = self.analysis_managers[section]
         if not mgr.views:
             return None
@@ -586,6 +588,61 @@ class AnalysisMixin:
         if holder is not None:
             holder.mark_user_mutation()
         return state
+
+    def _on_preset_committed(self, section, _baseline=None):
+        """Sync complete View payload after a successful user preset transaction."""
+        if getattr(self, '_applying_analysis_view', False):
+            return
+        if hasattr(self, '_analysis_context'):
+            ctx = self._analysis_ctx(section)
+            sync = self._analysis_context.sync_committed_preset
+        else:
+            ctx_name = 'fft_time_ctx' if section == 'fft_time' else f'{section}_ctx'
+            ctx = getattr(getattr(self, 'inspector', None), ctx_name, None)
+            if ctx is None:
+                return
+            from ..analysis_view_bridge import capture_params_to_state
+
+            def sync(_section, state, _ctx=ctx):
+                capture_params_to_state(_ctx, state)
+
+        mgr = (getattr(self, 'analysis_managers', None) or {}).get(section)
+        if mgr is None or not getattr(mgr, 'views', None):
+            return
+        state = mgr.get(mgr.active)
+        before_params = dict(state.params or {})
+        sync(section, state)
+        holder = getattr(self, '_project_dirty', None)
+        if holder is not None:
+            holder.mark_user_mutation()
+        params_changed = before_params != dict(state.params or {})
+        if params_changed:
+            self._mark_section_effective_facts_stale(section)
+            if section == 'order':
+                self._commit_live_analysis_sources(section)
+            dirty_frf = getattr(self, '_dirty_frf_pane', None)
+            if section == 'frf' and callable(dirty_frf):
+                for pane_idx in range(len(state.panes)):
+                    dirty_frf(state, pane_idx)
+        chart_stack = getattr(self, 'chart_stack', None)
+        current_mode = (
+            chart_stack.current_mode() if chart_stack is not None else None
+        )
+        if current_mode != section:
+            return
+        if section == 'frf' and params_changed and hasattr(ctx, 'display_params'):
+            page = self._analysis_page(section)
+            display = ctx.display_params()
+            for idx in range(min(page.pane_count(), len(state.panes))):
+                page.pane_canvas(idx).set_display_params(display)
+            return
+        if (
+            section in {'fft', 'fft_time', 'order'}
+            and self._analysis_xy_fingerprint(before_params)
+            != self._analysis_xy_fingerprint(state.params)
+        ):
+            self._clear_analysis_view_viewports(state)
+            self._render_analysis_view_from_cache(section, state)
 
     def _on_analysis_compute_params_changed(self, section, _params):
         """Record a compute edit without implicitly submitting a new job."""
@@ -894,6 +951,14 @@ class AnalysisMixin:
             and display_ranges_equal(draft.range, bounds.display_range)
         ):
             return None
+        coverage = validate_requested_span(
+            bounds.per_source,
+            draft.range,
+            bounds_status=bounds.status,
+            bounds_errors=bounds.errors,
+        )
+        if not coverage.ok:
+            return None
         return draft.range
 
     def _analysis_time_range_confirm_text(self, items, *, review_only):
@@ -923,6 +988,19 @@ class AnalysisMixin:
                         f"你调整了时间范围为 {span}，但尚未启用。"
                         "当前草稿无效，不能直接启用。"
                     )
+            elif kind == "uncovered_draft":
+                available = (
+                    f"可用范围 {_format_span_seconds(display)}"
+                    if display is not None
+                    else "当前来源可用范围"
+                )
+                detail = "；".join(
+                    str(err) for err in (item.get("errors") or ()) if err
+                )
+                extra = f"（{detail}）" if detail else ""
+                lines.append(
+                    f"{prefix}选定范围 {span} 超出{available}{extra}。"
+                )
             elif multi:
                 lines.append(f"{prefix}{span}")
             else:
@@ -1089,16 +1167,39 @@ class AnalysisMixin:
             pane = state.panes[idx]
             signature = target["signature"]
             bounds = ctrl.source_bounds_for(section, state.view_id, idx)
+            draft = ctrl.draft_for(section, state.view_id, idx)
+            if (
+                draft is not None
+                and draft.source_signature == signature
+                and (draft.range is None or not draft.valid)
+            ):
+                conflicts.append({
+                    "pane_idx": idx,
+                    "kind": "invalid_draft",
+                    "range": draft.range,
+                    "display_range": bounds.display_range,
+                    "signature": signature,
+                    "reason": "invalid_draft",
+                    "errors": ("invalid draft range",),
+                })
+                continue
             enabled = pane.time_range
             if enabled is not None:
-                parsed, valid = parse_span(enabled)
-                if not valid:
+                validation = validate_requested_span(
+                    bounds.per_source,
+                    enabled,
+                    bounds_status=bounds.status,
+                    bounds_errors=bounds.errors,
+                )
+                if validation.reason in {"unparseable", "unordered", "missing"}:
                     conflicts.append({
                         "pane_idx": idx,
                         "kind": "invalid_enabled",
-                        "range": parsed if parsed is not None else enabled,
+                        "range": validation.span if validation.span is not None else enabled,
                         "display_range": bounds.display_range,
                         "signature": signature,
+                        "reason": validation.reason,
+                        "errors": validation.errors,
                     })
                     continue
                 intent = ctrl.intent_for(
@@ -1108,33 +1209,40 @@ class AnalysisMixin:
                     enabled_range=enabled,
                     source_signature=signature,
                 )
-                if intent.needs_review or not enabled_covers_sources(
-                    bounds.per_source, parsed
-                ):
+                if intent.needs_review or not validation.ok:
                     conflicts.append({
                         "pane_idx": idx,
                         "kind": "review",
-                        "range": parsed,
+                        "range": validation.span,
                         "display_range": bounds.display_range,
                         "signature": signature,
+                        "reason": validation.reason,
+                        "errors": validation.errors or intent.errors,
                     })
                 continue
-            draft = ctrl.draft_for(section, state.view_id, idx)
             if draft is None or draft.source_signature != signature:
-                continue
-            if draft.range is None or not draft.valid:
-                conflicts.append({
-                    "pane_idx": idx,
-                    "kind": "invalid_draft",
-                    "range": draft.range,
-                    "display_range": bounds.display_range,
-                    "signature": signature,
-                })
                 continue
             if (
                 bounds.display_range is not None
                 and display_ranges_equal(draft.range, bounds.display_range)
             ):
+                continue
+            validation = validate_requested_span(
+                bounds.per_source,
+                draft.range,
+                bounds_status=bounds.status,
+                bounds_errors=bounds.errors,
+            )
+            if not validation.ok:
+                conflicts.append({
+                    "pane_idx": idx,
+                    "kind": "uncovered_draft",
+                    "range": draft.range,
+                    "display_range": bounds.display_range,
+                    "signature": signature,
+                    "reason": validation.reason,
+                    "errors": validation.errors,
+                })
                 continue
             conflicts.append({
                 "pane_idx": idx,
@@ -1142,14 +1250,17 @@ class AnalysisMixin:
                 "range": draft.range,
                 "display_range": bounds.display_range,
                 "signature": signature,
+                "reason": "ok",
+                "errors": (),
             })
         return conflicts
 
-    def _commit_analysis_time_range_choice(
+    def _freeze_analysis_time_range_candidates(
         self, section, state, conflicts, choice,
     ):
+        """Validate every target before the first pane write."""
         ctrl = self._analysis_context.time_range
-        dirty = getattr(self, "_dirty_frf_pane", None)
+        candidates = []
         for item in conflicts:
             idx = item["pane_idx"]
             pane = state.panes[idx]
@@ -1158,24 +1269,66 @@ class AnalysisMixin:
                 signature = self._analysis_source_signature_for_pane(
                     section, pane, state
                 )
-            before = pane.time_range
+            bounds = ctrl.source_bounds_for(section, state.view_id, idx)
             if choice == "local":
-                parsed, valid = parse_span(item.get("range"))
-                if not valid:
-                    return False
-                pane.time_range = parsed
+                validation = validate_requested_span(
+                    bounds.per_source,
+                    item.get("range"),
+                    bounds_status=bounds.status,
+                    bounds_errors=bounds.errors,
+                )
+                if not validation.ok:
+                    return None
+                candidates.append({
+                    "pane_idx": idx,
+                    "pane": pane,
+                    "signature": signature,
+                    "new_range": validation.span,
+                    "action": "enable",
+                })
+                continue
+            if bounds.status == "unavailable":
+                return None
+            candidates.append({
+                "pane_idx": idx,
+                "pane": pane,
+                "signature": signature,
+                "new_range": None,
+                "action": "full",
+            })
+        return candidates
+
+    def _commit_analysis_time_range_choice(
+        self, section, state, conflicts, choice,
+    ):
+        candidates = self._freeze_analysis_time_range_candidates(
+            section, state, conflicts, choice,
+        )
+        if candidates is None:
+            return False
+        ctrl = self._analysis_context.time_range
+        dirty = getattr(self, "_dirty_frf_pane", None)
+        frf_changed = []
+        for item in candidates:
+            pane = item["pane"]
+            idx = item["pane_idx"]
+            signature = item["signature"]
+            before = pane.time_range
+            if item["action"] == "enable":
+                pane.time_range = item["new_range"]
                 ctrl.note_enabled(
-                    section, state.view_id, idx, parsed, signature
+                    section, state.view_id, idx, item["new_range"], signature
                 )
             else:
                 pane.time_range = None
                 ctrl.convert_to_full(section, state.view_id, idx)
-            if (
-                section == "frf"
-                and callable(dirty)
-                and pane.time_range != before
-            ):
-                dirty(state, idx, clear_effective=True)
+            if section == "frf" and pane.time_range != before:
+                frf_changed.append(idx)
+        if section == "frf" and frf_changed and callable(dirty):
+            first = True
+            for idx in frf_changed:
+                dirty(state, idx, clear_effective=first)
+                first = False
         self._apply_analysis_time_range(section, state)
         return True
 
@@ -1259,24 +1412,12 @@ class AnalysisMixin:
         return state, idx
 
     def _axis_facts_for_sources(self, sources):
-        facts = {}
-        files = getattr(self, "files", None) or {}
-        for source in sources:
-            key = as_channel_key(source)
-            if key is None:
-                continue
-            fd = files.get(key[0]) if hasattr(files, "get") else None
-            axis = getattr(fd, "time_array", None) if fd is not None else None
-            extent = axis_extent(axis)
-            if extent is None:
-                facts[key] = None
-                continue
-            try:
-                n = int(len(axis))
-            except (TypeError, ValueError):
-                n = 0
-            facts[key] = (extent[0], extent[1], n)
-        return facts
+        ctx = getattr(self, "_analysis_context", None)
+        getter = getattr(ctx, "axis_facts_for_sources", None)
+        if callable(getter):
+            return getter(sources)
+        from .analysis_time_range import axis_facts_from_files
+        return axis_facts_from_files(getattr(self, "files", None) or {}, sources)
 
     def _analysis_source_signature_for_pane(self, section, pane, state=None):
         sources = list(getattr(pane, "sources", None) or ())
@@ -1341,7 +1482,33 @@ class AnalysisMixin:
             self._set_top_range_enabled_silently(False, mode=section)
             if intent.display_range is not None:
                 self._silent_project_range_values(*intent.display_range)
-        top.set_range_intent_status(kind)
+        top.set_range_intent_status(
+            kind,
+            needs_review=bool(getattr(intent, "needs_review", False)),
+            errors=tuple(getattr(intent, "errors", ()) or ()),
+            notes=tuple(getattr(intent, "notes", ()) or ()),
+        )
+
+    def _project_committed_time_range_intent(self, section, intent):
+        if intent is None or not self._analysis_section_uses_time_range(section):
+            return
+        state, idx = self._analysis_range_target(section)
+        pane = state.panes[idx]
+        self._project_top_from_time_range_intent(
+            section, intent, enabled=pane.time_range is not None,
+        )
+
+    def _apply_user_range_commit(self, span):
+        if getattr(self, "_applying_analysis_view", False):
+            return None
+        if getattr(self, "_applying_view", False):
+            return None
+        mode = self.chart_stack.current_mode()
+        if mode not in getattr(self, "analysis_managers", {}):
+            return None
+        intent = self._commit_analysis_user_range(mode, span)
+        self._project_committed_time_range_intent(mode, intent)
+        return intent
 
     def _commit_analysis_user_range(
         self, section, span, *, state=None, pane_idx=None,
@@ -1354,14 +1521,19 @@ class AnalysisMixin:
         signature = self._analysis_source_signature_for_pane(section, pane, state)
         ctrl = self._analysis_context.time_range
         intent = ctrl.apply_user_edit(section, view_id, idx, span, signature)
-        checked = bool(self.inspector.top.range_enabled())
-        if not (checked or pane.time_range is not None):
+        parsed, valid = parse_span(span)
+        if not valid:
             return intent
-        parsed, _valid = parse_span(span)
+        # Checkbox-on is owned by ``_enable_focused_analysis_time_range``.
+        # A just-checked box during flush must not write the pane here, or
+        # enable would then treat "no draft" as source-full and overwrite.
+        if pane.time_range is None:
+            return intent
         before = pane.time_range
-        # Keep an invalid pair visible; do not normalize it to full/None.
-        pane.time_range = parsed if parsed is not None else span
-        ctrl.note_enabled(section, view_id, idx, pane.time_range, signature)
+        pane.time_range = parsed
+        intent = ctrl.note_enabled(
+            section, view_id, idx, pane.time_range, signature,
+        )
         if section == "frf" and pane.time_range != before:
             dirty = getattr(self, "_dirty_frf_pane", None)
             if callable(dirty):
@@ -1375,12 +1547,19 @@ class AnalysisMixin:
         flush = getattr(top, "flush_pending_range_edit", None)
         if not callable(flush):
             return None
+        query_fn = getattr(top, "query_range_edit", None)
+        query = query_fn() if callable(query_fn) else None
         pending = flush(emit=False)
-        if pending is None:
-            return None
         mode = section or self.chart_stack.current_mode()
         if mode not in getattr(self, "analysis_managers", {}):
             return pending
+        if query is not None and getattr(query, "status", None) == "invalid_edit":
+            self._commit_analysis_user_range(
+                mode, query.span, state=state, pane_idx=pane_idx,
+            )
+            return None
+        if pending is None:
+            return None
         self._commit_analysis_user_range(
             mode, pending, state=state, pane_idx=pane_idx,
         )
@@ -1397,30 +1576,104 @@ class AnalysisMixin:
         self._apply_analysis_time_range(section, state)
 
     def _enable_focused_analysis_time_range(self, section, state, pane_idx):
-        """Checkbox on: apply a valid draft, otherwise the current source full."""
+        """Checkbox on: valid draft, else exact source full. Invalid stays draft."""
+        self._flush_pending_analysis_range_edit(
+            section, state=state, pane_idx=pane_idx,
+        )
         pane = state.panes[pane_idx]
         ctrl = self._analysis_context.time_range
         view_id = state.view_id
         draft = ctrl.draft_for(section, view_id, pane_idx)
+        if draft is not None and (not draft.valid or draft.range is None):
+            self._set_top_range_enabled_silently(False, mode=section)
+            intent = ctrl.intent_for(
+                section,
+                view_id,
+                pane_idx,
+                enabled_range=pane.time_range,
+                source_signature=draft.source_signature,
+            )
+            self._project_top_from_time_range_intent(
+                section, intent, enabled=False,
+            )
+            return
         if draft is not None and draft.valid and draft.range is not None:
+            bounds = ctrl.source_bounds_for(section, view_id, pane_idx)
+            coverage = validate_requested_span(
+                bounds.per_source,
+                draft.range,
+                bounds_status=bounds.status,
+                bounds_errors=bounds.errors,
+            )
+            if not coverage.ok:
+                self._set_top_range_enabled_silently(False, mode=section)
+                intent = ctrl.intent_for(
+                    section,
+                    view_id,
+                    pane_idx,
+                    enabled_range=pane.time_range,
+                    source_signature=draft.source_signature,
+                )
+                self._project_top_from_time_range_intent(
+                    section, intent, enabled=False,
+                )
+                return
             pane.time_range = draft.range
-            ctrl.note_enabled(
+            intent = ctrl.note_enabled(
                 section, view_id, pane_idx, draft.range, draft.source_signature,
             )
-            self._silent_project_range_values(*draft.range)
+            self._project_top_from_time_range_intent(
+                section, intent, enabled=True,
+            )
+            return
+        if pane.time_range is not None:
+            signature = self._analysis_source_signature_for_pane(
+                section, pane, state
+            )
+            intent = ctrl.intent_for(
+                section,
+                view_id,
+                pane_idx,
+                enabled_range=pane.time_range,
+                source_signature=signature,
+            )
+            self._project_top_from_time_range_intent(
+                section, intent, enabled=True,
+            )
             return
         bounds = ctrl.source_bounds_for(section, view_id, pane_idx)
         parsed, valid = parse_span(bounds.display_range)
         if valid:
+            coverage = validate_requested_span(
+                bounds.per_source,
+                parsed,
+                bounds_status=bounds.status,
+                bounds_errors=bounds.errors,
+            )
+            if not coverage.ok:
+                self._set_top_range_enabled_silently(False, mode=section)
+                intent = ctrl.intent_for(section, view_id, pane_idx)
+                self._project_top_from_time_range_intent(
+                    section, intent, enabled=False,
+                )
+                return
             pane.time_range = parsed
             signature = self._analysis_source_signature_for_pane(
                 section, pane, state
             )
-            ctrl.note_enabled(section, view_id, pane_idx, parsed, signature)
-            self._silent_project_range_values(*parsed)
+            intent = ctrl.note_enabled(
+                section, view_id, pane_idx, parsed, signature,
+            )
+            self._project_top_from_time_range_intent(
+                section, intent, enabled=True,
+            )
             return
         pane.time_range = None
         self._set_top_range_enabled_silently(False, mode=section)
+        intent = ctrl.intent_for(section, view_id, pane_idx)
+        self._project_top_from_time_range_intent(
+            section, intent, enabled=False,
+        )
 
     def _capture_analysis_time_range(self, section, state, pane_idx=None):
         if not self._analysis_section_uses_time_range(section):
@@ -1435,19 +1688,23 @@ class AnalysisMixin:
         pane = state.panes[idx]
         top = self.inspector.top
         if top.range_enabled():
+            # Already-enabled model keeps its exact tuple. Do not write
+            # display-rounded spin.value() back. set_range_from_span arms
+            # the checkbox without a model yet — persist that span once.
+            if pane.time_range is not None:
+                return
             parsed, valid = parse_span(top.range_values())
-            if valid:
-                pane.time_range = parsed
-            else:
-                pane.time_range = parsed if parsed is not None else top.range_values()
+            if not valid:
+                return
+            pane.time_range = parsed
             signature = self._analysis_source_signature_for_pane(
                 section, pane, state
             )
             self._analysis_context.time_range.note_enabled(
                 section, state.view_id, idx, pane.time_range, signature,
             )
-        else:
-            pane.time_range = None
+            return
+        pane.time_range = None
 
     def _set_top_range_enabled_silently(self, enabled, *, mode=None):
         top = self.inspector.top

@@ -1,12 +1,19 @@
 """Pure comparable-value contract for preset baselines (no QApplication)."""
 from mf4_analyzer.ui.inspector_sections.preset_state import (
+    PRESET_SOURCE_UNKNOWN_NOTE,
+    PRESET_SOURCE_UPDATED_NOTE,
+    PRESET_SOURCE_UNAVAILABLE_NOTE,
     apply_keep_ranges,
+    baseline_source_status,
     build_preset_baseline,
+    comparable_params_match,
     diff_preset_state,
     incompatible_amplitude_axes,
     infer_preset_baseline,
     manual_axis_conflicts,
     normalize_preset_params,
+    resolve_preset_target,
+    source_payloads_match,
     validate_preset_baseline,
     values_match,
 )
@@ -240,8 +247,220 @@ def test_validate_and_infer_baselines():
     assert inferred["slot"] == 1
     assert inferred["display_name"] == "频率"
     assert inferred["params"] == current
+    assert inferred["version"] == 1
+    assert "source_payload" not in inferred
     inferred["params"]["overlap"] = 1
     assert current["overlap"] == 50
 
     assert infer_preset_baseline("fft", current, {4: None}) is None
     assert infer_preset_baseline("fft", current, {4: {}}) is None
+
+
+def _fft_time_collect(**overrides):
+    base = dict(
+        window="hanning",
+        nfft="自动",
+        nfft_mode="auto",
+        t_win_s=1.5,
+        overlap=50,
+        amplitude_mode="Amplitude dB",
+        db_reference_mode="manual",
+        db_reference=1.0,
+        remove_mean=True,
+        cmap="viridis",
+        freq_auto=True,
+        freq_min=0.0,
+        freq_max=0.0,
+        dynamic="Auto",
+        x_auto=True,
+        x_min=0.0,
+        x_max=0.0,
+        y_auto=True,
+        y_min=0.0,
+        y_max=0.0,
+        z_auto=True,
+        z_floor=-40.0,
+        z_ceiling=0.0,
+    )
+    base.update(overrides)
+    return base
+
+
+def _order_collect(**overrides):
+    base = dict(
+        rpm_factor=1.0,
+        max_order=50,
+        order_res=0.1,
+        time_res=0.05,
+        window="hanning",
+        nfft="自动",
+        nfft_mode="auto",
+        amplitude_mode="Amplitude dB",
+        db_reference_mode="manual",
+        db_reference=1.0,
+        samples_per_rev=512,
+        x_auto=True,
+        x_min=0.0,
+        x_max=0.0,
+        y_auto=True,
+        y_min=0.0,
+        y_max=0.0,
+        z_auto=True,
+        z_floor=-50.0,
+        z_ceiling=-10.0,
+        rpm_mode="channel",
+        manual_rpm=1000.0,
+    )
+    base.update(overrides)
+    return base
+
+
+def _frf_collect(**overrides):
+    base = dict(
+        estimator="h1",
+        window="hanning",
+        t_win_s=2.0,
+        overlap=0.5,
+        nfft_mode="auto",
+        nfft=None,
+        magnitude_scale="db",
+        frequency_scale="log",
+        phase_mode="unwrapped",
+        coherence_threshold=0.8,
+        fade_low_coherence=True,
+        periodic_window=True,
+        detrend="constant",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_resolve_partial_patch_inherits_db_and_rpm():
+    fft_before = _fft_collect(db_reference_mode="manual", db_reference=2.5)
+    fft_target = resolve_preset_target("fft", fft_before, {"window": "flattop"})
+    assert fft_target["window"] == "flattop"
+    assert fft_target["db_reference_mode"] == "manual"
+    assert fft_target["db_reference"] == 2.5
+    assert fft_target["overlap"] == 50
+
+    order_before = _order_collect(rpm_mode="manual", manual_rpm=2400.0)
+    order_target = resolve_preset_target(
+        "order", order_before, {"max_order": 20, "window": "flattop"},
+    )
+    assert order_target["max_order"] == 20
+    assert order_target["rpm_mode"] == "manual"
+    assert order_target["manual_rpm"] == 2400.0
+
+
+def test_resolve_aliases_auto_nfft_overlap_axes_and_units():
+    fft_before = _fft_collect(nfft="4096", nfft_mode="fixed")
+    fft_target = resolve_preset_target(
+        "fft",
+        fft_before,
+        {"nfft": "自动", "autoscale": False, "x_min": 1.0, "x_max": 8.0, "amp_y": "Linear"},
+    )
+    assert fft_target["nfft_mode"] == "auto"
+    assert fft_target["nfft"] == "自动"
+    assert fft_target["x_auto"] is False
+    assert fft_target["autoscale"] is False
+    assert fft_target["x_min"] == 1.0
+    assert fft_target["amp_y"] == "Linear"
+
+    tf_before = _fft_time_collect()
+    tf_target = resolve_preset_target(
+        "fft_time",
+        tf_before,
+        {
+            "freq_auto": False,
+            "freq_min": 2.0,
+            "freq_max": 20.0,
+            "dynamic": "40 dB",
+            "amplitude_mode": "Amplitude",
+            "overlap": 75,
+        },
+    )
+    assert tf_target["y_auto"] is False
+    assert tf_target["y_min"] == 2.0
+    assert tf_target["y_max"] == 20.0
+    assert tf_target["z_auto"] is False
+    assert tf_target["z_floor"] == -40.0
+    assert tf_target["amplitude_mode"] == "Amplitude"
+    assert tf_target["overlap"] == 75
+    assert tf_target["db_reference_mode"] == "manual"
+
+    frf_before = _frf_collect()
+    frf_target = resolve_preset_target(
+        "frf", frf_before, {"t_win_s": 8.0, "overlap": 75, "nfft_mode": "auto"},
+    )
+    assert frf_target["t_win_s"] == 8.0
+    assert frf_target["overlap"] == 0.75
+    assert frf_target["nfft"] is None
+    assert frf_target["estimator"] == "h1"
+
+
+def test_resolve_does_not_use_unconditional_update():
+    before = _fft_collect(window="hanning", overlap=50, amp_y="dB")
+    target = resolve_preset_target(
+        "fft", before, {"window": "flattop", "mystery_knob": 9},
+    )
+    assert target["window"] == "flattop"
+    assert target["overlap"] == 50
+    assert "mystery_knob" not in target
+
+
+def test_v1_v2_and_empty_baseline_validation():
+    current = _fft_collect()
+    v1 = build_preset_baseline("fft", 2, "均衡", current)
+    assert v1["version"] == 1
+    assert "source_payload" not in v1
+    assert validate_preset_baseline(v1)["version"] == 1
+    assert "source_payload" not in validate_preset_baseline(v1)
+
+    v2 = build_preset_baseline(
+        "fft", 2, "均衡", current, source_payload={"window": "hanning"},
+    )
+    assert v2["version"] == 2
+    checked = validate_preset_baseline(v2)
+    assert checked["source_payload"] == {"window": "hanning"}
+    checked["source_payload"]["window"] = "other"
+    assert v2["source_payload"]["window"] == "hanning"
+
+    assert validate_preset_baseline({
+        "version": 2, "kind": "fft", "slot": 1, "display_name": "x",
+        "params": current,
+    }) is None
+    assert validate_preset_baseline({
+        "version": 2, "kind": "fft", "slot": 1, "display_name": "x",
+        "params": {}, "source_payload": {"window": "hanning"},
+    }) is None
+    assert validate_preset_baseline({
+        "version": 3, "kind": "fft", "slot": 1, "display_name": "x",
+        "params": current, "source_payload": {"window": "hanning"},
+    }) is None
+
+
+def test_baseline_source_status_unknown_updated_and_unavailable():
+    current = _fft_collect()
+    v1 = build_preset_baseline("fft", 1, "频率", current)
+    assert baseline_source_status(
+        v1, current_payload={"window": "hanning"}, current_name="频率",
+    ) == PRESET_SOURCE_UNKNOWN_NOTE
+    v2 = build_preset_baseline(
+        "fft", 1, "频率", current, source_payload={"window": "hanning"},
+    )
+    assert baseline_source_status(
+        v2, current_payload={"window": "hanning"}, current_name="频率",
+    ) == ""
+    assert baseline_source_status(
+        v2, current_payload={"window": "flattop"}, current_name="频率",
+    ) == PRESET_SOURCE_UPDATED_NOTE
+    assert baseline_source_status(
+        v2, current_payload={"window": "hanning"}, current_name="改名",
+    ) == PRESET_SOURCE_UPDATED_NOTE
+    assert baseline_source_status(
+        v2, slot_available=False, current_payload=None, current_name="频率",
+    ) == PRESET_SOURCE_UNAVAILABLE_NOTE
+    assert source_payloads_match(
+        "fft", {"autoscale": True}, {"x_auto": True},
+    )
+    assert comparable_params_match("fft", current, dict(current))

@@ -250,7 +250,8 @@ class FileData:
         self.channels = chs
         self.channel_units = units
         self.file_index = idx
-        self.time_array = None
+        self._time_array = None
+        self._time_axis_revision = 0
         self.fs = 1000.0
         self._time_source = 'auto'  # 'auto', 'column', 'generated'
         self.time_axis_provenance = None
@@ -279,6 +280,23 @@ class FileData:
             if self.time_array is None:
                 self.time_array = np.arange(frame_row_count(df), dtype=float) / self.fs
                 self._time_source = 'generated'
+
+    @property
+    def time_array(self):
+        return self._time_array
+
+    @time_array.setter
+    def time_array(self, value):
+        self._time_array = value
+        self._time_axis_revision = int(getattr(self, "_time_axis_revision", 0)) + 1
+
+    @property
+    def time_axis_revision(self):
+        return int(self._time_axis_revision)
+
+    @property
+    def source_instance_token(self):
+        return id(self)
 
     def rebuild_time_axis(self, fs, *, reason='manual'):
         """Rebuild ``time_array`` as ``arange(n) / fs``.

@@ -104,6 +104,7 @@ class FrfContextual(QWidget):
     pair_changed = pyqtSignal(object, object)
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
+    preset_committed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -180,6 +181,7 @@ class FrfContextual(QWidget):
             default_params=get_builtin_preset("frf", "robust").params_copy(),
             custom_slots=CUSTOM_PRESET_SLOTS,
         )
+        self.preset_bar.preset_committed.connect(self.preset_committed)
         params_layout.addWidget(self.preset_bar)
         compute_form = QFormLayout()
         _configure_form(compute_form)
@@ -815,7 +817,8 @@ class FrfContextual(QWidget):
         return self.current_params()
 
     def _apply_preset(self, params) -> None:
-        self.apply_params(params, emit_changes=True)
+        emit = not getattr(self.preset_bar, "is_transaction_open", False)
+        self.apply_params(params, emit_changes=emit)
 
     def apply_builtin_preset(self, key) -> None:
         self.apply_params(

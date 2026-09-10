@@ -146,6 +146,61 @@ def test_capture_does_not_inject_baseline_into_state_params():
     assert state.preset_baseline["kind"] == "fft"
 
 
+class _BarOwner:
+    """Contextual-shaped owner that stores baseline on PresetBar, not ctx."""
+
+    def __init__(self):
+        self._params = {"nfft": 2048, "window": "hanning", "overlap": 50}
+        self.preset_bar = _LivePresetBar()
+
+    def current_params(self):
+        return dict(self._params)
+
+    def get_params(self):
+        return self.current_params()
+
+    def apply_params(self, d):
+        self._params.update(d)
+
+
+class _LivePresetBar:
+    def __init__(self):
+        self._baseline = None
+
+    def baseline(self):
+        return None if self._baseline is None else {
+            key: (dict(value) if isinstance(value, dict) else value)
+            for key, value in self._baseline.items()
+        }
+
+    def set_baseline(self, value):
+        self._baseline = None if value is None else {
+            key: (dict(value[key]) if isinstance(value.get(key), dict) else value[key])
+            for key in value
+        }
+
+
+def test_capture_syncs_complete_params_and_bar_baseline():
+    ctx = _BarOwner()
+    ctx.preset_bar.set_baseline({
+        "version": 2,
+        "kind": "fft",
+        "slot": 4,
+        "display_name": "identical",
+        "params": {"window": "hanning", "nfft": "4096"},
+        "source_payload": {"window": "hanning"},
+    })
+    state = AnalysisViewState(name="v", tab_color="#fff")
+    state.params = {"nfft": 1024, "window": "hann"}
+    state.preset_baseline = _baseline()
+    capture_params_to_state(ctx, state)
+    assert state.params == ctx.current_params()
+    assert state.preset_baseline["slot"] == 4
+    assert state.preset_baseline["version"] == 2
+    assert state.preset_baseline["source_payload"] == {"window": "hanning"}
+    assert state.preset_baseline is not ctx.preset_bar._baseline
+
+
 class _StubOverlayCanvas:
     def __init__(self):
         self.remarks = []

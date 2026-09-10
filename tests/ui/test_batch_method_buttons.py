@@ -1015,10 +1015,9 @@ def test_method_button_labels_fit_narrow_batch_column_with_production_qss(
 def test_preset_radio_labels_fit_narrow_batch_column_with_production_qss(
     qapp, qtbot,
 ):
-    from pathlib import Path
-
     from PyQt5.QtGui import QFont, QFontMetrics
 
+    from mf4_analyzer.qt_chart_fonts import resolve_cjk_font
     from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel, _PresetCard
 
     old_stylesheet = qapp.styleSheet()
@@ -1027,15 +1026,21 @@ def test_preset_radio_labels_fit_narrow_batch_column_with_production_qss(
         panel = AnalysisPanel()
         qtbot.addWidget(panel)
         # BatchSheet enters compact mode at the supported 288 px pane width;
-        # retain the 10 pt centred title while hiding the second text level.
+        # retain the centred title while hiding the second text level.
         panel.set_compact_mode(True)
         panel.resize(288, 650)
         panel.show()
         qtbot.wait(20)
 
+        # Production QSS lists Microsoft YaHei first. Offscreen substitution of
+        # that missing family can report a 1 px wider CJK advance than the
+        # resolved chart face (PingFang SC here). A23 measures the known font,
+        # not the sandbox alias.
+        cjk = resolve_cjk_font()
+        assert cjk is not None
         for button in panel._preset_buttons.values():
             title_metrics = QFontMetrics(QFont(
-                button.font().family(), _PresetCard._TITLE_POINT_SIZE,
+                cjk.family(), _PresetCard._TITLE_POINT_SIZE,
                 QFont.Bold,
             ))
             assert button.width() >= title_metrics.horizontalAdvance(button.text()) + 16
@@ -1285,3 +1290,319 @@ def test_single_frame_fft_amplitude_ignores_window_and_overlap():
     np.testing.assert_array_equal(
         first["frequency_hz"].to_numpy(), second["frequency_hz"].to_numpy(),
     )
+
+
+def test_grouping_cards_keep_cartesian_fallback_and_accept_snapshot(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+    from mf4_analyzer.ui.drawers.batch.sheet import GroupingCountSnapshot
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_grouping_counts(source_count=2, signal_count=2)
+    cards = form._grouping_cards._buttons
+    assert cards["none"].formula_text() == "2 × 2 → 4 张"
+
+    form.set_grouping_snapshot(GroupingCountSnapshot(
+        status="ready",
+        task_count=2,
+        groups_by_mode={"none": 2, "source": 2, "channel": 2},
+        images_enabled=True,
+        artifact_count=4,
+    ))
+    assert cards["none"].formula_text() == "2 项 → 2 张"
+    assert cards["source"].formula_text() == "2 个数据源 → 2 张"
+    assert cards["channel"].formula_text() == "2 个信号 → 2 张"
+
+
+_ACTIVE_CARD_INKS = ("#0b73e7", "#1769e0", "#0f56bd")
+
+
+def _count_exact_rgb(image, hex_color: str) -> int:
+    from PyQt5.QtGui import QColor
+
+    rgb = QColor(hex_color).rgb()
+    return sum(
+        image.pixel(x, y) == rgb
+        for y in range(image.height())
+        for x in range(image.width())
+    )
+
+
+def _active_ink_counts(image) -> dict[str, int]:
+    return {color: _count_exact_rgb(image, color) for color in _ACTIVE_CARD_INKS}
+
+
+def _send_wheel(widget, qapp) -> None:
+    from PyQt5.QtCore import QPoint, QPointF, Qt
+    from PyQt5.QtGui import QWheelEvent
+
+    pos = QPoint(max(widget.width() // 2, 1), max(widget.height() // 2, 1))
+    event = QWheelEvent(
+        QPointF(pos),
+        QPointF(widget.mapToGlobal(pos)),
+        QPoint(0, 120),
+        QPoint(0, 120),
+        Qt.NoButton,
+        Qt.NoModifier,
+        Qt.NoScrollPhase,
+        False,
+    )
+    qapp.sendEvent(widget, event)
+
+
+def _show_painted_card(qtbot, qapp, card, *, width, height):
+    qtbot.addWidget(card)
+    card.setCheckable(True)
+    card.setChecked(True)
+    card.resize(width, height)
+    card.show()
+    qapp.processEvents()
+    return card
+
+
+@pytest.mark.parametrize("via", ("self", "ancestor"))
+def test_disabled_checked_preset_card_does_not_paint_active_blue(qtbot, qapp, via):
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import _PresetCard
+
+    old = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        host = QWidget()
+        qtbot.addWidget(host)
+        card = _PresetCard(host)
+        card.setText("均衡")
+        card.set_summary_text("hann · 1 s")
+        _show_painted_card(qtbot, qapp, card, width=150, height=66)
+        enabled_counts = _active_ink_counts(card.grab().toImage())
+        assert enabled_counts["#0b73e7"] > 0, enabled_counts
+
+        if via == "ancestor":
+            host.setEnabled(False)
+        else:
+            card.setEnabled(False)
+        qapp.processEvents()
+        card.repaint()
+
+        assert card.isChecked() is True
+        assert card.isEnabled() is False
+        assert card.text() == "均衡"
+        assert card.summary_text() == "hann · 1 s"
+        disabled_counts = _active_ink_counts(card.grab().toImage())
+        assert disabled_counts["#0b73e7"] == 0, disabled_counts
+        assert disabled_counts["#1769e0"] == 0, disabled_counts
+        assert disabled_counts["#0f56bd"] == 0, disabled_counts
+    finally:
+        qapp.setStyleSheet(old)
+
+
+@pytest.mark.parametrize("via", ("self", "ancestor"))
+@pytest.mark.parametrize("mode", ("none", "source", "channel"))
+def test_disabled_checked_grouping_card_mutes_title_radio_and_formula(
+    qtbot, qapp, via, mode,
+):
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import _GroupingCard
+
+    old = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        host = QWidget()
+        qtbot.addWidget(host)
+        card = _GroupingCard("每项单独\n每任务一张", mode, host)
+        card.set_counts(2, 2)
+        _show_painted_card(qtbot, qapp, card, width=220, height=140)
+        enabled_counts = _active_ink_counts(card.grab().toImage())
+        assert (
+            enabled_counts["#1769e0"] > 0 or enabled_counts["#0f56bd"] > 0
+        ), enabled_counts
+
+        if via == "ancestor":
+            host.setEnabled(False)
+        else:
+            card.setEnabled(False)
+        qapp.processEvents()
+        card.repaint()
+
+        assert card.isChecked() is True
+        assert card.isEnabled() is False
+        assert "2" in card.formula_text()
+        disabled_counts = _active_ink_counts(card.grab().toImage())
+        assert disabled_counts["#0b73e7"] == 0, disabled_counts
+        assert disabled_counts["#1769e0"] == 0, disabled_counts
+        assert disabled_counts["#0f56bd"] == 0, disabled_counts
+    finally:
+        qapp.setStyleSheet(old)
+
+
+def test_batch_sheet_parent_lock_blocks_painted_cards_without_clearing_values(
+    qtbot, qapp,
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    old = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        sheet = BatchSheet(None, files={})
+        qtbot.addWidget(sheet)
+        sheet.apply_method("time")
+        form = sheet._analysis_panel._param_form
+        form.apply_params({"render_group_by": "source", "render_layout": "subplot"})
+        grouping = form._grouping_cards._buttons["source"]
+        grouping.setChecked(True)
+        sheet.show()
+        qapp.processEvents()
+
+        method_changed = QSignalSpy(sheet._analysis_panel.methodChanged)
+        params_changed = QSignalSpy(sheet._analysis_panel.paramsChanged)
+        grouping_changed = QSignalSpy(form._grouping_cards.changed)
+        before_params = dict(form.get_params())
+        before_method = sheet.method()
+
+        sheet.lock_editing()
+        qapp.processEvents()
+        grouping.repaint()
+        locked_counts = _active_ink_counts(grouping.grab().toImage())
+        assert grouping.isEnabled() is False
+        assert locked_counts["#1769e0"] == 0, locked_counts
+        assert locked_counts["#0f56bd"] == 0, locked_counts
+
+        qtbot.mouseClick(grouping, Qt.LeftButton)
+        qtbot.mouseClick(form._grouping_cards._buttons["channel"], Qt.LeftButton)
+        qtbot.keyClick(grouping, Qt.Key_Space)
+        qtbot.keyClick(grouping, Qt.Key_Return)
+        _send_wheel(grouping, qapp)
+        qtbot.mouseClick(sheet._analysis_panel._method_group._buttons["frf"], Qt.LeftButton)
+        qapp.processEvents()
+
+        assert sheet.method() == before_method
+        assert form.get_params() == before_params
+        assert grouping.isChecked() is True
+        assert list(method_changed) == []
+        assert list(params_changed) == []
+        assert list(grouping_changed) == []
+
+        sheet.unlock_editing()
+        qapp.processEvents()
+        assert form._w_render_layout.isEnabled() is True
+        assert form.get_params()["render_group_by"] == "source"
+        assert form.get_params()["render_layout"] == "subplot"
+        assert grouping.isChecked() is True
+    finally:
+        qapp.setStyleSheet(old)
+
+
+def test_batch_sheet_parent_lock_blocks_checked_preset_card(qtbot, qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    old = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        sheet = BatchSheet(None, files={})
+        qtbot.addWidget(sheet)
+        sheet.apply_method("fft")
+        panel = sheet._analysis_panel
+        panel._preset_buttons["torque"].click()
+        card = panel._preset_buttons["torque"]
+        sheet.show()
+        qapp.processEvents()
+        assert card.isChecked() is True
+        applied = panel.preset_state_text()
+        params = dict(panel.get_params())
+        applied_spy = QSignalSpy(panel.presetApplied)
+        method_spy = QSignalSpy(panel.methodChanged)
+
+        sheet.lock_editing()
+        qapp.processEvents()
+        card.repaint()
+        counts = _active_ink_counts(card.grab().toImage())
+        assert card.isEnabled() is False
+        assert counts["#0b73e7"] == 0, counts
+
+        qtbot.mouseClick(panel._preset_buttons["vibration"], Qt.LeftButton)
+        qtbot.keyClick(card, Qt.Key_Space)
+        _send_wheel(card, qapp)
+        qapp.processEvents()
+
+        assert card.isChecked() is True
+        assert panel.preset_state_text() == applied
+        assert panel.get_params() == params
+        assert list(applied_spy) == []
+        assert list(method_spy) == []
+
+        sheet.unlock_editing()
+        qapp.processEvents()
+        assert card.isChecked() is True
+        assert panel.preset_state_text() == applied
+        assert panel.get_params() == params
+    finally:
+        qapp.setStyleSheet(old)
+
+
+@pytest.mark.parametrize("status", ("done", "cancelled", "blocked"))
+def test_run_unlock_restores_only_applicable_business_locks(qtbot, status):
+    from mf4_analyzer.batch import BatchOutput, BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.apply_method("fft")
+    form = sheet._analysis_panel._param_form
+    form._w_nfft.setValue(2048)
+    form.apply_params({
+        "avg_mode": "单帧",
+        "nfft_mode": "auto",
+        "nfft": 2048,
+        "t_win_s": 2.25,
+        "avg_overlap": 75,
+    })
+    output = sheet._output_panel
+    output.combo_amp_unit.setCurrentText("Linear")
+    sheet.apply_outputs(BatchOutput(export_data=True, export_image=False))
+    assert form._w_nfft.isEnabled() is False
+    assert form._w_t_win_s.isEnabled() is False
+    assert output.db_reference_control.isEnabled() is False
+    assert output._chk_image.isChecked() is False
+
+    sheet.lock_editing()
+    sheet._last_result = BatchRunResult(status=status)
+    sheet._on_thread_finished()
+
+    assert form._w_nfft.isEnabled() is False
+    assert form._w_t_win_s.isEnabled() is False
+    assert form._w_nfft.value() == 2048
+    assert form._w_t_win_s.value() == pytest.approx(2.25)
+    assert output.combo_amp_unit.currentText() == "Linear"
+    assert output.db_reference_control.isEnabled() is False
+    assert output._chk_image.isChecked() is False
+    assert form._w_avg_mode.currentText() == "单帧"
+
+
+def test_preview_finish_does_not_clear_linear_or_auto_locks(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.apply_method("fft")
+    form = sheet._analysis_panel._param_form
+    form._w_nfft.setValue(4096)
+    form.apply_params({"nfft_mode": "auto", "nfft": 4096})
+    sheet._output_panel.combo_amp_unit.setCurrentText("Linear")
+    sheet.lock_editing()
+    sheet._running = False
+    sheet._on_preview_thread_finished()
+    sheet.unlock_editing()
+
+    assert form._w_nfft.isEnabled() is False
+    assert form._w_nfft.value() == 4096
+    assert sheet._output_panel.combo_amp_unit.currentText() == "Linear"
+    assert sheet._output_panel.db_reference_control.isEnabled() is False

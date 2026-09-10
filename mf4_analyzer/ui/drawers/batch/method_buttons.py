@@ -29,6 +29,13 @@ from PyQt5.QtWidgets import (
 
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 from ...widgets.pill_switch import PillSwitch
+from ....ui_kit.control_style import (
+    CONTROL_COLORS,
+    PAINTED_GROUPING_RADIO,
+    PAINTED_GROUPING_TITLE,
+    painted_semantic_hex,
+    painted_state_hex,
+)
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ....signal.analysis_defaults import (
     ANALYSIS_WINDOW_CANDIDATES,
@@ -262,6 +269,9 @@ class _GroupingCard(QPushButton):
         self._title = label.splitlines()[0]
         self._source_count = 0
         self._signal_count = 0
+        self._planned_count = None
+        self._count_status = "legacy"
+        self._images_enabled = True
         self._show_explanation = True
         self.setCheckable(True)
         self.setObjectName("BatchGroupingCard")
@@ -272,6 +282,21 @@ class _GroupingCard(QPushButton):
     def set_counts(self, source_count: int, signal_count: int) -> None:
         self._source_count = max(0, int(source_count))
         self._signal_count = max(0, int(signal_count))
+        self._planned_count = None
+        self._count_status = "legacy"
+        self._images_enabled = True
+        self.update()
+
+    def apply_planned(
+        self,
+        *,
+        status: str,
+        count: int | None,
+        images_enabled: bool,
+    ) -> None:
+        self._count_status = str(status or "ready")
+        self._planned_count = None if count is None else max(0, int(count))
+        self._images_enabled = bool(images_enabled)
         self.update()
 
     def set_title(self, text: str) -> None:
@@ -286,6 +311,17 @@ class _GroupingCard(QPushButton):
         self.update()
 
     def formula_text(self) -> str:
+        if self._count_status in {"pending", "failed", "incomplete"}:
+            return "待确定"
+        if self._planned_count is not None:
+            count = self._planned_count
+            if not self._images_enabled:
+                return f"分组示意 {count} · 0 张实际图片"
+            if self._mode == "none":
+                return f"{count} 项 → {count} 张"
+            if self._mode == "source":
+                return f"{count} 个数据源 → {count} 张"
+            return f"{count} 个信号 → {count} 张"
         sources = self._source_count
         signals = self._signal_count
         if self._mode == "none":
@@ -372,6 +408,14 @@ class _GroupingCard(QPushButton):
                 path.lineTo(QPointF(x, y))
         return path
 
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange:
+            self.update()
+
+    def _category_hex(self, index: int) -> str:
+        return painted_semantic_hex(self._COLORS[index], enabled=self.isEnabled())
+
     def _draw_frame(self, painter: QPainter, rect: QRectF) -> None:
         painter.setPen(QPen(QColor("#c9d6e5"), 1))
         painter.setBrush(QColor("#ffffff"))
@@ -383,6 +427,7 @@ class _GroupingCard(QPushButton):
         )
 
     def _draw_wave_preview(self, painter: QPainter, rect: QRectF) -> None:
+        enabled = self.isEnabled()
         if self._mode == "none":
             gap = 4.0
             cell_w = (rect.width() - gap) / 2.0
@@ -394,18 +439,24 @@ class _GroupingCard(QPushButton):
                     rect.top() + row * (cell_h + gap), cell_w, cell_h,
                 )
                 self._draw_frame(painter, cell)
-                painter.setPen(QPen(QColor(self._COLORS[index]), 1.5))
+                painter.setPen(QPen(QColor(self._category_hex(index)), 1.5))
                 painter.drawPath(self._wave_path(cell.adjusted(4, 3, -4, -3), index * 0.7))
             return
 
         self._draw_frame(painter, rect)
         painter.setFont(QFont(self.font().family(), 6, QFont.Bold))
         tag = "F1" if self._mode == "source" else "S1"
-        painter.setPen(QPen(QColor("#c8dbf7"), 1))
-        painter.setBrush(QColor("#eaf2ff"))
+        painter.setPen(QPen(QColor(painted_semantic_hex("#c8dbf7", enabled=enabled)), 1))
+        painter.setBrush(QColor(painted_semantic_hex("#eaf2ff", enabled=enabled)))
         tag_rect = QRectF(rect.left() + 4, rect.top() + 4, 19, 11)
         painter.drawRoundedRect(tag_rect, 2, 2)
-        painter.setPen(QColor("#0f56bd"))
+        painter.setPen(QColor(painted_state_hex(
+            enabled=enabled,
+            checked=False,
+            accent=PAINTED_GROUPING_TITLE,
+            idle=PAINTED_GROUPING_TITLE,
+            disabled_idle=CONTROL_COLORS["CONTROL_TEXT_MUTED"],
+        )))
         painter.drawText(tag_rect, Qt.AlignCenter, tag)
 
         rows_top = rect.top() + 17
@@ -432,7 +483,7 @@ class _GroupingCard(QPushButton):
                 wave_rect = QRectF(
                     rect.left() + 18, row_top + 1, rect.width() - 23, row_height - 2,
                 )
-                painter.setPen(QPen(QColor(self._COLORS[index]), 1.45))
+                painter.setPen(QPen(QColor(self._category_hex(index)), 1.45))
                 if index == 0:
                     painter.drawPath(self._wave_path(wave_rect, 0.0))
                 elif index == 1:
@@ -443,7 +494,7 @@ class _GroupingCard(QPushButton):
 
         for index, label in enumerate(self.preview_row_labels()):
             legend_x = rect.right() - 51 + index * 17
-            painter.setBrush(QColor(self._COLORS[index]))
+            painter.setBrush(QColor(self._category_hex(index)))
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(QPointF(legend_x, rect.top() + 9), 2, 2)
             painter.setPen(QColor("#607087"))
@@ -463,7 +514,7 @@ class _GroupingCard(QPushButton):
                 rect.left() + 5, rows_top + index * row_height + 1,
                 rect.width() - 10, row_height - 2,
             )
-            pen = QPen(QColor(self._COLORS[index]), 1.45)
+            pen = QPen(QColor(self._category_hex(index)), 1.45)
             painter.setPen(pen)
             painter.drawPath(self._wave_path(wave_rect, index * 0.13))
 
@@ -477,17 +528,41 @@ class _GroupingCard(QPushButton):
             option.state |= QStyle.State_On
         self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
 
+        enabled = self.isEnabled()
+        checked = self.isChecked()
+        radio_ink = painted_state_hex(
+            enabled=enabled,
+            checked=checked,
+            accent=PAINTED_GROUPING_RADIO,
+            idle="#9caec4",
+            disabled_checked=CONTROL_COLORS["CONTROL_ACCENT_LINE_SOFT"],
+        )
+        title_ink = painted_state_hex(
+            enabled=enabled,
+            checked=checked,
+            accent=PAINTED_GROUPING_TITLE,
+            idle="#172033",
+        )
+        formula_ink = painted_state_hex(
+            enabled=enabled,
+            checked=True,
+            accent=PAINTED_GROUPING_TITLE,
+            idle=PAINTED_GROUPING_TITLE,
+            disabled_checked=CONTROL_COLORS["CONTROL_TEXT_MUTED"],
+            disabled_idle=CONTROL_COLORS["CONTROL_TEXT_MUTED"],
+        )
+
         content = QRectF(self.rect()).adjusted(8, 7, -8, -7)
         radio_rect = QRectF(content.left(), content.top() + 1, 13, 13)
         painter.setBrush(QColor("#ffffff"))
-        painter.setPen(QPen(QColor("#1769e0" if self.isChecked() else "#9caec4"), 1))
+        painter.setPen(QPen(QColor(radio_ink), 1))
         painter.drawEllipse(radio_rect)
-        if self.isChecked():
-            painter.setBrush(QColor("#1769e0"))
+        if checked:
+            painter.setBrush(QColor(radio_ink))
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(radio_rect.adjusted(3, 3, -3, -3))
 
-        painter.setPen(QColor("#0f56bd" if self.isChecked() else "#172033"))
+        painter.setPen(QColor(title_ink))
         painter.setFont(QFont(self.font().family(), 9, QFont.Bold))
         painter.drawText(
             QRectF(content.left() + 18, content.top(), content.width() - 18, 16),
@@ -499,7 +574,7 @@ class _GroupingCard(QPushButton):
         self._draw_wave_preview(
             painter, QRectF(content.left(), wave_top, content.width(), wave_height),
         )
-        painter.setPen(QColor("#0f56bd"))
+        painter.setPen(QColor(formula_ink))
         painter.setFont(QFont("Menlo", 8, QFont.Bold))
         formula_top = wave_top + wave_height + 4
         painter.drawText(
@@ -507,7 +582,7 @@ class _GroupingCard(QPushButton):
             Qt.AlignLeft | Qt.AlignVCenter, self.formula_text(),
         )
         if self._show_explanation:
-            painter.setPen(QColor("#64748b"))
+            painter.setPen(QColor(CONTROL_COLORS["CONTROL_TEXT_MUTED"]))
             painter.setFont(QFont(self.font().family(), 7))
             painter.drawText(
                 QRectF(content.left(), formula_top + 15, content.width(), 13),
@@ -559,6 +634,18 @@ class _GroupingCards(QWidget):
     def set_counts(self, source_count: int, signal_count: int) -> None:
         for button in self._buttons.values():
             button.set_counts(source_count, signal_count)
+
+    def apply_snapshot(self, snapshot) -> None:
+        groups = dict(getattr(snapshot, "groups_by_mode", {}) or {})
+        status = str(getattr(snapshot, "status", "ready") or "ready")
+        images_enabled = bool(getattr(snapshot, "images_enabled", True))
+        for mode, button in self._buttons.items():
+            count = groups.get(mode)
+            button.apply_planned(
+                status=status,
+                count=None if count is None else int(count),
+                images_enabled=images_enabled,
+            )
 
     def set_compact_mode(self, compact: bool) -> None:
         for button in self._buttons.values():
@@ -953,6 +1040,9 @@ class DynamicParamForm(QWidget):
 
     def set_grouping_counts(self, *, source_count: int, signal_count: int) -> None:
         self._grouping_cards.set_counts(source_count, signal_count)
+
+    def set_grouping_snapshot(self, snapshot) -> None:
+        self._grouping_cards.apply_snapshot(snapshot)
 
     def set_compact_mode(self, compact: bool) -> None:
         self._grouping_cards.set_compact_mode(compact)

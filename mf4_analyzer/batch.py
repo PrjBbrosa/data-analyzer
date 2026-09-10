@@ -877,30 +877,25 @@ class BatchRunner:
                 return ordinal, group, True
         return 1, groups[0], False
 
-    def preview_outputs(
-        self, preset, output_dir, *, source_channels=None,
-    ) -> BatchOutputPreview:
-        """Return UI-safe output counts without loading unresolved sources.
+    def plan_render_tasks(self, preset, *, source_channels=None):
+        """Return metadata-only render tasks shared by preview and UI cards.
 
-        ``source_channels`` is an optional ``{source key: channel names}`` map.
-        It both narrows the no-load expansion to the channels a source really
-        holds (see :meth:`seed_source_channels`) and picks a representative
-        group the user can actually see rendered; omitting it preserves the
-        historical planning result.
+        Planning never loads unresolved sources and never inspects an output
+        directory.  Callers that still need conflict detection (Preview / Run)
+        keep using :meth:`preview_outputs`.
         """
 
         self.seed_source_channels(source_channels)
-        output_issues = validate_outputs(preset.outputs)
-        if output_issues:
-            raise ValueError('; '.join(str(issue) for issue in output_issues))
         if preset.method == 'frf':
-            return self._preview_frf_outputs(
-                preset, output_dir, source_channels=source_channels,
-            )
-        tasks = list(self._expand_tasks(preset, allow_source_load=False))
+            return self._plan_frf_render_tasks(preset)
+        return self._plan_channel_render_tasks(preset)
+
+    def _plan_channel_render_tasks(self, preset):
         requested_params = normalize_batch_params(preset.params, preset.method)
         render_tasks = []
-        for source_key, channel in tasks:
+        for source_key, channel in self._expand_tasks(
+            preset, allow_source_load=False,
+        ):
             fd = self._known_file_data(source_key)
             if fd is not None:
                 identity = self._build_task_identity(
@@ -921,6 +916,60 @@ class BatchRunner:
                     ),
                 )
             render_tasks.append(RenderTask(source_key, channel, identity))
+        return tuple(render_tasks)
+
+    def _plan_frf_render_tasks(self, preset):
+        plan = self._frf_execution_plan(preset)
+        blocking = [
+            issue.message for issue in plan.issues if issue.severity == 'error'
+        ]
+        if blocking:
+            raise ValueError('; '.join(blocking))
+        return self._frf_render_tasks_from_plan(plan, preset)
+
+    def _frf_render_tasks_from_plan(self, plan, preset):
+        requested_params = normalize_batch_params(preset.params, 'frf')
+        output_settings = self._requested_output_settings(preset.outputs)
+        render_tasks = []
+        for task in plan.ordered_candidates:
+            if isinstance(task, SkippedFrfTask):
+                continue
+            fd = self._known_file_data(task.source_id)
+            identity = self._build_frf_task_identity(
+                task,
+                fd,
+                params=requested_params,
+                output_settings=output_settings,
+            )
+            render_tasks.append(RenderTask(
+                task.source_id,
+                f'{task.output_channel} / {task.input_channel}',
+                identity,
+            ))
+        return tuple(render_tasks)
+
+    def preview_outputs(
+        self, preset, output_dir, *, source_channels=None,
+    ) -> BatchOutputPreview:
+        """Return UI-safe output counts without loading unresolved sources.
+
+        ``source_channels`` is an optional ``{source key: channel names}`` map.
+        It both narrows the no-load expansion to the channels a source really
+        holds (see :meth:`seed_source_channels`) and picks a representative
+        group the user can actually see rendered; omitting it preserves the
+        historical planning result.
+        """
+
+        self.seed_source_channels(source_channels)
+        output_issues = validate_outputs(preset.outputs)
+        if output_issues:
+            raise ValueError('; '.join(str(issue) for issue in output_issues))
+        if preset.method == 'frf':
+            return self._preview_frf_outputs(
+                preset, output_dir, source_channels=source_channels,
+            )
+        render_tasks = list(self._plan_channel_render_tasks(preset))
+        requested_params = normalize_batch_params(preset.params, preset.method)
 
         required = self._required_artifacts(preset.outputs)
         output_dir = Path(output_dir)
@@ -994,7 +1043,7 @@ class BatchRunner:
                 channel_available=channel_available,
             )
         return BatchOutputPreview(
-            task_count=len(tasks),
+            task_count=len(render_tasks),
             artifact_count=data_artifact_count + image_artifact_count,
             conflict_count=conflict_count,
             image_format=str(preset.outputs.image_format).lower().lstrip('.'),
@@ -1022,23 +1071,7 @@ class BatchRunner:
         ]
         if blocking:
             raise ValueError('; '.join(blocking))
-        output_settings = self._requested_output_settings(preset.outputs)
-        render_tasks = []
-        for task in plan.ordered_candidates:
-            if isinstance(task, SkippedFrfTask):
-                continue
-            fd = self._known_file_data(task.source_id)
-            identity = self._build_frf_task_identity(
-                task,
-                fd,
-                params=requested_params,
-                output_settings=output_settings,
-            )
-            render_tasks.append(RenderTask(
-                task.source_id,
-                f'{task.output_channel} / {task.input_channel}',
-                identity,
-            ))
+        render_tasks = list(self._frf_render_tasks_from_plan(plan, preset))
 
         required = self._required_artifacts(preset.outputs)
         data_extension = required.get('data')

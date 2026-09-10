@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import json
 
+from PyQt5.QtCore import QTimer
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QFileDialog
 
@@ -219,3 +220,85 @@ def test_complete_configuration_hint_allows_preview_without_extra_click(qtbot):
     hint = sheet._method_hint.full_text()
     assert "已选时域" in hint
     assert "下一步：添加数据文件" not in hint
+
+
+def test_same_method_click_does_not_change_run_eligibility(qtbot):
+    sheet = _sheet(qtbot)
+    before = sheet.is_runnable()
+    sheet._analysis_panel._method_group._buttons["time"].click()
+    assert sheet._guidance_engaged is True
+    assert sheet.is_runnable() is before is False
+
+
+def test_handoff_preset_keeps_explicit_method_over_time_default(qtbot):
+    preset = AnalysisPreset(
+        name="current",
+        method="fft",
+        source="free_config",
+        params={"window": "hanning"},
+        outputs=BatchOutput(),
+    )
+    sheet = _sheet(qtbot, current_preset=preset)
+    assert sheet.method() == "time"
+    sheet._on_fill_from_current()
+    assert sheet.method() == "fft"
+    assert sheet._guidance_engaged is True
+
+
+def test_probe_completion_does_not_count_as_user_configuration(qtbot):
+    sheet = _sheet(qtbot)
+    fl = sheet._input_panel._file_list
+    fl._set_row_state("pending.mf4", "path_pending")
+    assert sheet._guidance_engaged is False
+
+    def _finish():
+        fl._on_probe_finished("pending.mf4", frozenset({"A", "B"}))
+
+    QTimer.singleShot(0, _finish)
+    qtbot.waitUntil(
+        lambda: any(
+            row.state == "loaded" for row in fl._rows.values()
+        ),
+        timeout=1000,
+    )
+    assert sheet._guidance_engaged is False
+    assert sheet._method_hint.full_text() == _METHOD_START_HINT
+
+
+def test_preference_restore_does_not_count_as_user_configuration(qtbot, tmp_path):
+    from PyQt5.QtCore import QSettings
+
+    from mf4_analyzer.ui.batch_settings import BatchPanelPrefs, BatchPanelPrefsStore
+
+    store = BatchPanelPrefsStore(
+        settings=QSettings(str(tmp_path / "batch-prefs.ini"), QSettings.IniFormat),
+    )
+    store.save(BatchPanelPrefs(
+        directory=str(tmp_path / "remembered-exports"),
+        outputs={"export_image": True},
+    ))
+    sheet = BatchSheet(None, files={}, prefs_store=store)
+    qtbot.addWidget(sheet)
+    qtbot.wait(20)
+    assert sheet._guidance_engaged is False
+    assert sheet._method_hint.full_text() == _METHOD_START_HINT
+    assert sheet.method() == "time"
+
+
+def test_programmatic_apply_does_not_count_as_user_configuration(qtbot):
+    sheet = _sheet(qtbot)
+    sheet.apply_params({"render_group_by": "source"})
+    sheet.apply_signals(("sig_a",))
+    assert sheet._guidance_engaged is False
+    assert sheet._method_hint.full_text() == _METHOD_START_HINT
+
+
+def test_failed_import_does_not_count_as_user_configuration(qtbot, monkeypatch, tmp_path):
+    sheet = _sheet(qtbot)
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName",
+        lambda *a, **k: (str(tmp_path / "missing.json"), ""),
+    )
+    sheet._on_import_preset()
+    assert sheet._guidance_engaged is False
+    assert sheet._method_hint.full_text() == _METHOD_START_HINT

@@ -1,6 +1,9 @@
 """PersistentTop and _AxisRangeHost widgets."""
+from functools import partial
+import math
+
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor, QPalette, QValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -35,6 +38,23 @@ from ._helpers import (
     _settings_bool,
     _AxisRangeHost,
 )
+
+
+class RangeEditQuery:
+    """Widget-local edit fact. Controller never imports this class."""
+
+    UNCHANGED = "unchanged"
+    VALID_EDIT = "valid_edit"
+    INVALID_EDIT = "invalid_edit"
+
+    __slots__ = ("status", "revision", "span", "start_text", "end_text")
+
+    def __init__(self, status, revision, span=None, start_text="", end_text=""):
+        self.status = str(status)
+        self.revision = int(revision)
+        self.span = span
+        self.start_text = "" if start_text is None else str(start_text)
+        self.end_text = "" if end_text is None else str(end_text)
 
 
 class PersistentTop(QWidget):
@@ -76,10 +96,13 @@ class PersistentTop(QWidget):
         "draft": "范围已调整，尚未启用",
         "invalid": "范围无效，无法用于计算",
         "unavailable": "当前没有可用时间范围",
+        "review": "已启用范围需要复核",
     }
     # User-committed start/end only. Programmatic set_range_values / limits /
     # checkout / set_range_from_span must not emit this.
     range_edited = pyqtSignal(float, float)
+    # Invalid / incomplete text. No forged (0, 0) / NaN payload.
+    range_edit_invalid = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -293,6 +316,13 @@ class PersistentTop(QWidget):
         self._range_checked_by_mode = {}
         self._range_silent = False
         self._range_committed = None
+        self._range_edit_revision = 0
+        self._range_projected_revision = 0
+        self._range_flushed_revision = 0
+        self._range_user_editing = False
+        self._range_start_raw = None
+        self._range_end_raw = None
+        self._range_last_query = None
 
         self._wire()
         self._xaxis_section_visible = True
@@ -341,6 +371,22 @@ class PersistentTop(QWidget):
         self.btn_range_max.clicked.connect(self.max_range_requested)
         self.spin_start.editingFinished.connect(self._on_range_editing_finished)
         self.spin_end.editingFinished.connect(self._on_range_editing_finished)
+        start_edit = self.spin_start.lineEdit()
+        end_edit = self.spin_end.lineEdit()
+        if start_edit is not None:
+            start_edit.textEdited.connect(
+                partial(self._on_range_text_edited, "start")
+            )
+        if end_edit is not None:
+            end_edit.textEdited.connect(
+                partial(self._on_range_text_edited, "end")
+            )
+        self.spin_start.valueChanged.connect(
+            partial(self._on_range_value_changed, "start")
+        )
+        self.spin_end.valueChanged.connect(
+            partial(self._on_range_value_changed, "end")
+        )
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.btn_xaxis_drop_hint_close.clicked.connect(
             self._dismiss_xaxis_drop_hint
@@ -451,16 +497,41 @@ class PersistentTop(QWidget):
             self._range_form, self._range_status_host, analysis,
         )
 
-    def set_range_intent_status(self, kind):
-        """Project reserved-height status from a TimeRangeIntent kind.
+    def set_range_intent_status(
+        self, kind, *, needs_review=False, errors=(), notes=(),
+    ):
+        """Project reserved-height status from a TimeRangeIntent.
 
         Window projection (``_project_top_from_time_range_intent``) is the
         only production caller. Switching kinds must not change row height.
+        Mixin supplies kind / review / errors / notes; this widget only
+        maps them to user-visible copy.
         """
         key = str(kind or "full")
-        text = self._RANGE_STATUS_TEXT.get(key, "")
+        extra_errors = tuple(item for item in (errors or ()) if item)
+        extra_notes = tuple(item for item in (notes or ()) if item)
+        if needs_review:
+            text = self._RANGE_STATUS_TEXT["review"]
+        elif key == "draft":
+            text = self._RANGE_STATUS_TEXT["draft"]
+        elif key in ("invalid", "unavailable"):
+            text = self._RANGE_STATUS_TEXT.get(key, "")
+        else:
+            text = extra_notes[0] if extra_notes else self._RANGE_STATUS_TEXT.get(
+                key, ""
+            )
         self.lbl_range_status.setText(text)
-        self.lbl_range_status.setToolTip(text)
+        tip_parts = []
+        if text:
+            tip_parts.append(text)
+        if needs_review or key in ("invalid", "unavailable"):
+            for item in extra_errors:
+                if item not in tip_parts:
+                    tip_parts.append(str(item))
+        for item in extra_notes:
+            if item not in tip_parts:
+                tip_parts.append(str(item))
+        self.lbl_range_status.setToolTip("\n".join(tip_parts))
 
     def range_intent_status_text(self):
         return self.lbl_range_status.text()
@@ -591,27 +662,199 @@ class PersistentTop(QWidget):
     def range_values(self):
         return (self.spin_start.value(), self.spin_end.value())
 
+    def last_range_edit_query(self):
+        return self._range_last_query
+
     def _remember_committed_range(self):
         self._range_committed = self.range_values()
 
-    def flush_pending_range_edit(self, *, emit=True):
-        """Commit in-progress line-edit text via Qt ``interpretText``.
+    def _spin_raw_text(self, spin):
+        edit = spin.lineEdit()
+        if edit is not None:
+            return edit.text()
+        return spin.cleanText()
 
-        Returns ``(lo, hi)`` when the committed pair differs from the last
-        recorded commit, else ``None``. Unchanged focus-out is silent.
-        Programmatic projection must call this only after updating the
-        remembered pair, or with ``emit=False``.
-        """
-        if not self._range_silent:
-            self.spin_start.interpretText()
-            self.spin_end.interpretText()
-        current = self.range_values()
-        if self._range_committed is not None and current == self._range_committed:
+    def _parse_spin_text(self, spin, text):
+        raw = "" if text is None else str(text)
+        state, _, _ = spin.validate(raw, 0)
+        if state != QValidator.Acceptable:
             return None
-        self._range_committed = current
-        if emit and not self._range_silent:
-            self.range_edited.emit(*current)
-        return current
+        try:
+            value = float(spin.valueFromText(raw))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return value
+
+    def _parse_range_texts(self, start_text, end_text):
+        lo = self._parse_spin_text(self.spin_start, start_text)
+        hi = self._parse_spin_text(self.spin_end, end_text)
+        if lo is None or hi is None:
+            return None
+        return (lo, hi)
+
+    def _visible_range_text_is_unacceptable(self):
+        return not (
+            self.spin_start.hasAcceptableInput()
+            and self.spin_end.hasAcceptableInput()
+        )
+
+    def _clear_user_range_edit(self, *, projected=False):
+        self._range_user_editing = False
+        self._range_start_raw = None
+        self._range_end_raw = None
+        if projected:
+            self._range_projected_revision = self._range_edit_revision
+            self._range_flushed_revision = self._range_edit_revision
+
+    def _mark_user_range_edit(self, which, text):
+        raw = "" if text is None else str(text)
+        if which == "start":
+            self._range_start_raw = raw
+        else:
+            self._range_end_raw = raw
+        if not self._range_user_editing:
+            self._range_user_editing = True
+            self._range_edit_revision += 1
+
+    def _on_range_text_edited(self, which, text):
+        if self._range_silent:
+            return
+        self._mark_user_range_edit(which, text)
+
+    def _on_range_value_changed(self, which, _value):
+        if self._range_silent or self._range_user_editing:
+            return
+        spin = self.spin_start if which == "start" else self.spin_end
+        self._mark_user_range_edit(which, self._spin_raw_text(spin))
+
+    def _adopt_untracked_invalid_visible_text(self):
+        """Treat currently unacceptable text as an edit if nothing tracked it.
+
+        ``setText('-')`` does not emit ``textEdited``. Compute still must not
+        interpret that Intermediate state as the last valid value.
+        """
+        if self._range_silent or self._range_user_editing:
+            return
+        if not self._visible_range_text_is_unacceptable():
+            return
+        if (
+            self._range_last_query is not None
+            and self._range_last_query.status == RangeEditQuery.INVALID_EDIT
+            and self._range_flushed_revision == self._range_edit_revision
+        ):
+            return
+        self._range_user_editing = True
+        self._range_edit_revision += 1
+        if not self.spin_start.hasAcceptableInput():
+            self._range_start_raw = self._spin_raw_text(self.spin_start)
+        if not self.spin_end.hasAcceptableInput():
+            self._range_end_raw = self._spin_raw_text(self.spin_end)
+
+    def query_range_edit(self):
+        """Return unchanged / valid_edit / invalid_edit plus revision."""
+        self._adopt_untracked_invalid_visible_text()
+        start_text = (
+            self._range_start_raw
+            if self._range_start_raw is not None
+            else self._spin_raw_text(self.spin_start)
+        )
+        end_text = (
+            self._range_end_raw
+            if self._range_end_raw is not None
+            else self._spin_raw_text(self.spin_end)
+        )
+        if not self._range_user_editing:
+            return RangeEditQuery(
+                RangeEditQuery.UNCHANGED,
+                self._range_edit_revision,
+                None,
+                start_text,
+                end_text,
+            )
+        pair = self._parse_range_texts(start_text, end_text)
+        if pair is None:
+            return RangeEditQuery(
+                RangeEditQuery.INVALID_EDIT,
+                self._range_edit_revision,
+                None,
+                start_text,
+                end_text,
+            )
+        if pair[1] <= pair[0]:
+            return RangeEditQuery(
+                RangeEditQuery.INVALID_EDIT,
+                self._range_edit_revision,
+                pair,
+                start_text,
+                end_text,
+            )
+        return RangeEditQuery(
+            RangeEditQuery.VALID_EDIT,
+            self._range_edit_revision,
+            pair,
+            start_text,
+            end_text,
+        )
+
+    def _restore_raw_range_texts(self, start_text, end_text):
+        self._range_silent = True
+        try:
+            start_edit = self.spin_start.lineEdit()
+            end_edit = self.spin_end.lineEdit()
+            if start_edit is not None and start_text is not None:
+                if start_edit.text() != start_text:
+                    start_edit.setText(start_text)
+            if end_edit is not None and end_text is not None:
+                if end_edit.text() != end_text:
+                    end_edit.setText(end_text)
+        finally:
+            self._range_silent = False
+
+    def flush_pending_range_edit(self, *, emit=True):
+        """Commit a real uncommitted edit once per revision.
+
+        Does not call ``interpretText()`` first. Invalid / Intermediate text
+        stays an invalid edit; it is never replaced by the fallback
+        ``value()``. Unchanged focus-out is silent. Same revision is
+        idempotent.
+        """
+        if self._range_silent:
+            return None
+        query = self.query_range_edit()
+        if query.status == RangeEditQuery.UNCHANGED:
+            return None
+        if (
+            query.revision == self._range_flushed_revision
+            and not self._range_user_editing
+        ):
+            return None
+        self._range_flushed_revision = query.revision
+        self._range_last_query = query
+        self._range_user_editing = False
+        if query.status == RangeEditQuery.INVALID_EDIT:
+            self._restore_raw_range_texts(query.start_text, query.end_text)
+            if emit:
+                self.range_edit_invalid.emit()
+            return None
+        lo, hi = query.span
+        self._range_silent = True
+        old_start = self.spin_start.blockSignals(True)
+        old_end = self.spin_end.blockSignals(True)
+        try:
+            self.spin_start.setValue(float(lo))
+            self.spin_end.setValue(float(hi))
+        finally:
+            self.spin_start.blockSignals(old_start)
+            self.spin_end.blockSignals(old_end)
+            self._remember_committed_range()
+            self._range_silent = False
+        self._range_start_raw = None
+        self._range_end_raw = None
+        if emit:
+            self.range_edited.emit(float(lo), float(hi))
+        return (float(lo), float(hi))
 
     def _on_range_editing_finished(self):
         if self._range_silent:
@@ -629,6 +872,7 @@ class PersistentTop(QWidget):
             self.spin_start.blockSignals(old_start)
             self.spin_end.blockSignals(old_end)
             self._remember_committed_range()
+            self._clear_user_range_edit(projected=True)
             self._range_silent = False
 
     def set_range_from_span(self, xmin, xmax):
@@ -685,6 +929,7 @@ class PersistentTop(QWidget):
                     sp.blockSignals(old)
         finally:
             self._remember_committed_range()
+            self._clear_user_range_edit(projected=True)
             self._range_silent = False
 
     def tick_density(self):

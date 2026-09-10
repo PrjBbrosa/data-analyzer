@@ -978,6 +978,7 @@ def test_available_policy_dry_run_uses_source_ids_without_cartesian_missing_pair
     fl = sheet._input_panel._file_list
     fl.add_loaded_file("s1", "same.hdf", frozenset({"A", "B"}))
     fl.add_loaded_file("s2", "same.hdf", frozenset({"A", "C"}))
+    sheet.apply_method("fft")
     sheet._input_panel.apply_target_policy("available_per_source")
     sheet.apply_signals(("B", "C"))
 
@@ -1000,6 +1001,7 @@ def test_common_policy_dry_run_only_lists_true_intersection(qtbot):
     fl = sheet._input_panel._file_list
     fl.add_loaded_file("s1", "one.hdf", frozenset({"A", "B"}))
     fl.add_loaded_file("s2", "two.hdf", frozenset({"A", "C"}))
+    sheet.apply_method("fft")
     sheet.apply_signals(("A", "B"))
 
     assert sheet.signals_marked_unavailable() == ("B",)
@@ -1048,6 +1050,7 @@ def test_builtin_analysis_preset_does_not_change_scope_output_or_db(qtbot, tmp_p
     sheet._input_panel._file_list.add_loaded_file(
         "s1", "a.csv", frozenset({"sig"}),
     )
+    sheet.apply_method("fft")
     sheet.apply_signals(("sig",))
     sheet._output_panel.apply_directory(str(tmp_path / "out"))
     sheet._output_panel.apply_reference_params({
@@ -1088,10 +1091,16 @@ def test_batch_columns_fit_supported_narrow_widths(qtbot, width):
         panel.close()
 
 
-def test_batch_sheet_respects_1080x760_with_production_qss(qapp, qtbot):
-    from pathlib import Path
-
+def test_batch_sheet_respects_1080x760_with_production_qss(
+    qapp, qtbot, monkeypatch,
+):
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    from mf4_analyzer.ui_kit import dialog_geometry
+
+    monkeypatch.setattr(
+        dialog_geometry, "resolve_available_rect",
+        lambda **kwargs: dialog_geometry.IntRect(0, 0, 1920, 1080),
+    )
 
     old_stylesheet = qapp.styleSheet()
     try:
@@ -1513,7 +1522,8 @@ def test_sheet_does_not_restore_signals_or_files(qtbot, tmp_path):
     assert sheet.file_paths() == ()
     assert sheet.source_ids() == ()
     assert sheet.rpm_channel() == ""
-    assert sheet.method() == "fft"
+    assert sheet.method() == "time"
+    assert sheet.method() != "order_time"
     assert sheet._output_panel.axis_params()["x_auto"] is True
     assert "motor_speed" not in sheet._input_panel.selected_signals()
 
@@ -1648,6 +1658,7 @@ def test_restore_defaults_keeps_an_applied_analysis_card(qtbot, tmp_path):
 
     sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
     qtbot.addWidget(sheet)
+    sheet.apply_method("fft")
     sheet._analysis_panel._preset_buttons["torque"].click()
     assert sheet._analysis_panel._preset_buttons["torque"].isChecked()
 

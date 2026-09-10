@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from PyQt5.QtCore import QRectF, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter
 from PyQt5.QtWidgets import (
     QButtonGroup, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 
 from ....analysis_presets import list_builtin_presets
 from ....list_text import split_list_text
+from ....ui_kit.control_style import PAINTED_CARD_ACCENT, painted_state_hex
 from ...analysis_preset_slots import preset_slot_bus, read_slot
 from .method_buttons import DynamicParamForm, MethodButtonGroup
 from .chart_statistics_panel import ChartStatisticsPanel
@@ -78,6 +79,11 @@ class _PresetCard(QPushButton):
         self.updateGeometry()
         self.update()
 
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange:
+            self.update()
+
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -88,7 +94,14 @@ class _PresetCard(QPushButton):
             option.state |= QStyle.State_On
         self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
         rect = QRectF(self.rect()).adjusted(8, 5, -8, -5)
-        painter.setPen(QColor("#0b73e7" if self.isChecked() else "#111827"))
+        enabled = self.isEnabled()
+        checked = self.isChecked()
+        painter.setPen(QColor(painted_state_hex(
+            enabled=enabled,
+            checked=checked,
+            accent=PAINTED_CARD_ACCENT,
+            idle="#111827",
+        )))
         painter.setFont(QFont(
             self.font().family(), self._TITLE_POINT_SIZE, QFont.Bold,
         ))
@@ -98,7 +111,12 @@ class _PresetCard(QPushButton):
             Qt.AlignHCenter | Qt.AlignVCenter, self.text(),
         )
         if self._summary_visible:
-            painter.setPen(QColor("#506d93" if self.isChecked() else "#64748b"))
+            painter.setPen(QColor(painted_state_hex(
+                enabled=enabled,
+                checked=checked,
+                accent="#506d93",
+                idle="#64748b",
+            )))
             painter.setFont(QFont(self.font().family(), self._SUMMARY_POINT_SIZE))
             painter.drawText(
                 QRectF(rect.left(), rect.top() + 24, rect.width(), rect.height() - 24),
@@ -163,6 +181,7 @@ class AnalysisPanel(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
+        self._preset_row = row
         self._preset_group = QButtonGroup(self)
         self._preset_group.setExclusive(True)
         self._preset_buttons: dict[str, _PresetCard] = {}
@@ -457,9 +476,17 @@ class AnalysisPanel(QWidget):
             source_count=source_count, signal_count=signal_count,
         )
 
+    def set_grouping_snapshot(self, snapshot) -> None:
+        self._param_form.set_grouping_snapshot(snapshot)
+
     def set_compact_mode(self, compact: bool) -> None:
         side = 12 if compact else 18
         self._outer_layout.setContentsMargins(side, 14, side, 18)
+        # 288 px compact: 12+12 margins and three 6 px gaps leave 246 px, so
+        # two cards get 61 px. "自定义" at 11 pt then sits on a 1 px knife
+        # edge. One less gap pixel gives every card ≥62 px without shrinking
+        # the title.
+        self._preset_row.setSpacing(5 if compact else 6)
         for button in self._preset_buttons.values():
             button.set_compact_mode(compact)
         self._param_form.set_compact_mode(compact)

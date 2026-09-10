@@ -1,7 +1,6 @@
 """ZFGE2 .zfd 解析：官方布局 fixture、长记录、结构失败与时基合同。"""
 from __future__ import annotations
 
-import json
 import math
 import struct
 from pathlib import Path
@@ -11,10 +10,19 @@ import pytest
 
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.io.loader import DataLoader
+from tests.zfd_corpus import (
+    CORPUS_ROOT_ENV,
+    REQUIRE_CORPUS_ENV,
+    CorpusSupplyError,
+    read_zfd_corpus_manifest,
+    resolve_zfd_corpus_samples,
+)
 from tests.zfd_fixtures import (
     FAKE_MARKER,
     characteristic_values,
     default_header_lines,
+    expected_f32_values,
+    expected_time_axis,
     pack_float32_record,
     pack_header,
     pack_time_record,
@@ -24,31 +32,22 @@ from tests.zfd_fixtures import (
     write_zfd_duplicate_names,
 )
 
-_ROOT = Path(__file__).resolve().parent.parent
-SAMPLE = _ROOT / "testdoc" / "wwt" / "end of travel_1.zfd"
-_SAMPLES_JSON = _ROOT / ".state" / "zfd-robustness" / "samples.json"
-
 # Re-export for existing callers (io notices / project session).
 _write_minimal_zfd = write_minimal_zfd
 _write_zfd_duplicate_names = write_zfd_duplicate_names
 
 
-def _sample():
-    if not SAMPLE.exists():
-        pytest.skip(f"sample not found: {SAMPLE}")
-    return str(SAMPLE)
+def _zfd_corpus_samples():
+    """Optional real samples: skip without corpus, fail in required mode."""
+    try:
+        return resolve_zfd_corpus_samples()
+    except CorpusSupplyError as exc:
+        message = str(exc)
+        optional = exc.optional
+    if optional:
+        pytest.skip(message)
+    pytest.fail(message)
 
-
-# marker 名字/单位 -> (first, min, max)
-_ANCHORS = {
-    "Szyl 1": ("mm", -83.773, -83.773, 76.897),      # A2（首列保原名）
-    "Fcyl 1": ("kN", -0.00055, -0.069, 66.799),
-    "U_Batt": ("V", 13.714, 13.249, 17.648),
-    "Szyl 1 [E5]": ("mm", -83.761, -83.85, 78.087),  # E5 消歧列
-    "I_Battary": ("", -0.066, -0.215, -0.0011),
-    "travel": ("mm", 83.177, -82.369, 83.177),
-    "travel speed": ("", 1.378, 0.351, 377.29),
-}
 
 _A1_COUNTS = (65535, 65536, 65537, 131072)
 _HOUR_COUNT = 3_608_000
@@ -77,74 +76,42 @@ def _filedata_from_group(path, group):
 
 
 def test_zfd_fixtures_do_not_import_product_parser():
-    text = Path(__file__).with_name("zfd_fixtures.py").read_text(encoding="utf-8")
-    assert "import mf4_analyzer" not in text
-    assert "from mf4_analyzer" not in text
-    assert "import tools.matlab_ports" not in text
-    assert "from tools.matlab_ports" not in text
-    assert "load_zfd" not in text
+    for name in ("zfd_fixtures.py", "zfd_corpus.py"):
+        text = Path(__file__).with_name(name).read_text(encoding="utf-8")
+        assert "import mf4_analyzer" not in text
+        assert "from mf4_analyzer" not in text
+        assert "import tools.matlab_ports" not in text
+        assert "from tools.matlab_ports" not in text
+        assert "load_zfd" not in text
 
 
-def test_zfd_single_group_seven_channels_anchors():
-    groups = DataLoader.load_zfd(_sample())
-    assert len(groups) == 1
-    g = groups[0]
-    assert g["label_suffix"] == ""
-
-    # 时间轴 1000 Hz / 7487 点
-    t = g["data"]["Time"].to_numpy()
-    assert len(t) == 7487
-    assert t[0] == pytest.approx(0.0)
-    assert t[1] - t[0] == pytest.approx(0.001)     # fs = 1000 Hz
-
-    signal_cols = [c for c in g["channels"] if c != "Time"]
-    assert len(signal_cols) == 7                    # 正好 7 个通道
-
-    # 两个 Szyl 1 都在（消歧后不同列名）
-    assert "Szyl 1" in g["channels"]
-    assert "Szyl 1 [E5]" in g["channels"]
-
-    for col, (unit, first, vmin, vmax) in _ANCHORS.items():
-        assert col in g["channels"], col
-        v = g["data"][col].to_numpy()
-        assert v[0] == pytest.approx(first, abs=1e-2), f"{col} first"
-        assert v.min() == pytest.approx(vmin, abs=1e-2), f"{col} min"
-        assert v.max() == pytest.approx(vmax, abs=1e-2), f"{col} max"
-        assert g["units"][col] == unit, f"{col} unit"
-
-    smeta = g["source_metadata"]
-    assert smeta["source_kind"] == "zfd"
-    assert smeta["title"] == "End of Travel"
-    assert "TestRunPRO Data V15532" in smeta["version"]
-    assert smeta["source_filename"] == "end of travel_1.zfd"
-    assert smeta["fs_estimated"] is False          # dt 真实读到
-
-    # channel_metadata 存 marker id / 单位 / 显示范围
-    cm = g["channel_metadata"]["travel"]
-    assert cm["marker_id"] == "E17"
-    assert cm["unit"] == "mm"
-    assert "display_min" in cm and "display_max" in cm
-    assert g["channel_metadata"]["Szyl 1 [E5]"]["marker_id"] == "E5"
-
-    renamed = smeta.get("renamed_channels") or []
-    assert renamed, "in-group marker_id disambiguation must record renamed_channels"
-    assert any(
-        r.get("original") == "Szyl 1" and r.get("renamed") == "Szyl 1 [E5]"
-        for r in renamed
-    )
+def test_zfd_fixtures_directory_has_no_customer_binaries():
+    root = Path(__file__).resolve().parent / "fixtures" / "zfd"
+    assert root.is_dir()
+    assert list(root.rglob("*.zfd")) == []
 
 
-def test_zfd_end_to_end_filedata_uniform_time_axis():
-    groups = DataLoader.load_zfd(_sample())
-    g = groups[0]
-    fd = _filedata_from_group(_sample(), g)
-    ta = fd.time_array
-    assert ta is not None and len(ta) == 7487
-    # 均匀时间轴
-    diffs = np.diff(ta)
-    np.testing.assert_allclose(diffs, diffs[0], rtol=1e-9)
-    assert diffs[0] == pytest.approx(0.001)
-    assert fd.fs == pytest.approx(1000.0, rel=1e-6)
+def test_zfd_checked_in_manifest_lists_six_samples():
+    manifest = read_zfd_corpus_manifest()
+    ids = [item["id"] for item in manifest["samples"]]
+    assert ids == [
+        "rws-axial-000031",
+        "rws-axial-000032",
+        "rws-axial-000033",
+        "rws-axial-000034",
+        "rws-axial-000035",
+        "wwt-end-of-travel-1",
+    ]
+    assert manifest["parser_profile"] == "zfge2-single-time-f32-v1"
+    assert manifest["license"]["redistributable"] is False
+    assert manifest["license"]["binaries_in_repo"] is False
+    assert manifest["long_customer_recording"]["status"] == "unknown"
+    for item in manifest["samples"]:
+        assert item["profile"] == "zfge2-single-time-f32-v1"
+        assert item["source_count"] == 1
+        assert item["channels"]
+        assert set(item["units"]) == set(item["channels"])
+        assert set(item["value_evidence"]) == set(item["channels"])
 
 
 def test_non_zfge2_magic_rejected(tmp_path):
@@ -221,6 +188,7 @@ def test_zfd_a1_int32_count_reads_every_sample(tmp_path, count):
     if count > 65535:
         assert struct.pack("<H", count & 0xFFFF) != struct.pack("<i", count)[:2] or True
 
+    # Port is a cross-check on a complete fixture, not the value oracle.
     _header, infos, channels = _port_read(p)
     assert infos[0]["Typ"] == 0
     assert infos[0]["AnzahlWerte"] == count
@@ -233,13 +201,16 @@ def test_zfd_a1_int32_count_reads_every_sample(tmp_path, count):
     g = groups[0]
     t = g["data"]["Time"].to_numpy()
     y = g["data"]["probe"].to_numpy()
-    assert len(t) == count
-    assert len(y) == count
-    assert y[-1] == pytest.approx(float(values[-1]), rel=0, abs=1e-5)
+    expected_y = expected_f32_values(values)
+    expected_t = expected_time_axis(count, t0=0.0, dt=0.001)
+    assert y.dtype == np.float64
+    assert t.dtype == np.float64
+    assert g["units"]["probe"] == "C"
+    np.testing.assert_array_equal(y, expected_y)
+    np.testing.assert_array_equal(t, expected_t)
     assert y[0] == pytest.approx(11.0, abs=1e-5)
     assert y[count // 2] == pytest.approx(22.0, abs=1e-5)
-    expected_t = 0.0 + np.arange(count, dtype=np.float64) * 0.001
-    np.testing.assert_allclose(t, expected_t, rtol=0, atol=1e-12)
+    assert y[-1] == pytest.approx(33.0, abs=1e-5)
 
 
 def test_zfd_a2_hour_record_span_and_filedata(tmp_path):
@@ -255,8 +226,13 @@ def test_zfd_a2_hour_record_span_and_filedata(tmp_path):
     g = groups[0]
     t = g["data"]["Time"].to_numpy()
     y = g["data"]["hour"].to_numpy()
-    assert len(t) == _HOUR_COUNT
-    assert len(y) == _HOUR_COUNT
+    expected_y = expected_f32_values(values)
+    expected_t = expected_time_axis(_HOUR_COUNT, t0=0.0, dt=_HOUR_DT)
+    assert y.dtype == np.float64
+    assert t.dtype == np.float64
+    assert g["units"]["hour"] == "C"
+    np.testing.assert_array_equal(y, expected_y)
+    np.testing.assert_array_equal(t, expected_t)
     assert t[-1] - t[0] == pytest.approx(_HOUR_SPAN, abs=1e-9)
     assert y[0] == pytest.approx(11.0, abs=1e-5)
     assert y[_HOUR_COUNT // 2] == pytest.approx(22.0, abs=1e-5)
@@ -265,10 +241,9 @@ def test_zfd_a2_hour_record_span_and_filedata(tmp_path):
 
     fd = _filedata_from_group(p, g)
     assert len(fd.time_array) == _HOUR_COUNT
-    assert fd.time_array[0] == pytest.approx(0.0)
-    assert fd.time_array[-1] - fd.time_array[0] == pytest.approx(_HOUR_SPAN, abs=1e-9)
+    np.testing.assert_array_equal(fd.time_array, t)
+    np.testing.assert_array_equal(fd.data["hour"].to_numpy(), y)
     assert fd.fs == pytest.approx(1000.0, rel=1e-9)
-    assert fd.time_array[0] != 0.0 or True  # t0 kept (here 0)
     # Must not have rebuilt Time via FileData(fs=...).
     assert fd.time_array[-1] == pytest.approx(t[-1])
 
@@ -331,32 +306,44 @@ def test_zfd_a3_incomplete_or_illegal_count_fails_closed(tmp_path, kind):
 
 
 def test_zfd_a4_real_samples_match_step0_profile():
-    if not _SAMPLES_JSON.exists():
-        pytest.fail("A4 unverified: missing .state/zfd-robustness/samples.json")
-    catalog = json.loads(_SAMPLES_JSON.read_text(encoding="utf-8"))
-    missing = [item["path"] for item in catalog if not (_ROOT / item["path"]).exists()]
-    if missing:
-        pytest.fail("A4 unverified: missing samples " + ", ".join(missing))
-
-    for item in catalog:
-        path = _ROOT / item["path"]
+    """A4 metadata only. Values live in the separate corpus evidence test."""
+    samples = _zfd_corpus_samples()
+    manifest = read_zfd_corpus_manifest()
+    time_tol = float(manifest.get("time_abs_tol", 1e-12))
+    assert len(samples) == 6
+    for entry, path in samples:
         groups = DataLoader.load_zfd(str(path))
-        expected = item["product"][0]
         assert len(groups) == 1
         g = groups[0]
         t = g["data"]["Time"].to_numpy()
-        assert len(t) == expected["n"]
-        assert t[0] == pytest.approx(expected["t0"])
-        assert t[1] - t[0] == pytest.approx(expected["dt"])
-        assert g["source_metadata"]["fs_estimated"] is False
+        smeta = g["source_metadata"]
+        zfd = smeta["zfd_import"]
         signal_cols = [c for c in g["channels"] if c != "Time"]
-        assert signal_cols == expected["channels"]
-        for col, unit in expected["units"].items():
+        assert g["label_suffix"] == entry.get("label_suffix", "")
+        assert smeta["source_kind"] == entry.get("source_kind", "zfd")
+        assert smeta["title"] == entry["title"]
+        assert smeta["version"] == entry["version"]
+        assert smeta["source_filename"] == entry["source_filename"]
+        assert smeta["fs_estimated"] is False
+        assert len(t) == entry["sample_count"]
+        assert t[0] == pytest.approx(entry["t0"], abs=time_tol, rel=0)
+        assert t[-1] == pytest.approx(entry["t_end"], abs=time_tol, rel=0)
+        if len(t) > 1:
+            assert t[1] - t[0] == pytest.approx(entry["dt"], abs=time_tol, rel=0)
+        assert signal_cols == entry["channels"]
+        for col, unit in entry["units"].items():
             assert g["units"][col] == unit
-        zfd = g["source_metadata"]["zfd_import"]
-        assert zfd["sample_count"] == expected["n"]
-        assert zfd["time_record_index"] == 0
-        assert zfd["parser_profile"] == "zfge2-single-time-f32-v1"
+        assert (smeta.get("renamed_channels") or []) == entry.get(
+            "renamed_channels", []
+        )
+        for col, marker in entry.get("channel_markers", {}).items():
+            assert g["channel_metadata"][col]["marker_id"] == marker
+        assert zfd["sample_count"] == entry["sample_count"]
+        assert zfd["time_record_index"] == entry["time_record_index"]
+        assert zfd["parser_profile"] == entry["profile"]
+        assert zfd["declared_record_count"] == entry["declared_record_count"]
+        assert zfd["parsed_record_count"] == entry["parsed_record_count"]
+        assert zfd["time_name"] == entry["time_name"]
 
 
 def test_zfd_a5_header_annotation_and_structure(tmp_path):
@@ -443,15 +430,21 @@ def test_zfd_a6_time_units_and_nonzero_t0(tmp_path, unit):
     )
     g = DataLoader.load_zfd(str(p))[0]
     t = g["data"]["Time"].to_numpy()
-    expected = 1.5 + np.arange(5, dtype=np.float64) * 2.0
-    np.testing.assert_allclose(t, expected)
+    y = g["data"]["temp"].to_numpy()
+    expected = expected_time_axis(5, t0=1.5, dt=2.0)
+    np.testing.assert_array_equal(t, expected)
+    np.testing.assert_array_equal(y, expected_f32_values([1.0, 2.0, 3.0, 4.0, 5.0]))
+    assert y.dtype == np.float64
+    assert t.dtype == np.float64
+    assert g["units"]["temp"] == "C"
     zfd = g["source_metadata"]["zfd_import"]
     assert zfd["time_start_s"] == pytest.approx(1.5)
     assert zfd["time_step_s"] == pytest.approx(2.0)
     assert zfd["time_end_s"] == pytest.approx(expected[-1])
     assert zfd["duration_s"] == pytest.approx(expected[-1] - expected[0])
     fd = _filedata_from_group(p, g)
-    assert fd.time_array[0] == pytest.approx(1.5)
+    np.testing.assert_array_equal(fd.time_array, t)
+    np.testing.assert_array_equal(fd.data["temp"].to_numpy(), y)
     assert fd.fs == pytest.approx(0.5)
 
 
@@ -465,13 +458,16 @@ def test_zfd_a6_one_point_uses_declared_dt_not_default_1khz(tmp_path):
     )
     g = DataLoader.load_zfd(str(p))[0]
     t = g["data"]["Time"].to_numpy()
+    y = g["data"]["temp"].to_numpy()
     assert len(t) == 1
-    assert t[0] == pytest.approx(3.0)
+    np.testing.assert_array_equal(t, expected_time_axis(1, t0=3.0, dt=0.004))
+    np.testing.assert_array_equal(y, expected_f32_values([7.0]))
+    assert y.dtype == np.float64
     zfd = g["source_metadata"]["zfd_import"]
     assert zfd["duration_s"] == pytest.approx(0.0)
     fd = _filedata_from_group(p, g)
     assert fd.fs == pytest.approx(250.0)
-    assert fd.time_array[0] == pytest.approx(3.0)
+    np.testing.assert_array_equal(fd.time_array, t)
 
 
 @pytest.mark.parametrize(
@@ -588,6 +584,15 @@ def test_zfd_a9_nan_inf_and_time_name_collision(tmp_path):
     force_cols = [c for c in g["channels"] if c.startswith("force")]
     assert len(force_cols) == 2
     assert "force" in g["channels"]
+    np.testing.assert_array_equal(
+        g["data"]["force"].to_numpy(),
+        expected_f32_values([0.0, 1.0, 2.0, 3.0]),
+    )
+    other_force = [c for c in force_cols if c != "force"][0]
+    np.testing.assert_array_equal(
+        g["data"][other_force].to_numpy(),
+        expected_f32_values([4.0, 5.0, 6.0, 7.0]),
+    )
 
 
 def test_zfd_a10_metadata_matches_arrays(tmp_path):
@@ -601,6 +606,11 @@ def test_zfd_a10_metadata_matches_arrays(tmp_path):
     )
     g = DataLoader.load_zfd(str(p))[0]
     t = g["data"]["Time"].to_numpy()
+    y = g["data"]["probe"].to_numpy()
+    np.testing.assert_array_equal(t, expected_time_axis(6, t0=0.5, dt=0.002))
+    np.testing.assert_array_equal(y, expected_f32_values([1, 2, 3, 4, 5, 6]))
+    assert y.dtype == np.float64
+    assert g["units"]["probe"] == "C"
     zfd = g["source_metadata"]["zfd_import"]
     assert zfd["schema"] == 1
     assert zfd["parser_profile"] == "zfge2-single-time-f32-v1"
@@ -630,3 +640,173 @@ def test_zfd_a10_metadata_matches_arrays(tmp_path):
     err = str(exc_info.value)
     assert "meta-err.zfd" in err
     assert any(ch.isdigit() for ch in err)
+
+
+def test_zfd_synthetic_complete_arrays_dtype_units_and_time(tmp_path):
+    """A22: construction formula is the parser oracle for every sample."""
+    count = 4096
+    t0 = 1.25
+    dt = 0.004
+    values = characteristic_values(count, head=-4.5, mid=8.25, tail=12.5)
+    p = write_minimal_zfd(
+        tmp_path / "full-array.zfd",
+        dt=dt,
+        count=count,
+        values=values,
+        name="rack",
+        unit="mm",
+        t0=t0,
+        title="Full Array",
+    )
+    g = DataLoader.load_zfd(str(p))[0]
+    t = g["data"]["Time"].to_numpy()
+    y = g["data"]["rack"].to_numpy()
+    np.testing.assert_array_equal(t, expected_time_axis(count, t0=t0, dt=dt))
+    np.testing.assert_array_equal(y, expected_f32_values(values))
+    assert t.dtype == np.float64
+    assert y.dtype == np.float64
+    assert g["units"]["rack"] == "mm"
+    assert g["source_metadata"]["title"] == "Full Array"
+    assert g["channel_metadata"]["rack"]["unit"] == "mm"
+    fd = _filedata_from_group(p, g)
+    np.testing.assert_array_equal(fd.time_array, t)
+    np.testing.assert_array_equal(fd.data["rack"].to_numpy(), y)
+    assert fd.fs == pytest.approx(1.0 / dt, rel=1e-12)
+
+
+def test_zfd_synthetic_parser_filedata_parity(tmp_path):
+    """Consumer parity is not a parser-correctness oracle."""
+    values = [1.5, -2.25, 3.0, 4.5, 5.75]
+    p = write_minimal_zfd(
+        tmp_path / "parity.zfd",
+        dt=0.5,
+        count=5,
+        values=values,
+        name="probe",
+        unit="N",
+        t0=0.25,
+    )
+    g = DataLoader.load_zfd(str(p))[0]
+    fd = _filedata_from_group(p, g)
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    loaded = SourceAdapterRegistry.default().adapter_for(p).load_sources(p)
+    assert len(loaded) == 1
+    other = loaded[0].file_data
+    np.testing.assert_array_equal(fd.time_array, g["data"]["Time"].to_numpy())
+    np.testing.assert_array_equal(other.time_array, fd.time_array)
+    np.testing.assert_array_equal(
+        fd.data["probe"].to_numpy(),
+        g["data"]["probe"].to_numpy(),
+    )
+    np.testing.assert_array_equal(
+        other.data["probe"].to_numpy(),
+        fd.data["probe"].to_numpy(),
+    )
+    assert fd.fs == pytest.approx(other.fs) == pytest.approx(2.0)
+
+
+def test_zfd_corpus_helper_optional_root_unset_is_skippable(monkeypatch):
+    monkeypatch.delenv(CORPUS_ROOT_ENV, raising=False)
+    monkeypatch.delenv(REQUIRE_CORPUS_ENV, raising=False)
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_zfd_corpus_samples()
+    assert exc.value.optional is True
+
+
+def test_zfd_corpus_helper_required_root_unset_is_failure(monkeypatch):
+    monkeypatch.delenv(CORPUS_ROOT_ENV, raising=False)
+    monkeypatch.setenv(REQUIRE_CORPUS_ENV, "1")
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_zfd_corpus_samples()
+    assert exc.value.optional is False
+    assert CORPUS_ROOT_ENV in str(exc.value)
+
+
+def test_zfd_corpus_helper_missing_file_is_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv(CORPUS_ROOT_ENV, str(tmp_path))
+    monkeypatch.setenv(REQUIRE_CORPUS_ENV, "1")
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_zfd_corpus_samples()
+    assert exc.value.optional is False
+    assert "missing" in str(exc.value).lower()
+
+
+def test_zfd_corpus_helper_hash_mismatch_is_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv(CORPUS_ROOT_ENV, str(tmp_path))
+    monkeypatch.delenv(REQUIRE_CORPUS_ENV, raising=False)
+    manifest = read_zfd_corpus_manifest()
+    for entry in manifest["samples"]:
+        dest = tmp_path / entry["relative_path"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"not-a-real-zfd-corpus-file")
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_zfd_corpus_samples()
+    assert exc.value.optional is False
+    assert "hash" in str(exc.value).lower()
+
+
+def test_zfd_corpus_helper_missing_manifest_is_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv(REQUIRE_CORPUS_ENV, "1")
+    monkeypatch.setenv(CORPUS_ROOT_ENV, str(tmp_path))
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_zfd_corpus_samples(manifest_path=tmp_path / "no-such-manifest.json")
+    assert exc.value.optional is False
+    assert "manifest" in str(exc.value).lower()
+
+
+def test_zfd_corpus_value_evidence_matches_manifest():
+    samples = _zfd_corpus_samples()
+    manifest = read_zfd_corpus_manifest()
+    abs_tol = float(manifest.get("value_abs_tol", 1e-6))
+    time_tol = float(manifest.get("time_abs_tol", 1e-12))
+    for entry, path in samples:
+        g = DataLoader.load_zfd(str(path))[0]
+        t = g["data"]["Time"].to_numpy()
+        assert t.dtype == np.float64
+        assert len(t) == entry["sample_count"]
+        assert t[0] == pytest.approx(entry["t0"], abs=time_tol, rel=0)
+        if len(t) > 1:
+            assert t[1] - t[0] == pytest.approx(entry["dt"], abs=time_tol, rel=0)
+        assert t[-1] == pytest.approx(entry["t_end"], abs=time_tol, rel=0)
+        for col, expected in entry["value_evidence"].items():
+            y = g["data"][col].to_numpy()
+            assert y.dtype == np.float64
+            assert len(y) == entry["sample_count"]
+            assert y[0] == pytest.approx(expected["first"], abs=abs_tol, rel=0)
+            assert y[1] == pytest.approx(expected["index_1"], abs=abs_tol, rel=0)
+            assert y[len(y) // 2] == pytest.approx(expected["mid"], abs=abs_tol, rel=0)
+            assert y[-2] == pytest.approx(
+                expected["index_n_minus_2"], abs=abs_tol, rel=0
+            )
+            assert y[-1] == pytest.approx(expected["last"], abs=abs_tol, rel=0)
+            assert y.min() == pytest.approx(expected["min"], abs=abs_tol, rel=0)
+            assert y.max() == pytest.approx(expected["max"], abs=abs_tol, rel=0)
+
+
+def test_zfd_corpus_parser_filedata_parity():
+    samples = _zfd_corpus_samples()
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    registry = SourceAdapterRegistry.default()
+    for _entry, path in samples:
+        g = DataLoader.load_zfd(str(path))[0]
+        fd = _filedata_from_group(path, g)
+        loaded = registry.adapter_for(path).load_sources(path)
+        assert len(loaded) == 1
+        other = loaded[0].file_data
+        t = g["data"]["Time"].to_numpy()
+        np.testing.assert_array_equal(fd.time_array, t)
+        np.testing.assert_array_equal(other.time_array, fd.time_array)
+        assert fd.fs == pytest.approx(other.fs)
+        for col in g["channels"]:
+            if col == "Time":
+                continue
+            np.testing.assert_array_equal(
+                fd.data[col].to_numpy(),
+                g["data"][col].to_numpy(),
+            )
+            np.testing.assert_array_equal(
+                other.data[col].to_numpy(),
+                fd.data[col].to_numpy(),
+            )

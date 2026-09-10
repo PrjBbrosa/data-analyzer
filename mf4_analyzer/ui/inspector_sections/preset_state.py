@@ -1,8 +1,8 @@
 """Preset baseline snapshots and comparable-value diffs.
 
-Qt-free owner for classification, alias normalization, axis conflicts, and
-old-project baseline inference. PresetBar and hover cards consume this;
-they must not copy a second compare.
+Qt-free owner for classification, alias normalization, axis conflicts,
+target resolution, and old-project baseline inference. PresetBar and hover
+cards consume this; they must not copy a second compare.
 """
 from __future__ import annotations
 
@@ -12,11 +12,19 @@ import math
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from ...db_reference import migrate_legacy_reference_params
+
 logger = logging.getLogger(__name__)
 
 PRESET_KINDS = frozenset({"fft", "fft_time", "order", "frf"})
-PRESET_BASELINE_VERSION = 1
+# Nested baseline write version. Outer AnalysisViewState schema stays 9.
+PRESET_BASELINE_VERSION = 2
+PRESET_BASELINE_SUPPORTED_VERSIONS = frozenset({1, 2})
 PRESET_SLOTS = (1, 2, 3, 4)
+
+PRESET_SOURCE_UNKNOWN_NOTE = "来源版本未知"
+PRESET_SOURCE_UPDATED_NOTE = "基准快照，槽位已更新"
+PRESET_SOURCE_UNAVAILABLE_NOTE = "原基准已不可用"
 
 _PRESET_MATCH_REL_TOL = 1e-9
 _PRESET_MATCH_ABS_TOL = 1e-9
@@ -307,14 +315,29 @@ def diff_preset_state(kind, baseline_params, current_params, *, owned_only=False
     )
 
 
-def build_preset_baseline(kind, slot, display_name, collect_params) -> dict[str, Any]:
-    return {
-        "version": PRESET_BASELINE_VERSION,
+def build_preset_baseline(
+    kind, slot, display_name, collect_params, *, source_payload=None,
+) -> dict[str, Any]:
+    """Build a baseline. ``source_payload`` makes a v2 load snapshot.
+
+    Inference and programmatic tests that did not observe a load omit
+    ``source_payload`` and stay on v1 (source unknown). An empty ``{}``
+    collect is still returned here; callers must not treat it as a
+    successful commit.
+    """
+    params = copy.deepcopy(_as_mapping(collect_params))
+    payload = {
         "kind": str(kind),
         "slot": int(slot),
         "display_name": str(display_name),
-        "params": copy.deepcopy(_as_mapping(collect_params)),
+        "params": params,
     }
+    if source_payload is None:
+        payload["version"] = 1
+        return payload
+    payload["version"] = PRESET_BASELINE_VERSION
+    payload["source_payload"] = copy.deepcopy(_as_mapping(source_payload))
+    return payload
 
 
 def validate_preset_baseline(baseline, *, expected_kind=None) -> dict[str, Any] | None:
@@ -328,7 +351,7 @@ def validate_preset_baseline(baseline, *, expected_kind=None) -> dict[str, Any] 
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version != PRESET_BASELINE_VERSION
+        or version not in PRESET_BASELINE_SUPPORTED_VERSIONS
     ):
         return None
     if not isinstance(kind, str) or not kind:
@@ -342,14 +365,27 @@ def validate_preset_baseline(baseline, *, expected_kind=None) -> dict[str, Any] 
         return None
     if not isinstance(display_name, str):
         return None
-    if not isinstance(params, dict):
+    if not isinstance(params, dict) or not params:
+        return None
+    if version == 1:
+        # Historical snapshot. Do not invent source_payload from a live slot.
+        return {
+            "version": 1,
+            "kind": kind,
+            "slot": slot,
+            "display_name": display_name,
+            "params": copy.deepcopy(params),
+        }
+    source_payload = baseline.get("source_payload")
+    if not isinstance(source_payload, dict) or not source_payload:
         return None
     return {
-        "version": version,
+        "version": 2,
         "kind": kind,
         "slot": slot,
         "display_name": display_name,
         "params": copy.deepcopy(params),
+        "source_payload": copy.deepcopy(source_payload),
     }
 
 
@@ -509,5 +545,219 @@ def apply_preset_ranges(kind, current, target) -> dict[str, Any]:
     out = dict(_as_mapping(target))
     for axis in incompatible_amplitude_axes(kind, current, target):
         _write_axis(out, axis, auto=True)
+    return out
+
+
+def comparable_params_match(kind, left, right) -> bool:
+    """True when normalized target/current comparison surfaces agree."""
+    diff = diff_preset_state(kind, left, right)
+    return not diff.params_differ and not diff.axes_differ
+
+
+def source_payloads_match(kind, left, right) -> bool:
+    """Compare slot patches with the same normalization used for diffs."""
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+        return False
+    if not left or not right:
+        return False
+    return comparable_params_match(kind, left, right)
+
+
+def baseline_source_status(
+    baseline,
+    *,
+    slot_available=True,
+    current_payload=None,
+    current_name="",
+    kind=None,
+) -> str:
+    """Explain whether a restored baseline still matches the live slot."""
+    if not isinstance(baseline, Mapping):
+        return ""
+    if not slot_available:
+        return PRESET_SOURCE_UNAVAILABLE_NOTE
+    version = baseline.get("version")
+    source = baseline.get("source_payload")
+    if version != 2 or not isinstance(source, Mapping) or not source:
+        return PRESET_SOURCE_UNKNOWN_NOTE
+    cmp_kind = kind or baseline.get("kind")
+    if not source_payloads_match(cmp_kind, source, current_payload):
+        return PRESET_SOURCE_UPDATED_NOTE
+    if str(current_name) != str(baseline.get("display_name", "")):
+        return PRESET_SOURCE_UPDATED_NOTE
+    return ""
+
+
+def _overlap_collect_value(kind: str, raw_value):
+    """Map a patch overlap onto the kind's ``_collect_preset`` shape."""
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return raw_value
+    if kind == "frf":
+        percent = value * 100.0 if value <= 1.0 else value
+        return float(round(percent)) / 100.0
+    # FFT / FFT-vs-Time ``_apply_preset`` write the percent spin via int().
+    return int(value)
+
+
+def _amplitude_mode_collect(value) -> str:
+    # Matches FFT-vs-Time / Order ``_apply_preset`` ('dB' in val).
+    return "Amplitude dB" if "dB" in str(value) else "Amplitude"
+
+
+def _apply_nfft_patch(kind: str, out: dict[str, Any], raw: Mapping[str, Any]) -> None:
+    if "nfft" not in raw and "nfft_mode" not in raw:
+        return
+    if _nfft_is_auto(raw):
+        if kind == "frf":
+            out["nfft_mode"] = "auto"
+            out["nfft"] = None
+            return
+        out["nfft_mode"] = "auto"
+        out["nfft"] = "自动"
+        return
+    if kind == "frf":
+        if "nfft_mode" in raw:
+            out["nfft_mode"] = "manual"
+            if raw.get("nfft") is not None:
+                out["nfft"] = int(raw["nfft"])
+            return
+        if raw.get("nfft") is not None and str(out.get("nfft_mode")) == "manual":
+            out["nfft"] = int(raw["nfft"])
+        return
+    out["nfft_mode"] = "fixed"
+    if raw.get("nfft") is not None:
+        out["nfft"] = str(raw["nfft"])
+
+
+def _apply_db_patch(out: dict[str, Any], raw: Mapping[str, Any]) -> None:
+    if "db_reference" not in raw and "db_reference_mode" not in raw:
+        return
+    migrated = migrate_legacy_reference_params(dict(raw))
+    if "db_reference_mode" in migrated:
+        out["db_reference_mode"] = migrated["db_reference_mode"]
+    if "db_reference" in migrated and str(out.get("db_reference_mode", "")).lower() != "auto":
+        out["db_reference"] = migrated["db_reference"]
+
+
+def _apply_axis_patch(kind: str, out: dict[str, Any], raw: Mapping[str, Any]) -> None:
+    if kind == "frf":
+        return
+    if "x_auto" in raw:
+        out["x_auto"] = bool(raw["x_auto"])
+    elif "autoscale" in raw:
+        out["x_auto"] = bool(raw["autoscale"])
+    if "x_min" in raw:
+        out["x_min"] = raw["x_min"]
+    if "x_max" in raw:
+        out["x_max"] = raw["x_max"]
+
+    if "y_auto" in raw:
+        out["y_auto"] = bool(raw["y_auto"])
+    elif "freq_auto" in raw:
+        out["y_auto"] = bool(raw["freq_auto"])
+    if "y_min" in raw:
+        out["y_min"] = raw["y_min"]
+    elif "freq_min" in raw:
+        out["y_min"] = raw["freq_min"]
+    if "y_max" in raw:
+        out["y_max"] = raw["y_max"]
+    elif "freq_max" in raw:
+        out["y_max"] = raw["freq_max"]
+
+    if "dynamic" in raw and "z_floor" not in raw:
+        parsed = _parse_dynamic(raw["dynamic"])
+        if parsed:
+            out.update(parsed)
+    if "z_auto" in raw:
+        out["z_auto"] = bool(raw["z_auto"])
+    if "z_floor" in raw:
+        out["z_floor"] = raw["z_floor"]
+    if "z_ceiling" in raw:
+        out["z_ceiling"] = raw["z_ceiling"]
+
+    allowed = set(_AXES_FOR_KIND.get(kind, ()))
+    for axis in _AXIS_IDS:
+        if axis in allowed:
+            continue
+        auto_key, min_key, max_key = _AXIS_KEYS[axis]
+        out.pop(auto_key, None)
+        out.pop(min_key, None)
+        out.pop(max_key, None)
+
+
+def _sync_collect_aliases(kind: str, out: dict[str, Any]) -> None:
+    if kind == "fft" and "x_auto" in out:
+        out["autoscale"] = bool(out["x_auto"])
+    if kind != "fft_time":
+        return
+    if "y_auto" in out:
+        out["freq_auto"] = bool(out["y_auto"])
+    if "y_min" in out:
+        out["freq_min"] = out["y_min"]
+    if "y_max" in out:
+        out["freq_max"] = out["y_max"]
+    if "z_auto" in out and bool(out["z_auto"]):
+        out["dynamic"] = "Auto"
+        return
+    if "z_floor" in out:
+        try:
+            span = abs(float(out["z_floor"]))
+        except (TypeError, ValueError):
+            return
+        out["dynamic"] = f"{int(round(span))} dB"
+
+
+def _apply_frf_enum(out: dict[str, Any], raw: Mapping[str, Any], key: str) -> None:
+    if key in raw:
+        out[key] = str(raw[key]).lower()
+
+
+def resolve_preset_target(kind, before, patch) -> dict[str, Any]:
+    """Resolve a slot patch onto ``before`` using apply-then-collect semantics.
+
+    ``before`` is the current ``_collect_preset`` surface. Missing RPM / dB /
+    axis / unit fields inherit from ``before``. This is not ``dict.update()``
+    and must not be obtained by applying the live panel twice.
+    """
+    kind = str(kind)
+    base = _as_mapping(before)
+    raw = _as_mapping(patch)
+    if not base and not raw:
+        return {}
+    out = dict(base)
+    param_allow = _PARAM_KEYS.get(kind, frozenset())
+
+    _apply_nfft_patch(kind, out, raw)
+    if "overlap" in raw:
+        out["overlap"] = _overlap_collect_value(kind, raw["overlap"])
+    _apply_db_patch(out, raw)
+    _apply_axis_patch(kind, out, raw)
+
+    skip = {
+        "nfft", "nfft_mode", "overlap",
+        "db_reference", "db_reference_mode",
+        *_CANONICAL_AXIS_KEYS, *_ALIAS_KEYS,
+    }
+    for key, value in raw.items():
+        if key == "remark":
+            out["remark"] = bool(value)
+            continue
+        if key in skip or key in _IGNORE_KEYS:
+            continue
+        if key == "amplitude_mode":
+            out["amplitude_mode"] = _amplitude_mode_collect(value)
+            continue
+        if kind == "frf" and key in {
+            "estimator", "window", "magnitude_scale",
+            "frequency_scale", "phase_mode",
+        }:
+            _apply_frf_enum(out, raw, key)
+            continue
+        if key in param_allow:
+            out[key] = value
+
+    _sync_collect_aliases(kind, out)
     return out
 

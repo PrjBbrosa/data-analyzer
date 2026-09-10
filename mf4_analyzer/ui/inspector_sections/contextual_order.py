@@ -61,6 +61,7 @@ class OrderContextual(QWidget):
     signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
+    preset_committed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -276,6 +277,7 @@ class OrderContextual(QWidget):
             default_params=self._collect_preset(),
             custom_slots=CUSTOM_PRESET_SLOTS,
         )
+        self.preset_bar.preset_committed.connect(self.preset_committed)
         self._order_section.add_persistent(self.preset_bar)
 
         self.btn_ot = QPushButton("计算阶次图")

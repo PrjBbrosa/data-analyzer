@@ -35,12 +35,14 @@ MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for late
 # schema 7 adds per-analysis-View ``attached_file_ids`` (Stage 1 source isolation).
 # schema 8 adds per-pane point remarks and frequency dual-cursor placement.
 # schema 9 adds optional per-View ``preset_baseline`` (preset source snapshot).
-# The additions are field-presence tolerant -- from_dict() keys the
+# Nested baseline version 2 adds ``source_payload``; the outer view schema
+# stays 9. The additions are field-presence tolerant -- from_dict() keys the
 # migration off "params has db_reference and no db_reference_mode", NOT this
 # number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
 _SCHEMA = 9
-_PRESET_BASELINE_VERSION = 1
+_PRESET_BASELINE_VERSION = 2
+_PRESET_BASELINE_SUPPORTED_VERSIONS = frozenset({1, 2})
 _PRESET_BASELINE_KINDS = frozenset({"fft", "fft_time", "order", "frf"})
 
 
@@ -107,7 +109,7 @@ def _coerce_preset_baseline(value: Any) -> dict[str, Any] | None:
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version != _PRESET_BASELINE_VERSION
+        or version not in _PRESET_BASELINE_SUPPORTED_VERSIONS
     ):
         logger.warning(
             "dropping corrupt preset_baseline: invalid version %r", version
@@ -139,12 +141,29 @@ def _coerce_preset_baseline(value: Any) -> dict[str, Any] | None:
             type(params).__name__,
         )
         return None
+    if version == 1:
+        # Keep the historical snapshot. Do not invent source_payload.
+        return {
+            "version": 1,
+            "kind": kind,
+            "slot": slot,
+            "display_name": display_name,
+            "params": copy.deepcopy(params),
+        }
+    source_payload = value.get("source_payload")
+    if not isinstance(source_payload, dict):
+        logger.warning(
+            "dropping corrupt preset_baseline: v2 source_payload must be dict, got %s",
+            type(source_payload).__name__,
+        )
+        return None
     return {
-        "version": version,
+        "version": 2,
         "kind": kind,
         "slot": slot,
         "display_name": display_name,
         "params": copy.deepcopy(params),
+        "source_payload": copy.deepcopy(source_payload),
     }
 
 

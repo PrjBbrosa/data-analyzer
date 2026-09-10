@@ -174,6 +174,31 @@ _HINTS = (
         priority=28,
     ),
     Hint(
+        id="preset.target_axis_dot",
+        text="黄点对比目标预设坐标",
+        surface="discovery",
+        priority=26,
+    ),
+    Hint(
+        id="preset.slot_source_note",
+        text="槽位更新或来源未知可再加载",
+        surface="discovery",
+        priority=25,
+    ),
+    Hint(
+        id="analysis.range_invalid_keep",
+        text="非法范围需改回或点全部",
+        surface="discovery",
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
+        priority=27,
+    ),
+    Hint(
+        id="channel.searchable_combo",
+        text="通道下拉框可输入关键词搜索",
+        surface="discovery",
+        priority=30,
+    ),
+    Hint(
         id="wheel.zoom_x",
         text="Ctrl + 滚轮 缩放 X",
         surface="persistent",
@@ -341,6 +366,20 @@ _HINTS = (
         surface="discovery",
         retire_on="batch_open",
         priority=40,
+    ),
+    Hint(
+        id="batch.count_pending",
+        text="目标数待确定时先等来源",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=39,
+    ),
+    Hint(
+        id="batch.disabled_keeps_value",
+        text="禁用项变灰仍保留原值",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=38,
     ),
     Hint(
         id="channel.right_click",

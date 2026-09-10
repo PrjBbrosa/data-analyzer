@@ -37,6 +37,7 @@ from .analysis_time_range import (
     AnalysisTimeRangeController,
     SourceBounds,
     as_channel_key,
+    axis_facts_from_files,
     bounds_from_axes,
 )
 
@@ -93,6 +94,12 @@ class AnalysisContext:
             'frf': self._inspector.frf_ctx,
             'order': self._inspector.order_ctx,
         }[section]
+
+    def sync_committed_preset(self, section, state) -> None:
+        """Write complete params + baseline after a successful preset commit."""
+        from ..analysis_view_bridge import capture_params_to_state
+
+        capture_params_to_state(self.section_ctx(section), state)
 
     def page(self, section):
         """The chart-stack page rendering ``section``."""
@@ -159,6 +166,10 @@ class AnalysisContext:
     def source_bounds_for(self, section, view_id, pane_index):
         """Physical full-span facts for one pane's current sources."""
         return self.time_range.source_bounds_for(section, view_id, pane_index)
+
+    def axis_facts_for_sources(self, sources):
+        """Runtime axis facts for ``make_source_signature``."""
+        return axis_facts_from_files(self._files_provider() or {}, sources)
 
     def _analysis_state_for_id(self, section, view_id):
         try:

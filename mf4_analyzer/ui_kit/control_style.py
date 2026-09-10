@@ -135,6 +135,53 @@ CONTROL_QSS_TOKENS: Mapping[str, str] = MappingProxyType({
 })
 """QSS placeholders derived from :data:`CONTROL_COLORS` and height tracks."""
 
+# Exact interaction accents used by Batch self-painted cards while enabled.
+# Disabled paint must not emit these RGB values — QStyle chrome can disable
+# itself, but hand-drawn title / radio / formula ink does not.
+PAINTED_CARD_ACCENT = "#0b73e7"
+PAINTED_GROUPING_RADIO = "#1769e0"
+PAINTED_GROUPING_TITLE = "#0f56bd"
+
+
+def _parse_hex_rgb(color: str) -> tuple[int, int, int]:
+    text = str(color).strip().lstrip("#")
+    if len(text) != 6:
+        raise ValueError(f"expected #RRGGBB, got {color!r}")
+    return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+
+
+def mix_hex_colors(color: str, toward: str, amount: float) -> str:
+    """Blend ``color`` toward ``toward``. ``amount`` is the toward weight."""
+    weight = min(1.0, max(0.0, float(amount)))
+    src = _parse_hex_rgb(color)
+    dst = _parse_hex_rgb(toward)
+    mixed = tuple(round(a + (b - a) * weight) for a, b in zip(src, dst))
+    return f"#{mixed[0]:02x}{mixed[1]:02x}{mixed[2]:02x}"
+
+
+def painted_state_hex(
+    *,
+    enabled: bool,
+    checked: bool,
+    accent: str,
+    idle: str,
+    disabled_checked: str | None = None,
+    disabled_idle: str | None = None,
+) -> str:
+    """Resolve hand-painted ink from effective enabled × checked."""
+    if enabled:
+        return accent if checked else idle
+    if checked:
+        return disabled_checked or CONTROL_COLORS["CONTROL_TEXT_ON_SELECT"]
+    return disabled_idle or CONTROL_COLORS["CONTROL_TEXT_MUTED"]
+
+
+def painted_semantic_hex(color: str, *, enabled: bool) -> str:
+    """Keep category hue when enabled; lower contrast when disabled."""
+    if enabled:
+        return color
+    return mix_hex_colors(color, CONTROL_COLORS["CONTROL_TEXT_MUTED"], 0.62)
+
 
 class _QtStyle(Protocol):
     def unpolish(self, widget: object) -> None: ...

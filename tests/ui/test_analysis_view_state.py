@@ -18,6 +18,19 @@ def _baseline(**overrides):
     return payload
 
 
+def _baseline_v2(**overrides):
+    payload = {
+        "version": 2,
+        "kind": "fft",
+        "slot": 2,
+        "display_name": "均衡",
+        "params": {"window": "hanning", "nfft": 4096, "nested": {"x_auto": True}},
+        "source_payload": {"window": "hanning", "overlap": 50},
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_default_view_one_empty_pane():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert len(v.panes) == 1
@@ -379,6 +392,10 @@ def test_null_preset_baseline_is_none():
     {"version": 1, "kind": "fft", "slot": "2", "display_name": "x", "params": {}},
     {"version": 1, "kind": "fft", "slot": True, "display_name": "x", "params": {}},
     {"version": 2, "kind": "fft", "slot": 1, "display_name": "x", "params": {}},
+    {"version": 2, "kind": "fft", "slot": 1, "display_name": "x",
+     "params": {"window": "hanning"}, "source_payload": "nope"},
+    {"version": 3, "kind": "fft", "slot": 1, "display_name": "x",
+     "params": {"window": "hanning"}, "source_payload": {"window": "hanning"}},
     {"version": 1, "kind": "fft", "slot": 1, "display_name": 3, "params": {}},
     {"version": 1, "kind": "fft", "slot": 1, "display_name": "x", "params": []},
     {"kind": "fft", "slot": 1, "display_name": "x", "params": {}},
@@ -411,3 +428,47 @@ def test_duplicate_copies_preset_baseline_values_not_identity(qapp):
     copied.preset_baseline["slot"] = 4
     assert original.preset_baseline["params"]["nfft"] == 4096
     assert original.preset_baseline["slot"] == 2
+
+
+def test_v2_preset_baseline_round_trip_keeps_source_payload_and_deep_copies():
+    original = _baseline_v2()
+    view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
+    view.preset_baseline = original
+    payload = view.to_dict()
+    assert payload["schema"] == 9
+    assert payload["preset_baseline"]["version"] == 2
+    assert payload["preset_baseline"]["source_payload"]["overlap"] == 50
+    payload["preset_baseline"]["source_payload"]["overlap"] = 1
+    assert original["source_payload"]["overlap"] == 50
+
+    restored = AnalysisViewState.from_dict(view.to_dict())
+    assert restored.preset_baseline["version"] == 2
+    assert restored.preset_baseline["source_payload"] == original["source_payload"]
+    assert restored.preset_baseline["source_payload"] is not original["source_payload"]
+    restored.preset_baseline["source_payload"]["window"] = "other"
+    assert view.preset_baseline["source_payload"]["window"] == "hanning"
+
+
+def test_v1_preset_baseline_does_not_invent_source_payload():
+    restored = AnalysisViewState.from_dict({
+        "schema": 9,
+        "name": "Legacy",
+        "tab_color": "#2d7ff9",
+        "preset_baseline": _baseline(),
+    })
+    assert restored.preset_baseline["version"] == 1
+    assert "source_payload" not in restored.preset_baseline
+
+
+def test_duplicate_copies_v2_source_payload_independently(qapp):
+    from mf4_analyzer.ui.view_state import ViewManager
+
+    manager = ViewManager(state_factory=AnalysisViewState)
+    original = manager.get(0)
+    original.preset_baseline = _baseline_v2()
+    idx = manager.duplicate(0)
+    copied = manager.get(idx)
+    assert copied.preset_baseline["source_payload"] == original.preset_baseline["source_payload"]
+    assert copied.preset_baseline["source_payload"] is not original.preset_baseline["source_payload"]
+    copied.preset_baseline["source_payload"]["overlap"] = 9
+    assert original.preset_baseline["source_payload"]["overlap"] == 50

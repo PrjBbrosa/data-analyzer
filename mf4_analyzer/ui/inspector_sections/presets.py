@@ -6,7 +6,8 @@ from functools import partial
 from html import escape
 
 from PyQt5 import sip
-from PyQt5.QtCore import QPoint, QSettings, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QRectF, QSettings, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -44,11 +45,14 @@ from ._helpers import (
 from .preset_state import (
     apply_keep_ranges,
     apply_preset_ranges,
+    baseline_source_status,
     build_preset_baseline,
+    comparable_params_match,
     diff_preset_state,
     incompatible_amplitude_axes,
     infer_preset_baseline,
     manual_axis_conflicts,
+    resolve_preset_target,
     validate_preset_baseline,
 )
 
@@ -62,6 +66,27 @@ _DIFF_AMBER = "#e8ae48"
 _DIFF_DOT_PX = 7
 _DIFF_DOT_GAP = 4
 logger = logging.getLogger(__name__)
+
+
+class _PresetDiffDot(QWidget):
+    """Painted circle. QSS ``border-radius`` on a 7px QLabel stays square."""
+
+    def __init__(self, color, parent=None):
+        super().__init__(parent)
+        self.setObjectName("presetDiffDot")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAutoFillBackground(False)
+        self.setFixedSize(_DIFF_DOT_PX, _DIFF_DOT_PX)
+        self._color = QColor(color)
+        self.hide()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._color)
+        painter.drawEllipse(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
 
 
 class _PresetHoverCard(QFrame):
@@ -506,6 +531,7 @@ class PresetBar(QWidget):
     SLOTS = (1, 2, 3)
     NAME_MAX_LEN = 12
     acknowledged = pyqtSignal(str, str)  # level, message
+    preset_committed = pyqtSignal(object)  # successful baseline, or None
 
     def __init__(
         self, kind, collect_fn, apply_fn, parent=None, builtin_defaults=None,
@@ -563,6 +589,7 @@ class PresetBar(QWidget):
         self._baseline = None
         self._loaded_slot_payload = None
         self._live_diff = diff_preset_state(self._kind, {}, {})
+        self._transaction_open = False
         # slot -> effective payload dict (or None), lazily filled by
         # _slot_payloads(). project_baseline runs on every keystroke-level
         # parameter edit, so it must not re-read four QSettings keys each time.
@@ -679,20 +706,7 @@ class PresetBar(QWidget):
         self._show_menu(slot, pos)
 
     def _make_diff_dot(self, parent, color):
-        dot = QLabel(parent)
-        dot.setObjectName("presetDiffDot")
-        dot.setAttribute(Qt.WA_StyledBackground, True)
-        dot.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        dot.setFixedSize(_DIFF_DOT_PX, _DIFF_DOT_PX)
-        dot.setStyleSheet(
-            f"QLabel#presetDiffDot {{"
-            f"background-color: {color};"
-            f"border-radius: 4px;"
-            f"border-width: 0px;"
-            f"}}"
-        )
-        dot.hide()
-        return dot
+        return _PresetDiffDot(color, parent)
 
     def _slot_payloads(self):
         """Return ``{slot: effective params or None}`` for every slot.
@@ -721,6 +735,7 @@ class PresetBar(QWidget):
         return self._default_name(slot)
 
     def _collect_safe(self):
+        """Presentation-only collect. Never use an empty result as a commit."""
         try:
             current = self._collect()
         except Exception:
@@ -735,26 +750,19 @@ class PresetBar(QWidget):
         return self._read(slot) is not None
 
     def _slot_source_changed(self, slot):
-        if self._loaded_slot_payload is None:
-            name = (
-                self._baseline.get("display_name")
-                if isinstance(self._baseline, dict) else None
-            )
-            return bool(name) and self._slot_display_name(slot) != name
-        return self._effective_payload(slot) != self._loaded_slot_payload or (
-            isinstance(self._baseline, dict)
-            and self._slot_display_name(slot) != self._baseline.get("display_name")
-        )
+        return bool(self._baseline_source_note(slot))
 
     def _baseline_source_note(self, slot):
         baseline = self._baseline
         if not isinstance(baseline, dict) or baseline.get("slot") != slot:
             return ""
-        if not self._slot_is_available(slot):
-            return "原基准已不可用"
-        if self._slot_source_changed(slot):
-            return "基准快照，槽位已更新"
-        return ""
+        return baseline_source_status(
+            baseline,
+            kind=self._kind,
+            slot_available=self._slot_is_available(slot),
+            current_payload=self._effective_payload(slot),
+            current_name=self._slot_display_name(slot),
+        )
 
     def baseline(self):
         return copy.deepcopy(self._baseline) if isinstance(self._baseline, dict) else None
@@ -765,12 +773,13 @@ class PresetBar(QWidget):
         self._baseline = validated
         if validated is None:
             self._loaded_slot_payload = None
+        elif validated.get("version") == 2 and isinstance(
+            validated.get("source_payload"), dict
+        ):
+            self._loaded_slot_payload = copy.deepcopy(validated["source_payload"])
         else:
-            slot = validated["slot"]
-            payload = self._effective_payload(slot)
-            self._loaded_slot_payload = (
-                copy.deepcopy(payload) if isinstance(payload, dict) else None
-            )
+            # v1 / unknown: do not backfill from the current global slot.
+            self._loaded_slot_payload = None
         self.sync_match()
 
     def infer_baseline_from_current(self):
@@ -829,17 +838,72 @@ class PresetBar(QWidget):
             self._kind, baseline.get("params") or {}, current,
         )
 
-    def _commit_loaded_slot(self, slot, fallback_params=None):
-        current = self._collect_safe()
-        if not current and isinstance(fallback_params, dict):
-            current = dict(fallback_params)
-        name = self._slot_display_name(slot)
-        self._baseline = build_preset_baseline(self._kind, slot, name, current)
-        payload = self._effective_payload(slot)
-        self._loaded_slot_payload = (
-            copy.deepcopy(payload) if isinstance(payload, dict) else None
+    @property
+    def is_transaction_open(self):
+        return bool(self._transaction_open)
+
+    def _run_user_transaction(self, work):
+        """Run one user load/save. Emit ``preset_committed`` only on success."""
+        self._transaction_open = True
+        ok = False
+        try:
+            ok = bool(work())
+        finally:
+            self._transaction_open = False
+        if ok:
+            self.preset_committed.emit(self.baseline())
+        return ok
+
+    def _snapshot_collect_and_baseline(self):
+        return (
+            self._collect_safe() or None,
+            copy.deepcopy(self._baseline),
+            copy.deepcopy(self._loaded_slot_payload),
         )
+
+    def _restore_collect_and_baseline(self, snapshot):
+        before, before_baseline, before_loaded = snapshot
+        if before:
+            try:
+                self._apply(before)
+            except Exception:
+                logger.exception(
+                    "failed to restore preset params after apply error"
+                )
+        self._baseline = before_baseline
+        self._loaded_slot_payload = before_loaded
         self.sync_match()
+
+    def _commit_loaded_slot(self, slot, target_params, source_payload):
+        """Commit the resolved target and the loaded slot patch, not applied."""
+        if not isinstance(target_params, dict) or not target_params:
+            logger.warning(
+                "refusing empty preset baseline commit for kind=%s slot=%s",
+                self._kind, slot,
+            )
+            return False
+        if not isinstance(source_payload, dict) or not source_payload:
+            logger.warning(
+                "refusing preset baseline commit without source payload "
+                "for kind=%s slot=%s",
+                self._kind, slot,
+            )
+            return False
+        name = self._slot_display_name(slot)
+        built = build_preset_baseline(
+            self._kind, slot, name, target_params, source_payload=source_payload,
+        )
+        validated = validate_preset_baseline(built, expected_kind=self._kind)
+        if validated is None:
+            logger.warning(
+                "refusing invalid preset baseline commit for kind=%s slot=%s",
+                self._kind, slot,
+            )
+            return False
+        self._baseline = validated
+        self._loaded_slot_payload = copy.deepcopy(validated["source_payload"])
+        self.sync_match()
+        return True
 
     def _clear_baseline(self):
         self._baseline = None
@@ -952,6 +1016,9 @@ class PresetBar(QWidget):
                 parts.append("分析参数有差异")
             if self._kind != "frf" and self._live_diff.axes_differ:
                 parts.append("坐标有差异")
+        note = self._baseline_source_note(slot) if applied else ""
+        if note:
+            parts.append(note)
         btn.setAccessibleDescription("，".join(parts))
 
     def _set_recommend_badge(self, slot, recommended):
@@ -1254,10 +1321,11 @@ class PresetBar(QWidget):
     def _axis_label(self, axis):
         return _AXIS_LABELS.get(self._kind, {}).get(axis, axis.upper())
 
-    def _prepare_user_preset(self, params, *, purpose="switch"):
+    def _prepare_user_preset(self, params, *, purpose="switch", current=None):
         """Protect ranges at user entry points only, never during View restore."""
         target = dict(params)
-        current = self._collect_safe()
+        if current is None:
+            current = self._collect_safe()
         conflict_axes = manual_axis_conflicts(self._kind, current, target)
         incompat_axes = incompatible_amplitude_axes(self._kind, current, target)
         keepable = [axis for axis in conflict_axes if axis not in incompat_axes]
@@ -1282,30 +1350,18 @@ class PresetBar(QWidget):
             return False
         if self._slot_source_changed(slot):
             return False
-        diff = diff_preset_state(
+        return comparable_params_match(
             self._kind,
             self._baseline.get("params") or {},
             self._collect_safe(),
         )
-        return not diff.params_differ and not diff.axes_differ
 
-    def _apply_with_rollback(self, params, *, error_prefix):
-        before = self._collect_safe() or None
-        before_baseline = copy.deepcopy(self._baseline)
-        before_loaded = copy.deepcopy(self._loaded_slot_payload)
+    def _apply_with_rollback(self, params, *, error_prefix, snapshot=None):
+        snapshot = snapshot or self._snapshot_collect_and_baseline()
         try:
             self._apply(params)
         except Exception as e:
-            if before:
-                try:
-                    self._apply(before)
-                except Exception:
-                    logger.exception(
-                        "failed to restore preset params after apply error"
-                    )
-            self._baseline = before_baseline
-            self._loaded_slot_payload = before_loaded
-            self.sync_match()
+            self._restore_collect_and_baseline(snapshot)
             self.acknowledged.emit("error", f"{error_prefix}: {e}")
             return False
         return True
@@ -1327,14 +1383,25 @@ class PresetBar(QWidget):
     def _save(self, slot):
         try:
             params = self._collect()
-        except Exception as e:  # pragma: no cover — defensive
+        except Exception as e:
+            logger.exception("preset collect failed during save")
             self.acknowledged.emit("error", f"保存失败: {e}")
+            return
+        if not isinstance(params, dict) or not params:
+            self.acknowledged.emit("error", "保存失败: 当前预设参数不可用")
             return
         existing = self._read(slot)
         name = existing[0] if existing else self._default_name(slot)
-        self._write(slot, name, params)
-        self._commit_loaded_slot(slot, fallback_params=params)
-        self.acknowledged.emit("success", f"已保存到「{name}」")
+
+        def work():
+            self._write(slot, name, params)
+            if not self._commit_loaded_slot(slot, params, params):
+                self.acknowledged.emit("error", "保存失败: 无法建立预设基准")
+                return False
+            return True
+
+        if self._run_user_transaction(work):
+            self.acknowledged.emit("success", f"已保存到「{name}」")
 
     def _load(self, slot):
         entry = self._read(slot)
@@ -1348,13 +1415,39 @@ class PresetBar(QWidget):
             name = self._default_name(slot)
         else:
             name, params = entry
-        prepared = self._prepare_user_preset(params)
+        if not isinstance(params, dict) or not params:
+            self.acknowledged.emit("error", f"加载失败: 「{name}」没有有效补丁")
+            return
+        before = self._collect()
+        if not isinstance(before, dict) or not before:
+            self.acknowledged.emit("error", "加载失败: 当前预设参数不可用")
+            return
+        target = resolve_preset_target(self._kind, before, params)
+        if not target:
+            self.acknowledged.emit("error", "加载失败: 无法解析预设目标")
+            return
+        prepared = self._prepare_user_preset(target, current=before)
         if prepared is None:
             return
-        if not self._apply_with_rollback(prepared, error_prefix="加载失败"):
-            return
-        self._commit_loaded_slot(slot, fallback_params=prepared)
-        self.acknowledged.emit("success", f"已加载「{name}」")
+        snapshot = (
+            copy.deepcopy(before),
+            copy.deepcopy(self._baseline),
+            copy.deepcopy(self._loaded_slot_payload),
+        )
+
+        def work():
+            if not self._apply_with_rollback(
+                prepared, error_prefix="加载失败", snapshot=snapshot,
+            ):
+                return False
+            if not self._commit_loaded_slot(slot, target, params):
+                self._restore_collect_and_baseline(snapshot)
+                self.acknowledged.emit("error", "加载失败: 无法建立预设基准")
+                return False
+            return True
+
+        if self._run_user_transaction(work):
+            self.acknowledged.emit("success", f"已加载「{name}」")
 
     def _restore_default_params(self, slot=None):
         """Menu path: apply construction defaults and clear the baseline."""
@@ -1367,10 +1460,18 @@ class PresetBar(QWidget):
         )
         if prepared is None:
             return
-        if not self._apply_with_rollback(prepared, error_prefix="恢复默认失败"):
-            return
-        self._clear_baseline()
-        self.acknowledged.emit("info", "已恢复面板默认参数")
+        snapshot = self._snapshot_collect_and_baseline()
+
+        def work():
+            if not self._apply_with_rollback(
+                prepared, error_prefix="恢复默认失败", snapshot=snapshot,
+            ):
+                return False
+            self._clear_baseline()
+            return True
+
+        if self._run_user_transaction(work):
+            self.acknowledged.emit("info", "已恢复面板默认参数")
 
     def _rename(self, slot):
         entry = self._read(slot)

@@ -158,6 +158,16 @@ def characteristic_values(count, *, head=11.0, mid=22.0, tail=33.0):
     return values
 
 
+def expected_time_axis(count, t0=0.0, dt=0.001):
+    """Independent time oracle: ``t0 + arange(n, float64) * dt``."""
+    return float(t0) + np.arange(int(count), dtype=np.float64) * float(dt)
+
+
+def expected_f32_values(values):
+    """Independent value oracle matching ZFGE2 type-4 decode (f32 LE → f64)."""
+    return np.asarray(values, dtype="<f4").astype(np.float64, copy=False)
+
+
 def write_minimal_zfd(
     path,
     *,

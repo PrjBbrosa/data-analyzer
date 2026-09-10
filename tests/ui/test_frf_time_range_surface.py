@@ -88,6 +88,61 @@ def test_time_domain_view_all_does_not_convert_analysis_pane_to_full(qtbot):
     ) is None
 
 
+def test_frf_missing_role_cannot_use_local_or_full(qtbot, monkeypatch):
+    from tests.ui.test_analysis_time_range_confirm import _user_commit_range
+
+    win, pane = _window_with_pair(qtbot)
+    pane.output_source = None
+    win.inspector.frf_ctx.set_output_source(None)
+    top = win.inspector.top
+    top.set_range_limits(-10.0, 20.0)
+    _user_commit_range(top, 0.25, 0.75)
+    monkeypatch.setattr(win, "_ask_use_local_time_range", lambda *a, **k: "local")
+    assert win._offer_analysis_time_range_before_compute("frf") is False
+    assert pane.time_range is None
+    monkeypatch.setattr(win, "_ask_use_local_time_range", lambda *a, **k: "full")
+    assert win._offer_analysis_time_range_before_compute("frf") is False
+    assert pane.time_range is None
+
+
+def test_frf_no_intersection_cannot_use_local_or_full(qtbot, monkeypatch):
+    from tests.ui.test_analysis_time_range_confirm import _user_commit_range
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    in_t = np.linspace(0.0, 1.0, 101)
+    out_t = np.linspace(3.0, 4.0, 101)
+    win.files["in"] = FileData(
+        "in.csv",
+        pd.DataFrame({"input": np.sin(in_t)}),
+        ["input"],
+        {},
+        fs=100.0,
+    )
+    win.files["in"].time_array = in_t
+    win.files["out"] = FileData(
+        "out.csv",
+        pd.DataFrame({"output": np.cos(out_t)}),
+        ["output"],
+        {},
+        fs=100.0,
+    )
+    win.files["out"].time_array = out_t
+    pane = win.analysis_managers["frf"].get(0).panes[0]
+    pane.input_source = ("in", "input")
+    pane.output_source = ("out", "output")
+    win.toolbar._set_mode("frf")
+    top = win.inspector.top
+    top.set_range_limits(-10.0, 20.0)
+    _user_commit_range(top, 0.2, 0.8)
+    monkeypatch.setattr(win, "_ask_use_local_time_range", lambda *a, **k: "local")
+    assert win._offer_analysis_time_range_before_compute("frf") is False
+    assert pane.time_range is None
+    monkeypatch.setattr(win, "_ask_use_local_time_range", lambda *a, **k: "full")
+    assert win._offer_analysis_time_range_before_compute("frf") is False
+    assert pane.time_range is None
+
+
 def test_frf_compute_reads_the_same_pane_range_shown_in_the_inspector(qtbot):
     win, pane = _window_with_pair(qtbot)
     pane.input_source = ("source-a", "input")

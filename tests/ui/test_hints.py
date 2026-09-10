@@ -147,6 +147,8 @@ def test_batch_control_applicability_discovery_hints_stay_short():
         "batch.layout_when_separate": ("每项单独", "图内布局"),
         "batch.fft_single_frame": ("单帧", "窗长"),
         "batch.data_only_preview": ("仅导出数据", "预览"),
+        "batch.count_pending": ("待确定", "来源"),
+        "batch.disabled_keeps_value": ("禁用", "原值"),
     }
     by_id = {hint.id: hint for hint in hints.all_hints()}
     for hint_id, phrases in expected.items():
@@ -155,6 +157,21 @@ def test_batch_control_applicability_discovery_hints_stay_short():
             assert phrase in hint.text
         assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
         assert hint.retire_on == "batch_open"
+        assert hint.surface == "discovery"
+
+
+def test_hardening_interaction_discovery_hints_stay_short():
+    expected = {
+        "analysis.range_invalid_keep": ("非法范围", "全部"),
+        "preset.target_axis_dot": ("黄点", "目标"),
+        "preset.slot_source_note": ("再加载",),
+    }
+    by_id = {hint.id: hint for hint in hints.all_hints()}
+    for hint_id, phrases in expected.items():
+        hint = by_id[hint_id]
+        for phrase in phrases:
+            assert phrase in hint.text
+        assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
         assert hint.surface == "discovery"
 
 

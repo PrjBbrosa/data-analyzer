@@ -104,6 +104,34 @@ def test_verified_zfd_fs_keeps_existing_time_and_nonzero_t0():
     assert fd._time_source == "column"
 
 
+def test_time_array_assignment_and_rebuild_bump_revision():
+    frame = pd.DataFrame({"sig": np.arange(8, dtype=float)})
+    fd = FileData("rev.csv", frame, ["sig"], {}, fs=1000.0)
+    assert fd.time_axis_revision >= 1
+    first = fd.time_axis_revision
+    token = fd.source_instance_token
+    assert token == id(fd)
+
+    same_extent = np.arange(8, dtype=float) / 1000.0
+    same_extent[1] += 1e-6
+    fd.time_array = same_extent
+    assert fd.time_axis_revision == first + 1
+    assert float(fd.time_array[0]) == pytest.approx(0.0)
+    assert float(fd.time_array[-1]) == pytest.approx(same_extent[-1])
+
+    reused = fd.time_array
+    reused[2] += 1e-6
+    fd.time_array = reused
+    assert fd.time_axis_revision == first + 2
+
+    fd.rebuild_time_axis(500.0, reason="manual")
+    assert fd.time_axis_revision == first + 3
+    assert fd.source_instance_token == token
+
+    other = FileData("other.csv", frame.copy(), ["sig"], {}, fs=1000.0)
+    assert other.source_instance_token != token
+
+
 def test_verified_zfd_fs_applies_to_one_point_time_column():
     frame = pd.DataFrame({"Time": [3.0], "sig": [7.0]})
     fd = FileData(

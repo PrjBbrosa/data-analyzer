@@ -17,10 +17,12 @@ from mf4_analyzer.ui.main_window.analysis_time_range import (
     AnalysisTimeRangeController,
     SourceBounds,
     axis_extent,
+    axis_facts_from_files,
     bounds_from_axes,
     display_ranges_equal,
     make_source_signature,
     order_rpm_alignment_hook,
+    validate_requested_span,
 )
 
 
@@ -217,6 +219,25 @@ def test_nonfinite_or_unparseable_edit_is_invalid_not_full(span):
     assert _intent(ctrl).kind != "full"
 
 
+def test_none_span_is_invalid_draft_without_forged_range():
+    ctrl = _controller()
+    intent = ctrl.apply_user_edit(*PANE, None, SIG_A)
+    assert intent.kind == "invalid"
+    assert intent.range is None
+    draft = ctrl.draft_for(*PANE)
+    assert draft is not None
+    assert draft.valid is False
+    assert draft.range is None
+
+
+def test_invalid_draft_is_visible_over_enabled_range():
+    ctrl = _controller()
+    ctrl.note_enabled(*PANE, (0.0, 10.0), SIG_A)
+    intent = ctrl.apply_user_edit(*PANE, None, SIG_A)
+    assert intent.kind == "invalid"
+    assert _intent(ctrl, enabled_range=(0.0, 10.0)).kind == "invalid"
+
+
 def test_invalid_enabled_is_not_silently_full():
     ctrl = _controller()
     bad = (5.0, 1.0)
@@ -241,10 +262,15 @@ def test_missing_source_is_unavailable_and_does_not_reuse_prior_display():
 
 # -- source signatures -------------------------------------------------------
 
+def _axis_fact(t0, t1, n, *, source_token="fd", axis_revision=1, axis_token="ax"):
+    """Fakes must supply tokens explicitly; no silent 0/False padding."""
+    return (float(t0), float(t1), int(n), source_token, axis_revision, axis_token)
+
+
 def test_source_signature_ignores_source_list_order():
     facts = {
-        ("f1", "a"): (0.0, 10.0, 100),
-        ("f2", "b"): (0.0, 12.0, 120),
+        ("f1", "a"): _axis_fact(0.0, 10.0, 100, source_token="a", axis_token="ta"),
+        ("f2", "b"): _axis_fact(0.0, 12.0, 120, source_token="b", axis_token="tb"),
     }
     left = make_source_signature(
         "fft", sources=[("f2", "b"), ("f1", "a")], axis_facts=facts,
@@ -256,8 +282,8 @@ def test_source_signature_ignores_source_list_order():
 
 
 def test_source_signature_changes_with_channel_axis_or_frf_direction():
-    facts_short = {("f1", "sig"): (0.0, 10.0, 100)}
-    facts_long = {("f1", "sig"): (0.0, 20.0, 200)}
+    facts_short = {("f1", "sig"): _axis_fact(0.0, 10.0, 100)}
+    facts_long = {("f1", "sig"): _axis_fact(0.0, 20.0, 200)}
     assert make_source_signature(
         "fft", sources=[("f1", "sig")], axis_facts=facts_short,
     ) != make_source_signature(
@@ -268,27 +294,25 @@ def test_source_signature_changes_with_channel_axis_or_frf_direction():
     ) != make_source_signature(
         "fft", sources=[("f1", "sig")], axis_facts=facts_long,
     )
+    io_facts = {
+        ("f1", "in"): _axis_fact(0.0, 10.0, 100, source_token="in", axis_token="tin"),
+        ("f1", "out"): _axis_fact(0.0, 10.0, 100, source_token="out", axis_token="tout"),
+    }
     assert make_source_signature(
         "frf",
         input_source=("f1", "in"),
         output_source=("f1", "out"),
-        axis_facts={
-            ("f1", "in"): (0.0, 10.0, 100),
-            ("f1", "out"): (0.0, 10.0, 100),
-        },
+        axis_facts=io_facts,
     ) != make_source_signature(
         "frf",
         input_source=("f1", "out"),
         output_source=("f1", "in"),
-        axis_facts={
-            ("f1", "in"): (0.0, 10.0, 100),
-            ("f1", "out"): (0.0, 10.0, 100),
-        },
+        axis_facts=io_facts,
     )
 
 
 def test_order_signature_includes_rpm_mode_and_source():
-    facts = {("f1", "sig"): (0.0, 10.0, 100)}
+    facts = {("f1", "sig"): _axis_fact(0.0, 10.0, 100)}
     channel = make_source_signature(
         "order",
         sources=[("f1", "sig")],
@@ -312,6 +336,121 @@ def test_order_signature_includes_rpm_mode_and_source():
     )
     assert channel != manual
     assert channel != other_rpm
+
+
+def test_same_extent_axis_revision_or_instance_changes_signature():
+    base = _axis_fact(0.0, 10.0, 100, source_token="fd-a", axis_revision=1, axis_token="ax-1")
+    same_extent = _axis_fact(0.0, 10.0, 100, source_token="fd-a", axis_revision=2, axis_token="ax-1")
+    replaced_axis = _axis_fact(0.0, 10.0, 100, source_token="fd-a", axis_revision=1, axis_token="ax-2")
+    replaced_source = _axis_fact(0.0, 10.0, 100, source_token="fd-b", axis_revision=1, axis_token="ax-1")
+    left = make_source_signature("fft", sources=[("f1", "sig")], axis_facts={("f1", "sig"): base})
+    assert left != make_source_signature(
+        "fft", sources=[("f1", "sig")], axis_facts={("f1", "sig"): same_extent},
+    )
+    assert left != make_source_signature(
+        "fft", sources=[("f1", "sig")], axis_facts={("f1", "sig"): replaced_axis},
+    )
+    assert left != make_source_signature(
+        "fft", sources=[("f1", "sig")], axis_facts={("f1", "sig"): replaced_source},
+    )
+
+
+def test_axis_facts_require_explicit_tokens_and_do_not_pad():
+    with pytest.raises(ValueError, match="explicit"):
+        make_source_signature(
+            "fft",
+            sources=[("f1", "sig")],
+            axis_facts={("f1", "sig"): (0.0, 10.0, 100)},
+        )
+    with pytest.raises(ValueError, match="explicit"):
+        make_source_signature(
+            "fft",
+            sources=[("f1", "sig")],
+            axis_facts={
+                ("f1", "sig"): {"t0": 0.0, "t1": 10.0, "n": 100},
+            },
+        )
+
+
+def test_validate_requested_span_is_shared_for_draft_and_enabled():
+    per_source = {("f1", "sig"): (0.0, 10.0)}
+    covered = validate_requested_span(per_source, (2.0, 4.0))
+    assert covered.ok is True
+    assert covered.reason == "ok"
+    assert covered.span == (2.0, 4.0)
+
+    outside = validate_requested_span(per_source, (20.0, 30.0))
+    assert outside.ok is False
+    assert outside.reason == "uncovered"
+    assert outside.span == (20.0, 30.0)
+    assert outside.errors
+
+    partial = validate_requested_span(per_source, (5.0, 15.0))
+    assert partial.ok is False
+    assert partial.reason == "uncovered"
+
+    inverted = validate_requested_span(per_source, (8.0, 2.0))
+    assert inverted.ok is False
+    assert inverted.reason == "unordered"
+    assert inverted.span == (8.0, 2.0)
+
+    missing = validate_requested_span({}, (2.0, 4.0), bounds_status="unavailable")
+    assert missing.ok is False
+    assert missing.reason == "unavailable"
+
+    overlay = {
+        ("f1", "a"): (0.0, 10.0),
+        ("f2", "b"): (20.0, 30.0),
+    }
+    envelope_local = validate_requested_span(overlay, (8.0, 22.0))
+    assert envelope_local.ok is False
+    assert envelope_local.reason == "uncovered"
+
+
+def test_draft_out_of_coverage_keeps_parse_valid_and_reports_errors():
+    ctrl = _controller(
+        display=(0.0, 10.0), per_source={("f1", "sig"): (0.0, 10.0)},
+    )
+    intent = ctrl.apply_user_edit(*PANE, (20.0, 30.0), SIG_A)
+    assert intent.kind == "draft"
+    draft = ctrl.draft_for(*PANE)
+    assert draft is not None
+    assert draft.valid is True
+    assert draft.range == (20.0, 30.0)
+    assert intent.errors
+    assert any("cover" in str(err) for err in intent.errors)
+
+
+def test_axis_facts_from_files_record_explicit_none_not_zero():
+    class _Bare:
+        def __init__(self, axis):
+            self.time_array = np.asarray(axis, dtype=float)
+
+    class _Complete:
+        def __init__(self, axis):
+            self.time_array = np.asarray(axis, dtype=float)
+            self.time_axis_revision = 4
+            self.source_instance_token = "token-a"
+
+    bare = _Bare([0.0, 10.0])
+    complete = _Complete([0.0, 10.0])
+    facts = axis_facts_from_files(
+        {"bare": bare, "full": complete},
+        [("bare", "sig"), ("full", "sig")],
+    )
+    bare_fact = facts[("bare", "sig")]
+    full_fact = facts[("full", "sig")]
+    assert bare_fact[0] == 0.0
+    assert bare_fact[1] == 10.0
+    assert bare_fact[2] == 2
+    assert bare_fact[3] == id(bare)
+    assert bare_fact[4] is None
+    assert bare_fact[4] is not False
+    assert bare_fact[4] != 0
+    assert bare_fact[5] == id(bare.time_array)
+    assert full_fact[3] == "token-a"
+    assert full_fact[4] == 4
+    assert full_fact[5] == id(complete.time_array)
 
 
 def test_same_signature_does_not_clear_draft():
@@ -528,8 +667,12 @@ class _ChartStack:
 
 
 class _FileData:
-    def __init__(self, time_array):
+    def __init__(self, time_array, *, time_axis_revision=1, source_instance_token=None):
         self.time_array = np.asarray(time_array, dtype=float)
+        self.time_axis_revision = int(time_axis_revision)
+        self.source_instance_token = (
+            source_instance_token if source_instance_token is not None else object()
+        )
 
 
 class _Pane:
@@ -610,10 +753,21 @@ def test_context_holds_one_controller_and_reads_pane_file_not_longest():
 
 # -- Step 2: shared Inspector widget + silent projection ---------------------
 
+def _emit_spin_text_edited(spin, text=None):
+    edit = spin.lineEdit()
+    if edit is None:
+        return
+    if text is not None:
+        edit.setText(text)
+    edit.textEdited.emit(edit.text())
+
+
 def _user_commit_range(top, lo, hi):
     """Simulate a typed start/end commit without going through set_range_values."""
     top.spin_start.setValue(float(lo))
     top.spin_end.setValue(float(hi))
+    _emit_spin_text_edited(top.spin_start)
+    _emit_spin_text_edited(top.spin_end)
     return top.flush_pending_range_edit(emit=True)
 
 
@@ -650,12 +804,72 @@ def test_flush_pending_range_edit_commits_line_edit_before_compute(qapp):
     top.set_range_values(0.0, 1.0)
     seen = []
     top.range_edited.connect(lambda lo, hi: seen.append((lo, hi)))
-    top.spin_end.lineEdit().setText("2.500")
+    _emit_spin_text_edited(top.spin_end, "2.500")
     pending = top.flush_pending_range_edit(emit=True)
     assert top.spin_end.value() == pytest.approx(2.5)
     assert pending == pytest.approx((0.0, 2.5))
     assert seen == [pytest.approx((0.0, 2.5))]
     assert top.flush_pending_range_edit(emit=True) is None
+
+
+def test_query_range_edit_distinguishes_unchanged_valid_and_invalid(qapp):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import (
+        PersistentTop,
+        RangeEditQuery,
+    )
+
+    top = PersistentTop()
+    top.set_range_values(0.0, 10.0)
+    query = top.query_range_edit()
+    assert query.status == RangeEditQuery.UNCHANGED
+    assert query.span is None
+
+    _emit_spin_text_edited(top.spin_start, "2.0")
+    _emit_spin_text_edited(top.spin_end, "4.0")
+    query = top.query_range_edit()
+    assert query.status == RangeEditQuery.VALID_EDIT
+    assert query.span == pytest.approx((2.0, 4.0))
+    revision = query.revision
+    assert revision > 0
+
+    top.set_range_values(0.0, 10.0)
+    _emit_spin_text_edited(top.spin_start, "-")
+    query = top.query_range_edit()
+    assert query.status == RangeEditQuery.INVALID_EDIT
+    assert query.span is None
+    assert query.revision != revision
+    assert "-" in query.start_text
+
+
+def test_flush_same_revision_is_idempotent_and_unedited_focus_out_is_quiet(qapp):
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    top = PersistentTop()
+    seen = []
+    invalid = []
+    top.range_edited.connect(lambda lo, hi: seen.append((lo, hi)))
+    top.range_edit_invalid.connect(lambda: invalid.append(True))
+    top.set_range_values(0.0, 10.0)
+    top.spin_start.editingFinished.emit()
+    top.spin_end.editingFinished.emit()
+    assert seen == []
+    assert invalid == []
+    assert top.query_range_edit().status == "unchanged"
+
+    _emit_spin_text_edited(top.spin_end, "2.500")
+    first = top.flush_pending_range_edit(emit=True)
+    second = top.flush_pending_range_edit(emit=True)
+    assert first == pytest.approx((0.0, 2.5))
+    assert second is None
+    assert seen == [pytest.approx((0.0, 2.5))]
+    assert invalid == []
+
+    _emit_spin_text_edited(top.spin_start, "-")
+    assert top.flush_pending_range_edit(emit=True) is None
+    assert top.flush_pending_range_edit(emit=True) is None
+    assert invalid == [True]
+    assert "-" in top.spin_start.lineEdit().text()
+    assert not top.spin_start.hasAcceptableInput()
 
 
 def test_programmatic_set_range_values_does_not_apply_user_edit(qapp, qtbot):
@@ -1123,6 +1337,58 @@ def test_corrupt_restored_tuple_stays_invalid_not_full(qapp, qtbot):
     assert intent.kind != "full"
 
 
+def test_same_extent_axis_replacement_invalidates_signature(qapp, qtbot):
+    """Migrated review probe: (t0, t1, n) alone must not keep the signature."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    fid, _time = _register_span(win, "src", 10.0, n=101)
+    _enter_fft(win, [fid])
+    _tick_fft_sources(win, [(fid, "sig")])
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    pane = state.panes[0]
+    before = win._analysis_source_signature_for_pane("fft", pane, state)
+    axis = win.files[fid].time_array.copy()
+    axis[1] += 0.001
+    win.files[fid].time_array = axis
+    after = win._analysis_source_signature_for_pane("fft", pane, state)
+    assert before != after
+
+
+def test_source_instance_replacement_changes_signature(qapp, qtbot):
+    import pandas as pd
+
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    fid, time = _register_span(win, "src", 10.0, n=101)
+    _enter_fft(win, [fid])
+    _tick_fft_sources(win, [(fid, "sig")])
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    pane = state.panes[0]
+    before = win._analysis_source_signature_for_pane("fft", pane, state)
+    replacement = FileData(
+        "src.csv",
+        pd.DataFrame({"sig": np.sin(time)}),
+        ["sig"],
+        {},
+        fs=10.0,
+    )
+    replacement.time_array = np.asarray(time, dtype=float).copy()
+    win.files[fid] = replacement
+    after = win._analysis_source_signature_for_pane("fft", pane, state)
+    assert before != after
+    payload = state.to_dict()
+    assert "time_axis_revision" not in payload
+    assert "source_instance_token" not in payload["panes"][0]
+    assert "source_signature" not in payload["panes"][0]
+
+
 def test_serialized_views_omit_drafts_and_signatures(qapp, qtbot, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -1362,3 +1628,27 @@ def test_project_top_from_intent_drives_status_text(qapp, qtbot):
         TimeRangeIntent(kind="invalid", range=(2.0, 1.0)),
     )
     assert top.range_intent_status_text() == "范围无效，无法用于计算"
+    win._project_top_from_time_range_intent(
+        "fft",
+        TimeRangeIntent(
+            kind="enabled",
+            range=(1.0, 2.0),
+            display_range=(0.0, 10.0),
+            needs_review=True,
+        ),
+    )
+    assert top.range_intent_status_text() == "已启用范围需要复核"
+    win._project_top_from_time_range_intent(
+        "fft",
+        TimeRangeIntent(
+            kind="full",
+            display_range=(0.0, 10.0),
+            notes=("各信号使用自身全时段",),
+        ),
+    )
+    assert top.range_intent_status_text() == "各信号使用自身全时段"
+    win._project_top_from_time_range_intent(
+        "fft",
+        TimeRangeIntent(kind="unavailable", errors=("missing source",)),
+    )
+    assert top.range_intent_status_text() == "当前没有可用时间范围"

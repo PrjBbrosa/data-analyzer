@@ -1,6 +1,17 @@
 """User preset switches protect manual ranges without changing restore semantics."""
 import pytest
-from mf4_analyzer.ui.inspector_sections import FFTContextual, FFTTimeContextual, OrderContextual
+from mf4_analyzer.ui.inspector_sections import (
+    FFTContextual,
+    FFTTimeContextual,
+    FrfContextual,
+    OrderContextual,
+)
+from mf4_analyzer.ui.inspector_sections.preset_state import (
+    diff_preset_state,
+    normalize_preset_params,
+    resolve_preset_target,
+    values_match,
+)
 
 
 @pytest.mark.parametrize('factory', [FFTContextual, FFTTimeContextual, OrderContextual])
@@ -202,3 +213,98 @@ def test_keep_disabled_when_only_incompatible_axis(qtbot, qapp):
     assert result == 'preset'
     assert captured['enabled'] is False
     assert captured['default'] == '使用预设范围'
+
+
+def test_keep_axes_preserves_target_baseline_difference(qtbot, monkeypatch):
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    bar = ctx.preset_bar
+    ctx.chk_x_auto.setChecked(False)
+    ctx.spin_x_min.setValue(1)
+    ctx.spin_x_max.setValue(5)
+    before = ctx._collect_preset()
+    patch = bar._effective_payload(1)
+    target = resolve_preset_target("fft", before, patch)
+    confirms = []
+
+    def choose(*args, **kwargs):
+        confirms.append("keep")
+        return "keep"
+
+    monkeypatch.setattr(bar, "_confirm_axis_preservation", choose)
+    bar._load(1)
+    assert not ctx.chk_x_auto.isChecked()
+    assert ctx.spin_x_min.value() == 1
+    assert ctx.spin_x_max.value() == 5
+    assert bar._selected_slot == 1
+    assert bar.baseline()["version"] == 2
+    assert bar.baseline()["params"]["x_auto"] is True
+    assert bar._live_diff.axes_differ
+    assert not bar._axis_dots[1].isHidden()
+    assert normalize_preset_params("fft", bar.baseline()["params"]) == (
+        normalize_preset_params("fft", target)
+    )
+    assert not bar._is_noop_reapply(1)
+    bar._load(1)
+    assert confirms == ["keep", "keep"]
+    assert not ctx.chk_x_auto.isChecked()
+    assert bar._live_diff.axes_differ
+
+
+def _assert_target_matches_apply(kind, ctx, patch):
+    before = ctx._collect_preset()
+    target = resolve_preset_target(kind, before, patch)
+    ctx._apply_preset(patch)
+    after = ctx._collect_preset()
+    diff = diff_preset_state(kind, target, after)
+    assert not diff.params_differ, (diff.param_keys, target, after)
+    assert not diff.axes_differ, (diff.axis_keys, target, after)
+    left = normalize_preset_params(kind, target)
+    right = normalize_preset_params(kind, after)
+    assert set(left) == set(right)
+    assert all(values_match(left[key], right[key]) for key in left)
+
+
+@pytest.mark.parametrize("factory,kind,patch", [
+    (
+        FFTContextual, "fft",
+        {"window": "flattop", "nfft": "自动", "overlap": 75, "amp_y": "Linear",
+         "autoscale": False, "x_min": 2.0, "x_max": 9.0},
+    ),
+    (
+        FFTTimeContextual, "fft_time",
+        {"window": "flattop", "nfft": None, "nfft_mode": "auto", "overlap": 75,
+         "amplitude_mode": "Amplitude", "freq_auto": False, "freq_min": 3.0,
+         "freq_max": 30.0, "dynamic": "40 dB"},
+    ),
+    (
+        OrderContextual, "order",
+        {"window": "flattop", "nfft": "自动", "max_order": 20,
+         "amplitude_mode": "Amplitude", "x_auto": False, "x_min": 0.5, "x_max": 4.0},
+    ),
+    (
+        FrfContextual, "frf",
+        {"t_win_s": 8.0, "overlap": 0.75, "nfft_mode": "manual", "nfft": 4096,
+         "estimator": "H1", "window": "Hanning"},
+    ),
+])
+def test_resolved_target_matches_real_apply(qtbot, factory, kind, patch):
+    ctx = factory()
+    qtbot.addWidget(ctx)
+    if kind == "fft":
+        ctx.db_reference_control.set_mode("manual")
+        ctx.db_reference_control.editor.setValue(2.5)
+    elif kind == "order":
+        ctx.set_rpm_mode("manual")
+        ctx.spin_manual_rpm.setValue(1800.0)
+        ctx.db_reference_control.set_mode("manual")
+        ctx.db_reference_control.editor.setValue(3.0)
+    _assert_target_matches_apply(kind, ctx, patch)
+    after = ctx._collect_preset()
+    if kind == "fft":
+        assert after["db_reference_mode"] == "manual"
+        assert after["db_reference"] == 2.5
+    elif kind == "order":
+        assert after["rpm_mode"] == "manual"
+        assert after["manual_rpm"] == 1800.0
+        assert after["db_reference"] == 3.0

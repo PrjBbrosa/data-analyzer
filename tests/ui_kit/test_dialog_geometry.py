@@ -69,6 +69,32 @@ def test_hard_minimum_cannot_break_screen_budget():
     assert plan.compact is True
 
 
+def test_1080x760_target_keeps_size_on_large_screen_and_clamps_on_small():
+    large = plan_geometry(
+        QRect(0, 0, 1920, 1080),
+        (1080, 760),
+        frame=FrameInsets(),
+        content_minimum=(640, 480),
+        position="center",
+    )
+    assert large.client.width == 1080
+    assert large.client.height == 760
+
+    small = plan_geometry(
+        QRect(0, 0, 800, 600),
+        (1080, 760),
+        frame=FrameInsets(),
+        content_minimum=(640, 480),
+        position="center",
+    )
+    safe = IntRect(0, 0, 800, 600).adjusted(
+        SCREEN_MARGIN, SCREEN_MARGIN, -SCREEN_MARGIN, -SCREEN_MARGIN,
+    )
+    assert small.client.width < 1080
+    assert small.client.width <= safe.width
+    assert safe.contains_rect(small.frame)
+
+
 @pytest.mark.parametrize(
     "available",
     [

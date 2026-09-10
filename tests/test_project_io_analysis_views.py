@@ -249,6 +249,98 @@ def test_preset_baseline_round_trips_through_project_json(tmp_path):
     assert restored.preset_baseline["params"] == {"window": "hanning", "nfft": 4096}
     restored.preset_baseline["params"]["nfft"] = 1
     assert view.preset_baseline["params"]["nfft"] == 4096
+    assert restored.preset_baseline["version"] == 1
+    assert "source_payload" not in restored.preset_baseline
+
+
+def test_equal_params_cross_slot_baseline_round_trips_through_project_json(tmp_path):
+    """A13 serializer half: same compute params, new loaded slot must persist."""
+    view = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
+    params = {"nfft": 4096, "window": "hanning", "overlap": 50}
+    view.params = dict(params)
+    view.preset_baseline = {
+        "version": 2,
+        "kind": "fft",
+        "slot": 4,
+        "display_name": "identical",
+        "params": dict(params),
+        "source_payload": dict(params),
+    }
+    path = tmp_path / "baseline-cross-slot.tlproj"
+    save_project_to_json(
+        ProjectDocument(
+            active_file="f1",
+            current_mode="fft",
+            analysis_views={
+                "fft": {"active": 0, "views": [view.to_dict()]},
+            },
+        ),
+        path,
+    )
+    loaded = load_project_from_json(path)
+    restored = AnalysisViewState.from_dict(loaded.analysis_views["fft"]["views"][0])
+    assert restored.params == params
+    assert restored.preset_baseline["slot"] == 4
+    assert restored.preset_baseline["display_name"] == "identical"
+    assert restored.preset_baseline["version"] == 2
+    assert restored.preset_baseline["source_payload"] == params
+
+
+def test_v2_preset_baseline_round_trips_through_project_json(tmp_path):
+    view = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
+    view.params = {"nfft": 4096, "window": "hanning"}
+    view.preset_baseline = {
+        "version": 2,
+        "kind": "fft",
+        "slot": 2,
+        "display_name": "均衡",
+        "params": {"window": "hanning", "nfft": 4096, "x_auto": True},
+        "source_payload": {"window": "hanning", "overlap": 50},
+    }
+    path = tmp_path / "baseline-v2.tlproj"
+    save_project_to_json(
+        ProjectDocument(
+            active_file="f1",
+            current_mode="fft",
+            analysis_views={
+                "fft": {"active": 0, "views": [view.to_dict()]},
+            },
+        ),
+        path,
+    )
+    loaded = load_project_from_json(path)
+    payload = loaded.analysis_views["fft"]["views"][0]
+    assert payload["schema"] == 9
+    assert payload["preset_baseline"]["version"] == 2
+    restored = AnalysisViewState.from_dict(payload)
+    assert restored.preset_baseline["source_payload"]["overlap"] == 50
+    restored.preset_baseline["source_payload"]["overlap"] = 1
+    assert view.preset_baseline["source_payload"]["overlap"] == 50
+
+
+def test_corrupt_v2_preset_baseline_in_project_json_is_none(tmp_path):
+    view = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
+    view.preset_baseline = {
+        "version": 2,
+        "kind": "fft",
+        "slot": 1,
+        "display_name": "频率",
+        "params": {"window": "hanning"},
+    }
+    path = tmp_path / "baseline-bad.tlproj"
+    save_project_to_json(
+        ProjectDocument(
+            active_file="f1",
+            current_mode="fft",
+            analysis_views={
+                "fft": {"active": 0, "views": [view.to_dict()]},
+            },
+        ),
+        path,
+    )
+    loaded = load_project_from_json(path)
+    restored = AnalysisViewState.from_dict(loaded.analysis_views["fft"]["views"][0])
+    assert restored.preset_baseline is None
 
 
 def test_project_json_time_range_omits_drafts_and_keeps_none_as_full(tmp_path):

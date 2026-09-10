@@ -847,3 +847,214 @@ def test_open_replacement_guard_on_real_window(qapp, tmp_path, monkeypatch):
     mw._open_paths([str(proj)])
     assert list(mw.files) == before
     assert mw._project_dirty.is_dirty
+
+
+def _fft_preset_window(qtbot, monkeypatch, tmp_path):
+    import csv
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.ui.test_analysis_time_range_confirm import _enter_fft, _tick_fft_sources
+
+    csv_path = tmp_path / "preset-src.csv"
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time", "sig"])
+        for i in range(101):
+            writer.writerow([i / 10.0, float(i)])
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_path))
+    fid = next(iter(win.files))
+    channel = next(iter(win.files[fid].channels))
+    _enter_fft(win, [fid])
+    _tick_fft_sources(win, [(fid, channel)])
+    bar = win.inspector.fft_ctx.preset_bar
+    monkeypatch.setattr(bar, "_confirm_axis_preservation", lambda *a, **kw: "preset")
+    return win, fid, bar
+
+
+def _fft_view_baseline(win):
+    mgr = win.analysis_managers["fft"]
+    return mgr.get(mgr.active).preset_baseline
+
+
+def test_baseline_only_cross_slot_load_is_dirty_without_helper_capture(
+    qtbot, monkeypatch, tmp_path,
+):
+    """A13 / F03: save → equal-params load of another slot must dirty live View."""
+    win, _fid, bar = _fft_preset_window(qtbot, monkeypatch, tmp_path)
+    bar._load(1)
+    project = tmp_path / "review.tlproj"
+    assert win.save_project(project) is True
+    assert not win._project_session_is_dirty()
+    marks = []
+    real_mark = win._project_dirty.mark_user_mutation
+
+    def _mark(*args, **kwargs):
+        marks.append((args, kwargs))
+        return real_mark(*args, **kwargs)
+
+    monkeypatch.setattr(win._project_dirty, "mark_user_mutation", _mark)
+    bar._write(4, "identical", win.inspector.fft_ctx._collect_preset())
+    assert not win._project_session_is_dirty()
+    assert _fft_view_baseline(win)["slot"] == 1
+    bar._load(4)
+    assert bar.baseline()["slot"] == 4
+    assert _fft_view_baseline(win)["slot"] == 4
+    assert _fft_view_baseline(win)["version"] == 2
+    assert len(marks) == 1
+    assert win._project_session_is_dirty()
+
+
+def test_global_slot_write_without_load_does_not_dirty_saved_project(
+    qtbot, monkeypatch, tmp_path,
+):
+    win, _fid, bar = _fft_preset_window(qtbot, monkeypatch, tmp_path)
+    bar._load(1)
+    assert win.save_project(tmp_path / "slots.tlproj") is True
+    bar._write(4, "idle", win.inspector.fft_ctx._collect_preset())
+    assert bar.baseline()["slot"] == 1
+    assert _fft_view_baseline(win)["slot"] == 1
+    assert not win._project_session_is_dirty()
+
+
+def test_save_as_new_baseline_marks_dirty_once(qtbot, monkeypatch, tmp_path):
+    win, _fid, bar = _fft_preset_window(qtbot, monkeypatch, tmp_path)
+    bar._load(1)
+    assert win.save_project(tmp_path / "save-baseline.tlproj") is True
+    marks = []
+    real_mark = win._project_dirty.mark_user_mutation
+
+    def _mark(*args, **kwargs):
+        marks.append(1)
+        return real_mark(*args, **kwargs)
+
+    monkeypatch.setattr(win._project_dirty, "mark_user_mutation", _mark)
+    bar._save(4)
+    assert bar.baseline()["slot"] == 4
+    assert _fft_view_baseline(win)["slot"] == 4
+    assert marks == [1]
+    assert win._project_session_is_dirty()
+
+
+def test_different_params_preset_load_is_dirty_once(qtbot, monkeypatch, tmp_path):
+    win, _fid, bar = _fft_preset_window(qtbot, monkeypatch, tmp_path)
+    bar._load(1)
+    assert win.save_project(tmp_path / "diff.tlproj") is True
+    marks = []
+    real_mark = win._project_dirty.mark_user_mutation
+
+    def _mark(*args, **kwargs):
+        marks.append(1)
+        return real_mark(*args, **kwargs)
+
+    monkeypatch.setattr(win._project_dirty, "mark_user_mutation", _mark)
+    bar._load(2)
+    assert _fft_view_baseline(win)["slot"] == 2
+    assert marks == [1]
+    assert win._project_session_is_dirty()
+
+
+def test_apply_failure_does_not_dirty_or_change_view(qtbot, monkeypatch, tmp_path):
+    win, _fid, bar = _fft_preset_window(qtbot, monkeypatch, tmp_path)
+    bar._load(1)
+    assert win.save_project(tmp_path / "fail.tlproj") is True
+    before = dict(_fft_view_baseline(win))
+
+    def boom(_params):
+        raise RuntimeError("injected apply failure")
+
+    monkeypatch.setattr(bar, "_apply", boom)
+    bar._load(2)
+    assert _fft_view_baseline(win)["slot"] == before["slot"]
+    assert not win._project_session_is_dirty()
+
+
+def test_baseline_change_close_cancel_save_and_discard(
+    qapp, qtbot, monkeypatch, tmp_path,
+):
+    """A13 leave path: cancel keeps slot 4; save/reopen restores it; discard does not."""
+    win, _fid, bar = _fft_preset_window(qtbot, monkeypatch, tmp_path)
+    bar._load(1)
+    project = tmp_path / "guard.tlproj"
+    assert win.save_project(project) is True
+    bar._write(4, "identical", win.inspector.fft_ctx._collect_preset())
+    bar._load(4)
+    assert win._project_session_is_dirty()
+    monkeypatch.setattr(win, "_prompt_unsaved_project", lambda: "cancel")
+    assert win.confirm_leave_unsaved_project() is DirtyGuardResult.CANCELLED
+    assert bar.baseline()["slot"] == 4
+    assert _fft_view_baseline(win)["slot"] == 4
+    assert win._project_session_is_dirty()
+
+    monkeypatch.setattr(win, "_prompt_unsaved_project", lambda: "save")
+    monkeypatch.setattr(
+        win, "save_project_via_dialog", lambda: win.save_project(project),
+    )
+    assert win.confirm_leave_unsaved_project() is DirtyGuardResult.PROCEED_SAVED
+    assert not win._project_session_is_dirty()
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(project)
+    qapp.processEvents()
+    assert restored.inspector.fft_ctx.preset_bar.baseline()["slot"] == 4
+    assert not restored._project_session_is_dirty()
+
+    discarded = MainWindow()
+    qtbot.addWidget(discarded)
+    discarded.open_project(project)
+    qapp.processEvents()
+    dbar = discarded.inspector.fft_ctx.preset_bar
+    monkeypatch.setattr(dbar, "_confirm_axis_preservation", lambda *a, **kw: "preset")
+    dbar._write(3, "later", discarded.inspector.fft_ctx._collect_preset())
+    dbar._load(3)
+    assert discarded._project_session_is_dirty()
+    monkeypatch.setattr(discarded, "_prompt_unsaved_project", lambda: "discard")
+    assert (
+        discarded.confirm_leave_unsaved_project()
+        is DirtyGuardResult.PROCEED_DISCARDED
+    )
+    discarded.open_project(project)
+    qapp.processEvents()
+    assert discarded.inspector.fft_ctx.preset_bar.baseline()["slot"] == 4
+    assert not discarded._project_session_is_dirty()
+
+
+def test_programmatic_preset_restore_is_clean_and_submits_no_jobs(
+    qapp, qtbot, monkeypatch, tmp_path,
+):
+    win, _fid, bar = _fft_preset_window(qtbot, monkeypatch, tmp_path)
+    bar._load(1)
+    project = tmp_path / "restore.tlproj"
+    assert win.save_project(project) is True
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    submitted = []
+    real_submit = restored._analysis_jobs.submit_batch
+
+    def _submit(*args, **kwargs):
+        submitted.append((args, kwargs))
+        return real_submit(*args, **kwargs)
+
+    monkeypatch.setattr(restored._analysis_jobs, "submit_batch", _submit)
+    restored.open_project(project)
+    qapp.processEvents()
+    assert restored.inspector.fft_ctx.preset_bar.baseline()["slot"] == 1
+    assert restored.inspector.fft_ctx.preset_bar.baseline()["version"] == 2
+    assert not restored._project_session_is_dirty()
+    assert submitted == []
+
+    from mf4_analyzer.ui.analysis_view_bridge import apply_params_from_state
+
+    mgr = restored.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    apply_params_from_state(restored.inspector.fft_ctx, state)
+    qapp.processEvents()
+    assert not restored._project_session_is_dirty()
+    assert submitted == []

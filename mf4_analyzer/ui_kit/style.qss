@@ -339,8 +339,14 @@ QPushButton#BatchAnalysisPresetCard:checked {
     color: #0b73e7;
 }
 QPushButton#BatchAnalysisPresetCard:disabled {
-    color: #a0aec0;
-    background-color: #f7f9fc;
+    color: {{CONTROL_TEXT_MUTED}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
+}
+QPushButton#BatchAnalysisPresetCard:checked:disabled {
+    border-color: {{CONTROL_DISABLED_LINE}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
 }
 QLabel#BatchPresetSyncBadge {
     padding: 3px 7px;
@@ -373,6 +379,16 @@ QPushButton#BatchGroupingCard:hover {
 QPushButton#BatchGroupingCard:checked {
     border-color: {{CONTROL_SELECT_LINE}};
     background-color: {{CONTROL_TRACK}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
+}
+QPushButton#BatchGroupingCard:disabled {
+    color: {{CONTROL_TEXT_MUTED}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
+}
+QPushButton#BatchGroupingCard:checked:disabled {
+    border-color: {{CONTROL_DISABLED_LINE}};
+    background-color: {{CONTROL_DISABLED_BG}};
     color: {{CONTROL_TEXT_ON_SELECT}};
 }
 QFrame#BatchInlineFileManager {
@@ -2609,14 +2625,6 @@ QLabel#presetRecommendBadge {
     border-radius: 7px;
     font-size: 9px;
     font-weight: 800;
-}
-QLabel#presetDiffDot {
-    min-width: 7px;
-    max-width: 7px;
-    min-height: 7px;
-    max-height: 7px;
-    border-radius: 4px;
-    border-width: 0px;
 }
 QPushButton[role="preset-save"] {
     min-height: 22px;

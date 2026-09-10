@@ -1159,6 +1159,35 @@ def test_batch_output_data_only_note_four_export_combinations(qtbot):
     assert note.text() == _XLSX_ONLY_PREVIEW_NOTE
 
 
+def test_single_analysis_linear_keeps_db_catalog_manage_available(qtbot):
+    """Single-analysis dB actions stay split; Linear does not disable catalog.
+
+    Effective parameters:
+    - ``combo_amp_y`` / ``combo_amp_unit``: current display unit (dB vs Linear)
+    - ``db_reference_control.editor``: current numeric reference for this view
+    - ``db_reference_control.manage_button``: shared catalog, not the current
+      dB value. Managing defaults remains valid while the plot is Linear.
+    Batch OutputPanel still disables the current-value group on Linear; that
+    is a display-parameter lock, not a reason to disable the whole inspector.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.show()
+    ctx.combo_amp_y.setCurrentText("Linear")
+    qtbot.wait(10)
+
+    assert ctx.combo_amp_y.currentText() == "Linear"
+    assert ctx.db_reference_control.isEnabled() is True
+    assert ctx.db_reference_control.manage_button.isEnabled() is True
+    assert ctx.db_reference_control.editor.isEnabled() is True
+    assert ctx.isEnabled() is True
+
+    ctx.combo_amp_y.setCurrentText("dB")
+    assert ctx.db_reference_control.manage_button.isEnabled() is True
+
+
 def test_batch_output_data_only_note_wraps_in_288px_column(qtbot):
     panel = _make_panel(qtbot)
     panel._chk_image.setChecked(False)

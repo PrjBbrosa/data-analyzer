@@ -72,6 +72,7 @@ class FFTContextual(QWidget):
     signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
+    preset_committed = pyqtSignal(object)
     _AUTO_NFFT_LABEL = "自动"
     _NO_SOURCE_SUMMARY = "未选通道，使用单信号"
 
@@ -292,6 +293,7 @@ class FFTContextual(QWidget):
             default_params=self._collect_preset(),
             custom_slots=CUSTOM_PRESET_SLOTS,
         )
+        self.preset_bar.preset_committed.connect(self.preset_committed)
         self._fft_section.add_persistent(self.preset_bar)
 
         self.btn_fft = QPushButton("计算 FFT")
