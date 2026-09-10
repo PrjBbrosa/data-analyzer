@@ -198,6 +198,13 @@ AUDIO_VIDEO_EXTS = {
     '.mp3', '.m4a', '.aac', '.wav', '.flac',
 }
 
+# Product default for decoded audio/video tracks. PCM containers do not
+# carry a sound-pressure calibration; this is an explicit NVH convention
+# so the channel tree shows a unit and Auto dB reference can resolve to
+# 20 µPa via ``is_audio_source`` (see ``db_reference`` R2). It is not a
+# claim that sample values are already in pascals.
+AUDIO_DEFAULT_UNIT = 'Pa'
+
 CSV_LIKE_EXTS = {'.asc', '.csv', '.fdc'}
 
 # Sentinel matched by ProjectIOMixin when re-raising empty CAN-log reads.
@@ -615,7 +622,7 @@ class DataLoader:
             names = [f'ch{i}' for i in range(n_ch)]
 
         data = pd.DataFrame({name: col for name, col in zip(names, cols)})
-        units = {name: '' for name in names}
+        units = {name: AUDIO_DEFAULT_UNIT for name in names}
         fs = float(fs or 0.0)
         if fs <= 0.0:
             # No usable sample rate from the container/codec/frames. Returning

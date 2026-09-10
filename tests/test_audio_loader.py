@@ -3,7 +3,9 @@ import wave
 import numpy as np
 import pytest
 
-from mf4_analyzer.io.loader import AUDIO_VIDEO_EXTS, DataLoader
+from mf4_analyzer.db_reference import ChannelReferenceFacts, resolve_db_reference
+from mf4_analyzer.io.file_data import FileData
+from mf4_analyzer.io.loader import AUDIO_DEFAULT_UNIT, AUDIO_VIDEO_EXTS, DataLoader
 
 
 def _write_mono_wav(path, fs, samples):
@@ -16,8 +18,25 @@ def _write_mono_wav(path, fs, samples):
         handle.writeframes(pcm.tobytes())
 
 
+def _write_stereo_wav(path, fs, left, right):
+    pcm_l = np.clip(left, -1.0, 1.0)
+    pcm_r = np.clip(right, -1.0, 1.0)
+    interleaved = np.empty(len(pcm_l) * 2, dtype="<i2")
+    interleaved[0::2] = (pcm_l * 32767).astype("<i2")
+    interleaved[1::2] = (pcm_r * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(2)
+        handle.setsampwidth(2)
+        handle.setframerate(fs)
+        handle.writeframes(interleaved.tobytes())
+
+
 def test_audio_video_exts_cover_common_formats():
     assert {".mp4", ".mov", ".mkv", ".m4v", ".mp3", ".m4a", ".aac", ".wav", ".flac"} <= AUDIO_VIDEO_EXTS
+
+
+def test_audio_default_unit_is_sound_pressure_pa():
+    assert AUDIO_DEFAULT_UNIT == "Pa"
 
 
 def test_load_audio_video_mono_wav(tmp_path):
@@ -32,12 +51,44 @@ def test_load_audio_video_mono_wav(tmp_path):
 
     assert got_fs == 48_000.0
     assert channels == ["audio"]
-    assert units == {"audio": ""}
+    assert units == {"audio": AUDIO_DEFAULT_UNIT}
     assert meta["source_kind"] == "audio"
     assert meta["fs"] == 48_000.0
     assert meta["channels"] == 1
     assert len(data) == pytest.approx(n, abs=int(fs * 0.05))
     assert data["audio"].dtype == np.float32
+
+    fd = FileData(
+        str(path), data, channels, units, fs=got_fs, source_metadata=meta,
+    )
+    facts = ChannelReferenceFacts(
+        quantity="",
+        unit=fd.channel_units["audio"],
+        is_audio_source=fd.is_audio_source(),
+    )
+    assert facts.unit == "Pa"
+    assert facts.is_audio_source is True
+    resolution = resolve_db_reference(mode="auto", facts=facts)
+    assert resolution.source == "system"
+    assert resolution.value == 2e-5
+    assert resolution.quantity == "sound pressure"
+
+
+def test_load_audio_video_stereo_defaults_both_channels_to_pa(tmp_path):
+    pytest.importorskip("av")
+    fs = 8_000
+    n = 800
+    t = np.arange(n, dtype=float) / fs
+    tone = 0.25 * np.sin(2 * np.pi * 440 * t)
+    path = tmp_path / "stereo.wav"
+    _write_stereo_wav(path, fs, tone, -tone)
+
+    _data, channels, units, _got_fs, meta = DataLoader.load_audio_video(path)
+
+    assert channels == ["L", "R"]
+    assert units == {"L": "Pa", "R": "Pa"}
+    assert meta["source_kind"] == "audio"
+    assert meta["channels"] == 2
 
 
 def test_load_audio_video_no_audio_stream_raises(monkeypatch):
