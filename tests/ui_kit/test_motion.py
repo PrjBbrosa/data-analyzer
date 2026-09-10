@@ -4,8 +4,11 @@ from __future__ import annotations
 import pytest
 from PyQt5.QtWidgets import QWidget
 
+from PyQt5.QtCore import QEasingCurve
+
 from mf4_analyzer.ui_kit.motion import (
     DURATION_MS,
+    EASING,
     POLICY_LIGHT,
     POLICY_OFF,
     POLICY_REDUCED,
@@ -13,7 +16,22 @@ from mf4_analyzer.ui_kit.motion import (
     ValueDriver,
     duration_ms,
     resolve_policy,
+    selection_easing,
 )
+
+_ORIGINAL_DURATION_MS = {
+    "hover_in": 100,
+    "hover_out": 80,
+    "press": 0,
+    "release": 80,
+    "switch": 160,
+    "segment": 160,
+    "view_marker": 140,
+    "collapse_expand": 180,
+    "collapse_collapse": 140,
+    "recent_enter": 140,
+    "page_enter": 140,
+}
 
 
 def test_missing_policy_equals_off_and_zero_duration():
@@ -137,3 +155,77 @@ def test_idle_driver_has_no_running_timer(qtbot):
     assert not driver.is_active()
     assert driver.clock().state() == driver.clock().Stopped
     assert not MotionPolicy().enabled
+
+
+def test_selection_duration_tokens_respect_policy_and_keep_originals():
+    for name, value in _ORIGINAL_DURATION_MS.items():
+        assert DURATION_MS[name] == value
+    assert DURATION_MS["selection_navigation"] == 400
+    assert DURATION_MS["selection_control"] == 300
+    assert duration_ms("selection_navigation", POLICY_OFF) == 0
+    assert duration_ms("selection_navigation", POLICY_REDUCED) == 0
+    assert duration_ms("selection_control", POLICY_OFF) == 0
+    assert duration_ms("selection_control", POLICY_REDUCED) == 0
+    assert duration_ms("selection_navigation", POLICY_LIGHT) == 400
+    assert duration_ms("selection_control", POLICY_LIGHT) == 300
+    assert duration_ms("segment", POLICY_LIGHT) == 160
+
+
+def test_selection_easing_samples_spec_waypoints():
+    curve = selection_easing()
+    assert curve.type() == QEasingCurve.BezierSpline
+    assert curve.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
+    assert curve.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
+
+
+def test_default_value_driver_keeps_out_cubic(qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    driver = ValueDriver(host)
+    curve = driver.clock().easingCurve()
+    assert EASING == QEasingCurve.OutCubic
+    assert curve.type() == QEasingCurve.OutCubic
+    assert curve.valueForProgress(0.25) == pytest.approx(0.578125, abs=0.005)
+    assert selection_easing().valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
+    assert curve.valueForProgress(0.25) != pytest.approx(
+        selection_easing().valueForProgress(0.25), abs=0.005
+    )
+
+    driver.snap(0.0)
+    driver.go(1.0, duration_ms=400)
+    driver.clock().setCurrentTime(100)
+    assert driver.current() == pytest.approx(0.578125, abs=0.005)
+
+
+def test_value_driver_uses_copied_selection_easing(qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    curve = selection_easing()
+    driver = ValueDriver(host, easing=curve)
+    used = driver.clock().easingCurve()
+    assert used.type() == QEasingCurve.BezierSpline
+    assert used.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
+    assert used.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
+
+    driver.snap(0.0)
+    driver.go(1.0, duration_ms=400)
+    driver.clock().setCurrentTime(100)
+    assert driver.current() == pytest.approx(0.735, abs=0.005)
+    driver.clock().setCurrentTime(200)
+    assert driver.current() == pytest.approx(0.937, abs=0.005)
+
+    curve.setType(QEasingCurve.Linear)
+    still = driver.clock().easingCurve()
+    assert still.type() == QEasingCurve.BezierSpline
+    assert still.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
+    driver.snap(0.0)
+    driver.go(1.0, duration_ms=400)
+    driver.clock().setCurrentTime(100)
+    assert driver.current() == pytest.approx(0.735, abs=0.005)
+
+    omitted = ValueDriver(host)
+    assert omitted.clock().easingCurve().type() == QEasingCurve.OutCubic
+    omitted.snap(0.0)
+    omitted.go(1.0, duration_ms=400)
+    omitted.clock().setCurrentTime(100)
+    assert omitted.current() == pytest.approx(0.578125, abs=0.005)

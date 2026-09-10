@@ -326,6 +326,27 @@ def _mode_buttons(tb):
     ]
 
 
+def _mapped_mode_rect(tb, button):
+    from PyQt5.QtCore import QPoint, QRect
+
+    host = tb._mode_segment
+    return QRect(button.mapTo(host, QPoint(0, 0)), button.size())
+
+
+def _show_main_toolbar(qtbot, qapp, *, width=1440, load_qss=False):
+    if load_qss:
+        from mf4_analyzer.ui_kit import load_stylesheet
+
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.resize(width, 44)
+    tb.show()
+    qapp.processEvents()
+    return tb
+
+
 def test_toolbar_five_modes_go_icon_only_when_narrow_and_restore_labels_when_wide(qtbot, qapp):
     from mf4_analyzer.ui_kit import load_stylesheet
 
@@ -479,3 +500,192 @@ def test_show_recent_popup_is_single_instance_and_refocuses(qtbot, tmp_path):
     assert shown == ["show"]
     assert popup._search.hasFocus()
     popup.close()
+
+
+def test_toolbar_production_light_uses_navigation_slide_and_keeps_five_keys(
+    qtbot, qapp,
+):
+    import pytest
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy, QTest
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui_kit.motion import (
+        DURATION_MS,
+        POLICY_LIGHT,
+        selection_easing,
+    )
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    buttons = _mode_buttons(tb)
+    assert tb.motion_policy() == POLICY_LIGHT
+    assert tb.height() == 44
+    assert [button.text() for button in buttons] == [
+        "时域", "频谱", "时频", "阶次", "频响",
+    ]
+    assert [button.property("segment") for button in buttons] == [
+        "time", "fft", "fft_time", "order", "frf",
+    ]
+    assert "Time Domain" in tb.btn_mode_time.toolTip()
+    assert "FFT" in tb.btn_mode_fft.toolTip()
+    assert "FFT vs Time" in tb.btn_mode_fft_time.toolTip()
+    assert "Order" in tb.btn_mode_order.toolTip()
+    assert "FRF" in tb.btn_mode_frf.toolTip()
+    assert tb._mode_active_dots["time"].isVisible()
+    assert not hasattr(tb, "btn_mode_ultraview")
+
+    driver = tb._motion_driver
+    pill = tb._selection_pill
+    assert driver is not None and pill is not None
+    assert "_motion_driver" not in tb.__dict__
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_time)
+    plates = [
+        child
+        for child in tb._mode_segment.findChildren(QWidget)
+        if child.objectName() == "selectionIndicatorPlate"
+    ]
+    assert plates == [pill]
+    qss = tb._mode_segment.styleSheet()
+    assert "background-color: transparent" in qss
+    assert "border:" not in qss
+
+    spy = QSignalSpy(tb.mode_changed)
+    QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton)
+
+    assert tb.current_mode() == "fft"
+    assert list(spy) == [["fft"]]
+    assert tb.btn_mode_fft.isChecked()
+    assert tb._mode_active_dots["fft"].isVisible()
+    assert not tb._mode_active_dots["time"].isVisible()
+    assert driver.is_active()
+    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 400
+    used = driver.clock().easingCurve()
+    assert used.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
+    assert used.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
+    assert used.valueForProgress(0.25) == pytest.approx(
+        selection_easing().valueForProgress(0.25), abs=0.001
+    )
+
+    clock = driver.clock()
+    clock.setCurrentTime(0)
+    assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_time)
+    clock.setCurrentTime(100)
+    mid = pill.geometry()
+    assert _mapped_mode_rect(tb, tb.btn_mode_time).x() < mid.x() < _mapped_mode_rect(
+        tb, tb.btn_mode_fft
+    ).x()
+    clock.setCurrentTime(400)
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_fft)
+    assert list(spy) == [["fft"]]
+
+
+def test_toolbar_mouse_animates_program_set_mode_snaps_repeat_is_noop(
+    qtbot, qapp,
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy, QTest
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    driver = tb._motion_driver
+    pill = tb._selection_pill
+    spy = QSignalSpy(tb.mode_changed)
+
+    QTest.mouseClick(tb.btn_mode_order, Qt.LeftButton)
+    assert tb.current_mode() == "order"
+    assert list(spy) == [["order"]]
+    assert driver.is_active()
+    driver.clock().setCurrentTime(100)
+    assert driver.is_active()
+
+    tb._set_mode("frf")
+    assert tb.current_mode() == "frf"
+    assert list(spy) == [["order"], ["frf"]]
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_frf)
+    assert tb.btn_mode_frf.isChecked()
+    assert tb._mode_active_dots["frf"].isVisible()
+
+    tb._set_mode("frf")
+    tb.btn_mode_frf.click()
+    assert list(spy) == [["order"], ["frf"]]
+    assert tb.current_mode() == "frf"
+    assert not driver.is_active()
+
+
+def test_toolbar_compact_icon_hit_restores_labels_and_snaps_plate(qtbot, qapp):
+    from PyQt5.QtCore import QPoint, Qt
+    from PyQt5.QtTest import QTest
+
+    tb = _show_main_toolbar(qtbot, qapp, width=980, load_qss=True)
+    qtbot.wait(30)
+    buttons = _mode_buttons(tb)
+    assert tb.is_mode_compact()
+    assert all(button.text() == "" for button in buttons)
+    assert not tb.btn_mode_fft.icon().isNull()
+    driver = tb._motion_driver
+    pill = tb._selection_pill
+    assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_time)
+
+    icon_pos = QPoint(tb.btn_mode_fft.width() // 2, tb.btn_mode_fft.height() // 2)
+    QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton, pos=icon_pos)
+    assert tb.current_mode() == "fft"
+    assert driver.is_active()
+    driver.clock().setCurrentTime(400)
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_fft)
+    assert "FFT" in tb.btn_mode_fft.toolTip()
+
+    tb.resize(1600, 44)
+    qapp.processEvents()
+    qtbot.wait(30)
+    assert not tb.is_mode_compact()
+    assert [button.text() for button in buttons] == [
+        "时域", "频谱", "时频", "阶次", "频响",
+    ]
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_fft)
+    assert tb._mode_active_dots["fft"].isVisible()
+
+
+def test_toolbar_mode_buttons_keep_tab_focus_without_changing_mode(qtbot, qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    for button in _mode_buttons(tb):
+        assert button.focusPolicy() != Qt.NoFocus
+    tb.btn_mode_fft.setFocus(Qt.TabFocusReason)
+    assert tb.btn_mode_fft.hasFocus()
+    spy = QSignalSpy(tb.mode_changed)
+    qtbot.keyClick(tb.btn_mode_fft, Qt.Key_Tab)
+    assert list(spy) == []
+    assert tb.current_mode() == "time"
+    assert tb.btn_mode_time.isChecked()
+
+
+def test_toolbar_off_and_reduced_restore_static_checked_chrome(qtbot, qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    from mf4_analyzer.ui_kit.motion import POLICY_OFF, POLICY_REDUCED
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton)
+    tb._motion_driver.clock().setCurrentTime(100)
+    assert tb._motion_driver.is_active()
+
+    tb.set_motion_policy(POLICY_REDUCED)
+    assert tb.motion_policy() == POLICY_REDUCED
+    assert tb._mode_segment.styleSheet() == ""
+    assert tb._motion_driver is None or not tb._motion_driver.is_active()
+    assert tb._selection_pill is None or tb._selection_pill.isHidden()
+    assert tb.btn_mode_fft.isChecked()
+    assert tb._mode_active_dots["fft"].isVisible()
+
+    tb.set_motion_policy(POLICY_OFF)
+    assert tb._mode_segment.styleSheet() == ""
+    QTest.mouseClick(tb.btn_mode_order, Qt.LeftButton)
+    assert tb.current_mode() == "order"
+    assert tb._motion_driver is None or not tb._motion_driver.is_active()

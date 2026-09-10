@@ -24,6 +24,7 @@ from ...signal.analysis_defaults import (
     DEFAULT_FFT_T_WIN_S,
 )
 from ...ui_kit.icons import Icons
+from ...ui_kit.motion import POLICY_LIGHT
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -191,6 +192,7 @@ class FFTTimeContextual(QWidget):
         )
         self.choice_weighting = SegmentedChoice()
         self.choice_weighting.bind(self.combo_weighting)
+        self.choice_weighting.set_motion_policy(POLICY_LIGHT)
         fl.addRow(
             "频率加权:",
             _fit_field(self.choice_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),

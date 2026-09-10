@@ -26,6 +26,7 @@ from ...signal.analysis_defaults import (
     normalize_overlap_fraction,
 )
 from ...ui_kit.icons import Icons
+from ...ui_kit.motion import POLICY_LIGHT
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -226,6 +227,7 @@ class FFTContextual(QWidget):
         self.combo_amp_y.setToolTip('dB 看宽动态，Linear 看绝对幅值。')
         self.choice_amp_y = SegmentedChoice()
         self.choice_amp_y.bind(self.combo_amp_y)
+        self.choice_amp_y.set_motion_policy(POLICY_LIGHT)
         self.combo_weighting = QComboBox()
         self.combo_weighting.addItems(['None', 'A'])
         self.combo_weighting.setCurrentText('None')
@@ -234,6 +236,7 @@ class FFTContextual(QWidget):
         )
         self.choice_weighting = SegmentedChoice()
         self.choice_weighting.bind(self.combo_weighting)
+        self.choice_weighting.set_motion_policy(POLICY_LIGHT)
         fl.addRow(
             "频率加权:",
             _fit_field(self.choice_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),

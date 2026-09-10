@@ -43,6 +43,7 @@ from ....ui_kit.menus import apply_rounded_menu_chrome
 from ....ui_kit.icons import Icons
 from ...recent_files import KIND_FILE, RecentFilesStore
 from ...widgets.recent_open_popup import RecentOpenPopup
+from ....ui_kit.motion import POLICY_LIGHT
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .filter_panel import BatchFilterPanel
@@ -944,6 +945,7 @@ class InputPanel(QWidget):
         )
         self._target_policy_choice = SegmentedChoice(form_host)
         self._target_policy_choice.bind(self._target_policy_combo)
+        self._target_policy_choice.set_motion_policy(POLICY_LIGHT)
         # Keep the Batch column shrinkable to its supported 288px width.  At
         # layout time this field still receives the full form slot; ``Ignored``
         # only prevents its two label hints from becoming the panel minimum.

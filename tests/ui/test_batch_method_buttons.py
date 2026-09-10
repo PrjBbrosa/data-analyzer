@@ -184,6 +184,7 @@ def test_batch_binary_params_use_segmented_choices_without_changing_combo_state(
     from PyQt5.QtTest import QSignalSpy
 
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
 
     form = DynamicParamForm()
     qtbot.addWidget(form)
@@ -203,6 +204,7 @@ def test_batch_binary_params_use_segmented_choices_without_changing_combo_state(
         assert combo.isHidden() is True
         assert choice.isVisibleTo(form) is True
         assert choice.height() == 32
+        assert choice.motion_policy() == POLICY_LIGHT
         assert choice.mapTo(form, choice.rect().topLeft()).x() == (
             host.mapTo(form, host.rect().topLeft()).x()
         )
@@ -231,6 +233,46 @@ def test_batch_binary_params_use_segmented_choices_without_changing_combo_state(
     assert weight_choice.isVisibleTo(form) is True
     weight_choice.buttons()[1].click()
     assert form.get_params()["weighting"] == "A"
+
+
+def test_batch_binary_choice_fields_enable_light_and_program_restore_snaps(
+    qtbot, qapp,
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy, QTest
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import (
+        DynamicParamForm,
+        _BINARY_CHOICE_FIELDS,
+    )
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.resize(288, 900)
+    form.show()
+    qapp.processEvents()
+
+    assert set(form._choice_widgets) == set(_BINARY_CHOICE_FIELDS)
+    for name, choice in form._choice_widgets.items():
+        assert choice.motion_policy() == POLICY_LIGHT, name
+
+    form.set_method("frf")
+    qapp.processEvents()
+    choice = form._choice_estimator
+    QTest.mouseClick(choice.buttons()[1], Qt.LeftButton)
+    driver = choice._motion_driver
+    assert driver is not None and driver.is_active()
+    driver.clock().setCurrentTime(300)
+    assert form.get_params()["estimator"] == "h2"
+    assert not driver.is_active()
+
+    spy = QSignalSpy(form.paramsChanged)
+    form.apply_params({"estimator": "h1"})
+    assert form.get_params()["estimator"] == "h1"
+    assert choice.currentIndex() == 0
+    assert not choice._motion_driver.is_active()
+    assert len(spy) == 1
 
 
 def test_batch_sheet_weighting_options_match_main_panel(qtbot):
@@ -388,6 +430,196 @@ def test_batch_method_tabs_keep_compact_geometry_without_extra_markers(qtbot, qa
     finally:
         group.close()
         qapp.setStyleSheet(old_stylesheet)
+
+
+def _mapped_method_rect(group, button):
+    from PyQt5.QtCore import QPoint, QRect
+
+    return QRect(button.mapTo(group, QPoint(0, 0)), button.size())
+
+
+def _show_method_group(qtbot, qapp):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    group = MethodButtonGroup()
+    qtbot.addWidget(group)
+    group.show()
+    qapp.processEvents()
+    return group
+
+
+def test_method_group_production_light_uses_navigation_slide_and_order_time_key(
+    qtbot, qapp,
+):
+    import pytest
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui_kit.motion import (
+        DURATION_MS,
+        POLICY_LIGHT,
+        selection_easing,
+    )
+
+    group = _show_method_group(qtbot, qapp)
+    assert group.motion_policy() == POLICY_LIGHT
+    assert group.height() == 40
+    assert tuple(group._buttons) == (
+        "time", "fft", "fft_time", "order_time", "frf",
+    )
+    assert tuple(button.text() for button in group._buttons.values()) == (
+        "时域", "频谱", "时频", "阶次", "频响",
+    )
+    assert all(button.height() == 32 for button in group._buttons.values())
+    driver = group._motion_driver
+    pill = group._selection_pill
+    assert driver is not None and pill is not None
+    assert "_motion_driver" not in group.__dict__
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_method_rect(group, group._buttons["fft"])
+    plates = [
+        child
+        for child in group.findChildren(QWidget)
+        if child.objectName() == "selectionIndicatorPlate"
+    ]
+    assert plates == [pill]
+    assert not hasattr(group, "_mode_active_dots")
+    assert not hasattr(group, "_underlines")
+    qss = group.styleSheet()
+    assert "background-color: transparent" in qss
+    assert "border:" not in qss
+
+    QTest.mouseClick(group._buttons["order_time"], Qt.LeftButton)
+    assert group.current_method() == "order_time"
+    assert driver.is_active()
+    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 400
+    used = driver.clock().easingCurve()
+    assert used.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
+    assert used.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
+    assert used.valueForProgress(0.25) == pytest.approx(
+        selection_easing().valueForProgress(0.25), abs=0.001
+    )
+    driver.clock().setCurrentTime(400)
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_method_rect(
+        group, group._buttons["order_time"]
+    )
+
+
+def test_method_group_mouse_and_keys_animate_program_set_snaps(qtbot, qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QSignalSpy, QTest
+
+    group = _show_method_group(qtbot, qapp)
+    driver = group._motion_driver
+    pill = group._selection_pill
+    changed = QSignalSpy(group.methodChanged)
+    activated = QSignalSpy(group.methodActivated)
+
+    QTest.mouseClick(group._buttons["time"], Qt.LeftButton)
+    assert group.current_method() == "time"
+    assert list(changed) == [["time"]]
+    assert list(activated) == [["time"]]
+    assert driver.is_active()
+    driver.clock().setCurrentTime(400)
+    assert not driver.is_active()
+
+    group._buttons["time"].setFocus()
+    qtbot.keyClick(group._buttons["time"], Qt.Key_Right)
+    assert group.current_method() == "fft"
+    assert list(changed) == [["time"], ["fft"]]
+    assert driver.is_active()
+    driver.clock().setCurrentTime(400)
+
+    qtbot.keyClick(group._buttons["fft"], Qt.Key_End)
+    assert group.current_method() == "frf"
+    assert list(changed)[-1] == ["frf"]
+    assert driver.is_active()
+    driver.clock().setCurrentTime(100)
+    assert driver.is_active()
+
+    group.set_method("fft_time")
+    assert group.current_method() == "fft_time"
+    assert list(changed)[-1] == ["fft_time"]
+    assert not driver.is_active()
+    assert pill.geometry() == _mapped_method_rect(
+        group, group._buttons["fft_time"]
+    )
+
+    before = list(changed)
+    group.set_method("fft_time")
+    assert list(changed) == before + [["fft_time"]]
+    assert not driver.is_active()
+
+    QTest.mouseClick(group._buttons["fft_time"], Qt.LeftButton)
+    assert list(changed) == before + [["fft_time"]]
+    assert list(activated)[-1] == ["fft_time"]
+    assert not driver.is_active()
+
+    qtbot.keyClick(group._buttons["fft_time"], Qt.Key_Home)
+    assert group.current_method() == "time"
+    assert driver.is_active()
+    driver.clock().setCurrentTime(400)
+    assert pill.geometry() == _mapped_method_rect(group, group._buttons["time"])
+
+
+def test_method_group_plate_tracks_mapped_unequal_button_rect(qtbot, qapp):
+    from PyQt5.QtCore import QRect, Qt
+    from PyQt5.QtTest import QTest
+
+    group = _show_method_group(qtbot, qapp)
+    order_btn = group._buttons["order_time"]
+    order_btn.setFixedWidth(order_btn.width() + 48)
+    group.adjustSize()
+    qapp.processEvents()
+
+    widths = [button.width() for button in group._buttons.values()]
+    assert max(widths) - min(widths) >= 48
+    QTest.mouseClick(order_btn, Qt.LeftButton)
+    group._motion_driver.clock().setCurrentTime(400)
+
+    mapped = _mapped_method_rect(group, order_btn)
+    pill = group._selection_pill
+    assert pill.geometry() == mapped
+    index = list(group._buttons).index("order_time")
+    naive_split = QRect(
+        index * (group.width() // 5),
+        0,
+        group.width() // 5,
+        order_btn.height(),
+    )
+    naive_index_width = QRect(
+        index * min(widths),
+        order_btn.y(),
+        min(widths),
+        order_btn.height(),
+    )
+    assert pill.geometry() != naive_split
+    assert pill.geometry() != naive_index_width
+    assert group.current_method() == "order_time"
+
+
+def test_method_group_off_restores_static_checked_chrome(qtbot, qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    from mf4_analyzer.ui_kit.motion import POLICY_OFF, POLICY_REDUCED
+
+    group = _show_method_group(qtbot, qapp)
+    QTest.mouseClick(group._buttons["frf"], Qt.LeftButton)
+    group._motion_driver.clock().setCurrentTime(80)
+    assert group._motion_driver.is_active()
+
+    group.set_motion_policy(POLICY_REDUCED)
+    assert group.styleSheet() == ""
+    assert group._selection_pill is None or group._selection_pill.isHidden()
+    assert group._buttons["frf"].isChecked()
+
+    group.set_motion_policy(POLICY_OFF)
+    QTest.mouseClick(group._buttons["time"], Qt.LeftButton)
+    assert group.current_method() == "time"
+    assert group._motion_driver is None or not group._motion_driver.is_active()
 
 
 def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
@@ -1082,6 +1314,8 @@ def test_none_grouping_puts_layout_reason_on_field_label_without_changing_value(
     assert form._w_render_layout.isEnabled() is False
     assert form._choice_render_layout.isEnabled() is False
     assert form._field_labels["render_layout"].toolTip() == _RENDER_LAYOUT_NONE_HINT
+    driver = form._choice_render_layout._motion_driver
+    assert driver is None or not driver.is_active()
 
     spy = QSignalSpy(form.paramsChanged)
     form._sync_render_group_by()

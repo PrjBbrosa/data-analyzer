@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 
 from ...db_reference import migrate_legacy_reference_params
 from ...db_reference import normalize_unit as _normalize_unit
+from ...ui_kit.motion import POLICY_LIGHT
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
@@ -1045,6 +1046,7 @@ def _make_axis_settings_group(
             w.blockSignals(False)
         owner.choice_amp_unit = SegmentedChoice()
         owner.choice_amp_unit.bind(owner.combo_amp_unit)
+        owner.choice_amp_unit.set_motion_policy(POLICY_LIGHT)
         owner.lbl_z_summary = QLabel(z_auto_summary)
         z_unit_widget = owner.choice_amp_unit
 

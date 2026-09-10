@@ -1,4 +1,6 @@
 """_ChartCard and TimeChartCard widget classes."""
+from functools import partial
+
 from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QKeySequence
 from PyQt5.QtWidgets import (
@@ -9,9 +11,15 @@ from PyQt5 import sip
 
 import qtawesome as qta
 
+from ...ui_kit.control_style import CONTROL_COLORS
 from ...ui_kit.dialog_geometry import fit_popover
 from ...ui_kit.icons import Icons
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
+from ...ui_kit.motion import MotionPolicy, POLICY_LIGHT, resolve_policy
+from ...ui_kit.widgets.selection_indicator import (
+    SelectionIndicator,
+    SelectionIndicatorStyle,
+)
 from .. import hints
 from ..file_navigator import _ElidedLabel
 from ..pg_canvases import TimeDomainCanvasPG
@@ -1095,7 +1103,120 @@ class _ChartCard(QWidget):
         self._refresh_bottom_hint()
 
 
-class TimeChartCard(_ChartCard):
+def _is_living(obj) -> bool:
+    try:
+        return obj is not None and not sip.isdeleted(obj)
+    except RuntimeError:
+        return False
+
+
+_CHART_CHOICE_INDICATOR_STYLE = SelectionIndicatorStyle(
+    fill=CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+    border=CONTROL_COLORS["CONTROL_SELECT_LINE"],
+    disabled_fill=CONTROL_COLORS["CONTROL_DISABLED_BG"],
+    disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
+    radius=6,
+)
+
+# Suppress static checked fill while Light interpolates. Longhands only:
+# a ``border:`` shorthand here would zero radius.
+_CHART_CHOICE_MOTION_QSS = f"""
+QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {{
+    background-color: transparent;
+    border-color: transparent;
+}}
+QWidget#chartToolbar QPushButton[role="chart-choice"]:checked:disabled,
+QWidget#chartToolbar QPushButton[role="chart-choice"]:checked:disabled:hover,
+QWidget#chartToolbar QPushButton[role="chart-choice"]:checked:disabled:pressed,
+QWidget#chartToolbar QPushButton[role="chart-choice"]:checked:disabled:focus {{
+    background-color: transparent;
+    border-color: transparent;
+    color: {CONTROL_COLORS["CONTROL_TEXT_MUTED"]};
+}}
+"""
+
+
+class _ChartChoiceMotionMixin:
+    """Local selected-background plates for chart-choice button groups."""
+
+    def _init_choice_motion(self, groups):
+        self._choice_motion_groups = {
+            name: tuple(buttons) for name, buttons in groups.items()
+        }
+        self._choice_indicators = {name: None for name in self._choice_motion_groups}
+        self._motion_policy = resolve_policy(None)
+
+    def motion_policy(self) -> MotionPolicy:
+        return getattr(self, "_motion_policy", resolve_policy(None))
+
+    def set_motion_policy(self, policy: MotionPolicy | None) -> None:
+        self._motion_policy = resolve_policy(policy)
+        self._apply_choice_motion_chrome()
+        if self._motion_policy.interpolates():
+            for name in self._choice_motion_groups:
+                helper = self._ensure_choice_indicator(name)
+                if helper is not None:
+                    helper.set_motion_policy(self._motion_policy)
+            self._snap_all_choice_indicators()
+            return
+        self._teardown_choice_indicators()
+
+    def _choice_current_button(self, name):
+        return None
+
+    def _apply_choice_motion_chrome(self) -> None:
+        toolbar = getattr(self, "toolbar", None)
+        if not _is_living(toolbar):
+            return
+        if self._motion_policy.interpolates():
+            toolbar.setStyleSheet(_CHART_CHOICE_MOTION_QSS)
+            return
+        toolbar.setStyleSheet("")
+
+    def _ensure_choice_indicator(self, name):
+        helper = self._choice_indicators.get(name)
+        if _is_living(helper):
+            return helper
+        buttons = self._choice_motion_groups.get(name)
+        toolbar = getattr(self, "toolbar", None)
+        if not buttons or not _is_living(toolbar):
+            return None
+        helper = SelectionIndicator(
+            toolbar,
+            buttons=buttons,
+            duration_name="selection_control",
+            style=_CHART_CHOICE_INDICATOR_STYLE,
+        )
+        self._choice_indicators[name] = helper
+        helper.set_motion_policy(self._motion_policy)
+        return helper
+
+    def _follow_choice_indicator(self, name, button, *, animate: bool) -> None:
+        policy = getattr(self, "_motion_policy", None)
+        if policy is None or not policy.interpolates():
+            self._teardown_choice_indicators()
+            return
+        helper = self._ensure_choice_indicator(name)
+        if helper is None:
+            return
+        helper.follow(button, animate=animate)
+        if not animate:
+            helper.snap_to_selection()
+
+    def _snap_all_choice_indicators(self) -> None:
+        for name in self._choice_motion_groups:
+            self._follow_choice_indicator(
+                name, self._choice_current_button(name), animate=False,
+            )
+
+    def _teardown_choice_indicators(self) -> None:
+        policy = getattr(self, "_motion_policy", resolve_policy(None))
+        for helper in self._choice_indicators.values():
+            if _is_living(helper):
+                helper.set_motion_policy(policy)
+
+
+class TimeChartCard(_ChartChoiceMotionMixin, _ChartCard):
     """Time-domain chart card: inherits base nav toolbar, appends
     segmented controls for plot mode (Subplot/Overlay) and cursor mode
     (Off/Single/Dual)."""
@@ -1151,8 +1272,12 @@ class TimeChartCard(_ChartCard):
             self._insert_right_toolbar_widget(loc_action, b)
         self._plot_mode = 'subplot'
         self.btn_subplot.setChecked(True)
-        self.btn_subplot.clicked.connect(lambda: self.set_plot_mode('subplot'))
-        self.btn_overlay.clicked.connect(lambda: self.set_plot_mode('overlay'))
+        self.btn_subplot.clicked.connect(
+            partial(self._on_plot_mode_clicked, 'subplot')
+        )
+        self.btn_overlay.clicked.connect(
+            partial(self._on_plot_mode_clicked, 'overlay')
+        )
 
         sep = _vline()
         self._time_separators.append(sep)
@@ -1166,7 +1291,7 @@ class TimeChartCard(_ChartCard):
             b.setFlat(True)
             self._insert_right_toolbar_widget(loc_action, b)
             self._cursor_buttons[key] = b
-            b.clicked.connect(lambda _=False, k=key: self.set_cursor_mode(k))
+            b.clicked.connect(partial(self._on_cursor_mode_clicked, key))
         self._cursor_mode = 'off'
         self._cursor_buttons['off'].setChecked(True)
 
@@ -1254,6 +1379,15 @@ class TimeChartCard(_ChartCard):
             self._cursor_display_settings_btn,
         )
         self.view_tabbar = None
+        self._init_choice_motion({
+            "plot": (self.btn_subplot, self.btn_overlay),
+            "cursor": (
+                self._cursor_buttons["off"],
+                self._cursor_buttons["single"],
+                self._cursor_buttons["dual"],
+            ),
+        })
+        self.set_motion_policy(POLICY_LIGHT)
         self._sync_responsive_toolbar()
 
     def _sync_responsive_toolbar(self):
@@ -1314,24 +1448,49 @@ class TimeChartCard(_ChartCard):
         if sep0 is not None:
             sep0.setVisible(visible)
 
+    def _choice_current_button(self, name):
+        if name == "plot":
+            return self.btn_overlay if self._plot_mode == "overlay" else self.btn_subplot
+        if name == "cursor":
+            return self._cursor_buttons.get(self._cursor_mode)
+        return None
+
     # ----- plot mode -----
     def plot_mode(self):
         return self._plot_mode
 
+    def _on_plot_mode_clicked(self, mode, _checked=False):
+        self._apply_plot_mode(mode, animate=True, notify=True)
+
     def set_plot_mode(self, mode):
+        self._apply_plot_mode(mode, animate=False, notify=True)
+
+    def _apply_plot_mode(self, mode, *, animate, notify):
         if mode not in ('subplot', 'overlay') or mode == self._plot_mode:
             return
         self._plot_mode = mode
         self.btn_subplot.setChecked(mode == 'subplot')
         self.btn_overlay.setChecked(mode == 'overlay')
         self._refresh_bottom_hint()
-        self.plot_mode_changed.emit(mode)
+        if notify:
+            self.plot_mode_changed.emit(mode)
+        self._follow_choice_indicator(
+            "plot",
+            self.btn_overlay if mode == "overlay" else self.btn_subplot,
+            animate=animate,
+        )
 
     # ----- cursor mode -----
     def cursor_mode(self):
         return self._cursor_mode
 
+    def _on_cursor_mode_clicked(self, mode, _checked=False):
+        self._apply_cursor_mode(mode, animate=True, notify=True)
+
     def set_cursor_mode(self, mode):
+        self._apply_cursor_mode(mode, animate=False, notify=True)
+
+    def _apply_cursor_mode(self, mode, *, animate, notify):
         if mode not in ('off', 'single', 'dual') or mode == self._cursor_mode:
             return
         self._cursor_mode = mode
@@ -1344,7 +1503,11 @@ class TimeChartCard(_ChartCard):
         # Cursor mode is part of HintState, so refresh the bottom context
         # label whenever it flips.
         self._refresh_bottom_hint()
-        self.cursor_mode_changed.emit(mode)
+        if notify:
+            self.cursor_mode_changed.emit(mode)
+        self._follow_choice_indicator(
+            "cursor", self._cursor_buttons.get(mode), animate=animate,
+        )
 
     def cursor_display_settings_button(self):
         return self._cursor_display_settings_btn
@@ -1493,7 +1656,7 @@ class TimeChartCard(_ChartCard):
         self._refresh_hint()
 
 
-class FrequencyCursorCard(_ChartCard):
+class FrequencyCursorCard(_ChartChoiceMotionMixin, _ChartCard):
     """Shared 关/单/双 cursor controls for frequency-domain cards.
 
     Frequency-domain views use the same deliberate cursor choices as the time
@@ -1540,9 +1703,7 @@ class FrequencyCursorCard(_ChartCard):
             button.setToolTip(tooltips[key])
             self._insert_right_toolbar_widget(loc_action, button)
             self._cursor_buttons[key] = button
-            button.clicked.connect(
-                lambda _checked=False, value=key: self._on_cursor_mode_clicked(value)
-            )
+            button.clicked.connect(partial(self._on_cursor_mode_clicked, key))
         # Keep the same Ctrl+3/4/5 keyboard contract as the time card.  The
         # shortcuts belong to this card, so a hidden analysis mode cannot
         # consume a time-domain shortcut.
@@ -1557,6 +1718,14 @@ class FrequencyCursorCard(_ChartCard):
                     self, self._cursor_buttons[mode], label, shortcut, key
                 )
             )
+        self._init_choice_motion({
+            "cursor": (
+                self._cursor_buttons["off"],
+                self._cursor_buttons["single"],
+                self._cursor_buttons["dual"],
+            ),
+        })
+        self.set_motion_policy(POLICY_LIGHT)
         self.set_cursor_mode(
             getattr(self.canvas, 'cursor_mode', lambda: 'off')(), notify=False
         )
@@ -1570,7 +1739,17 @@ class FrequencyCursorCard(_ChartCard):
         value = getter() if callable(getter) else 'off'
         return value if value in {'off', 'single', 'dual'} else 'off'
 
+    def _choice_current_button(self, name):
+        if name != "cursor":
+            return None
+        target = self._frequency_cursor_target()
+        mode = target.cursor_mode() if target is not self else self.cursor_mode()
+        return self._cursor_buttons.get(mode)
+
     def set_cursor_mode(self, mode: str, *, notify=True) -> None:
+        self._apply_cursor_mode(mode, animate=False, notify=notify)
+
+    def _apply_cursor_mode(self, mode: str, *, animate: bool, notify: bool) -> None:
         if mode not in {'off', 'single', 'dual'}:
             return
         old = self.cursor_mode()
@@ -1580,10 +1759,17 @@ class FrequencyCursorCard(_ChartCard):
         self._set_cursor_buttons(mode)
         if notify and old != mode:
             self.cursor_mode_changed.emit(mode)
+        self._follow_choice_indicator(
+            "cursor", self._cursor_buttons.get(mode), animate=animate,
+        )
 
     def sync_frequency_cursor_control(self) -> None:
         target = self._frequency_cursor_target()
-        self._set_cursor_buttons(target.cursor_mode())
+        mode = target.cursor_mode()
+        self._set_cursor_buttons(mode)
+        self._follow_choice_indicator(
+            "cursor", self._cursor_buttons.get(mode), animate=False,
+        )
 
     def _frequency_cursor_target(self):
         provider = self._frequency_cursor_target_provider
@@ -1598,11 +1784,13 @@ class FrequencyCursorCard(_ChartCard):
             finally:
                 button.blockSignals(old)
 
-    def _on_cursor_mode_clicked(self, mode: str) -> None:
+    def _on_cursor_mode_clicked(self, mode: str, _checked=False) -> None:
         target = self._frequency_cursor_target()
+        if target is self:
+            self._apply_cursor_mode(mode, animate=True, notify=True)
+            return
         target.set_cursor_mode(mode)
-        if target is not self:
-            self.sync_frequency_cursor_control()
+        self.sync_frequency_cursor_control()
 
 
 class FrfChartCard(FrequencyCursorCard):

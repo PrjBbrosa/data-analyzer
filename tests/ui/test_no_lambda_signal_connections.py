@@ -43,8 +43,7 @@ FROZEN_LAMBDA_CONNECT_COUNTS: dict[str, int] = {
     "acquisition_ui/widgets/health_strip.py": 1,
     "acquisition_ui/widgets/left_pane.py": 6,
     "acquisition_ui/widgets/live_cards.py": 3,
-    "ui/chart_stack/_helpers.py": 2,
-    "ui/chart_stack/cards.py": 7,
+    "ui/chart_stack/cards.py": 3,
     "ui/chart_stack/stack.py": 12,
     "ui/chart_stack/toolbar.py": 6,
     "ui/db_reference_dialog.py": 1,
@@ -67,7 +66,6 @@ FROZEN_LAMBDA_CONNECT_COUNTS: dict[str, int] = {
     "ui/pg_canvas/remarks.py": 1,
     "ui/pg_canvas/slice_panel.py": 1,
     "ui/side_panels.py": 5,
-    "ui/toolbar.py": 1,
     "ui/view_tabbar.py": 1,
     "ui/widgets/channel_config_manager.py": 2,
 }

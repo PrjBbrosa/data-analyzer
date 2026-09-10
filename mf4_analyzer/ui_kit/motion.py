@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 from weakref import ref
 
-from PyQt5.QtCore import QEasingCurve, QObject, QVariantAnimation
+from PyQt5.QtCore import QEasingCurve, QObject, QPointF, QVariantAnimation
 
 
 DURATION_MS = {
@@ -25,6 +25,8 @@ DURATION_MS = {
     "collapse_collapse": 140,
     "recent_enter": 140,
     "page_enter": 140,
+    "selection_navigation": 400,
+    "selection_control": 300,
 }
 EASING = QEasingCurve.OutCubic
 
@@ -58,6 +60,41 @@ def duration_ms(name: str, policy: MotionPolicy | None) -> int:
     return DURATION_MS[name]
 
 
+def selection_easing() -> QEasingCurve:
+    curve = QEasingCurve(QEasingCurve.BezierSpline)
+    curve.addCubicBezierSegment(
+        QPointF(0.22, 0.75), QPointF(0.20, 1.00), QPointF(1.00, 1.00)
+    )
+    return curve
+
+
+def _bezier_samples_match(left: QEasingCurve, right: QEasingCurve) -> bool:
+    return all(
+        abs(left.valueForProgress(progress) - right.valueForProgress(progress)) < 1e-6
+        for progress in (0.25, 0.50, 0.75)
+    )
+
+
+def _copy_easing(easing: QEasingCurve) -> QEasingCurve:
+    copied = QEasingCurve(easing)
+    if easing.type() != QEasingCurve.BezierSpline:
+        return copied
+    if _bezier_samples_match(copied, easing):
+        return copied
+    rebuilt = QEasingCurve(QEasingCurve.BezierSpline)
+    points = list(easing.toCubicSpline())
+    for index in range(0, len(points) - 2, 3):
+        rebuilt.addCubicBezierSegment(
+            points[index], points[index + 1], points[index + 2]
+        )
+    if _bezier_samples_match(rebuilt, easing):
+        return rebuilt
+    reference = selection_easing()
+    if _bezier_samples_match(easing, reference):
+        return reference
+    return copied
+
+
 class ValueDriver(QObject):
     """Interruptible value interpolation owned by one widget.
 
@@ -70,6 +107,7 @@ class ValueDriver(QObject):
         owner: QObject,
         *,
         on_value: Callable | None = None,
+        easing: QEasingCurve | None = None,
     ) -> None:
         super().__init__(owner)
         self._owner_ref = ref(owner)
@@ -78,7 +116,10 @@ class ValueDriver(QObject):
         self._current = None
         self._target = None
         self._anim = QVariantAnimation(self)
-        self._anim.setEasingCurve(QEasingCurve(EASING))
+        if easing is None:
+            self._anim.setEasingCurve(QEasingCurve(EASING))
+        else:
+            self._anim.setEasingCurve(_copy_easing(easing))
         self._anim.valueChanged.connect(self._on_anim_value)
         self._anim.finished.connect(self._on_finished)
 

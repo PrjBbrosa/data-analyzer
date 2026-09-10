@@ -1,4 +1,7 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
+from functools import partial
+
+from PyQt5 import sip
 from PyQt5.QtCore import QDateTime, QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
@@ -7,8 +10,14 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import app_meta
+from ..ui_kit.control_style import CONTROL_COLORS
 from ..ui_kit.icons import Icons
 from ..ui_kit.menus import apply_rounded_menu_chrome
+from ..ui_kit.motion import POLICY_LIGHT, resolve_policy
+from ..ui_kit.widgets.selection_indicator import (
+    SelectionIndicator,
+    SelectionIndicatorStyle,
+)
 from .widgets.recent_open_popup import RecentOpenPopup
 
 _MODE_LABELS = {
@@ -22,6 +31,33 @@ _MODE_LABELS = {
 # Icon-only half of the save split. Keep this tighter than a labeled chip so
 # 保存 / 批处理 can share one secondary width without the caret dominating.
 _SAVE_CARET_WIDTH = 20
+
+# Suppress static checked fill while the shared plate owns that chrome.
+# Longhands only: a ``border:`` shorthand here would zero the 6px radius.
+_MOTION_PILL_HOST_QSS = """
+QFrame#modeSegment QPushButton[segment]:checked {
+    background-color: transparent;
+    border-color: transparent;
+}
+QFrame#modeSegment QPushButton[segment]:checked:hover {
+    background-color: transparent;
+    border-color: transparent;
+}
+QFrame#modeSegment QPushButton[segment]:checked:disabled,
+QFrame#modeSegment QPushButton[segment]:checked:disabled:hover,
+QFrame#modeSegment QPushButton[segment]:checked:disabled:pressed,
+QFrame#modeSegment QPushButton[segment]:checked:disabled:focus {
+    background-color: transparent;
+    border-color: transparent;
+}
+"""
+
+
+def _is_living(obj):
+    try:
+        return obj is not None and not sip.isdeleted(obj)
+    except RuntimeError:
+        return False
 
 
 def _make_sep(parent):
@@ -264,6 +300,8 @@ class Toolbar(QWidget):
         self._current_mode = 'time'
         self._mode_compact = False
         self._left_action_chip_width = 0
+        self._motion_policy = resolve_policy(None)
+        self._indicator = None
 
         # Keep mirror width in sync with left_widget after layout is settled.
         self._left_widget = left_widget
@@ -282,6 +320,7 @@ class Toolbar(QWidget):
         # 保存 is gray on first launch; waiting for a mode change or file
         # activation leaves it lit until the user happens to switch modules.
         self.set_enabled_for_mode(self._current_mode, has_file=False)
+        self.set_motion_policy(POLICY_LIGHT)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -289,6 +328,7 @@ class Toolbar(QWidget):
         self._sync_mirror()
         self._apply_mode_compact()
         self._sync_mode_active_dots()
+        self._snap_mode_indicator()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -296,6 +336,7 @@ class Toolbar(QWidget):
         self._sync_mirror()
         self._apply_mode_compact()
         self._sync_mode_active_dots()
+        self._snap_mode_indicator()
 
     def eventFilter(self, watched, event):
         if watched in (self._left_widget, self._right_widget) and event.type() in (
@@ -341,6 +382,7 @@ class Toolbar(QWidget):
         self._equalize_left_action_widths()
         self._sync_mirror()
         self._apply_mode_compact()
+        self._snap_mode_indicator()
 
     def _mode_button_pairs(self):
         return (
@@ -380,6 +422,7 @@ class Toolbar(QWidget):
         self._mode_segment.updateGeometry()
         self._mode_zone.updateGeometry()
         self._sync_mode_active_dots()
+        self._snap_mode_indicator()
 
     def is_mode_compact(self) -> bool:
         return bool(self._mode_compact)
@@ -571,11 +614,17 @@ class Toolbar(QWidget):
         # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
         self._logo_label.triple_clicked.connect(self.acquisition_cockpit_requested)
         for key, b in self._mode_button_pairs():
-            b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
+            b.clicked.connect(partial(self._on_mode_button_clicked, key))
         self.btn_toggle_nav.clicked.connect(self.nav_panel_toggled)
         self.btn_toggle_inspector.clicked.connect(self.inspector_panel_toggled)
 
+    def _on_mode_button_clicked(self, mode, _checked=False):
+        self._apply_mode(mode, animate=True)
+
     def _set_mode(self, mode):
+        self._apply_mode(mode, animate=False)
+
+    def _apply_mode(self, mode, *, animate):
         mapping = dict(self._mode_button_pairs())
         if mode not in mapping:
             mode = "time"
@@ -585,6 +634,104 @@ class Toolbar(QWidget):
         mapping[mode].setChecked(True)
         self._sync_mode_active_dots()
         self.mode_changed.emit(mode)
+        self._follow_indicator(animate=animate)
+
+    def motion_policy(self):
+        return self._motion_policy
+
+    def set_motion_policy(self, policy):
+        """Apply an explicit per-instance policy and snap chrome to the mode."""
+        self._motion_policy = resolve_policy(policy)
+        self._apply_motion_chrome()
+        helper = self._indicator
+        if _is_living(helper):
+            helper.set_motion_policy(self._motion_policy)
+        if self._motion_policy.interpolates():
+            self._snap_indicator()
+        else:
+            self._teardown_visible_indicator()
+
+    @property
+    def _motion_driver(self):
+        helper = self._indicator
+        if not _is_living(helper):
+            return None
+        return helper.driver()
+
+    @property
+    def _selection_pill(self):
+        helper = self._indicator
+        if not _is_living(helper):
+            return None
+        plate = helper._plate
+        if not _is_living(plate):
+            return None
+        return plate
+
+    def _current_mode_button(self):
+        mapping = dict(self._mode_button_pairs())
+        return mapping.get(self._current_mode)
+
+    def _apply_motion_chrome(self):
+        host = self._mode_segment
+        if self._motion_policy.interpolates():
+            host.setStyleSheet(_MOTION_PILL_HOST_QSS)
+            return
+        host.setStyleSheet("")
+
+    def _ensure_indicator(self):
+        helper = self._indicator
+        if _is_living(helper):
+            return helper
+        buttons = tuple(button for _key, button in self._mode_button_pairs())
+        helper = SelectionIndicator(
+            self._mode_segment,
+            buttons=buttons,
+            duration_name="selection_navigation",
+            style=SelectionIndicatorStyle(
+                fill=CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+                border=CONTROL_COLORS["CONTROL_ACCENT_HI"],
+                disabled_fill=CONTROL_COLORS["CONTROL_DISABLED_BG"],
+                disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
+                radius=6,
+            ),
+        )
+        self._indicator = helper
+        helper.set_motion_policy(self._motion_policy)
+        return helper
+
+    def _snap_indicator(self):
+        if not self._motion_policy.interpolates():
+            self._teardown_visible_indicator()
+            return
+        helper = self._ensure_indicator()
+        if helper is None:
+            return
+        helper.follow(self._current_mode_button(), animate=False)
+        helper.snap_to_selection()
+
+    def _follow_indicator(self, *, animate):
+        if not self._motion_policy.interpolates():
+            self._teardown_visible_indicator()
+            return
+        helper = self._ensure_indicator()
+        if helper is None:
+            return
+        helper.follow(self._current_mode_button(), animate=animate)
+        if not animate:
+            helper.snap_to_selection()
+
+    def _snap_mode_indicator(self):
+        helper = self._indicator
+        if not _is_living(helper) or not self._motion_policy.interpolates():
+            return
+        helper.snap_to_selection()
+
+    def _teardown_visible_indicator(self):
+        helper = self._indicator
+        if not _is_living(helper):
+            return
+        helper.set_motion_policy(self._motion_policy)
 
     def set_enabled_for_mode(self, mode, has_file):
         """Implements the §7.1 enabled-state matrix."""

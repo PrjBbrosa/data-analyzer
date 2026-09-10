@@ -11,7 +11,13 @@ from PyQt5.QtWidgets import QComboBox, QFormLayout, QWidget
 from mf4_analyzer.ui.inspector_sections._helpers import _configure_form, _fit_field
 from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
-from mf4_analyzer.ui_kit.motion import POLICY_LIGHT, POLICY_OFF, POLICY_REDUCED
+from mf4_analyzer.ui_kit.motion import (
+    DURATION_MS,
+    POLICY_LIGHT,
+    POLICY_OFF,
+    POLICY_REDUCED,
+    selection_easing,
+)
 from mf4_analyzer.ui_kit.widgets.segmented_choice import SegmentedChoice
 
 
@@ -189,6 +195,7 @@ def test_contextual_binary_choices_keep_hidden_combo_state_and_32px_height(
     for name in choice_names:
         choice = getattr(panel, name)
         assert isinstance(choice, SegmentedChoice)
+        assert choice.motion_policy() == POLICY_LIGHT
         assert choice.height() == 32
         assert choice.bound_combo().isHidden()
         assert choice.currentIndex() == choice.bound_combo().currentIndex()
@@ -205,10 +212,143 @@ def test_persistent_top_xaxis_source_is_a_full_width_segmented_choice(qtbot, qap
 
     choice = top.choice_xaxis
     assert isinstance(choice, SegmentedChoice)
+    assert choice.motion_policy() == POLICY_LIGHT
     assert top.combo_xaxis.isHidden()
     assert choice.height() == 32
     choice.buttons()[1].click()
     assert top.xaxis_mode() == "channel"
+
+
+def _driver_is_active(choice: SegmentedChoice) -> bool:
+    driver = choice._motion_driver
+    return driver is not None and driver.is_active()
+
+
+def test_frf_preset_apply_snaps_binary_choices_without_extra_signals(qtbot, qapp):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    panel = FrfContextual()
+    qtbot.addWidget(panel)
+    panel.resize(288, 900)
+    panel.show()
+    qapp.processEvents()
+
+    names = (
+        "choice_estimator",
+        "choice_nfft_mode",
+        "choice_magnitude_scale",
+        "choice_frequency_scale",
+        "choice_phase_mode",
+    )
+    choices = tuple(getattr(panel, name) for name in names)
+    for choice in choices:
+        assert choice.motion_policy() == POLICY_LIGHT
+        assert not _driver_is_active(choice)
+
+    baseline = panel.current_params()
+    panel.apply_params(
+        {
+            "estimator": "h2",
+            "nfft_mode": "manual",
+            "magnitude_scale": "linear",
+            "frequency_scale": "linear",
+            "phase_mode": "wrapped",
+        }
+    )
+    assert panel.current_params() != baseline
+    for choice in choices:
+        assert choice.currentIndex() == 1
+        assert not _driver_is_active(choice)
+
+    compute_spy = QSignalSpy(panel.compute_params_changed)
+    display_spy = QSignalSpy(panel.display_params_changed)
+    combo_spies = [
+        QSignalSpy(choice.bound_combo().currentIndexChanged) for choice in choices
+    ]
+    choice_spies = [QSignalSpy(choice.currentIndexChanged) for choice in choices]
+
+    panel.apply_builtin_preset("robust")
+
+    assert panel.current_params() == baseline
+    assert list(compute_spy) == [ [panel.compute_params()] ]
+    assert list(display_spy) == [ [panel.display_params()] ]
+    for combo_spy, choice_spy, choice in zip(combo_spies, choice_spies, choices):
+        assert list(combo_spy) == [[0]]
+        assert list(choice_spy) == [[0]]
+        assert choice.currentIndex() == 0
+        assert not _driver_is_active(choice)
+
+
+def test_fft_amp_y_restore_snaps_and_click_does_not_animate_weighting(qtbot, qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    panel = FFTContextual()
+    qtbot.addWidget(panel)
+    panel.resize(288, 900)
+    panel.show()
+    qapp.processEvents()
+
+    amp = panel.choice_amp_y
+    weighting = panel.choice_weighting
+    assert amp.motion_policy() == POLICY_LIGHT
+    assert weighting.motion_policy() == POLICY_LIGHT
+    assert amp.currentIndex() == 0
+    assert weighting.currentIndex() == 0
+
+    y_before = (
+        panel.chk_y_auto.isChecked(),
+        panel.spin_y_min.value(),
+        panel.spin_y_max.value(),
+    )
+    compute_spy = QSignalSpy(panel.compute_params_changed)
+    display_spy = QSignalSpy(panel.display_params_changed)
+    amp_combo_spy = QSignalSpy(amp.bound_combo().currentIndexChanged)
+    amp_choice_spy = QSignalSpy(amp.currentIndexChanged)
+    weight_combo_spy = QSignalSpy(weighting.bound_combo().currentIndexChanged)
+    weight_choice_spy = QSignalSpy(weighting.currentIndexChanged)
+
+    panel.apply_params({"amp_y": "dB", "y_auto": False, "y_min": 1.0, "y_max": 2.0})
+
+    assert amp.currentIndex() == 1
+    assert panel.combo_amp_y.currentText() == "dB"
+    assert panel.chk_y_auto.isChecked() is False
+    assert panel.spin_y_min.value() == pytest.approx(1.0)
+    assert panel.spin_y_max.value() == pytest.approx(2.0)
+    assert list(amp_combo_spy) == []
+    assert list(amp_choice_spy) == []
+    assert list(weight_combo_spy) == []
+    assert list(weight_choice_spy) == []
+    assert list(compute_spy) == []
+    assert list(display_spy) == []
+    assert not _driver_is_active(amp)
+    assert not _driver_is_active(weighting)
+    assert y_before != (
+        False,
+        1.0,
+        2.0,
+    )
+
+    QTest.mouseClick(amp.buttons()[0], Qt.LeftButton)
+
+    assert amp.currentIndex() == 0
+    assert panel.combo_amp_y.currentText() == "Linear"
+    assert list(amp_combo_spy) == [[0]]
+    assert list(amp_choice_spy) == [[0]]
+    assert list(weight_combo_spy) == []
+    assert list(weight_choice_spy) == []
+    assert list(compute_spy) == []
+    display_after_click = list(display_spy)
+    assert _driver_is_active(amp)
+    assert not _driver_is_active(weighting)
+    amp._motion_driver.clock().setCurrentTime(300)
+    assert list(amp_combo_spy) == [[0]]
+    assert list(amp_choice_spy) == [[0]]
+    assert list(weight_combo_spy) == []
+    assert list(weight_choice_spy) == []
+    assert list(compute_spy) == []
+    assert list(display_spy) == display_after_click
+    assert not _driver_is_active(amp)
+    assert not _driver_is_active(weighting)
 
 
 def _show_bound_choice(qtbot, qapp, *, width=260) -> SegmentedChoice:
@@ -282,6 +422,7 @@ def test_motion_policy_defaults_off_and_click_does_not_start_a_clock(qtbot, qapp
     assert choice.motion_policy() == POLICY_OFF
     assert choice._motion_driver is None
     assert choice._selection_pill is None
+    assert "_motion_driver" not in choice.__dict__
 
     QTest.mouseClick(choice.buttons()[1], Qt.LeftButton)
     qapp.processEvents()
@@ -290,6 +431,7 @@ def test_motion_policy_defaults_off_and_click_does_not_start_a_clock(qtbot, qapp
     assert choice.buttons()[1].isChecked()
     assert choice._motion_driver is None
     assert choice._selection_pill is None
+    assert "_motion_driver" not in choice.__dict__
     assert choice.height() == 32
 
 
@@ -302,40 +444,50 @@ def test_motion_pill_tracks_0_25_50_100_percent_frames(qtbot, qapp):
     assert pill is not None and driver is not None
     assert pill.geometry() == first.geometry()
     assert not driver.is_active()
+    assert "_motion_driver" not in choice.__dict__
 
     combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
     choice_spy = QSignalSpy(choice.currentIndexChanged)
-    choice.setCurrentIndex(1)
+    QTest.mouseClick(second, Qt.LeftButton)
 
+    assert choice.bound_combo().currentIndex() == 1
     assert choice.currentIndex() == 1
     assert second.isChecked() and not first.isChecked()
     assert list(combo_spy) == [[1]]
     assert list(choice_spy) == [[1]]
     assert driver.is_active()
-    assert driver.clock().duration() == 160
+    assert driver.clock().duration() == DURATION_MS["selection_control"] == 300
+    used = driver.clock().easingCurve()
+    assert used.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
+    assert used.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
+    assert used.valueForProgress(0.25) == pytest.approx(
+        selection_easing().valueForProgress(0.25), abs=0.001
+    )
 
     clock = driver.clock()
     clock.setCurrentTime(0)
     assert QRect(driver.current()) == first.geometry()
     assert pill.geometry() == first.geometry()
 
-    clock.setCurrentTime(40)
+    clock.setCurrentTime(75)
     mid_25 = QRect(driver.current())
     assert first.x() < mid_25.x() < second.x()
     assert pill.geometry() == mid_25
     assert mid_25 != first.geometry()
     assert mid_25 != second.geometry()
 
-    clock.setCurrentTime(80)
+    clock.setCurrentTime(150)
     mid_50 = QRect(driver.current())
     assert mid_50.x() > mid_25.x()
     assert pill.geometry() == mid_50
     assert first.x() < mid_50.x() < second.x()
 
-    clock.setCurrentTime(160)
+    clock.setCurrentTime(300)
     assert QRect(driver.current()) == second.geometry()
     assert pill.geometry() == second.geometry()
     assert not driver.is_active()
+    assert list(combo_spy) == [[1]]
+    assert list(choice_spy) == [[1]]
     assert choice.height() == 32
 
 
@@ -344,13 +496,13 @@ def test_motion_interrupt_continues_from_displayed_rect(qtbot, qapp):
     choice.set_motion_policy(POLICY_LIGHT)
     first, second = choice.buttons()
     driver = choice._motion_driver
-    choice.setCurrentIndex(1)
-    driver.clock().setCurrentTime(40)
+    QTest.mouseClick(second, Qt.LeftButton)
+    driver.clock().setCurrentTime(75)
     mid = QRect(driver.current())
     assert mid not in (first.geometry(), second.geometry())
 
     combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
-    choice.setCurrentIndex(0)
+    QTest.mouseClick(first, Qt.LeftButton)
 
     assert choice.currentIndex() == 0
     assert first.isChecked()
@@ -362,13 +514,119 @@ def test_motion_interrupt_continues_from_displayed_rect(qtbot, qapp):
     assert choice._selection_pill.geometry() == mid
 
 
+def test_program_set_current_index_snaps_while_visible_light(qtbot, qapp):
+    choice = _show_bound_choice(qtbot, qapp)
+    choice.set_motion_policy(POLICY_LIGHT)
+    first, second = choice.buttons()
+    driver = choice._motion_driver
+    pill = choice._selection_pill
+    assert driver is not None and pill is not None
+    assert not driver.is_active()
+
+    combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+    choice.setCurrentIndex(1)
+
+    assert choice.currentIndex() == 1
+    assert second.isChecked() and not first.isChecked()
+    assert list(combo_spy) == [[1]]
+    assert list(choice_spy) == [[1]]
+    assert not driver.is_active()
+    assert pill.geometry() == second.geometry()
+
+    combo_spy = QSignalSpy(choice.bound_combo().currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+    choice.bound_combo().setCurrentIndex(0)
+
+    assert choice.currentIndex() == 0
+    assert first.isChecked() and not second.isChecked()
+    assert list(combo_spy) == [[0]]
+    assert list(choice_spy) == [[0]]
+    assert not driver.is_active()
+    assert pill.geometry() == first.geometry()
+
+
+def test_preset_blocked_combo_sync_does_not_animate(qtbot, qapp):
+    choice = _show_bound_choice(qtbot, qapp)
+    choice.set_motion_policy(POLICY_LIGHT)
+    first, second = choice.buttons()
+    driver = choice._motion_driver
+    combo = choice.bound_combo()
+    combo_spy = QSignalSpy(combo.currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+    combo.blockSignals(True)
+    try:
+        combo.setCurrentIndex(1)
+    finally:
+        combo.blockSignals(False)
+    choice.sync_from_bound_combo()
+
+    assert combo.currentIndex() == 1
+    assert second.isChecked() and not first.isChecked()
+    assert list(combo_spy) == []
+    assert list(choice_spy) == []
+    assert not driver.is_active()
+    assert choice._selection_pill.geometry() == second.geometry()
+
+
+def test_linked_instance_snaps_while_direct_click_animates(qtbot, qapp):
+    choice_a = _show_bound_choice(qtbot, qapp)
+    choice_b = _show_bound_choice(qtbot, qapp)
+    choice_a.set_motion_policy(POLICY_LIGHT)
+    choice_b.set_motion_policy(POLICY_LIGHT)
+    driver_a = choice_a._motion_driver
+    driver_b = choice_b._motion_driver
+    assert driver_a is not None and driver_b is not None
+    assert not driver_a.is_active()
+    assert not driver_b.is_active()
+
+    choice_a.currentIndexChanged.connect(choice_b.setCurrentIndex)
+    spy_a = QSignalSpy(choice_a.currentIndexChanged)
+    spy_b = QSignalSpy(choice_b.currentIndexChanged)
+    QTest.mouseClick(choice_a.buttons()[1], Qt.LeftButton)
+
+    assert choice_a.currentIndex() == 1
+    assert choice_b.currentIndex() == 1
+    assert list(spy_a) == [[1]]
+    assert list(spy_b) == [[1]]
+    assert driver_a.is_active()
+    assert driver_a.clock().duration() == 300
+    assert not driver_b.is_active()
+    assert choice_b._selection_pill.geometry() == choice_b.buttons()[1].geometry()
+
+    driver_a.clock().setCurrentTime(300)
+    assert not driver_a.is_active()
+    assert not driver_b.is_active()
+    assert list(spy_a) == [[1]]
+    assert list(spy_b) == [[1]]
+
+
+def test_business_correction_snaps_to_corrected_index(qtbot, qapp):
+    choice = _show_bound_choice(qtbot, qapp)
+    choice.set_motion_policy(POLICY_LIGHT)
+    first, second = choice.buttons()
+    driver = choice._motion_driver
+
+    def _correct(_index: int) -> None:
+        if choice.bound_combo().currentIndex() == 1:
+            choice.bound_combo().setCurrentIndex(0)
+
+    choice.currentIndexChanged.connect(_correct)
+    QTest.mouseClick(second, Qt.LeftButton)
+
+    assert choice.currentIndex() == 0
+    assert first.isChecked() and not second.isChecked()
+    assert not driver.is_active()
+    assert choice._selection_pill.geometry() == first.geometry()
+
+
 def test_sync_from_blocked_combo_snaps_to_end_state(qtbot, qapp):
     choice = _show_bound_choice(qtbot, qapp)
     choice.set_motion_policy(POLICY_LIGHT)
     first, second = choice.buttons()
     driver = choice._motion_driver
-    choice.setCurrentIndex(1)
-    driver.clock().setCurrentTime(40)
+    QTest.mouseClick(second, Qt.LeftButton)
+    driver.clock().setCurrentTime(75)
     assert driver.is_active()
 
     combo = choice.bound_combo()
@@ -394,8 +652,8 @@ def test_resize_snaps_to_measured_button_rect_without_chasing(qtbot, qapp):
     choice.set_motion_policy(POLICY_LIGHT)
     first, second = choice.buttons()
     driver = choice._motion_driver
-    choice.setCurrentIndex(1)
-    driver.clock().setCurrentTime(40)
+    QTest.mouseClick(second, Qt.LeftButton)
+    driver.clock().setCurrentTime(75)
     assert driver.is_active()
     assert first.width() == second.width()
 
@@ -419,8 +677,8 @@ def test_refresh_and_hide_restore_snap_without_replaying(qtbot, qapp):
     first, second = choice.buttons()
     driver = choice._motion_driver
 
-    choice.setCurrentIndex(1)
-    driver.clock().setCurrentTime(40)
+    QTest.mouseClick(second, Qt.LeftButton)
+    driver.clock().setCurrentTime(75)
     combo.setItemText(0, "Auto")
     combo.setItemText(1, "Fixed")
     choice.refresh_from_bound_combo()
@@ -472,8 +730,15 @@ def test_light_motion_has_one_plate_and_checked_text_updates_immediately(
     first, second = choice.buttons()
     driver = choice._motion_driver
     production_stylesheet.processEvents()
+    plates = [
+        child
+        for child in choice.findChildren(QWidget)
+        if child.objectName() == "selectionIndicatorPlate"
+    ]
+    assert len(plates) == 1
+    assert plates[0] is choice._selection_pill
 
-    choice.setCurrentIndex(1)
+    QTest.mouseClick(second, Qt.LeftButton)
     driver.clock().setCurrentTime(0)
     choice.repaint()
 
@@ -483,14 +748,21 @@ def test_light_motion_has_one_plate_and_checked_text_updates_immediately(
         CONTROL_COLORS["CONTROL_SURFACE_TOP"]
     ).name()
     assert _background_at(choice, second) == QColor(CONTROL_COLORS["CONTROL_TRACK"]).name()
+    plates = [
+        child
+        for child in choice.findChildren(QWidget)
+        if child.objectName() == "selectionIndicatorPlate"
+    ]
+    assert len(plates) == 1
 
-    driver.clock().setCurrentTime(160)
+    driver.clock().setCurrentTime(300)
     choice.repaint()
     assert choice._selection_pill.geometry() == second.geometry()
     assert _background_at(choice, first) == QColor(CONTROL_COLORS["CONTROL_TRACK"]).name()
     assert _background_at(choice, second) == QColor(
         CONTROL_COLORS["CONTROL_SURFACE_TOP"]
     ).name()
+    assert not driver.is_active()
 
 
 def test_motion_deferred_delete_owns_pill_driver_and_hidden_combo(qapp):
@@ -498,6 +770,9 @@ def test_motion_deferred_delete_owns_pill_driver_and_hidden_combo(qapp):
     combo = _binary_combo()
     choice = SegmentedChoice(host)
     choice.bind(combo)
+    host.resize(260, 32)
+    host.show()
+    qapp.processEvents()
     choice.set_motion_policy(POLICY_LIGHT)
     group = choice._group
     buttons = choice.buttons()
@@ -668,8 +943,8 @@ def test_motion_light_disable_mid_animation_snaps_and_paints_disabled(
     production_stylesheet.processEvents()
     assert pill is not None and driver is not None
 
-    choice.setCurrentIndex(1)
-    driver.clock().setCurrentTime(40)
+    QTest.mouseClick(second, Qt.LeftButton)
+    driver.clock().setCurrentTime(75)
     mid = QRect(driver.current())
     assert driver.is_active()
     assert mid not in (first.geometry(), second.geometry())

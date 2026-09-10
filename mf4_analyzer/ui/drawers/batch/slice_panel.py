@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....list_text import split_list_text
+from ....ui_kit.motion import POLICY_LIGHT
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...widgets.pill_switch import PillSwitch
 from .optional_eyebrow import BatchOptionalEyebrow
@@ -86,6 +87,7 @@ class SlicePanel(QWidget):
         self._axis_combo.addItem("固定频率", "y")
         self._axis_choice = SegmentedChoice(form_host)
         self._axis_choice.bind(self._axis_combo)
+        self._axis_choice.set_motion_policy(POLICY_LIGHT)
         self._axis_choice.setMinimumWidth(0)
         self._axis_choice.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         form.addRow("切片维度", self._axis_choice)

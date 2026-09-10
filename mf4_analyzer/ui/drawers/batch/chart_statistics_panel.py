@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
 from mf4_analyzer.ui_kit.widgets.segmented_choice import SegmentedChoice
 from mf4_analyzer.ui.widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
@@ -83,6 +84,7 @@ class ChartStatisticsPanel(QWidget):
         self._range_mode_combo.addItem("手动", "manual")
         self._range_mode_choice = SegmentedChoice(self.range_row)
         self._range_mode_choice.bind(self._range_mode_combo)
+        self._range_mode_choice.set_motion_policy(POLICY_LIGHT)
         self._range_mode_choice.setMinimumWidth(0)
         self._range_mode_choice.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed,

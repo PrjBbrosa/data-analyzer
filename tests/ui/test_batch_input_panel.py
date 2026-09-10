@@ -277,6 +277,9 @@ def test_target_policy_uses_a_full_width_segmented_choice_at_288px(qapp, qtbot):
         assert combo.isHidden() is True
         assert choice.isVisibleTo(panel) is True
         assert choice.height() == 32
+        from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+        assert choice.motion_policy() == POLICY_LIGHT
         # Shared QFormLayout label column. The field origin is ~71 under
         # PingFang and can move 1px when QSS's leading Microsoft YaHei is
         # substituted. The product contract is a full-width field column,
@@ -298,6 +301,46 @@ def test_target_policy_uses_a_full_width_segmented_choice_at_288px(qapp, qtbot):
         assert panel.target_policy() == "available_per_source"
     finally:
         qapp.setStyleSheet(old_sheet)
+
+
+def test_target_policy_program_restore_snaps_without_extra_changed(qtbot, qapp):
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    panel.resize(288, 900)
+    panel.show()
+    qapp.processEvents()
+
+    choice = panel._target_policy_choice
+    assert choice.motion_policy() == POLICY_LIGHT
+    driver = choice._motion_driver
+    assert driver is not None
+    assert not driver.is_active()
+    assert panel.target_policy() == "common"
+
+    changed = QSignalSpy(panel.changed)
+    combo_spy = QSignalSpy(panel._target_policy_combo.currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+
+    panel.apply_target_policy("available_per_source")
+
+    assert panel.target_policy() == "available_per_source"
+    assert panel._target_policy_combo.currentData() == "available_per_source"
+    assert list(combo_spy) == [[1]]
+    assert list(choice_spy) == [[1]]
+    assert len(changed) == 1
+    assert not driver.is_active()
+
+    panel.apply_target_policy("available_per_source")
+    assert panel.target_policy() == "available_per_source"
+    assert list(combo_spy) == [[1]]
+    assert list(choice_spy) == [[1]]
+    assert len(changed) == 1
+    assert not driver.is_active()
 
 
 def test_rpm_picker_matches_the_standard_input_height(qapp, qtbot):

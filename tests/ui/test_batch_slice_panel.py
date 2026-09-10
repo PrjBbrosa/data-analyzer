@@ -91,7 +91,10 @@ def test_slice_axis_uses_segmented_choice_not_dropdown(qtbot):
     panel.show()
     qtbot.wait(20)
 
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
     assert isinstance(panel._axis_choice, SegmentedChoice)
+    assert panel._axis_choice.motion_policy() == POLICY_LIGHT
     assert panel._axis_choice.bound_combo() is panel._axis_combo
     assert panel._axis_combo.isHidden() is True
     assert panel._axis_choice.isVisibleTo(panel) is True
@@ -102,6 +105,45 @@ def test_slice_axis_uses_segmented_choice_not_dropdown(qtbot):
     # Both segment labels remain fully painted inside the narrow Batch column.
     for button in panel._axis_choice.buttons():
         assert button.width() >= button.fontMetrics().horizontalAdvance(button.text())
+
+
+def test_slice_dimension_rename_snaps_without_extra_signals(qtbot, qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    panel = _make_panel(qtbot)
+    panel._enable_switch.setChecked(True)
+    panel.resize(288, 400)
+    panel.show()
+    qapp.processEvents()
+
+    choice = panel._axis_choice
+    assert choice.motion_policy() == POLICY_LIGHT
+    driver = choice._motion_driver
+    assert driver is not None
+    assert not driver.is_active()
+
+    changed = QSignalSpy(panel.changed)
+    combo_spy = QSignalSpy(panel._axis_combo.currentIndexChanged)
+    QTest.mouseClick(choice.buttons()[1], Qt.LeftButton)
+
+    assert choice.currentIndex() == 1
+    assert panel._axis_combo.currentData() == "y"
+    assert list(combo_spy) == [[1]]
+    assert len(changed) == 1
+    assert driver.is_active()
+    payload = panel.get_params()
+
+    panel.set_context(method="order_time")
+
+    assert panel.get_params() == payload
+    assert choice.buttons()[1].text() == "固定阶次"
+    assert panel._axis_combo.itemText(1) == "固定阶次"
+    assert list(combo_spy) == [[1]]
+    assert len(changed) == 1
+    assert not driver.is_active()
 
 
 def test_slice_panel_order_time_context_renames_second_axis_and_clears_unit(qtbot):

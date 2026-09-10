@@ -19,6 +19,7 @@ from functools import partial
 from collections.abc import Mapping, Sequence
 import math
 
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
@@ -36,7 +37,12 @@ from ....ui_kit.control_style import (
     painted_semantic_hex,
     painted_state_hex,
 )
+from ....ui_kit.motion import POLICY_LIGHT, resolve_policy
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
+from ....ui_kit.widgets.selection_indicator import (
+    SelectionIndicator,
+    SelectionIndicatorStyle,
+)
 from ....signal.analysis_defaults import (
     ANALYSIS_WINDOW_CANDIDATES,
     DEFAULT_COHERENCE_THRESHOLD,
@@ -59,6 +65,33 @@ _METHOD_TAB_GAP_PX = 4
 _METHOD_TAB_MIN_WIDTH_PX = 58
 _METHOD_ROW_HEIGHT_PX = 40
 _METHOD_TAB_MIN_HEIGHT_PX = 28
+
+# Suppress static checked fill while the shared plate owns that chrome.
+# Longhands only: a ``border:`` shorthand here would zero the 5px radius.
+_MOTION_PILL_HOST_QSS = """
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked {
+    background-color: transparent;
+    border-color: transparent;
+}
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:hover {
+    background-color: transparent;
+    border-color: transparent;
+}
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:disabled,
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:disabled:hover,
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:disabled:pressed,
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:disabled:focus {
+    background-color: transparent;
+    border-color: transparent;
+}
+"""
+
+
+def _is_living(obj) -> bool:
+    try:
+        return obj is not None and not sip.isdeleted(obj)
+    except RuntimeError:
+        return False
 
 
 class MethodButtonGroup(QWidget):
@@ -103,6 +136,9 @@ class MethodButtonGroup(QWidget):
         # Default to FFT.
         self._current = "fft"
         self._buttons["fft"].setChecked(True)
+        self._motion_policy = resolve_policy(None)
+        self._indicator = None
+        self.set_motion_policy(POLICY_LIGHT)
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
         return QSize(self._preferred_width(), _METHOD_ROW_HEIGHT_PX)
@@ -130,6 +166,7 @@ class MethodButtonGroup(QWidget):
         if event.type() == QEvent.FontChange:
             self._sync_button_widths()
             self.updateGeometry()
+            self._snap_indicator()
 
     def eventFilter(self, obj, event):  # noqa: N802 - Qt override
         if (
@@ -168,25 +205,120 @@ class MethodButtonGroup(QWidget):
 
     def _on_button_clicked(self, method: str) -> None:
         """Apply a user selection only when it changes the active method."""
-        if method != self._current:
-            self.set_method(method)
+        self._apply_method(method, animate=True)
         self.methodActivated.emit(method)
 
     def set_method(self, method: str) -> None:
         if method not in self._buttons:
             return
+        self._apply_method(method, animate=False)
+
+    def _apply_method(self, method: str, *, animate: bool) -> None:
         btn = self._buttons[method]
         if not btn.isChecked():
             btn.setChecked(True)
-        if method == self._current:
-            # Still emit on explicit set so callers/tests observe the call.
+        changed = method != self._current
+        if changed:
+            self._current = method
+        if changed or not animate:
+            # Program set_method still emits on the same value; user repeats do not.
             self.methodChanged.emit(method)
-            return
-        self._current = method
-        self.methodChanged.emit(method)
+        if animate:
+            self._follow_indicator(animate=True)
+        else:
+            self._snap_indicator()
 
     def current_method(self) -> str:
         return self._current
+
+    def motion_policy(self):
+        return self._motion_policy
+
+    def set_motion_policy(self, policy) -> None:
+        """Apply an explicit per-instance policy and snap chrome to the method."""
+        self._motion_policy = resolve_policy(policy)
+        self._apply_motion_chrome()
+        helper = self._indicator
+        if _is_living(helper):
+            helper.set_motion_policy(self._motion_policy)
+        if self._motion_policy.interpolates():
+            self._snap_indicator()
+        else:
+            self._teardown_visible_indicator()
+
+    @property
+    def _motion_driver(self):
+        helper = self._indicator
+        if not _is_living(helper):
+            return None
+        return helper.driver()
+
+    @property
+    def _selection_pill(self):
+        helper = self._indicator
+        if not _is_living(helper):
+            return None
+        plate = helper._plate
+        if not _is_living(plate):
+            return None
+        return plate
+
+    def _current_button(self) -> QPushButton | None:
+        return self._buttons.get(self._current)
+
+    def _apply_motion_chrome(self) -> None:
+        if self._motion_policy.interpolates():
+            self.setStyleSheet(_MOTION_PILL_HOST_QSS)
+            return
+        self.setStyleSheet("")
+
+    def _ensure_indicator(self) -> SelectionIndicator | None:
+        helper = self._indicator
+        if _is_living(helper):
+            return helper
+        buttons = tuple(self._buttons[key] for key, _label in _METHODS)
+        helper = SelectionIndicator(
+            self,
+            buttons=buttons,
+            duration_name="selection_navigation",
+            style=SelectionIndicatorStyle(
+                fill=CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+                border=CONTROL_COLORS["CONTROL_ACCENT_HI"],
+                disabled_fill=CONTROL_COLORS["CONTROL_DISABLED_BG"],
+                disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
+                radius=5,
+            ),
+        )
+        self._indicator = helper
+        helper.set_motion_policy(self._motion_policy)
+        return helper
+
+    def _snap_indicator(self) -> None:
+        if not self._motion_policy.interpolates():
+            self._teardown_visible_indicator()
+            return
+        helper = self._ensure_indicator()
+        if helper is None:
+            return
+        helper.follow(self._current_button(), animate=False)
+        helper.snap_to_selection()
+
+    def _follow_indicator(self, *, animate: bool) -> None:
+        if not self._motion_policy.interpolates():
+            self._teardown_visible_indicator()
+            return
+        helper = self._ensure_indicator()
+        if helper is None:
+            return
+        helper.follow(self._current_button(), animate=animate)
+        if not animate:
+            helper.snap_to_selection()
+
+    def _teardown_visible_indicator(self) -> None:
+        helper = self._indicator
+        if not _is_living(helper):
+            return
+        helper.set_motion_policy(self._motion_policy)
 
 
 # ---------------------------------------------------------------------------
@@ -990,6 +1122,7 @@ class DynamicParamForm(QWidget):
                     choice.bind(widget, labels=("展开", "±180°"))
                 else:
                     choice.bind(widget)
+                choice.set_motion_policy(POLICY_LIGHT)
                 choice.setMinimumWidth(0)
                 choice.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
                 self._choice_widgets[name] = choice

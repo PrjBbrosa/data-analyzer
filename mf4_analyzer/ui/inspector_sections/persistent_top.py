@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...ui_kit.motion import POLICY_LIGHT
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from .. import hints
@@ -184,6 +185,7 @@ class PersistentTop(QWidget):
         ])
         self.choice_xaxis = SegmentedChoice()
         self.choice_xaxis.bind(self.combo_xaxis)
+        self.choice_xaxis.set_motion_policy(POLICY_LIGHT)
         self._xaxis_source_label = QLabel("来源:")
         fl.addRow(self._xaxis_source_label, _fit_field(self.choice_xaxis))
         self._combo_xaxis_ch = SearchableComboBox()

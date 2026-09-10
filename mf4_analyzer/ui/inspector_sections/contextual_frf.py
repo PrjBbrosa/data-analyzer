@@ -25,6 +25,7 @@ from ...signal.analysis_defaults import (
     DEFAULT_COHERENCE_THRESHOLD,
 )
 from ...ui_kit.icons import Icons
+from ...ui_kit.motion import POLICY_LIGHT
 from ..widgets.pill_switch import PillSwitch
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -195,6 +196,7 @@ class FrfContextual(QWidget):
         )
         self.choice_estimator = SegmentedChoice(params_card)
         self.choice_estimator.bind(self.combo_estimator, labels=("H1", "H2"))
+        self.choice_estimator.set_motion_policy(POLICY_LIGHT)
         compute_form.addRow(
             "估计器:", _fit_field(self.choice_estimator, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
@@ -241,6 +243,7 @@ class FrfContextual(QWidget):
         )
         self.choice_nfft_mode = SegmentedChoice(params_card)
         self.choice_nfft_mode.bind(self.combo_nfft_mode)
+        self.choice_nfft_mode.set_motion_policy(POLICY_LIGHT)
         compute_form.addRow(
             "NFFT 模式:",
             _fit_field(self.choice_nfft_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
@@ -294,6 +297,7 @@ class FrfContextual(QWidget):
         )
         self.choice_magnitude_scale = SegmentedChoice(display_card)
         self.choice_magnitude_scale.bind(self.combo_magnitude_scale)
+        self.choice_magnitude_scale.set_motion_policy(POLICY_LIGHT)
         display_form.addRow(
             "幅值:",
             _fit_field(self.choice_magnitude_scale, max_width=_SHORT_FIELD_MAX_WIDTH),
@@ -313,6 +317,7 @@ class FrfContextual(QWidget):
         )
         self.choice_frequency_scale = SegmentedChoice(display_card)
         self.choice_frequency_scale.bind(self.combo_frequency_scale)
+        self.choice_frequency_scale.set_motion_policy(POLICY_LIGHT)
         self.btn_frequency_log, self.btn_frequency_linear = self.choice_frequency_scale.buttons()
         display_form.addRow(
             "频率轴:", _fit_field(self.choice_frequency_scale, max_width=_SHORT_FIELD_MAX_WIDTH),
@@ -330,6 +335,7 @@ class FrfContextual(QWidget):
         )
         self.choice_phase_mode = SegmentedChoice(display_card)
         self.choice_phase_mode.bind(self.combo_phase_mode, labels=("展开", "±180°"))
+        self.choice_phase_mode.set_motion_policy(POLICY_LIGHT)
         self.btn_phase_unwrapped, self.btn_phase_wrapped = self.choice_phase_mode.buttons()
         display_form.addRow(
             "相位:", _fit_field(self.choice_phase_mode, max_width=_SHORT_FIELD_MAX_WIDTH),

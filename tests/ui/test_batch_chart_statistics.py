@@ -30,7 +30,10 @@ def test_chart_statistics_panel_round_trips_only_when_enabled(qtbot):
     assert isinstance(panel.mean, QCheckBox)
     assert isinstance(panel.auto_range, QCheckBox)
     assert panel.auto_range.isHidden() is True
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
     assert panel._range_mode_choice.bound_combo() is panel._range_mode_combo
+    assert panel._range_mode_choice.motion_policy() == POLICY_LIGHT
     assert panel._range_mode_choice.isVisibleTo(panel) is False  # settings collapsed
 
     assert panel.get_params() == {}
@@ -100,6 +103,50 @@ def test_chart_statistics_panel_round_trips_only_when_enabled(qtbot):
     panel.enabled.setChecked(False)
     assert panel._settings.isHidden()
     assert panel._summary_note.text() == "统计关闭 · 图上不加标注"
+
+
+def test_chart_statistics_program_restore_snaps_without_extra_changed(qtbot, qapp):
+    from mf4_analyzer.ui.drawers.batch.chart_statistics_panel import (
+        ChartStatisticsPanel,
+    )
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    panel = ChartStatisticsPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    qapp.processEvents()
+    panel.enabled.setChecked(True)
+    qapp.processEvents()
+
+    choice = panel._range_mode_choice
+    assert choice.motion_policy() == POLICY_LIGHT
+    driver = choice._motion_driver
+    assert driver is not None
+    assert not driver.is_active()
+    assert choice.currentIndex() == 0
+
+    payload = {
+        "chart_statistics": {
+            "enabled": True,
+            "range_mode": "custom",
+            "x_min": -5.0,
+            "x_max": 15.0,
+            "metrics": ["min"],
+        },
+    }
+    changed = QSignalSpy(panel.changed)
+    combo_spy = QSignalSpy(panel._range_mode_combo.currentIndexChanged)
+    choice_spy = QSignalSpy(choice.currentIndexChanged)
+
+    panel.apply_params(payload)
+
+    assert panel.get_params() == payload
+    assert choice.currentIndex() == 1
+    assert panel.auto_range.isChecked() is False
+    assert list(combo_spy) == []
+    assert list(choice_spy) == []
+    assert len(changed) == 1
+    assert not driver.is_active()
 
 
 def test_apply_params_without_the_key_disables_but_keeps_the_dialed_in_range(qtbot):

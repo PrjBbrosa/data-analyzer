@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5 import sip
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -12,11 +12,11 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QSizePolicy,
-    QWidget,
 )
 
 from ..control_style import CONTROL_COLORS
-from ..motion import MotionPolicy, ValueDriver, duration_ms, resolve_policy
+from ..motion import MotionPolicy, resolve_policy
+from .selection_indicator import SelectionIndicator, SelectionIndicatorStyle
 
 # Suppress the QSS checked pill while the shared moving plate owns that chrome.
 # Longhand colors only: a ``border:`` shorthand here would zero radius.
@@ -37,37 +37,11 @@ QFrame#segmentedChoice QPushButton[role="choice"]:checked:disabled:focus {{
 """
 
 
-class _SelectionPill(QFrame):
-    """Input-transparent selected-segment plate. Geometry is owned by the choice."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("segmentedChoicePill")
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFocusPolicy(Qt.NoFocus)
-        self.hide()
-
-    def changeEvent(self, event) -> None:
-        super().changeEvent(event)
-        if event.type() == QEvent.EnabledChange:
-            self.update()
-
-    def paintEvent(self, event) -> None:
-        del event
-        host = self.parentWidget()
-        enabled = True if host is None else host.isEnabled()
-        if enabled:
-            fill = CONTROL_COLORS["CONTROL_SURFACE_TOP"]
-            line = CONTROL_COLORS["CONTROL_SELECT_LINE"]
-        else:
-            fill = CONTROL_COLORS["CONTROL_DISABLED_BG"]
-            line = CONTROL_COLORS["CONTROL_DISABLED_LINE"]
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setBrush(QColor(fill))
-        painter.setPen(QPen(QColor(line), 1))
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 5, 5)
+def _is_living(obj) -> bool:
+    try:
+        return obj is not None and not sip.isdeleted(obj)
+    except RuntimeError:
+        return False
 
 
 class SegmentedChoice(QFrame):
@@ -95,8 +69,25 @@ class SegmentedChoice(QFrame):
         self._layout.setContentsMargins(2, 2, 2, 2)
         self._layout.setSpacing(0)
         self._motion_policy = resolve_policy(None)
-        self._selection_pill: _SelectionPill | None = None
-        self._motion_driver: ValueDriver | None = None
+        self._indicator: SelectionIndicator | None = None
+        self._direct_activation_index: int | None = None
+
+    @property
+    def _motion_driver(self):
+        helper = self._indicator
+        if not _is_living(helper):
+            return None
+        return helper.driver()
+
+    @property
+    def _selection_pill(self):
+        helper = self._indicator
+        if not _is_living(helper):
+            return None
+        plate = helper._plate
+        if not _is_living(plate):
+            return None
+        return plate
 
     def bind(
         self,
@@ -156,6 +147,9 @@ class SegmentedChoice(QFrame):
         """Apply an explicit per-instance policy and snap chrome to business state."""
         self._motion_policy = resolve_policy(policy)
         self._apply_motion_chrome()
+        helper = self._indicator
+        if _is_living(helper):
+            helper.set_motion_policy(self._motion_policy)
         if self._motion_policy.interpolates():
             self._snap_indicator()
         else:
@@ -226,8 +220,10 @@ class SegmentedChoice(QFrame):
                 button.blockSignals(was_blocked)
 
     def _on_combo_index_changed(self, index: int) -> None:
+        requested = self._direct_activation_index
+        self._direct_activation_index = None
         self._set_checked_index(index)
-        self._follow_indicator(animate=True)
+        self._follow_indicator(animate=requested is not None and requested == index)
         self.currentIndexChanged.emit(index)
 
     def _on_button_clicked(self, button: QPushButton) -> None:
@@ -237,8 +233,13 @@ class SegmentedChoice(QFrame):
             return
         combo = self.bound_combo()
         index = self._group.id(button)
-        if index >= 0 and combo.currentIndex() != index:
+        if index < 0 or combo.currentIndex() == index:
+            return
+        self._direct_activation_index = index
+        try:
             combo.setCurrentIndex(index)
+        finally:
+            self._direct_activation_index = None
 
     def _refresh_enabled_chrome(self) -> None:
         pill = self._selection_pill
@@ -251,89 +252,61 @@ class SegmentedChoice(QFrame):
     def _apply_motion_chrome(self) -> None:
         if self._motion_policy.interpolates():
             self.setStyleSheet(_MOTION_PILL_HOST_QSS)
-            self._ensure_indicator()
             return
         self.setStyleSheet("")
 
-    def _ensure_driver(self) -> ValueDriver:
-        if self._motion_driver is None:
-            self._motion_driver = ValueDriver(self, on_value=self._on_indicator_rect)
-        return self._motion_driver
-
-    def _ensure_indicator(self) -> _SelectionPill:
-        if self._selection_pill is None:
-            self._selection_pill = _SelectionPill(self)
-        self._stack_indicator()
-        return self._selection_pill
-
-    def _stack_indicator(self) -> None:
-        pill = self._selection_pill
-        if pill is None:
-            return
-        pill.lower()
-        for button in self._buttons:
-            button.raise_()
-
-    def _measured_target_rect(self) -> QRect | None:
-        if self._combo is None or not self._buttons:
+    def _current_button(self) -> QPushButton | None:
+        combo = self._combo
+        if combo is None or not self._buttons:
             return None
-        index = self._combo.currentIndex()
+        index = combo.currentIndex()
         if not 0 <= index < len(self._buttons):
             return None
-        rect = QRect(self._buttons[index].geometry())
-        if not rect.isValid() or rect.isEmpty():
+        return self._buttons[index]
+
+    def _ensure_indicator(self) -> SelectionIndicator | None:
+        if not self._buttons:
             return None
-        return rect
+        helper = self._indicator
+        if _is_living(helper):
+            return helper
+        helper = SelectionIndicator(
+            self,
+            buttons=self._buttons,
+            duration_name="selection_control",
+            style=SelectionIndicatorStyle(
+                fill=CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+                border=CONTROL_COLORS["CONTROL_SELECT_LINE"],
+                disabled_fill=CONTROL_COLORS["CONTROL_DISABLED_BG"],
+                disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
+                radius=5,
+            ),
+        )
+        self._indicator = helper
+        helper.set_motion_policy(self._motion_policy)
+        return helper
 
     def _snap_indicator(self) -> None:
         if not self._motion_policy.interpolates():
             self._teardown_visible_indicator()
             return
-        target = self._measured_target_rect()
-        if target is None:
+        helper = self._ensure_indicator()
+        if helper is None:
             return
-        self._ensure_indicator()
-        self._ensure_driver().snap(target)
+        helper.follow(self._current_button(), animate=False)
+        helper.snap_to_selection()
 
     def _follow_indicator(self, *, animate: bool) -> None:
         if not self._motion_policy.interpolates():
             self._teardown_visible_indicator()
             return
-        target = self._measured_target_rect()
-        if target is None:
+        helper = self._ensure_indicator()
+        if helper is None:
             return
-        self._ensure_indicator()
-        driver = self._ensure_driver()
-        if (
-            not animate
-            or not self.isVisible()
-            or not self.isEnabled()
-            or driver.current() is None
-        ):
-            driver.snap(target)
-            return
-        driver.go(target, duration_ms=duration_ms("segment", self._motion_policy))
+        helper.follow(self._current_button(), animate=animate)
 
     def _teardown_visible_indicator(self) -> None:
-        driver = self._motion_driver
-        if driver is not None:
-            target = self._measured_target_rect()
-            if target is not None:
-                driver.snap(target)
-            elif driver.is_active():
-                driver.stop_and_keep()
-        pill = self._selection_pill
-        if pill is not None:
-            pill.hide()
-
-    def _on_indicator_rect(self, value) -> None:
-        pill = self._selection_pill
-        if pill is None or value is None:
+        helper = self._indicator
+        if not _is_living(helper):
             return
-        rect = QRect(value)
-        if not rect.isValid():
-            return
-        pill.setGeometry(rect)
-        if self._motion_policy.interpolates() and pill.isHidden():
-            pill.show()
-            self._stack_indicator()
+        helper.set_motion_policy(self._motion_policy)

@@ -1,4 +1,6 @@
 """Pixmap/HTML helpers, toolbar-icon helpers, and shared module-level constants."""
+from functools import partial
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QKeySequence, QPainter
 from PyQt5.QtWidgets import QFrame, QToolButton
@@ -162,6 +164,10 @@ def _apply_mdi_icons(toolbar, active_key=''):
             btn.style().polish(btn)
 
 
+def _mark_toolbar_shortcuts_discovered(card, *_ignored):
+    card.mark_discovered("toolbar.shortcuts_exist")
+
+
 def _install_nav_shortcuts(card, toolbar):
     for key, shortcut in _NAV_SHORTCUTS.items():
         act = _find_action(toolbar, key)
@@ -175,9 +181,7 @@ def _install_nav_shortcuts(card, toolbar):
         native = seq.toString(QKeySequence.NativeText)
         if native and native not in tip:
             act.setToolTip(f"{tip} ({native})")
-        act.triggered.connect(
-            lambda _checked=False, c=card: c.mark_discovered("toolbar.shortcuts_exist")
-        )
+        act.triggered.connect(partial(_mark_toolbar_shortcuts_discovered, card))
         card.addAction(act)
 
 
@@ -194,9 +198,7 @@ def _install_button_shortcut(card, button, label, shortcut, action_key=None):
     seq = QKeySequence(shortcut)
     sc = QShortcut(seq, card)
     sc.setContext(Qt.WidgetWithChildrenShortcut)
-    sc.activated.connect(
-        lambda c=card: c.mark_discovered("toolbar.shortcuts_exist")
-    )
+    sc.activated.connect(partial(_mark_toolbar_shortcuts_discovered, card))
     sc.activated.connect(button.click)
     native = seq.toString(QKeySequence.NativeText)
     button.setToolTip(f"{label} ({native})" if native else label)
