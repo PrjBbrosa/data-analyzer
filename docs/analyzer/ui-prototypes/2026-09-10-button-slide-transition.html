@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceLab · 按钮滑动过渡</title>
+<style>
+:root{--blue:#0674ed;--ink:#2c3c52;--muted:#667b96;--line:#dce6f2;--duration:220ms;--ease:cubic-bezier(.22,.75,.2,1)}
+*{box-sizing:border-box}body{margin:0;background:#e9eef5;color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif}button,input,select{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #82b5fa;outline-offset:3px}main{max-width:1040px;margin:56px auto;padding:0 28px}header{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:24px}h1{font-size:27px;letter-spacing:-.7px;margin:6px 0}p{margin:6px 0;color:var(--muted)}.brand{color:#426080;font-size:13px;font-weight:600}.tag{border:1px solid #c8d8eb;padding:4px 10px;border-radius:6px;color:#607a98;white-space:nowrap;font-size:12px}.settings{display:flex;align-items:center;flex-wrap:wrap;gap:14px 26px;padding:18px 0 24px}.settings label{display:flex;align-items:center;gap:10px}select{border:1px solid #c9d7e8;border-radius:6px;color:var(--ink);background:white;padding:6px 10px}input{accent-color:var(--blue)}output{font-variant-numeric:tabular-nums;min-width:54px;color:#1763bd}.window{background:#fff;border:1px solid #ccd9e9;border-radius:12px;overflow:hidden;box-shadow:0 12px 40px #2546690c}.titlebar{display:flex;align-items:center;gap:10px;background:#fafcff;border-bottom:1px solid var(--line);padding:13px 22px;font-size:13px}.titlebar strong{flex:1}.lights{display:flex;gap:6px;margin-right:8px}.lights i{width:8px;height:8px;border-radius:50%;background:#d4dfec}.methodarea{padding:22px;background:#edf4ff;border-bottom:1px solid #d9e6fa}.label{font-size:12px;color:#59738f;margin:0 0 10px}.segment{position:relative;display:flex;isolation:isolate;gap:4px;padding:4px;border-radius:8px;background:#e8eef6;min-width:0}.segment .indicator{position:absolute;left:0;top:4px;bottom:4px;background:white;border:1px solid #c7d9ef;border-radius:6px;box-shadow:0 2px 4px #2b52750c;pointer-events:none;transition:transform var(--duration) var(--ease),width var(--duration) var(--ease);z-index:-1}.segment button{position:relative;flex:1;min-width:0;border:0;border-radius:5px;background:transparent;padding:9px 12px;color:#60758f;white-space:nowrap;transition:color 100ms;font-weight:500}.segment button[aria-pressed=true]{color:#075dbb}.segment button:hover{color:#075dbb}.methods{background:#deebfc}.methods button{font-size:15px}.body{padding:26px 28px 30px}.intro{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding-bottom:24px;border-bottom:1px solid #edf1f6}.intro h2{font-size:19px;margin:0}.intro p{font-size:13px}.controls{display:grid;grid-template-columns:1fr 1fr;gap:36px;padding-top:25px}.row{display:flex;align-items:center;gap:18px}.row>span{white-space:nowrap;font-size:13px}.row .segment{flex:1}.row button{font-size:12px;padding:6px 10px}.sample{height:138px;margin-top:26px;border:1px solid #e1e9f3;border-radius:6px;display:flex;gap:12px;padding:16px;background:#fafcff}.sample.split .plot{flex:1}.plot{position:relative;flex:1;overflow:hidden;background:linear-gradient(#e6edf5 1px,transparent 1px),linear-gradient(90deg,#e6edf5 1px,transparent 1px);background-size:25% 25%;border-bottom:1px solid #b9cade}.plot svg{width:100%;height:100%;position:absolute;inset:0}.plot path{fill:none;stroke:#0674ed;stroke-width:2;vector-effect:non-scaling-stroke}.plot .second{stroke:#08a382}.plot span{position:absolute;top:4px;left:8px;color:#6b8098;font-size:10px}.footer{display:flex;justify-content:space-between;gap:15px;padding:12px 22px;border-top:1px solid var(--line);font-size:12px;background:#fafcff;color:var(--muted)}.explain{display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px;margin-top:28px}.explain b{font-size:13px;font-weight:600}.explain p{font-size:12px;line-height:1.8}.bottom{margin:24px 0;font-size:11px;color:#7588a0}.no-motion .indicator{transition:none!important}@media(prefers-reduced-motion:reduce){.segment .indicator{transition:none!important}.bottom:after{content:' · 已跟随系统减少动态效果设置'}}@media(max-width:650px){main{margin:24px auto;padding:0 15px}header{align-items:flex-start}h1{font-size:23px}.controls,.explain{grid-template-columns:1fr;gap:20px}.methods{gap:0}.methods button{padding:9px 5px;font-size:13px}.methodarea{padding:16px}.body{padding:20px}.settings{gap:14px}header .tag{display:none}.footer{flex-wrap:wrap}.row{gap:12px}}
+</style>
+</head>
+<body>
+<main>
+ <header><div><div class="brand">TraceLab / 交互动效试验</div><h1>让选中态滑过去。</h1><p>点击下面的按钮，感受同一块背景在选项之间移动。</p></div><span class="tag">可交互 HTML 原型</span></header>
+ <div class="settings"><label>过渡方式 <select id="motion"><option value="smooth">平滑滑动 · 推荐</option><option value="spring">轻微回弹</option><option value="none">直接切换 · 对照</option></select></label><label>时长 <input id="duration" type="range" min="120" max="500" step="10" value="220"><output id="ms" for="duration">220 ms</output></label></div>
+ <section class="window" aria-label="按钮切换演示">
+  <div class="titlebar"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><strong>批处理分析</strong><span style="color:#71869e">动效预览</span></div>
+  <div class="methodarea"><div class="label">分析方法</div><div class="segment methods" data-group="method" role="group" aria-label="分析方法"><span class="indicator" aria-hidden="true"></span><button aria-pressed="true">时域</button><button aria-pressed="false">频谱</button><button aria-pressed="false">时频</button><button aria-pressed="false">阶次</button><button aria-pressed="false">频响</button></div></div>
+  <div class="body"><div class="intro" aria-live="polite"><h2 id="method-title">时域分析</h2><p id="description">查看信号随时间的变化。</p></div>
+   <div class="controls"><div class="row"><span>曲线布局</span><div class="segment" data-group="layout" role="group" aria-label="曲线布局"><span class="indicator" aria-hidden="true"></span><button aria-pressed="true">叠加</button><button aria-pressed="false">分屏</button></div></div><div class="row"><span>分组方式</span><div class="segment" data-group="grouping" role="group" aria-label="分组方式"><span class="indicator" aria-hidden="true"></span><button aria-pressed="true">按文件</button><button aria-pressed="false">按通道名称</button></div></div></div>
+   <div class="sample" id="sample" aria-label="模拟曲线，仅演示布局"></div>
+  </div><div class="footer"><span id="status" aria-live="polite">时域 · 叠加 · 按文件</span><span>示意曲线，不执行分析</span></div>
+ </section>
+ <div class="explain"><div><b>只移动选中背景</b><p>按钮文字与位置保持稳定，视线跟着背景找到新选项。</p></div><div><b>连续点击也能接上</b><p>滑动途中再次选择，背景会从当前位置转向，不排队播放。</p></div><div><b>选择立即生效</b><p>内容立即响应点击，动画只负责反馈，不额外等待。</p></div></div>
+ <p class="bottom">尝试跨项切换“时域 → 频响”，或快速来回点击。支持 Tab 聚焦、方向键切换与 Enter / 空格选择。本页不修改 TraceLab 设置。</p>
+</main>
+<script>
+const groups=[...document.querySelectorAll('.segment')];
+const descriptions={时域:'查看信号随时间的变化。',频谱:'比较信号的频率成分。',时频:'观察频率成分随时间的变化。',阶次:'查看与转速相关的阶次成分。',频响:'查看输入与输出的频率响应关系。'};
+function position(group,instant=false){
+ const selected=group.querySelector('[aria-pressed="true"]'), indicator=group.querySelector('.indicator');
+ if(instant) indicator.style.transition='none';
+ indicator.style.width=selected.offsetWidth+'px';
+ indicator.style.transform=`translateX(${selected.offsetLeft}px)`;
+ if(instant){void indicator.offsetWidth;indicator.style.transition='';}
+}
+function selected(name){return document.querySelector(`[data-group="${name}"] [aria-pressed="true"]`).textContent;}
+function update(){
+ const method=selected('method'),layout=selected('layout'),grouping=selected('grouping');
+ document.querySelector('#method-title').textContent=method+'分析';
+ document.querySelector('#description').textContent=descriptions[method];
+ document.querySelector('#status').textContent=`${method} · ${layout} · ${grouping}`;
+ const split=layout==='分屏',sample=document.querySelector('#sample');sample.classList.toggle('split',split);
+ const first='<path d="M0 65 Q25 5 50 50 T100 45 T150 65 T200 35 T250 50 T300 25 T350 60 T400 45"/>',second='<path class="second" d="M0 45 Q25 95 50 60 T100 60 T150 30 T200 70 T250 45 T300 70 T350 30 T400 60"/>';
+ const plot=(paths,label)=>`<div class="plot"><svg viewBox="0 0 400 100" preserveAspectRatio="none" aria-hidden="true">${paths}</svg><span>${label}</span></div>`;
+ sample.innerHTML=split?plot(first,grouping==='按文件'?'示例文件 A':'示例通道 A')+plot(second,grouping==='按文件'?'示例文件 B':'示例通道 B'):plot(first+second,'布局示意 · '+grouping);
+}
+groups.forEach(group=>{
+ const buttons=[...group.querySelectorAll('button')];
+ buttons.forEach(button=>button.addEventListener('click',()=>{buttons.forEach(b=>b.setAttribute('aria-pressed',String(b===button)));position(group);update();}));
+ group.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;const current=buttons.indexOf(document.activeElement);if(current<0)return;event.preventDefault();const i=event.key==='Home'?0:event.key==='End'?buttons.length-1:(current+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;buttons[i].focus();buttons[i].click();});
+ new ResizeObserver(()=>position(group,true)).observe(group);
+});
+document.querySelector('#motion').addEventListener('change',event=>{document.body.classList.toggle('no-motion',event.target.value==='none');document.documentElement.style.setProperty('--ease',event.target.value==='spring'?'cubic-bezier(.25,1.35,.4,1)':'cubic-bezier(.22,.75,.2,1)');document.querySelector('#duration').disabled=event.target.value==='none';});
+document.querySelector('#duration').addEventListener('input',event=>{document.documentElement.style.setProperty('--duration',event.target.value+'ms');document.querySelector('#ms').value=event.target.value+' ms';});
+groups.forEach(group=>position(group,true));update();
+</script>
+</body>
+</html>
