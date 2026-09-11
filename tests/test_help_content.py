@@ -25,7 +25,7 @@ def _deck_data() -> dict:
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
     assert d["meta"]["version"] == "v8.2.3"
-    assert d["meta"]["updated"] == "2026-09-09"
+    assert d["meta"]["updated"] == "2026-09-10"
     assert d["meta"]["docVersion"] == "3.0"
     assert [c["v"] for c in d["changelog"]][:7] == [
         "v8.2.3", "v8.2.2", "v8.2.1", "v8.2.0", "v8.1.0", "v8.0.1", "v8.0.0",
@@ -48,6 +48,18 @@ def test_v820_changelog_covers_stability_closure():
         "紧凑排列", "按原图比例", "适应内容", "保存重开",
     ):
         assert keyword in description
+
+
+def test_v823_changelog_covers_batch_range_preset_and_zfd():
+    entry = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v8.2.3"
+    )
+    description = " ".join(entry["items"])
+    for keyword in (
+        "分析方法", "下一步引导", "待启用草稿", "调整基准",
+        "完整读取", "禁用并保留", "坐标刻度",
+    ):
+        assert description.count(keyword) == 1, keyword
 
 
 def test_v821_changelog_covers_each_visible_interaction_once():

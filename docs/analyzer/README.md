@@ -110,6 +110,13 @@ per-source custom-X ownership and restored ranges remain explicit.
 per-curve legend colors, and stabilizes bottom-axis space and mode-rebuild presentation.
 8.2.3 places compact method tabs at the top of Batch, adds next-step guidance,
 and unifies header surfaces, stage separators, and button interaction feedback.
+Analysis time range follows the current source unless the user edits it; invalid
+input is kept for correction instead of silently becoming the full span. Loaded
+analysis presets remain the edit baseline, with axis preservation and difference
+dots. ZFD long records keep declared sample counts and verified timebases, and
+fail closed when the axis cannot be interpreted. Batch disables inapplicable
+controls without dropping their values, settles first-show geometry before paint,
+and sizes axis tick gutters to the final labels.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
