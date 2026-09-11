@@ -149,6 +149,44 @@ def test_chart_statistics_program_restore_snaps_without_extra_changed(qtbot, qap
     assert not driver.is_active()
 
 
+def test_chart_statistics_light_plate_keeps_track_corners(qtbot, qapp):
+    from PyQt5.QtGui import QColor
+
+    from mf4_analyzer.ui.drawers.batch.chart_statistics_panel import (
+        ChartStatisticsPanel,
+    )
+    from mf4_analyzer.ui_kit import load_stylesheet
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    old = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        panel = ChartStatisticsPanel()
+        qtbot.addWidget(panel)
+        panel.show()
+        panel.enabled.setChecked(True)
+        qapp.processEvents()
+        choice = panel._range_mode_choice
+        assert choice.motion_policy() == POLICY_LIGHT
+        plate = choice._selection_pill
+        assert plate is not None
+        image = choice.grab().toImage()
+        dpr = float(image.devicePixelRatio() or 1.0)
+        origin = plate.mapTo(choice, plate.rect().topLeft())
+        track = QColor(CONTROL_COLORS["CONTROL_TRACK"])
+        px = min(max(int(round(origin.x() * dpr)), 0), image.width() - 1)
+        py = min(max(int(round(origin.y() * dpr)), 0), image.height() - 1)
+        corner = QColor(image.pixel(px, py))
+        assert max(
+            abs(corner.red() - track.red()),
+            abs(corner.green() - track.green()),
+            abs(corner.blue() - track.blue()),
+        ) <= 18
+    finally:
+        qapp.setStyleSheet(old)
+
+
 def test_apply_params_without_the_key_disables_but_keeps_the_dialed_in_range(qtbot):
     """A missing `chart_statistics` key must not reset the range to auto.
 

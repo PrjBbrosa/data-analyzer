@@ -113,6 +113,20 @@ REPRESENTATIVE_SCENE_IDS = (
     "C1",
     "C2",
 )
+PRODUCTION_SCENE_IDS = (
+    "N1-empty",
+    "N2",
+    "B1-phase",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6-input",
+    "B6-slice",
+    "B6-stats",
+    "C1",
+    "C2",
+)
 POLICIES = ("off", "light")
 TIMING_FIELDS = (
     "feedback_paint_ms",
@@ -125,6 +139,7 @@ SNAPSHOT_PATHS = (
     "mf4_analyzer/ui_kit/motion.py",
     "mf4_analyzer/ui_kit/widgets/selection_indicator.py",
     "mf4_analyzer/ui_kit/widgets/segmented_choice.py",
+    "mf4_analyzer/ui_kit/control_style.py",
     "mf4_analyzer/ui_kit/style.qss",
     "mf4_analyzer/ui/toolbar.py",
     "mf4_analyzer/ui/drawers/batch/method_buttons.py",
@@ -880,12 +895,18 @@ def build_n1_cached(app, policy: str, *, logic_only: bool, settings_dir: Path) -
 def build_n2(app, policy: str, *, logic_only: bool) -> SceneHost:
     from PyQt5.QtCore import Qt
     from PyQt5.QtTest import QSignalSpy
+    from PyQt5.QtWidgets import QHBoxLayout, QWidget
 
     from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
 
     group = MethodButtonGroup()
     group.set_motion_policy(_policy_obj(policy))
-    _show_host(app, group, logic_only=logic_only, width=520, height=48)
+    shell = QWidget()
+    shell.setObjectName("BatchMethodRow")
+    row = QHBoxLayout(shell)
+    row.setContentsMargins(8, 4, 8, 4)
+    row.addWidget(group)
+    _show_host(app, shell, logic_only=logic_only, width=560, height=56)
     changed = QSignalSpy(group.methodChanged)
     activated = QSignalSpy(group.methodActivated)
     buttons = dict(group._buttons)
@@ -920,13 +941,13 @@ def build_n2(app, policy: str, *, logic_only: bool) -> SceneHost:
         return {
             "method": group.current_method(),
             "driver_active": bool(driver is not None and driver.is_active()),
-            "exposed": window_is_exposed(group),
+            "exposed": window_is_exposed(shell),
         }
 
     return SceneHost(
         scene_id="N2",
         policy=policy,
-        widget=group,
+        widget=shell,
         owner=group,
         buttons=buttons,
         next_target=next_target,
@@ -936,7 +957,7 @@ def build_n2(app, policy: str, *, logic_only: bool) -> SceneHost:
         signal_snapshot=signals,
         final_state=state,
         indicator_owner=group,
-        paint_widgets=[group],
+        paint_widgets=[shell, group],
     )
 
 
@@ -1307,13 +1328,146 @@ def build_c2(app, policy: str, *, logic_only: bool) -> SceneHost:
     )
 
 
+def _build_binary_choice_scene(
+    app,
+    policy: str,
+    *,
+    logic_only: bool,
+    scene_id: str,
+    panel,
+    choice,
+    labels: tuple[str, str],
+    restore_index: int = 0,
+    width: int = 320,
+    height: int = 720,
+) -> SceneHost:
+    from PyQt5.QtTest import QSignalSpy
+
+    choice.set_motion_policy(_policy_obj(policy))
+    _show_host(app, panel, logic_only=logic_only, width=width, height=height)
+    spy = QSignalSpy(choice.currentIndexChanged)
+    buttons = {labels[0]: choice.buttons()[0], labels[1]: choice.buttons()[1]}
+    cycle = (labels[1], labels[0])
+
+    def next_target(index: int, current: str | None) -> str:
+        del current
+        return cycle[index % 2]
+
+    def user_activate(target: str, index: int) -> str:
+        del index
+        return _click_button(buttons[target])
+
+    def program_restore(target: str) -> None:
+        del target
+        choice.setCurrentIndex(restore_index)
+
+    def signals() -> dict[str, Any]:
+        return {"choice_currentIndexChanged": len(spy)}
+
+    def state() -> dict[str, Any]:
+        driver = choice._motion_driver
+        return {
+            "index": int(choice.currentIndex()),
+            "driver_active": bool(driver is not None and driver.is_active()),
+            "exposed": window_is_exposed(panel),
+        }
+
+    return SceneHost(
+        scene_id=scene_id,
+        policy=policy,
+        widget=panel,
+        owner=choice,
+        buttons=buttons,
+        next_target=next_target,
+        user_activate=user_activate,
+        program_restore=program_restore,
+        restore_target=labels[restore_index],
+        signal_snapshot=signals,
+        final_state=state,
+        indicator_owner=choice,
+        paint_widgets=[choice],
+    )
+
+
+def build_b2(app, policy: str, *, logic_only: bool) -> SceneHost:
+    from mf4_analyzer.ui.inspector_sections.contextual_fft import FFTContextual
+
+    panel = FFTContextual()
+    return _build_binary_choice_scene(
+        app, policy, logic_only=logic_only, scene_id="B2",
+        panel=panel, choice=panel.choice_amp_y, labels=("linear", "db"),
+    )
+
+
+def build_b3(app, policy: str, *, logic_only: bool) -> SceneHost:
+    from mf4_analyzer.ui.inspector_sections.contextual_order import OrderContextual
+
+    panel = OrderContextual()
+    return _build_binary_choice_scene(
+        app, policy, logic_only=logic_only, scene_id="B3",
+        panel=panel, choice=panel.choice_rpm_mode, labels=("channel", "manual"),
+    )
+
+
+def build_b4(app, policy: str, *, logic_only: bool) -> SceneHost:
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    panel = PersistentTop()
+    return _build_binary_choice_scene(
+        app, policy, logic_only=logic_only, scene_id="B4",
+        panel=panel, choice=panel.choice_xaxis, labels=("time", "channel"),
+        height=500,
+    )
+
+
+def build_b6_input(app, policy: str, *, logic_only: bool) -> SceneHost:
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    return _build_binary_choice_scene(
+        app, policy, logic_only=logic_only, scene_id="B6-input",
+        panel=panel, choice=panel._target_policy_choice,
+        labels=("common", "available"), width=320, height=900,
+    )
+
+
+def build_b6_slice(app, policy: str, *, logic_only: bool) -> SceneHost:
+    from mf4_analyzer.ui.drawers.batch.slice_panel import SlicePanel
+
+    panel = SlicePanel()
+    panel._enable_switch.setChecked(True)
+    return _build_binary_choice_scene(
+        app, policy, logic_only=logic_only, scene_id="B6-slice",
+        panel=panel, choice=panel._axis_choice, labels=("time", "frequency"),
+        height=400,
+    )
+
+
+def build_b6_stats(app, policy: str, *, logic_only: bool) -> SceneHost:
+    from mf4_analyzer.ui.drawers.batch.chart_statistics_panel import ChartStatisticsPanel
+
+    panel = ChartStatisticsPanel()
+    panel.enabled.setChecked(True)
+    return _build_binary_choice_scene(
+        app, policy, logic_only=logic_only, scene_id="B6-stats",
+        panel=panel, choice=panel._range_mode_choice, labels=("auto", "manual"),
+        height=360,
+    )
+
+
 SCENE_BUILDERS: dict[str, Callable[..., SceneHost]] = {
     "N1-empty": build_n1_empty,
     "N1-cached": build_n1_cached,
     "N2": build_n2,
     "B1-phase": build_b1_phase,
     "B1-preset": build_b1_preset,
+    "B2": build_b2,
+    "B3": build_b3,
+    "B4": build_b4,
     "B5": build_b5,
+    "B6-input": build_b6_input,
+    "B6-slice": build_b6_slice,
+    "B6-stats": build_b6_stats,
     "C1": build_c1,
     "C2": build_c2,
 }
@@ -1779,6 +1933,369 @@ def run_all_scenes(
     return report
 
 
+AA_EDGE_TOL = 18
+
+
+def _plate_local_corners_are_not_fill(plate, fill, *, aa_tol: int = AA_EDGE_TOL) -> bool:
+    from PyQt5.QtGui import QColor
+
+    if plate is None or not _widget_alive(plate):
+        return False
+    image = plate.grab().toImage()
+    if image.width() < 2 or image.height() < 2:
+        return False
+    fill_c = QColor(fill)
+    for x, y in ((0, 0), (image.width() - 1, 0)):
+        corner = QColor(image.pixel(x, y))
+        if _qcolor_distance(corner, fill_c) <= aa_tol:
+            return False
+    return True
+
+
+def _image_pixel(image, x: float, y: float):
+    from PyQt5.QtGui import QColor
+
+    dpr = float(image.devicePixelRatio() or 1.0)
+    px = min(max(int(round(x * dpr)), 0), image.width() - 1)
+    py = min(max(int(round(y * dpr)), 0), image.height() - 1)
+    return QColor(image.pixel(px, py))
+
+
+def _qcolor_distance(left, right) -> int:
+    return max(
+        abs(left.red() - right.red()),
+        abs(left.green() - right.green()),
+        abs(left.blue() - right.blue()),
+    )
+
+
+def analyze_selection_visual(
+    host,
+    plate,
+    *,
+    expected_parent,
+    expected_fill,
+    expected_fill_bottom=None,
+    aa_tol: int = AA_EDGE_TOL,
+) -> dict[str, Any]:
+    from PyQt5.QtGui import QColor
+
+    if host is None or plate is None or not _widget_alive(host) or not _widget_alive(plate):
+        return {"ok": False, "reason": "missing_host_or_plate"}
+    image = host.grab().toImage()
+    origin = plate.mapTo(host, plate.rect().topLeft())
+    width = max(plate.width() - 1, 0)
+    parent = QColor(expected_parent)
+    fill = QColor(expected_fill)
+    top_left = _image_pixel(image, origin.x(), origin.y())
+    top_right = _image_pixel(image, origin.x() + width, origin.y())
+    fill_top = _image_pixel(
+        image, origin.x() + 8, origin.y() + 4,
+    )
+    fill_bottom = _image_pixel(
+        image, origin.x() + 8, origin.y() + max(plate.height() - 5, 4),
+    )
+    neighbor = _image_pixel(image, max(origin.x() - 2, 0), origin.y())
+    parent_vs_fill = _qcolor_distance(parent, fill)
+    neighbor_vs_fill = _qcolor_distance(neighbor, fill)
+    reference = neighbor if neighbor_vs_fill > 8 else parent
+    near_ref = (
+        _qcolor_distance(top_left, reference) <= aa_tol
+        and _qcolor_distance(top_right, reference) <= aa_tol
+    )
+    if parent_vs_fill > aa_tol or neighbor_vs_fill > 8:
+        corners_ok = bool(
+            near_ref
+            and _qcolor_distance(top_left, reference) < _qcolor_distance(top_left, fill)
+            and _qcolor_distance(top_right, reference) < _qcolor_distance(top_right, fill)
+        )
+    else:
+        corners_ok = near_ref
+    fill_ok = _qcolor_distance(fill_top, fill) <= 28
+    gradient_ok = True
+    if expected_fill_bottom:
+        bottom = QColor(expected_fill_bottom)
+        gradient_ok = (
+            _qcolor_distance(fill_top, fill) < _qcolor_distance(fill_top, bottom)
+            and _qcolor_distance(fill_bottom, bottom) < _qcolor_distance(fill_bottom, fill)
+        )
+    return {
+        "ok": bool(corners_ok and fill_ok and gradient_ok),
+        "corners_ok": corners_ok,
+        "fill_ok": fill_ok,
+        "gradient_ok": gradient_ok,
+        "top_left": top_left.name(),
+        "top_right": top_right.name(),
+        "fill_top": fill_top.name(),
+        "fill_bottom": fill_bottom.name(),
+        "dpr": float(image.devicePixelRatio() or 1.0),
+    }
+
+
+def _visual_expected_for(scene_id: str, style) -> dict[str, str]:
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+
+    if scene_id == "N1-empty":
+        return {
+            "parent": "#FBFCFF",
+            "fill": CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+            "fill_bottom": CONTROL_COLORS["CONTROL_ACCENT_WASH"],
+        }
+    if scene_id == "N2":
+        return {
+            "parent": "#E3EFFF",
+            "fill": CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+            "fill_bottom": CONTROL_COLORS["CONTROL_ACCENT_WASH"],
+        }
+    if scene_id in {"C1", "C2"}:
+        return {
+            "parent": CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+            "fill": CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+            "fill_bottom": None,
+        }
+    return {
+        "parent": CONTROL_COLORS["CONTROL_TRACK"],
+        "fill": CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+        "fill_bottom": None,
+    }
+
+
+def capture_visual_scene(app, host: SceneHost, output_dir: Path) -> dict[str, Any]:
+    from PyQt5.QtCore import QEvent
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+
+    shots = output_dir / "visual"
+    shots.mkdir(parents=True, exist_ok=True)
+    helper = host.current_indicator()
+    plate = host.current_plate()
+    if plate is None or not _widget_alive(plate) or plate.isHidden():
+        owned_buttons = tuple(getattr(helper, "_buttons", ()) or ())
+        plate = next(
+            (button for button in owned_buttons if _widget_alive(button) and button.isChecked()),
+            None,
+        )
+        if plate is None:
+            plate = next((button for button in owned_buttons if _widget_alive(button)), None)
+        if plate is None:
+            plate = next(iter(host.buttons.values()), None)
+    style = getattr(helper, "_style", None) if helper is not None else None
+    expected = _visual_expected_for(host.scene_id, style)
+    frames: dict[str, Any] = {}
+    prefix = f"{host.scene_id}-{host.policy}"
+    rest_path = shots / f"{prefix}-rest.png"
+    if _save_png(host.widget, rest_path):
+        frames["rest"] = str(rest_path)
+    grab_host = host.widget
+    if host.scene_id == "N1-empty":
+        grab_host = getattr(host.owner, "_mode_zone", None) or host.widget
+    elif host.scene_id in {"C1", "C2"}:
+        grab_host = getattr(host.owner, "toolbar", None) or host.widget
+    rest = analyze_selection_visual(
+        grab_host,
+        plate,
+        expected_parent=expected["parent"],
+        expected_fill=expected["fill"],
+        expected_fill_bottom=expected["fill_bottom"],
+    )
+    driver = host.current_driver()
+    mid_ok = True
+    if host.policy == "light" and driver is not None and _widget_alive(driver):
+        buttons = list(host.buttons.values())
+        if len(buttons) >= 2:
+            helper = host.current_indicator()
+            if helper is not None:
+                helper.follow(buttons[0], animate=False)
+                helper.follow(buttons[1], animate=True)
+                for label, fraction in (("mid25", 0.25), ("mid50", 0.50)):
+                    driver.clock().setCurrentTime(int(driver.clock().duration() * fraction))
+                    app.processEvents()
+                    mid_path = shots / f"{prefix}-{label}.png"
+                    if _save_png(host.widget, mid_path):
+                        frames[label] = str(mid_path)
+                    mid_plate = host.current_plate()
+                    mid = analyze_selection_visual(
+                        grab_host,
+                        mid_plate,
+                        expected_parent=expected["parent"],
+                        expected_fill=expected["fill"],
+                        expected_fill_bottom=None,
+                    )
+                    local_ok = _plate_local_corners_are_not_fill(
+                        mid_plate, expected["fill"],
+                    )
+                    frames[f"{label}_corners_ok"] = bool(mid.get("corners_ok") or local_ok)
+                    mid_ok = mid_ok and bool(mid.get("corners_ok") or local_ok)
+                driver.clock().setCurrentTime(int(driver.clock().duration()))
+    hover_ok = True
+    target_btn = getattr(helper, "_target", None) if helper is not None else None
+    if not _widget_alive(target_btn):
+        target_btn = next(
+            (
+                button for button in host.buttons.values()
+                if _widget_alive(button) and button.isChecked()
+            ),
+            next(iter(host.buttons.values()), None),
+        )
+    if target_btn is not None and _widget_alive(target_btn):
+        app.sendEvent(target_btn, QEvent(QEvent.Enter))
+        app.sendEvent(target_btn, QEvent(QEvent.HoverEnter))
+        if helper is not None:
+            helper._pointer_over_target = True
+            helper._refresh_plate_chrome()
+        if plate is not None and _widget_alive(plate):
+            plate.update()
+            plate.repaint()
+        app.processEvents()
+        hover_path = shots / f"{prefix}-hover.png"
+        if _save_png(host.widget, hover_path):
+            frames["hover"] = str(hover_path)
+        if host.scene_id == "N2" and host.policy == "light":
+            hover = analyze_selection_visual(
+                grab_host, host.current_plate(),
+                expected_parent=expected["parent"],
+                expected_fill=CONTROL_COLORS["CONTROL_SELECT_HOVER_TOP"],
+                expected_fill_bottom=CONTROL_COLORS["CONTROL_SELECT_HOVER_BOTTOM"],
+            )
+            hover_ok = bool(hover.get("gradient_ok"))
+            frames["hover_gradient_ok"] = hover_ok
+        app.sendEvent(target_btn, QEvent(QEvent.Leave))
+        app.sendEvent(target_btn, QEvent(QEvent.HoverLeave))
+        if helper is not None:
+            helper._pointer_over_target = False
+            helper._refresh_plate_chrome()
+        was_enabled = target_btn.isEnabled()
+        target_btn.setEnabled(False)
+        app.processEvents()
+        disabled_path = shots / f"{prefix}-disabled.png"
+        if _save_png(host.widget, disabled_path):
+            frames["disabled"] = str(disabled_path)
+        target_btn.setEnabled(was_enabled)
+        try:
+            target_btn.setFocus()
+            app.processEvents()
+            focus_path = shots / f"{prefix}-focus.png"
+            if _save_png(host.widget, focus_path):
+                frames["focus"] = str(focus_path)
+        except Exception:
+            pass
+    corners = bool(rest.get("corners_ok") and mid_ok)
+    if host.scene_id in {"N1-empty", "N2"}:
+        ok = bool(rest.get("gradient_ok") and corners and hover_ok)
+    elif host.scene_id.startswith(("B",)):
+        ok = bool(corners and hover_ok)
+    else:
+        ok = bool(rest.get("fill_ok") and corners and hover_ok)
+    return {
+        "scene_id": host.scene_id,
+        "policy": host.policy,
+        "ok": ok,
+        "rest": rest,
+        "mid_ok": mid_ok,
+        "hover_ok": hover_ok,
+        "files": frames,
+    }
+
+
+def run_visual_scenes(
+    *,
+    output_dir: Path,
+    scene_ids: list[str] | None = None,
+    logic_only: bool = False,
+) -> dict[str, Any]:
+    app = _qapp()
+    offscreen = is_offscreen_platform(app)
+    if offscreen and not logic_only:
+        # Visual grabs are allowed offscreen; they are not a native pass.
+        pass
+    else:
+        require_platform(logic_only=logic_only, app=app)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    settings_dir = Path(tempfile.mkdtemp(prefix="probe-selection-visual-", dir=str(output_dir)))
+    token = isolate_qsettings(settings_dir)
+    isolated_path = prove_qsettings_isolated(token)
+    snapshot_before = source_snapshot(SNAPSHOT_PATHS)
+    errors: list[str] = []
+    results: list[dict[str, Any]] = []
+    stylesheet_prev = app.styleSheet()
+    selected = list(scene_ids or PRODUCTION_SCENE_IDS)
+    try:
+        if not logic_only:
+            from mf4_analyzer.ui_kit.stylesheet import load_stylesheet
+
+            load_stylesheet(app)
+        for scene_id in selected:
+            if scene_id not in SCENE_BUILDERS:
+                errors.append(f"unknown scene {scene_id}")
+                continue
+            builder = SCENE_BUILDERS[scene_id]
+            for policy in POLICIES:
+                host = None
+                try:
+                    if scene_id == "N1-cached":
+                        host = builder(app, policy, logic_only=logic_only, settings_dir=settings_dir)
+                    else:
+                        host = builder(app, policy, logic_only=logic_only)
+                    results.append(capture_visual_scene(app, host, output_dir))
+                except Exception as exc:
+                    errors.append(f"{scene_id}/{policy}: {type(exc).__name__}: {exc}")
+                    results.append({
+                        "scene_id": scene_id,
+                        "policy": policy,
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                finally:
+                    widget = host.widget if host is not None else None
+                    extra = host.extra_teardown if host is not None else None
+                    if callable(extra):
+                        try:
+                            extra()
+                        except Exception:
+                            pass
+                    teardown_probe(app=app, window=widget)
+    finally:
+        try:
+            app.setStyleSheet(stylesheet_prev)
+        except Exception:
+            pass
+        token.restore()
+        drain_deferred_deletes(app)
+    snapshot_after = source_snapshot(SNAPSHOT_PATHS)
+    source_changed = not snapshots_match(snapshot_before, snapshot_after)
+    if source_changed:
+        errors.append(REASON_SOURCE_CHANGED)
+    env = environment_record(
+        app,
+        logic_only=logic_only,
+        extra={
+            "command": "selection_slide_visual",
+            "qsettings": isolated_path,
+            "offscreen": offscreen,
+        },
+    )
+    all_ok = all(item.get("ok") for item in results) and not errors and not source_changed
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        "environment": env,
+        "source_snapshot_before": snapshot_before,
+        "source_snapshot_after": snapshot_after,
+        "production_scene_ids": selected,
+        "results": results,
+        "errors": errors,
+        "visual_status": STATUS_PASS if all_ok else STATUS_FAIL,
+        "offscreen_status": STATUS_UNVERIFIED if offscreen else (
+            STATUS_PASS if all_ok else STATUS_FAIL
+        ),
+        "windows_foreground_status": (
+            STATUS_UNVERIFIED if offscreen or sys.platform != "win32"
+            else (STATUS_PASS if all_ok else STATUS_FAIL)
+        ),
+        "cocoa_status": STATUS_UNVERIFIED,
+    }
+    _write_json(output_dir / "selection-slide-visual.json", report)
+    return report
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1792,6 +2309,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scene", action="append", default=[])
     parser.add_argument("--record-screen", action="store_true")
     parser.add_argument("--skip-screenshots", action="store_true")
+    parser.add_argument(
+        "--visual",
+        action="store_true",
+        help="Capture Off/Light endpoints, mid-frames, and hover/focus/disabled diffs",
+    )
     return parser
 
 
@@ -1799,15 +2321,22 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     output_dir = Path(args.output_dir)
     try:
-        report = run_all_scenes(
-            logic_only=bool(args.logic_only),
-            output_dir=output_dir,
-            warmup=int(args.warmup),
-            samples=int(args.samples),
-            scene_ids=list(args.scene) or None,
-            capture_shots=not args.skip_screenshots,
-            record_screen=bool(args.record_screen),
-        )
+        if args.visual:
+            report = run_visual_scenes(
+                output_dir=output_dir,
+                scene_ids=list(args.scene) or None,
+                logic_only=bool(args.logic_only),
+            )
+        else:
+            report = run_all_scenes(
+                logic_only=bool(args.logic_only),
+                output_dir=output_dir,
+                warmup=int(args.warmup),
+                samples=int(args.samples),
+                scene_ids=list(args.scene) or None,
+                capture_shots=not args.skip_screenshots,
+                record_screen=bool(args.record_screen),
+            )
     except PlatformPolicyError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
@@ -1815,6 +2344,10 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 1
     errors = report.get("errors") or []
+    if args.visual:
+        if errors or report.get("visual_status") != STATUS_PASS:
+            return 1
+        return 0
     return 1 if errors else 0
 
 

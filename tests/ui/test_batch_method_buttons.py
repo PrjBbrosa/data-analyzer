@@ -622,6 +622,89 @@ def test_method_group_off_restores_static_checked_chrome(qtbot, qapp):
     assert group._motion_driver is None or not group._motion_driver.is_active()
 
 
+def _method_fill_samples(group, button):
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtGui import QColor
+
+    image = group.grab().toImage()
+    dpr = float(image.devicePixelRatio() or 1.0)
+    origin = button.mapTo(group, QPoint(0, 0))
+    x = int(round((origin.x() + 8) * dpr))
+    top_y = int(round((origin.y() + 4) * dpr))
+    bottom_y = int(round((origin.y() + button.height() - 5) * dpr))
+    return (
+        QColor(image.pixel(x, top_y)),
+        QColor(image.pixel(x, bottom_y)),
+    )
+
+
+def _color_distance(left, right) -> int:
+    return max(
+        abs(left.red() - right.red()),
+        abs(left.green() - right.green()),
+        abs(left.blue() - right.blue()),
+    )
+
+
+def test_method_group_off_and_light_rest_keep_gradient_and_checked_hover(
+    qtbot, qapp,
+):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QColor
+
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+    from mf4_analyzer.ui_kit.motion import POLICY_OFF
+
+    old = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        white = QColor(CONTROL_COLORS["CONTROL_SURFACE_TOP"])
+        wash = QColor(CONTROL_COLORS["CONTROL_ACCENT_WASH"])
+        hover_bottom = QColor(CONTROL_COLORS["CONTROL_SELECT_HOVER_BOTTOM"])
+
+        off = _show_method_group(qtbot, qapp)
+        off.set_motion_policy(POLICY_OFF)
+        qapp.processEvents()
+        checked = off._buttons["fft"]
+        off_top, off_bottom = _method_fill_samples(off, checked)
+        assert _color_distance(off_top, white) < _color_distance(off_top, wash)
+        assert _color_distance(off_bottom, wash) < _color_distance(off_bottom, white)
+
+        light = _show_method_group(qtbot, qapp)
+        qapp.processEvents()
+        light_checked = light._buttons["fft"]
+        light_top, light_bottom = _method_fill_samples(light, light_checked)
+        assert _color_distance(light_top, white) < _color_distance(light_top, wash)
+        assert _color_distance(light_bottom, wash) < _color_distance(light_bottom, white)
+        assert _color_distance(light_top, off_top) <= 24
+        assert _color_distance(light_bottom, off_bottom) <= 24
+
+        qapp.sendEvent(light_checked, QEvent(QEvent.Enter))
+        light._selection_pill.update()
+        light._selection_pill.repaint()
+        qapp.processEvents()
+        hover_top, hover_fill_bottom = _method_fill_samples(light, light_checked)
+        assert _color_distance(hover_fill_bottom, hover_bottom) < _color_distance(
+            hover_fill_bottom, wash
+        )
+        assert _color_distance(hover_fill_bottom, off_bottom) > 8
+
+        light.setEnabled(False)
+        qapp.processEvents()
+        light._selection_pill.update()
+        light._selection_pill.repaint()
+        disabled_top, disabled_bottom = _method_fill_samples(light, light_checked)
+        disabled = QColor(CONTROL_COLORS["CONTROL_DISABLED_BG"])
+        assert _color_distance(disabled_bottom, disabled) <= 28
+        assert _color_distance(disabled_bottom, hover_bottom) > _color_distance(
+            disabled_bottom, disabled
+        )
+        del hover_top, disabled_top
+    finally:
+        qapp.setStyleSheet(old)
+
+
 def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
     from mf4_analyzer.batch_recipe import normalize_batch_params
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm

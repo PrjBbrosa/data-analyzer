@@ -690,10 +690,12 @@ class Toolbar(QWidget):
             duration_name="selection_navigation",
             style=SelectionIndicatorStyle(
                 fill=CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+                fill_bottom=CONTROL_COLORS["CONTROL_ACCENT_WASH"],
                 border=CONTROL_COLORS["CONTROL_ACCENT_HI"],
                 disabled_fill=CONTROL_COLORS["CONTROL_DISABLED_BG"],
                 disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
                 radius=6,
+                inset=(1, 0, 1, 0),
             ),
         )
         self._indicator = helper

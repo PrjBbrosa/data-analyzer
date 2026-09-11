@@ -86,7 +86,22 @@ def test_scene_coverage_includes_all_p1_representative_ids(probe):
         "C1",
         "C2",
     }
-    assert set(probe.SCENE_BUILDERS) == set(probe.REPRESENTATIVE_SCENE_IDS)
+    assert set(probe.REPRESENTATIVE_SCENE_IDS) <= set(probe.SCENE_BUILDERS)
+    assert set(probe.PRODUCTION_SCENE_IDS) <= set(probe.SCENE_BUILDERS)
+    assert set(probe.PRODUCTION_SCENE_IDS) >= {
+        "N1-empty",
+        "N2",
+        "B1-phase",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6-input",
+        "B6-slice",
+        "B6-stats",
+        "C1",
+        "C2",
+    }
     assert probe.ACTION_TIMEOUT_S == 30.0
     assert probe.GROUP_TIMEOUT_S == 180.0
     assert probe.WARMUP_COUNT == 5
@@ -180,21 +195,25 @@ def test_timeout_is_unverified_or_fail_not_pass(probe):
 
 
 def test_qsettings_isolation_and_cleanup(probe, tmp_path):
+    tmp_key = str(tmp_path).replace("\\", "/")
     token = probe.isolate_qsettings(tmp_path)
     try:
         path = probe.prove_qsettings_isolated(token)
-        assert str(tmp_path) in path
+        path_key = path.replace("\\", "/")
+        assert tmp_key in path_key
         store = QSettings("MF4Analyzer", "DataAnalyzer")
         store.setValue("probe/selection_slide_marker", "isolated")
         store.sync()
-        assert str(tmp_path) in str(store.fileName())
-        assert "Library/Preferences" not in str(store.fileName())
+        store_key = str(store.fileName()).replace("\\", "/")
+        assert tmp_key in store_key
+        assert "Library/Preferences" not in store_key
         assert store.value("probe/selection_slide_marker") == "isolated"
     finally:
         token.restore()
     restored = QSettings("MF4Analyzer", "DataAnalyzer")
+    restored_key = str(restored.fileName()).replace("\\", "/")
     assert restored.value("probe/selection_slide_marker") != "isolated" or (
-        str(tmp_path) not in str(restored.fileName())
+        tmp_key not in restored_key
     )
 
 
@@ -257,6 +276,13 @@ def test_off_light_instance_policy_and_signal_counts(probe, qapp, tmp_path):
     dumped = json.loads((output / "selection-slide.json").read_text(encoding="utf-8"))
     assert dumped["p1_representative_ids"] == ["N2"]
     assert dumped["environment"]["logic_only"] is True
+
+
+def test_visual_helpers_cover_production_scenes(probe):
+    assert callable(probe.analyze_selection_visual)
+    assert callable(probe.run_visual_scenes)
+    assert probe.AA_EDGE_TOL == 18
+    assert set(probe.PRODUCTION_SCENE_IDS) <= set(probe.SCENE_BUILDERS)
 
 
 def test_c2_split_focus_signal_counts(probe, qapp, tmp_path):
@@ -355,3 +381,10 @@ def test_clock_advanced_values_are_not_performance_fields(probe):
     assert rec["animation_end_ms"] is None
     assert rec["content_ready_ms"] is None
     assert rec["null_reasons"]["feedback_paint_ms"] == probe.REASON_LOGIC_ONLY
+
+
+def test_visual_helpers_cover_production_scenes(probe):
+    assert callable(probe.analyze_selection_visual)
+    assert callable(probe.run_visual_scenes)
+    assert probe.AA_EDGE_TOL == 18
+    assert set(probe.PRODUCTION_SCENE_IDS) <= set(probe.SCENE_BUILDERS)

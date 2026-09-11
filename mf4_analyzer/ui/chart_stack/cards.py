@@ -1116,6 +1116,8 @@ _CHART_CHOICE_INDICATOR_STYLE = SelectionIndicatorStyle(
     disabled_fill=CONTROL_COLORS["CONTROL_DISABLED_BG"],
     disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
     radius=6,
+    inset=(2, 0, 2, 0),
+    compact_inset=(1, 0, 1, 0),
 )
 
 # Suppress static checked fill while Light interpolates. Longhands only:

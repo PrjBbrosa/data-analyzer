@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from weakref import ref
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, QRectF, Qt
+from PyQt5.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PyQt5.QtWidgets import QFrame, QPushButton, QWidget
 
 from ..motion import (
@@ -19,6 +19,40 @@ from ..motion import (
     selection_easing,
 )
 
+# Scoped to this objectName. Longhands only: a ``border:`` shorthand would
+# zero radius if a later state rule omitted it.
+_PLATE_TRANSPARENT_QSS = """
+QFrame#selectionIndicatorPlate {
+    background-color: transparent;
+    border-width: 0px;
+    border-style: none;
+}
+"""
+
+_POINTER_EVENTS = (
+    QEvent.MouseButtonPress,
+    QEvent.MouseButtonRelease,
+    QEvent.MouseButtonDblClick,
+    QEvent.KeyPress,
+    QEvent.KeyRelease,
+    QEvent.Wheel,
+    QEvent.HoverEnter,
+    QEvent.HoverMove,
+    QEvent.HoverLeave,
+    QEvent.Enter,
+    QEvent.Leave,
+)
+_CHROME_EVENTS = (
+    QEvent.MouseButtonPress,
+    QEvent.MouseButtonRelease,
+    QEvent.HoverEnter,
+    QEvent.HoverLeave,
+    QEvent.Enter,
+    QEvent.Leave,
+    QEvent.FocusIn,
+    QEvent.FocusOut,
+)
+
 
 @dataclass(frozen=True)
 class SelectionIndicatorStyle:
@@ -27,6 +61,12 @@ class SelectionIndicatorStyle:
     disabled_fill: str
     disabled_border: str
     radius: int
+    fill_bottom: str | None = None
+    hover_fill: str | None = None
+    hover_fill_bottom: str | None = None
+    focus_border: str | None = None
+    inset: tuple[int, int, int, int] = (0, 0, 0, 0)
+    compact_inset: tuple[int, int, int, int] | None = None
 
 
 def _belongs_to_host(widget: QWidget, host: QWidget) -> bool:
@@ -52,8 +92,12 @@ class _SelectionPlate(QFrame):
         super().__init__(host)
         self.setObjectName("selectionIndicatorPlate")
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAutoFillBackground(False)
         self.setFocusPolicy(Qt.NoFocus)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setStyleSheet(_PLATE_TRANSPARENT_QSS)
         self._indicator_ref = ref(indicator)
         self.hide()
 
@@ -68,12 +112,20 @@ class _SelectionPlate(QFrame):
         if indicator is None or sip.isdeleted(indicator):
             return
         fill, line = indicator._effective_chrome()
+        fill_bottom = indicator._effective_fill_bottom()
+        box = indicator._paint_rect(self.rect())
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setBrush(QColor(fill))
-        painter.setPen(QPen(QColor(line), 1))
-        radius = int(indicator._style.radius)
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), radius, radius)
+        if fill_bottom is not None:
+            gradient = QLinearGradient(box.left(), box.top(), box.left(), box.bottom())
+            gradient.setColorAt(0.0, QColor(fill))
+            gradient.setColorAt(1.0, QColor(fill_bottom))
+            painter.setBrush(gradient)
+        else:
+            painter.setBrush(QColor(fill))
+        painter.setPen(QPen(QColor(line), 1.0))
+        radius = float(indicator._style.radius)
+        painter.drawRoundedRect(box, radius, radius)
 
 
 class SelectionIndicator(QObject):
@@ -111,6 +163,7 @@ class SelectionIndicator(QObject):
         self._confirmed_rect: QRect | None = None
         self._plate: _SelectionPlate | None = None
         self._driver: ValueDriver | None = None
+        self._pointer_over_target = False
         host.installEventFilter(self)
         window = host.window()
         if window is not None and window is not host:
@@ -132,6 +185,7 @@ class SelectionIndicator(QObject):
         if button is None:
             self._target = None
             self._confirmed_rect = None
+            self._pointer_over_target = False
             self._hide_and_stop()
             return
         if not _is_living(button):
@@ -156,6 +210,7 @@ class SelectionIndicator(QObject):
             return
         self._target = button
         self._confirmed_rect = QRect(rect)
+        self._pointer_over_target = bool(button.underMouse())
         if not self._policy.interpolates():
             self._hide_and_stop()
             return
@@ -201,19 +256,14 @@ class SelectionIndicator(QObject):
         if sip.isdeleted(self):
             return False
         kind = event.type()
-        if kind in (
-            QEvent.MouseButtonPress,
-            QEvent.MouseButtonRelease,
-            QEvent.MouseButtonDblClick,
-            QEvent.KeyPress,
-            QEvent.KeyRelease,
-            QEvent.Wheel,
-            QEvent.HoverEnter,
-            QEvent.HoverMove,
-            QEvent.HoverLeave,
-            QEvent.Enter,
-            QEvent.Leave,
-        ):
+        if kind in _POINTER_EVENTS or kind in (QEvent.FocusIn, QEvent.FocusOut):
+            if kind in _CHROME_EVENTS:
+                if watched is self._target:
+                    if kind in (QEvent.Enter, QEvent.HoverEnter):
+                        self._pointer_over_target = True
+                    elif kind in (QEvent.Leave, QEvent.HoverLeave):
+                        self._pointer_over_target = False
+                self._refresh_plate_chrome()
             return False
         if kind == QEvent.Hide:
             target = self._target
@@ -242,15 +292,67 @@ class SelectionIndicator(QObject):
         return False
 
     def _effective_chrome(self) -> tuple[str, str]:
-        if self._target_is_enabled():
-            return (self._style.fill, self._style.border)
-        return (self._style.disabled_fill, self._style.disabled_border)
+        if not self._target_is_enabled():
+            return (self._style.disabled_fill, self._style.disabled_border)
+        fill, _bottom = self._enabled_fill_stops()
+        return (fill, self._effective_border())
+
+    def _effective_fill_bottom(self) -> str | None:
+        if not self._target_is_enabled():
+            return None
+        _fill, bottom = self._enabled_fill_stops()
+        return bottom
+
+    def _enabled_fill_stops(self) -> tuple[str, str | None]:
+        if self._target_is_hovered() and self._style.hover_fill:
+            return (self._style.hover_fill, self._style.hover_fill_bottom)
+        return (self._style.fill, self._style.fill_bottom)
+
+    def _effective_border(self) -> str:
+        target = self._target
+        if (
+            self._style.focus_border
+            and target is not None
+            and _is_living(target)
+            and target.hasFocus()
+        ):
+            return self._style.focus_border
+        return self._style.border
 
     def _target_is_enabled(self) -> bool:
         target = self._target
         if target is None or not _is_living(target):
             return True
         return bool(target.isEnabled())
+
+    def _target_is_hovered(self) -> bool:
+        target = self._target
+        if target is None or not _is_living(target) or not target.isEnabled():
+            return False
+        return bool(self._pointer_over_target or target.underMouse())
+
+    def _effective_inset(self) -> tuple[int, int, int, int]:
+        target = self._target
+        if (
+            target is not None
+            and _is_living(target)
+            and str(target.property("timeControlDensity") or "") == "compact"
+            and self._style.compact_inset is not None
+        ):
+            return self._style.compact_inset
+        return self._style.inset
+
+    def _paint_rect(self, plate_rect: QRect) -> QRectF:
+        left, top, right, bottom = self._effective_inset()
+        box = QRectF(plate_rect).adjusted(left, top, -right, -bottom)
+        if box.width() < 2.0 or box.height() < 2.0:
+            box = QRectF(plate_rect)
+        return box.adjusted(0.5, 0.5, -0.5, -0.5)
+
+    def _refresh_plate_chrome(self) -> None:
+        plate = self._plate
+        if plate is not None and _is_living(plate):
+            plate.update()
 
     def _is_same_confirmed(self, button: QPushButton, rect: QRect) -> bool:
         if self._target is not button:

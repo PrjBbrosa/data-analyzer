@@ -1369,7 +1369,7 @@ Toolbar QPushButton[segment]:hover {
 Toolbar QPushButton[segment]:checked {
     background-color: qlineargradient(
         x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #ffffff, stop: 1 {{CONTROL_ACCENT_WASH}}
+        stop: 0 {{CONTROL_SURFACE_TOP}}, stop: 1 {{CONTROL_ACCENT_WASH}}
     );
     color: {{CONTROL_ACCENT}};
     /* Base segment rules use border:none; longhands recreate the frame
@@ -1432,7 +1432,7 @@ QWidget#BatchMethodGroup QPushButton[batchMethod]:hover {
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked {
     background-color: qlineargradient(
         x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #ffffff, stop: 1 {{CONTROL_ACCENT_WASH}}
+        stop: 0 {{CONTROL_SURFACE_TOP}}, stop: 1 {{CONTROL_ACCENT_WASH}}
     );
     border-color: {{CONTROL_ACCENT_HI}};
     color: {{CONTROL_ACCENT}};
@@ -1441,7 +1441,7 @@ QWidget#BatchMethodGroup QPushButton[batchMethod]:checked {
 QWidget#BatchMethodGroup QPushButton[batchMethod]:checked:hover {
     background-color: qlineargradient(
         x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #f5faff, stop: 1 #d5e8ff
+        stop: 0 {{CONTROL_SELECT_HOVER_TOP}}, stop: 1 {{CONTROL_SELECT_HOVER_BOTTOM}}
     );
 }
 QWidget#BatchMethodGroup QPushButton[batchMethod]:pressed,

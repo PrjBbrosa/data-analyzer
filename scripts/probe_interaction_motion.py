@@ -206,7 +206,7 @@ def environment_record(app=None, *, logic_only: bool, extra: Mapping[str, Any] |
     }
     try:
         info["loadavg"] = list(os.getloadavg())
-    except OSError:
+    except (OSError, AttributeError):
         info["loadavg"] = None
     if app is not None:
         try:
@@ -328,18 +328,25 @@ def _is_native_org_app_ctor(args: tuple[Any, ...]) -> bool:
     return False
 
 
+def _posix_path_text(value) -> str:
+    """Normalize for containment checks. Qt fileName() uses '/' on Windows."""
+    return str(Path(value)).replace("\\", "/")
+
+
 def prove_qsettings_isolated(token: SettingsIsolation) -> str:
     from PyQt5.QtCore import QSettings
 
     store = QSettings("MF4Analyzer", "DataAnalyzer")
     path = str(store.fileName())
-    expected = str(token.ini_path)
-    native_home = str(Path.home() / "Library" / "Preferences")
-    if native_home in path and "MF4Analyzer" in path:
+    path_key = _posix_path_text(path)
+    expected_key = _posix_path_text(token.ini_path)
+    tmp_key = _posix_path_text(token.tmp_dir)
+    native_home = _posix_path_text(Path.home() / "Library" / "Preferences")
+    if native_home in path_key and "MF4Analyzer" in path_key:
         raise IsolationError(
             f"NativeFormat two-arg QSettings still resolved to {path}"
         )
-    if expected not in path and str(token.tmp_dir) not in path:
+    if expected_key not in path_key and tmp_key not in path_key:
         raise IsolationError(
             f"isolated QSettings fileName={path!r} is outside {token.tmp_dir}"
         )

@@ -283,7 +283,11 @@ class MethodButtonGroup(QWidget):
             duration_name="selection_navigation",
             style=SelectionIndicatorStyle(
                 fill=CONTROL_COLORS["CONTROL_SURFACE_TOP"],
+                fill_bottom=CONTROL_COLORS["CONTROL_ACCENT_WASH"],
+                hover_fill=CONTROL_COLORS["CONTROL_SELECT_HOVER_TOP"],
+                hover_fill_bottom=CONTROL_COLORS["CONTROL_SELECT_HOVER_BOTTOM"],
                 border=CONTROL_COLORS["CONTROL_ACCENT_HI"],
+                focus_border=CONTROL_COLORS["CONTROL_ACCENT"],
                 disabled_fill=CONTROL_COLORS["CONTROL_DISABLED_BG"],
                 disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
                 radius=5,

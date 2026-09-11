@@ -219,6 +219,66 @@ def test_persistent_top_xaxis_source_is_a_full_width_segmented_choice(qtbot, qap
     assert top.xaxis_mode() == "channel"
 
 
+def _choice_track_corners(choice: SegmentedChoice):
+    plate = choice._selection_pill
+    assert plate is not None
+    image = choice.grab().toImage()
+    dpr = float(image.devicePixelRatio() or 1.0)
+    origin = plate.mapTo(choice, QPoint(0, 0))
+    width = max(plate.width() - 1, 0)
+    samples = []
+    for x, y in (
+        (origin.x(), origin.y()),
+        (origin.x() + width, origin.y()),
+        (origin.x() + 1, origin.y() + 1),
+        (origin.x() + width - 1, origin.y() + 1),
+    ):
+        px = min(max(int(round(x * dpr)), 0), image.width() - 1)
+        py = min(max(int(round(y * dpr)), 0), image.height() - 1)
+        samples.append(QColor(image.pixel(px, py)))
+    return samples
+
+
+def test_inspector_binary_choices_keep_track_outside_the_rounded_plate(
+    qtbot, qapp, production_stylesheet,
+):
+    from mf4_analyzer.ui import inspector_sections
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    track = QColor(CONTROL_COLORS["CONTROL_TRACK"])
+    white = QColor(CONTROL_COLORS["CONTROL_SURFACE_TOP"])
+    cases = (
+        (inspector_sections.FFTContextual(), "choice_amp_y"),
+        (inspector_sections.FFTTimeContextual(), "choice_weighting"),
+        (inspector_sections.OrderContextual(), "choice_rpm_mode"),
+        (inspector_sections.FrfContextual(), "choice_phase_mode"),
+        (PersistentTop(), "choice_xaxis"),
+    )
+    for panel, name in cases:
+        qtbot.addWidget(panel)
+        panel.resize(288, 900)
+        panel.show()
+        production_stylesheet.processEvents()
+        choice = getattr(panel, name)
+        assert isinstance(choice, SegmentedChoice)
+        assert choice.motion_policy() == POLICY_LIGHT
+        for sample in _choice_track_corners(choice):
+            assert max(
+                abs(sample.red() - track.red()),
+                abs(sample.green() - track.green()),
+                abs(sample.blue() - track.blue()),
+            ) <= 18
+            assert max(
+                abs(sample.red() - track.red()),
+                abs(sample.green() - track.green()),
+                abs(sample.blue() - track.blue()),
+            ) < max(
+                abs(sample.red() - white.red()),
+                abs(sample.green() - white.green()),
+                abs(sample.blue() - white.blue()),
+            )
+
+
 def _driver_is_active(choice: SegmentedChoice) -> bool:
     driver = choice._motion_driver
     return driver is not None and driver.is_active()

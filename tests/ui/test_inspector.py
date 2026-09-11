@@ -943,6 +943,41 @@ def test_persistent_top_xaxis_channel_change_updates_auto_label(qapp):
     assert pt.xaxis_label() == "angle"
 
 
+def test_order_rpm_choice_light_plate_keeps_track_corners(qapp, qtbot):
+    from PyQt5.QtGui import QColor
+
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    previous = qapp.styleSheet()
+    try:
+        _load_production_stylesheet(qapp)
+        ctx = OrderContextual()
+        qtbot.addWidget(ctx)
+        ctx.resize(288, 900)
+        ctx.show()
+        qapp.processEvents()
+        choice = ctx.choice_rpm_mode
+        assert choice.motion_policy() == POLICY_LIGHT
+        plate = choice._selection_pill
+        assert plate is not None
+        image = choice.grab().toImage()
+        dpr = float(image.devicePixelRatio() or 1.0)
+        origin = plate.mapTo(choice, plate.rect().topLeft())
+        track = QColor(CONTROL_COLORS["CONTROL_TRACK"])
+        px = min(max(int(round(origin.x() * dpr)), 0), image.width() - 1)
+        py = min(max(int(round(origin.y() * dpr)), 0), image.height() - 1)
+        corner = QColor(image.pixel(px, py))
+        assert max(
+            abs(corner.red() - track.red()),
+            abs(corner.green() - track.green()),
+            abs(corner.blue() - track.blue()),
+        ) <= 18
+    finally:
+        qapp.setStyleSheet(previous)
+
+
 def test_persistent_top_time_mode_clears_auto_channel_label(qapp):
     from mf4_analyzer.ui.inspector_sections import PersistentTop
 

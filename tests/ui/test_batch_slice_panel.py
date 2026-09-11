@@ -107,6 +107,41 @@ def test_slice_axis_uses_segmented_choice_not_dropdown(qtbot):
         assert button.width() >= button.fontMetrics().horizontalAdvance(button.text())
 
 
+def test_slice_axis_light_plate_keeps_track_corners(qtbot, qapp):
+    from PyQt5.QtGui import QColor
+
+    from mf4_analyzer.ui_kit import load_stylesheet
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    old = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        panel = _make_panel(qtbot)
+        panel._enable_switch.setChecked(True)
+        panel.resize(288, 400)
+        panel.show()
+        qapp.processEvents()
+        choice = panel._axis_choice
+        assert choice.motion_policy() == POLICY_LIGHT
+        plate = choice._selection_pill
+        assert plate is not None
+        image = choice.grab().toImage()
+        dpr = float(image.devicePixelRatio() or 1.0)
+        origin = plate.mapTo(choice, plate.rect().topLeft())
+        track = QColor(CONTROL_COLORS["CONTROL_TRACK"])
+        px = min(max(int(round(origin.x() * dpr)), 0), image.width() - 1)
+        py = min(max(int(round(origin.y() * dpr)), 0), image.height() - 1)
+        corner = QColor(image.pixel(px, py))
+        assert max(
+            abs(corner.red() - track.red()),
+            abs(corner.green() - track.green()),
+            abs(corner.blue() - track.blue()),
+        ) <= 18
+    finally:
+        qapp.setStyleSheet(old)
+
+
 def test_slice_dimension_rename_snaps_without_extra_signals(qtbot, qapp):
     from PyQt5.QtCore import Qt
     from PyQt5.QtTest import QTest

@@ -478,3 +478,58 @@ def test_narrow_hidden_and_policy_restore_do_not_relayout_canvas(qtbot, qapp):
     assert "background-color: transparent" in card.toolbar.styleSheet()
     assert not _driver(card, "plot").is_active()
     assert card.canvas.width() > 0
+
+
+def test_chart_choice_plate_corners_keep_toolbar_surface(qtbot, qapp):
+    from PyQt5.QtGui import QColor
+
+    from mf4_analyzer.ui_kit import load_stylesheet
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+
+    previous = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        card = _time_card(qtbot, qapp)
+        plate = _indicator(card, "plot")._plate
+        assert plate is not None
+        image = card.toolbar.grab().toImage()
+        dpr = float(image.devicePixelRatio() or 1.0)
+        origin = plate.mapTo(card.toolbar, QPoint(0, 0))
+
+        def sample(x: float, y: float) -> QColor:
+            px = min(max(int(round(x * dpr)), 0), image.width() - 1)
+            py = min(max(int(round(y * dpr)), 0), image.height() - 1)
+            return QColor(image.pixel(px, py))
+
+        white = QColor(CONTROL_COLORS["CONTROL_SURFACE_TOP"])
+        center = sample(
+            origin.x() + plate.width() / 2,
+            origin.y() + plate.height() / 2,
+        )
+        assert max(
+            abs(center.red() - white.red()),
+            abs(center.green() - white.green()),
+            abs(center.blue() - white.blue()),
+        ) <= 24
+        outside = sample(max(origin.x() - 2, 0), origin.y())
+        for x, y in (
+            (origin.x(), origin.y()),
+            (origin.x() + plate.width() - 1, origin.y()),
+            (origin.x(), origin.y() + plate.height() - 1),
+            (origin.x() + plate.width() - 1, origin.y() + plate.height() - 1),
+        ):
+            corner = sample(x, y)
+            corner_to_outside = max(
+                abs(corner.red() - outside.red()),
+                abs(corner.green() - outside.green()),
+                abs(corner.blue() - outside.blue()),
+            )
+            corner_to_white = max(
+                abs(corner.red() - white.red()),
+                abs(corner.green() - white.green()),
+                abs(corner.blue() - white.blue()),
+            )
+            assert corner_to_outside <= 24
+            assert corner_to_outside < corner_to_white
+    finally:
+        qapp.setStyleSheet(previous)

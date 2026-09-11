@@ -43,6 +43,8 @@ CONTROL_COLORS: Mapping[str, str] = MappingProxyType({
     "CONTROL_TRACK_LINE": "#DDE3EC",
     "CONTROL_SELECT_LINE": "#CDD8E8",
     "CONTROL_TEXT_ON_SELECT": "#12437F",
+    "CONTROL_SELECT_HOVER_TOP": "#F5FAFF",
+    "CONTROL_SELECT_HOVER_BOTTOM": "#D5E8FF",
 })
 """Canonical control palette; QSS and hand-painted controls read this map."""
 

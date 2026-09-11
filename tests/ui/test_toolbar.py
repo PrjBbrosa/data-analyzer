@@ -689,3 +689,60 @@ def test_toolbar_off_and_reduced_restore_static_checked_chrome(qtbot, qapp):
     QTest.mouseClick(tb.btn_mode_order, Qt.LeftButton)
     assert tb.current_mode() == "order"
     assert tb._motion_driver is None or not tb._motion_driver.is_active()
+
+
+def _toolbar_fill_samples(tb, button):
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtGui import QColor
+
+    host = tb._mode_segment
+    image = host.grab().toImage()
+    dpr = float(image.devicePixelRatio() or 1.0)
+    origin = button.mapTo(host, QPoint(0, 0))
+    x = int(round((origin.x() + 8) * dpr))
+    top_y = int(round((origin.y() + 4) * dpr))
+    bottom_y = int(round((origin.y() + button.height() - 5) * dpr))
+    return (
+        QColor(image.pixel(x, top_y)),
+        QColor(image.pixel(x, bottom_y)),
+    )
+
+
+def _color_distance(left, right) -> int:
+    return max(
+        abs(left.red() - right.red()),
+        abs(left.green() - right.green()),
+        abs(left.blue() - right.blue()),
+    )
+
+
+def test_toolbar_off_and_light_rest_keep_the_original_checked_gradient(qtbot, qapp):
+    from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
+    from mf4_analyzer.ui_kit.motion import POLICY_OFF
+    from PyQt5.QtGui import QColor
+
+    white = QColor(CONTROL_COLORS["CONTROL_SURFACE_TOP"])
+    wash = QColor(CONTROL_COLORS["CONTROL_ACCENT_WASH"])
+    off = _show_main_toolbar(qtbot, qapp, load_qss=True)
+    off.set_motion_policy(POLICY_OFF)
+    qapp.processEvents()
+    off_top, off_bottom = _toolbar_fill_samples(off, off.btn_mode_time)
+    assert _color_distance(off_top, white) < _color_distance(off_top, wash)
+    assert _color_distance(off_bottom, wash) < _color_distance(off_bottom, white)
+
+    light = _show_main_toolbar(qtbot, qapp, load_qss=True)
+    qapp.processEvents()
+    light_top, light_bottom = _toolbar_fill_samples(light, light.btn_mode_time)
+    assert _color_distance(light_top, white) < _color_distance(light_top, wash)
+    assert _color_distance(light_bottom, wash) < _color_distance(light_bottom, white)
+    assert _color_distance(light_top, off_top) <= 24
+    assert _color_distance(light_bottom, off_bottom) <= 24
+
+    light.btn_mode_time.setEnabled(False)
+    qapp.processEvents()
+    light._selection_pill.update()
+    light._selection_pill.repaint()
+    disabled_top, disabled_bottom = _toolbar_fill_samples(light, light.btn_mode_time)
+    disabled = QColor(CONTROL_COLORS["CONTROL_DISABLED_BG"])
+    assert _color_distance(disabled_top, disabled) <= 28
+    assert _color_distance(disabled_bottom, wash) > _color_distance(disabled_bottom, disabled)

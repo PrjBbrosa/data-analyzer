@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QRect, QTimer
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor, QFont, QImage
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
@@ -21,6 +21,8 @@ from mf4_analyzer.ui_kit.widgets.selection_indicator import (
     SelectionIndicator,
     SelectionIndicatorStyle,
 )
+from mf4_analyzer.ui_kit.widgets.segmented_choice import SegmentedChoice
+from mf4_analyzer.ui_kit import load_stylesheet
 
 
 _HELPER_SRC = (
@@ -40,6 +42,49 @@ def _style() -> SelectionIndicatorStyle:
         disabled_border=CONTROL_COLORS["CONTROL_DISABLED_LINE"],
         radius=5,
     )
+
+
+@pytest.fixture
+def production_stylesheet(qapp):
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    try:
+        yield qapp
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def _pixel(image: QImage, x: float, y: float) -> QColor:
+    dpr = float(image.devicePixelRatio() or 1.0)
+    px = min(max(int(round(x * dpr)), 0), image.width() - 1)
+    py = min(max(int(round(y * dpr)), 0), image.height() - 1)
+    return QColor(image.pixel(px, py))
+
+
+def _channel_distance(left: QColor, right: QColor) -> int:
+    return max(
+        abs(left.red() - right.red()),
+        abs(left.green() - right.green()),
+        abs(left.blue() - right.blue()),
+    )
+
+
+def _host_plate_corners(host: QWidget, plate: QWidget) -> tuple[QImage, list[QColor]]:
+    image = host.grab().toImage()
+    origin = plate.mapTo(host, QPoint(0, 0))
+    width = max(plate.width() - 1, 0)
+    height = max(plate.height() - 1, 0)
+    # Extreme corners of the plate widget sit outside the 5–6px radius. The
+    # 1px antialiased stroke can tint the bottom/right bounding-box pixels,
+    # so parent-surface checks use the top corners plus a 1px inward sample
+    # that is still outside the fill.
+    points = (
+        (origin.x(), origin.y()),
+        (origin.x() + width, origin.y()),
+        (origin.x() + 1, origin.y() + 1),
+        (origin.x() + width - 1, origin.y() + 1),
+    )
+    return image, [_pixel(image, x, y) for x, y in points]
 
 
 def _mapped_rect(host: QWidget, button: QPushButton) -> QRect:
@@ -519,3 +564,147 @@ def test_interrupt_continues_from_displayed_rect(qtbot, qapp):
     driver.clock().setCurrentTime(300)
     assert indicator._plate.geometry() == _mapped_rect(host, buttons[0])
     assert not driver.is_active()
+
+
+def test_optional_style_fields_keep_the_five_argument_constructor():
+    style = SelectionIndicatorStyle(
+        fill="#FFFFFF",
+        border="#CDD8E8",
+        disabled_fill="#F3F5F8",
+        disabled_border="#E2E7EE",
+        radius=5,
+    )
+    assert style.fill_bottom is None
+    assert style.hover_fill is None
+    assert style.inset == (0, 0, 0, 0)
+    assert style.compact_inset is None
+
+
+def _assert_corners_match(host: QWidget, plate: QWidget, expected: QColor, *, tol: int = 18):
+    _image, corners = _host_plate_corners(host, plate)
+    white = QColor(CONTROL_COLORS["CONTROL_SURFACE_TOP"])
+    for corner in corners:
+        assert _channel_distance(corner, expected) <= tol, (
+            corner.name(), expected.name(), [item.name() for item in corners]
+        )
+        if expected.name() != white.name():
+            assert _channel_distance(corner, expected) < _channel_distance(corner, white), (
+                corner.name(), expected.name()
+            )
+
+
+def test_production_qss_plate_corners_keep_track_and_tinted_parents(
+    qtbot, qapp, production_stylesheet,
+):
+    from PyQt5.QtWidgets import QComboBox
+
+    choice = SegmentedChoice()
+    combo = QComboBox()
+    combo.addItem("左", "left")
+    combo.addItem("右", "right")
+    choice.bind(combo)
+    choice.set_motion_policy(POLICY_LIGHT)
+    choice.resize(260, 32)
+    qtbot.addWidget(choice)
+    choice.show()
+    production_stylesheet.processEvents()
+    plate = choice._selection_pill
+    assert plate is not None
+    _assert_corners_match(choice, plate, QColor(CONTROL_COLORS["CONTROL_TRACK"]))
+
+    tint = QColor("#C8E0FF")
+    host, buttons = _make_host(qtbot, qapp, (70, 110))
+    host.setStyleSheet(f"background-color: {tint.name()};")
+    for button in buttons:
+        button.setStyleSheet(
+            "background-color: transparent; border-width: 0px; border-style: none;"
+        )
+    indicator = _make_indicator(host, buttons)
+    indicator.set_motion_policy(POLICY_LIGHT)
+    indicator.follow(buttons[0], animate=False)
+    production_stylesheet.processEvents()
+    host.repaint()
+    _assert_corners_match(host, indicator._plate, tint)
+
+    white_host, white_buttons = _make_host(qtbot, qapp, (80, 90))
+    white_host.setStyleSheet("background-color: #FFFFFF;")
+    for button in white_buttons:
+        button.setStyleSheet(
+            "background-color: transparent; border-width: 0px; border-style: none;"
+        )
+    white_indicator = _make_indicator(white_host, white_buttons)
+    white_indicator.set_motion_policy(POLICY_LIGHT)
+    white_indicator.follow(white_buttons[1], animate=False)
+    production_stylesheet.processEvents()
+    white_host.repaint()
+    _assert_corners_match(
+        white_host, white_indicator._plate, QColor("#FFFFFF"),
+    )
+
+
+def test_mid_frame_plate_corners_do_not_leave_a_white_block(
+    qtbot, qapp, production_stylesheet,
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QComboBox
+
+    choice = SegmentedChoice()
+    combo = QComboBox()
+    combo.addItem("左", "left")
+    combo.addItem("右", "right")
+    choice.bind(combo)
+    choice.set_motion_policy(POLICY_LIGHT)
+    choice.resize(260, 32)
+    qtbot.addWidget(choice)
+    choice.show()
+    production_stylesheet.processEvents()
+    first, second = choice.buttons()
+    driver = choice._motion_driver
+    QTest.mouseClick(second, Qt.LeftButton)
+    track = QColor(CONTROL_COLORS["CONTROL_TRACK"])
+    for fraction in (0.25, 0.50):
+        driver.clock().setCurrentTime(int(300 * fraction))
+        choice.repaint()
+        production_stylesheet.processEvents()
+        plate = choice._selection_pill
+        assert plate is not None and not plate.isHidden()
+        _assert_corners_match(choice, plate, track)
+        mid = plate.geometry()
+        assert mid != first.geometry()
+        assert mid != second.geometry()
+
+
+def test_available_dpr_samples_plate_corners_on_unequal_and_disabled_buttons(
+    qtbot, qapp, production_stylesheet,
+):
+    host, buttons = _make_host(qtbot, qapp, (40, 90, 70))
+    host.setStyleSheet(
+        f"background-color: {CONTROL_COLORS['CONTROL_TRACK']};"
+    )
+    for button in buttons:
+        button.setStyleSheet(
+            "background-color: transparent; border-width: 0px; border-style: none;"
+        )
+    indicator = _make_indicator(host, buttons)
+    indicator.set_motion_policy(POLICY_LIGHT)
+    screen = production_stylesheet.primaryScreen()
+    dpr = float(screen.devicePixelRatio()) if screen is not None else 1.0
+    assert dpr >= 1.0
+    track = QColor(CONTROL_COLORS["CONTROL_TRACK"])
+    for button in buttons:
+        indicator.follow(button, animate=False)
+        production_stylesheet.processEvents()
+        host.repaint()
+        _assert_corners_match(host, indicator._plate, track)
+    buttons[1].setEnabled(False)
+    indicator.follow(buttons[1], animate=False)
+    production_stylesheet.processEvents()
+    host.repaint()
+    _assert_corners_match(host, indicator._plate, track)
+    indicator.follow(buttons[2], animate=True)
+    indicator.follow(buttons[0], animate=True)
+    indicator.driver().clock().setCurrentTime(300)
+    production_stylesheet.processEvents()
+    assert indicator._plate.geometry() == _mapped_rect(host, buttons[0])
+    _assert_corners_match(host, indicator._plate, track)
