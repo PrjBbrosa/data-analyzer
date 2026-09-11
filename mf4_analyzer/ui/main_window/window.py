@@ -1795,18 +1795,14 @@ class MainWindow(
         x_auto = bool(p.get('x_auto', p.get('autoscale', True)))
         x_min = float(p.get('x_min', 0.0))
         x_max = float(p.get('x_max', 0.0))
+        extents = [self._fft_frequency_extent(entry['freq']) for entry in entries]
+        full_xlim = (min(v[0] for v in extents), max(v[1] for v in extents))
         if x_auto:
-            xmax = max(
-                self._fft_auto_xlim(
-                    entry['freq'], entry.get('amp_for_xlim', entry['amp'])
-                )
-                for entry in entries
-            )
-            xlim = (0.0, xmax)
+            xlim = full_xlim
         elif x_max > x_min:
             xlim = (x_min, x_max)
         else:
-            xlim = (0.0, self.inspector.fft_ctx.fs() / 2)
+            xlim = full_xlim
         canvas.plot_spectra(
             entries,
             xlim=xlim,
@@ -5208,26 +5204,27 @@ class MainWindow(
 
     @staticmethod
     def _fft_auto_xlim(freq, amp):
-        """Return display-only FFT fmax from the non-DC energy band."""
-        return energy_band_fmax(freq, amp)
+        """Compatibility upper bound from actual finite nonnegative bins."""
+        return MainWindow._fft_frequency_extent(freq)[1]
+
+    @staticmethod
+    def _fft_frequency_extent(freq):
+        values = np.asarray(freq, dtype=float)
+        if values.ndim != 1:
+            raise ValueError('FFT frequencies must be one-dimensional')
+        values = values[np.isfinite(values) & (values >= 0)]
+        if not values.size:
+            return (0., 1.)  # explicit empty display window
+        lo, hi = float(values.min()), float(values.max())
+        return (lo, hi) if hi > lo else (lo, lo + 1.)
 
     @staticmethod
     def _fft_time_auto_freq_range(result):
-        """Return display-only FFT-vs-Time frequency range from energy.
-
-        ``SpectrogramResult.amplitude`` is ``freq_bins x frames``. Max over
-        frames is intentionally conservative: intermittent low-frequency
-        energy still expands the displayed frequency band enough to show it.
-        """
+        """Use actual result bins; frequency validity is amplitude-independent."""
         freq = getattr(result, 'frequencies', None)
         if freq is None:
             freq = getattr(result, 'freq', [])
-        amp = np.asarray(getattr(result, 'amplitude', []), dtype=float)
-        if amp.ndim >= 2:
-            representative = np.nanmax(amp, axis=1)
-        else:
-            representative = amp
-        return (0.0, energy_band_fmax(freq, representative))
+        return MainWindow._fft_frequency_extent(freq)
 
     @staticmethod
     def _format_time_axis_provenance_chip(provenance):

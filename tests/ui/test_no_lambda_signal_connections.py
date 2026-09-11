@@ -62,7 +62,7 @@ FROZEN_LAMBDA_CONNECT_COUNTS: dict[str, int] = {
     "ui/markup/toolbar.py": 3,
     "ui/pg_canvas/context_menu.py": 7,
     "ui/pg_canvas/heatmap_canvas.py": 1,
-    "ui/pg_canvas/line_canvas.py": 4,
+    "ui/pg_canvas/line_canvas.py": 3,
     "ui/pg_canvas/remarks.py": 1,
     "ui/pg_canvas/slice_panel.py": 1,
     "ui/side_panels.py": 5,

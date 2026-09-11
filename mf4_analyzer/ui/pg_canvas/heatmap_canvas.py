@@ -269,6 +269,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # User pan/box/modifier-wheel/View-All on the heatmap (not the slice).
     # plot_or_update_heatmap / empty View-All / full_reset must not emit this.
     viewport_intent_committed = pyqtSignal()
+    viewport_action_committed = pyqtSignal(str, object)
     # Emitted after labels/ticks/title/colorbar changes that can resize the
     # pyqtgraph layout. Analysis split pages coalesce this and align panes.
     layout_geometry_changed = pyqtSignal()
@@ -341,6 +342,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._rendered_levels = None
         self._has_result = False
         self._matrix_disp = None  # display-space matrix
+        self._matrix_amp_valid = None
+        self.analysis_range_adapter = None
+        self._observed_main_viewport = None
+        self._pending_manual_axes = set()
+        self._manual_axes_clear_timer = QTimer(self)
+        self._manual_axes_clear_timer.setSingleShot(True)
+        self._manual_axes_clear_timer.timeout.connect(self._clear_pending_manual_axes)
         self._extents = None      # (x0, x1, y0, y1)
         self._raw_title = ''
         self._split_title_width = None
@@ -389,6 +397,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._plot.vb.sigRangeChangedManually.connect(
             self._on_interactive_range_changed)
         self._plot.vb.sigRangeChangedManually.connect(self._on_main_manual_zoom)
+        self._plot.vb.sigRangeChanged.connect(self._observe_main_range_change)
         # Wheel / Home / inspector setRange are programmatic and do not emit
         # sigRangeChangedManually. The slice still has to follow the live map
         # when the inspector axis is auto.
@@ -671,13 +680,34 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.disable_interactive_quality()
         self.schedule_idle_quality()
 
-    def _on_main_manual_zoom(self, *_args) -> None:
-        self.manual_zoom_changed.emit(True)
-        self._emit_viewport_intent()
+    def _clear_pending_manual_axes(self):
+        self._pending_manual_axes.clear()
 
-    def _emit_viewport_intent(self) -> None:
+    def _observe_main_range_change(self, *_args):
+        current = tuple(tuple(r) for r in self._plot.vb.viewRange())
+        previous = self._observed_main_viewport
+        self._observed_main_viewport = current
+        if previous is not None:
+            self._pending_manual_axes.update(
+                axis for axis, before, after in zip(('x', 'y'), previous, current)
+                if before != after)
+        # A ViewBox emits its manual signal synchronously after range changes.
+        # Programmatic changes expire before the next user event.
+        self._manual_axes_clear_timer.start(0)
+
+    def _on_main_manual_zoom(self, axes=None) -> None:
+        enabled = axes if axes is not None else (True, True)
+        affected = tuple(axis for axis, on in zip(('x', 'y'), enabled)
+                         if on and axis in self._pending_manual_axes)
+        self._clear_pending_manual_axes()
+        if affected:
+            self.manual_zoom_changed.emit(True)
+            self._emit_viewport_intent(axes=affected)
+
+    def _emit_viewport_intent(self, action='user', axes=('x', 'y')) -> None:
         if not self._has_result:
             return
+        self.viewport_action_committed.emit(action, tuple(axes))
         self.viewport_intent_committed.emit()
 
     def capture_xy_viewport(self):
@@ -723,7 +753,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def _sync_slice_to_heatmap_view(self, *_args) -> None:
         """Re-clip the 1D slice to the heatmap's current view.
 
-        Inspector-manual panel ranges still win inside ``_slice_axis_range``.
+        Inspector ranges are applied to the map before the slice follows it.
         Skips chrome/layout so pan, wheel and Home can call this every tick.
         """
         if self._heatmap_range_updating or self._slice_view_syncing:
@@ -809,6 +839,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         vmin=None, vmax=None,
         x_coords=None, y_coords=None,
         amplitude_label=None, z_unit_suffix=None,
+        amplitude_valid_mask=None,
     ):
         self.clear_empty_hint()
         # Reset any panel-driven slice ranges. plot_result re-sets them AFTER
@@ -817,7 +848,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # heatmap view range.
         self._panel_time_range = None
         self._panel_freq_range = None
-        self._panel_amp_range = None
+        self._panel_amp_range = None if z_auto else (float(z_floor), float(z_ceiling))
         # dB-reference-defaults Task 7 (spec §15 C2/C3): explicit label
         # context from the caller (FFT-time / Order mixins), stored so the
         # slice axis (_apply_slice / _apply_default_axis_labels) and the
@@ -850,6 +881,15 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             )
 
         m = np.asarray(matrix, dtype=float)
+        if m.ndim != 2:
+            raise ValueError('heatmap matrix must have 2D shape')
+        valid = np.isfinite(m)
+        if amplitude_valid_mask is not None:
+            mask = np.asarray(amplitude_valid_mask, dtype=bool)
+            if mask.shape != m.shape:
+                raise ValueError('amplitude_valid_mask must match matrix shape')
+            valid &= mask
+        self._matrix_amp_valid = valid
 
         bounds = _finite_data_bounds(m)
         if bounds is None:
@@ -974,6 +1014,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         hidden) so a stale color scale never outlives its data; the next
         ``plot_or_update_heatmap`` recreates it.
         """
+        self._manual_axes_clear_timer.stop()
+        self._clear_pending_manual_axes()
+        self._observed_main_viewport = None
         self.clear_empty_hint()
         self.clear_remarks()
         self._overlay_source = None
@@ -993,6 +1036,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         _hide_plot_title(self._plot)
         self._raw_title = ''
         self._matrix_disp = None
+        self._matrix_amp_valid = None
+        self._panel_time_range = None
+        self._panel_freq_range = None
+        self._panel_amp_range = None
         self._extents = None
         self._has_result = False
         # FFT-vs-Time slice state. Keep the persistent slice row / curve /
@@ -1139,7 +1186,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.schedule_idle_quality()
         if view_box is self._plot.vb:
             self.manual_zoom_changed.emit(True)
-            self._emit_viewport_intent()
+            self._emit_viewport_intent(axes=('x',) if ctrl else ('y',))
         self.layout_geometry_changed.emit()
         return True
 
@@ -1254,7 +1301,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._heatmap_range_updating = False
         self._sync_slice_to_heatmap_view()
         self.manual_zoom_changed.emit(False)
-        self._emit_viewport_intent()
+        self._emit_viewport_intent(action='home')
 
     # ------------------------------------------------------------------
     # FFT-vs-Time: spectrogram render + frequency slice (with_slice=True)
@@ -1320,6 +1367,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         changes between renders (spec §8.3.1) — the shift only ever moves
         the display LEVELS, never the stored matrix.
         """
+        raw = np.asarray(result.amplitude)
+        frequencies = np.asarray(result.frequencies, dtype=float)
+        times = np.asarray(result.times, dtype=float)
+        if frequencies.ndim != 1 or times.ndim != 1 or raw.shape != (frequencies.size, times.size):
+            raise ValueError('spectrogram coordinates and amplitude shape must match')
+        finite_freq = frequencies[np.isfinite(frequencies)]
+        if raw.size == 0 or finite_freq.size == 0 or not np.any(np.isfinite(times)):
+            self.full_reset()
+            self.show_empty_hint('没有可显示的分析结果')
+            return
         self._result = result
         # Pin the amplitude mode so annotation/slice labels read the value as
         # 'dB' (not the channel unit) in dB mode, and the slice y-label
@@ -1412,8 +1469,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._last_manual_levels_shifted = None
             cbar = colorbar_label if colorbar_label is not None else f"Amplitude{unit}"
 
-        y_lo = float(result.frequencies[0])
-        y_hi = float(result.frequencies[-1])
+        y_lo = float(finite_freq.min())
+        y_hi = float(finite_freq.max())
         if freq_range is not None:
             # freq_range controls the Y axis only; (lo, hi) with hi<=lo or
             # hi<=0 falls back to the Nyquist bin (parity with
@@ -1446,6 +1503,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             y_auto=y_auto, y_min=y_min, y_max=y_max,
             x_coords=result.times, y_coords=result.frequencies,
             amplitude_label=amplitude_label, z_unit_suffix=z_unit_suffix,
+            amplitude_valid_mask=(np.isfinite(result.amplitude) & (result.amplitude > 0)
+                                  if amplitude_mode_is_db(amplitude_mode)
+                                  else np.isfinite(result.amplitude)),
         )
         # plot_or_update_heatmap stores the matrix it was handed (the
         # display matrix) in self._matrix_disp; re-pin it explicitly so
@@ -1467,7 +1527,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # axis to [z_floor, z_ceiling] — same window as the colorbar. z_auto
         # leaves it None so the slice auto-fits the (freq-range-clipped) data.
         self._panel_amp_range = (
-            None if z_auto else (float(z_floor), float(z_ceiling)))
+            None if z_auto else (float(vmin), float(vmax)))
         if self._slice_curve is not None and len(result.times):
             self._seed_slice()
         self.layout_geometry_changed.emit()
@@ -1488,29 +1548,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return self._slice.select_time_index(idx)
 
     def _main_view_range(self, axis: str):
-        """Return the main heatmap's current visible range, clamped to data."""
+        """Return the actual applied main viewport, including empty windows."""
         if self._extents is None:
             return None
-        x0, x1, y0, y1 = self._extents
-        try:
-            x_range, y_range = self._plot.vb.viewRange()
-        except Exception:
-            x_range, y_range = (x0, x1), (y0, y1)
-        if axis == 'y':
-            lo, hi = float(y_range[0]), float(y_range[1])
-            data_lo, data_hi = float(y0), float(y1)
-        else:
-            lo, hi = float(x_range[0]), float(x_range[1])
-            data_lo, data_hi = float(x0), float(x1)
-        if hi < lo:
-            lo, hi = hi, lo
-        data_lo, data_hi = sorted((data_lo, data_hi))
-        lo = max(lo, data_lo)
-        hi = min(hi, data_hi)
-        if hi < lo:
-            mid = min(max((lo + hi) / 2.0, data_lo), data_hi)
-            return mid, mid
-        return lo, hi
+        axis_index = 1 if axis == 'y' else 0
+        lo, hi = self._plot.vb.viewRange()[axis_index]
+        return tuple(sorted((float(lo), float(hi))))
 
     @staticmethod
     def _slice_visible_mask(coords, lo: float, hi: float):

@@ -1,4 +1,6 @@
 """Chart options dialog: per-axes appearance and scaling controls."""
+from functools import partial
+
 import numpy as np
 
 from PyQt5.QtWidgets import (
@@ -112,6 +114,11 @@ class ChartOptionsDialog(QDialog):
         self.combo_curve.currentIndexChanged.connect(self._sync_curve_color)
         self.btn_curve_color.clicked.connect(self._choose_curve_color)
         self.reset_fields()
+        self._range_axes_edited = set()
+        for axis in ("x", "y"):
+            getattr(self, f"chk_{axis}_auto").toggled.connect(partial(self._note_range_edit, axis))
+            getattr(self, f"spin_{axis}_min").valueChanged.connect(partial(self._note_range_edit, axis))
+            getattr(self, f"spin_{axis}_max").valueChanged.connect(partial(self._note_range_edit, axis))
         self._geometry_fitted = False
         self._fit_to_available_height()
 
@@ -334,6 +341,13 @@ class ChartOptionsDialog(QDialog):
     def _read_axes(self):
         xlo, xhi = self.handle.get_xlim()
         ylo, yhi = self.handle.get_ylim()
+        read_policy = getattr(self.handle, "analysis_range_policy", None)
+        policy = read_policy() if callable(read_policy) else None
+        if policy is not None:
+            if not policy.get("x_auto", policy.get("autoscale", True)):
+                xlo, xhi = policy.get("x_min", xlo), policy.get("x_max", xhi)
+            if not policy.get("y_auto", True):
+                ylo, yhi = policy.get("y_min", ylo), policy.get("y_max", yhi)
         try:
             grid_visible = bool(self.handle.is_grid_enabled())
         except AttributeError:
@@ -415,10 +429,26 @@ class ChartOptionsDialog(QDialog):
         self.chk_color_auto.setChecked(d["color_auto"])
         self._sync_auto_fields()
 
+    def _note_range_edit(self, axis, _value):
+        self._range_axes_edited.add(axis)
+
     def apply_changes(self):
         # Reset per-apply error collector; repeated clicks must not carry
         # invalid-axis state from a previous attempt.
         self._invalid_axes = []
+        # Applying an unchanged dialog explicitly reapplies its parameter policy.
+        # Appearance-only edits must keep the current browsing viewport.
+        appearance = {
+            "title": self.edit_title.text(),
+            "x_label": self.edit_x_label.text(), "y_label": self.edit_y_label.text(),
+            "x_scale": self.combo_x_scale.currentText(), "y_scale": self.combo_y_scale.currentText(),
+            "grid": self.chk_grid.isChecked(), "legend": self.chk_legend.isChecked(),
+            "curve_index": self.combo_curve.currentIndex(), "curve_color": self.edit_curve_color.text(),
+            "color_min": self.spin_color_min.value(), "color_max": self.spin_color_max.value(),
+            "color_auto": self.chk_color_auto.isChecked(), "cmap": self.combo_cmap.currentText(),
+        }
+        if not self._range_axes_edited and all(value == self._initial[key] for key, value in appearance.items()):
+            self._range_axes_edited.update(("x", "y"))
         self.handle.set_title(self.edit_title.text())
         self._apply_axis(
             axis="x",
@@ -447,6 +477,15 @@ class ChartOptionsDialog(QDialog):
                 handles, labels = zip(*pairs)
                 self.ax.legend(handles, labels)
         self._apply_appearance()
+        apply_policy = getattr(self.handle, "apply_analysis_range_policy", None)
+        if callable(apply_policy) and not self._invalid_axes:
+            policies = {}
+            for axis in self._range_axes_edited:
+                auto = getattr(self, f"chk_{axis}_auto").isChecked()
+                limits = (getattr(self, f"spin_{axis}_min").value(), getattr(self, f"spin_{axis}_max").value())
+                policies[axis] = (auto, limits)
+            if policies:
+                apply_policy(policies)
         self.handle.request_redraw()
         if self._invalid_axes:
             # Log scale + non-positive range: scale switch and label/legend
@@ -463,6 +502,7 @@ class ChartOptionsDialog(QDialog):
             self._focus_first_invalid_axis()
             return
         self._applied = True
+        self._range_axes_edited.clear()
 
     def was_applied(self):
         return self._applied
@@ -479,6 +519,10 @@ class ChartOptionsDialog(QDialog):
             setter_label = self.handle.set_ylabel
 
         setter_scale(scale)
+        read_policy = getattr(self.handle, "analysis_range_policy", None)
+        if callable(read_policy) and read_policy() is not None and axis not in self._range_axes_edited:
+            setter_label(label)
+            return
         if auto:
             self.handle.autoscale(axis=axis)
         else:

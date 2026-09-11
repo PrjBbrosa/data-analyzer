@@ -986,3 +986,47 @@ def test_empty_ultraview_search_escape_bubbles_to_sheet_reject(qapp, qtbot):
     assert len(rejected) == 1
     assert sheet.result() == QDialog.Rejected
     assert not sheet.isVisible()
+
+
+def test_analysis_chart_options_policy_is_read_only_until_axis_apply(qapp, qtbot):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    applied = []
+    canvas.analysis_range_adapter = (lambda: {'x_auto': True, 'y_auto': True}, applied.append)
+    handle.set_xlim(.5, 1.)
+    before = handle.get_xlim()
+    dialog = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dialog)
+    assert dialog.chk_x_auto.isChecked()
+    assert applied == []
+    dialog.reject()
+    assert applied == []
+    dialog = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dialog)
+    dialog.edit_title.setText('only title')
+    dialog.apply_changes()
+    assert applied == []
+    assert handle.get_xlim() == pytest.approx(before)
+    dialog.chk_x_auto.setChecked(False)
+    dialog.spin_x_min.setValue(.2)
+    dialog.spin_x_max.setValue(.8)
+    dialog.apply_changes()
+    assert applied[-1] == {'x': (False, (.2, .8))}
+    dialog.chk_x_auto.setChecked(True)
+    dialog.apply_changes()
+    assert applied[-1]['x'][0] is True
+    assert 'y' not in applied[-1]
+
+
+def test_analysis_chart_options_unchanged_apply_reapplies_parameters(qapp, qtbot):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    canvas, handle = _pg_heatmap_handle(qapp)
+    qtbot.addWidget(canvas)
+    applied = []
+    canvas.analysis_range_adapter = (lambda: {'x_auto': True, 'y_auto': True}, applied.append)
+    dialog = ChartOptionsDialog(None, handle)
+    qtbot.addWidget(dialog)
+    dialog.apply_changes()
+    assert set(applied[-1]) == {'x', 'y'}
+    assert all(policy[0] for policy in applied[-1].values())

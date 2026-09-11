@@ -611,6 +611,7 @@ class ChannelScopeMixin:
         for manager in self.analysis_managers.values():
             for state in manager.views:
                 for pane in state.panes:
+                    before_signal_sources = (tuple(pane.sources), pane.rpm_source)
                     pane.sources = [
                         key for key in pane.sources
                         if (str(key[0]), str(key[1])) not in removed
@@ -630,6 +631,9 @@ class ChannelScopeMixin:
                     ):
                         pane.input_source = None
                         pane.output_source = None
+                    if before_signal_sources != (tuple(pane.sources), pane.rpm_source):
+                        pane.xlim = pane.ylim = None
+                        pane.viewport_origin = {"x": "auto", "y": "auto"}
         refresh_range = getattr(
             self, "_refresh_analysis_time_range_after_source_loss", None,
         )

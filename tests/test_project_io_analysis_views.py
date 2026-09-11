@@ -156,7 +156,7 @@ def test_analysis_view_schema6_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 9
+    assert d["schema"] == 10
     assert d["preset_baseline"] is None
 
     v2 = AnalysisViewState.from_dict(d)
@@ -240,7 +240,7 @@ def test_preset_baseline_round_trips_through_project_json(tmp_path):
     )
     loaded = load_project_from_json(path)
     payload = loaded.analysis_views["fft"]["views"][0]
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
     assert payload["params"]["nfft"] == 4096
     assert payload["preset_baseline"]["kind"] == "fft"
     assert payload["preset_baseline"]["slot"] == 2
@@ -310,7 +310,7 @@ def test_v2_preset_baseline_round_trips_through_project_json(tmp_path):
     )
     loaded = load_project_from_json(path)
     payload = loaded.analysis_views["fft"]["views"][0]
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
     assert payload["preset_baseline"]["version"] == 2
     restored = AnalysisViewState.from_dict(payload)
     assert restored.preset_baseline["source_payload"]["overlap"] == 50
@@ -366,7 +366,7 @@ def test_project_json_time_range_omits_drafts_and_keeps_none_as_full(tmp_path):
     )
     loaded = load_project_from_json(path)
     views = loaded.analysis_views["fft"]["views"]
-    assert views[0]["schema"] == 9
+    assert views[0]["schema"] == 10
     assert views[0]["panes"][0].get("time_range") in (None, [])
     assert views[1]["panes"][0]["time_range"] == [0.25, 0.75]
     for pane in (views[0]["panes"][0], views[1]["panes"][0]):
@@ -430,3 +430,19 @@ def test_collect_dropped_analysis_refs_records_missing_pane_roles():
     assert ("frf", "vid-frf", 0, "input") in dropped
     assert ("frf", "vid-frf", 0, "output") not in dropped
     assert ("order", "vid-ord", 0, "signal") not in dropped
+
+
+def test_viewport_origins_survive_project_json_and_legacy_migration(tmp_path):
+    doc = _doc()
+    panes = [PaneState(xlim=(1., 2.), ylim=(3., 4.), viewport_origin={'x': 'user', 'y': 'home'}),
+             PaneState.from_dict({'xlim': [5., 6.]})]
+    state = AnalysisViewState(name='Saved', tab_color='#ffffff', panes=panes)
+    doc.analysis_views['fft']['views'] = [state.to_dict()]
+    path = tmp_path / 'viewport.tlproj'
+    save_project_to_json(doc, path)
+    loaded = load_project_from_json(path)
+    restored = AnalysisViewState.from_dict(loaded.analysis_views['fft']['views'][0])
+    assert restored.panes[0].viewport_origin == {'x': 'user', 'y': 'home'}
+    assert restored.panes[0].xlim == (1., 2.)
+    assert restored.panes[0].ylim == (3., 4.)
+    assert restored.panes[1].viewport_origin == {'x': 'legacy', 'y': 'auto'}

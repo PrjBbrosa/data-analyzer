@@ -696,6 +696,9 @@ class OrderMixin:
             setter(source)
         canvas.plot_or_update_heatmap(
             matrix=matrix,
+            amplitude_valid_mask=(np.isfinite(result.amplitude.T) & (result.amplitude.T > 0)
+                                  if amp_mode_token == 'amplitude_db'
+                                  else np.isfinite(result.amplitude.T)),
             x_extent=time_axis_display_extent(
                 result.times,
                 params=getattr(result, 'params', None),

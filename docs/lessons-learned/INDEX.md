@@ -243,6 +243,7 @@ lesson by default.
 | [Binary count fields keep official width and remaining-byte bounds](zfd-int32-count-before-allocate.md) | Reading a binary measurement format whose records declare a sample count, especially ZFD / ZFGE2 or any format that also has a historical marker-scan parser. | See lesson |
 | [Hidden Form Fields Keep Payload Round-Trip](hidden-form-fields-keep-payload-roundtrip.md) | Hiding a Batch/Inspector form field because it is no longer applicable to the current method or mode. | See lesson |
 | [Progress Label Must Account For Implicit QLabel Indent](progress-label-implicit-indent-clips-ink.md) | Changing progress label geometry, text budgets, masks, or QSS padding. | See lesson |
+| [Analysis Line Ranges Use The Raw Valid Window](analysis-line-ranges-use-raw-valid-window.md) | Changing automatic FFT or heatmap-slice amplitude ranges, dB reference | See lesson |
 
 ## Selection Rules
 

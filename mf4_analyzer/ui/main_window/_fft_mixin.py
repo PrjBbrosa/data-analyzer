@@ -758,11 +758,11 @@ class FFTMixin:
             x_min = float(display_params.get('x_min', 0.0))
             x_max = float(display_params.get('x_max', 0.0))
             if x_auto:
-                xlim = (0.0, self._fft_auto_xlim(freq, amp))
+                xlim = self._fft_frequency_extent(freq)
             elif x_max > x_min:
                 xlim = (x_min, x_max)
             else:
-                xlim = (0.0, fs / 2)
+                xlim = self._fft_frequency_extent(freq)
             y_auto = bool(display_params.get('y_auto', True))
             y_min = float(display_params.get('y_min', 0.0))
             y_max = float(display_params.get('y_max', 0.0))

@@ -1407,7 +1407,7 @@ def test_serialized_views_omit_drafts_and_signatures(qapp, qtbot, monkeypatch):
     assert "draft" not in pane
     assert "source_signature" not in pane
     assert "needs_review" not in pane
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
 
 
 def test_frf_input_output_swap_is_signature_change(qapp, qtbot, monkeypatch):

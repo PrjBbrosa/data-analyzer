@@ -227,7 +227,7 @@ def test_plot_spectra_single_entry(canvas):
     assert canvas._plot_time.getAxis('bottom').labelText == 'Time (s)'
 
 
-def test_db_auto_y_range_uses_robust_visible_span(qapp):
+def test_db_auto_y_range_preserves_visible_valleys(qapp):
     c = PgLineCanvas()
     try:
         c.resize(640, 480)
@@ -252,15 +252,14 @@ def test_db_auto_y_range_uses_robust_visible_span(qapp):
         qapp.processEvents()
 
         _x, (y0, y1) = c._plot_amp.vb.viewRange()
-        assert y0 > -60.0
-        assert y0 <= -42.0
+        assert y0 == pytest.approx(-114.9)
         assert y1 >= -12.0
         assert y1 < 5.0
     finally:
         c.deleteLater()
 
 
-def test_linear_auto_y_range_still_uses_pyqtgraph_autorange(qapp):
+def test_linear_auto_y_range_uses_raw_explicit_limits(qapp):
     c = PgLineCanvas()
     try:
         c.resize(640, 480)
@@ -274,7 +273,7 @@ def test_linear_auto_y_range_still_uses_pyqtgraph_autorange(qapp):
         qapp.processEvents()
 
         assert c._last_yrange is None
-        assert bool(c._plot_amp.vb.autoRangeEnabled()[1])
+        assert not bool(c._plot_amp.vb.autoRangeEnabled()[1])
     finally:
         c.deleteLater()
 
@@ -546,7 +545,7 @@ def test_ctrl_wheel_zooms_fft_line_canvas_x_only(canvas, qapp):
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0),
         amp_label='Amplitude',
-        title='FFT - vib', y_auto=True, y_min=0.0, y_max=0.0,
+        title='FFT - vib', y_auto=False, y_min=-1.0, y_max=1.0,
     )
     canvas._plot_amp.setXRange(0.0, 500.0, padding=0)
     canvas._plot_amp.setYRange(-1.0, 1.0, padding=0)
@@ -572,7 +571,7 @@ def test_viewport_ctrl_wheel_zooms_fft_line_canvas_x_only(canvas, qapp):
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0),
         amp_label='Amplitude', title='FFT - vib',
-        y_auto=True, y_min=0.0, y_max=0.0,
+        y_auto=False, y_min=-1.0, y_max=1.0,
     )
     vb = canvas._plot_amp.vb
     vb.setXRange(0.0, 500.0, padding=0)
@@ -3790,3 +3789,157 @@ def test_preview_only_view_all_does_not_emit_viewport_intent(canvas, qapp):
     assert len(spy) == 0
     assert canvas.capture_xy_viewport() is None
     assert canvas.restore_xy_viewport((0.0, 1.0), (0.0, 1.0)) is False
+
+
+def test_visible_raw_fft_range_and_full_home(canvas):
+    entry = _entry()
+    entry['freq'] = np.arange(1001.)
+    entry['amp'] = np.where(entry['freq'] <= 200, -110. + entry['freq'] / 10, 0.)
+    entry['amp_for_xlim'] = 10 ** (entry['amp'] / 20)
+    canvas.plot_spectra([entry], xlim=(0., 200.), amp_label='Amplitude (dB)', title='FFT')
+    assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx((-111., -89.))
+    canvas.reset_view_to_data_extents()
+    xr, yr = canvas._plot_amp.vb.viewRange()
+    assert xr[1] >= 1000
+    assert yr == pytest.approx((-115.5, 5.5))
+
+
+def test_visible_fft_peak_trace_rebuild_and_boundary(canvas, monkeypatch):
+    monkeypatch.setattr(canvas, '_spectrum_pixel_width', lambda: 1000)
+    entry = _entry()
+    entry['freq'] = np.linspace(0., 12000., 594001)
+    entry['amp'] = np.ones(594001)
+    entry['amp'][5000] = 7.
+    canvas.plot_spectra([entry], xlim=(0., 12000.), amp_label='Amplitude', title='FFT')
+    curve = canvas._amp_curves[0]
+    canvas.restore_xy_viewport((0., 200.), (0., 8.))
+    x, y = curve.getData()
+    assert np.count_nonzero((x >= 0) & (x <= 200)) > 500
+    assert 7. in y
+    assert canvas._amp_curves[0] is curve
+    assert entry['amp'].size == 594001
+    canvas.restore_xy_viewport((12001., 12002.), (0., 8.))
+    assert curve.getData()[0] is None or len(curve.getData()[0]) == 0
+
+
+def test_fft_rejects_mismatched_raw_arrays(canvas):
+    entry = _entry()
+    entry['amp'] = np.ones(2)
+    with pytest.raises(ValueError):
+        canvas.plot_spectra([entry], xlim=(0., 200.), amp_label='Amplitude', title='FFT')
+
+
+def test_fft_viewport_actions_axes_and_programmatic_refresh(canvas, qapp):
+    from PyQt5.QtTest import QSignalSpy
+    spy = QSignalSpy(canvas.viewport_action_committed)
+    canvas.plot_spectra([_entry()], xlim=(0., 200.), amp_label='Amplitude', title='FFT')
+    canvas.restore_xy_viewport((10., 100.), (0., 2.))
+    qapp.processEvents()
+    assert not spy
+    canvas._begin_view_interaction()
+    canvas._plot_amp.setXRange(20., 80., padding=0)
+    canvas._plot_amp.vb.sigRangeChangedManually.emit([True, False])
+    canvas._end_view_interaction()
+    assert list(spy[-1]) == ['user', ('x',)]
+    canvas.reset_view_to_data_extents()
+    assert list(spy[-1]) == ['home', ('x', 'y')]
+    assert canvas._aa_idle_timer.interval() == 150
+
+
+def test_fft_visible_boundary_interpolation_and_deep_raw_valley(canvas):
+    entry = _entry()
+    entry['freq'] = np.array([0., 10., 20.])
+    entry['amp'] = np.array([-300., -100., 0.])
+    entry['amp_for_xlim'] = 10 ** (entry['amp'] / 20)
+    canvas.plot_spectra([entry], xlim=(2., 4.), amp_label='Amplitude (dB)', title='FFT')
+    assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx((-262., -218.))
+    x, y = canvas._amp_curves[0].getData()
+    assert list(x) == [0., 10.]
+    canvas.reset_view_to_data_extents()
+    assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx((-315., 15.))
+
+
+def test_fft_resize_refresh_preserves_curve_and_raw_fit(canvas, monkeypatch):
+    width = [300]
+    monkeypatch.setattr(canvas, '_spectrum_pixel_width', lambda: width[0])
+    entry = _entry()
+    entry['freq'] = np.linspace(0., 1000., 10001)
+    entry['amp'] = np.ones(10001)
+    entry['amp'][5] = -20.
+    canvas.plot_spectra([entry], xlim=(0., 1000.), amp_label='Amplitude', title='FFT')
+    curve = canvas._amp_curves[0]
+    old_count = len(curve.getData()[0])
+    width[0] = 1000
+    canvas._plot_amp.vb.sigResized.emit(canvas._plot_amp.vb)
+    assert len(curve.getData()[0]) > old_count * 2
+    canvas._fit_y_to_visible_x(canvas._plot_amp)
+    assert canvas._plot_amp.vb.viewRange()[1][0] < -20.
+
+
+@pytest.mark.parametrize('fs', [24000., 48000.])
+def test_fft_window_auto_extent_uses_actual_bins(fs):
+    from types import SimpleNamespace
+    from mf4_analyzer.ui.main_window.window import MainWindow
+    freq = np.linspace(20., fs / 2, 1001)
+    amp = np.zeros_like(freq)
+    amp[1] = 1.
+    amp[-1] = 1e-12
+    assert MainWindow._fft_auto_xlim(freq, amp) == fs / 2
+    assert MainWindow._fft_time_auto_freq_range(
+        SimpleNamespace(frequencies=freq, amplitude=amp[:, None])) == (20., fs / 2)
+
+
+def test_fft_x_zoom_respects_adapter_y_origin(canvas):
+    entry = _entry()
+    entry['freq'] = np.arange(1001.)
+    entry['amp'] = np.where(entry['freq'] <= 200, entry['freq'], 10000.)
+    policy = {'y_auto': True, 'viewport_origin': {'x': 'user', 'y': 'auto'}}
+    canvas.analysis_range_adapter = (lambda: policy, None)
+    canvas.plot_spectra([entry], xlim=(0., 1000.), amp_label='Amplitude', title='FFT')
+    canvas._plot_amp.setXRange(0., 200., padding=0)
+    assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx((-10., 210.))
+    policy['viewport_origin']['y'] = 'user'
+    canvas._plot_amp.setYRange(50., 70., padding=0)
+    canvas._plot_amp.setXRange(0., 100., padding=0)
+    assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx((50., 70.))
+
+
+def test_fft_peak_trace_keeps_nan_frequency_break(canvas):
+    x, y = canvas._spectrum_plot_arrays([0., np.nan, 10.], [0., 50., 100.], xlim=(0., 10.))
+    assert len(x) == 3
+    assert np.isnan(x[1]) and np.isnan(y[1])
+
+
+def test_fft_peak_trace_keeps_neighbors_with_nan_amplitude(canvas, monkeypatch):
+    monkeypatch.setattr(canvas, '_spectrum_pixel_width', lambda: 2)
+    x = np.arange(12.)
+    y = x.copy()
+    y[10] = np.nan
+    xx, yy = canvas._spectrum_plot_arrays(x, y, xlim=(.5, 10.5))
+    assert xx[0] == 0.
+    assert xx[-1] == 11.
+    assert np.isnan(yy[xx == 10.]).all()
+
+
+def test_fft_manual_enabled_mask_does_not_claim_unchanged_y(canvas):
+    from PyQt5.QtTest import QSignalSpy
+    canvas.plot_spectra([_entry()], xlim=(0., 500.), amp_label='Amplitude', title='FFT')
+    spy = QSignalSpy(canvas.viewport_action_committed)
+    canvas._begin_view_interaction()
+    canvas._plot_amp.setXRange(20., 100., padding=0)
+    canvas._plot_amp.vb.sigRangeChangedManually.emit([True, True])
+    assert list(spy[-1]) == ['user', ('x',)]
+    canvas._plot_amp.vb.sigRangeChangedManually.emit([True, True])
+    assert len(spy) == 1
+    canvas._end_view_interaction()
+
+
+def test_fft_restore_x_user_reapplies_visible_auto_y(canvas):
+    entry = _entry()
+    entry['freq'] = np.arange(1001.)
+    entry['amp'] = np.where(entry['freq'] <= 200, entry['freq'], 10000.)
+    canvas.analysis_range_adapter = (lambda: {'y_auto': True, 'viewport_origin': {'x': 'user', 'y': 'auto'}}, None)
+    canvas.plot_spectra([entry], xlim=(0., 1000.), amp_label='Amplitude', title='FFT')
+    full_y = canvas._plot_amp.vb.viewRange()[1]
+    canvas.restore_xy_viewport((0., 200.), full_y)
+    assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx((-10., 210.))

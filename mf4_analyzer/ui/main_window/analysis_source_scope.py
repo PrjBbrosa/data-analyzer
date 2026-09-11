@@ -275,6 +275,7 @@ def detach_analysis_files(
     ]
 
     for pane_idx, pane in enumerate(state.panes):
+        before_signal_sources = (tuple(pane.sources), pane.rpm_source)
         kept_sources = []
         for key in pane.sources:
             if str(key[0]) in removed:
@@ -308,6 +309,10 @@ def detach_analysis_files(
                 )
             pane.input_source = None
             pane.output_source = None
+
+        if before_signal_sources != (tuple(pane.sources), pane.rpm_source):
+            pane.xlim = pane.ylim = None
+            pane.viewport_origin = {"x": "auto", "y": "auto"}
 
     return impact
 

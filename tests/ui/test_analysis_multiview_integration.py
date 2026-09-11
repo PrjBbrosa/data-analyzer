@@ -2782,12 +2782,13 @@ def test_fft_split_link_off_does_not_copy_sibling_viewport(two_file_win, qapp):
     page = win.chart_stack.page_fft
     c1 = page.pane_canvas(1)
     before = c1.capture_xy_viewport()
-    win._on_analysis_compare_toggled("fft", "x_linked", False)
+    page.btn_link.setChecked(False)
     page.pane_canvas(0)._plot_amp.setXRange(15.0, 45.0, padding=0)
     page.pane_canvas(0)._emit_viewport_intent()
     assert state.panes[0].xlim[0] == pytest.approx(15.0)
-    assert state.panes[1].xlim[0] == pytest.approx(before[0][0], abs=1e-3)
-    assert state.panes[1].xlim[1] == pytest.approx(before[0][1], abs=1e-3)
+    assert c1.capture_xy_viewport()[0][0] == pytest.approx(before[0][0], abs=1e-3)
+    assert state.panes[1].viewport_origin["x"] == "auto"
+    assert c1.capture_xy_viewport()[0][1] == pytest.approx(before[0][1], abs=1e-3)
 
 
 def test_fft_time_and_order_viewport_roundtrip(two_file_win, qtbot, qapp):
@@ -2871,3 +2872,83 @@ def test_duplicate_analysis_view_copies_enabled_range_not_draft(two_file_win):
     assert win._analysis_context.time_range.draft_for(
         "fft", enabled_copy.view_id, 0
     ) is None
+
+
+def test_fft_viewport_axis_origin_and_range_restore_action(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode('fft')
+    _check_speed_in_both(win)
+    win.do_fft()
+    page = win.chart_stack.page_fft
+    canvas = page.pane_canvas(0)
+    manager = win.analysis_managers['fft']
+    pane = manager.get(manager.active).panes[0]
+    canvas._plot_amp.setXRange(40., 120., padding=0)
+    canvas._emit_viewport_intent('user', ('x',))
+    assert pane.viewport_origin == {'x': 'user', 'y': 'auto'}
+    assert page.viewport_status_label.text() == 'X 已缩放 · 自动范围暂停'
+    saved_x = pane.xlim
+    visible_auto_y = canvas.capture_xy_viewport()[1]
+    # Programmatic redraw/capture does not promote an automatic Y to user.
+    win._capture_active_analysis_view('fft')
+    assert pane.viewport_origin['y'] == 'auto'
+    win._render_analysis_view_from_cache('fft', manager.get(manager.active))
+    assert canvas.capture_xy_viewport()[0] == pytest.approx(saved_x)
+    assert canvas.capture_xy_viewport()[1] == pytest.approx(visible_auto_y)
+    win._on_analysis_new('fft')
+    win._on_analysis_switch('fft', 0)
+    assert canvas.capture_xy_viewport()[1] == pytest.approx(visible_auto_y)
+    assert pane.viewport_origin == {'x': 'user', 'y': 'auto'}
+    canvas._plot_amp.setYRange(-20., -10., padding=0)
+    canvas._emit_viewport_intent('user', ('y',))
+    win._apply_analysis_range_policy('fft', 0, {'x': (True, (0., 100.))})
+    assert pane.viewport_origin == {'x': 'auto', 'y': 'user'}
+    page.restore_range_button.click()
+    assert pane.viewport_origin == {'x': 'auto', 'y': 'auto'}
+    assert page.viewport_status_label.text() == ''
+
+
+def test_fft_restoration_compute_preserves_user_viewport(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode('fft')
+    _check_speed_in_both(win)
+    win.do_fft()
+    page = win.chart_stack.page_fft
+    canvas = page.pane_canvas(0)
+    mgr = win.analysis_managers['fft']
+    state = mgr.get(mgr.active)
+    canvas._plot_amp.setXRange(40., 120., padding=0)
+    canvas._emit_viewport_intent('user', ('x',))
+    saved = state.panes[0].xlim
+    canvas.full_reset()
+    win.analysis_caches["fft"].clear()
+    win._recompute_restored_fft_view(state.view_id)
+    assert state.panes[0].viewport_origin['x'] == 'user'
+    assert canvas.capture_xy_viewport()[0] == pytest.approx(saved)
+
+
+def test_fft_time_chart_options_updates_frequency_alias_policy(two_file_win, qtbot):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _HeatmapAxisHandle
+    win = two_file_win
+    win.toolbar._set_mode('fft_time')
+    _seed_active_analysis_attachments(win)
+    fid = next(iter(win.files))
+    ctx = win.inspector.fft_time_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fid, 'speed'))
+    ctx.apply_params({'y_auto': False, 'y_min': 10., 'y_max': 60., 'nfft': 512})
+    win.do_fft_time()
+    _drain_fft_time_jobs(win, qtbot)
+    canvas = win.chart_stack.page_fft_time.pane_canvas(0)
+    manager = win.analysis_managers['fft_time']
+    state = manager.get(manager.active)
+    assert state.params['freq_auto'] is False
+    dialog = ChartOptionsDialog(None, _HeatmapAxisHandle(canvas))
+    qtbot.addWidget(dialog)
+    assert not dialog.chk_y_auto.isChecked()
+    dialog.chk_y_auto.setChecked(True)
+    dialog.apply_changes()
+    assert state.params['y_auto'] is True
+    assert state.params['freq_auto'] is True
+    assert state.panes[0].viewport_origin['y'] == 'auto'
+    assert canvas.capture_xy_viewport()[1][1] > 60.

@@ -390,99 +390,128 @@ class AnalysisMixin:
             params.get("y_max"),
         )
 
-    def _clear_analysis_view_viewports(self, state):
-        for pane in getattr(state, "panes", ()) or ():
-            pane.xlim = None
-            pane.ylim = None
+    def _clear_analysis_view_viewports(self, state, axes=("x", "y")):
+        for pane in state.panes:
+            for axis in axes:
+                setattr(pane, axis + "lim", None)
+                pane.viewport_origin[axis] = "auto"
 
     def _wire_analysis_viewport_intent(self, canvas, section, pane_idx):
-        """Connect canvas user-viewport intent once (partial, not lambda)."""
-        signal = getattr(canvas, "viewport_intent_committed", None)
+        """Consume the axis-aware event only; old signal remains public compatibility."""
+        canvas.analysis_range_adapter = (
+            partial(self._analysis_range_policy, section, pane_idx),
+            partial(self._apply_analysis_range_policy, section, pane_idx),
+        )
+        signal = getattr(canvas, "viewport_action_committed", None)
         if signal is None or getattr(canvas, "_viewport_intent_wired", False):
             return
-        signal.connect(
-            partial(self._on_analysis_viewport_intent, section, pane_idx)
-        )
+        signal.connect(partial(self._on_analysis_viewport_intent, section, pane_idx))
         canvas._viewport_intent_wired = True
+        page = self._analysis_page(section)
+        page.bind_range_restore(partial(self._restore_analysis_parameter_ranges, section))
 
-    def _on_analysis_viewport_intent(self, section, pane_idx):
-        if getattr(self, "_applying_analysis_view", False):
+    def _analysis_range_policy(self, section, pane_idx):
+        state = self.analysis_managers[section].get(self.analysis_managers[section].active)
+        return {**state.params, "viewport_origin": dict(state.panes[pane_idx].viewport_origin)}
+
+    def _apply_analysis_range_policy(self, section, pane_idx, policies):
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        patch = {}
+        for axis, (auto, limits) in policies.items():
+            patch[axis + "_auto"] = auto
+            if not auto:
+                patch[axis + "_min"], patch[axis + "_max"] = limits
+        ctx = self._analysis_ctx(section)
+        ctx.apply_params(patch)
+        state.params = dict(ctx.current_params())
+        if self._project_dirty is not None:
+            self._project_dirty.mark_user_mutation()
+        self._clear_analysis_view_viewports(state, tuple(policies))
+        self._render_analysis_view_from_cache(section, state)
+        self._analysis_page(section).refresh_viewport_status()
+
+    def _restore_analysis_parameter_ranges(self, section):
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        page = self._analysis_page(section)
+        focused = page.focused_index()
+        for index, pane in enumerate(state.panes):
+            axes = ("x", "y") if index == focused else (("x",) if state.compare.get("x_linked", True) else ())
+            for axis in axes:
+                setattr(pane, axis + "lim", None)
+                pane.viewport_origin[axis] = "auto"
+        self._render_analysis_view_from_cache(section, state)
+        page.refresh_viewport_status()
+
+    def _on_analysis_viewport_intent(self, section, pane_idx, action="user", axes=("x", "y")):
+        if action not in {"user", "home"} or any(axis not in {"x", "y"} for axis in axes):
+            raise ValueError("Invalid analysis viewport action")
+        if self._applying_analysis_view or self.chart_stack.current_mode() != section:
             return
-        if self.chart_stack.current_mode() != section:
-            return
-        managers = getattr(self, "analysis_managers", None) or {}
-        mgr = managers.get(section)
+        mgr = self.analysis_managers.get(section)
         if mgr is None or not mgr.views:
             return
         state = mgr.get(mgr.active)
-        self._commit_analysis_pane_viewport(section, state, pane_idx)
-        if not bool(state.compare.get("x_linked", True)):
-            return
-        sibling = 1 - int(pane_idx)
+        self._commit_analysis_pane_viewport(section, state, pane_idx, action, axes)
+        if self._project_dirty is not None:
+            self._project_dirty.mark_user_mutation()
         page = self._analysis_page(section)
-        if sibling < page.pane_count() and sibling < len(state.panes):
-            self._commit_analysis_pane_viewport(section, state, sibling)
+        sibling = 1 - int(pane_idx)
+        if "x" in axes and state.compare.get("x_linked", True) and sibling < page.pane_count() and sibling < len(state.panes):
+            self._commit_analysis_pane_viewport(section, state, sibling, action, ("x",))
+        page.refresh_viewport_status()
 
-    def _commit_analysis_pane_viewport(self, section, state, pane_idx):
+    def _commit_analysis_pane_viewport(self, section, state, pane_idx, action=None, axes=("x", "y")):
         page = self._analysis_page(section)
         if pane_idx >= page.pane_count() or pane_idx >= len(state.panes):
             return
-        canvas = page.pane_canvas(pane_idx)
-        capture = getattr(canvas, "capture_xy_viewport", None)
-        if not callable(capture):
-            return
-        captured = capture()
+        captured = page.pane_canvas(pane_idx).capture_xy_viewport()
         if captured is None:
             return
-        xlim, ylim = captured
         pane = state.panes[pane_idx]
-        pane.xlim = xlim
-        pane.ylim = ylim
+        for axis, limits in zip(("x", "y"), captured):
+            if axis in axes:
+                setattr(pane, axis + "lim", limits)
+                if action is not None:
+                    pane.viewport_origin[axis] = action
 
     def _capture_analysis_xy_viewports(self, section, state):
-        if section not in {"fft", "fft_time", "order"}:
-            return
-        page = self._analysis_page(section)
-        for pane_idx in range(min(page.pane_count(), len(state.panes))):
-            self._commit_analysis_pane_viewport(section, state, pane_idx)
+        if section in {"fft", "fft_time", "order"}:
+            page = self._analysis_page(section)
+            for pane_idx in range(min(page.pane_count(), len(state.panes))):
+                self._commit_analysis_pane_viewport(section, state, pane_idx)
 
     def _restore_analysis_pane_viewport(self, section, state, pane_idx, canvas):
         from ...ui_kit.ticks_math import finite_non_degenerate_range, ranges_overlap
 
-        if section not in {"fft", "fft_time", "order"} or canvas is None:
-            return
-        if pane_idx >= len(state.panes):
+        if section not in {"fft", "fft_time", "order"} or canvas is None or pane_idx >= len(state.panes):
             return
         pane = state.panes[pane_idx]
-        restore = getattr(canvas, "restore_xy_viewport", None)
-        extents_fn = getattr(canvas, "data_xy_extents", None)
-        capture = getattr(canvas, "capture_xy_viewport", None)
-        if not callable(restore):
+        current = canvas.capture_xy_viewport()
+        if current is None:
             return
-        data = extents_fn() if callable(extents_fn) else None
-        data_x = data[0] if data else None
-        data_y = data[1] if data else None
-        saved_x = pane.xlim
-        saved_y = pane.ylim
-        try:
-            x_ok = (
-                saved_x is not None
-                and finite_non_degenerate_range(saved_x[0], saved_x[1]) is not None
-                and (data_x is None or ranges_overlap(saved_x, data_x))
-            )
-            y_ok = (
-                saved_y is not None
-                and finite_non_degenerate_range(saved_y[0], saved_y[1]) is not None
-                and (data_y is None or ranges_overlap(saved_y, data_y))
-            )
-        except (TypeError, ValueError, IndexError):
-            x_ok = y_ok = False
-        if x_ok and y_ok and restore(saved_x, saved_y):
-            return
-        if callable(capture):
-            captured = capture()
-            if captured is not None:
-                pane.xlim, pane.ylim = captured
+        data = canvas.data_xy_extents()
+        target = list(current)
+        changed = False
+        for index, axis in enumerate(("x", "y")):
+            if pane.viewport_origin[axis] == "auto":
+                continue
+            saved = getattr(pane, axis + "lim")
+            extent = data[index] if data else None
+            try:
+                valid = saved is not None and finite_non_degenerate_range(*saved) is not None and (extent is None or ranges_overlap(saved, extent))
+            except (TypeError, ValueError, IndexError):
+                valid = False
+            if valid:
+                target[index] = saved
+                changed = True
+            else:
+                setattr(pane, axis + "lim", None)
+                pane.viewport_origin[axis] = "auto"
+        if changed:
+            canvas.restore_xy_viewport(*target)
+        self._analysis_page(section).refresh_viewport_status()
 
     def _restore_analysis_canvas_viewport(self, section, canvas):
         managers = getattr(self, "analysis_managers", None) or {}
@@ -638,10 +667,9 @@ class AnalysisMixin:
             return
         if (
             section in {'fft', 'fft_time', 'order'}
-            and self._analysis_xy_fingerprint(before_params)
-            != self._analysis_xy_fingerprint(state.params)
+            and self._analysis_changed_range_axes(before_params, state.params, section)
         ):
-            self._clear_analysis_view_viewports(state)
+            self._clear_analysis_view_viewports(state, self._analysis_changed_range_axes(before_params, state.params, section))
             self._render_analysis_view_from_cache(section, state)
 
     def _on_analysis_compute_params_changed(self, section, _params):
@@ -726,23 +754,23 @@ class AnalysisMixin:
         if callable(marker):
             marker()
 
+    def _analysis_changed_range_axes(self, before, after, section="fft"):
+        old, new = self._analysis_xy_fingerprint(before), self._analysis_xy_fingerprint(after)
+        axes = [axis for axis, start in (("x", 0), ("y", 3)) if old[start:start+3] != new[start:start+3]]
+        if section == "fft" and any(before.get(key) != after.get(key) for key in ("amp_y", "amplitude_mode", "db_reference", "db_reference_mode", "unit", "unit_mode")) and "y" not in axes:
+            axes.append("y")
+        return tuple(axes)
+
     def _on_analysis_display_params_changed(self, section, _params):
-        """Record a display edit and redraw only the visible active View."""
-        xy_changed = False
-        if (
-            section in {'fft', 'fft_time', 'order'}
-            and not getattr(self, '_applying_analysis_view', False)
-            and self.chart_stack.current_mode() == section
-        ):
-            mgr = (getattr(self, 'analysis_managers', None) or {}).get(section)
+        """Clear only changed axis policy; presentation redraw retains intent."""
+        axes = ()
+        if section in {"fft", "fft_time", "order"} and not self._applying_analysis_view and self.chart_stack.current_mode() == section:
+            mgr = self.analysis_managers.get(section)
             if mgr is not None and mgr.views:
-                xy_changed = (
-                    self._analysis_xy_fingerprint(mgr.get(mgr.active).params)
-                    != self._analysis_xy_fingerprint(_params)
-                )
+                axes = self._analysis_changed_range_axes(mgr.get(mgr.active).params, _params, section)
         state = self._sync_active_analysis_params(section)
-        if state is not None and xy_changed:
-            self._clear_analysis_view_viewports(state)
+        if state is not None and axes:
+            self._clear_analysis_view_viewports(state, axes)
         if state is not None and self.chart_stack.current_mode() == section:
             self._render_analysis_view_from_cache(section, state)
 

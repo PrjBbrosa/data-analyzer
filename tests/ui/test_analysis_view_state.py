@@ -45,7 +45,7 @@ def test_analysis_view_default_attachment_is_explicitly_empty():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert v.attached_file_ids == []
     payload = v.to_dict()
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
     assert payload["attached_file_ids"] == []
     assert payload["preset_baseline"] is None
     restored = AnalysisViewState.from_dict(payload)
@@ -147,7 +147,7 @@ def test_none_time_range_round_trip_stays_full():
     restored = PaneState.from_dict(payload)
     assert restored.time_range is None
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
-    assert view.to_dict()["schema"] == 9
+    assert view.to_dict()["schema"] == 10
     assert AnalysisViewState.from_dict(view.to_dict()).panes[0].time_range is None
 
 
@@ -252,7 +252,7 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
 
     payload = view.to_dict()
 
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
     assert payload["attached_file_ids"] == []
     assert payload["preset_baseline"] is None
     legacy = AnalysisViewState.from_dict({
@@ -336,7 +336,7 @@ def test_preset_baseline_round_trip_preserves_fields_and_deep_copies_params():
     view.preset_baseline = _baseline(params=original_params)
 
     payload = view.to_dict()
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
     assert payload["preset_baseline"]["kind"] == "fft"
     assert payload["preset_baseline"]["slot"] == 2
     assert payload["preset_baseline"]["display_name"] == "均衡"
@@ -435,7 +435,7 @@ def test_v2_preset_baseline_round_trip_keeps_source_payload_and_deep_copies():
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
     view.preset_baseline = original
     payload = view.to_dict()
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
     assert payload["preset_baseline"]["version"] == 2
     assert payload["preset_baseline"]["source_payload"]["overlap"] == 50
     payload["preset_baseline"]["source_payload"]["overlap"] = 1
@@ -472,3 +472,49 @@ def test_duplicate_copies_v2_source_payload_independently(qapp):
     assert copied.preset_baseline["source_payload"] is not original.preset_baseline["source_payload"]
     copied.preset_baseline["source_payload"]["overlap"] = 9
     assert original.preset_baseline["source_payload"]["overlap"] == 50
+
+
+def test_viewport_origin_defaults_roundtrip_and_legacy(caplog):
+    pane = PaneState()
+    assert pane.viewport_origin == {'x': 'auto', 'y': 'auto'}
+    pane.xlim = (1., 2.)
+    pane.viewport_origin['x'] = 'user'
+    assert PaneState.from_dict(pane.to_dict()).viewport_origin == pane.viewport_origin
+    legacy = PaneState.from_dict({'xlim': [1, 2], 'ylim': [3, 3]})
+    assert legacy.viewport_origin == {'x': 'legacy', 'y': 'auto'}
+    with caplog.at_level(logging.WARNING):
+        invalid = PaneState.from_dict({'viewport_origin': {'x': 'bogus', 'y': 'home'}})
+    assert invalid.viewport_origin == {'x': 'auto', 'y': 'home'}
+    assert 'viewport_origin' in caplog.text
+
+
+@pytest.mark.parametrize('origins,saved,expected,expected_origins', [
+    ({'x': 'auto', 'y': 'auto'}, ((10, 20), (-2, 2)), ((0, 1000), (-10, 10)), {'x': 'auto', 'y': 'auto'}),
+    ({'x': 'user', 'y': 'user'}, ((10, 20), (200, 300)), ((10, 20), (-10, 10)), {'x': 'user', 'y': 'auto'}),
+    ({'x': 'legacy', 'y': 'home'}, ((10, 20), (-2, 2)), ((10, 20), (-2, 2)), {'x': 'legacy', 'y': 'home'}),
+])
+def test_viewport_restore_independent_axes(origins, saved, expected, expected_origins):
+    from types import SimpleNamespace
+    from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
+    pane = PaneState(xlim=saved[0], ylim=saved[1], viewport_origin=origins.copy())
+    state = AnalysisViewState(name="View", tab_color="#ffffff", panes=[pane])
+    class Canvas:
+        limits = ((0, 1000), (-10, 10))
+        def capture_xy_viewport(self): return self.limits
+        def data_xy_extents(self): return ((0, 1000), (-10, 10))
+        def restore_xy_viewport(self, x, y): self.limits = (x, y); return True
+    canvas = Canvas()
+    owner = SimpleNamespace(_analysis_page=lambda section: SimpleNamespace(refresh_viewport_status=lambda: None))
+    AnalysisMixin._restore_analysis_pane_viewport(owner, 'fft', state, 0, canvas)
+    assert canvas.limits == expected
+    assert pane.viewport_origin == expected_origins
+
+
+def test_reference_change_invalidates_only_fft_amplitude_axis():
+    from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
+    owner = AnalysisMixin()
+    before = {'x_auto': True, 'y_auto': True, 'db_reference': 1., 'amp_y': 'Amplitude dB'}
+    after = {**before, 'db_reference': 2.}
+    assert owner._analysis_changed_range_axes(before, after, 'fft') == ('y',)
+    assert owner._analysis_changed_range_axes(before, after, 'fft_time') == ()
+    assert owner._analysis_changed_range_axes(before, after, 'order') == ()

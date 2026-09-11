@@ -31,6 +31,8 @@ import pyqtgraph as pg
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
+from mf4_analyzer.signal.display_ranges import line_amplitude_limits, visible_line_values
+
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
@@ -38,7 +40,6 @@ from mf4_analyzer.ui._axis_handle import (
 from mf4_analyzer.ui.pg_canvas._backref import _CanvasBackref
 from mf4_analyzer.ui.pg_canvas.analysis_axes import (
     _hide_plot_title,
-    _slice_amp_bounds,
 )
 
 
@@ -190,22 +191,23 @@ class _SliceStrip(_CanvasBackref):
 
     @staticmethod
     def _slice_visible_mask(coords, lo: float, hi: float):
-        """Mask coordinate centers inside a visible range, with nearest fallback."""
+        """Keep visible centers and adjacent endpoints of crossing segments."""
         arr = np.asarray(coords, dtype=float)
         finite = np.isfinite(arr)
-        if arr.size == 0:
-            return finite
         lo, hi = sorted((float(lo), float(hi)))
         mask = finite & (arr >= lo) & (arr <= hi)
-        if np.any(mask):
-            return mask
-        valid = np.flatnonzero(finite)
-        if valid.size == 0:
-            return mask
-        target = (lo + hi) / 2.0
-        nearest = valid[int(np.argmin(np.abs(arr[valid] - target)))]
-        mask = np.zeros(arr.shape, dtype=bool)
-        mask[nearest] = True
+        adjacent = finite[:-1] & finite[1:]
+        for boundary in (lo, hi):
+            crossing = adjacent & (((arr[:-1] < boundary) & (arr[1:] > boundary))
+                                   | ((arr[:-1] > boundary) & (arr[1:] < boundary)))
+            indices = np.flatnonzero(crossing)
+            mask[indices] = True
+            mask[indices + 1] = True
+        selected = np.flatnonzero(mask)
+        if selected.size:
+            # Keep intervening NaN coordinates as drawing breaks. Removing
+            # them would connect physically disconnected finite samples.
+            mask[selected[0]:selected[-1] + 1] = True
         return mask
 
     def _set_slice_x_range(self, lo: float, hi: float, values) -> None:
@@ -223,21 +225,15 @@ class _SliceStrip(_CanvasBackref):
             self._slice_plot.setXRange(center - pad, center + pad, padding=0)
 
     def _slice_axis_range(self, panel_range, view_axis: str, coords):
-        """Range for the slice's horizontal axis.
-
-        Prefer the inspector-driven ``panel_range`` (manual min/max) so the
-        slice axis tracks the panel rather than the live heatmap pan/zoom.
-        When the panel axis is auto (``panel_range is None``) fall back to the
-        live heatmap view range, then to the data extent."""
-        if panel_range is not None:
-            lo, hi = float(panel_range[0]), float(panel_range[1])
-            if hi != lo:
-                return sorted((lo, hi))
+        """Follow the applied main viewport, including zoom and Home."""
         vr = self._main_view_range(view_axis)
-        if vr is None:
-            arr = np.asarray(coords, dtype=float)
-            return float(arr[0]), float(arr[-1])
-        return vr
+        if vr is not None:
+            return vr
+        if panel_range is not None:
+            return tuple(sorted(map(float, panel_range)))
+        arr = np.asarray(coords, dtype=float)
+        finite = arr[np.isfinite(arr)]
+        return (float(finite.min()), float(finite.max())) if finite.size else (0., 1.)
 
     def _apply_slice_amp_range(self, values) -> None:
         """Set the slice's amplitude (vertical) axis.
@@ -257,51 +253,31 @@ class _SliceStrip(_CanvasBackref):
                 vb.enableAutoRange(axis=vb.YAxis, enable=False)
                 self._slice_plot.setYRange(lo, hi, padding=0)
                 return
-        # Auto: fit the visible curve data, ignoring numerically-dead dB-floor
-        # bins (the 0 Hz DC artifact) so they can't crush the real signal
-        # against the top (fall back to pg auto-range when there is no spread).
-        bounds = _slice_amp_bounds(values)
-        if bounds is not None:
-            lo, hi = bounds
-            pad = (hi - lo) * 0.05
-            vb.enableAutoRange(axis=vb.YAxis, enable=False)
-            self._slice_plot.setYRange(lo - pad, hi + pad, padding=0)
-            return
-        vb.enableAutoRange(axis=vb.YAxis, enable=True)
+        bounds = line_amplitude_limits(values, amplitude_mode=self._amplitude_mode)
+        # Explicit empty view: never inherit a previous curve's range.
+        lo, hi = bounds if bounds is not None else (0., 1.)
+        vb.enableAutoRange(axis=vb.YAxis, enable=False)
+        self._slice_plot.setYRange(lo, hi, padding=0)
+
+    def _raw_slice_arrays(self):
+        xc, yc = self._slice_coords()
+        if self._slice_dir == 'y':
+            idx = self._slice_y_idx
+            return xc, self._matrix_disp[idx, :], self._matrix_amp_valid[idx, :]
+        idx = self._slice_x_idx
+        return yc, self._matrix_disp[:, idx], self._matrix_amp_valid[:, idx]
 
     def fit_y_to_visible_x(self) -> None:
-        """Right-click 「Y适应」: keep the slice X window, fit amplitude Y.
-
-        Uses the already-drawn slice curve, not the colorbar window. Manual
-        z-floor/z-ceiling still owns the map; this only reframes the 1D
-        readout. Dead dB-floor bins stay excluded via ``_slice_amp_bounds``.
-        """
-        if self._slice_plot is None or self._slice_curve is None:
+        """Fit the raw slice in the visible window, independently of color Z."""
+        if self._slice_plot is None or self._matrix_disp is None:
             return
-        try:
-            xs, ys = self._slice_curve.getData()
-        except Exception:
-            return
-        if xs is None or ys is None or len(xs) == 0:
-            return
-        xs = np.asarray(xs)
-        ys = np.asarray(ys)
-        try:
-            (x0, x1), _ = self._slice_plot.vb.viewRange()
-        except Exception:
-            return
-        mask = (xs >= x0) & (xs <= x1) & np.isfinite(ys)
-        if not np.any(mask):
-            return
-        bounds = _slice_amp_bounds(ys[mask])
-        if bounds is None:
-            return
-        lo, hi = bounds
-        pad = (hi - lo) * 0.05
+        xs, ys, valid = self._raw_slice_arrays()
+        xlim = self._slice_plot.vb.viewRange()[0]
+        values = visible_line_values(xs, ys, xlim, valid_mask=valid)
+        bounds = line_amplitude_limits(values, amplitude_mode=self._amplitude_mode)
         self.disable_interactive_quality()
-        vb = self._slice_plot.vb
-        vb.enableAutoRange(axis=vb.YAxis, enable=False)
-        self._slice_plot.setYRange(lo - pad, hi + pad, padding=0)
+        self._slice_plot.vb.enableAutoRange(axis=self._slice_plot.vb.YAxis, enable=False)
+        self._slice_plot.setYRange(*(bounds or (0., 1.)), padding=0)
         self.schedule_idle_quality()
 
     def _apply_slice(self, *, refresh_chrome: bool = True) -> None:
@@ -310,7 +286,9 @@ class _SliceStrip(_CanvasBackref):
         if m is None or self._slice_curve is None:
             return
         xc, yc = self._slice_coords()
-        if xc is None:
+        if xc is None or m.size == 0:
+            self._slice_curve.clear()
+            self._apply_slice_amp_range([])
             return
         nrows, ncols = m.shape[0], m.shape[1]
         if self._slice_dir == 'y':
@@ -323,7 +301,8 @@ class _SliceStrip(_CanvasBackref):
             mask = self._slice_visible_mask(xc, lo, hi)
             self._slice_curve.setData(xc[mask], m[idx, :][mask])
             self._set_slice_x_range(lo, hi, xc[mask])
-            self._apply_slice_amp_range(m[idx, :][mask])
+            self._apply_slice_amp_range(visible_line_values(
+                xc, m[idx, :], (lo, hi), valid_mask=self._matrix_amp_valid[idx, :]))
             if refresh_chrome:
                 self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
                 self._slice_marker_updating = True
@@ -343,7 +322,8 @@ class _SliceStrip(_CanvasBackref):
             mask = self._slice_visible_mask(yc, lo, hi)
             self._slice_curve.setData(yc[mask], m[:, idx][mask])
             self._set_slice_x_range(lo, hi, yc[mask])
-            self._apply_slice_amp_range(m[:, idx][mask])
+            self._apply_slice_amp_range(visible_line_values(
+                yc, m[:, idx], (lo, hi), valid_mask=self._matrix_amp_valid[:, idx]))
             if refresh_chrome:
                 self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
                 self._slice_marker_updating = True
