@@ -51,6 +51,10 @@ class ComputeProgressWidget(QWidget):
         self.label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.label.setMinimumWidth(self._MIN_LABEL_WIDTH)
         self.label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        # QSS padding gives QLabel a nonzero frameWidth. Its default indent=-1
+        # then shifts text by half an 'x', outside our measured text budget and
+        # into the mask at the trailing '%'. Layout/QSS already own spacing.
+        self.label.setIndent(0)
 
         self.bar = QProgressBar(self)
         self.bar.setObjectName("computeProgressBar")
