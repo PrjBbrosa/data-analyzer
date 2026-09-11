@@ -10,11 +10,13 @@ choice + comma-separated positions).
 from __future__ import annotations
 
 import pytest
-from PyQt5.QtTest import QSignalSpy
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtTest import QSignalSpy, QTest
 
 from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
 from mf4_analyzer.ui.drawers.batch.slice_panel import SlicePanel
 from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
+from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
 
 
 def _make_panel(qtbot) -> SlicePanel:
@@ -30,6 +32,31 @@ def _make_panel(qtbot) -> SlicePanel:
 def test_slice_panel_main_switch_is_a_pill_switch(qtbot):
     panel = _make_panel(qtbot)
     assert isinstance(panel._enable_switch, PillSwitch)
+    assert panel._enable_switch.motion_policy() == POLICY_LIGHT
+
+
+def test_slice_user_click_animates_and_apply_params_snaps(qtbot, qapp):
+    panel = _make_panel(qtbot)
+    panel.show()
+    qapp.processEvents()
+    switch = panel._enable_switch
+    toggled = QSignalSpy(switch.toggled)
+    changed = QSignalSpy(panel.changed)
+
+    QTest.mouseClick(switch, Qt.LeftButton, Qt.NoModifier, QPoint(22, 12))
+    assert switch.isChecked()
+    assert list(toggled) == [[True]]
+    assert len(changed) == 1
+    driver = switch._value_driver
+    assert driver is not None and driver.is_active()
+
+    panel.apply_params({
+        "slice": {"enabled": True, "axis": "time", "positions": [5.0, 15.0]},
+    })
+    assert switch.isChecked()
+    assert not driver.is_active()
+    assert panel.get_params()["slice"]["positions"] == [5.0, 15.0]
+    assert len(changed) == 2
 
 
 def test_slice_panel_settings_collapse_when_switch_is_off(qtbot):

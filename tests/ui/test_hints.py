@@ -795,6 +795,36 @@ def test_wwt_import_hint_mentions_ordinary_view_creation_only():
     assert "全部公式" not in joined
 
 
+def test_channel_filter_restore_discovery_stays_in_budget():
+    hint = next(
+        item for item in hints.all_hints() if item.id == "channel.filter_restore"
+    )
+    assert hint.surface == "discovery"
+    assert hint.ship == "now"
+    assert "清除筛选" in hint.text
+    assert "展开" in hint.text and "滚动" in hint.text
+    assert "勾选" in hint.text
+    assert "显隐" in hint.text
+    assert "恢复勾选" not in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
+def test_batch_result_details_discovery_stays_in_budget():
+    hint = next(
+        item for item in hints.all_hints() if item.id == "batch.result_details"
+    )
+    assert hint.surface == "discovery"
+    assert hint.ship == "now"
+    assert hint.retire_on == "batch_open"
+    assert "查看详情" in hint.text
+    assert "Esc" in hint.text
+    assert "收起" in hint.text
+    assert "检查" in hint.text
+    assert "重试" not in hint.text
+    assert "导出" not in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
 def test_record_curve_eye_hint_points_at_owner_file_not_inspector():
     hint = next(
         item for item in hints.all_hints() if item.id == "time.record_curve_eye"

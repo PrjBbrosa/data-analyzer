@@ -815,6 +815,9 @@ class AnalysisMixin:
 
     def _project_analysis_attachments(self, section, state):
         """Project one analysis View's file range onto the shared navigator."""
+        invalidate = getattr(self.navigator, "invalidate_channel_filter_context", None)
+        if callable(invalidate):
+            invalidate()
         attached = [
             fid for fid in state.attached_file_ids if fid in self.files
         ]

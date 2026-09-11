@@ -1124,9 +1124,43 @@ def test_batch_sheet_respects_1080x760_with_production_qss(
         assert sheet._footer_host.height() == 50
         assert sheet._footer_progress.isVisible()
         assert sheet._footer_status.isVisible()
+        assert sheet._btn_result_details.text() == "查看详情"
+        assert not sheet._btn_result_details.isEnabled()
     finally:
         sheet.close()
         qapp.setStyleSheet(old_stylesheet)
+
+
+def test_finished_result_enables_details_without_restoring_task_list(
+    qtbot, monkeypatch,
+):
+    from mf4_analyzer.batch import BatchItemResult, BatchRunResult
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    monkeypatch.setattr(
+        sheet_module.QMessageBox, "information", lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        sheet_module.QMessageBox, "warning", lambda *a, **k: None,
+    )
+    sheet._on_runner_finished_with_result(BatchRunResult(
+        status="partial",
+        items=[BatchItemResult(
+            method="fft", file_id=0, file_name="a.mf4", signal="sig",
+            status="failed", message="disk full", task_id="t1",
+        )],
+    ))
+    sheet._on_thread_finished()
+    assert sheet._btn_result_details.isEnabled()
+    assert not sheet._task_list.isVisible()
+    assert sheet.layout().indexOf(sheet._task_list) == -1
+    assert sheet._footer_host.height() == 50
+    sheet._btn_result_details.click()
+    assert sheet._result_details.isVisibleTo(sheet)
+    assert "disk full" in sheet._result_details._message.text()
 
 
 def test_sheet_migrates_legacy_outputs_to_the_compact_contract(qtbot):

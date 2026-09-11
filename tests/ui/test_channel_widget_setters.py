@@ -142,3 +142,24 @@ def test_file_navigator_delegates_channel_state(qtbot):
         ("f1", "rpm")
     ]
     assert navigator.get_channel_colors()[("f1", "spd")] == "#123456"
+
+
+def test_file_navigator_invalidate_channel_filter_context_is_silent(qtbot):
+    navigator = FileNavigator()
+    qtbot.addWidget(navigator)
+    navigator.add_file("f1", _FakeFileData())
+    navigator.set_attached_file_ids(["f1"])
+    navigator.set_checked_channels([("f1", "rpm")])
+    navigator.channel_list.search.setText("rpm")
+    fired = []
+    navigator.channels_changed.connect(lambda: fired.append(1))
+    navigator.visibility_changed.connect(lambda *_args: fired.append(2))
+    generation = navigator.channel_list._filter_generation
+
+    navigator.invalidate_channel_filter_context()
+
+    assert navigator.channel_list._filter_snapshot is None
+    assert navigator.channel_list._filter_generation == generation + 1
+    assert navigator.channel_list.search.text() == "rpm"
+    assert _checked_pairs(navigator) == [("f1", "rpm")]
+    assert fired == []

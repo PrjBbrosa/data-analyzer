@@ -780,6 +780,91 @@ QProgressBar#BatchFooterProgress::chunk {
     border-radius: 3px;
     background-color: {{CONTROL_ACCENT}};
 }
+QWidget#BatchCompactFooter QPushButton#BatchResultDetailsEntry {
+    min-height: 0;
+    min-width: 0;
+    padding: 0 4px;
+    border: none;
+    background-color: transparent;
+    color: #086dda;
+    font-size: 12px;
+    font-weight: 500;
+}
+QWidget#BatchCompactFooter QPushButton#BatchResultDetailsEntry:hover {
+    color: {{CONTROL_ACCENT}};
+    background-color: transparent;
+}
+QWidget#BatchCompactFooter QPushButton#BatchResultDetailsEntry:disabled {
+    color: #94a3b8;
+    background-color: transparent;
+}
+QWidget#BatchResultDetails {
+    background-color: #ffffff;
+    border-top-width: 1px;
+    border-top-style: solid;
+    border-top-color: #bccfe8;
+}
+QLabel#BatchResultDetailsTitle {
+    color: #1e293b;
+    font-size: 13px;
+    font-weight: 700;
+    background-color: transparent;
+}
+QLabel#BatchResultDetailsCaption {
+    color: #7890ab;
+    font-size: 11px;
+    background-color: transparent;
+}
+QListWidget#BatchResultDetailsList {
+    background-color: #ffffff;
+    color: #111827;
+    outline: none;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #dce7f5;
+    border-radius: 6px;
+    selection-background-color: #e9f2ff;
+    selection-color: #111827;
+}
+QListWidget#BatchResultDetailsList::item {
+    padding: 8px;
+    color: #111827;
+    background-color: transparent;
+}
+QListWidget#BatchResultDetailsList::item:hover,
+QListWidget#BatchResultDetailsList::item:selected,
+QListWidget#BatchResultDetailsList::item:selected:active {
+    background-color: #e9f2ff;
+    color: #225b9c;
+    border-radius: 4px;
+}
+QLabel#BatchResultDetailsStatus {
+    font-size: 12px;
+    font-weight: 700;
+    background-color: transparent;
+}
+QLabel#BatchResultDetailsStatus[tone="error"] { color: #a44541; }
+QLabel#BatchResultDetailsStatus[tone="skip"] { color: #94641b; }
+QLabel#BatchResultDetailsStatus[tone="success"] { color: #168065; }
+QLabel#BatchResultDetailsMessage,
+QLabel#BatchResultDetailsWarnings,
+QLabel#BatchResultDetailsSource,
+QLabel#BatchResultDetailsIO,
+QLabel#BatchResultDetailsFrfReason {
+    color: #334155;
+    font-size: 11px;
+    background-color: transparent;
+}
+QLabel#BatchResultDetailsMessage[tone="error"] { color: #a44541; }
+QLabel#BatchResultDetailsMessage[tone="skip"] { color: #94641b; }
+QLabel#BatchResultDetailsMessage[tone="success"] { color: #168065; }
+QLabel#BatchResultDetailsWarnings,
+QLabel#BatchResultDetailsFrfReason {
+    color: #94641b;
+}
+QWidget#BatchResultDetailsActions {
+    background-color: transparent;
+}
 
 QCheckBox::indicator {
     width: 16px;
@@ -3700,6 +3785,12 @@ QWidget#viewTabBar QTabBar#viewTabs::tab:selected {
     border-color: #a7bfea;
     border-bottom: 2px solid #2563eb;
     color: #173262;
+}
+
+/* Light motion paints the 2px marker. Keep selected thickness so hit
+ * geometry is unchanged; hide the static blue so the two never stack. */
+QWidget#viewTabBar QTabBar#viewTabs[paintedMarker="true"]::tab:selected {
+    border-bottom: 2px solid #e8f0ff;
 }
 
 /* Inline rename editor — floats over the tab on double-click. It MUST look

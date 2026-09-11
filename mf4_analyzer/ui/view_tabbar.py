@@ -527,6 +527,7 @@ class ViewTabBar(QWidget):
         self._overflow_popup_closed_msecs = 0
         self._tab_spacer_icon = _tab_spacer_icon()
         self._motion_policy = POLICY_OFF
+        self._user_marker_view_id = None
         self._marker_rect = QRectF()
         self._marker_view_id = ""
         self._marker_layout_key = None
@@ -561,6 +562,7 @@ class ViewTabBar(QWidget):
         # (_set_density flips it); the roomy box lives in the unqualified
         # ::tab rule, so "roomy" simply matches nothing extra.
         self._tabs.setProperty("density", "roomy")
+        self._tabs.setProperty("paintedMarker", "false")
         self._tabs.currentChanged.connect(self._tabs.current_index_changed)
         self._tabs.currentChanged.connect(self._on_current_changed)
         self._tabs.tabBarDoubleClicked.connect(self._on_double_clicked)
@@ -746,7 +748,38 @@ class ViewTabBar(QWidget):
 
     def set_motion_policy(self, policy: MotionPolicy | None) -> None:
         self._motion_policy = resolve_policy(policy)
+        self._sync_painted_marker_chrome()
         self._relocate_marker(interpolate=False)
+
+    def _sync_painted_marker_chrome(self) -> None:
+        flag = "true" if self._motion_policy.interpolates() else "false"
+        if self._tabs.property("paintedMarker") == flag:
+            return
+        self._tabs.setProperty("paintedMarker", flag)
+        style = self._tabs.style()
+        style.unpolish(self._tabs)
+        style.polish(self._tabs)
+        self._tabs.update()
+
+    def _arm_user_marker_target(self, view_id: str) -> None:
+        ident = str(view_id or "")
+        self._user_marker_view_id = ident or None
+
+    def _clear_user_marker_target(self) -> None:
+        self._user_marker_view_id = None
+
+    def _consume_user_marker_target(self, confirmed_view_id: str) -> bool:
+        target = self._user_marker_view_id
+        self._user_marker_view_id = None
+        confirmed = str(confirmed_view_id or "")
+        return bool(target) and bool(confirmed) and target == confirmed
+
+    def _emit_user_switch(self, view_id: str, idx: int) -> None:
+        self._arm_user_marker_target(view_id)
+        try:
+            self.switch_requested.emit(idx)
+        finally:
+            self._clear_user_marker_target()
 
     def _confirmed_active_view_id(self) -> str:
         return self._view_id_at(int(self._manager.active))
@@ -1169,7 +1202,7 @@ class ViewTabBar(QWidget):
         idx = self._index_for_view_id(view_id)
         if idx < 0 or idx == self._tabs.currentIndex():
             return
-        self.switch_requested.emit(idx)
+        self._emit_user_switch(str(view_id), idx)
 
     def _on_overflow_row_close(self, view_id: str) -> None:
         idx = self._index_for_view_id(view_id)
@@ -1229,19 +1262,24 @@ class ViewTabBar(QWidget):
         self._relocate_marker(interpolate=False)
 
     def _sync_active(self, idx: int) -> None:
-        self._secondary_focused = False
-        self._suppress = True
+        confirmed = self._confirmed_active_view_id()
+        interpolate = self._consume_user_marker_target(confirmed)
         try:
-            self._set_current_index(idx)
+            self._secondary_focused = False
+            self._suppress = True
+            try:
+                self._set_current_index(idx)
+            finally:
+                self._suppress = False
+            self._update_split_chip()
+            # The View just made active may be retired into the » menu (e.g. it
+            # was picked FROM that menu). Re-fitting pulls it back onto the
+            # strip, since _retire_tail_tabs never hides the current tab, and
+            # pushes some other tail tab into the menu in its place.
+            self._sync_tabbar_width()
+            self._relocate_marker(interpolate=interpolate)
         finally:
-            self._suppress = False
-        self._update_split_chip()
-        # The View just made active may be retired into the » menu (e.g. it was
-        # picked FROM that menu). Re-fitting pulls it back onto the strip, since
-        # _retire_tail_tabs never hides the current tab, and pushes some other
-        # tail tab into the menu in its place.
-        self._sync_tabbar_width()
-        self._relocate_marker(interpolate=True)
+            self._clear_user_marker_target()
 
     def set_split_focus(self, secondary_focused: bool) -> None:
         self._secondary_focused = bool(secondary_focused)
@@ -1310,7 +1348,7 @@ class ViewTabBar(QWidget):
         if self._suppress_switch_after_reorder:
             self._suppress_switch_after_reorder = False
             return
-        self.switch_requested.emit(idx)
+        self._emit_user_switch(self._view_id_at(idx), idx)
 
     def _on_plus_clicked(self) -> None:
         if not self._plus.isEnabled():

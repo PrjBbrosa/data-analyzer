@@ -52,6 +52,7 @@ from ..plot_helpers import (
     resolve_cursor_source_label,
 )
 from .toolbar import PgNavigationToolbar
+from ...ui_kit.motion import POLICY_LIGHT
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ..channel_drag import INTERNAL_CHANNEL_MIME, decode_channel_drag
 
@@ -1146,6 +1147,7 @@ class ChartStack(QWidget):
         rail.setSpacing(6)
 
         bar = ViewTabBar(manager, host, section='time')
+        bar.set_motion_policy(POLICY_LIGHT)
         rail.addWidget(bar, 1)
         sep = make_ultraview_separator(host)
         entry = UltraViewEntryButton(host)

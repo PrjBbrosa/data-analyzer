@@ -566,6 +566,43 @@ def test_selected_filter_button_only_shows_checked_channels(qapp, qtbot):
     ]
 
 
+def test_channel_filter_restore_after_typing_does_not_emit_data_signals(
+    qapp, qtbot,
+):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    file_item = widget._file_items["file-a"]
+    file_item.setExpanded(False)
+    file_item.child(0).setCheckState(0, Qt.Checked)
+    QCoreApplication.processEvents()
+
+    changed = []
+    widget.channels_changed.connect(lambda: changed.append("channels"))
+    widget.visibility_changed.connect(
+        lambda *_args: changed.append("visibility")
+    )
+    widget.search.setText("t")
+    widget.search.setText("tas")
+    QCoreApplication.processEvents()
+    assert file_item.isExpanded()
+
+    widget.search.clear()
+    QCoreApplication.processEvents()
+    timer = getattr(widget, "_filter_restore_timer", None)
+    if timer is not None and timer.isActive():
+        timer.stop()
+        widget._flush_filter_restore()
+    QCoreApplication.processEvents()
+
+    assert not file_item.isExpanded()
+    assert file_item.child(0).checkState(0) == Qt.Checked
+    assert changed == []
+
+
 def _left_click(tree, pos):
     """Synthesize a left-button press at viewport ``pos`` and dispatch it to
     the tree so the custom mousePressEvent tolerance logic runs."""

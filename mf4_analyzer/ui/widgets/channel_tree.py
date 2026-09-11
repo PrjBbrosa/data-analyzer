@@ -35,6 +35,7 @@ from PyQt5.QtGui import (
     QPixmap,
     QPolygon,
 )
+from PyQt5 import sip
 from PyQt5.QtCore import (
     Qt,
     QEvent,
@@ -43,6 +44,7 @@ from PyQt5.QtCore import (
     QRect,
     QSettings,
     QSize,
+    QTimer,
     pyqtSignal,
 )
 
@@ -962,6 +964,22 @@ class MultiFileChannelWidget(QWidget):
         self.empty_state.setAlignment(Qt.AlignCenter)
         self.empty_state.setWordWrap(True)
         self._tree_stack.addWidget(self.empty_state)
+        self._filter_empty = QWidget(self._tree_stack_host)
+        self._filter_empty.setObjectName("channelFilterEmpty")
+        filter_empty_layout = QVBoxLayout(self._filter_empty)
+        filter_empty_layout.setContentsMargins(16, 16, 16, 16)
+        filter_empty_layout.setAlignment(Qt.AlignCenter)
+        self._filter_empty_title = QLabel(self._filter_empty)
+        self._filter_empty_title.setObjectName("channelFilterEmptyTitle")
+        self._filter_empty_title.setAlignment(Qt.AlignCenter)
+        self._filter_empty_title.setWordWrap(True)
+        self._filter_empty_clear = QPushButton("清除筛选", self._filter_empty)
+        self._filter_empty_clear.setObjectName("channelFilterEmptyClear")
+        self._filter_empty_clear.setProperty("role", "quiet")
+        self._filter_empty_clear.clicked.connect(self._clear_all_filters)
+        filter_empty_layout.addWidget(self._filter_empty_title)
+        filter_empty_layout.addWidget(self._filter_empty_clear, 0, Qt.AlignHCenter)
+        self._tree_stack.addWidget(self._filter_empty)
         self._empty_section_label = "时域"
         self._empty_view_name = "View 1"
         layout.addWidget(self._tree_stack_host)
@@ -1027,10 +1045,24 @@ class MultiFileChannelWidget(QWidget):
             Qt.WA_TransparentForMouseEvents, True
         )
         self._file_tree_insert_line.hide()
+        self._filter_snapshot = None
+        self._filter_generation = 0
+        self._filter_restore_pending = False
+        self._filter_was_active = False
+        self._filter_restore_generation = 0
+        self._filter_match_channels = 0
+        self._filter_match_records = 0
+        self._filter_kept_record_groups = 0
+        self._filter_checked_count = 0
+        self._filter_restore_timer = QTimer(self)
+        self._filter_restore_timer.setSingleShot(True)
+        self._filter_restore_timer.setInterval(0)
+        self._filter_restore_timer.timeout.connect(self._flush_filter_restore)
         self._sync_empty_state()
         self._sync_projection_chrome()
 
     def add_file(self, fid, fd):
+        self.invalidate_filter_context()
         self._files[fid] = fd
         label_suffix = getattr(fd, 'label_suffix', '')
 
@@ -1254,6 +1286,7 @@ class MultiFileChannelWidget(QWidget):
                 self.project_channel_order(fid, channel_order)
             return
 
+        self.invalidate_filter_context()
         checked = list(self.get_checked_channels())
         hidden = list(self.get_hidden_channels())
         colors = dict(self._colors)
@@ -1402,6 +1435,7 @@ class MultiFileChannelWidget(QWidget):
         return list(self._attached_file_ids)
 
     def set_attached_file_ids(self, fids):
+        self.invalidate_filter_context()
         known = self._files
         self._attached_file_ids = [
             fid
@@ -1822,7 +1856,10 @@ class MultiFileChannelWidget(QWidget):
 
     def _sync_empty_state(self):
         has_attached = bool(self._attached_file_ids)
-        self._tree_stack.setCurrentWidget(self.tree if has_attached else self.empty_state)
+        if not has_attached:
+            self._tree_stack.setCurrentWidget(self.empty_state)
+        else:
+            self._sync_filter_empty_state()
         if not has_attached:
             section = getattr(self, "_empty_section_label", "时域")
             view_name = getattr(self, "_empty_view_name", "View")
@@ -2347,6 +2384,7 @@ class MultiFileChannelWidget(QWidget):
             self.restore_imported_axis_group(sel_keys)
 
     def remove_file(self, fid, *, emit=True):
+        self.invalidate_filter_context()
         # Clean up colors and files dict
         for k in [k for k in self._colors if k[0] == fid]:
             del self._colors[k]
@@ -3130,6 +3168,122 @@ class MultiFileChannelWidget(QWidget):
         self._apply_filters()
         self.channels_changed.emit()
 
+    def _is_filtering(self):
+        return bool(self.search.text().strip()) or self.btn_selected_only.isChecked()
+
+    def invalidate_filter_context(self):
+        if sip.isdeleted(self):
+            return
+        self._filter_restore_timer.stop()
+        self._filter_snapshot = None
+        self._filter_generation += 1
+        self._filter_restore_pending = False
+
+    def _clear_all_filters(self):
+        self.search.blockSignals(True)
+        self.btn_selected_only.blockSignals(True)
+        try:
+            self.search.clear()
+            self.btn_selected_only.setChecked(False)
+        finally:
+            self.search.blockSignals(False)
+            self.btn_selected_only.blockSignals(False)
+        self._apply_filters()
+        self.search.setFocus(Qt.OtherFocusReason)
+
+    def _capture_filter_snapshot(self):
+        expanded = []
+        for item in self._iter_tree_items():
+            data = item.data(0, Qt.UserRole)
+            if not data:
+                continue
+            expanded.append((tuple(data), bool(item.isExpanded())))
+        top_identity, top_offset = self._filter_viewport_anchor()
+        return {
+            "expanded": tuple(expanded),
+            "top_identity": top_identity,
+            "top_offset": top_offset,
+            "scroll": int(self.tree.verticalScrollBar().value()),
+        }
+
+    def _filter_viewport_anchor(self):
+        height = self.tree.viewport().height()
+        for item in self._iter_tree_items():
+            if item.isHidden():
+                continue
+            data = item.data(0, Qt.UserRole)
+            if not data:
+                continue
+            rect = self.tree.visualItemRect(item)
+            if rect.bottom() <= 0:
+                continue
+            if height > 0 and rect.top() >= height:
+                break
+            return tuple(data), int(rect.top())
+        return None, 0
+
+    def _restore_filter_snapshot(self, snapshot):
+        if not snapshot:
+            return
+        for identity, is_expanded in snapshot.get("expanded") or ():
+            item = self._tree_item_for_data(identity)
+            if item is not None:
+                item.setExpanded(bool(is_expanded))
+        self.tree.doItemsLayout()
+        bar = self.tree.verticalScrollBar()
+        bar.setValue(int(snapshot.get("scroll") or 0))
+        identity = snapshot.get("top_identity")
+        item = self._tree_item_for_data(identity) if identity else None
+        if item is None or item.isHidden():
+            return
+        rect = self.tree.visualItemRect(item)
+        if not rect.isValid():
+            return
+        bar.setValue(bar.value() + rect.top() - int(snapshot.get("top_offset") or 0))
+
+    def _schedule_filter_restore(self):
+        self._filter_restore_pending = True
+        self._filter_restore_generation = self._filter_generation
+        if not self._filter_restore_timer.isActive():
+            self._filter_restore_timer.start()
+
+    def _flush_filter_restore(self):
+        if sip.isdeleted(self):
+            return
+        pending = self._filter_restore_pending
+        self._filter_restore_pending = False
+        self._filter_restore_timer.stop()
+        if not pending:
+            return
+        if self._filter_restore_generation != self._filter_generation:
+            return
+        if self._is_filtering():
+            return
+        snapshot = self._filter_snapshot
+        self._filter_snapshot = None
+        self._restore_filter_snapshot(snapshot)
+
+    def _sync_filter_empty_state(self):
+        if not self._attached_file_ids:
+            return
+        filtering = self._is_filtering()
+        empty = filtering and (
+            self._filter_match_channels == 0
+            and self._filter_match_records == 0
+            and self._filter_kept_record_groups == 0
+        )
+        if not empty:
+            self._tree_stack.setCurrentWidget(self.tree)
+            return
+        if (
+            self.btn_selected_only.isChecked()
+            and self._filter_checked_count == 0
+        ):
+            self._filter_empty_title.setText("尚未勾选通道")
+        else:
+            self._filter_empty_title.setText("没有匹配的通道")
+        self._tree_stack.setCurrentWidget(self._filter_empty)
+
     def _filter(self, txt):
         self._apply_filters()
 
@@ -3137,17 +3291,33 @@ class MultiFileChannelWidget(QWidget):
         t = self.search.text().strip().lower()
         show_checked_only = self.btn_selected_only.isChecked()
         filtering = bool(t) or show_checked_only
+        entering = filtering and not self._filter_was_active
+        exiting = (not filtering) and self._filter_was_active
+        if entering:
+            self._flush_filter_restore()
+            if self._filter_snapshot is None:
+                self._filter_snapshot = self._capture_filter_snapshot()
+
+        match_channels = 0
+        match_records = 0
+        kept_groups = 0
+        checked_count = 0
 
         def _apply_to_node(item):
+            nonlocal match_channels, match_records, kept_groups, checked_count
             data = item.data(0, Qt.UserRole)
             if data and data[0] == 'channel':
                 if not self._is_item_attached(item):
                     item.setHidden(True)
                     return False
+                if item.checkState(0) == Qt.Checked:
+                    checked_count += 1
                 matches_text = not t or t in item.text(0).lower()
                 matches_checked = not show_checked_only or item.checkState(0) == Qt.Checked
                 visible = matches_text and matches_checked
                 item.setHidden(not visible)
+                if visible:
+                    match_channels += 1
                 return visible
             if data and data[0] == RECORD_BINDING_KIND:
                 if not self._is_item_attached(item):
@@ -3158,6 +3328,8 @@ class MultiFileChannelWidget(QWidget):
                     return False
                 matches_text = not t or t in self._record_search_haystack(item)
                 item.setHidden(not matches_text)
+                if matches_text:
+                    match_records += 1
                 return matches_text
             if data and data[0] == RECORD_GROUP_KIND:
                 if not self._is_item_attached(item):
@@ -3183,6 +3355,8 @@ class MultiFileChannelWidget(QWidget):
                 item.setHidden(not visible)
                 if visible and filtering:
                     item.setExpanded(True)
+                    if visible_children == 0:
+                        kept_groups += 1
                 return visible
             else:
                 if data and data[0] in ('file', 'raster') and not self._is_item_attached(item):
@@ -3190,7 +3364,6 @@ class MultiFileChannelWidget(QWidget):
                     for idx in range(item.childCount()):
                         _apply_to_node(item.child(idx))
                     return False
-                # Container node: visible if any child is visible
                 visible_children = 0
                 for i in range(item.childCount()):
                     if _apply_to_node(item.child(i)):
@@ -3204,6 +3377,19 @@ class MultiFileChannelWidget(QWidget):
 
         for i in range(self.tree.topLevelItemCount()):
             _apply_to_node(self.tree.topLevelItem(i))
+
+        self._filter_match_channels = match_channels
+        self._filter_match_records = match_records
+        self._filter_kept_record_groups = kept_groups
+        self._filter_checked_count = checked_count
+        self.tree.doItemsLayout()
+        if self._attached_file_ids:
+            self._sync_filter_empty_state()
+        else:
+            self._tree_stack.setCurrentWidget(self.empty_state)
+        if exiting and self._filter_snapshot is not None:
+            self._schedule_filter_restore()
+        self._filter_was_active = filtering
 
     def _all(self):
         # Count total visible channel leaves across the whole tree

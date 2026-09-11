@@ -363,6 +363,14 @@ def test_quickref_covers_batch_drawer():
     run_warnings = next(r for r in group.rows if r.desc == "运行警告")
     assert "结果区" in run_warnings.sub
     assert "该行自己" in run_warnings.sub
+    assert "查看详情" in run_warnings.sub
+    details = next(r for r in group.rows if r.desc == "查看详情")
+    assert details.gesture == "底栏「查看详情」"
+    assert "Esc" in details.sub and "收起" in details.sub
+    assert "检查" in details.sub
+    assert "不自动重试" in details.sub
+    assert "重跑" not in details.sub
+    assert "恢复任务" not in details.sub
     # The picker rewrite has landed — nothing here is a staged capability.
     assert all(not r.soon for r in group.rows)
 
@@ -460,6 +468,19 @@ def test_catalog_states_file_remove_action_is_available_in_every_mode():
 def test_catalog_says_how_to_read_a_truncated_channel_name():
     row = _row_by_desc("看通道全名")
     assert "悬停" in row.gesture
+
+
+def test_catalog_channel_search_restores_expand_scroll_not_checks():
+    row = _row_by_desc("搜索通道")
+    joined = f"{row.desc} {row.sub} {row.gesture or ''}"
+    assert "清除筛选" in joined
+    assert "展开" in joined and "滚动" in joined
+    assert "不恢复勾选" in joined
+    assert "显隐" in joined
+    assert "通道树搜索框" in (row.gesture or "")
+    assert "不恢复勾选" in joined
+    assert "恢复勾选" not in joined.replace("不恢复勾选", "")
+    assert len(row.sub) <= 160
 
 
 def test_catalog_view_all_frames_plotted_channels_not_longest_file():

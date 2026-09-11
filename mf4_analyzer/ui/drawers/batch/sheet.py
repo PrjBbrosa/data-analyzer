@@ -60,6 +60,7 @@ from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
 from .output_panel import OutputPanel
 from .pipeline_strip import PipelineStrip
 from .preview_dialog import BatchPreviewDialog
+from .result_details import BatchResultDetailsPanel, result_has_detail_payload
 from .runner_thread import BatchPreviewThread, BatchRunnerThread
 from .task_list import TaskListWidget
 
@@ -252,6 +253,8 @@ class BatchSheet(QDialog):
         self._running: bool = False
         self._runner_thread: BatchRunnerThread | None = None
         self._last_result = None
+        self._result_generation = 0
+        self._result_stale = False
         # Window-local method-first guidance.  Not persisted, not a run gate.
         self._guidance_engaged: bool = False
         self._guidance_ready: bool = False
@@ -494,6 +497,17 @@ class BatchSheet(QDialog):
         self._footer_task_summary = QLabel("等待运行", self._footer_host)
         self._footer_task_summary.setObjectName("BatchFooterTaskSummary")
         self._footer_lay.addWidget(self._footer_task_summary, 1)
+        self._btn_result_details = QPushButton("查看详情", self._footer_host)
+        self._btn_result_details.setObjectName("BatchResultDetailsEntry")
+        self._btn_result_details.setFlat(True)
+        self._btn_result_details.setCursor(Qt.PointingHandCursor)
+        self._btn_result_details.setFocusPolicy(Qt.TabFocus)
+        self._btn_result_details.setAutoDefault(False)
+        self._btn_result_details.setDefault(False)
+        self._btn_result_details.clicked.connect(self._show_result_details)
+        self._btn_result_details.setEnabled(False)
+        self._btn_result_details.hide()
+        self._footer_lay.addWidget(self._btn_result_details)
         self._footer_locate = QPushButton("", self._footer_host)
         self._footer_locate.setObjectName("BatchFooterLocate")
         self._footer_locate.setFlat(True)
@@ -537,6 +551,19 @@ class BatchSheet(QDialog):
 
         root.addWidget(self._footer_host)
 
+        # Overlay above the footer; not part of the three-column layout.
+        self._result_details = BatchResultDetailsPanel(self)
+        self._result_details.hide()
+        self._result_details.artifactRequested.connect(
+            self._on_details_artifact_requested
+        )
+        self._result_details.locateRequested.connect(
+            self._on_details_locate_requested
+        )
+        self._result_details._btn_close.clicked.connect(
+            self._on_result_details_close
+        )
+
         # Wire status recomputation. Each signal is independent — we wire all
         # of them so that any sub-control mutation flows into a single
         # recompute pass.
@@ -571,6 +598,9 @@ class BatchSheet(QDialog):
         )
         self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
         self._analysis_panel.methodChanged.connect(self._schedule_pipeline_recompute)
+        self._analysis_panel.methodChanged.connect(
+            self._sync_result_details_locate_context
+        )
         self._analysis_panel.methodActivated.connect(self._on_user_method_activated)
         self._analysis_panel.paramsChanged.connect(self._sync_x_axis_context)
         self._analysis_panel.paramsChanged.connect(self._schedule_pipeline_recompute)
@@ -724,6 +754,7 @@ class BatchSheet(QDialog):
         overlay = getattr(self, "_drop_overlay", None)
         if overlay is not None and not overlay.isHidden():
             overlay.setGeometry(self.rect())
+        self._layout_result_details()
 
     def _init_drop_import(self) -> None:
         self.setAcceptDrops(True)
@@ -897,6 +928,9 @@ class BatchSheet(QDialog):
         """Live clearance from the compact footer's real height."""
         host = getattr(self, "_footer_host", None)
         height = int(host.height()) if host is not None else 0
+        panel = getattr(self, "_result_details", None)
+        if panel is not None and panel.isVisible():
+            height += int(panel.height())
         return max(0, height) + 12
 
     def _sync_own_toast_margin(self) -> None:
@@ -910,6 +944,13 @@ class BatchSheet(QDialog):
             return
         if toast.isVisible():
             toast._reposition()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.key() == Qt.Key_Escape and self._result_details_is_open():
+            self._hide_result_details(focus_entry=True)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
     # Pipeline status recompute
@@ -926,6 +967,7 @@ class BatchSheet(QDialog):
         if not self._guidance_ready:
             return
         self._guidance_engaged = True
+        self._mark_result_previous()
         if not self._recompute_timer.isActive():
             self._refresh_method_guidance()
 
@@ -933,6 +975,7 @@ class BatchSheet(QDialog):
         if not self._guidance_ready or self._applying_preset:
             return
         self._guidance_engaged = True
+        self._mark_result_previous()
         self._refresh_method_guidance()
 
     @contextmanager
@@ -1149,20 +1192,34 @@ class BatchSheet(QDialog):
             self._footer_locate.show()
 
     def _on_footer_locate(self) -> None:
-        widget = self._resolve_locate_widget(self._locate_kind)
+        self._focus_locate_target(self._locate_kind)
+
+    def _widget_is_usable(self, widget: QWidget | None) -> bool:
         if widget is None:
-            return
+            return False
         try:
             if sip.isdeleted(widget):
-                return
+                return False
         except RuntimeError:
-            return
-        if not widget.isVisible():
-            return
+            return False
+        if self.isVisible():
+            return bool(widget.isVisible())
+        return bool(widget.isVisibleTo(self))
+
+    def _focus_locate_target(self, kind: str | None) -> bool:
+        """Scroll to and focus a locate target. Does not rewrite `_locate_kind`."""
+        widget = self._resolve_locate_widget(kind)
+        if kind == "frf" and not self._widget_is_usable(widget):
+            editor = getattr(self._input_panel, "_frf_pair_editor", None)
+            if self.method() == "frf" and self._widget_is_usable(editor):
+                widget = editor
+        if not self._widget_is_usable(widget):
+            return False
         scroll = self._scroll_for_widget(widget)
         if scroll is not None:
             scroll.ensureWidgetVisible(widget)
         widget.setFocus(Qt.OtherFocusReason)
+        return True
 
     def _scroll_for_widget(self, widget: QWidget) -> QScrollArea | None:
         for scroll in (
@@ -1218,6 +1275,170 @@ class BatchSheet(QDialog):
                 }[field]
             return analysis._param_form._visible_widgets.get(field)
         return None
+
+    def _result_details_is_open(self) -> bool:
+        panel = getattr(self, "_result_details", None)
+        if panel is None:
+            return False
+        try:
+            if sip.isdeleted(panel):
+                return False
+        except RuntimeError:
+            return False
+        return bool(panel.isVisible())
+
+    def _layout_result_details(self) -> None:
+        panel = getattr(self, "_result_details", None)
+        footer = getattr(self, "_footer_host", None)
+        if panel is None or footer is None or not panel.isVisible():
+            return
+        work = getattr(self, "_detail_host", None)
+        work_h = int(work.height()) if work is not None else max(0, self.height() - footer.height())
+        cap = int(work_h * 0.45) if work_h > 0 else 240
+        height = min(240, cap) if cap > 0 else 240
+        height = max(0, height)
+        y = max(0, self.height() - footer.height() - height)
+        panel.setGeometry(0, y, self.width(), height)
+        panel.raise_()
+        self._sync_own_toast_margin()
+
+    def _sync_result_details_entry(self) -> None:
+        button = getattr(self, "_btn_result_details", None)
+        if button is None:
+            return
+        available = (
+            not self._running
+            and result_has_detail_payload(self._last_result)
+        )
+        button.setEnabled(available)
+        button.setVisible(available)
+
+    def _sync_result_details_locate_context(self, *_args) -> None:
+        panel = getattr(self, "_result_details", None)
+        if panel is None:
+            return
+        output_widget = self._resolve_locate_widget("output")
+        editor = getattr(self._input_panel, "_frf_pair_editor", None)
+        frf_enabled = self.method() == "frf" and self._widget_is_usable(editor)
+        if self.method() != "frf":
+            reason = "当前方法已切换，无法检查信号配对"
+        elif not frf_enabled:
+            reason = "当前无法核对信号配对"
+        else:
+            reason = ""
+        panel.set_locate_context(
+            output_enabled=self._widget_is_usable(output_widget),
+            frf_enabled=frf_enabled,
+            frf_reason=reason,
+        )
+
+    def _mark_result_previous(self) -> None:
+        if self._running or self._last_result is None or self._result_stale:
+            return
+        panel = getattr(self, "_result_details", None)
+        if panel is None:
+            return
+        self._result_stale = True
+        panel.set_previous_run(True)
+
+    def _begin_new_result_generation(self) -> None:
+        self._result_generation += 1
+        self._result_stale = False
+        self._hide_result_details(focus_entry=False)
+        panel = getattr(self, "_result_details", None)
+        if panel is not None:
+            panel.clear()
+        self._sync_result_details_entry()
+
+    def _attach_result_details(self, result) -> None:
+        panel = getattr(self, "_result_details", None)
+        if panel is None:
+            return
+        if result is None:
+            self._hide_result_details(focus_entry=False)
+            panel.clear()
+            self._result_stale = False
+            self._sync_result_details_entry()
+            return
+        panel.set_result(result, generation=self._result_generation)
+        panel.set_previous_run(False)
+        self._result_stale = False
+        self._sync_result_details_locate_context()
+        self._sync_result_details_entry()
+
+    def _show_result_details(self) -> None:
+        if self._running or not result_has_detail_payload(self._last_result):
+            return
+        panel = self._result_details
+        if panel.isHidden():
+            panel.set_result(
+                self._last_result, generation=self._result_generation,
+            )
+            if self._result_stale:
+                panel.set_previous_run(True)
+        self._sync_result_details_locate_context()
+        panel.show()
+        self._layout_result_details()
+        panel._list.setFocus(Qt.OtherFocusReason)
+
+    def _hide_result_details(self, *, focus_entry: bool = False) -> None:
+        panel = getattr(self, "_result_details", None)
+        if panel is None:
+            return
+        try:
+            if sip.isdeleted(panel):
+                return
+        except RuntimeError:
+            return
+        panel.hide()
+        self._sync_own_toast_margin()
+        if (
+            focus_entry
+            and self._btn_result_details.isVisible()
+            and self._btn_result_details.isEnabled()
+        ):
+            self._btn_result_details.setFocus(Qt.OtherFocusReason)
+
+    def _on_result_details_close(self) -> None:
+        self._hide_result_details(focus_entry=True)
+
+    def _on_details_artifact_requested(self, artifact_path: str) -> None:
+        raw = str(artifact_path or "").strip()
+        path = Path(raw).expanduser()
+        if not raw or not path.exists():
+            self._toast("文件已移动或删除", kind="warning")
+            return
+        self._open_artifact_location(raw)
+
+    def _on_details_locate_requested(self, kind: str) -> None:
+        if not self._focus_locate_target(kind):
+            self._toast("当前无法定位该检查入口", kind="info")
+
+    def _teardown_result_details(self) -> None:
+        panel = getattr(self, "_result_details", None)
+        if panel is None:
+            return
+        try:
+            if sip.isdeleted(panel):
+                return
+        except RuntimeError:
+            return
+        try:
+            panel.artifactRequested.disconnect(
+                self._on_details_artifact_requested
+            )
+        except TypeError:
+            pass
+        try:
+            panel.locateRequested.disconnect(self._on_details_locate_requested)
+        except TypeError:
+            pass
+        try:
+            panel._btn_close.clicked.disconnect(self._on_result_details_close)
+        except TypeError:
+            pass
+        panel.hide()
+        panel.clear()
 
     def _recompute_pipeline_status(self) -> None:
         self._recompute_timer.stop()
@@ -1717,6 +1938,8 @@ class BatchSheet(QDialog):
         ):
             self._analysis_panel.clear_applied_preset()
             self._analysis_preset_output_snapshot = None
+        if not self._applying_analysis_preset:
+            self._mark_result_previous()
         self._schedule_pipeline_recompute()
 
     def _db_reference_host(self):
@@ -1874,6 +2097,8 @@ class BatchSheet(QDialog):
 
     def _on_recipe_method_changed(self, method: str) -> None:
         method = str(method)
+        if method != self._recipe_method:
+            self._mark_result_previous()
         if not self._applying_preset and method != self._recipe_method:
             self._base_params = normalize_batch_params(self._base_params, method)
         self._recipe_method = method
@@ -2330,6 +2555,7 @@ class BatchSheet(QDialog):
         # the worker fails before emitting its result, QThread.finished still
         # unlocks against None rather than presenting stale success/failure.
         self._last_result = None
+        self._begin_new_result_generation()
 
         runner = self._make_runner()
         preset = self.get_preset()
@@ -2591,6 +2817,7 @@ class BatchSheet(QDialog):
             done=done, total=total, task_count=self._task_list.row_count(),
             reason=warn_summary,
         )
+        self._attach_result_details(result)
         self._show_result_toast(result)
         self._maybe_open_output_folder(result)
 
@@ -2868,6 +3095,7 @@ class BatchSheet(QDialog):
             return
         # Normal-close branch only; the run-in-progress branch above ignores
         # the event and comes back through here once the runner has stopped.
+        self._teardown_result_details()
         self._persist_panel_prefs()
         super().closeEvent(event)
 
@@ -2885,6 +3113,7 @@ class BatchSheet(QDialog):
         conversely a visible close runs both, writing the same snapshot twice,
         which is harmless.
         """
+        self._teardown_result_details()
         self._persist_panel_prefs()
         super().done(result)
 

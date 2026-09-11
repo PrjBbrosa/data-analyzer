@@ -199,6 +199,12 @@ _HINTS = (
         priority=30,
     ),
     Hint(
+        id="channel.filter_restore",
+        text="清除筛选恢复展开滚动，不改勾选显隐",
+        surface="discovery",
+        priority=47,
+    ),
+    Hint(
         id="wheel.zoom_x",
         text="Ctrl + 滚轮 缩放 X",
         surface="persistent",
@@ -380,6 +386,13 @@ _HINTS = (
         surface="discovery",
         retire_on="batch_open",
         priority=38,
+    ),
+    Hint(
+        id="batch.result_details",
+        text="底栏查看详情 · Esc收起 · 可检查",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=42,
     ),
     Hint(
         id="channel.right_click",

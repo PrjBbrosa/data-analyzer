@@ -289,6 +289,9 @@ class ViewMixin:
     def _project_view_controls(self, idx):
         if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return
+        invalidate = getattr(self.navigator, "invalidate_channel_filter_context", None)
+        if callable(invalidate):
+            invalidate()
         canvas = self._canvas_for_view_index(idx) or self.canvas_time
         old_applying_view = getattr(self, '_applying_view', False)
         self._applying_view = True

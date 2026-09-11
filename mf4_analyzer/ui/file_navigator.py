@@ -773,6 +773,9 @@ class FileNavigator(QWidget):
     def set_attached_file_ids(self, fids):
         self.channel_list.set_attached_file_ids(fids)
 
+    def invalidate_channel_filter_context(self):
+        self.channel_list.invalidate_filter_context()
+
     def auto_attach_enabled(self):
         """Item-1 shim: whether new loads attach into the active context."""
         return self._act_attach_on_load.isChecked()

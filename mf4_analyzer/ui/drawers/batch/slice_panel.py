@@ -121,6 +121,7 @@ class SlicePanel(QWidget):
         self._axis_combo.currentIndexChanged.connect(self._on_axis_changed)
         self._positions_edit.textChanged.connect(self._refresh_summary)
         self._positions_edit.textChanged.connect(self.changed)
+        self._enable_switch.set_motion_policy(POLICY_LIGHT)
 
     # ------------------------------------------------------------------
     def _sync_enabled(self, *_args) -> None:
