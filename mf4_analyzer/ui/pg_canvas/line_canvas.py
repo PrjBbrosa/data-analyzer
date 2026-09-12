@@ -8,7 +8,9 @@ breaks grab_pixmap exports on this project.
 from __future__ import annotations
 
 from html import escape
+from contextlib import contextmanager
 from functools import partial
+from time import monotonic
 import logging
 import math
 
@@ -25,7 +27,11 @@ from mf4_analyzer.ui._axis_handle import (
     PgAxisHandle,
 )
 from mf4_analyzer.signal.envelope import build_envelope, build_peak_trace
-from mf4_analyzer.signal.display_ranges import line_amplitude_limits, visible_line_values
+from mf4_analyzer.signal.display_ranges import (
+    line_amplitude_limits,
+    prepare_line_range,
+    visible_line_values,  # probe/T0 monkeypatch seam; Batch/slices keep this helper
+)
 # The ink metric itself is UI-neutral (spec 2026-08-08 §2): it is the same pure
 # function the time-domain renderer bills its frames with, so the analysis rows
 # cannot drift into a second definition of "how much does this cost to paint".
@@ -71,6 +77,12 @@ from .analysis_axes import (
 from .context_menu import redesign_pg_context_menu
 from .empty_hint import EmptyHintOverlay
 from .fonts import _apply_pg_axis_font
+from .spectrum_display import (
+    SpectrumCurveIndex,
+    SpectrumDisplayRequest,
+    build_spectrum_trace_cache,
+    plan_spectrum_display,
+)
 from .remarks import (
     RemarkArtist,
     RemarkInteraction,
@@ -181,6 +193,10 @@ _PREVIEW_FALLBACK_PIXEL_WIDTH = 2000
 _PREVIEW_MIN_REALIZED_PIXEL_WIDTH = 200
 _SPECTRUM_FALLBACK_PIXEL_WIDTH = 2400
 _SPECTRUM_MIN_REALIZED_PIXEL_WIDTH = 200
+# Coalesced spectrum data+Y period. Timeout rechecks monotonic time because
+# QTimer is not exact; QTimer.start(int) rewrites interval, so fire/stop
+# paths restore this value.
+_SPECTRUM_REFRESH_MS = 16
 
 # FFT amplitude overlays keep a local AA budget. After peak-hold (one max
 # per pixel, not min/max ribbons) a 4-curve screenshot-width overlay is
@@ -301,6 +317,14 @@ def _xy_from_viewbox(view_box):
     if xr is None or yr is None:
         return None
     return xr, yr
+
+
+def _xy_break_indices(prepared):
+    """Absolute NaN-gap indices, computed once at ingest — not on every pan."""
+    finite_xy = prepared.finite_xy
+    if finite_xy.all():
+        return ()
+    return tuple(int(i) for i in np.flatnonzero(~finite_xy))
 
 
 class PgLineCanvas(_StackedSplitMixin, QWidget):
@@ -426,10 +450,21 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             remark_at_viewport_pos=lambda pos: self._remark_item_at_viewport_pos(pos),
         )
         self._raw_spectrum_xlim = None
-        self._spectrum_refresh_key = None
+        self._spectrum_trace_cache = None
+        self._spectrum_rebuild_plan = None
         self._spectrum_refresh_busy = False
+        self._spectrum_display_generation = 0
+        self._spectrum_refresh_armed_generation = 0
+        self._spectrum_curves_dirty = False
+        self._spectrum_y_dirty = False
+        self._spectrum_refresh_interactive = False
+        self._spectrum_program_range_depth = 0
+        self._spectrum_last_refresh_at = 0.0
+        self._spectrum_monotonic = monotonic
         self._manual_amp_viewport = None
         self._spectrum_db = False
+        self._spectrum_display_revision = 0
+        self._prepared_by_identity = {}
         self._spectrum_y_auto = True
         self._last_xlim = None
         self._last_yrange = None
@@ -528,6 +563,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             )
         self.destroyed.connect(self._stop_aa_idle_timer)
         self.destroyed.connect(self._stop_discrete_aa_timer)
+        self.destroyed.connect(self._stop_spectrum_refresh_timer)
         for _p in (self._plot_amp, self._plot_time):
             # Pan / box-zoom / plain wheel emit sigRangeChangedManually (a
             # programmatic setRange, e.g. plot_spectra, does NOT — so a fresh
@@ -538,8 +574,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         self._spectrum_refresh_timer = QTimer(self)
         self._spectrum_refresh_timer.setSingleShot(True)
-        self._spectrum_refresh_timer.setInterval(16)
-        self._spectrum_refresh_timer.timeout.connect(self._refresh_spectrum_display)
+        self._spectrum_refresh_timer.setInterval(_SPECTRUM_REFRESH_MS)
+        self._spectrum_refresh_timer.timeout.connect(
+            self._on_spectrum_refresh_timeout)
         self._plot_amp.vb.sigXRangeChanged.connect(self._request_spectrum_refresh)
         self._plot_amp.vb.sigResized.connect(self._refresh_spectrum_display)
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
@@ -993,6 +1030,20 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except RuntimeError:
             return
 
+    def _spectrum_refresh_timer_alive(self):
+        return self._timer_alive(getattr(self, "_spectrum_refresh_timer", None))
+
+    def _stop_spectrum_refresh_timer(self, *_args) -> None:
+        timer = self._spectrum_refresh_timer_alive()
+        if timer is None:
+            return
+        try:
+            timer.stop()
+            # start(int) rewrites interval; keep the 16 ms coalescer period.
+            timer.setInterval(_SPECTRUM_REFRESH_MS)
+        except RuntimeError:
+            return
+
     def _query_idle_mouse_buttons(self):
         """Defensive injectable query; failures are logged and treated as unknown.
 
@@ -1260,7 +1311,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._manual_amp_viewport = current
             if before is None or current is None:
                 return
-            axes = tuple(axis for axis, old, new in zip(('x', 'y'), before, current) if old != new)
+            axes = tuple(
+                axis for axis, old, new in zip(('x', 'y'), before, current)
+                if old != new
+            )
+            if self._spectrum_program_range_depth:
+                axes = tuple(axis for axis in axes if axis != 'y')
             if axes:
                 self._emit_viewport_intent(axes=axes)
                 self._manual_amp_viewport = self.capture_xy_viewport()
@@ -1272,8 +1328,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._spectrum_y_auto = False
         self.viewport_action_committed.emit(action, axes)
         self.viewport_intent_committed.emit()
-        if axes == ('x',):
-            self._fit_active_spectrum_y()
+        if 'x' in axes:
+            self._spectrum_curves_dirty = True
+            self._spectrum_y_dirty = True
+            # Record the latest target only. Raw Y-scan belongs on the
+            # coalesced tick, not this mouse/wheel callback stack.
+            self._schedule_spectrum_refresh()
 
     def capture_xy_viewport(self):
         """Return the spectrum row's finite X/Y window, else ``None``.
@@ -1305,10 +1365,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if xr is None or yr is None:
             return False
         self._spectrum_y_auto = False
-        self._plot_amp.setXRange(xr[0], xr[1], padding=0)
-        self._plot_amp.setYRange(yr[0], yr[1], padding=0)
-        self._refresh_spectrum_display()
-        self._fit_active_spectrum_y()
+        with self._program_spectrum_range():
+            self._plot_amp.setXRange(xr[0], xr[1], padding=0)
+            self._plot_amp.setYRange(yr[0], yr[1], padding=0)
+        self._drop_spectrum_trace_cache()
+        self.flush_pending_spectrum_display()
         self._arm_discrete_aa()
         return True
 
@@ -1374,7 +1435,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if plot is self._plot_amp:
             limits = self._auto_amplitude_y_range(self._entries, plot.vb.viewRange()[0])
             if limits is not None:
-                plot.setYRange(*limits, padding=0)
+                with self._program_spectrum_range():
+                    plot.setYRange(*limits, padding=0)
                 self._emit_viewport_intent(axes=('y',))
                 self._arm_discrete_aa()
             return
@@ -1581,6 +1643,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             if ctrl:
                 lo, hi = x_range
                 center = float(x_pos) if np.isfinite(x_pos) else (lo + hi) / 2.0
+                spectrum_x = view_box is self._plot_amp.vb
+                if spectrum_x:
+                    # note_pulse() does not set busy; latch before setXRange
+                    # so sigXRangeChanged coalesces instead of idle-immediate.
+                    self._spectrum_refresh_interactive = True
                 view_box.setXRange(
                     center - (center - lo) * factor,
                     center + (hi - center) * factor,
@@ -1588,7 +1655,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 )
                 if on_time:
                     self._emit_time_preview_range()
-                elif view_box is self._plot_amp.vb:
+                elif spectrum_x:
                     self.manual_zoom_changed.emit(True)
                     self._emit_viewport_intent(axes=('x',))
             elif on_time:
@@ -1688,9 +1755,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                      y_auto=True, y_min=0.0, y_max=0.0):
         """Plot FFT curves and show all source time traces below."""
         entries = list(entries)
-        for entry in entries:
-            visible_line_values(entry['freq'], entry['amp'], xlim,
-                                valid_mask=self._entry_valid_mask(entry, self._is_db_amp_label(amp_label)))
+        db = self._is_db_amp_label(amp_label)
+        prepared_ranges = [
+            prepare_line_range(
+                entry['freq'], entry['amp'],
+                valid_mask=self._entry_valid_mask(entry, db),
+            )
+            for entry in entries
+        ]
+        self._invalidate_spectrum_display_generation()
         self.clear_empty_hint()
         self._hide_frequency_cursor_items()
         for p, curves in ((self._plot_amp, self._amp_curves),
@@ -1705,10 +1778,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # A fresh compute supersedes any stale marker; restore the NORMAL
         # visual state (full-opacity curves rebuilt below + marker removed).
         self._clear_spectrum_stale()
+        self._drop_prepared_line_ranges()
         self._entries = list(entries)
-        self._spectrum_db = self._is_db_amp_label(amp_label)
+        self._spectrum_db = db
+        self._store_prepared_line_ranges(self._entries, prepared_ranges)
         self._spectrum_y_auto = bool(y_auto)
-        self._spectrum_refresh_key = None
         bounds = []
         for entry in self._entries:
             freq = np.asarray(entry['freq'], dtype=float)
@@ -1718,13 +1792,14 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._raw_spectrum_xlim = (
             (min(b[0] for b in bounds), max(b[1] for b in bounds)) if bounds else None
         )
-        for e in self._entries:
+        for e, prepared in zip(self._entries, prepared_ranges):
             pen = pg.mkPen(e.get('color', '#2563eb'), width=1.5)
             # Peak-hold spectra are 1 pt/px polylines. Round joins fatten the
             # vertices into a filled look; mitre/flat keeps the stroke a line.
             pen.setJoinStyle(Qt.MiterJoin)
             pen.setCapStyle(Qt.FlatCap)
-            freq, amp = self._spectrum_plot_arrays(e['freq'], e['amp'], xlim=xlim)
+            freq, amp = self._spectrum_plot_arrays(
+                e['freq'], e['amp'], xlim=xlim, prepared=prepared)
             # dB-reference-defaults Task 6 (spec §15 C1): a mixed-reference
             # FFT overlay attaches a per-curve 'legend_label' (base label +
             # a compact 'dB[A] re ...' disclosure) distinct from the base
@@ -1739,6 +1814,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 antialias=False)
             curve.setOpacity(1.0)
             curve._spectrum_entry = e
+            curve._prepared_line_range = prepared
+            curve._prepared_display_revision = self._spectrum_display_revision
+            curve._spectrum_xy_break_indices = _xy_break_indices(prepared)
             self._amp_curves.append(curve)
 
         self._raw_amp_title = title or ''
@@ -1749,12 +1827,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         manual_y = (not y_auto) and y_max > y_min
         self._last_yrange = (float(y_min), float(y_max)) if manual_y else None
 
-        self._plot_amp.setXRange(float(xlim[0]), float(xlim[1]), padding=0)
-        if manual_y:
-            self._plot_amp.setYRange(float(y_min), float(y_max), padding=0)
-        else:
-            yrange = self._auto_amplitude_y_range(self._entries, xlim)
-            self._plot_amp.setYRange(*(yrange or (0., 1.)), padding=0)
+        with self._program_spectrum_range():
+            self._plot_amp.setXRange(float(xlim[0]), float(xlim[1]), padding=0)
+            if manual_y:
+                self._plot_amp.setYRange(float(y_min), float(y_max), padding=0)
+            else:
+                yrange = self._auto_amplitude_y_range(self._entries, xlim)
+                self._plot_amp.setYRange(*(yrange or (0., 1.)), padding=0)
         self._refresh_spectrum_display()
         self.manual_zoom_changed.emit(False)
 
@@ -1788,6 +1867,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         restores the normal visual state."""
         self.clear_empty_hint()
         if clear_spectrum:
+            self._invalidate_spectrum_display_generation()
             for c in self._amp_curves:
                 self._plot_amp.removeItem(c)
             self._amp_curves.clear()
@@ -1797,10 +1877,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._entries = []
             self._selected_time_entry_idx = None
             self._raw_spectrum_xlim = None
-            self._spectrum_refresh_key = None
-            self._spectrum_refresh_busy = False
             self._manual_amp_viewport = None
             self._spectrum_db = False
+            self._drop_prepared_line_ranges()
             self._spectrum_y_auto = True
             self._last_xlim = None
             self._last_yrange = None
@@ -1915,10 +1994,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return
         bounds = self._raw_spectrum_xlim or self._last_xlim
         x0, x1 = _visual_padded_bounds(*bounds)
-        self._plot_amp.setXRange(x0, x1, padding=0)
-        yrange = self._auto_amplitude_y_range(self._entries, bounds)
-        self._plot_amp.setYRange(*(yrange or (0., 1.)), padding=0)
-        self._refresh_spectrum_display()
+        with self._program_spectrum_range():
+            self._plot_amp.setXRange(x0, x1, padding=0)
+            yrange = self._auto_amplitude_y_range(self._entries, bounds)
+            self._plot_amp.setYRange(*(yrange or (0., 1.)), padding=0)
+        self._drop_spectrum_trace_cache()
+        self.flush_pending_spectrum_display()
         self._arm_discrete_aa()
         self.select_time_entry(self._selected_time_entry_idx)
         bounds = self._combined_time_bounds()
@@ -1941,7 +2022,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._reframe_time_y_to_grid()
 
     def full_reset(self) -> None:
-        self._spectrum_refresh_timer.stop()
+        self._invalidate_spectrum_display_generation()
         self._stop_aa_idle_timer()
         self._stop_discrete_aa_timer()
         if self._aa_backstop_armed:
@@ -1967,10 +2048,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._entries = []
         self._selected_time_entry_idx = None
         self._raw_spectrum_xlim = None
-        self._spectrum_refresh_key = None
-        self._spectrum_refresh_busy = False
         self._manual_amp_viewport = None
         self._spectrum_db = False
+        self._drop_prepared_line_ranges()
         self._spectrum_y_auto = True
         self._last_xlim = None
         self._last_yrange = None
@@ -2436,6 +2516,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def _end_view_interaction(self) -> None:
         self._idle_activity.note_drag_end()
+        self.flush_pending_spectrum_display()
         self._time_y_needs_repin = True
         self.schedule_idle_quality()
 
@@ -2742,49 +2823,52 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pass
         return _SPECTRUM_FALLBACK_PIXEL_WIDTH
 
-    def _spectrum_plot_arrays(self, freq, amp, *, xlim=None):
-        freq_arr = np.asarray(freq, dtype=float)
-        amp_arr = np.asarray(amp, dtype=float)
-        if freq_arr.ndim != 1 or amp_arr.ndim != 1 or freq_arr.shape != amp_arr.shape:
-            raise ValueError('Spectrum X/Y must have equal one-dimensional shapes')
+    def _spectrum_plot_arrays(self, freq, amp, *, xlim=None, prepared=None):
+        if prepared is None:
+            prepared = self._lookup_prepared_for_arrays(freq, amp)
+        if prepared is None:
+            freq_arr = np.asarray(freq, dtype=float)
+            amp_arr = np.asarray(amp, dtype=float)
+            if freq_arr.ndim != 1 or amp_arr.ndim != 1 or freq_arr.shape != amp_arr.shape:
+                raise ValueError('Spectrum X/Y must have equal one-dimensional shapes')
+            prepared = prepare_line_range(freq_arr, amp_arr)
+        freq_arr = prepared.x
+        amp_arr = prepared.y
         if not freq_arr.size:
             return freq_arr, amp_arr
         if xlim is None:
-            finite = freq_arr[np.isfinite(freq_arr)]
-            if not finite.size:
+            if prepared.finite_x_min is None:
                 return freq_arr[:0], amp_arr[:0]
-            xlim = (finite.min(), finite.max())
+            xlim = (prepared.finite_x_min, prepared.finite_x_max)
         lo, hi = sorted(xlim)
-        # Retain adjacent source points at each visible boundary. Keep NaNs
-        # in the selected polyline so a missing sample cannot create a bridge.
-        inside = np.flatnonzero(np.isfinite(freq_arr) & (freq_arr >= lo) & (freq_arr <= hi))
-        crossing = np.flatnonzero(
-            np.isfinite(freq_arr[:-1]) & np.isfinite(freq_arr[1:])
-            & (np.minimum(freq_arr[:-1], freq_arr[1:]) <= hi)
-            & (np.maximum(freq_arr[:-1], freq_arr[1:]) >= lo))
-        if not inside.size and not crossing.size:
+        rebuild = self._spectrum_rebuild_plan
+        if rebuild is not None:
+            # Transaction passes the viewport xlim (T2 wrappers record it)
+            # and expands to the planned cover internally.
+            lo, hi = float(rebuild.cover_lo), float(rebuild.cover_hi)
+            if hi < lo:
+                lo, hi = hi, lo
+        first, last = prepared.plot_source_slice((lo, hi))
+        if last < first:
             return freq_arr[:0], amp_arr[:0]
-        # Only the first/last selected positions are needed for a contiguous
-        # source slice; sorting a union of every visible index costs far more
-        # than the peak trace itself on large FFTs.
-        first = min(int(inside[0]) if inside.size else len(freq_arr),
-                    int(crossing[0]) if crossing.size else len(freq_arr))
-        last = max(int(inside[-1]) if inside.size else -1,
-                   int(crossing[-1]) + 1 if crossing.size else -1)
         # Keep intervening source positions: a NaN X is a real break, not
         # an out-of-window point to filter away and bridge across.
         selected = slice(first, last + 1)
         selected_x, selected_y = freq_arr[selected], amp_arr[selected]
         # Preserve gaps through peak selection by reducing each finite run.
-        valid = np.isfinite(selected_x) & np.isfinite(selected_y)
+        valid = prepared.finite_xy[selected]
         breaks = np.flatnonzero(~valid)
         if breaks.size:
             pieces_x, pieces_y = [], []
             start = 0
             for stop in [*breaks, len(selected_x)]:
                 if stop > start:
-                    xx, yy = build_peak_trace(selected_x[start:stop], selected_y[start:stop],
-                                              xlim=None, pixel_width=self._spectrum_pixel_width())
+                    xx, yy = build_peak_trace(
+                        selected_x[start:stop], selected_y[start:stop],
+                        xlim=None,
+                        pixel_width=self._spectrum_leg_pixel_width(
+                            selected_x[start], selected_x[stop - 1], lo, hi),
+                    )
                     # Each finite leg must reach its original endpoints;
                     # otherwise a peak bucket can trim away the line entering
                     # the viewport or the edge immediately before a gap.
@@ -2801,8 +2885,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     pieces_y.append(np.array([np.nan]))
                 start = stop + 1
             return np.concatenate(pieces_x), np.concatenate(pieces_y)
-        xx, yy = build_peak_trace(selected_x, selected_y, xlim=None,
-                                  pixel_width=self._spectrum_pixel_width())
+        xx, yy = build_peak_trace(
+            selected_x, selected_y, xlim=None,
+            pixel_width=self._spectrum_leg_pixel_width(
+                selected_x[0], selected_x[-1], lo, hi),
+        )
         # The peak bucket may not select the outside edge sample.
         if len(xx) < len(selected_x):
             if selected_x[0] < lo:
@@ -2813,46 +2900,278 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 yy = np.concatenate((yy, selected_y[-1:]))
         return xx, yy
 
+    @contextmanager
+    def _program_spectrum_range(self):
+        """Ignore Y on interactive range callbacks during programmatic setRange."""
+        self._spectrum_program_range_depth += 1
+        try:
+            yield
+        finally:
+            self._spectrum_program_range_depth = max(
+                0, self._spectrum_program_range_depth - 1)
+            if self._spectrum_program_range_depth == 0 and self._amp_curves:
+                captured = self.capture_xy_viewport()
+                if captured is not None:
+                    self._manual_amp_viewport = captured
+
+    def _invalidate_spectrum_display_generation(self) -> None:
+        self._spectrum_display_generation += 1
+        self._stop_spectrum_refresh_timer()
+        self._spectrum_curves_dirty = False
+        self._spectrum_y_dirty = False
+        self._spectrum_refresh_interactive = False
+        self._drop_spectrum_trace_cache()
+        self._spectrum_refresh_busy = False
+        self._spectrum_last_refresh_at = 0.0
+        self._spectrum_program_range_depth = 0
+
+    def _spectrum_refresh_remaining_ms(self) -> int:
+        last = self._spectrum_last_refresh_at
+        if last <= 0.0:
+            return _SPECTRUM_REFRESH_MS
+        elapsed_ms = (self._spectrum_monotonic() - last) * 1000.0
+        remaining = float(_SPECTRUM_REFRESH_MS) - elapsed_ms
+        if remaining <= 0.0:
+            return 0
+        return max(1, int(math.ceil(remaining)))
+
+    def _spectrum_refresh_timer_is_active(self) -> bool:
+        timer = self._spectrum_refresh_timer_alive()
+        if timer is None:
+            return False
+        try:
+            return bool(timer.isActive())
+        except RuntimeError:
+            return False
+
+    def _start_spectrum_refresh_timer(self, delay_ms: int) -> None:
+        timer = self._spectrum_refresh_timer_alive()
+        if timer is None:
+            return
+        self._spectrum_refresh_armed_generation = self._spectrum_display_generation
+        try:
+            timer.start(max(1, int(delay_ms)))
+        except RuntimeError:
+            return
+
+    def _schedule_spectrum_refresh(self) -> None:
+        if self._spectrum_refresh_timer_is_active():
+            return
+        delay = self._spectrum_refresh_remaining_ms()
+        if delay <= 0:
+            delay = 1
+        self._start_spectrum_refresh_timer(delay)
+
+    def _should_coalesce_spectrum_refresh(self) -> bool:
+        return (
+            self._idle_activity.is_busy()
+            or self._spectrum_refresh_interactive
+            or self._spectrum_refresh_timer_is_active()
+        )
+
     def _fit_active_spectrum_y(self):
+        """Refit amplitude Y when auto-Y is live. Returns whether Y changed."""
         active = self._spectrum_y_auto
         if self.analysis_range_adapter is not None:
             policy = self.analysis_range_adapter[0]()
             active = (bool(policy.get('y_auto', True))
                       and policy.get('viewport_origin', {}).get('y', 'auto') == 'auto')
-        if active and self._amp_curves:
-            limits = self._auto_amplitude_y_range(self._entries, self._plot_amp.vb.viewRange()[0])
-            self._plot_amp.setYRange(*(limits or (0., 1.)), padding=0)
+        if not (active and self._amp_curves):
+            return False
+        limits = self._auto_amplitude_y_range(
+            self._entries, self._plot_amp.vb.viewRange()[0])
+        target = limits if limits is not None else (0.0, 1.0)
+        current = self._plot_amp.vb.viewRange()[1]
+        if np.allclose(
+                (float(current[0]), float(current[1])),
+                (float(target[0]), float(target[1])),
+                rtol=0.0, atol=1e-9):
+            return False
+        with self._program_spectrum_range():
+            self._plot_amp.setYRange(float(target[0]), float(target[1]), padding=0)
+        return True
 
     def _request_spectrum_refresh(self, *_args):
-        if self._idle_activity.is_busy():
-            if not self._spectrum_refresh_timer.isActive():
-                self._spectrum_refresh_timer.start()
-        else:
-            self._refresh_spectrum_display()
+        if not self._amp_curves:
+            return
+        self._spectrum_curves_dirty = True
+        self._spectrum_y_dirty = True
+        if self._spectrum_program_range_depth:
+            return
+        if self._should_coalesce_spectrum_refresh():
+            self._schedule_spectrum_refresh()
+            return
+        self._run_spectrum_display_transaction(schedule_quality=True)
+
+    def _on_spectrum_refresh_timeout(self) -> None:
+        timer = self._spectrum_refresh_timer_alive()
+        if timer is not None:
+            try:
+                if not timer.isActive():
+                    timer.setInterval(_SPECTRUM_REFRESH_MS)
+            except RuntimeError:
+                return
+        if (
+            self._spectrum_refresh_armed_generation
+            != self._spectrum_display_generation
+        ):
+            return
+        remaining = self._spectrum_refresh_remaining_ms()
+        if remaining > 0:
+            self._start_spectrum_refresh_timer(remaining)
+            return
+        self._run_spectrum_display_transaction(schedule_quality=True)
+
+    def flush_pending_spectrum_display(self) -> None:
+        """Apply the latest curve/Y request now. Does not rewrite the 150 ms AA idle timer."""
+        self._stop_spectrum_refresh_timer()
+        self._spectrum_refresh_interactive = False
+        self._run_spectrum_display_transaction(schedule_quality=False)
 
     def _refresh_spectrum_display(self, *_args):
+        self._run_spectrum_display_transaction(schedule_quality=True)
+
+    def _drop_spectrum_trace_cache(self) -> None:
+        self._spectrum_trace_cache = None
+        self._spectrum_rebuild_plan = None
+
+    def _spectrum_leg_pixel_width(self, x0, x1, cover_lo, cover_hi) -> int:
+        rebuild = self._spectrum_rebuild_plan
+        base = (
+            rebuild.bucket_width if rebuild is not None
+            else self._spectrum_pixel_width()
+        )
+        base = max(1, int(base))
+        cover_span = float(cover_hi) - float(cover_lo)
+        leg_span = float(x1) - float(x0)
+        if not (cover_span > 0.0 and np.isfinite(leg_span) and leg_span > 0.0):
+            return base
+        return max(1, int(round(base * min(leg_span, cover_span) / cover_span)))
+
+    def _spectrum_breaks_in_slice(self, entry, first, last):
+        stored = ()
+        for curve in self._amp_curves:
+            if getattr(curve, '_spectrum_entry', None) is entry:
+                stored = getattr(curve, '_spectrum_xy_break_indices', ())
+                break
+        if last < first or not stored:
+            return ()
+        return tuple(i for i in stored if first <= i <= last)
+
+    def _spectrum_curve_index(self, entry, xlim) -> SpectrumCurveIndex:
+        prepared = self._prepared_for_entry(entry)
+        lo, hi = float(xlim[0]), float(xlim[1])
+        if hi < lo:
+            lo, hi = hi, lo
+        fx_lo = prepared.finite_x_min
+        fx_hi = prepared.finite_x_max
+        fully = fx_lo is None or (lo <= fx_lo and hi >= fx_hi)
+        first, last = prepared.plot_source_slice((lo, hi))
+        return SpectrumCurveIndex(
+            first=first,
+            last=last,
+            fully_covered=fully,
+            break_key=self._spectrum_breaks_in_slice(entry, first, last),
+        )
+
+    def _spectrum_data_x_extents(self):
+        lo = hi = None
+        for entry in self._entries:
+            prepared = self._prepared_for_entry(entry)
+            fx_lo = prepared.finite_x_min
+            fx_hi = prepared.finite_x_max
+            if fx_lo is None:
+                continue
+            lo = fx_lo if lo is None else min(lo, fx_lo)
+            hi = fx_hi if hi is None else max(hi, fx_hi)
+        return lo, hi
+
+    def _spectrum_display_request(self, xlim) -> SpectrumDisplayRequest:
+        lo, hi = float(xlim[0]), float(xlim[1])
+        if hi < lo:
+            lo, hi = hi, lo
+        identities = []
+        curves = []
+        for curve in self._amp_curves:
+            entry = curve._spectrum_entry
+            identities.append(self._entry_display_identity(entry))
+            curves.append(self._spectrum_curve_index(entry, (lo, hi)))
+        data_lo, data_hi = self._spectrum_data_x_extents()
+        return SpectrumDisplayRequest(
+            revision=self._spectrum_display_revision,
+            identities=tuple(identities),
+            target_lo=lo,
+            target_hi=hi,
+            pixel_width=self._spectrum_pixel_width(),
+            curves=tuple(curves),
+            data_lo=data_lo,
+            data_hi=data_hi,
+        )
+
+    def _spectrum_cache_from_plan(self, request, plan):
+        cover = (plan.cover_lo, plan.cover_hi)
+        cover_curves = []
+        for curve in self._amp_curves:
+            cover_curves.append(
+                self._spectrum_curve_index(curve._spectrum_entry, cover),
+            )
+        return build_spectrum_trace_cache(request, plan, tuple(cover_curves))
+
+    def _run_spectrum_display_transaction(self, *, schedule_quality=True):
+        try:
+            if sip.isdeleted(self):
+                return
+        except RuntimeError:
+            return
         if self._spectrum_refresh_busy or not self._amp_curves:
             return
         xlim = tuple(self._plot_amp.vb.viewRange()[0])
-        key = (xlim, self._spectrum_pixel_width(), tuple(id(e) for e in self._entries))
-        if key == self._spectrum_refresh_key:
+        request = self._spectrum_display_request(xlim)
+        plan = plan_spectrum_display(request, self._spectrum_trace_cache)
+        curves_changed = not plan.reuse
+        y_dirty = self._spectrum_y_dirty or curves_changed
+        if not curves_changed and not self._spectrum_y_dirty:
+            self._spectrum_curves_dirty = False
+            self._spectrum_refresh_interactive = False
             return
         self._spectrum_refresh_busy = True
         try:
-            self.disable_interactive_quality()
-            for curve in self._amp_curves:
-                entry = curve._spectrum_entry
-                x, y = self._spectrum_plot_arrays(entry['freq'], entry['amp'], xlim=xlim)
-                curve.setData(x, y, antialias=False, connect='finite')
-            self._spectrum_refresh_key = key
-            if not self._idle_activity.is_busy():
-                self._fit_active_spectrum_y()
-            if self._idle_activity.is_busy():
-                self.schedule_idle_quality()
-            else:
-                self._arm_discrete_aa()
+            y_changed = False
+            if curves_changed:
+                if schedule_quality:
+                    self.disable_interactive_quality()
+                self._spectrum_rebuild_plan = plan
+                try:
+                    for curve in self._amp_curves:
+                        entry = curve._spectrum_entry
+                        x, y = self._spectrum_plot_arrays(
+                            entry['freq'], entry['amp'], xlim=xlim)
+                        curve.setData(x, y, antialias=False, connect='finite')
+                finally:
+                    self._spectrum_rebuild_plan = None
+                self._spectrum_trace_cache = self._spectrum_cache_from_plan(
+                    request, plan)
+            if y_dirty:
+                y_changed = bool(self._fit_active_spectrum_y())
+            self._spectrum_curves_dirty = False
+            self._spectrum_y_dirty = False
+            self._spectrum_last_refresh_at = self._spectrum_monotonic()
+            # HIT + unchanged Y: keep the 16 ms coalescer, but do not
+            # setYRange / disable AA / restart the idle or 0 ms discrete timer.
+            if schedule_quality and (curves_changed or y_changed):
+                if not curves_changed:
+                    self.disable_interactive_quality()
+                if (
+                    self._idle_activity.is_busy()
+                    or self._spectrum_refresh_interactive
+                ):
+                    self.schedule_idle_quality()
+                else:
+                    self._arm_discrete_aa()
         finally:
+            self._spectrum_rebuild_plan = None
             self._spectrum_refresh_busy = False
+            self._spectrum_refresh_interactive = False
 
     @staticmethod
     def _is_db_amp_label(label: str) -> bool:
@@ -2868,9 +3187,59 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             raise ValueError('Spectrum raw amplitude must match displayed amplitude')
         return np.isfinite(raw) & (raw > 0) if db else np.isfinite(raw)
 
+    def _drop_prepared_line_ranges(self):
+        self._spectrum_display_revision += 1
+        self._prepared_by_identity = {}
+        self._drop_spectrum_trace_cache()
+
+    def _entry_display_identity(self, entry):
+        # Revision plus the live array identities, not the entry dict id
+        # alone: dB/Linear/reference/weighting replace displayed Y in place
+        # of the same result object.
+        freq = entry.get('freq')
+        amp = entry.get('amp')
+        raw = entry.get('amp_for_xlim')
+        return (
+            self._spectrum_display_revision,
+            id(freq) if freq is not None else 0,
+            id(amp) if amp is not None else 0,
+            id(raw) if raw is not None else 0,
+            bool(self._spectrum_db),
+        )
+
+    def _store_prepared_line_ranges(self, entries, prepared_ranges):
+        stored = {}
+        for entry, prepared in zip(entries, prepared_ranges):
+            stored[self._entry_display_identity(entry)] = prepared
+        self._prepared_by_identity = stored
+
+    def _lookup_prepared_for_entry(self, entry):
+        return self._prepared_by_identity.get(self._entry_display_identity(entry))
+
+    def _lookup_prepared_for_arrays(self, freq, amp):
+        for entry in self._entries:
+            if entry.get('freq') is freq and entry.get('amp') is amp:
+                prepared = self._lookup_prepared_for_entry(entry)
+                if prepared is not None:
+                    return prepared
+        return None
+
+    def _prepared_for_entry(self, entry):
+        prepared = self._lookup_prepared_for_entry(entry)
+        if prepared is not None:
+            return prepared
+        prepared = prepare_line_range(
+            entry['freq'], entry['amp'],
+            valid_mask=self._entry_valid_mask(entry, self._spectrum_db),
+        )
+        self._prepared_by_identity[self._entry_display_identity(entry)] = prepared
+        return prepared
+
     def _visible_entry_values(self, entry, xlim):
-        return visible_line_values(entry['freq'], entry['amp'], xlim,
-                                   valid_mask=self._entry_valid_mask(entry, self._spectrum_db))
+        result = self._prepared_for_entry(entry).query(xlim)
+        if result.y_min is None:
+            return np.array([], dtype=float)
+        return np.array([result.y_min, result.y_max], dtype=float)
 
     def _auto_amplitude_y_range(self, entries, xlim):
         values = [self._visible_entry_values(entry, xlim) for entry in entries]
@@ -3953,6 +4322,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     # ------------------------------------------------------------------
     def grab_pixmap(self, scale: float = 2.0) -> QPixmap:
+        self.flush_pending_spectrum_display()
         base = self._glw.grab()
         if base.isNull() or base.width() <= 0 or base.height() <= 0:
             fallback = QPixmap(1, 1)

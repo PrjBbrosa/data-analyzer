@@ -133,10 +133,20 @@ class _ModifierWheelViewBox(pg.ViewBox):
                 and plot_time is not None
                 and self is plot_time.vb
             )
+            # FFT amplitude plot body: same X-only pan. Heatmap/FRF have no
+            # `_plot_amp`, so they stay 2D. RectMode and Y-gutter (`axis`)
+            # keep their existing 2D / single-axis behavior.
+            force_spectrum_x_only = (
+                is_left_2d
+                and not is_rect_left_2d
+                and getattr(owner, "_plot_amp", None) is not None
+                and self is owner._plot_amp.vb
+            )
         except Exception:
             is_left_2d = False
             is_rect_left_2d = False
             force_time_x_only = False
+            force_spectrum_x_only = False
         if is_left_2d:
             try:
                 if ev.isStart():
@@ -147,7 +157,7 @@ class _ModifierWheelViewBox(pg.ViewBox):
                         owner.disable_interactive_quality()
             except Exception:
                 pass
-        if force_time_x_only:
+        if force_time_x_only or force_spectrum_x_only:
             try:
                 prev = list(self.state["mouseEnabled"])
                 self.setMouseEnabled(x=True, y=False)
