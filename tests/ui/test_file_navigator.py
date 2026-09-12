@@ -140,6 +140,71 @@ def test_file_row_click_emits_activated(qapp, qtbot):
     assert blocker.args == ["f0"]
 
 
+def test_file_card_attach_button_projects_all_attachment_states(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    source = "C:/data/grouped.hdf"
+    nav.add_file("f0", FakeFd(filepath=source, label_suffix="1 kHz"))
+    nav.add_file("f1", FakeFd(filepath=source, label_suffix="2 kHz"))
+    row = nav._rows[str(source)]
+
+    nav.set_attachment_context(section_label="时域", view_name="View 2")
+    nav.set_attached_file_ids([])
+    assert row._btn_attach.isEnabled()
+    assert row._btn_attach.property("attachmentState") == "available"
+    assert row._lbl_attachment.isHidden()
+    assert "时域 · View 2" in row._btn_attach.toolTip()
+
+    nav.set_attached_file_ids(["f0"])
+    assert row._btn_attach.isEnabled()
+    assert row._btn_attach.property("attachmentState") == "partial"
+    assert row._lbl_attachment.text() == "已加入 1/2 轨"
+    assert "补齐剩余 1 轨" in row._btn_attach.toolTip()
+
+    nav.set_attached_file_ids(["f0", "f1"])
+    assert not row._btn_attach.isEnabled()
+    assert row._btn_attach.property("attachmentState") == "attached"
+    assert row._btn_attach.toolTip() == "已加入 时域 · View 2"
+
+    nav.remove_file("f0")
+    remaining = nav._rows[str(source)]
+    assert remaining._btn_attach.property("attachmentState") == "attached"
+    assert remaining._btn_attach.toolTip() == "已加入 时域 · View 2"
+
+    nav.set_attachment_context(available=False)
+    assert not remaining._btn_attach.isEnabled()
+    assert remaining._btn_attach.property("attachmentState") == "unavailable"
+    assert "没有可接收的 View" in remaining._btn_attach.toolTip()
+
+
+def test_file_card_attach_button_emits_group_without_activating_card(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    source = "C:/data/grouped.hdf"
+    nav.add_file("f0", FakeFd(filepath=source, label_suffix="1 kHz"))
+    nav.add_file("f1", FakeFd(filepath=source, label_suffix="2 kHz"))
+    nav.set_attachment_context(section_label="频谱", view_name="View 1")
+    row = nav._rows[str(source)]
+
+    with qtbot.assertNotEmitted(nav.file_activated):
+        with qtbot.waitSignal(nav.files_attach_requested, timeout=200) as emitted:
+            row._btn_attach.click()
+
+    assert emitted.args == [("f0", "f1")]
+
+
+def test_file_card_actions_do_not_expand_into_empty_file_list(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    nav.resize(520, 420)
+    nav.show()
+    qapp.processEvents()
+    row = nav._rows["f0"]
+
+    assert row.height() <= row.sizeHint().height() + 2
+
+
 from unittest.mock import patch
 from PyQt5.QtCore import Qt
 

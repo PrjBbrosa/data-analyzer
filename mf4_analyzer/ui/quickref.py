@@ -123,8 +123,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("BLF / CANoe ASC 报文解码", sub="选择 DBC；界面会标注「完整匹配」或「抽样解码」。ASC 进度只增不减。"),
             QuickRow(
                 "把文件加入当前 View",
-                sub="上方是全局已打开，下方是当前 View；打开后拖入才能画图或分析。Enter/Space 激活当前行，F2 重命名。",
-                gesture="从文件列表拖到通道树",
+                sub="上方是全局已打开，下方是当前 View；点文件卡片右下的 ＋ 或拖入即可加入，不会自动勾选通道。Enter/Space 激活当前行，F2 重命名。",
+                gesture="点击文件卡片 ＋ 或拖到通道树",
             ),
             QuickRow(
                 "文件范围跟随",

@@ -835,6 +835,11 @@ class AnalysisMixin:
         if callable(setter):
             setter(attached)
         label = self._analysis_section_label(section)
+        set_attachment_context = getattr(
+            self.navigator, "set_attachment_context", None,
+        )
+        if callable(set_attachment_context):
+            set_attachment_context(section_label=label, view_name=state.name)
         empty = getattr(self.navigator, 'set_empty_state_context', None)
         if callable(empty):
             empty(section_label=label, view_name=state.name)

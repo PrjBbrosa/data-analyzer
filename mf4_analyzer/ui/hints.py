@@ -429,6 +429,12 @@ _HINTS = (
         priority=78,
     ),
     Hint(
+        id="file.attach_current_view",
+        text="文件卡片 ＋：加入当前 View，不勾选通道",
+        surface="discovery",
+        priority=77,
+    ),
+    Hint(
         id="view.history",
         text=f"视角后退已改为 {NAV_SHORTCUTS['back']}",
         surface="discovery",

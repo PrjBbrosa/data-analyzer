@@ -313,6 +313,20 @@ class ViewMixin:
         # (Stage 1 source isolation). Time View projection must not rebuild
         # analysis candidates — that would re-couple the two scopes.
         state = self.view_manager.get(idx)
+        set_attachment_context = getattr(
+            self.navigator, "set_attachment_context", None,
+        )
+        if callable(set_attachment_context):
+            pane_role = None
+            if self.chart_stack.split_active():
+                pane_role = (
+                    "副栏" if idx == self._secondary_view_idx else "主栏"
+                )
+            set_attachment_context(
+                section_label="时域",
+                view_name=state.name,
+                pane_role=pane_role,
+            )
         empty = getattr(self.navigator, 'set_empty_state_context', None)
         if callable(empty):
             empty(section_label='时域', view_name=state.name)

@@ -60,6 +60,7 @@ class _ElidedLabel(QLabel):
 class _FileRow(QFrame):
     activated = pyqtSignal(str)       # emits primary fid
     close_requested = pyqtSignal(str)  # emits rows_key (filepath_str or fid)
+    attach_requested = pyqtSignal(object)  # emits every logical fid on this card
     # Keyboard equivalent of drag-reorder: rows_key, "up"|"down".
     reorder_requested = pyqtSignal(str, str)
     MIME_TYPE = INTERNAL_FILE_FIDS_MIME
@@ -96,6 +97,24 @@ class _FileRow(QFrame):
         self._lbl_name.setFocusPolicy(Qt.NoFocus)
         self.setAccessibleName(full_name)
         top.addWidget(self._lbl_name, stretch=1)
+        lay.addLayout(top)
+
+        meta = QHBoxLayout()
+        meta.setSpacing(5)
+        self._lbl_attachment = QLabel("")
+        self._lbl_attachment.setObjectName("fileRowAttachment")
+        self._lbl_attachment.setFocusPolicy(Qt.NoFocus)
+        self._lbl_attachment.hide()
+        meta.addWidget(self._lbl_attachment, 0, Qt.AlignVCenter)
+        self._lbl_meta = _ElidedLabel("")
+        self._lbl_meta.setObjectName("fileRowMeta")
+        self._lbl_meta.setFocusPolicy(Qt.NoFocus)
+        meta.addWidget(self._lbl_meta, stretch=1)
+        lay.addLayout(meta)
+
+        actions = QVBoxLayout()
+        actions.setContentsMargins(0, 8, 7, 8)
+        actions.setSpacing(4)
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) on the file-row
         # close button. The icon stays 16x16 but the outer chrome was
         # eating ~30px before, dwarfing every other element on the row.
@@ -109,16 +128,28 @@ class _FileRow(QFrame):
         self._btn_close.setAutoRaise(True)
         self._btn_close.setFocusPolicy(Qt.StrongFocus)
         self._btn_close.clicked.connect(
-            lambda: self.close_requested.emit(self._rows_key)
+            self._on_close_clicked
         )
-        top.addWidget(self._btn_close, 0, Qt.AlignVCenter)
-        lay.addLayout(top)
-        self._lbl_meta = QLabel("")
-        self._lbl_meta.setObjectName("fileRowMeta")
-        self._lbl_meta.setFocusPolicy(Qt.NoFocus)
-        lay.addWidget(self._lbl_meta)
+        actions.addWidget(self._btn_close)
+        self._btn_attach = QToolButton()
+        self._btn_attach.setObjectName("fileRowAttach")
+        self._btn_attach.setIconSize(QSize(16, 16))
+        self._btn_attach.setFixedSize(QSize(24, 24))
+        self._btn_attach.setProperty("role", "icon")
+        self._btn_attach.setAutoRaise(True)
+        self._btn_attach.setFocusPolicy(Qt.StrongFocus)
+        self._btn_attach.clicked.connect(self._on_attach_clicked)
+        actions.addWidget(self._btn_attach)
+        # Both action buttons belong to the card's natural height. A stretch
+        # here advertises vertical expansion to the file-list layout, causing
+        # a single card to absorb the empty list area.
+        actions.setAlignment(Qt.AlignTop)
         outer.addLayout(lay, stretch=1)
+        outer.addLayout(actions, 0)
+        self._attachment_target = None
+        self._attachment_available = False
         self._refresh_meta()
+        self._refresh_attachment_status()
 
     def _set_rows_key(self, key):
         """Set the key this row emits on close (filepath_str in grouped mode, fid in flat)."""
@@ -142,11 +173,73 @@ class _FileRow(QFrame):
                 f"{len(self._fids)} 轨 · {hz_parts} Hz · {max_dur:.2f} s"
             )
 
+    def set_attachment_context(self, target, attached_fids, *, available=True):
+        """Refresh this card from a parent-provided, View-scoped projection.
+
+        File rows deliberately retain no MainWindow/ViewState reference: the
+        navigator supplies the currently projected attachment facts and target
+        text whenever the owner switches its context.
+        """
+        self._attachment_target = str(target or "")
+        self._attachment_available = bool(available)
+        self._attached_fids = {str(fid) for fid in (attached_fids or ())}
+        self._refresh_attachment_status()
+
+    def _refresh_attachment_status(self):
+        attached = getattr(self, "_attached_fids", set())
+        attached_count = sum(str(fid) in attached for fid in self._fids)
+        total = len(self._fids)
+        target = self._attachment_target or "当前 View"
+        if not self._attachment_available:
+            state = "unavailable"
+            icon = qta.icon("mdi6.plus", color="#94a3b8")
+            tooltip = "没有可接收的 View；请先选择目标 View"
+            accessible = tooltip
+            enabled = False
+            attachment_text = ""
+        elif total and attached_count == total:
+            state = "attached"
+            icon = qta.icon("mdi6.check", color="#899db5")
+            tooltip = f"已加入 {target}"
+            accessible = tooltip
+            enabled = False
+            attachment_text = ""
+        else:
+            state = "partial" if attached_count else "available"
+            icon = qta.icon("mdi6.plus", color="#1769e0")
+            missing = total - attached_count
+            if attached_count:
+                attachment_text = f"已加入 {attached_count}/{total} 轨"
+                tooltip = f"补齐剩余 {missing} 轨到 {target}"
+            else:
+                attachment_text = ""
+                tooltip = f"加入 {target}"
+            accessible = tooltip
+            enabled = True
+        self._lbl_attachment.setText(attachment_text)
+        self._lbl_attachment.setToolTip(attachment_text)
+        self._lbl_attachment.setVisible(bool(attachment_text))
+        self._btn_attach.setIcon(icon)
+        self._btn_attach.setToolTip(tooltip)
+        self._btn_attach.setAccessibleName(accessible)
+        self._btn_attach.setEnabled(enabled)
+        self._btn_attach.setProperty("attachmentState", state)
+        self._btn_attach.style().unpolish(self._btn_attach)
+        self._btn_attach.style().polish(self._btn_attach)
+
+    def _on_close_clicked(self):
+        self.close_requested.emit(self._rows_key)
+
+    def _on_attach_clicked(self):
+        if self._attachment_available:
+            self.attach_requested.emit(tuple(str(fid) for fid in self._fids))
+
     def add_fid(self, fid, fd):
         """Merge a new fid into this group card and refresh the meta label."""
         self._fids.append(fid)
         self._fds.append(fd)
         self._refresh_meta()
+        self._refresh_attachment_status()
 
     def remove_fid(self, fid):
         """Remove a fid from this group. Returns True if the group is now empty."""
@@ -159,6 +252,7 @@ class _FileRow(QFrame):
         if self._fids:
             self.fid = self._fids[0]
             self._refresh_meta()
+            self._refresh_attachment_status()
             return False
         return True
 
@@ -280,6 +374,10 @@ class FileNavigator(QWidget):
         # fid -> rows_key
         self._fid_to_key = {}
         self._active_fid = None
+        # Presentation-only attachment context. ViewState owns the underlying
+        # facts; these fields exist solely to render file-card affordances.
+        self._attachment_target = ""
+        self._attachment_available = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(3, 3, 3, 3)
         lay.setSpacing(4)
@@ -450,6 +548,7 @@ class FileNavigator(QWidget):
                 row._set_rows_key(fp_str)
                 row.activated.connect(self._activate)
                 row.close_requested.connect(self._request_close_group)
+                row.attach_requested.connect(self._on_row_attach_requested)
                 row.reorder_requested.connect(self._on_row_reorder_requested)
                 insert_pos = self._file_layout.count() - 1  # before the stretch
                 self._file_layout.insertWidget(insert_pos, row)
@@ -461,6 +560,7 @@ class FileNavigator(QWidget):
             row._set_rows_key(fid)
             row.activated.connect(self._activate)
             row.close_requested.connect(self._request_close_group)
+            row.attach_requested.connect(self._on_row_attach_requested)
             row.reorder_requested.connect(self._on_row_reorder_requested)
             insert_pos = self._file_layout.count() - 1  # before the stretch
             self._file_layout.insertWidget(insert_pos, row)
@@ -468,6 +568,7 @@ class FileNavigator(QWidget):
             self._fid_to_key[fid] = fid
 
         self.channel_list.add_file(fid, fd)
+        self._refresh_attachment_rows()
         self._refresh_header()
         self._activate(fid)
 
@@ -744,6 +845,10 @@ class FileNavigator(QWidget):
                     row.setParent(None)
                     row.deleteLater()
         self.channel_list.remove_file(fid, emit=emit)
+        # ChannelTree owns the filtered attachment list. A real source close
+        # changes that projection for every remaining card, so refresh their
+        # presentation state after (not before) its removal bookkeeping.
+        self._refresh_attachment_rows()
         if self._active_fid == fid:
             remaining = list(self._fid_to_key.keys())
             new_active = remaining[0] if remaining else None
@@ -772,6 +877,35 @@ class FileNavigator(QWidget):
 
     def set_attached_file_ids(self, fids):
         self.channel_list.set_attached_file_ids(fids)
+        self._refresh_attachment_rows()
+
+    def set_attachment_context(
+        self, *, section_label=None, view_name=None, pane_role=None,
+        available=True,
+    ):
+        """Set the target wording for the same attachment projection as rows.
+
+        This stays in the navigator's presentation layer. Callers must project
+        the actual attachment collection separately through
+        :meth:`set_attached_file_ids` before (or in the same event turn as)
+        this method.
+        """
+        if available:
+            parts = [str(value) for value in (section_label, view_name, pane_role) if value]
+            self._attachment_target = " · ".join(parts) or "当前 View"
+        else:
+            self._attachment_target = ""
+        self._attachment_available = bool(available)
+        self._refresh_attachment_rows()
+
+    def _refresh_attachment_rows(self):
+        attached = self.channel_list.get_attached_file_ids()
+        for row in self._rows.values():
+            row.set_attachment_context(
+                self._attachment_target,
+                attached,
+                available=self._attachment_available,
+            )
 
     def invalidate_channel_filter_context(self):
         self.channel_list.invalidate_filter_context()
@@ -875,6 +1009,16 @@ class FileNavigator(QWidget):
         if new_key is not None and new_key in self._rows:
             self._rows[new_key].set_active(True)
         self.file_activated.emit(fid)
+
+    def _on_row_attach_requested(self, fids):
+        """Forward a card's complete logical-source group to the shared path."""
+        known = set(self._fid_to_key)
+        selected = tuple(
+            fid for fid in dict.fromkeys(str(value) for value in (fids or ()))
+            if fid in known
+        )
+        if selected:
+            self.files_attach_requested.emit(selected)
 
     def _on_follow_action_toggled(self, _checked=False):
         prefs = self.follow_prefs()

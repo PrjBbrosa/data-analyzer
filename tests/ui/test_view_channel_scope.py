@@ -132,6 +132,27 @@ def test_attach_targets_secondary_focused_view(qtbot, qapp, loaded_csv):
     assert window.view_manager.get(window._primary_view_idx).attached_file_ids == []
 
 
+def test_file_card_attach_uses_the_focused_time_view(qtbot, qapp, loaded_csv):
+    from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
+
+    window = _window(qtbot, qapp)
+    window._on_view_new()
+    window.view_manager.set_split(0)
+    window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
+    window.load_file(loaded_csv)
+    fid = _fid(window)
+    window._on_chart_focus_changed(True)
+    row = window.navigator._rows[window.navigator._fid_to_key[fid]]
+
+    assert "时域" in row._btn_attach.toolTip()
+    assert "副栏" in row._btn_attach.toolTip()
+    row._btn_attach.click()
+
+    assert window.view_manager.get(window._secondary_view_idx).attached_file_ids == [fid]
+    assert window.view_manager.get(window._primary_view_idx).attached_file_ids == []
+    assert window.navigator.get_checked_channels() == []
+
+
 def test_detach_cancel_preserves_attachment_and_checked_state(
     qtbot, qapp, loaded_csv, monkeypatch
 ):

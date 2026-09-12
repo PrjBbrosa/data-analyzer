@@ -2128,6 +2128,15 @@ QLabel#fileRowMeta {
     color: #64748b;
     font-size: 11px;
 }
+QLabel#fileRowAttachment {
+    color: {{CONTROL_ACCENT}};
+    font-size: 11px;
+    font-weight: 600;
+}
+QToolButton#fileRowAttach[attachmentState="attached"] {
+    background-color: transparent;
+    border-color: transparent;
+}
 QFrame#fileInsertLine,
 QFrame#channelInsertLine,
 QFrame#fileTreeInsertLine {

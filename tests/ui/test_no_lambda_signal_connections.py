@@ -52,7 +52,6 @@ FROZEN_LAMBDA_CONNECT_COUNTS: dict[str, int] = {
     "ui/drawers/batch/frf_pair_editor.py": 1,
     "ui/drawers/batch/render_style_popover.py": 4,
     "ui/drawers/batch/signal_picker.py": 1,
-    "ui/file_navigator.py": 1,
     "ui/inspector_sections/_helpers.py": 1,
     "ui/inspector_sections/persistent_top.py": 2,
     "ui/main_window/_analysis_mixin.py": 1,

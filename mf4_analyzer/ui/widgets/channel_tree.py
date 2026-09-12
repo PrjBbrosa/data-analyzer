@@ -1876,12 +1876,12 @@ class MultiFileChannelWidget(QWidget):
             if self._projection_role == "time":
                 self.empty_state.setText(
                     f"当前“{section} · {view_name}”尚未加入文件\n"
-                    "从上方拖入文件，或开启自动加入"
+                    "点击上方文件的 ＋、拖入文件，或开启自动加入"
                 )
             else:
                 self.empty_state.setText(
                     f"当前“{section} · {view_name}”尚未加入文件\n"
-                    "从上方拖入；或在链接菜单启用「切换分析时填充空 View」"
+                    "点击上方文件的 ＋、拖入；或在链接菜单启用「切换分析时填充空 View」"
                 )
         editable = self._channel_checks_editable
         for widget in (

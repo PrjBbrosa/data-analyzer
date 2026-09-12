@@ -273,6 +273,7 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
         "chart.right_click_menu",
         "channel.right_click",
         "file.scope_follow",
+        "file.attach_current_view",
         # 58030e4d: landed WWT lossless/compact export; same default-mode
         # discovery pool as custom_action_slot (priority 70 > 50).
         "channel.export_wwt_storage",
