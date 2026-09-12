@@ -1,6 +1,7 @@
 import pytest
 
 from mf4_analyzer.ui_kit import load_stylesheet
+from mf4_analyzer.ui_kit.motion import DURATION_MS
 
 
 def test_method_buttons_emit_signal(qtbot):
@@ -457,7 +458,6 @@ def test_method_group_production_light_uses_navigation_slide_and_order_time_key(
     from PyQt5.QtWidgets import QWidget
 
     from mf4_analyzer.ui_kit.motion import (
-        DURATION_MS,
         POLICY_LIGHT,
         selection_easing,
     )
@@ -493,14 +493,14 @@ def test_method_group_production_light_uses_navigation_slide_and_order_time_key(
     QTest.mouseClick(group._buttons["order_time"], Qt.LeftButton)
     assert group.current_method() == "order_time"
     assert driver.is_active()
-    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 400
+    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 320
     used = driver.clock().easingCurve()
     assert used.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
     assert used.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
     assert used.valueForProgress(0.25) == pytest.approx(
         selection_easing().valueForProgress(0.25), abs=0.001
     )
-    driver.clock().setCurrentTime(400)
+    driver.clock().setCurrentTime(DURATION_MS["selection_navigation"])
     assert not driver.is_active()
     assert pill.geometry() == _mapped_method_rect(
         group, group._buttons["order_time"]
@@ -522,7 +522,7 @@ def test_method_group_mouse_and_keys_animate_program_set_snaps(qtbot, qapp):
     assert list(changed) == [["time"]]
     assert list(activated) == [["time"]]
     assert driver.is_active()
-    driver.clock().setCurrentTime(400)
+    driver.clock().setCurrentTime(DURATION_MS["selection_navigation"])
     assert not driver.is_active()
 
     group._buttons["time"].setFocus()
@@ -530,7 +530,7 @@ def test_method_group_mouse_and_keys_animate_program_set_snaps(qtbot, qapp):
     assert group.current_method() == "fft"
     assert list(changed) == [["time"], ["fft"]]
     assert driver.is_active()
-    driver.clock().setCurrentTime(400)
+    driver.clock().setCurrentTime(DURATION_MS["selection_navigation"])
 
     qtbot.keyClick(group._buttons["fft"], Qt.Key_End)
     assert group.current_method() == "frf"
@@ -560,7 +560,7 @@ def test_method_group_mouse_and_keys_animate_program_set_snaps(qtbot, qapp):
     qtbot.keyClick(group._buttons["fft_time"], Qt.Key_Home)
     assert group.current_method() == "time"
     assert driver.is_active()
-    driver.clock().setCurrentTime(400)
+    driver.clock().setCurrentTime(DURATION_MS["selection_navigation"])
     assert pill.geometry() == _mapped_method_rect(group, group._buttons["time"])
 
 
@@ -577,7 +577,7 @@ def test_method_group_plate_tracks_mapped_unequal_button_rect(qtbot, qapp):
     widths = [button.width() for button in group._buttons.values()]
     assert max(widths) - min(widths) >= 48
     QTest.mouseClick(order_btn, Qt.LeftButton)
-    group._motion_driver.clock().setCurrentTime(400)
+    group._motion_driver.clock().setCurrentTime(DURATION_MS["selection_navigation"])
 
     mapped = _mapped_method_rect(group, order_btn)
     pill = group._selection_pill

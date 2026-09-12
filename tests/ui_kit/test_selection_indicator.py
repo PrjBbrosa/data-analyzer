@@ -185,7 +185,7 @@ def test_same_target_does_not_restart(qtbot, qapp):
     "duration_name, expected_ms",
     [
         ("selection_control", 300),
-        ("selection_navigation", 400),
+        ("selection_navigation", 320),
     ],
 )
 def test_light_follow_interpolates_rect_and_lands_exactly(

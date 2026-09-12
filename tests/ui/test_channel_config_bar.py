@@ -262,3 +262,19 @@ def test_config_bar_top_aligns_with_view_rail_in_navigator_width_host(qtbot):
     assert tabbar.height() == RAIL_HEIGHT
     assert 2 <= leftover <= 5
     assert abs(btn_mid - rail_mid) <= 4
+
+
+def test_unselected_config_shows_search_placeholder_from_start(qtbot):
+    bar = ChannelConfigBar()
+    qtbot.addWidget(bar)
+    assert bar.combo.currentText() == ""
+    assert bar.combo.lineEdit().placeholderText() == "输入关键词搜索配置"
+    bar.set_configs([fake_config("a", "动力分析", 4)])
+    assert bar.combo.currentText() == ""
+    bar.select_config("a")
+    assert bar.combo.currentText() == "动力分析"
+    bar.select_config(None)
+    assert bar.combo.currentText() == ""
+    bar.combo.setEditText("动力")
+    assert bar.combo.currentText() == "动力"
+    assert bar.selected_config_id() is None

@@ -209,8 +209,17 @@ class FFTMixin:
         params['time_range'] = time_range
         return self.analysis_caches['fft'].make_key(fid, ch, params)
 
-    def _fft_effective_params_for_source(self, fft_params, fid, ch, time_range):
-        sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range, params=fft_params)
+    def _fft_effective_params_for_source(
+        self, fft_params, fid, ch, time_range, *, prepared=None,
+    ):
+        # Borrow only the current caller's preparation, including missing/empty
+        # input; no arrays are retained across calls or Section switches.
+        if prepared is None:
+            sig, fs = self._fft_fetch_signal(
+                fid, ch, time_range=time_range, params=fft_params,
+            )
+        else:
+            sig, fs = prepared
         if sig is None or fs is None or len(sig) <= 0:
             out = dict(fft_params)
             # Stamp fs when available so the fallback key distinguishes signals
@@ -358,9 +367,11 @@ class FFTMixin:
         any_content = False
         for fid, ch in sources:
             header = f"{fid} · {ch}"
-            sig, _fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+            sig, fs = self._fft_fetch_signal(
+                fid, ch, time_range=time_range, params=fft_params,
+            )
             params = self._fft_effective_params_for_source(
-                fft_params, fid, ch, time_range,
+                fft_params, fid, ch, time_range, prepared=(sig, fs),
             )
             decision = params.get('nfft_decision')
             blocked = (

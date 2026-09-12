@@ -202,6 +202,7 @@ def test_apply_time_xaxis_spec_matches_inspector_apply(qtbot, qapp, loaded_csv):
         resolver=PER_SOURCE_NAME,
         channel="speed",
         label="speed",
+        label_origin="auto",
     )
     w.apply_time_xaxis_spec(spec, w.canvas_time, sync_inspector=True)
     applied = w._custom_xaxis_spec
@@ -230,6 +231,7 @@ def test_programmatic_channel_xaxis_auto_label_clears_on_first_time_switch(
             resolver=PER_SOURCE_NAME,
             channel="speed",
             label="speed",
+            label_origin="auto",
         ),
         w.canvas_time,
         sync_inspector=True,
@@ -268,6 +270,28 @@ def test_programmatic_channel_xaxis_custom_label_survives_time_switch(
 
     top.set_xaxis_mode("time")
     assert top.xaxis_label() == "Vehicle speed"
+
+
+def test_user_same_as_channel_label_keeps_user_origin_through_apply_and_time_switch(
+    qtbot, qapp, loaded_csv,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _set_checked(w, "torque")
+    w.plot_time()
+    qapp.processEvents()
+
+    top = w.inspector.top
+    top.set_xaxis_mode("channel")
+    w._on_xaxis_mode_changed("channel")
+    assert top.set_xaxis_channel_data((PER_SOURCE_NAME, None, "speed"))
+    top.set_xaxis_label("speed", auto_from_channel=True)
+    top.edit_xlabel.textEdited.emit("speed")
+    assert top.xaxis_label_origin() == "user"
+
+    w._apply_xaxis()
+    assert w._custom_xaxis_spec.label_origin == "user"
+    top.set_xaxis_mode("time")
+    assert top.xaxis_label() == "speed"
 
 
 def test_drag_leave_clears_drop_highlight(qtbot, qapp, loaded_csv):

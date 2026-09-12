@@ -13,6 +13,7 @@ from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ..time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
+    LABEL_ORIGIN_AUTO,
     CustomXAxisSpec,
     selection_payload,
 )
@@ -76,6 +77,8 @@ class ViewMixin:
             gate.leave()
             if not gate.busy:
                 self._schedule_pending_view_switch()
+                if gate.pending_section_view is not None:
+                    self._schedule_time_section_entry()
 
     def _canvas_display_update_scope(self, canvas):
         """Canvas-owned nested display suppression, or a no-op on test doubles."""
@@ -1122,7 +1125,7 @@ class ViewMixin:
                 top._combo_xaxis_ch.setCurrentIndex(match_idx)
                 top.set_xaxis_label(
                     label or target_channel or '',
-                    auto_from_channel=(not label or label == target_channel),
+                    auto_from_channel=(spec.label_origin == LABEL_ORIGIN_AUTO),
                 )
             else:
                 self._custom_xaxis.adopt(

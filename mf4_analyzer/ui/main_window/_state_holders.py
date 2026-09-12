@@ -123,6 +123,8 @@ class TimeRenderGate:
     depth: int = 0
     pending_view_id: str | None = None
     drain_scheduled: bool = False
+    pending_section_view: object | None = None
+    section_entry_scheduled: bool = False
 
     @property
     def busy(self) -> bool:

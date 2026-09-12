@@ -1472,13 +1472,13 @@ class TimeChartCard(_ChartChoiceMotionMixin, _ChartCard):
         self.btn_subplot.setChecked(mode == 'subplot')
         self.btn_overlay.setChecked(mode == 'overlay')
         self._refresh_bottom_hint()
-        if notify:
-            self.plot_mode_changed.emit(mode)
         self._follow_choice_indicator(
             "plot",
             self.btn_overlay if mode == "overlay" else self.btn_subplot,
             animate=animate,
         )
+        if notify:
+            self.plot_mode_changed.emit(mode)
 
     # ----- cursor mode -----
     def cursor_mode(self):
@@ -1503,11 +1503,11 @@ class TimeChartCard(_ChartChoiceMotionMixin, _ChartCard):
         # Cursor mode is part of HintState, so refresh the bottom context
         # label whenever it flips.
         self._refresh_bottom_hint()
-        if notify:
-            self.cursor_mode_changed.emit(mode)
         self._follow_choice_indicator(
             "cursor", self._cursor_buttons.get(mode), animate=animate,
         )
+        if notify:
+            self.cursor_mode_changed.emit(mode)
 
     def cursor_display_settings_button(self):
         return self._cursor_display_settings_btn
@@ -1757,11 +1757,11 @@ class FrequencyCursorCard(_ChartChoiceMotionMixin, _ChartCard):
         if callable(setter):
             setter(mode)
         self._set_cursor_buttons(mode)
-        if notify and old != mode:
-            self.cursor_mode_changed.emit(mode)
         self._follow_choice_indicator(
             "cursor", self._cursor_buttons.get(mode), animate=animate,
         )
+        if notify and old != mode:
+            self.cursor_mode_changed.emit(mode)
 
     def sync_frequency_cursor_control(self) -> None:
         target = self._frequency_cursor_target()

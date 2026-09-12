@@ -147,41 +147,40 @@ def project_result_rows(result, *, generation) -> tuple[ResultDetailRow, ...]:
             image_path=_optional_path(getattr(group, "image_path", None)),
             group_identity=identity,
         ))
-    if not items:
-        for index, reason in enumerate(blocked):
-            rows.append(ResultDetailRow(
-                row_key=(generation, "run", "blocked", index),
-                file_id=None,
-                source_identity="",
-                file_name="",
-                method="",
-                signal="",
-                input_signal="",
-                output_signal="",
-                status="blocked",
-                message=_message_text(reason),
-                warnings=(),
-                data_path=None,
-                image_path=None,
-                group_identity="",
-            ))
-        for index, warning in enumerate(run_warnings):
-            rows.append(ResultDetailRow(
-                row_key=(generation, "run", "warning", index),
-                file_id=None,
-                source_identity="",
-                file_name="",
-                method="",
-                signal="",
-                input_signal="",
-                output_signal="",
-                status="done",
-                message=_message_text(warning),
-                warnings=_copy_warnings((warning,)),
-                data_path=None,
-                image_path=None,
-                group_identity="",
-            ))
+    for index, reason in enumerate(blocked):
+        rows.append(ResultDetailRow(
+            row_key=(generation, "run", "blocked", index),
+            file_id=None,
+            source_identity="",
+            file_name="",
+            method="",
+            signal="",
+            input_signal="",
+            output_signal="",
+            status="blocked",
+            message=_message_text(reason),
+            warnings=(),
+            data_path=None,
+            image_path=None,
+            group_identity="",
+        ))
+    for index, warning in enumerate(run_warnings):
+        rows.append(ResultDetailRow(
+            row_key=(generation, "run", "warning", index),
+            file_id=None,
+            source_identity="",
+            file_name="",
+            method="",
+            signal="",
+            input_signal="",
+            output_signal="",
+            status="done",
+            message=_message_text(warning),
+            warnings=_copy_warnings((warning,)),
+            data_path=None,
+            image_path=None,
+            group_identity="",
+        ))
     return tuple(rows)
 
 

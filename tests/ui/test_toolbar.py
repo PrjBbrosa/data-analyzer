@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui.toolbar import Toolbar
+from mf4_analyzer.ui_kit.motion import DURATION_MS
 
 
 def test_toolbar_constructs(qapp):
@@ -559,7 +560,7 @@ def test_toolbar_production_light_uses_navigation_slide_and_keeps_five_keys(
     assert tb._mode_active_dots["fft"].isVisible()
     assert not tb._mode_active_dots["time"].isVisible()
     assert driver.is_active()
-    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 400
+    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 320
     used = driver.clock().easingCurve()
     assert used.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
     assert used.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
@@ -575,7 +576,7 @@ def test_toolbar_production_light_uses_navigation_slide_and_keeps_five_keys(
     assert _mapped_mode_rect(tb, tb.btn_mode_time).x() < mid.x() < _mapped_mode_rect(
         tb, tb.btn_mode_fft
     ).x()
-    clock.setCurrentTime(400)
+    clock.setCurrentTime(DURATION_MS["selection_navigation"])
     assert not driver.is_active()
     assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_fft)
     assert list(spy) == [["fft"]]
@@ -701,7 +702,7 @@ def test_toolbar_compact_icon_hit_restores_labels_and_snaps_plate(qtbot, qapp):
     QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton, pos=icon_pos)
     assert tb.current_mode() == "fft"
     assert driver.is_active()
-    driver.clock().setCurrentTime(400)
+    driver.clock().setCurrentTime(DURATION_MS["selection_navigation"])
     assert not driver.is_active()
     assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_fft)
     assert "FFT" in tb.btn_mode_fft.toolTip()

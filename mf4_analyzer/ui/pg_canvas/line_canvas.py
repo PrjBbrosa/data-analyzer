@@ -517,6 +517,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._spectrum_aa_ink_seeded = False
         self._time_aa_ink_allowed = False
         self._time_aa_ink_seeded = False
+        self._section_reveal_generation = 0
+        self._section_reveal_waiting = False
+        self._section_reveal_painted_generation = -1
+        self._section_reveal_geometry = None
         self._last_quality_status = None
         self._idle_activity = _IdleQualityActivity()
         self._mouse_buttons_provider = QApplication.mouseButtons
@@ -919,6 +923,56 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             or (time_idle_aa and self._time_curves)
         )
 
+    def _cancel_section_reveal(self) -> None:
+        self._section_reveal_generation += 1
+        self._section_reveal_waiting = False
+        self._section_reveal_geometry = None
+        self._stop_aa_idle_timer()
+        self._stop_discrete_aa_timer()
+
+    def begin_section_reveal(self) -> None:
+        """Prepare existing curves before their Section page becomes visible.
+
+        No replot callback or range/history mutation is part of this hook.
+        A rebuilt result supersedes it through the normal render lifecycle.
+        """
+        self._cancel_section_reveal()
+        if not (self._amp_curves or self._time_curves):
+            return
+        self.disable_interactive_quality()
+        self._section_reveal_waiting = True
+        self._emit_quality_status()
+        self._glw.viewport().update()
+
+    def _section_reveal_geometry_key(self):
+        viewport = self._glw.viewport()
+        return (
+            viewport.width(), viewport.height(), self.devicePixelRatioF(),
+            tuple((p.vb.sceneBoundingRect().getRect(),
+                   tuple(tuple(r) for r in p.vb.viewRange()))
+                  for p in (self._plot_amp, self._plot_time)),
+        )
+
+    def _section_reveal_paint_token(self):
+        if not self._section_reveal_waiting or not self.isVisible():
+            return None
+        return self._section_reveal_generation, self._section_reveal_geometry_key()
+
+    def _section_reveal_painted(self, token) -> None:
+        """Receive completion from the actual GraphicsView paint override."""
+        if token is None or not self._section_reveal_waiting:
+            return
+        generation, geometry = token
+        if generation != self._section_reveal_generation or not self.isVisible():
+            return
+        if (geometry != self._section_reveal_geometry_key()
+                or self._spectrum_curves_dirty or self._spectrum_y_dirty):
+            self._glw.viewport().update()
+            return
+        self._section_reveal_painted_generation = generation
+        self._section_reveal_geometry = geometry
+        self._arm_discrete_aa()
+
     def _arm_discrete_aa(self) -> None:
         """Settle AA for a DISCRETE render on the next event-loop turn.
 
@@ -994,6 +1048,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         has to look at both or it will report red on a canvas that is one
         event-loop turn away from green.
         """
+        if self._section_reveal_waiting:
+            return True
         for timer in (self._aa_idle_timer_alive(),
                       self._discrete_aa_timer_alive()):
             if timer is None:
@@ -1151,6 +1207,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Idle-timer slot: restore crisp AA once THIS canvas is hands-off."""
         if sip.isdeleted(self):
             return
+        if self._section_reveal_waiting:
+            if (self._section_reveal_painted_generation != self._section_reveal_generation
+                    or self._section_reveal_geometry != self._section_reveal_geometry_key()
+                    or self._spectrum_curves_dirty or self._spectrum_y_dirty):
+                self._stop_aa_idle_timer()
+                self._stop_discrete_aa_timer()
+                self._glw.viewport().update()
+                return
+            self._section_reveal_waiting = False
         if self._aa_on:
             self._stop_aa_idle_timer()
             self._stop_discrete_aa_timer()
@@ -1865,6 +1930,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         DIMS them and overlays a "结果已过期" marker, while the lower time row
         still updates live to the new selection. The next ``plot_spectra``
         restores the normal visual state."""
+        self._cancel_section_reveal()
         self.clear_empty_hint()
         if clear_spectrum:
             self._invalidate_spectrum_display_generation()
@@ -2095,6 +2161,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         super().resizeEvent(event)
         self._position_collapse_ctrl()
         self._refresh_bottom_x_ticks()
+
+    def hideEvent(self, event):
+        if self._section_reveal_waiting:
+            self._cancel_section_reveal()
+        super().hideEvent(event)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2915,6 +2986,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     self._manual_amp_viewport = captured
 
     def _invalidate_spectrum_display_generation(self) -> None:
+        self._cancel_section_reveal()
         self._spectrum_display_generation += 1
         self._stop_spectrum_refresh_timer()
         self._spectrum_curves_dirty = False
@@ -2982,10 +3054,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._entries, self._plot_amp.vb.viewRange()[0])
         target = limits if limits is not None else (0.0, 1.0)
         current = self._plot_amp.vb.viewRange()[1]
-        if np.allclose(
-                (float(current[0]), float(current[1])),
-                (float(target[0]), float(target[1])),
-                rtol=0.0, atol=1e-9):
+        if tuple(map(float, current)) == tuple(map(float, target)):
             return False
         with self._program_spectrum_range():
             self._plot_amp.setYRange(float(target[0]), float(target[1]), padding=0)
@@ -4323,6 +4392,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     # ------------------------------------------------------------------
     def grab_pixmap(self, scale: float = 2.0) -> QPixmap:
         self.flush_pending_spectrum_display()
+        if self._section_reveal_waiting:
+            # An explicit copy/export cannot rely on a future timer. Realize
+            # layout, paint the retained content, then apply the same gate.
+            # repaint dispatches this viewport only, never the global queue.
+            self._activate_graphics_layout()
+            self._glw.viewport().repaint()
+            self._enable_idle_quality()
         base = self._glw.grab()
         if base.isNull() or base.width() <= 0 or base.height() <= 0:
             fallback = QPixmap(1, 1)

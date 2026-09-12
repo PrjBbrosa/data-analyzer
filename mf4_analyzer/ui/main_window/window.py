@@ -41,6 +41,8 @@ from ..plot_risk import PlotRisk, PlotRiskLevel, estimate_time_overlay_risk
 from ..time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
+    LABEL_ORIGIN_AUTO,
+    LABEL_ORIGIN_USER,
     PER_SOURCE_NAME,
     TIME_MODE,
     CursorXAxisContext,
@@ -1909,6 +1911,7 @@ class MainWindow(
         self.toolbar.set_nav_open(state == PanelState.PINNED)
 
     def _on_mode_changed(self, mode):
+        self._time_render.pending_section_view = None
         old_mode = self.chart_stack.current_mode()
         uv = getattr(self, "_ultraview", None)
         source_modes = ("time", "fft", "fft_time", "frf", "order")
@@ -1920,6 +1923,10 @@ class MainWindow(
                 self._capture_active_analysis_view(old_mode)
         if uv is not None and mode in source_modes:
             uv.note_source_mode(mode)
+        if mode == "fft" and old_mode != mode:
+            page = self.chart_stack.page_fft
+            for pane_idx in range(page.pane_count()):
+                page.pane_canvas(pane_idx).begin_section_reveal()
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
@@ -1946,11 +1953,14 @@ class MainWindow(
                 self.files
                 and self.navigator.get_checked_channels()
                 and not opening
+                and idx is not None
+                and 0 <= idx < len(self.view_manager.views)
             ):
                 # Project open already plots via `_apply_active_view`. A
                 # deferred replot here would processEvents into the restore
                 # pump and freeze the UI (macOS beachball).
-                QTimer.singleShot(0, self._plot_time_preserving_xlim)
+                self._time_render.pending_section_view = self.view_manager.get(idx)
+                self._schedule_time_section_entry()
         elif mode in self.analysis_managers:
             # D8: hide the Time View record subtree when leaving Time. The
             # sync entry itself no-ops to empty rows whenever mode != "time".
@@ -2067,10 +2077,42 @@ class MainWindow(
         self._hint_focused_pane("分叠")
         self._replot_canvas_for_view(idx, canvas)
 
-    def _plot_time_preserving_xlim(self):
+    def _schedule_time_section_entry(self):
+        gate = self._time_render
+        if gate.pending_section_view is not None and not gate.section_entry_scheduled:
+            gate.section_entry_scheduled = True
+            QTimer.singleShot(0, self._render_time_section_entry)
+
+    def _render_time_section_entry(self):
+        from PyQt5 import sip
+
+        if sip.isdeleted(self):
+            return
+        gate = self._time_render
+        gate.section_entry_scheduled = False
+        if gate.busy:
+            return
+        target = gate.pending_section_view
+        gate.pending_section_view = None
+        if target is None or self.chart_stack.current_mode() != "time":
+            return
+        resolved = self._focused_time_view_state()
+        if resolved is None or resolved[1] is not target:
+            return
+        if (
+            getattr(self, "_opening_project", False)
+            or self._project_dirty.close_teardown_started
+        ):
+            return
+        self._plot_time_preserving_xlim(section_entry=True)
+
+    def _plot_time_preserving_xlim(self, *, section_entry=False):
         cur_xlim = self._safe_capture_primary_xlim()
         try:
-            self.plot_time()
+            if section_entry:
+                self.plot_time(section_entry=True)
+            else:
+                self.plot_time()
         finally:
             if cur_xlim is not None:
                 self._safe_restore_primary_xlim(cur_xlim)
@@ -2996,6 +3038,7 @@ class MainWindow(
             spec = CustomXAxisSpec(
                 mode='time',
                 label=self.inspector.top.xaxis_label() or '',
+                label_origin=LABEL_ORIGIN_USER,
             )
         else:
             data = self.inspector.top.xaxis_channel_data()
@@ -3003,7 +3046,10 @@ class MainWindow(
                 self.toast("请选择横坐标通道", "warning")
                 return
             raw_label = self.inspector.top.xaxis_label()
-            selected = spec_from_selection(data, label=raw_label)
+            label_origin = self.inspector.top.xaxis_label_origin()
+            selected = spec_from_selection(
+                data, label=raw_label, label_origin=label_origin,
+            )
             if selected.mode != CHANNEL_MODE or not selected.channel:
                 self.toast("横坐标选择无效", "warning")
                 return
@@ -3016,6 +3062,7 @@ class MainWindow(
                 channel=selected.channel,
                 source_fid=selected.source_fid,
                 label=label,
+                label_origin=label_origin,
             )
         return MainWindow.apply_time_xaxis_spec(
             self, spec, canvas, sync_inspector=False,
@@ -3148,10 +3195,12 @@ class MainWindow(
             label = spec.label or spec.channel or ''
             top.set_xaxis_label(
                 label,
-                auto_from_channel=(not spec.label or label == spec.channel),
+                auto_from_channel=(spec.label_origin == LABEL_ORIGIN_AUTO),
             )
         else:
-            top.set_xaxis_label(spec.label or '', auto_from_channel=False)
+            top.set_xaxis_label(
+                spec.label or '', auto_from_channel=False,
+            )
 
     def _on_time_channel_drop(self, canvas, key, zone):
         """Join a dragged channel to the drop-target time View, or set custom X."""
@@ -3185,6 +3234,7 @@ class MainWindow(
                 source_fid=None,
                 channel=channel,
                 label=channel,
+                label_origin=LABEL_ORIGIN_AUTO,
             )
             self.apply_time_xaxis_spec(spec, canvas, sync_inspector=True)
             return
@@ -3585,7 +3635,7 @@ class MainWindow(
     def _restore_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
 
-    def plot_time(self, *, user_initiated=False):
+    def plot_time(self, *, user_initiated=False, section_entry=False):
         # Route channel-check replots to the focused time card. Outside
         # side-by-side compare, focused_canvas() is the primary self.canvas_time
         # so this is byte-identical to the old behaviour; while split is active
@@ -3602,6 +3652,7 @@ class MainWindow(
                 focused,
                 update_primary_ui=(focused is self.canvas_time),
                 user_initiated=user_initiated,
+                **({"section_entry": True} if section_entry else {}),
             )
 
     @staticmethod
@@ -3813,6 +3864,7 @@ class MainWindow(
         user_initiated=False,
         *,
         defer_axis_finalize=False,
+        section_entry=False,
     ):
         """Plot time data; deferred finalization leaves it to the caller."""
         if not self.files:
@@ -4006,6 +4058,7 @@ class MainWindow(
             progress_token = self._begin_compute_progress(
                 "时间域绘制中",
                 total=1000,
+                process_events=not section_entry,
             )
 
         def phase_progress(start, stop, label):
@@ -5431,6 +5484,7 @@ class MainWindow(
         # closing; replaying it would drive a full render through a widget tree
         # that is being torn down.
         self._time_render.clear_pending_switch()
+        self._time_render.pending_section_view = None
         self._analysis_jobs.shutdown()
         super().closeEvent(event)
 

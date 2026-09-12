@@ -58,6 +58,7 @@ def _set_channel_xaxis(w, fid, channel, label):
     )
     combo.setCurrentIndex(idx)
     top.edit_xlabel.setText(label)
+    top.edit_xlabel.textEdited.emit(label)
     w._apply_xaxis()
 
 

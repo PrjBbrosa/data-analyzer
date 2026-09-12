@@ -77,6 +77,9 @@ def test_apply_custom_xaxis_invalidates_fft_time_analysis_cache(qtbot):
         def xaxis_label(self):
             return "Custom X"
 
+        def xaxis_label_origin(self):
+            return "user"
+
     canvas = _Canvas()
     cache = AnalysisResultCache(12)
     key = cache.make_key(

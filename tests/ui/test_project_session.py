@@ -378,6 +378,7 @@ def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):
         "fid": None,
         "channel": "rpm",
         "label": "Speed",
+        "label_origin": "user",
     }
 
     restored = MainWindow()
@@ -390,6 +391,36 @@ def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):
         channel="rpm",
         label="Speed",
     )
+
+
+def test_project_roundtrip_keeps_same_text_user_xaxis_label_origin(qapp, tmp_path):
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    project = tmp_path / "same-label-origin.tlproj"
+    window = MainWindow()
+    window._load_one(str(csv_a))
+    window._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="per_source_name",
+        channel="rpm",
+        label="rpm",
+        label_origin="user",
+    )
+    window._custom_xlabel = "rpm"
+    window._capture_current_view()
+    window.save_project(project)
+
+    saved = pio.load_project_from_json(project)
+    assert saved.views[0]["axis_opts"]["x_axis"]["label_origin"] == "user"
+
+    restored = MainWindow()
+    restored.open_project(project)
+    assert restored._custom_xaxis_spec.label_origin == "user"
+    restored.inspector.top.set_xaxis_mode("time")
+    assert restored.inspector.top.xaxis_label() == "rpm"
 
 
 def test_open_project_migrates_legacy_xaxis_to_remapped_exact_source(

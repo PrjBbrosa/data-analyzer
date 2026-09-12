@@ -1,9 +1,12 @@
 """Channel-tree search empty states and same-context expand/scroll restore."""
 import inspect
 
+import pytest
 from PyQt5.QtCore import QCoreApplication, QEvent, Qt
 from PyQt5.QtGui import QKeyEvent
-from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+from PyQt5.QtWidgets import (
+    QApplication, QLabel, QPushButton, QTreeWidgetItem, QWidget,
+)
 
 from mf4_analyzer.ui.file_navigator import FileNavigator
 from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
@@ -103,8 +106,10 @@ def test_duplicate_channel_names_restore_by_userrole_identity(qapp, qtbot):
     assert snapshot is not None
     identities = [ident for ident, _expanded in snapshot["expanded"]]
     assert all(isinstance(ident, tuple) for ident in identities)
-    assert ("channel", "file-a", "speed") in identities
-    assert ("channel", "file-b", "speed") in identities
+    assert ("file", "file-a") in identities
+    assert ("file", "file-b") in identities
+    assert ("channel", "file-a", "speed") not in identities
+    assert ("channel", "file-b", "speed") not in identities
     assert "speed" not in identities
     assert left is not widget._tree_item_for_data(("file", "file-b"))
 
@@ -112,6 +117,40 @@ def test_duplicate_channel_names_restore_by_userrole_identity(qapp, qtbot):
     _flush(widget)
     assert not left.isExpanded()
     assert right.isExpanded()
+
+
+@pytest.mark.parametrize("count", (500, 1000, 2000, 10000))
+def test_filter_snapshot_restore_identity_work_is_linear(qapp, qtbot, monkeypatch, count):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    root = QTreeWidgetItem(widget.tree, ["bulk"])
+    root.setData(0, Qt.UserRole, ("file", "bulk"))
+    children = []
+    for index in range(count):
+        child = QTreeWidgetItem([f"channel-{index}"])
+        child.setData(0, Qt.UserRole, ("channel", "bulk", str(index)))
+        children.append(child)
+    root.addChildren(children)
+    root.setExpanded(False)
+    snapshot = {
+        "expanded": ((("file", "bulk"), False),),
+        "top_identity": None,
+        "top_offset": 0,
+        "scroll": 0,
+    }
+
+    calls = 0
+    original_data = QTreeWidgetItem.data
+
+    def counted_data(item, *args):
+        nonlocal calls
+        calls += 1
+        return original_data(item, *args)
+
+    monkeypatch.setattr(QTreeWidgetItem, "data", counted_data)
+    widget._restore_filter_snapshot(snapshot)
+
+    assert calls <= 2 * count + 20
 
 
 def test_keyword_and_selected_only_share_one_snapshot(qapp, qtbot):

@@ -622,6 +622,9 @@ class PersistentTop(QWidget):
     def xaxis_label(self):
         return self.edit_xlabel.text().strip()
 
+    def xaxis_label_origin(self):
+        return "auto" if self._xlabel_auto_from_channel else "user"
+
     def set_xaxis_label(self, text, *, auto_from_channel=None):
         """Project an X-axis label, optionally preserving its provenance.
 

@@ -57,6 +57,8 @@ class _ChannelConfigItemDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(surface, 7, 7)
 
         title = str(index.data(CONFIG_NAME_ROLE) or index.data(Qt.DisplayRole) or "")
+        if kind == "placeholder":
+            title = "选配置（可搜索）"
         if kind == "config":
             count = int(index.data(CHANNEL_COUNT_ROLE) or 0)
             title_rect = surface.adjusted(10, 0, -78, 0)
@@ -193,7 +195,8 @@ class ChannelConfigBar(QWidget):
         selected = selected_id if selected_id is not None else self.selected_config_id()
         blocker = QSignalBlocker(self.combo)
         self.combo.clear()
-        self.combo.addItem("选配置（可搜索）", None)
+        # Keep the unselected editor empty so its search placeholder is visible.
+        self.combo.addItem("", None)
         self.combo.setItemData(0, "placeholder", ITEM_KIND_ROLE)
         for config in configs:
             count = len(config.channel_names)

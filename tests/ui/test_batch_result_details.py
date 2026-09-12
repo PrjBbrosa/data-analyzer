@@ -148,6 +148,22 @@ class TestProjectResultRows:
         }
         assert result_has_detail_payload(result) is True
 
+    def test_run_level_diagnostics_are_kept_alongside_item_rows(self):
+        result = _result(
+            status="partial",
+            items=[_item(task_id="done", message="wrote output")],
+            blocked=["one source was unavailable"],
+            warnings=["render backend degraded"],
+        )
+        rows = project_result_rows(result, generation=5)
+        assert [row.message for row in rows] == [
+            "wrote output",
+            "one source was unavailable",
+            "render backend degraded",
+        ]
+        assert rows[1].row_key == (5, "run", "blocked", 0)
+        assert rows[2].row_key == (5, "run", "warning", 0)
+
     def test_render_group_failure_is_separate_and_not_index_paired(self):
         items = [
             _item(
@@ -279,6 +295,19 @@ def test_format_row_clipboard_is_local_text_only():
 
 
 class TestSheetResultDetails:
+    def test_filter_change_marks_completed_result_as_previous_run(
+        self, qtbot, monkeypatch,
+    ):
+        sheet = BatchSheet(None, files={})
+        qtbot.addWidget(sheet)
+        _silence_finish(monkeypatch, sheet)
+        _finish(sheet, _result(items=[_item(task_id="done")]))
+
+        sheet._input_panel._filter_panel._enable_switch.click()
+
+        assert sheet._result_stale is True
+        assert sheet._result_details.caption_text() == "上次运行结果"
+
     def test_finished_callback_enables_entry_and_per_item_reasons(
         self, qtbot, monkeypatch,
     ):

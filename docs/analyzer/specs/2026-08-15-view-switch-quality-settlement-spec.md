@@ -296,6 +296,18 @@ AaFrameLatch`（构造参数：首帧上限、稳态上限、EMA α、LRU 上限
 域包络，物理与 TimeDomain overlay 相同；标定探针同时报它的斜率，偏差 >2× 再
 分家。
 
+**2026-09-12 retained Section reveal 合同补充：** 保留结果的 FFT 回切与上述
+新结果重建是不同入口。离开页捕获完成、目标页显示之前，对每个已有目标 Pane
+调用 `PgLineCanvas.begin_section_reveal()`；只暂降 AA，不重建曲线、不发 replot、
+不改范围、游标或历史。真实 GraphicsView 内容 paint 完成且本帧前后几何/范围
+相同、无 display dirty 时才武装独立离散结算；单独运行 0 ms timer 不构成首帧证据。
+结算再次校验几何与 generation；失配等下一次真实 paint，不使用固定等待。
+隐藏、reset、结果替换使旧 generation 失效，销毁时子 timer 随 owner 清理。
+等待期间通过既有 quality status / capture stability 报 pending，隐藏取消不得
+遗留 pending。最终仍使用原 ink、points 和实测 backstop；150 ms 交互 timer
+不变。首次内容、最终质量以及迟到 paint 峰值须独立在 Cocoa 测量；本合同不把
+AA 恢复后同等阻塞视为性能通过，也不回写以上历史标定数字。
+
 ### 3.5 前后对比（一次回切，时域，全量重建路径）
 
 ```

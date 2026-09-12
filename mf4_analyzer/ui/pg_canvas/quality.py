@@ -172,9 +172,12 @@ def _frame_timed_view_class(base):
         """
 
         def paintEvent(self, ev):
+            owner = getattr(self, _FRAME_TIMER_OWNER_ATTR, None)
+            token_provider = getattr(owner, "_section_reveal_paint_token", None)
+            token = token_provider() if token_provider is not None else None
             t0 = perf_counter()
             try:
-                return base.paintEvent(self, ev)
+                result = base.paintEvent(self, ev)
             finally:
                 try:
                     owner = getattr(self, _FRAME_TIMER_OWNER_ATTR, None)
@@ -191,6 +194,10 @@ def _frame_timed_view_class(base):
                     # A measurement must never propagate an exception into
                     # Qt's paint dispatch. Zero cost on the happy path.
                     pass
+
+            if token is not None:
+                owner._section_reveal_painted(token)
+            return result
 
     _FrameTimedGraphicsView.__name__ = f"_FrameTimed{base.__name__}"
     _FrameTimedGraphicsView.__qualname__ = _FrameTimedGraphicsView.__name__

@@ -568,6 +568,7 @@ class BatchSheet(QDialog):
         # of them so that any sub-control mutation flows into a single
         # recompute pass.
         self._input_panel.changed.connect(self._on_input_scope_changed)
+        self._input_panel.filterChanged.connect(self._on_user_configuration)
         self._input_panel._file_list.filesChanged.connect(
             self._schedule_pipeline_recompute
         )

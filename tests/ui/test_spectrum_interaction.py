@@ -579,6 +579,32 @@ def test_fit_active_spectrum_y_skips_identical_setyrange(canvas, qapp, monkeypat
     )
 
 
+@pytest.mark.parametrize("scale", (1e-12, 1e-6, 1.0, 1e6))
+def test_linear_auto_y_tracks_visible_window_across_scales(canvas, qapp, scale):
+    """Final auto-Y must contain raw visible values at every unit scale."""
+    canvas.show()
+    qapp.processEvents()
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    amp = np.array([1.0, 2.0, 100.0, 200.0]) * scale
+    entry = {
+        "label": "tiny-linear",
+        "freq": x,
+        "amp": amp,
+        "amp_for_xlim": amp,
+        "time": x,
+        "signal": amp,
+    }
+    _plot_fft(canvas, entry, xlim=(0.0, 1.0))
+    canvas._plot_amp.setXRange(2.0, 3.0, padding=0)
+    canvas.flush_pending_spectrum_display()
+
+    expected = canvas._auto_amplitude_y_range([entry], (2.0, 3.0))
+    actual = tuple(canvas._plot_amp.vb.viewRange()[1])
+    assert expected is not None
+    assert actual[0] <= expected[0]
+    assert actual[1] >= expected[1]
+
+
 def test_manual_y_fit_does_not_query_auto_amplitude(canvas, qapp, monkeypatch):
     _plot_fft(canvas)
     qapp.processEvents()

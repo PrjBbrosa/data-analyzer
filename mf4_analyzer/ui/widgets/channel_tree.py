@@ -1352,10 +1352,11 @@ class MultiFileChannelWidget(QWidget):
 
     def _restore_file_tree_state(self, tree_state):
         selected, expanded, current_data, placement = tree_state
+        items_by_data = self._tree_items_by_data()
         if placement is not None:
             root_data, parent_data, previous_index = placement
-            root = self._tree_item_for_data(root_data)
-            parent = self._tree_item_for_data(parent_data)
+            root = items_by_data.get(root_data)
+            parent = items_by_data.get(parent_data)
             if root is not None and parent is not None and root.parent() is parent:
                 current_index = parent.indexOfChild(root)
                 target_index = min(max(0, previous_index), parent.childCount() - 1)
@@ -1363,17 +1364,17 @@ class MultiFileChannelWidget(QWidget):
                     parent.takeChild(current_index)
                     parent.insertChild(target_index, root)
         for data in selected:
-            item = self._tree_item_for_data(data)
+            item = items_by_data.get(data)
             if item is not None:
                 item.setSelected(True)
         if current_data is not None:
-            item = self._tree_item_for_data(current_data)
+            item = items_by_data.get(current_data)
             if item is not None:
                 self.tree.setCurrentItem(item)
         # Selecting a child may make Qt expand its ancestors.  Apply the saved
         # expansion state last so a collapsed file remains collapsed.
         for data, is_expanded in expanded:
-            item = self._tree_item_for_data(data)
+            item = items_by_data.get(data)
             if item is not None:
                 item.setExpanded(is_expanded)
 
@@ -1393,6 +1394,15 @@ class MultiFileChannelWidget(QWidget):
             if found is not None:
                 return found
         return None
+
+    def _tree_items_by_data(self):
+        """Build one short-lived identity index for one tree transaction."""
+        return {
+            tuple(data): item
+            for item in self._iter_tree_items()
+            for data in (item.data(0, Qt.UserRole),)
+            if data
+        }
 
     def _restore_axis_groups(self, previous):
         valid_keys = {
@@ -3195,7 +3205,7 @@ class MultiFileChannelWidget(QWidget):
         expanded = []
         for item in self._iter_tree_items():
             data = item.data(0, Qt.UserRole)
-            if not data:
+            if not data or item.childCount() == 0:
                 continue
             expanded.append((tuple(data), bool(item.isExpanded())))
         top_identity, top_offset = self._filter_viewport_anchor()
@@ -3225,15 +3235,16 @@ class MultiFileChannelWidget(QWidget):
     def _restore_filter_snapshot(self, snapshot):
         if not snapshot:
             return
+        items_by_data = self._tree_items_by_data()
         for identity, is_expanded in snapshot.get("expanded") or ():
-            item = self._tree_item_for_data(identity)
+            item = items_by_data.get(tuple(identity))
             if item is not None:
                 item.setExpanded(bool(is_expanded))
         self.tree.doItemsLayout()
         bar = self.tree.verticalScrollBar()
         bar.setValue(int(snapshot.get("scroll") or 0))
         identity = snapshot.get("top_identity")
-        item = self._tree_item_for_data(identity) if identity else None
+        item = items_by_data.get(tuple(identity)) if identity else None
         if item is None or item.isHidden():
             return
         rect = self.tree.visualItemRect(item)
