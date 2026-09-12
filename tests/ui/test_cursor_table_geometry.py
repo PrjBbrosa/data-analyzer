@@ -698,3 +698,83 @@ def test_chartstack_repositions_space_hidden_pill_on_safe_rect_growth(qapp, qtbo
     assert pill.visible_channel_count() == len(CHANNELS)
     assert safe[0].contains(pill.geometry())
     assert_painted_glyphs_contained(pill)
+
+
+@pytest.mark.parametrize('width', [320, 500, 1200])
+@pytest.mark.parametrize('cursor_mode', ['single', 'dual'])
+@pytest.mark.parametrize('x_mode', ['time', 'custom'])
+@pytest.mark.parametrize('mini', [False, True])
+def test_channel_text_color_follows_projection_in_painted_document(
+        qapp, qtbot, production_style, width, cursor_mode, x_mode, mini):
+    from mf4_analyzer.ui.cursor_display_model import CursorDisplayBranch
+
+    parent, pill = make_pill(qtbot, width, 720)
+    channel = CursorDisplayChannel(
+        identity=('source', 'signal'), source_label='', channel_label='Steering',
+        unit_suffix='U_Nm', current_value=1.25, min_value=-2, max_value=3,
+        avg_value=1.25, delta=-.75,
+        branches=(CursorDisplayBranch('X↑', 1.25, -2, 3, 1.25, -.75),),
+        diagnostic='区间内无数据' if x_mode == 'custom' else '',
+    )
+    # Recolor the same identity, exercising a value-only projection refresh
+    # without relying on a font/width/identity change to invalidate layout.
+    for color in ('#008577', '#d52f67'):
+        pill.set_display_projection(build_cursor_presentation(
+            (replace(channel, color=color),), CursorDisplayOptions(),
+            cursor_mode=cursor_mode, x_mode=x_mode, mini=mini,
+        ))
+        pill.show()
+        qapp.processEvents()
+        colored_fragments = 0
+        block = painted_document(pill).begin()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                text = fragment.text().strip()
+                if text:
+                    actual = fragment.charFormat().foreground().color().name()
+                    if text in ('方向', 'Value', 'Min', 'Max', 'Avg', 'Δ'):
+                        assert actual == '#94a3b8', text
+                    else:
+                        assert actual == color, (text, actual, color)
+                        colored_fragments += 1
+                iterator += 1
+            block = block.next()
+        assert colored_fragments >= 3  # dot, unit, and at least one reading
+        assert_painted_glyphs_contained(pill)
+
+
+@pytest.mark.parametrize('x_mode', ['time', 'custom'])
+def test_dual_mini_hides_names_reclaims_width_and_restores_full(
+        qapp, qtbot, production_style, x_mode):
+    from mf4_analyzer.ui.cursor_display_model import CursorDisplayBranch
+
+    parent, pill = make_pill(qtbot, 1000, 600)
+    channel = CursorDisplayChannel(
+        identity=('run', 'steering'), source_label='Run A',
+        channel_label='Long_channel_identity_for_steering', color='#008577',
+        unit_suffix='U_Nm', min_value=1, max_value=3, avg_value=2, delta=.5,
+        branches=(CursorDisplayBranch('X↑', 2, 1, 3, 2, .5),
+                  CursorDisplayBranch('X↓', 3, 2, 4, 3, -.5)),
+    )
+    widths = []
+    for mini in (False, True, False):
+        projected = build_cursor_presentation(
+            (channel,), CursorDisplayOptions(), cursor_mode='dual',
+            x_mode=x_mode, mini=mini,
+        )
+        pill.set_display_projection(projected)
+        pill.show()
+        qapp.processEvents()
+        text = painted_document(pill).toPlainText()
+        assert ('Long_channel' in text) is not mini
+        assert ('Long_channel' in projected.html) is not mini
+        assert channel.qualified_label in projected.tooltip
+        assert 'U_Nm' in text and '0.5' in text and '●' in text
+        if x_mode == 'custom':
+            assert 'X↑' in text and 'X↓' in text and '-0.5' in text
+        widths.append(pill.width())
+        assert_painted_glyphs_contained(pill)
+    assert widths[1] < widths[0]
+    assert widths[2] == widths[0]

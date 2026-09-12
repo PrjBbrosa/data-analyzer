@@ -1042,7 +1042,7 @@ class CursorPill(QFrame):
     def _signal_width(self, block, projection):
         from .cursor_display import visible_block_label
         name = visible_block_label(block, bool(projection.omit_visible_source_prefix))
-        if projection.mini and projection.cursor_mode == "single":
+        if projection.mini:
             name = ""
         return (self._measure_name_text(name) + self._measure_body_text("● ")
                 + (self._measure_body_text(block.unit_text) + 6 if block.unit_text else 0)

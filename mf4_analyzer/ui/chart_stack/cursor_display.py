@@ -264,7 +264,6 @@ def _compact_block_html(
         return "".join(out)
     if cursor_mode == "dual" and x_mode == "time" and mini:
         row = rows[0] if rows else CursorDisplayRow(face_name, "—")
-        name = header_override or row.label
         metric_cell = ""
         if row.value:
             if row.role == "Δ":
@@ -280,8 +279,6 @@ def _compact_block_html(
         out.append(
             '<tr>'
             f'<td style="padding-right:4px;">{_dot_html(color)}</td>'
-            f'<td style="color:{color};font-weight:600;padding-right:8px;">'
-            f'{escape(name)}</td>'
             f'{metric_cell}'
             '</tr>'
         )
@@ -298,12 +295,7 @@ def _compact_block_html(
     ):
         identity_label = metrics[0].label
         metrics = metrics[1:]
-    if mini and cursor_mode == "dual":
-        face = (
-            f'<td style="color:{color};font-weight:600;padding-right:8px;">'
-            f'{_dot_html(color)} {escape(face_name)}</td>'
-        )
-    elif mini:
+    if mini:
         face = f'<td style="padding-right:5px;">{_dot_html(color)}</td>'
     else:
         name = header_override or identity_label or face_name
@@ -431,15 +423,15 @@ def _block_html(
 
 
 _VALUE_FONT_STYLE = "font-family:'SF Mono',Menlo,Consolas,monospace;"
-_TABLE_NAME_COLOR = "#111827"
+_TABLE_FALLBACK_COLOR = "#111827"
 _TABLE_SECONDARY_COLOR = "#94a3b8"
 
 
-def _shared_value_cell(width, value, *, bold=False, top_pad="0"):
+def _shared_value_cell(width, value, *, color, bold=False, top_pad="0"):
     weight = "font-weight:700;" if bold else ""
     return (
         f'<td width="{int(width)}" align="right" '
-        f'style="padding-top:{top_pad};color:{_TABLE_NAME_COLOR};{_VALUE_FONT_STYLE}{weight}">'
+        f'style="padding-top:{top_pad};color:{color};{_VALUE_FONT_STYLE}{weight}">'
         f'{escape(value)}</td>'
     )
 
@@ -447,11 +439,11 @@ def _shared_value_cell(width, value, *, bold=False, top_pad="0"):
 def _shared_name_span(color, name, unit_html):
     unit = ""
     if unit_html:
-        unit = (f'&nbsp;<span style="color:{_TABLE_SECONDARY_COLOR};'
+        unit = (f'&nbsp;<span style="color:{color};'
                 f'font-weight:400;">{unit_html}</span>')
     return (
         f'<span style="color:{color};">{_DOT_MARKER}</span>&nbsp;'
-        f'<span style="color:{_TABLE_NAME_COLOR};font-weight:600;">'
+        f'<span style="color:{color};font-weight:600;">'
         f'{name}{unit}</span>'
     )
 
@@ -478,9 +470,9 @@ def _render_shared_table(projection, plan, shown_blocks, header_overrides, heade
     columns = slots + branch_columns + int(horizontal)
     rows = []
 
-    def branch_cell(label, top_pad="0"):
+    def branch_cell(label, top_pad="0", color=_TABLE_SECONDARY_COLOR):
         return (f'<td width="{int(branch_width)}" '
-                f'style="padding-top:{top_pad};color:{_TABLE_SECONDARY_COLOR};">'
+                f'style="padding-top:{top_pad};color:{color};">'
                 f'{escape(label) or "&nbsp;"}</td>')
 
     if k and not compact and plan.kind != "identity":
@@ -498,8 +490,8 @@ def _render_shared_table(projection, plan, shown_blocks, header_overrides, heade
         rows.append('<tr>' + ''.join(cells) + '</tr>')
 
     for index, block in enumerate(shown_blocks):
-        color = escape(block.color or _TABLE_NAME_COLOR, quote=True)
-        if projection.mini and projection.cursor_mode == "single":
+        color = escape(block.color or _TABLE_FALLBACK_COLOR, quote=True)
+        if projection.mini:
             name = ""
         elif header_lines is not None and index < len(header_lines):
             name = '<br>'.join(escape(line) for line in header_lines[index])
@@ -522,10 +514,10 @@ def _render_shared_table(projection, plan, shown_blocks, header_overrides, heade
                            f'style="padding-top:{cell_pad};">'
                            f'{identity if first else "&nbsp;"}</td>')
             if has_branch:
-                leading += branch_cell(row.branch_label, cell_pad)
+                leading += branch_cell(row.branch_label, cell_pad, color=color)
             if row.diagnostic:
                 rows.append('<tr>' + leading +
-                            f'<td colspan="{slots}" style="padding-top:{cell_pad};color:#64748b;">'
+                            f'<td colspan="{slots}" style="padding-top:{cell_pad};color:{color};">'
                             f'{escape(row.diagnostic)}</td></tr>')
             elif not k:
                 # Identity-only settings still preserve real branch labels.
@@ -539,14 +531,14 @@ def _render_shared_table(projection, plan, shown_blocks, header_overrides, heade
                     for label, value in items:
                         cells += (f'<td width="{int(plan.label_column_width)}" '
                                   f'style="color:{_TABLE_SECONDARY_COLOR};">{escape(label)}</td>')
-                        cells += _shared_value_cell(plan.value_column_width, value, bold=label == 'Δ')
+                        cells += _shared_value_cell(plan.value_column_width, value, color=color, bold=label == 'Δ')
                     missing = slots - 2 * len(items)
                     if missing:
                         cells += f'<td colspan="{missing}">&nbsp;</td>'
                     rows.append('<tr>' + cells + '</tr>')
             else:
                 values = row.metric_texts + ('—',) * max(0, k - len(row.metric_texts))
-                cells = ''.join(_shared_value_cell(plan.column_width, value,
+                cells = ''.join(_shared_value_cell(plan.column_width, value, color=color,
                                                  bold=label == 'Δ', top_pad=cell_pad)
                                 for label, value in zip(labels, values))
                 rows.append('<tr>' + leading + cells + '</tr>')

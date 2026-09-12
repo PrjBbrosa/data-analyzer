@@ -289,7 +289,7 @@ def test_channel_label_with_separator_survives_single_source_headers(
     block = projection.blocks[0]
     assert block.channel_label == channel_label
     assert channel_label in projection.tooltip
-    if not (cursor_mode == "single" and mini):
+    if not mini:
         assert channel_label in projection.html
 
 
@@ -341,7 +341,7 @@ def test_dual_time_mini_emits_one_table_row_per_channel():
         assert "Δ=" in projection.tooltip
 
 
-def test_dual_custom_mini_keeps_identity_and_branches_on_one_row():
+def test_dual_custom_mini_keeps_dot_and_branches_on_one_row():
     projection = build_cursor_presentation(
         _custom_rows(2), CursorDisplayOptions(),
         cursor_mode="dual", x_mode="custom", mini=True,

@@ -60,9 +60,11 @@ def test_table_projection_covers_modes_and_all_settings(bits, x_mode, cursor_mod
         assert all(value == '—' for value in block.table_rows[1].metric_texts)
     html = render_cursor_presentation(projection, layout_plan=plan(count=len(labels)))
     assert html.count('<table ') == 1
-    assert 'color:#111827' in html
-    if not (mini and cursor_mode == 'single'):
+    assert 'color:#123456' in html
+    if not mini:
         assert 'A&amp;B &lt;signal&gt;' in html
+    else:
+        assert 'A&amp;B &lt;signal&gt;' not in html
     if x_mode == 'custom':
         assert 'X↑' in html and '全程' in html
 

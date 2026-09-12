@@ -16,4 +16,6 @@ Past failure: A separately constructed wrapping QTextDocument passed width asser
 
 Rule: Measure and paint the same document configuration with production QSS. Check every visible glyph against the widget content rectangle, not only equal column positions or the imposed textWidth. Cover Time/Custom-X, single/dual, full/mini, diagnostic-first and zero-visible-channel cases. Do not change the spec to justify a prototype mismatch. Preserve the single projection apply boundary and legacy +/- sizing when introducing a shared widget.
 
+Color checks: A matching dot does not prove matching text. Preserve user-specified channel colors for names, readings, units and branch/status text; check foreground formats in the painted document, including recoloring an unchanged channel identity.
+
 Verification: Run the focused geometry/mode/single-pipeline tests and applicable chart-stack toggle/capture regressions. Inspect real ChartStack renderings with screenshot-length names, short names, units, and direction/diagnostic fixtures. Record offscreen, native Cocoa, foreground original project, and Windows separately.

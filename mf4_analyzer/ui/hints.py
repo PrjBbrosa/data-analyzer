@@ -273,7 +273,7 @@ _HINTS = (
     ),
     Hint(
         id="time.custom_x_paths",
-        text="显示设置：极值点/差值；读数列对齐；−mini；X↑/X↓",
+        text="显示设置：极值点/差值；−mini隐藏名称；X↑/X↓",
         surface="discovery",
         modes=frozenset({"time"}),
         retire_on="custom_x_dual_cursor",
