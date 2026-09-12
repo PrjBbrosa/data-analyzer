@@ -19,7 +19,6 @@ from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QSplitter,
     QToolButton,
     QVBoxLayout,
@@ -123,20 +122,6 @@ class AnalysisSectionPage(QWidget):
             self._toolbar = self._cards[0].toolbar
             self._configure_shared_toolbar()
         lay.addWidget(self._split, stretch=1)
-        self._range_restore_callback = None
-        self._viewport_status_row = QWidget(self)
-        status_layout = QHBoxLayout(self._viewport_status_row)
-        status_layout.setContentsMargins(8, 2, 8, 2)
-        self.viewport_status_label = QLabel(self._viewport_status_row)
-        status_layout.addWidget(self.viewport_status_label)
-        status_layout.addStretch(1)
-        self.restore_range_button = QToolButton(self._viewport_status_row)
-        self.restore_range_button.setText("恢复参数范围")
-        self.restore_range_button.setAccessibleName("恢复当前分析参数范围")
-        self.restore_range_button.clicked.connect(self._restore_parameter_ranges)
-        status_layout.addWidget(self.restore_range_button)
-        self._viewport_status_row.hide()
-        lay.addWidget(self._viewport_status_row)
 
         self._focused = 0
         self._previous_focused = 0
@@ -466,37 +451,10 @@ class AnalysisSectionPage(QWidget):
             return _FOCUS_ACCENT
         return accent
 
-    def bind_range_restore(self, callback):
-        self._range_restore_callback = callback
-
-    def _restore_parameter_ranges(self):
-        if self._range_restore_callback is not None:
-            self._range_restore_callback()
-
-    def refresh_viewport_status(self):
-        text = ""
-        if self.section in {"fft", "fft_time", "order"} and self.manager.views:
-            state = self.manager.get(self.manager.active)
-            pane = state.panes[min(self._focused, len(state.panes) - 1)]
-            notes = []
-            for axis in ("x", "y"):
-                origin = pane.viewport_origin[axis]
-                if origin == "legacy":
-                    notes.append(f"{axis.upper()} 已恢复保存范围")
-                elif origin == "home":
-                    notes.append(f"{axis.upper()} 查看全部 · 参数范围保留")
-                elif origin == "user":
-                    auto = state.params.get(axis + "_auto", state.params.get("autoscale", True) if axis == "x" else True)
-                    notes.append(f"{axis.upper()} 已缩放" + (" · 自动范围暂停" if auto else " · 参数范围保留"))
-            text = "；".join(notes)
-        self.viewport_status_label.setText(text)
-        self._viewport_status_row.setVisible(bool(text))
-
     def refresh_focus_style(self, *_args) -> None:
         self._apply_focus_style()
 
     def _apply_focus_style(self) -> None:
-        self.refresh_viewport_status()
         focus_accent = self._active_view_focus_accent()
         for i, card in enumerate(self._cards):
             focused = i == self._focused and len(self._cards) > 1

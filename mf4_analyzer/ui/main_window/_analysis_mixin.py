@@ -407,8 +407,6 @@ class AnalysisMixin:
             return
         signal.connect(partial(self._on_analysis_viewport_intent, section, pane_idx))
         canvas._viewport_intent_wired = True
-        page = self._analysis_page(section)
-        page.bind_range_restore(partial(self._restore_analysis_parameter_ranges, section))
 
     def _analysis_range_policy(self, section, pane_idx):
         state = self.analysis_managers[section].get(self.analysis_managers[section].active)
@@ -429,20 +427,6 @@ class AnalysisMixin:
             self._project_dirty.mark_user_mutation()
         self._clear_analysis_view_viewports(state, tuple(policies))
         self._render_analysis_view_from_cache(section, state)
-        self._analysis_page(section).refresh_viewport_status()
-
-    def _restore_analysis_parameter_ranges(self, section):
-        mgr = self.analysis_managers[section]
-        state = mgr.get(mgr.active)
-        page = self._analysis_page(section)
-        focused = page.focused_index()
-        for index, pane in enumerate(state.panes):
-            axes = ("x", "y") if index == focused else (("x",) if state.compare.get("x_linked", True) else ())
-            for axis in axes:
-                setattr(pane, axis + "lim", None)
-                pane.viewport_origin[axis] = "auto"
-        self._render_analysis_view_from_cache(section, state)
-        page.refresh_viewport_status()
 
     def _on_analysis_viewport_intent(self, section, pane_idx, action="user", axes=("x", "y")):
         if action not in {"user", "home"} or any(axis not in {"x", "y"} for axis in axes):
@@ -460,7 +444,6 @@ class AnalysisMixin:
         sibling = 1 - int(pane_idx)
         if "x" in axes and state.compare.get("x_linked", True) and sibling < page.pane_count() and sibling < len(state.panes):
             self._commit_analysis_pane_viewport(section, state, sibling, action, ("x",))
-        page.refresh_viewport_status()
 
     def _commit_analysis_pane_viewport(self, section, state, pane_idx, action=None, axes=("x", "y")):
         page = self._analysis_page(section)
@@ -511,7 +494,6 @@ class AnalysisMixin:
                 pane.viewport_origin[axis] = "auto"
         if changed:
             canvas.restore_xy_viewport(*target)
-        self._analysis_page(section).refresh_viewport_status()
 
     def _restore_analysis_canvas_viewport(self, section, canvas):
         managers = getattr(self, "analysis_managers", None) or {}

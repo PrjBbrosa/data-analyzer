@@ -2767,6 +2767,16 @@ def test_fft_viewport_survives_view_switch_and_resets_on_recompute(two_file_win,
     assert applied[0][0] == pytest.approx(10.0, abs=0.5)
     assert applied[0][1] == pytest.approx(60.0, abs=0.5)
 
+    # Home shows the full result without replacing the configured range.
+    canvas.reset_view_to_data_extents()
+    assert canvas.capture_xy_viewport()[0][1] > 60.0
+    assert ctx.display_params()['x_auto'] is False
+    assert ctx.display_params()['x_min'] == pytest.approx(10.0)
+    assert ctx.display_params()['x_max'] == pytest.approx(60.0)
+    assert ctx.btn_fft.isEnabled()
+    ctx.btn_fft.click()
+    assert canvas.capture_xy_viewport()[0] == pytest.approx((10.0, 60.0))
+
 
 def test_fft_split_link_off_does_not_copy_sibling_viewport(two_file_win, qapp):
     win = two_file_win
@@ -2874,7 +2884,7 @@ def test_duplicate_analysis_view_copies_enabled_range_not_draft(two_file_win):
     ) is None
 
 
-def test_fft_viewport_axis_origin_and_range_restore_action(two_file_win, qapp):
+def test_fft_viewport_axis_origin_and_recompute(two_file_win, qapp):
     win = two_file_win
     win.toolbar._set_mode('fft')
     _check_speed_in_both(win)
@@ -2886,7 +2896,6 @@ def test_fft_viewport_axis_origin_and_range_restore_action(two_file_win, qapp):
     canvas._plot_amp.setXRange(40., 120., padding=0)
     canvas._emit_viewport_intent('user', ('x',))
     assert pane.viewport_origin == {'x': 'user', 'y': 'auto'}
-    assert page.viewport_status_label.text() == 'X 已缩放 · 自动范围暂停'
     saved_x = pane.xlim
     visible_auto_y = canvas.capture_xy_viewport()[1]
     # Programmatic redraw/capture does not promote an automatic Y to user.
@@ -2903,9 +2912,9 @@ def test_fft_viewport_axis_origin_and_range_restore_action(two_file_win, qapp):
     canvas._emit_viewport_intent('user', ('y',))
     win._apply_analysis_range_policy('fft', 0, {'x': (True, (0., 100.))})
     assert pane.viewport_origin == {'x': 'auto', 'y': 'user'}
-    page.restore_range_button.click()
+    assert win.inspector.fft_ctx.btn_fft.isEnabled()
+    win.inspector.fft_ctx.btn_fft.click()
     assert pane.viewport_origin == {'x': 'auto', 'y': 'auto'}
-    assert page.viewport_status_label.text() == ''
 
 
 def test_fft_restoration_compute_preserves_user_viewport(two_file_win, qapp):

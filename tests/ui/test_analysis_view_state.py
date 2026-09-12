@@ -494,7 +494,6 @@ def test_viewport_origin_defaults_roundtrip_and_legacy(caplog):
     ({'x': 'legacy', 'y': 'home'}, ((10, 20), (-2, 2)), ((10, 20), (-2, 2)), {'x': 'legacy', 'y': 'home'}),
 ])
 def test_viewport_restore_independent_axes(origins, saved, expected, expected_origins):
-    from types import SimpleNamespace
     from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
     pane = PaneState(xlim=saved[0], ylim=saved[1], viewport_origin=origins.copy())
     state = AnalysisViewState(name="View", tab_color="#ffffff", panes=[pane])
@@ -504,7 +503,7 @@ def test_viewport_restore_independent_axes(origins, saved, expected, expected_or
         def data_xy_extents(self): return ((0, 1000), (-10, 10))
         def restore_xy_viewport(self, x, y): self.limits = (x, y); return True
     canvas = Canvas()
-    owner = SimpleNamespace(_analysis_page=lambda section: SimpleNamespace(refresh_viewport_status=lambda: None))
+    owner = AnalysisMixin()
     AnalysisMixin._restore_analysis_pane_viewport(owner, 'fft', state, 0, canvas)
     assert canvas.limits == expected
     assert pane.viewport_origin == expected_origins

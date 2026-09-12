@@ -546,7 +546,7 @@ _HINTS = (
     ),
     Hint(
         id="analysis.zoom_scope",
-        text="缩放暂停自动；Home查看全部",
+        text="Home 查看全部；重新计算按参数显示",
         surface="context",
         modes=frozenset({"fft", "fft_time", "order"}),
         priority=65,
