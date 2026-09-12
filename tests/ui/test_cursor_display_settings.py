@@ -481,7 +481,12 @@ def test_cursor_pill_restores_original_right_anchor_after_width_changes_while_av
     ))
     assert pill.width() > 0
     pill.restore_after_avoidance()
-    assert abs(pill.geometry().right() - original_right) <= 1
+    # The shared table can be narrower than the old per-channel layout, so the
+    # user anchor may not fit inside the safe rect any more; the contract is
+    # "clamp inside the pane, no drift" (R8), not "always keep the old edge".
+    safe = pill.safe_rect()
+    expected_right = min(original_right, safe.right())
+    assert abs(pill.geometry().right() - expected_right) <= 1
     assert pill.y() == original_top
 
 
@@ -547,8 +552,8 @@ def test_cursor_pill_middle_elides_constrained_identity_without_hover_tooltip(qa
     parent = QWidget()
     qtbot.addWidget(parent)
     # Two sources so D1 keeps the qualified prefix on the visible face.
-    # This width still forces constrained rendering for the full identity, but
-    # leaves enough measured text space to prove both retained identity ends.
+    # The shared table fits both channels vertically at this size (natural),
+    # but the name budget still elides the long identity with both ends kept.
     parent.resize(440, 210)
     pill = CursorPill(parent)
     qtbot.addWidget(pill)
@@ -573,16 +578,18 @@ def test_cursor_pill_middle_elides_constrained_identity_without_hover_tooltip(qa
     pill.show()
     qapp.processEvents()
     visible = pill.detail_text()
-    assert pill.layout_category() == "constrained"
+    assert pill.layout_category() == "natural"
     assert projection.omit_visible_source_prefix is False
     assert full_identity not in visible
     assert "..." in visible
-    displayed_identity = pill._middle_elide_label(
-        full_identity, int(pill._detail.maximumWidth() * 1.2)
-    )
-    assert displayed_identity in visible
-    assert displayed_identity.startswith(source[0])
-    assert displayed_identity.endswith(channel[-1])
+    # The shared-table path elides inside the measured name budget (R6): both
+    # identity ends must survive around the elision marker (source prefix,
+    # channel suffix), whatever the font metrics keep of each.
+    for name_lines in pill._name_elisions:
+        plain = " ".join(name_lines)
+        assert "..." in plain
+        assert plain.startswith(source[0]) or plain.startswith(other[0])
+        assert plain.endswith(channel[-1])
     assert pill._detail.toolTip() == ""
     assert projection.tooltip.splitlines()[0] == full_identity
     assert pill.width() <= pill.safe_rect().width()

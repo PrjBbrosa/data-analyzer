@@ -2,7 +2,7 @@
 import logging
 from functools import partial
 
-from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QHBoxLayout, QSizePolicy, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
@@ -87,6 +87,7 @@ class ChartStack(QWidget):
         self._cursor_display_store = CursorDisplaySettingsStore(cursor_settings)
         self._cursor_display_options = self._cursor_display_store.load()
         self._cursor_rows_by_canvas = {}
+        self._legacy_detail_pending = {}
         self._source_label_resolver = None
         # QSS (ChartStack { border-radius:10px; background:#fff }) only paints on
         # a plain QWidget subclass once WA_StyledBackground is set; without it Qt
@@ -124,6 +125,9 @@ class ChartStack(QWidget):
         self._time_split.setAttribute(Qt.WA_NoSystemBackground, True)
         self._time_split.setAutoFillBackground(False)
         self._time_split.setChildrenCollapsible(False)
+        # A splitter drag resizes only its children, not necessarily this
+        # stack. Reflow both pills from their actual canvas rectangles.
+        self._time_split.splitterMoved.connect(self._on_time_splitter_moved)
         self._time_split.addWidget(self._time_card)
         time_lay.addWidget(self._time_split, stretch=1)
         # QWidget (not QFrame): analysisCompareRow is a QWidget, and QFrame +
@@ -1584,6 +1588,7 @@ class ChartStack(QWidget):
         This is the single seam every size-changing cursor readout must pass
         through so single/dual switching never drifts or overflows the parent.
         """
+        self._sync_pill_safe_rect(pill, card)
         was_user_placed = pill.is_user_placed()
         old_right = pill.x() + pill.width()
         old_top = pill.y()
@@ -1623,24 +1628,25 @@ class ChartStack(QWidget):
         pill = self._pill_for_canvas(source)
         card = self._card_for_canvas(source)
         if not text:
+            self._cancel_legacy_detail_fallback(source)
             self._update_pill_content(pill, card, pill.clear)
             return
         managed = self._is_managed_time_canvas(source)
-        if mode == 'single' and not managed:
-            # Compatibility callers may emit only ``cursor_info``. Drop an
-            # older empty-dual cache so the pill's mini toggle does not revive
-            # that stale projection. Live canvases keep the cache: rows update
-            # it, and popping here flashed the pill before rows arrived.
-            cache_source = self.canvas_time if source is None else source
-            self._cursor_rows_by_canvas.pop(cache_source, None)
-
         def update():
             if mode == 'single':
                 primary, detail, mini_detail, tooltip = (
                     self._format_single_cursor_variants_for_pill(text)
                 )
                 pill.set_primary(primary)
-                if not managed:
+                if managed:
+                    # Rows normally arrive synchronously after cursor_info.
+                    # Delay the legacy fallback one event turn so that path
+                    # remains a single structured projection write.
+                    self._schedule_legacy_detail_fallback(
+                        source, pill, card, "single",
+                        (detail, mini_detail, tooltip),
+                    )
+                else:
                     pill.set_single_detail_html(detail, mini_detail, tooltip)
             else:
                 primary, _detail = self._format_cursor_info_for_pill(text, mode)
@@ -1683,14 +1689,13 @@ class ChartStack(QWidget):
             self._active_cursor_card = self._card_for_canvas(source)
         if self._is_managed_time_canvas(source):
             # Live dual detail comes from dual_cursor_rows. Keep visibility
-            # if this HTML is the only signal a caller sent; do not write
-            # detail from the legacy string.
+            # if this HTML is the only signal a caller sent. Structured rows
+            # replace this legacy fallback when they arrive.
             pill = self._pill_for_canvas(source)
-            if (
-                self._cursor_pill_visible_for_mode(self.current_mode(), source)
-                and (text or pill.primary_text())
-            ):
-                pill.setVisible(True)
+            card = self._card_for_canvas(source)
+            self._schedule_legacy_detail_fallback(
+                source, pill, card, "dual", text,
+            )
             return
         pill = self._pill_for_canvas(source)
         card = self._card_for_canvas(source)
@@ -1707,6 +1712,7 @@ class ChartStack(QWidget):
         if not self._cursor_source_on_screen(source):
             return
         source = self.canvas_time if source is None else source
+        self._cancel_legacy_detail_fallback(source)
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         channels = tuple(apply_cursor_source_prefix_policy(
@@ -1724,6 +1730,7 @@ class ChartStack(QWidget):
         if not self._cursor_source_on_screen(source):
             return
         source = self.canvas_time if source is None else source
+        self._cancel_legacy_detail_fallback(source)
         self._active_cursor_card = self._card_for_canvas(source)
         channels = tuple(rows or ())
         self._cursor_rows_by_canvas[source] = (
@@ -1809,6 +1816,47 @@ class ChartStack(QWidget):
             pill.set_display_projection(projection)
             if self.current_mode() == 'time' and (
                 channels or pill.primary_text()
+            ):
+                pill.setVisible(True)
+
+        self._update_pill_content(pill, card, update)
+
+    def _cancel_legacy_detail_fallback(self, source):
+        source = self.canvas_time if source is None else source
+        self._legacy_detail_pending.pop(source, None)
+
+    def _schedule_legacy_detail_fallback(self, source, pill, card, mode, payload):
+        """Render legacy detail only when rows do not arrive this event turn."""
+        source = self.canvas_time if source is None else source
+        token = object()
+        self._legacy_detail_pending[source] = token
+        QTimer.singleShot(
+            0,
+            partial(
+                self._apply_legacy_detail_fallback,
+                source, token, pill, card, mode, payload,
+            ),
+        )
+
+    def _apply_legacy_detail_fallback(
+        self, source, token, pill, card, mode, payload
+    ):
+        if self._legacy_detail_pending.get(source) is not token:
+            return
+        self._legacy_detail_pending.pop(source, None)
+        # A compatibility-only emission supersedes old structured rows before
+        # the user can toggle between the full and mini variants.
+        self._cursor_rows_by_canvas.pop(source, None)
+
+        def update():
+            if mode == "single":
+                detail, mini_detail, tooltip = payload
+                pill.set_single_detail_html(detail, mini_detail, tooltip)
+            else:
+                pill.set_detail_html(payload)
+            if (
+                self._cursor_pill_visible_for_mode(self.current_mode(), source)
+                and (payload or pill.primary_text())
             ):
                 pill.setVisible(True)
 
@@ -1900,6 +1948,14 @@ class ChartStack(QWidget):
     def _reposition_one_pill(self, pill, card):
         """Anchor ``pill`` to ``card``'s canvas top-right corner (or honour
         its user-placed position)."""
+        if not pill.isVisible() and not pill.awaiting_space():
+            return
+        safe_changed = self._sync_pill_safe_rect(pill, card)
+        if safe_changed and pill._display_projection is not None:
+            # A canvas/split resize changes both the allowed frame width and
+            # the row budget. Rebuild from the current projection rather than
+            # merely clamping a stale-size widget into the new pane.
+            pill.reflow_to_parent()
         if not pill.isVisible():
             return
         safe = pill.safe_rect()
@@ -1924,8 +1980,30 @@ class ChartStack(QWidget):
             )
         pill.raise_()
 
+    def _sync_pill_safe_rect(self, pill, card):
+        """Give a shared-stack pill its owning canvas's mapped safe area."""
+        if pill is None:
+            return False
+        canvas = getattr(card, "canvas", None)
+        if canvas is None or canvas.width() <= 0 or canvas.height() <= 0:
+            return pill.set_safe_rect(None)
+        try:
+            top_left = canvas.mapTo(self.stack, canvas.rect().topLeft())
+            bottom_right = canvas.mapTo(self.stack, canvas.rect().bottomRight())
+        except (RuntimeError, TypeError):
+            return pill.set_safe_rect(None)
+        mapped = QRect(top_left, bottom_right).intersected(
+            self.stack.contentsRect()
+        )
+        safe = mapped.adjusted(8, 8, -8, -8)
+        return pill.set_safe_rect(safe if safe.isValid() else None)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._reposition_pill()
+
+    def _on_time_splitter_moved(self, _position, _index):
+        """Rebudget both time-domain pills after a user divider drag."""
         self._reposition_pill()
 
     def clear_cursor_pill(self):

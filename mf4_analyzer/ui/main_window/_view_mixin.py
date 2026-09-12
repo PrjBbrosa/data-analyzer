@@ -549,6 +549,11 @@ class ViewMixin:
 
     def _on_view_split(self, other_idx):
         self._capture_focused_view()
+        # Splitting re-renders the already active primary View before drawing
+        # its partner. Canvas.clear() legitimately emits an empty cursor
+        # readout during that render, but it must not discard the active
+        # floating pill merely because the View itself has not changed.
+        active_pill_snapshot = self.chart_stack.cursor_pill_snapshot()
         self._sync_pane_bindings_from_manager()
         if other_idx is None:
             self.chart_stack.exit_split()
@@ -583,6 +588,9 @@ class ViewMixin:
                 )
                 self._render_view_to_canvas(
                     other_idx, self.chart_stack.secondary_canvas(), update_primary_ui=False
+                )
+                self.chart_stack.restore_cursor_pill_snapshot(
+                    active_pill_snapshot
                 )
             else:
                 self._project_view_controls(self.view_manager.active)

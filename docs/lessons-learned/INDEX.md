@@ -247,6 +247,7 @@ lesson by default.
 | [Spectrum Plot-Body Pan Is X-Only](spectrum-plot-body-pan-is-x-only.md) | Changing FFT spectrum ViewBox pan/zoom, `_on_interactive_range_changed`, or `viewport_action_committed` axis detection. | See lesson |
 | [Deferred Section Entry Shares The Render Gate](deferred-section-entry-shares-render-gate.md) | Scheduling a delayed Section replot or changing TimeRenderGate. | See lesson |
 | [Toolbar Feedback Precedes Synchronous Mode Delivery](toolbar-feedback-precedes-sync-mode-delivery.md) | Changing Toolbar section selection, selection-indicator animation, or | See lesson |
+| [Cursor geometry acceptance must inspect the painted document](cursor-layout-tests-must-use-painted-document.md) | Cursor rich-text layout, prototype-to-Qt implementation, or reports that aligned values are clipped. | See lesson |
 
 ## Selection Rules
 

@@ -406,7 +406,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "游标显示设置",
-                sub="游标旁设置可独立开关最小值点、最大值点与双游标 Min / Max / Avg / 差值；指定通道横坐标时，X↑/X↓ 各算 Y(B)−Y(A)，端点超出该分支则显示 —。− 把读数收成 mini。读数面板本身不弹出 tooltip。全局同步所有分屏。",
+                sub="独立开关最小值点、最大值点及 Min / Max / Avg / 差值，全局同步分屏。单/双游标短名与值同行，窄时分行；Custom-X 方向/状态同表。X↑/X↓ 各算 Y(B)−Y(A)，端点越界显示 —。− 收成 mini，+ 恢复；读数不弹出 tooltip。",
             ),
             QuickRow(
                 "频谱 / 频响游标",

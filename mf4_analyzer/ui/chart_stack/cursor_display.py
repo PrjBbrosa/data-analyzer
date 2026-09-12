@@ -25,6 +25,7 @@ from ..cursor_display_model import (
     CursorDisplayChannel,
     CursorDisplayOptions,
     CursorDisplayRow,
+    CursorTableRow,
     CursorPresentation,
     _OPTION_NAMES,
     enabled_value_fields,
@@ -429,17 +430,155 @@ def _block_html(
     return "".join(out)
 
 
+_VALUE_FONT_STYLE = "font-family:'SF Mono',Menlo,Consolas,monospace;"
+_TABLE_NAME_COLOR = "#111827"
+_TABLE_SECONDARY_COLOR = "#94a3b8"
+
+
+def _shared_value_cell(width, value, *, bold=False, top_pad="0"):
+    weight = "font-weight:700;" if bold else ""
+    return (
+        f'<td width="{int(width)}" align="right" '
+        f'style="padding-top:{top_pad};color:{_TABLE_NAME_COLOR};{_VALUE_FONT_STYLE}{weight}">'
+        f'{escape(value)}</td>'
+    )
+
+
+def _shared_name_span(color, name, unit_html):
+    unit = ""
+    if unit_html:
+        unit = (f'&nbsp;<span style="color:{_TABLE_SECONDARY_COLOR};'
+                f'font-weight:400;">{unit_html}</span>')
+    return (
+        f'<span style="color:{color};">{_DOT_MARKER}</span>&nbsp;'
+        f'<span style="color:{_TABLE_NAME_COLOR};font-weight:600;">'
+        f'{name}{unit}</span>'
+    )
+
+
+def _render_shared_table(projection, plan, shown_blocks, header_overrides, header_lines):
+    """Render every structured mode in one grid, with whole-channel grouping.
+
+    Layout supplies plain name lines and measured cell widths. This boundary
+    alone escapes those lines; explicit line breaks are controlled markup.
+    Branches and diagnostics remain inside the same grid as normal values.
+    """
+    if not shown_blocks:
+        return ""
+    labels = projection.metric_labels
+    k = len(labels)
+    horizontal = plan.kind == "horizontal"
+    compact = plan.kind == "compact"
+    branch_width = getattr(plan, "branch_column_width", 0.0)
+    has_branch = any(
+        row.branch_label for block in projection.blocks for row in block.table_rows
+    )
+    branch_columns = int(has_branch)
+    slots = 2 * max(1, plan.pairs_per_row) if compact else max(1, k)
+    columns = slots + branch_columns + int(horizontal)
+    rows = []
+
+    def branch_cell(label, top_pad="0"):
+        return (f'<td width="{int(branch_width)}" '
+                f'style="padding-top:{top_pad};color:{_TABLE_SECONDARY_COLOR};">'
+                f'{escape(label) or "&nbsp;"}</td>')
+
+    if k and not compact and plan.kind != "identity":
+        cells = []
+        if horizontal:
+            cells.append(f'<td width="{int(plan.signal_column_width)}" '
+                         f'style="color:{_TABLE_SECONDARY_COLOR};">&nbsp;</td>')
+        if has_branch:
+            cells.append(branch_cell("方向"))
+        cells.extend(
+            f'<td width="{int(plan.column_width)}" align="right" '
+            f'style="color:{_TABLE_SECONDARY_COLOR};">{escape(label)}</td>'
+            for label in labels
+        )
+        rows.append('<tr>' + ''.join(cells) + '</tr>')
+
+    for index, block in enumerate(shown_blocks):
+        color = escape(block.color or _TABLE_NAME_COLOR, quote=True)
+        if projection.mini and projection.cursor_mode == "single":
+            name = ""
+        elif header_lines is not None and index < len(header_lines):
+            name = '<br>'.join(escape(line) for line in header_lines[index])
+        elif header_overrides is not None and index < len(header_overrides):
+            name = escape(header_overrides[index])
+        else:
+            name = escape(visible_block_label(block, projection.omit_visible_source_prefix))
+        identity = _shared_name_span(color, name, escape(str(block.unit_text or "").strip()))
+        block_rows = block.table_rows or (CursorTableRow(metric_texts=block.metric_texts),)
+        top_pad = '7px' if index else '3px'
+        if not horizontal:
+            rows.append(f'<tr><td colspan="{columns}" style="padding-top:{top_pad};">'
+                        f'{identity}</td></tr>')
+        first = True
+        for row in block_rows:
+            cell_pad = top_pad if horizontal and first else "0"
+            leading = ''
+            if horizontal:
+                leading = (f'<td width="{int(plan.signal_column_width)}" '
+                           f'style="padding-top:{cell_pad};">'
+                           f'{identity if first else "&nbsp;"}</td>')
+            if has_branch:
+                leading += branch_cell(row.branch_label, cell_pad)
+            if row.diagnostic:
+                rows.append('<tr>' + leading +
+                            f'<td colspan="{slots}" style="padding-top:{cell_pad};color:#64748b;">'
+                            f'{escape(row.diagnostic)}</td></tr>')
+            elif not k:
+                # Identity-only settings still preserve real branch labels.
+                if horizontal or row.branch_label:
+                    rows.append('<tr>' + leading + f'<td colspan="{slots}">&nbsp;</td></tr>')
+            elif compact:
+                values = row.metric_texts + ('—',) * max(0, k - len(row.metric_texts))
+                for offset in range(0, k, max(1, plan.pairs_per_row)):
+                    cells = leading if offset == 0 else (branch_cell('') if has_branch else '')
+                    items = list(zip(labels, values))[offset:offset + max(1, plan.pairs_per_row)]
+                    for label, value in items:
+                        cells += (f'<td width="{int(plan.label_column_width)}" '
+                                  f'style="color:{_TABLE_SECONDARY_COLOR};">{escape(label)}</td>')
+                        cells += _shared_value_cell(plan.value_column_width, value, bold=label == 'Δ')
+                    missing = slots - 2 * len(items)
+                    if missing:
+                        cells += f'<td colspan="{missing}">&nbsp;</td>'
+                    rows.append('<tr>' + cells + '</tr>')
+            else:
+                values = row.metric_texts + ('—',) * max(0, k - len(row.metric_texts))
+                cells = ''.join(_shared_value_cell(plan.column_width, value,
+                                                 bold=label == 'Δ', top_pad=cell_pad)
+                                for label, value in zip(labels, values))
+                rows.append('<tr>' + leading + cells + '</tr>')
+            first = False
+    return ('<table cellspacing="0" cellpadding="0" style="font-size:11px;">'
+            + ''.join(rows) + '</table>')
+
+
 def render_cursor_presentation(
     projection: CursorPresentation,
     *,
     layout_category: str | None = None,
     visible_count: int | None = None,
     header_overrides: tuple[str, ...] | None = None,
+    layout_plan=None,
+    header_lines: tuple[tuple[str, ...], ...] | None = None,
 ) -> str:
     category = layout_category or projection.layout_category
     constrained = category == "constrained"
     count = len(projection.blocks) if visible_count is None else max(0, visible_count)
     shown = projection.blocks[:count]
+    use_shared_table = layout_plan is not None
+    if use_shared_table:
+        parts = [_render_shared_table(projection, layout_plan, shown,
+                                      header_overrides, header_lines)]
+        omitted = len(projection.blocks) - len(shown)
+        if omitted:
+            parts.append(
+                '<div style="color:#64748b;padding-top:4px;">'
+                f'+{omitted} channels</div>'
+            )
+        return "".join(parts)
     gap = "4px" if constrained else "6px"
     parts = [f'<div style="margin:0;">']
     for index, block in enumerate(shown):
@@ -504,6 +643,15 @@ def build_cursor_presentation(
         raise ValueError("x_mode must be time or custom")
     channel_list = tuple(channels)
     omit_prefix = cursor_result_source_count(channel_list) <= 1
+    enabled = enabled_value_fields(options)
+    displayed_fields = enabled
+    if cursor_mode == "single":
+        displayed_fields = (("Value", "current_value"),)
+    elif mini:
+        displayed_fields = tuple(
+            item for wanted in _MINI_PRIORITY for item in enabled if item[0] == wanted
+        )[:1]
+    metric_labels = tuple(label for label, _attr in displayed_fields)
     blocks = []
     for channel in channel_list:
         if x_mode == "custom":
@@ -512,6 +660,26 @@ def build_cursor_presentation(
             visible, tooltip = _time_rows(channel, options, cursor_mode, mini)
         if not visible:
             continue
+        # Display formatting only. Keep original row/tooltip interfaces while
+        # the structured grid carries raw units and real branch identities.
+        table_rows = []
+        if x_mode == "custom":
+            for branch in channel.branches:
+                table_rows.append(CursorTableRow(
+                    branch_label=str(branch.label),
+                    metric_texts=tuple(
+                        _formatted(getattr(branch, _BRANCH_ATTR.get(attr, attr)))
+                        for _label, attr in displayed_fields
+                    ),
+                ))
+        else:
+            table_rows.append(CursorTableRow(metric_texts=tuple(
+                _formatted(getattr(channel, attr)) for _label, attr in displayed_fields
+            )))
+        if channel.diagnostic:
+            table_rows.append(CursorTableRow(diagnostic=str(channel.diagnostic)))
+        metric_texts = table_rows[0].metric_texts if table_rows else ()
+        unit_text = str(channel.unit_suffix or "")
         blocks.append(CursorDisplayBlock(
             identity=channel.identity,
             qualified_label=channel.qualified_label,
@@ -520,6 +688,9 @@ def build_cursor_presentation(
             visible_rows=visible,
             tooltip_rows=tooltip,
             diagnostic=channel.diagnostic,
+            metric_texts=metric_texts,
+            unit_text=unit_text,
+            table_rows=tuple(table_rows),
         ))
     projection = CursorPresentation(
         blocks=tuple(blocks),
@@ -530,6 +701,7 @@ def build_cursor_presentation(
         x_mode=x_mode,
         mini=bool(mini),
         omit_visible_source_prefix=omit_prefix,
+        metric_labels=metric_labels,
     )
     return CursorPresentation(
         blocks=projection.blocks,
@@ -540,6 +712,7 @@ def build_cursor_presentation(
         x_mode=projection.x_mode,
         mini=projection.mini,
         omit_visible_source_prefix=omit_prefix,
+        metric_labels=metric_labels,
     )
 
 
@@ -759,6 +932,7 @@ __all__ = [
     "CursorDisplaySettingsStore",
     "CursorDisplayBlock",
     "CursorDisplayRow",
+    "CursorTableRow",
     "CursorPresentation",
     "build_cursor_presentation",
     "enabled_value_fields",
