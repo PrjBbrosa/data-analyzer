@@ -1120,7 +1120,10 @@ class ViewMixin:
                 top.set_xaxis_mode('channel')
                 top._combo_xaxis_ch.setEnabled(True)
                 top._combo_xaxis_ch.setCurrentIndex(match_idx)
-                top.edit_xlabel.setText(label or '')
+                top.set_xaxis_label(
+                    label or target_channel or '',
+                    auto_from_channel=(not label or label == target_channel),
+                )
             else:
                 self._custom_xaxis.adopt(
                     CustomXAxisSpec(label=label), xlabel=label or None,
@@ -1128,7 +1131,10 @@ class ViewMixin:
                 top.set_xaxis_mode('time')
                 top._combo_xaxis_ch.setEnabled(False)
                 _safe_label = label if (label and label != 'Time (s)') else ''
-                top.edit_xlabel.setText(_safe_label if requested_mode == 'time' else '')
+                top.set_xaxis_label(
+                    _safe_label if requested_mode == 'time' else '',
+                    auto_from_channel=False,
+                )
         finally:
             top.edit_xlabel.blockSignals(old_label)
             top._combo_xaxis_ch.blockSignals(old_combo)

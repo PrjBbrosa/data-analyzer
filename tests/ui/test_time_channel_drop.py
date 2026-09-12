@@ -216,6 +216,60 @@ def test_apply_time_xaxis_spec_matches_inspector_apply(qtbot, qapp, loaded_csv):
     )
 
 
+def test_programmatic_channel_xaxis_auto_label_clears_on_first_time_switch(
+    qtbot, qapp, loaded_csv,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _set_checked(w, "torque")
+    w.plot_time()
+    qapp.processEvents()
+
+    w.apply_time_xaxis_spec(
+        CustomXAxisSpec(
+            mode=CHANNEL_MODE,
+            resolver=PER_SOURCE_NAME,
+            channel="speed",
+            label="speed",
+        ),
+        w.canvas_time,
+        sync_inspector=True,
+    )
+    top = w.inspector.top
+    assert top.xaxis_label() == "speed"
+    assert top._xlabel_auto_from_channel is True
+
+    top.set_xaxis_mode("time")
+    assert top.xaxis_label() == ""
+
+    w._apply_xaxis()
+    assert w._custom_xaxis_spec == CustomXAxisSpec()
+
+
+def test_programmatic_channel_xaxis_custom_label_survives_time_switch(
+    qtbot, qapp, loaded_csv,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _set_checked(w, "torque")
+    w.plot_time()
+    qapp.processEvents()
+
+    w.apply_time_xaxis_spec(
+        CustomXAxisSpec(
+            mode=CHANNEL_MODE,
+            resolver=PER_SOURCE_NAME,
+            channel="speed",
+            label="Vehicle speed",
+        ),
+        w.canvas_time,
+        sync_inspector=True,
+    )
+    top = w.inspector.top
+    assert top._xlabel_auto_from_channel is False
+
+    top.set_xaxis_mode("time")
+    assert top.xaxis_label() == "Vehicle speed"
+
+
 def test_drag_leave_clears_drop_highlight(qtbot, qapp, loaded_csv):
     w = _make_loaded_window(qtbot, qapp, loaded_csv)
     fid = _fid(w)

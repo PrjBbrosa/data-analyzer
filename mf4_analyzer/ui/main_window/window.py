@@ -3145,10 +3145,13 @@ class MainWindow(
             self._refresh_xaxis_candidates()
             payload = selection_payload(spec)
             top.set_xaxis_channel_data(payload)
-            top.set_xaxis_label(spec.label or spec.channel or '')
-            top._xlabel_auto_from_channel = False
+            label = spec.label or spec.channel or ''
+            top.set_xaxis_label(
+                label,
+                auto_from_channel=(not spec.label or label == spec.channel),
+            )
         else:
-            top.set_xaxis_label(spec.label or '')
+            top.set_xaxis_label(spec.label or '', auto_from_channel=False)
 
     def _on_time_channel_drop(self, canvas, key, zone):
         """Join a dragged channel to the drop-target time View, or set custom X."""

@@ -622,8 +622,17 @@ class PersistentTop(QWidget):
     def xaxis_label(self):
         return self.edit_xlabel.text().strip()
 
-    def set_xaxis_label(self, text):
+    def set_xaxis_label(self, text, *, auto_from_channel=None):
+        """Project an X-axis label, optionally preserving its provenance.
+
+        Programmatic Custom-X restore/drop paths do not emit ``textEdited``.
+        They must therefore state whether the displayed label was generated
+        from the selected channel, so the first switch back to time can clear
+        only that generated value and retain a user-entered title.
+        """
         self.edit_xlabel.setText("" if text is None else str(text))
+        if auto_from_channel is not None:
+            self._xlabel_auto_from_channel = bool(auto_from_channel)
 
     def set_xaxis_channel_data(self, payload):
         """Select the Inspector candidate whose tagged triple equals ``payload``."""
