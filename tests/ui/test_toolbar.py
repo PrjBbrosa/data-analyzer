@@ -581,6 +581,75 @@ def test_toolbar_production_light_uses_navigation_slide_and_keeps_five_keys(
     assert list(spy) == [["fft"]]
 
 
+def test_toolbar_starts_feedback_before_mode_changed_delivery(qtbot, qapp):
+    """Synchronous section work must see the navigation feedback already live."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    seen = []
+
+    def observe_delivery(mode):
+        driver = tb._motion_driver
+        seen.append((
+            mode,
+            tb.btn_mode_fft.isChecked(),
+            tb._mode_active_dots["fft"].isVisible(),
+            driver.target(),
+            driver.is_active(),
+        ))
+
+    tb.mode_changed.connect(observe_delivery)
+    QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton)
+
+    assert seen == [(
+        "fft",
+        True,
+        True,
+        _mapped_mode_rect(tb, tb.btn_mode_fft),
+        True,
+    )]
+
+
+def test_toolbar_reentrant_programmatic_mode_does_not_replay_outer_indicator(
+    qtbot, qapp,
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    delivered = []
+
+    def choose_frf_from_fft(mode):
+        delivered.append(mode)
+        if mode == "fft":
+            tb._set_mode("frf")
+
+    tb.mode_changed.connect(choose_frf_from_fft)
+    QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton)
+
+    assert delivered == ["fft", "frf"]
+    assert tb.current_mode() == "frf"
+    assert tb._motion_driver.target() == _mapped_mode_rect(tb, tb.btn_mode_frf)
+    assert not tb._motion_driver.is_active()
+
+
+def test_toolbar_destroyed_by_mode_receiver_has_no_post_delivery_access(qapp):
+    from PyQt5 import sip
+    from PyQt5.QtCore import QCoreApplication, QEvent
+
+    tb = Toolbar()
+
+    def destroy_toolbar(_mode):
+        tb.deleteLater()
+        QCoreApplication.sendPostedEvents(tb, QEvent.DeferredDelete)
+
+    tb.mode_changed.connect(destroy_toolbar)
+    tb._apply_mode("fft", animate=True)
+
+    assert sip.isdeleted(tb)
+
+
 def test_toolbar_mouse_animates_program_set_mode_snaps_repeat_is_noop(
     qtbot, qapp,
 ):

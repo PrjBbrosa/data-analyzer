@@ -245,6 +245,7 @@ lesson by default.
 | [Progress Label Must Account For Implicit QLabel Indent](progress-label-implicit-indent-clips-ink.md) | Changing progress label geometry, text budgets, masks, or QSS padding. | See lesson |
 | [Analysis Line Ranges Use The Raw Valid Window](analysis-line-ranges-use-raw-valid-window.md) | Changing automatic FFT or heatmap-slice amplitude ranges, dB reference | See lesson |
 | [Spectrum Plot-Body Pan Is X-Only](spectrum-plot-body-pan-is-x-only.md) | Changing FFT spectrum ViewBox pan/zoom, `_on_interactive_range_changed`, or `viewport_action_committed` axis detection. | See lesson |
+| [Toolbar Feedback Precedes Synchronous Mode Delivery](toolbar-feedback-precedes-sync-mode-delivery.md) | Changing Toolbar section selection, selection-indicator animation, or | See lesson |
 
 ## Selection Rules
 
