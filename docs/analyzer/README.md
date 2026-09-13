@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.2.3. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.2.4. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -117,6 +117,12 @@ dots. ZFD long records keep declared sample counts and verified timebases, and
 fail closed when the axis cannot be interpreted. Batch disables inapplicable
 controls without dropping their values, settles first-show geometry before paint,
 and sizes axis tick gutters to the final labels.
+8.2.4 adds a file-card action for attaching files to the current View, channel
+filter-context restoration, and per-item Batch result details. It corrects
+automatic analysis ranges and viewport-following slices, improves spectrum
+panning and selection feedback, and aligns cursor readouts across full and mini
+modes with channel colors. Progress labels, toolbar branding, and help screenshots
+are restored or corrected.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
