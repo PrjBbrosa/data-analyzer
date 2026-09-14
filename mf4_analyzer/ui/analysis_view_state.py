@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 from uuid import uuid4
@@ -34,16 +35,37 @@ MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for late
 # schema 6 removes the obsolete FRF Time-View link from persisted output;
 # schema 7 adds per-analysis-View ``attached_file_ids`` (Stage 1 source isolation).
 # schema 8 adds per-pane point remarks and frequency dual-cursor placement.
+# schema 10 adds per-axis viewport origin (auto/user/home/legacy).
 # schema 9 adds optional per-View ``preset_baseline`` (preset source snapshot).
 # Nested baseline version 2 adds ``source_payload``; the outer view schema
 # stays 9. The additions are field-presence tolerant -- from_dict() keys the
 # migration off "params has db_reference and no db_reference_mode", NOT this
 # number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
-_SCHEMA = 9
+_SCHEMA = 10
 _PRESET_BASELINE_VERSION = 2
 _PRESET_BASELINE_SUPPORTED_VERSIONS = frozenset({1, 2})
 _PRESET_BASELINE_KINDS = frozenset({"fft", "fft_time", "order", "frf"})
+
+
+def _viewport_origins(data):
+    origins = data.get("viewport_origin")
+    result = {}
+    for axis in ("x", "y"):
+        if origins is None:
+            value = data.get(axis + "lim")
+            try:
+                valid = len(value) == 2 and all(math.isfinite(float(v)) for v in value) and float(value[0]) < float(value[1])
+            except (TypeError, ValueError, IndexError):
+                valid = False
+            result[axis] = "legacy" if valid else "auto"
+        else:
+            value = origins.get(axis, "auto") if isinstance(origins, dict) else None
+            if not isinstance(value, str) or value not in {"auto", "user", "home", "legacy"}:
+                logger.warning("Invalid viewport_origin for %s: %r; using auto", axis, value)
+                value = "auto"
+            result[axis] = value
+    return result
 
 
 def _coerce_key(value: Any) -> ChannelKey:
@@ -213,6 +235,7 @@ class PaneState:
     # ``ylim``. Capture/restore never mix Z levels or the FFT time preview.
     xlim: tuple[float, float] | None = None
     ylim: tuple[float, float] | None = None
+    viewport_origin: dict[str, str] = field(default_factory=lambda: {"x": "auto", "y": "auto"})
     ylims: dict[str, tuple[float, float]] = field(default_factory=dict)
     source_time_view_id: str | None = None
     # FRF only: actual first/last selected sample. ``time_range`` remains the
@@ -242,6 +265,7 @@ class PaneState:
             ),
             "xlim": list(self.xlim) if self.xlim else None,
             "ylim": list(self.ylim) if self.ylim else None,
+            "viewport_origin": _viewport_origins({"viewport_origin": self.viewport_origin}),
             "ylims": {key: list(value) for key, value in self.ylims.items()},
             "effective_time_range": (
                 list(self.effective_time_range)
@@ -257,7 +281,12 @@ class PaneState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PaneState":
         def pair(v):
-            return (float(v[0]), float(v[1])) if v else None
+            if v is None:
+                return None
+            try:
+                return (float(v[0]), float(v[1])) if len(v) == 2 else None
+            except (TypeError, ValueError, IndexError):
+                return None
         return cls(
             sources=[_coerce_key(k) for k in data.get("sources", [])],
             rpm_source=(_coerce_key(data["rpm_source"])
@@ -269,6 +298,7 @@ class PaneState:
             time_range=_coerce_enabled_time_range(data.get("time_range")),
             xlim=pair(data.get("xlim")),
             ylim=pair(data.get("ylim")),
+            viewport_origin=_viewport_origins(data),
             ylims={
                 str(key): pair(value)
                 for key, value in (data.get("ylims") or {}).items()

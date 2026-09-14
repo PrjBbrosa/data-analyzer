@@ -223,39 +223,17 @@ def _auto_db_window(matrix):
     return ceiling - _AUTO_SPAN_DB, ceiling
 
 
-# Widest dynamic range a real measurement slice can plausibly span. Bins more
-# than this far below the slice's top are numerically-dead artifacts: the 0 Hz
-# DC bin, zeroed by de-mean and/or A-weighting (gain == 0 at f == 0), then
-# floored by ``amplitude_to_db`` to ``20*log10(np.finfo(float).tiny)`` ≈
-# -6153 dB. A 24-bit acquisition has only ~144 dB of range, so 200 dB only ever
-# catches such dead bins, never real signal (e.g. a deep anti-resonance notch).
+# Retained for compatibility only; never used to identify invalid line values.
 _SLICE_MAX_SPAN_DB: float = 200.0
 
 
-def _slice_amp_bounds(values):
-    """Robust ``(lo, hi)`` for the slice amplitude *view* axis, or ``None``.
+def _slice_amp_bounds(values, *, amplitude_mode="amplitude_db", valid_mask=None):
+    """Compatibility entry returning padded line limits with explicit mode."""
+    from mf4_analyzer.signal.display_ranges import line_amplitude_limits
 
-    Display-only: the slice curve is always drawn in full (``setData`` is
-    untouched); this only picks the Y *view* range. The top is the literal max
-    (a line plot should show real peaks, unlike the colour window). The bottom
-    ignores numerically-dead bins sitting more than ``_SLICE_MAX_SPAN_DB`` below
-    the top, so a single DC bin floored to ≈ -6153 dB can no longer crush the
-    real -40..-60 dB signal into a thin band at the top of the panel. NaN/inf
-    -safe. Returns ``None`` when there is no finite spread to fit (the caller
-    then falls back to pyqtgraph auto-range), including residue-only spans
-    under ``_DEGENERATE_SPAN_RATIO`` (B5)."""
-    arr = np.asarray(values, dtype=float)
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return None
-    hi = float(np.max(finite))
-    real = finite[finite >= hi - _SLICE_MAX_SPAN_DB]
-    lo = float(np.min(real)) if real.size else hi
-    span = hi - lo
-    magnitude = max(abs(lo), abs(hi))
-    if not (span > magnitude * _DEGENERATE_SPAN_RATIO and span > 0.0):
-        return None
-    return lo, hi
+    return line_amplitude_limits(
+        values, amplitude_mode=amplitude_mode, valid_mask=valid_mask
+    )
 
 
 class _SmoothImageItem(pg.ImageItem):

@@ -35,7 +35,7 @@ def test_analysis_view_default_attachment_is_explicitly_empty():
     state = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert state.attached_file_ids == []
     payload = state.to_dict()
-    assert payload["schema"] == 9
+    assert payload["schema"] == 10
     assert payload["attached_file_ids"] == []
     restored = AnalysisViewState.from_dict(payload)
     assert restored.attached_file_ids == []
@@ -369,12 +369,17 @@ def test_local_analysis_detach_clears_active_fft_canvas(win_two, monkeypatch, qt
     win.do_fft()
     canvas = win.chart_stack.page_fft.pane_canvas(0)
     assert canvas.has_result()
+    xlim, _ylim = canvas.capture_xy_viewport()
+    canvas._plot_amp.setXRange(xlim[0], (xlim[0] + xlim[1]) / 2., padding=0)
+    canvas._emit_viewport_intent('user', ('x',))
+    assert fft.get(0).panes[0].viewport_origin['x'] == 'user'
 
     win._detach_files_from_active_context([fid_b], label="b.csv")
     qtbot.wait(20)
     assert fid_b not in fft.get(0).attached_file_ids
     assert fft.get(0).panes[0].sources == []
     assert canvas.has_result() is False
+    assert fft.get(0).panes[0].viewport_origin == {"x": "auto", "y": "auto"}
 
 
 def test_local_analysis_detach_does_not_touch_sibling_or_other_section(
@@ -757,3 +762,29 @@ def test_unrelated_detach_keeps_draft_source_close_clears_it(win_two, monkeypatc
     assert win._analysis_context.time_range.draft_for(
         "fft", state.view_id, 0
     ) is None
+
+
+def test_detach_changed_analysis_source_clears_viewport_origin_only_affected_pane():
+    from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+    from mf4_analyzer.ui.main_window.analysis_source_scope import detach_analysis_files
+    panes = [PaneState(sources=[(fid, 'a')], xlim=(1., 2.), ylim=(3., 4.),
+                       viewport_origin={'x': 'user', 'y': 'home'}) for fid in ('f1', 'f2')]
+    state = AnalysisViewState(name='View', tab_color='#ffffff', panes=panes)
+    detach_analysis_files(state, ['f1'])
+    assert panes[0].viewport_origin == {'x': 'auto', 'y': 'auto'}
+    assert panes[0].xlim is None and panes[0].ylim is None
+    assert panes[1].viewport_origin == {'x': 'user', 'y': 'home'}
+
+
+def test_remove_analysis_channel_clears_only_affected_viewport():
+    from types import SimpleNamespace
+    from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+    from mf4_analyzer.ui.main_window._channel_scope_mixin import ChannelScopeMixin
+    pane = PaneState(sources=[('f1', 'a')], xlim=(1., 2.), viewport_origin={'x': 'user', 'y': 'auto'})
+    state = AnalysisViewState(name='View', tab_color='#ffffff', panes=[pane])
+    owner = SimpleNamespace(analysis_managers={'fft': SimpleNamespace(views=[state])})
+    ChannelScopeMixin._remove_channels_from_all_analysis_views(owner, 'f1', ['other'])
+    assert pane.viewport_origin['x'] == 'user'
+    ChannelScopeMixin._remove_channels_from_all_analysis_views(owner, 'f1', ['a'])
+    assert pane.viewport_origin == {'x': 'auto', 'y': 'auto'}
+    assert pane.xlim is None

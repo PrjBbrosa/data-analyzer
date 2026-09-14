@@ -13,6 +13,7 @@ from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ..time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
+    LABEL_ORIGIN_AUTO,
     CustomXAxisSpec,
     selection_payload,
 )
@@ -76,6 +77,8 @@ class ViewMixin:
             gate.leave()
             if not gate.busy:
                 self._schedule_pending_view_switch()
+                if gate.pending_section_view is not None:
+                    self._schedule_time_section_entry()
 
     def _canvas_display_update_scope(self, canvas):
         """Canvas-owned nested display suppression, or a no-op on test doubles."""
@@ -289,6 +292,9 @@ class ViewMixin:
     def _project_view_controls(self, idx):
         if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return
+        invalidate = getattr(self.navigator, "invalidate_channel_filter_context", None)
+        if callable(invalidate):
+            invalidate()
         canvas = self._canvas_for_view_index(idx) or self.canvas_time
         old_applying_view = getattr(self, '_applying_view', False)
         self._applying_view = True
@@ -307,6 +313,20 @@ class ViewMixin:
         # (Stage 1 source isolation). Time View projection must not rebuild
         # analysis candidates — that would re-couple the two scopes.
         state = self.view_manager.get(idx)
+        set_attachment_context = getattr(
+            self.navigator, "set_attachment_context", None,
+        )
+        if callable(set_attachment_context):
+            pane_role = None
+            if self.chart_stack.split_active():
+                pane_role = (
+                    "副栏" if idx == self._secondary_view_idx else "主栏"
+                )
+            set_attachment_context(
+                section_label="时域",
+                view_name=state.name,
+                pane_role=pane_role,
+            )
         empty = getattr(self.navigator, 'set_empty_state_context', None)
         if callable(empty):
             empty(section_label='时域', view_name=state.name)
@@ -529,6 +549,11 @@ class ViewMixin:
 
     def _on_view_split(self, other_idx):
         self._capture_focused_view()
+        # Splitting re-renders the already active primary View before drawing
+        # its partner. Canvas.clear() legitimately emits an empty cursor
+        # readout during that render, but it must not discard the active
+        # floating pill merely because the View itself has not changed.
+        active_pill_snapshot = self.chart_stack.cursor_pill_snapshot()
         self._sync_pane_bindings_from_manager()
         if other_idx is None:
             self.chart_stack.exit_split()
@@ -563,6 +588,9 @@ class ViewMixin:
                 )
                 self._render_view_to_canvas(
                     other_idx, self.chart_stack.secondary_canvas(), update_primary_ui=False
+                )
+                self.chart_stack.restore_cursor_pill_snapshot(
+                    active_pill_snapshot
                 )
             else:
                 self._project_view_controls(self.view_manager.active)
@@ -1117,7 +1145,10 @@ class ViewMixin:
                 top.set_xaxis_mode('channel')
                 top._combo_xaxis_ch.setEnabled(True)
                 top._combo_xaxis_ch.setCurrentIndex(match_idx)
-                top.edit_xlabel.setText(label or '')
+                top.set_xaxis_label(
+                    label or target_channel or '',
+                    auto_from_channel=(spec.label_origin == LABEL_ORIGIN_AUTO),
+                )
             else:
                 self._custom_xaxis.adopt(
                     CustomXAxisSpec(label=label), xlabel=label or None,
@@ -1125,7 +1156,10 @@ class ViewMixin:
                 top.set_xaxis_mode('time')
                 top._combo_xaxis_ch.setEnabled(False)
                 _safe_label = label if (label and label != 'Time (s)') else ''
-                top.edit_xlabel.setText(_safe_label if requested_mode == 'time' else '')
+                top.set_xaxis_label(
+                    _safe_label if requested_mode == 'time' else '',
+                    auto_from_channel=False,
+                )
         finally:
             top.edit_xlabel.blockSignals(old_label)
             top._combo_xaxis_ch.blockSignals(old_combo)

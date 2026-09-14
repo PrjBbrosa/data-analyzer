@@ -218,6 +218,40 @@ def test_time_domain_cap_is_twenty_four_and_analysis_default_stays_twelve():
     assert ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS).max_views == 24
 
 
+def test_delete_view_refuses_to_remove_the_last_view():
+    manager = ViewManager()
+    only_id = manager.views[0].view_id
+    manager.delete_view(0)
+    assert len(manager.views) == 1
+    assert manager.views[0].view_id == only_id
+    assert manager.active == 0
+
+
+def test_new_view_stops_at_the_instance_cap_not_a_unified_constant():
+    time_manager = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
+    analysis_manager = ViewManager(max_views=MAX_VIEWS)
+    while time_manager.new_view() != -1:
+        pass
+    while analysis_manager.new_view() != -1:
+        pass
+    assert len(time_manager.views) == TIME_DOMAIN_MAX_VIEWS
+    assert len(analysis_manager.views) == MAX_VIEWS
+    assert time_manager.new_view() == -1
+    assert analysis_manager.new_view() == -1
+
+
+def test_reset_to_single_default_keeps_one_fresh_view():
+    manager = ViewManager()
+    manager.new_view()
+    manager.new_view()
+    removed = manager.reset_to_single_default()
+    assert len(removed) == 3
+    assert len(manager.views) == 1
+    assert manager.active == 0
+    assert manager.views[0].name == "View 1"
+    assert manager.views[0].view_id not in removed
+
+
 def test_default_view_tab_color_matches_make_and_cycles_every_twelve():
     manager = ViewManager(max_views=TIME_DOMAIN_MAX_VIEWS)
     first_twelve = [default_view_tab_color(i) for i in range(12)]

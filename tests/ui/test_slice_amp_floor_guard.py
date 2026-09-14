@@ -1,18 +1,7 @@
-"""Slice amplitude auto-range must ignore numerically-dead dB-floor bins.
+"""Slice range validity follows original amplitudes, never a peak cutoff.
 
-When A-weighting (gain == 0 at f == 0) and/or de-mean zero the DC bin, the
-linear amplitude there is ~0, and ``amplitude_to_db`` floors it to
-``20*log10(np.finfo(float).tiny) ≈ -6153 dB``. A *time* slice (amplitude vs
-frequency) reads that whole column, so it includes the 0 Hz bin; the slice's
-auto amplitude axis then stretched from ~-6000 dB to 0, crushing the real
--40..-60 dB signal into a thin band at the top. A *frequency* slice (one
-non-zero-gain row across time) never touches the 0 Hz bin, so it looked fine —
-exactly the asymmetry the user reported.
-
-The fix is display-only: the slice auto-range drops bins that sit far below the
-real dynamic range (numerically-dead bins) when choosing the *view* bounds. The
-curve itself is still drawn in full (setData is untouched); only the Y view
-range is robust.
+Zero source amplitudes may be excluded using their explicit mask, while finite
+nonzero deep valleys and compatible calls without masks remain visible.
 """
 import numpy as np
 
@@ -23,20 +12,19 @@ def test_slice_amp_bounds_excludes_db_floor_outlier(qapp):
     floor = 20.0 * np.log10(np.finfo(float).tiny)  # ≈ -6153 dB, the DC artifact
     # Real bulk -39..-60 dB plus one dead DC bin floored to ~-6153.
     vals = np.array([floor, -42.0, -55.0, -48.0, -60.0, -39.0])
-    lo, hi = hc._slice_amp_bounds(vals)
-    assert hi == -39.0                       # top tracks the real peak
-    assert lo == -60.0                       # bottom is the real min, NOT the floor
+    lo, hi = hc._slice_amp_bounds(vals, valid_mask=[False, True, True, True, True, True])
+    assert hi == -37.95
+    assert lo == -61.05
 
 
 def test_slice_amp_bounds_keeps_real_low_data(qapp):
     from mf4_analyzer.ui.pg_canvas import heatmap_canvas as hc
 
-    # A deep but physically-real notch at -120 dB (within any real dynamic
-    # range) must be preserved, not clipped away as if it were an artifact.
-    vals = np.array([-40.0, -120.0, -50.0])
+    # Even a nonzero notch more than 200 dB below the peak must survive.
+    vals = np.array([-40.0, -300.0, -50.0])
     lo, hi = hc._slice_amp_bounds(vals)
-    assert lo == -120.0
-    assert hi == -40.0
+    assert lo == -313.0
+    assert hi == -27.0
 
 
 def test_slice_amp_bounds_is_nan_inf_safe(qapp):
@@ -44,18 +32,19 @@ def test_slice_amp_bounds_is_nan_inf_safe(qapp):
 
     floor = 20.0 * np.log10(np.finfo(float).tiny)
     vals = np.array([np.nan, floor, -45.0, np.inf, -55.0])
-    lo, hi = hc._slice_amp_bounds(vals)
+    lo, hi = hc._slice_amp_bounds(vals, valid_mask=[False, False, True, False, True])
     assert np.isfinite(lo) and np.isfinite(hi)
-    assert hi == -45.0
-    assert lo == -55.0
+    assert hi == -44.5
+    assert lo == -55.5
 
 
 def test_slice_amp_bounds_degenerate_returns_none(qapp):
     from mf4_analyzer.ui.pg_canvas import heatmap_canvas as hc
 
     floor = 20.0 * np.log10(np.finfo(float).tiny)
-    # Nothing but dead bins → no real spread to fit; caller falls back.
-    assert hc._slice_amp_bounds(np.array([floor, floor])) is None
+    # Nothing but invalid source amplitudes is an explicit empty range.
+    assert hc._slice_amp_bounds(np.array([floor, floor]), valid_mask=[False, False]) is None
+    assert hc._slice_amp_bounds(np.array([floor, floor])) == (floor - 1, floor + 1)
     assert hc._slice_amp_bounds(np.array([])) is None
 
 

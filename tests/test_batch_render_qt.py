@@ -1383,3 +1383,63 @@ except BaseException as exc:
     )
     assert "RuntimeError" in completed.stdout
     assert "application is exiting" in completed.stdout
+
+
+@pytest.mark.parametrize('db', [True, False])
+def test_fft_auto_y_uses_visible_original_values(qapp, db):
+    raw = np.power(10., np.array([-110., -100., -90., 0.]) / 20.) if db else np.array([0., 100., 200., 10000.])
+    frame = pd.DataFrame({'frequency_hz': [0., 100., 200., 1000.], 'amplitude': raw})
+    scene = _open_scene(qapp, ('fft', frame), params={'amplitude_mode': 'amplitude_db' if db else 'amplitude', 'db_reference_mode': 'manual', 'db_reference': 1., 'x_auto': False, 'x_min': 0., 'x_max': 200.}, context=_context(method='fft'))
+    try:
+        assert scene.plots[0].vb.viewRange()[1] == pytest.approx([-111., -89.] if db else [-10., 210.])
+    finally:
+        scene.close()
+
+
+def test_fft_db_values_preserve_deep_valid_amplitudes():
+    from mf4_analyzer.batch_render_qt._builder import _display_db_values
+    result = _display_db_values([1e-15, 1., np.nan, np.inf, 0.], 1.)
+    assert result[:2] == pytest.approx([-300., 0.])
+    assert np.all(~np.isfinite(result[2:]))
+
+
+@pytest.mark.parametrize('window,expected', [(None, (-50, 1050)), ((3, 4), (895, 1005)), ((2.2, 2.4), (333, 487))])
+def test_batch_slice_linear_original_visible_range(qapp, window, expected):
+    from types import SimpleNamespace
+    payload = SimpleNamespace(x=np.array([0., 1.]), y=np.arange(5.), matrix=np.tile([0., 100., 200., 900., 1000.], (2, 1)), x_name='time_s', y_name='frequency_hz', metadata={})
+    params = {'amplitude_mode': 'amplitude', 'slice': {'enabled': True, 'axis': 'time', 'positions': [0.]}}
+    if window:
+        params.update(y_auto=False, y_min=window[0], y_max=window[1])
+    scene = _open_scene(qapp, ('fft_time', payload), params=params, context=_context(method='fft_time'))
+    try:
+        lo, hi = scene.slice_plot.vb.viewRange()[1]
+        assert lo <= expected[0]
+        assert hi >= expected[1]
+        assert hi - lo < (expected[1] - expected[0]) * 1.5
+    finally:
+        scene.close()
+
+
+def test_batch_slice_db_mask_excludes_zero_but_preserves_deep_values(qapp):
+    from types import SimpleNamespace
+    raw = np.tile([0., 1e-15, 1.], (2, 1))
+    payload = SimpleNamespace(x=np.array([0., 1.]), y=np.arange(3.), matrix=raw.copy(), x_name='time_s', y_name='frequency_hz', metadata={})
+    scene = _open_scene(qapp, ('fft_time', payload), params={'amplitude_mode': 'amplitude_db', 'db_reference_mode': 'manual', 'db_reference': 1., 'slice': {'enabled': True, 'axis': 'time', 'positions': [0.]}}, context=_context(method='fft_time'))
+    try:
+        lo, hi = scene.slice_plot.vb.viewRange()[1]
+        assert -400 < lo <= -315
+        assert hi >= 15
+        assert scene.slice_curves[0].getData()[1][1:] == pytest.approx([-300., 0.])
+        np.testing.assert_array_equal(payload.matrix, raw)
+    finally:
+        scene.close()
+
+
+def test_batch_fft_all_invalid_db_is_empty(qapp):
+    frame = pd.DataFrame({'frequency_hz': [0., 1., 2.], 'amplitude': [0., np.nan, -1.]})
+    scene = _open_scene(qapp, ('fft', frame), params={'amplitude_mode': 'amplitude_db'}, context=_context(method='fft'))
+    try:
+        assert not np.any(np.isfinite(scene.curves[0].getData()[1]))
+        assert scene.plots[0].vb.viewRange()[1] == pytest.approx([-230., -200.])
+    finally:
+        scene.close()

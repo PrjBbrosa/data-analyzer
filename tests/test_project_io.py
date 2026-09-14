@@ -286,6 +286,7 @@ def test_remap_migrates_legacy_channel_axis_to_exact_source():
         "fid": "new-fid",
         "channel": "angle",
         "label": "Angle",
+        "label_origin": "user",
     }
 
 
@@ -306,7 +307,9 @@ def test_remap_preserves_per_source_name_without_a_fid():
 
     out = pio.remap_view_fids([view], {})[0]
 
-    assert out["axis_opts"]["x_axis"] == view["axis_opts"]["x_axis"]
+    assert out["axis_opts"]["x_axis"] == {
+        **view["axis_opts"]["x_axis"], "label_origin": "user",
+    }
 
 
 @pytest.mark.parametrize(

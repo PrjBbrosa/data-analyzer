@@ -46,6 +46,12 @@ class CursorDisplayChannel:
     avg_value: float | None = None
     branches: tuple[CursorDisplayBranch, ...] = ()
     diagnostic: str = ""
+    # Display-only formatted number texts without the unit (R2). Empty when
+    # the value is missing or the caller did not provide the display layer.
+    min_text: str = ""
+    max_text: str = ""
+    avg_text: str = ""
+    delta_text: str = ""
 
     @property
     def qualified_label(self) -> str:
@@ -62,6 +68,15 @@ class CursorDisplayRow:
 
 
 @dataclass(frozen=True)
+class CursorTableRow:
+    """One display row within a channel; values carry no unit or HTML."""
+
+    branch_label: str = ""
+    metric_texts: tuple[str, ...] = ()
+    diagnostic: str = ""
+
+
+@dataclass(frozen=True)
 class CursorDisplayBlock:
     identity: object
     qualified_label: str
@@ -70,6 +85,11 @@ class CursorDisplayBlock:
     visible_rows: tuple[CursorDisplayRow, ...]
     tooltip_rows: tuple[CursorDisplayRow, ...]
     diagnostic: str = ""
+    # Display-only extras for the shared table (R1/R2): unit-less formatted
+    # values in enabled-field order plus the channel's own unit text.
+    metric_texts: tuple[str, ...] = ()
+    unit_text: str = ""
+    table_rows: tuple[CursorTableRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -82,6 +102,9 @@ class CursorPresentation:
     x_mode: str
     mini: bool
     omit_visible_source_prefix: bool = False
+    # Actual displayed columns: Value for single, enabled stats for dual,
+    # one priority stat for dual mini, or empty for identity-only display.
+    metric_labels: tuple[str, ...] = ()
 
 
 def enabled_value_fields(options: CursorDisplayOptions | None):
@@ -114,6 +137,7 @@ __all__ = [
     "CursorDisplayChannel",
     "CursorDisplayOptions",
     "CursorDisplayRow",
+    "CursorTableRow",
     "CursorPresentation",
     "_OPTION_NAMES",
     "enabled_value_fields",

@@ -1007,13 +1007,15 @@ def test_slice_amplitude_axis_ends_on_whole_nice_steps(qapp):
             *bounds, scene.style.tick_density_y
         )
         assert (bottom, top) == pytest.approx(expected)
-        step = (top - bottom) / scene.style.tick_density_y
+        step = batch_render_builder._nice_per_div(
+            (bounds[1] - bounds[0]) / scene.style.tick_density_y
+        )
         assert bottom / step == pytest.approx(round(bottom / step))
         assert top / step == pytest.approx(round(top / step))
         # At most one step of headroom at either end — the whole point of not
         # using ``_frame_to_nice``.
-        assert float(np.min(values)) - bottom < step
-        assert top - float(np.max(values)) < step
+        assert 0 <= bounds[0] - bottom < step
+        assert 0 <= top - bounds[1] < step
         ticks = scene.slice_plot.getAxis("left")._tickLevels[0]
         tick_values = [value for value, _label in ticks]
         assert tick_values
@@ -1045,7 +1047,12 @@ def test_slice_amplitude_axis_ignores_the_dc_dead_zone(qapp):
         # The dead bin is still in the curve data — only the view range skips it.
         assert float(np.min(values)) < -1000.0
         bottom, top = scene.slice_plot.vb.viewRange()[1]
-        bounds = batch_render_builder._slice_amp_bounds(values)
+        raw = _sweep_spectro(dc_dead=True).matrix
+        valid = np.concatenate([np.isfinite(raw[pick.index]) & (raw[pick.index] > 0)
+                                for pick in scene.slice_plan.picks])
+        bounds = batch_render_builder._slice_amp_bounds(
+            values, amplitude_mode="amplitude_db", valid_mask=valid
+        )
         expected = batch_render_builder._nice_amp_range(
             *bounds, scene.style.tick_density_y
         )

@@ -283,6 +283,8 @@ class SearchableComboBox(QComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setEditable(True)
+        self.lineEdit().setPlaceholderText("输入关键词搜索通道")
+        self.setToolTip("可输入关键词搜索通道，也可点击右侧箭头选择。")
         self.setInsertPolicy(QComboBox.NoInsert)
         self.setMaxVisibleItems(10)
         delegate = _TwoLineChannelDelegate(self)

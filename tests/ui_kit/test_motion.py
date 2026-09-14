@@ -160,13 +160,13 @@ def test_idle_driver_has_no_running_timer(qtbot):
 def test_selection_duration_tokens_respect_policy_and_keep_originals():
     for name, value in _ORIGINAL_DURATION_MS.items():
         assert DURATION_MS[name] == value
-    assert DURATION_MS["selection_navigation"] == 400
+    assert DURATION_MS["selection_navigation"] == 320
     assert DURATION_MS["selection_control"] == 300
     assert duration_ms("selection_navigation", POLICY_OFF) == 0
     assert duration_ms("selection_navigation", POLICY_REDUCED) == 0
     assert duration_ms("selection_control", POLICY_OFF) == 0
     assert duration_ms("selection_control", POLICY_REDUCED) == 0
-    assert duration_ms("selection_navigation", POLICY_LIGHT) == 400
+    assert duration_ms("selection_navigation", POLICY_LIGHT) == 320
     assert duration_ms("selection_control", POLICY_LIGHT) == 300
     assert duration_ms("segment", POLICY_LIGHT) == 160
 

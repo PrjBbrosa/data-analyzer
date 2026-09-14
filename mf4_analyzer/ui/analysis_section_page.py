@@ -32,6 +32,7 @@ from .widgets.ultraview_entry import (
     UltraViewRailFitter,
     make_ultraview_separator,
 )
+from ..ui_kit.motion import POLICY_LIGHT
 from ..ui_kit.qt_lifecycle import as_weak_callable
 
 _FOCUS_ACCENT = "#2d7ff9"
@@ -166,6 +167,7 @@ class AnalysisSectionPage(QWidget):
                 'clear': "关闭对比窗格",
             },
         )
+        self.tabbar.set_motion_policy(POLICY_LIGHT)
         row.addWidget(self.tabbar, 1)
 
         self.btn_link = self._make_toggle(

@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui.toolbar import Toolbar
+from mf4_analyzer.ui_kit.motion import DURATION_MS
 
 
 def test_toolbar_constructs(qapp):
@@ -559,7 +560,7 @@ def test_toolbar_production_light_uses_navigation_slide_and_keeps_five_keys(
     assert tb._mode_active_dots["fft"].isVisible()
     assert not tb._mode_active_dots["time"].isVisible()
     assert driver.is_active()
-    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 400
+    assert driver.clock().duration() == DURATION_MS["selection_navigation"] == 320
     used = driver.clock().easingCurve()
     assert used.valueForProgress(0.25) == pytest.approx(0.735, abs=0.005)
     assert used.valueForProgress(0.50) == pytest.approx(0.937, abs=0.005)
@@ -575,10 +576,79 @@ def test_toolbar_production_light_uses_navigation_slide_and_keeps_five_keys(
     assert _mapped_mode_rect(tb, tb.btn_mode_time).x() < mid.x() < _mapped_mode_rect(
         tb, tb.btn_mode_fft
     ).x()
-    clock.setCurrentTime(400)
+    clock.setCurrentTime(DURATION_MS["selection_navigation"])
     assert not driver.is_active()
     assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_fft)
     assert list(spy) == [["fft"]]
+
+
+def test_toolbar_starts_feedback_before_mode_changed_delivery(qtbot, qapp):
+    """Synchronous section work must see the navigation feedback already live."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    seen = []
+
+    def observe_delivery(mode):
+        driver = tb._motion_driver
+        seen.append((
+            mode,
+            tb.btn_mode_fft.isChecked(),
+            tb._mode_active_dots["fft"].isVisible(),
+            driver.target(),
+            driver.is_active(),
+        ))
+
+    tb.mode_changed.connect(observe_delivery)
+    QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton)
+
+    assert seen == [(
+        "fft",
+        True,
+        True,
+        _mapped_mode_rect(tb, tb.btn_mode_fft),
+        True,
+    )]
+
+
+def test_toolbar_reentrant_programmatic_mode_does_not_replay_outer_indicator(
+    qtbot, qapp,
+):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    tb = _show_main_toolbar(qtbot, qapp)
+    delivered = []
+
+    def choose_frf_from_fft(mode):
+        delivered.append(mode)
+        if mode == "fft":
+            tb._set_mode("frf")
+
+    tb.mode_changed.connect(choose_frf_from_fft)
+    QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton)
+
+    assert delivered == ["fft", "frf"]
+    assert tb.current_mode() == "frf"
+    assert tb._motion_driver.target() == _mapped_mode_rect(tb, tb.btn_mode_frf)
+    assert not tb._motion_driver.is_active()
+
+
+def test_toolbar_destroyed_by_mode_receiver_has_no_post_delivery_access(qapp):
+    from PyQt5 import sip
+    from PyQt5.QtCore import QCoreApplication, QEvent
+
+    tb = Toolbar()
+
+    def destroy_toolbar(_mode):
+        tb.deleteLater()
+        QCoreApplication.sendPostedEvents(tb, QEvent.DeferredDelete)
+
+    tb.mode_changed.connect(destroy_toolbar)
+    tb._apply_mode("fft", animate=True)
+
+    assert sip.isdeleted(tb)
 
 
 def test_toolbar_mouse_animates_program_set_mode_snaps_repeat_is_noop(
@@ -632,7 +702,7 @@ def test_toolbar_compact_icon_hit_restores_labels_and_snaps_plate(qtbot, qapp):
     QTest.mouseClick(tb.btn_mode_fft, Qt.LeftButton, pos=icon_pos)
     assert tb.current_mode() == "fft"
     assert driver.is_active()
-    driver.clock().setCurrentTime(400)
+    driver.clock().setCurrentTime(DURATION_MS["selection_navigation"])
     assert not driver.is_active()
     assert pill.geometry() == _mapped_mode_rect(tb, tb.btn_mode_fft)
     assert "FFT" in tb.btn_mode_fft.toolTip()

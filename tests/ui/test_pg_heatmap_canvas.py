@@ -576,6 +576,7 @@ def test_heatmap_main_manual_zoom_emits_transient_true(canvas):
     seen = []
     canvas.manual_zoom_changed.connect(seen.append)
 
+    canvas._plot.setXRange(0.2, 0.8, padding=0)
     canvas._on_main_manual_zoom()
 
     assert seen == [True]
@@ -1255,8 +1256,8 @@ def _spec_result():
 
 
 def _make_spec(channel, amplitude):
-    freqs = np.linspace(0, 500, 16)
-    times = np.linspace(0, 1.0, 4)
+    freqs = np.linspace(0, 500, amplitude.shape[0])
+    times = np.linspace(0, 1.0, amplitude.shape[1])
     return SpectrogramResult(
         times=times, frequencies=freqs, amplitude=amplitude,
         params=SpectrogramParams(fs=1000.0, nfft=32),
@@ -3348,8 +3349,8 @@ def test_x_slice_uses_visible_frequency_range(qapp):
 
     assert c._slice_dir == 'x'
     xs, _ = c._slice_curve.getData()
-    assert np.nanmin(xs) >= 100.0 - 1e-6
-    assert np.nanmax(xs) <= 300.0 + 1e-6
+    assert xs[0] <= 100.0 <= xs[1]
+    assert xs[-2] <= 300.0 <= xs[-1]
     (sx0, sx1), _ = c._slice_plot.vb.viewRange()
     assert sx0 == pytest.approx(100.0, abs=1e-6)
     assert sx1 == pytest.approx(300.0, abs=1e-6)
@@ -3371,8 +3372,8 @@ def test_y_slice_uses_visible_time_range(qapp):
     qapp.processEvents()
 
     xs, _ = c._slice_curve.getData()
-    assert np.nanmin(xs) >= 0.5 - 1e-6
-    assert np.nanmax(xs) <= 1.5 + 1e-6
+    assert xs[0] <= 0.5 <= xs[1]
+    assert xs[-2] <= 1.5 <= xs[-1]
     (sx0, sx1), _ = c._slice_plot.vb.viewRange()
     assert sx0 == pytest.approx(0.5, abs=1e-6)
     assert sx1 == pytest.approx(1.5, abs=1e-6)
@@ -3401,8 +3402,8 @@ def test_x_slice_follows_live_heatmap_y_zoom(qapp):
     qapp.processEvents()
 
     xs, _ = c._slice_curve.getData()
-    assert np.nanmin(xs) >= 100.0 - 1e-6
-    assert np.nanmax(xs) <= 300.0 + 1e-6
+    assert xs[0] <= 100.0 <= xs[1]
+    assert xs[-2] <= 300.0 <= xs[-1]
     (sx0, sx1), _ = c._slice_plot.vb.viewRange()
     assert sx0 == pytest.approx(100.0, abs=1e-6)
     assert sx1 == pytest.approx(300.0, abs=1e-6)
@@ -3424,8 +3425,8 @@ def test_y_slice_follows_live_heatmap_x_zoom(qapp):
     qapp.processEvents()
 
     xs, _ = c._slice_curve.getData()
-    assert np.nanmin(xs) >= 0.5 - 1e-6
-    assert np.nanmax(xs) <= 1.5 + 1e-6
+    assert xs[0] <= 0.5 <= xs[1]
+    assert xs[-2] <= 1.5 <= xs[-1]
     (sx0, sx1), _ = c._slice_plot.vb.viewRange()
     assert sx0 == pytest.approx(0.5, abs=1e-6)
     assert sx1 == pytest.approx(1.5, abs=1e-6)
@@ -3454,8 +3455,8 @@ def test_home_restores_slice_to_full_heatmap_extents(qapp):
     c.deleteLater()
 
 
-def test_manual_panel_freq_range_ignores_heatmap_y_zoom(qapp):
-    """Inspector-manual frequency window still owns the slice X axis."""
+def test_manual_panel_freq_range_follows_heatmap_y_zoom(qapp):
+    """A manual parameter is the initial viewport; later zoom and Home update the slice."""
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     c.show()
@@ -3469,11 +3470,11 @@ def test_manual_panel_freq_range_ignores_heatmap_y_zoom(qapp):
     qapp.processEvents()
 
     xs, _ = c._slice_curve.getData()
-    assert np.nanmin(xs) >= 100.0 - 1e-6
-    assert np.nanmax(xs) <= 300.0 + 1e-6
+    assert xs[0] <= 50.0 <= xs[1]
+    assert xs[-2] <= 400.0 <= xs[-1]
     (sx0, sx1), _ = c._slice_plot.vb.viewRange()
-    assert sx0 == pytest.approx(100.0, abs=1e-6)
-    assert sx1 == pytest.approx(300.0, abs=1e-6)
+    assert sx0 == pytest.approx(50.0, abs=1e-6)
+    assert sx1 == pytest.approx(400.0, abs=1e-6)
     c.hide()
     c.deleteLater()
 
@@ -4101,3 +4102,123 @@ def test_heatmap_view_all_emits_intent_and_keeps_flush_extents(canvas, qapp):
     extents = canvas.data_xy_extents()
     assert extents[0] == pytest.approx((0.0, 10.0))
     assert extents[1] == pytest.approx((0.0, 8.0))
+
+
+@pytest.mark.parametrize('scale', [1.0, 0.001])
+def test_slice_linear_auto_range_keeps_zero_and_full_span(qtbot, scale):
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    r = SpectrogramResult(
+        times=np.array([0., 1.]), frequencies=np.arange(5.),
+        amplitude=np.tile(np.array([0., 100., 200., 900., 1000.])[:, None], (1, 2)) * scale,
+        params=SpectrogramParams(fs=10., nfft=8), channel_name='linear', unit='Pa',
+    )
+    c.plot_result(r, amplitude_mode='amplitude', z_auto=True)
+    assert c._slice_plot.vb.viewRange()[1] == pytest.approx((-50. * scale, 1050. * scale))
+    c._plot.setYRange(3., 4., padding=0)
+    assert c._slice_plot.vb.viewRange()[1] == pytest.approx((895. * scale, 1005. * scale))
+    np.testing.assert_array_equal(c._matrix_disp, r.amplitude)
+
+
+def test_slice_db_mask_excludes_zero_but_preserves_real_deep_valley(qtbot):
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    r = SpectrogramResult(
+        times=np.array([0., 1.]), frequencies=np.arange(4.),
+        amplitude=np.tile(np.array([0., 1e-15, 0.01, 0.1])[:, None], (1, 2)),
+        params=SpectrogramParams(fs=8., nfft=8), channel_name='db', unit='Pa',
+    )
+    c.plot_result(r, amplitude_mode='amplitude_db', db_reference=1., z_auto=True)
+    assert c._slice_plot.vb.viewRange()[1] == pytest.approx((-314., -6.))
+    assert not c._matrix_amp_valid[0].any()
+    assert c._matrix_amp_valid[1:].all()
+    c.full_reset()
+    assert c._matrix_amp_valid is None
+
+
+def test_heatmap_mask_shape_rejected(qtbot):
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    with pytest.raises(ValueError, match='shape'):
+        c.plot_or_update_heatmap(np.ones((2, 3)), (0., 2.), (0., 1.),
+                                 amplitude_valid_mask=np.ones((3, 2), dtype=bool))
+
+
+def test_manual_heatmap_home_updates_slice_and_action_axes(qtbot):
+    from PyQt5.QtTest import QSignalSpy
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    c.plot_result(_spec_result(), z_auto=True, y_auto=False, y_min=100., y_max=300.)
+    spy = QSignalSpy(c.viewport_action_committed)
+    c.reset_view_to_data_extents()
+    assert c._slice_plot.vb.viewRange()[0] == pytest.approx((0., 500.))
+    assert list(spy) == [['home', ('x', 'y')]]
+    c._plot.setYRange(50., 200., padding=0)
+    assert len(spy) == 1
+
+
+def test_slice_interpolates_window_between_samples_without_nan_bridge(qtbot):
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    c.plot_or_update_heatmap(np.array([[0., 0.], [100., 100.]]), (0., 1.), (0., 10.),
+                             x_coords=np.array([0., 1.]), y_coords=np.array([0., 10.]))
+    c._amplitude_mode = 'amplitude'
+    c.select_time_index(0)
+    c._plot.setYRange(4., 6., padding=0)
+    assert c._slice_plot.vb.viewRange()[1] == pytest.approx((39., 61.))
+    xs, _ = c._slice_curve.getData()
+    assert xs[0] == 0. and xs[-1] == 10.
+    c._plot.setYRange(20., 30., padding=0)
+    xs, _ = c._slice_curve.getData()
+    assert xs is None or len(xs) == 0
+
+
+@pytest.mark.parametrize('frequencies,times', [(np.array([]), np.array([0., 1.])),
+                                               (np.array([0., 1.]), np.array([]))])
+def test_empty_spectrogram_clears_previous_result_and_mask(qtbot, frequencies, times):
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    c.plot_result(_spec_result(), z_auto=True)
+    r = SpectrogramResult(times=times, frequencies=frequencies,
+        amplitude=np.empty((len(frequencies), len(times))),
+        params=SpectrogramParams(fs=10., nfft=8), channel_name='empty', unit='Pa')
+    c.plot_result(r, z_auto=True)
+    assert not c.has_result()
+    assert c._matrix_amp_valid is None
+    assert c._slice_curve.getData()[0] is None
+
+
+def test_reference_shift_keeps_manual_slice_on_same_levels(qtbot):
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    r = _spec_result()
+    c.plot_result(r, z_auto=False, z_floor=-50., z_ceiling=-30., db_reference=1.)
+    c.plot_result(r, z_auto=False, z_floor=-50., z_ceiling=-30., db_reference=0.1)
+    assert c._img.getLevels() == pytest.approx((-30., -10.))
+    assert c._slice_plot.vb.viewRange()[1] == pytest.approx((-30., -10.))
+
+
+def test_slice_retains_nan_coordinate_break(qtbot):
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    c.plot_or_update_heatmap(np.array([[0., 0.], [50., 50.], [100., 100.]]),
+        (0., 1.), (0., 10.), x_coords=np.array([0., 1.]), y_coords=np.array([0., np.nan, 10.]))
+    c.select_time_index(0)
+    x, y = c._slice_curve.getData()
+    assert len(x) == 3
+    assert np.isnan(x[1]) or np.isnan(y[1])
+
+
+def test_heatmap_manual_signal_reports_only_changed_axes(qtbot, qapp):
+    from PyQt5.QtTest import QSignalSpy
+    c = PgHeatmapCanvas(with_slice=True)
+    qtbot.addWidget(c)
+    c.plot_result(_spec_result(), z_auto=True)
+    qapp.processEvents()
+    spy = QSignalSpy(c.viewport_action_committed)
+    c._plot.setXRange(0.2, 0.8, padding=0)
+    c._plot.vb.sigRangeChangedManually.emit([True, True])
+    assert list(spy) == [['user', ('x',)]]
+    qapp.processEvents()
+    c._plot.vb.sigRangeChangedManually.emit([True, True])
+    assert len(spy) == 1

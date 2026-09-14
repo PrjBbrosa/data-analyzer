@@ -44,6 +44,7 @@ def test_custom_xaxis_spec_round_trips_new_and_legacy_axis_opts():
         "fid": None,
         "channel": "angle",
         "label": "Steering angle",
+        "label_origin": "user",
     }
     assert CustomXAxisSpec.from_axis_opts(per_source.to_axis_opts()) == per_source
 
@@ -56,10 +57,25 @@ def test_custom_xaxis_spec_round_trips_new_and_legacy_axis_opts():
         channel="angle",
         source_fid="f1",
         label="Angle",
+        label_origin="user",
     )
     assert CustomXAxisSpec.from_axis_opts(
         {"mode": "channel", "resolver": "future", "channel": "angle"}
     ).mode == "time"
+
+
+def test_legacy_label_origin_is_inferred_only_when_payload_lacks_it():
+    legacy_auto = CustomXAxisSpec.from_axis_opts({
+        "mode": "channel", "resolver": "per_source_name", "fid": None,
+        "channel": "speed", "label": "speed",
+    })
+    assert legacy_auto.label_origin == "auto"
+
+    explicit_user = CustomXAxisSpec.from_axis_opts({
+        **legacy_auto.to_axis_opts(), "label_origin": "user",
+    })
+    assert explicit_user.label == "speed"
+    assert explicit_user.label_origin == "user"
 
 
 def test_selection_payload_is_a_tagged_triple():

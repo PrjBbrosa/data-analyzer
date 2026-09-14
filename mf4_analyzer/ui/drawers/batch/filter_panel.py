@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....signal.filters import FilterSpec
+from ....ui_kit.motion import POLICY_LIGHT
 from ...inspector_sections._helpers import _fit_field, _pair_field, _stacked_field
 from ...widgets.pill_switch import PillSwitch
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
@@ -132,6 +133,7 @@ class BatchFilterPanel(QWidget):
             spin.valueChanged.connect(self.changed)
         for chk in (self.chk_show_original, self.chk_show_filtered):
             chk.toggled.connect(self.changed)
+        self._enable_switch.set_motion_policy(POLICY_LIGHT)
 
     def _sync_enabled(self, *_args) -> None:
         enabled = self._enable_switch.isChecked()

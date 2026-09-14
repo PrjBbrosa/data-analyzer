@@ -199,6 +199,12 @@ _HINTS = (
         priority=30,
     ),
     Hint(
+        id="channel.filter_restore",
+        text="清除筛选恢复展开滚动，不改勾选显隐",
+        surface="discovery",
+        priority=47,
+    ),
+    Hint(
         id="wheel.zoom_x",
         text="Ctrl + 滚轮 缩放 X",
         surface="persistent",
@@ -267,7 +273,7 @@ _HINTS = (
     ),
     Hint(
         id="time.custom_x_paths",
-        text="游标显示设置管极值点与差值；− 收 mini；X↑/X↓",
+        text="显示设置：极值点/差值；−mini隐藏名称；X↑/X↓",
         surface="discovery",
         modes=frozenset({"time"}),
         retire_on="custom_x_dual_cursor",
@@ -382,6 +388,13 @@ _HINTS = (
         priority=38,
     ),
     Hint(
+        id="batch.result_details",
+        text="底栏查看详情 · Esc收起 · 可检查",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=42,
+    ),
+    Hint(
         id="channel.right_click",
         text="左侧通道右键 → 设为叠加图左轴",
         surface="discovery",
@@ -414,6 +427,12 @@ _HINTS = (
         text="链接=文件范围跟随（加载/新建/切分析）",
         surface="discovery",
         priority=78,
+    ),
+    Hint(
+        id="file.attach_current_view",
+        text="文件卡片 ＋：加入当前 View，不勾选通道",
+        surface="discovery",
+        priority=77,
     ),
     Hint(
         id="view.history",
@@ -514,6 +533,30 @@ _HINTS = (
         modes=frozenset({"fft", "fft_time"}),
         priority=80,
         dwell_ms=4000,
+    ),
+    Hint(
+        id="analysis.auto_range_scope",
+        text="自动全频段，幅值适配当前窗口",
+        surface="context",
+        modes=frozenset({"fft", "fft_time", "order"}),
+        priority=70,
+        dwell_ms=8000,
+    ),
+    Hint(
+        id="analysis.color_scale_scope",
+        text="自动色阶仅调对比度，不裁数据",
+        surface="context",
+        modes=frozenset({"fft_time", "order"}),
+        priority=65,
+        dwell_ms=8000,
+    ),
+    Hint(
+        id="analysis.zoom_scope",
+        text="Home 查看全部；重新计算按参数显示",
+        surface="context",
+        modes=frozenset({"fft", "fft_time", "order"}),
+        priority=65,
+        dwell_ms=6000,
     ),
     Hint(
         id="analysis.time_axis_scope",

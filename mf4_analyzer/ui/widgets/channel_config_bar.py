@@ -57,6 +57,8 @@ class _ChannelConfigItemDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(surface, 7, 7)
 
         title = str(index.data(CONFIG_NAME_ROLE) or index.data(Qt.DisplayRole) or "")
+        if kind == "placeholder":
+            title = "选配置（可搜索）"
         if kind == "config":
             count = int(index.data(CHANNEL_COUNT_ROLE) or 0)
             title_rect = surface.adjusted(10, 0, -78, 0)
@@ -148,6 +150,7 @@ class ChannelConfigBar(QWidget):
         self.combo = _ChannelConfigComboBox(self)
         self.combo.setObjectName("channelConfigCombo")
         self.combo.setEditable(True)
+        self.combo.lineEdit().setPlaceholderText("输入关键词搜索配置")
         self.combo.setInsertPolicy(QComboBox.NoInsert)
         self.combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.combo.setMinimumWidth(132)
@@ -192,7 +195,8 @@ class ChannelConfigBar(QWidget):
         selected = selected_id if selected_id is not None else self.selected_config_id()
         blocker = QSignalBlocker(self.combo)
         self.combo.clear()
-        self.combo.addItem("选配置…", None)
+        # Keep the unselected editor empty so its search placeholder is visible.
+        self.combo.addItem("", None)
         self.combo.setItemData(0, "placeholder", ITEM_KIND_ROLE)
         for config in configs:
             count = len(config.channel_names)
@@ -243,7 +247,8 @@ class ChannelConfigBar(QWidget):
         dirty = bool(dirty)
         self.combo.setProperty("dirty", dirty)
         self.combo.setToolTip(
-            "当前勾选与待应用配置不同" if dirty else "选择待应用的通道配置"
+            ("当前勾选与待应用配置不同" if dirty else "选择待应用的通道配置")
+            + "\n可输入关键词搜索配置，也可点击右侧箭头选择。"
         )
         self.combo.style().unpolish(self.combo)
         self.combo.style().polish(self.combo)

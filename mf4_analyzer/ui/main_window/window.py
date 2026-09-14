@@ -41,6 +41,8 @@ from ..plot_risk import PlotRisk, PlotRiskLevel, estimate_time_overlay_risk
 from ..time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
+    LABEL_ORIGIN_AUTO,
+    LABEL_ORIGIN_USER,
     PER_SOURCE_NAME,
     TIME_MODE,
     CursorXAxisContext,
@@ -1795,18 +1797,14 @@ class MainWindow(
         x_auto = bool(p.get('x_auto', p.get('autoscale', True)))
         x_min = float(p.get('x_min', 0.0))
         x_max = float(p.get('x_max', 0.0))
+        extents = [self._fft_frequency_extent(entry['freq']) for entry in entries]
+        full_xlim = (min(v[0] for v in extents), max(v[1] for v in extents))
         if x_auto:
-            xmax = max(
-                self._fft_auto_xlim(
-                    entry['freq'], entry.get('amp_for_xlim', entry['amp'])
-                )
-                for entry in entries
-            )
-            xlim = (0.0, xmax)
+            xlim = full_xlim
         elif x_max > x_min:
             xlim = (x_min, x_max)
         else:
-            xlim = (0.0, self.inspector.fft_ctx.fs() / 2)
+            xlim = full_xlim
         canvas.plot_spectra(
             entries,
             xlim=xlim,
@@ -1913,6 +1911,7 @@ class MainWindow(
         self.toolbar.set_nav_open(state == PanelState.PINNED)
 
     def _on_mode_changed(self, mode):
+        self._time_render.pending_section_view = None
         old_mode = self.chart_stack.current_mode()
         uv = getattr(self, "_ultraview", None)
         source_modes = ("time", "fft", "fft_time", "frf", "order")
@@ -1924,6 +1923,10 @@ class MainWindow(
                 self._capture_active_analysis_view(old_mode)
         if uv is not None and mode in source_modes:
             uv.note_source_mode(mode)
+        if mode == "fft" and old_mode != mode:
+            page = self.chart_stack.page_fft
+            for pane_idx in range(page.pane_count()):
+                page.pane_canvas(pane_idx).begin_section_reveal()
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
@@ -1950,11 +1953,14 @@ class MainWindow(
                 self.files
                 and self.navigator.get_checked_channels()
                 and not opening
+                and idx is not None
+                and 0 <= idx < len(self.view_manager.views)
             ):
                 # Project open already plots via `_apply_active_view`. A
                 # deferred replot here would processEvents into the restore
                 # pump and freeze the UI (macOS beachball).
-                QTimer.singleShot(0, self._plot_time_preserving_xlim)
+                self._time_render.pending_section_view = self.view_manager.get(idx)
+                self._schedule_time_section_entry()
         elif mode in self.analysis_managers:
             # D8: hide the Time View record subtree when leaving Time. The
             # sync entry itself no-ops to empty rows whenever mode != "time".
@@ -2071,10 +2077,42 @@ class MainWindow(
         self._hint_focused_pane("分叠")
         self._replot_canvas_for_view(idx, canvas)
 
-    def _plot_time_preserving_xlim(self):
+    def _schedule_time_section_entry(self):
+        gate = self._time_render
+        if gate.pending_section_view is not None and not gate.section_entry_scheduled:
+            gate.section_entry_scheduled = True
+            QTimer.singleShot(0, self._render_time_section_entry)
+
+    def _render_time_section_entry(self):
+        from PyQt5 import sip
+
+        if sip.isdeleted(self):
+            return
+        gate = self._time_render
+        gate.section_entry_scheduled = False
+        if gate.busy:
+            return
+        target = gate.pending_section_view
+        gate.pending_section_view = None
+        if target is None or self.chart_stack.current_mode() != "time":
+            return
+        resolved = self._focused_time_view_state()
+        if resolved is None or resolved[1] is not target:
+            return
+        if (
+            getattr(self, "_opening_project", False)
+            or self._project_dirty.close_teardown_started
+        ):
+            return
+        self._plot_time_preserving_xlim(section_entry=True)
+
+    def _plot_time_preserving_xlim(self, *, section_entry=False):
         cur_xlim = self._safe_capture_primary_xlim()
         try:
-            self.plot_time()
+            if section_entry:
+                self.plot_time(section_entry=True)
+            else:
+                self.plot_time()
         finally:
             if cur_xlim is not None:
                 self._safe_restore_primary_xlim(cur_xlim)
@@ -3000,6 +3038,7 @@ class MainWindow(
             spec = CustomXAxisSpec(
                 mode='time',
                 label=self.inspector.top.xaxis_label() or '',
+                label_origin=LABEL_ORIGIN_USER,
             )
         else:
             data = self.inspector.top.xaxis_channel_data()
@@ -3007,7 +3046,10 @@ class MainWindow(
                 self.toast("请选择横坐标通道", "warning")
                 return
             raw_label = self.inspector.top.xaxis_label()
-            selected = spec_from_selection(data, label=raw_label)
+            label_origin = self.inspector.top.xaxis_label_origin()
+            selected = spec_from_selection(
+                data, label=raw_label, label_origin=label_origin,
+            )
             if selected.mode != CHANNEL_MODE or not selected.channel:
                 self.toast("横坐标选择无效", "warning")
                 return
@@ -3020,6 +3062,7 @@ class MainWindow(
                 channel=selected.channel,
                 source_fid=selected.source_fid,
                 label=label,
+                label_origin=label_origin,
             )
         return MainWindow.apply_time_xaxis_spec(
             self, spec, canvas, sync_inspector=False,
@@ -3149,10 +3192,15 @@ class MainWindow(
             self._refresh_xaxis_candidates()
             payload = selection_payload(spec)
             top.set_xaxis_channel_data(payload)
-            top.set_xaxis_label(spec.label or spec.channel or '')
-            top._xlabel_auto_from_channel = False
+            label = spec.label or spec.channel or ''
+            top.set_xaxis_label(
+                label,
+                auto_from_channel=(spec.label_origin == LABEL_ORIGIN_AUTO),
+            )
         else:
-            top.set_xaxis_label(spec.label or '')
+            top.set_xaxis_label(
+                spec.label or '', auto_from_channel=False,
+            )
 
     def _on_time_channel_drop(self, canvas, key, zone):
         """Join a dragged channel to the drop-target time View, or set custom X."""
@@ -3186,6 +3234,7 @@ class MainWindow(
                 source_fid=None,
                 channel=channel,
                 label=channel,
+                label_origin=LABEL_ORIGIN_AUTO,
             )
             self.apply_time_xaxis_spec(spec, canvas, sync_inspector=True)
             return
@@ -3586,7 +3635,7 @@ class MainWindow(
     def _restore_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
 
-    def plot_time(self, *, user_initiated=False):
+    def plot_time(self, *, user_initiated=False, section_entry=False):
         # Route channel-check replots to the focused time card. Outside
         # side-by-side compare, focused_canvas() is the primary self.canvas_time
         # so this is byte-identical to the old behaviour; while split is active
@@ -3603,6 +3652,7 @@ class MainWindow(
                 focused,
                 update_primary_ui=(focused is self.canvas_time),
                 user_initiated=user_initiated,
+                **({"section_entry": True} if section_entry else {}),
             )
 
     @staticmethod
@@ -3814,6 +3864,7 @@ class MainWindow(
         user_initiated=False,
         *,
         defer_axis_finalize=False,
+        section_entry=False,
     ):
         """Plot time data; deferred finalization leaves it to the caller."""
         if not self.files:
@@ -4007,6 +4058,7 @@ class MainWindow(
             progress_token = self._begin_compute_progress(
                 "时间域绘制中",
                 total=1000,
+                process_events=not section_entry,
             )
 
         def phase_progress(start, stop, label):
@@ -5208,26 +5260,27 @@ class MainWindow(
 
     @staticmethod
     def _fft_auto_xlim(freq, amp):
-        """Return display-only FFT fmax from the non-DC energy band."""
-        return energy_band_fmax(freq, amp)
+        """Compatibility upper bound from actual finite nonnegative bins."""
+        return MainWindow._fft_frequency_extent(freq)[1]
+
+    @staticmethod
+    def _fft_frequency_extent(freq):
+        values = np.asarray(freq, dtype=float)
+        if values.ndim != 1:
+            raise ValueError('FFT frequencies must be one-dimensional')
+        values = values[np.isfinite(values) & (values >= 0)]
+        if not values.size:
+            return (0., 1.)  # explicit empty display window
+        lo, hi = float(values.min()), float(values.max())
+        return (lo, hi) if hi > lo else (lo, lo + 1.)
 
     @staticmethod
     def _fft_time_auto_freq_range(result):
-        """Return display-only FFT-vs-Time frequency range from energy.
-
-        ``SpectrogramResult.amplitude`` is ``freq_bins x frames``. Max over
-        frames is intentionally conservative: intermittent low-frequency
-        energy still expands the displayed frequency band enough to show it.
-        """
+        """Use actual result bins; frequency validity is amplitude-independent."""
         freq = getattr(result, 'frequencies', None)
         if freq is None:
             freq = getattr(result, 'freq', [])
-        amp = np.asarray(getattr(result, 'amplitude', []), dtype=float)
-        if amp.ndim >= 2:
-            representative = np.nanmax(amp, axis=1)
-        else:
-            representative = amp
-        return (0.0, energy_band_fmax(freq, representative))
+        return MainWindow._fft_frequency_extent(freq)
 
     @staticmethod
     def _format_time_axis_provenance_chip(provenance):
@@ -5431,6 +5484,7 @@ class MainWindow(
         # closing; replaying it would drive a full render through a widget tree
         # that is being torn down.
         self._time_render.clear_pending_switch()
+        self._time_render.pending_section_view = None
         self._analysis_jobs.shutdown()
         super().closeEvent(event)
 

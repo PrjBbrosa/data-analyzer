@@ -262,3 +262,29 @@ def test_artifact_open_request_requires_explicit_row_activation(qtbot):
     w._body.itemDoubleClicked.emit(w._body.item(0))
 
     assert requested == ["/tmp/out.png"]
+
+
+def test_sheet_result_details_do_not_reinsert_the_task_list(qtbot, monkeypatch):
+    from mf4_analyzer.batch import BatchItemResult, BatchRunResult
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    monkeypatch.setattr(
+        sheet_module.QMessageBox, "information", lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        sheet_module.QMessageBox, "warning", lambda *a, **k: None,
+    )
+    sheet._on_runner_finished_with_result(BatchRunResult(
+        status="done",
+        items=[BatchItemResult(
+            method="fft", file_id=0, file_name="a.mf4", signal="sig",
+            status="done", task_id="t1",
+        )],
+    ))
+    sheet._on_thread_finished()
+    sheet._btn_result_details.click()
+    assert not sheet._task_list.isVisible()
+    assert sheet.layout().indexOf(sheet._task_list) == -1

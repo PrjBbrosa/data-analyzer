@@ -58,6 +58,7 @@ def _set_channel_xaxis(w, fid, channel, label):
     )
     combo.setCurrentIndex(idx)
     top.edit_xlabel.setText(label)
+    top.edit_xlabel.textEdited.emit(label)
     w._apply_xaxis()
 
 
@@ -312,6 +313,28 @@ def test_restore_unknown_xaxis_resolver_degrades_to_time(
     assert w._custom_xaxis_spec == CustomXAxisSpec(label="Saved label")
     assert w.inspector.top.xaxis_mode() == "time"
     assert not w.inspector.top._combo_xaxis_ch.isEnabled()
+
+
+def test_restore_channel_xaxis_auto_label_clears_on_first_time_switch(
+    qtbot, qapp, loaded_csv,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+
+    w._restore_view_axis_opts({
+        "x_axis": {
+            "mode": "channel",
+            "resolver": "per_source_name",
+            "fid": None,
+            "channel": "speed",
+            "label": "speed",
+        }
+    })
+    top = w.inspector.top
+    assert top.xaxis_mode() == "channel"
+    assert top._xlabel_auto_from_channel is True
+
+    top.set_xaxis_mode("time")
+    assert top.xaxis_label() == ""
 
 
 def test_bridge_can_capture_canvas_ranges_without_replacing_controls(

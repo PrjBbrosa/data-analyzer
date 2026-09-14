@@ -4,10 +4,11 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5 import sip
+from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QColor, QImage, QPainter, QRegion
 from PyQt5.QtTest import QSignalSpy, QTest
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QApplication, QWidget
 
 from mf4_analyzer.ui.widgets.pill_switch import PillSwitch, PillSwitchLabel
 from mf4_analyzer.ui_kit.control_style import CONTROL_COLORS
@@ -16,6 +17,7 @@ from mf4_analyzer.ui_kit.motion import (
     POLICY_OFF,
     POLICY_REDUCED,
     ValueDriver,
+    duration_ms,
 )
 
 
@@ -226,6 +228,15 @@ def _shown_switch(qtbot, qapp, policy=None, *, parent=None) -> PillSwitch:
     return switch
 
 
+def _click(switch: PillSwitch) -> None:
+    QTest.mouseClick(switch, Qt.LeftButton, Qt.NoModifier, QPoint(22, 12))
+
+
+def _driver_inactive(switch: PillSwitch) -> bool:
+    driver = switch._value_driver
+    return driver is None or not driver.is_active()
+
+
 def test_default_policy_stays_on_the_binary_path_without_an_active_clock(qtbot, qapp):
     switch = _shown_switch(qtbot, qapp)
     toggled = QSignalSpy(switch.toggled)
@@ -241,18 +252,38 @@ def test_default_policy_stays_on_the_binary_path_without_an_active_clock(qtbot, 
     switch.click()
     assert not switch.isChecked()
     assert list(toggled) == [[True], [False]]
-    assert switch._value_driver is None or not switch._value_driver.is_active()
+    assert _driver_inactive(switch)
     assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(11.0, abs=0.5)
 
 
-@pytest.mark.parametrize("dpr", [1, 2])
-def test_light_motion_exposes_an_intermediate_knob_and_track(qtbot, qapp, dpr):
+def test_program_set_checked_keeps_toggled_semantics_but_snaps(qtbot, qapp):
+    off_switch = _shown_switch(qtbot, qapp)
+    off_toggled = QSignalSpy(off_switch.toggled)
     switch = _shown_switch(qtbot, qapp, POLICY_LIGHT)
-    switch.setChecked(True)
+    toggled = QSignalSpy(switch.toggled)
+
+    for value in (True, False, True):
+        off_switch.setChecked(value)
+        switch.setChecked(value)
+        assert switch.isChecked() is value
+        assert _driver_inactive(switch)
+
+    assert list(toggled) == [[True], [False], [True]]
+    assert list(toggled) == list(off_toggled)
+    assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(33.0, abs=0.5)
+
+
+@pytest.mark.parametrize("dpr", [1, 2])
+def test_user_mouse_click_animates_160ms_from_displayed_knob(qtbot, qapp, dpr):
+    switch = _shown_switch(qtbot, qapp, POLICY_LIGHT)
+    toggled = QSignalSpy(switch.toggled)
+    _click(switch)
     assert switch.isChecked()
+    assert list(toggled) == [[True]]
 
     driver = _motion_driver(switch)
     assert driver.is_active()
+    assert driver.clock().duration() == duration_ms("switch", POLICY_LIGHT) == 160
     assert _knob_center_x(_render_at_dpr(switch, dpr), dpr) == pytest.approx(11.0, abs=1.0)
 
     driver.clock().setCurrentTime(40)
@@ -273,26 +304,44 @@ def test_light_motion_exposes_an_intermediate_knob_and_track(qtbot, qapp, dpr):
     assert _knob_center_x(_render_at_dpr(switch, dpr), dpr) == pytest.approx(33.0, abs=0.5)
 
 
-def test_light_motion_reverse_continues_from_displayed_value_without_extra_toggled(
+def test_user_space_and_paired_label_animate_once(qtbot, qapp):
+    keyed = _shown_switch(qtbot, qapp, POLICY_LIGHT)
+    keyed_toggled = QSignalSpy(keyed.toggled)
+    keyed.setFocus()
+    QTest.keyClick(keyed, Qt.Key_Space)
+    assert keyed.isChecked()
+    assert list(keyed_toggled) == [[True]]
+    assert _motion_driver(keyed).is_active()
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    switch = PillSwitch(host)
+    label = PillSwitchLabel("滤波", switch, host)
+    switch.set_motion_policy(POLICY_LIGHT)
+    host.show()
+    qapp.processEvents()
+    toggled = QSignalSpy(switch.toggled)
+    QTest.mouseClick(label, Qt.LeftButton, Qt.NoModifier, QPoint(4, 4))
+    assert switch.isChecked()
+    assert list(toggled) == [[True]]
+    assert _motion_driver(switch).is_active()
+
+
+def test_user_reverse_continues_from_displayed_value_without_extra_toggled(
     qtbot, qapp
 ):
-    off_switch = _shown_switch(qtbot, qapp)
-    off_toggled = QSignalSpy(off_switch.toggled)
-    off_switch.setChecked(True)
-    off_switch.setChecked(False)
-    off_switch.setChecked(True)
-
     switch = _shown_switch(qtbot, qapp, POLICY_LIGHT)
     toggled = QSignalSpy(switch.toggled)
-    switch.setChecked(True)
+    _click(switch)
     driver = _motion_driver(switch)
     driver.clock().setCurrentTime(40)
     mid = float(driver.current())
     mid_x = _knob_center_x(_render_at_dpr(switch, 1), 1)
     assert 11.5 < mid_x < 32.5
 
-    switch.setChecked(False)
+    _click(switch)
     assert not switch.isChecked()
+    assert list(toggled) == [[True], [False]]
     assert driver.clock().startValue() == pytest.approx(mid)
     assert float(driver.current()) == pytest.approx(mid)
     reversed_x = _knob_center_x(_render_at_dpr(switch, 1), 1)
@@ -300,11 +349,41 @@ def test_light_motion_reverse_continues_from_displayed_value_without_extra_toggl
     assert reversed_x != pytest.approx(33.0, abs=0.5)
     assert reversed_x != pytest.approx(11.0, abs=0.5)
 
-    switch.setChecked(True)
+    _click(switch)
     assert switch.isChecked()
     assert list(toggled) == [[True], [False], [True]]
-    assert list(toggled) == list(off_toggled)
     assert driver.clock().startValue() == pytest.approx(float(driver.current()))
+
+
+def test_program_set_checked_during_user_motion_snaps(qtbot, qapp):
+    switch = _shown_switch(qtbot, qapp, POLICY_LIGHT)
+    toggled = QSignalSpy(switch.toggled)
+    _click(switch)
+    driver = _motion_driver(switch)
+    driver.clock().setCurrentTime(40)
+    assert driver.is_active()
+
+    switch.setChecked(False)
+    assert not switch.isChecked()
+    assert list(toggled) == [[True], [False]]
+    assert not driver.is_active()
+    assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(11.0, abs=0.5)
+
+
+def test_toggled_subscriber_rewrite_snaps_instead_of_stale_target(qtbot, qapp):
+    switch = _shown_switch(qtbot, qapp, POLICY_LIGHT)
+    toggled = QSignalSpy(switch.toggled)
+
+    def revert_on(_checked):
+        if switch.isChecked():
+            switch.setChecked(False)
+
+    switch.toggled.connect(revert_on)
+    _click(switch)
+    assert not switch.isChecked()
+    assert list(toggled) == [[True], [False]]
+    assert _driver_inactive(switch)
+    assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(11.0, abs=0.5)
 
 
 def test_blocked_disabled_hidden_and_reduced_paths_snap_to_real_checked(qtbot, qapp):
@@ -315,8 +394,9 @@ def test_blocked_disabled_hidden_and_reduced_paths_snap_to_real_checked(qtbot, q
     parent.show()
     qapp.processEvents()
     toggled = QSignalSpy(switch.toggled)
+    assert switch.cursor().shape() == Qt.PointingHandCursor
 
-    switch.setChecked(True)
+    _click(switch)
     driver = _motion_driver(switch)
     driver.clock().setCurrentTime(40)
     assert driver.is_active()
@@ -329,17 +409,28 @@ def test_blocked_disabled_hidden_and_reduced_paths_snap_to_real_checked(qtbot, q
     assert not driver.is_active()
     assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(11.0, abs=0.5)
 
-    switch.setChecked(True)
+    _click(switch)
     driver.clock().setCurrentTime(40)
     parent.setEnabled(False)
     assert switch.isChecked()
+    assert not switch.isEnabled()
+    assert switch.cursor().shape() == Qt.ArrowCursor
     assert not driver.is_active()
     assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(33.0, abs=0.5)
 
     parent.setEnabled(True)
-    switch.setChecked(False)
+    assert switch.isEnabled()
+    assert switch.cursor().shape() == Qt.PointingHandCursor
+    assert switch.isChecked()
+    assert not driver.is_active()
+    assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(33.0, abs=0.5)
+
+    _click(switch)
     driver.clock().setCurrentTime(40)
+    assert driver.is_active()
     switch.hide()
+    assert not switch.isChecked()
+    assert not driver.is_active()
     switch.setChecked(True)
     switch.show()
     qapp.processEvents()
@@ -349,7 +440,7 @@ def test_blocked_disabled_hidden_and_reduced_paths_snap_to_real_checked(qtbot, q
     assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(33.0, abs=0.5)
 
     switch.set_motion_policy(POLICY_REDUCED)
-    switch.setChecked(False)
+    _click(switch)
     assert not switch.isChecked()
     assert not driver.is_active()
     assert _knob_center_x(_render_at_dpr(switch, 1), 1) == pytest.approx(11.0, abs=0.5)
@@ -359,8 +450,38 @@ def test_blocked_disabled_hidden_and_reduced_paths_snap_to_real_checked(qtbot, q
     hidden.set_motion_policy(POLICY_LIGHT)
     hidden.setChecked(True)
     assert hidden.isChecked()
-    assert hidden._value_driver is None or not hidden._value_driver.is_active()
+    assert _driver_inactive(hidden)
     assert _knob_center_x(_render_at_dpr(hidden, 1), 1) == pytest.approx(33.0, abs=0.5)
+
+
+def test_parent_hide_and_delete_later_stop_animation(qtbot, qapp):
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    switch = PillSwitch(parent)
+    switch.set_motion_policy(POLICY_LIGHT)
+    parent.show()
+    qapp.processEvents()
+    _click(switch)
+    driver = _motion_driver(switch)
+    driver.clock().setCurrentTime(40)
+    assert driver.is_active()
+
+    parent.hide()
+    assert switch.isChecked()
+    assert not driver.is_active()
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    orphan = PillSwitch(host)
+    orphan.set_motion_policy(POLICY_LIGHT)
+    host.show()
+    qapp.processEvents()
+    _click(orphan)
+    assert _motion_driver(orphan).is_active()
+    orphan.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    qapp.processEvents()
+    assert sip.isdeleted(orphan)
 
 
 def test_label_and_space_keep_checked_ownership_while_motion_follows(qtbot, qapp):

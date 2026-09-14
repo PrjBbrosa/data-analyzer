@@ -174,44 +174,41 @@ def test_auto_db_window_keeps_its_span_when_nothing_is_finite():
 # _slice_amp_bounds — robust Y view range for the slice curve
 # --------------------------------------------------------------------------
 
-def test_slice_amp_bounds_returns_none_without_finite_spread():
+def test_slice_amp_bounds_empty_and_constants():
     assert _slice_amp_bounds(np.array([])) is None
     assert _slice_amp_bounds(np.full(5, np.nan)) is None
-    assert _slice_amp_bounds(np.array([3.0])) is None        # single value
-    assert _slice_amp_bounds(np.array([7.0, 7.0])) is None   # flat → hi <= lo
+    assert _slice_amp_bounds(np.array([3.0])) == (2.0, 4.0)
+    assert _slice_amp_bounds(np.array([7.0, 7.0])) == (6.0, 8.0)
 
 
-def test_slice_amp_bounds_rejects_residue_only_span():
-    from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
-
-    lo = 35.0
-    hi = lo + lo * _DEGENERATE_SPAN_RATIO * 0.5
-    assert _slice_amp_bounds(np.array([lo, hi])) is None
+def test_slice_amp_bounds_preserves_small_finite_spread():
+    lo, hi = 35.0, 35.00001
+    bounds = _slice_amp_bounds(np.array([lo, hi]))
+    assert bounds[0] < lo and bounds[1] > hi
 
 
 def test_slice_amp_bounds_spans_normal_data():
-    assert _slice_amp_bounds(np.array([-60.0, -40.0, -50.0])) == (-60.0, -40.0)
+    assert _slice_amp_bounds(np.array([-60.0, -40.0, -50.0])) == (-61.0, -39.0)
 
 
 def test_slice_amp_bounds_ignores_inf():
-    assert _slice_amp_bounds(np.array([np.inf, -10.0, -20.0])) == (-20.0, -10.0)
+    assert _slice_amp_bounds(np.array([np.inf, -10.0, -20.0])) == (-20.5, -9.5)
 
 
-def test_slice_amp_bounds_drops_bins_below_the_max_span():
-    # The DC bin floored to ~-6153 dB must not crush the real -40..-60 band.
+def test_slice_amp_bounds_excludes_only_explicit_invalid_sources():
     floor = 20.0 * np.log10(np.finfo(float).tiny)
-    assert floor < -6000.0
-    assert _slice_amp_bounds(np.array([floor, -40.0, -60.0, -50.0])) == (-60.0, -40.0)
+    values = np.array([floor, -40.0, -60.0, -50.0])
+    assert _slice_amp_bounds(values, valid_mask=[False, True, True, True]) == (-61.0, -39.0)
+    assert _slice_amp_bounds(values)[0] < floor
 
 
-def test_slice_amp_bounds_keeps_a_bin_exactly_at_the_span_limit():
-    # The cut is `>= hi - _SLICE_MAX_SPAN_DB`, so the boundary bin survives.
-    assert _SLICE_MAX_SPAN_DB == 200.0
-    assert _slice_amp_bounds(np.array([0.0, -200.0])) == (-200.0, 0.0)
+def test_slice_amp_bounds_keeps_a_bin_at_old_span_limit():
+    assert _SLICE_MAX_SPAN_DB == 200.0  # compatibility constant only
+    assert _slice_amp_bounds(np.array([0.0, -200.0])) == (-210.0, 10.0)
 
 
-def test_slice_amp_bounds_drops_a_bin_just_past_the_span_limit():
-    assert _slice_amp_bounds(np.array([0.0, -200.0001, -30.0])) == (-30.0, 0.0)
+def test_slice_amp_bounds_preserves_deeper_nonzero_valleys():
+    assert _slice_amp_bounds(np.array([0.0, -300.0, -30.0])) == (-315.0, 15.0)
 
 
 # --------------------------------------------------------------------------

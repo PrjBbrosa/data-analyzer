@@ -633,8 +633,8 @@ class Toolbar(QWidget):
         self._current_mode = mode
         mapping[mode].setChecked(True)
         self._sync_mode_active_dots()
-        self.mode_changed.emit(mode)
         self._follow_indicator(animate=animate)
+        self.mode_changed.emit(mode)
 
     def motion_policy(self):
         return self._motion_policy

@@ -19,6 +19,8 @@ TIME_MODE = "time"
 CHANNEL_MODE = "channel"
 PER_SOURCE_NAME = "per_source_name"
 EXACT_SOURCE = "exact_source"
+LABEL_ORIGIN_AUTO = "auto"
+LABEL_ORIGIN_USER = "user"
 
 SelectionPayload = tuple[str, str | None, str]
 
@@ -46,6 +48,7 @@ class CustomXAxisSpec:
     channel: str | None = None
     source_fid: str | None = None
     label: str = ""
+    label_origin: str = LABEL_ORIGIN_USER
 
     @classmethod
     def from_axis_opts(cls, payload: Mapping[str, Any] | None) -> "CustomXAxisSpec":
@@ -65,6 +68,19 @@ class CustomXAxisSpec:
         if not channel:
             return cls(mode=TIME_MODE, label=label)
 
+        # ``label_origin`` was added after channel-backed X axes shipped.
+        # Only legacy payloads lack it, so compatibility inference is confined
+        # here.  New apply/capture paths must persist the explicit value.
+        raw_origin = str(values.get("label_origin", "") or "").strip()
+        if raw_origin in {LABEL_ORIGIN_AUTO, LABEL_ORIGIN_USER}:
+            label_origin = raw_origin
+        else:
+            label_origin = (
+                LABEL_ORIGIN_AUTO
+                if not label or label == channel
+                else LABEL_ORIGIN_USER
+            )
+
         raw_resolver = values.get("resolver")
         resolver = (
             EXACT_SOURCE
@@ -78,6 +94,7 @@ class CustomXAxisSpec:
                 channel=channel,
                 source_fid=None,
                 label=label,
+                label_origin=label_origin,
             )
         if resolver == EXACT_SOURCE:
             source_fid = str(values.get("fid", "") or "").strip()
@@ -88,6 +105,7 @@ class CustomXAxisSpec:
                     channel=channel,
                     source_fid=source_fid,
                     label=label,
+                    label_origin=label_origin,
                 )
         return cls(mode=TIME_MODE, label=label)
 
@@ -104,6 +122,7 @@ class CustomXAxisSpec:
                 "fid": None,
                 "channel": str(self.channel),
                 "label": str(self.label or ""),
+                "label_origin": self.label_origin,
             }
         if (
             self.mode == CHANNEL_MODE
@@ -117,6 +136,7 @@ class CustomXAxisSpec:
                 "fid": str(self.source_fid),
                 "channel": str(self.channel),
                 "label": str(self.label or ""),
+                "label_origin": self.label_origin,
             }
         return {
             "mode": TIME_MODE,
@@ -176,6 +196,7 @@ def spec_from_selection(
     payload: object,
     *,
     label: str = "",
+    label_origin: str = LABEL_ORIGIN_USER,
 ) -> CustomXAxisSpec:
     """Decode one tagged Inspector triple, failing closed to ``time``."""
     if not isinstance(payload, (tuple, list)) or len(payload) != 3:
@@ -189,6 +210,7 @@ def spec_from_selection(
             channel=channel,
             source_fid=None,
             label=str(label or ""),
+            label_origin=label_origin,
         )
     if resolver == EXACT_SOURCE and source_fid and channel:
         return CustomXAxisSpec(
@@ -197,6 +219,7 @@ def spec_from_selection(
             channel=channel,
             source_fid=str(source_fid),
             label=str(label or ""),
+            label_origin=label_origin,
         )
     return CustomXAxisSpec(mode=TIME_MODE, label=str(label or ""))
 

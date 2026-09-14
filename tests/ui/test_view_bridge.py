@@ -247,6 +247,7 @@ def test_capture_view_reads_custom_xaxis_from_window_state():
         "fid": "f1",
         "channel": "angle",
         "label": "Angle",
+        "label_origin": "user",
     }
 
 
@@ -270,6 +271,7 @@ def test_capture_view_uses_channel_name_for_blank_custom_xaxis_label():
         "fid": "f1",
         "channel": "angle",
         "label": "angle",
+        "label_origin": "user",
     }
 
 
@@ -292,6 +294,7 @@ def test_capture_view_writes_per_source_name_without_fid():
         "fid": None,
         "channel": "angle",
         "label": "Angle",
+        "label_origin": "user",
     }
 
 
@@ -378,8 +381,9 @@ def test_capture_into_preserves_tab_metadata_and_updates_screen_state():
             "mode": "channel",
             "resolver": "exact_source",
             "fid": "f2",
-            "channel": "angle",
-            "label": "Angle",
+                "channel": "angle",
+                "label": "Angle",
+                "label_origin": "user",
         },
         "tick_density": {"x": 12, "y": 7},
     }
@@ -560,8 +564,9 @@ def test_passive_capture_discards_retired_native_ticks():
         "mode": "channel",
         "resolver": "exact_source",
         "fid": "f1",
-        "channel": "angle",
-        "label": "Angle",
+            "channel": "angle",
+            "label": "Angle",
+            "label_origin": "user",
     }
 
 

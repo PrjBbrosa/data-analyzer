@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QAbstractButton, QApplication, QLabel, QPushButton, 
 from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.view_state import ViewManager
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
+from mf4_analyzer.ui_kit.motion import POLICY_LIGHT, POLICY_OFF
 
 
 def _host_clickables(host):
@@ -27,6 +28,10 @@ def test_chartstack_mounts_tabbar_in_shared_bottom_dock(qtbot):
     rail = cs.findChild(QWidget, "timeViewRail")
 
     assert isinstance(bar, ViewTabBar)
+    assert bar.motion_policy() == POLICY_LIGHT
+    isolated = ViewTabBar(ViewManager())
+    qtbot.addWidget(isolated)
+    assert isolated.motion_policy() == POLICY_OFF
     assert rail is not None
     assert bar.parentWidget() is rail
     assert rail.parentWidget() is cs._time_bottom_dock
@@ -101,6 +106,7 @@ def test_time_bottom_dock_top_hairline_matches_analysis_contents_inset(qtbot):
     row = cs.page_fft._compare_row
     assert row.contentsRect().top() == 0
     assert cs.page_fft.tabbar.geometry().top() == 0
+    assert cs.page_fft.tabbar.motion_policy() == POLICY_LIGHT
 
 
 def test_chartstack_exposes_cursor_mode(qtbot):

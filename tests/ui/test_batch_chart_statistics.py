@@ -3,9 +3,9 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PyQt5.QtCore import QPointF
+from PyQt5.QtCore import QPoint, QPointF, Qt
 from PyQt5.QtGui import QImage
-from PyQt5.QtTest import QSignalSpy
+from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QAbstractSpinBox, QCheckBox
 
 
@@ -14,6 +14,7 @@ def test_chart_statistics_panel_round_trips_only_when_enabled(qtbot):
         ChartStatisticsPanel,
     )
     from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
 
     panel = ChartStatisticsPanel()
     qtbot.addWidget(panel)
@@ -24,13 +25,13 @@ def test_chart_statistics_panel_round_trips_only_when_enabled(qtbot):
     # (chip-styled) and auto_range stays the boolean state owner behind a
     # SegmentedChoice.
     assert isinstance(panel.enabled, PillSwitch)
+    assert panel.enabled.motion_policy() == POLICY_LIGHT
     assert not isinstance(panel.enabled, QCheckBox)
     assert isinstance(panel.maximum, QCheckBox)
     assert isinstance(panel.minimum, QCheckBox)
     assert isinstance(panel.mean, QCheckBox)
     assert isinstance(panel.auto_range, QCheckBox)
     assert panel.auto_range.isHidden() is True
-    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
 
     assert panel._range_mode_choice.bound_combo() is panel._range_mode_combo
     assert panel._range_mode_choice.motion_policy() == POLICY_LIGHT
@@ -103,6 +104,36 @@ def test_chart_statistics_panel_round_trips_only_when_enabled(qtbot):
     panel.enabled.setChecked(False)
     assert panel._settings.isHidden()
     assert panel._summary_note.text() == "统计关闭 · 图上不加标注"
+
+
+def test_chart_statistics_user_click_animates_and_apply_params_snaps(qtbot, qapp):
+    from mf4_analyzer.ui.drawers.batch.chart_statistics_panel import (
+        ChartStatisticsPanel,
+    )
+    from mf4_analyzer.ui_kit.motion import POLICY_LIGHT
+
+    panel = ChartStatisticsPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    qapp.processEvents()
+    switch = panel.enabled
+    assert switch.motion_policy() == POLICY_LIGHT
+    toggled = QSignalSpy(switch.toggled)
+    changed = QSignalSpy(panel.changed)
+
+    QTest.mouseClick(switch, Qt.LeftButton, Qt.NoModifier, QPoint(22, 12))
+    assert switch.isChecked()
+    assert list(toggled) == [[True]]
+    assert len(changed) >= 1
+    driver = switch._value_driver
+    assert driver is not None and driver.is_active()
+
+    panel.apply_params({"chart_statistics": {
+        "enabled": True, "range_mode": "full", "metrics": ["min"],
+    }})
+    assert switch.isChecked()
+    assert not driver.is_active()
+    assert panel.get_params()["chart_statistics"]["metrics"] == ["min"]
 
 
 def test_chart_statistics_program_restore_snaps_without_extra_changed(qtbot, qapp):

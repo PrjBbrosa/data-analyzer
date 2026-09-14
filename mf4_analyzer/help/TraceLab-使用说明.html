@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v8.2.3 · 使用说明</title>
+<title>TraceLab v8.2.4 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -255,11 +255,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v8.2.3",
-    "versionLabel": "使用说明 · V8.2.3",
+    "version": "v8.2.4",
+    "versionLabel": "使用说明 · V8.2.4",
     "subtitle": "从导入数据到分析与导出，一份可直接照做的操作指南",
     "docVersion": "3.0",
-    "updated": "2026-09-10",
+    "updated": "2026-09-13",
     "credit": "GC02689"
   },
   "slides": [
@@ -548,18 +548,28 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.2.3 · 使用说明", "density": "compact",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v8.2.4 · 使用说明", "density": "compact",
       "blocks": [
         { "type": "flow", "height": 550, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.2.3" }
+        { "type": "lead", "center": true, "html": "从数据到结论，按场景完成查看、分析与导出。 —— TraceLab v8.2.4" }
       ] }
   ],
 
   "changelog": [
+    { "v": "v8.2.4", "date": "2026-09-13", "items": [
+      "文件卡片新增 <b>＋ 加入当前 View</b> 入口，点击即可加入文件范围，不自动勾选通道；原有拖入方式继续可用。",
+      "通道搜索空态支持<b>清除筛选</b>，恢复筛选前的展开与滚动位置；通道与配置下拉框增加可输入搜索的提示。",
+      "批处理底栏新增<b>查看详情</b>，可查看逐项原因、警告与产物；Esc 收起详情并返回入口。启用开关与 View 选中标记增加过渡反馈，页面切换提前显示选中反馈。",
+      "修正频谱、时频与阶次的<b>自动范围</b>：频率覆盖完整结果，FFT 和切片幅值适配当前可见窗口并保留真实深谷；切片跟随主图视野，自动色阶只调整对比度，不裁断原始矩阵。",
+      "优化<b>频谱平移</b>，复用已有曲线并合并幅值自适应更新；图内左键平移仅移动横轴，保持幅值自动适配。",
+      "移除分析范围恢复控件；Home 查看全部，再次计算按当前参数显示。切回时间横坐标时清除自动生成的通道轴标题。",
+      "统一单游标、双游标及指定通道横坐标的<b>读数排版</b>，窄面板可分行；名称、数值、单位和方向状态跟随通道颜色，mini 模式隐藏名称，展开后恢复。",
+      "修复进度百分号被裁切的问题，恢复工具栏品牌图标与帮助指南截图，并同步 8.2.4 版本标识。"
+    ] },
     { "v": "v8.2.3", "date": "2026-09-10", "items": [
       "批处理顶部新增紧凑的<b>分析方法</b>选择行：时域、频谱、时频、阶次、频响集中切换，目标与参数随方法更新。",
       "首次打开提供<b>下一步引导</b>；底栏可定位到待配置项目，已选方法无需重复确认。",

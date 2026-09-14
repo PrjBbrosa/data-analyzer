@@ -17,6 +17,7 @@ from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_style import RenderStyle, render_style_from_params
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+from mf4_analyzer.signal.display_ranges import line_amplitude_limits, visible_line_values
 from mf4_analyzer.signal.frf import (
     magnitude_db,
     magnitude_linear,
@@ -39,7 +40,6 @@ from mf4_analyzer.qt_analysis_shared import (
     SUPPORTED_HEATMAP_COLORMAPS,
     _AUTO_CEILING_PCT,
     _AUTO_SPAN_DB,
-    _SLICE_MAX_SPAN_DB,
     _SmoothImageItem,
     amplitude_mode_is_db,
     default_amplitude_mode_for_kind,
@@ -728,26 +728,13 @@ def _resolve_heatmap_colormap(
 def _display_db_values(amplitude, reference: float) -> np.ndarray:
     linear = np.asarray(amplitude, dtype=float)
     converted = SpectrogramAnalyzer.amplitude_to_db(linear, reference=reference)
-    display_floor = max(
-        _EMPTY_DB_LEVEL,
-        float(np.max(converted[np.isfinite(converted)])) - _SLICE_MAX_SPAN_DB
-        if np.any(np.isfinite(converted))
-        else _EMPTY_DB_LEVEL,
-    )
-    finite = np.where(np.isfinite(converted), converted, display_floor)
-    return np.maximum(finite, display_floor)
+    return np.where(np.isfinite(linear) & (linear > 0), converted, np.nan)
 
 
-def _auto_db_line_limits(values) -> tuple[float, float]:
-    finite = _finite_values(values)
-    if finite.size == 0:
-        return (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL)
-    ceiling = float(np.percentile(finite, _AUTO_CEILING_PCT))
-    top = max(ceiling, float(np.max(finite)))
-    bottom = ceiling - _AUTO_SPAN_DB
-    if not top > bottom:
-        top = bottom + 1.0
-    return (bottom, top)
+def _auto_db_line_limits(values, *, valid_mask=None) -> tuple[float, float]:
+    return line_amplitude_limits(
+        values, amplitude_mode="amplitude_db", valid_mask=valid_mask
+    ) or (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL)
 
 
 def _require_dataframe(data, columns, kind: str) -> pd.DataFrame:
@@ -2120,7 +2107,7 @@ class _SceneBuilder:
         self._apply_legend_font(legend)
         legend.addItem(curve, str(self.context.channel or "Channel"))
         self.legend = legend
-        finite_x = _finite_values(x_values)
+        finite_x = x_values[np.isfinite(x_values) & (x_values >= 0)]
         if not bool(self.params.get("x_auto", True)) and _valid_pair(
             self.params.get("x_min"), self.params.get("x_max")
         ):
@@ -2138,10 +2125,16 @@ class _SceneBuilder:
                 float(self.params["y_max"]),
                 padding=0,
             )
-        elif render_db:
-            plot.setYRange(*_auto_db_line_limits(y_values), padding=0)
         else:
-            plot.enableAutoRange(axis="y", enable=True)
+            valid = np.isfinite(linear_values)
+            if render_db:
+                valid &= linear_values > 0
+            visible = visible_line_values(x_values, y_values, x_range, valid_mask=valid)
+            limits = line_amplitude_limits(
+                visible, amplitude_mode="amplitude_db" if render_db else "amplitude"
+            )
+            empty_limits = (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL) if render_db else (-1.0, 1.0)
+            plot.setYRange(*(limits or empty_limits), padding=0)
         self.widget.ci.layout.setRowStretchFactor(3, 1)
         self.panel_titles.append("")
         self.panel_text_items.append(
@@ -2565,8 +2558,6 @@ class _SceneBuilder:
         slice_plot.setLabel("left", colorbar_label)
         self._register_bottom_label_spacing(slice_plot, overhang=True)
 
-        mask = _slice_visible_mask(curve_coords, *curve_range)
-        visible_x = curve_coords[mask]
         visible_values = []
         # Design D-B6: 3+ overlaid curves in one 322px panel read as clutter
         # at full weight. Thinning (not fading — translucency on a white
@@ -2577,11 +2568,18 @@ class _SceneBuilder:
             curve_line_width *= 0.85
         for pick, color in zip(plan.picks, palette):
             values = _slice_curve_values(display_matrix, plan.axis, pick.index)
-            visible = np.asarray(values, dtype=float)[mask]
-            visible_values.append(visible)
+            raw = _slice_curve_values(matrix, plan.axis, pick.index)
+            valid = np.isfinite(raw)
+            if render_db:
+                valid &= raw > 0
+            visible_values.append(visible_line_values(
+                curve_coords, values, curve_range, valid_mask=valid
+            ))
+            # Preserve original display values and adjacent samples; the source
+            # validity mask controls range fitting, not matrix conversion.
             curve = pg.PlotDataItem(
-                visible_x,
-                visible,
+                curve_coords,
+                values,
                 pen=pg.mkPen(color, width=curve_line_width),
                 antialias=False,
             )
@@ -2598,14 +2596,17 @@ class _SceneBuilder:
             stacked = (
                 np.concatenate(visible_values) if visible_values else np.empty(0)
             )
-            bounds = _slice_amp_bounds(stacked)
+            bounds = line_amplitude_limits(
+                stacked, amplitude_mode="amplitude_db" if render_db else "amplitude"
+            )
             amp_range = (
                 None
                 if bounds is None
                 else _nice_amp_range(*bounds, self.style.tick_density_y)
             )
             if amp_range is None:
-                slice_plot.enableAutoRange(axis="y", enable=True)
+                empty_limits = (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL) if render_db else (-1.0, 1.0)
+                slice_plot.setYRange(*empty_limits, padding=0)
             else:
                 slice_plot.setYRange(*amp_range, padding=0)
 

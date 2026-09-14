@@ -180,6 +180,62 @@ def test_switch_landing_inside_a_render_does_not_interleave(
     assert [_state_channels(state) for state in window.view_manager.views] == before
 
 
+def test_confirmed_view_marker_starts_before_real_restore_for_time_and_fft(
+    three_view_window, qapp, monkeypatch,
+):
+    """The installed ViewTabBar slot leads the restore slots in both sections."""
+    window, _fid = three_view_window
+
+    time_events = []
+    time_bar = window.view_tabbar
+    real_time_marker = time_bar._relocate_marker
+    real_time_restore = window._render_view_to_canvas
+
+    def record_time_marker(*, interpolate):
+        time_events.append(("marker", window.view_manager.active, interpolate))
+        return real_time_marker(interpolate=interpolate)
+
+    def record_time_restore(*args, **kwargs):
+        time_events.append(("restore", window.view_manager.active))
+        return real_time_restore(*args, **kwargs)
+
+    monkeypatch.setattr(time_bar, "_relocate_marker", record_time_marker)
+    monkeypatch.setattr(window, "_render_view_to_canvas", record_time_restore)
+    time_bar.tabBar().setCurrentIndex(1)
+    qapp.processEvents()
+
+    assert time_events[0] == ("marker", 1, True)
+    assert time_events[1] == ("restore", 1)
+
+    window.toolbar._set_mode("fft")
+    qapp.processEvents()
+    window._on_analysis_new("fft")
+    qapp.processEvents()
+    window._on_analysis_switch("fft", 0)
+    qapp.processEvents()
+    fft_events = []
+    fft_manager = window.analysis_managers["fft"]
+    fft_bar = window.chart_stack.page_fft.tabbar
+    real_fft_marker = fft_bar._relocate_marker
+    real_fft_restore = window._render_analysis_view_from_cache
+
+    def record_fft_marker(*, interpolate):
+        fft_events.append(("marker", fft_manager.active, interpolate))
+        return real_fft_marker(interpolate=interpolate)
+
+    def record_fft_restore(section, state):
+        fft_events.append(("restore", section, state.view_id))
+        return real_fft_restore(section, state)
+
+    monkeypatch.setattr(fft_bar, "_relocate_marker", record_fft_marker)
+    monkeypatch.setattr(window, "_render_analysis_view_from_cache", record_fft_restore)
+    fft_bar.tabBar().setCurrentIndex(1)
+    qapp.processEvents()
+
+    assert fft_events[0] == ("marker", 1, True)
+    assert fft_events[1] == ("restore", "fft", fft_manager.get(1).view_id)
+
+
 def test_deferred_switch_keeps_each_view_window(three_view_window, qapp, monkeypatch):
     """The interleaved capture used to overwrite a View's zoom; it must not."""
     window, _fid = three_view_window

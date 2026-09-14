@@ -511,7 +511,24 @@ class PgAxisHandle:
             pass
         return bool(self._grid_enabled)
 
+    def analysis_range_policy(self):
+        adapter = getattr(self._owner_canvas, "analysis_range_adapter", None)
+        # The spectrum preview has a different coordinate space.
+        primary = getattr(self._owner_canvas, "_plot_amp", self._plot_item)
+        if adapter is None or self._plot_item is not primary:
+            return None
+        return adapter[0]()
+
+    def apply_analysis_range_policy(self, policies):
+        if self.analysis_range_policy() is None:
+            return False
+        self._owner_canvas.analysis_range_adapter[1](policies)
+        return True
+
     def is_autorange(self, axis: str = "x") -> bool:
+        policy = self.analysis_range_policy()
+        if policy is not None:
+            return bool(policy.get(axis + "_auto", policy.get("autoscale", True) if axis == "x" else True))
         vb = self._view_box
         state = getattr(vb, "state", None) if vb is not None else None
         if not isinstance(state, dict):

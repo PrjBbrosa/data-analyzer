@@ -307,3 +307,53 @@ def test_analysis_restore_pump_survives_closed_window(qapp, qtbot, monkeypatch):
     window.deleteLater()
     qapp.processEvents()
     qapp.processEvents()
+
+
+def test_progress_label_keeps_all_ink_at_requested_width(qapp, qtbot):
+    """Compare actual ink with an unconstrained rendering, including the last %."""
+    from PyQt5.QtWidgets import QMainWindow, QStatusBar
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        host = QMainWindow()
+        qtbot.addWidget(host)
+        status = QStatusBar(host)
+        status.setObjectName("surfaceStatusBar")
+        host.setStatusBar(status)
+        widget = ComputeProgressWidget(status)
+        status.addPermanentWidget(widget)
+        host.resize(1000, 160)
+        host.show()
+        widget.begin("加载 1/1 · 快速解析", 100)
+        qapp.processEvents()
+
+        def ink_count():
+            # Grab the parent so the child widget's mask participates in paint.
+            image = widget.grab(widget.label.geometry()).toImage()
+            return sum(
+                1
+                for y in range(image.height())
+                for x in range(image.width())
+                if (color := image.pixelColor(x, y)).alpha() > 128
+                and max(color.red(), color.green(), color.blue()) < 180
+            )
+
+        for phase in ("快速解析", "读取 CAN 帧", "解码信号"):
+            for percent in (0, 25, 99, 100):
+                widget.set_progress(percent, 100, label=f"加载 1/1 · {phase}")
+                width = widget.sizeHint().width()
+                widget.setFixedWidth(width)
+                qapp.processEvents()
+                assert widget.label.text() == f"加载 1/1 · {phase} · {percent}%"
+                constrained = ink_count()
+                widget.setFixedWidth(width + 24)
+                qapp.processEvents()
+                reference = ink_count()
+                assert reference > 0
+                assert constrained == reference, (
+                    phase, percent, constrained, reference
+                )
+    finally:
+        qapp.setStyleSheet(old_sheet)

@@ -863,6 +863,7 @@ class InputPanel(QWidget):
     """Compact INPUT column with first-level authoritative file management."""
 
     changed = pyqtSignal()
+    filterChanged = pyqtSignal()
     channelUniverseChanged = pyqtSignal(tuple, dict)
 
     def __init__(
@@ -1067,6 +1068,7 @@ class InputPanel(QWidget):
         self._rpm_factor_spin.valueChanged.connect(self.changed)
         self._time_edit.textChanged.connect(self._on_time_text_changed)
         self._filter_panel.changed.connect(self.changed)
+        self._filter_panel.changed.connect(self.filterChanged)
 
         # Seed picker / RPM with initial empty intersection.
         self._refresh_signal_universe()

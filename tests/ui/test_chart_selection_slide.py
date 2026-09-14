@@ -176,6 +176,40 @@ def test_user_click_animates_program_setters_snap(qtbot, qapp):
     )
 
 
+def test_reentrant_mode_signal_leaves_indicator_on_effective_choice(qtbot, qapp):
+    """A slot may synchronously replace the requested choice while emitting."""
+    time = _time_card(qtbot, qapp)
+    fft = _fft_card(qtbot, qapp)
+
+    def redirect_plot(mode):
+        if mode == "overlay":
+            time.set_plot_mode("subplot")
+
+    def redirect_time_cursor(mode):
+        if mode == "dual":
+            time.set_cursor_mode("off")
+
+    def redirect_frequency_cursor(mode):
+        if mode == "dual":
+            fft.set_cursor_mode("off")
+
+    time.plot_mode_changed.connect(redirect_plot)
+    time.cursor_mode_changed.connect(redirect_time_cursor)
+    fft.cursor_mode_changed.connect(redirect_frequency_cursor)
+
+    time._on_plot_mode_clicked("overlay")
+    assert time.plot_mode() == "subplot"
+    assert _indicator(time, "plot")._target is time.btn_subplot
+
+    time._on_cursor_mode_clicked("dual")
+    assert time.cursor_mode() == "off"
+    assert _indicator(time, "cursor")._target is time._cursor_buttons["off"]
+
+    fft._on_cursor_mode_clicked("dual")
+    assert fft.cursor_mode() == "off"
+    assert _indicator(fft, "cursor")._target is fft._cursor_buttons["off"]
+
+
 def test_frequency_user_click_animates_setters_and_sync_snap(qtbot, qapp):
     card = _fft_card(qtbot, qapp)
     spy = QSignalSpy(card.cursor_mode_changed)

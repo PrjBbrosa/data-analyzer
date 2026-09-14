@@ -635,7 +635,7 @@ class FFTTimeMixin:
         ``(fid, ch)`` this specific pane/result came from -- required for a
         per-pane-accurate dB-reference resolution (spec §15 C2)."""
         if bool(p.get('freq_auto', p.get('y_auto', True))):
-            freq_range = self._fft_time_auto_freq_range(result)
+            freq_range = None  # The canvas adapts to actual result bins; keep auto intent.
         else:
             freq_range = self._normalize_freq_range(p)
         # Wave 5: legacy ``dynamic: str`` is gone; we forward the explicit
@@ -678,7 +678,7 @@ class FFTTimeMixin:
             x_auto=bool(p.get('x_auto', True)),
             x_min=float(p.get('x_min', 0.0)),
             x_max=float(p.get('x_max', 0.0)),
-            y_auto=bool(p.get('y_auto', True)),
+            y_auto=bool(p.get('freq_auto', p.get('y_auto', True))),
             y_min=float(p.get('y_min', 0.0)),
             y_max=float(p.get('y_max', 0.0)),
             # db_reference is display-only: source it from the resolved

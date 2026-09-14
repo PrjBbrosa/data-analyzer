@@ -242,6 +242,12 @@ lesson by default.
 | [Batch First Show Must Settle Scrollbar Gutters](batch-first-show-scrollbar-settlement.md) | Changing Batch window startup or scroll-pane geometry. | See lesson |
 | [Binary count fields keep official width and remaining-byte bounds](zfd-int32-count-before-allocate.md) | Reading a binary measurement format whose records declare a sample count, especially ZFD / ZFGE2 or any format that also has a historical marker-scan parser. | See lesson |
 | [Hidden Form Fields Keep Payload Round-Trip](hidden-form-fields-keep-payload-roundtrip.md) | Hiding a Batch/Inspector form field because it is no longer applicable to the current method or mode. | See lesson |
+| [Progress Label Must Account For Implicit QLabel Indent](progress-label-implicit-indent-clips-ink.md) | Changing progress label geometry, text budgets, masks, or QSS padding. | See lesson |
+| [Analysis Line Ranges Use The Raw Valid Window](analysis-line-ranges-use-raw-valid-window.md) | Changing automatic FFT or heatmap-slice amplitude ranges, dB reference | See lesson |
+| [Spectrum Plot-Body Pan Is X-Only](spectrum-plot-body-pan-is-x-only.md) | Changing FFT spectrum ViewBox pan/zoom, `_on_interactive_range_changed`, or `viewport_action_committed` axis detection. | See lesson |
+| [Deferred Section Entry Shares The Render Gate](deferred-section-entry-shares-render-gate.md) | Scheduling a delayed Section replot or changing TimeRenderGate. | See lesson |
+| [Toolbar Feedback Precedes Synchronous Mode Delivery](toolbar-feedback-precedes-sync-mode-delivery.md) | Changing Toolbar section selection, selection-indicator animation, or | See lesson |
+| [Cursor geometry acceptance must inspect the painted document](cursor-layout-tests-must-use-painted-document.md) | Cursor rich-text layout, prototype-to-Qt implementation, or reports that aligned values are clipped. | See lesson |
 
 ## Selection Rules
 

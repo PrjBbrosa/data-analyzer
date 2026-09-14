@@ -138,6 +138,35 @@ def test_item1_off_on_analysis_page_skips_attach(qtbot, qapp, loaded_csv):
     assert fid in window.files
 
 
+def test_file_card_attach_targets_active_analysis_view_without_compute(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    window = _window(qtbot, qapp)
+    window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
+    window.load_file(loaded_csv)
+    qapp.processEvents()
+    fid = _fid(window)
+
+    window._on_mode_changed("fft")
+    qapp.processEvents()
+    row = window.navigator._rows[window.navigator._fid_to_key[fid]]
+    submissions = []
+    monkeypatch.setattr(
+        window._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submissions.append((args, kwargs)),
+    )
+
+    assert "频谱" in row._btn_attach.toolTip()
+    assert row._btn_attach.isEnabled()
+    row._btn_attach.click()
+
+    assert window.analysis_managers["fft"].get(0).attached_file_ids == [fid]
+    assert window.view_manager.get(0).attached_file_ids == []
+    assert not window.navigator.get_checked_channels()
+    assert submissions == []
+
+
 def test_item2_time_and_analysis_new_inherit(qtbot, qapp, loaded_csv, monkeypatch):
     window = _window(qtbot, qapp)
     window.load_file(loaded_csv)

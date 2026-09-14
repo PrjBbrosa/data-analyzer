@@ -206,6 +206,7 @@ class ChartStatisticsPanel(QWidget):
             signal.connect(self.changed)
         self._range_mode_combo.currentIndexChanged.connect(self._on_range_mode_ui)
         self._sync()
+        self.enabled.set_motion_policy(POLICY_LIGHT)
 
     def _on_range_mode_ui(self, index: int) -> None:
         """SegmentedChoice → hidden auto_range checkbox (state owner)."""

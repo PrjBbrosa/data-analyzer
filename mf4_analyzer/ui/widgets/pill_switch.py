@@ -6,6 +6,7 @@ share the exact same visual — track / knob colours, 44×24 size, disabled tint
 ``isChecked()`` / ``setChecked()`` behave like a normal checkable button, so a
 caller can swap a ``QCheckBox`` for it without touching its enable/sync logic.
 """
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, Qt, QSize, QRectF
 from PyQt5.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PyQt5.QtWidgets import QAbstractButton, QLabel
@@ -40,13 +41,15 @@ class PillSwitch(QAbstractButton):
         self._motion_policy = POLICY_OFF
         self._value_driver = None
         self._present = 0.0
+        self._direct_activation = False
+        self._hold_presentation = False
         super().__init__(parent)
         if object_name:
             self.setObjectName(object_name)
         if accessible_name:
             self.setAccessibleName(accessible_name)
         self.setCheckable(True)
-        self.setCursor(Qt.PointingHandCursor)
+        self._sync_cursor()
         self.setFixedSize(44, 24)
 
     def sizeHint(self):
@@ -61,30 +64,54 @@ class PillSwitch(QAbstractButton):
 
     def checkStateSet(self):
         super().checkStateSet()
-        self._follow_checked_state()
+        if sip.isdeleted(self):
+            return
+        if self._direct_activation:
+            # Consume before toggled subscribers run so their setChecked /
+            # disable / delete paths snap instead of inheriting this click.
+            self._direct_activation = False
+            return
+        self._follow_checked_state(animate=False)
 
     def nextCheckState(self):
-        super().nextCheckState()
-        self._follow_checked_state()
+        intended = not self.isChecked()
+        self._direct_activation = True
+        self._hold_presentation = True
+        try:
+            super().nextCheckState()
+            if sip.isdeleted(self):
+                return
+            self._follow_checked_state(animate=self.isChecked() == intended)
+        finally:
+            if not sip.isdeleted(self):
+                self._direct_activation = False
+                self._hold_presentation = False
 
     def hideEvent(self, event):
         self._snap_presentation_to_checked()
         super().hideEvent(event)
 
+    def event(self, event):
+        kind = event.type()
+        if kind in (QEvent.HideToParent, QEvent.DeferredDelete):
+            if not sip.isdeleted(self):
+                self._snap_presentation_to_checked()
+        return super().event(event)
+
     def changeEvent(self, event):
         super().changeEvent(event)
+        if sip.isdeleted(self):
+            return
         kind = event.type()
         if kind == QEvent.EnabledChange:
             self._snap_presentation_to_checked()
+            self._sync_cursor()
         elif kind == QEvent.ActivationChange and not self.isActiveWindow():
             self._snap_presentation_to_checked()
 
-    def _should_interpolate(self):
-        return (
-            self._motion_policy.interpolates()
-            and self.isVisible()
-            and self.isEnabled()
-            and not self.signalsBlocked()
+    def _sync_cursor(self):
+        self.setCursor(
+            Qt.PointingHandCursor if self.isEnabled() else Qt.ArrowCursor
         )
 
     def _ensure_driver(self):
@@ -94,10 +121,14 @@ class PillSwitch(QAbstractButton):
         return self._value_driver
 
     def _on_present_value(self, value):
+        if sip.isdeleted(self):
+            return
         self._present = 0.0 if value is None else float(value)
         self.update()
 
     def _snap_presentation_to_checked(self):
+        if sip.isdeleted(self):
+            return
         end = 1.0 if self.isChecked() else 0.0
         if self._value_driver is not None:
             self._value_driver.snap(end)
@@ -105,14 +136,20 @@ class PillSwitch(QAbstractButton):
         self._present = end
         self.update()
 
-    def _follow_checked_state(self):
-        end = 1.0 if self.isChecked() else 0.0
-        if not self._should_interpolate():
-            self._snap_presentation_to_checked()
+    def _follow_checked_state(self, *, animate=False):
+        if sip.isdeleted(self):
             return
-        self._ensure_driver().go(
-            end, duration_ms=duration_ms("switch", self._motion_policy)
-        )
+        end = 1.0 if self.isChecked() else 0.0
+        if (
+            animate
+            and self._motion_policy.interpolates()
+            and self.isEnabled()
+        ):
+            self._ensure_driver().go(
+                end, duration_ms=duration_ms("switch", self._motion_policy)
+            )
+            return
+        self._snap_presentation_to_checked()
 
     def _presentation(self):
         driver = self._value_driver
@@ -120,7 +157,7 @@ class PillSwitch(QAbstractButton):
             current = driver.current()
             if current is not None:
                 return max(0.0, min(1.0, float(current)))
-        return 1.0 if self.isChecked() else 0.0
+        return max(0.0, min(1.0, float(self._present)))
 
     def _paints_interpolated(self):
         driver = self._value_driver
@@ -183,7 +220,7 @@ class PillSwitch(QAbstractButton):
 
         on = self.isChecked()
         enabled = self.isEnabled()
-        interpolate = self._paints_interpolated()
+        interpolate = self._paints_interpolated() or self._hold_presentation
         progress = self._presentation() if interpolate else (1.0 if on else 0.0)
 
         # Each state only changes ink.  The shared 44×24 geometry, track
