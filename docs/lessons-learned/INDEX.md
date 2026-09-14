@@ -248,6 +248,7 @@ lesson by default.
 | [Deferred Section Entry Shares The Render Gate](deferred-section-entry-shares-render-gate.md) | Scheduling a delayed Section replot or changing TimeRenderGate. | See lesson |
 | [Toolbar Feedback Precedes Synchronous Mode Delivery](toolbar-feedback-precedes-sync-mode-delivery.md) | Changing Toolbar section selection, selection-indicator animation, or | See lesson |
 | [Cursor geometry acceptance must inspect the painted document](cursor-layout-tests-must-use-painted-document.md) | Cursor rich-text layout, prototype-to-Qt implementation, or reports that aligned values are clipped. | See lesson |
+| [Fractional Nice Steps Need Label Precision Independent Of Step Selection](fractional-nice-step-label-precision.md) | Formatting explicit 2.5-family ticks or changing common linear axis labels. | See lesson |
 
 ## Selection Rules
 

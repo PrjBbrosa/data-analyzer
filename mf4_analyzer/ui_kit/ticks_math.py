@@ -129,34 +129,19 @@ def pad_y_extent(lo, hi, *, fraction=0.05):
 def bounded_tick_strings(
     values, scale, spacing, *, max_significant=MAX_TICK_SIGNIFICANT_DIGITS
 ):
-    """``AxisItem.tickStrings`` with the printed digit count bounded.
+    """Keep accurate legacy labels; repair lossy ladders within a digit budget.
 
-    Reproduces pyqtgraph 0.14's default formatting EXACTLY while the label
-    stays inside ``max_significant`` significant digits — every ordinary
-    engineering axis in this app is byte-identical, which is what keeps the
-    tick-label width measurements in ``ui_kit.axis_metrics`` and the batch /
-    GUI render parity guards agreeing.
-
-    The one divergence is the branch pyqtgraph has no exit from: for
-    ``0.001 <= |v| < 10000`` it formats fixed with ``places`` derived from
-    ``spacing``, so a microscopic spacing prints every digit of the mantissa
-    (``'35.000000000000000'``). Past the budget this switches to ``%g``, which
-    picks whichever of fixed/scientific is shorter and drops the noise digits.
-
-    Honest limitation: at that point adjacent ticks CAN render identically,
-    because at 1e-15 relative resolution they genuinely are the same number to
-    any displayable precision. Bounding the label is all this can do; showing
-    distinct short labels there would need offset notation (an axis-level
-    ``+3.5e1`` annotation), which is a separate feature. ``pad_y_extent``
-    is what keeps auto-framing from ever landing there.
-
-    Raises ``ValueError``/``OverflowError`` on a non-positive or non-finite
-    ``spacing * scale``, exactly as pyqtgraph's own ``log10`` call does; the
-    caller is expected to fall back to ``super().tickStrings``.
+    Repair uses one fixed precision or one scientific precision for the entire
+    ladder, with <=1% division error. Positions and nice-step selection are
+    untouched. At sub-budget relative resolution (e.g. float residue around
+    35), retain bounded labels rather than printing meaningless long tails;
+    distinct labels there would require a separately designed offset axis.
+    Non-finite values retain their legacy text. Invalid spacing still raises.
     """
     scale = float(scale)
     spacing = float(spacing)
     places = max(0, math.ceil(-math.log10(spacing * scale)))
+    values = list(values)
     strings = []
     for value in values:
         scaled = float(value) * scale
@@ -171,7 +156,46 @@ def bounded_tick_strings(
             strings.append(("%%0.%df" % places) % scaled)
         else:
             strings.append("%.*g" % (max_significant, scaled))
-    return strings
+    scaled_values = [float(value) * scale for value in values]
+    step = spacing * scale
+
+    def accurate(labels):
+        return all(
+            not math.isfinite(value)
+            or abs(float(label) - value) <= max(step * .01, 4 * math.ulp(value))
+            for value, label in zip(scaled_values, labels)
+        )
+
+    if accurate(strings):
+        return ["0" if text.startswith("-") and float(text) == 0 else text
+                for text in strings]
+
+    # Repair the whole ladder with one precision. Never expand beyond the
+    # existing significant-digit budget to describe floating-point residue.
+    candidates = []
+    for places in range(max_significant + 1):
+        fixed = []
+        for value in scaled_values:
+            label = f"{value:.{places}f}"
+            if "." in label:
+                label = label.rstrip("0").rstrip(".")
+            fixed.append("0" if label == "-0" else label)
+        within_budget = all(
+            not math.isfinite(value) or len(
+                label.lstrip("-").replace(".", "").lstrip("0").rstrip("0")
+            ) <= max_significant
+            for value, label in zip(scaled_values, fixed)
+        )
+        if within_budget and accurate(fixed):
+            candidates.append((sum(map(len, fixed)), 0, fixed))
+            break
+    for digits in range(1, max_significant + 1):
+        scientific = ["0" if value == 0 else f"{value:.{digits - 1}e}"
+                      for value in scaled_values]
+        if accurate(scientific):
+            candidates.append((sum(map(len, scientific)), 1, scientific))
+            break
+    return min(candidates)[2] if candidates else strings
 
 
 _NICE_STEP_MANTISSAS = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8]

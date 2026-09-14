@@ -953,7 +953,7 @@ class OverlayAxisManager(_CanvasBackref):
             axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
             if axis is not None:
                 axis.setStyle(maxTickLevel=0)
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+                axis.setTicks([[(value, _fmt_tick(value, per_div)) for value in ticks], []])
         except Exception:
             pass
 
@@ -997,7 +997,7 @@ class OverlayAxisManager(_CanvasBackref):
             axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
             if axis is not None:
                 axis.setStyle(maxTickLevel=0)
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+                axis.setTicks([[(value, _fmt_tick(value, per_div)) for value in ticks], []])
         except Exception:
             pass
 

@@ -224,7 +224,7 @@ class TestFrameToNiceDegenerateSpan:
 # bounded_tick_strings
 # ----------------------------------------------------------------------
 class TestBoundedTickStrings:
-    """Byte-identical to pyqtgraph everywhere except on noise digits.
+    """Preserve accurate legacy labels and bound noise digits.
 
     The parity clause is the load-bearing one: ``ui_kit.axis_metrics`` sizes
     left axes from these strings and the batch/GUI render parity guards
@@ -318,3 +318,32 @@ class TestBoundedTickStrings:
         # pyqtgraph rather than inventing labels.
         with pytest.raises((ValueError, OverflowError)):
             bounded_tick_strings([1.0], 1.0, spacing)
+
+@pytest.mark.parametrize('step,scale', [(2.5, 1), (0.25, 1), (0.025, 1), (0.0025, 1000)])
+def test_tick_labels_preserve_fractional_nice_steps(step, scale):
+    values = [k * step for k in range(-4, 5)]
+    labels = bounded_tick_strings(values, scale, step)
+    assert [float(s) for s in labels] == pytest.approx([v * scale for v in values])
+    assert max(len(s) for s in labels) <= 6
+    assert '-0' not in labels
+
+
+def test_tick_labels_resolve_small_steps_on_large_offset():
+    values = [100000 + k * .2 for k in range(6)]
+    labels = bounded_tick_strings(values, 1, .2)
+    assert len(set(labels)) == len(values)
+    assert [float(s) for s in labels] == pytest.approx(values, rel=0, abs=.002)
+    assert max(len(s) for s in labels) <= 8
+
+@pytest.mark.parametrize('exponent', range(-8, 9))
+@pytest.mark.parametrize('factor', [1, 2, 2.5, 5, 10])
+def test_tick_precision_ladder_preserves_value_and_gap(exponent, factor):
+    step = factor * 10.0 ** exponent
+    values = [(k + .137) * step for k in range(-4, 5)]
+    labels = bounded_tick_strings(values, 1, step)
+    parsed = [float(text) for text in labels]
+    assert len(set(labels)) == len(values)
+    for actual, shown in zip(values, parsed):
+        assert abs(actual - shown) <= .01 * step
+    for left, right in zip(parsed, parsed[1:]):
+        assert abs((right - left) - step) <= .02 * step

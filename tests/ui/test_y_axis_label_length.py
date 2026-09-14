@@ -102,15 +102,10 @@ class TestVerticalAxisBoundsItsLabels:
         ours = self._axis().tickStrings(list(values), 1.0, spacing)
         assert max(len(text) for text in ours) <= 4, ours
 
-    def test_horizontal_axis_is_left_to_pyqtgraph(self, qapp):
-        """X pays for a long label in a dimension it has to spare, and the
-        time-domain X path already backs off on label collision
-        (``tick_density._fit_x_tick_labels``) — re-formatting under that fit
-        would only change which ticks it selects."""
+    def test_horizontal_axis_also_bounds_float_residue(self, qapp):
+        """X labels must not regain long float tails while repairing precision."""
         values = [34.99999999999999, 35.0, 35.00000000000001]
-        spacing = 2e-15
-        assert self._axis("bottom").tickStrings(list(values), 1.0, spacing) == \
-            pg.AxisItem.tickStrings(self._axis("bottom"), list(values), 1.0, spacing)
+        assert self._axis("bottom").tickStrings(values, 1.0, 2e-15) == ["35"] * 3
 
     @pytest.mark.parametrize("spacing", [0.0, -1.0])
     def test_unusable_spacing_defers_to_pyqtgraph(self, qapp, spacing):
