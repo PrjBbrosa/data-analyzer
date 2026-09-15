@@ -42,6 +42,7 @@ $Requirements = Join-Path $RepoRoot "requirements.txt"
 $AcquisitionRequirements = Join-Path $RepoRoot "requirements-windows-acquisition.txt"
 $RuntimeVerifier = Join-Path $RepoRoot "scripts\verify_windows_acquisition_runtime.py"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
+$QssIconFallbackDir = Join-Path $RepoRoot "mf4_analyzer\ui_kit\resources"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeHookPyxcp = Join-Path $PSScriptRoot "pyinstaller_rthook_pyxcp_vendor.py"
@@ -162,6 +163,7 @@ foreach ($RequiredVendorPath in @($Pya2lPackage, $Pya2lMetadata)) {
 
 Write-Step "Building folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
+$AddDataQssIconFallbacks = "$QssIconFallbackDir;mf4_analyzer\ui_kit\resources"
 $AddDataIcons = "$IconsDir;assets\icons"
 $BrandingDir = Join-Path $RepoRoot "assets\branding"
 $AddDataBranding = "$BrandingDir;assets\branding"
@@ -295,6 +297,7 @@ $PyInstallerArgs += @(
     "--workpath", $WorkDir,
     "--specpath", $SpecDir,
     "--add-data", $AddDataStyle,
+    "--add-data", $AddDataQssIconFallbacks,
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataWwt,

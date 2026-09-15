@@ -39,26 +39,16 @@ def load_stylesheet(app):
     if not qss.exists():
         return
     template = qss.read_text(encoding="utf-8")
-    try:
-        icon_paths = ensure_icon_cache()
-        stylesheet = render_qss_template(
-            template,
-            {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS, **icon_paths},
-        )
-    except Exception as exc:
-        # Defensive: if qtawesome import or icon rendering fails (e.g.
-        # an unusual install), fall back to the raw template. Spinbox
-        # arrows will be invisible (the original bug) but the rest of
-        # the app remains styled. Log so it surfaces in the console.
-        print(
-            f"[mf4_analyzer.ui_kit.stylesheet] icon cache generation failed "
-            f"({exc!r}); loading stylesheet without subcontrol arrow glyphs.",
-        )
-        # Control tokens do not depend on icon rendering, so retain the shared
-        # action-control contract even when the optional icon cache is absent.
-        stylesheet = render_qss_template(
-            template, {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS}
-        )
+    # ``ensure_icon_cache`` resolves each glyph independently to a healthy
+    # cache file or a validated packaged fallback. Do not catch broad errors
+    # here: programming errors must surface, and a missing packaged fallback is
+    # an explicit release-resource failure rather than permission to install
+    # QSS with unresolved icon placeholders.
+    icon_paths = ensure_icon_cache()
+    stylesheet = render_qss_template(
+        template,
+        {**CONTROL_QSS_TOKENS, **ULTRAVIEW_QSS_TOKENS, **icon_paths},
+    )
     app.setStyleSheet(stylesheet)
     # The QSS above rounds the inner QComboBox list, but the popup's
     # top-level window stays a square, natively shadowed rectangle that

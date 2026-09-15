@@ -1,7 +1,8 @@
 import json
+import sys
 from pathlib import Path
 
-from PyQt5.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox, QPushButton
@@ -220,6 +221,237 @@ def _add_attached_file(widget, fid, file_data):
     """Mirror the production View contract for channel-widget tests."""
     widget.add_file(fid, file_data)
     widget.set_attached_file_ids([*widget.get_attached_file_ids(), fid])
+
+
+def _expander_slot(tree, item):
+    """Return Qt's actual disclosure slot for the item's current indent.
+
+    ``drawBranches`` receives the complete branch gutter, not merely its
+    disclosure slot.  The slot is adjacent to the item in both directions:
+    on LTR it is the gutter's rightmost indentation unit, while on RTL it is
+    its leftmost unit.  Keep this test geometry tied to the actual tree
+    indentation rather than a literal 16px test-only assumption.
+    """
+    row = tree.visualItemRect(item)
+    width = tree.indentation()
+    if tree.layoutDirection() == Qt.RightToLeft:
+        return QRect(row.right() + 1, row.top(), width, row.height())
+    return QRect(row.left() - width, row.top(), width, row.height())
+
+
+def _physical_rect(rect, dpr):
+    """Map a logical viewport rect to the grabbed image's pixel grid."""
+    left = round(rect.left() * dpr)
+    top = round(rect.top() * dpr)
+    right = round((rect.right() + 1) * dpr) - 1
+    bottom = round((rect.bottom() + 1) * dpr) - 1
+    return QRect(left, top, right - left + 1, bottom - top + 1)
+
+
+def _chevron_ink_bbox(image, slot, color=QColor("#334155")):
+    """Find a vector-chevron core, excluding its antialiased fringe."""
+    physical_slot = _physical_rect(slot, image.devicePixelRatio())
+    points = []
+    for y in range(physical_slot.top(), physical_slot.bottom() + 1):
+        for x in range(physical_slot.left(), physical_slot.right() + 1):
+            if image.pixelColor(x, y) == color:
+                points.append(QPoint(x, y))
+    assert points, f"the disclosure slot has no {color.name()} vector-chevron core"
+    return QRect(
+        min(point.x() for point in points),
+        min(point.y() for point in points),
+        max(point.x() for point in points) - min(point.x() for point in points) + 1,
+        max(point.y() for point in points) - min(point.y() for point in points) + 1,
+    ), physical_slot
+
+
+def _assert_parent_expander(tree, item, expanded, *, selected, ink):
+    """Prove glyph, direction, slot bound, and correct slot background."""
+    tree.clearSelection()
+    if selected:
+        tree.setCurrentItem(item)
+        item.setSelected(True)
+    else:
+        tree.setCurrentItem(None)
+        item.setSelected(False)
+    item.setExpanded(expanded)
+    QCoreApplication.processEvents()
+
+    slot = _expander_slot(tree, item)
+    image = tree.viewport().grab().toImage()
+    bbox, physical_slot = _chevron_ink_bbox(image, slot, ink)
+    assert physical_slot.contains(bbox), (
+        f"chevron bbox {bbox.getRect()} escaped slot {physical_slot.getRect()}"
+    )
+    if expanded:
+        assert bbox.width() > bbox.height(), (
+            f"open chevron must be wider than tall, got {bbox.getRect()}"
+        )
+    else:
+        assert bbox.height() > bbox.width(), (
+            f"closed chevron must be taller than wide, got {bbox.getRect()}"
+        )
+
+    expected = QColor("#b7d3f2") if selected else tree.palette().base().color()
+    for point, label in (
+        (physical_slot.topLeft(), "slot top-left"),
+        (physical_slot.topRight(), "slot top-right"),
+        (physical_slot.bottomLeft(), "slot bottom-left"),
+        (physical_slot.bottomRight(), "slot bottom-right"),
+    ):
+        assert image.pixelColor(point) == expected, (
+            f"{label} lost its expected slot background: "
+            f"{image.pixelColor(point).name()}"
+        )
+    return bbox
+
+
+def _relative_luminance(color):
+    def linear(channel):
+        normalized = channel / 255
+        return (
+            normalized / 12.92
+            if normalized <= 0.04045
+            else ((normalized + 0.055) / 1.055) ** 2.4
+        )
+
+    return (
+        0.2126 * linear(color.red())
+        + 0.7152 * linear(color.green())
+        + 0.0722 * linear(color.blue())
+    )
+
+
+def _contrast_ratio(first, second):
+    low, high = sorted((_relative_luminance(first), _relative_luminance(second)))
+    return (high + 0.05) / (low + 0.05)
+
+
+def test_non_darwin_selected_parent_expanders_are_vector_painted_at_all_depths(
+    qapp, qtbot, monkeypatch,
+):
+    """The old non-Darwin path exposed no selected-parent chevron at all.
+
+    Mocking the process platform before construction exercises the production
+    Windows/Linux branch of the former implementation (rather than accepting
+    the macOS-only default).  File, source, raster, and record-group parents
+    cover the supported shapes, including multi-depth slots and both states.
+    """
+    from PyQt5.QtWidgets import QTreeWidgetItem
+
+    from mf4_analyzer.ui.widgets.channel_tree import (
+        RECORD_BINDING_KIND,
+        RECORD_GROUP_KIND,
+    )
+
+    old_sheet = qapp.styleSheet()
+    old_style = qapp.style().objectName()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        # The legacy Darwin-only branch reads this process-global value in
+        # _CheckTolerantTree.__init__; it therefore provides a genuine red
+        # regression for the path Windows used to take.
+        monkeypatch.setattr(sys, "platform", "win32")
+        widget = MultiFileChannelWidget()
+        qtbot.addWidget(widget)
+        widget.resize(560, 400)
+        _add_attached_file(widget, "flat", _MultiChannelFileData())
+        _add_attached_file(widget, "nested", _GroupedFileData(1000, "1.0 kHz"))
+
+        source = next(iter(widget._source_items.values()))
+        raster = widget._raster_items["nested"]
+        record_group = QTreeWidgetItem(["Record group", ""])
+        record_group.setData(0, Qt.UserRole, (RECORD_GROUP_KIND, "view", "group"))
+        record_binding = QTreeWidgetItem(["Record binding", ""])
+        record_binding.setData(
+            0,
+            Qt.UserRole,
+            (RECORD_BINDING_KIND, "view", "binding", "nested", 1),
+        )
+        record_group.addChild(record_binding)
+        raster.addChild(record_group)
+
+        widget.show()
+        qtbot.waitExposed(widget)
+        widget.tree.expandAll()
+        QCoreApplication.processEvents()
+
+        parents = (
+            widget._file_items["flat"],
+            source,
+            raster,
+            record_group,
+        )
+        normal_ink = QColor("#334155")
+        assert _contrast_ratio(normal_ink, QColor("#b7d3f2")) >= 3.0
+        for parent in parents:
+            for selected in (False, True):
+                # Ancestors must stay visible while exercising each nested row.
+                source.setExpanded(True)
+                raster.setExpanded(True)
+                open_bbox = _assert_parent_expander(
+                    widget.tree,
+                    parent,
+                    expanded=True,
+                    selected=selected,
+                    ink=normal_ink,
+                )
+                source.setExpanded(True)
+                raster.setExpanded(True)
+                closed_bbox = _assert_parent_expander(
+                    widget.tree,
+                    parent,
+                    expanded=False,
+                    selected=selected,
+                    ink=normal_ink,
+                )
+                assert open_bbox != closed_bbox, "open and closed chevrons matched"
+
+        # Qt mirrors the complete branch gutter in RTL.  The disclosure slot
+        # for a nested row is then adjacent to its right-hand content edge,
+        # not the old LTR gutter edge.  A bbox assertion here catches a vector
+        # that remains visible but was painted into a parent connector slot.
+        widget.setLayoutDirection(Qt.RightToLeft)
+        widget.tree.setLayoutDirection(Qt.RightToLeft)
+        source.setExpanded(True)
+        raster.setExpanded(True)
+        rtl_open = _assert_parent_expander(
+            widget.tree,
+            raster,
+            expanded=True,
+            selected=True,
+            ink=normal_ink,
+        )
+        source.setExpanded(True)
+        raster.setExpanded(True)
+        rtl_closed = _assert_parent_expander(
+            widget.tree,
+            raster,
+            expanded=False,
+            selected=True,
+            ink=normal_ink,
+        )
+        assert rtl_open != rtl_closed, "RTL open and closed chevrons matched"
+        widget.setLayoutDirection(Qt.LeftToRight)
+        widget.tree.setLayoutDirection(Qt.LeftToRight)
+
+        # The disabled glyph is deliberately distinct from the normal vector,
+        # while keeping its actual branch slot and selected background intact.
+        flat = widget._file_items["flat"]
+        flat.setDisabled(True)
+        source.setExpanded(True)
+        raster.setExpanded(True)
+        _assert_parent_expander(
+            widget.tree,
+            flat,
+            expanded=True,
+            selected=True,
+            ink=QColor("#94a3b8"),
+        )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+        qapp.setStyle(old_style)
 
 
 def test_nested_parent_checkbox_geometry_stays_aligned_when_selected(qapp, qtbot):

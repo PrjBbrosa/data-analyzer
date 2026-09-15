@@ -1,7 +1,6 @@
 """The multi-file channel tree: MultiFileChannelWidget and its private helpers."""
 import json
 import logging
-import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 
@@ -31,6 +30,7 @@ from PyQt5.QtGui import (
     QFontMetrics,
     QIcon,
     QPainter,
+    QPalette,
     QPen,
     QPixmap,
     QPolygon,
@@ -523,6 +523,11 @@ class _CheckTolerantTree(QTreeWidget):
     """
 
     HIT_PAD = 6  # px tolerance added to each side of the indicator rect
+    _EXPANDER_PARENT_KINDS = (
+        "file", "source", "raster", RECORD_GROUP_KIND,
+    )
+    _EXPANDER_INK = QColor("#334155")
+    _DISABLED_EXPANDER_INK = QColor("#94a3b8")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -533,11 +538,6 @@ class _CheckTolerantTree(QTreeWidget):
         self._drag_file_press_pos = None
         self._drag_file_anchor_fid = None
         self._channel_delegate = _ChannelLeafDelegate(self)
-        # Darwin-only: selected-row tint washes out Fusion's branch glyph, so
-        # drawBranches overpaints a dark chevron in the branch slot. Kept as a
-        # platform gate (not a QStyle handle) — QMacStyle.PE_IndicatorBranch
-        # can Abort under restricted offscreen hosts.
-        self._repaint_selected_expander = sys.platform == "darwin"
         self.setItemDelegate(self._channel_delegate)
 
     def _check_hit_rect(self, item, index):
@@ -763,30 +763,35 @@ class _CheckTolerantTree(QTreeWidget):
         super().drawBranches(painter, rect, index)
         selected = item is not None and item.isSelected()
         is_parent = bool(
-            data and data[0] in ('file', 'source', 'raster', RECORD_GROUP_KIND)
+            data and data[0] in self._EXPANDER_PARENT_KINDS
         )
         is_channel = bool(data and data[0] == 'channel')
         is_record_binding = bool(data and data[0] == RECORD_BINDING_KIND)
-        # Flatten the branch slot to the same rectangular selected fill as
-        # the item body. Channel leaves have no expander, so always overwrite
-        # the native grey gutter. Darwin selected parents also overwrite:
-        # QSS ::branch:selected radius (and the native disclosure chrome)
-        # otherwise leaves a circular highlight whose square slot corners
-        # show through. Non-Darwin parents keep the native glyph, so they
-        # must not be filled over.
-        if selected and (
-            is_channel
-            or is_record_binding
-            or (is_parent and self._repaint_selected_expander)
-        ):
+        # The branch background and item delegate are separate painters.  Fill
+        # every selected supported row as one rectangular bar before painting
+        # a disclosure slot, so QSS cannot leave a rounded/circular remnant
+        # around the chevron.  Channel and record-binding leaves retain their
+        # existing branch-gutter behavior and never get a disclosure glyph.
+        if selected and (is_parent or is_channel or is_record_binding):
             painter.fillRect(rect, _ChannelLeafDelegate.SELECTED_BG)
-        if (
-            is_parent
-            and item.childCount() > 0
-            and selected
-            and self._repaint_selected_expander
-        ):
-            self._paint_selected_expander(painter, rect, item.isExpanded())
+        if is_parent and item.childCount() > 0:
+            slot = self._branch_slot_rect(rect)
+            option = self._branch_style_option(
+                slot,
+                selected=selected,
+                enabled=bool(item.flags() & Qt.ItemIsEnabled),
+            )
+            # Paint over the native PE_IndicatorBranch glyph before our vector
+            # glyph.  This is deliberate for *all* states/platforms: QSS owns
+            # the branch background, and retaining the native arrow here would
+            # either disappear on selection or produce a double indicator.
+            painter.fillRect(slot, self._branch_slot_background(option, selected))
+            self._paint_expander(
+                painter,
+                slot,
+                expanded=item.isExpanded(),
+                enabled=bool(option.state & QStyle.State_Enabled),
+            )
         if not is_channel:
             return
         owner = self._owner
@@ -799,23 +804,68 @@ class _CheckTolerantTree(QTreeWidget):
             painter, rect, gid, owner.axis_group_badge_label(data[1], data[2]),
         )
 
-    def _paint_selected_expander(self, painter, rect, expanded):
-        """Repaint a dark chevron so the selected tint does not swallow it.
+    def _branch_slot_rect(self, branch_rect):
+        """Return this index's disclosure slot inside Qt's branch rectangle.
 
-        Historically this called ``QMacStyle.drawPrimitive(PE_IndicatorBranch)``.
-        That native primitive can ``Abort`` under restricted offscreen hosts
-        (sandbox / missing Cocoa) once the selected branch fill is styled, so
-        the glyph is drawn as a plain vector instead. Geometry still tracks the
-        16px right-edge branch slot Qt uses for the unselected row.
+        ``drawBranches`` supplies the complete accumulated indentation area.
+        The final indentation unit is the actual parent expander slot: right
+        edge in LTR and left edge in RTL.  Using the supplied branch rect and
+        the tree's live indentation preserves style/DPI geometry without
+        inventing a second hit or layout model.
         """
-        draw_rect = QRect(rect)
-        target_center_x = rect.right() - 8
-        draw_rect.translate(target_center_x - rect.center().x(), 0)
-        cx = draw_rect.center().x()
-        cy = draw_rect.center().y()
+        option = self.viewOptions()
+        option.rect = QRect(branch_rect)
+        width = self.indentation()
+        if width <= 0:
+            width = self.style().pixelMetric(
+                QStyle.PM_TreeViewIndentation, option, self
+            )
+        width = max(1, min(width, branch_rect.width()))
+        if self.layoutDirection() == Qt.RightToLeft:
+            return QRect(
+                branch_rect.left(), branch_rect.top(), width, branch_rect.height()
+            )
+        return QRect(
+            branch_rect.right() - width + 1,
+            branch_rect.top(),
+            width,
+            branch_rect.height(),
+        )
+
+    def _branch_style_option(self, slot, *, selected, enabled):
+        """Build the style state used only for branch-slot background color."""
+        option = self.viewOptions()
+        option.rect = QRect(slot)
+        if selected:
+            option.state |= QStyle.State_Selected
+        else:
+            option.state &= ~QStyle.State_Selected
+        if enabled:
+            option.state |= QStyle.State_Enabled
+        else:
+            option.state &= ~QStyle.State_Enabled
+        return option
+
+    @staticmethod
+    def _branch_slot_background(option, selected):
+        if selected:
+            return _ChannelLeafDelegate.SELECTED_BG
+        group = (
+            QPalette.Active
+            if option.state & QStyle.State_Enabled
+            else QPalette.Disabled
+        )
+        return option.palette.color(group, QPalette.Base)
+
+    def _paint_expander(self, painter, slot, *, expanded, enabled):
+        """Paint the single portable vector disclosure glyph for a parent."""
+        cx = slot.center().x()
+        cy = slot.center().y()
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        pen = QPen(QColor("#334155"))
+        pen = QPen(
+            self._EXPANDER_INK if enabled else self._DISABLED_EXPANDER_INK
+        )
         pen.setWidthF(1.7)
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
@@ -828,12 +878,21 @@ class _CheckTolerantTree(QTreeWidget):
                 QPoint(cx + 4, cy - 1),
             ])
         else:
-            # Rightward chevron (collapsed).
-            points = QPolygon([
-                QPoint(cx - 1, cy - 4),
-                QPoint(cx + 3, cy),
-                QPoint(cx - 1, cy + 4),
-            ])
+            # A collapsed parent points into its child region.  The branch
+            # slot itself mirrors in RTL, so the horizontal chevron mirrors
+            # with it rather than pointing away from the content.
+            if self.layoutDirection() == Qt.RightToLeft:
+                points = QPolygon([
+                    QPoint(cx + 1, cy - 4),
+                    QPoint(cx - 3, cy),
+                    QPoint(cx + 1, cy + 4),
+                ])
+            else:
+                points = QPolygon([
+                    QPoint(cx - 1, cy - 4),
+                    QPoint(cx + 3, cy),
+                    QPoint(cx - 1, cy + 4),
+                ])
         painter.drawPolyline(points)
         painter.restore()
 

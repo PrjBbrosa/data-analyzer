@@ -55,6 +55,7 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
+$QssIconFallbackDir = Join-Path $RepoRoot "mf4_analyzer\ui_kit\resources"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
@@ -114,6 +115,7 @@ try {
 }
 Write-Step "Building analyzer-only folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
+$AddDataQssIconFallbacks = "$QssIconFallbackDir;mf4_analyzer\ui_kit\resources"
 $AddDataIcons = "$IconsDir;assets\icons"
 $BrandingDir = Join-Path $RepoRoot "assets\branding"
 $AddDataBranding = "$BrandingDir;assets\branding"
@@ -214,6 +216,7 @@ $PyInstallerArgs += @(
     "--workpath", $WorkDir,
     "--specpath", $SpecDir,
     "--add-data", $AddDataStyle,
+    "--add-data", $AddDataQssIconFallbacks,
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataWwt,
