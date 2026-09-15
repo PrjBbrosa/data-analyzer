@@ -466,6 +466,13 @@ _HINTS = (
         priority=65,
     ),
     Hint(
+        id="time.view_fade",
+        text="单图切 View：新图就绪后淡入",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        priority=39,
+    ),
+    Hint(
         id="view.quick_close",
         text="当前 View 色标可关闭，其他 View 首击只切换",
         surface="discovery",

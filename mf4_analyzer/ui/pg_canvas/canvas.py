@@ -334,6 +334,10 @@ class TimeDomainCanvasPG(QWidget):
     xrange_changed = pyqtSignal(float, float)
     visible_range_changed = pyqtSignal()
     quality_status_changed = pyqtSignal(object)
+    # A transition consumer may arm one acknowledgement after it completes a
+    # Time-View restore.  The signal is emitted only by the actual
+    # GraphicsView paint hook, never by the request call itself.
+    presentation_paint_acknowledged = pyqtSignal(object)
     # Fires after plot_channels rebuilds the chart, so the footer can refresh
     # situational nudges (channel count / units / amplitude / clip).
     chart_rebuilt = pyqtSignal()
@@ -470,6 +474,15 @@ class TimeDomainCanvasPG(QWidget):
         # cannot invalidate PlotDataItem geometry event-by-event.
         self._refresh_pending = False
         self._interaction_generation = 0
+        # Presentation transitions do not own rendering or quality settlement.
+        # They can only ask the real GraphicsView to naturally paint a fully
+        # restored target, then listen for this short-lived proof.  Keep this
+        # state on the canvas rather than in a quality collaborator: it is a
+        # presentation lifecycle token, not an AA/ink policy input.
+        self._presentation_restore_generation = 0
+        self._presentation_restore_interaction_generation = None
+        self._presentation_paint_ack_epoch = 0
+        self._presentation_paint_ack_request = None
         self._interaction_depth = 0
         self._interaction_state = "idle"
         self._latest_target_xlim = None
@@ -676,6 +689,7 @@ class TimeDomainCanvasPG(QWidget):
                     "AA frame-paint backstop failed to install; "
                     "measured-frame safety net is inactive on this canvas"
                 )
+        self.destroyed.connect(self._on_presentation_paint_destroyed)
 
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).
@@ -2351,6 +2365,9 @@ class TimeDomainCanvasPG(QWidget):
         has separated gutters — View switch does not resize the widget, so
         ``_on_resize_settled`` will not do this later.
         """
+        # A request armed before this closing step would observe provisional
+        # X-only geometry, so it cannot be carried into the final transaction.
+        self._invalidate_presentation_paint_ack()
         if self._overlay_mode:
             self._realize_overlay_axis_columns()
         if self._refresh_pending:
@@ -2361,6 +2378,146 @@ class TimeDomainCanvasPG(QWidget):
         if self._dense_raster.has_dense_candidates():
             self._dense_raster.schedule_rebuild("view-restored", delay_ms=0)
         self._quality.settle_after_discrete_render()
+        self._presentation_restore_generation += 1
+        self._presentation_restore_interaction_generation = (
+            self._interaction_generation
+        )
+
+    # ------------------------------------------------------------------
+    # Natural-paint acknowledgement for local chart transitions.
+    # ------------------------------------------------------------------
+
+    def _invalidate_presentation_paint_ack(self) -> None:
+        """Drop an unpainted presentation request without emitting anything."""
+        self._presentation_paint_ack_epoch += 1
+        self._presentation_paint_ack_request = None
+
+    def _on_presentation_paint_destroyed(self, *_args) -> None:
+        # ``destroyed`` is a lifecycle boundary, never an acknowledgement.
+        # These are plain Python attributes, so clearing them is safe even
+        # while Qt is tearing down the underlying QObject.
+        self._invalidate_presentation_paint_ack()
+
+    def _presentation_paint_ack_visible(self) -> bool:
+        """Whether the real viewport can presently deliver a natural paint."""
+        try:
+            viewport = self._glw.viewport()
+            return bool(
+                viewport is not None
+                and self.isVisible()
+                and self._glw.isVisible()
+                and viewport.isVisible()
+            )
+        except RuntimeError:
+            return False
+
+    def _presentation_paint_ack_geometry_key(self):
+        """Stable paint-relevant host and PlotItem geometry, or ``None``.
+
+        This deliberately records only presentation facts the canvas already
+        owns: viewport size/DPR and each final ViewBox scene rect/ranges.  A
+        controller's View identity remains in its opaque request id; mutable
+        data state is neither copied nor cached here.
+        """
+        try:
+            viewport = self._glw.viewport()
+            if viewport is None or viewport.width() <= 0 or viewport.height() <= 0:
+                return None
+            dpr = (
+                float(self.devicePixelRatioF()),
+                float(self._glw.devicePixelRatioF()),
+                float(viewport.devicePixelRatioF()),
+            )
+            axes = []
+            for handle in tuple(self.axes_list):
+                if getattr(handle, "placeholder", False):
+                    continue
+                view_box = getattr(handle, "view_box", None)
+                if view_box is None:
+                    continue
+                rect = view_box.sceneBoundingRect()
+                x_range, y_range = view_box.viewRange()
+                axes.append((
+                    tuple(float(value) for value in rect.getRect()),
+                    tuple(float(value) for value in x_range),
+                    tuple(float(value) for value in y_range),
+                ))
+            return (
+                int(viewport.width()),
+                int(viewport.height()),
+                dpr,
+                tuple(axes),
+            )
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+
+    def request_presentation_paint_ack(self, request_id) -> bool:
+        """Request one normal viewport paint after a completed View restore.
+
+        This method intentionally does *not* flush data, settle quality, run
+        an event loop, or call ``repaint()``.  ``update()`` merely schedules
+        the one ordinary QWidget paint whose completion is reported from the
+        resident GraphicsView ``paintEvent`` hook.
+        """
+        self._invalidate_presentation_paint_ack()
+        if (
+            self._presentation_restore_interaction_generation
+            != self._interaction_generation
+            or not self._presentation_paint_ack_visible()
+        ):
+            return False
+        geometry = self._presentation_paint_ack_geometry_key()
+        if geometry is None:
+            return False
+        token = (
+            request_id,
+            self._presentation_paint_ack_epoch,
+            self._presentation_restore_generation,
+            self._interaction_generation,
+            geometry,
+        )
+        self._presentation_paint_ack_request = token
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._invalidate_presentation_paint_ack()
+            return False
+        return True
+
+    def _presentation_paint_ack_token(self):
+        """Return the pending token immediately before a real viewport paint."""
+        token = self._presentation_paint_ack_request
+        if token is None:
+            return None
+        if (
+            token[1] != self._presentation_paint_ack_epoch
+            or token[2] != self._presentation_restore_generation
+            or token[3] != self._interaction_generation
+            or not self._presentation_paint_ack_visible()
+            or token[4] != self._presentation_paint_ack_geometry_key()
+        ):
+            self._invalidate_presentation_paint_ack()
+            return None
+        return token
+
+    def _presentation_paint_acked(self, token) -> None:
+        """Emit once after the GraphicsView has painted the verified token."""
+        if token is None or token is not self._presentation_paint_ack_request:
+            return
+        if (
+            token[1] != self._presentation_paint_ack_epoch
+            or token[2] != self._presentation_restore_generation
+            or token[3] != self._interaction_generation
+            or not self._presentation_paint_ack_visible()
+            or token[4] != self._presentation_paint_ack_geometry_key()
+        ):
+            self._invalidate_presentation_paint_ack()
+            return
+        request_id = token[0]
+        # Clear before emitting so a synchronous consumer cannot replay this
+        # acknowledgement, and may safely arm a later request of its own.
+        self._presentation_paint_ack_request = None
+        self.presentation_paint_acknowledged.emit(request_id)
 
     def get_visible_ylims(self):
         """Return per-channel visible Y ranges keyed for ViewState storage."""
@@ -3061,6 +3218,11 @@ class TimeDomainCanvasPG(QWidget):
 
     def clear(self):
         """Tear down the chart. Mirrors TimeDomainCanvas.clear."""
+        # Any outstanding natural-paint proof belongs to the outgoing chart
+        # generation.  Never allow the rebuild's later viewport update to ack
+        # it as if it had painted the old final target.
+        self._invalidate_presentation_paint_ack()
+        self._presentation_restore_interaction_generation = None
         # Invalidate callbacks captured by the previous curve generation
         # before stopping timers or destroying PlotDataItems.
         self._interaction_generation += 1
@@ -4685,6 +4847,10 @@ class TimeDomainCanvasPG(QWidget):
 
     def resizeEvent(self, event):
         """Keep border dragging transform/paint-only until one quiet settle."""
+        # The transition overlay is clipped to actual viewport geometry.  A
+        # resize makes any armed paint token ambiguous, so the controller must
+        # fall back to the real canvas rather than acknowledge this frame.
+        self._invalidate_presentation_paint_ack()
         try:
             self.disable_interactive_quality()
         except Exception:
@@ -4708,6 +4874,11 @@ class TimeDomainCanvasPG(QWidget):
                 self._resize_settle_timer.start()
             except Exception:
                 pass
+
+    def hideEvent(self, event):
+        """A hidden viewport cannot supply presentation paint evidence."""
+        self._invalidate_presentation_paint_ack()
+        super().hideEvent(event)
 
     def _on_resize_settled(self):
         """Run label/tick/layout/data work once after the final resize event."""

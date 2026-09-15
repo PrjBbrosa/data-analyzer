@@ -48,6 +48,7 @@ from .presets import PresetBar
 
 _FACTS_PLACEHOLDER = "尚无计算结果；点击『计算频响』后在此显示实际参数。"
 _FACTS_STALE_PREFIX = "（已过期）参数已改动，以下为上一次计算的结果"
+_PRESERVE_CANDIDATE_SELECTION = object()
 
 
 _FRF_TOOLTIPS = {
@@ -502,9 +503,23 @@ class FrfContextual(QWidget):
             return None
         return str(fid), str(channel)
 
-    def set_channel_candidates(self, candidates) -> None:
-        old_input = self.input_source()
-        old_output = self.output_source()
+    def set_channel_candidates(
+        self,
+        candidates,
+        *,
+        input_source=_PRESERVE_CANDIDATE_SELECTION,
+        output_source=_PRESERVE_CANDIDATE_SELECTION,
+    ) -> None:
+        old_input = (
+            self.input_source()
+            if input_source is _PRESERVE_CANDIDATE_SELECTION
+            else self._coerce_key(input_source)
+        )
+        old_output = (
+            self.output_source()
+            if output_source is _PRESERVE_CANDIDATE_SELECTION
+            else self._coerce_key(output_source)
+        )
         candidate_items = []
         for candidate in candidates or ():
             if isinstance(candidate, Mapping):
@@ -536,14 +551,19 @@ class FrfContextual(QWidget):
             label = self._channel_labels.get(source, source[1])
             items.append((f"{label}（来源不可用）", source))
             item_sources.add(source)
+        rows = [("请选择通道", None), *items]
         old_input_blocked = self.combo_input.blockSignals(True)
         old_output_blocked = self.combo_output.blockSignals(True)
         try:
-            for combo in (self.combo_input, self.combo_output):
-                combo.clear()
-                combo.addItem("请选择通道", None)
-                for label, composite in items:
-                    combo.addItem(label, composite)
+            # Both controls have the same candidate model, but separate
+            # selection ownership.  Their nested batches settle each popup
+            # once after clear/add completes.
+            with (
+                self.combo_input.candidate_batch(),
+                self.combo_output.candidate_batch(),
+            ):
+                self.combo_input.replace_candidate_rows(rows)
+                self.combo_output.replace_candidate_rows(rows)
             self._set_combo_source(self.combo_input, old_input)
             self._set_combo_source(self.combo_output, old_output)
         finally:

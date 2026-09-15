@@ -2287,6 +2287,40 @@ def test_grab_image_prefers_presentation_pixmap(qapp):
     coord.deleteLater()
 
 
+def test_grab_image_reuses_matching_page_transition_source(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    calls = []
+
+    class _Stack:
+        def transition_source_pixmap_for(
+            self, section, view_id, target, *, scale=1.0,
+        ):
+            calls.append(("source", section, view_id, target, scale))
+            pix = QPixmap(32, 24)
+            pix.fill(QColor("#00cc88"))
+            return pix
+
+        def grab_presentation_pixmap(self, *args, **kwargs):
+            raise AssertionError("reused source must not run a second capture")
+
+    window.chart_stack = _Stack()
+    canvas = FakeCanvas("#000000")
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "leaving-bound-canvas")
+    _flush()
+
+    assert calls == [("source", "time", "view-a", canvas, 1.0)]
+    record = coord.store.get(ref)
+    assert record is not None and record.image is not None
+    pixel = record.image.pixelColor(2, 2)
+    assert pixel.green() > 150 and pixel.blue() > 80 and pixel.red() < 20
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 def _page_stack(page, **extra):
     fields = dict(
         page_ultraview=page,

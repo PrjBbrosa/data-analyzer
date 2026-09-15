@@ -188,21 +188,22 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
     target = canvas if canvas is not None else chart_stack.canvas_time
 
     with _signals_blocked(navigator), _signals_blocked(chart_stack):
-        navigator.set_attached_file_ids(state.attached_file_ids)
-        navigator.set_channel_colors(state.colors)
-        navigator.set_checked_channels(state.checked)
-        navigator.set_hidden_channels(state.hidden_channels)
-        plot_setter = getattr(chart_stack, "set_plot_mode_for_canvas", None)
-        cursor_setter = getattr(chart_stack, "set_cursor_mode_for_canvas", None)
-        if callable(plot_setter):
-            plot_setter(target, state.plot_mode)
-        else:
-            chart_stack.set_plot_mode(state.plot_mode)
-        if callable(cursor_setter):
-            cursor_setter(target, state.cursor_mode)
-        else:
-            chart_stack.set_cursor_mode(state.cursor_mode)
-            _apply_cursor_to_canvas(target, state.cursor_mode)
+        with _channel_projection_batch(navigator):
+            navigator.set_attached_file_ids(state.attached_file_ids)
+            navigator.set_channel_colors(state.colors)
+            navigator.set_checked_channels(state.checked)
+            navigator.set_hidden_channels(state.hidden_channels)
+            plot_setter = getattr(chart_stack, "set_plot_mode_for_canvas", None)
+            cursor_setter = getattr(chart_stack, "set_cursor_mode_for_canvas", None)
+            if callable(plot_setter):
+                plot_setter(target, state.plot_mode)
+            else:
+                chart_stack.set_plot_mode(state.plot_mode)
+            if callable(cursor_setter):
+                cursor_setter(target, state.cursor_mode)
+            else:
+                chart_stack.set_cursor_mode(state.cursor_mode)
+                _apply_cursor_to_canvas(target, state.cursor_mode)
 
     window._overlay_primary = state.overlay_primary
     restore_axis_groups = getattr(
@@ -298,6 +299,22 @@ def _apply_cursor_to_canvas(canvas, mode: str) -> None:
         visible_setter(mode != "off")
     if callable(dual_setter):
         dual_setter(mode == "dual")
+
+
+@contextmanager
+def _channel_projection_batch(navigator):
+    """Use the concrete tree transaction when the navigator provides it.
+
+    Small test doubles and third-party-compatible navigator facades keep the
+    historical immediate setter route, so the bridge remains import- and
+    behavior-compatible outside the production Qt owner.
+    """
+    scope = getattr(navigator, "channel_projection_batch", None)
+    if not callable(scope):
+        yield
+        return
+    with scope():
+        yield
 
 
 @contextmanager

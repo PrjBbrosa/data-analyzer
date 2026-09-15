@@ -353,6 +353,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     # time-domain card does.
     quality_status_changed = pyqtSignal(object)
     markup_revision_changed = pyqtSignal()
+    # A presentation transition may retire its cover only after this canvas'
+    # GraphicsView has naturally painted the requested final content.  This is
+    # deliberately separate from retained Section reveal / AA settlement.
+    presentation_paint_acknowledged = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -521,6 +525,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._section_reveal_waiting = False
         self._section_reveal_painted_generation = -1
         self._section_reveal_geometry = None
+        self._presentation_paint_ack_generation = 0
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
         self._last_quality_status = None
         self._idle_activity = _IdleQualityActivity()
         self._mouse_buttons_provider = QApplication.mouseButtons
@@ -568,6 +576,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self.destroyed.connect(self._stop_aa_idle_timer)
         self.destroyed.connect(self._stop_discrete_aa_timer)
         self.destroyed.connect(self._stop_spectrum_refresh_timer)
+        self.destroyed.connect(self._on_presentation_paint_destroyed)
         for _p in (self._plot_amp, self._plot_time):
             # Pan / box-zoom / plain wheel emit sigRangeChangedManually (a
             # programmatic setRange, e.g. plot_spectra, does NOT — so a fresh
@@ -929,6 +938,117 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._section_reveal_geometry = None
         self._stop_aa_idle_timer()
         self._stop_discrete_aa_timer()
+
+    def _cancel_presentation_paint_ack(self) -> None:
+        """Invalidate a pending presentation-paint acknowledgement."""
+        self._presentation_paint_ack_generation += 1
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
+
+    def _on_presentation_paint_destroyed(self, *_args) -> None:
+        """Destroyed is a lifecycle boundary, never a paint acknowledgement."""
+        self._cancel_presentation_paint_ack()
+
+    def _presentation_paint_ack_visible(self) -> bool:
+        """Whether the real GraphicsView viewport can naturally paint."""
+        try:
+            viewport = self._glw.viewport()
+            return bool(
+                viewport is not None
+                and self.isVisible()
+                and self._glw.isVisible()
+                and viewport.isVisible()
+            )
+        except RuntimeError:
+            return False
+
+    def _presentation_paint_ack_geometry_key(self):
+        """Geometry/DPR facts that must survive through one viewport paint."""
+        try:
+            viewport = self._glw.viewport()
+            if viewport is None or viewport.width() <= 0 or viewport.height() <= 0:
+                return None
+            dpr = (
+                float(self.devicePixelRatioF()),
+                float(self._glw.devicePixelRatioF()),
+                float(viewport.devicePixelRatioF()),
+            )
+            plots = []
+            for plot in (self._plot_amp, self._plot_time):
+                rect = plot.vb.sceneBoundingRect()
+                x_range, y_range = plot.vb.viewRange()
+                plots.append((
+                    tuple(float(value) for value in rect.getRect()),
+                    tuple(float(value) for value in x_range),
+                    tuple(float(value) for value in y_range),
+                ))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        return (
+            self.width(), self.height(),
+            viewport.width(), viewport.height(),
+            dpr,
+            tuple(plots),
+        )
+
+    def request_presentation_paint_ack(self, request_id) -> bool:
+        """Request one acknowledgement after the next natural viewport paint.
+
+        The transition owner calls this only after it has applied the target
+        state.  A hidden or unrealized canvas cannot produce valid presentation
+        evidence, so the request is invalidated instead of being deferred.
+        """
+        self._cancel_presentation_paint_ack()
+        if not self._presentation_paint_ack_visible():
+            return False
+        geometry = self._presentation_paint_ack_geometry_key()
+        if geometry is None:
+            return False
+        self._presentation_paint_ack_pending = True
+        self._presentation_paint_ack_request_id = request_id
+        self._presentation_paint_ack_geometry = geometry
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._cancel_presentation_paint_ack()
+            return False
+        return True
+
+    def _presentation_paint_ack_token(self):
+        """Token sampled immediately before an actual GraphicsView paint."""
+        if not self._presentation_paint_ack_pending:
+            return None
+        if not self._presentation_paint_ack_visible():
+            self._cancel_presentation_paint_ack()
+            return None
+        geometry = self._presentation_paint_ack_geometry_key()
+        if geometry != self._presentation_paint_ack_geometry:
+            self._cancel_presentation_paint_ack()
+            return None
+        return (
+            self._presentation_paint_ack_generation,
+            self._presentation_paint_ack_request_id,
+            geometry,
+        )
+
+    def _presentation_paint_acked(self, token) -> None:
+        """Emit exactly once, after the sampled natural viewport paint."""
+        if token is None or not self._presentation_paint_ack_pending:
+            return
+        generation, request_id, geometry = token
+        if (
+            generation != self._presentation_paint_ack_generation
+            or not self._presentation_paint_ack_visible()
+            or geometry != self._presentation_paint_ack_geometry_key()
+            or geometry != self._presentation_paint_ack_geometry
+        ):
+            self._cancel_presentation_paint_ack()
+            return
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
+        self.presentation_paint_acknowledged.emit(request_id)
 
     def begin_section_reveal(self) -> None:
         """Prepare existing curves before their Section page becomes visible.
@@ -1931,6 +2051,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         still updates live to the new selection. The next ``plot_spectra``
         restores the normal visual state."""
         self._cancel_section_reveal()
+        self._cancel_presentation_paint_ack()
         self.clear_empty_hint()
         if clear_spectrum:
             self._invalidate_spectrum_display_generation()
@@ -2158,11 +2279,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         return self._plot_time
 
     def resizeEvent(self, event):
+        self._cancel_presentation_paint_ack()
         super().resizeEvent(event)
         self._position_collapse_ctrl()
         self._refresh_bottom_x_ticks()
 
     def hideEvent(self, event):
+        self._cancel_presentation_paint_ack()
         if self._section_reveal_waiting:
             self._cancel_section_reveal()
         super().hideEvent(event)
@@ -2987,6 +3110,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def _invalidate_spectrum_display_generation(self) -> None:
         self._cancel_section_reveal()
+        self._cancel_presentation_paint_ack()
         self._spectrum_display_generation += 1
         self._stop_spectrum_refresh_timer()
         self._spectrum_curves_dirty = False

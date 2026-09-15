@@ -17,6 +17,7 @@ from ..analysis_section_page import AnalysisSectionPage
 from ..analysis_view_state import AnalysisViewState
 from ..view_state import ViewManager
 from .ultraview.page import UltraViewPage
+from .page_transition import PageTransitionController, PresentationToken
 
 from ._helpers import (
     _grab_pixmap_hidpi,
@@ -52,7 +53,7 @@ from ..plot_helpers import (
     resolve_cursor_source_label,
 )
 from .toolbar import PgNavigationToolbar
-from ...ui_kit.motion import POLICY_LIGHT
+from ...ui_kit.motion import POLICY_LIGHT, POLICY_OFF, MotionPolicy
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ..channel_drag import INTERNAL_CHANNEL_MIME, decode_channel_drag
 
@@ -103,6 +104,23 @@ class ChartStack(QWidget):
         self.stack.setAttribute(Qt.WA_TranslucentBackground, True)
         self.stack.setAttribute(Qt.WA_NoSystemBackground, True)
         self.stack.setAutoFillBackground(False)
+        # This controller is deliberately policy-off until each producer has a
+        # measured local endpoint capture path.  It is presentation-only: the
+        # normal mode/view restore remains the source of truth.
+        self._page_transition = PageTransitionController(
+            self.stack, policy=POLICY_OFF,
+        )
+        self._page_transition_enabled_sections = frozenset()
+        self._page_transition_target = None
+        self._page_transition_ready_canvases = ()
+        self._page_transition_ready_acks = set()
+        self._page_transition_ready_slots = []
+        self._page_transition.transition_finished.connect(
+            self._clear_page_transition_ready_fence,
+        )
+        self._page_transition.transition_cancelled.connect(
+            lambda _reason: self._clear_page_transition_ready_fence(),
+        )
         self.canvas_time = TimeDomainCanvasPG(self)
         self._time_card = TimeChartCard(self.canvas_time)
         self.canvas_time.set_cursor_display_options(self._cursor_display_options)
@@ -1223,6 +1241,201 @@ class ChartStack(QWidget):
         self._time_bottom_dock.setVisible(mode == 'time')
         self.mode_changed.emit(mode)
 
+    def page_transition(self) -> PageTransitionController:
+        """Return the stack-local presentation compositor.
+
+        Callers must not use this as a state owner; they provide a source only
+        after a local measured capture and arm a target only for a matching
+        natural-paint acknowledgement.
+        """
+        return self._page_transition
+
+    def set_page_transition_motion_policy(
+        self, policy: MotionPolicy | None,
+    ) -> None:
+        self._page_transition.set_motion_policy(policy)
+
+    def set_page_transition_enabled_sections(self, sections) -> None:
+        """Select product paths with completed capture/paint admission.
+
+        Motion policy alone is not a blanket feature switch: each section
+        needs its own exposed-machine cost evidence.  Disabled sections retain
+        their existing direct restore path with no endpoint capture.
+        """
+        self._page_transition_enabled_sections = frozenset(
+            str(section) for section in (sections or ())
+        )
+        target = self._page_transition_target
+        if target is not None and target.section not in self._page_transition_enabled_sections:
+            self.cancel_page_transition("section-not-enabled")
+
+    def begin_page_transition(
+        self,
+        *,
+        source_section: str,
+        source_view_id: str,
+        target_section: str,
+        target_view_id: str,
+        pane_signature: tuple = (),
+    ) -> PresentationToken | None:
+        """Capture an outgoing local page before its normal restore starts.
+
+        This is an opt-in presentation hook for approved user navigation
+        paths.  It neither selects a View nor causes rendering; callers still
+        execute the existing state transaction immediately after this returns.
+        """
+        if (
+            not self._page_transition.motion_policy().interpolates()
+            or str(source_section) not in self._page_transition_enabled_sections
+            or str(target_section) not in self._page_transition_enabled_sections
+        ):
+            return None
+        self._clear_page_transition_ready_fence()
+        source = self._page_transition.capture_local_endpoint(self.stack)
+        token = self._page_transition.begin_transition(
+            source_section=source_section,
+            source_view_id=source_view_id,
+            target_section=target_section,
+            target_view_id=target_view_id,
+            source_pixmap=source,
+            pane_signature=pane_signature,
+        )
+        self._page_transition_target = token
+        return token
+
+    def request_page_transition_target(
+        self,
+        token: PresentationToken | None,
+        canvases,
+    ) -> bool:
+        """Arm final target paint proof for one already-restored page."""
+        if token is None or token != self._page_transition_target:
+            return False
+        unique = tuple(
+            canvas for index, canvas in enumerate(tuple(canvases or ()))
+            if canvas is not None and canvas not in tuple(canvases or ())[:index]
+        )
+        if not unique:
+            self._page_transition.cancel("target-has-no-canvas")
+            return False
+        self._clear_page_transition_ready_fence(keep_target=True)
+        self._page_transition_ready_canvases = unique
+        self._page_transition_ready_acks = set()
+        for canvas in unique:
+            signal = getattr(canvas, "presentation_paint_acknowledged", None)
+            request = getattr(canvas, "request_presentation_paint_ack", None)
+            if signal is None or not callable(request):
+                self._page_transition.cancel("target-has-no-paint-fence")
+                return False
+
+            def _ack(request_id, *, expected=token, source=canvas):
+                self._on_page_transition_target_painted(
+                    expected, source, request_id,
+                )
+
+            signal.connect(_ack)
+            self._page_transition_ready_slots.append((signal, _ack))
+            if request(token) is not True:
+                self._page_transition.cancel("target-paint-not-requested")
+                return False
+        return self._page_transition.watch_target_ack(token)
+
+    def request_page_transition_target_for(
+        self, section: str, view_id: str, canvases,
+    ) -> bool:
+        """Arm only the target identity that the active restore just drew."""
+        token = self._page_transition_target
+        if (
+            token is None
+            or token.section != str(section)
+            or token.view_id != str(view_id)
+        ):
+            return False
+        return self.request_page_transition_target(token, canvases)
+
+    def cancel_page_transition(self, reason: str) -> None:
+        self._page_transition.cancel(str(reason))
+
+    def has_page_transition_target(self, section: str, view_id: str) -> bool:
+        """Whether this identity is currently covered by a local handoff."""
+        token = self._page_transition_target
+        return bool(
+            token is not None
+            and token.section == str(section)
+            and token.view_id == str(view_id)
+            and self._page_transition.image_bytes() > 0
+        )
+
+    def transition_source_pixmap_for(
+        self, section: str, view_id: str, canvas, *, scale=1.0,
+    ) -> QPixmap | None:
+        """Crop the already-held outgoing frame for a matching canvas.
+
+        It prevents UltraView from immediately re-running its expensive
+        canvas export during a normal View handoff.  Only native-scale,
+        direct source endpoints qualify; redirected blends and request scales
+        that need new pixels keep UltraView's existing capture path.
+        """
+        if canvas is None or float(scale or 1.0) != 1.0:
+            return None
+        source = self._page_transition.local_source_endpoint(section, view_id)
+        if source.isNull():
+            return None
+        try:
+            origin = canvas.mapTo(self.stack, QPoint(0, 0))
+            dpr = max(1.0, float(source.devicePixelRatioF()))
+            physical = QRect(
+                int(round(origin.x() * dpr)),
+                int(round(origin.y() * dpr)),
+                int(round(canvas.width() * dpr)),
+                int(round(canvas.height() * dpr)),
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return None
+        if (
+            physical.width() <= 0
+            or physical.height() <= 0
+            or not source.rect().contains(physical)
+        ):
+            return None
+        cropped = source.copy(physical)
+        if cropped.isNull():
+            return None
+        cropped.setDevicePixelRatio(dpr)
+        return cropped
+
+    def _on_page_transition_target_painted(self, token, canvas, request_id):
+        if (
+            token != self._page_transition_target
+            or request_id != token
+            or canvas not in self._page_transition_ready_canvases
+        ):
+            return
+        self._page_transition_ready_acks.add(canvas)
+        if len(self._page_transition_ready_acks) != len(
+            self._page_transition_ready_canvases
+        ):
+            return
+        # The ordinary GraphicsView paint has now proved the live target is
+        # underneath the transparent overlay.  Fading the retained source out
+        # over that live surface is visually the selected B crossfade, without
+        # a second QWidget.grab() that can synchronously repaint the target.
+        self._clear_page_transition_ready_fence(keep_target=True)
+        if not self._page_transition.accept_target(token):
+            self._page_transition.cancel("target-paint-not-accepted")
+
+    def _clear_page_transition_ready_fence(self, *_args, keep_target=False):
+        for signal, slot in self._page_transition_ready_slots:
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._page_transition_ready_slots.clear()
+        self._page_transition_ready_canvases = ()
+        self._page_transition_ready_acks = set()
+        if not keep_target:
+            self._page_transition_target = None
+
     def current_mode(self):
         return _INDEX_TO_MODE.get(self.stack.currentIndex(), 'time')
 
@@ -1374,6 +1587,7 @@ class ChartStack(QWidget):
             card.set_annotation_enabled(enabled, notify=notify)
 
     def full_reset_all(self):
+        self.cancel_page_transition("full-reset")
         self.canvas_time.full_reset()
         if self._secondary_card is not None:
             self._secondary_card.canvas.full_reset()
@@ -1414,7 +1628,9 @@ class ChartStack(QWidget):
             button.setEnabled(True)
         self._sync_shared_time_controls_to_focus()
 
-    def grab_presentation_pixmap(self, target, *, scale=1.0):
+    def grab_presentation_pixmap(
+        self, target, *, scale=1.0, cancel_page_transition=True,
+    ):
         """Grab canvas pixels plus the overlapping cursor pill.
 
         Copy-to-clipboard uses hi-DPI ``scale``; UltraView uses ``1.0``.
@@ -1422,6 +1638,13 @@ class ChartStack(QWidget):
         ``_combined_split_pixmap`` and does not go through this helper.
         Multi-pane analysis pages keep ``grab_combined_pixmap``.
         """
+        # An explicit copy/export must consume the real settled page, not a
+        # transient presentation blend.  UltraView's automatic coordinator is
+        # different: it grabs the already-bound canvas (never the overlay),
+        # and must not cancel the visual handoff merely to preserve the
+        # outgoing View before that canvas is reused.
+        if cancel_page_transition:
+            self.cancel_page_transition("explicit-presentation-capture")
         canvas, page = self._presentation_canvas_and_page(target)
         if page is not None and callable(getattr(page, "pane_count", None)):
             try:
@@ -1999,6 +2222,7 @@ class ChartStack(QWidget):
         return pill.set_safe_rect(safe if safe.isValid() else None)
 
     def resizeEvent(self, event):
+        self._page_transition.cancel("stack-resize")
         super().resizeEvent(event)
         self._reposition_pill()
 

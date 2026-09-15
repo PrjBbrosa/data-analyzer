@@ -129,6 +129,22 @@ class AnalysisMixin:
         if idx == mgr.active:
             return
         self._capture_active_analysis_view(section)
+        if (
+            section == "fft"
+            and self.chart_stack.current_mode() == "fft"
+            and self.chart_stack.page_fft.pane_count() == 1
+            and 0 <= idx < len(mgr.views)
+            and len(getattr(mgr.get(idx), "panes", ())) == 1
+        ):
+            source = mgr.get(mgr.active)
+            target = mgr.get(idx)
+            self.chart_stack.begin_page_transition(
+                source_section="fft",
+                source_view_id=source.view_id,
+                target_section="fft",
+                target_view_id=target.view_id,
+                pane_signature=("fft", "single"),
+            )
         mgr.set_active(idx)
 
     def _on_analysis_view_rename(self, section, idx, name):
@@ -811,7 +827,9 @@ class AnalysisMixin:
                 apply_params_from_state(self._analysis_ctx(section), state)
             if section in {'fft', 'frf'}:
                 self._apply_frequency_cursor_controls(section, state)
-            self._apply_analysis_sources(section, state)
+            self._apply_analysis_sources(
+                section, state, sync_effective_facts=False,
+            )
             self._apply_analysis_time_range(section, state)
             self._apply_analysis_overlay(section, state)
         finally:
@@ -819,9 +837,25 @@ class AnalysisMixin:
             if dirty is not None:
                 dirty.end_restore()
         # 5. Render from cache only (spec §4: switching never auto-computes).
+        # A completed cache restore already synchronizes its final effective
+        # facts.  ``render=False`` and a deferred restore do not, so they keep
+        # this outer sync as their one owner.  This is transaction-local: no
+        # prepared navigator/inspector data survives the call.
+        facts_synced_by_render = False
         if render:
-            self._render_analysis_view_from_cache(section, state)
-        self._sync_section_effective_facts(section, state)
+            facts_synced_by_render = bool(
+                self._render_analysis_view_from_cache(section, state)
+            )
+        if not facts_synced_by_render:
+            self._sync_section_effective_facts(section, state)
+        elif (
+            section == "fft"
+            and self.chart_stack.current_mode() == "fft"
+            and page.pane_count() == 1
+        ):
+            self.chart_stack.request_page_transition_target_for(
+                "fft", state.view_id, (page.pane_canvas(0),),
+            )
 
     def _project_analysis_attachments(self, section, state):
         """Project one analysis View's file range onto the shared navigator."""
@@ -1911,12 +1945,15 @@ class AnalysisMixin:
             colors[(fid, ch)] = color
         return colors
 
-    def _apply_analysis_sources(self, section, state):
+    def _apply_analysis_sources(self, section, state, *,
+                                sync_effective_facts=True):
         page = self._analysis_page(section)
         idx = min(page.focused_index(), len(state.panes) - 1)
         pane = state.panes[idx]
         if section == 'frf':
-            self._apply_frf_sources(state)
+            self._apply_frf_sources(
+                state, sync_effective_facts=sync_effective_facts,
+            )
             return
         if section == 'fft':
             self.navigator.set_checked_channels(list(pane.sources))
@@ -2303,6 +2340,11 @@ class AnalysisMixin:
         source-bearing View is dispatched by ``view_id``. If this View is
         still pending when it first becomes visible (tab switch before the
         timer), schedule that same restore once, then fall back to cache.
+
+        Returns ``True`` only after this call has synchronized the final
+        effective facts itself.  A deferred project restore returns falsey so
+        its caller retains the one current-state sync; direct callers continue
+        to get the existing default sync at the end of a completed render.
         """
         from ..analysis_view_state import analysis_view_has_sources
 
@@ -2326,7 +2368,7 @@ class AnalysisMixin:
                     return
         if section == 'frf':
             self._render_frf_view_from_cache(state)
-            return
+            return True
         page = self._analysis_page(section)
         any_missing = False
         enumerated_panes = set()
@@ -2404,6 +2446,7 @@ class AnalysisMixin:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
         notify_ultraview_plot(self, section, "analysis-restore-plot")
         self._sync_section_effective_facts(section, state)
+        return True
 
     def _rebind_pane_overlay(self, canvas, pane) -> None:
         from ..analysis_view_bridge import apply_overlay_to_canvas

@@ -823,6 +823,72 @@ def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
     assert compute_calls["n"] == 0, "switch-back must NOT recompute (cache hit)"
 
 
+def test_fft_view_switch_syncs_effective_facts_once_after_cache_restore(
+    two_file_win, monkeypatch,
+):
+    """A cache restore owns the only facts sync in its switch transaction."""
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.do_fft()
+    win._on_analysis_new("fft")
+
+    calls = []
+    real_sync = win._sync_section_effective_facts
+
+    def spy_sync(section, state=None):
+        calls.append((section, state.view_id if state is not None else None))
+        return real_sync(section, state)
+
+    monkeypatch.setattr(win, "_sync_section_effective_facts", spy_sync)
+    win._on_analysis_switch("fft", 0)
+
+    state = win.analysis_managers["fft"].get(0)
+    assert calls == [("fft", state.view_id)]
+
+
+def test_analysis_view_apply_without_render_keeps_its_facts_sync(
+    two_file_win, monkeypatch,
+):
+    """The render=False mode-entry path has no cache renderer to do this."""
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    state = win.analysis_managers["fft"].get(0)
+
+    calls = []
+    real_sync = win._sync_section_effective_facts
+
+    def spy_sync(section, target=None):
+        calls.append((section, target.view_id if target is not None else None))
+        return real_sync(section, target)
+
+    monkeypatch.setattr(win, "_sync_section_effective_facts", spy_sync)
+    win._on_analysis_view_switched("fft", 0, render=False)
+
+    assert calls == [("fft", state.view_id)]
+
+
+def test_direct_analysis_cache_restore_keeps_its_facts_sync(
+    two_file_win, monkeypatch,
+):
+    """Callers outside the View-switch transaction retain their default sync."""
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    state = win.analysis_managers["fft"].get(0)
+
+    calls = []
+    real_sync = win._sync_section_effective_facts
+
+    def spy_sync(section, target=None):
+        calls.append((section, target.view_id if target is not None else None))
+        return real_sync(section, target)
+
+    monkeypatch.setattr(win, "_sync_section_effective_facts", spy_sync)
+    win._render_analysis_view_from_cache("fft", state)
+
+    assert calls == [("fft", state.view_id)]
+
+
 def test_fft_uncalculated_view_switch_restores_time_preview(
     two_file_win, qapp, monkeypatch,
 ):

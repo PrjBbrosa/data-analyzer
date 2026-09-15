@@ -832,6 +832,26 @@ def test_frf_fresh_and_cached_renders_both_fill_the_inspector_facts(qtbot):
         assert "only 2 complete segments" in ctx.effective_warnings_text()
 
 
+def test_frf_view_switch_syncs_effective_facts_once_after_cache_restore(
+    qtbot, monkeypatch,
+):
+    """FRF's renderer already owns the final facts sync for a View switch."""
+    win, _fid, state, time = _window_with_pair(qtbot)
+    _seed_frf_cache(win, state, 0, _result(time, 1000.0))
+
+    calls = []
+    real_sync = win._sync_frf_effective_facts
+
+    def spy_sync(target=None):
+        calls.append(target.view_id if target is not None else None)
+        return real_sync(target)
+
+    monkeypatch.setattr(win, "_sync_frf_effective_facts", spy_sync)
+    win._on_analysis_view_switched("frf", 0)
+
+    assert calls == [state.view_id]
+
+
 def test_frf_display_only_change_leaves_the_effective_facts_untouched(qtbot):
     win, _fid, state, time = _window_with_pair(qtbot)
     ctx = win.inspector.frf_ctx

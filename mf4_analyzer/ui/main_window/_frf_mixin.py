@@ -60,7 +60,7 @@ class FrfMixin:
         pane.input_source = tuple(input_source) if input_source else None
         pane.output_source = tuple(output_source) if output_source else None
 
-    def _apply_frf_sources(self, state):
+    def _apply_frf_sources(self, state, *, sync_effective_facts=True):
         page = self._analysis_page("frf")
         idx = min(page.focused_index(), len(state.panes) - 1)
         pane = state.panes[idx]
@@ -74,10 +74,11 @@ class FrfMixin:
             ctx.combo_output.blockSignals(old_output)
             ctx.combo_input.blockSignals(old_input)
         ctx._refresh_validation()
-        # This is the single echo point the analysis mixin drives on BOTH a
-        # focused-pane change and a View switch, so the resident facts follow
-        # the pair they describe without a second notification path.
-        self._sync_frf_effective_facts(state)
+        # A focused-pane echo owns its immediate facts refresh.  The full View
+        # restore has a later cache-render sync after all final source, range,
+        # and canvas state is in place, so it suppresses this provisional one.
+        if sync_effective_facts:
+            self._sync_frf_effective_facts(state)
 
     def _frf_focused_pane_index(self, state):
         """Focused pane index while ``state`` is the one on screen, else None."""

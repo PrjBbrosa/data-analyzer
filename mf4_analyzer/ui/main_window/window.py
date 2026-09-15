@@ -446,6 +446,7 @@ class MainWindow(
         from ..toolbar import Toolbar
         from .. import view_bridge
         from ..view_state import TIME_DOMAIN_MAX_VIEWS, ViewManager
+        from ...ui_kit.motion import POLICY_LIGHT
 
         cw = QWidget()
         self.setCentralWidget(cw)
@@ -469,6 +470,11 @@ class MainWindow(
         self.splitter = splitter
         self.navigator = FileNavigator(self)
         self.chart_stack = ChartStack(self)
+        # M1 admission currently covers exposed Cocoa Time View switches only.
+        # FFT remains a direct restore until its own local endpoint benchmark
+        # and natural-paint evidence are recorded.
+        self.chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
+        self.chart_stack.set_page_transition_enabled_sections(("time",))
         self.chart_stack.set_source_label_resolver(self._cursor_fid_short_name)
         self.inspector = Inspector(self)
         splitter.addWidget(self.navigator)
@@ -3409,6 +3415,20 @@ class MainWindow(
                 sig_cands.append((px + ch, (fid, ch)))
         return sig_cands
 
+    def _analysis_candidate_targets(self, section):
+        """Sources saved by the focused pane being projected right now."""
+        manager = self.analysis_managers[section]
+        state = manager.get(manager.active)
+        page = self._analysis_page(section)
+        pane_idx = min(page.focused_index(), len(state.panes) - 1)
+        pane = state.panes[pane_idx]
+        if section == 'frf':
+            return pane.input_source, pane.output_source
+        signal = pane.sources[0] if pane.sources else None
+        if section == 'order':
+            return signal, pane.rpm_source
+        return (signal,)
+
     def _refresh_analysis_candidates(self, section=None):
         """Rebuild analysis signal pickers from each section's active View.
 
@@ -3427,11 +3447,17 @@ class MainWindow(
             sig_cands = self._candidate_rows_for_fids(fids)
             ctx = self._analysis_ctx(sec)
             if sec == 'frf':
-                ctx.set_channel_candidates(sig_cands)
+                input_source, output_source = self._analysis_candidate_targets(sec)
+                ctx.set_channel_candidates(
+                    sig_cands,
+                    input_source=input_source,
+                    output_source=output_source,
+                )
             else:
-                ctx.set_signal_candidates(sig_cands)
+                targets = self._analysis_candidate_targets(sec)
+                ctx.set_signal_candidates(sig_cands, selected=targets[0])
                 if sec == 'order':
-                    ctx.set_rpm_candidates(list(sig_cands))
+                    ctx.set_rpm_candidates(list(sig_cands), selected=targets[1])
         if section is None or section == 'fft':
             self._sync_fft_source_summary()
 

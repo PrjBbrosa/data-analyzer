@@ -332,6 +332,11 @@ class UltraViewCaptureCoordinator(QObject):
         self._runtime = PresentationRuntimeLedger()
         self._presentation_revision: dict[UltraViewRef, int] = {}
         self._resolution_stale_notified: set[UltraViewRef] = set()
+        # A target canvas can be correct while a local page handoff is still
+        # presenting its previous frame.  Keep UltraView's expensive export
+        # capture out of that 300 ms presentation window; the controller's
+        # finished/cancelled signal, not a guessed delay, resumes it.
+        self._page_transition_waits: dict[tuple, tuple] = {}
 
     @property
     def store(self) -> PreviewStore:
@@ -469,6 +474,8 @@ class UltraViewCaptureCoordinator(QObject):
                 return
         except RuntimeError:
             return
+        if self._defer_capture_for_page_transition(ref, widget, reason):
+            return
         captured = collect_widget_capture_facts(widget)
         if captured.capability != CAPABILITY_OK:
             self._warn_capture(
@@ -503,6 +510,87 @@ class UltraViewCaptureCoordinator(QObject):
             self._queue_heatmap_grab(key, ref, widget, digest, reason)
             return
         self._queue_grab(key, ref, widget, digest, reason)
+
+    def _defer_capture_for_page_transition(self, ref, widget, reason: str) -> bool:
+        """Resume an automatic target-preview grab after a real handoff.
+
+        This never delays a leaving-source capture (that path calls
+        ``_try_publish_now`` directly).  It also does not use a duration as a
+        readiness proxy: the page-transition owner emits after its natural
+        target paint and either finishes the compositor or cancels it.
+        """
+        window = self._window
+        stack = getattr(window, "chart_stack", None) if window is not None else None
+        matches = getattr(stack, "has_page_transition_target", None)
+        controller_getter = getattr(stack, "page_transition", None)
+        if not callable(matches) or not callable(controller_getter):
+            return False
+        try:
+            if not matches(ref.section, ref.view_id):
+                return False
+            controller = controller_getter()
+        except (RuntimeError, TypeError):
+            return False
+        if controller is None:
+            return False
+        key = (ref, id(widget), str(reason))
+        if key in self._page_transition_waits:
+            return True
+        owner_ref = weakref.ref(self)
+        widget_ref = weakref.ref(widget)
+
+        def resume(*_args):
+            owner = owner_ref()
+            if owner is None:
+                return
+            owner._resume_page_transition_capture(key)
+
+        try:
+            controller.transition_finished.connect(resume)
+            controller.transition_cancelled.connect(resume)
+        except (RuntimeError, TypeError):
+            return False
+        self._page_transition_waits[key] = (
+            controller, resume, ref, widget_ref, str(reason),
+        )
+        return True
+
+    def _resume_page_transition_capture(self, key) -> None:
+        entry = self._page_transition_waits.pop(key, None)
+        if entry is None:
+            return
+        controller, slot, ref, widget_ref, reason = entry
+        for signal in (
+            getattr(controller, "transition_finished", None),
+            getattr(controller, "transition_cancelled", None),
+        ):
+            if signal is None:
+                continue
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        widget = widget_ref()
+        if widget is not None and _alive(widget):
+            self.request_capture(ref, widget, reason)
+
+    def _clear_page_transition_waits(self, *, widget_id=None) -> None:
+        keys = tuple(self._page_transition_waits)
+        for key in keys:
+            if widget_id is not None and key[1] != widget_id:
+                continue
+            entry = self._page_transition_waits.pop(key)
+            controller, slot = entry[:2]
+            for signal in (
+                getattr(controller, "transition_finished", None),
+                getattr(controller, "transition_cancelled", None),
+            ):
+                if signal is None:
+                    continue
+                try:
+                    signal.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
 
     def request_visible_section_capture(self, section: str, reason: str = "plot") -> None:
         if self._inactive():
@@ -1408,11 +1496,32 @@ class UltraViewCaptureCoordinator(QObject):
         stack = getattr(window, "chart_stack", None) if window is not None else None
         grab_pres = getattr(stack, "grab_presentation_pixmap", None)
         scale = self._grab_scale(widget, ref)
-        if callable(grab_pres):
+        reuse_source = getattr(stack, "transition_source_pixmap_for", None)
+        if ref is not None and callable(reuse_source):
             try:
-                pixmap = grab_pres(widget, scale=scale)
-            except (TypeError, RuntimeError):
+                pixmap = reuse_source(
+                    ref.section, ref.view_id, widget, scale=scale,
+                )
+            except (RuntimeError, TypeError, ValueError):
                 pixmap = None
+        if callable(grab_pres):
+            if pixmap is None:
+                try:
+                    try:
+                        # The automatic coordinator captures the canvas bound
+                        # to the outgoing ref, not the stack overlay.  It must
+                        # preserve an active page handoff; explicit user
+                        # copy/export retains the default cancellation
+                        # behavior in ChartStack.
+                        pixmap = grab_pres(
+                            widget, scale=scale, cancel_page_transition=False,
+                        )
+                    except TypeError:
+                        # Compatibility seam for an older/mocked ChartStack
+                        # that has not gained the presentation-only argument.
+                        pixmap = grab_pres(widget, scale=scale)
+                except (TypeError, RuntimeError):
+                    pixmap = None
             if pixmap is not None and pixmap.isNull():
                 pixmap = None
         if pixmap is None:
@@ -1504,6 +1613,7 @@ class UltraViewCaptureCoordinator(QObject):
     def _on_canvas_destroyed(self, ident: int, *_args) -> None:
         if not _alive(self):
             return
+        self._clear_page_transition_waits(widget_id=ident)
         self._bindings.pop(ident, None)
         self._unstable.pop(ident, None)
         self._hooked_ids.discard(ident)
@@ -1906,6 +2016,7 @@ class UltraViewCaptureCoordinator(QObject):
             timer.stop()
             timer.deleteLater()
         self._queued.clear()
+        self._clear_page_transition_waits()
 
     def _disconnect_hooks(self) -> None:
         for obj, signal, slot in self._hooks:

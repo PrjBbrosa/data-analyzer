@@ -293,6 +293,93 @@ def test_time_view_switch_does_not_change_any_analysis_picker_or_source(win_two)
     assert fft.get(0).panes[0].sources == before_sources
 
 
+def test_unchanged_candidates_still_project_each_active_view_source(win_two):
+    """Candidate model reuse cannot keep the previous View's live selection."""
+    win, fid_a, _fid_b = win_two
+    target_by_section = {
+        "fft": (fid_a, "rpm"),
+        "fft_time": (fid_a, "rpm"),
+        "order": (fid_a, "rpm"),
+    }
+    for section, target in target_by_section.items():
+        state = win.analysis_managers[section].get(0)
+        state.attached_file_ids = [fid_a]
+        state.panes[0].sources = [(fid_a, "sig")]
+        win._refresh_analysis_candidates(section)
+
+        ctx = win._analysis_ctx(section)
+        previous_idx = next(
+            i for i in range(ctx.combo_sig.count())
+            if tuple(ctx.combo_sig.itemData(i)) == (fid_a, "sig")
+        )
+        old = ctx.combo_sig.blockSignals(True)
+        try:
+            ctx.combo_sig.setCurrentIndex(previous_idx)
+        finally:
+            ctx.combo_sig.blockSignals(old)
+
+        projected_signals = []
+        ctx.signal_changed.connect(
+            lambda *args, section=section: projected_signals.append(
+                (section, args)
+            )
+        )
+        state.panes[0].sources = [target]
+        win._refresh_analysis_candidates(section)
+        assert ctx.combo_sig.currentData() == target, section
+        assert projected_signals == [], section
+
+    order_state = win.analysis_managers["order"].get(0)
+    order_state.panes[0].rpm_source = (fid_a, "rpm")
+    win._refresh_analysis_candidates("order")
+    order_ctx = win.inspector.order_ctx
+    assert order_ctx.combo_rpm.currentData() == (fid_a, "rpm")
+
+    # A saved absence is meaningful: it must not retain a prior selector or
+    # silently select the first channel. Order's explicit None entry remains.
+    order_state.panes[0].sources = []
+    order_state.panes[0].rpm_source = None
+    win._refresh_analysis_candidates("order")
+    assert order_ctx.combo_sig.currentIndex() == -1
+    assert order_ctx.combo_rpm.currentData() is None
+
+
+def test_unchanged_frf_candidates_still_project_both_saved_sources(win_two):
+    win, fid_a, _fid_b = win_two
+    state = win.analysis_managers["frf"].get(0)
+    state.attached_file_ids = [fid_a]
+    state.panes[0].input_source = (fid_a, "in")
+    state.panes[0].output_source = (fid_a, "out")
+    win._refresh_analysis_candidates("frf")
+    ctx = win.inspector.frf_ctx
+
+    # Keep the same rows but poison both current controls. The next no-op
+    # candidate refresh must restore the active FRF pane pair independently.
+    for combo, source in ((ctx.combo_input, (fid_a, "sig")),
+                          (ctx.combo_output, (fid_a, "rpm"))):
+        idx = next(
+            i for i in range(combo.count())
+            if combo.itemData(i) is not None
+            and tuple(combo.itemData(i)) == source
+        )
+        old = combo.blockSignals(True)
+        try:
+            combo.setCurrentIndex(idx)
+        finally:
+            combo.blockSignals(old)
+
+    projected_pairs = []
+    ctx.pair_changed.connect(
+        lambda input_source, output_source: projected_pairs.append(
+            (input_source, output_source)
+        )
+    )
+    win._refresh_analysis_candidates("frf")
+    assert ctx.input_source() == (fid_a, "in")
+    assert ctx.output_source() == (fid_a, "out")
+    assert projected_pairs == []
+
+
 def test_fft_projection_never_writes_time_view_checked(win_two):
     win, fid_a, fid_b = win_two
     time_state = win.view_manager.get(0)

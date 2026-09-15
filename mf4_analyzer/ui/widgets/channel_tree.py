@@ -1,4 +1,5 @@
 """The multi-file channel tree: MultiFileChannelWidget and its private helpers."""
+from contextlib import contextmanager
 import json
 import logging
 from collections import Counter
@@ -72,6 +73,7 @@ RECORD_GROUP_KIND = "record_group"
 RECORD_BINDING_KIND = "record_binding"
 RECORD_GROUP_TAG = "WinWert 原始记录"
 _RECORD_KINDS = (RECORD_GROUP_KIND, RECORD_BINDING_KIND)
+_PRESENTATION_ICON_TOKEN_ROLE = Qt.UserRole + 37
 
 
 def _channel_tip(channel, fd):
@@ -1117,8 +1119,61 @@ class MultiFileChannelWidget(QWidget):
         self._filter_restore_timer.setSingleShot(True)
         self._filter_restore_timer.setInterval(0)
         self._filter_restore_timer.timeout.connect(self._flush_filter_restore)
+        # View restore projects attachment, colour, checks and visibility as
+        # one logical transaction.  The values themselves remain immediate so
+        # callers outside this scope retain their public setter contract; only
+        # the expensive tree-wide projection settle is coalesced.
+        self._projection_batch_depth = 0
+        self._projection_needs_filter = False
+        self._projection_needs_visibility = False
+        self._projection_needs_empty_state = False
         self._sync_empty_state()
         self._sync_projection_chrome()
+
+    @contextmanager
+    def channel_projection_batch(self):
+        """Coalesce nested View-to-tree projection settles.
+
+        This intentionally settles on an exceptional outer exit too: the
+        setters have already made a coherent prefix visible, and leaving stale
+        filter/layout chrome behind is worse than one deterministic settle.
+        """
+        self._projection_batch_depth += 1
+        try:
+            yield self
+        finally:
+            self._projection_batch_depth -= 1
+            if self._projection_batch_depth == 0:
+                self._settle_channel_projection()
+
+    def _request_channel_projection_settle(
+        self, *, filters=False, visibility=False, empty_state=False,
+    ):
+        self._projection_needs_filter |= bool(filters)
+        self._projection_needs_visibility |= bool(visibility)
+        self._projection_needs_empty_state |= bool(empty_state)
+        if self._projection_batch_depth == 0:
+            self._settle_channel_projection()
+
+    def _settle_channel_projection(self):
+        """Run at most one tree-wide settle for the current outer batch."""
+        if sip.isdeleted(self):
+            return
+        filters = self._projection_needs_filter
+        visibility = self._projection_needs_visibility
+        empty_state = self._projection_needs_empty_state
+        self._projection_needs_filter = False
+        self._projection_needs_visibility = False
+        self._projection_needs_empty_state = False
+        if visibility:
+            self._refresh_visibility_icons()
+        if filters:
+            # ``_sync_empty_state`` below owns the one final stack/config
+            # projection, rather than letting _apply_filters do it halfway
+            # through a multi-setter restore.
+            self._apply_filters(sync_empty_state=False)
+        if filters or empty_state:
+            self._sync_empty_state()
 
     def add_file(self, fid, fd):
         self.invalidate_filter_context()
@@ -1504,16 +1559,20 @@ class MultiFileChannelWidget(QWidget):
         return list(self._attached_file_ids)
 
     def set_attached_file_ids(self, fids):
-        self.invalidate_filter_context()
         known = self._files
-        self._attached_file_ids = [
+        attached = [
             fid
             for fid in dict.fromkeys(str(value) for value in (fids or ()))
             if fid in known
         ]
+        if attached == self._attached_file_ids:
+            return
+        self.invalidate_filter_context()
+        self._attached_file_ids = attached
         self._clear_detach_hover()
-        self._apply_filters()
-        self._sync_empty_state()
+        self._request_channel_projection_settle(
+            filters=True, visibility=True, empty_state=True,
+        )
 
     def _file_fids_from_mime(self, mime):
         if mime is None or not mime.hasFormat(INTERNAL_FILE_FIDS_MIME):
@@ -2040,6 +2099,35 @@ class MultiFileChannelWidget(QWidget):
                 return item
         return None
 
+    @staticmethod
+    def _set_item_text_if_changed(item, column, text):
+        if item.text(column) != text:
+            item.setText(column, text)
+
+    @staticmethod
+    def _set_item_tooltip_if_changed(item, column, text):
+        if item.toolTip(column) != text:
+            item.setToolTip(column, text)
+
+    @staticmethod
+    def _set_item_data_if_changed(item, column, role, value):
+        if item.data(column, role) != value:
+            item.setData(column, role, value)
+
+    def _set_item_icon_for_target(self, item, column, token, factory):
+        """Only create/write an icon when this item's target actually changes.
+
+        Our icon factories intentionally return fresh ``QIcon`` instances, so
+        comparing ``cacheKey`` would turn identical target state into a Qt
+        write on every View restore.  A presentation-only item role records
+        the last target that *this* owner applied; it never participates in
+        channel identity or persistence.
+        """
+        if item.data(column, _PRESENTATION_ICON_TOKEN_ROLE) == token:
+            return
+        item.setIcon(column, factory())
+        item.setData(column, _PRESENTATION_ICON_TOKEN_ROLE, token)
+
     def _sync_visibility_icon(self, item):
         data = item.data(0, Qt.UserRole)
         if data and data[0] == RECORD_BINDING_KIND:
@@ -2049,24 +2137,34 @@ class MultiFileChannelWidget(QWidget):
             self._updating = True
             try:
                 if not self._time_channel_visibility_available:
-                    item.setIcon(2, QIcon())
-                    item.setToolTip(2, "")
-                    item.setData(2, Qt.AccessibleTextRole, "")
+                    self._set_item_icon_for_target(
+                        item, 2, ("record-eye", False, None), QIcon,
+                    )
+                    self._set_item_tooltip_if_changed(item, 2, "")
+                    self._set_item_data_if_changed(
+                        item, 2, Qt.AccessibleTextRole, "",
+                    )
                 elif self._record_visible.get(key, True):
-                    item.setIcon(2, Icons.eye_open())
-                    item.setToolTip(2, "点击隐藏此记录（仅影响当前 View）")
-                    item.setData(
-                        2,
-                        Qt.AccessibleTextRole,
-                        f"显示/隐藏 WinWert 原始记录：{name}",
+                    self._set_item_icon_for_target(
+                        item, 2, ("record-eye", True, key), Icons.eye_open,
+                    )
+                    self._set_item_tooltip_if_changed(
+                        item, 2, "点击隐藏此记录（仅影响当前 View）",
+                    )
+                    self._set_item_data_if_changed(
+                        item, 2,
+                        Qt.AccessibleTextRole, f"显示/隐藏 WinWert 原始记录：{name}",
                     )
                 else:
-                    item.setIcon(2, Icons.eye_closed())
-                    item.setToolTip(2, "点击显示此记录（仅影响当前 View）")
-                    item.setData(
-                        2,
-                        Qt.AccessibleTextRole,
-                        f"显示/隐藏 WinWert 原始记录：{name}",
+                    self._set_item_icon_for_target(
+                        item, 2, ("record-eye", False, key), Icons.eye_closed,
+                    )
+                    self._set_item_tooltip_if_changed(
+                        item, 2, "点击显示此记录（仅影响当前 View）",
+                    )
+                    self._set_item_data_if_changed(
+                        item, 2,
+                        Qt.AccessibleTextRole, f"显示/隐藏 WinWert 原始记录：{name}",
                     )
             finally:
                 self._updating = previous
@@ -2079,14 +2177,20 @@ class MultiFileChannelWidget(QWidget):
         self._updating = True
         try:
             if not self._time_channel_visibility_available or not checked:
-                item.setIcon(2, QIcon())
-                item.setToolTip(2, '')
+                self._set_item_icon_for_target(
+                    item, 2, ("channel-eye", False, None), QIcon,
+                )
+                self._set_item_tooltip_if_changed(item, 2, '')
             elif key in self._hidden_channels:
-                item.setIcon(2, Icons.eye_closed())
-                item.setToolTip(2, '点击显示此通道（仅影响时域图）')
+                self._set_item_icon_for_target(
+                    item, 2, ("channel-eye", False, key), Icons.eye_closed,
+                )
+                self._set_item_tooltip_if_changed(item, 2, '点击显示此通道（仅影响时域图）')
             else:
-                item.setIcon(2, Icons.eye_open())
-                item.setToolTip(2, '点击隐藏此通道（仅影响时域图）')
+                self._set_item_icon_for_target(
+                    item, 2, ("channel-eye", True, key), Icons.eye_open,
+                )
+                self._set_item_tooltip_if_changed(item, 2, '点击隐藏此通道（仅影响时域图）')
         finally:
             self._updating = previous
 
@@ -2116,8 +2220,10 @@ class MultiFileChannelWidget(QWidget):
             key = (fid, channel)
             if key in checked:
                 wanted.add(key)
+        if wanted == self._hidden_channels:
+            return
         self._hidden_channels = wanted
-        self._refresh_visibility_icons()
+        self._request_channel_projection_settle(visibility=True)
 
     def get_visible_checked_channels(self):
         return [
@@ -2490,9 +2596,19 @@ class MultiFileChannelWidget(QWidget):
         Rows whose ``owner_fid`` is missing or not in the tree are dropped.
         """
         if view_id is None or not rows:
+            if (
+                self._record_view_id is None
+                and not self._record_group_items
+                and not self._record_binding_items
+                and not self._dropped_record_rows
+            ):
+                return
             self._clear_all_record_items()
             self._record_view_id = None
             self._dropped_record_rows = ()
+            self._request_channel_projection_settle(
+                filters=True, visibility=True, empty_state=True,
+            )
             return
 
         view_id = str(view_id)
@@ -2513,6 +2629,8 @@ class MultiFileChannelWidget(QWidget):
             (view_id, row["binding_id"], row["owner_fid"], row["record_index"])
             for row, _parent in parsed
         }
+        if self._record_projection_matches(view_id, parsed, dropped, wanted):
+            return
 
         previous = self._updating
         self._updating = True
@@ -2536,11 +2654,16 @@ class MultiFileChannelWidget(QWidget):
                 by_owner[fid].append(row)
 
             for owner_fid, parent in seen_owners:
+                group_key = (view_id, owner_fid)
+                group_was_present = group_key in self._record_group_items
                 group = self._ensure_record_group(view_id, owner_fid, parent)
                 bindings = by_owner[owner_fid]
-                group.setText(0, f"{RECORD_GROUP_TAG} ({len(bindings)})")
-                group.setToolTip(0, RECORD_GROUP_TAG)
-                group.setExpanded(True)
+                self._set_item_text_if_changed(
+                    group, 0, f"{RECORD_GROUP_TAG} ({len(bindings)})",
+                )
+                self._set_item_tooltip_if_changed(group, 0, RECORD_GROUP_TAG)
+                if not group_was_present:
+                    group.setExpanded(True)
                 for index, row in enumerate(bindings):
                     key = (
                         view_id,
@@ -2581,8 +2704,9 @@ class MultiFileChannelWidget(QWidget):
 
         self._record_view_id = view_id
         self._dropped_record_rows = tuple(dropped)
-        self._refresh_record_visibility_icons()
-        self._apply_filters()
+        self._request_channel_projection_settle(
+            filters=True, visibility=True, empty_state=True,
+        )
 
     def clear_record_curve_rows(self):
         self.set_record_curve_rows(None, ())
@@ -2611,6 +2735,83 @@ class MultiFileChannelWidget(QWidget):
             "color": color,
             "visible": bool(row.get("visible", True)),
         }
+
+    def _record_projection_matches(self, view_id, parsed, dropped, wanted):
+        """Whether the live record subtree already expresses these facts.
+
+        This deliberately verifies live items and parent ownership rather than
+        retaining a last-input cache.  A file/channel rebuild therefore cannot
+        turn a necessary replay into a stale no-op, and the comparison includes
+        the record context that changes search/filter presentation.
+        """
+        if self._record_view_id != view_id:
+            return False
+        if tuple(dropped) != self._dropped_record_rows:
+            return False
+        if set(self._record_binding_items) != wanted:
+            return False
+        expected_groups = {(view_id, row["owner_fid"]) for row, _ in parsed}
+        if set(self._record_group_items) != expected_groups:
+            return False
+        expected_presentation = {}
+        expected_visible = {}
+        by_owner = {}
+        for row, parent in parsed:
+            by_owner.setdefault(row["owner_fid"], (parent, []))[1].append(row)
+            key = (
+                view_id, row["binding_id"], row["owner_fid"], row["record_index"],
+            )
+            expected_presentation[key] = {
+                "name": row["name"] or row["binding_id"],
+                "unit": row["unit"],
+                "color": row["color"],
+            }
+            expected_visible[key] = bool(row["visible"])
+        if self._record_presentations != expected_presentation:
+            return False
+        if self._record_visible != expected_visible:
+            return False
+        for owner_fid, (parent, rows_for_owner) in by_owner.items():
+            group = self._record_group_items.get((view_id, owner_fid))
+            if group is None or group.parent() is not parent:
+                return False
+            if group.text(0) != f"{RECORD_GROUP_TAG} ({len(rows_for_owner)})":
+                return False
+            if group.toolTip(0) != RECORD_GROUP_TAG:
+                return False
+            if group.childCount() != len(rows_for_owner):
+                return False
+            for index, row in enumerate(rows_for_owner):
+                key = (
+                    view_id, row["binding_id"], row["owner_fid"], row["record_index"],
+                )
+                item = self._record_binding_items.get(key)
+                if (
+                    item is None
+                    or item.parent() is not group
+                    or group.child(index) is not item
+                ):
+                    return False
+                name = row["name"] or row["binding_id"]
+                text = f"{name} [{row['unit']}]" if row["unit"] else name
+                tip = (
+                    f"{text}\nWinWert record {row['record_index']}\n"
+                    f"所属 View: {view_id}\n仅控制当前 View"
+                )
+                if item.text(0) != text or item.toolTip(0) != tip:
+                    return False
+                if item.data(0, _PRESENTATION_ICON_TOKEN_ROLE) != (
+                    "swatch", row["color"],
+                ):
+                    return False
+                eye_token = (
+                    ("record-eye", bool(row["visible"]), key)
+                    if self._time_channel_visibility_available
+                    else ("record-eye", False, None)
+                )
+                if item.data(2, _PRESENTATION_ICON_TOKEN_ROLE) != eye_token:
+                    return False
+        return True
 
     @staticmethod
     def _dropped_row_fact(row, *, reason):
@@ -2677,16 +2878,15 @@ class MultiFileChannelWidget(QWidget):
         name = row["name"] or row["binding_id"]
         unit = row["unit"]
         text = f"{name} [{unit}]" if unit else name
-        item.setText(0, text)
-        item.setIcon(0, _swatch_icon(row["color"]))
-        item.setToolTip(
-            0,
-            (
-                f"{text}\n"
-                f"WinWert record {row['record_index']}\n"
-                f"所属 View: {view_id}\n"
-                "仅控制当前 View"
-            ),
+        self._set_item_text_if_changed(item, 0, text)
+        color = row["color"]
+        self._set_item_icon_for_target(
+            item, 0, ("swatch", color), lambda: _swatch_icon(color),
+        )
+        self._set_item_tooltip_if_changed(
+            item, 0,
+            f"{text}\nWinWert record {row['record_index']}\n"
+            f"所属 View: {view_id}\n仅控制当前 View",
         )
         key = (
             str(view_id),
@@ -3112,17 +3312,23 @@ class MultiFileChannelWidget(QWidget):
         # Preserve hidden state only for channels that remain checked. Newly
         # checked rows therefore default to visible; removed rows cannot leave
         # stale hidden references behind.
+        hidden_changed = bool(self._hidden_channels - wanted)
         self._hidden_channels.intersection_update(wanted)
+        item_changed = False
 
         self._updating = True
         try:
             def _set_in_subtree(item):
+                nonlocal item_changed
                 data = item.data(0, Qt.UserRole)
                 if data and data[0] in _RECORD_KINDS:
                     return
                 if data and data[0] == 'channel':
                     is_checked = (data[1], data[2]) in wanted
-                    item.setCheckState(0, Qt.Checked if is_checked else Qt.Unchecked)
+                    target_state = Qt.Checked if is_checked else Qt.Unchecked
+                    if item.checkState(0) != target_state:
+                        item.setCheckState(0, target_state)
+                        item_changed = True
                 else:
                     for i in range(item.childCount()):
                         _set_in_subtree(item.child(i))
@@ -3150,15 +3356,19 @@ class MultiFileChannelWidget(QWidget):
                         all_ch = True
                         any_ch = False
                         _check_leaves(item)
-                        item.setCheckState(0, Qt.Checked if all_ch else Qt.Unchecked)
+                        target_state = Qt.Checked if all_ch else Qt.Unchecked
+                        if item.checkState(0) != target_state:
+                            item.setCheckState(0, target_state)
+                            item_changed = True
 
             for i in range(self.tree.topLevelItemCount()):
                 _set_in_subtree(self.tree.topLevelItem(i))
         finally:
             self._updating = False
-        self._refresh_visibility_icons()
-        self._apply_filters()
-        self._update_config_context()
+        if item_changed or hidden_changed:
+            self._request_channel_projection_settle(
+                filters=True, visibility=True, empty_state=True,
+            )
 
     def get_channel_colors(self):
         return dict(self._colors)
@@ -3177,7 +3387,7 @@ class MultiFileChannelWidget(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             _collect_keys(self.tree.topLevelItem(i))
 
-        self._colors = {k: v for k, v in self._colors.items() if k in valid_keys}
+        projected = {k: v for k, v in self._colors.items() if k in valid_keys}
         for key, hex_color in (colors or {}).items():
             try:
                 fid, ch = key
@@ -3185,7 +3395,15 @@ class MultiFileChannelWidget(QWidget):
                 continue
             if (fid, ch) not in valid_keys:
                 continue
-            self._colors[(fid, ch)] = hex_color
+            projected[(fid, ch)] = hex_color
+
+        changed_keys = {
+            key for key in valid_keys
+            if projected.get(key) != self._colors.get(key)
+        }
+        if projected == self._colors:
+            return
+        self._colors = projected
 
         # Update icons in tree. ``setIcon`` mutates item data, so QTreeWidget
         # fires ``itemChanged`` — which ``_on_item_changed`` turns into a
@@ -3197,8 +3415,12 @@ class MultiFileChannelWidget(QWidget):
             data = item.data(0, Qt.UserRole)
             if data and data[0] == 'channel':
                 key = (data[1], data[2])
-                if key in self._colors:
-                    item.setIcon(0, _swatch_icon(self._colors[key]))
+                if key in changed_keys and key in self._colors:
+                    color = self._colors[key]
+                    self._set_item_icon_for_target(
+                        item, 0, ("swatch", color),
+                        lambda color=color: _swatch_icon(color),
+                    )
             for i in range(item.childCount()):
                 _update_icons(item.child(i))
 
@@ -3357,7 +3579,7 @@ class MultiFileChannelWidget(QWidget):
     def _filter(self, txt):
         self._apply_filters()
 
-    def _apply_filters(self, _checked=None):
+    def _apply_filters(self, _checked=None, *, sync_empty_state=True):
         t = self.search.text().strip().lower()
         show_checked_only = self.btn_selected_only.isChecked()
         filtering = bool(t) or show_checked_only
@@ -3373,37 +3595,45 @@ class MultiFileChannelWidget(QWidget):
         kept_groups = 0
         checked_count = 0
 
+        def _set_hidden(item, hidden):
+            if item.isHidden() != bool(hidden):
+                item.setHidden(bool(hidden))
+
+        def _set_expanded(item, expanded):
+            if item.isExpanded() != bool(expanded):
+                item.setExpanded(bool(expanded))
+
         def _apply_to_node(item):
             nonlocal match_channels, match_records, kept_groups, checked_count
             data = item.data(0, Qt.UserRole)
             if data and data[0] == 'channel':
                 if not self._is_item_attached(item):
-                    item.setHidden(True)
+                    _set_hidden(item, True)
                     return False
                 if item.checkState(0) == Qt.Checked:
                     checked_count += 1
                 matches_text = not t or t in item.text(0).lower()
                 matches_checked = not show_checked_only or item.checkState(0) == Qt.Checked
                 visible = matches_text and matches_checked
-                item.setHidden(not visible)
+                _set_hidden(item, not visible)
                 if visible:
                     match_channels += 1
                 return visible
             if data and data[0] == RECORD_BINDING_KIND:
                 if not self._is_item_attached(item):
-                    item.setHidden(True)
+                    _set_hidden(item, True)
                     return False
                 if show_checked_only:
-                    item.setHidden(True)
+                    _set_hidden(item, True)
                     return False
                 matches_text = not t or t in self._record_search_haystack(item)
-                item.setHidden(not matches_text)
+                _set_hidden(item, not matches_text)
                 if matches_text:
                     match_records += 1
                 return matches_text
             if data and data[0] == RECORD_GROUP_KIND:
                 if not self._is_item_attached(item):
-                    item.setHidden(True)
+                    _set_hidden(item, True)
                     for idx in range(item.childCount()):
                         _apply_to_node(item.child(idx))
                     return False
@@ -3417,20 +3647,20 @@ class MultiFileChannelWidget(QWidget):
                     or t in RECORD_GROUP_TAG.lower()
                 )
                 if not filtering:
-                    item.setHidden(False)
+                    _set_hidden(item, False)
                     return True
                 visible = visible_children > 0 or (
                     bool(t) and matches_tag and not show_checked_only
                 )
-                item.setHidden(not visible)
+                _set_hidden(item, not visible)
                 if visible and filtering:
-                    item.setExpanded(True)
+                    _set_expanded(item, True)
                     if visible_children == 0:
                         kept_groups += 1
                 return visible
             else:
                 if data and data[0] in ('file', 'raster') and not self._is_item_attached(item):
-                    item.setHidden(True)
+                    _set_hidden(item, True)
                     for idx in range(item.childCount()):
                         _apply_to_node(item.child(idx))
                     return False
@@ -3440,9 +3670,9 @@ class MultiFileChannelWidget(QWidget):
                         visible_children += 1
                 attached = self._is_item_attached(item)
                 hide = not attached or (visible_children == 0 and filtering)
-                item.setHidden(hide)
+                _set_hidden(item, hide)
                 if filtering and visible_children > 0:
-                    item.setExpanded(True)
+                    _set_expanded(item, True)
                 return visible_children > 0
 
         for i in range(self.tree.topLevelItemCount()):
@@ -3453,10 +3683,11 @@ class MultiFileChannelWidget(QWidget):
         self._filter_kept_record_groups = kept_groups
         self._filter_checked_count = checked_count
         self.tree.doItemsLayout()
-        if self._attached_file_ids:
-            self._sync_filter_empty_state()
-        else:
-            self._tree_stack.setCurrentWidget(self.empty_state)
+        if sync_empty_state:
+            if self._attached_file_ids:
+                self._sync_filter_empty_state()
+            else:
+                self._tree_stack.setCurrentWidget(self.empty_state)
         if exiting and self._filter_snapshot is not None:
             self._schedule_filter_restore()
         self._filter_was_active = filtering

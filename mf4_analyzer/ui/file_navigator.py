@@ -1,6 +1,7 @@
 """Left pane: file list (replacing QTabWidget) + channel tree."""
 import json
 import logging
+from contextlib import nullcontext
 
 import qtawesome as qta
 from PyQt5.QtCore import QEvent, QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
@@ -871,6 +872,11 @@ class FileNavigator(QWidget):
 
     def set_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
+
+    def channel_projection_batch(self):
+        """Expose the tree owner's nested View-projection transaction."""
+        scope = getattr(self.channel_list, "channel_projection_batch", None)
+        return scope() if callable(scope) else nullcontext()
 
     def get_attached_file_ids(self):
         return self.channel_list.get_attached_file_ids()

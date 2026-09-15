@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceLab · 图面过渡试验</title>
+<style>
+:root{--blue:#0674ed;--ink:#263950;--muted:#687c94;--line:#dae3ed;--paper:#fff;--field:#edf2f7;--teal:#079b8a;--ease:cubic-bezier(.22,.75,.2,1)}
+*{box-sizing:border-box}body{margin:0;background:var(--field);color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}button,input,select{font:inherit}button{cursor:pointer}button:disabled,input:disabled{cursor:default;opacity:.45}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #8fbcff;outline-offset:3px}button{touch-action:manipulation}main{max-width:1510px;margin:auto;padding:32px 32px 24px}header{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:23px}h1{margin:0;font-size:25px;font-weight:650;letter-spacing:-.7px}header p{margin:5px 0 0;color:var(--muted);font-size:13px}.demo-label{color:#58718d;font-size:12px;border:1px solid #cddae8;border-radius:5px;padding:5px 10px;white-space:nowrap}.layout{display:grid;grid-template-columns:minmax(0,1fr) 245px;gap:26px;align-items:start}.window{background:var(--paper);border:1px solid #cbd7e5;border-radius:12px;overflow:hidden;box-shadow:0 14px 42px #3049610b}.titlebar{display:flex;align-items:center;gap:11px;height:43px;padding:0 17px;background:#f9fbfd;border-bottom:1px solid var(--line)}.brand-icon{color:var(--blue);display:flex}.titlebar strong{font-size:13px}.titlebar>span:last-child{margin-left:auto;font-size:11px;color:var(--muted)}.nav{padding:11px 16px;background:#f4f8fe;border-bottom:1px solid var(--line)}.segment{position:relative;display:flex;isolation:isolate;padding:3px;gap:3px;max-width:620px;background:#e6edf6;border-radius:8px}.marker{z-index:-1;position:absolute;top:3px;bottom:3px;left:0;background:white;border:1px solid #cbdbee;border-radius:6px;box-shadow:0 1px 3px #3153790c;transition:transform 320ms var(--ease),width 320ms var(--ease);pointer-events:none}.segment button{flex:1;min-width:0;border:0;background:transparent;color:#5c728b;padding:7px 9px;white-space:nowrap;font-size:13px}.segment button[aria-pressed=true]{color:#0565ce;font-weight:650}.workspace{display:grid;grid-template-columns:161px minmax(0,1fr);min-height:480px}.sources{background:#fafcfe;border-right:1px solid var(--line);padding:17px 12px}.side-title{display:flex;justify-content:space-between;font-size:11px;color:#718397;margin-bottom:14px}.file{font-size:12px;font-weight:600;padding:9px 7px;background:#eef4fc;border-radius:5px;margin-bottom:9px;word-break:break-all}.file small{display:block;font-weight:400;color:#73879d;font-size:10px;margin-top:2px}.channel{display:flex;align-items:center;gap:7px;padding:8px 4px;cursor:pointer;font-size:12px}.channel input{margin:0;width:13px;height:13px;accent-color:var(--blue)}.channel i{width:6px;height:6px;border-radius:50%;background:var(--c);flex:none}.side-note{font-size:11px;line-height:1.8;color:#7b8b9e;margin:24px 5px 0}.plot-area{min-width:0;background:white;display:flex;flex-direction:column}.viewbar{display:flex;align-items:center;gap:2px;height:43px;border-bottom:1px solid #e7edf4;padding:0 13px}.viewbar button{background:transparent;color:#6a7d93;border:0;height:100%;padding:0 12px;font-size:12px;position:relative;white-space:nowrap}.viewbar button[aria-pressed=true]{color:#075fbe;font-weight:650}.viewbar button[aria-pressed=true]:after{content:"";position:absolute;height:2px;left:11px;right:11px;bottom:0;background:var(--blue);border-radius:2px}.viewbar .empty-tab{margin-left:auto;color:#8998aa}.stage{height:clamp(395px,49vh,525px);position:relative;overflow:hidden;background:white;flex:1;min-height:395px}.stage canvas{position:absolute;inset:0;display:block;width:100%;height:100%}.pending{position:absolute;right:18px;top:12px;display:flex;align-items:center;gap:7px;padding:4px 9px;background:#f2f7ff;border:1px solid #dbe8fb;color:#42678f;border-radius:5px;font-size:11px;pointer-events:none}.pending[hidden]{display:none}.pending i{width:7px;height:7px;background:#779fd0;border-radius:50%}.screen-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:33px;padding:7px 14px;border-top:1px solid #e8eef5;font-size:10px;color:#7b8b9e}.screen-footer span:first-child{color:#58738e}.window-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 15px;border-top:1px solid var(--line);background:#f9fbfd;font-size:11px}.phases{display:flex;gap:15px;color:#96a3b3}.phases span{display:flex;align-items:center;gap:5px}.phases i{height:5px;width:5px;border-radius:50%;background:#c6d0de}.phases .done{color:#4b6b89}.phases .done i{background:#6299d2}.phases .active{color:#075fbe}.phases .active i{background:var(--blue)}#frame-state{color:#56728f;white-space:nowrap;font-variant-numeric:tabular-nums}.lab{padding-top:2px}.lab h2{margin:0 0 12px;font-size:14px;font-weight:650}.effects{display:flex;flex-direction:column;gap:7px;margin-bottom:20px}.effect{border:1px solid #d4dfeb;background:transparent;border-radius:7px;color:#62778e;padding:10px 12px;text-align:left;display:flex;align-items:center;justify-content:space-between;font-size:13px}.effect[aria-pressed=true]{background:#fff;border-color:#7facdf;color:#0764c7;box-shadow:0 0 0 1px #7facdf20}.effect small{font-size:10px;color:#8395a9}.effect[aria-pressed=true] small{color:#6092ca}.lab-divider{height:1px;background:#d7e0eb;margin:18px 0}.setting{display:block;margin:16px 0}.setting .label-line{display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:9px}.setting output{color:#1763b4;font-variant-numeric:tabular-nums}.setting input[type=range]{width:100%;accent-color:var(--blue);margin:0;height:15px}.range-hints{display:flex;justify-content:space-between;color:#8595a9;font-size:10px;margin-top:1px}.select-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;gap:8px;margin:16px 0}.select-row select{max-width:140px;padding:5px 7px;border:1px solid #cbd8e7;border-radius:5px;background:#f8fbff;color:#49647e;font-size:11px}.check-row{display:flex;align-items:center;gap:8px;font-size:12px;color:#536c86;margin:11px 0;cursor:pointer}.check-row input{accent-color:var(--blue);width:14px;height:14px;margin:0}.actions{display:grid;gap:8px;margin-top:18px}.actions button{border:1px solid #b5cce5;background:#fff;color:#26669f;border-radius:6px;padding:8px 12px;font-size:12px}.actions button.primary{background:#0674ed;border-color:#0674ed;color:white}.actions button:hover{filter:brightness(.97)}.hint{font-size:11px;color:#7a8da3;line-height:1.8;margin:14px 0 0}.caption{margin:15px 2px 0;font-size:12px;color:#657b94;min-height:22px}.caption b{color:#315879;font-weight:600}.under{display:flex;justify-content:space-between;gap:16px;margin-top:22px;padding-top:15px;border-top:1px solid #d7e0eb;font-size:11px;color:#7c8b9e}.under p{margin:0;max-width:760px}.system-note{display:none;padding:8px 11px;background:#e5edf8;color:#4f6d8e;font-size:11px;border-radius:5px;margin-bottom:12px}body.reduced .marker{transition:none}body.system-reduced .system-note{display:block}body.reduced #mode-note:after{content:" · 动效已关闭"}.screen-reader{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}@media(max-width:1100px){main{padding:24px 20px}.layout{grid-template-columns:minmax(0,1fr) 214px;gap:20px}.workspace{grid-template-columns:136px minmax(0,1fr)}.sources{padding:15px 8px}.viewbar{padding:0 6px}.viewbar button{padding:0 8px}.phases{gap:9px}}@media(max-width:850px){.layout{grid-template-columns:1fr}.lab{display:grid;grid-template-columns:1fr 1fr;gap:0 24px;padding:20px 0}.lab>h2,.effects,.system-note{grid-column:1/-1}.effects{flex-direction:row}.effect{flex:1}.lab-divider{display:none}.actions{align-content:start;margin-top:10px}.lab .hint{margin-top:4px}.stage{height:440px}.under{margin-top:0}.demo-label{display:none}}@media(max-width:520px){main{padding:20px 12px}h1{font-size:22px}header p{font-size:12px}.workspace{grid-template-columns:1fr}.sources{display:none}.nav{padding:9px 7px}.segment button{font-size:11px;padding:7px 4px}.titlebar{padding:0 12px}.viewbar button{font-size:11px;padding:0 9px}.stage{min-height:400px;height:400px}.screen-footer span:last-child{display:none}.phases{gap:9px;font-size:10px}.window-footer{padding:10px}.effect{padding:9px 8px;font-size:12px}.effect small{display:none}.under{display:block}.under p+p{margin-top:7px}.lab{gap:0 17px}.caption{font-size:11px}}
+</style>
+</head>
+<body>
+<main>
+ <header><div><h1>图面过渡试验</h1><p>切换分析类型或 View，感受旧图如何交接给新图。</p></div><span class="demo-label">TraceLab 交互原型</span></header>
+ <div class="layout">
+  <section aria-label="Analyzer 演示窗口">
+   <div class="window">
+    <div class="titlebar"><span class="brand-icon" aria-hidden="true"><svg width="19" height="19" viewBox="0 0 20 20" fill="none"><path d="M1 11h4l2-7 4 13 2-8 2 2h4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></svg></span><strong>TraceLab</strong><span>示例项目 / 图面切换</span></div>
+    <nav class="nav" aria-label="分析页面"><div class="segment" id="sections" role="group" aria-label="分析类型"><span class="marker" aria-hidden="true"></span><button data-section="time" aria-pressed="true">时域</button><button data-section="fft" aria-pressed="false">频谱</button><button data-section="tf" aria-pressed="false">时频</button><button data-section="order" aria-pressed="false">阶次</button><button data-section="frf" aria-pressed="false">频响</button></div></nav>
+    <div class="workspace">
+     <aside class="sources" aria-label="示例通道"><div class="side-title"><span>文件与通道</span><span>3</span></div><div class="file">转向试验.mf4<small>合成演示数据</small></div><label class="channel"><input type="checkbox" data-channel="0" checked><i style="--c:#0674ed"></i>转向扭矩</label><label class="channel"><input type="checkbox" data-channel="1" checked><i style="--c:#079b8a"></i>壳体振动</label><label class="channel"><input type="checkbox" data-channel="2"><i style="--c:#cd8934"></i>电机转速</label><p class="side-note">勾选通道立即更新图面，<br>不重复播放整页过渡。</p></aside>
+     <div class="plot-area"><div class="viewbar" role="group" aria-label="Views"><button data-view="0" aria-pressed="true">稳态段</button><button data-view="1" aria-pressed="false">扫频段</button><button data-view="2" aria-pressed="false">瞬态段</button><button data-view="3" class="empty-tab" aria-pressed="false">空 View</button></div>
+      <div class="stage" id="stage" data-phase="idle"><canvas id="chart" role="img" aria-label="合成演示图：时域，稳态段"></canvas><div class="pending" id="pending" hidden><i></i><span id="pending-text">正在切换</span></div></div>
+      <div class="screen-footer"><span id="shown">已显示：时域 / 稳态段</span><span>示意图形，不执行数据分析</span></div>
+     </div>
+    </div>
+    <div class="window-footer"><div class="phases" aria-hidden="true"><span id="phase-input" class="done"><i></i>操作确认</span><span id="phase-ready" class="done"><i></i>图面就绪</span><span id="phase-done" class="done"><i></i>交接完成</span></div><span id="frame-state">等待操作</span></div>
+   </div>
+   <p class="caption" id="mode-note"><b>淡化＋轻移：</b>本次以 0 px 呈现，保留 B 的交接与打断策略；外侧控件保持稳定。</p>
+  </section>
+  <aside class="lab" aria-label="过渡设置">
+   <h2>选择过渡效果</h2>
+   <div class="effects" role="group" aria-label="过渡效果"><button class="effect" data-effect="cut" aria-pressed="false"><span>直接切换</span><small>当前方式</small></button><button class="effect" data-effect="fade" aria-pressed="false"><span>淡化交接</span><small>方案 A</small></button><button class="effect" data-effect="slide" aria-pressed="true"><span>淡化＋轻移</span><small>方案 B · 已选（0 px）</small></button></div>
+   <div class="system-note">系统已开启减少动态效果，本页使用直接切换。</div>
+   <label class="setting"><span class="label-line"><span>过渡时长</span><output id="duration-value" for="duration">300 ms</output></span><input id="duration" aria-label="过渡时长" type="range" min="120" max="500" step="20" value="300"><span class="range-hints"><span>利落 120</span><span>舒缓 500</span></span></label>
+   <label class="setting"><span class="label-line"><span>位移距离</span><output id="distance-value" for="distance">0 px</output></span><input id="distance" aria-label="位移距离" type="range" min="0" max="20" step="2" value="0"><span class="range-hints"><span>安静 0</span><span>明显 20</span></span></label>
+   <div class="lab-divider"></div>
+   <div><label class="select-row">模拟内容就绪<select id="delay" aria-label="模拟内容就绪"><option value="0">立即</option><option value="100" selected>等待 100 ms</option><option value="600">等待 600 ms</option></select></label><label class="check-row"><input id="split" type="checkbox">双 Pane 对比</label><label class="check-row"><input id="slow" type="checkbox">四倍慢放，观察细节</label><label class="check-row"><input id="reduce" type="checkbox">关闭动效作对照</label></div>
+   <div class="actions"><button class="primary" id="next">切到下一页</button><button id="burst">试试快速连点</button><button id="reset">恢复推荐参数</button><p class="hint">可以直接连续点上方导航。途中改选会接着当前画面走，不排队播放。</p></div>
+  </aside>
+ </div>
+ <footer class="under"><p>方案 B 已选：默认 300 ms / 0 px；模拟内容就绪默认等待 100 ms。立即与 600 ms 仅供比较，方向键可切换已聚焦的导航组。</p><p>HTML 手感演示 · 不定义 Qt 内容就绪机制，Qt 流畅性另行验证</p></footer>
+ <div class="screen-reader" id="announcement" role="status" aria-live="polite"></div>
+</main>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const modes=["time","fft","tf","order","frf"];
+const names={time:"时域",fft:"频谱",tf:"时频",order:"阶次",frf:"频响"};
+const viewNames=["稳态段","扫频段","瞬态段","空 View"];
+const colors=["#0674ed","#079b8a","#cd8934"];
+const channels=["转向扭矩","壳体振动","电机转速"];
+const units=["N·m","g","rpm"];
+const stage=$("#stage"), canvas=$("#chart"), ctx=canvas.getContext("2d",{alpha:false});
+const media=matchMedia("(prefers-reduced-motion: reduce)");
+let goal={mode:"time",view:0}, shown={...goal}, effect="slide", serial=0;
+let animation=null, frame=0, readyTimer=0, burstTimers=[], width=0, height=0, dpr=1;
+let activeChannels=[true,true,false];
+const reduced=()=>media.matches||$("#reduce").checked;
+const font='-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif';
+function text(c,s,x,y,size=11,color="#718397",weight=400,align="left"){
+ c.font=`${weight} ${size}px ${font}`;c.fillStyle=color;c.textAlign=align;c.textBaseline="alphabetic";c.fillText(s,x,y);
+}
+function line(c,x1,y1,x2,y2,color="#e8edf3",lw=1){c.strokeStyle=color;c.lineWidth=lw;c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();}
+function makeBuffer(){const b=document.createElement("canvas");b.width=canvas.width;b.height=canvas.height;return b;}
+function snapshot(){const b=makeBuffer();b.getContext("2d").drawImage(canvas,0,0);return b;}
+function background(c){c.fillStyle="#fff";c.fillRect(0,0,width,height);}
+function axes(c,r,options={}){
+ const {x,y,w,h}=r, n=w<260?3:5;
+ for(let i=0;i<=n;i++){const xx=x+w*i/n;line(c,xx,y,xx,y+h);text(c,options.heat?String(Math.round(i/n*12)):options.freq?String(Math.round(i/n*1000)):String(i/n*10).replace(/\.0$/,""),xx,y+h+17,10,"#8695a8",400,"center");}
+ for(let j=0;j<=4;j++){const yy=y+h*j/4;line(c,x,yy,x+w,yy);text(c,options.heat?String(Math.round((1-j/4)*(options.order?12:1000))):options.freq?String(-j*20):String((2-j)*(options.scale||1)),x-9,yy+3,10,"#8695a8",400,"right");}
+ line(c,x,y+h,x+w,y+h,"#bfcddd");line(c,x,y,x,y+h,"#ccd7e4");
+ text(c,options.heat?"时间 / s":options.freq?"频率 / Hz":"时间 / s",x+w,y+h+34,10,"#708499",400,"right");
+}
+function trace(c,r,fn,color,lw=1.35){c.save();c.beginPath();c.rect(r.x,r.y,r.w,r.h);c.clip();c.beginPath();for(let i=0;i<=Math.ceil(r.w*1.7);i++){const u=i/Math.ceil(r.w*1.7),v=Math.max(-2,Math.min(3,fn(u))),x=r.x+u*r.w,y=r.y+(1-v)*r.h;i?c.lineTo(x,y):c.moveTo(x,y);}c.lineWidth=lw;c.strokeStyle=color;c.lineJoin="round";c.stroke();c.restore();}
+function timeSignal(u,v,ch){
+ const envelope=v===0?.78:v===1?.25+.75*u:.22+.8*Math.exp(-Math.pow((u-.58)*13,2));
+ const f=v===1?10*u+20*u*u:16*u;
+ return .5+envelope*(.24*Math.sin(f*6.283+ch*.8)+.09*Math.sin(u*193+ch)+.04*Math.sin(u*379+1.4));
+}
+function spectrum(u,v,ch){const peak=(center,spread,amp)=>amp*Math.exp(-Math.pow((u-center)/spread,2));return .09+.025*(Math.sin(u*790+ch)*Math.sin(u*311))+.03*Math.sin(u*129)**2+peak(.16+.055*v,.012,.7-ch*.09)+peak(.34+.045*ch,.023,.38+v*.1)+peak(.66-.04*v,.014,.25)+peak(.82,.042,.1);}
+function pane(c,mode,v,box,secondary=false){
+ const chs=activeChannels.map((on,i)=>on?i:-1).filter(i=>i>=0);
+ const left=box.x+(box.w<350?42:49), right=box.w<350?20:30, plotW=box.w-(left-box.x)-right;
+ if(mode==="time"){
+  const count=secondary?1:Math.min(chs.length,3), chosen=secondary?[chs[chs.length-1]]:chs;
+  const available=box.h-22, gap=42, h=(available-gap*(count-1)-36)/count;
+  chosen.slice(0,count).forEach((ch,i)=>{const r={x:left,y:box.y+24+i*(h+gap),w:plotW,h};text(c,channels[ch]+" / "+units[ch],left,r.y-10,11,colors[ch],550);axes(c,r,{scale:ch===2?500:1});trace(c,r,u=>timeSignal(u,v,ch),colors[ch]);});
+ }else if(mode==="fft"){
+  const r={x:left,y:box.y+24,w:plotW,h:box.h*.59};text(c,"幅值 / dB",left,r.y-10,11,"#5d7894",550);axes(c,r,{freq:true});chs.forEach(ch=>trace(c,r,u=>spectrum(u,v,ch),colors[ch],1.5));
+  const p={x:left,y:r.y+r.h+56,w:plotW,h:Math.max(27,box.h*.19-8)};c.fillStyle="#f5f8fc";c.fillRect(p.x,p.y,p.w,p.h);text(c,"原始时间预览",p.x,p.y-8,10,"#8395a8");trace(c,p,u=>timeSignal(u,v,chs[0]),colors[chs[0]],1);
+ }else if(mode==="tf"||mode==="order"){
+  const r={x:left,y:box.y+24,w:plotW-12,h:box.h-72};text(c,mode==="order"?"阶次":"频率 / Hz",left,r.y-10,11,"#5d7894",550);
+  const nx=110,ny=75;
+  for(let i=0;i<nx;i++)for(let j=0;j<ny;j++){
+   const u=i/nx,f=1-j/ny, band=mode==="order"?.24:.13+.34*u+.035*v;
+   const z=Math.min(1,.08+.12*(Math.sin(i*.37+j*.43+v)+1)/2+.83*Math.exp(-Math.pow((f-band)/.025,2))+.5*Math.exp(-Math.pow((f-band*2)/.032,2))+.27*Math.exp(-Math.pow((u-.62)/.07,2)-Math.pow((f-.72)/.17,2)));
+   c.fillStyle=`hsl(${224-z*187} ${62+z*24}% ${19+z*43}%)`;c.fillRect(r.x+i*r.w/nx,r.y+j*r.h/ny,Math.ceil(r.w/nx+.2),Math.ceil(r.h/ny+.2));
+  }
+  const n=plotW<260?3:6;for(let i=0;i<=n;i++)text(c,String(Math.round(i/n*12)),r.x+i/n*r.w,r.y+r.h+18,10,"#8695a8",400,"center");
+  for(let j=0;j<=4;j++)text(c,String(Math.round((1-j/4)*(mode==="order"?12:1000))),r.x-9,r.y+j/4*r.h+3,10,"#8695a8",400,"right");
+  const g=c.createLinearGradient(0,r.y+r.h,0,r.y);g.addColorStop(0,"#122b62");g.addColorStop(.5,"#189dbe");g.addColorStop(1,"#f2cb4a");c.fillStyle=g;c.fillRect(r.x+r.w+10,r.y,6,r.h);text(c,"时间 / s",r.x+r.w,r.y+r.h+35,10,"#708499",400,"right");
+ }else{
+  const h=(box.h-105)/2, r={x:left,y:box.y+24,w:plotW,h};text(c,"幅值 / dB",left,r.y-10,11,"#5d7894",550);axes(c,r,{freq:true});trace(c,r,u=>.25+.5/(1+Math.pow((u-.27-v*.07)/.056,2))+.04*Math.sin(u*21),colors[0],1.6);
+  const p={x:left,y:r.y+h+63,w:plotW,h};text(c,"相位 / °",left,p.y-10,11,"#5d7894",550);axes(c,p,{freq:true});trace(c,p,u=>.8-.58/(1+Math.exp(-(u-.28-v*.06)*29)),colors[1],1.6);
+ }
+}
+function renderPage(state){
+ const b=makeBuffer(),c=b.getContext("2d");c.scale(dpr,dpr);background(c);
+ const compact=width<470;
+ text(c,names[state.mode]+"分析",compact?17:22,28,compact?13:14,"#2c465f",650);
+ text(c,viewNames[state.view],width-21,28,11,"#7c8c9e",400,"right");line(c,20,42,width-20,42,"#edf1f6");
+ if(state.view===3||!activeChannels.some(Boolean)){
+  const x=width/2,y=height/2;c.strokeStyle="#cbd8e7";c.lineWidth=1.5;c.strokeRect(x-22,y-50,44,32);line(c,x-15,y-27,x-7,y-37,"#a4bad2",1.5);line(c,x-7,y-37,x+1,y-29,"#a4bad2",1.5);line(c,x+1,y-29,x+15,y-43,"#a4bad2",1.5);
+  text(c,state.view===3?"这个 View 还没有分析结果":"当前没有勾选通道",x,y+11,14,"#617b95",500,"center");text(c,state.view===3?"切回其他 View，观察空态也如何自然衔接。":"勾选左侧通道，恢复演示图面。",x,y+38,11,"#94a2b3",400,"center");return b;
+ }
+ const split=$("#split").checked;
+ if(split){line(c,width/2,55,width/2,height-17,"#dfe7f1");const half=width/2;pane(c,state.mode,state.view,{x:0,y:55,w:half,h:height-67});pane(c,state.mode,(state.view+1)%3,{x:half,y:55,w:half,h:height-67},true);}
+ else pane(c,state.mode,state.view,{x:0,y:55,w:width,h:height-67});
+ return b;
+}
+function blit(image){ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.drawImage(image,0,0);}
+function eased(x){let a=0,b=1,t=x;for(let i=0;i<15;i++){t=(a+b)/2;const q=1-t,bx=3*q*q*t*.22+3*q*t*t*.20+t*t*t;if(bx<x)a=t;else b=t;}const q=1-t;return 3*q*q*t*.75+3*q*t*t+t*t*t;}
+function setPhase(phase){
+ stage.dataset.phase=phase;
+ const n=phase==="pending"?0:phase==="animating"?1:2;
+ ["input","ready","done"].forEach((s,i)=>$("#phase-"+s).className=i<n?"done":i===n?"active":"");
+ $("#pending").hidden=phase!=="pending";
+}
+function settle(state){
+ shown={...state};animation=null;frame=0;setPhase("idle");$("#shown").textContent=`已显示：${names[state.mode]} / ${viewNames[state.view]}`;canvas.setAttribute("aria-label",`合成演示图：${names[state.mode]}，${viewNames[state.view]}${$("#split").checked?"，双 Pane":""}`);$("#frame-state").textContent="交接完成";$("#announcement").textContent=$("#shown").textContent;
+}
+function stopPending(){serial++;clearTimeout(readyTimer);readyTimer=0;cancelAnimationFrame(frame);frame=0;animation=null;}
+function stopBurst(){burstTimers.forEach(clearTimeout);burstTimers=[];$("#burst").textContent="试试快速连点";}
+function paintAnimation(now){
+ if(!animation)return;const a=animation,p=Math.min(1,(now-a.start)/a.duration),e=eased(p);ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);
+ ctx.drawImage(a.from,-a.dx*e*dpr,-a.dy*e*dpr);ctx.globalAlpha=e;ctx.drawImage(a.to,a.dx*(1-e)*dpr,a.dy*(1-e)*dpr);ctx.globalAlpha=1;
+ $("#frame-state").textContent=`交接中 ${Math.round(p*100)}%${$("#slow").checked?" · 慢放":""}`;
+ if(p<1)frame=requestAnimationFrame(paintAnimation);else{blit(a.to);settle(a.state);}
+}
+function marker(instant=false){const group=$("#sections"),b=group.querySelector('[aria-pressed="true"]'),m=group.querySelector(".marker");if(instant)m.style.transition="none";m.style.width=b.offsetWidth+"px";m.style.transform=`translateX(${b.offsetLeft}px)`;if(instant){void m.offsetWidth;m.style.transition="";}}
+function nav(){document.querySelectorAll("[data-section]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.section===goal.mode)));document.querySelectorAll("[data-view]").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.view)===goal.view)));marker();}
+function request(state,{axis="y",force=false,automated=false}={}){
+ if(!automated)stopBurst();
+ if(!force&&state.mode===goal.mode&&state.view===goal.view)return;
+ const previous={...goal};const from=snapshot();stopPending();goal={...state};nav();
+ const token=serial;setPhase("pending");$("#pending-text").textContent=`正在切换至${names[state.mode]} / ${viewNames[state.view]}`;$("#frame-state").textContent="等待图面就绪";
+ const start=()=>{
+  readyTimer=0;if(token!==serial)return;const to=renderPage(state);
+  const duration=Number($("#duration").value)*($("#slow").checked?4:1);
+  if(effect==="cut"||reduced()){blit(to);settle(state);return;}
+  const dist=effect==="slide"?Number($("#distance").value):0;
+  const direction=axis==="x"?Math.sign(state.view-previous.view)||1:1;
+  animation={from,to,state:{...state},start:performance.now(),duration,dx:axis==="x"?dist*direction:0,dy:axis==="y"?dist:0};setPhase("animating");frame=requestAnimationFrame(paintAnimation);
+ };
+ const delay=Number($("#delay").value);if(delay)readyTimer=setTimeout(start,delay);else start();
+}
+function snapCurrent(){stopBurst();stopPending();blit(renderPage(goal));settle(goal);}
+function settings(){
+ $("#duration-value").value=$("#duration").value+" ms";$("#distance-value").value=$("#distance").value+" px";
+ document.body.classList.toggle("reduced",reduced());document.body.classList.toggle("system-reduced",media.matches);
+ $("#duration").disabled=effect==="cut"||reduced();$("#distance").disabled=effect!=="slide"||reduced();$("#slow").disabled=effect==="cut"||reduced();
+ const messages={cut:["直接切换：","对照当前方式，新内容就绪后直接出现。"],fade:["淡化交接：","画面柔和交接，图面位置不发生移动。"],slide:["淡化＋轻移：","本次以 0 px 呈现，保留 B 的交接与打断策略；外侧控件保持稳定。"]};
+ $("#mode-note").replaceChildren();const b=document.createElement("b");b.textContent=messages[effect][0];$("#mode-note").append(b,document.createTextNode(messages[effect][1]));
+}
+document.querySelectorAll("[data-section]").forEach(b=>b.addEventListener("click",()=>request({...goal,mode:b.dataset.section})));
+document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",()=>request({...goal,view:Number(b.dataset.view)},{axis:"x"})));
+document.querySelectorAll("[data-effect]").forEach(b=>b.addEventListener("click",()=>{effect=b.dataset.effect;document.querySelectorAll("[data-effect]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));snapCurrent();settings();request({...goal,mode:modes[(modes.indexOf(goal.mode)+1)%modes.length]});}));
+document.querySelectorAll("[data-channel]").forEach(b=>b.addEventListener("change",()=>{activeChannels[Number(b.dataset.channel)]=b.checked;snapCurrent();}));
+for(const id of ["duration","distance"])$("#"+id).addEventListener("input",settings);
+for(const id of ["split","slow","reduce"])$("#"+id).addEventListener("change",()=>{snapCurrent();settings();});
+$("#delay").addEventListener("change",snapCurrent);
+$("#next").addEventListener("click",()=>request({...goal,mode:modes[(modes.indexOf(goal.mode)+1)%modes.length]}));
+$("#burst").addEventListener("click",()=>{stopBurst();const start=modes.indexOf(goal.mode),sequence=[1,2,3,1,0,4];$("#burst").textContent="正在快速切换…";sequence.forEach((step,i)=>burstTimers.push(setTimeout(()=>{request({...goal,mode:modes[(start+step)%modes.length]},{automated:true});if(i===sequence.length-1){burstTimers=[];$("#burst").textContent="试试快速连点";}},i*90)));});
+$("#reset").addEventListener("click",()=>{effect="slide";$("#duration").value=300;$("#distance").value=0;$("#delay").value="100";for(const id of ["split","slow","reduce"])$("#"+id).checked=false;activeChannels=[true,true,false];document.querySelectorAll("[data-channel]").forEach(b=>b.checked=activeChannels[Number(b.dataset.channel)]);document.querySelectorAll("[data-effect]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.effect===effect)));goal={mode:"time",view:0};snapCurrent();settings();nav();});
+document.querySelectorAll('[role="group"]').forEach(group=>group.addEventListener("keydown",e=>{if(!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End"].includes(e.key))return;const buttons=[...group.querySelectorAll("button")],i=buttons.indexOf(document.activeElement);if(i<0)return;e.preventDefault();const n=e.key==="Home"?0:e.key==="End"?buttons.length-1:(i+(["ArrowRight","ArrowDown"].includes(e.key)?1:-1)+buttons.length)%buttons.length;buttons[n].focus();buttons[n].click();}));
+function resize(){const r=stage.getBoundingClientRect(),ratio=window.devicePixelRatio||1;if(Math.abs(width-r.width)<.5&&Math.abs(height-r.height)<.5&&ratio===dpr)return;width=r.width;height=r.height;dpr=ratio;canvas.width=Math.max(1,Math.round(width*dpr));canvas.height=Math.max(1,Math.round(height*dpr));snapCurrent();marker(true);}
+new ResizeObserver(resize).observe(stage);new ResizeObserver(()=>marker(true)).observe($("#sections"));window.addEventListener("resize",resize);
+document.addEventListener("visibilitychange",()=>{if(document.hidden)snapCurrent();});window.addEventListener("pagehide",()=>{stopBurst();stopPending();});media.addEventListener("change",()=>{snapCurrent();settings();});
+settings();resize();
+</script>
+</body>
+</html>

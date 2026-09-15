@@ -157,6 +157,26 @@ def test_split_render_does_not_pollute_active_view_ui(qtbot, qapp, loaded_csv):
     _assert_canvas_ylims(w.canvas_time, view1_ylims)
 
 
+def test_split_secondary_projection_finally_restores_focused_primary(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    """The secondary's control projection is temporary; focused primary wins."""
+    w, fid, *_rest = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    history = []
+    original = w.navigator.set_checked_channels
+
+    def _record(checked):
+        history.append([(file_id, channel) for file_id, channel in checked])
+        return original(checked)
+
+    monkeypatch.setattr(w.navigator, "set_checked_channels", _record)
+    w.view_manager.set_split(1)
+    qapp.processEvents()
+
+    assert history
+    assert history[-1] == [(fid, "speed")]
+
+
 def test_split_render_preserves_active_cursor_pill(qtbot, qapp, loaded_csv):
     w, _fid_value, _v1_xlim, _v1_ylims, _v2_xlim, _v2_ylims = (
         _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)

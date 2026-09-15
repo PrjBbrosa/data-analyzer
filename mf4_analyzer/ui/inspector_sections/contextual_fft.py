@@ -55,6 +55,9 @@ from .collapsible import _CollapsibleParamSection
 from .presets import PresetBar
 
 
+_PRESERVE_CANDIDATE_SELECTION = object()
+
+
 @dataclass(frozen=True)
 class _FftAutoNfftPreview:
     values: tuple[int, ...] = ()
@@ -820,28 +823,34 @@ class FFTContextual(QWidget):
             self.lbl_single_signal.setVisible(True)
             self.combo_sig.setVisible(True)
 
-    def set_signal_candidates(self, candidates):
+    def set_signal_candidates(
+        self, candidates, *, selected=_PRESERVE_CANDIDATE_SELECTION,
+    ):
         # Preserve the user's current selection across repopulation —
         # editing channels / loading a new file refreshes candidates,
         # and dropping back to index 0 was a regression (commit
         # 0132253 fixed xaxis + fft_time but missed FFT/Order).
-        prev = self.combo_sig.currentData()
-        self.combo_sig.blockSignals(True)
-        self.combo_sig.clear()
-        keep_idx = -1
-        for i, (text, data) in enumerate(candidates):
-            self.combo_sig.addItem(text, data)
-            if prev is not None and data == prev:
-                keep_idx = i
-        # No prior selection to preserve -> leave the combo unselected (-1)
-        # instead of defaulting to the first signal. The old auto-select + emit
-        # planted a phantom default (drew a time preview / looked like a
-        # configured analysis) on project open even when nothing was ever
-        # computed. The saved-source restore (_apply_analysis_sources) selects
-        # the signal explicitly when the project did compute this analysis, so
-        # the "previously computed -> preselect" case is unaffected.
-        self.combo_sig.setCurrentIndex(keep_idx)
-        self.combo_sig.blockSignals(False)
+        prev = (
+            self.combo_sig.currentData()
+            if selected is _PRESERVE_CANDIDATE_SELECTION else selected
+        )
+        old = self.combo_sig.blockSignals(True)
+        try:
+            self.combo_sig.replace_candidate_rows(candidates)
+            keep_idx = -1
+            for i in range(self.combo_sig.count()):
+                if prev is not None and self.combo_sig.itemData(i) == prev:
+                    keep_idx = i
+            # No prior selection to preserve -> leave the combo unselected (-1)
+            # instead of defaulting to the first signal. The old auto-select + emit
+            # planted a phantom default (drew a time preview / looked like a
+            # configured analysis) on project open even when nothing was ever
+            # computed. The saved-source restore (_apply_analysis_sources) selects
+            # the signal explicitly when the project did compute this analysis, so
+            # the "previously computed -> preselect" case is unaffected.
+            self.combo_sig.setCurrentIndex(keep_idx)
+        finally:
+            self.combo_sig.blockSignals(old)
         try:
             self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
         except TypeError:

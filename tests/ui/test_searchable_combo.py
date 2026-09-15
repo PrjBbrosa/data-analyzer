@@ -1,3 +1,5 @@
+import pytest
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QStyleOptionViewItem
 from mf4_analyzer.ui_kit.widgets.searchable_combo import (
@@ -34,6 +36,73 @@ def test_completer_model_rebinds_after_addItems(qapp):
     assert cb.completer().model() is not None
     assert cb._proxy_model.sourceModel() is cb.model()
     assert first_model is not None  # original kept alive but unused
+
+
+def test_candidate_rows_use_full_metadata_and_batch_syncs_once(qapp, monkeypatch):
+    """Candidate no-ops require every rendered role to agree.
+
+    The batch remains transparent to Qt's model signals, but its expensive
+    completer/popup synchronization is deferred to the outermost exit.
+    """
+    cb = SearchableComboBox()
+    rows = [
+        ("[one] speed", ("file-1", "speed")),
+        ("[one] torque", ("file-1", "torque")),
+    ]
+    sync_calls = []
+    real_sync = cb._sync_popup_geometry
+    monkeypatch.setattr(
+        cb, "_sync_popup_geometry", lambda: sync_calls.append("sync"),
+    )
+
+    emitted_rows = []
+    cb.model().rowsInserted.connect(
+        lambda _parent, first, last: emitted_rows.append((first, last))
+    )
+    assert cb.replace_candidate_rows(rows) is True
+    assert emitted_rows == [(0, 0), (1, 1)]
+    assert sync_calls == ["sync"]
+
+    sync_calls.clear()
+    assert cb.replace_candidate_rows(rows) is False
+    assert sync_calls == []
+
+    assert not cb.candidate_rows_match([
+        ("[renamed] speed", ("file-1", "speed")),
+        rows[1],
+    ])
+    assert not cb.candidate_rows_match([
+        (rows[0][0], ("file-2", "speed")),
+        rows[1],
+    ])
+
+    cb.setItemData(0, "stale tooltip", Qt.ToolTipRole)
+    assert cb.replace_candidate_rows(rows) is True
+    assert cb.itemData(0, Qt.ToolTipRole) == rows[0][0]
+    assert sync_calls == ["sync"]
+
+    # The display text, identity and tooltip now agree, but a non-default
+    # role does not: this must rebuild instead of treating a stale row as
+    # equivalent.
+    sync_calls.clear()
+    cb.setItemData(0, "stale detail", Qt.WhatsThisRole)
+    assert cb.replace_candidate_rows(rows) is True
+    assert cb.itemData(0, Qt.WhatsThisRole) is None
+    assert sync_calls == ["sync"]
+    monkeypatch.setattr(cb, "_sync_popup_geometry", real_sync)
+
+
+def test_nested_candidate_batch_rebinds_after_exception_without_swallowing(qapp):
+    cb = SearchableComboBox()
+    with pytest.raises(RuntimeError, match="model failure"):
+        with cb.candidate_batch():
+            cb.clear()
+            with cb.candidate_batch():
+                cb.addItem("speed", ("file-1", "speed"))
+            raise RuntimeError("model failure")
+
+    assert cb._proxy_model.sourceModel() is cb.model()
+    assert cb.completer().model() is cb._proxy_model
 
 
 def test_currentIndexChanged_signal_still_fires(qapp, qtbot):

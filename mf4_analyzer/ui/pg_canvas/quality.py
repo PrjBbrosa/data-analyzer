@@ -175,6 +175,13 @@ def _frame_timed_view_class(base):
             owner = getattr(self, _FRAME_TIMER_OWNER_ATTR, None)
             token_provider = getattr(owner, "_section_reveal_paint_token", None)
             token = token_provider() if token_provider is not None else None
+            presentation_token_provider = getattr(
+                owner, "_presentation_paint_ack_token", None,
+            )
+            presentation_token = (
+                presentation_token_provider()
+                if presentation_token_provider is not None else None
+            )
             t0 = perf_counter()
             try:
                 result = base.paintEvent(self, ev)
@@ -197,6 +204,8 @@ def _frame_timed_view_class(base):
 
             if token is not None:
                 owner._section_reveal_painted(token)
+            if presentation_token is not None:
+                owner._presentation_paint_acked(presentation_token)
             return result
 
     _FrameTimedGraphicsView.__name__ = f"_FrameTimed{base.__name__}"

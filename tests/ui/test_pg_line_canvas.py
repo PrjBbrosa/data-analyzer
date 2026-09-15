@@ -722,6 +722,109 @@ def test_grab_pixmap_not_null(canvas):
     assert pm.width() > 0 and pm.height() > 0
 
 
+def _shown_line_canvas(qtbot):
+    """Shown canvas for natural-viewport-paint acknowledgement tests."""
+    c = PgLineCanvas()
+    qtbot.addWidget(c)
+    c.resize(640, 480)
+    c.show()
+    return c
+
+
+@pytest.mark.parametrize("path", ("retained", "cache", "empty"))
+def test_presentation_paint_acknowledges_one_natural_paint_for_each_fft_path(
+    qtbot, path,
+):
+    """The transition fence is independent from reveal and result availability."""
+    c = _shown_line_canvas(qtbot)
+    request_id = f"{path}-paint"
+    if path == "retained":
+        c.plot_spectra(
+            [_entry()], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+        )
+        c.begin_section_reveal()
+        reveal_generation = c._section_reveal_generation
+        assert c._section_reveal_waiting is True
+    elif path == "cache":
+        c.plot_spectra(
+            [_entry()], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+        )
+        cache = c._spectrum_trace_cache
+        c.flush_pending_spectrum_display()
+        assert c._spectrum_trace_cache is cache
+        assert c._section_reveal_waiting is False
+    else:
+        c.full_reset()
+        assert not c._amp_curves and not c._time_curves
+        assert c._section_reveal_waiting is False
+
+    received = []
+    c.presentation_paint_acknowledged.connect(received.append)
+    with qtbot.waitSignal(c.presentation_paint_acknowledged, timeout=1000) as ack:
+        c.request_presentation_paint_ack(request_id)
+        assert received == []
+
+    assert ack.args == [request_id]
+    assert received == [request_id]
+    assert c._presentation_paint_ack_request_id is None
+    if path == "retained":
+        assert c._section_reveal_generation == reveal_generation
+
+
+def test_presentation_paint_ack_replaces_stale_request_and_is_one_shot(qtbot):
+    c = _shown_line_canvas(qtbot)
+    received = []
+    c.presentation_paint_acknowledged.connect(received.append)
+
+    with qtbot.waitSignal(c.presentation_paint_acknowledged, timeout=1000) as ack:
+        c.request_presentation_paint_ack("stale")
+        c.request_presentation_paint_ack("current")
+        assert received == []
+
+    assert ack.args == ["current"]
+    assert received == ["current"]
+    assert c._presentation_paint_ack_request_id is None
+
+
+@pytest.mark.parametrize("change", ("hide", "resize", "clear"))
+def test_presentation_paint_ack_is_cancelled_by_visibility_or_geometry_change(
+    qtbot, change,
+):
+    c = _shown_line_canvas(qtbot)
+    with qtbot.assertNotEmitted(c.presentation_paint_acknowledged, wait=50):
+        c.request_presentation_paint_ack(change)
+        if change == "hide":
+            c.hide()
+        elif change == "resize":
+            c.resize(700, 480)
+        else:
+            c.full_reset()
+        assert c._presentation_paint_ack_request_id is None
+        assert c._presentation_paint_ack_token() is None
+
+
+@pytest.mark.parametrize("change", ("geometry", "dpr"))
+def test_presentation_paint_ack_rejects_geometry_or_dpr_change_before_paint(
+    qtbot, monkeypatch, change,
+):
+    c = _shown_line_canvas(qtbot)
+    original = c._presentation_paint_ack_geometry_key()
+    assert original is not None
+    if change == "geometry":
+        changed = (original[0] + 1, *original[1:])
+    else:
+        changed_dpr = (original[4][0] + 1.0, *original[4][1:])
+        changed = (*original[:4], changed_dpr, *original[5:])
+    keys = iter((original, changed))
+    monkeypatch.setattr(
+        c, "_presentation_paint_ack_geometry_key", lambda: next(keys, changed),
+    )
+
+    with qtbot.assertNotEmitted(c.presentation_paint_acknowledged, wait=50):
+        c.request_presentation_paint_ack(change)
+    assert c._presentation_paint_ack_request_id is None
+
+
 def test_fft_amp_curves_stay_antialiased_when_light(canvas, qapp):
     # The FFT amplitude overlay has its own combined drawn-point density
     # budget (ON=5000/OFF=8000).  A small two-curve overlay stays crisp.  The

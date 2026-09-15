@@ -54,6 +54,9 @@ from .collapsible import _CollapsibleParamSection
 from .presets import PresetBar
 
 
+_PRESERVE_CANDIDATE_SELECTION = object()
+
+
 class FFTTimeContextual(QWidget):
     """FFT vs Time contextual: signal / time-frequency params / amplitude /
     range-and-color / presets / actions.
@@ -435,7 +438,9 @@ class FFTTimeContextual(QWidget):
         self.signal_changed.emit(self.combo_sig.currentData())
 
     # ---- public API consumed by MainWindow / tests ----
-    def set_signal_candidates(self, candidates):
+    def set_signal_candidates(
+        self, candidates, *, selected=_PRESERVE_CANDIDATE_SELECTION,
+    ):
         """Repopulate the signal combo, preserving an existing selection
         (matched by userData) when it remains in the new candidate list.
 
@@ -443,19 +448,23 @@ class FFTTimeContextual(QWidget):
         item — this hook is part of the contract verified by
         ``test_fft_time_compute_button_tracks_signal_candidates``.
         """
-        prev = self.combo_sig.currentData()
-        self.combo_sig.blockSignals(True)
-        self.combo_sig.clear()
-        keep_idx = -1
-        for i, (text, data) in enumerate(candidates):
-            self.combo_sig.addItem(text, data)
-            if prev is not None and data == prev:
-                keep_idx = i
-        # No prior selection to preserve -> leave unselected (-1) instead of
-        # sitting on the first signal; see FFTContextual.set_signal_candidates
-        # for the phantom-default rationale.
-        self.combo_sig.setCurrentIndex(keep_idx)
-        self.combo_sig.blockSignals(False)
+        prev = (
+            self.combo_sig.currentData()
+            if selected is _PRESERVE_CANDIDATE_SELECTION else selected
+        )
+        old = self.combo_sig.blockSignals(True)
+        try:
+            self.combo_sig.replace_candidate_rows(candidates)
+            keep_idx = -1
+            for i in range(self.combo_sig.count()):
+                if prev is not None and self.combo_sig.itemData(i) == prev:
+                    keep_idx = i
+            # No prior selection to preserve -> leave unselected (-1) instead of
+            # sitting on the first signal; see FFTContextual.set_signal_candidates
+            # for the phantom-default rationale.
+            self.combo_sig.setCurrentIndex(keep_idx)
+        finally:
+            self.combo_sig.blockSignals(old)
         # Re-attach signal_changed listener exactly once.
         try:
             self.combo_sig.currentIndexChanged.disconnect(

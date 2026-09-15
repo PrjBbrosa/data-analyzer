@@ -5,11 +5,12 @@ Usage:
     cb.addItems(channel_names)
 
 The completer matches anywhere in the string (substring), case-insensitive.
-After every model change (addItem, addItems, clear, insertItem) the completer
-is re-bound to the live model so its filter stays correct.
+Ordinary model changes re-bind the completer immediately; a dedicated,
+nested candidate-replacement batch defers that settlement to its outer exit.
 """
 import functools
 import re
+from contextlib import contextmanager
 
 from PyQt5.QtCore import QSortFilterProxyModel, QSize, Qt
 from PyQt5.QtGui import QColor, QFont
@@ -301,6 +302,8 @@ class SearchableComboBox(QComboBox):
         self.setCompleter(completer)
         if self.lineEdit() is not None:
             self.lineEdit().textChanged.connect(self._proxy_model.setFilterText)
+        self._candidate_batch_depth = 0
+        self._candidate_batch_dirty = False
         self._rebind_completer_model()
         self._sync_popup_geometry()
 
@@ -347,18 +350,85 @@ class SearchableComboBox(QComboBox):
         if text:
             self.setItemData(index, text, Qt.ToolTipRole)
 
+    @contextmanager
+    def candidate_batch(self):
+        """Coalesce completer/popup settlement for candidate replacement.
+
+        Qt item-model signals are deliberately left alone: callers still get
+        the normal rows-inserted/removed/reset notifications.  Only the
+        expensive proxy/delegate/geometry synchronization is deferred, and
+        only until the outermost batch exits.
+        """
+        self._candidate_batch_depth += 1
+        try:
+            yield self
+        finally:
+            self._candidate_batch_depth -= 1
+            if self._candidate_batch_depth == 0 and self._candidate_batch_dirty:
+                self._candidate_batch_dirty = False
+                self._rebind_completer_model()
+
+    def _finish_item_mutation(self):
+        if self._candidate_batch_depth:
+            self._candidate_batch_dirty = True
+        else:
+            self._rebind_completer_model()
+
+    @staticmethod
+    def _candidate_item_metadata(text, data):
+        rendered = str(text)
+        return {
+            int(Qt.DisplayRole): rendered,
+            int(Qt.ToolTipRole): rendered,
+            int(Qt.UserRole): data,
+        }
+
+    def candidate_rows_match(self, candidates):
+        """Return whether ``candidates`` exactly describes the live model.
+
+        A candidate's identity, display label, tooltip and every rendered
+        role are part of the comparison.  A stale auxiliary role therefore
+        forces a real rebuild instead of being silently carried into a new
+        View's picker.
+        """
+        rows = tuple((str(text), data) for text, data in candidates)
+        if self.count() != len(rows):
+            return False
+        model = self.model()
+        for row, (text, data) in enumerate(rows):
+            index = model.index(row, self.modelColumn())
+            if model.itemData(index) != self._candidate_item_metadata(text, data):
+                return False
+        return True
+
+    def replace_candidate_rows(self, candidates):
+        """Replace candidates only when the complete rendered rows differ.
+
+        Ordinary ``addItem``/``clear`` semantics are unchanged.  This narrow
+        helper is for refresh owners that have already decided they are
+        projecting the complete candidate universe.
+        """
+        rows = tuple((str(text), data) for text, data in candidates)
+        if self.candidate_rows_match(rows):
+            return False
+        with self.candidate_batch():
+            self.clear()
+            for text, data in rows:
+                self.addItem(text, data)
+        return True
+
     # Methods that mutate the item set: re-bind after each.
     def addItem(self, *args, **kwargs):
         super().addItem(*args, **kwargs)
         self._set_item_tooltip(self.count() - 1)
-        self._rebind_completer_model()
+        self._finish_item_mutation()
 
     def addItems(self, items):
         super().addItems(items)
         start = self.count() - len(items)
         for i in range(max(0, start), self.count()):
             self._set_item_tooltip(i)
-        self._rebind_completer_model()
+        self._finish_item_mutation()
 
     def insertItem(self, *args, **kwargs):
         super().insertItem(*args, **kwargs)
@@ -367,7 +437,7 @@ class SearchableComboBox(QComboBox):
                 self._set_item_tooltip(int(args[0]))
             except (TypeError, ValueError):
                 pass
-        self._rebind_completer_model()
+        self._finish_item_mutation()
 
     def insertItems(self, *args, **kwargs):
         super().insertItems(*args, **kwargs)
@@ -378,7 +448,7 @@ class SearchableComboBox(QComboBox):
                     self._set_item_tooltip(i)
             except (TypeError, ValueError):
                 pass
-        self._rebind_completer_model()
+        self._finish_item_mutation()
 
     def clear(self):
         # Qt's internal QComboBox model clears through a reset-like sequence
@@ -389,8 +459,12 @@ class SearchableComboBox(QComboBox):
         # model" and can leave the completion popup out of sync.
         if self._proxy_model.sourceModel() is self.model():
             self._proxy_model.setSourceModel(None)
-        super().clear()
-        self._rebind_completer_model()
+        try:
+            super().clear()
+        finally:
+            # Preserve the detach -> model mutation -> rebind sequence even
+            # when Qt reports a model failure.  The failure still propagates.
+            self._finish_item_mutation()
 
     def setCurrentText(self, text):
         """Drop-in compatible: when ``text`` matches an existing item, also

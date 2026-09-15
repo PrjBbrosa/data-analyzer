@@ -52,6 +52,8 @@ _RPM_FACTOR_TOOLTIP = (
     "方向盘角速度信号通常填 4～5；已是电机 rpm 时填 1.0。"
 )
 
+_PRESERVE_CANDIDATE_SELECTION = object()
+
 
 class OrderContextual(QWidget):
     """Order-analysis contextual: source/params/presets + compute action."""
@@ -649,44 +651,56 @@ class OrderContextual(QWidget):
     def _on_sig_index_changed(self):
         self.signal_changed.emit('order', self.combo_sig.currentData())
 
-    def set_signal_candidates(self, candidates):
+    def set_signal_candidates(
+        self, candidates, *, selected=_PRESERVE_CANDIDATE_SELECTION,
+    ):
         # Preserve the user's current selection across repopulation —
         # see FFTContextual.set_signal_candidates for the same fix
         # (commit 0132253 missed FFT/Order panels).
-        prev = self.combo_sig.currentData()
-        self.combo_sig.blockSignals(True)
-        self.combo_sig.clear()
-        keep_idx = -1
-        for i, (text, data) in enumerate(candidates):
-            self.combo_sig.addItem(text, data)
-            if prev is not None and data == prev:
-                keep_idx = i
-        # No prior selection to preserve -> leave the combo unselected (-1)
-        # rather than defaulting to the first signal; see
-        # FFTContextual.set_signal_candidates for the phantom-default rationale.
-        self.combo_sig.setCurrentIndex(keep_idx)
-        self.combo_sig.blockSignals(False)
+        prev = (
+            self.combo_sig.currentData()
+            if selected is _PRESERVE_CANDIDATE_SELECTION else selected
+        )
+        old = self.combo_sig.blockSignals(True)
+        try:
+            self.combo_sig.replace_candidate_rows(candidates)
+            keep_idx = -1
+            for i in range(self.combo_sig.count()):
+                if prev is not None and self.combo_sig.itemData(i) == prev:
+                    keep_idx = i
+            # No prior selection to preserve -> leave the combo unselected (-1)
+            # rather than defaulting to the first signal; see
+            # FFTContextual.set_signal_candidates for the phantom-default rationale.
+            self.combo_sig.setCurrentIndex(keep_idx)
+        finally:
+            self.combo_sig.blockSignals(old)
         try:
             self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
         except TypeError:
             pass
         self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
 
-    def set_rpm_candidates(self, candidates):
+    def set_rpm_candidates(
+        self, candidates, *, selected=_PRESERVE_CANDIDATE_SELECTION,
+    ):
         # Preserve current rpm selection — same regression class as
         # set_signal_candidates above.
-        prev = self.combo_rpm.currentData()
-        self.combo_rpm.blockSignals(True)
-        self.combo_rpm.clear()
-        self.combo_rpm.addItem("None", None)
-        keep_idx = 0
-        for i, (text, data) in enumerate(candidates, start=1):
-            self.combo_rpm.addItem(text, data)
-            if prev is not None and data == prev:
-                keep_idx = i
-        if keep_idx > 0:
+        prev = (
+            self.combo_rpm.currentData()
+            if selected is _PRESERVE_CANDIDATE_SELECTION else selected
+        )
+        rows = [("None", None), *candidates]
+        old = self.combo_rpm.blockSignals(True)
+        try:
+            self.combo_rpm.replace_candidate_rows(rows)
+            keep_idx = 0
+            for i in range(1, self.combo_rpm.count()):
+                if prev is not None and self.combo_rpm.itemData(i) == prev:
+                    keep_idx = i
+                    break
             self.combo_rpm.setCurrentIndex(keep_idx)
-        self.combo_rpm.blockSignals(False)
+        finally:
+            self.combo_rpm.blockSignals(old)
 
     def current_signal(self):
         return self.combo_sig.currentData()

@@ -11868,3 +11868,154 @@ class TestDiscreteSettle:
 
         QCoreApplication.processEvents()
         assert quality.aa_on is True
+
+
+class TestPresentationPaintAcknowledgement:
+    """The transition seam acknowledges one final-geometry natural paint.
+
+    This is intentionally a canvas-level protocol test, not a transition
+    controller test.  The controller owns timing and image composition; the
+    canvas only proves that the real GraphicsView has painted the final
+    restored target without forcing a paint or borrowing quality settlement.
+    """
+
+    XLIM = (0.2, 0.8)
+
+    @staticmethod
+    def _drain_events():
+        from PyQt5.QtCore import QCoreApplication
+
+        # ``update()`` is asynchronous.  A second pass also drains the
+        # GraphicsView's deferred viewport update under offscreen Qt.
+        QCoreApplication.processEvents()
+        QCoreApplication.processEvents()
+
+    def _settled_canvas(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(
+            _five_channel_rows(),
+            mode="subplot",
+            defer_first_frame=True,
+            render_context_key=("presentation-ack", "target"),
+        )
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        canvas.restore_visible_ylims({})
+        canvas.settle_view_restore()
+        self._drain_events()
+        return canvas
+
+    def test_acknowledges_once_after_a_completed_final_restore(
+        self, qapp, monkeypatch,
+    ):
+        """The request neither flushes nor settles; Qt's paint is the proof."""
+        canvas = self._settled_canvas(qapp)
+        acknowledged = []
+        canvas.presentation_paint_acknowledged.connect(acknowledged.append)
+
+        monkeypatch.setattr(
+            canvas,
+            "_flush_pending_refresh",
+            lambda: pytest.fail("paint-ack request must not flush data"),
+        )
+        monkeypatch.setattr(
+            canvas._quality,
+            "settle_after_discrete_render",
+            lambda: pytest.fail("paint-ack request must not settle quality"),
+        )
+        assert canvas._quality.timer.interval() == 150
+
+        canvas.request_presentation_paint_ack("final")
+        assert acknowledged == []
+        self._drain_events()
+
+        assert acknowledged == ["final"]
+        assert canvas._quality.timer.interval() == 150
+
+        # Another ordinary paint cannot replay the one-shot acknowledgement.
+        canvas._glw.viewport().update()
+        self._drain_events()
+        assert acknowledged == ["final"]
+
+    def test_request_before_settle_never_acknowledges_the_placeholder_frame(
+        self, qapp,
+    ):
+        """A caller must arm after the X → Y → final-settle transaction."""
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(
+            _five_channel_rows(),
+            mode="subplot",
+            defer_first_frame=True,
+            render_context_key=("presentation-ack", "not-final"),
+        )
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        acknowledged = []
+        canvas.presentation_paint_acknowledged.connect(acknowledged.append)
+
+        canvas.request_presentation_paint_ack("too-early")
+        self._drain_events()
+        assert acknowledged == []
+
+        canvas.restore_visible_ylims({})
+        canvas.settle_view_restore()
+        self._drain_events()
+        assert acknowledged == [], "settling must not revive a rejected request"
+
+    def test_generation_clear_and_replacement_invalidate_stale_ack(
+        self, qapp,
+    ):
+        canvas = self._settled_canvas(qapp)
+        acknowledged = []
+        canvas.presentation_paint_acknowledged.connect(acknowledged.append)
+
+        canvas.request_presentation_paint_ack("old")
+        stale_token = canvas._presentation_paint_ack_token()
+        assert stale_token is not None
+        canvas.clear()
+        canvas._presentation_paint_acked(stale_token)
+        self._drain_events()
+        assert acknowledged == []
+
+        canvas.plot_channels(
+            _five_channel_rows(),
+            mode="subplot",
+            defer_first_frame=True,
+            render_context_key=("presentation-ack", "replacement"),
+        )
+        canvas.restore_visible_xlim(self.XLIM, flush=False)
+        canvas.restore_visible_ylims({})
+        canvas.settle_view_restore()
+        self._drain_events()
+
+        canvas.request_presentation_paint_ack("new")
+        self._drain_events()
+        assert acknowledged == ["new"]
+
+    def test_hide_resize_geometry_and_dpr_invalidate_without_ack(
+        self, qapp, monkeypatch,
+    ):
+        canvas = self._settled_canvas(qapp)
+        acknowledged = []
+        canvas.presentation_paint_acknowledged.connect(acknowledged.append)
+
+        canvas.request_presentation_paint_ack("hidden")
+        canvas.hide()
+        self._drain_events()
+        canvas.show()
+        self._drain_events()
+        assert acknowledged == []
+
+        canvas.request_presentation_paint_ack("resized")
+        stale_token = canvas._presentation_paint_ack_token()
+        assert stale_token is not None
+        canvas.resize(canvas.width() + 1, canvas.height())
+        canvas._presentation_paint_acked(stale_token)
+        self._drain_events()
+        assert acknowledged == []
+
+        canvas.request_presentation_paint_ack("dpr")
+        stale_token = canvas._presentation_paint_ack_token()
+        assert stale_token is not None
+        monkeypatch.setattr(canvas._glw, "devicePixelRatioF", lambda: 2.0)
+        canvas._presentation_paint_acked(stale_token)
+        self._drain_events()
+        assert acknowledged == []

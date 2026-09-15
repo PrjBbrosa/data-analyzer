@@ -516,7 +516,28 @@ class ViewMixin:
         if idx == self.view_manager.active:
             return
         self._capture_focused_view()
+        self._begin_time_view_page_transition(idx)
         self.view_manager.set_active(idx)
+
+    def _begin_time_view_page_transition(self, target_idx):
+        """Optionally preserve the visible single-pane View during restore."""
+        if (
+            self.chart_stack.current_mode() != "time"
+            or self.chart_stack.split_active()
+            or not self.files
+            or not (0 <= self.view_manager.active < len(self.view_manager.views))
+            or not (0 <= target_idx < len(self.view_manager.views))
+        ):
+            return None
+        source = self.view_manager.get(self.view_manager.active)
+        target = self.view_manager.get(target_idx)
+        return self.chart_stack.begin_page_transition(
+            source_section="time",
+            source_view_id=source.view_id,
+            target_section="time",
+            target_view_id=target.view_id,
+            pane_signature=("time", "single"),
+        )
 
     def _apply_active_view(self, idx):
         if not (0 <= idx < len(self.view_manager.views)):
@@ -543,6 +564,11 @@ class ViewMixin:
                         partner,
                         self.chart_stack.secondary_canvas(),
                         update_primary_ui=False,
+                    )
+                else:
+                    self.chart_stack.request_page_transition_target_for(
+                        "time", self.view_manager.get(idx).view_id,
+                        (self.canvas_time,),
                     )
             else:
                 self._project_view_controls(idx)
