@@ -527,7 +527,7 @@ _HINTS = (
     ),
     Hint(
         id="fft.frequency_cursor",
-        text="频谱工具栏：关/单/双游标，双游标读 Δf",
+        text="频谱游标：−隐名称，窄时+N，放大恢复",
         surface="context",
         modes=frozenset({"fft"}),
         priority=120,

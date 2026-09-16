@@ -397,6 +397,7 @@ class CursorPill(QFrame):
         # managed pills. Standalone/compatibility users retain the parent
         # contents-rect fallback in ``safe_rect`` below.
         self._safe_rect_override = None
+        self._host_pending = False
         self._primary_original = ""
         self._text_measure_cache = {}
         # Free-floating child pinned to the top-right corner. Repositioned from
@@ -588,6 +589,7 @@ class CursorPill(QFrame):
     def snapshot(self):
         return {
             "primary": self._primary.text(),
+            "primary_original": self._primary_original,
             "detail": self.detail_text(),
             "detail_visible": self.has_detail(),
             "detail_tooltip": self._detail.toolTip(),
@@ -597,9 +599,20 @@ class CursorPill(QFrame):
             "single_full_detail": self._single_full_detail,
             "single_mini_detail": self._single_mini_detail,
             "single_tooltip": self._single_tooltip,
+            "display_projection": self._display_projection,
         }
 
     def restore_snapshot(self, snapshot):
+        projection = snapshot.get("display_projection")
+        if projection is not None:
+            self._mode = snapshot.get("mode") or "full"
+            if self._mode not in {"full", "mini"}:
+                self._mode = "full"
+            self._primary_original = (
+                snapshot.get("primary_original") or snapshot.get("primary") or ""
+            )
+            self.set_display_projection(projection)
+            return
         self._clear_display_projection()
         self._mode = snapshot.get("mode") or "full"
         if self._mode not in {"full", "mini"}:
@@ -649,6 +662,7 @@ class CursorPill(QFrame):
         self._single_mini_detail = ""
         self._single_tooltip = ""
         self._clear_display_projection()
+        self._host_pending = False
         self.setVisible(False)
 
     def mark_user_placed(self, value=True):
@@ -676,6 +690,8 @@ class CursorPill(QFrame):
         self._space_hidden = False
 
     def safe_rect(self):
+        if self._host_pending:
+            return QRect()
         if self._safe_rect_override is not None:
             return QRect(self._safe_rect_override)
         parent = self.parentWidget()
@@ -684,19 +700,26 @@ class CursorPill(QFrame):
         rect = parent.contentsRect().adjusted(8, 8, -8, -8)
         return rect if rect.isValid() else QRect(parent.contentsRect())
 
-    def set_safe_rect(self, rect):
+    def set_safe_rect(self, rect, *, host_pending=False):
         """Set a parent-coordinate safe rectangle supplied by ChartStack.
 
         The pill remains parented to the shared stack for compositing, while
         this override keeps geometry, width budgets and drag clamping inside
         its own canvas when time-domain split mode is active. ``None`` keeps
         the legacy parent-contents fallback for standalone callers.
+        ``host_pending=True`` means the owning FFT provider exists but has
+        no usable spectrum rectangle yet; do not fall back to the stack.
         """
+        if host_pending:
+            changed = (not self._host_pending) or self._safe_rect_override is not None
+            self._host_pending = True
+            self._safe_rect_override = None
+            return changed
         next_rect = QRect(rect) if rect is not None and rect.isValid() else None
-        if next_rect == self._safe_rect_override:
-            return False
+        changed = self._host_pending or next_rect != self._safe_rect_override
+        self._host_pending = False
         self._safe_rect_override = next_rect
-        return True
+        return changed
 
     def layout_category(self):
         return self._display_layout_category
@@ -1204,14 +1227,17 @@ class CursorPill(QFrame):
         self.display_mode_changed.emit(self._mode)
 
     def move_preserving_right_edge(self, right_edge, top):
-        parent = self.parentWidget()
+        safe = self.safe_rect()
         new_x = int(right_edge) - self.width()
         new_y = int(top)
-        if parent is not None:
-            anchor_right = max(0, min(int(right_edge), parent.width()))
+        if safe.isValid() and safe.width() > 0 and safe.height() > 0:
+            new_x = max(safe.left(), min(new_x, safe.right() - self.width() + 1))
+            new_y = max(safe.top(), min(new_y, safe.bottom() - self.height() + 1))
+        elif self.parentWidget() is not None:
+            parent = self.parentWidget()
             max_x = max(parent.width() - self.width(), 0)
             max_y = max(parent.height() - self.height(), 0)
-            new_x = max(0, min(anchor_right - self.width(), max_x))
+            new_x = max(0, min(new_x, max_x))
             new_y = max(0, min(new_y, max_y))
         self.move(new_x, new_y)
 

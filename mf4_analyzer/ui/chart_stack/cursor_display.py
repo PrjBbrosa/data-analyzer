@@ -27,6 +27,7 @@ from ..cursor_display_model import (
     CursorDisplayRow,
     CursorTableRow,
     CursorPresentation,
+    FrequencyCursorChannel,
     _OPTION_NAMES,
     enabled_value_fields,
 )
@@ -238,7 +239,7 @@ def _compact_block_html(
     out = ['<table cellspacing="0" cellpadding="0" style="font-size:11px;">']
     face_name = header_override or _channel_face_name(block)
     rows = block.visible_rows
-    if cursor_mode == "single" and x_mode == "time":
+    if cursor_mode == "single" and x_mode in {"time", "frequency"}:
         row = rows[0] if rows else CursorDisplayRow(
             _DOT_MARKER if mini else face_name, "—"
         )
@@ -262,7 +263,7 @@ def _compact_block_html(
             )
         out.append('</table>')
         return "".join(out)
-    if cursor_mode == "dual" and x_mode == "time" and mini:
+    if cursor_mode == "dual" and x_mode in {"time", "frequency"} and mini:
         row = rows[0] if rows else CursorDisplayRow(face_name, "—")
         metric_cell = ""
         if row.value:
@@ -708,6 +709,98 @@ def build_cursor_presentation(
     )
 
 
+def _fft_single_value_text(channel: FrequencyCursorChannel) -> str:
+    text = _formatted(channel.value)
+    if channel.delta_to_primary is None:
+        return text
+    return f"{text}  Δ{channel.delta_to_primary:+.4g}"
+
+
+def build_fft_cursor_presentation(
+    channels: Iterable[FrequencyCursorChannel],
+    *,
+    cursor_mode: str,
+    mini: bool,
+    layout_category: str = "natural",
+) -> CursorPresentation:
+    """Project already-computed FFT cursor readings into the shared table."""
+    if cursor_mode not in {"single", "dual"}:
+        raise ValueError("cursor_mode must be single or dual")
+    channel_list = tuple(channels)
+    omit_prefix = cursor_result_source_count(channel_list) <= 1
+    if cursor_mode == "single":
+        metric_labels = ("Value",)
+    elif mini:
+        metric_labels = ("Δ",)
+    else:
+        metric_labels = ("A", "B", "Δ")
+    blocks = []
+    for channel in channel_list:
+        face = str(channel.channel_label or channel.qualified_label or "").strip()
+        if cursor_mode == "single":
+            value_text = _fft_single_value_text(channel)
+            table_rows = (CursorTableRow(metric_texts=(value_text,)),)
+            tooltip = (CursorDisplayRow(face, value_text),)
+            if mini:
+                visible = (CursorDisplayRow(_DOT_MARKER, value_text),)
+            else:
+                visible = (CursorDisplayRow(face, value_text),)
+        else:
+            a_text = _formatted(channel.a_value)
+            b_text = _formatted(channel.b_value)
+            delta_text = _formatted(channel.delta_ab)
+            if mini:
+                table_rows = (CursorTableRow(metric_texts=(delta_text,)),)
+                visible = (CursorDisplayRow(face, delta_text, role="Δ"),)
+            else:
+                table_rows = (CursorTableRow(
+                    metric_texts=(a_text, b_text, delta_text),
+                ),)
+                visible = (
+                    CursorDisplayRow("A", a_text),
+                    CursorDisplayRow("B", b_text),
+                    CursorDisplayRow("Δ", delta_text),
+                )
+            tooltip = (
+                CursorDisplayRow("A", a_text),
+                CursorDisplayRow("B", b_text),
+                CursorDisplayRow("Δ", delta_text),
+            )
+        blocks.append(CursorDisplayBlock(
+            identity=channel.identity,
+            qualified_label=channel.qualified_label,
+            channel_label=channel.channel_label,
+            color=channel.color,
+            visible_rows=visible,
+            tooltip_rows=tooltip,
+            metric_texts=table_rows[0].metric_texts,
+            unit_text=str(channel.unit_suffix or ""),
+            table_rows=table_rows,
+        ))
+    projection = CursorPresentation(
+        blocks=tuple(blocks),
+        html="",
+        tooltip="",
+        layout_category=layout_category,
+        cursor_mode=cursor_mode,
+        x_mode="frequency",
+        mini=bool(mini),
+        omit_visible_source_prefix=omit_prefix,
+        metric_labels=metric_labels,
+    )
+    return CursorPresentation(
+        blocks=projection.blocks,
+        html=render_cursor_presentation(projection),
+        tooltip=_tooltip(projection.blocks),
+        layout_category=projection.layout_category,
+        cursor_mode=projection.cursor_mode,
+        x_mode=projection.x_mode,
+        mini=projection.mini,
+        omit_visible_source_prefix=omit_prefix,
+        metric_labels=metric_labels,
+    )
+
+
 class CursorDisplayPopover(QFrame):
     """Six-option floating control anchored by :class:`TimeChartCard`."""
 
@@ -926,7 +1019,9 @@ __all__ = [
     "CursorDisplayRow",
     "CursorTableRow",
     "CursorPresentation",
+    "FrequencyCursorChannel",
     "build_cursor_presentation",
+    "build_fft_cursor_presentation",
     "enabled_value_fields",
     "render_cursor_presentation",
     "visible_block_label",

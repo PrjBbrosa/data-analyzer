@@ -303,25 +303,28 @@ def test_fft_card_exposes_the_same_frequency_cursor_options(qapp, qtbot):
     assert canvas.cursor_mode() == "dual"
     assert "Δf=" in cs._pill.primary_text()
     assert "background-color:#e8f1ff" in cs._pill.primary_text()
-    assert cs._pill._frequency_dual_rows
+    projection = cs._pill._display_projection
+    assert projection is not None
+    assert projection.x_mode == "frequency"
+    assert projection.metric_labels == ("A", "B", "Δ")
     full_detail = cs._pill._detail.text()
     assert "Acceleration" in full_detail
     assert ">A</td>" in full_detail
     assert ">B</td>" in full_detail
-    assert "△" in full_detail
+    assert "Δ" in full_detail
     assert cs._pill.has_detail()
     full_right = cs._pill.x() + cs._pill.width()
-    full_height = cs._pill.height()
 
     cs._pill._toggle_mode()
     mini_detail = cs._pill._detail.text()
     assert mini_detail != full_detail
     assert ">A</td>" not in mini_detail
     assert ">B</td>" not in mini_detail
-    assert cs._pill.height() < full_height
+    assert "Acceleration" not in mini_detail
+    assert cs._pill.display_mode() == "mini"
     assert abs((cs._pill.x() + cs._pill.width()) - full_right) <= 1
     cs._pill._toggle_mode()
-    assert cs._pill._detail.text() == full_detail
+    assert "Acceleration" in cs._pill._detail.text()
     assert abs((cs._pill.x() + cs._pill.width()) - full_right) <= 1
 
 

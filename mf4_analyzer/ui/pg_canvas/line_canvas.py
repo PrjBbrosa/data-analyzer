@@ -16,7 +16,7 @@ import math
 
 import numpy as np
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QPointF, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QPointF, QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 import pyqtgraph as pg
@@ -36,6 +36,7 @@ from mf4_analyzer.signal.display_ranges import (
 # function the time-domain renderer bills its frames with, so the analysis rows
 # cannot drift into a second definition of "how much does this cost to paint".
 from mf4_analyzer.render_profile import envelope_ink_dev_px
+from mf4_analyzer.ui.cursor_display_model import FrequencyCursorChannel
 
 # Overlay AA point-density budget, shared with TimeDomainCanvasPG (canvas.py:
 # 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so
@@ -335,6 +336,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     # switch between its full A/B table and a compact delta view without
     # attempting to reconstruct data from already-rendered HTML.
     frequency_cursor_rows = pyqtSignal(object)
+    frequency_cursor_channels = pyqtSignal(object)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     time_preview_range_changed = pyqtSignal(float, float)
@@ -3654,6 +3656,46 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             ))
         return rows
 
+    def frequency_cursor_host_rect(self):
+        """Spectrum data viewport in this canvas's widget coordinates.
+
+        Returns ``None`` when the amplitude ViewBox has no usable layout yet.
+        Coordinates are Qt logical pixels of this widget, not scene or device
+        pixels, and they exclude the time-preview row.
+        """
+        try:
+            if sip.isdeleted(self):
+                return None
+            if self.width() <= 0 or self.height() <= 0:
+                return None
+            view_box = self._plot_amp.vb
+            scene_rect = view_box.sceneBoundingRect()
+            if (
+                scene_rect is None
+                or scene_rect.isNull()
+                or scene_rect.width() <= 1
+                or scene_rect.height() <= 1
+            ):
+                return None
+            glw = self._glw
+            top_left = glw.mapFromScene(scene_rect.topLeft())
+            bottom_right = glw.mapFromScene(scene_rect.bottomRight())
+            view_rect = QRect(
+                int(min(top_left.x(), bottom_right.x())),
+                int(min(top_left.y(), bottom_right.y())),
+                max(1, int(abs(bottom_right.x() - top_left.x()))),
+                max(1, int(abs(bottom_right.y() - top_left.y()))),
+            )
+            mapped = QRect(
+                glw.mapTo(self, view_rect.topLeft()),
+                glw.mapTo(self, view_rect.bottomRight()),
+            ).intersected(self.rect())
+            if not mapped.isValid() or mapped.width() <= 1 or mapped.height() <= 1:
+                return None
+            return mapped
+        except (RuntimeError, TypeError, AttributeError, ValueError):
+            return None
+
     def _make_frequency_cursor_lines(self, color):
         line = pg.InfiniteLine(
             angle=90, movable=False, pen=pg.mkPen(color, width=1.2)
@@ -3683,6 +3725,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self.cursor_info.emit("")
             self.dual_cursor_info.emit("")
             self.frequency_cursor_rows.emit([])
+            self.frequency_cursor_channels.emit(())
 
     def _clear_frequency_cursor_readout(self) -> None:
         """Wipe A/B placement and hide lines. File-close / empty-canvas path."""
@@ -3736,6 +3779,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         snapped = self._nearest_frequency(frequency)
         if snapped is None:
             self.cursor_info.emit("")
+            self.frequency_cursor_channels.emit(())
             return ""
         self._show_frequency_cursor_lines(self._cursor_lines, snapped)
         # Keep the public return value's legacy plain-text contract.  Only
@@ -3743,6 +3787,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # to build its time-style vertical detail rows.
         readout = self.format_readout(snapped)
         self.cursor_info.emit(self._format_single_cursor_readout(snapped))
+        self.frequency_cursor_channels.emit(
+            self._frequency_cursor_channels(mode="single", freq=snapped)
+        )
         return readout
 
     def _format_single_cursor_readout(self, freq: float) -> str:
@@ -3778,6 +3825,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if a_value is None:
             self.cursor_info.emit("")
             self.dual_cursor_info.emit("")
+            self.frequency_cursor_rows.emit([])
+            self.frequency_cursor_channels.emit(())
             return ""
         self._cursor_a_frequency = a_value
         self._show_frequency_cursor_lines(self._cursor_a_lines, a_value)
@@ -3788,21 +3837,28 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self.cursor_info.emit(primary)
             self.dual_cursor_info.emit("")
             self.frequency_cursor_rows.emit([])
+            self.frequency_cursor_channels.emit(())
             return primary
         b_value = self._nearest_frequency(b_frequency)
         if b_value is None:
             return ""
         self._cursor_b_frequency = b_value
         self._show_frequency_cursor_lines(self._cursor_b_lines, b_value)
-        primary = (
-            f"A={a_value:g} Hz | B={b_value:g} Hz | "
+        primary = _CURSOR_HTML_SEP.join((
+            f"A <b>{a_value:g} Hz</b>",
+            f"B <b>{b_value:g} Hz</b>",
             f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
-            f"Δf={b_value - a_value:+g} Hz</span>"
-        )
+            f"Δf={b_value - a_value:+g} Hz</span>",
+        ))
         self.cursor_info.emit(primary)
         self.dual_cursor_info.emit(self._format_dual_cursor_detail(a_value, b_value))
         self.frequency_cursor_rows.emit(
             self._frequency_cursor_rows(a_value, b_value)
+        )
+        self.frequency_cursor_channels.emit(
+            self._frequency_cursor_channels(
+                mode="dual", a_value=a_value, b_value=b_value,
+            )
         )
         return primary
 
@@ -3839,6 +3895,67 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             ))
         return rows
 
+    def _frequency_cursor_channel_from_entry(self, entry, display_label, **values):
+        identity = self._entry_source(entry)
+        channel_name = entry.get("channel")
+        return FrequencyCursorChannel(
+            identity=identity if identity is not None else str(display_label or ""),
+            source_label="",
+            channel_label=str(channel_name or display_label or ""),
+            color=str(entry.get("color", "#2563eb") or "#2563eb"),
+            unit_suffix="",
+            **values,
+        )
+
+    def _frequency_cursor_channels(
+        self, *, mode, freq=None, a_value=None, b_value=None,
+    ):
+        """Return structured FFT readings without computing new spectrum values."""
+        channels = []
+        if mode == "single":
+            rows = self.readout_at(float(freq))
+            if not rows:
+                return ()
+            base_amp = rows[0][2]
+            usable = []
+            for entry in self._entries:
+                freq_arr = np.asarray(entry.get("freq", ()))
+                amp_arr = np.asarray(entry.get("amp", ()))
+                if freq_arr.size == 0 or amp_arr.size == 0:
+                    continue
+                usable.append(entry)
+            for index, ((label, _snapped, amp), entry) in enumerate(zip(rows, usable)):
+                channels.append(self._frequency_cursor_channel_from_entry(
+                    entry,
+                    label,
+                    value=float(amp),
+                    delta_to_primary=(
+                        None if index == 0 else float(amp) - float(base_amp)
+                    ),
+                ))
+            return tuple(channels)
+        if a_value is None or b_value is None:
+            return ()
+        for entry in self._entries:
+            freq_arr = np.asarray(entry.get("freq", ()), dtype=float)
+            amp_arr = np.asarray(entry.get("amp", ()), dtype=float)
+            count = min(freq_arr.size, amp_arr.size)
+            if count <= 0:
+                continue
+            freq_arr = freq_arr[:count]
+            amp_arr = amp_arr[:count]
+            a_amp = float(amp_arr[int(np.argmin(np.abs(freq_arr - a_value)))])
+            b_amp = float(amp_arr[int(np.argmin(np.abs(freq_arr - b_value)))])
+            display = entry.get("legend_label", entry.get("label", ""))
+            channels.append(self._frequency_cursor_channel_from_entry(
+                entry,
+                display,
+                a_value=a_amp,
+                b_value=b_amp,
+                delta_ab=b_amp - a_amp,
+            ))
+        return tuple(channels)
+
     def _format_dual_cursor_detail(self, a_value: float, b_value: float) -> str:
         """Keep A/B values while surfacing every B-minus-A spectrum delta."""
         a_rows = self.readout_at(a_value)
@@ -3874,6 +3991,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return
         if not self._plot_amp.vb.sceneBoundingRect().contains(pos) or not self._entries:
             self.cursor_info.emit("")
+            self.frequency_cursor_channels.emit(())
             return
         x = self._plot_amp.vb.mapSceneToView(pos).x()
         self.set_cursor_frequency(x)

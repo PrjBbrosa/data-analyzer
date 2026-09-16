@@ -93,6 +93,28 @@ class CursorDisplayBlock:
 
 
 @dataclass(frozen=True)
+class FrequencyCursorChannel:
+    """Neutral FFT cursor readout. A/B are independent of time-domain stats."""
+
+    identity: object
+    source_label: str
+    channel_label: str
+    color: str = "#111827"
+    unit_suffix: str = ""
+    value: float | None = None
+    delta_to_primary: float | None = None
+    a_value: float | None = None
+    b_value: float | None = None
+    delta_ab: float | None = None
+
+    @property
+    def qualified_label(self) -> str:
+        source = str(self.source_label or "").strip()
+        channel = str(self.channel_label or "").strip()
+        return f"{source} / {channel}" if source else channel
+
+
+@dataclass(frozen=True)
 class CursorPresentation:
     blocks: tuple[CursorDisplayBlock, ...]
     html: str
@@ -139,6 +161,7 @@ __all__ = [
     "CursorDisplayRow",
     "CursorTableRow",
     "CursorPresentation",
+    "FrequencyCursorChannel",
     "_OPTION_NAMES",
     "enabled_value_fields",
 ]

@@ -217,6 +217,8 @@ def test_quickref_explains_the_pane_local_frequency_cursor_modes():
     assert "Δf" in row.sub
     assert "ΔY" in row.sub
     assert "pane" in row.sub and "默认关闭" in row.sub
+    assert "隐名称" in row.sub
+    assert "+N" in row.sub
 
 
 def test_quickref_documents_time_cursor_display_settings():

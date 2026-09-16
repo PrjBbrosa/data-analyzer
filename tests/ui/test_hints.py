@@ -195,7 +195,7 @@ def test_frf_hints_cover_cursor_display_and_time_domain_limits():
         assert phrase in joined
 
     fft_hints = {hint.id: hint.text for hint in hints.all_hints() if hint.id.startswith("fft.")}
-    assert fft_hints["fft.frequency_cursor"] == "频谱工具栏：关/单/双游标，双游标读 Δf"
+    assert fft_hints["fft.frequency_cursor"] == "频谱游标：−隐名称，窄时+N，放大恢复"
 
 
 def test_time_hint_documents_cursor_display_settings_and_custom_x_single_values():
