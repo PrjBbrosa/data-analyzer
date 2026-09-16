@@ -1910,3 +1910,84 @@ def test_project_restore_unremapable_record_has_no_ghost_row(
     ]
     assert live_bad == []
     assert health.degraded or health.dropped_time_refs
+
+
+def test_project_roundtrip_keeps_wwt_auto_xaxis_label_origin(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import LABEL_ORIGIN_AUTO
+    from tests._helpers import wwt_factory as wwt
+    from tests.ui.test_wwt_import_flow import (
+        _load_wwt_accepting_layout,
+        _view_xaxis_spec,
+    )
+
+    path = wwt.multi_window_overlap_and_formula(tmp_path / "auto-origin.wwt")
+    mw = _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path)
+    layout_label = f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]"
+    assert mw._custom_xaxis_spec.label_origin == LABEL_ORIGIN_AUTO
+    project = tmp_path / "wwt-auto-x.tlproj"
+    assert mw.save_project(project) is True
+    saved = pio.load_project_from_json(project)
+    assert saved.views[0]["axis_opts"]["x_axis"]["label_origin"] == "auto"
+    assert saved.views[0]["axis_opts"]["x_axis"]["label"] == layout_label
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.show()
+    qapp.processEvents()
+    monkeypatch.setattr(
+        restored._wwt_import, "_ask_layout",
+        lambda *_a, **_k: pytest.fail("layout dialog must not run"),
+    )
+    restored.open_project(project)
+    qapp.processEvents()
+    assert restored._custom_xaxis_spec.label_origin == LABEL_ORIGIN_AUTO
+    assert restored._custom_xaxis_spec.label == layout_label
+    assert restored.inspector.top._xlabel_auto_from_channel is True
+    restored.inspector.top.set_xaxis_mode("time")
+    assert restored.inspector.top.xaxis_label() == ""
+    assert _view_xaxis_spec(restored.view_manager.views[0]).label_origin == (
+        LABEL_ORIGIN_AUTO
+    )
+
+
+def test_project_roundtrip_keeps_wwt_user_xaxis_label_origin(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import LABEL_ORIGIN_USER
+    from tests._helpers import wwt_factory as wwt
+    from tests.ui.test_wwt_import_flow import _load_wwt_accepting_layout
+
+    path = wwt.multi_window_overlap_and_formula(tmp_path / "user-origin.wwt")
+    mw = _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path)
+    top = mw.inspector.top
+    top.set_xaxis_label(wwt.CHAN_X, auto_from_channel=True)
+    top.edit_xlabel.textEdited.emit(wwt.CHAN_X)
+    top.btn_apply_xaxis.click()
+    qapp.processEvents()
+    assert mw._custom_xaxis_spec.label_origin == LABEL_ORIGIN_USER
+    project = tmp_path / "wwt-user-x.tlproj"
+    assert mw.save_project(project) is True
+    saved = pio.load_project_from_json(project)
+    assert saved.views[0]["axis_opts"]["x_axis"]["label_origin"] == "user"
+    assert saved.views[0]["axis_opts"]["x_axis"]["label"] == wwt.CHAN_X
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.show()
+    qapp.processEvents()
+    monkeypatch.setattr(
+        restored._wwt_import, "_ask_layout",
+        lambda *_a, **_k: pytest.fail("layout dialog must not run"),
+    )
+    restored.open_project(project)
+    qapp.processEvents()
+    assert restored._custom_xaxis_spec.label_origin == LABEL_ORIGIN_USER
+    assert restored._custom_xaxis_spec.label == wwt.CHAN_X
+    restored.inspector.top.set_xaxis_mode("time")
+    assert restored.inspector.top.xaxis_label() == wwt.CHAN_X

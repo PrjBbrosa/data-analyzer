@@ -42,6 +42,69 @@ def _stub_wwt_ui(mw, monkeypatch, accept=True, *, apply_to_remaining=False):
     return asked
 
 
+def _stub_layout_prompt_only(mw, monkeypatch, accept=True):
+    """Stub the WinWert confirm dialog without shielding restore or plot."""
+    asked = []
+
+    def fake_ask(body, informative=""):
+        asked.append((body, informative))
+        return accept
+
+    monkeypatch.setattr(mw._wwt_import, "_ask_layout", fake_ask)
+    return asked
+
+
+def _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path):
+    pytest.importorskip("pytestqt")
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.resize(1400, 820)
+    mw.show()
+    qapp.processEvents()
+    asked = _stub_layout_prompt_only(mw, monkeypatch, accept=True)
+    mw._load_one(str(path))
+    qapp.processEvents()
+    assert asked
+    return mw
+
+
+def _view_xaxis_spec(state):
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    return CustomXAxisSpec.from_axis_opts((state.axis_opts or {}).get("x_axis"))
+
+
+def _plot_x_by_name(mw):
+    result = mw._build_time_plot_data()
+    return {row[0]: np.asarray(row[2]) for row in result.rows}, result
+
+
+def _canvas_xlabel(mw):
+    canvas = mw.chart_stack.focused_canvas() or mw.canvas_time
+    axes = getattr(canvas, "axes_list", None) or ()
+    if axes:
+        return axes[0].get_xlabel()
+    return str(getattr(canvas, "_selection_xlabel", "") or "")
+
+
+def _click_auto_time(qtbot, top):
+    from PyQt5.QtCore import Qt
+
+    qtbot.mouseClick(top.choice_xaxis.buttons()[0], Qt.LeftButton)
+
+
+def _type_xlabel(edit, text):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    edit.setFocus()
+    edit.selectAll()
+    QTest.keyClick(edit, Qt.Key_Backspace)
+    QTest.keyClicks(edit, text)
+
+
 def _store_of(fd):
     return (getattr(fd, "source_metadata", None) or {}).get("wwt_record_store")
 
@@ -1047,3 +1110,188 @@ def test_open_batch_project_restore_asks_zero_times(qapp, tmp_path, monkeypatch)
     qapp.processEvents()
     assert restored.files
     assert _winwert_views(restored)
+
+
+def test_wwt_layout_import_first_time_switch_clears_auto_draft_then_apply_uses_time(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.time_xaxis import (
+        CHANNEL_MODE,
+        LABEL_ORIGIN_AUTO,
+        PER_SOURCE_NAME,
+        CustomXAxisSpec,
+    )
+
+    path = wwt.multi_window_overlap_and_formula(tmp_path / "origin.wwt")
+    mw = _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path)
+    top = mw.inspector.top
+    layout_label = f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]"
+    applied = mw._custom_xaxis_spec
+    view_opts = dict(mw.view_manager.views[0].axis_opts["x_axis"])
+    plotted_before, _result_before = _plot_x_by_name(mw)
+    fid, channel = mw.view_manager.views[0].checked[0]
+    fd = mw.files[fid]
+    ordinary_name = fd.get_prefixed_channel(channel)
+
+    assert applied == CustomXAxisSpec(
+        mode=CHANNEL_MODE,
+        resolver=PER_SOURCE_NAME,
+        source_fid=None,
+        channel=wwt.CHAN_X,
+        label=layout_label,
+        label_origin=LABEL_ORIGIN_AUTO,
+    )
+    assert top.xaxis_label() == layout_label
+    assert top._xlabel_auto_from_channel is True
+    assert top.edit_xlabel.placeholderText() == "Time (s)"
+    assert "Time (s)" not in _canvas_xlabel(mw)
+    np.testing.assert_array_equal(
+        plotted_before[ordinary_name],
+        np.asarray(fd.data[wwt.CHAN_X]),
+    )
+
+    _click_auto_time(qtbot, top)
+    qapp.processEvents()
+    assert top.xaxis_mode() == "time"
+    assert top.xaxis_label() == ""
+    assert top.edit_xlabel.placeholderText() == "Time (s)"
+    assert mw._custom_xaxis_spec == applied
+    assert mw.view_manager.views[0].axis_opts["x_axis"] == view_opts
+    plotted_draft, _result_draft = _plot_x_by_name(mw)
+    np.testing.assert_array_equal(
+        plotted_draft[ordinary_name], plotted_before[ordinary_name],
+    )
+
+    top.btn_apply_xaxis.click()
+    qapp.processEvents()
+    assert mw._custom_xaxis_spec == CustomXAxisSpec(mode="time", label="")
+    assert _view_xaxis_spec(mw.view_manager.views[0]) == CustomXAxisSpec(
+        mode="time", label="",
+    )
+    plotted_time, _result_time = _plot_x_by_name(mw)
+    np.testing.assert_array_equal(
+        plotted_time[ordinary_name], np.asarray(fd.time_array),
+    )
+    assert _canvas_xlabel(mw) == "Time (s)"
+
+
+@pytest.mark.parametrize(
+    "typed",
+    (
+        "Manual title",
+        wwt.CHAN_X,
+        f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]",
+    ),
+)
+def test_wwt_imported_auto_label_becomes_user_after_edit_and_survives_time_switch(
+    qtbot, qapp, tmp_path, monkeypatch, typed,
+):
+    from mf4_analyzer.ui.time_xaxis import LABEL_ORIGIN_USER
+
+    path = wwt.multi_window_overlap_and_formula(tmp_path / "user-origin.wwt")
+    mw = _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path)
+    top = mw.inspector.top
+    if typed == "Manual title":
+        _type_xlabel(top.edit_xlabel, typed)
+    else:
+        top.set_xaxis_label(typed, auto_from_channel=True)
+        top.edit_xlabel.textEdited.emit(typed)
+    qapp.processEvents()
+    assert top.xaxis_label() == typed
+    assert top.xaxis_label_origin() == LABEL_ORIGIN_USER
+
+    top.btn_apply_xaxis.click()
+    qapp.processEvents()
+    assert mw._custom_xaxis_spec.label == typed
+    assert mw._custom_xaxis_spec.label_origin == LABEL_ORIGIN_USER
+    top.set_xaxis_mode("time")
+    assert top.xaxis_label() == typed
+    assert _view_xaxis_spec(mw.view_manager.views[0]).label_origin == (
+        LABEL_ORIGIN_USER
+    )
+
+
+def test_wwt_unapplied_time_draft_does_not_commit_when_switching_views(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.time_xaxis import CHANNEL_MODE, LABEL_ORIGIN_AUTO
+
+    path = wwt.multi_window_overlap_and_formula(tmp_path / "draft-switch.wwt")
+    mw = _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path)
+    layout_label = f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]"
+    top = mw.inspector.top
+    _click_auto_time(qtbot, top)
+    qapp.processEvents()
+    assert top.xaxis_label() == ""
+
+    mw._switch_view(1)
+    qapp.processEvents()
+    mw._switch_view(0)
+    qapp.processEvents()
+    spec = _view_xaxis_spec(mw.view_manager.views[0])
+    assert spec.mode == CHANNEL_MODE
+    assert spec.label == layout_label
+    assert spec.label_origin == LABEL_ORIGIN_AUTO
+    assert mw._custom_xaxis_spec == spec
+    assert top.xaxis_label() == layout_label
+    assert top._xlabel_auto_from_channel is True
+
+
+def test_wwt_mixed_exact_binding_keeps_curve_x_when_view_applies_time(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.time_xaxis import LABEL_ORIGIN_AUTO
+
+    path = wwt.channel_exception_with_header_x(tmp_path / "mixed-x.wwt")
+    mw = _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path)
+    state = mw.view_manager.views[0]
+    binding_before = state.curve_bindings[0]
+    assert binding_before.x_ref.channel == "X_Wheel input torque"
+    assert binding_before.y_ref.channel == "Diff.Limit A"
+    binding_id = binding_before.binding_id
+    x_ref = binding_before.x_ref
+    y_ref = binding_before.y_ref
+    assert _view_xaxis_spec(state).label_origin == LABEL_ORIGIN_AUTO
+
+    top = mw.inspector.top
+    top.set_xaxis_mode("time")
+    top.btn_apply_xaxis.click()
+    qapp.processEvents()
+
+    state = mw.view_manager.views[0]
+    binding = state.curve_bindings[0]
+    assert binding.binding_id == binding_id
+    assert binding.x_ref == x_ref
+    assert binding.y_ref == y_ref
+    fid = state.checked[0][0]
+    fd = mw.files[fid]
+    plotted, _result = _plot_x_by_name(mw)
+    np.testing.assert_array_equal(
+        plotted[fd.get_prefixed_channel("Diff.Moment A")],
+        np.asarray(fd.time_array),
+    )
+    np.testing.assert_array_equal(
+        plotted[fd.get_prefixed_channel("Diff.Limit A")],
+        np.asarray(fd.data["X_Wheel input torque"]),
+    )
+
+
+def test_wwt_record_only_view_keeps_curve_bound_readonly_controls(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    path = wwt.record_only_gap_curves(tmp_path / "gap-readonly.wwt")
+    mw = _load_wwt_accepting_layout(qtbot, qapp, monkeypatch, path)
+    top = mw.inspector.top
+    state = mw.view_manager.views[0]
+    bindings_before = [binding.to_dict() for binding in state.curve_bindings]
+    assert top.curve_bound_xaxis_summary()
+    assert not top.choice_xaxis.isEnabled()
+    assert not top.btn_apply_xaxis.isEnabled()
+    assert _view_xaxis_spec(state).mode == "time"
+    assert "label_origin" not in (state.axis_opts or {}).get("x_axis", {})
+    _click_auto_time(qtbot, top)
+    qapp.processEvents()
+    assert not top.choice_xaxis.isEnabled()
+    assert [binding.to_dict() for binding in state.curve_bindings] == (
+        bindings_before
+    )

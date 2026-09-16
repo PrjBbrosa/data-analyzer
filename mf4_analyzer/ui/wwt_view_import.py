@@ -15,6 +15,7 @@ from mf4_analyzer.io.wwt_document import WwtDocument, WwtRecord
 from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
+    LABEL_ORIGIN_AUTO,
     PER_SOURCE_NAME,
     CustomXAxisSpec,
 )
@@ -279,6 +280,7 @@ def _x_axis_opts(ordinary_x_channel: str | None, x_label: str) -> dict:
             source_fid=None,
             channel=str(ordinary_x_channel),
             label=str(x_label or ""),
+            label_origin=LABEL_ORIGIN_AUTO,
         ).to_axis_opts()
     return {"mode": "time", "label": str(x_label or "")}
 

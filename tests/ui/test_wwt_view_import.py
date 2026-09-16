@@ -9,11 +9,13 @@ import pytest
 from mf4_analyzer.io.wwt_document import load_wwt_document
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
+    LABEL_ORIGIN_AUTO,
     PER_SOURCE_NAME,
     CustomXAxisSpec,
 )
 from mf4_analyzer.ui.wwt_view_import import (
     RegisteredWwtSources,
+    _x_axis_opts,
     build_wwt_view_proposals,
     register_groups_for_test,
 )
@@ -51,6 +53,7 @@ def test_channel_backed_wwt_proposal_is_ordinary_view_with_initial_ranges(tmp_pa
         source_fid=None,
         channel=wwt.SFNS_RACK_TRAVEL,
         label=f"{wwt.SFNS_RACK_TRAVEL} [{wwt.SFNS_RACK_TRAVEL_UNIT}]",
+        label_origin=LABEL_ORIGIN_AUTO,
     ).to_axis_opts()
     assert "native_ticks" not in view.axis_opts
     assert not hasattr(view, "x_viewport_intent")
@@ -81,6 +84,7 @@ def test_channel_xy_proposal_uses_only_registered_y_and_winwert_color(tmp_path):
         source_fid=None,
         channel=wwt.CHAN_X,
         label=f"{wwt.CHAN_X} [{wwt.CHAN_X_UNIT}]",
+        label_origin=LABEL_ORIGIN_AUTO,
     ).to_axis_opts()
     winwert = wwt.palette_hex(wwt.CHAN_Y_COLOR)
     assert view.curve_bindings == []
@@ -132,6 +136,7 @@ def test_measurement_proposal_binds_record_only_tolerance_y(tmp_path):
     assert tuple(view.ylims.values()) == ((wwt.MEAS_Y_LO, wwt.MEAS_Y_HI),)
     assert wwt.TOL_Y not in {ch for _fid, ch in registered.record_channels.values()}
     assert view.axis_opts["x_axis"]["mode"] == CHANNEL_MODE
+    assert view.axis_opts["x_axis"]["label_origin"] == LABEL_ORIGIN_AUTO
     assert view.axis_opts["channel_axis_groups"] == {
         '["f1","MeasY"]': tol.axis_id,
     }
@@ -168,6 +173,7 @@ def test_registered_y_may_keep_record_only_x_without_promoting_auxiliary_y(tmp_p
     # There is no honest Inspector schema for per-curve/record X. Fail closed
     # to the legacy state instead of claiming a specific registered channel.
     assert proposals[0].state.axis_opts["x_axis"]["mode"] == "time"
+    assert "label_origin" not in proposals[0].state.axis_opts["x_axis"]
 
 
 def test_cross_source_channel_xy_keeps_exact_curve_binding(tmp_path):
@@ -190,6 +196,7 @@ def test_cross_source_channel_xy_keeps_exact_curve_binding(tmp_path):
     assert len(proposals) == 1
     view = proposals[0].state
     assert view.axis_opts["x_axis"]["mode"] == "time"
+    assert "label_origin" not in view.axis_opts["x_axis"]
     assert len(view.curve_bindings) == 1
     binding = view.curve_bindings[0]
     assert (binding.x_ref.fid, binding.x_ref.channel) == ("f1", wwt.CHAN_X)
@@ -271,6 +278,17 @@ def test_multi_window_proposals_include_record_only_y_window(tmp_path):
     assert proposals[0].state.curve_bindings == []
     assert proposals[1].state.curve_bindings == []
     assert ("f1", wwt.CHAN_Y) in proposals[0].state.checked
+    ordinary_x = CustomXAxisSpec.from_axis_opts(
+        proposals[0].state.axis_opts["x_axis"]
+    )
+    assert ordinary_x == CustomXAxisSpec(
+        mode=CHANNEL_MODE,
+        resolver=PER_SOURCE_NAME,
+        source_fid=None,
+        channel=wwt.CHAN_X,
+        label=f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]",
+        label_origin=LABEL_ORIGIN_AUTO,
+    )
     form_key = next(
         key for key in proposals[1].state.checked if key[1] == wwt.FORM_Y
     )
@@ -278,6 +296,8 @@ def test_multi_window_proposals_include_record_only_y_window(tmp_path):
     tol_y = proposals[2].state.curve_bindings[0]
     assert tol_y.y_ref.kind == "wwt_record"
     assert tol_y.color == wwt.palette_hex(wwt.TOL_Y_COLOR)
+    assert proposals[2].state.axis_opts["x_axis"]["mode"] == "time"
+    assert "label_origin" not in proposals[2].state.axis_opts["x_axis"]
 
 
 def test_optional_customer_wwt_proposal_smoke_when_present():
@@ -325,6 +345,8 @@ def test_whole_window_record_only_gap_curves_generate_a_view(tmp_path):
     assert proposals[0].state.checked == []
     assert proposals[0].state.colors == {}
     assert proposals[0].state.ylims == {}
+    assert proposals[0].state.axis_opts["x_axis"]["mode"] == "time"
+    assert "label_origin" not in proposals[0].state.axis_opts["x_axis"]
 
 
 def _customer_wwt(name: str) -> Path:
@@ -387,6 +409,7 @@ def test_header_x_keeps_matching_channel_rows_ordinary_with_one_exception(
             source_fid=None,
             channel="Wheel input torque",
             label="Wheel input torque [Nm]",
+            label_origin=LABEL_ORIGIN_AUTO,
         )
     )
     assert set(view.checked) == {
@@ -485,3 +508,27 @@ def test_speed_unit_alias_keeps_channel_rows_out_of_bindings(tmp_path):
     assert not any(
         binding.y_ref.kind == "channel" for binding in view.curve_bindings
     )
+
+
+def test_ordinary_x_axis_opts_mark_layout_title_auto_even_when_it_differs():
+    opts = _x_axis_opts(wwt.CHAN_X, f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]")
+    spec = CustomXAxisSpec.from_axis_opts(opts)
+    assert spec.mode == CHANNEL_MODE
+    assert spec.resolver == PER_SOURCE_NAME
+    assert spec.source_fid is None
+    assert spec.channel == wwt.CHAN_X
+    assert spec.label == f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]"
+    assert spec.label_origin == LABEL_ORIGIN_AUTO
+
+
+def test_empty_layout_title_keeps_empty_label_with_auto_origin():
+    spec = CustomXAxisSpec.from_axis_opts(_x_axis_opts(wwt.CHAN_X, ""))
+    assert spec.channel == wwt.CHAN_X
+    assert spec.label == ""
+    assert spec.label_origin == LABEL_ORIGIN_AUTO
+
+
+def test_time_fallback_x_axis_opts_do_not_invent_label_origin():
+    opts = _x_axis_opts(None, f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]")
+    assert opts == {"mode": "time", "label": f"{wwt.WIN_A} [{wwt.CHAN_X_UNIT}]"}
+    assert "label_origin" not in opts
