@@ -12019,3 +12019,14 @@ class TestPresentationPaintAcknowledgement:
         canvas._presentation_paint_acked(stale_token)
         self._drain_events()
         assert acknowledged == []
+
+    def test_clear_emits_presentation_content_invalidated(self, qapp):
+        canvas = self._settled_canvas(qapp)
+        seen = []
+
+        def _mark():
+            seen.append(True)
+
+        canvas.presentation_content_invalidated.connect(_mark)
+        canvas.clear()
+        assert seen == [True]

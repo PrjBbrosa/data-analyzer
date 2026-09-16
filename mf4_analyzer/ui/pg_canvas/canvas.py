@@ -338,6 +338,9 @@ class TimeDomainCanvasPG(QWidget):
     # Time-View restore.  The signal is emitted only by the actual
     # GraphicsView paint hook, never by the request call itself.
     presentation_paint_acknowledged = pyqtSignal(object)
+    # Semantic replacement of the admitted target (rebuild, selection delta,
+    # live visibility).  Ordinary expose/paint does not emit this.
+    presentation_content_invalidated = pyqtSignal()
     # Fires after plot_channels rebuilds the chart, so the footer can refresh
     # situational nudges (channel count / units / amplitude / clip).
     chart_rebuilt = pyqtSignal()
@@ -1461,6 +1464,7 @@ class TimeDomainCanvasPG(QWidget):
             self._settle_visible_data(self._interaction_generation)
         self._dense_raster.sync_visibility()
         self.draw_idle()
+        self._note_presentation_content_invalidated()
         return dict(self._last_selection_delta)
 
     def _try_apply_subplot_selection_delta(self, parsed):
@@ -1670,6 +1674,7 @@ class TimeDomainCanvasPG(QWidget):
         self.disable_interactive_quality()
         self.schedule_idle_quality()
         self.chart_rebuilt.emit()
+        self._note_presentation_content_invalidated()
         self.draw_idle()
         return {"applied": True, "reason": "subplot-object-reuse"}
 
@@ -1785,6 +1790,7 @@ class TimeDomainCanvasPG(QWidget):
                 self._refresh_visible_data()
             self._dense_raster.sync_visibility()
             self.draw()
+            self._note_presentation_content_invalidated()
         return n
 
     def set_companion_lines_visible(self, visible):
@@ -1840,6 +1846,7 @@ class TimeDomainCanvasPG(QWidget):
                 self._refresh_visible_data()
             self._dense_raster.sync_visibility()
             self.draw()
+            self._note_presentation_content_invalidated()
         return n
 
     def _axis_groups(self, *, companion_only=False):
@@ -2391,6 +2398,13 @@ class TimeDomainCanvasPG(QWidget):
         """Drop an unpainted presentation request without emitting anything."""
         self._presentation_paint_ack_epoch += 1
         self._presentation_paint_ack_request = None
+
+    def _note_presentation_content_invalidated(self) -> None:
+        """Tell a covering page transition that this chart is no longer B.
+
+        Ordinary expose/paint and quality convergence must not call this.
+        """
+        self.presentation_content_invalidated.emit()
 
     def _on_presentation_paint_destroyed(self, *_args) -> None:
         # ``destroyed`` is a lifecycle boundary, never an acknowledgement.
@@ -3226,6 +3240,7 @@ class TimeDomainCanvasPG(QWidget):
         # Invalidate callbacks captured by the previous curve generation
         # before stopping timers or destroying PlotDataItems.
         self._interaction_generation += 1
+        self._note_presentation_content_invalidated()
         # Raster items live in channel ViewBoxes, so remove them before those
         # ViewBoxes are torn down by the overlay/layout cleanup below.
         self._dense_raster.clear()

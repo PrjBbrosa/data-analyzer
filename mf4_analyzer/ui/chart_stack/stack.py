@@ -115,6 +115,7 @@ class ChartStack(QWidget):
         self._page_transition_ready_canvases = ()
         self._page_transition_ready_acks = set()
         self._page_transition_ready_slots = []
+        self._page_transition_content_slots = []
         self._page_transition.transition_finished.connect(
             self._clear_page_transition_ready_fence,
         )
@@ -1326,6 +1327,7 @@ class ChartStack(QWidget):
             self._page_transition.cancel("target-has-no-canvas")
             return False
         self._clear_page_transition_ready_fence(keep_target=True)
+        self._clear_page_transition_content_watch()
         real_input_targets = tuple(
             canvas for canvas in unique if isinstance(canvas, QWidget)
         )
@@ -1350,6 +1352,17 @@ class ChartStack(QWidget):
 
             signal.connect(_ack)
             self._page_transition_ready_slots.append((signal, _ack))
+            content_signal = getattr(
+                canvas, "presentation_content_invalidated", None,
+            )
+            if content_signal is not None:
+                def _invalidate(*, expected=token):
+                    self._on_page_transition_content_invalidated(expected)
+
+                content_signal.connect(_invalidate)
+                self._page_transition_content_slots.append(
+                    (content_signal, _invalidate),
+                )
             if request(token) is not True:
                 self._page_transition.cancel("target-paint-not-requested")
                 return False
@@ -1444,9 +1457,24 @@ class ChartStack(QWidget):
         # underneath the transparent overlay.  Fading the retained source out
         # over that live surface is visually the selected B crossfade, without
         # a second QWidget.grab() that can synchronously repaint the target.
+        # Content-invalidation watches stay armed: keep_target must not drop
+        # them, because a later rebuild happens after this paint fence is gone.
         self._clear_page_transition_ready_fence(keep_target=True)
         if not self._page_transition.accept_target(token):
             self._page_transition.cancel("target-paint-not-accepted")
+
+    def _on_page_transition_content_invalidated(self, token):
+        if token != self._page_transition_target:
+            return
+        self.cancel_page_transition("target-content-invalidated")
+
+    def _clear_page_transition_content_watch(self):
+        for signal, slot in self._page_transition_content_slots:
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._page_transition_content_slots.clear()
 
     def _clear_page_transition_ready_fence(self, *_args, keep_target=False):
         for signal, slot in self._page_transition_ready_slots:
@@ -1458,6 +1486,7 @@ class ChartStack(QWidget):
         self._page_transition_ready_canvases = ()
         self._page_transition_ready_acks = set()
         if not keep_target:
+            self._clear_page_transition_content_watch()
             self._page_transition_target = None
 
     def current_mode(self):

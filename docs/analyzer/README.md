@@ -124,7 +124,7 @@ panning and selection feedback, and aligns cursor readouts across full and mini
 modes with channel colors. Progress labels, toolbar branding, and help screenshots
 are restored or corrected.
 8.2.5 unifies channel-tree disclosure arrows, adds bundled fallback QSS icons,
-reduces repeated tree/candidate/facts projection, and adds a 300 ms single-pane
+reduces repeated tree/candidate/facts projection, and adds a 240 ms single-pane
 time-View crossfade coordinated with UltraView previews. Other analysis sections
 and split panes retain direct restoration. Fractional tick labels keep accurate
 precision without changing tick locations or grid divisions.

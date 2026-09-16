@@ -334,7 +334,7 @@ class UltraViewCaptureCoordinator(QObject):
         self._resolution_stale_notified: set[UltraViewRef] = set()
         # A target canvas can be correct while a local page handoff is still
         # presenting its previous frame.  Keep UltraView's expensive export
-        # capture out of that 300 ms presentation window; the controller's
+        # capture out of that 240 ms presentation window; the controller's
         # finished/cancelled signal, not a guessed delay, resumes it.
         self._page_transition_waits: dict[tuple, tuple] = {}
 

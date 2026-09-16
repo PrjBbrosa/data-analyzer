@@ -8,10 +8,12 @@ target.  It never synchronously captures the incoming endpoint.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtGui import QColor, QPixmap
+from PyQt5.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPixmap
+from PyQt5.QtWidgets import QApplication, QWidget
 
 from mf4_analyzer.ui.chart_stack import ChartStack
+from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui_kit.motion import POLICY_LIGHT, POLICY_OFF, duration_ms
 
 
@@ -19,6 +21,7 @@ class _NaturalPaintFence(QObject):
     """A deterministic canvas-side natural-paint acknowledgement seam."""
 
     presentation_paint_acknowledged = pyqtSignal(object)
+    presentation_content_invalidated = pyqtSignal()
 
     def __init__(self, *, accepts_request=True) -> None:
         super().__init__()
@@ -33,6 +36,38 @@ class _NaturalPaintFence(QObject):
         self.presentation_paint_acknowledged.emit(
             self.requests[-1] if request_id is None else request_id,
         )
+
+
+class _LiveTarget(QWidget):
+    """A real QWidget target: natural paint admits the fade, later paints must not cancel it."""
+
+    presentation_paint_acknowledged = pyqtSignal(object)
+    presentation_content_invalidated = pyqtSignal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.requests = []
+        self.paints = 0
+        self._pending = None
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+
+    def request_presentation_paint_ack(self, request_id) -> bool:
+        self.requests.append(request_id)
+        self._pending = request_id
+        self.update()
+        return True
+
+    def paintEvent(self, event):  # noqa: N802 - Qt callback spelling
+        self.paints += 1
+        painter = QPainter(self)
+        try:
+            painter.fillRect(self.rect(), QColor("#20a060"))
+        finally:
+            painter.end()
+        pending = self._pending
+        if pending is not None:
+            self._pending = None
+            self.presentation_paint_acknowledged.emit(pending)
 
 
 def _stack(qtbot) -> ChartStack:
@@ -120,7 +155,8 @@ def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
     token, calls = _begin_light_transition(chart_stack, monkeypatch)
     fence = _NaturalPaintFence()
 
-    assert duration_ms("page_transition", POLICY_LIGHT) == 300
+    duration = duration_ms("page_transition", POLICY_LIGHT)
+    assert duration == 240
     assert calls == [(chart_stack.stack, False, False)]
     assert chart_stack.request_page_transition_target(token, [fence])
     assert fence.requests == [token]
@@ -146,7 +182,7 @@ def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
         chart_stack.stack.width() * chart_stack.stack.height() * 4
     )
 
-    chart_stack.page_transition()._driver.clock().setCurrentTime(300)
+    chart_stack.page_transition()._driver.clock().setCurrentTime(duration)
     qtbot.waitUntil(lambda: not chart_stack.page_transition().is_active())
     assert chart_stack.page_transition().image_bytes() == 0
 
@@ -193,7 +229,8 @@ def test_rapid_redirect_keeps_bridge_captured_visible_source_on_single_image_pat
     assert chart_stack.request_page_transition_target(token_b, (fence_b,))
     fence_b.acknowledge()
     assert controller.is_active()
-    controller._driver.clock().setCurrentTime(150)
+    duration = duration_ms("page_transition", POLICY_LIGHT)
+    controller._driver.clock().setCurrentTime(duration // 2)
 
     token_c = chart_stack.begin_page_transition(
         source_section="time",
@@ -207,7 +244,7 @@ def test_rapid_redirect_keeps_bridge_captured_visible_source_on_single_image_pat
     fence_c = _NaturalPaintFence()
     assert chart_stack.request_page_transition_target(token_c, (fence_c,))
     fence_c.acknowledge()
-    controller._driver.clock().setCurrentTime(300)
+    controller._driver.clock().setCurrentTime(duration)
     qtbot.waitUntil(lambda: not controller.is_active())
 
 
@@ -252,3 +289,184 @@ def test_stale_ack_cannot_start_live_target_fade_and_rejected_ack_request_cancel
     assert not chart_stack.page_transition().is_pending()
     assert not chart_stack.page_transition().is_active()
     assert chart_stack.page_transition().image_bytes() == 0
+
+
+def _arm_live_target(qtbot, chart_stack, monkeypatch):
+    token, _calls = _begin_light_transition(chart_stack, monkeypatch)
+    fence = _LiveTarget(chart_stack)
+    fence.setGeometry(8, 8, 160, 100)
+    fence.show()
+    qtbot.waitExposed(fence)
+    assert chart_stack.request_page_transition_target(token, [fence])
+    qtbot.waitUntil(chart_stack.page_transition().is_active, timeout=1000)
+    return token, fence
+
+
+def test_live_widget_natural_paint_completes_fade_without_manual_clock(
+    qtbot, monkeypatch,
+):
+    chart_stack = _stack(qtbot)
+    cancelled = []
+    finished = []
+    controller = chart_stack.page_transition()
+    controller.transition_cancelled.connect(cancelled.append)
+    controller.transition_finished.connect(finished.append)
+    _token, fence = _arm_live_target(qtbot, chart_stack, monkeypatch)
+
+    fence.update()
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert controller.is_active()
+    assert cancelled == []
+
+    qtbot.waitUntil(lambda: not controller.is_active(), timeout=1500)
+    assert cancelled == []
+    assert finished
+    assert controller.image_bytes() == 0
+    assert chart_stack._page_transition_content_slots == []
+    assert fence.updatesEnabled()
+
+
+def test_ready_content_replacement_cancels_live_fade(qtbot, monkeypatch):
+    chart_stack = _stack(qtbot)
+    cancelled = []
+    chart_stack.page_transition().transition_cancelled.connect(cancelled.append)
+    _token, fence = _arm_live_target(qtbot, chart_stack, monkeypatch)
+    assert chart_stack._page_transition_content_slots
+
+    fence.presentation_content_invalidated.emit()
+
+    assert cancelled == ["target-content-invalidated"]
+    assert chart_stack.page_transition().image_bytes() == 0
+    assert chart_stack._page_transition_target is None
+    assert chart_stack._page_transition_content_slots == []
+
+
+def test_pending_content_replacement_drops_cover_before_ack(qtbot, monkeypatch):
+    chart_stack = _stack(qtbot)
+    token, _calls = _begin_light_transition(chart_stack, monkeypatch)
+    fence = _NaturalPaintFence()
+    cancelled = []
+    chart_stack.page_transition().transition_cancelled.connect(cancelled.append)
+    assert chart_stack.request_page_transition_target(token, [fence])
+    assert not chart_stack.page_transition().is_active()
+
+    fence.presentation_content_invalidated.emit()
+
+    assert cancelled == ["target-content-invalidated"]
+    assert chart_stack.page_transition().image_bytes() == 0
+    fence.acknowledge(token)
+    assert not chart_stack.page_transition().is_active()
+
+
+def test_rapid_live_redirect_cleans_up_and_finishes_on_c(qtbot, monkeypatch):
+    chart_stack = _stack(qtbot)
+    chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
+    chart_stack.set_page_transition_enabled_sections(("time",))
+    controller = chart_stack.page_transition()
+    captures = iter(("#ff0000", "#7f0080"))
+
+    def _capture(widget, *, exclude_overlay=False):
+        return _frame(widget, next(captures))
+
+    monkeypatch.setattr(controller, "capture_local_endpoint", _capture)
+    cancelled = []
+    finished = []
+    controller.transition_cancelled.connect(cancelled.append)
+    controller.transition_finished.connect(finished.append)
+
+    token_b = chart_stack.begin_page_transition(
+        source_section="time",
+        source_view_id="view-A",
+        target_section="time",
+        target_view_id="view-B",
+    )
+    fence_b = _LiveTarget(chart_stack)
+    fence_b.setGeometry(8, 8, 160, 100)
+    fence_b.show()
+    assert chart_stack.request_page_transition_target(token_b, (fence_b,))
+    qtbot.waitUntil(controller.is_active, timeout=1000)
+
+    token_c = chart_stack.begin_page_transition(
+        source_section="time",
+        source_view_id="view-B",
+        target_section="time",
+        target_view_id="view-C",
+    )
+    assert token_c is not None
+    fence_c = _LiveTarget(chart_stack)
+    fence_c.setGeometry(8, 8, 160, 100)
+    fence_c.show()
+    assert chart_stack.request_page_transition_target(token_c, (fence_c,))
+    qtbot.waitUntil(controller.is_active, timeout=1000)
+    qtbot.waitUntil(lambda: not controller.is_active(), timeout=1500)
+
+    assert cancelled == []
+    assert finished
+    assert controller.image_bytes() == 0
+
+
+def test_time_tab_switch_completes_natural_fade(qtbot, qapp, loaded_csv):
+    """Production View switch must restore, naturally ack, and finish without Paint cancel."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(1400, 820)
+    window.show()
+    qtbot.waitExposed(window)
+    window.load_file(loaded_csv)
+    qapp.processEvents()
+    window._on_view_new()
+    qapp.processEvents()
+
+    controller = window.chart_stack.page_transition()
+    cancelled = []
+    finished = []
+    started = []
+    controller.transition_started.connect(started.append)
+    controller.transition_cancelled.connect(cancelled.append)
+    controller.transition_finished.connect(finished.append)
+    if window.view_manager.active != 0:
+        window._switch_view(0)
+        qtbot.waitUntil(
+            lambda: controller.image_bytes() == 0 and not controller.is_active(),
+            timeout=2500,
+        )
+        started.clear()
+        cancelled.clear()
+        finished.clear()
+
+    stack = window.chart_stack.stack
+    probe = controller.capture_local_endpoint(stack)
+    assert not probe.isNull(), (
+        f"outgoing capture empty: stack={stack.size()} visible={stack.isVisible()}"
+    )
+
+    viewport = window.canvas_time._glw.viewport()
+    under_paints = []
+
+    class _UnderPaintCounter(QObject):
+        def eventFilter(self, watched, event):  # noqa: N802 - Qt callback spelling
+            if event.type() == QEvent.Paint:
+                under_paints.append(True)
+            return False
+
+    counter = _UnderPaintCounter(viewport)
+    viewport.installEventFilter(counter)
+
+    window.view_tabbar.switch_requested.emit(1)
+
+    qtbot.waitUntil(
+        lambda: bool(finished) or bool(cancelled),
+        timeout=2500,
+    )
+    viewport.removeEventFilter(counter)
+    assert cancelled == [], cancelled
+    assert finished
+    assert started
+    assert not controller.is_active()
+    assert controller.image_bytes() == 0
+    assert window.view_manager.active == 1
+    # Overlay frames must not drive a 60 Hz GraphicsView replay.  A few
+    # natural/quality paints during the handoff are expected.
+    assert len(under_paints) <= 8, len(under_paints)

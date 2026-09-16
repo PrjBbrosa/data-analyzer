@@ -25,7 +25,7 @@ DURATION_MS = {
     "collapse_collapse": 140,
     "recent_enter": 140,
     "page_enter": 140,
-    "page_transition": 300,
+    "page_transition": 240,
     "selection_navigation": 320,
     "selection_control": 300,
 }

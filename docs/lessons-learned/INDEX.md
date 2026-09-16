@@ -250,6 +250,7 @@ lesson by default.
 | [Cursor geometry acceptance must inspect the painted document](cursor-layout-tests-must-use-painted-document.md) | Cursor rich-text layout, prototype-to-Qt implementation, or reports that aligned values are clipped. | See lesson |
 | [Fractional Nice Steps Need Label Precision Independent Of Step Selection](fractional-nice-step-label-precision.md) | Formatting explicit 2.5-family ticks or changing common linear axis labels. | See lesson |
 | [Candidate Metadata Matches Qt Storage](pyqt-ui/2026-09-16-candidate-metadata-matches-qt-storage.md) | QComboBox candidate no-op comparisons with None, empty labels, or QVariant values. | `tests/ui/test_searchable_combo.py` |
+| [Overlay Paint Is Not Content Invalidation](overlay-paint-is-not-content-invalidation.md) | A translucent Qt overlay composites over a live chart, or a page-transition / cover widget watches the target's `QEvent.Paint`. | See lesson |
 
 ## Selection Rules
 

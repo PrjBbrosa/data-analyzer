@@ -171,6 +171,7 @@ class PageTransitionController(QObject):
         # not the policy that makes a covered chart safe to operate.
         self._target_ready = False
         self._input_targets = ()
+        self._frozen_input_targets = []
         self._input_target_destroyed_slots = []
         self._application_filter_installed = False
         self._generation = 0
@@ -349,6 +350,7 @@ class PageTransitionController(QObject):
             self.cancel("departure-empty")
             return False
         self._driver.stop_and_keep()
+        self._thaw_input_target_updates()
         self._clear_input_targets()
         self._generation += 1
         self._target_ack_watchdog.stop()
@@ -424,6 +426,10 @@ class PageTransitionController(QObject):
         self._target_ack_watchdog.stop()
         self._target_ack_watchdog_token = None
         self._target_ready = True
+        # The admitted target has already painted.  Overlay frames are the
+        # same presentation, so further GraphicsView replays are duplicate
+        # work; quality/update requests stay queued until this cover lifts.
+        QTimer.singleShot(0, self._freeze_input_target_updates)
         self._driver.snap(0.0)
         self._driver.go(
             1.0, duration_ms=duration_ms("page_transition", self._policy),
@@ -445,6 +451,7 @@ class PageTransitionController(QObject):
         self._remove_application_filter()
         self._overlay.hide()
         self._overlay.clear_frames()
+        self._thaw_input_target_updates()
         if had_session:
             self.transition_cancelled.emit(str(reason))
 
@@ -463,9 +470,12 @@ class PageTransitionController(QObject):
                     self.cancel("covered-chart-input-ready")
                     return False
             elif event.type() in self._input_invalidation_events():
-                if event.type() != QEvent.Paint or self._target_ready:
-                    self.cancel("target-surface-invalidated")
-                    return False
+                # Ordinary expose/paint is not semantic invalidation: the
+                # overlay's own frames and later quality paints must be
+                # allowed to reach the already-admitted target.  Content
+                # replacement is signalled by the canvas owner.
+                self.cancel("target-surface-invalidated")
+                return False
         if watched is self._host:
             kind = event.type()
             if kind in self._host_invalidation_events():
@@ -496,6 +506,7 @@ class PageTransitionController(QObject):
             self._remove_application_filter()
             self._overlay.hide()
             self._overlay.clear_frames()
+            self._thaw_input_target_updates()
             self.transition_finished.emit(token)
 
     def _on_target_ack_watchdog_timeout(self) -> None:
@@ -531,7 +542,6 @@ class PageTransitionController(QObject):
             QEvent.Hide,
             QEvent.Close,
             QEvent.ParentChange,
-            QEvent.Paint,
         }
         dpr_change = getattr(QEvent, "DevicePixelRatioChange", None)
         if dpr_change is not None:
@@ -592,6 +602,33 @@ class PageTransitionController(QObject):
                 pass
         self._input_target_destroyed_slots.clear()
         self._input_targets = ()
+
+    def _freeze_input_target_updates(self) -> None:
+        """Drop duplicate exposes of the already-admitted live target.
+
+        Overlay opacity changes are presentation-only.  They must not replay
+        curve painting.  Queued quality ``update()`` calls resume on thaw.
+        """
+        if not self._target_ready or self._source_token is None:
+            return
+        self._thaw_input_target_updates()
+        frozen = []
+        for widget in self._input_targets:
+            try:
+                if widget.updatesEnabled():
+                    widget.setUpdatesEnabled(False)
+                    frozen.append(widget)
+            except RuntimeError:
+                continue
+        self._frozen_input_targets = frozen
+
+    def _thaw_input_target_updates(self) -> None:
+        for widget in self._frozen_input_targets:
+            try:
+                widget.setUpdatesEnabled(True)
+            except RuntimeError:
+                pass
+        self._frozen_input_targets = []
 
     def _on_input_target_destroyed(self, *_args) -> None:
         if self._source_token is not None:

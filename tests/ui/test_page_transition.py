@@ -85,12 +85,13 @@ def test_transition_is_off_by_default_and_retains_no_frames(qtbot):
     assert controller.image_bytes() == 0
 
 
-def test_target_ack_starts_300ms_crossfade_and_finished_releases_frames(qtbot):
+def test_target_ack_starts_crossfade_and_finished_releases_frames(qtbot):
     controller = _controller(qtbot)
     source = _token("A")
     target = _token("B")
+    duration = duration_ms("page_transition", POLICY_LIGHT)
 
-    assert duration_ms("page_transition", POLICY_LIGHT) == 300
+    assert duration == 240
     assert controller.begin_departure(source, _frame("#204080"))
     assert controller.is_pending()
     assert controller.arm_target(target)
@@ -99,9 +100,9 @@ def test_target_ack_starts_300ms_crossfade_and_finished_releases_frames(qtbot):
     assert controller.image_bytes() == 2 * 240 * 160 * 4
     assert controller._overlay.testAttribute(Qt.WA_TransparentForMouseEvents)
 
-    controller._driver.clock().setCurrentTime(150)
+    controller._driver.clock().setCurrentTime(duration // 2)
     assert 0.0 < controller._overlay._progress < 1.0
-    controller._driver.clock().setCurrentTime(300)
+    controller._driver.clock().setCurrentTime(duration)
     qtbot.waitUntil(lambda: not controller.is_active())
 
     assert controller.image_bytes() == 0
@@ -167,7 +168,8 @@ def test_single_image_redirect_uses_the_visible_a_b_frame_before_fading_to_c(
     assert controller.begin_departure(source, _frame("#ff0000"))
     assert controller.arm_target(target_b)
     assert controller.accept_target(target_b)
-    controller._driver.clock().setCurrentTime(150)
+    duration = duration_ms("page_transition", POLICY_LIGHT)
+    controller._driver.clock().setCurrentTime(duration // 2)
     visible_before_redirect = host.grab().toImage().pixelColor(120, 80)
 
     assert controller.begin_departure(
@@ -180,7 +182,7 @@ def test_single_image_redirect_uses_the_visible_a_b_frame_before_fading_to_c(
     QApplication.processEvents()
     assert controller.arm_target(target_c)
     assert controller.accept_target(target_c)
-    controller._driver.clock().setCurrentTime(300)
+    controller._driver.clock().setCurrentTime(duration)
     qtbot.waitUntil(lambda: not controller.is_active())
     final = host.grab().toImage().pixelColor(120, 80)
     assert final == QColor("#00a040")
@@ -207,7 +209,9 @@ def test_rapid_a_b_c_keeps_two_endpoint_frames_and_cancel_releases_them(qtbot):
     assert controller.begin_departure(_token("A"), _frame("#204080"))
     assert controller.arm_target(_token("B"))
     assert controller.accept_target(_token("B"), _frame("#d08020"))
-    controller._driver.clock().setCurrentTime(150)
+    controller._driver.clock().setCurrentTime(
+        duration_ms("page_transition", POLICY_LIGHT) // 2,
+    )
 
     # A new navigation samples only the displayed blend, then replaces B.
     assert controller.begin_departure(_token("B"), _frame("#d08020"))
@@ -277,3 +281,89 @@ def test_local_source_endpoint_is_not_reused_after_a_redirect_blend(qtbot):
 
     assert controller.begin_departure(_token("B"), _frame("#d08020"))
     assert controller.local_source_endpoint("time", "B").isNull()
+
+
+class _LiveInputSurface(_InputSurface):
+    """A real QWidget hit surface that also paints, like a GraphicsView viewport."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.paints = 0
+        self.color = QColor("#20a060")
+
+    def paintEvent(self, event):  # noqa: N802 - Qt callback spelling
+        self.paints += 1
+        painter = QPainter(self)
+        try:
+            painter.fillRect(self.rect(), self.color)
+        finally:
+            painter.end()
+
+
+def test_ordinary_ready_paint_does_not_cancel_live_fade(qtbot):
+    """A natural expose after target-ready must not be treated as invalidation.
+
+    Production watches the real canvas/viewport QWidget.  Existing QObject
+    fences never receive ``QEvent.Paint``, so clock-jump tests cannot catch
+    this path.  Do not skip to the token duration before the expose.
+    """
+    controller = _controller(qtbot)
+    surface = _LiveInputSurface(controller._host)
+    surface.setGeometry(controller._host.rect())
+    surface.show()
+    qtbot.waitExposed(surface)
+    source = _token("A")
+    target = _token("B")
+    cancelled = []
+    finished = []
+    controller.transition_cancelled.connect(cancelled.append)
+    controller.transition_finished.connect(finished.append)
+
+    assert controller.begin_departure(source, _frame("#204080"))
+    assert controller.arm_target(target)
+    assert controller.watch_input_targets(target, (surface,))
+    assert controller.accept_target(target)
+    assert controller.is_active()
+
+    surface.update()
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert controller.is_active()
+    assert cancelled == []
+    assert controller._overlay._progress < 1.0
+
+    qtbot.waitUntil(lambda: not controller.is_active(), timeout=1500)
+    assert cancelled == []
+    assert finished
+    assert controller.image_bytes() == 0
+
+
+def test_host_close_cancels_ready_fade_and_releases_frames(qtbot):
+    controller = _controller(qtbot)
+    cancelled = []
+    controller.transition_cancelled.connect(cancelled.append)
+    assert controller.begin_departure(_token("A"), _frame("#204080"))
+    assert controller.arm_target(_token("B"))
+    assert controller.accept_target(_token("B"), _frame("#d08020"))
+    assert controller.is_active()
+
+    controller._host.close()
+    qtbot.waitUntil(lambda: controller.image_bytes() == 0)
+
+    assert "host-geometry-or-lifecycle" in cancelled
+    assert not controller.is_active()
+
+
+def test_missing_natural_ack_times_out_without_starting_a_fade(qtbot):
+    controller = _controller(qtbot)
+    cancelled = []
+    controller.transition_cancelled.connect(cancelled.append)
+    target = _token("B")
+    assert controller.begin_departure(_token("A"), _frame("#204080"))
+    assert controller.arm_target(target)
+    controller._target_ack_watchdog.setInterval(20)
+    assert controller.watch_target_ack(target)
+    qtbot.waitUntil(lambda: controller.image_bytes() == 0, timeout=1000)
+    assert cancelled == ["target-paint-timeout"]
+    assert not controller.is_active()
