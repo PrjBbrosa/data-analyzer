@@ -120,6 +120,7 @@ class ChartStack(QWidget):
         self._page_transition_ready_canvases = ()
         self._page_transition_ready_acks = set()
         self._page_transition_ready_slots = []
+        self._page_transition_content_slots = []
         self._page_transition.transition_finished.connect(
             self._clear_page_transition_ready_fence,
         )
@@ -1263,12 +1264,15 @@ class ChartStack(QWidget):
         target = self._page_transition_target
         if target is not None and target.section != mode:
             self.cancel_page_transition("target-section-replaced")
+            target = None
         self.stack.setCurrentIndex(idx)
         self.stats_strip.setVisible(_STATS_STRIP_ENABLED and mode == 'time')
         bar = getattr(self, '_view_tabbar', None)
         if bar is not None:
             bar.setVisible(mode == 'time')
         self._time_bottom_dock.setVisible(mode == 'time')
+        if target is not None and target.section == mode:
+            self._constrain_page_transition_overlay_to_plot_surface()
         self.mode_changed.emit(mode)
         self._sync_cursor_pill_to_mode(mode)
 
@@ -1289,9 +1293,10 @@ class ChartStack(QWidget):
     def set_page_transition_enabled_sections(self, sections) -> None:
         """Select product paths with completed capture/paint admission.
 
-        Motion policy alone is not a blanket feature switch: each section
-        needs its own exposed-machine cost evidence.  Disabled sections retain
-        their existing direct restore path with no endpoint capture.
+        Motion policy alone is not a blanket feature switch. Disabled
+        sections retain their existing direct restore path with no endpoint
+        capture. Split, programmatic restore, and uncomputed targets stay
+        terminal even when a section is listed here.
         """
         self._page_transition_enabled_sections = frozenset(
             str(section) for section in (sections or ())
@@ -1321,8 +1326,12 @@ class ChartStack(QWidget):
             or str(target_section) not in self._page_transition_enabled_sections
         ):
             return None
+        overlay_rect = self.page_transition_plot_surface_rect()
         self._clear_page_transition_ready_fence()
-        source = self._page_transition.capture_local_endpoint(self.stack)
+        source = self._crop_page_transition_pixmap(
+            self._page_transition.capture_local_endpoint(self.stack),
+            overlay_rect,
+        )
         token = self._page_transition.begin_transition(
             source_section=source_section,
             source_view_id=source_view_id,
@@ -1330,9 +1339,55 @@ class ChartStack(QWidget):
             target_view_id=target_view_id,
             source_pixmap=source,
             pane_signature=pane_signature,
+            overlay_rect=overlay_rect,
         )
         self._page_transition_target = token
         return token
+
+    def page_transition_plot_surface(self) -> QWidget:
+        """Visible plot surface of the current page, excluding View-tab chrome."""
+        mode = self.current_mode()
+        if mode == "time":
+            return self._time_split
+        page = {
+            "fft": self.page_fft,
+            "fft_time": self.page_fft_time,
+            "frf": self.page_frf,
+            "order": self.page_order,
+        }.get(mode)
+        split = getattr(page, "_split", None)
+        if isinstance(split, QWidget):
+            return split
+        return self.stack
+
+    def page_transition_plot_surface_rect(self, surface: QWidget | None = None) -> QRect:
+        """Plot-surface rectangle in stacked-host coordinates."""
+        widget = surface if surface is not None else self.page_transition_plot_surface()
+        origin = widget.mapTo(self.stack, QPoint(0, 0))
+        return QRect(origin, widget.size()).intersected(self.stack.rect())
+
+    def _crop_page_transition_pixmap(self, pixmap: QPixmap, rect: QRect) -> QPixmap:
+        if pixmap.isNull() or rect.width() <= 0 or rect.height() <= 0:
+            return QPixmap()
+        dpr = max(1.0, float(pixmap.devicePixelRatioF()))
+        physical = QRect(
+            int(round(rect.x() * dpr)),
+            int(round(rect.y() * dpr)),
+            int(round(rect.width() * dpr)),
+            int(round(rect.height() * dpr)),
+        ).intersected(pixmap.rect())
+        if physical.width() <= 0 or physical.height() <= 0:
+            return QPixmap()
+        cropped = pixmap.copy(physical)
+        cropped.setDevicePixelRatio(dpr)
+        return cropped
+
+    def _constrain_page_transition_overlay_to_plot_surface(self) -> None:
+        if self._page_transition_target is None:
+            return
+        self._page_transition.constrain_overlay_to(
+            self.page_transition_plot_surface_rect(),
+        )
 
     def request_page_transition_target(
         self,
@@ -1350,9 +1405,17 @@ class ChartStack(QWidget):
             self._page_transition.cancel("target-has-no-canvas")
             return False
         self._clear_page_transition_ready_fence(keep_target=True)
-        real_input_targets = tuple(
-            canvas for canvas in unique if isinstance(canvas, QWidget)
-        )
+        self._clear_page_transition_content_watch()
+        real_input_targets = []
+        for canvas in unique:
+            extra = getattr(canvas, "page_transition_input_widgets", None)
+            widgets = extra() if callable(extra) else (
+                (canvas,) if isinstance(canvas, QWidget) else ()
+            )
+            for widget in widgets or ():
+                if isinstance(widget, QWidget) and widget not in real_input_targets:
+                    real_input_targets.append(widget)
+        real_input_targets = tuple(real_input_targets)
         if real_input_targets and not self._page_transition.watch_input_targets(
             token, real_input_targets,
         ):
@@ -1366,14 +1429,25 @@ class ChartStack(QWidget):
             if signal is None or not callable(request):
                 self._page_transition.cancel("target-has-no-paint-fence")
                 return False
+            content_signal = getattr(
+                canvas, "presentation_content_invalidated", None,
+            )
+            if content_signal is None:
+                self._page_transition.cancel("target-has-no-content-fence")
+                return False
 
-            def _ack(request_id, *, expected=token, source=canvas):
-                self._on_page_transition_target_painted(
-                    expected, source, request_id,
-                )
-
-            signal.connect(_ack)
-            self._page_transition_ready_slots.append((signal, _ack))
+            ack_slot = partial(
+                self._on_page_transition_target_painted, token, canvas,
+            )
+            signal.connect(ack_slot)
+            self._page_transition_ready_slots.append((signal, ack_slot))
+            invalidate_slot = partial(
+                self._on_page_transition_content_invalidated, token,
+            )
+            content_signal.connect(invalidate_slot)
+            self._page_transition_content_slots.append(
+                (content_signal, invalidate_slot),
+            )
             if request(token) is not True:
                 self._page_transition.cancel("target-paint-not-requested")
                 return False
@@ -1431,10 +1505,12 @@ class ChartStack(QWidget):
             return None
         try:
             origin = canvas.mapTo(self.stack, QPoint(0, 0))
+            capture_origin = self._page_transition._overlay.pos()
+            relative = origin - capture_origin
             dpr = max(1.0, float(source.devicePixelRatioF()))
             physical = QRect(
-                int(round(origin.x() * dpr)),
-                int(round(origin.y() * dpr)),
+                int(round(relative.x() * dpr)),
+                int(round(relative.y() * dpr)),
                 int(round(canvas.width() * dpr)),
                 int(round(canvas.height() * dpr)),
             )
@@ -1468,9 +1544,24 @@ class ChartStack(QWidget):
         # underneath the transparent overlay.  Fading the retained source out
         # over that live surface is visually the selected B crossfade, without
         # a second QWidget.grab() that can synchronously repaint the target.
+        # Content-invalidation watches stay armed: keep_target must not drop
+        # them, because a later rebuild happens after this paint fence is gone.
         self._clear_page_transition_ready_fence(keep_target=True)
         if not self._page_transition.accept_target(token):
             self._page_transition.cancel("target-paint-not-accepted")
+
+    def _on_page_transition_content_invalidated(self, token, *_args):
+        if token != self._page_transition_target:
+            return
+        self.cancel_page_transition("target-content-invalidated")
+
+    def _clear_page_transition_content_watch(self):
+        for signal, slot in self._page_transition_content_slots:
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._page_transition_content_slots.clear()
 
     def _clear_page_transition_ready_fence(self, *_args, keep_target=False):
         for signal, slot in self._page_transition_ready_slots:
@@ -1482,6 +1573,7 @@ class ChartStack(QWidget):
         self._page_transition_ready_canvases = ()
         self._page_transition_ready_acks = set()
         if not keep_target:
+            self._clear_page_transition_content_watch()
             self._page_transition_target = None
 
     def current_mode(self):

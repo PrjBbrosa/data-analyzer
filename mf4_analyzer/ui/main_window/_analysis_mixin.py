@@ -124,26 +124,116 @@ class AnalysisMixin:
         return True
 
     # -- tab-bar intent handlers (capture outgoing view first) ----------
+    def _analysis_page_transition_section_enabled(self, section) -> bool:
+        enabled = getattr(
+            self.chart_stack, "_page_transition_enabled_sections", frozenset(),
+        )
+        return str(section) in enabled
+
+    def _canvas_has_page_transition_protocol(self, canvas) -> bool:
+        """True when a managed canvas can arm paint-ack and content invalidation."""
+        return (
+            getattr(canvas, "presentation_paint_acknowledged", None) is not None
+            and callable(getattr(canvas, "request_presentation_paint_ack", None))
+            and getattr(canvas, "presentation_content_invalidated", None) is not None
+        )
+
+    def _section_has_page_transition_protocol(self, section) -> bool:
+        if section == "time":
+            return self._canvas_has_page_transition_protocol(
+                getattr(self, "canvas_time", None),
+            )
+        page = self._analysis_page(section)
+        if page is None or page.pane_count() < 1:
+            return False
+        return self._canvas_has_page_transition_protocol(page.pane_canvas(0))
+
+    def _fft_view_is_uncomputed(self, state) -> bool:
+        """True when the View has sources but no cached FFT result."""
+        panes = tuple(getattr(state, "panes", ()) or ())
+        if not panes or not tuple(getattr(panes[0], "sources", ()) or ()):
+            return False
+        return not self._fft_any_source_cached(state)
+
+    def _analysis_view_is_uncomputed(self, section, state) -> bool:
+        if section == "fft":
+            return self._fft_view_is_uncomputed(state)
+        if section == "frf":
+            return self._frf_view_is_uncomputed(state)
+        if section == "fft_time":
+            return self._fft_time_view_is_uncomputed(state)
+        if section == "order":
+            return self._order_view_is_uncomputed(state)
+        return False
+
+    def _should_begin_analysis_page_transition(self, section, idx) -> bool:
+        """Begin only for protocol-ready single-Pane analysis navigation.
+
+        An uncomputed target is not captured: cache miss stays
+        direct-terminal and must not compute for the animation.
+        """
+        if self.chart_stack.current_mode() != section:
+            return False
+        page = self._analysis_page(section)
+        if page is None or page.pane_count() != 1:
+            return False
+        canvas = page.pane_canvas(0)
+        if not self._canvas_has_page_transition_protocol(canvas):
+            return False
+        mgr = self.analysis_managers.get(section)
+        if mgr is None or not (0 <= idx < len(mgr.views)):
+            return False
+        target = mgr.get(idx)
+        if len(getattr(target, "panes", ()) or ()) != 1:
+            return False
+        if (
+            self._analysis_page_transition_section_enabled(section)
+            and self._analysis_view_is_uncomputed(section, target)
+        ):
+            return False
+        return True
+
+    def _request_analysis_page_transition_ready(self, section, state) -> bool:
+        """Arm paint-ack after an analysis restore/reveal transaction finished.
+
+        Independent of ``_render_analysis_view_from_cache`` facts sync.
+        FRF's three visible rows share one host ``_glw`` fence.  Heatmap
+        map + in-scene colorbar + visible slice share one host fence;
+        a collapsed slice is not an extra waiter.
+        """
+        if self.chart_stack.current_mode() != section:
+            return False
+        page = self._analysis_page(section)
+        if page is None or page.pane_count() != 1:
+            return False
+        canvas = page.pane_canvas(0)
+        if not self._canvas_has_page_transition_protocol(canvas):
+            return False
+        view_id = getattr(state, "view_id", None)
+        if not view_id:
+            return False
+        return self.chart_stack.request_page_transition_target_for(
+            section, view_id, (canvas,),
+        )
+
+    def _request_fft_page_transition_ready(self, state) -> bool:
+        """FFT retained-reveal / mode-entry arm; same analysis paint fence."""
+        return self._request_analysis_page_transition_ready("fft", state)
+
     def _on_analysis_switch(self, section, idx):
         mgr = self.analysis_managers[section]
         if idx == mgr.active:
             return
         self._capture_active_analysis_view(section)
-        if (
-            section == "fft"
-            and self.chart_stack.current_mode() == "fft"
-            and self.chart_stack.page_fft.pane_count() == 1
-            and 0 <= idx < len(mgr.views)
-            and len(getattr(mgr.get(idx), "panes", ())) == 1
-        ):
+        if self._should_begin_analysis_page_transition(section, idx):
             source = mgr.get(mgr.active)
             target = mgr.get(idx)
             self.chart_stack.begin_page_transition(
-                source_section="fft",
+                source_section=section,
                 source_view_id=source.view_id,
-                target_section="fft",
+                target_section=section,
                 target_view_id=target.view_id,
-                pane_signature=("fft", "single"),
+                pane_signature=(section, "single"),
             )
         mgr.set_active(idx)
 
@@ -268,6 +358,9 @@ class AnalysisMixin:
         mgr.delete_view(idx)
 
     def _forget_analysis_view(self, section, view_id, pane_count=1):
+        self.chart_stack.invalidate_page_transition_identity(
+            section, view_id, reason="analysis-view-deleted",
+        )
         self._analysis_restore_pending.discard((section, view_id))
         self._drop_analysis_view_pins(section, view_id)
         ctrl = getattr(getattr(self, "_analysis_context", None), "time_range", None)
@@ -841,6 +934,10 @@ class AnalysisMixin:
         # facts.  ``render=False`` and a deferred restore do not, so they keep
         # this outer sync as their one owner.  This is transaction-local: no
         # prepared navigator/inspector data survives the call.
+        #
+        # The facts bool is *not* paint-ready.  It only says whether this
+        # render already synced Inspector effective facts.  Page-transition
+        # arming is a separate presentation-complete notification.
         facts_synced_by_render = False
         if render:
             facts_synced_by_render = bool(
@@ -848,14 +945,8 @@ class AnalysisMixin:
             )
         if not facts_synced_by_render:
             self._sync_section_effective_facts(section, state)
-        elif (
-            section == "fft"
-            and self.chart_stack.current_mode() == "fft"
-            and page.pane_count() == 1
-        ):
-            self.chart_stack.request_page_transition_target_for(
-                "fft", state.view_id, (page.pane_canvas(0),),
-            )
+        else:
+            self._request_analysis_page_transition_ready(section, state)
 
     def _project_analysis_attachments(self, section, state):
         """Project one analysis View's file range onto the shared navigator."""

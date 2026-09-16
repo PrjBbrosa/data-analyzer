@@ -23,6 +23,11 @@ from ...ui_kit.motion import (
 )
 
 
+# Production user-navigation admission. Split, programmatic restore, and
+# uncomputed cache-miss targets stay on the direct-terminal path.
+PAGE_TRANSITION_ENABLED_SECTIONS = ("time", "fft", "fft_time", "frf", "order")
+
+
 @dataclass(frozen=True)
 class PresentationToken:
     """The non-persistent identity and geometry of one presentation request."""
@@ -280,13 +285,20 @@ class PageTransitionController(QObject):
         target_view_id: str,
         source_pixmap: QPixmap | None,
         pane_signature: tuple = (),
+        overlay_rect: QRect | None = None,
     ) -> PresentationToken | None:
         """Begin one request and return the exact token a target must ack."""
         generation = self._generation + 1
+        host_rect = QRect(self._host.rect())
+        overlay = (
+            QRect(overlay_rect) if overlay_rect is not None else QRect(host_rect)
+        )
+        if overlay.width() <= 0 or overlay.height() <= 0:
+            overlay = QRect(host_rect)
         common = {
             "request_generation": generation,
             "host_epoch": id(self._host),
-            "rect": self._host.rect(),
+            "rect": host_rect,
             "device_pixel_ratio": float(self._host.devicePixelRatioF()),
             "pane_signature": tuple(pane_signature),
         }
@@ -296,7 +308,9 @@ class PageTransitionController(QObject):
         target = PresentationToken(
             section=str(target_section), view_id=str(target_view_id), **common,
         )
-        if not self.begin_departure(source, source_pixmap):
+        if not self.begin_departure(
+            source, source_pixmap, overlay_rect=overlay,
+        ):
             return None
         if self.arm_target(target):
             return target
@@ -317,7 +331,13 @@ class PageTransitionController(QObject):
         self._target_ack_watchdog.start()
         return True
 
-    def begin_departure(self, token: PresentationToken, pixmap: QPixmap) -> bool:
+    def begin_departure(
+        self,
+        token: PresentationToken,
+        pixmap: QPixmap,
+        *,
+        overlay_rect: QRect | None = None,
+    ) -> bool:
         """Hold a captured outgoing endpoint while the target restores."""
         if not self._policy.interpolates():
             self.cancel("departure-not-eligible")
@@ -360,11 +380,55 @@ class PageTransitionController(QObject):
         self._target_token = None
         self._target_ready = False
         self._install_application_filter()
-        self._overlay.setGeometry(token.rect)
+        geom = QRect(overlay_rect) if overlay_rect is not None else QRect(token.rect)
+        if geom.width() <= 0 or geom.height() <= 0:
+            geom = QRect(token.rect)
+        self._overlay.setGeometry(geom)
         self._overlay.set_frames(source)
         self._overlay.show()
         self._overlay.raise_()
         self.transition_started.emit(token)
+        return True
+
+    def constrain_overlay_to(self, rect: QRect) -> bool:
+        """Crop the held source to a host-local subset without scaling.
+
+        Cross-section chrome (View tabs, bottom docks) can sit inside the
+        stacked host.  The cover must not stretch old pixels to a new size.
+        """
+        if self._source_token is None:
+            return False
+        current = QRect(self._overlay.geometry())
+        clipped = current.intersected(QRect(rect))
+        if clipped.width() <= 0 or clipped.height() <= 0:
+            self.cancel("overlay-rect-empty")
+            return False
+        if clipped == current:
+            return True
+        source = self._overlay._source
+        if source.isNull():
+            self.cancel("overlay-source-empty")
+            return False
+        dpr = max(1.0, float(source.devicePixelRatioF()))
+        physical = QRect(
+            int(round((clipped.x() - current.x()) * dpr)),
+            int(round((clipped.y() - current.y()) * dpr)),
+            int(round(clipped.width() * dpr)),
+            int(round(clipped.height() * dpr)),
+        ).intersected(source.rect())
+        if physical.width() <= 0 or physical.height() <= 0:
+            self.cancel("overlay-crop-empty")
+            return False
+        cropped = source.copy(physical)
+        cropped.setDevicePixelRatio(dpr)
+        held_target = self._overlay._target
+        if held_target.isNull():
+            self._overlay.set_frames(cropped)
+        else:
+            target_crop = held_target.copy(physical)
+            target_crop.setDevicePixelRatio(dpr)
+            self._overlay.set_frames(cropped, target_crop)
+        self._overlay.setGeometry(clipped)
         return True
 
     def arm_target(self, token: PresentationToken) -> bool:
@@ -417,7 +481,8 @@ class PageTransitionController(QObject):
         if (
             not self._policy.interpolates()
             or token != self._target_token
-            or token.rect != self._overlay.geometry()
+            or token.rect != self._host.rect()
+            or not self._overlay.isVisible()
             or self.is_active()
         ):
             return False

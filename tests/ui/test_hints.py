@@ -287,6 +287,19 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
     assert nxt is None or nxt.id != "chart.custom_action_slot"
 
 
+def test_view_fade_hint_covers_chart_modes_without_claiming_every_scene():
+    hint = next(item for item in hints.all_hints() if item.id == "time.view_fade")
+    assert hint.modes == frozenset({"time", "fft", "fft_time", "frf", "order"})
+    assert hint.surface == "discovery"
+    assert "单图" in hint.text
+    assert "淡入" in hint.text
+    assert "所有" not in hint.text
+    assert "五个" not in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+    for mode in hint.modes:
+        assert hints._matches_state(hint, HintState(mode=mode)), mode
+
+
 def test_view_history_hint_migrates_camera_off_ctrl_z():
     hint = next(h for h in hints.all_hints() if h.id == "view.history")
     back = hints.NAV_SHORTCUTS["back"]

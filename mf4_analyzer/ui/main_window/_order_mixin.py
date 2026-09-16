@@ -262,6 +262,40 @@ class OrderMixin:
             self._order_compute_cache_params(p, rpm_source, time_range),
         )
 
+    def _order_view_is_uncomputed(self, state) -> bool:
+        """True when the View has a signal but is missing RPM or a cache hit."""
+        panes = tuple(getattr(state, "panes", ()) or ())
+        if not panes:
+            return False
+        pane = panes[0]
+        sources = tuple(getattr(pane, "sources", ()) or ())
+        if not sources:
+            return False
+        params = self._compute_params_overlay_state("order", state)
+        rpm_mode = params.get("rpm_mode")
+        if rpm_mode is None:
+            rpm_mode = self.inspector.order_ctx.rpm_mode()
+        if rpm_mode != "manual" and not getattr(pane, "rpm_source", None):
+            return True
+        fid, ch = sources[0]
+        key = self._analysis_cache_key(
+            "order",
+            fid,
+            ch,
+            rpm_source=pane.rpm_source,
+            pane_idx=0,
+        )
+        return self.analysis_caches["order"].get(key) is None
+
+    def _cancel_order_page_transition_cover(self, view_id=None) -> None:
+        """Drop a pending Order cover before a live result replaces it."""
+        token = getattr(self.chart_stack, "_page_transition_target", None)
+        if token is None or token.section != "order":
+            return
+        if view_id is not None and str(token.view_id) != str(view_id):
+            return
+        self.chart_stack.cancel_page_transition("order-live-result")
+
     def _order_effective_params_for_source(self, p, fid, ch, rpm_source, time_range):
         t, sig = self._order_sig_for((fid, ch), time_range=time_range)
         if sig is None or len(sig) < 100:
@@ -806,6 +840,7 @@ class OrderMixin:
         # page draw when the user has already switched away.
         if not self._analysis_ctx_targets_active_view('order', ctx):
             return
+        self._cancel_order_page_transition_cover(ctx.get('view_id'))
         # V7b: render onto the SPECIFIC pane this job was computed for.
         # ``_render_order_time`` (preset + status + toast side-effects) runs
         # only for the primary pane (0); compare panes get a pure canvas draw.

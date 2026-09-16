@@ -4222,3 +4222,169 @@ def test_heatmap_manual_signal_reports_only_changed_axes(qtbot, qapp):
     qapp.processEvents()
     c._plot.vb.sigRangeChangedManually.emit([True, True])
     assert len(spy) == 1
+
+
+def _shown_heatmap(qtbot, *, with_slice=True):
+    canvas = PgHeatmapCanvas(with_slice=with_slice)
+    qtbot.addWidget(canvas)
+    canvas.resize(640, 480)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    qtbot.wait(20)
+    return canvas
+
+
+def _order_matrix():
+    return np.linspace(0.0, 1.0, 32).reshape(8, 4)
+
+
+@pytest.mark.parametrize("path", ("plot_result", "plot_or_update", "empty"))
+def test_presentation_paint_acknowledges_one_natural_paint_for_heatmap_path(
+    qtbot, path,
+):
+    canvas = _shown_heatmap(qtbot, with_slice=True)
+    request_id = f"{path}-paint"
+    if path == "plot_result":
+        canvas.plot_result(_spec_result(), z_auto=True)
+        assert canvas.has_result()
+        assert canvas._result is not None
+    elif path == "plot_or_update":
+        canvas.set_slice_direction("y")
+        canvas.plot_or_update_heatmap(
+            _order_matrix(), (0.0, 1.0), (0.0, 8.0),
+            x_label="Time (s)", y_label="Order",
+        )
+        canvas._seed_slice()
+        assert canvas.has_result()
+        assert canvas._result is None
+    else:
+        canvas.full_reset()
+        canvas.show_empty_hint("点击『计算』生成")
+        assert canvas.has_result() is False
+
+    received = []
+    canvas.presentation_paint_acknowledged.connect(received.append)
+    with qtbot.waitSignal(canvas.presentation_paint_acknowledged, timeout=1000) as ack:
+        assert canvas.request_presentation_paint_ack(request_id) is True
+        assert received == []
+
+    assert ack.args == [request_id]
+    assert received == [request_id]
+    assert canvas._presentation_paint_ack_request_id is None
+
+
+def test_heatmap_presentation_paint_ack_replaces_stale_request_and_is_one_shot(qtbot):
+    canvas = _shown_heatmap(qtbot, with_slice=True)
+    received = []
+    canvas.presentation_paint_acknowledged.connect(received.append)
+
+    with qtbot.waitSignal(canvas.presentation_paint_acknowledged, timeout=1000) as ack:
+        canvas.request_presentation_paint_ack("stale")
+        canvas.request_presentation_paint_ack("current")
+        assert received == []
+
+    assert ack.args == ["current"]
+    assert received == ["current"]
+    assert canvas._presentation_paint_ack_request_id is None
+
+
+@pytest.mark.parametrize("change", ("hide", "resize", "clear"))
+def test_heatmap_presentation_paint_ack_is_cancelled_by_visibility_or_geometry(
+    qtbot, change,
+):
+    canvas = _shown_heatmap(qtbot, with_slice=True)
+    with qtbot.assertNotEmitted(canvas.presentation_paint_acknowledged, wait=50):
+        canvas.request_presentation_paint_ack(change)
+        if change == "hide":
+            canvas.hide()
+        elif change == "resize":
+            canvas.resize(720, 500)
+        else:
+            canvas.full_reset()
+        assert canvas._presentation_paint_ack_request_id is None
+        assert canvas._presentation_paint_ack_token() is None
+
+
+def test_semantic_heatmap_mutations_emit_presentation_content_invalidated(qtbot):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _HeatmapMappable
+
+    fft_canvas = _shown_heatmap(qtbot, with_slice=True)
+    fft_seen = []
+
+    def _mark_fft():
+        fft_seen.append("fft_time")
+
+    fft_canvas.presentation_content_invalidated.connect(_mark_fft)
+    fft_canvas.plot_result(_spec_result(), z_auto=True)
+    assert fft_seen, "fft_time: plot_result must emit content at mutation start"
+    fft_canvas.set_slice_direction("y")
+    fft_canvas._select_slice_at(0.5, 100.0)
+    fft_canvas._set_bottom_collapsed(True)
+    assert not fft_canvas._slice_panel.isVisible()
+    fft_canvas._set_bottom_collapsed(False)
+    _HeatmapMappable(fft_canvas).set_cmap("viridis")
+    _HeatmapMappable(fft_canvas).set_clim(-50.0, 0.0)
+    before_reset = len(fft_seen)
+    fft_canvas.full_reset()
+    assert len(fft_seen) > before_reset, "fft_time: full_reset must emit content"
+
+    order_canvas = _shown_heatmap(qtbot, with_slice=True)
+    order_canvas.set_slice_direction("y")
+    order_seen = []
+
+    def _mark_order():
+        order_seen.append("order")
+
+    order_canvas.presentation_content_invalidated.connect(_mark_order)
+    order_canvas.plot_or_update_heatmap(
+        _order_matrix(), (0.0, 1.0), (0.0, 8.0),
+        x_label="Time (s)", y_label="Order",
+    )
+    assert order_seen, "order: plot_or_update_heatmap must emit even as the direct entry"
+    order_canvas._seed_slice()
+    order_canvas.set_slice_direction("x")
+    order_canvas.show_empty_hint("缺转速")
+    assert "order" in order_seen
+
+
+def test_ordinary_paint_ack_and_layout_or_levels_are_not_content_or_ready(qtbot):
+    canvas = _shown_heatmap(qtbot, with_slice=True)
+    canvas.plot_result(_spec_result(), z_auto=True)
+    seen = []
+
+    def _mark():
+        seen.append(True)
+
+    canvas.presentation_content_invalidated.connect(_mark)
+    with qtbot.assertNotEmitted(canvas.presentation_paint_acknowledged, wait=50):
+        canvas.layout_geometry_changed.emit()
+        canvas.levels_changed.emit(-20.0, 0.0)
+    with qtbot.waitSignal(canvas.presentation_paint_acknowledged, timeout=1000):
+        assert canvas.request_presentation_paint_ack("ack") is True
+    assert seen == []
+    canvas.update()
+    qtbot.wait(50)
+    canvas.resize(canvas.width() + 12, canvas.height())
+    qtbot.wait(50)
+    assert seen == []
+    assert canvas._presentation_paint_ack_request_id is None
+
+
+def test_collapsed_slice_is_not_an_extra_presentation_waiter(qtbot):
+    canvas = _shown_heatmap(qtbot, with_slice=True)
+    canvas.plot_result(_spec_result(), z_auto=True)
+    expanded = canvas._presentation_paint_ack_geometry_key()
+    canvas._set_bottom_collapsed(True)
+    collapsed = canvas._presentation_paint_ack_geometry_key()
+    assert expanded is not None and collapsed is not None
+    assert len(expanded[5]) == 2
+    assert len(collapsed[5]) == 1
+    assert canvas._slice_panel is not None and not canvas._slice_panel.isVisible()
+    widgets = canvas.page_transition_input_widgets()
+    assert canvas._slice_panel in widgets
+    received = []
+    canvas.presentation_paint_acknowledged.connect(received.append)
+    with qtbot.waitSignal(canvas.presentation_paint_acknowledged, timeout=1000):
+        assert canvas.request_presentation_paint_ack("collapsed") is True
+    assert received == ["collapsed"]
+    assert canvas._presentation_paint_ack_request_id is None

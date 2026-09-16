@@ -467,9 +467,9 @@ _HINTS = (
     ),
     Hint(
         id="time.view_fade",
-        text="单图切 View：新图就绪后淡入",
+        text="单图切 View：就绪后淡入",
         surface="discovery",
-        modes=frozenset({"time"}),
+        modes=frozenset({"time", "fft", "fft_time", "frf", "order"}),
         priority=39,
     ),
     Hint(

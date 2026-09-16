@@ -359,6 +359,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     # GraphicsView has naturally painted the requested final content.  This is
     # deliberately separate from retained Section reveal / AA settlement.
     presentation_paint_acknowledged = pyqtSignal(object)
+    # Semantic replacement of the admitted FFT target (spectra, time preview
+    # including stale, full_reset / explicit clear).  Ordinary expose, quality
+    # settle, AA, and layout_geometry_changed must not emit this.
+    presentation_content_invalidated = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -947,6 +951,14 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._presentation_paint_ack_pending = False
         self._presentation_paint_ack_request_id = None
         self._presentation_paint_ack_geometry = None
+
+    def _note_presentation_content_invalidated(self) -> None:
+        """Tell a covering page transition that this chart is no longer B.
+
+        Emit at semantic mutation start, before freeze / the next paint.
+        Ordinary expose/paint and quality/AA convergence must not call this.
+        """
+        self.presentation_content_invalidated.emit()
 
     def _on_presentation_paint_destroyed(self, *_args) -> None:
         """Destroyed is a lifecycle boundary, never a paint acknowledgement."""
@@ -1950,6 +1962,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             )
             for entry in entries
         ]
+        self._note_presentation_content_invalidated()
         self._invalidate_spectrum_display_generation()
         self.clear_empty_hint()
         self._hide_frequency_cursor_items()
@@ -2052,6 +2065,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         DIMS them and overlays a "结果已过期" marker, while the lower time row
         still updates live to the new selection. The next ``plot_spectra``
         restores the normal visual state."""
+        self._note_presentation_content_invalidated()
         self._cancel_section_reveal()
         self._cancel_presentation_paint_ack()
         self.clear_empty_hint()
@@ -2211,6 +2225,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._reframe_time_y_to_grid()
 
     def full_reset(self) -> None:
+        self._note_presentation_content_invalidated()
         self._invalidate_spectrum_display_generation()
         self._stop_aa_idle_timer()
         self._stop_discrete_aa_timer()

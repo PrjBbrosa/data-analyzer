@@ -441,6 +441,7 @@ class MainWindow(
         from PyQt5.QtCore import Qt
 
         from ..chart_stack import ChartStack
+        from ..chart_stack.page_transition import PAGE_TRANSITION_ENABLED_SECTIONS
         from ..file_navigator import FileNavigator
         from ..inspector import Inspector
         from ..toolbar import Toolbar
@@ -470,11 +471,12 @@ class MainWindow(
         self.splitter = splitter
         self.navigator = FileNavigator(self)
         self.chart_stack = ChartStack(self)
-        # M1 admission currently covers exposed Cocoa Time View switches only.
-        # FFT remains a direct restore until its own local endpoint benchmark
-        # and natural-paint evidence are recorded.
+        # Single-pane user navigation among the five chart sections. Split,
+        # programmatic restore, and uncomputed targets stay direct-terminal.
         self.chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
-        self.chart_stack.set_page_transition_enabled_sections(("time",))
+        self.chart_stack.set_page_transition_enabled_sections(
+            PAGE_TRANSITION_ENABLED_SECTIONS,
+        )
         self.chart_stack.set_source_label_resolver(self._cursor_fid_short_name)
         self.inspector = Inspector(self)
         splitter.addWidget(self.navigator)
@@ -1686,6 +1688,10 @@ class MainWindow(
         self._resolve_and_apply_db_reference('fft')
         signature = self._fft_render_signature()
         if signature == self._fft_last_render_sig:
+            # Retained reveal: the stacked canvas already shows this target.
+            # Do not re-run cache render for a page-transition; still notify
+            # presentation-complete so a matching token can arm paint-ack.
+            self._request_fft_page_transition_ready(state)
             return
         self._fft_last_render_sig = signature
         if self._fft_any_source_cached(state):
@@ -1697,6 +1703,7 @@ class MainWindow(
                 self._refresh_fft_time_preview(clear_spectrum=False)
             else:
                 self._refresh_fft_time_preview()
+        self._request_fft_page_transition_ready(state)
 
     def _fft_entry_from_cache(
         self, result, fid, ch, color, time_range=_INSPECTOR_TIME_RANGE
@@ -1927,6 +1934,7 @@ class MainWindow(
                 self._capture_focused_view()
             elif old_mode in self.analysis_managers:
                 self._capture_active_analysis_view(old_mode)
+        self._begin_cross_section_page_transition(old_mode, mode)
         if uv is not None and mode in source_modes:
             uv.note_source_mode(mode)
         if mode == "fft" and old_mode != mode:
@@ -2111,6 +2119,91 @@ class MainWindow(
         ):
             return
         self._plot_time_preserving_xlim(section_entry=True)
+        canvas = self.canvas_time
+        settle = getattr(canvas, "settle_view_restore", None)
+        if callable(settle):
+            settle()
+        self._request_time_section_page_transition_ready()
+
+    def _section_page_transition_view_id(self, section):
+        if section == "time":
+            resolved = self._focused_time_view_state()
+            if resolved is not None:
+                return resolved[1].view_id
+            idx = self.view_manager.active
+            if 0 <= idx < len(self.view_manager.views):
+                return self.view_manager.get(idx).view_id
+            return None
+        mgr = self.analysis_managers.get(section)
+        if mgr is None or not mgr.views:
+            return None
+        return mgr.get(mgr.active).view_id
+
+    def _should_begin_cross_section_page_transition(self, source_mode, target_mode) -> bool:
+        """User navigation between protocol-ready enabled sections; restore stays terminal."""
+        if source_mode == target_mode:
+            return False
+        if not self.files:
+            return False
+        if (
+            getattr(self, "_opening_project", False)
+            or getattr(self, "_restoring_project", False)
+            or self._project_dirty.close_teardown_started
+        ):
+            return False
+        if self.chart_stack.split_active():
+            return False
+        enabled = getattr(
+            self.chart_stack, "_page_transition_enabled_sections", frozenset(),
+        )
+        if source_mode not in enabled or target_mode not in enabled:
+            return False
+        if not self._section_has_page_transition_protocol(source_mode):
+            return False
+        if not self._section_has_page_transition_protocol(target_mode):
+            return False
+        for mode in (source_mode, target_mode):
+            if mode == "time":
+                continue
+            page = self._analysis_page(mode)
+            if page is None or page.pane_count() != 1:
+                return False
+        mgr = self.analysis_managers.get(target_mode)
+        if mgr is not None and mgr.views:
+            target_state = mgr.get(mgr.active)
+            if self._analysis_view_is_uncomputed(target_mode, target_state):
+                return False
+        return True
+
+    def _begin_cross_section_page_transition(self, source_mode, target_mode):
+        if not self._should_begin_cross_section_page_transition(
+            source_mode, target_mode,
+        ):
+            return None
+        source_view_id = self._section_page_transition_view_id(source_mode)
+        target_view_id = self._section_page_transition_view_id(target_mode)
+        if not source_view_id or not target_view_id:
+            return None
+        return self.chart_stack.begin_page_transition(
+            source_section=source_mode,
+            source_view_id=source_view_id,
+            target_section=target_mode,
+            target_view_id=target_view_id,
+            pane_signature=(source_mode, target_mode, "single"),
+        )
+
+    def _request_time_section_page_transition_ready(self) -> bool:
+        """Arm paint-ack after the deferred Time section-entry plot finished."""
+        if self.chart_stack.current_mode() != "time":
+            return False
+        if self.chart_stack.split_active():
+            return False
+        view_id = self._section_page_transition_view_id("time")
+        if not view_id:
+            return False
+        return self.chart_stack.request_page_transition_target_for(
+            "time", view_id, (self.canvas_time,),
+        )
 
     def _plot_time_preserving_xlim(self, *, section_entry=False):
         cur_xlim = self._safe_capture_primary_xlim()
@@ -5470,6 +5563,15 @@ class MainWindow(
                 return
         if holder is not None:
             holder.close_teardown_started = True
+
+        stack = getattr(self, "chart_stack", None)
+        if stack is not None:
+            try:
+                gone = sip.isdeleted(stack)
+            except (RuntimeError, TypeError):
+                gone = True
+            if not gone:
+                stack.cancel_page_transition("window-closing")
 
         batch = getattr(self, "_batch_sheet", None)
         if batch is not None:

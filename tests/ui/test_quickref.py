@@ -530,6 +530,18 @@ def test_catalog_channel_editor_create_and_param_help():
     assert "»" in time_views.sub
     assert "未显示" in time_views.sub
     assert "关闭其他" in time_views.sub or "全部 View" in time_views.sub
+    assert "单图" in time_views.sub
+    assert "淡入" in time_views.sub
+    assert "分屏" in time_views.sub
+    assert "直接到达终态" in time_views.sub
+    assert "所有场景" not in time_views.sub
+    assert "五个" not in time_views.sub
+    analysis_views = _row_by_desc("分析页 View")
+    assert "淡入" in analysis_views.sub
+    assert "分屏" in analysis_views.sub
+    assert "未计算" in analysis_views.sub
+    assert "直接到达终态" in analysis_views.sub
+    assert "所有场景" not in analysis_views.sub
     close_row = _row_by_desc("View 标签关闭")
     assert "色标" in close_row.sub
     assert "至少保留一个 View" in close_row.sub

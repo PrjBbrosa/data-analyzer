@@ -2534,6 +2534,9 @@ class ProjectIOMixin:
         fp.set_enabled(bool(payload.get("enabled", False)))
 
     def close_all(self, *, force=False):
+        stack = getattr(self, "chart_stack", None)
+        if stack is not None:
+            stack.cancel_page_transition("files-closed")
         health = getattr(self, "_project_restore_health", None)
         uv = getattr(self, "_ultraview", None)
         if not self.files:

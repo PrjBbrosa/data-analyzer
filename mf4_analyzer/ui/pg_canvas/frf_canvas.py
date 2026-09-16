@@ -178,6 +178,15 @@ class PgFrfCanvas(QWidget):
     # chart_stack.cards attach the reader-facing quality dot to an FRF card,
     # exactly as it already does for the time-domain and FFT canvases.
     quality_status_changed = pyqtSignal(object)
+    # A presentation transition may retire its cover only after this canvas'
+    # GraphicsView has naturally painted the requested final content.  This is
+    # deliberately separate from AA settlement and layout_geometry_changed.
+    presentation_paint_acknowledged = pyqtSignal(object)
+    # Semantic replacement of the admitted FRF target (set_result,
+    # set_display_params, clear / full_reset, set_state including empty /
+    # stale / error / progress).  Ordinary expose, quality settle, AA, and
+    # layout_geometry_changed must not emit this.
+    presentation_content_invalidated = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -262,6 +271,7 @@ class PgFrfCanvas(QWidget):
         self._discrete_aa_timer.setInterval(0)
         self._discrete_aa_timer.timeout.connect(self._enable_idle_quality)
         self.destroyed.connect(self._stop_aa_timers)
+        self.destroyed.connect(self._on_presentation_paint_destroyed)
         # Hysteresis state for the two AA legs (ink + drawn points). Both are
         # re-seeded whenever a new result lands, because a replacement result
         # changes the very geometry the previous verdict was about.
@@ -294,6 +304,10 @@ class PgFrfCanvas(QWidget):
                 "FRF canvas frame-paint timer not installed; the measured-AA-"
                 "frame backstop is inactive for this canvas",
             )
+        self._presentation_paint_ack_generation = 0
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
         self._threshold_line = pg.InfiniteLine(
             pos=_DEFAULT_DISPLAY["coherence_threshold"],
             angle=0,
@@ -759,6 +773,144 @@ class PgFrfCanvas(QWidget):
         self._emit_quality_status()
 
     # ------------------------------------------------------------------
+    # Natural-paint acknowledgement for local chart transitions.
+    # Same fence as PgLineCanvas: one GraphicsView paint, not layout.
+    # Magnitude / phase / coherence share ``_glw``; the ready set is this host.
+    # ------------------------------------------------------------------
+
+    def _cancel_presentation_paint_ack(self) -> None:
+        """Invalidate a pending presentation-paint acknowledgement."""
+        self._presentation_paint_ack_generation += 1
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
+
+    def _note_presentation_content_invalidated(self) -> None:
+        """Tell a covering page transition that this chart is no longer B.
+
+        Emit at semantic mutation start, before freeze / the next paint.
+        Ordinary expose/paint and quality/AA convergence must not call this.
+        """
+        self.presentation_content_invalidated.emit()
+
+    def _on_presentation_paint_destroyed(self, *_args) -> None:
+        """Destroyed is a lifecycle boundary, never a paint acknowledgement."""
+        self._cancel_presentation_paint_ack()
+
+    def _presentation_paint_ack_visible(self) -> bool:
+        """Whether the real GraphicsView viewport can naturally paint."""
+        try:
+            viewport = self._glw.viewport()
+            return bool(
+                viewport is not None
+                and self.isVisible()
+                and self._glw.isVisible()
+                and viewport.isVisible()
+            )
+        except RuntimeError:
+            return False
+
+    def _presentation_paint_ack_geometry_key(self):
+        """Geometry/DPR facts that must survive through one viewport paint."""
+        try:
+            viewport = self._glw.viewport()
+            if viewport is None or viewport.width() <= 0 or viewport.height() <= 0:
+                return None
+            dpr = (
+                float(self.devicePixelRatioF()),
+                float(self._glw.devicePixelRatioF()),
+                float(viewport.devicePixelRatioF()),
+            )
+            plots = []
+            for plot in self.plots:
+                rect = plot.vb.sceneBoundingRect()
+                x_range, y_range = plot.vb.viewRange()
+                plots.append((
+                    tuple(float(value) for value in rect.getRect()),
+                    tuple(float(value) for value in x_range),
+                    tuple(float(value) for value in y_range),
+                ))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        return (
+            self.width(), self.height(),
+            viewport.width(), viewport.height(),
+            dpr,
+            tuple(plots),
+        )
+
+    def request_presentation_paint_ack(self, request_id) -> bool:
+        """Request one acknowledgement after the next natural viewport paint.
+
+        Does not flush data, settle quality, run an event loop, or call
+        ``repaint()``.  ``update()`` only schedules the ordinary QWidget paint
+        whose completion is reported from the resident GraphicsView hook.
+        ``layout_geometry_changed`` is not a ready signal.
+        """
+        self._cancel_presentation_paint_ack()
+        host = getattr(self, "_plot_host", None)
+        reset = getattr(host, "reset_alignment", None)
+        if callable(reset):
+            reset()
+        # Magnitude/phase Y autorange is applied on the ViewBox, not on the
+        # next expose.  Capture the settled ranges so the first natural paint
+        # is not rejected as a geometry change.
+        for plot in self.plots:
+            try:
+                plot.vb.updateAutoRange()
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+        if not self._presentation_paint_ack_visible():
+            return False
+        geometry = self._presentation_paint_ack_geometry_key()
+        if geometry is None:
+            return False
+        self._presentation_paint_ack_pending = True
+        self._presentation_paint_ack_request_id = request_id
+        self._presentation_paint_ack_geometry = geometry
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._cancel_presentation_paint_ack()
+            return False
+        return True
+
+    def _presentation_paint_ack_token(self):
+        """Token sampled immediately before an actual GraphicsView paint."""
+        if not self._presentation_paint_ack_pending:
+            return None
+        if not self._presentation_paint_ack_visible():
+            self._cancel_presentation_paint_ack()
+            return None
+        geometry = self._presentation_paint_ack_geometry_key()
+        if geometry != self._presentation_paint_ack_geometry:
+            self._cancel_presentation_paint_ack()
+            return None
+        return (
+            self._presentation_paint_ack_generation,
+            self._presentation_paint_ack_request_id,
+            geometry,
+        )
+
+    def _presentation_paint_acked(self, token) -> None:
+        """Emit exactly once, after the sampled natural viewport paint."""
+        if token is None or not self._presentation_paint_ack_pending:
+            return
+        generation, request_id, geometry = token
+        if (
+            generation != self._presentation_paint_ack_generation
+            or not self._presentation_paint_ack_visible()
+            or geometry != self._presentation_paint_ack_geometry_key()
+            or geometry != self._presentation_paint_ack_geometry
+        ):
+            self._cancel_presentation_paint_ack()
+            return
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
+        self.presentation_paint_acknowledged.emit(request_id)
+
+    # ------------------------------------------------------------------
     # AA status (reader-facing traffic light). Shape mirrors
     # PgLineCanvas.quality_status so chart_stack.cards can consume both
     # without knowing which canvas it holds.
@@ -854,6 +1006,8 @@ class PgFrfCanvas(QWidget):
         token = str(state)
         if token not in _STATE_TEXT:
             raise ValueError(f"unknown FRF canvas state: {state!r}")
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         self._state = token
         text = _STATE_TEXT[token]
         if detail:
@@ -877,6 +1031,8 @@ class PgFrfCanvas(QWidget):
             raise ValueError("FRF result arrays must be one-dimensional")
         if not (frequencies.size == transfer.size == coherence.size):
             raise ValueError("FRF result arrays must have equal length")
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         # Point labels include panel values, so a new calculation must
         # re-snap Y. Intent stays; Qt items are a projection.
         self._drop_remark_projection()
@@ -900,6 +1056,8 @@ class PgFrfCanvas(QWidget):
         self.layout_geometry_changed.emit()
 
     def set_display_params(self, params) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         old_xlim = self.get_xlim()
         self._display_params.update(
             self._normalise_display_params(dict(params or {}))
@@ -1767,6 +1925,8 @@ class PgFrfCanvas(QWidget):
         )
 
     def clear(self) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         self.clear_remarks()
         self._result = None
         self._context = {}
@@ -1853,7 +2013,12 @@ class PgFrfCanvas(QWidget):
         super().showEvent(event)
         self._plot_host.schedule_alignment()
 
+    def hideEvent(self, event):
+        self._cancel_presentation_paint_ack()
+        super().hideEvent(event)
+
     def resizeEvent(self, event):
+        self._cancel_presentation_paint_ack()
         super().resizeEvent(event)
         self._plot_host.schedule_alignment()
 

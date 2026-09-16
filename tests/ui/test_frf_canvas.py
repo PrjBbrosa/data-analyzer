@@ -784,6 +784,153 @@ def test_frf_canvas_state_hints_and_full_reset(qtbot):
     assert canvas.state() == "empty"
 
 
+def _shown_frf_canvas(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 700)
+    canvas.show()
+    qtbot.wait(20)
+    return canvas
+
+
+@pytest.mark.parametrize("path", ("result", "empty", "stale"))
+def test_presentation_paint_acknowledges_one_natural_paint_for_each_frf_path(
+    qtbot, path,
+):
+    """The transition fence is independent from AA settle and result availability."""
+    canvas = _shown_frf_canvas(qtbot)
+    request_id = f"{path}-paint"
+    if path == "result":
+        canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+        assert canvas.has_result()
+    elif path == "empty":
+        canvas.full_reset()
+        assert canvas.has_result() is False
+        assert canvas.state() == "empty"
+    else:
+        canvas.set_state("stale")
+        assert canvas.state() == "stale"
+
+    received = []
+    canvas.presentation_paint_acknowledged.connect(received.append)
+    with qtbot.waitSignal(canvas.presentation_paint_acknowledged, timeout=1000) as ack:
+        assert canvas.request_presentation_paint_ack(request_id) is True
+        assert received == []
+
+    assert ack.args == [request_id]
+    assert received == [request_id]
+    assert canvas._presentation_paint_ack_request_id is None
+    assert canvas._glw is canvas._plot_host.widget
+    assert canvas.plots == (
+        canvas._plot_magnitude,
+        canvas._plot_phase,
+        canvas._plot_coherence,
+    )
+
+
+def test_presentation_paint_ack_replaces_stale_request_and_is_one_shot(qtbot):
+    canvas = _shown_frf_canvas(qtbot)
+    received = []
+    canvas.presentation_paint_acknowledged.connect(received.append)
+
+    with qtbot.waitSignal(canvas.presentation_paint_acknowledged, timeout=1000) as ack:
+        canvas.request_presentation_paint_ack("stale")
+        canvas.request_presentation_paint_ack("current")
+        assert received == []
+
+    assert ack.args == ["current"]
+    assert received == ["current"]
+    assert canvas._presentation_paint_ack_request_id is None
+
+
+@pytest.mark.parametrize("change", ("hide", "resize", "clear"))
+def test_presentation_paint_ack_is_cancelled_by_visibility_or_geometry_change(
+    qtbot, change,
+):
+    canvas = _shown_frf_canvas(qtbot)
+    with qtbot.assertNotEmitted(canvas.presentation_paint_acknowledged, wait=50):
+        canvas.request_presentation_paint_ack(change)
+        if change == "hide":
+            canvas.hide()
+        elif change == "resize":
+            canvas.resize(980, 700)
+        else:
+            canvas.full_reset()
+        assert canvas._presentation_paint_ack_request_id is None
+        assert canvas._presentation_paint_ack_token() is None
+
+
+@pytest.mark.parametrize("change", ("geometry", "dpr"))
+def test_presentation_paint_ack_rejects_geometry_or_dpr_change_before_paint(
+    qtbot, monkeypatch, change,
+):
+    canvas = _shown_frf_canvas(qtbot)
+    original = canvas._presentation_paint_ack_geometry_key()
+    assert original is not None
+    if change == "geometry":
+        changed = (original[0] + 1, *original[1:])
+    else:
+        changed_dpr = (original[4][0] + 1.0, *original[4][1:])
+        changed = (*original[:4], changed_dpr, *original[5:])
+    keys = iter((original, changed))
+    monkeypatch.setattr(
+        canvas, "_presentation_paint_ack_geometry_key", lambda: next(keys, changed),
+    )
+
+    with qtbot.assertNotEmitted(canvas.presentation_paint_acknowledged, wait=50):
+        canvas.request_presentation_paint_ack(change)
+    assert canvas._presentation_paint_ack_request_id is None
+
+
+def test_semantic_frf_mutations_emit_presentation_content_invalidated(qtbot):
+    """set_result / display params / set_state / clear notify at mutation start."""
+    canvas = _shown_frf_canvas(qtbot)
+    seen = []
+
+    def _mark():
+        seen.append(True)
+
+    canvas.presentation_content_invalidated.connect(_mark)
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    assert seen == [True]
+    canvas.set_display_params({"magnitude_scale": "linear"})
+    assert seen == [True, True]
+    canvas.set_state("stale")
+    assert seen == [True, True, True]
+    canvas.set_state("error", "boom")
+    assert seen == [True, True, True, True]
+    canvas.set_state("progress")
+    assert seen == [True, True, True, True, True]
+    before_clear = len(seen)
+    canvas.full_reset()
+    assert len(seen) > before_clear
+
+
+def test_ordinary_paint_ack_and_layout_signal_are_not_content_or_ready(qtbot):
+    """layout_geometry_changed is not paint-ready; expose/AA must not invalidate."""
+    canvas = _shown_frf_canvas(qtbot)
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    seen = []
+
+    def _mark():
+        seen.append(True)
+
+    canvas.presentation_content_invalidated.connect(_mark)
+    with qtbot.assertNotEmitted(canvas.presentation_paint_acknowledged, wait=50):
+        canvas.layout_geometry_changed.emit()
+    with qtbot.waitSignal(canvas.presentation_paint_acknowledged, timeout=1000):
+        assert canvas.request_presentation_paint_ack("ack") is True
+    assert seen == []
+    canvas.update()
+    qtbot.wait(50)
+    canvas.resize(canvas.width() + 12, canvas.height())
+    qtbot.wait(50)
+    assert seen == []
+    assert canvas._presentation_paint_ack_request_id is None
+
+
 # ---------------------------------------------------------------------------
 # Discrete AA arming + three-row ink/point gate + measured-frame backstop
 # (spec docs/analyzer/specs/2026-08-15-view-switch-quality-settlement-spec.md

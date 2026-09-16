@@ -256,6 +256,28 @@ def test_local_endpoint_capture_is_host_scoped_and_excludes_active_overlay(qtbot
     assert controller.capture_local_endpoint(outsider).isNull()
 
 
+def test_cropped_overlay_accepts_matching_host_token(qtbot):
+    """Overlay may be a plot-surface subset; host rect still gates geometry."""
+    controller = _controller(qtbot)
+    overlay_rect = QRect(20, 30, 160, 80)
+    frame = QPixmap(overlay_rect.width(), overlay_rect.height())
+    frame.fill(QColor("#204080"))
+    token = controller.begin_transition(
+        source_section="time", source_view_id="A",
+        target_section="fft", target_view_id="B",
+        source_pixmap=frame, overlay_rect=overlay_rect,
+    )
+    assert token is not None
+    assert token.section == "fft"
+    assert token.rect == controller._host.rect()
+    assert controller._overlay.geometry() == overlay_rect
+    assert controller._overlay.size() == frame.size()
+    assert controller.accept_target(token)
+    assert controller.is_active()
+    controller.cancel("overlay-rect-probe")
+    assert controller.image_bytes() == 0
+
+
 def test_begin_transition_mints_one_generation_for_its_two_endpoints(qtbot):
     controller = _controller(qtbot)
     target = controller.begin_transition(

@@ -112,6 +112,11 @@ def _begin_light_transition(chart_stack, monkeypatch):
     return token, calls
 
 
+def _plot_surface_image_bytes(chart_stack) -> int:
+    rect = chart_stack.page_transition_plot_surface_rect()
+    return max(0, rect.width()) * max(0, rect.height()) * 4
+
+
 def test_policy_off_does_not_capture_or_open_a_transition_session(qtbot, monkeypatch):
     chart_stack = _stack(qtbot)
     chart_stack.set_page_transition_motion_policy(POLICY_OFF)
@@ -165,7 +170,7 @@ def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
     assert not chart_stack.page_transition().is_pending()
     assert not chart_stack.page_transition().is_active()
     assert chart_stack.page_transition().image_bytes() == (
-        chart_stack.stack.width() * chart_stack.stack.height() * 4
+        _plot_surface_image_bytes(chart_stack)
     )
     assert len(calls) == 1
 
@@ -179,7 +184,7 @@ def test_light_transition_waits_for_natural_paint_then_fades_to_live_target(
     assert calls == [(chart_stack.stack, False, False)]
     assert chart_stack.page_transition().is_active()
     assert chart_stack.page_transition().image_bytes() == (
-        chart_stack.stack.width() * chart_stack.stack.height() * 4
+        _plot_surface_image_bytes(chart_stack)
     )
 
     chart_stack.page_transition()._driver.clock().setCurrentTime(duration)
@@ -289,6 +294,46 @@ def test_stale_ack_cannot_start_live_target_fade_and_rejected_ack_request_cancel
     assert not chart_stack.page_transition().is_pending()
     assert not chart_stack.page_transition().is_active()
     assert chart_stack.page_transition().image_bytes() == 0
+
+
+class _PaintAckOnlyFence(QObject):
+    """Managed-canvas paint-ack without a content-invalidation contract."""
+
+    presentation_paint_acknowledged = pyqtSignal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests = []
+
+    def request_presentation_paint_ack(self, request_id) -> bool:
+        self.requests.append(request_id)
+        return True
+
+    def acknowledge(self, request_id=None) -> None:
+        self.presentation_paint_acknowledged.emit(
+            self.requests[-1] if request_id is None else request_id,
+        )
+
+
+def test_paint_ack_without_content_signal_does_not_start_fade(
+    qtbot, monkeypatch,
+):
+    """E1: missing content fence is direct-terminal, not an optional listen."""
+    chart_stack = _stack(qtbot)
+    token, calls = _begin_light_transition(chart_stack, monkeypatch)
+    fence = _PaintAckOnlyFence()
+    cancelled = []
+    chart_stack.page_transition().transition_cancelled.connect(cancelled.append)
+
+    assert not chart_stack.request_page_transition_target(token, [fence])
+    assert cancelled == ["target-has-no-content-fence"]
+    assert fence.requests == []
+    assert not chart_stack.page_transition().is_pending()
+    assert not chart_stack.page_transition().is_active()
+    assert chart_stack.page_transition().image_bytes() == 0
+    assert calls == [(chart_stack.stack, False, False)]
+    fence.acknowledge(token)
+    assert not chart_stack.page_transition().is_active()
 
 
 def _arm_live_target(qtbot, chart_stack, monkeypatch):

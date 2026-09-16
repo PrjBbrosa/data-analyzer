@@ -104,6 +104,28 @@ class FFTTimeMixin:
             time_range,
         )
 
+    def _fft_time_view_is_uncomputed(self, state) -> bool:
+        """True when the View has a source but no cached spectrogram."""
+        panes = tuple(getattr(state, "panes", ()) or ())
+        if not panes:
+            return False
+        pane = panes[0]
+        sources = tuple(getattr(pane, "sources", ()) or ())
+        if not sources:
+            return False
+        fid, ch = sources[0]
+        key = self._analysis_cache_key("fft_time", fid, ch, pane_idx=0)
+        return self.analysis_caches["fft_time"].get(key) is None
+
+    def _cancel_fft_time_page_transition_cover(self, view_id=None) -> None:
+        """Drop a pending FFT vs Time cover before a live result replaces it."""
+        token = getattr(self.chart_stack, "_page_transition_target", None)
+        if token is None or token.section != "fft_time":
+            return
+        if view_id is not None and str(token.view_id) != str(view_id):
+            return
+        self.chart_stack.cancel_page_transition("fft-time-live-result")
+
     def _fft_time_effective_params_for_source(self, p, fid, ch, time_range):
         """Resolve params for cache lookup without starting a worker."""
         _fid, _ch, t, sig, _fd = self._fft_time_signal_for((fid, ch))
@@ -748,6 +770,7 @@ class FFTTimeMixin:
                 outcome.computed += 1
         if not self._analysis_ctx_targets_active_view('fft_time', ctx):
             return
+        self._cancel_fft_time_page_transition_cover(ctx.get('view_id'))
         if p is not None:
             page = self._analysis_page('fft_time')
             if pane_idx is not None and pane_idx < page.pane_count():

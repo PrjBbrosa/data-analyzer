@@ -52,12 +52,16 @@ class FrfStackedPlotHost:
 
         self.plots[1].setXLink(self.plots[0])
         self.plots[2].setXLink(self.plots[0])
+        self._alignment_timer = QTimer(owner)
+        self._alignment_timer.setSingleShot(True)
+        self._alignment_timer.setInterval(0)
+        self._alignment_timer.timeout.connect(self.reset_alignment)
 
     def schedule_alignment(self) -> None:
         if self._alignment_pending:
             return
         self._alignment_pending = True
-        QTimer.singleShot(0, self.reset_alignment)
+        self._alignment_timer.start()
 
     def _left_axes(self):
         return [plot.getAxis("left") for plot in self.plots]
@@ -75,6 +79,10 @@ class FrfStackedPlotHost:
 
     def reset_alignment(self) -> None:
         self._alignment_pending = False
+        try:
+            self._alignment_timer.stop()
+        except RuntimeError:
+            pass
         self.prepare_alignment()
         pin_left_axes_to_common_width(
             self._left_axes(), layout_owners=self._layout_owners()

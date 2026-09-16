@@ -15,6 +15,7 @@ verified on the time-domain canvas history).
 """
 from __future__ import annotations
 
+import logging
 import math
 
 import numpy as np
@@ -95,6 +96,7 @@ from mf4_analyzer.ui.ultraview_capture_facts import (
     iter_axes_rubberband_items,
     widget_visible_and_sized,
 )
+from mf4_analyzer.ui.pg_canvas.quality import install_frame_paint_timer
 from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,
     _WheelDeltaGraphicsLayoutWidget,
@@ -119,6 +121,8 @@ from mf4_analyzer.qt_analysis_shared import (  # noqa: F401
     _normalise_colormap_name,
     _resolve_colormap,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class _AxisShim:
@@ -160,9 +164,11 @@ class _HeatmapMappable:
             getattr(self._canvas, "_cmap_name", DEFAULT_HEATMAP_CMAP))
 
     def set_cmap(self, name):
+        canvas = self._canvas
+        canvas._note_presentation_content_invalidated()
+        canvas._cancel_presentation_paint_ack()
         name = _normalise_colormap_name(name)
         cm = _resolve_colormap(name)
-        canvas = self._canvas
         canvas._cmap_name = name
         canvas._img.setColorMap(cm)
         if canvas._cbar is not None:
@@ -188,6 +194,8 @@ class _HeatmapMappable:
     def set_clim(self, vmin, vmax):
         lo, hi = float(vmin), float(vmax)
         canvas = self._canvas
+        canvas._note_presentation_content_invalidated()
+        canvas._cancel_presentation_paint_ack()
         canvas._img.setLevels((lo, hi))
         if canvas._cbar is not None:
             canvas._cbar.blockSignals(True)
@@ -273,6 +281,14 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # Emitted after labels/ticks/title/colorbar changes that can resize the
     # pyqtgraph layout. Analysis split pages coalesce this and align panes.
     layout_geometry_changed = pyqtSignal()
+    # A presentation transition may retire its cover only after this canvas'
+    # GraphicsView has naturally painted the requested final content.
+    # layout_geometry_changed / levels_changed are not ready.
+    presentation_paint_acknowledged = pyqtSignal(object)
+    # Semantic replacement of the admitted heatmap (plot_result /
+    # plot_or_update_heatmap, clear, cmap/levels, slice, collapse).
+    # Ordinary expose, quality, and layout_geometry_changed must not emit this.
+    presentation_content_invalidated = pyqtSignal()
     # Emitted after a render path programmatically resets image/colorbar levels.
     levels_rebased = pyqtSignal()
     # Double-click restore of the last render window. Distinct from
@@ -290,6 +306,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def __init__(self, parent=None, with_slice: bool = False):
         super().__init__(parent)
         self._with_slice = bool(with_slice)
+        self._aa_backstop_armed = False
+        self._last_frame_paint_ms = None
+        self._presentation_paint_ack_generation = 0
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
         self._glw = _WheelDeltaGraphicsLayoutWidget(self, owner_canvas=self)
         # White chart surface to match the package baseline
         # (TimeDomainCanvasPG, canvas.py:198) and the matplotlib
@@ -622,6 +644,193 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # (negative time/freq/order ticks). Real extents from the first
         # plot_or_update_heatmap override this via setXRange/setYRange.
         self._apply_empty_state_range()
+        self.destroyed.connect(self._on_presentation_paint_destroyed)
+        if not install_frame_paint_timer(self):
+            logger.warning(
+                "Heatmap canvas frame-paint timer not installed; "
+                "presentation paint acknowledgement is inactive for this canvas",
+            )
+
+    # ------------------------------------------------------------------
+    # Natural-paint acknowledgement for local chart transitions.
+    # Same fence as PgLineCanvas / PgFrfCanvas: one GraphicsView paint, not
+    # layout_geometry_changed or levels_changed.  Map, in-scene colorbar, and
+    # the visible slice share ``_glw``; a collapsed slice is not an extra
+    # waiter.
+    # ------------------------------------------------------------------
+
+    def _cancel_presentation_paint_ack(self) -> None:
+        """Invalidate a pending presentation-paint acknowledgement."""
+        self._presentation_paint_ack_generation += 1
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
+
+    def _note_presentation_content_invalidated(self) -> None:
+        """Tell a covering page transition that this chart is no longer B.
+
+        Emit at semantic mutation start, before freeze / the next paint.
+        Ordinary expose/paint and quality/AA convergence must not call this.
+        """
+        self.presentation_content_invalidated.emit()
+
+    def _on_presentation_paint_destroyed(self, *_args) -> None:
+        """Destroyed is a lifecycle boundary, never a paint acknowledgement."""
+        self._cancel_presentation_paint_ack()
+
+    def _presentation_paint_ack_plots(self):
+        """Visible heatmap rows that must be consistent on the ready paint."""
+        plots = [self._plot]
+        if (
+            self._with_slice
+            and self._slice_plot is not None
+            and not bool(getattr(self, "_bottom_collapsed", False))
+        ):
+            plots.append(self._slice_plot)
+        return tuple(plots)
+
+    def page_transition_input_widgets(self):
+        """Chart hit surfaces the overlay must freeze/filter.
+
+        Colorbar lives in the GraphicsView scene (covered by ``_glw``).
+        ``_slice_panel`` is a sibling QWidget, so parent ``updatesEnabled``
+        does not fence its clicks.
+        """
+        widgets = [self]
+        panel = getattr(self, "_slice_panel", None)
+        if isinstance(panel, QWidget):
+            widgets.append(panel)
+        rail = getattr(self, "_collapsed_rail", None)
+        if isinstance(rail, QWidget) and rail.isVisible():
+            widgets.append(rail)
+        divider = getattr(self, "_split_divider", None)
+        if isinstance(divider, QWidget) and divider.isVisible():
+            widgets.append(divider)
+        return tuple(widgets)
+
+    def _presentation_paint_ack_visible(self) -> bool:
+        """Whether the real GraphicsView viewport can naturally paint."""
+        try:
+            viewport = self._glw.viewport()
+            return bool(
+                viewport is not None
+                and self.isVisible()
+                and self._glw.isVisible()
+                and viewport.isVisible()
+            )
+        except RuntimeError:
+            return False
+
+    def _presentation_paint_ack_geometry_key(self):
+        """Geometry/DPR facts that must survive through one viewport paint."""
+        try:
+            viewport = self._glw.viewport()
+            if viewport is None or viewport.width() <= 0 or viewport.height() <= 0:
+                return None
+            dpr = (
+                float(self.devicePixelRatioF()),
+                float(self._glw.devicePixelRatioF()),
+                float(viewport.devicePixelRatioF()),
+            )
+            plots = []
+            for plot in self._presentation_paint_ack_plots():
+                rect = plot.vb.sceneBoundingRect()
+                x_range, y_range = plot.vb.viewRange()
+                plots.append((
+                    tuple(float(value) for value in rect.getRect()),
+                    tuple(float(value) for value in x_range),
+                    tuple(float(value) for value in y_range),
+                ))
+            cbar_key = None
+            if self._cbar is not None:
+                cbar_rect = self._cbar.sceneBoundingRect()
+                levels = self._cbar.levels()
+                cbar_key = (
+                    tuple(float(value) for value in cbar_rect.getRect()),
+                    float(levels[0]),
+                    float(levels[1]),
+                )
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        return (
+            self.width(), self.height(),
+            viewport.width(), viewport.height(),
+            dpr,
+            tuple(plots),
+            cbar_key,
+        )
+
+    def request_presentation_paint_ack(self, request_id) -> bool:
+        """Request one acknowledgement after the next natural viewport paint.
+
+        Does not flush data, settle quality, run an event loop, or call
+        ``repaint()``.  ``update()`` only schedules the ordinary QWidget paint
+        whose completion is reported from the resident GraphicsView hook.
+        ``layout_geometry_changed`` and ``levels_changed`` are not ready.
+        """
+        self._cancel_presentation_paint_ack()
+        if self._slice_plot is not None and not bool(
+            getattr(self, "_bottom_collapsed", False)
+        ):
+            try:
+                self._align_slice_to_main()
+                self._position_slice_panel()
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+        for plot in self._presentation_paint_ack_plots():
+            try:
+                plot.vb.updateAutoRange()
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+        if not self._presentation_paint_ack_visible():
+            return False
+        geometry = self._presentation_paint_ack_geometry_key()
+        if geometry is None:
+            return False
+        self._presentation_paint_ack_pending = True
+        self._presentation_paint_ack_request_id = request_id
+        self._presentation_paint_ack_geometry = geometry
+        try:
+            self._glw.viewport().update()
+        except RuntimeError:
+            self._cancel_presentation_paint_ack()
+            return False
+        return True
+
+    def _presentation_paint_ack_token(self):
+        """Token sampled immediately before an actual GraphicsView paint."""
+        if not self._presentation_paint_ack_pending:
+            return None
+        if not self._presentation_paint_ack_visible():
+            self._cancel_presentation_paint_ack()
+            return None
+        geometry = self._presentation_paint_ack_geometry_key()
+        if geometry != self._presentation_paint_ack_geometry:
+            self._cancel_presentation_paint_ack()
+            return None
+        return (
+            self._presentation_paint_ack_generation,
+            self._presentation_paint_ack_request_id,
+            geometry,
+        )
+
+    def _presentation_paint_acked(self, token) -> None:
+        """Emit exactly once, after the sampled natural viewport paint."""
+        if token is None or not self._presentation_paint_ack_pending:
+            return
+        generation, request_id, geometry = token
+        if (
+            generation != self._presentation_paint_ack_generation
+            or not self._presentation_paint_ack_visible()
+            or geometry != self._presentation_paint_ack_geometry_key()
+            or geometry != self._presentation_paint_ack_geometry
+        ):
+            self._cancel_presentation_paint_ack()
+            return
+        self._presentation_paint_ack_pending = False
+        self._presentation_paint_ack_request_id = None
+        self._presentation_paint_ack_geometry = None
+        self.presentation_paint_acknowledged.emit(request_id)
 
     @staticmethod
     def _set_curve_aa(curve, on: bool) -> None:
@@ -788,6 +997,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._empty_hint_text = text
 
     def show_empty_hint(self, text: str) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         self._empty_hint.show(text)
 
     def _reposition_empty_hint(self, *_args) -> None:
@@ -841,6 +1052,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         amplitude_label=None, z_unit_suffix=None,
         amplitude_valid_mask=None,
     ):
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         self.clear_empty_hint()
         # Reset any panel-driven slice ranges. plot_result re-sets them AFTER
         # this call from the FFT-vs-Time inspector knobs; direct callers (the
@@ -1007,13 +1220,15 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def full_reset(self) -> None:
         """Clear the heatmap, colorbar, remarks and result state.
 
-        File-close contract: ``ChartStack.full_reset_all``
+        File-close contract:         ``ChartStack.full_reset_all``
         (chart_stack.py:2336) calls ``full_reset()`` on every canvas —
         mirrors ``PlotCanvas.full_reset`` (canvases.py:655), which wiped
         the whole matplotlib figure. The colorbar is detached (not just
         hidden) so a stale color scale never outlives its data; the next
         ``plot_or_update_heatmap`` recreates it.
         """
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         self._manual_axes_clear_timer.stop()
         self._clear_pending_manual_axes()
         self._observed_main_viewport = None
@@ -1367,6 +1582,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         changes between renders (spec §8.3.1) — the shift only ever moves
         the display LEVELS, never the stored matrix.
         """
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         raw = np.asarray(result.amplitude)
         frequencies = np.asarray(result.frequencies, dtype=float)
         times = np.asarray(result.times, dtype=float)
@@ -1542,9 +1759,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return self._slice._seed_slice()
 
     def set_slice_direction(self, direction: str) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         return self._slice.set_slice_direction(direction)
 
     def select_time_index(self, idx: int) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         return self._slice.select_time_index(idx)
 
     def _main_view_range(self, axis: str):
@@ -1575,6 +1796,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return self._slice._apply_slice()
 
     def _on_slice_marker_dragged(self, *_args) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         return self._slice._on_slice_marker_dragged(*_args)
 
     @staticmethod
@@ -1599,6 +1822,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return self._slice._update_slice_hint(label, value)
 
     def _select_slice_at(self, x: float, y: float) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         return self._slice._select_slice_at(x, y)
 
     def set_slice_button_labels(self, x_label: str, y_label: str) -> None:
@@ -1615,6 +1840,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def _split_bottom_plot(self):
         return self._slice_plot
+
+    def _set_bottom_collapsed(self, collapsed: bool) -> None:
+        if not self._split_is_ready():
+            return
+        collapsed = bool(collapsed)
+        if collapsed == bool(getattr(self, "_bottom_collapsed", False)):
+            return
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
+        super()._set_bottom_collapsed(collapsed)
 
     def _after_split_collapse_changed(self) -> None:
         if self._slice_panel is not None:
@@ -1640,6 +1875,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._position_slice_panel()
 
     def resizeEvent(self, event):
+        self._cancel_presentation_paint_ack()
         super().resizeEvent(event)
         # Slice re-alignment on resize is owned by the AnalysisSectionPage
         # layout sync (single → reset_split_layout_alignment; split →
@@ -1648,6 +1884,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._position_slice_panel()
         self._position_collapse_ctrl()
         self._refresh_bottom_x_ticks()
+
+    def hideEvent(self, event):
+        self._cancel_presentation_paint_ack()
+        super().hideEvent(event)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2167,6 +2407,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return colorbar_interaction_active(self._cbar)
 
     def _on_cbar_levels(self, bar) -> None:
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         lo, hi = float(bar.levels()[0]), float(bar.levels()[1])
         # ImageItem levels are already owned by ColorBarItem._update_items.
         # Keep the slice amplitude axis on the same window without a replot.
@@ -2224,6 +2466,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         """
         if self._rendered_levels is None or self._cbar is None:
             return False
+        self._note_presentation_content_invalidated()
+        self._cancel_presentation_paint_ack()
         lo, hi = self._rendered_levels
         self._img.setLevels((lo, hi))
         self._cbar.blockSignals(True)

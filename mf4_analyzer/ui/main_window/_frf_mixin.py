@@ -97,6 +97,25 @@ class FrfMixin:
             return None
         return self.analysis_caches["frf"].get(key)
 
+    def _frf_view_is_uncomputed(self, state) -> bool:
+        """True when the View has an I/O pair but no cached FRF result."""
+        panes = tuple(getattr(state, "panes", ()) or ())
+        if not panes:
+            return False
+        pane = panes[0]
+        if pane.input_source is None or pane.output_source is None:
+            return False
+        return self._frf_cached_result_for_pane(state, pane) is None
+
+    def _cancel_frf_page_transition_cover(self, view_id=None) -> None:
+        """Drop a pending FRF cover before a live result or status replaces it."""
+        token = getattr(self.chart_stack, "_page_transition_target", None)
+        if token is None or token.section != "frf":
+            return
+        if view_id is not None and str(token.view_id) != str(view_id):
+            return
+        self.chart_stack.cancel_page_transition("frf-live-result")
+
     def _publish_frf_effective_facts(self, result):
         self.inspector.frf_ctx.set_effective_facts(
             result.effective, getattr(result, "warnings", ()) or ()
@@ -564,6 +583,7 @@ class FrfMixin:
             })
             return False
         self.inspector.frf_ctx.set_validation_message("")
+        self._cancel_frf_page_transition_cover(state.view_id)
         page.pane_canvas(pane_idx).show_progress()
         return self._frf_coordinator.request(candidate)
 
@@ -600,6 +620,7 @@ class FrfMixin:
                 })
                 continue
             if is_active and pane_idx < page.pane_count():
+                self._cancel_frf_page_transition_cover(state.view_id)
                 page.pane_canvas(pane_idx).show_progress()
             submitted += bool(self._frf_coordinator.request(candidate))
         return submitted
@@ -617,6 +638,7 @@ class FrfMixin:
             pane_idx = int(context.get("pane_idx", 0))
             page = self._analysis_page("frf")
             if 0 <= pane_idx < page.pane_count():
+                self._cancel_frf_page_transition_cover(state.view_id)
                 page.pane_canvas(pane_idx).show_progress()
 
     def _on_frf_job_progress(self, done, total):
@@ -683,6 +705,7 @@ class FrfMixin:
             if key in context
         })
         canvas = page.pane_canvas(pane_idx)
+        self._cancel_frf_page_transition_cover(state.view_id)
         canvas.set_result(
             result,
             # Presentation controls do not invalidate compute. A job may
@@ -713,6 +736,7 @@ class FrfMixin:
             if manager.get(manager.active) is state:
                 page = self._analysis_page("frf")
                 if 0 <= pane_idx < page.pane_count():
+                    self._cancel_frf_page_transition_cover(state.view_id)
                     page.pane_canvas(pane_idx).show_error(message)
                 if pane_idx == page.focused_index():
                     self.inspector.frf_ctx.set_validation_message(message)

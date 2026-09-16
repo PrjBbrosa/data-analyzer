@@ -825,6 +825,51 @@ def test_presentation_paint_ack_rejects_geometry_or_dpr_change_before_paint(
     assert c._presentation_paint_ack_request_id is None
 
 
+def test_semantic_fft_mutations_emit_presentation_content_invalidated(qtbot):
+    """Spectra, preview (including stale), and full_reset notify at start."""
+    c = _shown_line_canvas(qtbot)
+    seen = []
+
+    def _mark():
+        seen.append(True)
+
+    c.presentation_content_invalidated.connect(_mark)
+    c.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+    )
+    assert seen == [True]
+    c.plot_time_preview([_entry()], title="时域预览", clear_spectrum=False)
+    assert seen == [True, True]
+    c.plot_time_preview([_entry()], title="时域预览", clear_spectrum=True)
+    assert seen == [True, True, True]
+    c.full_reset()
+    assert seen == [True, True, True, True]
+
+
+def test_ordinary_paint_and_paint_ack_do_not_emit_content_invalidation(qtbot):
+    c = _shown_line_canvas(qtbot)
+    c.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label="Amplitude", title="FFT",
+    )
+    seen = []
+
+    def _mark():
+        seen.append(True)
+
+    c.presentation_content_invalidated.connect(_mark)
+    with qtbot.waitSignal(c.presentation_paint_acknowledged, timeout=1000):
+        assert c.request_presentation_paint_ack("ack") is True
+    assert seen == []
+    c.update()
+    qtbot.wait(50)
+    c.resize(c.width() + 12, c.height())
+    qtbot.wait(50)
+    c.begin_section_reveal()
+    qtbot.wait(50)
+    assert seen == []
+    assert c._presentation_paint_ack_request_id is None
+
+
 def test_fft_amp_curves_stay_antialiased_when_light(canvas, qapp):
     # The FFT amplitude overlay has its own combined drawn-point density
     # budget (ON=5000/OFF=8000).  A small two-curve overlay stays crisp.  The
