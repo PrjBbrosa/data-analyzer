@@ -1,6 +1,6 @@
 import pytest
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QVariant
 from PyQt5.QtWidgets import QStyleOptionViewItem
 from mf4_analyzer.ui_kit.widgets.searchable_combo import (
     SearchableComboBox,
@@ -90,6 +90,87 @@ def test_candidate_rows_use_full_metadata_and_batch_syncs_once(qapp, monkeypatch
     assert cb.itemData(0, Qt.WhatsThisRole) is None
     assert sync_calls == ["sync"]
     monkeypatch.setattr(cb, "_sync_popup_geometry", real_sync)
+
+
+def test_candidate_none_placeholder_matches_qt_storage_and_rebuilds_only_on_real_changes(
+    qapp,
+):
+    """None placeholders are an invalid QVariant, not a stored UserRole."""
+    cb = SearchableComboBox()
+    rows = (
+        ("请选择通道", None),
+        ("[source-a] signal", ("file-a", "signal")),
+        ("[source-a] rpm", ("file-a", "rpm")),
+    )
+    inserted = []
+    removed = []
+
+    def record_insert(_parent, first, last):
+        inserted.append((first, last))
+
+    def record_remove(_parent, first, last):
+        removed.append((first, last))
+
+    cb.model().rowsInserted.connect(record_insert)
+    cb.model().rowsRemoved.connect(record_remove)
+
+    assert cb.replace_candidate_rows(rows) is True
+    assert cb.itemData(0, Qt.UserRole) is None
+    assert int(Qt.UserRole) not in cb.model().itemData(cb.model().index(0, 0))
+
+    inserted.clear()
+    removed.clear()
+    cb.setCurrentIndex(1)
+    assert cb.replace_candidate_rows(rows) is False
+    assert inserted == []
+    assert removed == []
+    assert cb.currentData() == ("file-a", "signal")
+
+    def assert_one_rebuild(changed_rows):
+        before_inserted = len(inserted)
+        before_removed = len(removed)
+        assert cb.replace_candidate_rows(changed_rows) is True
+        assert len(inserted) > before_inserted
+        assert len(removed) > before_removed
+        after_inserted = len(inserted)
+        after_removed = len(removed)
+        assert cb.replace_candidate_rows(changed_rows) is False
+        assert len(inserted) == after_inserted
+        assert len(removed) == after_removed
+
+    # Composite source identity and candidate order are both part of the
+    # rendered row contract, despite the unchanged display label.
+    source_changed = (
+        rows[0],
+        ("[source-a] signal", ("file-b", "signal")),
+        rows[2],
+    )
+    assert_one_rebuild(source_changed)
+    assert_one_rebuild((source_changed[0], source_changed[2], source_changed[1]))
+
+    # An actually stored, extra role is still a real difference and must not
+    # be hidden by the None-placeholder normalization.
+    cb.setItemData(1, "stale detail", Qt.WhatsThisRole)
+    assert_one_rebuild((source_changed[0], source_changed[2], source_changed[1]))
+    assert cb.itemData(1, Qt.WhatsThisRole) is None
+
+    # Empty display labels still have DisplayRole, but Qt does not retain the
+    # empty tooltip written by the normal addItem path.
+    empty_label = SearchableComboBox()
+    empty_rows = (("", ("file-empty", "signal")),)
+    assert empty_label.replace_candidate_rows(empty_rows) is True
+    assert int(Qt.ToolTipRole) not in empty_label.model().itemData(
+        empty_label.model().index(0, 0)
+    )
+    assert empty_label.replace_candidate_rows(empty_rows) is False
+
+    invalid_variant = SearchableComboBox()
+    invalid_rows = (("invalid QVariant", QVariant()),)
+    assert invalid_variant.replace_candidate_rows(invalid_rows) is True
+    assert int(Qt.UserRole) not in invalid_variant.model().itemData(
+        invalid_variant.model().index(0, 0)
+    )
+    assert invalid_variant.replace_candidate_rows(invalid_rows) is False
 
 
 def test_nested_candidate_batch_rebinds_after_exception_without_swallowing(qapp):

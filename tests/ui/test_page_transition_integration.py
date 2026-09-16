@@ -168,6 +168,67 @@ def test_explicit_presentation_capture_cancels_active_transition(qtbot, monkeypa
     assert chart_stack.page_transition().image_bytes() == 0
 
 
+def test_rapid_redirect_keeps_bridge_captured_visible_source_on_single_image_path(
+    qtbot, monkeypatch,
+):
+    """The real bridge must feed a complete A/B capture into B -> C."""
+    chart_stack = _stack(qtbot)
+    chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
+    chart_stack.set_page_transition_enabled_sections(("time",))
+    controller = chart_stack.page_transition()
+    captures = iter(("#ff0000", "#7f0080"))
+
+    def _capture(widget, *, exclude_overlay=False):
+        return _frame(widget, next(captures))
+
+    monkeypatch.setattr(controller, "capture_local_endpoint", _capture)
+    token_b = chart_stack.begin_page_transition(
+        source_section="time",
+        source_view_id="view-A",
+        target_section="time",
+        target_view_id="view-B",
+    )
+    assert token_b is not None
+    fence_b = _NaturalPaintFence()
+    assert chart_stack.request_page_transition_target(token_b, (fence_b,))
+    fence_b.acknowledge()
+    assert controller.is_active()
+    controller._driver.clock().setCurrentTime(150)
+
+    token_c = chart_stack.begin_page_transition(
+        source_section="time",
+        source_view_id="view-B",
+        target_section="time",
+        target_view_id="view-C",
+    )
+
+    assert token_c is not None
+    assert controller._overlay._source.toImage().pixelColor(8, 8) == QColor("#7f0080")
+    fence_c = _NaturalPaintFence()
+    assert chart_stack.request_page_transition_target(token_c, (fence_c,))
+    fence_c.acknowledge()
+    controller._driver.clock().setCurrentTime(300)
+    qtbot.waitUntil(lambda: not controller.is_active())
+
+
+def test_split_entry_cancels_a_single_pane_transition_and_its_paint_fence(
+    qtbot, monkeypatch,
+):
+    chart_stack = _stack(qtbot)
+    token, _calls = _begin_light_transition(chart_stack, monkeypatch)
+    fence = _NaturalPaintFence()
+    assert chart_stack.request_page_transition_target(token, (fence,))
+    assert chart_stack._page_transition_ready_slots
+
+    chart_stack.enter_split()
+
+    assert chart_stack.page_transition().image_bytes() == 0
+    assert chart_stack._page_transition_target is None
+    assert chart_stack._page_transition_ready_slots == []
+    fence.acknowledge(token)
+    assert not chart_stack.page_transition().is_active()
+
+
 def test_stale_ack_cannot_start_live_target_fade_and_rejected_ack_request_cancels(
     qtbot, monkeypatch,
 ):

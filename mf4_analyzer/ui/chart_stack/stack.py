@@ -119,7 +119,7 @@ class ChartStack(QWidget):
             self._clear_page_transition_ready_fence,
         )
         self._page_transition.transition_cancelled.connect(
-            lambda _reason: self._clear_page_transition_ready_fence(),
+            self._clear_page_transition_ready_fence,
         )
         self.canvas_time = TimeDomainCanvasPG(self)
         self._time_card = TimeChartCard(self.canvas_time)
@@ -948,6 +948,8 @@ class ChartStack(QWidget):
                 setter("")
 
     def enter_split(self):
+        if self._page_transition.image_bytes() > 0:
+            self.cancel_page_transition("time-split-entered")
         if self._secondary_card is None:
             canvas = TimeDomainCanvasPG(self)
             self._secondary_card = TimeChartCard(canvas)
@@ -1073,6 +1075,8 @@ class ChartStack(QWidget):
         return []
 
     def exit_split(self):
+        if self.split_active() and self._page_transition.image_bytes() > 0:
+            self.cancel_page_transition("time-split-exited")
         if self._secondary_card is not None:
             self._secondary_card.close_cursor_display_popover()
             self._secondary_card.setVisible(False)
@@ -1233,6 +1237,9 @@ class ChartStack(QWidget):
         idx = _MODE_TO_INDEX[mode]
         if self.stack.currentIndex() == idx:
             return
+        target = self._page_transition_target
+        if target is not None and target.section != mode:
+            self.cancel_page_transition("target-section-replaced")
         self.stack.setCurrentIndex(idx)
         self.stats_strip.setVisible(_STATS_STRIP_ENABLED and mode == 'time')
         bar = getattr(self, '_view_tabbar', None)
@@ -1319,6 +1326,14 @@ class ChartStack(QWidget):
             self._page_transition.cancel("target-has-no-canvas")
             return False
         self._clear_page_transition_ready_fence(keep_target=True)
+        real_input_targets = tuple(
+            canvas for canvas in unique if isinstance(canvas, QWidget)
+        )
+        if real_input_targets and not self._page_transition.watch_input_targets(
+            token, real_input_targets,
+        ):
+            self._page_transition.cancel("target-has-no-input-fence")
+            return False
         self._page_transition_ready_canvases = unique
         self._page_transition_ready_acks = set()
         for canvas in unique:
@@ -1355,6 +1370,15 @@ class ChartStack(QWidget):
 
     def cancel_page_transition(self, reason: str) -> None:
         self._page_transition.cancel(str(reason))
+
+    def invalidate_page_transition_identity(
+        self, section: str, view_id: str, *, reason: str,
+    ) -> bool:
+        """Drop a local cover when its source or target View no longer exists."""
+        if not self._page_transition.invalidates_identity(section, view_id):
+            return False
+        self.cancel_page_transition(reason)
+        return True
 
     def has_page_transition_target(self, section: str, view_id: str) -> bool:
         """Whether this identity is currently covered by a local handoff."""

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPainter, QPixmap
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QApplication, QWidget
 
 from ...ui_kit.motion import (
     MotionPolicy,
@@ -139,6 +139,19 @@ class PageTransitionController(QObject):
     transition_finished = pyqtSignal(object)
     transition_cancelled = pyqtSignal(str)
 
+    _CHART_INPUT_EVENTS = frozenset(
+        {
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease,
+            QEvent.MouseButtonDblClick,
+            QEvent.MouseMove,
+            QEvent.Wheel,
+            QEvent.ContextMenu,
+            QEvent.KeyPress,
+            QEvent.KeyRelease,
+        }
+    )
+
     def __init__(
         self,
         host: QWidget,
@@ -152,6 +165,14 @@ class PageTransitionController(QObject):
         self._source_token = None
         self._source_is_local_endpoint = False
         self._target_token = None
+        # The overlay remains transparent to hit testing so QWidget routes an
+        # event to the real chart viewport.  These direct target filters are
+        # therefore the input fence; the overlay attribute is visual plumbing,
+        # not the policy that makes a covered chart safe to operate.
+        self._target_ready = False
+        self._input_targets = ()
+        self._input_target_destroyed_slots = []
+        self._application_filter_installed = False
         self._generation = 0
         self._target_ack_watchdog_token = None
         self._target_ack_watchdog = QTimer(self)
@@ -180,8 +201,25 @@ class PageTransitionController(QObject):
     def is_active(self) -> bool:
         return self._driver.is_active()
 
+    def input_state(self) -> str:
+        """Return the presentation state relevant to chart input routing."""
+        if self._source_token is None:
+            return "idle"
+        if not self._target_ready:
+            return "pending"
+        return "ready"
+
     def image_bytes(self) -> int:
         return self._overlay.image_bytes()
+
+    def invalidates_identity(self, section: str, view_id: str) -> bool:
+        """Cancel only when a removed/replaced View belongs to this handoff."""
+        identity = (str(section), str(view_id))
+        return any(
+            token is not None
+            and (token.section, token.view_id) == identity
+            for token in (self._source_token, self._target_token)
+        )
 
     def local_source_endpoint(self, section: str, view_id: str) -> QPixmap:
         """Return the exact outgoing endpoint, only when it was locally read.
@@ -290,21 +328,36 @@ class PageTransitionController(QObject):
         if self._source_token == token:
             return False
         prior_composite = self._overlay.has_source()
-        source = (
-            self._overlay.composite_snapshot()
-            if prior_composite
-            else (QPixmap(pixmap) if pixmap is not None else QPixmap())
-        )
+        captured = QPixmap(pixmap) if pixmap is not None else QPixmap()
+        if prior_composite and not captured.isNull():
+            # ChartStack captured the actual visible A/B composition before
+            # this redirect.  It is the only valid source for the production
+            # one-image path, where B lives below a transparent overlay.
+            source = captured
+        elif prior_composite and self._overlay.has_target():
+            # A two-image transition already owns both endpoints, so its local
+            # composition is complete without another QWidget capture.
+            source = self._overlay.composite_snapshot()
+        elif prior_composite:
+            # Never restart from transparent A alone: reveal the real terminal
+            # target instead of manufacturing a discontinuous handoff.
+            self.cancel("redirect-source-unavailable")
+            return False
+        else:
+            source = captured
         if source.isNull():
             self.cancel("departure-empty")
             return False
         self._driver.stop_and_keep()
+        self._clear_input_targets()
         self._generation += 1
         self._target_ack_watchdog.stop()
         self._target_ack_watchdog_token = None
         self._source_token = token
         self._source_is_local_endpoint = not prior_composite
         self._target_token = None
+        self._target_ready = False
+        self._install_application_filter()
         self._overlay.setGeometry(token.rect)
         self._overlay.set_frames(source)
         self._overlay.show()
@@ -319,7 +372,34 @@ class PageTransitionController(QObject):
         if token.request_generation != self._source_token.request_generation:
             return False
         self._target_token = token
+        self._target_ready = False
         return True
+
+    def watch_input_targets(self, token: PresentationToken, targets) -> bool:
+        """Fence only chart hit surfaces while a visible source covers them.
+
+        A pending target drops input; once its natural paint is acknowledged,
+        the first chart event settles the presentation and continues through
+        the very same Qt delivery.  No event is stored or replayed.
+        """
+        if token != self._target_token or self._source_token is None:
+            return False
+        self._clear_input_targets()
+        widgets = []
+        for target in tuple(targets or ()):
+            for widget in self._input_widgets_for(target):
+                if widget not in widgets:
+                    widgets.append(widget)
+        for widget in widgets:
+            slot = self._on_input_target_destroyed
+            try:
+                widget.installEventFilter(self)
+                widget.destroyed.connect(slot)
+            except RuntimeError:
+                continue
+            self._input_targets += (widget,)
+            self._input_target_destroyed_slots.append((widget, slot))
+        return bool(self._input_targets)
 
     def accept_target(
         self, token: PresentationToken, pixmap: QPixmap | None = None,
@@ -343,6 +423,7 @@ class PageTransitionController(QObject):
             self._overlay.set_target(pixmap)
         self._target_ack_watchdog.stop()
         self._target_ack_watchdog_token = None
+        self._target_ready = True
         self._driver.snap(0.0)
         self._driver.go(
             1.0, duration_ms=duration_ms("page_transition", self._policy),
@@ -359,6 +440,9 @@ class PageTransitionController(QObject):
         self._source_token = None
         self._source_is_local_endpoint = False
         self._target_token = None
+        self._target_ready = False
+        self._clear_input_targets()
+        self._remove_application_filter()
         self._overlay.hide()
         self._overlay.clear_frames()
         if had_session:
@@ -368,15 +452,34 @@ class PageTransitionController(QObject):
         self.cancel("close")
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt callback spelling
+        if watched in self._input_targets:
+            if event.type() in self._CHART_INPUT_EVENTS:
+                state = self.input_state()
+                if state == "pending":
+                    return True
+                if state == "ready":
+                    # Returning False lets the original target process this
+                    # exact event once after the temporary cover is gone.
+                    self.cancel("covered-chart-input-ready")
+                    return False
+            elif event.type() in self._input_invalidation_events():
+                if event.type() != QEvent.Paint or self._target_ready:
+                    self.cancel("target-surface-invalidated")
+                    return False
         if watched is self._host:
             kind = event.type()
-            if kind in (QEvent.Resize, QEvent.Hide, QEvent.Close):
+            if kind in self._host_invalidation_events():
                 self.cancel("host-geometry-or-lifecycle")
             elif kind == QEvent.LayoutRequest:
                 # A page switch may legitimately request layout without moving
                 # this local compositor.  Check on the next turn and cancel
                 # only if the endpoint rectangle was actually invalidated.
                 QTimer.singleShot(0, self._cancel_if_host_rect_changed)
+        elif (
+            watched is QApplication.instance()
+            and event.type() in self._application_invalidation_events()
+        ):
+            self.cancel("application-inactive")
         return super().eventFilter(watched, event)
 
     def _on_progress(self, value) -> None:
@@ -388,6 +491,9 @@ class PageTransitionController(QObject):
             self._source_token = None
             self._source_is_local_endpoint = False
             self._target_token = None
+            self._target_ready = False
+            self._clear_input_targets()
+            self._remove_application_filter()
             self._overlay.hide()
             self._overlay.clear_frames()
             self.transition_finished.emit(token)
@@ -402,3 +508,91 @@ class PageTransitionController(QObject):
         token = self._source_token
         if token is not None and token.rect != self._host.rect():
             self.cancel("host-layout-geometry")
+
+    @staticmethod
+    def _input_widgets_for(target):
+        if isinstance(target, QWidget):
+            yield target
+        graphics_widget = getattr(target, "_glw", None)
+        viewport = getattr(graphics_widget, "viewport", None)
+        if callable(viewport):
+            try:
+                viewport = viewport()
+            except RuntimeError:
+                viewport = None
+        if isinstance(viewport, QWidget):
+            yield viewport
+
+    @staticmethod
+    def _input_invalidation_events():
+        events = {
+            QEvent.Resize,
+            QEvent.Move,
+            QEvent.Hide,
+            QEvent.Close,
+            QEvent.ParentChange,
+            QEvent.Paint,
+        }
+        dpr_change = getattr(QEvent, "DevicePixelRatioChange", None)
+        if dpr_change is not None:
+            events.add(dpr_change)
+        return events
+
+    @classmethod
+    def _host_invalidation_events(cls):
+        events = {
+            QEvent.Resize,
+            QEvent.Hide,
+            QEvent.Close,
+            QEvent.WindowDeactivate,
+            QEvent.WindowStateChange,
+        }
+        dpr_change = getattr(QEvent, "DevicePixelRatioChange", None)
+        if dpr_change is not None:
+            events.add(dpr_change)
+        return events
+
+    @staticmethod
+    def _application_invalidation_events():
+        return {
+            event_type
+            for event_type in (
+                getattr(QEvent, "ApplicationDeactivate", None),
+                getattr(QEvent, "ApplicationStateChange", None),
+            )
+            if event_type is not None
+        }
+
+    def _install_application_filter(self) -> None:
+        if self._application_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.installEventFilter(self)
+        self._application_filter_installed = True
+
+    def _remove_application_filter(self) -> None:
+        if not self._application_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self._application_filter_installed = False
+
+    def _clear_input_targets(self) -> None:
+        for widget, slot in self._input_target_destroyed_slots:
+            try:
+                widget.removeEventFilter(self)
+                widget.destroyed.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._input_target_destroyed_slots.clear()
+        self._input_targets = ()
+
+    def _on_input_target_destroyed(self, *_args) -> None:
+        if self._source_token is not None:
+            self.cancel("target-surface-destroyed")

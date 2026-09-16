@@ -1,9 +1,10 @@
 """Presentation-only contracts for chart page-transition composition."""
 from __future__ import annotations
 
-from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtGui import QColor, QPixmap
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PyQt5.QtGui import QColor, QPainter, QPixmap, QWheelEvent
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication, QWidget
 
 from mf4_analyzer.ui.chart_stack.page_transition import (
     PageTransitionController,
@@ -31,6 +32,48 @@ def _controller(qtbot, *, policy=POLICY_LIGHT):
     qtbot.addWidget(host)
     host.show()
     return PageTransitionController(host, policy=policy)
+
+
+class _InputSurface(QWidget):
+    """A real hit-tested chart stand-in that records delivered input."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.events = []
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def event(self, event):  # noqa: N802 - Qt callback spelling
+        if event.type() in {
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease,
+            QEvent.MouseMove,
+            QEvent.MouseButtonDblClick,
+            QEvent.Wheel,
+            QEvent.ContextMenu,
+            QEvent.KeyPress,
+            QEvent.KeyRelease,
+        }:
+            self.events.append(event.type())
+        return super().event(event)
+
+
+class _ColorHost(QWidget):
+    """Small paintable host used to check the actual visible redirect frame."""
+
+    def __init__(self, color: str) -> None:
+        super().__init__()
+        self._color = QColor(color)
+
+    def set_color(self, color: str) -> None:
+        self._color = QColor(color)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt callback spelling
+        painter = QPainter(self)
+        try:
+            painter.fillRect(self.rect(), self._color)
+        finally:
+            painter.end()
 
 
 def test_transition_is_off_by_default_and_retains_no_frames(qtbot):
@@ -63,6 +106,84 @@ def test_target_ack_starts_300ms_crossfade_and_finished_releases_frames(qtbot):
 
     assert controller.image_bytes() == 0
     assert not controller._overlay.isVisible()
+
+
+def test_pending_chart_input_is_blocked_but_first_ready_input_settles_then_hits_once(
+    qtbot,
+):
+    """Never let a real hit target act on data hidden by the outgoing frame."""
+    controller = _controller(qtbot)
+    surface = _InputSurface(controller._host)
+    surface.setGeometry(controller._host.rect())
+    surface.show()
+    source = _token("A")
+    target = _token("B")
+
+    assert controller.begin_departure(source, _frame("#204080"))
+    assert controller.arm_target(target)
+    assert controller.watch_input_targets(target, (surface,))
+
+    hit = QApplication.widgetAt(surface.mapToGlobal(surface.rect().center()))
+    assert hit is surface
+    QTest.mousePress(hit, Qt.LeftButton)
+    QTest.mouseMove(hit, hit.rect().center())
+    QTest.mouseRelease(hit, Qt.LeftButton)
+    center = hit.rect().center()
+    QApplication.sendEvent(
+        hit,
+        QWheelEvent(
+            QPointF(center), QPointF(hit.mapToGlobal(center)), QPoint(),
+            QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase,
+            False,
+        ),
+    )
+    surface.setFocus(Qt.OtherFocusReason)
+    QTest.keyClick(surface, Qt.Key_Left)
+    assert surface.events == []
+    assert controller._overlay.isVisible()
+
+    assert controller.accept_target(target)
+    QTest.mouseClick(hit, Qt.LeftButton)
+
+    assert surface.events == [QEvent.MouseButtonPress, QEvent.MouseButtonRelease]
+    assert not controller.is_active()
+    assert controller.image_bytes() == 0
+
+
+def test_single_image_redirect_uses_the_visible_a_b_frame_before_fading_to_c(
+    qtbot,
+):
+    """The normal no-target-pixmap path must not drop B during A -> B -> C."""
+    host = _ColorHost("#0000ff")
+    host.resize(240, 160)
+    qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    controller = PageTransitionController(host, policy=POLICY_LIGHT)
+    source = _token("A")
+    target_b = _token("B")
+    target_c = _token("C")
+
+    assert controller.begin_departure(source, _frame("#ff0000"))
+    assert controller.arm_target(target_b)
+    assert controller.accept_target(target_b)
+    controller._driver.clock().setCurrentTime(150)
+    visible_before_redirect = host.grab().toImage().pixelColor(120, 80)
+
+    assert controller.begin_departure(
+        target_b, controller.capture_local_endpoint(host),
+    )
+    redirect_source = controller._overlay._source.toImage().pixelColor(120, 80)
+    assert redirect_source.rgba() == visible_before_redirect.rgba()
+
+    host.set_color("#00a040")
+    QApplication.processEvents()
+    assert controller.arm_target(target_c)
+    assert controller.accept_target(target_c)
+    controller._driver.clock().setCurrentTime(300)
+    qtbot.waitUntil(lambda: not controller.is_active())
+    final = host.grab().toImage().pixelColor(120, 80)
+    assert final == QColor("#00a040")
 
 
 def test_stale_or_wrong_geometry_target_never_starts_animation(qtbot):

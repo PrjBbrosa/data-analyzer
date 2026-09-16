@@ -12,7 +12,7 @@ import functools
 import re
 from contextlib import contextmanager
 
-from PyQt5.QtCore import QSortFilterProxyModel, QSize, Qt
+from PyQt5.QtCore import QSortFilterProxyModel, QSize, Qt, QVariant
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QComboBox, QCompleter, QStyledItemDelegate, QStyle
 
@@ -377,11 +377,17 @@ class SearchableComboBox(QComboBox):
     @staticmethod
     def _candidate_item_metadata(text, data):
         rendered = str(text)
-        return {
-            int(Qt.DisplayRole): rendered,
-            int(Qt.ToolTipRole): rendered,
-            int(Qt.UserRole): data,
-        }
+        # Match the roles Qt actually retains in QComboBox's item model.
+        # Passing None to addItem() creates an invalid QVariant, so UserRole
+        # is absent from itemData(); an empty tooltip is similarly not stored.
+        metadata = {int(Qt.DisplayRole): rendered}
+        if rendered:
+            metadata[int(Qt.ToolTipRole)] = rendered
+        if data is not None and not (
+            isinstance(data, QVariant) and not data.isValid()
+        ):
+            metadata[int(Qt.UserRole)] = data
+        return metadata
 
     def candidate_rows_match(self, candidates):
         """Return whether ``candidates`` exactly describes the live model.

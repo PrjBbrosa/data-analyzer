@@ -1,8 +1,26 @@
 import pytest
+from PyQt5.QtCore import QObject, pyqtSignal
 
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
+
+
+class _PageTransitionFence(QObject):
+    """Minimal natural-paint seam for a real View deletion path."""
+
+    presentation_paint_acknowledged = pyqtSignal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.requested = []
+
+    def request_presentation_paint_ack(self, token) -> bool:
+        self.requested.append(token)
+        return True
+
+    def acknowledge(self, token) -> None:
+        self.presentation_paint_acknowledged.emit(token)
 
 
 def _assert_subplot_materially_fills_viewport(canvas, expected_rows):
@@ -426,6 +444,37 @@ def test_delete_inactive_before_active_captures_current_view(
     assert w.view_manager.active == 0
     assert w.view_manager.get(0).checked == [(fid, "speed")]
     assert _checked_pairs(w) == [(fid, "speed")]
+
+
+def test_deleting_page_transition_target_immediately_releases_image_and_fence(
+    qtbot, qapp, loaded_csv,
+):
+    """The actual View deletion route must not leave an old chart cover alive."""
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    w._on_view_new()
+    qapp.processEvents()
+    source = w.view_manager.get(0)
+    target = w.view_manager.get(1)
+    token = w.chart_stack.begin_page_transition(
+        source_section="time",
+        source_view_id=source.view_id,
+        target_section="time",
+        target_view_id=target.view_id,
+        pane_signature=("time", "single"),
+    )
+    assert token is not None
+    fence = _PageTransitionFence()
+    assert w.chart_stack.request_page_transition_target(token, (fence,))
+    assert w.chart_stack._page_transition_ready_slots
+    assert w.chart_stack.page_transition().image_bytes() > 0
+
+    w._on_overflow_view_delete(1)
+
+    assert w.chart_stack.page_transition().image_bytes() == 0
+    assert w.chart_stack._page_transition_target is None
+    assert w.chart_stack._page_transition_ready_slots == []
+    fence.acknowledge(token)
+    assert not w.chart_stack.page_transition().is_active()
 
 
 def test_overflow_view_delete_skips_confirm_and_tab_delete_still_prompts(

@@ -1016,6 +1016,10 @@ class ViewMixin:
             return
         if confirm and not self._confirm_view_delete(self.view_manager.get(idx).name):
             return
+        deleted = self.view_manager.get(idx)
+        self.chart_stack.invalidate_page_transition_identity(
+            "time", deleted.view_id, reason="time-view-deleted",
+        )
         self._capture_current_view()
         self.view_manager.delete_view(idx)
 

@@ -1423,10 +1423,11 @@ def ensure_icon_cache():
     * Renders at ``devicePixelRatio * _LOGICAL_ARROW_PX`` and calls
       ``setDevicePixelRatio`` on the saved pixmap so HiDPI screens get crisp
       output without QSS having to know about scale factors.
-    * Known cache/read/write/render-resource failures choose one validated,
-      read-only packaged fallback per icon and emit a rate-limited diagnostic.
-      Missing/corrupt packaged fallbacks are release-resource failures and
-      deliberately propagate.
+    * Known cache/read/write failures plus qtawesome font-registration and
+      font-resource IO failures choose one validated, read-only packaged
+      fallback per icon and emit a rate-limited diagnostic. Missing/corrupt
+      packaged fallbacks are release-resource failures and deliberately
+      propagate.
 
     **Ordering constraint**: must be called AFTER ``QApplication`` has been
     constructed. qtawesome lazy-loads its icon font and emits
@@ -1481,6 +1482,12 @@ def ensure_icon_cache():
     paths = {}
     generated = 0
     t0 = time.perf_counter()
+    # A failed lazy qtawesome font load leaves its singleton uninitialized, so
+    # retrying the same load for every QSS glyph adds work without improving
+    # recovery. Preserve the precise, known failure and still resolve every
+    # placeholder independently to its validated bundled resource.
+    renderer_failure: Exception | None = None
+    renderer_failure_stage: str | None = None
 
     for placeholder, icon_name, color in _ARROW_SPECS:
         out_path = _cache_icon_path(out_dir, icon_name, color, size_px, qta_version)
@@ -1499,10 +1506,31 @@ def ensure_icon_cache():
         if status != "missing":
             _cache_fallback_diagnostic(placeholder, "cache_decode", status)
 
-        # Let configuration/programming errors from qtawesome propagate. A
-        # null pixmap, in contrast, is the concrete runtime-font/render
-        # failure the static packaged resource is designed to cover.
-        pix = qta.icon(icon_name, color=color).pixmap(size_px, size_px)
+        # Let configuration/programming errors from qtawesome propagate. Only
+        # its documented font failure and an OS error while reading its font
+        # resource are expected runtime degradation paths here.
+        if renderer_failure is not None:
+            _cache_fallback_diagnostic(
+                placeholder,
+                renderer_failure_stage or "renderer_resource",
+                renderer_failure,
+            )
+            paths[placeholder] = fallback_paths[placeholder]
+            continue
+        try:
+            pix = qta.icon(icon_name, color=color).pixmap(size_px, size_px)
+        except qta.FontError as exc:
+            renderer_failure = exc
+            renderer_failure_stage = "renderer_font"
+            _cache_fallback_diagnostic(placeholder, renderer_failure_stage, exc)
+            paths[placeholder] = fallback_paths[placeholder]
+            continue
+        except OSError as exc:
+            renderer_failure = exc
+            renderer_failure_stage = "renderer_resource_io"
+            _cache_fallback_diagnostic(placeholder, renderer_failure_stage, exc)
+            paths[placeholder] = fallback_paths[placeholder]
+            continue
         if pix.isNull():
             _cache_fallback_diagnostic(placeholder, "renderer_null_pixmap", icon_name)
             paths[placeholder] = fallback_paths[placeholder]

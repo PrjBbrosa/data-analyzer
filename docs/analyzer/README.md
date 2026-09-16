@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.2.4. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.2.5. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -123,6 +123,11 @@ automatic analysis ranges and viewport-following slices, improves spectrum
 panning and selection feedback, and aligns cursor readouts across full and mini
 modes with channel colors. Progress labels, toolbar branding, and help screenshots
 are restored or corrected.
+8.2.5 unifies channel-tree disclosure arrows, adds bundled fallback QSS icons,
+reduces repeated tree/candidate/facts projection, and adds a 300 ms single-pane
+time-View crossfade coordinated with UltraView previews. Other analysis sections
+and split panes retain direct restoration. Fractional tick labels keep accurate
+precision without changing tick locations or grid divisions.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

@@ -53,6 +53,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 ## pyqt-ui
 
+- [candidate-qt-storage](pyqt-ui/2026-09-16-candidate-metadata-matches-qt-storage.md) [candidate][qvariant] — Match actual Qt model roles.
 - [ultraview-qicon-native-target-raster](pyqt-ui/2026-08-22-ultraview-qicon-native-target-raster.md) [qicon] — Native sources avoid rail blur.
 - [action-button-natural-height-under-wrapped-label-pressure](pyqt-ui/2026-08-08-action-button-natural-height-under-wrapped-label-pressure.md) [qpushbutton][qsizepolicy][word-wrap][vertical-layout][screenshot] — In compact vertical forms, pin indispensable actions to their natural minimum height and Fixed vertical policy; wrapped neighbours can otherwise compress a valid button into an unreadable stripe in one captured state.
 
