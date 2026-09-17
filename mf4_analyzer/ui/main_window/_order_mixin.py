@@ -278,12 +278,8 @@ class OrderMixin:
         if rpm_mode != "manual" and not getattr(pane, "rpm_source", None):
             return True
         fid, ch = sources[0]
-        key = self._analysis_cache_key(
-            "order",
-            fid,
-            ch,
-            rpm_source=pane.rpm_source,
-            pane_idx=0,
+        key = self._analysis_cache_key_for_view_source(
+            "order", state, pane, 0, fid, ch,
         )
         return self.analysis_caches["order"].get(key) is None
 

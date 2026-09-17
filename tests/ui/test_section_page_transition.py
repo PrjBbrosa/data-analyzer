@@ -1706,6 +1706,22 @@ def _clear_heatmap_view_sources(state):
     pane.rpm_source = None
 
 
+def _seed_fft_view_cache(window, state, fid, channel="speed"):
+    pane = state.panes[0]
+    pane.sources = [(fid, channel)]
+    pane.rpm_source = None
+    _attach_analysis_file(state, fid)
+    state.params.update(window.inspector.fft_ctx.current_params())
+    window._refresh_analysis_candidates("fft")
+    window._apply_analysis_sources("fft", state, sync_effective_facts=False)
+    key = window._analysis_cache_key("fft", fid, channel, pane_idx=0)
+    freq = np.asarray([0.0, 1.0, 2.0], dtype=float)
+    amp = np.asarray([1.0, 0.5, 0.25], dtype=float)
+    window.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+    assert key is not None
+    return key
+
+
 def _seed_fft_time_view_cache(window, state, fid, channel="speed"):
     pane = state.panes[0]
     pane.sources = [(fid, channel)]
@@ -2372,6 +2388,315 @@ def test_e5_close_and_open_project_leave_no_residue(
     _wait_idle(qtbot, restored)
     _assert_no_transition_residue(restored)
     _restore_production_enabled_sections(restored)
+
+
+def _flip_inspector_window(ctx):
+    params = dict(ctx.current_params())
+    params["window"] = (
+        "hamming" if str(params.get("window")) != "hamming" else "hanning"
+    )
+    ctx.apply_params(params)
+    return str(params["window"])
+
+
+def _flip_inspector_nfft(ctx):
+    params = dict(ctx.current_params())
+    current = params.get("nfft")
+    params["nfft"] = 512 if current != 512 else 1024
+    params["nfft_mode"] = "fixed"
+    ctx.apply_params(params)
+    return params["nfft"]
+
+
+def _view_pin_keys(window, section, view_id):
+    pins = getattr(window, "_analysis_pins", None)
+    if pins is None:
+        return frozenset()
+    slot = (section, str(view_id), 0)
+    return frozenset(pins._slots.get(slot) or ())
+
+
+def _section_page(window, section):
+    return {
+        "fft": window.chart_stack.page_fft,
+        "fft_time": window.chart_stack.page_fft_time,
+        "order": window.chart_stack.page_order,
+    }[section]
+
+
+def _seed_section_view_cache(window, section, state, fid):
+    if section == "fft":
+        return _seed_fft_view_cache(window, state, fid)
+    if section == "fft_time":
+        return _seed_fft_time_view_cache(window, state, fid)
+    return _seed_order_view_cache(window, state, fid)
+
+
+def _section_ctx(window, section):
+    return getattr(window.inspector, f"{section}_ctx")
+
+
+def _uncomputed(window, section, state):
+    return window._analysis_view_is_uncomputed(section, state)
+
+
+def _prepare_cached_then_divergent_view(qtbot, qapp, window, section):
+    """View 0 cached; View 1 live inspector uses a different window."""
+    _pause_page_transition(window)
+    window.toolbar._set_mode(section)
+    qapp.processEvents()
+    _seed_active_analysis_attachments(window)
+    fid = _fid(window)
+    mgr = window.analysis_managers[section]
+    cached = mgr.get(mgr.active)
+    _seed_section_view_cache(window, section, cached, fid)
+    window._render_analysis_view_from_cache(section, cached)
+    canvas = _section_page(window, section).pane_canvas(0)
+    qtbot.waitUntil(canvas.has_result, timeout=2500)
+    window._capture_active_analysis_view(section)
+    assert not _uncomputed(window, section, cached)
+    window._on_analysis_new(section)
+    qapp.processEvents()
+    leaving = mgr.get(mgr.active)
+    leaving.panes[0].sources = list(cached.panes[0].sources)
+    leaving.panes[0].rpm_source = getattr(cached.panes[0], "rpm_source", None)
+    _attach_analysis_file(leaving, fid)
+    _flip_inspector_window(_section_ctx(window, section))
+    leaving.params.update(_section_ctx(window, section).current_params())
+    window._apply_analysis_sources(section, leaving, sync_effective_facts=False)
+    return fid, cached, leaving
+
+
+@pytest.mark.parametrize("section", ("fft", "fft_time", "order"))
+def test_analysis_admission_uses_target_params(
+    qtbot, qapp, loaded_csv, monkeypatch, section,
+):
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    fid, cached, leaving = _prepare_cached_then_divergent_view(
+        qtbot, qapp, window, section,
+    )
+    del leaving
+    classified = _uncomputed(window, section, cached)
+    assert classified is False, "cached target must use stored params, not leaving Inspector"
+
+    submitted, computes = _install_compute_spies(monkeypatch, window)
+    restores = []
+    orig_restore = window._render_analysis_view_from_cache
+
+    def restore(sec, state):
+        restores.append((sec, state.view_id))
+        return orig_restore(sec, state)
+
+    monkeypatch.setattr(window, "_render_analysis_view_from_cache", restore)
+    dirty_before = window._project_dirty.is_dirty
+    pins_before = _view_pin_keys(window, section, cached.view_id)
+    _resume_page_transition(window)
+    begins, captures = _install_transition_spies(monkeypatch, window)
+    controller, started, cancelled, finished = _connect_transition_lifecycle(
+        window,
+    )
+
+    _section_page(window, section).tabbar.switch_requested.emit(0)
+    qtbot.waitUntil(lambda: bool(finished) or bool(cancelled), timeout=2500)
+    _wait_idle(qtbot, window)
+
+    assert classified is False
+    assert cancelled == []
+    assert started and finished
+    assert [item["token"] is not None for item in begins] == [True]
+    assert captures and captures[0]["null"] is False
+    assert submitted == [] and computes == []
+    assert window.analysis_managers[section].active == 0
+    canvas = _section_page(window, section).pane_canvas(0)
+    assert canvas.has_result() is True
+    pane = cached.panes[0]
+    assert tuple(pane.sources[0])[:1] == (fid,)
+    assert restores and restores[0][0] == section
+    assert restores[0][1] == cached.view_id
+    assert window._project_dirty.is_dirty == dirty_before
+    pins_after = _view_pin_keys(window, section, cached.view_id)
+    assert pins_after
+    assert pins_before <= pins_after
+    _assert_idle(controller)
+
+
+def test_fft_time_admission_covers_nfft_and_range_mismatch(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _pause_page_transition(window)
+    window.toolbar._set_mode("fft_time")
+    qapp.processEvents()
+    _seed_active_analysis_attachments(window)
+    fid = _fid(window)
+    mgr = window.analysis_managers["fft_time"]
+    cached = mgr.get(mgr.active)
+    _seed_fft_time_view_cache(window, cached, fid)
+    window._render_analysis_view_from_cache("fft_time", cached)
+    qtbot.waitUntil(
+        window.chart_stack.page_fft_time.pane_canvas(0).has_result,
+        timeout=2500,
+    )
+    window._capture_active_analysis_view("fft_time")
+    window._on_analysis_new("fft_time")
+    qapp.processEvents()
+    _flip_inspector_nfft(window.inspector.fft_time_ctx)
+    mgr.get(mgr.active).panes[0].time_range = (0.0, 0.2)
+    assert window._fft_time_view_is_uncomputed(cached) is False
+
+    submitted, computes = _install_compute_spies(monkeypatch, window)
+    _resume_page_transition(window)
+    begins, captures = _install_transition_spies(monkeypatch, window)
+    _controller, started, cancelled, finished = _connect_transition_lifecycle(
+        window,
+    )
+    window.chart_stack.page_fft_time.tabbar.switch_requested.emit(0)
+    qtbot.waitUntil(lambda: bool(finished) or bool(cancelled), timeout=2500)
+    _wait_idle(qtbot, window)
+    assert cancelled == []
+    assert started and finished
+    assert [item["token"] is not None for item in begins] == [True]
+    assert submitted == [] and computes == []
+    assert window.chart_stack.page_fft_time.pane_canvas(0).has_result() is True
+
+
+def test_analysis_cache_miss_then_hit_with_divergent_params(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    fid, cached, miss_state = _prepare_cached_then_divergent_view(
+        qtbot, qapp, window, "fft_time",
+    )
+    original_window = cached.params.get("window")
+    assert window._fft_time_view_is_uncomputed(cached) is False
+    cached.params["window"] = (
+        "hamming" if original_window != "hamming" else "hanning"
+    )
+    assert window._fft_time_view_is_uncomputed(cached) is True
+    cached.params["window"] = original_window
+    assert window._fft_time_view_is_uncomputed(cached) is False
+    assert window._fft_time_view_is_uncomputed(miss_state) is True
+
+    _seed_fft_time_view_cache(window, miss_state, fid)
+    window._render_analysis_view_from_cache("fft_time", miss_state)
+    qtbot.waitUntil(
+        window.chart_stack.page_fft_time.pane_canvas(0).has_result,
+        timeout=2500,
+    )
+    assert window._fft_time_view_is_uncomputed(miss_state) is False
+
+    submitted, computes = _install_compute_spies(monkeypatch, window)
+    _resume_page_transition(window)
+    begins, captures = _install_transition_spies(monkeypatch, window)
+    _controller, started, cancelled, finished = _connect_transition_lifecycle(
+        window,
+    )
+    window.chart_stack.page_fft_time.tabbar.switch_requested.emit(0)
+    qtbot.waitUntil(lambda: bool(finished) or bool(cancelled), timeout=2500)
+    _wait_idle(qtbot, window)
+    assert cancelled == []
+    assert started and finished
+    begins.clear()
+    captures.clear()
+    started.clear()
+    cancelled.clear()
+    finished.clear()
+    window.chart_stack.page_fft_time.tabbar.switch_requested.emit(1)
+    qtbot.waitUntil(lambda: bool(finished) or bool(cancelled), timeout=2500)
+    _wait_idle(qtbot, window)
+    assert cancelled == []
+    assert started and finished
+    assert [item["token"] is not None for item in begins] == [True]
+    assert submitted == [] and computes == []
+
+
+def test_page_transition_presentation_admitted_is_shared(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_page_transition_enabled_sections(PAGE_TRANSITION_ENABLED_SECTIONS)
+    cs.set_page_transition_motion_policy(POLICY_LIGHT)
+    assert cs.page_transition_presentation_admitted("fft_time", "fft_time")
+    assert cs.page_transition_presentation_admitted("time", "fft")
+    cs.set_page_transition_motion_policy(POLICY_OFF)
+    assert not cs.page_transition_presentation_admitted("fft_time", "fft_time")
+    cs.set_page_transition_motion_policy(POLICY_LIGHT)
+    cs.set_page_transition_enabled_sections(("time",))
+    assert not cs.page_transition_presentation_admitted("fft_time", "fft_time")
+
+
+def test_off_admission_does_not_prepare_signal(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _prepare_cached_then_divergent_view(qtbot, qapp, window, "fft_time")
+    prepared = []
+    original = window._fft_time_effective_params_for_source
+
+    def prepare(*args, **kwargs):
+        prepared.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(window, "_fft_time_effective_params_for_source", prepare)
+    window.chart_stack.set_page_transition_motion_policy(POLICY_OFF)
+    assert not window.chart_stack.page_transition().motion_policy().interpolates()
+    assert window._should_begin_analysis_page_transition("fft_time", 0) is False
+    assert prepared == [], "motion admission must be cheap when OFF"
+
+    window.toolbar._set_mode("time")
+    qapp.processEvents()
+    prepared.clear()
+    assert window._should_begin_cross_section_page_transition(
+        "time", "fft_time",
+    ) is False
+    assert prepared == []
+
+    window.chart_stack.set_page_transition_motion_policy(POLICY_LIGHT)
+    window.chart_stack.set_page_transition_enabled_sections(("time",))
+    prepared.clear()
+    window.toolbar._set_mode("fft_time")
+    qapp.processEvents()
+    assert window._should_begin_analysis_page_transition("fft_time", 0) is False
+    assert prepared == []
+
+
+def test_split_and_programmatic_admission_skip_prepare(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _prepare_cached_then_divergent_view(qtbot, qapp, window, "fft_time")
+    prepared = []
+    original = window._fft_time_effective_params_for_source
+
+    def prepare(*args, **kwargs):
+        prepared.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(window, "_fft_time_effective_params_for_source", prepare)
+    _resume_page_transition(window)
+    window._opening_project = True
+    assert window._should_begin_analysis_page_transition("fft_time", 0) is False
+    assert prepared == []
+    window._opening_project = False
+    window.toolbar._set_mode("time")
+    qapp.processEvents()
+    fid = _fid(window)
+    _set_checked(window, "speed")
+    window.plot_time()
+    qapp.processEvents()
+    window._capture_current_view()
+    _new_time_view(qtbot, qapp, window)
+    window._attach_files_to_focused_view([fid])
+    if window.view_manager.active != 0:
+        window._switch_view(0)
+        qapp.processEvents()
+    window.view_manager.set_split(1)
+    qapp.processEvents()
+    assert window.chart_stack.split_active() is True
+    prepared.clear()
+    assert window._should_begin_cross_section_page_transition(
+        "time", "fft_time",
+    ) is False
+    assert prepared == []
 
 
 @pytest.mark.skip(reason="E0: acquisition cockpit is a separate window; Windows/macOS cockpit not in this offscreen matrix")

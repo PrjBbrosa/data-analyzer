@@ -15,6 +15,7 @@ from mf4_analyzer.ui.chart_stack.cursor_display import (
     build_fft_cursor_presentation,
 )
 from mf4_analyzer.ui.cursor_display_model import (
+    CursorDisplayChannel,
     CursorDisplayOptions,
     FrequencyCursorChannel,
 )
@@ -516,3 +517,148 @@ def test_fft_structured_snapshot_does_not_fall_back_to_unbounded_html(
     assert cs._pill._display_projection is not None
     _assert_inside(cs._pill, _spectrum_safe_rect(cs))
     _assert_document_fits(cs._pill)
+
+
+def _arm_time_dual(cs, qapp, a_text="1 s", b_text="2 s"):
+    cs.set_mode("time")
+    cs.set_cursor_mode("dual")
+    cs.canvas_time.cursor_info.emit(
+        f"A <b>{a_text}</b> &nbsp;│&nbsp; B <b>{b_text}</b>"
+    )
+    cs.canvas_time.dual_cursor_rows.emit((CursorDisplayChannel(
+        identity="speed", source_label="", channel_label="speed",
+        min_value=1., max_value=9., avg_value=5., delta=8.,
+        unit_suffix="rpm",
+    ),))
+    qapp.processEvents()
+
+
+def test_shared_pill_restores_primary_with_same_domain_rows(
+    qapp, qtbot, production_style,
+):
+    cs, canvas = _make_fft_stack(qtbot, qapp, width=1000, height=700, count=2)
+    _arm_time_dual(cs, qapp)
+    time_primary = cs._pill.primary_text()
+    time_detail = cs._pill.detail_text()
+    time_doc = cs._pill._detail.document.toPlainText()
+    assert "s" in time_primary
+    assert "Hz" not in time_primary
+    assert "speed" in time_doc.lower() or "min" in time_doc.lower()
+
+    cs.set_mode("fft")
+    _arm_dual(cs, canvas, qapp, a=10., b=200.)
+    fft_primary = cs._pill.primary_text()
+    fft_detail = cs._pill.detail_text()
+    assert "Hz" in fft_primary
+    assert fft_primary != time_primary
+
+    cs.set_mode("time")
+    qapp.processEvents()
+    frame = cs.grab()
+    assert not frame.isNull()
+    assert cs._pill._display_projection.x_mode == "time"
+    assert cs._pill.primary_text() == time_primary
+    assert "Hz" not in cs._pill.primary_text()
+    restored_doc = cs._pill._detail.document.toPlainText()
+    assert restored_doc == time_doc
+    assert cs._pill.detail_text() == time_detail
+    assert "Min" in restored_doc or "min" in restored_doc.lower()
+
+    cs._pill._toggle_mode()
+    qapp.processEvents()
+    assert cs._pill.display_mode() == "mini"
+    assert cs._pill.primary_text() == time_primary
+    assert cs._pill._display_projection.x_mode == "time"
+    cs._pill._toggle_mode()
+    qapp.processEvents()
+
+    cs.set_mode("fft")
+    qapp.processEvents()
+    assert cs._pill.primary_text() == fft_primary
+    assert cs._pill._display_projection.x_mode == "frequency"
+    assert "Hz" in cs._pill.primary_text()
+    assert cs._pill.detail_text() == fft_detail
+    fft_doc = cs._pill._detail.document.toPlainText()
+    assert "A" in fft_doc or "10" in fft_doc
+
+
+def test_shared_pill_single_and_a_only_restore_matching_primary(
+    qapp, qtbot, production_style,
+):
+    cs, canvas = _make_fft_stack(qtbot, qapp, width=1000, height=700, count=2)
+    cs.set_mode("time")
+    cs.set_cursor_mode("single")
+    cs.canvas_time.cursor_info.emit("t = <b>0.40 s</b>")
+    cs.canvas_time.single_cursor_rows.emit((CursorDisplayChannel(
+        identity="torque", source_label="", channel_label="torque",
+        current_value=3.5, unit_suffix="Nm",
+    ),))
+    qapp.processEvents()
+    time_primary = cs._pill.primary_text()
+    assert "s" in time_primary
+
+    cs.set_mode("fft")
+    cs._fft_card.set_cursor_mode("dual")
+    canvas.set_dual_cursor_frequencies(10.0, None)
+    qapp.processEvents()
+    fft_primary = cs._pill.primary_text()
+    assert "点击 B" in fft_primary
+
+    cs.set_mode("time")
+    qapp.processEvents()
+    assert cs._pill.primary_text() == time_primary
+    assert cs._pill._display_projection.x_mode == "time"
+    cs.set_mode("fft")
+    qapp.processEvents()
+    assert "点击 B" in cs._pill.primary_text()
+    assert cs._pill._display_projection.x_mode == "frequency"
+
+
+def test_missing_primary_does_not_inherit_other_domain(
+    qapp, qtbot, production_style,
+):
+    cs, canvas = _make_fft_stack(qtbot, qapp, width=900, height=600, count=2)
+    _arm_dual(cs, canvas, qapp, a=10., b=200.)
+    fft_primary = cs._pill.primary_text()
+    assert "Hz" in fft_primary
+    cs.set_mode("time")
+    cs.set_cursor_mode("dual")
+    cs.canvas_time.dual_cursor_rows.emit((CursorDisplayChannel(
+        identity="speed", source_label="", channel_label="speed",
+        min_value=1., max_value=9., avg_value=5., delta=8.,
+    ),))
+    qapp.processEvents()
+    cs.set_mode("fft")
+    qapp.processEvents()
+    cs.set_mode("time")
+    qapp.processEvents()
+    assert "Hz" not in cs._pill.primary_text()
+    assert cs._pill._display_projection.x_mode == "time"
+
+
+def test_mainwindow_retained_fft_keeps_frequency_primary(
+    qapp, qtbot, loaded_csv,
+):
+    from tests.ui.test_section_page_transition import (
+        _ensure_section,
+        _pause_page_transition,
+        _seed_all_section_cache_homes,
+    )
+    from tests.ui.test_view_switch_integration import _make_loaded_window
+
+    window = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _seed_all_section_cache_homes(qtbot, qapp, window)
+    _pause_page_transition(window)
+    cs = window.chart_stack
+    cs.set_cursor_mode_for_canvas(window.canvas_time, "dual")
+    window.canvas_time._cursor.ax = 0.1
+    window.canvas_time._cursor.bx = 0.5
+    window.canvas_time._emit_dual_cursor_html()
+    _ensure_section(qtbot, qapp, window, "fft")
+    cs._fft_card.set_cursor_mode("dual")
+    cs.canvas_fft.set_dual_cursor_frequencies(10., 100.)
+    qapp.processEvents()
+    _ensure_section(qtbot, qapp, window, "time")
+    _ensure_section(qtbot, qapp, window, "fft")
+    assert cs._pill.isVisible()
+    assert "Hz" in cs._pill.primary_text()

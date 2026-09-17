@@ -48,3 +48,7 @@ Offscreen 证据：`test_ordinary_ready_paint_does_not_cancel_live_fade`、`test
 - 未提交、未 bump 版本。
 - 未改采样/滤波/FFT/结果缓存。
 - `stack.py` 中 FFT 游标在途 diff 保留；本补丁只动 page-transition 方法与 `_page_transition_content_slots` 初始化。
+
+## 2026-09-17 后续台账
+
+历史启用范围（仅 time）与上表保留为当时事实。当前生产已全开五个 Section（见扩展验证记录）。本轮 follow-up 生命周期合同未回退；新增的是审查修复 F1/F2 廉价准入，不重测 Cocoa。overlay paint P95 / Windows 仍 **UNKNOWN**。

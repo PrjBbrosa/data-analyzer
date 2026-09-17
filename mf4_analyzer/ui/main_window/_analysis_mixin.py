@@ -36,6 +36,11 @@ from .analysis_time_range import (
 
 logger = logging.getLogger(__name__)
 
+# Explicit ``time_range=None`` means "full span"; omit the kwarg to read the
+# active pane.  Inactive cache identity must not use the latter.
+_ANALYSIS_CACHE_RANGE_UNSET = object()
+
+
 def _format_seconds_endpoint(value):
     text = f"{float(value):.3f}".rstrip("0").rstrip(".")
     return text or "0"
@@ -166,12 +171,28 @@ class AnalysisMixin:
             return self._order_view_is_uncomputed(state)
         return False
 
+    def _page_transition_lifecycle_blocks_animation(self) -> bool:
+        dirty = getattr(self, "_project_dirty", None)
+        return bool(
+            getattr(self, "_opening_project", False)
+            or getattr(self, "_restoring_project", False)
+            or (dirty is not None and dirty.close_teardown_started)
+        )
+
     def _should_begin_analysis_page_transition(self, section, idx) -> bool:
         """Begin only for protocol-ready single-Pane analysis navigation.
 
         An uncomputed target is not captured: cache miss stays
         direct-terminal and must not compute for the animation.
+        Policy, enabled sections, and split are decided before any
+        animation-only cache-key or signal preparation.
         """
+        if not self.chart_stack.page_transition_presentation_admitted(
+            section, section,
+        ):
+            return False
+        if self._page_transition_lifecycle_blocks_animation():
+            return False
         if self.chart_stack.current_mode() != section:
             return False
         page = self._analysis_page(section)
@@ -186,10 +207,7 @@ class AnalysisMixin:
         target = mgr.get(idx)
         if len(getattr(target, "panes", ()) or ()) != 1:
             return False
-        if (
-            self._analysis_page_transition_section_enabled(section)
-            and self._analysis_view_is_uncomputed(section, target)
-        ):
+        if self._analysis_view_is_uncomputed(section, target):
             return False
         return True
 
@@ -2105,17 +2123,26 @@ class AnalysisMixin:
             return frf_compute_cache_params(p)
         return p
 
-    def _analysis_cache_key(self, section, fid, ch, rpm_source=None, pane_idx=None):
+    def _analysis_cache_key(
+        self, section, fid, ch, rpm_source=None, pane_idx=None, *,
+        params=None, time_range=_ANALYSIS_CACHE_RANGE_UNSET,
+    ):
         cache = self.analysis_caches[section]
+        if time_range is _ANALYSIS_CACHE_RANGE_UNSET:
+            resolved_range = self._pane_time_range_for(section, pane_idx)
+        else:
+            resolved_range = time_range
         if section == 'fft_time':
-            p = self._analysis_compute_params('fft_time')
-            time_range = self._pane_time_range_for(section, pane_idx)
+            p = dict(
+                self._analysis_compute_params('fft_time')
+                if params is None else params
+            )
             prepared = self._fft_time_effective_params_for_source(
-                p, fid, ch, time_range)
+                p, fid, ch, resolved_range)
             if prepared is not None:
                 effective_p, _effective_time_range = prepared
                 return self._fft_time_analysis_cache_key(
-                    fid, ch, effective_p, pane_idx)
+                    fid, ch, effective_p, resolved_range)
             # Fallback: signal not yet available (< 2 samples). Delegate to
             # the primary key function so the key is always byte-identical to
             # the one that will be stored on compute — no field-shape divergence.
@@ -2155,39 +2182,74 @@ class AnalysisMixin:
                     effective_nfft=None,
                     n_samples=None,
                 )
-            return self._fft_time_analysis_cache_key(fid, ch, p_fb, pane_idx)
+            return self._fft_time_analysis_cache_key(
+                fid, ch, p_fb, resolved_range)
         if section == 'fft':
-            time_range = self._pane_time_range_for(section, pane_idx)
-            params = self._fft_effective_params_for_source(
-                self._analysis_compute_params(section),
+            live_params = (
+                self._analysis_compute_params(section)
+                if params is None else params
+            )
+            effective = self._fft_effective_params_for_source(
+                live_params,
                 fid,
                 ch,
-                time_range,
+                resolved_range,
             )
-            return self._fft_analysis_cache_key(fid, ch, params, time_range)
+            return self._fft_analysis_cache_key(
+                fid, ch, effective, resolved_range)
         if section == 'order':
-            time_range = self._pane_time_range_for(section, pane_idx)
-            params = self._analysis_compute_params(section)
+            live_params = (
+                self._analysis_compute_params(section)
+                if params is None else params
+            )
             effective = self._order_effective_params_for_source(
-                params,
+                live_params,
                 fid,
                 ch,
                 rpm_source,
-                time_range,
+                resolved_range,
             )
             if effective is not None:
-                params = effective
+                live_params = effective
             return self._order_analysis_cache_key(
                 fid,
                 ch,
-                params,
+                live_params,
                 rpm_source,
-                time_range,
+                resolved_range,
             )
-        params = dict(self._analysis_compute_params(section))
+        live_params = dict(
+            self._analysis_compute_params(section)
+            if params is None else params
+        )
         if section in {'fft', 'fft_time', 'order'}:
-            params['time_range'] = self._pane_time_range_for(section, pane_idx)
-        return cache.make_key(fid, ch, params)
+            live_params['time_range'] = resolved_range
+        return cache.make_key(fid, ch, live_params)
+
+    def _analysis_cache_key_for_view_source(
+        self, section, state, pane, pane_idx, fid, ch,
+    ):
+        """Build the restore key from a View's stored params/range/RPM.
+
+        Inactive admission must not read the live Inspector or the current
+        active pane. Overlay keeps identity aligned with inactive restore.
+        """
+        params = self._compute_params_overlay_state(section, state)
+        time_range = self._normalize_analysis_time_range(
+            getattr(pane, "time_range", None),
+        )
+        rpm_source = (
+            getattr(pane, "rpm_source", None) if section == "order" else None
+        )
+        return self._analysis_cache_key(
+            section,
+            fid,
+            ch,
+            rpm_source=rpm_source,
+            pane_idx=pane_idx,
+            params=params,
+            time_range=time_range,
+        )
 
     def _recompute_analysis_section(self, section):
         """Dispatch the active view's compute for ``section``.

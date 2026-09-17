@@ -114,7 +114,9 @@ class FFTTimeMixin:
         if not sources:
             return False
         fid, ch = sources[0]
-        key = self._analysis_cache_key("fft_time", fid, ch, pane_idx=0)
+        key = self._analysis_cache_key_for_view_source(
+            "fft_time", state, pane, 0, fid, ch,
+        )
         return self.analysis_caches["fft_time"].get(key) is None
 
     def _cancel_fft_time_page_transition_cover(self, view_id=None) -> None:

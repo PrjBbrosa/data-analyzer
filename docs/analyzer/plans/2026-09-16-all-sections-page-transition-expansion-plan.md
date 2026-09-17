@@ -145,3 +145,7 @@ UI 检查使用项目 runtime、临时配置与正常 Qt teardown；offscreen �
 完成需要逐 Section/导航类别列出：已接入、功能验证、性能准入、实际启用、平台缺口。正常 paint 不误取消，真实结果更新不被冻结掩盖；所有结束/取消/重定向路径恢复 updatesEnabled 并清理临时连接/图像。用户导航终态与 Off 一致，计算量不因动效增加。
 
 任何类别未达准入可保持直接终态，但总任务应标 partial，并给具体阻断证据；不能用“已加进集合”表示扩展完成。本次仅新增计划，检查引用/owner/范围与 `git diff --check`，不修改产品代码、不执行上述实现门。
+
+## 当前执行台账（2026-09-17）
+
+上文「待实施」是 9 月 16 日编写时状态，保留。扩展实现与五区全开已在后续提交落地，验证记录见 [2026-09-16-all-sections-page-transition-expansion.md](../verify/2026-09-16-all-sections-page-transition-expansion.md)。2026-09-17 审查修复 F1/F2：目标缓存身份与 Off 廉价门；Cocoa 30 样本与 Windows 仍 UNKNOWN，总体仍 partial。

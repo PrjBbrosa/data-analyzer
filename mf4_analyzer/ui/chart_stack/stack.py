@@ -62,6 +62,10 @@ from ..channel_drag import INTERNAL_CHANNEL_MIME, decode_channel_drag
 
 logger = logging.getLogger(__name__)
 
+# ``None`` is a valid stored primary (clear this source). Omit the argument
+# to leave the live pill primary unchanged.
+_CURSOR_PRIMARY_UNSET = object()
+
 
 class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
@@ -93,6 +97,7 @@ class ChartStack(QWidget):
         self._cursor_rows_by_canvas = {}
         self._legacy_detail_pending = {}
         self._pending_fft_primary = {}
+        self._pending_cursor_primary = {}
         self._frequency_layout_hooks = weakref.WeakSet()
         self._source_label_resolver = None
         # QSS (ChartStack { border-radius:10px; background:#fff }) only paints on
@@ -1104,7 +1109,7 @@ class ChartStack(QWidget):
         if self._secondary_card is not None:
             self._secondary_card.close_cursor_display_popover()
             self._secondary_card.setVisible(False)
-            self._cursor_rows_by_canvas.pop(self._secondary_card.canvas, None)
+            self._drop_cursor_canvas_state(self._secondary_card.canvas)
         if self._pill_secondary is not None:
             self._clear_cursor_pill_content(
                 self._pill_secondary, self._secondary_card
@@ -1305,6 +1310,26 @@ class ChartStack(QWidget):
         if target is not None and target.section not in self._page_transition_enabled_sections:
             self.cancel_page_transition("section-not-enabled")
 
+    def page_transition_presentation_admitted(
+        self, source_section: str, target_section: str,
+    ) -> bool:
+        """Cheap read-only gate before animation-only key/data/capture work.
+
+        Motion policy, enabled sections, and split layout live here so the
+        analysis-internal and cross-section callers share one feature switch.
+        """
+        if not self._page_transition.motion_policy().interpolates():
+            return False
+        enabled = self._page_transition_enabled_sections
+        if (
+            str(source_section) not in enabled
+            or str(target_section) not in enabled
+        ):
+            return False
+        if self.split_active():
+            return False
+        return True
+
     def begin_page_transition(
         self,
         *,
@@ -1320,10 +1345,8 @@ class ChartStack(QWidget):
         paths.  It neither selects a View nor causes rendering; callers still
         execute the existing state transaction immediately after this returns.
         """
-        if (
-            not self._page_transition.motion_policy().interpolates()
-            or str(source_section) not in self._page_transition_enabled_sections
-            or str(target_section) not in self._page_transition_enabled_sections
+        if not self.page_transition_presentation_admitted(
+            source_section, target_section,
         ):
             return None
         overlay_rect = self.page_transition_plot_surface_rect()
@@ -2002,9 +2025,11 @@ class ChartStack(QWidget):
         card = self._card_for_canvas(source)
         if not text:
             self._cancel_legacy_detail_fallback(source)
-            if self._is_managed_frequency_canvas(source) and source is not None:
+            if source is not None:
                 self._pending_fft_primary.pop(source, None)
-                self._cursor_rows_by_canvas.pop(source, None)
+                self._pending_cursor_primary.pop(source, None)
+                if self._is_managed_frequency_canvas(source):
+                    self._drop_cursor_canvas_state(source)
             self._update_pill_content(pill, card, pill.clear)
             return
         if self._is_managed_frequency_canvas(source):
@@ -2018,6 +2043,7 @@ class ChartStack(QWidget):
                     self._format_single_cursor_variants_for_pill(text)
                 )
                 pill.set_primary(primary)
+                self._remember_cursor_primary(source, primary)
                 if managed:
                     # Rows normally arrive synchronously after cursor_info.
                     # Delay the legacy fallback one event turn so that path
@@ -2031,6 +2057,7 @@ class ChartStack(QWidget):
             else:
                 primary, _detail = self._format_cursor_info_for_pill(text, mode)
                 pill.set_primary(primary)
+                self._remember_cursor_primary(source, primary)
             pill.setVisible(
                 self._cursor_pill_visible_for_mode(self.current_mode(), source)
             )
@@ -2105,7 +2132,10 @@ class ChartStack(QWidget):
             if any(dual_row_is_custom_x(row) for row in rows)
             else self._cursor_x_mode(source, channels)
         )
-        self._cursor_rows_by_canvas[source] = ("dual", x_mode, channels)
+        self._cursor_rows_by_canvas[source] = (
+            "dual", x_mode, channels,
+            self._primary_for_stored_rows(source),
+        )
         self._refresh_cursor_projection(source)
 
     def _on_single_cursor_rows(self, rows, source=None):
@@ -2119,6 +2149,7 @@ class ChartStack(QWidget):
             "single",
             self._cursor_x_mode(source, channels),
             channels,
+            self._primary_for_stored_rows(source),
         )
         self._refresh_cursor_projection(source)
 
@@ -2179,11 +2210,46 @@ class ChartStack(QWidget):
             if canvas is not None:
                 canvas.set_source_label_resolver(resolver)
 
-    def _refresh_cursor_projection(self, source, primary=None):
+    def _drop_cursor_canvas_state(self, source):
+        if source is None:
+            return
+        self._cursor_rows_by_canvas.pop(source, None)
+        self._pending_fft_primary.pop(source, None)
+        self._pending_cursor_primary.pop(source, None)
+
+    def _cursor_snapshot(self, source):
         cached = self._cursor_rows_by_canvas.get(source)
         if cached is None:
+            return None
+        cursor_mode, x_mode, channels = cached[:3]
+        primary = cached[3] if len(cached) > 3 else None
+        return cursor_mode, x_mode, channels, primary
+
+    def _remember_cursor_primary(self, source, primary):
+        text = primary or ""
+        self._pending_cursor_primary[source] = text
+        cached = self._cursor_snapshot(source)
+        if cached is None:
             return
-        cursor_mode, x_mode, channels = cached
+        cursor_mode, x_mode, channels, _old = cached
+        self._cursor_rows_by_canvas[source] = (
+            cursor_mode, x_mode, channels, text,
+        )
+
+    def _primary_for_stored_rows(self, source):
+        pending = self._pending_cursor_primary.pop(source, None)
+        if pending is not None:
+            return pending
+        cached = self._cursor_snapshot(source)
+        if cached is not None and cached[3] is not None:
+            return cached[3]
+        return ""
+
+    def _refresh_cursor_projection(self, source, primary=_CURSOR_PRIMARY_UNSET):
+        cached = self._cursor_snapshot(source)
+        if cached is None:
+            return
+        cursor_mode, x_mode, channels, cached_primary = cached
         pill = self._pill_for_canvas(source)
         card = self._card_for_canvas(source)
         if x_mode == "frequency":
@@ -2200,13 +2266,18 @@ class ChartStack(QWidget):
                 x_mode=x_mode,
                 mini=pill.display_mode() == "mini",
             )
+        apply_primary = primary is not _CURSOR_PRIMARY_UNSET
+        if apply_primary:
+            primary_text = primary or ""
+        else:
+            primary_text = None
 
         def update():
-            if primary:
-                pill._primary_original = primary
+            if apply_primary:
+                pill._primary_original = primary_text
             pill.set_display_projection(projection)
             if self._cursor_pill_visible_for_mode(self.current_mode(), source) and (
-                channels or pill.primary_text() or primary
+                channels or pill.primary_text() or primary_text
             ):
                 pill.setVisible(True)
 
@@ -2237,7 +2308,7 @@ class ChartStack(QWidget):
         self._legacy_detail_pending.pop(source, None)
         # A compatibility-only emission supersedes old structured rows before
         # the user can toggle between the full and mini variants.
-        self._cursor_rows_by_canvas.pop(source, None)
+        self._drop_cursor_canvas_state(source)
 
         def update():
             if mode == "single":
@@ -2296,8 +2367,7 @@ class ChartStack(QWidget):
         self._active_cursor_card = self._card_for_canvas(source)
         mode = self._cursor_mode_for_canvas(source)
         if mode not in {"single", "dual"}:
-            self._pending_fft_primary.pop(source, None)
-            self._cursor_rows_by_canvas.pop(source, None)
+            self._drop_cursor_canvas_state(source)
             return
         resolved = tuple(
             self._resolve_frequency_channel(channel)
@@ -2305,10 +2375,12 @@ class ChartStack(QWidget):
         )
         primary = self._pending_fft_primary.pop(source, None)
         if not resolved and not primary:
-            self._cursor_rows_by_canvas.pop(source, None)
+            self._drop_cursor_canvas_state(source)
             return
-        self._cursor_rows_by_canvas[source] = (mode, "frequency", resolved)
-        self._refresh_cursor_projection(source, primary=primary)
+        self._cursor_rows_by_canvas[source] = (
+            mode, "frequency", resolved, primary or "",
+        )
+        self._refresh_cursor_projection(source, primary=primary or "")
 
     def _on_frequency_layout_geometry_changed(self, source=None):
         if not self._cursor_source_on_screen(source):
@@ -2355,7 +2427,7 @@ class ChartStack(QWidget):
                 if card is not None and card is not source_card:
                     card.close_cursor_display_popover()
         for canvas in tuple(self._cursor_rows_by_canvas):
-            cached = self._cursor_rows_by_canvas.get(canvas)
+            cached = self._cursor_snapshot(canvas)
             if cached is not None and cached[1] == "frequency":
                 continue
             self._refresh_cursor_projection(canvas)
@@ -2384,13 +2456,17 @@ class ChartStack(QWidget):
         leave the previous domain's projection on screen, and must restore
         the destination canvas cache when it still exists. FRF keeps its
         legacy HTML path, so this only isolates the two managed domains.
+        Primary and detail belong to the same per-canvas snapshot.
         """
         if mode == "time":
             self._active_cursor_card = self._time_card
             restored = False
             for source in (self.canvas_time, self.secondary_canvas()):
-                if source is not None and source in self._cursor_rows_by_canvas:
-                    self._refresh_cursor_projection(source)
+                cached = self._cursor_snapshot(source)
+                if source is not None and cached is not None:
+                    self._refresh_cursor_projection(
+                        source, primary=cached[3] or "",
+                    )
                     restored = True
             if not restored:
                 self._pill.setVisible(False)
@@ -2401,10 +2477,12 @@ class ChartStack(QWidget):
         restored = False
         for card in self.page_fft._cards:
             source = getattr(card, "canvas", None)
-            cached = self._cursor_rows_by_canvas.get(source)
+            cached = self._cursor_snapshot(source)
             if cached is not None and cached[1] == "frequency":
                 self._active_cursor_card = card
-                self._refresh_cursor_projection(source)
+                self._refresh_cursor_projection(
+                    source, primary=cached[3] or "",
+                )
                 restored = True
                 break
         if not restored:
@@ -2524,6 +2602,7 @@ class ChartStack(QWidget):
         )
         self._cursor_rows_by_canvas.clear()
         self._pending_fft_primary.clear()
+        self._pending_cursor_primary.clear()
 
     def cursor_pill_snapshot(self):
         """Return the current floating cursor pill UI state.

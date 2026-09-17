@@ -1653,8 +1653,8 @@ class MainWindow(
         cache = self.analysis_caches['fft']
         for pane_idx, pane in enumerate(state.panes):
             for fid, ch in pane.sources:
-                key = self._analysis_cache_key(
-                    'fft', fid, ch, pane_idx=pane_idx)
+                key = self._analysis_cache_key_for_view_source(
+                    'fft', state, pane, pane_idx, fid, ch)
                 if cache.get(key) is not None:
                     return True
         return False
@@ -2145,18 +2145,11 @@ class MainWindow(
             return False
         if not self.files:
             return False
-        if (
-            getattr(self, "_opening_project", False)
-            or getattr(self, "_restoring_project", False)
-            or self._project_dirty.close_teardown_started
+        if self._page_transition_lifecycle_blocks_animation():
+            return False
+        if not self.chart_stack.page_transition_presentation_admitted(
+            source_mode, target_mode,
         ):
-            return False
-        if self.chart_stack.split_active():
-            return False
-        enabled = getattr(
-            self.chart_stack, "_page_transition_enabled_sections", frozenset(),
-        )
-        if source_mode not in enabled or target_mode not in enabled:
             return False
         if not self._section_has_page_transition_protocol(source_mode):
             return False

@@ -121,3 +121,7 @@
 ## 8. 本次计划交付检查
 
 本次为文档变更，不执行上述实现任务。检查 owner/路径、现有契约一致性、工作区范围及 `git diff --check`；不需要运行 runtime suite。既有临时探针仅作为问题证据，不计入修复验收。
+
+## 当前执行台账（2026-09-17）
+
+上表与「待实施」是 9 月 16 日计划当时状态，保留不改写。共享布局已在后续提交落地。2026-09-17 审查修复 F3：每 canvas 快照同时保存 primary 与 rows，Time↔FFT 组件恢复不再混域；完整 MainWindow 对照仍通过。Cocoa/Windows 仍 UNKNOWN。详见 [2026-09-17 审查优化计划 §6](2026-09-17-commit-review-optimization-plan.md)。

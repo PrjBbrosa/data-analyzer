@@ -48,3 +48,7 @@ ChartStack 层仍可只启用子集；`test_measured_policy_does_not_enable_an_u
 - 未跑全量 pytest / 整个 `tests/ui`。
 - 未启用分屏 / UltraView / Batch / 采集动效。
 - 未 commit / 未 bump 版本。
+
+## 2026-09-17 审查修复台账
+
+基线仍是上表。F1/F2 在 `fa7f6e21` 之上修复：动效准入先做 policy/enabled/split/生命周期廉价判断，缓存身份按目标 View 的 overlay params 与 pane range/RPM 构造。生产仍全开五个 Section；Off 不再为动效准备分析 key。Cocoa 30 样本与 Windows 仍 **UNKNOWN**。详见 [2026-09-17 审查优化计划 §6](../plans/2026-09-17-commit-review-optimization-plan.md)。

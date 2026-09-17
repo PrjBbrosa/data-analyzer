@@ -133,3 +133,7 @@ Owner：探针优先复用 `scripts/probe_interaction_motion.py` 的基建；若
 实施完成需要：普通 paint 不再误取消；语义失效仍正确撤层；不新增计算/重复提交；真实生产入口视觉与性能门通过，或对未准入场景明确保留直接终态。不以空控件测试、手动 animation clock 或 offscreen 耗时替代原生性能。
 
 本次只新增本文；核对引用、owner、范围及空白，不运行实现测试，不修改产品代码。所有风险等级为计划阶段判断，修复效果与性能均待实施验证。
+
+## 当前执行台账（2026-09-17）
+
+上文「本次只新增本文」是 9 月 16 日编写时状态，保留。生命周期修复已落地，见 [验证记录](../verify/2026-09-16-page-transition-safety-performance-followup.md)。2026-09-17 审查修复不回退该合同；Cocoa/Windows 性能仍 UNKNOWN。
