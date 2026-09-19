@@ -63,9 +63,18 @@ def test_audio_signal_selection_enables_a_weighting_for_fft_time_path(
 
 
 def test_audio_source_builtin_presets_keep_a_weighting_across_all_sections(
-    qapp, qtbot
+    qapp, qtbot, monkeypatch
 ):
     from mf4_analyzer.ui.main_window import MainWindow
+
+    # This test is about A-weighting, not the "keep manual axis range?"
+    # confirm. Combined-suite leftover axis state otherwise opens
+    # ``box.exec_()`` and hangs the offscreen session.
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.inspector_sections.presets.PresetBar."
+        "_confirm_axis_preservation",
+        lambda *args, **kwargs: "preset",
+    )
 
     win = MainWindow()
     qtbot.addWidget(win)

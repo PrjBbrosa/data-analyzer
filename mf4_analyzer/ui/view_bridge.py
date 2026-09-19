@@ -11,7 +11,7 @@ from dataclasses import replace
 import json
 from typing import Any, Iterable
 
-from .pinned_cursor_state import collection_from_dict
+from .pinned_cursor_state import PinnedCursorCollection, collection_from_dict
 from .time_xaxis import CustomXAxisSpec, CHANNEL_MODE, EXACT_SOURCE
 from .view_overlay_state import (
     normalize_cursor_placement,
@@ -217,7 +217,8 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     # Pins are pane-local; do not gate on the shared navigator/filter projection.
     getter = getattr(chart_stack, "pinned_cursors_for_canvas", None)
     if callable(getter):
-        state.pinned_cursors = collection_from_dict(getter(target))
+        live = getter(target)
+        state.pinned_cursors = _adopt_live_pins(state.pinned_cursors, live)
 
 
 def capture_canvas_ranges_into(state: ViewState, canvas) -> None:
@@ -419,3 +420,25 @@ def _signals_blocked(widget):
         yield
     finally:
         blocker(old)
+
+
+def _adopt_live_pins(state_collection, live):
+    """Keep the state's collection when the controller has none / no records.
+
+    Controller empty collections must not mint a new ``scope_id`` into capture.
+    Closing every pin still replaces records with ``()`` while keeping the
+    state's identity.
+    """
+    if live is None:
+        return state_collection
+    if not isinstance(live, PinnedCursorCollection):
+        live = collection_from_dict(live)
+    if not live.records:
+        if not getattr(state_collection, "records", ()):
+            return state_collection
+        return replace(
+            state_collection,
+            records=(),
+            next_ordinal=live.next_ordinal,
+        )
+    return live

@@ -202,8 +202,9 @@ class ViewMixin:
             self._store_companion_color_override(canvas, source, color)
             return
         fid, ch = resolved
+        from ..view_bridge import _canvas_owns_shared_projection
         setter = getattr(self.navigator, 'set_channel_colors', None)
-        if callable(setter):
+        if callable(setter) and _canvas_owns_shared_projection(self, canvas):
             setter({(fid, ch): str(color)})
         idx = self._view_index_for_canvas(canvas)
         if idx is None:
@@ -227,7 +228,9 @@ class ViewMixin:
             return None
         try:
             items = list(composite_items())
-        except Exception:
+        except (AttributeError, RuntimeError):
+            # Canvas storage can already be sip-deleted while a color signal
+            # is still draining; there is then no companion identity to map.
             return None
         for ck, name, _row in items:
             if ck not in companions or str(name) != str(display_name):
@@ -406,7 +409,9 @@ class ViewMixin:
             return ""
         try:
             items = list(composite_items())
-        except Exception:
+        except (AttributeError, RuntimeError):
+            # Same teardown window as companion lookup: a dying canvas has no
+            # stable composite identity for chart-options capture.
             return ""
         for ck, name, pair in items:
             owner = pair[0] if pair else None
@@ -422,11 +427,13 @@ class ViewMixin:
                 y_ref = getattr(binding, "y_ref", None)
                 if not binding_id:
                     continue
-                if (
-                    data_id is not None
-                    and str(getattr(y_ref, "fid", "") or "") == str(data_id)
-                ):
-                    return appearance_binding_key(binding_id)
+                y_fid = str(getattr(y_ref, "fid", "") or "")
+                display = str(getattr(binding, "display_name", "") or "")
+                if data_id is not None and y_fid and y_fid != str(data_id):
+                    continue
+                if str(name) != binding_id and str(name) != display:
+                    continue
+                return appearance_binding_key(binding_id)
         return ""
 
     def _apply_view_chart_appearance(self, state, canvas):
@@ -509,7 +516,8 @@ class ViewMixin:
             return
         try:
             lo, hi = getter()
-        except Exception:
+        except (AttributeError, RuntimeError):
+            # Handle or ViewBox already gone; skip the log-range repair.
             return
         if float(lo) <= 0.0 or float(hi) <= 0.0:
             autoscale(axis=axis)
@@ -523,7 +531,9 @@ class ViewMixin:
                 continue
             try:
                 item.setVisible(False)
-            except Exception:
+            except (AttributeError, RuntimeError):
+                # Inside-label QGraphicsItem can already be sip-deleted during
+                # a View rebuild; skip that stale handle pairing.
                 continue
 
     def _inherit_chart_appearance_after_groups_changed(
@@ -640,9 +650,6 @@ class ViewMixin:
         )
 
     def _project_view_controls(self, idx):
-        ensure = getattr(self, "_ensure_pinned_cursor_lifecycle_hooks", None)
-        if callable(ensure):
-            ensure()
         if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return
         invalidate = getattr(self.navigator, "invalidate_channel_filter_context", None)
@@ -1080,9 +1087,6 @@ class ViewMixin:
             )
 
     def _render_view_onto_canvas(self, idx, canvas, *, update_primary_ui):
-        ensure = getattr(self, "_ensure_pinned_cursor_lifecycle_hooks", None)
-        if callable(ensure):
-            ensure()
         if canvas is None:
             return
         if not (0 <= idx < len(self.view_manager.views)):

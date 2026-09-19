@@ -753,6 +753,16 @@ def test_capture_keeps_pins_when_stack_seam_is_absent():
     assert state.pinned_cursors is pins
 
 
+def test_capture_keeps_pins_when_controller_collection_is_none():
+    win = _Window()
+    stack = _PinStack()
+    win.chart_stack = stack
+    pins = _sample_pins()
+    state = ViewState(name="v", tab_color="#000000", pinned_cursors=pins)
+    view_bridge.capture_controls_into(state, win, stack.canvas_time)
+    assert state.pinned_cursors is pins
+
+
 def test_capture_and_apply_pins_are_pane_local_not_shared_projection():
     win = _Window()
     stack = _PinStack()

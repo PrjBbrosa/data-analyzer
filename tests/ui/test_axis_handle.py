@@ -84,6 +84,33 @@ def test_snapshot_axis_appearance_reads_handle_fields(qapp):
     assert snap["grid"] is False
 
 
+def test_snapshot_axis_appearance_swallows_deleted_grid_probe(qapp):
+    from mf4_analyzer.ui._axis_handle import snapshot_axis_appearance
+
+    class _DyingHandle:
+        def get_title(self):
+            return "t"
+
+        def get_xlabel(self):
+            return "x"
+
+        def get_ylabel(self):
+            return "y"
+
+        def get_xscale(self):
+            return "linear"
+
+        def get_yscale(self):
+            return "linear"
+
+        def is_grid_enabled(self):
+            raise RuntimeError("wrapped C/C++ object of type PlotItem has been deleted")
+
+    snap = snapshot_axis_appearance(_DyingHandle())
+    assert snap["grid"] is False
+    assert snap["title"] == "t"
+
+
 def test_pg_axis_handle_label_and_title_roundtrip(qapp):
     handle, _canvas = _pg_time_handle(qapp)
 

@@ -161,6 +161,26 @@ def test_close_last_file_clears_pins_not_display_prefs(qapp, qtbot, tmp_path):
     assert win.chart_stack.cursor_display_options() == before_options
 
 
+def test_close_all_clears_pins_while_restoring_project(qapp, qtbot, tmp_path):
+    """F-P0-2: close_all must wipe pins even under ``_restoring_project``."""
+    win, fid_a, _fid_b = _load_two(qtbot, tmp_path)
+    page = win.chart_stack.page_fft
+    canvas = page.pane_canvas(0)
+    pins = _pinned(fid_a)
+    win.chart_stack.set_pinned_cursors_for_canvas(canvas, pins)
+    page._overlay_session_bound = True
+    assert win.chart_stack.pinned_cursors_for_canvas(canvas).records
+
+    win._restoring_project = True
+    try:
+        win.close_all(force=True)
+    finally:
+        win._restoring_project = False
+
+    assert win.chart_stack.pinned_cursors_for_canvas(canvas).records == ()
+    assert win.chart_stack.pinned_cursors_for_canvas(win.canvas_time).records == ()
+
+
 def test_close_last_file_one_by_one_resets_session(qapp, qtbot, tmp_path):
     win, fid_a, fid_b = _load_two(qtbot, tmp_path)
     _dirty_session(win)

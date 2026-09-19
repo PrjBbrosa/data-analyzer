@@ -42,7 +42,6 @@ from .cursor_pill import (
     strip_html,
 )
 from .cursor_display import (
-    CursorDisplayBranch,
     CursorDisplayChannel,
     CursorDisplayOptions,
     CursorDisplaySettingsStore,
@@ -51,6 +50,7 @@ from .cursor_display import (
     build_fft_cursor_presentation,
     live_pin_hint_text,
 )
+from ..cursor_display_model import cursor_display_channel_from_dual_row
 from .pinned_cursor_controller import PinnedCursorController
 from ..plot_helpers import (
     apply_cursor_source_prefix_policy,
@@ -567,7 +567,11 @@ class ChartStack(QWidget):
             return ()
         try:
             return getter(canvas)
-        except (TypeError, RuntimeError):
+        except RuntimeError:
+            # Qt C++ wrapper already deleted (teardown / closed canvas).
+            logger.warning(
+                "pinned_cursor_fingerprint failed for %r", canvas, exc_info=True,
+            )
             return ()
 
     def consume_live_cursor_pill(self, canvas):
@@ -608,28 +612,8 @@ class ChartStack(QWidget):
 
     def _install_analysis_pin_split_hooks(self):
         for page in (self.page_fft, self.page_frf):
-            page.enter_split = partial(
-                self._analysis_pin_enter_split, page, page.enter_split,
-            )
-            page.exit_split = partial(
-                self._analysis_pin_exit_split, page, page.exit_split,
-            )
-
-    def _analysis_pin_enter_split(self, page, original):
-        before = list(page._cards)
-        original()
-        for card in page._cards:
-            if card in before:
-                continue
-            canvas = getattr(card, "canvas", None)
-            if canvas is not None:
-                self._pinned_cursors.bind_canvas(canvas)
-
-    def _analysis_pin_exit_split(self, page, original):
-        if page.pane_count() >= 2:
-            canvas = page.pane_canvas(1)
-            self._pinned_cursors.unbind_canvas(canvas)
-        original()
+            page.pane_added.connect(self._pinned_cursors.bind_canvas)
+            page.pane_removing.connect(self._pinned_cursors.unbind_canvas)
 
     def secondary_canvas(self):
         if self._secondary_card is None:
@@ -2337,48 +2321,8 @@ class ChartStack(QWidget):
         return "custom" if callable(checker) and checker() else "time"
 
     def _cursor_display_channel_from_dual(self, row):
-        if isinstance(row, CursorDisplayChannel):
-            return row
-        if not hasattr(row, "channel_name"):
-            name, minimum, maximum, average, delta, unit_suffix, color = row[:7]
-            return CursorDisplayChannel(
-                identity=name,
-                source_label="",
-                channel_label=str(name),
-                color=str(color or "#111827"),
-                unit_suffix=str(unit_suffix or ""),
-                delta=delta,
-                min_value=minimum,
-                max_value=maximum,
-                avg_value=average,
-            )
-        name = str(getattr(row, "label", "") or getattr(row, "channel_name", ""))
-        identity = getattr(row, "identity", None)
-        source_label, channel_label = resolve_cursor_source_label(
-            name, identity, self._source_label_resolver
-        )
-        branches = tuple(
-            CursorDisplayBranch(
-                branch.branch_label,
-                min_value=branch.min_value,
-                max_value=branch.max_value,
-                avg_value=branch.avg,
-                delta_value=getattr(branch, "delta", None),
-            )
-            for branch in getattr(row, "branches", ())
-        )
-        return CursorDisplayChannel(
-            identity=identity,
-            source_label=source_label,
-            channel_label=channel_label,
-            color=str(getattr(row, "color", "#111827") or "#111827"),
-            unit_suffix=str(getattr(row, "unit_suffix", "") or ""),
-            delta=getattr(row, "delta", None),
-            min_value=getattr(row, "min_value", None),
-            max_value=getattr(row, "max_value", None),
-            avg_value=getattr(row, "avg", None),
-            branches=branches,
-            diagnostic=str(getattr(row, "status", "") or ""),
+        return cursor_display_channel_from_dual_row(
+            row, source_label_resolver=self._source_label_resolver,
         )
 
     def set_source_label_resolver(self, resolver):

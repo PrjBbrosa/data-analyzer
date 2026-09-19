@@ -499,24 +499,36 @@ class CursorPill(QFrame):
     def _position_toggle(self):
         self._position_title_actions()
 
+    def _title_action_occupies_slot(self, widget):
+        """True when this chrome widget occupies a right-edge slot.
+
+        ``QWidget.isVisible()`` is False until ancestors are shown, so packing
+        uses ``isVisibleTo(self)``: hidden pin/close take no slot, and live
+        +/- still lands on the right edge during pre-show ``adjustSize()``.
+        """
+        return widget.isVisibleTo(self)
+
     def _position_title_actions(self):
-        """Keep P hint / pin / +/- / close on one reserved right-edge strip."""
+        """Pack only visible title actions from the right edge.
+
+        Order: × → +/- → pin → P hint. Hidden chrome occupies no slot.
+        First-line text still uses the full ``_TITLE_ACTION_RESERVE`` margin.
+        """
         y = _TOGGLE_EDGE_GAP
         right = self.width() - _TOGGLE_EDGE_GAP
-        self._close_btn.move(right - _ACTION_BTN, y)
-        right -= _ACTION_BTN + _TOGGLE_EDGE_GAP
-        self._toggle_btn.move(right - _ACTION_BTN, y)
-        right -= _ACTION_BTN + _TOGGLE_EDGE_GAP
-        self._pin_btn.move(right - _ACTION_BTN, y)
-        hint_width = max(_ACTION_BTN, self._pin_hint.sizeHint().width())
-        hint_width = min(hint_width, right)
-        self._pin_hint.setGeometry(
-            right - hint_width, y, hint_width, _ACTION_BTN,
-        )
-        self._close_btn.raise_()
-        self._toggle_btn.raise_()
-        self._pin_btn.raise_()
-        self._pin_hint.raise_()
+        for widget in (self._close_btn, self._toggle_btn, self._pin_btn):
+            if not self._title_action_occupies_slot(widget):
+                continue
+            widget.move(right - _ACTION_BTN, y)
+            right -= _ACTION_BTN + _TOGGLE_EDGE_GAP
+            widget.raise_()
+        if self._title_action_occupies_slot(self._pin_hint):
+            hint_width = max(_ACTION_BTN, self._pin_hint.sizeHint().width())
+            hint_width = min(hint_width, right)
+            self._pin_hint.setGeometry(
+                right - hint_width, y, hint_width, _ACTION_BTN,
+            )
+            self._pin_hint.raise_()
 
     def _emit_unpin(self):
         self.unpin_requested.emit()

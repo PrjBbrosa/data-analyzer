@@ -33,6 +33,7 @@ from mf4_analyzer.ui.cursor_display_model import (
     CursorDisplayOptions,
     CursorExtremaFact,
     PinnedCursorSample,
+    cursor_display_channel_from_dual_row,
 )
 from mf4_analyzer.ui.plot_helpers import (
     DualCursorBranch,
@@ -557,6 +558,16 @@ class CursorController(_CanvasBackref):
         setattr(self, attr_name, new_items)
         return new_items
 
+    def sync_single_cursor_line(self, x):
+        """Move the live single-cursor line to ``x`` without re-sampling."""
+        x_value = _finite_float(x)
+        if x_value is None:
+            return
+        items = self._ensure_cursor_items(
+            "_cursor_line_items", color="#111827", width=1.0,
+        )
+        self._set_cursor_items_pos(items, x_value)
+
     def _cursor_item_owner(self, item):
         owner = self._cursor_item_owners.get(id(item))
         if owner is not None:
@@ -961,48 +972,8 @@ class CursorController(_CanvasBackref):
 
     def _cursor_display_channel_from_dual_row(self, row):
         """Same field mapping as ChartStack._cursor_display_channel_from_dual."""
-        if isinstance(row, CursorDisplayChannel):
-            return row
-        if not hasattr(row, "channel_name"):
-            name, minimum, maximum, average, delta, unit_suffix, color = row[:7]
-            return CursorDisplayChannel(
-                identity=name,
-                source_label="",
-                channel_label=str(name),
-                color=str(color or "#111827"),
-                unit_suffix=str(unit_suffix or ""),
-                delta=delta,
-                min_value=minimum,
-                max_value=maximum,
-                avg_value=average,
-            )
-        name = str(getattr(row, "label", "") or getattr(row, "channel_name", ""))
-        identity = getattr(row, "identity", None)
-        source_label, channel_label = resolve_cursor_source_label(
-            name, identity, self._source_label_resolver
-        )
-        branches = tuple(
-            CursorDisplayBranch(
-                branch.branch_label,
-                min_value=branch.min_value,
-                max_value=branch.max_value,
-                avg_value=branch.avg,
-                delta_value=getattr(branch, "delta", None),
-            )
-            for branch in getattr(row, "branches", ())
-        )
-        return CursorDisplayChannel(
-            identity=identity,
-            source_label=source_label,
-            channel_label=channel_label,
-            color=str(getattr(row, "color", "#111827") or "#111827"),
-            unit_suffix=str(getattr(row, "unit_suffix", "") or ""),
-            delta=getattr(row, "delta", None),
-            min_value=getattr(row, "min_value", None),
-            max_value=getattr(row, "max_value", None),
-            avg_value=getattr(row, "avg", None),
-            branches=branches,
-            diagnostic=str(getattr(row, "status", "") or ""),
+        return cursor_display_channel_from_dual_row(
+            row, source_label_resolver=self._source_label_resolver,
         )
 
     @staticmethod

@@ -58,7 +58,7 @@ import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from .pinned_cursor_state import (
     collection_from_dict,
@@ -191,6 +191,13 @@ def _project_json_dumps(payload, *, sort_keys=False, indent=None) -> str:
 
 class UnsupportedProjectVersion(ValueError):
     """Raised when reading a .tlproj whose schema_version is unknown."""
+
+    def __init__(self, schema_version):
+        self.schema_version = schema_version
+        super().__init__(
+            f"project schema_version={schema_version} not supported "
+            f"(this app reads v{SCHEMA_VERSION})"
+        )
 
 
 @dataclass
@@ -340,10 +347,7 @@ def load_project_from_json(path) -> ProjectDocument:
     if version is None:
         version = 1
     if version not in SUPPORTED_SCHEMA_VERSIONS:
-        raise UnsupportedProjectVersion(
-            f"project schema_version={version} not supported "
-            f"(this app reads v{SCHEMA_VERSION})"
-        )
+        raise UnsupportedProjectVersion(version)
 
     files = [
         ProjectFileRef(
@@ -515,8 +519,10 @@ def _remap_channel_axis_groups(value, fid_map: dict) -> dict[str, str]:
     return groups
 
 
-def _remap_pinned_cursors(raw, fid_map: dict) -> dict:
-    """Rewrite known pin fids; keep unknown fids. Bad records are dropped."""
+def _remap_pinned_cursors(raw, fid_map: dict):
+    """Rewrite known pin fids; drop unknown fids. Missing payload stays missing."""
+    if raw is None:
+        return None
     return collection_to_dict(
         remap_collection_fids(collection_from_dict(raw), fid_map)
     )
@@ -712,7 +718,8 @@ def collect_dropped_analysis_refs(analysis_views: dict, fid_map: dict) -> list[t
     """Pane roles whose source fid is absent from ``fid_map`` after restore.
 
     Returns ``(section, view_id, pane_idx, role)`` tuples. Roles are
-    ``signal`` (overlay sources), ``rpm``, ``input``, and ``output``.
+    ``signal`` (overlay sources), ``rpm``, ``input``, ``output``, and
+    ``pin`` (unknown-fid pinned-cursor identities).
     """
     dropped: list[tuple] = []
     for section, block in (analysis_views or {}).items():
@@ -744,13 +751,18 @@ def collect_dropped_analysis_refs(analysis_views: dict, fid_map: dict) -> list[t
                         and source[0] not in fid_map
                     ):
                         dropped.append((section, view_id, pane_idx, role))
+                for _fid, _channel in _dropped_pin_identities(
+                    pane.get("pinned_cursors"), fid_map,
+                ):
+                    dropped.append((section, view_id, pane_idx, "pin"))
     return dropped
 
 
 def collect_dropped_time_refs(views: list, fid_map: dict) -> list[tuple]:
     """Time-View channel refs whose fid is absent from ``fid_map``.
 
-    Returns ``(view_id_or_name, fid, channel)`` tuples from ``checked``.
+    Returns ``(view_id_or_name, fid, channel)`` tuples from ``checked``,
+    curve bindings, and unknown-fid pinned-cursor identities.
     """
     dropped: list[tuple] = []
     for view in views or []:
@@ -767,4 +779,66 @@ def collect_dropped_time_refs(views: list, fid_map: dict) -> list[tuple]:
                 view.get("curve_bindings") or [], fid_map, view_id=view_id
             )
         )
+        for fid, channel in _dropped_pin_identities(
+            view.get("pinned_cursors"), fid_map,
+        ):
+            dropped.append((view_id, fid, channel))
+    return dropped
+
+
+def _dropped_pin_identities(raw, fid_map: dict) -> list[tuple[object, object]]:
+    """Return ``(fid, channel)`` pairs that ``remap_collection_fids`` would drop."""
+    if not isinstance(raw, Mapping):
+        return []
+    records = raw.get("records")
+    if not isinstance(records, Sequence) or isinstance(
+        records, (str, bytes, bytearray)
+    ):
+        return []
+    mapping = fid_map if isinstance(fid_map, Mapping) else {}
+    dropped: list[tuple[object, object]] = []
+    seen: set[tuple[object, object]] = set()
+
+    def _emit(fid, channel) -> None:
+        key = (fid, channel)
+        if key in seen:
+            return
+        seen.add(key)
+        dropped.append(key)
+
+    for item in records:
+        if not isinstance(item, Mapping):
+            continue
+        axis = item.get("axis_identity")
+        axis_fid = None
+        axis_channel = ""
+        axis_missing = False
+        if isinstance(axis, (list, tuple)) and len(axis) >= 1:
+            axis_fid = axis[0]
+            if len(axis) > 1:
+                axis_channel = axis[1]
+            axis_missing = axis_fid not in mapping
+        bindings_raw = item.get("bindings") or ()
+        parsed: list[tuple[object, object]] = []
+        if isinstance(bindings_raw, Sequence) and not isinstance(
+            bindings_raw, (str, bytes, bytearray, Mapping)
+        ):
+            for binding in bindings_raw:
+                if not isinstance(binding, Mapping):
+                    continue
+                fid = binding.get("fid")
+                if not fid:
+                    continue
+                parsed.append((fid, binding.get("channel") or ""))
+        kept = any(fid in mapping for fid, _channel in parsed)
+        drop_whole = axis_missing or not kept
+        if drop_whole:
+            if axis_fid is not None:
+                _emit(axis_fid, axis_channel)
+            for fid, channel in parsed:
+                _emit(fid, channel)
+        else:
+            for fid, channel in parsed:
+                if fid not in mapping:
+                    _emit(fid, channel)
     return dropped

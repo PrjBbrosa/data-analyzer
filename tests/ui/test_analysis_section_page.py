@@ -211,6 +211,20 @@ def test_enter_exit_split(page):
     assert page.focused_index() == 0
 
 
+def test_enter_exit_split_emits_pane_signals(page):
+    added = []
+    removed = []
+    page.pane_added.connect(added.append)
+    page.pane_removing.connect(removed.append)
+    page.enter_split()
+    assert page.pane_count() == 2
+    assert added == [page.pane_canvas(1)]
+    canvas = page.pane_canvas(1)
+    page.exit_split()
+    assert removed == [canvas]
+    assert page.pane_count() == 1
+
+
 def test_set_focus(page):
     page.enter_split()
     page.set_focused_index(1)

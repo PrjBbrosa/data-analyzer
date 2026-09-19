@@ -747,6 +747,52 @@ def test_cursor_pill_toggle_stays_pinned_to_top_right_corner(qapp, qtbot):
     assert pill._toggle_btn.x() >= primary_text_right
 
 
+def test_cursor_pill_pinned_close_packs_toggle_immediately_to_its_left(qapp, qtbot):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    parent.resize(1000, 400)
+    qtbot.addWidget(parent)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    pill.set_primary("<span>t=216.2100s</span>")
+    pill.set_dual_rows([
+        ("very_long_dual_cursor_channel_name_to_force_width",
+         -1.0, 2.0, 0.5, 1.5, " Nm", "#ef4444"),
+        ("another_long_dual_cursor_channel_name_for_more_width",
+         -3.0, 4.0, 0.25, -0.75, " Nm", "#1769e0"),
+    ])
+    pill.set_pin_role("pinned")
+    parent.show()
+    pill.show()
+    qapp.processEvents()
+
+    def close_corner_and_toggle_gap():
+        pill.adjustSize()
+        pill.resize(pill.sizeHint())
+        qapp.processEvents()
+        close = pill._close_btn
+        toggle = pill._toggle_btn
+        close_inset = pill.width() - (close.x() + close.width())
+        gap = close.x() - (toggle.x() + toggle.width())
+        return close_inset, close.y(), gap, toggle.y()
+
+    right_inset_full, top_full, gap_full, toggle_top_full = close_corner_and_toggle_gap()
+    full_width = pill.width()
+    pill._toggle_mode()
+    right_inset_mini, top_mini, gap_mini, toggle_top_mini = close_corner_and_toggle_gap()
+    mini_width = pill.width()
+
+    assert mini_width != full_width
+    assert right_inset_full <= 6 and top_full <= 6
+    assert right_inset_mini <= 6 and top_mini <= 6
+    assert 0 <= gap_full <= 6
+    assert 0 <= gap_mini <= 6
+    assert toggle_top_full == top_full
+    assert toggle_top_mini == top_mini
+
+
 def test_user_placed_primary_pill_preserves_right_edge_after_dual_rows_resize(
     qapp, qtbot
 ):

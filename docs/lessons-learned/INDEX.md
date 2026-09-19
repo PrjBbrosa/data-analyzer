@@ -253,6 +253,8 @@ lesson by default.
 | [Overlay Paint Is Not Content Invalidation](overlay-paint-is-not-content-invalidation.md) | A translucent Qt overlay composites over a live chart, or a page-transition / cover widget watches the target's `QEvent.Paint`. | See lesson |
 | [Layout-Derived X Titles Are Auto Origin](layout-derived-x-titles-are-auto-origin.md) | Constructing `CustomXAxisSpec` in a file or layout importer, especially WWT/WinWert ordinary channel X. | See lesson |
 | [Time-domain drawing intent belongs only to ViewState](view-state-isolation-no-session-truth.md) | Changing time-domain co-axis merge/split, filter intent, channel color | See lesson |
+| [Offscreen QDialog.exec Must Fail Fast](offscreen-qdialog-exec-must-fail-fast.md) | Combined UI pytest, `QDialog.exec_()`, preset load, confirmation boxes, or a session that appears stuck at a progress percentage. | See lesson |
+| [Qt5 Coordinate Mapping Must Respect Widget Ancestry](qt5-mapto-descendant-native-crash.md) | Mapping QWidget coordinates into descendant widgets or QGraphicsView scenes, especially Pin geometry timers. | See lesson |
 
 ## Selection Rules
 

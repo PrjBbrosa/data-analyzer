@@ -33,6 +33,7 @@ from ..pinned_cursor_state import (
     PinnedCursorCollection,
     PinnedCursorIntent,
     captures_equal,
+    clear_collection,
     coords_equal,
     empty_collection,
     next_record,
@@ -50,9 +51,22 @@ from .ultraview.author_widgets import is_text_input_widget
 
 _PLACE_B_MESSAGE = "先放置 B，再按 P 固定"
 _PLACE_AB_MESSAGE = "先放置 A、B，再按 P 固定"
+_PIN_WARNING_MESSAGES = frozenset({
+    _PLACE_B_MESSAGE, _PLACE_AB_MESSAGE, "无数据",
+})
 _NUDGE_STEP = 28
 _NUDGE_LIMIT = 72
 _DUMMY_RECORD_ID = "00000000-0000-0000-0000-000000000001"
+_P_EVENT_TYPES = frozenset({
+    QEvent.ShortcutOverride,
+    QEvent.KeyPress,
+    QEvent.Enter,
+    QEvent.Leave,
+    QEvent.FocusIn,
+    QEvent.FocusOut,
+    QEvent.Show,
+    QEvent.Hide,
+})
 
 PIN_STATUS_READY = "ready"
 PIN_STATUS_PENDING = "pending"
@@ -60,9 +74,17 @@ PIN_STATUS_UNAVAILABLE = "unavailable"
 PIN_STATUS_INCOMPATIBLE_AXIS = "incompatible_axis"
 
 HIDDEN_CHANNEL_TEXT = "已隐藏"
+UNCHECKED_TEXT = "未勾选"
 PENDING_TEXT = "更新中"
 INCOMPATIBLE_AXIS_TEXT = "X 轴已更改"
 UNAVAILABLE_TEXT = "无数据"
+
+
+def pin_feedback_level(message: str) -> str:
+    text = str(message or "")
+    if text in _PIN_WARNING_MESSAGES or text.startswith("先放置"):
+        return "warning"
+    return "info"
 
 
 def _finite(value):
@@ -98,30 +120,22 @@ def _widget_alive(widget):
 
 
 @dataclass
-class _ClosedPin:
-    intent: PinnedCursorIntent
-    sample: object
-    snapshot: dict
-    pos: tuple[int, int]
-    data_revision: int | None
-
-
-@dataclass
 class _OwnerState:
     canvas: object
-    collection: PinnedCursorCollection
+    collection: PinnedCursorCollection | None = None
     pills: dict = field(default_factory=dict)
     samples: dict = field(default_factory=dict)
     axis_labels: dict = field(default_factory=dict)
     reserved_ordinal: int | None = None
     reserved_intent: PinnedCursorIntent | None = None
-    undo: _ClosedPin | None = None
     live_suppressed: bool = False
     dual_hidden_placement: object = None
     availability: dict = field(default_factory=dict)
     pending_epoch: int = 0
     reproject_timer: object = None
     signal_conns: list = field(default_factory=list)
+    projected_generation: tuple | None = None
+    skip_stale_invalidation: bool = False
 
 
 class PinnedCursorController(QObject):
@@ -136,10 +150,12 @@ class PinnedCursorController(QObject):
         self._owners: dict[int, _OwnerState] = {}
         self._application_filter_installed = False
         self._last_mouse_global = QPoint()
-        self._pin_key_armed = False
         self.user_intent_revision = 0
-        self._install_application_filter()
-        host.destroyed.connect(self._remove_application_filter)
+        if host is not None:
+            host.installEventFilter(self)
+            host.destroyed.connect(self._remove_application_filter)
+            if host.isVisible():
+                self._install_application_filter()
 
     # ---- bind / collections -------------------------------------------------
 
@@ -155,7 +171,7 @@ class PinnedCursorController(QObject):
         timer.timeout.connect(partial(self._reproject_owner, key))
         owner = _OwnerState(
             canvas=canvas,
-            collection=empty_collection(),
+            collection=None,
             reproject_timer=timer,
         )
         self._owners[key] = owner
@@ -183,10 +199,10 @@ class PinnedCursorController(QObject):
             return
         self._drop_owner(id(canvas), destroy_pills=True)
 
-    def collection_for(self, canvas) -> PinnedCursorCollection:
-        owner = self._owner(canvas, create=True)
+    def collection_for(self, canvas) -> PinnedCursorCollection | None:
+        owner = self._owner(canvas)
         if owner is None:
-            return empty_collection()
+            return None
         return owner.collection
 
     def set_collection(self, canvas, collection) -> None:
@@ -194,15 +210,19 @@ class PinnedCursorController(QObject):
         if owner is None:
             return
         if not isinstance(collection, PinnedCursorCollection):
-            collection = empty_collection()
+            return
         self._cancel_reproject(owner)
         self._clear_pills(owner)
         owner.collection = collection
-        owner.undo = None
         owner.reserved_ordinal = None
         owner.reserved_intent = None
+        owner.dual_hidden_placement = None
         owner.availability.clear()
-        self._reproject_now(owner, drop_unbound=False)
+        owner.projected_generation = None
+        owner.skip_stale_invalidation = False
+        if collection.records:
+            self._mark_records_pending(owner)
+            self._schedule_reproject(owner)
 
     def availability_for(self, canvas, record_id: str) -> str:
         owner = self._owner(canvas)
@@ -211,10 +231,11 @@ class PinnedCursorController(QObject):
         return str(owner.availability.get(str(record_id), PIN_STATUS_READY))
 
     def clear_all(self) -> None:
-        """Drop GUI, caches, undo, and records on every bound canvas.
+        """Drop GUI, caches, and records on every bound canvas.
 
         Used when the last source closes / the session is replaced. Does not
         emit ``intent_changed``; those paths already mark project dirty.
+        Does not mint a new ``scope_id``.
         """
         for owner in list(self._owners.values()):
             self._cancel_reproject(owner)
@@ -222,13 +243,13 @@ class PinnedCursorController(QObject):
             if overlay is not None:
                 overlay.clear()
             self._clear_pills(owner)
-            owner.collection = empty_collection()
-            owner.undo = None
+            if owner.collection is not None:
+                owner.collection = clear_collection(owner.collection)
             owner.reserved_ordinal = None
             owner.reserved_intent = None
             owner.live_suppressed = False
             owner.dual_hidden_placement = None
-            owner.availability.clear()
+            owner.projected_generation = None
 
     @staticmethod
     def filter_collection_identities(
@@ -239,7 +260,7 @@ class PinnedCursorController(QObject):
     ) -> PinnedCursorCollection:
         """Drop closed identities from records. Empty binding set → drop record."""
         if collection is None or not isinstance(collection, PinnedCursorCollection):
-            return empty_collection()
+            return collection
         drop_fids = {str(item) for item in (fids or ()) if str(item)}
         drop_channels = {
             (str(fid), str(channel))
@@ -270,6 +291,8 @@ class PinnedCursorController(QObject):
     def drop_closed_identities(self, *, fids=(), channels=()) -> None:
         """Remove closed source/channel identities from live collections."""
         for owner in list(self._owners.values()):
+            if owner.collection is None:
+                continue
             filtered = self.filter_collection_identities(
                 owner.collection, fids=fids, channels=channels,
             )
@@ -284,8 +307,6 @@ class PinnedCursorController(QObject):
                 owner.availability.pop(record_id, None)
                 self._destroy_pill(pill)
             owner.collection = filtered
-            if owner.undo is not None and owner.undo.intent.record_id in removed:
-                owner.undo = None
             self._reproject_now(owner)
 
     def pills_for(self, canvas) -> tuple[CursorPill, ...]:
@@ -307,7 +328,7 @@ class PinnedCursorController(QObject):
     def capture_fingerprint_for(self, canvas) -> tuple:
         """Stable pin presentation digest. Hover highlight is omitted."""
         owner = self._owner(canvas)
-        if owner is None:
+        if owner is None or owner.collection is None:
             return ()
         rows = []
         for intent in owner.collection.records:
@@ -408,35 +429,39 @@ class PinnedCursorController(QObject):
     # ---- P routing ----------------------------------------------------------
 
     def eventFilter(self, watched, event):  # noqa: N802
+        etype = event.type()
+        if etype not in _P_EVENT_TYPES:
+            return False
+        if watched is self._host:
+            if etype in (QEvent.Show, QEvent.Hide):
+                self._sync_application_filter()
+            return False
         if isinstance(watched, CursorPill):
             self._on_pinned_pill_event(watched, event)
-        etype = event.type()
-        if etype in (QEvent.MouseMove, QEvent.HoverMove):
-            global_pos = self._event_global_pos(event)
-            if global_pos is not None:
-                self._last_mouse_global = QPoint(global_pos)
-            return super().eventFilter(watched, event)
         if etype not in (QEvent.ShortcutOverride, QEvent.KeyPress):
-            return super().eventFilter(watched, event)
+            return False
         if not self._is_unmodified_p(event):
-            return super().eventFilter(watched, event)
+            return False
         if event.isAutoRepeat():
-            return super().eventFilter(watched, event)
+            return False
         eligible = self._pin_eligible()
         if etype == QEvent.ShortcutOverride:
             if eligible:
                 event.accept()
-                self._pin_key_armed = True
                 return True
-            self._pin_key_armed = False
-            return super().eventFilter(watched, event)
+            return False
         if not eligible:
-            self._pin_key_armed = False
-            return super().eventFilter(watched, event)
-        self._pin_key_armed = False
+            return False
         self._pin_at_mouse()
         event.accept()
         return True
+
+    def _sync_application_filter(self) -> None:
+        host = self._host
+        if _widget_alive(host) and host.isVisible():
+            self._install_application_filter()
+            return
+        self._remove_application_filter()
 
     def _install_application_filter(self) -> None:
         if self._application_filter_installed:
@@ -459,6 +484,12 @@ class PinnedCursorController(QObject):
         self._application_filter_installed = False
 
     def close(self) -> None:
+        host = self._host
+        if _widget_alive(host):
+            try:
+                host.removeEventFilter(self)
+            except RuntimeError:
+                pass
         self._remove_application_filter()
         for key in list(self._owners):
             self._drop_owner(key, destroy_pills=True)
@@ -484,11 +515,20 @@ class PinnedCursorController(QObject):
             self._pin_dual(owner, canvas, domain)
 
     def _pin_single(self, owner, canvas, domain, viewport_pos) -> None:
-        x = self._physical_x(canvas, domain, viewport_pos)
+        use_reserved = (
+            owner.dual_hidden_placement is not None
+            and owner.reserved_intent is not None
+            and owner.reserved_intent.mode == "single"
+        )
+        if use_reserved:
+            x = _finite(owner.reserved_intent.x)
+        else:
+            x = self._physical_x(canvas, domain, viewport_pos)
         if x is None:
             return
         sample = self._evaluate(canvas, domain, mode="single", x=x)
         if not self._sample_has_result(sample):
+            self.pin_feedback.emit(UNAVAILABLE_TEXT)
             return
         x_value = _finite(getattr(sample, "x", None))
         if x_value is None:
@@ -529,6 +569,7 @@ class PinnedCursorController(QObject):
             return
         sample = self._evaluate(canvas, domain, mode="dual", ax=ax, bx=bx)
         if not self._sample_has_result(sample):
+            self.pin_feedback.emit(UNAVAILABLE_TEXT)
             return
         ax_value = _finite(getattr(sample, "ax", None))
         bx_value = _finite(getattr(sample, "bx", None))
@@ -557,6 +598,8 @@ class PinnedCursorController(QObject):
         self.pin_feedback.emit(self._success_text(record))
 
     def _commit_record(self, owner, intent):
+        if owner.collection is None:
+            owner.collection = empty_collection()
         reserved = owner.reserved_ordinal
         reserved_intent = owner.reserved_intent
         owner.reserved_ordinal = None
@@ -580,6 +623,8 @@ class PinnedCursorController(QObject):
         return next_record(owner.collection, intent)
 
     def _highlight_duplicate(self, owner, intent) -> bool:
+        if owner.collection is None:
+            return False
         for existing in owner.collection.records:
             if not captures_equal(existing, intent):
                 continue
@@ -618,8 +663,8 @@ class PinnedCursorController(QObject):
         owner.availability.pop(record_id, None)
         owner.reserved_ordinal = intent.ordinal
         owner.reserved_intent = intent
-        owner.undo = None
         owner.live_suppressed = False
+        owner.dual_hidden_placement = intent
         self._destroy_pill(pill)
         self._sync_overlay(owner)
         self._mark_user_intent()
@@ -642,67 +687,13 @@ class PinnedCursorController(QObject):
         if intent is None:
             return
         pill = owner.pills.pop(record_id, None)
-        snapshot = pill.snapshot() if _widget_alive(pill) else {}
-        pos = (pill.x(), pill.y()) if _widget_alive(pill) else (0, 0)
-        sample = owner.samples.pop(record_id, None)
+        owner.samples.pop(record_id, None)
         owner.availability.pop(record_id, None)
         owner.collection = remove_record(owner.collection, record_id)
-        owner.undo = _ClosedPin(
-            intent=intent,
-            sample=sample,
-            snapshot=snapshot,
-            pos=pos,
-            data_revision=getattr(sample, "data_revision", None),
-        )
         self._destroy_pill(pill)
         self._sync_overlay(owner)
         self._mark_user_intent()
         self.pin_feedback.emit(f"已关闭 P{intent.ordinal}")
-
-    def undo_close(self, canvas=None) -> None:
-        owner = self._owner(canvas) if canvas is not None else None
-        if owner is None:
-            for item in self._owners.values():
-                if item.undo is not None:
-                    owner = item
-                    canvas = item.canvas
-                    break
-        if owner is None or owner.undo is None or not _widget_alive(canvas):
-            return
-        closed = owner.undo
-        current = self._evaluate_intent(canvas, closed.intent)
-        current_rev = getattr(current, "data_revision", None)
-        if (
-            closed.data_revision is not None
-            and current_rev is not None
-            and current_rev != closed.data_revision
-        ):
-            owner.undo = None
-            self.pin_feedback.emit("无法撤销：数据已更新")
-            return
-        owner.undo = None
-        intent = closed.intent
-        if any(item.record_id == intent.record_id for item in owner.collection.records):
-            return
-        owner.collection = replace(
-            owner.collection,
-            records=owner.collection.records + (intent,),
-        )
-        sample = current if self._sample_has_result(current) else closed.sample
-        owner.samples[intent.record_id] = sample
-        status = self._status_for_sample(owner.canvas, intent, sample)
-        owner.availability[intent.record_id] = status
-        self._project_record(owner, intent, sample, availability=status)
-        self._sync_overlay(owner)
-        self._mark_user_intent()
-        pill = owner.pills.get(intent.record_id)
-        if _widget_alive(pill) and closed.snapshot:
-            pill.restore_snapshot(closed.snapshot)
-            pill.set_pin_role("pinned")
-            pill.move(*closed.pos)
-            pill.mark_user_placed(True)
-            pill.setVisible(True)
-        self.pin_feedback.emit(f"已恢复 P{intent.ordinal}")
 
     # ---- eligibility / hit test --------------------------------------------
 
@@ -715,7 +706,11 @@ class PinnedCursorController(QObject):
             return None
         if app.activeModalWidget() is not None or app.activePopupWidget() is not None:
             return None
-        if is_text_input_widget(app.focusWidget()):
+        focus = app.focusWidget()
+        if focus is not None and (
+            bool(focus.testAttribute(Qt.WA_InputMethodEnabled))
+            or is_text_input_widget(focus)
+        ):
             return None
         host = self._host
         ultraview = getattr(host, "page_ultraview", None)
@@ -730,6 +725,10 @@ class PinnedCursorController(QObject):
         if canvas is None or isinstance(canvas, PgHeatmapCanvas):
             return None
         if not _widget_alive(canvas) or not canvas.isVisible() or not canvas.isVisibleTo(host):
+            return None
+        window = canvas.window()
+        active = app.activeWindow()
+        if window is None or active is None or window is not active:
             return None
         if id(canvas) not in self._owners:
             if not self._canvas_belongs_to_host(canvas):
@@ -1048,6 +1047,11 @@ class PinnedCursorController(QObject):
         if status == PIN_STATUS_INCOMPATIBLE_AXIS:
             return self._status_primary_html(intent, INCOMPATIBLE_AXIS_TEXT), None
         if status == PIN_STATUS_UNAVAILABLE:
+            if self._sample_has_unchecked(sample):
+                return (
+                    self._primary_html(intent),
+                    self._presentation_for(intent, sample, host),
+                )
             diagnostic = str(getattr(sample, "diagnostic", "") or "").strip()
             text = diagnostic or UNAVAILABLE_TEXT
             return self._status_primary_html(intent, text), None
@@ -1102,6 +1106,15 @@ class PinnedCursorController(QObject):
         )
         live.set_pin_role("live")
         live.set_live_hint(live_pin_hint_text(mode, dual_complete=True))
+        if mode == "single":
+            x_value = _finite(getattr(sample, "x", None))
+            if x_value is not None:
+                sync = getattr(canvas, "sync_single_cursor_line", None)
+                if not callable(sync):
+                    cursor = getattr(canvas, "_cursor", None)
+                    sync = getattr(cursor, "sync_single_cursor_line", None)
+                if callable(sync):
+                    sync(x_value)
 
     # ---- geometry -----------------------------------------------------------
 
@@ -1116,7 +1129,7 @@ class PinnedCursorController(QObject):
 
     def _on_pinned_display_mode(self, canvas, record_id, mode) -> None:
         owner = self._owner(canvas)
-        if owner is None:
+        if owner is None or owner.collection is None:
             return
         intent = self._intent(owner, record_id)
         if intent is None:
@@ -1160,6 +1173,8 @@ class PinnedCursorController(QObject):
         self._mark_user_intent()
 
     def _apply_anchor(self, pill, collection, *, pill_record_id) -> None:
+        if collection is None:
+            return
         intent = next(
             (item for item in collection.records if item.record_id == pill_record_id),
             None,
@@ -1237,13 +1252,22 @@ class PinnedCursorController(QObject):
     def _owner(self, canvas, *, create=False):
         if canvas is None:
             return None
-        owner = self._owners.get(id(canvas))
+        key = id(canvas)
+        owner = self._owners.get(key)
+        if owner is not None and owner.canvas is not canvas:
+            self._drop_owner(key, destroy_pills=True)
+            owner = None
+            if not create:
+                self.bind_canvas(canvas)
+                owner = self._owners.get(key)
         if owner is None and create:
             self.bind_canvas(canvas)
-            owner = self._owners.get(id(canvas))
+            owner = self._owners.get(key)
         return owner
 
     def _intent(self, owner, record_id):
+        if owner is None or owner.collection is None:
+            return None
         for item in owner.collection.records:
             if item.record_id == record_id:
                 return item
@@ -1333,8 +1357,22 @@ class PinnedCursorController(QObject):
 
     @staticmethod
     def _disconnect_owner_signals(owner) -> None:
+        canvas = owner.canvas
+        if not _widget_alive(canvas):
+            owner.signal_conns.clear()
+            return
         for signal, slot in list(owner.signal_conns):
             try:
+                if sip.isdeleted(canvas):
+                    break
+                sig = getattr(signal, "signal", None)
+                name = ""
+                if isinstance(sig, (bytes, bytearray)):
+                    name = sig.decode("ascii", "replace").split("(")[0]
+                elif sig:
+                    name = str(sig).split("(")[0]
+                if name and not hasattr(canvas, name):
+                    continue
                 signal.disconnect(slot)
             except (TypeError, RuntimeError):
                 pass
@@ -1362,9 +1400,11 @@ class PinnedCursorController(QObject):
 
     def _on_content_invalidated(self, key, *_args) -> None:
         owner = self._owners.get(key)
-        if owner is None or not owner.collection.records:
+        if owner is None or owner.collection is None or not owner.collection.records:
             return
         if not _widget_alive(owner.canvas):
+            return
+        if owner.skip_stale_invalidation:
             return
         self._mark_records_pending(owner)
         if self._bound_identity_keys(owner.canvas) or getattr(
@@ -1374,12 +1414,20 @@ class PinnedCursorController(QObject):
 
     def _on_chart_rebuilt(self, key, *_args) -> None:
         owner = self._owners.get(key)
-        if owner is None or not owner.collection.records:
+        if owner is None or owner.collection is None or not owner.collection.records:
             return
         if not _widget_alive(owner.canvas):
             return
         self._cancel_reproject(owner)
-        self._reproject_now(owner, drop_unbound=True)
+        self._reproject_now(owner)
+        owner.skip_stale_invalidation = True
+        QTimer.singleShot(0, partial(self._clear_skip_stale, key))
+
+    def _clear_skip_stale(self, key) -> None:
+        owner = self._owners.get(key)
+        if owner is None:
+            return
+        owner.skip_stale_invalidation = False
 
     def _reproject_owner(self, key) -> None:
         owner = self._owners.get(key)
@@ -1388,6 +1436,8 @@ class PinnedCursorController(QObject):
         self._reproject_now(owner)
 
     def _mark_records_pending(self, owner) -> None:
+        if owner.collection is None:
+            return
         for intent in owner.collection.records:
             owner.availability[intent.record_id] = PIN_STATUS_PENDING
             self._project_record(
@@ -1396,20 +1446,17 @@ class PinnedCursorController(QObject):
             )
         self._sync_overlay(owner)
 
-    def _reproject_now(self, owner, *, drop_unbound=None) -> None:
+    def _reproject_now(self, owner) -> None:
         canvas = owner.canvas
-        if not _widget_alive(canvas):
+        if not _widget_alive(canvas) or owner.collection is None:
             return
         if self._canvas_compute_pending(canvas):
             self._mark_records_pending(owner)
             return
         kept = []
-        dropped = []
         generation, revision = self._canvas_generations(canvas)
         bound = self._bound_identity_keys(canvas)
         hidden = self._hidden_identity_keys(canvas)
-        if drop_unbound is None:
-            drop_unbound = bool(bound)
         for intent in owner.collection.records:
             status = self._axis_status(canvas, intent)
             sample = None
@@ -1436,16 +1483,13 @@ class PinnedCursorController(QObject):
                 ):
                     kept.append(intent)
                     continue
-                sample, next_intent, dropped_record = self._reconcile_sample(
+                sample, next_intent, _dropped_record = self._reconcile_sample(
                     intent, sample, bound=bound, hidden=hidden,
-                    drop_unbound=drop_unbound,
                 )
-                if dropped_record:
-                    dropped.append(intent.record_id)
-                    continue
                 if sample is None or (
                     not self._sample_has_numeric(sample)
                     and not self._sample_has_hidden(sample)
+                    and not self._sample_has_unchecked(sample)
                 ):
                     status = PIN_STATUS_UNAVAILABLE
                     sample = sample or PinnedCursorSample(
@@ -1458,8 +1502,10 @@ class PinnedCursorController(QObject):
                         bx=intent.bx,
                         diagnostic=UNAVAILABLE_TEXT,
                     )
-                else:
+                elif self._sample_has_numeric(sample) or self._sample_has_hidden(sample):
                     status = PIN_STATUS_READY
+                else:
+                    status = PIN_STATUS_UNAVAILABLE
                 owner.samples[intent.record_id] = sample
             owner.availability[intent.record_id] = status
             kept.append(next_intent)
@@ -1467,16 +1513,9 @@ class PinnedCursorController(QObject):
                 owner, next_intent, owner.samples.get(next_intent.record_id),
                 availability=status,
             )
-        if dropped:
-            for record_id in dropped:
-                pill = owner.pills.pop(record_id, None)
-                owner.samples.pop(record_id, None)
-                owner.availability.pop(record_id, None)
-                self._destroy_pill(pill)
-            if owner.undo is not None and owner.undo.intent.record_id in dropped:
-                owner.undo = None
         if tuple(kept) != owner.collection.records:
             owner.collection = replace(owner.collection, records=tuple(kept))
+        owner.projected_generation = (generation, revision)
         self._sync_overlay(owner)
 
     def _axis_status(self, canvas, intent) -> str:
@@ -1493,6 +1532,7 @@ class PinnedCursorController(QObject):
         if sample is None or (
             not self._sample_has_numeric(sample)
             and not self._sample_has_hidden(sample)
+            and not self._sample_has_unchecked(sample)
         ):
             return PIN_STATUS_UNAVAILABLE
         return PIN_STATUS_READY
@@ -1569,7 +1609,7 @@ class PinnedCursorController(QObject):
             return False
         return True
 
-    def _reconcile_sample(self, intent, sample, *, bound, hidden, drop_unbound):
+    def _reconcile_sample(self, intent, sample, *, bound, hidden):
         if not intent.bindings:
             return sample, intent, False
         evaluated = {}
@@ -1580,15 +1620,15 @@ class PinnedCursorController(QObject):
         kept_bindings = []
         channels = []
         for binding in intent.bindings:
-            key = (str(binding.fid), str(binding.channel))
-            is_bound = key in bound or self._key_in(key, bound)
-            is_hidden = key in hidden or self._key_in(key, hidden)
-            if not is_bound and not is_hidden:
-                if drop_unbound:
-                    continue
-                kept_bindings.append(binding)
-                continue
+            key = self._binding_key(binding)
+            is_bound = self._key_in(key, bound)
+            is_hidden = self._key_in(key, hidden)
             kept_bindings.append(binding)
+            if not is_bound and not is_hidden:
+                channels.append(
+                    self._hidden_channel_row(binding, None, diagnostic=UNCHECKED_TEXT)
+                )
+                continue
             match = evaluated.get(key)
             if match is None:
                 for ekey, channel in evaluated.items():
@@ -1619,17 +1659,35 @@ class PinnedCursorController(QObject):
         else:
             extrema = tuple(
                 item for item in (getattr(sample, "extrema", ()) or ())
-                if self._identity_key(getattr(item, "identity", None)) not in hidden
+                if not self._key_in(
+                    self._identity_key(getattr(item, "identity", None)), hidden,
+                )
             )
             sample = replace(sample, channels=tuple(channels), extrema=extrema)
         return sample, next_intent, False
 
     @staticmethod
+    def _binding_key(binding):
+        fid = str(binding.fid)
+        channel = str(binding.channel)
+        binding_id = str(getattr(binding, "binding_id", "") or "")
+        if binding_id:
+            return (fid, channel, binding_id)
+        return (fid, channel)
+
+    @staticmethod
     def _key_in(key, pool) -> bool:
+        if key is None or not pool:
+            return False
         if key in pool:
             return True
-        fid, channel = key
-        return any(item[1] == channel and (not item[0] or not fid or item[0] == fid) for item in pool)
+        fid, channel = key[0], key[1]
+        if not fid or not channel:
+            return False
+        return any(
+            item[0] == fid and item[1] == channel
+            for item in pool
+        )
 
     @staticmethod
     def _hidden_channel_row(binding, existing, diagnostic=HIDDEN_CHANNEL_TEXT):
@@ -1645,7 +1703,10 @@ class PinnedCursorController(QObject):
                 diagnostic=diagnostic,
             )
         return CursorDisplayChannel(
-            identity=(binding.fid, binding.channel),
+            identity=(
+                (binding.fid, binding.channel, binding.binding_id)
+                if binding.binding_id else (binding.fid, binding.channel)
+            ),
             source_label="",
             channel_label=binding.channel,
             diagnostic=diagnostic,
@@ -1657,7 +1718,7 @@ class PinnedCursorController(QObject):
             return False
         if getattr(sample, "frf_sample", None) is not None:
             return True
-        skip = {HIDDEN_CHANNEL_TEXT, UNAVAILABLE_TEXT}
+        skip = {HIDDEN_CHANNEL_TEXT, UNAVAILABLE_TEXT, UNCHECKED_TEXT}
         for channel in tuple(getattr(sample, "channels", ()) or ()):
             if str(getattr(channel, "diagnostic", "") or "") in skip:
                 continue
@@ -1683,10 +1744,18 @@ class PinnedCursorController(QObject):
         return False
 
     @staticmethod
+    def _sample_has_unchecked(sample) -> bool:
+        for channel in tuple(getattr(sample, "channels", ()) or ()):
+            if str(getattr(channel, "diagnostic", "") or "") == UNCHECKED_TEXT:
+                return True
+        return False
+
+    @staticmethod
     def _hidden_keys_from_sample(sample):
         keys = set()
+        skip = {HIDDEN_CHANNEL_TEXT, UNCHECKED_TEXT}
         for channel in tuple(getattr(sample, "channels", ()) or ()) if sample is not None else ():
-            if str(getattr(channel, "diagnostic", "") or "") != HIDDEN_CHANNEL_TEXT:
+            if str(getattr(channel, "diagnostic", "") or "") not in skip:
                 continue
             key = PinnedCursorController._identity_key(getattr(channel, "identity", None))
             if key is not None:
@@ -1699,7 +1768,7 @@ class PinnedCursorController(QObject):
         items = getattr(lines, "composite_items", None)
         if callable(items):
             for channel_key, name, _values in items():
-                key = self._identity_key(channel_key) or self._identity_key(name)
+                key = self._identity_key(channel_key)
                 if key is not None:
                     keys.add(key)
             return keys
@@ -1712,9 +1781,13 @@ class PinnedCursorController(QObject):
         entries = getattr(canvas, "_entries", None) or ()
         for entry in entries:
             identity = entry.get("identity") if isinstance(entry, dict) else None
-            key = self._identity_key(identity) or self._identity_key(
-                entry.get("label") if isinstance(entry, dict) else None
-            )
+            if identity is None and isinstance(entry, dict):
+                fid = entry.get("fid")
+                channel = entry.get("channel")
+                binding_id = entry.get("binding_id") or ""
+                if fid and channel:
+                    identity = (fid, channel, binding_id) if binding_id else (fid, channel)
+            key = self._identity_key(identity)
             if key is not None:
                 keys.add(key)
         return keys
@@ -1732,11 +1805,20 @@ class PinnedCursorController(QObject):
 
     @staticmethod
     def _identity_key(identity):
+        if identity is None:
+            return None
+        if isinstance(identity, (tuple, list)) and len(identity) >= 2:
+            fid = "" if identity[0] is None else str(identity[0])
+            channel = "" if identity[1] is None else str(identity[1])
+            binding_id = ""
+            if len(identity) >= 3 and identity[2]:
+                binding_id = str(identity[2])
+            if fid and channel:
+                return (fid, channel, binding_id) if binding_id else (fid, channel)
+            return None
         fid, channel = _cursor_identity_parts(identity)
         if fid and channel:
             return (str(fid), str(channel))
-        if isinstance(identity, str) and identity:
-            return ("", identity)
         return None
 
     def _widget_under_mouse(self):
@@ -1761,22 +1843,6 @@ class PinnedCursorController(QObject):
         if not self._last_mouse_global.isNull():
             return QPoint(self._last_mouse_global)
         return pos
-
-    @staticmethod
-    def _event_global_pos(event):
-        for name in ("globalPos", "globalPosition"):
-            getter = getattr(event, name, None)
-            if not callable(getter):
-                continue
-            try:
-                value = getter()
-            except TypeError:
-                continue
-            if hasattr(value, "toPoint"):
-                value = value.toPoint()
-            if isinstance(value, QPoint):
-                return value
-        return None
 
     @staticmethod
     def _is_unmodified_p(event: QKeyEvent) -> bool:
@@ -1824,16 +1890,30 @@ class PinnedCursorController(QObject):
         if sample is None:
             return ()
         out = []
+        seen = set()
         for channel in getattr(sample, "channels", ()) or ():
             identity = getattr(channel, "identity", None)
-            fid = channel_name = ""
-            if isinstance(identity, tuple) and len(identity) == 2:
-                fid, channel_name = str(identity[0]), str(identity[1])
-            elif getattr(channel, "channel_label", None) and getattr(channel, "source_label", None):
-                fid = str(channel.source_label)
-                channel_name = str(channel.channel_label)
-            if fid and channel_name:
-                out.append(PinnedCursorBinding(fid=fid, channel=channel_name))
+            fid = channel_name = binding_id = ""
+            if isinstance(identity, (tuple, list)) and len(identity) >= 2:
+                fid = str(identity[0] or "")
+                channel_name = str(identity[1] or "")
+                if len(identity) >= 3 and identity[2]:
+                    binding_id = str(identity[2])
+            else:
+                parsed_fid, parsed_channel = _cursor_identity_parts(identity)
+                fid = str(parsed_fid or "")
+                channel_name = str(parsed_channel or "")
+            if not channel_name:
+                channel_name = str(getattr(channel, "channel_label", "") or "")
+            if not fid or not channel_name:
+                continue
+            key = (fid, channel_name, binding_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(PinnedCursorBinding(
+                fid=fid, channel=channel_name, binding_id=binding_id,
+            ))
         return tuple(out)
 
     @staticmethod
@@ -1924,6 +2004,8 @@ class PinnedCursorController(QObject):
         overlay.set_records(self._overlay_records(owner))
 
     def _overlay_records(self, owner):
+        if owner.collection is None:
+            return ()
         records = []
         for intent in owner.collection.records:
             status = owner.availability.get(intent.record_id, PIN_STATUS_READY)

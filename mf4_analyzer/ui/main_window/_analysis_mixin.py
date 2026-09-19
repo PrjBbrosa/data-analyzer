@@ -680,9 +680,6 @@ class AnalysisMixin:
             )
 
     def _apply_analysis_overlay(self, section, state):
-        ensure = getattr(self, "_ensure_pinned_cursor_lifecycle_hooks", None)
-        if callable(ensure):
-            ensure()
         from ..analysis_view_bridge import apply_overlay_to_canvas
 
         page = self._analysis_page(section)

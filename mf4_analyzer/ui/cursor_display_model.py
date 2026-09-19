@@ -219,6 +219,60 @@ def enabled_value_fields(options: CursorDisplayOptions | None):
     )
 
 
+def cursor_display_channel_from_dual_row(row, *, source_label_resolver=None):
+    """Map a DualCursorRow / 7-tuple / existing channel to CursorDisplayChannel.
+
+    Qt-free shared mapping used by both ``pg_canvas.cursor`` and
+    ``chart_stack.stack``. Label resolution is imported lazily so this module
+    does not cycle with ``plot_helpers`` at import time.
+    """
+    if isinstance(row, CursorDisplayChannel):
+        return row
+    if not hasattr(row, "channel_name"):
+        name, minimum, maximum, average, delta, unit_suffix, color = row[:7]
+        return CursorDisplayChannel(
+            identity=name,
+            source_label="",
+            channel_label=str(name),
+            color=str(color or "#111827"),
+            unit_suffix=str(unit_suffix or ""),
+            delta=delta,
+            min_value=minimum,
+            max_value=maximum,
+            avg_value=average,
+        )
+    from mf4_analyzer.ui.plot_helpers import resolve_cursor_source_label
+
+    name = str(getattr(row, "label", "") or getattr(row, "channel_name", ""))
+    identity = getattr(row, "identity", None)
+    source_label, channel_label = resolve_cursor_source_label(
+        name, identity, source_label_resolver
+    )
+    branches = tuple(
+        CursorDisplayBranch(
+            branch.branch_label,
+            min_value=branch.min_value,
+            max_value=branch.max_value,
+            avg_value=branch.avg,
+            delta_value=getattr(branch, "delta", None),
+        )
+        for branch in getattr(row, "branches", ())
+    )
+    return CursorDisplayChannel(
+        identity=identity,
+        source_label=source_label,
+        channel_label=channel_label,
+        color=str(getattr(row, "color", "#111827") or "#111827"),
+        unit_suffix=str(getattr(row, "unit_suffix", "") or ""),
+        delta=getattr(row, "delta", None),
+        min_value=getattr(row, "min_value", None),
+        max_value=getattr(row, "max_value", None),
+        avg_value=getattr(row, "avg", None),
+        branches=branches,
+        diagnostic=str(getattr(row, "status", "") or ""),
+    )
+
+
 __all__ = [
     "CursorDisplayBlock",
     "CursorDisplayBranch",
@@ -233,5 +287,6 @@ __all__ = [
     "FrfCursorSample",
     "PinnedCursorSample",
     "_OPTION_NAMES",
+    "cursor_display_channel_from_dual_row",
     "enabled_value_fields",
 ]

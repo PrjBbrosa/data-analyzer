@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import copy
 
-from .pinned_cursor_state import collection_from_dict
+from dataclasses import replace
+
+from .pinned_cursor_state import PinnedCursorCollection, collection_from_dict
 from .view_overlay_state import (
     normalize_cursor_placement,
     normalize_remarks,
@@ -83,7 +85,7 @@ def capture_overlay_from_canvas(canvas, pane, chart_stack=None) -> None:
     host = chart_stack if chart_stack is not None else canvas
     getter = getattr(host, "pinned_cursors_for_canvas", None)
     if callable(getter):
-        pane.pinned_cursors = collection_from_dict(getter(canvas))
+        pane.pinned_cursors = _adopt_live_pins(pane.pinned_cursors, getter(canvas))
 
 
 def apply_overlay_to_canvas(canvas, pane, chart_stack=None) -> None:
@@ -98,3 +100,20 @@ def apply_overlay_to_canvas(canvas, pane, chart_stack=None) -> None:
     setter = getattr(host, "set_pinned_cursors_for_canvas", None)
     if callable(setter):
         setter(canvas, getattr(pane, "pinned_cursors", None))
+
+
+def _adopt_live_pins(state_collection, live):
+    """Keep the pane collection when the controller has none / no records."""
+    if live is None:
+        return state_collection
+    if not isinstance(live, PinnedCursorCollection):
+        live = collection_from_dict(live)
+    if not live.records:
+        if not getattr(state_collection, "records", ()):
+            return state_collection
+        return replace(
+            state_collection,
+            records=(),
+            next_ordinal=live.next_ordinal,
+        )
+    return live

@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 8.2.5. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.3.0. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and the original 12-View expansion (time-domain is now 24
 Views; the four analysis sections stay at 12), as well as the native WinWert
 (`.wwt`), ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced
@@ -128,6 +128,11 @@ reduces repeated tree/candidate/facts projection, and adds a 240 ms single-pane
 time-View crossfade coordinated with UltraView previews. Other analysis sections
 and split panes retain direct restoration. Fractional tick labels keep accurate
 precision without changing tick locations or grid divisions.
+8.3.0 pins cursor readouts with P, stores shared-axis / filter / color / chart
+appearance per View, and writes project files as schema 4 (already the codec
+version; older TraceLab builds cannot open these projects). Channels without an
+explicit color override now take the default palette by load order, so a missing
+file can shift later files' default colors.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

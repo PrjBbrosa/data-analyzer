@@ -5,12 +5,12 @@ not resample DSP, and does not join ``iter_transient_overlay_items``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 import pyqtgraph as pg
 from PyQt5 import sip
-from PyQt5.QtCore import QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt5.QtWidgets import (
     QFrame,
@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QWIDGETSIZE_MAX,
     QWidget,
 )
 
@@ -25,6 +26,7 @@ from ._backref import _CanvasBackref
 
 
 PINNED_OFFSCREEN_TEXT = "视野外"
+PINNED_UNREPRESENTABLE_TEXT = "不可用"
 
 _LABEL_H = 16
 _LABEL_GAP = 3
@@ -67,6 +69,40 @@ def _pen(color, *, alpha, width=1.0, style=Qt.DashLine):
     painted = QColor(color)
     painted.setAlpha(int(alpha))
     return pg.mkPen(painted, width=width, style=style)
+
+
+_EXTREMA_PEN_CACHE = {}
+_EXTREMA_BRUSH_CACHE = {}
+_LEADER_PEN = None
+
+
+def _extrema_pen(alpha):
+    key = int(alpha)
+    pen = _EXTREMA_PEN_CACHE.get(key)
+    if pen is None:
+        pen = pg.mkPen(QColor(255, 255, 255, key), width=1.0)
+        _EXTREMA_PEN_CACHE[key] = pen
+    return pen
+
+
+def _extrema_brush(color, alpha):
+    key = (str(color), int(alpha))
+    brush = _EXTREMA_BRUSH_CACHE.get(key)
+    if brush is None:
+        painted = QColor(color)
+        painted.setAlpha(int(alpha))
+        brush = pg.mkBrush(painted)
+        _EXTREMA_BRUSH_CACHE[key] = brush
+    return brush
+
+
+def _leader_pen():
+    global _LEADER_PEN
+    if _LEADER_PEN is None:
+        color = QColor(_SINGLE_COLOR)
+        color.setAlpha(_FAINT_ALPHA)
+        _LEADER_PEN = QPen(color, 1.0)
+    return _LEADER_PEN
 
 
 def cluster_label_text(ordinals):
@@ -152,6 +188,9 @@ def layout_pinned_axis_labels(
     visible = [item for item in endpoints if item.get("offscreen") is None]
     left_off = [item for item in endpoints if item.get("offscreen") == "left"]
     right_off = [item for item in endpoints if item.get("offscreen") == "right"]
+    unrepresentable = [
+        item for item in endpoints if item.get("offscreen") == "unrepresentable"
+    ]
     items = []
     if tiny:
         ordinals = tuple(item["ordinal"] for item in endpoints)
@@ -177,7 +216,7 @@ def layout_pinned_axis_labels(
                 for item in endpoints
             ),
         ))
-        return tuple(items)
+        return _stamp_stable_keys(tuple(items))
 
     def _place_group(group, *, kind, offscreen, edge_x=None):
         if not group:
@@ -194,6 +233,8 @@ def layout_pinned_axis_labels(
             text = f"◀{text}"
         elif offscreen == "right":
             text = f"{text}▶"
+        elif offscreen == "unrepresentable":
+            text = PINNED_UNREPRESENTABLE_TEXT
         chip_w = _label_width(text, fm)
         true_x = float(group[0]["canvas_x"])
         if edge_x is not None:
@@ -295,6 +336,15 @@ def layout_pinned_axis_labels(
         )
         if geom is not None:
             placed.insert(0, geom)
+    if unrepresentable:
+        geom = _place_group(
+            unrepresentable,
+            kind="cluster" if len(unrepresentable) > 1 else "edge",
+            offscreen="unrepresentable",
+            edge_x=left + 10,
+        )
+        if geom is not None:
+            placed.insert(1 if left_off else 0, geom)
     if right_off:
         geom = _place_group(
             right_off, kind="cluster" if len(right_off) > 1 else "edge",
@@ -302,7 +352,7 @@ def layout_pinned_axis_labels(
         )
         if geom is not None:
             placed.append(geom)
-    return tuple(placed)
+    return _stamp_stable_keys(tuple(placed))
 
 
 def _merge_overlapping_labels(placed, *, fm, left, right, top, height):
@@ -359,6 +409,26 @@ def _merge_overlapping_labels(placed, *, fm, left, right, top, height):
     return placed
 
 
+def _stamp_stable_keys(items):
+    """Key chips by slot/edge, not member identity (F-P2-7)."""
+    stamped = []
+    slot = 0
+    for geom in items:
+        if geom.offscreen == "left":
+            key = "edge:left"
+        elif geom.offscreen == "right":
+            key = "edge:right"
+        elif geom.offscreen == "unrepresentable":
+            key = "edge:unrepresentable"
+        elif geom.key == "tiny":
+            key = "tiny"
+        else:
+            key = f"slot:{slot}"
+            slot += 1
+        stamped.append(replace(geom, key=key))
+    return tuple(stamped)
+
+
 class PinnedAxisLabel(QFrame):
     """Axis-edge Pn chip. Click raises the pill; hover expands a cluster."""
 
@@ -394,9 +464,13 @@ class PinnedAxisLabel(QFrame):
         self._caption.setVisible(not self._expanded)
         x, y, w, h = geom.canvas_rect
         if self._expanded and geom.kind == "cluster" and len(geom.members) > 1:
+            self._release_size_constraint()
             self._ensure_members(geom)
             self.adjustSize()
         else:
+            if self._expanded:
+                self._expanded = False
+                self._caption.setVisible(True)
             self._clear_members()
             self.setFixedSize(max(16, w), max(12, h))
         self.setToolTip(self._tooltip(geom))
@@ -415,17 +489,28 @@ class PinnedAxisLabel(QFrame):
         return self._geom
 
     def _tooltip(self, geom):
+        if geom.offscreen == "unrepresentable":
+            return PINNED_UNREPRESENTABLE_TEXT
         if geom.offscreen:
             return PINNED_OFFSCREEN_TEXT
         if geom.kind == "cluster":
             return " ".join(f"P{item}" for item in geom.ordinals)
         return geom.text
 
+    def _release_size_constraint(self):
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX)
+
+    def _member_min_width(self, button, text):
+        fm = QFontMetrics(button.font())
+        return max(18, int(fm.horizontalAdvance(str(text))) + 8)
+
     def _ensure_members(self, geom):
         if self._buttons and len(self._buttons) == len(geom.members):
             for button, member in zip(self._buttons, geom.members):
                 button.setText(member[1])
                 button.setProperty("record_id", member[0])
+                button.setMinimumWidth(self._member_min_width(button, member[1]))
             return
         self._clear_members()
         for record_id, text, _ordinal in geom.members:
@@ -433,6 +518,7 @@ class PinnedAxisLabel(QFrame):
             button.setObjectName("pinnedAxisLabelMember")
             button.setCursor(Qt.PointingHandCursor)
             button.setFixedHeight(_LABEL_H - 2)
+            button.setMinimumWidth(self._member_min_width(button, text))
             button.setProperty("record_id", record_id)
             button.clicked.connect(self._emit_member_clicked)
             self.layout().addWidget(button)
@@ -459,6 +545,7 @@ class PinnedAxisLabel(QFrame):
         if geom.kind == "cluster" and len(geom.members) > 1:
             self._expanded = True
             self._caption.setVisible(False)
+            self._release_size_constraint()
             self._ensure_members(geom)
             self.adjustSize()
             self.raise_()
@@ -517,6 +604,8 @@ class PinnedCursorOverlay(_CanvasBackref):
         "_rebuild_hooks",
         "_projecting",
         "_label_font",
+        "_geom_timer",
+        "_line_highlight",
     })
     _delegate_names = frozenset()
 
@@ -538,6 +627,11 @@ class PinnedCursorOverlay(_CanvasBackref):
         self._projecting = False
         self._label_font = QFont()
         self._label_font.setPointSize(9)
+        self._line_highlight = {}
+        self._geom_timer = QTimer(canvas)
+        self._geom_timer.setSingleShot(True)
+        self._geom_timer.setInterval(0)
+        self._geom_timer.timeout.connect(self._reproject_geometry)
         self._install_rebuild_hooks()
 
     def set_layout_callback(self, callback: Callable | None) -> None:
@@ -590,12 +684,14 @@ class PinnedCursorOverlay(_CanvasBackref):
         return mapped
 
     def clear_items(self) -> None:
+        self._stop_geom_timer()
         self._disconnect_view_hooks()
         self._remove_items(self._all_managed_items())
         self._line_items = {}
         self._leader_items = []
         self._extrema_items = []
         self._item_owners = {}
+        self._line_highlight = {}
 
     def clear(self) -> None:
         self._records = ()
@@ -609,6 +705,18 @@ class PinnedCursorOverlay(_CanvasBackref):
             callback(self._layout)
 
     def reproject(self, *_args) -> None:
+        self._stop_geom_timer()
+        self._reproject(full=True)
+
+    def _reproject_geometry(self, *_args) -> None:
+        self._reproject(full=False)
+
+    def _stop_geom_timer(self) -> None:
+        timer = getattr(self, "_geom_timer", None)
+        if _alive(timer):
+            timer.stop()
+
+    def _reproject(self, *, full) -> None:
         if self._projecting:
             return
         canvas = self._c
@@ -616,11 +724,18 @@ class PinnedCursorOverlay(_CanvasBackref):
             return
         self._projecting = True
         try:
-            self._sync_view_hooks()
+            if full:
+                self._sync_view_hooks()
             host = self._host_rect()
             pending = host is None
             if not self._records:
-                self.clear_items()
+                if full:
+                    self.clear_items()
+                else:
+                    self._sync_leaders(PinnedOverlayLayout(
+                        host_rect=None, items=(), offscreen_ids=frozenset(),
+                        pending=pending,
+                    ))
                 self._layout = PinnedOverlayLayout(
                     host_rect=None if host is None else (
                         host.x(), host.y(), host.width(), host.height()
@@ -629,12 +744,15 @@ class PinnedCursorOverlay(_CanvasBackref):
                     offscreen_ids=frozenset(),
                     pending=pending,
                 )
-            else:
+            elif full:
                 self._sync_lines()
                 self._sync_extrema()
                 self._layout = self._build_layout(host)
                 self._sync_leaders(self._layout)
                 self._apply_highlight()
+            else:
+                self._layout = self._build_layout(host)
+                self._sync_leaders(self._layout)
             callback = self._on_layout
             if callable(callback):
                 callback(self._layout)
@@ -683,7 +801,14 @@ class PinnedCursorOverlay(_CanvasBackref):
         self._view_hooks = []
 
     def _on_view_geometry_changed(self, *_args) -> None:
-        self.reproject()
+        if self._projecting:
+            return
+        timer = self._geom_timer
+        if not _alive(timer):
+            self._reproject_geometry()
+            return
+        if not timer.isActive():
+            timer.start()
 
     def _line_viewboxes(self):
         if self._kind == "frequency":
@@ -864,6 +989,7 @@ class PinnedCursorOverlay(_CanvasBackref):
         stale = [key for key in self._line_items if key not in wanted]
         for key in stale:
             self._remove_items(self._line_items.pop(key, ()))
+            self._line_highlight.pop(key, None)
         for key, (view_x, endpoint_key) in wanted.items():
             items = [
                 item for item in self._line_items.get(key, ()) if _alive(item)
@@ -879,11 +1005,10 @@ class PinnedCursorOverlay(_CanvasBackref):
                     if line is not None:
                         items.append(line)
                 self._line_items[key] = items
-            highlighted = self._is_highlighted(key[0])
+                self._line_highlight.pop(key, None)
             for line in items:
                 try:
                     line.setValue(float(view_x))
-                    line.setPen(self._line_pen(endpoint_key, highlighted))
                     line.setVisible(True)
                 except (RuntimeError, TypeError, ValueError):
                     pass
@@ -991,13 +1116,9 @@ class PinnedCursorOverlay(_CanvasBackref):
                     [point[1] for point in points],
                     symbol=[point[3] for point in points],
                     size=[point[4] for point in points],
-                    pen=[
-                        pg.mkPen(QColor(255, 255, 255, point[5]), width=1.0)
-                        for point in points
-                    ],
+                    pen=[_extrema_pen(point[5]) for point in points],
                     brush=[
-                        pg.mkBrush(self._brush_color(point[2], point[5]))
-                        for point in points
+                        _extrema_brush(point[2], point[5]) for point in points
                     ],
                 )
                 marker.setVisible(True)
@@ -1022,18 +1143,23 @@ class PinnedCursorOverlay(_CanvasBackref):
         endpoints = []
         offscreen_ids = set()
         for record in self._records:
+            flags = []
             for endpoint in record.endpoints:
                 view_x = self._view_x(endpoint.physical_x)
-                canvas_x = self._canvas_x(vb, view_x) if vb is not None else None
+                canvas_x = (
+                    self._canvas_x(vb, view_x)
+                    if vb is not None and view_x is not None else None
+                )
                 offscreen = None
-                if view_x is None or view_range is None or canvas_x is None:
+                if view_x is None:
+                    offscreen = "unrepresentable"
+                elif view_range is None:
                     offscreen = "left"
                 elif view_x < view_range[0]:
                     offscreen = "left"
                 elif view_x > view_range[1]:
                     offscreen = "right"
-                if offscreen is not None:
-                    offscreen_ids.add(record.record_id)
+                flags.append(offscreen)
                 endpoints.append({
                     "record_id": record.record_id,
                     "ordinal": record.ordinal,
@@ -1044,6 +1170,8 @@ class PinnedCursorOverlay(_CanvasBackref):
                     ),
                     "offscreen": offscreen,
                 })
+            if flags and all(flag in ("left", "right") for flag in flags):
+                offscreen_ids.add(record.record_id)
         tiny = host.width() < _TINY_HOST_W or host.height() < _LABEL_H + 2
         axis_top = host.bottom() - _LABEL_H - 1
         if axis_top < host.top():
@@ -1065,38 +1193,64 @@ class PinnedCursorOverlay(_CanvasBackref):
         )
 
     def _sync_leaders(self, layout: PinnedOverlayLayout) -> None:
-        self._remove_items(self._leader_items)
-        self._leader_items = []
         glw = getattr(self._c, "_glw", None)
         canvas = self._c
-        if not _alive(glw) or not _alive(canvas):
-            return
-        scene = getattr(glw, "scene", lambda: None)()
-        if scene is None:
-            return
-        for geom in layout.items:
-            if geom.leader is None:
-                continue
-            x1, y1, x2, y2 = geom.leader
+        wanted = []
+        if _alive(glw) and _alive(canvas):
             try:
-                p1 = glw.mapToScene(canvas.mapTo(glw, QPointF(x1, y1).toPoint()))
-                p2 = glw.mapToScene(canvas.mapTo(glw, QPointF(x2, y2).toPoint()))
+                scene = glw.scene()
             except (RuntimeError, TypeError, AttributeError):
-                continue
-            item = QGraphicsLineItem(p1.x(), p1.y(), p2.x(), p2.y())
-            color = QColor(_SINGLE_COLOR)
-            color.setAlpha(_FAINT_ALPHA)
-            item.setPen(QPen(color, 1.0))
+                scene = None
+            if scene is not None:
+                for geom in layout.items:
+                    if geom.leader is None:
+                        continue
+                    x1, y1, x2, y2 = geom.leader
+                    try:
+                        p1 = glw.mapToScene(
+                            canvas.mapTo(glw, QPointF(x1, y1).toPoint())
+                        )
+                        p2 = glw.mapToScene(
+                            canvas.mapTo(glw, QPointF(x2, y2).toPoint())
+                        )
+                    except (RuntimeError, TypeError, AttributeError):
+                        continue
+                    wanted.append((p1, p2, scene))
+        while len(self._leader_items) > len(wanted):
+            extra = self._leader_items.pop()
+            self._remove_items((extra,))
+        if not wanted:
+            return
+        scene = wanted[0][2]
+        while len(self._leader_items) < len(wanted):
+            item = QGraphicsLineItem()
+            item.setPen(_leader_pen())
             item.setZValue(_LEADER_Z)
             try:
                 scene.addItem(item)
             except (RuntimeError, TypeError):
-                continue
+                break
             self._leader_items.append(item)
+        for item, (p1, p2, _scene) in zip(self._leader_items, wanted):
+            if not _alive(item):
+                continue
+            try:
+                item.setLine(p1.x(), p1.y(), p2.x(), p2.y())
+                item.setVisible(True)
+            except RuntimeError:
+                pass
 
     def _apply_highlight(self) -> None:
+        extrema_needed = False
         for (record_id, endpoint_key), items in self._line_items.items():
             highlighted = self._is_highlighted(record_id)
+            prev = self._line_highlight.get((record_id, endpoint_key))
+            if prev is highlighted:
+                continue
+            self._line_highlight[(record_id, endpoint_key)] = highlighted
+            if prev is None and not highlighted:
+                continue
+            extrema_needed = True
             for line in items:
                 if not _alive(line):
                     continue
@@ -1104,7 +1258,7 @@ class PinnedCursorOverlay(_CanvasBackref):
                     line.setPen(self._line_pen(endpoint_key, highlighted))
                 except RuntimeError:
                     pass
-        if self._kind == "time" and self._records:
+        if extrema_needed and self._kind == "time" and self._records:
             self._sync_extrema()
 
     def _all_managed_items(self):
@@ -1145,6 +1299,7 @@ class PinnedCursorOverlay(_CanvasBackref):
 
 __all__ = [
     "PINNED_OFFSCREEN_TEXT",
+    "PINNED_UNREPRESENTABLE_TEXT",
     "PinnedAxisLabel",
     "PinnedCursorOverlay",
     "PinnedLabelGeom",

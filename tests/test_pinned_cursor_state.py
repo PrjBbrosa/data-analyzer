@@ -22,6 +22,7 @@ from mf4_analyzer.ui.pinned_cursor_state import (
     REASON_DUPLICATE_RECORD_ID,
     REASON_INCOMPLETE_DUAL,
     REASON_INVALID_AXIS_IDENTITY,
+    REASON_INVALID_BINDINGS,
     REASON_MISSING_COORD,
     REASON_NON_FINITE_COORD,
     REASON_UNKNOWN_PAYLOAD_VERSION,
@@ -501,7 +502,7 @@ def test_one_corrupt_record_is_dropped_and_rest_kept():
     assert any(item.reason == "invalid_record" for item in dropped)
 
 
-def test_fid_remap_rewrites_known_and_keeps_unknown():
+def test_fid_remap_rewrites_known_and_drops_unknown():
     raw = _raw_single(
         domain="channel",
         x=0.4,
@@ -516,18 +517,83 @@ def test_fid_remap_rewrites_known_and_keeps_unknown():
     remapped = remap_collection_fids(
         collection, {"old-a": "new-a", "unrelated": "nope"},
     )
+    assert len(remapped.records) == 1
     intent = remapped.records[0]
     assert intent.axis_identity == ("new-a", "steer_angle")
+    assert len(intent.bindings) == 1
     assert intent.bindings[0].fid == "new-a"
     assert intent.bindings[0].channel == "torque"
     assert intent.bindings[0].binding_id == "b1"
-    assert intent.bindings[1].fid == "old-b"
-    assert intent.bindings[1].channel == "rpm"
     same_name = remap_collection_fids(
         collection, {"some-other-file-named-the-same": "new-a"},
     )
-    assert same_name.records[0].bindings[0].fid == "old-a"
-    assert same_name.records[0].axis_identity == ("old-a", "steer_angle")
+    assert same_name.records == ()
+    assert same_name.scope_id == collection.scope_id
+
+
+def test_fid_remap_drops_record_when_all_bindings_unknown():
+    collection = _collection(
+        _raw_single(bindings=[{"fid": "gone", "channel": "torque"}]),
+    )
+    remapped = remap_collection_fids(collection, {"f0": "F0"})
+    assert remapped.records == ()
+    assert remapped.scope_id == collection.scope_id
+    assert remapped.next_ordinal == collection.next_ordinal
+
+
+def test_fid_remap_drops_record_when_custom_x_axis_fid_unknown():
+    collection = _collection(_raw_single(
+        domain="channel",
+        x=0.4,
+        x_unit="mm",
+        axis_identity=["gone-x", "steer_angle"],
+        bindings=[{"fid": "old-a", "channel": "torque"}],
+    ))
+    remapped = remap_collection_fids(collection, {"old-a": "new-a"})
+    assert remapped.records == ()
+
+
+def test_empty_bindings_record_is_illegal():
+    collection, dropped = normalize_collection(
+        {
+            "payload_version": 1,
+            "scope_id": _uuid(),
+            "records": [
+                _raw_single(bindings=[]),
+                _without(_raw_single(), "bindings"),
+            ],
+        }
+    )
+    assert collection.records == ()
+    assert [item.reason for item in dropped] == [
+        REASON_INVALID_BINDINGS,
+        REASON_INVALID_BINDINGS,
+    ]
+
+
+def test_next_record_rejects_empty_bindings():
+    with pytest.raises(ValueError, match="invalid_bindings"):
+        next_record(empty_collection(), _spec(bindings=[]))
+
+
+def test_collection_from_dict_logs_dropped_records(caplog):
+    import logging
+
+    bad = _raw_single(x=True)
+    with caplog.at_level(
+        logging.WARNING, logger="mf4_analyzer.ui.pinned_cursor_state",
+    ):
+        restored = collection_from_dict(
+            {
+                "payload_version": 1,
+                "scope_id": _uuid(),
+                "records": [bad],
+            }
+        )
+    assert restored.records == ()
+    assert any(
+        REASON_BOOL_COORD in rec.message for rec in caplog.records
+    )
 
 
 def test_clear_collection_keeps_scope_and_ordinal_counter():

@@ -3978,7 +3978,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         identity = self._entry_source(entry)
         channel_name = entry.get("channel")
         return FrequencyCursorChannel(
-            identity=identity if identity is not None else str(display_label or ""),
+            identity=identity,
             source_label="",
             channel_label=str(channel_name or display_label or ""),
             color=str(entry.get("color", "#2563eb") or "#2563eb"),
@@ -4255,21 +4255,33 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if not isinstance(entry, dict):
             return None
         fid, channel = entry.get("fid"), entry.get("channel")
-        if fid is None or channel is None:
+        if not fid or not channel:
             return None
+        binding_id = str(entry.get("binding_id") or "")
+        if binding_id:
+            return (str(fid), str(channel), binding_id)
         return (str(fid), str(channel))
 
     def _entry_for_source(self, source):
         parsed = None
-        if isinstance(source, (list, tuple)) and len(source) == 2:
+        binding_id = ""
+        if isinstance(source, (list, tuple)) and len(source) >= 2:
             parsed = (str(source[0]), str(source[1]))
+            if len(source) >= 3 and source[2]:
+                binding_id = str(source[2])
         matches = []
         for entry in self._entries:
             identity = self._entry_source(entry)
             if parsed is None:
                 matches.append(entry)
-            elif identity == parsed:
-                return entry
+                continue
+            if identity is None:
+                continue
+            if identity[0] == parsed[0] and identity[1] == parsed[1]:
+                if not binding_id or (
+                    len(identity) >= 3 and identity[2] == binding_id
+                ):
+                    return entry
         if parsed is None and len(matches) == 1:
             return matches[0]
         return None

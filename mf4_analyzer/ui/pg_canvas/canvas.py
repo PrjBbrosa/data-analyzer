@@ -2402,6 +2402,10 @@ class TimeDomainCanvasPG(QWidget):
 
     def _invalidate_presentation_paint_ack(self) -> None:
         """Drop an unpainted presentation request without emitting anything."""
+        if not hasattr(self, "_presentation_paint_ack_epoch"):
+            # hideEvent / destroyed can fire during construct or teardown,
+            # before this token exists or after it has been dropped.
+            return
         self._presentation_paint_ack_epoch += 1
         self._presentation_paint_ack_request = None
 

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from time import monotonic
 
-from PyQt5.QtCore import QEventLoop, QSettings, Qt
+from PyQt5.QtCore import QEventLoop, QSettings
 from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ...blf_dbc_candidates import (
@@ -89,20 +89,6 @@ class ProjectIOMixin:
         if holder is None:
             return False
         return holder.mark_user_mutation(token)
-
-    def _ensure_pinned_cursor_lifecycle_hooks(self):
-        """Connect pin user-intent to project dirty. Idempotent."""
-        controller = getattr(
-            getattr(self, "chart_stack", None), "_pinned_cursors", None,
-        )
-        if controller is None:
-            return
-        try:
-            controller.intent_changed.connect(
-                self._on_pinned_cursor_intent_changed, Qt.UniqueConnection,
-            )
-        except TypeError:
-            pass
 
     def _on_pinned_cursor_intent_changed(self):
         self._note_user_project_mutation(token="pinned_cursor")
@@ -2039,7 +2025,6 @@ class ProjectIOMixin:
         chart_stack = getattr(self, "chart_stack", None)
         if chart_stack is not None:
             chart_stack.clear_cursor_pill()
-            self._ensure_pinned_cursor_lifecycle_hooks()
             controller = getattr(chart_stack, "_pinned_cursors", None)
             if controller is not None:
                 controller.clear_all()
@@ -2376,7 +2361,21 @@ class ProjectIOMixin:
         from .. import project_io as pio
         path = Path(path)
 
-        doc = pio.load_project_from_json(path)
+        for section in getattr(self, "analysis_managers", {}) or {}:
+            page = self._analysis_page(section)
+            if page is not None:
+                page._overlay_session_bound = False
+
+        try:
+            doc = pio.load_project_from_json(path)
+        except pio.UnsupportedProjectVersion:
+            QMessageBox.warning(
+                self,
+                "无法打开",
+                "该工程由更新版本的 TraceLab 保存（工程格式 v4），"
+                "请升级到 v8.3.0 或更高",
+            )
+            return
         dirty = getattr(self, "_project_dirty", None)
         if dirty is not None:
             dirty.begin_restore()
@@ -2644,6 +2643,7 @@ class ProjectIOMixin:
         for fid in list(self.files.keys()):
             self._remove_file_from_all_time_views(fid)
             self._remove_file_from_all_analysis_views(fid)
+            self._drop_pinned_cursor_identities(fids=(fid,))
             del self.files[fid]
             self.navigator_order.remove_fid(fid)
             self.navigator.remove_file(fid, emit=False)
@@ -2656,6 +2656,11 @@ class ProjectIOMixin:
         # would otherwise sync record rows. Clear presentation here, not after
         # a successful replot.
         self._sync_record_curve_tree()
+        controller = getattr(
+            getattr(self, "chart_stack", None), "_pinned_cursors", None,
+        )
+        if controller is not None:
+            controller.clear_all()
         self._reset_empty_workspace_session()
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")

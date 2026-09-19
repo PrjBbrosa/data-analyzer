@@ -147,6 +147,38 @@ def test_live_uncheck_show_filtered_hides_companion_without_replot(
     assert replot_calls == []
 
 
+def test_lowpass_zero_cutoff_does_not_draw_companion(
+    time_window_with_two_high_low_channels,
+):
+    """F-V2-1: low-pass 0 Hz is a widget value, not an enabled overlay.
+
+    ``capture_payload`` still persists unused band cutoffs (100/2000 Hz).
+    Plotting must ignore those fields so a 0 Hz low-pass does not mint
+    ``LP 1e-06Hz`` after ``nyquist_guard``.
+    """
+    w = time_window_with_two_high_low_channels
+    panel = w.inspector.filter_panel
+    panel.set_kind("低通")
+    panel.set_cutoff(0.0)
+    panel.set_enabled(True)
+    payload = panel.capture_payload()
+    assert payload["spec"]["cutoff"] == pytest.approx(0.0)
+    assert payload["spec"]["cutoff_lo"] > 0
+    assert payload["spec"]["cutoff_hi"] > 0
+
+    data = w._build_time_plot_data().rows
+    names = [d[0] for d in data]
+    assert data
+    assert not any("Hz)" in name for name in names)
+    assert not any("LP" in name for name in names)
+    assert not any("1e-06" in name or "1e-6" in name for name in names)
+
+    risk = w._estimate_current_time_overlay_risk(
+        "overlay", w.navigator.get_checked_channels(),
+    )
+    assert risk.filter_enabled is False
+
+
 def test_filter_state_change_invalidates_time_canvas_cache(
     time_window_with_two_high_low_channels, monkeypatch,
 ):

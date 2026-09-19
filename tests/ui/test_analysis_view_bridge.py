@@ -306,6 +306,13 @@ def test_capture_overlay_keeps_pins_without_seam():
     assert pane.pinned_cursors is pins
 
 
+def test_capture_overlay_keeps_pins_when_live_collection_is_none():
+    pins = _sample_pins()
+    pane = PaneState(pinned_cursors=pins)
+    capture_overlay_from_canvas(_PinOverlayCanvas(None), pane)
+    assert pane.pinned_cursors is pins
+
+
 def test_capture_and_apply_overlay_pins_use_optional_seam():
     live = _sample_pins(x=33.0)
     canvas = _PinOverlayCanvas(live)

@@ -132,6 +132,37 @@ def test_restore_payload_keeps_zero_cutoff(qtbot):
     assert p.spin_hi.value() == pytest.approx(0.0)
 
 
+def test_project_filter_spec_ignores_unused_band_cutoffs():
+    from mf4_analyzer.ui.inspector_sections.time_filter import (
+        filter_spec_is_enabled,
+        project_filter_spec,
+    )
+
+    spec = project_filter_spec({
+        "kind": "low",
+        "order": 4,
+        "cutoff": 0.0,
+        "cutoff_lo": 100.0,
+        "cutoff_hi": 2000.0,
+    })
+    assert spec.kind == "low"
+    assert spec.cutoff == pytest.approx(0.0)
+    assert spec.cutoff_lo == pytest.approx(0.0)
+    assert spec.cutoff_hi == pytest.approx(0.0)
+    assert filter_spec_is_enabled(spec) is False
+
+    band = project_filter_spec({
+        "kind": "band",
+        "order": 4,
+        "cutoff": 50.0,
+        "cutoff_lo": 100.0,
+        "cutoff_hi": 2000.0,
+    })
+    assert band.cutoff == pytest.approx(0.0)
+    assert band.cutoff_lo == pytest.approx(100.0)
+    assert filter_spec_is_enabled(band) is True
+
+
 def test_inspector_filter_disabled_by_default(qtbot):
     from mf4_analyzer.ui.inspector import Inspector
     insp = Inspector(); qtbot.addWidget(insp)

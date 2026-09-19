@@ -164,6 +164,38 @@ def test_cursor_display_model_stays_qt_free():
         assert cls.__dataclass_params__.frozen is True
 
 
+def test_cursor_display_channel_from_dual_row_maps_tuple_and_row():
+    from mf4_analyzer.ui.cursor_display_model import (
+        cursor_display_channel_from_dual_row,
+    )
+    from mf4_analyzer.ui.plot_helpers import DualCursorRow
+
+    row = DualCursorRow(
+        channel_name="torque",
+        min_value=1.0,
+        max_value=2.0,
+        avg=1.5,
+        delta=0.5,
+        unit_suffix="Nm",
+        color="#ef4444",
+        identity=("fid-a", "torque"),
+        label="[car] torque",
+    )
+    channel = cursor_display_channel_from_dual_row(row)
+    assert channel.channel_label == "torque"
+    assert channel.source_label == "car"
+    assert channel.min_value == 1.0
+    assert channel.max_value == 2.0
+    assert channel.avg_value == 1.5
+    assert channel.delta == 0.5
+    tuple_channel = cursor_display_channel_from_dual_row(
+        ("speed", 0.0, 1.0, 0.5, 0.2, "rpm", "#1769e0")
+    )
+    assert tuple_channel.channel_label == "speed"
+    assert tuple_channel.min_value == 0.0
+    assert cursor_display_channel_from_dual_row(channel) is channel
+
+
 def test_pinned_cursor_sample_is_immutable():
     sample = PinnedCursorSample(
         domain="time",

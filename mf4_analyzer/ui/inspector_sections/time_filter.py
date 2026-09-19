@@ -23,6 +23,29 @@ from ...signal.filters import FilterSpec
 _KIND_MAP = {"低通": "low", "高通": "high", "带通": "band", "带阻": "bandstop"}
 
 
+def project_filter_spec(data) -> FilterSpec:
+    """Keep only cutoffs that belong to ``kind``.
+
+    ``capture_payload`` persists unused widget values so a kind switch can
+    restore them. Plot and enable decisions must ignore those fields.
+    """
+    spec = FilterSpec.from_dict(data)
+    if spec.kind in ("band", "bandstop"):
+        return FilterSpec(
+            spec.kind,
+            order=spec.order,
+            cutoff_lo=spec.cutoff_lo,
+            cutoff_hi=spec.cutoff_hi,
+        )
+    return FilterSpec(spec.kind, order=spec.order, cutoff=spec.cutoff)
+
+
+def filter_spec_is_enabled(spec: FilterSpec) -> bool:
+    if spec.kind in ("band", "bandstop"):
+        return spec.cutoff_lo > 0 and spec.cutoff_hi > 0
+    return spec.cutoff > 0
+
+
 def _coerce_filter_spin(value, default):
     """Widget restore must keep 0 Hz; ``or default`` would rewrite it to 100."""
     if value is None or value == "":

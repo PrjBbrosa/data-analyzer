@@ -7,11 +7,14 @@ Qt, pyqtgraph, or ``cursor_display_model`` Sample DTOs.
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import UUID, uuid4
+
+logger = logging.getLogger(__name__)
 
 
 PAYLOAD_VERSION = 1
@@ -151,7 +154,14 @@ def collection_to_dict(collection: PinnedCursorCollection | None) -> dict[str, A
 
 def collection_from_dict(raw: Any) -> PinnedCursorCollection:
     """Decode an optional persisted field. Missing/illegal → empty collection."""
-    collection, _dropped = normalize_collection(raw)
+    collection, dropped = normalize_collection(raw)
+    for item in dropped:
+        logger.warning(
+            "dropped pinned cursor record (%s) at index %s: %s",
+            item.reason,
+            item.index,
+            item.detail,
+        )
     return collection
 
 
@@ -292,10 +302,14 @@ def remap_collection_fids(
     collection: PinnedCursorCollection,
     fid_map: Mapping[Any, Any] | None,
 ) -> PinnedCursorCollection:
-    """Rewrite known fids; keep unknown fids (do not rebind by display name)."""
+    """Rewrite known fids; drop unknown fids (do not rebind by display name)."""
     mapping = fid_map if isinstance(fid_map, Mapping) else {}
-    records = tuple(_remap_intent_fids(item, mapping) for item in collection.records)
-    return replace(collection, records=records)
+    records = []
+    for item in collection.records:
+        remapped = _remap_intent_fids(item, mapping)
+        if remapped is not None:
+            records.append(remapped)
+    return replace(collection, records=tuple(records))
 
 
 def duplicate_collection(
@@ -414,6 +428,12 @@ def _parse_intent(
     bindings, bindings_error = _parse_bindings(raw.get("bindings"), index=index)
     if bindings_error is not None:
         return None, bindings_error
+    if not bindings:
+        return None, DroppedPinnedCursor(
+            reason=REASON_INVALID_BINDINGS,
+            index=index,
+            detail="pinned cursor requires at least one binding",
+        )
 
     if require_identity:
         record_id = _uuid_str(raw.get("record_id"))
@@ -623,21 +643,20 @@ def _composite_two_tuple(value: Any) -> tuple[str, str] | None:
 def _remap_intent_fids(
     intent: PinnedCursorIntent,
     fid_map: Mapping[Any, Any],
-) -> PinnedCursorIntent:
+) -> PinnedCursorIntent | None:
     axis = intent.axis_identity
     if axis is not None:
-        axis = (_remap_fid(axis[0], fid_map), axis[1])
+        if axis[0] not in fid_map:
+            return None
+        axis = (str(fid_map[axis[0]]), axis[1])
     bindings = tuple(
-        replace(item, fid=_remap_fid(item.fid, fid_map))
+        replace(item, fid=str(fid_map[item.fid]))
         for item in intent.bindings
+        if item.fid in fid_map
     )
+    if not bindings:
+        return None
     return replace(intent, axis_identity=axis, bindings=bindings)
-
-
-def _remap_fid(fid: str, fid_map: Mapping[Any, Any]) -> str:
-    if fid in fid_map:
-        return str(fid_map[fid])
-    return fid
 
 
 def _next_ordinal(collection: PinnedCursorCollection) -> int:

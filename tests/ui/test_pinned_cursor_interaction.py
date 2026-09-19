@@ -85,7 +85,8 @@ def _press_p(target, *, autorepeat=False):
 
 def _records(cs, canvas=None):
     canvas = cs.canvas_time if canvas is None else canvas
-    return cs.pinned_cursors_for_canvas(canvas).records
+    collection = cs.pinned_cursors_for_canvas(canvas)
+    return () if collection is None else collection.records
 
 
 def test_a01_mouse_over_plot_without_click_pins(qapp, qtbot):

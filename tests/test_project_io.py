@@ -152,8 +152,9 @@ def test_load_and_resave_drop_retired_wwt_display_fields_without_schema_bump(tmp
 def test_unknown_version_rejected(tmp_path):
     path = tmp_path / "s.tlproj"
     path.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
-    with pytest.raises(pio.UnsupportedProjectVersion):
+    with pytest.raises(pio.UnsupportedProjectVersion) as caught:
         pio.load_project_from_json(path)
+    assert caught.value.schema_version == 999
 
 
 def test_resolve_prefers_relative(tmp_path):
@@ -469,7 +470,7 @@ def _sample_pin_payload(*, fid="f0", extra_bindings=None, **overrides):
     return collection_to_dict(collection_from_dict(raw))
 
 
-def test_remap_rewrites_known_pin_fids_keeps_unknown_and_cursor_placement():
+def test_remap_rewrites_known_pin_fids_drops_unknown_and_cursor_placement():
     pins = _sample_pin_payload(
         fid="f0",
         extra_bindings=[{"fid": "missing", "channel": "rpm"}],
@@ -489,8 +490,26 @@ def test_remap_rewrites_known_pin_fids_keeps_unknown_and_cursor_placement():
     assert record["record_id"] == pins["records"][0]["record_id"]
     assert record["ordinal"] == 1
     assert record["axis_identity"] == ["f9", "steer_angle"]
-    assert record["bindings"][0]["fid"] == "f9"
-    assert record["bindings"][1]["fid"] == "missing"
+    assert [item["fid"] for item in record["bindings"]] == ["f9"]
+    dropped = pio.collect_dropped_time_refs([view], {"f0": "f9"})
+    assert ("V", "missing", "rpm") in dropped
+
+
+def test_remap_view_fids_twice_does_not_mint_pin_scope():
+    view = {
+        "name": "V",
+        "tab_color": "#fff",
+        "checked": [["f0", "rpm"]],
+    }
+    fid_map = {"f0": "f9"}
+    first = pio.remap_view_fids([view], fid_map)
+    second = pio.remap_view_fids([view], fid_map)
+    assert first == second
+    assert first[0]["pinned_cursors"] is None
+    from mf4_analyzer.ui.view_state import ViewState
+    restored = ViewState.from_dict(first[0])
+    assert restored.pinned_cursors.records == ()
+    assert restored.pinned_cursors.next_ordinal == 1
 
 
 def test_corrupt_pin_record_does_not_break_project_payload(tmp_path):

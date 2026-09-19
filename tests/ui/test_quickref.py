@@ -244,9 +244,10 @@ def test_quickref_documents_chart_pin_not_board_pen():
     assert pin_row.keys == (quickref._sc("pin_cursor"),)
     for phrase in (
         "单游标", "双游标", "A、B", "关游标", "不隐藏", "蓝图钉",
-        "取消固定", "原地", "×", "撤销", "−/+",
+        "取消固定", "原地", "×", "−/+",
     ):
         assert phrase in pin_row.sub, phrase
+    assert "撤销" not in pin_row.sub
     dual = next(row for row in group.rows if row.desc == "双游标")
     assert "点 A、B" in dual.sub
 

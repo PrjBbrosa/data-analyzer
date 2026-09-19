@@ -339,7 +339,8 @@ def inherit_chart_appearance_for_group_change(
     prev_gids = {str(gid) for gid in prev.values()}
     new_gids = {str(gid) for gid in new.values()}
     for gid in prev_gids - new_gids:
-        gspec = axes.get(appearance_group_key(gid)) or {}
+        gkey = appearance_group_key(gid)
+        gspec = axes.pop(gkey, {}) or {}
         inherit = {
             key: gspec[key]
             for key in ("y_scale", "grid")
@@ -364,8 +365,10 @@ def inherit_chart_appearance_for_group_change(
         grids = []
         for fid, channel in members:
             spec = axes.get(appearance_channel_key(fid, channel)) or {}
-            scales.append(_normalize_scale(spec.get("y_scale")))
-            grids.append(bool(spec["grid"]) if "grid" in spec else True)
+            if "y_scale" in spec:
+                scales.append(_normalize_scale(spec.get("y_scale")))
+            if "grid" in spec:
+                grids.append(bool(spec["grid"]))
         gspec: dict[str, Any] = {}
         if scales and all(item == scales[0] for item in scales):
             gspec["y_scale"] = scales[0]

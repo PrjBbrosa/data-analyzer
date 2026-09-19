@@ -103,6 +103,82 @@ def pytest_runtest_teardown(item):
     finally:
         _PINNED_TOPLEVELS.clear()
         gc.collect()
+        _assert_pinned_cursor_filters_not_accumulated(item)
+
+
+def _assert_pinned_cursor_filters_not_accumulated(item):
+    """F-P1-3: living app-level pin filters must not accumulate across tests."""
+    try:
+        from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
+            PinnedCursorController,
+        )
+    except Exception:
+        return
+    living = 0
+    for obj in gc.get_objects():
+        try:
+            if type(obj) is not PinnedCursorController:
+                continue
+            if getattr(obj, "_application_filter_installed", False):
+                living += 1
+        except (ReferenceError, RuntimeError, TypeError):
+            continue
+    if living > 1:
+        pytest.fail(
+            f"{living} PinnedCursorController app filters still installed "
+            f"after {item.nodeid}"
+        )
+
+
+_MODAL_EXEC_FAIL_MS = 800
+
+
+@pytest.fixture(autouse=True)
+def _fail_fast_unstubbed_modal_exec(qapp, monkeypatch, request):
+    """Refuse to let an offscreen QDialog.exec_() block the session.
+
+    Combined UI pytest hung 2h+ at 0% CPU in
+    ``PresetBar._confirm_axis_preservation`` → ``box.exec_()`` because no
+    click ever arrived. Tests that drive a dialog with ``QTimer.singleShot(0)``
+    still finish; a forgotten modal fails in <1s instead of hanging.
+    Opt out with ``@pytest.mark.allow_blocking_modal``.
+    """
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QDialog
+
+    if request.node.get_closest_marker("allow_blocking_modal"):
+        yield
+        return
+    original = QDialog.exec_
+
+    def _guarded(dialog, *args, **kwargs):
+        timed_out = []
+
+        def _timeout():
+            timed_out.append(True)
+            try:
+                dialog.reject()
+            except RuntimeError:
+                pass
+
+        QTimer.singleShot(_MODAL_EXEC_FAIL_MS, _timeout)
+        result = original(dialog, *args, **kwargs)
+        if timed_out:
+            title = ""
+            try:
+                title = dialog.windowTitle()
+            except RuntimeError:
+                title = "<deleted>"
+            raise RuntimeError(
+                f"QDialog.exec_() blocked in {request.node.nodeid} "
+                f"({type(dialog).__name__} title={title!r}). "
+                "Stub the confirmation seam, or mark allow_blocking_modal."
+            )
+        return result
+
+    monkeypatch.setattr(QDialog, "exec_", _guarded)
+    monkeypatch.setattr(QDialog, "exec", _guarded)
+    yield
 
 
 @pytest.fixture(autouse=True)

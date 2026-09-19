@@ -1,12 +1,13 @@
 # tests/ui/test_project_session.py
+import json
 import pytest
 
 from mf4_analyzer import app_meta
 
 
 def test_app_meta_constants():
-    assert app_meta.APP_VERSION == "v8.2.5"
-    assert app_meta.WINDOW_TITLE == "TraceLab v8.2.5"
+    assert app_meta.APP_VERSION == "v8.3.0"
+    assert app_meta.WINDOW_TITLE == "TraceLab v8.3.0"
     assert app_meta.RELEASE_URL.startswith("https://")
 
 
@@ -16,8 +17,32 @@ def test_window_title_uses_app_meta(qapp):
     assert mw.windowTitle() == app_meta.WINDOW_TITLE
 
 
+def test_open_project_unsupported_schema_prompts_chinese_upgrade(
+    qapp, tmp_path, monkeypatch,
+):
+    """F-P2-18: unknown schema_version shows an actionable Chinese dialog."""
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = tmp_path / "future.tlproj"
+    path.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
+    warns = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        lambda *args, **kwargs: warns.append(args) or None,
+    )
+    mw = MainWindow()
+    mw.open_project(path)
+    assert warns
+    assert warns[0][1] == "无法打开"
+    assert warns[0][2] == (
+        "该工程由更新版本的 TraceLab 保存（工程格式 v4），"
+        "请升级到 v8.3.0 或更高"
+    )
+    assert not mw.files
+
+
 import csv
-import json
 
 
 def _write_csv(path, n=40):
@@ -1610,6 +1635,62 @@ def test_project_roundtrip_restores_pinned_cursors(qapp, tmp_path):
     assert pin.x == pytest.approx(0.12)
     assert pin.bindings[0].fid == restored_fid
     assert pin.bindings[0].channel == "rpm"
+
+
+def test_open_project_does_not_write_old_fft_pins_into_new_project(
+    qapp, tmp_path,
+):
+    """F-P0-2: opening a new project must not save the previous FFT pin set."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    csv_old = tmp_path / "old.csv"
+    csv_new = tmp_path / "new.csv"
+    _write_csv(csv_old)
+    _write_csv(csv_new)
+    old_proj = tmp_path / "old.tlproj"
+    new_proj = tmp_path / "new.tlproj"
+
+    mw_old = MainWindow()
+    mw_old._load_one(str(csv_old))
+    old_fid = next(iter(mw_old.files))
+    page = mw_old.chart_stack.page_fft
+    canvas = page.pane_canvas(0)
+    collection = empty_collection()
+    collection, _intent = next_record(collection, {
+        "mode": "single",
+        "domain": "frequency",
+        "x": 12.0,
+        "x_unit": "Hz",
+        "bindings": [{"fid": old_fid, "channel": "rpm"}],
+        "presentation": "full",
+    })
+    mw_old.chart_stack.set_pinned_cursors_for_canvas(canvas, collection)
+    page._overlay_session_bound = True
+    mw_old.save_project(old_proj)
+    old_raw = json.loads(old_proj.read_text(encoding="utf-8"))
+    assert old_raw["analysis_views"]["fft"]["views"][0]["panes"][0][
+        "pinned_cursors"
+    ]["records"]
+
+    mw_seed = MainWindow()
+    mw_seed._load_one(str(csv_new))
+    mw_seed.save_project(new_proj)
+
+    mw = MainWindow()
+    mw.open_project(old_proj)
+    qapp.processEvents()
+    mw.open_project(new_proj)
+    qapp.processEvents()
+    mw.save_project(new_proj)
+
+    raw = json.loads(new_proj.read_text(encoding="utf-8"))
+    records = (
+        raw["analysis_views"]["fft"]["views"][0]["panes"][0]
+        .get("pinned_cursors", {})
+        .get("records", [])
+    )
+    assert records == []
 
 
 def test_reopen_with_frf_view_keeps_time_dual_cursor_pill(qapp, tmp_path, qtbot):

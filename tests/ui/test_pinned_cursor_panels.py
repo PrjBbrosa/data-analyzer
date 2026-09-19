@@ -68,10 +68,11 @@ def _press_p(target):
 
 def _records(cs, canvas=None):
     canvas = cs.canvas_time if canvas is None else canvas
-    return cs.pinned_cursors_for_canvas(canvas).records
+    collection = cs.pinned_cursors_for_canvas(canvas)
+    return () if collection is None else collection.records
 
 
-def test_a09_full_mini_independent_drag_close_undo_ordinal(qapp, qtbot):
+def test_a09_full_mini_independent_drag_close_and_reuse_ordinal(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     vp = _viewport(cs.canvas_time)
     _aim(qtbot, cs.canvas_time, 0.3, cs._pinned_cursors)
@@ -103,13 +104,16 @@ def test_a09_full_mini_independent_drag_close_undo_ordinal(qapp, qtbot):
 
     closed_id = _records(cs)[1].record_id
     closed_ordinal = _records(cs)[1].ordinal
+    heard = []
+    cs.pin_feedback.connect(heard.append)
     second.close_requested.emit()
     qapp.processEvents()
     assert len(_records(cs)) == 1
-    cs._pinned_cursors.undo_close(cs.canvas_time)
-    qapp.processEvents()
-    restored = [item for item in _records(cs) if item.record_id == closed_id]
-    assert restored and restored[0].ordinal == closed_ordinal
+    assert closed_id not in {item.record_id for item in _records(cs)}
+    assert any(text.startswith("已关闭") for text in heard)
+    assert not hasattr(cs._pinned_cursors, "undo_close")
+    assert all(item.ordinal != closed_ordinal or item.record_id != closed_id
+               for item in _records(cs))
 
     first_record = next(item for item in _records(cs) if item.ordinal == 1)
     first_pill = next(

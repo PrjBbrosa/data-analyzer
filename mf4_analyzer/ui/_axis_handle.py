@@ -48,7 +48,9 @@ def snapshot_axis_appearance(handle) -> dict[str, object]:
     if callable(getter):
         try:
             grid = bool(getter())
-        except Exception:
+        except (AttributeError, RuntimeError):
+            # Teardown / sip-deleted PlotItem: treat grid as off rather than
+            # failing a chart-options snapshot of a handle that is going away.
             grid = False
     return {
         "title": title,

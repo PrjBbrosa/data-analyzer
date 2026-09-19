@@ -121,7 +121,6 @@ def test_ordinary_merge_is_captured_from_real_channel_tree(qapp):
     ))
     groups = opts.get("channel_axis_groups") or {}
     assert groups['["f1","speed"]'] == groups['["f1","torque"]']
-    assert tree._axis_groups == {}
 
 
 def test_capture_keeps_unchecked_color_overrides_from_real_tree(qapp):

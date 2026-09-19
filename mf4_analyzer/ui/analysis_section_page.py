@@ -14,6 +14,8 @@ ChartStack/MainWindow (state capture/apply, tabbar signal handling).
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -34,6 +36,8 @@ from .widgets.ultraview_entry import (
 )
 from ..ui_kit.motion import POLICY_LIGHT
 from ..ui_kit.qt_lifecycle import as_weak_callable
+
+logger = logging.getLogger(__name__)
 
 _FOCUS_ACCENT = "#2d7ff9"
 
@@ -98,6 +102,8 @@ class AnalysisSectionPage(QWidget):
     # which set_linked fires non-edge (every apply, incl. programmatic) — the
     # button's toggled(bool) is a TRUE edge, so the two must not be conflated.
     compare_toggled = pyqtSignal(str, bool)
+    pane_added = pyqtSignal(object)
+    pane_removing = pyqtSignal(object)
 
     def __init__(self, *, section: str, manager, card_factory, parent=None):
         super().__init__(parent)
@@ -278,8 +284,13 @@ class AnalysisSectionPage(QWidget):
             if callable(compositor):
                 try:
                     compositor(pix, canvas)
-                except (RuntimeError, TypeError):
-                    pass
+                except RuntimeError:
+                    # Qt C++ object already deleted during grab/teardown.
+                    logger.warning(
+                        "pin chrome compositor failed for canvas %r",
+                        canvas,
+                        exc_info=True,
+                    )
             pixes.append(pix)
         if not pixes:
             return None
@@ -319,6 +330,9 @@ class AnalysisSectionPage(QWidget):
         self._sync_card_hint_bars()
         self.tabbar.refresh_split_controls()
         self._schedule_heatmap_layout_sync()
+        canvas = getattr(card, "canvas", None)
+        if canvas is not None:
+            self.pane_added.emit(canvas)
 
     def _configure_shared_toolbar(self) -> None:
         toolbar = getattr(self, '_toolbar', None)
@@ -372,6 +386,9 @@ class AnalysisSectionPage(QWidget):
     def exit_split(self) -> None:
         if len(self._cards) < 2:
             return
+        canvas = getattr(self._cards[1], "canvas", None)
+        if canvas is not None:
+            self.pane_removing.emit(canvas)
         self.set_linked(False)
         # Tear down level-lock signal wiring before the pane is destroyed.
         self._disconnect_level_lock_handlers(self._heatmap_canvases())

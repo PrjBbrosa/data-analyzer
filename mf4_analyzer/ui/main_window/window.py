@@ -1006,6 +1006,15 @@ class MainWindow(
                 self._toast_forwarding = False
         self._toast.show_message(msg, level=level)
 
+    def _on_pin_feedback(self, message):
+        """Surface P-key pin results on toast + status bar (D2)."""
+        text = str(message or "")
+        if not text:
+            return
+        from ..chart_stack.pinned_cursor_controller import pin_feedback_level
+        self.toast(text, pin_feedback_level(text))
+        self.statusBar.showMessage(text, 3000)
+
     def _status_message(self, message, timeout=0):
         """Status-bar feedback; during channel-editor modal, surface via toast.
 
@@ -1316,6 +1325,10 @@ class MainWindow(
         self.chart_stack.analysis_cursor_mode_changed.connect(
             self._on_analysis_cursor_mode_changed
         )
+        self.chart_stack.pin_feedback.connect(self._on_pin_feedback)
+        pinned = getattr(self.chart_stack, "_pinned_cursors", None)
+        if pinned is not None:
+            pinned.intent_changed.connect(self._on_pinned_cursor_intent_changed)
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
         self.chart_stack.channel_drop_requested.connect(self._on_time_channel_drop)
@@ -3897,14 +3910,15 @@ class MainWindow(
                 idx = getattr(self.view_manager, "active", None)
             cfg = getter(idx) if callable(getter) else None
         if isinstance(cfg, dict) and cfg.get("enabled"):
-            from ...signal.filters import FilterSpec
+            from ..inspector_sections.time_filter import (
+                filter_spec_is_enabled,
+                project_filter_spec,
+            )
 
-            spec = FilterSpec.from_dict(cfg.get("spec"))
+            spec = project_filter_spec(cfg.get("spec"))
             show_original = bool(cfg.get("show_original", True))
             show_filtered = bool(cfg.get("show_filtered", True))
-            filter_enabled = (spec.cutoff > 0) or (
-                spec.cutoff_lo > 0 and spec.cutoff_hi > 0
-            )
+            filter_enabled = filter_spec_is_enabled(spec)
 
         return estimate_time_overlay_risk(
             checked=checked,
@@ -4508,11 +4522,15 @@ class MainWindow(
                 idx = getattr(self, "_focused_view_idx", None)
             time_filter = getter(idx) if callable(getter) else None
         if isinstance(time_filter, dict) and time_filter.get("enabled"):
-            spec = _filters.FilterSpec.from_dict(time_filter.get("spec"))
+            from ..inspector_sections.time_filter import (
+                filter_spec_is_enabled,
+                project_filter_spec,
+            )
+
+            spec = project_filter_spec(time_filter.get("spec"))
             show_orig = bool(time_filter.get("show_original", True))
             show_filt = bool(time_filter.get("show_filtered", True))
-            filt_enabled = (spec.cutoff > 0) or (
-                spec.cutoff_lo > 0 and spec.cutoff_hi > 0)
+            filt_enabled = filter_spec_is_enabled(spec)
 
         # Track filtered-overlay names so the stats path can exclude them
         # without relying on a fragile name-suffix heuristic.

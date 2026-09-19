@@ -58,8 +58,14 @@ def _fft_entries():
 def _collection(domain, values, *, mode="single"):
     collection = empty_collection()
     unit = "s" if domain == "time" else "Hz"
+    channel = "speed" if domain == "time" else "force"
     for value in values:
-        payload = {"mode": mode, "domain": domain, "x_unit": unit}
+        payload = {
+            "mode": mode,
+            "domain": domain,
+            "x_unit": unit,
+            "bindings": [{"fid": "fid-a", "channel": channel}],
+        }
         if mode == "dual":
             payload["ax"] = float(value[0])
             payload["bx"] = float(value[1])

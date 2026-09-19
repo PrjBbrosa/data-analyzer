@@ -8,9 +8,15 @@ import pytest
 from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.view_state import (
+    ViewState,
     _encode_channel_key,
+    appearance_binding_key,
     appearance_channel_key,
+    appearance_group_key,
+    inherit_chart_appearance_for_group_change,
+    is_reusable_blank_view,
 )
+from mf4_analyzer.ui.widgets import MultiFileChannelWidget
 
 from tests.ui.test_view_state_isolation import (
     _enable_lowpass,
@@ -383,3 +389,151 @@ def test_offscreen_appearance_pngs_and_axis_values(
     assert handle.is_grid_enabled() is False
     lo, hi = handle.get_ylim()
     assert lo > 0 and hi > lo
+
+
+def test_dissolving_coaxis_group_does_not_steal_sibling_group_appearance():
+    """F-V1-1: group1={A,B} grid off, group2={C,D} log; dissolve A.
+
+    Surviving C/D must keep log and must not inherit group1's grid-off,
+    even if a leftover ``["g","1"]`` spec is still sitting in axes.
+    """
+    prev = {
+        _encode_channel_key(("f1", "A")): "1",
+        _encode_channel_key(("f1", "B")): "1",
+        _encode_channel_key(("f1", "C")): "2",
+        _encode_channel_key(("f1", "D")): "2",
+    }
+    new = {
+        _encode_channel_key(("f1", "C")): "2",
+        _encode_channel_key(("f1", "D")): "2",
+    }
+    appearance = {
+        "x_scale": "linear",
+        "axes": {
+            appearance_group_key("1"): {"grid": False},
+            appearance_group_key("2"): {"y_scale": "log"},
+        },
+        "companion_colors": {},
+    }
+
+    tree = MultiFileChannelWidget()
+    tree.merge_axis_group([("f1", "A"), ("f1", "B")])
+    tree.merge_axis_group([("f1", "C"), ("f1", "D")])
+    tree.split_axis_group([("f1", "A")])
+    assert tree.axis_group_for("f1", "C") == 2
+    assert tree.axis_group_for("f1", "D") == 2
+    assert tree.axis_group_for("f1", "A") is None
+    assert tree.axis_group_for("f1", "B") is None
+
+    got = inherit_chart_appearance_for_group_change(appearance, prev, new)
+    axes = got["axes"]
+    assert appearance_group_key("1") not in axes
+    g2 = axes.get(appearance_group_key("2")) or {}
+    assert g2.get("y_scale") == "log"
+    assert g2.get("grid") is not False
+    for channel in ("C", "D"):
+        spec = axes.get(appearance_channel_key("f1", channel)) or {}
+        assert spec.get("grid") is not False
+
+
+def test_group_merge_without_member_specs_does_not_stamp_default_appearance():
+    """F-V2-9: empty member specs must not mint linear/grid-on group keys."""
+    new = {
+        _encode_channel_key(("f1", "a")): "1",
+        _encode_channel_key(("f1", "b")): "1",
+    }
+    got = inherit_chart_appearance_for_group_change({}, {}, new)
+    assert got["axes"] == {}
+    blank = ViewState(name="View 1", tab_color="#2d7ff9", chart_appearance=got)
+    assert is_reusable_blank_view(blank) is True
+
+
+def test_record_only_appearance_key_matches_binding_id_not_first_fid():
+    """F-V2-5: two WWT record-only curves on the same fid must not alias."""
+    from types import SimpleNamespace
+
+    from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
+    from mf4_analyzer.ui.time_curve_bindings import TimeCurveBinding, TimeDataRef
+
+    handle = SimpleNamespace(axis_group=None)
+    ck = '["f1","TolB"]'
+
+    class _Lines:
+        def composite_items(self):
+            return [(ck, "TolB", (handle, None))]
+
+    canvas = SimpleNamespace(
+        _companion_names=set(),
+        _channel_lines=_Lines(),
+        _channel_data_id={ck: "f1"},
+    )
+    first = TimeCurveBinding(
+        binding_id="rec-a",
+        y_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=1),
+        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=0),
+        display_name="TolA",
+        unit="mm",
+        color="#ff0000",
+        axis_id="window-0-axis-1",
+        y_range=(0.0, 1.0),
+    )
+    second = TimeCurveBinding(
+        binding_id="rec-b",
+        y_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=3),
+        x_ref=TimeDataRef(kind="wwt_record", fid="f1", record_index=2),
+        display_name="TolB",
+        unit="mm",
+        color="#00ff00",
+        axis_id="window-0-axis-2",
+        y_range=(0.0, 1.0),
+    )
+    class _Host:
+        files = {}
+        _resolve_navigator_channel_key = ViewMixin._resolve_navigator_channel_key
+        _appearance_key_for_handle = ViewMixin._appearance_key_for_handle
+
+    key = _Host()._appearance_key_for_handle(
+        canvas, handle, SimpleNamespace(curve_bindings=(first, second)),
+    )
+    assert key == appearance_binding_key("rec-b")
+
+
+def test_split_unfocused_recolor_keeps_focused_navigator_colors(
+    qtbot, qapp, loaded_csv, monkeypatch,
+):
+    """F-V2-2: non-focused split recolor writes state.colors, not navigator."""
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(w)
+    _set_checked(w, "torque")
+    w.plot_time()
+    _wait_time_view_idle(qtbot, w)
+    canvas, handle = _torque_handle(w)
+    _apply_chart_options(
+        w, canvas, handle, monkeypatch, curve_color="#111111",
+    )
+    _flush(qapp)
+    assert w.view_manager.get(0).colors[(fid, "torque")].lower() == "#111111"
+
+    _new_attached_view(w, qapp, fid)
+    _set_checked(w, "torque")
+    w.plot_time()
+    _wait_time_view_idle(qtbot, w)
+    w._switch_view(0)
+    _flush(qapp)
+    w.view_manager.set_split(1)
+    _flush(qapp)
+    w.chart_stack.set_focused_card(w.chart_stack._time_card)
+    _flush(qapp)
+
+    secondary = w.chart_stack.secondary_canvas()
+    assert secondary is not None
+    assert secondary.axes_list
+    _apply_chart_options(
+        w, secondary, secondary.axes_list[0], monkeypatch,
+        curve_color="#abcdef",
+    )
+    _flush(qapp)
+    nav_color = w.navigator.get_channel_colors().get((fid, "torque"), "")
+    assert nav_color.lower() == "#111111"
+    assert w.view_manager.get(0).colors[(fid, "torque")].lower() == "#111111"
+    assert w.view_manager.get(1).colors[(fid, "torque")].lower() == "#abcdef"

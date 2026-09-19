@@ -94,7 +94,7 @@ def test_remap_analysis_remarks_rewrites_fid_and_drops_missing():
     assert pane["cursor_placement"] == {"ax": 12.0, "bx": 40.0}
 
 
-def test_remap_analysis_pins_rewrites_known_fids_keeps_unknown():
+def test_remap_analysis_pins_rewrites_known_fids_drops_unknown():
     from uuid import uuid4
     from mf4_analyzer.ui.pinned_cursor_state import (
         collection_from_dict,
@@ -138,9 +138,10 @@ def test_remap_analysis_pins_rewrites_known_fids_keeps_unknown():
     pane = out["fft"]["views"][0]["panes"][0]
     assert pane["cursor_placement"] == {"ax": 12.0, "bx": 40.0}
     record = pane["pinned_cursors"]["records"][0]
-    assert record["bindings"][0]["fid"] == "F1"
-    assert record["bindings"][1]["fid"] == "gone"
+    assert [item["fid"] for item in record["bindings"]] == ["F1"]
     assert record["ordinal"] == 1
+    dropped = collect_dropped_analysis_refs(analysis_views, {"f1": "F1"})
+    assert ("fft", "FFT", 0, "pin") in dropped
 
 
 def test_remap_frf_role_endpoints_is_directional_and_symmetric():

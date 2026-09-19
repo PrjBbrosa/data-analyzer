@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QApplication, QPushButton
 from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import (
     PINNED_OFFSCREEN_TEXT,
+    PINNED_UNREPRESENTABLE_TEXT,
     PinnedAxisLabel,
     cluster_label_text,
     layout_pinned_axis_labels,
@@ -93,8 +94,14 @@ def _frf_result(*, log=False):
 def _collection(domain, values, *, mode="single"):
     collection = empty_collection()
     unit = "s" if domain == "time" else "Hz"
+    channel = "speed" if domain == "time" else "force"
     for value in values:
-        payload = {"mode": mode, "domain": domain, "x_unit": unit}
+        payload = {
+            "mode": mode,
+            "domain": domain,
+            "x_unit": unit,
+            "bindings": [{"fid": "fid-a", "channel": channel}],
+        }
         if mode == "dual":
             payload["ax"] = float(value[0])
             payload["bx"] = float(value[1])
@@ -374,6 +381,12 @@ def test_same_x_cluster_hover_expands_numbers(
         if child.objectName() == "pinnedAxisLabelMember"
     ]
     assert len(member_buttons) == 8
+    for button in member_buttons:
+        text = button.text()
+        fm = QFontMetrics(button.font())
+        assert button.width() >= fm.horizontalAdvance(text), (
+            f"{text!r} button width {button.width()} < text {fm.horizontalAdvance(text)}"
+        )
 
 
 def test_offscreen_endpoint_is_not_clamped_and_marks_out_of_view(
@@ -521,3 +534,178 @@ def test_dual_ab_merge_and_a_b_colors(qapp, qtbot, production_style):
     if callable(b_pen):
         b_pen = b_pen()
     assert a_pen.color().name() != b_pen.color().name()
+
+
+def test_unrepresentable_layout_is_not_offscreen_left(qapp):
+    fm = QFontMetrics(QFont())
+    items = layout_pinned_axis_labels(
+        [
+            {
+                "record_id": "zero",
+                "ordinal": 1,
+                "endpoint": "x",
+                "text": "P1",
+                "canvas_x": 40.0,
+                "offscreen": "unrepresentable",
+            }
+        ],
+        axis_left=20, axis_right=220, axis_top=80, axis_height=16, fm=fm,
+    )
+    assert items
+    assert items[0].offscreen == "unrepresentable"
+    assert items[0].text == PINNED_UNREPRESENTABLE_TEXT
+    assert not items[0].text.startswith("◀")
+
+
+def test_cluster_keys_are_slot_indices_not_member_sets(qapp):
+    fm = QFontMetrics(QFont())
+    kwargs = dict(
+        axis_left=20, axis_right=220, axis_top=80, axis_height=16, fm=fm,
+    )
+    first = [
+        {
+            "record_id": f"id-{index}",
+            "ordinal": index + 1,
+            "endpoint": "x",
+            "text": f"P{index + 1}",
+            "canvas_x": 40.0 + index * 2.0,
+            "offscreen": None,
+        }
+        for index in range(8)
+    ]
+    second = [
+        {**item, "record_id": f"other-{item['ordinal']}"}
+        for item in first
+    ]
+    items_a = layout_pinned_axis_labels(first, **kwargs)
+    items_b = layout_pinned_axis_labels(second, **kwargs)
+    assert items_a
+    assert [item.key for item in items_a] == [item.key for item in items_b]
+    assert all(
+        item.key.startswith("slot:")
+        or item.key.startswith("edge:")
+        or item.key == "tiny"
+        for item in items_a
+    )
+    assert all("id-" not in item.key and "other-" not in item.key for item in items_a)
+
+
+def test_dual_one_endpoint_offscreen_does_not_mark_whole_pill(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    records = _pin(cs, canvas, [(0.15, 0.5)], mode="dual")
+    canvas.set_xlim(0.4, 0.6)
+    qapp.processEvents()
+    overlay = canvas._pinned_overlay
+    overlay.reproject()
+    qapp.processEvents()
+    record_id = records[0].record_id
+    assert record_id not in overlay.offscreen_record_ids()
+    pills = cs._pinned_cursors.pills_for(canvas)
+    assert pills
+    assert not bool(pills[0].property("pinnedOffscreen"))
+    assert any(item.offscreen == "left" for item in overlay.layout().items)
+
+    both = _pin(cs, canvas, [(0.05, 0.10)], mode="dual")
+    canvas.set_xlim(0.4, 0.6)
+    qapp.processEvents()
+    overlay.reproject()
+    qapp.processEvents()
+    assert both[0].record_id in overlay.offscreen_record_ids()
+    both_pills = cs._pinned_cursors.pills_for(canvas)
+    assert any(bool(pill.property("pinnedOffscreen")) for pill in both_pills)
+
+
+def test_frf_log_non_positive_frequency_is_unrepresentable(
+    qapp, qtbot, production_style,
+):
+    from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import (
+        PinnedOverlayEndpoint,
+        PinnedOverlayRecord,
+    )
+
+    cs = _make_stack(qtbot, qapp, height=820)
+    cs.set_mode("frf")
+    qapp.processEvents()
+    canvas = cs.canvas_frf
+    cs.set_cursor_mode_for_canvas(canvas, "single")
+    canvas.set_result(
+        _frf_result(log=True),
+        {"frequency_scale": "log", "magnitude_scale": "db"},
+        {},
+    )
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    overlay = canvas._pinned_overlay
+    assert overlay._view_x(0.0) is None
+    assert overlay._view_x(0.5) is not None
+    overlay.set_records((
+        PinnedOverlayRecord(
+            record_id="zero-hz",
+            ordinal=1,
+            mode="single",
+            domain="frf",
+            endpoints=(PinnedOverlayEndpoint("x", 0.0, "P1"),),
+        ),
+    ))
+    qapp.processEvents()
+    items = overlay.layout().items
+    assert any(item.offscreen == "unrepresentable" for item in items)
+    assert not any(
+        item.offscreen == "unrepresentable" and item.text.startswith("◀")
+        for item in items
+    )
+    assert any(item.text == PINNED_UNREPRESENTABLE_TEXT for item in items)
+
+    overlay.set_records((
+        PinnedOverlayRecord(
+            record_id="half-hz",
+            ordinal=1,
+            mode="single",
+            domain="frf",
+            endpoints=(PinnedOverlayEndpoint("x", 0.5, "P1"),),
+        ),
+    ))
+    qapp.processEvents()
+    left_items = overlay.layout().items
+    assert any(item.offscreen == "left" for item in left_items)
+    assert not any(item.offscreen == "unrepresentable" for item in left_items)
+    assert any(item.text.startswith("◀") for item in left_items)
+
+
+def test_view_geometry_coalesces_and_reuses_leaders(
+    qapp, qtbot, production_style, monkeypatch,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    xs = [0.40 + index * 0.002 for index in range(12)]
+    _pin(cs, canvas, xs)
+    overlay = canvas._pinned_overlay
+    overlay.reproject()
+    qapp.processEvents()
+    before = [id(item) for item in overlay._leader_items]
+    overlay._stop_geom_timer()
+    calls = []
+    real = type(overlay)._build_layout
+
+    def wrapped(self, host):
+        calls.append(host)
+        return real(self, host)
+
+    monkeypatch.setattr(type(overlay), "_build_layout", wrapped)
+    for _ in range(6):
+        overlay._on_view_geometry_changed()
+    assert overlay._geom_timer.isActive()
+    qapp.processEvents()
+    assert len(calls) == 1
+    after = [id(item) for item in overlay._leader_items]
+    if before and after:
+        assert before[0] in after

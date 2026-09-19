@@ -74,26 +74,26 @@ class TestAxisGroupModel:
         assert w.axis_group_for("f1", "a") is None
         assert w.axis_group_for("f1", "b") is None
 
-    def test_split_allows_next_merge_to_reuse_first_group_id(self, qapp):
+    def test_split_does_not_reuse_dissolved_ordinary_group_id(self, qapp):
         w = MultiFileChannelWidget()
         w.merge_axis_group([("f1", "a"), ("f1", "b")])
         w.split_axis_group([("f1", "a"), ("f1", "b")])
 
         gid = w.merge_axis_group([("f1", "c"), ("f1", "d")])
 
-        assert gid == 1
-        assert w.axis_group_for("f1", "c") == 1
-        assert w.axis_group_for("f1", "d") == 1
+        assert gid == 2
+        assert w.axis_group_for("f1", "c") == 2
+        assert w.axis_group_for("f1", "d") == 2
 
-    def test_prune_renumbers_remaining_groups_contiguously(self, qapp):
+    def test_prune_keeps_surviving_ordinary_group_id(self, qapp):
         w = MultiFileChannelWidget()
         w.merge_axis_group([("f1", "a"), ("f1", "b")])
         w.merge_axis_group([("f1", "c"), ("f1", "d")])
 
         w.split_axis_group([("f1", "a"), ("f1", "b")])
 
-        assert w.axis_group_for("f1", "c") == 1
-        assert w.axis_group_for("f1", "d") == 1
+        assert w.axis_group_for("f1", "c") == 2
+        assert w.axis_group_for("f1", "d") == 2
 
     def test_merge_emits_signal(self, qapp):
         w = MultiFileChannelWidget()
@@ -176,7 +176,7 @@ class TestAxisGroupModel:
             '["f1","imported"]': "wwt-axis-3",
             '["f1","ordinary"]': "wwt-axis-3",
         }
-        assert w._axis_groups == {}
+        assert not hasattr(w, "_axis_groups") or w._axis_groups == {}
 
     def test_collect_selected_channel_keys_then_merge(self, qapp):
         # 直接驱动数据模型，模拟 _on_context_menu 收集到的 sel_keys → 合并
@@ -207,6 +207,20 @@ class TestAxisGroupModel:
         assert w.restore_imported_axis_group([("f1", "a"), ("f1", "b")]) is True
         assert w.axis_group_for("f1", "a") == imported
 
+    def test_user_merged_ordinary_member_is_not_promoted_to_imported_seed(self, qapp):
+        w = MultiFileChannelWidget()
+        imported = "window-0-axis-7"
+        w.set_restored_axis_group_projection({
+            '["f1","a"]': imported,
+            '["f1","b"]': imported,
+        })
+        w.merge_axis_group([("f1", "a"), ("f1", "ordinary")])
+        merged = w.restored_axis_group_projection()
+        w.set_restored_axis_group_projection({})
+        w.set_restored_axis_group_projection(merged)
+        assert ("f1", "ordinary") not in w._imported_axis_group_seed
+        assert w._imported_axis_group_seed[("f1", "a")] == imported
+
 
 class TestChannelTreeIndent:
     def test_indentation_is_narrowed(self, qapp):
@@ -224,7 +238,10 @@ class TestChannelTreeIndent:
         w.resize(260, 300)
         w.show()
         QCoreApplication.processEvents()
-        w._axis_groups[("f1", "a")] = 1  # 直接置状态绕过 add_file
+        w.set_restored_axis_group_projection({
+            '["f1","a"]': "1",
+            '["f1","b"]': "1",
+        })
         w.tree.viewport().update()
         QCoreApplication.processEvents()
         pm = w.grab()

@@ -100,6 +100,24 @@ def test_analysis_split_uses_one_shared_toolbar_and_equal_widths(qtbot, qapp):
     assert abs(left - right) <= 2
 
 
+def test_analysis_enter_split_uses_pane_signals_not_partial(qtbot, qapp):
+    from functools import partial
+
+    from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage
+
+    cs = _shown_chart_stack(qtbot)
+    page = cs.page_fft
+    assert not isinstance(page.enter_split, partial)
+    assert not isinstance(page.exit_split, partial)
+    assert page.enter_split.__func__ is AnalysisSectionPage.enter_split
+    page.enter_split()
+    qapp.processEvents()
+    secondary = page.pane_canvas(1)
+    assert cs._pinned_cursors._owner(secondary) is not None
+    page.exit_split()
+    qapp.processEvents()
+
+
 def test_secondary_time_controls_disabled_until_focus_routing(qtbot):
     cs = _shown_chart_stack(qtbot)
 

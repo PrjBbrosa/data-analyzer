@@ -21,6 +21,7 @@ from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
     PIN_STATUS_PENDING,
     PIN_STATUS_READY,
     PIN_STATUS_UNAVAILABLE,
+    UNCHECKED_TEXT,
 )
 from mf4_analyzer.ui.pinned_cursor_state import (
     collection_to_dict,
@@ -141,7 +142,7 @@ def test_pane_and_analysis_schema11_roundtrip_and_schema10_load():
     assert legacy.to_dict()["schema"] == 11
 
 
-def test_remap_view_pins_rewrites_known_keeps_unknown_and_placement():
+def test_remap_view_pins_rewrites_known_drops_unknown_and_placement():
     pins = _single_pins(
         fid="f0",
         domain="channel",
@@ -157,8 +158,7 @@ def test_remap_view_pins_rewrites_known_keeps_unknown_and_placement():
     assert out["cursor_placement"] == {"ax": 1.0, "bx": 2.5}
     restored = ViewState.from_dict(out)
     intent = restored.pinned_cursors.records[0]
-    assert intent.bindings[0].fid == "f9"
-    assert intent.bindings[1].fid == "missing"
+    assert [item.fid for item in intent.bindings] == ["f9"]
     assert intent.axis_identity == ("f9", "steer_angle")
     assert intent.ordinal == 1
     assert restored.pinned_cursors.scope_id == pins.scope_id
@@ -191,8 +191,9 @@ def test_remap_analysis_pins_inside_pane_loop():
     pane = out["fft"]["views"][0]["panes"][0]
     assert pane["cursor_placement"] == {"ax": 12.0, "bx": 40.0}
     restored = PaneState.from_dict(pane)
-    assert restored.pinned_cursors.records[0].bindings[0].fid == "F1"
-    assert restored.pinned_cursors.records[0].bindings[1].fid == "gone"
+    assert [item.fid for item in restored.pinned_cursors.records[0].bindings] == [
+        "F1",
+    ]
 
 
 def test_one_corrupt_pin_does_not_break_project_payload(tmp_path):
@@ -282,7 +283,9 @@ def _install_pins(cs, collection, canvas=None):
     canvas = cs.canvas_time if canvas is None else canvas
     cs.set_pinned_cursors_for_canvas(canvas, collection)
     _flush(QApplication.instance())
-    return cs.pinned_cursors_for_canvas(canvas).records
+    live = cs.pinned_cursors_for_canvas(canvas)
+    assert live is not None
+    return live.records
 
 
 def _pill_html(cs, canvas=None):
@@ -608,3 +611,37 @@ def test_split_close_hides_projection_keeps_records(qapp, qtbot):
     assert cs.split_active() is False
     for pill in cs._pinned_cursors.pills_for(secondary):
         assert pill.isVisible() is False
+
+
+def test_uncheck_marks_unavailable_without_dirty_recheck_restores(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    controller = cs._pinned_cursors
+    records = _install_pins(cs, _single_pins(fid="fid-a", channel="speed"))
+    record_id = records[0].record_id
+    marked = controller.user_intent_revision
+    t = np.linspace(0.0, 1.0, 400)
+    cs.canvas_time.plot_channels(
+        [
+            (
+                "torque", True, t, np.cos(2 * np.pi * t),
+                "#e01769", "Nm", "fid-a",
+            ),
+        ],
+        mode="overlay",
+    )
+    _flush(qapp)
+    assert controller.availability_for(
+        cs.canvas_time, record_id,
+    ) == PIN_STATUS_UNAVAILABLE
+    live = cs.pinned_cursors_for_canvas(cs.canvas_time).records
+    assert live and live[0].record_id == record_id
+    assert live[0].bindings[0].channel == "speed"
+    assert UNCHECKED_TEXT in _pill_html(cs)
+    assert controller.user_intent_revision == marked
+    _plot_two(cs.canvas_time)
+    _flush(qapp)
+    assert controller.availability_for(
+        cs.canvas_time, record_id,
+    ) == PIN_STATUS_READY
+    assert UNCHECKED_TEXT not in _pill_html(cs)
+    assert controller.user_intent_revision == marked
