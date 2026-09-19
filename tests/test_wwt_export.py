@@ -21,19 +21,15 @@ _TRAILER_ASSET = _ROOT / "assets" / "wwt" / "winwert_display_trailer.bin"
 _TEMPLATE = _ROOT / "assets" / "wwt" / "winwert_export_template.wwt"
 
 
-@pytest.fixture(autouse=True)
-def _require_assets():
-    if not _TRAILER_ASSET.is_file():
-        pytest.skip("bundled WinWert display trailer missing")
+def _require_tracked_asset(path: Path, label: str) -> Path:
+    if not path.is_file():
+        pytest.fail(f"tracked {label} missing from checkout: {path}")
+    return path
 
 
 @pytest.fixture
 def template():
-    if not _TEMPLATE.is_file():
-        if _TEMPLATE.parent.is_dir():
-            pytest.fail("bundled WWT export template missing from checkout")
-        pytest.skip("bundled WWT export template missing from packaged install")
-    return _TEMPLATE
+    return _require_tracked_asset(_TEMPLATE, "WWT export template")
 
 
 def _series(n=600, dt=0.002):
@@ -44,11 +40,26 @@ def _series(n=600, dt=0.002):
     }, {"Steering torque": "Nm", "Steering angle": "°"}
 
 
+def _independent_linear_resample(time, values):
+    """Linear interpolation onto ``linspace(t0, t1, n)`` — not the product resampler."""
+    t = np.asarray(time, dtype=np.float64)
+    y = np.asarray(values, dtype=np.float64)
+    order = np.argsort(t, kind="mergesort")
+    t_sorted = t[order]
+    uniq = np.concatenate([[True], np.diff(t_sorted) > 0.0])
+    t_eq = np.linspace(float(t_sorted[0]), float(t_sorted[-1]), t.size, dtype=np.float64)
+    y_eq = np.interp(t_eq, t_sorted[uniq], y[order][uniq])
+    return t_eq, y_eq
+
+
 def test_default_trailer_asset_resolves():
-    assert default_display_trailer_path() == _TRAILER_ASSET
+    assert default_display_trailer_path() == _require_tracked_asset(
+        _TRAILER_ASSET, "WinWert display trailer"
+    )
 
 
 def test_cleanroom_keeps_native_length_and_exact_values(tmp_path):
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     t, channels, units = _series()
     out = tmp_path / "native.wwt"
     result = export_wwt(out, t, channels, units=units, title="T", comment="C")
@@ -71,6 +82,7 @@ def test_cleanroom_keeps_native_length_and_exact_values(tmp_path):
 
 
 def test_cleanroom_writes_time_domain_display(tmp_path):
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     t, channels, units = _series()
     out = tmp_path / "display.wwt"
     export_wwt(out, t, channels, units=units)
@@ -96,6 +108,7 @@ def test_cleanroom_writes_time_domain_display(tmp_path):
 
 def test_cleanroom_axis_origin_follows_range(tmp_path):
     """轴原点必须按新量程重算：漏改则首帧只画出正半边（负下限被顶出画面）。"""
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     t, channels, units = _series()
     out = tmp_path / "origin.wwt"
     export_wwt(out, t, channels, units=units)
@@ -122,6 +135,7 @@ def test_cleanroom_axis_origin_follows_range(tmp_path):
 
 def test_cleanroom_gives_every_channel_its_own_colour(tmp_path):
     """回归：所有曲线都从同一原型复制，不单独配色就会全是红色。"""
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     n = 300
     t = np.arange(n, dtype=np.float64) * 0.001
     channels = {f"Ch{i + 1}": float(i + 1) * np.sin(t) for i in range(6)}
@@ -136,6 +150,7 @@ def test_cleanroom_gives_every_channel_its_own_colour(tmp_path):
 
 
 def test_cleanroom_stamps_own_text_and_drops_template_annotations(tmp_path):
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     t, channels, units = _series()
     out = tmp_path / "text.wwt"
     export_wwt(out, t, channels, units=units,
@@ -152,6 +167,7 @@ def test_cleanroom_stamps_own_text_and_drops_template_annotations(tmp_path):
 
 
 def test_cleanroom_accepts_more_channels_than_template_slots(tmp_path):
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     n = 300
     t = np.arange(n, dtype=np.float64) * 0.001
     channels = {f"Ch{i + 1}": float(i + 1) * np.sin(t) for i in range(10)}
@@ -173,6 +189,7 @@ def test_cleanroom_refuses_short_source(tmp_path):
 
 def test_cleanroom_auto_resamples_uneven_time_axis(tmp_path):
     """Irregular source axes are common; export must not force manual rebuild."""
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     t = np.concatenate([
         np.arange(200, dtype=np.float64) * 0.001,
         0.2 + np.arange(200, dtype=np.float64) * 0.004,
@@ -189,6 +206,11 @@ def test_cleanroom_auto_resamples_uneven_time_axis(tmp_path):
     # Equidistant after export.
     assert np.allclose(np.diff(got_t), got_t[1] - got_t[0])
     assert "已重采样" in result.summary
+    got_y = loaded["data"]["a"].to_numpy()
+    expected_t, expected_y = _independent_linear_resample(t, y)
+    np.testing.assert_allclose(got_t, expected_t, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(got_y, expected_y, rtol=0, atol=1e-12)
+    assert float(np.max(np.abs(got_y))) > 0.5
 
 def test_cleanroom_refuses_length_mismatch(tmp_path):
     t = np.arange(200, dtype=np.float64) * 0.001
@@ -204,9 +226,22 @@ def test_cleanroom_refuses_empty_selection(tmp_path):
 
 def test_missing_trailer_asset_reports_packaging_problem(tmp_path):
     t, channels, _ = _series()
-    with pytest.raises(WwtExportError, match="assets/wwt"):
+    stand_in = tmp_path / "nope.bin"
+    with pytest.raises(WwtExportError, match="assets/wwt|显示尾块"):
         export_wwt(tmp_path / "x.wwt", t, channels,
-                   trailer_path=tmp_path / "nope.bin")
+                   trailer_path=stand_in)
+
+
+def test_missing_default_trailer_uses_stand_in_path(tmp_path, monkeypatch):
+    """Do not delete the tracked trailer; reroute the default path to a stand-in."""
+    t, channels, _ = _series()
+    stand_in = tmp_path / "missing-trailer.bin"
+    monkeypatch.setattr(
+        "mf4_analyzer.io.wwt_export.default_display_trailer_path",
+        lambda: stand_in,
+    )
+    with pytest.raises(WwtExportError, match="显示尾块|assets/wwt"):
+        export_wwt(tmp_path / "x.wwt", t, channels)
 
 
 def test_template_mode_still_available(tmp_path, template):
@@ -229,6 +264,7 @@ def test_unknown_mode_rejected(tmp_path):
 
 
 def test_result_summary_reads_naturally(tmp_path):
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     t, channels, units = _series()
     result = export_wwt(tmp_path / "s.wwt", t, channels, units=units)
     assert result.summary == f"2 通道 · {len(t)} 点"
@@ -237,6 +273,7 @@ def test_result_summary_reads_naturally(tmp_path):
 def test_cleanroom_compact_quantizes_int16_and_roundtrips(tmp_path):
     from mf4_analyzer.io.wwt_writer import STORAGE_COMPACT
 
+    _require_tracked_asset(_TRAILER_ASSET, "WinWert display trailer")
     t, channels, units = _series()
     out = tmp_path / "compact.wwt"
     result = export_wwt(

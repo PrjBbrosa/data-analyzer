@@ -85,6 +85,27 @@ def test_load_hdf_groups_by_factor_and_drops_nan(tmp_path):
     assert fast["channel_metadata"]["MOTOR X"]["quantity"] == "acceleration"
 
 
+def test_load_hdf_drops_all_nan_factor_group_entirely(tmp_path):
+    """A whole factor group whose only member is all-NaN must disappear."""
+    n = 4
+    live = np.arange(n, dtype=float)
+    p = write_head_hdf(
+        tmp_path / "nan-group.hdf", n_scans=n, delta=1.0, start_of_data=4096,
+        channels=[
+            {"name": "L", "factor": 1, "quantity": "sound pressure",
+             "unit": "Pa", "calibration": 1.0, "samples": live},
+            {"name": "CAN", "factor": 8, "quantity": "raw", "unit": "",
+             "calibration": 1.0, "samples": None},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    suffixes = {g["label_suffix"] for g in groups}
+    assert "8x" not in suffixes
+    assert "1x" in suffixes
+    dropped = groups[0]["source_metadata"]["dropped_channels"]
+    assert any(item["name"] == "CAN" and "NaN" in item["reason"] for item in dropped)
+    np.testing.assert_allclose(groups[0]["data"]["L"].to_numpy(), live)
+
+
 def test_duplicate_truncated_channel_names_are_disambiguated_not_overwritten(tmp_path):
     """HEAD 的 ``name str`` 被截断到 16 字符会让物理上不同的通道塌成同名。
 

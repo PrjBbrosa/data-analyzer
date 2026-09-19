@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import queue
+import subprocess
 import sys
+import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +17,11 @@ from can_logger.p0.a2l_probe import MeasurementSummary
 from can_logger.p0.ifdata_xcp import DaqEventInfo, DaqProcessorInfo, IfDataXcp
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+from tests._helpers.acq_owned_objects import isolated_user_env, junit_case_results
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_THIS = Path(__file__).resolve()
+_VECTOR_MINI_ENV = "T4_ACQ_VECTOR_MINI"
 
 
 def _ifdata() -> IfDataXcp:
@@ -125,13 +134,42 @@ def _patch_runtime_sequence(
     return runtimes
 
 
-def test_vector_backend_is_refused_before_native_import_on_non_windows() -> None:
+def _stop_vector_backend(backend) -> None:
+    try:
+        backend.stop()
+    except Exception:
+        pass
+    thread = getattr(backend, "_decode_thread", None)
+    if thread is not None and thread.is_alive():
+        stop_event = getattr(backend, "_stop_event", None)
+        if stop_event is not None:
+            stop_event.set()
+        thread.join(timeout=2.0)
+
+
+def _register_vector_finalizer(request, backend) -> None:
+    request.addfinalizer(lambda: _stop_vector_backend(backend))
+
+
+def _living_vector_decode_threads() -> list[threading.Thread]:
+    return [
+        thread
+        for thread in threading.enumerate()
+        if thread.name == "xcp-daq-decode" and thread.is_alive()
+    ]
+
+
+@pytest.mark.parametrize("platform_name", ("darwin", "linux"))
+def test_vector_backend_is_refused_before_native_import_on_non_windows(
+    monkeypatch, platform_name: str
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform_name)
     from mf4_analyzer.acquisition_capture.backends import (
         RecorderBackendUnavailableError,
         VectorXcpRecorderBackend,
     )
 
-    with pytest.raises(RecorderBackendUnavailableError):
+    with pytest.raises(RecorderBackendUnavailableError, match="Windows-only"):
         VectorXcpRecorderBackend()
 
 
@@ -173,13 +211,14 @@ def test_pyxcp_import_probe_selects_source_or_frozen_child_command(
     assert calls == [command]
 
 
-def test_lifecycle_uses_one_runtime_and_policy_driven_dto_ingress(monkeypatch) -> None:
+def test_lifecycle_uses_one_runtime_and_policy_driven_dto_ingress(monkeypatch, request) -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
 
     master = _StrictMaster()
     runtime = _patch_runtime(monkeypatch, master)
     monkeypatch.setattr(sys, "platform", "win32")
     backend = VectorXcpRecorderBackend(transport=TransportConfig(), ifdata=_ifdata(), measurements=_measurements())
+    _register_vector_finalizer(request, backend)
     backend.start(_selected())
 
     assert ("allocDaq", 1) in master.calls
@@ -200,7 +239,7 @@ def test_lifecycle_uses_one_runtime_and_policy_driven_dto_ingress(monkeypatch) -
     assert master.calls.count(("disconnect",)) >= 1
 
 
-def test_failed_daq_start_closes_runtime(monkeypatch) -> None:
+def test_failed_daq_start_closes_runtime(monkeypatch, request) -> None:
     from mf4_analyzer.acquisition_capture.backends import RecorderStartError, VectorXcpRecorderBackend
     from mf4_analyzer.acquisition_capture.xcp_daq_session import XcpDaqSession
 
@@ -209,6 +248,7 @@ def test_failed_daq_start_closes_runtime(monkeypatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(XcpDaqSession, "start", lambda *_args: (_ for _ in ()).throw(RuntimeError("DAQ rejected")))
     backend = VectorXcpRecorderBackend(transport=TransportConfig(), ifdata=_ifdata(), measurements=_measurements())
+    _register_vector_finalizer(request, backend)
     with pytest.raises(RecorderStartError, match="DAQ rejected"):
         backend.start(_selected())
     assert runtime.closed is True
@@ -220,7 +260,7 @@ def test_fake_backend_does_not_expose_vector_diagnostics() -> None:
     assert not hasattr(FakeRecorderBackend(), "diagnostics")
 
 
-def test_vector_diagnostics_classify_bad_dto_and_continue(monkeypatch) -> None:
+def test_vector_diagnostics_classify_bad_dto_and_continue(monkeypatch, request) -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
 
     master = _StrictMaster()
@@ -231,6 +271,7 @@ def test_vector_diagnostics_classify_bad_dto_and_continue(monkeypatch) -> None:
         ifdata=_ifdata(),
         measurements=_measurements(),
     )
+    _register_vector_finalizer(request, backend)
     backend.start(_selected())
 
     backend._policy.feed("DAQ", 1, 0, bytes([0x99, 0x00, 0x00]))
@@ -269,7 +310,7 @@ def test_vector_diagnostics_classify_bad_dto_and_continue(monkeypatch) -> None:
     backend.stop()
 
 
-def test_vector_diagnostics_report_sample_queue_overflow(monkeypatch) -> None:
+def test_vector_diagnostics_report_sample_queue_overflow(monkeypatch, request) -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
 
     master = _StrictMaster()
@@ -280,6 +321,7 @@ def test_vector_diagnostics_report_sample_queue_overflow(monkeypatch) -> None:
         ifdata=_ifdata(),
         measurements=_measurements(),
     )
+    _register_vector_finalizer(request, backend)
     backend._sample_queue = queue.Queue(maxsize=1)
     backend.start(_selected())
 
@@ -300,7 +342,7 @@ def test_vector_diagnostics_report_sample_queue_overflow(monkeypatch) -> None:
     backend.stop()
 
 
-def test_vector_diagnostics_report_policy_error_and_recover(monkeypatch) -> None:
+def test_vector_diagnostics_report_policy_error_and_recover(monkeypatch, request) -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
 
     master = _StrictMaster()
@@ -311,6 +353,7 @@ def test_vector_diagnostics_report_policy_error_and_recover(monkeypatch) -> None
         ifdata=_ifdata(),
         measurements=_measurements(),
     )
+    _register_vector_finalizer(request, backend)
     backend.start(_selected())
 
     original_get = backend._policy.get
@@ -346,6 +389,7 @@ def test_vector_diagnostics_report_policy_error_and_recover(monkeypatch) -> None
 
 def test_backend_status_overflow_is_frame_plus_sample_without_double_count(
     monkeypatch,
+    request,
 ) -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
     from mf4_analyzer.acquisition_capture.pyxcp_daq_policy import BoundedDaqPolicy
@@ -358,6 +402,7 @@ def test_backend_status_overflow_is_frame_plus_sample_without_double_count(
         ifdata=_ifdata(),
         measurements=_measurements(),
     )
+    _register_vector_finalizer(request, backend)
     backend.start(_selected())
     backend._stop_event.set()
     backend._decode_thread.join(timeout=1.0)
@@ -375,7 +420,7 @@ def test_backend_status_overflow_is_frame_plus_sample_without_double_count(
     backend.stop()
 
 
-def test_unknown_pid_updates_dto_arrival_but_not_last_sample(monkeypatch) -> None:
+def test_unknown_pid_updates_dto_arrival_but_not_last_sample(monkeypatch, request) -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
 
     master = _StrictMaster()
@@ -386,6 +431,7 @@ def test_unknown_pid_updates_dto_arrival_but_not_last_sample(monkeypatch) -> Non
         ifdata=_ifdata(),
         measurements=_measurements(),
     )
+    _register_vector_finalizer(request, backend)
     backend.start(_selected())
     backend._policy.feed("DAQ", 1, 0, bytes([0x99, 0x00, 0x00]))
 
@@ -404,6 +450,7 @@ def test_unknown_pid_updates_dto_arrival_but_not_last_sample(monkeypatch) -> Non
 
 def test_repeated_start_releases_old_session_and_resets_capture_state(
     monkeypatch,
+    request,
 ) -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
 
@@ -420,6 +467,7 @@ def test_repeated_start_releases_old_session_and_resets_capture_state(
         ifdata=_ifdata(),
         measurements=_measurements(),
     )
+    _register_vector_finalizer(request, backend)
     capacity = backend._sample_queue.maxsize
     backend.start(_selected())
     old_session = backend._session
@@ -479,6 +527,7 @@ def test_repeated_start_releases_old_session_and_resets_capture_state(
 
 def test_failed_start_can_retry_without_inheriting_error_or_queue_state(
     monkeypatch,
+    request,
 ) -> None:
     from mf4_analyzer.acquisition_capture.backends import (
         RecorderStartError,
@@ -510,6 +559,7 @@ def test_failed_start_can_retry_without_inheriting_error_or_queue_state(
         ifdata=_ifdata(),
         measurements=_measurements(),
     )
+    _register_vector_finalizer(request, backend)
 
     with pytest.raises(RecorderStartError, match="DAQ rejected once"):
         backend.start(_selected())
@@ -532,3 +582,69 @@ def test_failed_start_can_retry_without_inheriting_error_or_queue_state(
     assert second_runtime.closed is False
 
     backend.stop()
+
+
+@pytest.mark.skipif(
+    os.environ.get(_VECTOR_MINI_ENV) != "child",
+    reason="forced-failure child for the Vector teardown mini suite",
+)
+def test_vector_mini_forced_assert_failure(monkeypatch, request) -> None:
+    from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
+
+    master = _StrictMaster()
+    runtime = _patch_runtime(monkeypatch, master)
+    monkeypatch.setattr(sys, "platform", "win32")
+    backend = VectorXcpRecorderBackend(
+        transport=TransportConfig(),
+        ifdata=_ifdata(),
+        measurements=_measurements(),
+    )
+    _register_vector_finalizer(request, backend)
+    backend.start(_selected())
+    assert runtime.closed is False
+    assert False, "forced vector start assertion"
+
+
+@pytest.mark.skipif(
+    os.environ.get(_VECTOR_MINI_ENV) != "child",
+    reason="following child node for the Vector teardown mini suite",
+)
+def test_vector_mini_following_node_has_no_decode_thread() -> None:
+    assert _living_vector_decode_threads() == []
+
+
+def test_vector_assert_failure_teardown_mini_suite(tmp_path) -> None:
+    junit = tmp_path / "vector-mini.xml"
+    env = isolated_user_env(tmp_path / "home")
+    env[_VECTOR_MINI_ENV] = "child"
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"{_THIS}::test_vector_mini_forced_assert_failure",
+            f"{_THIS}::test_vector_mini_following_node_has_no_decode_thread",
+            "-q",
+            f"--junitxml={junit}",
+            f"--basetemp={tmp_path / 'basetemp'}",
+        ],
+        cwd=str(_REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert junit.exists(), (
+        f"vector mini suite produced no junit\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+    cases = junit_case_results(junit)
+    assert cases.get("test_vector_mini_forced_assert_failure") == "failed", (
+        f"forced assert must fail: {cases}\n{result.stdout}\n{result.stderr}"
+    )
+    assert cases.get("test_vector_mini_following_node_has_no_decode_thread") == (
+        "passed"
+    ), (
+        f"following node saw leftover decode thread: {cases}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )

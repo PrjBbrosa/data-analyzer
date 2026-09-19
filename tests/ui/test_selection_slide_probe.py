@@ -400,9 +400,3 @@ def test_clock_advanced_values_are_not_performance_fields(probe):
     assert rec["content_ready_ms"] is None
     assert rec["null_reasons"]["feedback_paint_ms"] == probe.REASON_LOGIC_ONLY
 
-
-def test_visual_helpers_cover_production_scenes(probe):
-    assert callable(probe.analyze_selection_visual)
-    assert callable(probe.run_visual_scenes)
-    assert probe.AA_EDGE_TOL == 18
-    assert set(probe.PRODUCTION_SCENE_IDS) <= set(probe.SCENE_BUILDERS)

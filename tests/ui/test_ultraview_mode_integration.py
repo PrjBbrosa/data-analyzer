@@ -783,6 +783,18 @@ def test_coordinator_orphan_rebind_end_to_end(qapp, qtbot):
     assert UltraViewRef("fft", fft_id) in membership_set(uv.board)
 
 
+def _preview_capture_state(uv, ref, page=None):
+    record = uv.store.get(ref)
+    image = None if record is None else record.image
+    return {
+        "has_record": record is not None,
+        "has_image": image is not None,
+        "null_image": image is not None and image.isNull(),
+        "digest": None if record is None else record.captured_digest,
+        "status": None if page is None else page._status_for(ref),
+    }
+
+
 def test_open_ultraview_captures_plotted_time_view(qapp, qtbot, loaded_csv):
     """Visible time ink must snapshot even when native-AA curve_count is 0."""
     win = MainWindow()
@@ -793,9 +805,14 @@ def test_open_ultraview_captures_plotted_time_view(qapp, qtbot, loaded_csv):
     win._load_one(loaded_csv)
     fid = next(iter(win.files))
     win.channel_list.check_first_channel(fid)
-    qtbot.wait(250)
-    QCoreApplication.processEvents()
 
+    def _plotted():
+        canvas = win.chart_stack.canvas_time
+        assert len(canvas._channel_lines) > 0, (
+            f"no plotted lines after check_first_channel; files={list(win.files)}"
+        )
+
+    qtbot.waitUntil(_plotted, timeout=2000)
     canvas = win.chart_stack.canvas_time
     assert len(canvas._channel_lines) > 0
     win.open_ultraview()
@@ -803,18 +820,23 @@ def test_open_ultraview_captures_plotted_time_view(qapp, qtbot, loaded_csv):
     view_id = str(win.view_manager.get(0).view_id)
     uv.add_from_source_tab("time", view_id)
     ref = UltraViewRef("time", view_id)
-    record = None
-    for _ in range(40):
-        QCoreApplication.processEvents()
+    page = uv.page()
+    assert page is not None
+
+    def _captured():
         record = uv.store.get(ref)
-        if record is not None and record.image is not None and not record.image.isNull():
-            break
-        qtbot.wait(50)
+        assert record is not None, (
+            f"no preview record; last={_preview_capture_state(uv, ref, page)}"
+        )
+        assert record.image is not None and not record.image.isNull(), (
+            f"preview image missing/null; last={_preview_capture_state(uv, ref, page)}"
+        )
+
+    qtbot.waitUntil(_captured, timeout=2500)
+    record = uv.store.get(ref)
     assert record is not None
     assert record.image is not None
     assert record.image.isNull() is False
-    page = uv.page()
-    assert page is not None
     assert page._status_for(ref) == STATUS_FRESH
 
 
@@ -827,60 +849,81 @@ def test_idle_pan_and_markup_recaptures_time_preview(qapp, qtbot, loaded_csv):
     win._load_one(loaded_csv)
     fid = next(iter(win.files))
     win.channel_list.check_first_channel(fid)
-    qtbot.wait(250)
-    QCoreApplication.processEvents()
 
+    def _plotted():
+        canvas = win.chart_stack.canvas_time
+        assert len(canvas._channel_lines) > 0, (
+            f"no plotted lines after check_first_channel; files={list(win.files)}"
+        )
+
+    qtbot.waitUntil(_plotted, timeout=2000)
     canvas = win.chart_stack.canvas_time
     win.open_ultraview()
     uv = win._ultraview
     view_id = str(win.view_manager.get(0).view_id)
     uv.add_from_source_tab("time", view_id)
     ref = UltraViewRef("time", view_id)
-    record = None
-    for _ in range(40):
-        QCoreApplication.processEvents()
-        record = uv.store.get(ref)
-        if record is not None and record.image is not None and not record.image.isNull():
-            break
-        qtbot.wait(50)
-    assert record is not None
-    first_digest = record.captured_digest
     page = uv.page()
     assert page is not None
+
+    def _captured():
+        record = uv.store.get(ref)
+        assert record is not None, (
+            f"no preview record; last={_preview_capture_state(uv, ref, page)}"
+        )
+        assert record.image is not None and not record.image.isNull(), (
+            f"preview image missing/null; last={_preview_capture_state(uv, ref, page)}"
+        )
+        assert page._status_for(ref) == STATUS_FRESH, (
+            f"status {page._status_for(ref)}; last={_preview_capture_state(uv, ref, page)}"
+        )
+
+    qtbot.waitUntil(_captured, timeout=2500)
+    record = uv.store.get(ref)
+    assert record is not None
+    first_digest = record.captured_digest
     assert page._status_for(ref) == STATUS_FRESH
 
     xlim = canvas.get_visible_xlim()
     assert xlim is not None
     lo, hi = xlim
     canvas.restore_visible_xlim((lo + 0.1 * (hi - lo), hi))
-    recaptured = None
-    for _ in range(40):
-        QCoreApplication.processEvents()
+
+    def _pan_recaptured():
         recaptured = uv.store.get(ref)
-        if (
-            recaptured is not None
-            and recaptured.captured_digest != first_digest
-            and page._status_for(ref) == STATUS_FRESH
-        ):
-            break
-        qtbot.wait(50)
+        assert recaptured is not None, (
+            f"lost record after pan; last={_preview_capture_state(uv, ref, page)}"
+        )
+        assert recaptured.captured_digest != first_digest, (
+            f"digest still {first_digest}; last={_preview_capture_state(uv, ref, page)}"
+        )
+        assert page._status_for(ref) == STATUS_FRESH, (
+            f"status {page._status_for(ref)}; last={_preview_capture_state(uv, ref, page)}"
+        )
+
+    qtbot.waitUntil(_pan_recaptured, timeout=2500)
+    recaptured = uv.store.get(ref)
     assert recaptured is not None
     assert recaptured.captured_digest != first_digest
     assert page._status_for(ref) == STATUS_FRESH
     pan_digest = recaptured.captured_digest
 
     canvas._annotations._bump_markup_revision()
-    marked = None
-    for _ in range(40):
-        QCoreApplication.processEvents()
+
+    def _markup_recaptured():
         marked = uv.store.get(ref)
-        if (
-            marked is not None
-            and marked.captured_digest != pan_digest
-            and page._status_for(ref) == STATUS_FRESH
-        ):
-            break
-        qtbot.wait(50)
+        assert marked is not None, (
+            f"lost record after markup; last={_preview_capture_state(uv, ref, page)}"
+        )
+        assert marked.captured_digest != pan_digest, (
+            f"digest still {pan_digest}; last={_preview_capture_state(uv, ref, page)}"
+        )
+        assert page._status_for(ref) == STATUS_FRESH, (
+            f"status {page._status_for(ref)}; last={_preview_capture_state(uv, ref, page)}"
+        )
+
+    qtbot.waitUntil(_markup_recaptured, timeout=2500)
+    marked = uv.store.get(ref)
     assert marked is not None
     assert marked.captured_digest != pan_digest
     assert page._status_for(ref) == STATUS_FRESH

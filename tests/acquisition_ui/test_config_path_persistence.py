@@ -4,8 +4,14 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.acquisition_capture.config_store import (
     load_or_default,
@@ -14,6 +20,18 @@ from mf4_analyzer.acquisition_capture.config_store import (
 )
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
+from tests._helpers.acq_owned_objects import (
+    assert_producers_destroyed,
+    destroy_owned_widget,
+    isolated_user_env,
+    junit_case_results,
+    living_widgets_of_type,
+    owned_timers,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_THIS = Path(__file__).resolve()
+_RESTART_MINI_ENV = "T4_ACQ_RESTART_MINI"
 
 
 def _custom_transport() -> TransportConfig:
@@ -96,12 +114,13 @@ def test_persist_transport_writes_back(qapp, tmp_path):
 
 
 def test_round_trip_settings_then_restart(qapp, tmp_path):
-    """End-to-end: write transport via cockpit, kill window, build a
-    new one with the same config_path — value persists."""
+    """End-to-end: write transport via cockpit, destroy the old window
+    and its timers, then build a new one with the same config_path."""
 
     config_path = tmp_path / "acquisition_config.yaml"
 
     window1 = CockpitMainWindow(config_path=config_path)
+    timers = owned_timers(window1)
     new_transport = TransportConfig(
         app_name="Python",
         channel=1,
@@ -111,13 +130,76 @@ def test_round_trip_settings_then_restart(qapp, tmp_path):
     )
     window1.set_transport(new_transport)
     window1._persist_transport(new_transport)
-    window1.deleteLater()
+    destroy_owned_widget(window1, qapp)
+    assert_producers_destroyed((window1,), timers)
+    assert living_widgets_of_type(CockpitMainWindow) == []
 
     window2 = CockpitMainWindow(config_path=config_path)
     try:
         assert window2._transport_config == new_transport
+        assert window2 is not window1
     finally:
-        window2.deleteLater()
+        destroy_owned_widget(window2, qapp)
+
+
+@pytest.mark.skipif(
+    os.environ.get(_RESTART_MINI_ENV) != "child",
+    reason="exception-path child for the restart isolation mini suite",
+)
+def test_mini_raise_after_creating_cockpit(qapp, tmp_path):
+    CockpitMainWindow(config_path=tmp_path / "acquisition_config.yaml")
+    raise RuntimeError("forced failure after creating cockpit")
+
+
+@pytest.mark.skipif(
+    os.environ.get(_RESTART_MINI_ENV) != "child",
+    reason="following child node for the restart isolation mini suite",
+)
+def test_mini_following_item_has_no_cockpit_and_keeps_qapp(qapp):
+    assert living_widgets_of_type(CockpitMainWindow) == []
+    assert QApplication.instance() is qapp
+
+
+def test_restart_lifecycle_cross_item_subprocess(tmp_path):
+    """Success, uncaught exception, and session-owner qapp in one child."""
+    junit = tmp_path / "restart-mini.xml"
+    env = isolated_user_env(tmp_path / "home")
+    env[_RESTART_MINI_ENV] = "child"
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"{_THIS}::test_round_trip_settings_then_restart",
+            f"{_THIS}::test_mini_raise_after_creating_cockpit",
+            f"{_THIS}::test_mini_following_item_has_no_cockpit_and_keeps_qapp",
+            "-q",
+            f"--junitxml={junit}",
+            f"--basetemp={tmp_path / 'basetemp'}",
+        ],
+        cwd=str(_REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert junit.exists(), (
+        f"mini suite produced no junit\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+    cases = junit_case_results(junit)
+    assert cases.get("test_round_trip_settings_then_restart") == "passed", (
+        f"success restart path failed: {cases}\n{result.stdout}\n{result.stderr}"
+    )
+    assert cases.get("test_mini_raise_after_creating_cockpit") == "failed", (
+        f"exception path must fail the child item: {cases}\n{result.stdout}"
+    )
+    assert cases.get("test_mini_following_item_has_no_cockpit_and_keeps_qapp") == (
+        "passed"
+    ), (
+        f"following item saw leftover cockpit or lost qapp: {cases}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
 
 
 def test_corrupt_yaml_keeps_cockpit_alive(qapp, tmp_path):

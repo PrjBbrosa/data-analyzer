@@ -59,27 +59,42 @@ def _compute_form_spacing(ctx, field_host):
     raise AssertionError("field host not found in any QFormLayout")
 
 
-def test_frf_first_open_rows_keep_breathing_gaps(shown_inspector, qtbot):
-    _win, inspector = shown_inspector
-    inspector.set_mode("frf")
-    # 修复采用 singleShot(0) 二次布局：首帧允许仍是压缩帧，验收的是
-    # 事件循环转完之后用户实际看到的稳定帧。
-    qtbot.wait(50)
-
-    ctx = inspector.frf_ctx
-    prev_bottom = None
-    spacing = _compute_form_spacing(
-        ctx, getattr(ctx, FRF_FIELD_ROWS[0]).parentWidget()
-    )
-    assert spacing >= 4  # _configure_form 的紧凑节奏约定
-
+def _frf_row_snapshot(ctx):
+    rows = []
     for name in FRF_FIELD_ROWS:
         field = getattr(ctx, name)
         host = field.parentWidget()
+        rows.append(
+            {
+                "name": name,
+                "host_h": None if host is None else host.height(),
+                "hint_h": field.sizeHint().height(),
+                "field_h": field.height(),
+            }
+        )
+    return rows
+
+
+def _assert_frf_rows_keep_breathing_gaps(ctx):
+    """Stable-frame contract after the real first-show singleShot settle.
+
+    Must not call layout()/updateGeometry(): forcing a second layout would
+    hide the first-show budget bug this test exists to catch.
+    """
+    snapshot = _frf_row_snapshot(ctx)
+    spacing = _compute_form_spacing(
+        ctx, getattr(ctx, FRF_FIELD_ROWS[0]).parentWidget()
+    )
+    assert spacing >= 4, f"spacing {spacing}; last={snapshot}"
+    prev_bottom = None
+    for name in FRF_FIELD_ROWS:
+        field = getattr(ctx, name)
+        host = field.parentWidget()
+        assert host is not None, f"{name}: missing host; last={snapshot}"
         assert host.height() >= field.sizeHint().height(), (
             f"{name}: row host {host.height()}px starves the Fixed-height "
             f"field ({field.sizeHint().height()}px) — first-show budget was "
-            "taken from the pre-polish hint chain"
+            f"taken from the pre-polish hint chain; last={snapshot}"
         )
         top = field.mapTo(ctx, field.rect().topLeft()).y()
         if prev_bottom is not None:
@@ -87,9 +102,26 @@ def test_frf_first_open_rows_keep_breathing_gaps(shown_inspector, qtbot):
             assert gap >= spacing, (
                 f"{name}: gap above is {gap}px, expected >= form "
                 f"verticalSpacing {spacing}px — fields are overflowing "
-                "their starved rows into the breathing gap"
+                f"their starved rows into the breathing gap; last={snapshot}"
             )
         prev_bottom = top + field.height()
+
+
+def _wait_until(qtbot, callback, *, timeout=1500):
+    """Deadline-bounded settle wait; timeout keeps the last AssertionError."""
+    qtbot.waitUntil(callback, timeout=timeout)
+
+
+def test_frf_first_open_rows_keep_breathing_gaps(shown_inspector, qtbot):
+    _win, inspector = shown_inspector
+    inspector.set_mode("frf")
+    # 修复采用 singleShot(0) 二次布局：首帧允许仍是压缩帧，验收的是
+    # 事件循环转完之后用户实际看到的稳定帧。不强制 layout。
+    _wait_until(
+        qtbot,
+        lambda: _assert_frf_rows_keep_breathing_gaps(inspector.frf_ctx),
+    )
+    _assert_frf_rows_keep_breathing_gaps(inspector.frf_ctx)
 
 
 def _assert_uniform_filter_editor_gaps(panel, editors):
@@ -123,32 +155,48 @@ def test_time_filter_rows_keep_inspector_form_gaps(shown_inspector, qtbot):
     横坐标 / 时间范围, not collapse into overlapping field borders."""
     _win, inspector = shown_inspector
     inspector.set_mode("time")
-    qtbot.wait(50)
-
     panel = inspector.filter_panel
+    editors = (panel.combo_kind, panel.spin_cut, panel.combo_order)
+    _wait_until(
+        qtbot,
+        lambda: _assert_uniform_filter_editor_gaps(panel, editors),
+    )
     form = panel._form
     assert form.horizontalSpacing() == 6
     assert form.verticalSpacing() == 4
-    _assert_uniform_filter_editor_gaps(
-        panel, (panel.combo_kind, panel.spin_cut, panel.combo_order),
-    )
+    _assert_uniform_filter_editor_gaps(panel, editors)
 
 
 def test_time_filter_row_gaps_stay_uniform_for_every_kind(shown_inspector, qtbot):
     """低通/高通 hide the band editors; 带通/带阻 swap them in the same slot."""
     _win, inspector = shown_inspector
     inspector.set_mode("time")
-    qtbot.wait(50)
     panel = inspector.filter_panel
+    _wait_until(
+        qtbot,
+        lambda: _assert_uniform_filter_editor_gaps(
+            panel, (panel.combo_kind, panel.spin_cut, panel.combo_order)
+        ),
+    )
     panel.set_enabled(True)
-    qtbot.wait(20)
+    _wait_until(
+        qtbot,
+        lambda: _assert_uniform_filter_editor_gaps(
+            panel, (panel.combo_kind, panel.spin_cut, panel.combo_order)
+        ),
+    )
     for kind in ("低通", "高通", "带通", "带阻"):
         panel.set_kind(kind)
-        qtbot.wait(20)
         if kind in ("带通", "带阻"):
             editors = (panel.combo_kind, panel.spin_lo, panel.combo_order)
         else:
             editors = (panel.combo_kind, panel.spin_cut, panel.combo_order)
+        _wait_until(
+            qtbot,
+            lambda editors=editors: _assert_uniform_filter_editor_gaps(
+                panel, editors
+            ),
+        )
         _assert_uniform_filter_editor_gaps(panel, editors)
 
 
@@ -156,21 +204,22 @@ def test_frf_reentry_stays_settled(shown_inspector, qtbot):
     """切走再切回（历史上的治愈路径）不得比首开验收更差。"""
     _win, inspector = shown_inspector
     inspector.set_mode("frf")
-    qtbot.wait(50)
+    _wait_until(
+        qtbot,
+        lambda: _assert_frf_rows_keep_breathing_gaps(inspector.frf_ctx),
+    )
     inspector.set_mode("fft")
-    qtbot.wait(50)
+    def _fft_page_ready():
+        stack_h = inspector.contextual_stack.sizeHint().height()
+        page_h = inspector.fft_ctx.sizeHint().height()
+        assert stack_h == page_h, f"stack={stack_h} fft_page={page_h}"
+    _wait_until(qtbot, _fft_page_ready)
     inspector.set_mode("frf")
-    qtbot.wait(50)
-
-    ctx = inspector.frf_ctx
-    prev_bottom = None
-    for name in FRF_FIELD_ROWS:
-        field = getattr(ctx, name)
-        assert field.parentWidget().height() >= field.sizeHint().height()
-        top = field.mapTo(ctx, field.rect().topLeft()).y()
-        if prev_bottom is not None:
-            assert top - prev_bottom >= 4
-        prev_bottom = top + field.height()
+    _wait_until(
+        qtbot,
+        lambda: _assert_frf_rows_keep_breathing_gaps(inspector.frf_ctx),
+    )
+    _assert_frf_rows_keep_breathing_gaps(inspector.frf_ctx)
 
 
 def test_switching_to_shorter_page_drops_dead_white(shown_inspector, qtbot):
@@ -185,13 +234,26 @@ def test_switching_to_shorter_page_drops_dead_white(shown_inspector, qtbot):
     stack = inspector.contextual_stack
 
     inspector.set_mode("frf")
-    qtbot.wait(50)
+    def _tall_ready():
+        tall_hint = stack.sizeHint().height()
+        tall_page = inspector.frf_ctx.sizeHint().height()
+        assert tall_hint == tall_page, (
+            f"FRF stack hint {tall_hint} != page {tall_page}"
+        )
+    _wait_until(qtbot, _tall_ready)
     tall_hint = stack.sizeHint().height()
     tall_page = inspector.frf_ctx.sizeHint().height()
     assert tall_hint == tall_page
 
     inspector.set_mode("fft")
-    qtbot.wait(50)
+    def _short_ready():
+        short_hint = stack.sizeHint().height()
+        short_page = inspector.fft_ctx.sizeHint().height()
+        assert short_hint == short_page, (
+            f"FFT stack hint {short_hint} != page {short_page} "
+            f"(FRF was {tall_hint})"
+        )
+    _wait_until(qtbot, _short_ready)
     short_hint = stack.sizeHint().height()
     short_page = inspector.fft_ctx.sizeHint().height()
     assert short_hint == short_page

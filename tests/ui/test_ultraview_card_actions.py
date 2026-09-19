@@ -1,6 +1,10 @@
 """UltraView card action bar: remove affordance, alignment, and narrow LOD."""
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -31,6 +35,8 @@ _FULL_ACTIONS = ("open", "focus", "fit", "remove", "more")
 _COMPACT_ACTIONS = ("open", "focus", "remove", "more")
 _SIZE_100 = QSize(512, 288)
 _SIZE_66 = QSize(338, 190)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DPR_UNAUDITED_CODE = 78
 
 
 def _prepare_app(qapp) -> None:
@@ -234,20 +240,107 @@ def test_action_buttons_center_in_header_contents_rect(qtbot, qapp, size):
     _assert_action_centers(card, _FULL_ACTIONS)
 
 
-def test_action_button_centers_survive_optional_dpr2(qtbot, qapp):
-    card = _make_card(qtbot, qapp)
+def _card_dpr_child_env(target_dpr: float) -> dict[str, str]:
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+    env["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
+    env["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+    env["QT_SCALE_FACTOR"] = str(target_dpr)
+    env.setdefault("TMPDIR", "/tmp")
+    env.setdefault("MPLCONFIGDIR", "/tmp")
+    if abs(target_dpr - 1.0) < 0.01:
+        env.pop("QT_SCREEN_SCALE_FACTORS", None)
+    return env
+
+
+def _run_card_dpr_child(target_dpr: float) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--dpr-child", str(target_dpr)],
+        cwd=str(_REPO_ROOT),
+        env=_card_dpr_child_env(target_dpr),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def _actual_dpr_readings(card, app) -> dict[str, float | None]:
     handle = card.windowHandle()
-    if handle is None:
-        pytest.skip("offscreen card has no QWindow")
-    try:
-        handle.setDevicePixelRatio(2.0)
-    except Exception:
-        pytest.skip("offscreen backend rejected DPR 2.0")
+    screen = app.primaryScreen()
+    return {
+        "widget": float(card.devicePixelRatioF()),
+        "window": None if handle is None else float(handle.devicePixelRatio()),
+        "screen": None if screen is None else float(screen.devicePixelRatio()),
+    }
+
+
+def _chosen_actual_dpr(readings: dict[str, float | None]) -> float:
+    for key in ("window", "widget", "screen"):
+        value = readings[key]
+        if value is not None:
+            return float(value)
+    raise AssertionError(f"no DPR reading available; {readings}")
+
+
+def _probe_card_dpr(target_dpr: float) -> None:
+    """Fresh-process widget path: configure DPR before QApplication exists."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    if QApplication.instance() is not None:
+        raise SystemExit("fresh QApplication required before DPR configuration")
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    app = QApplication([])
+    _prepare_app(app)
+    card = UltraViewCard(_model())
     card.resize(_SIZE_100)
-    qapp.processEvents()
-    if abs(handle.devicePixelRatio() - 2.0) > 0.01:
-        pytest.skip("offscreen DPR stayed at 1.0")
+    card.show()
+    app.processEvents()
+    readings = _actual_dpr_readings(card, app)
+    report = {"target_dpr": target_dpr, "readings": readings}
+    actual = _chosen_actual_dpr(readings)
+    report["actual_dpr"] = actual
+    if abs(actual - target_dpr) > 0.05:
+        report["status"] = "UNAUDITED"
+        print(json.dumps(report, sort_keys=True))
+        raise SystemExit(_DPR_UNAUDITED_CODE)
     _assert_action_centers(card, _FULL_ACTIONS)
+    pixmap = card.grab()
+    pix_dpr = float(pixmap.devicePixelRatioF() or 1.0)
+    logical = card.size()
+    report.update(
+        {
+            "status": "ok",
+            "pixmap_dpr": pix_dpr,
+            "logical": [logical.width(), logical.height()],
+            "physical": [pixmap.width(), pixmap.height()],
+        }
+    )
+    assert abs(pix_dpr - actual) < 0.05, report
+    expected_w = int(round(logical.width() * actual))
+    expected_h = int(round(logical.height() * actual))
+    assert abs(pixmap.width() - expected_w) <= 1, report
+    assert abs(pixmap.height() - expected_h) <= 1, report
+    print(json.dumps(report, sort_keys=True))
+
+
+@pytest.mark.parametrize("target_dpr", (1.0, 2.0))
+def test_action_button_centers_in_fresh_app_dpr(target_dpr):
+    result = _run_card_dpr_child(target_dpr)
+    if abs(target_dpr - 2.0) < 0.01 and result.returncode == _DPR_UNAUDITED_CODE:
+        pytest.skip(
+            "UNAUDITED: platform did not apply DPR 2.0 to a fresh QApplication; "
+            f"stdout={result.stdout.strip()!r}"
+        )
+    assert result.returncode == 0, (
+        f"DPR {target_dpr} widget child failed rc={result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "ok"
+    assert abs(float(payload["actual_dpr"]) - target_dpr) <= 0.05
 
 
 def test_title_only_lod_keeps_open_focus_remove(qtbot, qapp):
@@ -359,3 +452,10 @@ def test_workspace_gesture_signal_has_a_single_active_lifetime(qtbot, qapp):
     assert seen
     assert seen[0][0] is True
     assert seen[-1] == (False, None)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--dpr-child":
+        _probe_card_dpr(float(sys.argv[2]))
+    else:
+        raise SystemExit("usage: test_ultraview_card_actions.py --dpr-child RATIO")

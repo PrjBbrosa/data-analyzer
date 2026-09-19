@@ -19,6 +19,7 @@ from tests.zfd_corpus import (
 )
 from tests.zfd_fixtures import (
     FAKE_MARKER,
+    HEADER_LINE_COUNT,
     characteristic_values,
     default_header_lines,
     expected_f32_values,
@@ -73,6 +74,54 @@ def _filedata_from_group(path, group):
         channel_metadata=group["channel_metadata"],
         label_suffix=group["label_suffix"],
     )
+
+
+def _skip_c_string(raw, pos):
+    return raw.index(b"\n", pos) + 1
+
+
+def _fixture_records_start(raw):
+    """Walk the official ZFGE2 fixture header; do not use the product parser."""
+    pos = 0
+    for _ in range(HEADER_LINE_COUNT):
+        pos = _skip_c_string(raw, pos)
+    ann_count = struct.unpack_from("<h", raw, pos)[0]
+    pos += 2
+    for _ in range(ann_count):
+        pos += 6 + 12
+        pos = _skip_c_string(raw, pos)
+    pos += 1  # int8 record count
+    return pos
+
+
+def assert_int32_count_and_payload_boundary(raw, count, *, payload_item_bytes=4):
+    """Verify the 4-byte little-endian count at the format's known offsets."""
+    pos = _fixture_records_start(raw)
+    assert struct.unpack_from("<h", raw, pos)[0] == 0
+    time_count_off = pos + 3
+    assert struct.unpack_from("<i", raw, time_count_off)[0] == count
+    pos = time_count_off + 4
+    pos = _skip_c_string(raw, pos)
+    pos = _skip_c_string(raw, pos)
+    pos += 16  # t0, dt
+    assert struct.unpack_from("<h", raw, pos)[0] == 4
+    f32_count_off = pos + 2
+    packed = struct.pack("<i", count)
+    assert raw[f32_count_off:f32_count_off + 4] == packed
+    assert struct.unpack_from("<i", raw, f32_count_off)[0] == count
+    if count > 65535:
+        truncated = count & 0xFFFF
+        assert truncated != count
+        assert struct.unpack_from("<H", raw, f32_count_off)[0] == truncated
+    pos = f32_count_off + 4
+    pos = _skip_c_string(raw, pos)
+    pos = _skip_c_string(raw, pos)
+    pos += 1 + 1 + 16  # x, pad, min/max
+    payload_start = pos
+    payload_end = payload_start + int(count) * int(payload_item_bytes)
+    assert payload_end <= len(raw)
+    assert payload_end - payload_start == int(count) * int(payload_item_bytes)
+    return time_count_off, f32_count_off
 
 
 def test_zfd_fixtures_do_not_import_product_parser():
@@ -184,9 +233,7 @@ def test_zfd_a1_int32_count_reads_every_sample(tmp_path, count):
         name="probe",
     )
     raw = Path(p).read_bytes()
-    assert struct.pack("<i", count) in raw
-    if count > 65535:
-        assert struct.pack("<H", count & 0xFFFF) != struct.pack("<i", count)[:2] or True
+    assert_int32_count_and_payload_boundary(raw, count)
 
     # Port is a cross-check on a complete fixture, not the value oracle.
     _header, infos, channels = _port_read(p)
@@ -222,6 +269,8 @@ def test_zfd_a2_hour_record_span_and_filedata(tmp_path):
         values=values,
         name="hour",
     )
+    raw = Path(p).read_bytes()
+    assert_int32_count_and_payload_boundary(raw, _HOUR_COUNT)
     groups = DataLoader.load_zfd(str(p))
     g = groups[0]
     t = g["data"]["Time"].to_numpy()

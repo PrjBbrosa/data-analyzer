@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -29,7 +30,7 @@ def _grouped_result(tmp_path: Path, group_by: str):
 
 def _mutated_result(result, mutate):
     manifest_path = Path(result.manifest_path)
-    manifest = load_batch_manifest(manifest_path)
+    manifest = copy.deepcopy(load_batch_manifest(manifest_path))
     mutate(manifest)
     mutated_path = manifest_path.with_name(f"mutated-{manifest_path.name}")
     mutated_path.write_text(json.dumps(manifest), encoding="utf-8")

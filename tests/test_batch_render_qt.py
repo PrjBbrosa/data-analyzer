@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import threading
-import time
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +13,12 @@ from PyQt5.QtGui import QColor, QImage, QPainter
 
 from mf4_analyzer._palette import FILE_PALETTES
 from mf4_analyzer.batch_image_options import BatchRenderOptions
+
+from tests.batch_render_qt_dispatch_helpers import (
+    FORCED_FAILURE_MESSAGE,
+    qt_child_environment,
+    run_gui_dispatch_worker,
+)
 
 
 _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S = 15.0
@@ -1084,7 +1089,7 @@ def test_cjk_font_support_and_header_ink_proof(qapp):
     assert proof["ink_pixels"] > proof["empty_ink_pixels"] + 120
 
 
-def test_render_on_gui_thread_marshals_result_and_exception(qapp):
+def test_render_on_gui_thread_marshals_result_and_exception(qapp, request):
     from mf4_analyzer.batch_render_qt._dispatch import render_on_gui_thread
 
     observed = {}
@@ -1098,17 +1103,13 @@ def test_render_on_gui_thread_marshals_result_and_exception(qapp):
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
-    while thread.is_alive():
-        qapp.processEvents()
-        thread.join(0.01)
-        if thread.is_alive() and time.monotonic() >= deadline:
-            pytest.fail(
-                "render-on-GUI-thread worker did not finish within "
-                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
-            )
+    run_gui_dispatch_worker(
+        qapp,
+        request,
+        worker,
+        timeout_s=_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S,
+        name="render-on-GUI-thread worker",
+    )
     assert observed["result"][1] == "ok"
     assert observed["result"][0] == threading.get_ident()
     assert isinstance(observed["exception"], ValueError)
@@ -1119,7 +1120,7 @@ def test_render_on_gui_thread_marshals_result_and_exception(qapp):
 
 
 def test_worker_render_preserves_warnings_out_on_gui_thread(
-    qapp, monkeypatch, tmp_path
+    qapp, monkeypatch, tmp_path, request
 ):
     import mf4_analyzer.batch_render_qt as qt_render
 
@@ -1146,17 +1147,13 @@ def test_worker_render_preserves_warnings_out_on_gui_thread(
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
-    while thread.is_alive():
-        qapp.processEvents()
-        thread.join(0.01)
-        if thread.is_alive() and time.monotonic() >= deadline:
-            pytest.fail(
-                "warning-render worker did not finish within "
-                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
-            )
+    run_gui_dispatch_worker(
+        qapp,
+        request,
+        worker,
+        timeout_s=_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S,
+        name="warning-render worker",
+    )
 
     assert "exception" not in observed
     assert observed["path"].is_file()
@@ -1164,7 +1161,7 @@ def test_worker_render_preserves_warnings_out_on_gui_thread(
 
 
 def test_worker_render_paints_on_gui_thread_and_encodes_on_caller_thread(
-    qapp, monkeypatch, tmp_path
+    qapp, monkeypatch, tmp_path, request
 ):
     import mf4_analyzer.batch_render_qt as qt_render
 
@@ -1202,17 +1199,13 @@ def test_worker_render_paints_on_gui_thread_and_encodes_on_caller_thread(
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
-    while thread.is_alive():
-        qapp.processEvents()
-        thread.join(0.01)
-        if thread.is_alive() and time.monotonic() >= deadline:
-            pytest.fail(
-                "paint-and-encode worker did not finish within "
-                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
-            )
+    run_gui_dispatch_worker(
+        qapp,
+        request,
+        worker,
+        timeout_s=_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S,
+        name="paint-and-encode worker",
+    )
 
     assert "exception" not in observed
     assert observed["build_thread"] == threading.main_thread().ident
@@ -1263,7 +1256,7 @@ def test_gui_render_paints_and_encodes_on_gui_thread(qapp, monkeypatch, tmp_path
 
 
 def test_worker_png_encode_failure_is_raised_unchanged_on_caller_thread(
-    qapp, monkeypatch, tmp_path
+    qapp, monkeypatch, tmp_path, request
 ):
     import mf4_analyzer.batch_render_qt as qt_render
 
@@ -1288,22 +1281,101 @@ def test_worker_png_encode_failure_is_raised_unchanged_on_caller_thread(
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
-    while thread.is_alive():
-        qapp.processEvents()
-        thread.join(0.01)
-        if thread.is_alive() and time.monotonic() >= deadline:
-            pytest.fail(
-                "encode-failure worker did not finish within "
-                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
-            )
+    run_gui_dispatch_worker(
+        qapp,
+        request,
+        worker,
+        timeout_s=_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S,
+        name="encode-failure worker",
+    )
 
     assert observed["save_thread"] == observed["caller_thread"]
     assert observed["exception"] is marker
     assert not getattr(marker, "__notes__", [])
     assert not (tmp_path / "encode-failure.png").exists()
+
+
+def test_gui_dispatch_assert_failure_cleanup_does_not_pollute_following_node(
+    tmp_path,
+):
+    import subprocess
+    import sys
+
+    helper = Path(__file__).resolve().parent / "batch_render_qt_dispatch_helpers.py"
+    repo_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"{helper}::test_lifecycle_assert_failure_cleans_worker",
+            f"{helper}::test_lifecycle_followup_node_is_not_polluted",
+            "-v",
+            "--tb=line",
+            f"--basetemp={tmp_path / 'lifecycle-basetemp'}",
+        ],
+        cwd=repo_root,
+        env=qt_child_environment(repo_root),
+        capture_output=True,
+        text=True,
+        timeout=_BATCH_RENDER_SUBPROCESS_TIMEOUT_S,
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0, output
+    assert FORCED_FAILURE_MESSAGE in output
+    assert "1 failed" in output
+    assert "1 passed" in output
+    assert "FAILED" in output and "test_lifecycle_assert_failure_cleans_worker" in output
+    assert "PASSED" in output and "test_lifecycle_followup_node_is_not_polluted" in output
+
+
+def test_never_cooperative_gui_slot_hang_is_contained_by_outer_process_timeout(
+    tmp_path,
+):
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = tmp_path / "never_cooperative_dispatch.py"
+    script.write_text(
+        """
+import sys
+import threading
+import time
+from PyQt5.QtWidgets import QApplication
+from mf4_analyzer.batch_render_qt._dispatch import render_on_gui_thread
+
+app = QApplication([])
+
+def hang():
+    time.sleep(3600)
+
+def worker():
+    render_on_gui_thread(hang)
+
+thread = threading.Thread(target=worker, daemon=True, name="never-cooperative")
+thread.start()
+print("child-started", flush=True)
+while thread.is_alive():
+    app.processEvents()
+    thread.join(0.05)
+sys.exit(0)
+""".strip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(subprocess.TimeoutExpired) as expired:
+        subprocess.run(
+            [sys.executable, str(script)],
+            cwd=repo_root,
+            env=qt_child_environment(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    stdout = expired.value.stdout or ""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", "replace")
+    assert "child-started" in stdout
 
 
 def test_non_main_thread_without_app_fails_clearly_in_subprocess(tmp_path):

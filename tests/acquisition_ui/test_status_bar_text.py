@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import time
 
+import pytest
 from PyQt5.QtGui import QFontMetrics
 
 from can_logger.p0.a2l_probe import MeasurementSummary
-from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
+from mf4_analyzer.acquisition_capture.backends import (
+    BackendStatus,
+    FakeRecorderBackend,
+    RecorderBackend,
+)
 from mf4_analyzer.acquisition_capture.health import (
     CanHealth,
     DaqHealth,
@@ -223,16 +228,214 @@ def test_probe_rec_uses_writer_write_count_delta(qapp, monkeypatch):
         window.close()
 
 
-def test_idle_polling_does_not_fill_ring(qapp):
+class _ControllableClock:
+    def __init__(self, t: float = 1000.0) -> None:
+        self.t = float(t)
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, dt: float) -> None:
+        self.t += float(dt)
+
+
+class _QueuedBackend(RecorderBackend):
+    """Deterministic idle-poll source: samples are queued, not wall-clock."""
+
+    def __init__(self) -> None:
+        self.pending: list[tuple[str, float, float]] = []
+        self.rx_count = 0
+        self.started = False
+        self._last_frame: float | None = None
+
+    def start(self, selected) -> None:
+        self.started = True
+        self.rx_count = 0
+        self._last_frame = None
+
+    def stop(self) -> BackendStatus:
+        self.started = False
+        return self.status()
+
+    def poll(self) -> list[tuple[str, float, float]]:
+        out = list(self.pending)
+        self.pending.clear()
+        self.rx_count += len(out)
+        if out:
+            self._last_frame = out[-1][1]
+        return out
+
+    def status(self) -> BackendStatus:
+        return BackendStatus(
+            started=self.started,
+            rx_count=self.rx_count,
+            bus_error_count=0,
+            queue_overflow_count=0,
+        )
+
+    def last_frame_monotonic(self) -> float | None:
+        return self._last_frame
+
+
+def _one_second_samples(name: str, *, sps: float = 20.0) -> list[tuple[str, float, float]]:
+    count = int(sps)
+    dt = 1.0 / sps
+    return [(name, (i + 1) * dt, float(i + 1)) for i in range(count)]
+
+
+def _card_sample_count(window: CockpitMainWindow, name: str) -> int:
+    card = window._center.cards.get(name)
+    if card is None:
+        return 0
+    return int(card._spark.sample_count)
+
+
+def _assert_idle_samples_processed_without_ring(
+    window: CockpitMainWindow,
+    *,
+    channel: str,
+    min_samples: int,
+    ring_puts: list,
+) -> None:
+    assert window._cumulative_rx_count >= min_samples, (
+        f"idle poll processed no samples (rx={window._cumulative_rx_count})"
+    )
+    assert _card_sample_count(window, channel) >= min_samples, (
+        f"cards did not receive {channel!r} data"
+    )
+    assert ring_puts == [], f"idle poll must not write the ring: {ring_puts!r}"
+    assert window.ring_buffer.level_pct == 0.0
+
+
+def _prepare_idle_demo(window: CockpitMainWindow, backend: RecorderBackend) -> None:
+    _connect(window)
+    selected = [SelectedMeasurement(name="DemoSignal")]
+    window._refresh_center_cards(explicit=selected)
+    backend.start(selected)
+    assert "DemoSignal" in window._center.cards
+
+
+def test_idle_polling_does_not_fill_ring(qapp, monkeypatch):
     """Idle live polling feeds cards directly; ring is recording-only."""
-    backend = FakeRecorderBackend(samples_per_second=1000.0)
+    backend = _QueuedBackend()
     window = CockpitMainWindow(backend=backend, allow_fake_backend=True)
+    ring_puts: list = []
+    orig_put = window.ring_buffer.put
+
+    def _spy_put(item):
+        ring_puts.append(item)
+        return orig_put(item)
+
+    monkeypatch.setattr(window.ring_buffer, "put", _spy_put)
     try:
-        _connect(window)
-        backend.start([SelectedMeasurement(name="DemoSignal")])
-        time.sleep(0.02)
-        for _ in range(20):
-            window._poll_live()
+        _prepare_idle_demo(window, backend)
+        samples = _one_second_samples("DemoSignal")
+        backend.pending.extend(samples)
+        window._poll_live()
+        _assert_idle_samples_processed_without_ring(
+            window,
+            channel="DemoSignal",
+            min_samples=len(samples),
+            ring_puts=ring_puts,
+        )
+        assert samples[0][1] == pytest.approx(0.05)
+        assert samples[-1][1] == pytest.approx(1.0)
+    finally:
+        window.close()
+
+
+def test_idle_polling_real_fake_backend_owner(qapp, monkeypatch):
+    """Keep FakeRecorderBackend as the owner/integration idle path."""
+    clock = _ControllableClock()
+    monkeypatch.setattr(
+        "mf4_analyzer.acquisition_capture.backends.time.monotonic",
+        clock,
+    )
+    backend = FakeRecorderBackend(samples_per_second=20.0)
+    window = CockpitMainWindow(backend=backend, allow_fake_backend=True)
+    ring_puts: list = []
+    monkeypatch.setattr(
+        window.ring_buffer,
+        "put",
+        lambda item: ring_puts.append(item),
+    )
+    try:
+        _prepare_idle_demo(window, backend)
+        clock.advance(1.0)
+        window._poll_live()
+        _assert_idle_samples_processed_without_ring(
+            window,
+            channel="DemoSignal",
+            min_samples=20,
+            ring_puts=ring_puts,
+        )
+    finally:
+        window.close()
+
+
+def test_idle_polling_no_samples_is_not_success(qapp, monkeypatch):
+    backend = _QueuedBackend()
+    window = CockpitMainWindow(backend=backend, allow_fake_backend=True)
+    ring_puts: list = []
+    monkeypatch.setattr(window.ring_buffer, "put", lambda item: ring_puts.append(item))
+    try:
+        _prepare_idle_demo(window, backend)
+        window._poll_live()
+        with pytest.raises(AssertionError, match="processed no samples"):
+            _assert_idle_samples_processed_without_ring(
+                window,
+                channel="DemoSignal",
+                min_samples=1,
+                ring_puts=ring_puts,
+            )
+    finally:
+        window.close()
+
+
+def test_idle_polling_dropped_delivery_is_not_success(qapp, monkeypatch):
+    backend = _QueuedBackend()
+    window = CockpitMainWindow(backend=backend, allow_fake_backend=True)
+    ring_puts: list = []
+    monkeypatch.setattr(window.ring_buffer, "put", lambda item: ring_puts.append(item))
+    monkeypatch.setattr(window._center, "push_sample", lambda *args, **kwargs: None)
+    try:
+        _prepare_idle_demo(window, backend)
+        backend.pending.extend(_one_second_samples("DemoSignal"))
+        window._poll_live()
+        with pytest.raises(AssertionError, match="cards did not receive"):
+            _assert_idle_samples_processed_without_ring(
+                window,
+                channel="DemoSignal",
+                min_samples=1,
+                ring_puts=ring_puts,
+            )
+    finally:
+        window.close()
+
+
+def test_idle_polling_ring_write_error_is_not_success(qapp, monkeypatch):
+    backend = _QueuedBackend()
+    window = CockpitMainWindow(backend=backend, allow_fake_backend=True)
+
+    def _failing_put(_item):
+        raise RuntimeError("error writing the ring")
+
+    monkeypatch.setattr(window.ring_buffer, "put", _failing_put)
+    try:
+        _prepare_idle_demo(window, backend)
+        samples = _one_second_samples("DemoSignal")
+        backend.pending.extend(samples)
+        window._poll_live()
+        # Idle path must not call ring.put; a recording-path write error
+        # would raise here. Discriminate by feeding the helper a recorded put.
+        with pytest.raises(AssertionError, match="must not write the ring"):
+            _assert_idle_samples_processed_without_ring(
+                window,
+                channel="DemoSignal",
+                min_samples=len(samples),
+                ring_puts=[("DemoSignal", 1.0, 1.0)],
+            )
         assert window.ring_buffer.level_pct == 0.0
+        assert window._cumulative_rx_count == len(samples)
     finally:
         window.close()

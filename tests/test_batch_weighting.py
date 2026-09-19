@@ -35,17 +35,24 @@ def test_batch_fft_dataframe_weighting_attenuates_low_freq():
     base = BatchRunner._compute_fft_dataframe(
         sig, fs, {"window": "hanning", "nfft": n, "weighting": "None"}
     )
-    try:
-        weighted = BatchRunner._compute_fft_dataframe(
-            sig, fs, {"window": "hanning", "nfft": n, "weighting": "A"}
-        )
-    except TypeError as exc:
-        if "weighting" in str(exc):
-            pytest.xfail("signal FFT weighting API is not integrated yet")
-        raise
+    weighted = BatchRunner._compute_fft_dataframe(
+        sig, fs, {"window": "hanning", "nfft": n, "weighting": "A"}
+    )
+
+    weighted_amp = np.asarray(weighted["amplitude"], dtype=float)
+    assert np.any(np.isfinite(weighted_amp) & (weighted_amp != 0.0))
 
     i100_base = int((base["frequency_hz"] - 100.0).abs().idxmin())
     i100_weighted = int((weighted["frequency_hz"] - 100.0).abs().idxmin())
+    i1k_base = int((base["frequency_hz"] - 1000.0).abs().idxmin())
+    i1k_weighted = int((weighted["frequency_hz"] - 1000.0).abs().idxmin())
+
+    base_1k = float(base["amplitude"].iloc[i1k_base])
+    weighted_1k = float(weighted["amplitude"].iloc[i1k_weighted])
+    assert base_1k > 0.0
+    assert weighted_1k > 0.0
+    # IEC A-weighting is 0 dB at 1 kHz, so Batch must keep the reference gain.
+    assert weighted_1k == pytest.approx(base_1k, rel=0.05, abs=0.0)
     assert weighted["amplitude"].iloc[i100_weighted] < base["amplitude"].iloc[i100_base] * 0.3
 
 

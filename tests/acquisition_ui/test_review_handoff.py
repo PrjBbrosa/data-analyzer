@@ -57,6 +57,7 @@ from mf4_analyzer.acquisition_ui.state import (
     CockpitState,
     HealthyPredicateResult,
 )
+from mf4_analyzer.io.loader import DataLoader
 
 
 # ---------------------------------------------------------------------------
@@ -64,21 +65,50 @@ from mf4_analyzer.acquisition_ui.state import (
 # ---------------------------------------------------------------------------
 
 
-def _run_one_second_fake(tmp_path: Path, *, signals=None) -> CaptureController:
-    """Drive a short fake recording and return the controller pre-stop."""
+class _ControllableClock:
+    def __init__(self, t: float = 1000.0) -> None:
+        self.t = float(t)
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, dt: float) -> None:
+        self.t += float(dt)
+
+
+def _run_one_second_fake(
+    tmp_path: Path,
+    *,
+    signals=None,
+    samples_per_second: float = 20.0,
+    advance_s: float = 1.0,
+) -> CaptureController:
+    """Drive one second of fake samples on a controllable clock.
+
+    ``advance_s`` is sample time on the fake clock, not wall-clock sleep.
+    A no-op poll / empty write must fail the sample-count check.
+    """
     selected = signals or (
         SelectedMeasurement(name="EngSpd"),
         SelectedMeasurement(name="Throttle"),
         SelectedMeasurement(name="Steering"),
     )
     cfg = SessionConfig(output_mf4=tmp_path / "rec.mf4", selected=selected)
-    backend = FakeRecorderBackend(samples_per_second=20.0)
-    ctrl = CaptureController(cfg, backend)
-    ctrl.start()
-    # Drive enough poll steps to put samples through the writer.
-    for _ in range(10):
-        ctrl.poll_step()
-    return ctrl
+    backend = FakeRecorderBackend(samples_per_second=samples_per_second)
+    clock = _ControllableClock()
+    import mf4_analyzer.acquisition_capture.backends as backends_mod
+
+    orig_monotonic = backends_mod.time.monotonic
+    backends_mod.time.monotonic = clock
+    try:
+        ctrl = CaptureController(cfg, backend, clock=clock)
+        ctrl.start()
+        clock.advance(advance_s)
+        written = ctrl.poll_step()
+        assert written > 0, "one-second fake poll wrote no samples"
+        return ctrl
+    finally:
+        backends_mod.time.monotonic = orig_monotonic
 
 
 class _DroppingWriter:
@@ -174,6 +204,24 @@ def _finalize_and_make_context(
 # ---------------------------------------------------------------------------
 
 
+def _assert_recorded_channel_data(result, expected_names: tuple[str, ...]) -> None:
+    """Channel schema is not recorded data: require rx/write and a 1s span."""
+    assert result.summary.rx_count > 0
+    assert result.summary.write_count > 0
+    assert result.summary.write_count == result.summary.rx_count
+    assert result.preflight.missing_channels == ()
+    df, channels, _units = DataLoader.load_mf4(str(result.summary.output_mf4))
+    for name in expected_names:
+        assert name in channels
+        series = df[name]
+        nonempty = series.dropna()
+        assert len(nonempty) >= 2, f"{name} has no recorded samples"
+        assert not (nonempty == 0).all(), f"{name} looks like an empty-write placeholder"
+    time_col = df["Time"] if "Time" in df.columns else df.iloc[:, 0]
+    span = float(time_col.max() - time_col.min())
+    assert span >= 0.9, f"recorded time range {span} is not one fake-clock second"
+
+
 def test_expected_channels(tmp_path):
     """A 1-second fake recording with three measurements MUST produce a
     preflight result whose ``missing_channels == ()``.
@@ -187,18 +235,25 @@ def test_expected_channels(tmp_path):
         SelectedMeasurement(name="Throttle"),
         SelectedMeasurement(name="Steering"),
     )
+    expected = tuple(m.name for m in selected)
     ctrl = _run_one_second_fake(tmp_path, signals=selected)
     result = run_stop_flush_finalize(
         controller=ctrl,
-        expected_channels=tuple(m.name for m in selected),
+        expected_channels=expected,
     )
-    assert result.preflight.missing_channels == ()
-    # And the underlying analyze_mf4 call agrees when invoked fresh.
+    _assert_recorded_channel_data(result, expected)
     fresh = analyze_mf4(
         ctrl.config.output_mf4,
-        expected_channels=tuple(m.name for m in selected),
+        expected_channels=expected,
     )
     assert fresh.missing_channels == ()
+    assert fresh.rows >= 2
+    assert fresh.duration_s >= 0.9
+
+
+def test_one_second_fake_noop_poll_is_rejected(tmp_path):
+    with pytest.raises(AssertionError, match="wrote no samples"):
+        _run_one_second_fake(tmp_path, advance_s=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -610,9 +665,11 @@ def test_cockpit_routes_open_in_analyzer_to_load_file(qapp, tmp_path):
         ctx_mf4 = Path(modal.context.mf4_path)
         # Real-flow Step 1: 仅保存文件 — modal MUST stay open.
         modal.do_save_only()
-        assert modal.isVisible() or modal.result() == 0, (
+        qapp.processEvents()
+        assert modal.isVisible() is True, (
             "save-only must not auto-close the modal (CR3 finding 6)"
         )
+        assert modal._btn_open_analyzer.isEnabled() is True
         assert modal.is_open_in_analyzer_enabled() is True
         # Real-flow Step 2: 在 Analyzer 打开 — fires handoff and closes.
         modal.do_open_in_analyzer()
@@ -626,12 +683,29 @@ def test_cockpit_routes_open_in_analyzer_to_load_file(qapp, tmp_path):
         window.close()
 
 
+def _assert_archive_left_modal_open_and_clickable(modal: ReviewModal) -> None:
+    """Archive success must leave a visible, unrejected, clickable modal.
+
+    ``QDialog.result()`` is 0 while a dialog is still unfinished, so
+    ``isVisible() or result()==0`` would pass after a wrong reject.
+    """
+    assert modal.isVisible() is True, "archive must leave the review modal visible"
+    assert modal._is_closing is False
+    assert modal.archive_ok is True
+    assert modal._btn_open_analyzer.isVisible() is True
+    assert modal._btn_open_analyzer.isEnabled() is True
+    assert modal._btn_open_analyzer.rect().isValid()
+    assert modal.is_open_in_analyzer_enabled() is True
+
+
 def test_cockpit_archive_then_open_in_analyzer_real_flow(qapp, tmp_path):
     """Same real-flow contract for the archive path: ``保存并归档``
     must leave the modal open so the now-enabled ``在 Analyzer 打开``
     button can route to ``MainWindow.load_file``. CR3 finding 6.
     """
     window = CockpitMainWindow()
+    window.show()
+    qapp.processEvents()
     try:
         ctrl = _run_one_second_fake(tmp_path)
         window.set_capture_controller(ctrl)
@@ -645,16 +719,14 @@ def test_cockpit_archive_then_open_in_analyzer_real_flow(qapp, tmp_path):
         load_calls: list[str] = []
         window.set_analyzer_handoff(lambda p: load_calls.append(p))
         window.request_stop_and_review()
+        qapp.processEvents()
         modal = window.review_modal
         assert isinstance(modal, ReviewModal)
         ctx_mf4 = Path(modal.context.mf4_path)
         # Drive archive — must succeed and stay open.
         modal.do_archive()
-        assert modal.archive_ok is True
-        assert modal.isVisible() or modal.result() == 0, (
-            "archive success must not auto-close the modal (CR3 finding 6)"
-        )
-        assert modal.is_open_in_analyzer_enabled() is True
+        qapp.processEvents()
+        _assert_archive_left_modal_open_and_clickable(modal)
         # Then click the Analyzer button.
         modal.do_open_in_analyzer()
         qapp.processEvents()
@@ -665,6 +737,29 @@ def test_cockpit_archive_then_open_in_analyzer_real_flow(qapp, tmp_path):
             window.review_modal.done(0)
             qapp.processEvents()
         window.close()
+
+
+def test_forced_reject_after_archive_fails_open_contract(qapp, tmp_path):
+    """A wrong reject after archive must not satisfy the visibility contract."""
+    ctx = _make_review_context_with_missing(
+        tmp_path,
+        missing_count=0,
+        manifest_path=tmp_path / "manifest.json",
+    )
+    modal = ReviewModal(ctx)
+    try:
+        modal.show()
+        qapp.processEvents()
+        modal.do_archive()
+        qapp.processEvents()
+        _assert_archive_left_modal_open_and_clickable(modal)
+        modal.reject()
+        qapp.processEvents()
+        with pytest.raises(AssertionError, match="leave the review modal visible"):
+            _assert_archive_left_modal_open_and_clickable(modal)
+    finally:
+        if modal.isVisible():
+            modal.done(0)
 
 
 def test_cockpit_does_not_route_open_in_analyzer_before_save(qapp, tmp_path):
@@ -778,6 +873,7 @@ def _make_review_context_with_missing(
     tmp_path: Path,
     *,
     missing_count: int,
+    manifest_path: Path | None = None,
 ) -> ReviewContext:
     """Build a ReviewContext with a fake preflight whose missing_channels
     holds ``missing_count`` entries.
@@ -819,6 +915,7 @@ def _make_review_context_with_missing(
         preflight=pf,
         preflight_sidecar_path=preflight_sidecar,
         expected_channels=missing,
+        manifest_path=manifest_path,
     )
 
 

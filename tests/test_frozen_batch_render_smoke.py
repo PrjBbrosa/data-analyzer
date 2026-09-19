@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 import runpy
 import subprocess
 import sys
-from types import ModuleType
 
 import pytest
 from PyQt5.QtGui import QImage
@@ -19,15 +19,13 @@ VERIFY_TOOL = ROOT / "tools" / "verify_frozen_batch_render.py"
 def _source_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT)
-    environment.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # Hard-asserted offscreen smoke must not inherit a cocoa parent platform.
+    environment["QT_QPA_PLATFORM"] = "offscreen"
     return environment
 
 
-def test_runtime_smoke_cli_generates_heatmap_png_kinds(tmp_path):
-    output_directory = tmp_path / "outputs"
-    child_json = tmp_path / "child.json"
-
-    completed = subprocess.run(
+def _run_source_smoke(output_directory: Path, child_json: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [
             sys.executable,
             "-m",
@@ -44,8 +42,27 @@ def test_runtime_smoke_cli_generates_heatmap_png_kinds(tmp_path):
         timeout=120,
     )
 
+
+@pytest.fixture(scope="module")
+def frozen_smoke_png_artifacts(tmp_path_factory):
+    """One 6-PNG smoke child. Qt dies with that process; files are immutable."""
+
+    root = tmp_path_factory.mktemp("frozen-smoke")
+    output_directory = root / "outputs"
+    child_json = root / "child.json"
+    completed = _run_source_smoke(output_directory, child_json)
     assert completed.returncode == 0, completed.stderr
     result = json.loads(child_json.read_text(encoding="utf-8"))
+    return SimpleNamespace(
+        output_directory=output_directory,
+        child_json=child_json,
+        result=result,
+        stderr=completed.stderr,
+    )
+
+
+def test_runtime_smoke_cli_generates_heatmap_png_kinds(frozen_smoke_png_artifacts):
+    result = frozen_smoke_png_artifacts.result
     expected = {
         f"{kind}.png"
         for kind in ("time", "fft", "fft_time", "order_time")
@@ -92,36 +109,18 @@ def test_runtime_smoke_renders_time_spec_through_public_renderer(
     assert (image.width(), image.height()) == (640, 360)
 
 
-def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(tmp_path):
-    output_directory = tmp_path / "outputs"
-    child_json = tmp_path / "child.json"
+def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(
+    tmp_path, frozen_smoke_png_artifacts
+):
     evidence_json = tmp_path / "evidence.json"
-    child = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "mf4_analyzer.batch_render_smoke",
-            "--output-dir",
-            str(output_directory),
-            "--json",
-            str(child_json),
-        ],
-        cwd=ROOT,
-        env=_source_environment(),
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert child.returncode == 0, child.stderr
-
     completed = subprocess.run(
         [
             sys.executable,
             str(VERIFY_TOOL),
             "--artifacts",
-            str(output_directory),
+            str(frozen_smoke_png_artifacts.output_directory),
             "--child-json",
-            str(child_json),
+            str(frozen_smoke_png_artifacts.child_json),
             "--platform",
             "offscreen",
             "--evidence-json",
@@ -170,36 +169,18 @@ def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(tmp_path):
     assert evidence["title"] == "单帧振动加速度"
 
 
-def test_artifact_verifier_rejects_requested_actual_platform_mismatch(tmp_path):
-    artifacts = tmp_path / "outputs"
-    child_json = tmp_path / "child.json"
+def test_artifact_verifier_rejects_requested_actual_platform_mismatch(
+    tmp_path, frozen_smoke_png_artifacts
+):
     evidence_json = tmp_path / "evidence.json"
-    child = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "mf4_analyzer.batch_render_smoke",
-            "--output-dir",
-            str(artifacts),
-            "--json",
-            str(child_json),
-        ],
-        cwd=ROOT,
-        env=_source_environment(),
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert child.returncode == 0, child.stderr
-
     completed = subprocess.run(
         [
             sys.executable,
             str(VERIFY_TOOL),
             "--artifacts",
-            str(artifacts),
+            str(frozen_smoke_png_artifacts.output_directory),
             "--child-json",
-            str(child_json),
+            str(frozen_smoke_png_artifacts.child_json),
             "--platform",
             "windows",
             "--evidence-json",

@@ -177,7 +177,7 @@ def test_report_facts_use_runner_nfft_effective_not_requested_auto(tmp_path):
     items = effective_fact_items(facts, facts)
     text = " ".join(items)
     assert f"NFFT={expected.effective_nfft}" in text
-    assert "NFFT=auto" not in text.lower()
+    assert "nfft=auto" not in text.lower()
     assert "NFFT=None" not in text
 
 

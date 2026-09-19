@@ -1,0 +1,184 @@
+{
+  "version": 1,
+  "license": {
+    "redistributable": false,
+    "binaries_in_repo": false,
+    "kind": "customer_lab_measurements",
+    "note": "Registered files are lab/customer recordings. They must stay outside git. This manifest records identity, fingerprint, and the scene each sample is allowed to prove."
+  },
+  "gate": {
+    "require_env": "TRACELAB_REQUIRE_REALFILE",
+    "root_env": "TRACELAB_REALFILE_ROOT",
+    "explore_wwt_env": "TRACELAB_WWT_CORPUS_EXPLORE",
+    "note": "Default suite never uses these files. Real-file gate: set TRACELAB_REQUIRE_REALFILE=1 and TRACELAB_REALFILE_ROOT to the testdoc-equivalent tree. Missing config, a bad path/hash, and a matching sample are distinct outcomes. A required gate with no samples must not PASS."
+  },
+  "samples": [
+    {
+      "id": "head-hdf-260417-ripple",
+      "format": "head-hdf",
+      "scene": "HEAD acoustics v4 multi-rate motor-heating: 24x audio/acceleration, 1x controls, 48x UINT32 CAN dropped",
+      "relative_path": "260417-ripple-PK2C-电机加热-1.hdf",
+      "path_env": "TRACELAB_HEAD_HDF_SAMPLE",
+      "sha256": "2b99856e1c8b636e604c70416287c9b7b6ea3fcc03626e8ed8b9dba5b4ea4af6",
+      "size_bytes": 51347673,
+      "n_scans": 49500,
+      "per_scan": 259,
+      "expected_suffixes": ["24x", "1x"],
+      "absent_suffixes": ["48x"],
+      "fast_length": 1188000,
+      "slow_length": 49500,
+      "dropped_channel_name": "CAN 1@SQuadriga III",
+      "amplitude_baseline": {
+        "channel": "L",
+        "unit": "Pa",
+        "source": "independent little-endian FLOAT32 demux of ch-order first 24 columns; calibration not applied",
+        "window": "full native-rate channel",
+        "n": 1188000,
+        "first": -0.0806955024600029,
+        "min": -0.3592185974121094,
+        "max": 0.45237383246421814,
+        "absmax": 0.45237383246421814
+      }
+    },
+    {
+      "id": "t08-yuandi-foc-ripple",
+      "format": "mf4",
+      "scene": "T08 YuanDi FOC current-mode 0-1-2 ripple: whole-file COT second-order neighborhood",
+      "relative_path": "T08_YuanDi_FOC_CurrentMode_0-1-2_Ripple.MF4",
+      "path_env": "TRACELAB_T08_MF4",
+      "sha256": "",
+      "sha256_status": "unknown",
+      "signal_channel": "Rte_TAS_mTorsionBarTorque_xds16",
+      "rpm_channel": "Rte_RPS_nRotorSpeed_xds16",
+      "order": 2.0,
+      "neighbor_ratio": 2.0
+    },
+    {
+      "id": "mat-175rpm-tighten",
+      "format": "mat",
+      "scene": "MATLAB v4 175 rpm / -45 deg tighten: five channels, 1000 Hz time axis",
+      "relative_path": "exporttowwt/175rpm_-45deg-270tighten.mat",
+      "path_env": "TRACELAB_MAT_SAMPLE",
+      "sha256": "075d74f463ef4b0b54088b457fb02a5727ed02df47048c43a52fd7f80e43c357",
+      "size_bytes": 13679615,
+      "sample_count": 284988,
+      "dt": 0.001,
+      "t_end": 284.987,
+      "anchors": {
+        "A1___angle": [-0.043936, -0.043936, 44100.0],
+        "A2___Load_Torque": [1.8551, -0.00037216, 70.0],
+        "E1___M_Lsp_1": [0.068359, -4.0137, 4.1113],
+        "E3___Load_Torque": [1.5625, -73.34, 73.047],
+        "E17__angle": [-0.043945, -120.23, 44220.0]
+      }
+    },
+    {
+      "id": "wwt-yp-ss-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 yoke-play sensor-side scaling anchors",
+      "relative_path": "2024_3_17/YP_SS_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_YP_SS_SAMPLE",
+      "sha256": "78727e4dd02abe3e76d719ce0c951a590c823545e2fb04db45ca46cb70f53dee",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-yp-ms-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 yoke-play motor-side registered load",
+      "relative_path": "2024_3_17/YP_MS_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_YP_MS_SAMPLE",
+      "sha256": "37330eced2793f8986360b484ed5af4a6c88eacfbb0cc36a17ff711c21fb6eeb",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-sfns-5-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 SFNS 5 Hz merged Zeit groups",
+      "relative_path": "2024_3_17/SFNS_5_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_SFNS5_SAMPLE",
+      "sha256": "7ba4d9666e9249815cea84e33ad599e210ddb76a5c72559313037adb8dfb7b0c",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-sfns-10-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 SFNS 10 Hz registered load",
+      "relative_path": "2024_3_17/SFNS_10_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_SFNS10_SAMPLE",
+      "sha256": "e7513ad7674b62c3dc80baf3179895cf0bb8c9ecca4cb3ff1b5af6adfdaafd16",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-sfns-20-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 SFNS 20 Hz registered load",
+      "relative_path": "2024_3_17/SFNS_20_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_SFNS20_SAMPLE",
+      "sha256": "56965f0610550920545bc0da0a1fc734016fb749b99fba1be081bf85b55b34a8",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-sfns-40-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 SFNS 40 Hz registered load",
+      "relative_path": "2024_3_17/SFNS_40_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_SFNS40_SAMPLE",
+      "sha256": "caa2d05c57e7496773a2f81e2e2f2073c8fbb3a375d392d2780188f844430dfd",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-nltnp-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 NLTNP degree decode and float32 channel",
+      "relative_path": "2024_3_17/NLTNP_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_NLTNP_SAMPLE",
+      "sha256": "af8d049d02135e5c473f34d1fa3f92ce4918bc68e2eb48249550b0b96ebefa28",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-nltwp-000009",
+      "format": "wwt",
+      "scene": "WinWert 091293 NLTWP registered load",
+      "relative_path": "2024_3_17/NLTWP_X04-CSER_000009.wwt",
+      "path_env": "TRACELAB_WWT_NLTWP_SAMPLE",
+      "sha256": "1bbe2ed186993d9cb105a4c6ce6d11eabe5b38b22b6a476c3498e0a15a598f57",
+      "group": "2024_3_17"
+    },
+    {
+      "id": "wwt-nltnp-000089",
+      "format": "wwt",
+      "scene": "WinWert v2 NLTNP registered load",
+      "relative_path": "wwt/NLTNP_000089.wwt",
+      "path_env": "TRACELAB_WWT_NLTNP_V2_SAMPLE",
+      "sha256": "46150c20bf3dd987897a79a003a5b951827a61c3bbda136e9dfeb3171f6d593b",
+      "group": "wwt-v2"
+    },
+    {
+      "id": "wwt-u-can-eo3-000089",
+      "format": "wwt",
+      "scene": "WinWert 200401 U-Can EO3 short-block filter and Pars resync",
+      "relative_path": "wwt/U-Can_EO3_000089.wwt",
+      "path_env": "TRACELAB_WWT_UCAN_EO3_SAMPLE",
+      "sha256": "8193faeb1f8dcf27b1bf495eef4e9cac7e604253c7e503e617bddd675a85ae7a",
+      "group": "wwt-v2"
+    },
+    {
+      "id": "wwt-u-can-d6-00479",
+      "format": "wwt",
+      "scene": "WinWert v2 U-Can D6 registered load",
+      "relative_path": "wwt/U-Can_D6-CSER double_00479.wwt",
+      "path_env": "TRACELAB_WWT_UCAN_D6_SAMPLE",
+      "sha256": "f782ca058631d254c745ca368676c2ea8b5f0ab6dd7efc3af16e29e8c3c17886",
+      "group": "wwt-v2"
+    },
+    {
+      "id": "wwt-yp-ss-000089",
+      "format": "wwt",
+      "scene": "WinWert v2 yoke-play sensor-side registered load",
+      "relative_path": "wwt/YP_SS_000089.wwt",
+      "path_env": "TRACELAB_WWT_YP_SS_V2_SAMPLE",
+      "sha256": "059bdb782c1f84de26bdcfd881aedf41b7222054c31f7aa21fdcbe931e68e47c",
+      "group": "wwt-v2"
+    }
+  ]
+}

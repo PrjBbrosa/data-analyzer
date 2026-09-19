@@ -365,8 +365,11 @@ def test_batch_style_align_distribute_z_order_are_one_history_each():
     ]
     styled = apply_author_batch_style(board, ("left", "mid", "right"), "fill", "orange")
     assert styled.changed
-    fills = {item.fill_palette for item in board.author_objects}
-    assert len(fills) == 1
+    assert [item.fill_palette for item in board.author_objects] == [
+        "orange",
+        "orange",
+        "orange",
+    ]
     assert len(styled.patches) == 3
 
     distributed = apply_author_distribute(board, ("left", "mid", "right"), "horizontal")
@@ -383,12 +386,15 @@ def test_batch_style_align_distribute_z_order_are_one_history_each():
     assert len(aligned.patches) >= 1
 
     before_order = [item.object_id for item in board.author_objects]
+    assert before_order == ["left", "mid", "right"]
     zed = apply_author_z_order(board, ("left",), "front")
     assert zed.changed
-    assert board.author_objects[-1].object_id == "left"
+    assert [item.object_id for item in board.author_objects] == ["mid", "right", "left"]
     assert len(zed.patches) >= 1
-    apply_author_z_order(board, ("left",), "back")
-    assert [item.object_id for item in board.author_objects][0] == "left" or before_order
+    zed_back = apply_author_z_order(board, ("left",), "back")
+    assert zed_back.changed
+    assert [item.object_id for item in board.author_objects] == ["left", "mid", "right"]
+    assert len(zed_back.patches) >= 1
 
 
 def test_duplicate_lock_and_nudge_skip_locked_unknown():
@@ -529,7 +535,10 @@ def test_page_toolbar_mixed_and_batch_style_one_history(qtbot):
     QApplication.processEvents()
     assert len(sink.undo) == 1
     assert sink.undo[0].label == "author-style"
-    assert {item.fill_palette for item in harness.board.author_objects} != {"blue", "red"} or len({item.fill_palette for item in harness.board.author_objects}) == 1
+    assert [item.fill_palette for item in harness.board.author_objects] == [
+        "orange",
+        "orange",
+    ]
 
 
 def test_page_align_duplicate_lock_are_one_history(qtbot):

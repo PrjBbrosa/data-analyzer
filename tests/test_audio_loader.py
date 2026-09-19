@@ -31,6 +31,16 @@ def _write_stereo_wav(path, fs, left, right):
         handle.writeframes(interleaved.tobytes())
 
 
+def _pcm16_expected_float32(samples):
+    """Independent PCM16 → float32 oracle (truncate toward 0, decode / 32768).
+
+    Encoder delay is not part of this conversion; WAV PCM has delay 0.
+    """
+    pcm = np.clip(np.asarray(samples, dtype=np.float64), -1.0, 1.0)
+    pcm = (pcm * 32767.0).astype("<i2")
+    return pcm.astype(np.float32) / np.float32(32768.0)
+
+
 def test_audio_video_exts_cover_common_formats():
     assert {".mp4", ".mov", ".mkv", ".m4v", ".mp3", ".m4a", ".aac", ".wav", ".flac"} <= AUDIO_VIDEO_EXTS
 
@@ -44,8 +54,9 @@ def test_load_audio_video_mono_wav(tmp_path):
     fs = 48_000
     n = 4_800
     t = np.arange(n, dtype=float) / fs
+    source = 0.5 * np.sin(2 * np.pi * 1000 * t)
     path = tmp_path / "tone.wav"
-    _write_mono_wav(path, fs, 0.5 * np.sin(2 * np.pi * 1000 * t))
+    _write_mono_wav(path, fs, source)
 
     data, channels, units, got_fs, meta = DataLoader.load_audio_video(path)
 
@@ -55,8 +66,15 @@ def test_load_audio_video_mono_wav(tmp_path):
     assert meta["source_kind"] == "audio"
     assert meta["fs"] == 48_000.0
     assert meta["channels"] == 1
-    assert len(data) == pytest.approx(n, abs=int(fs * 0.05))
-    assert data["audio"].dtype == np.float32
+    loaded = np.asarray(data["audio"], dtype=np.float32)
+    expected = _pcm16_expected_float32(source)
+    assert loaded.dtype == np.float32
+    assert len(loaded) == n, (
+        "WAV PCM has encoder delay 0; decoded frames must match the source "
+        f"exactly (got {len(loaded)}, expected {n})"
+    )
+    np.testing.assert_allclose(loaded, expected, rtol=0, atol=0)
+    assert float(np.max(np.abs(loaded))) > 0.4, "silent mono must not pass"
 
     fd = FileData(
         str(path), data, channels, units, fs=got_fs, source_metadata=meta,
@@ -79,16 +97,27 @@ def test_load_audio_video_stereo_defaults_both_channels_to_pa(tmp_path):
     fs = 8_000
     n = 800
     t = np.arange(n, dtype=float) / fs
-    tone = 0.25 * np.sin(2 * np.pi * 440 * t)
+    left = 0.25 * np.sin(2 * np.pi * 440 * t)
+    right = -left
     path = tmp_path / "stereo.wav"
-    _write_stereo_wav(path, fs, tone, -tone)
+    _write_stereo_wav(path, fs, left, right)
 
-    _data, channels, units, _got_fs, meta = DataLoader.load_audio_video(path)
+    data, channels, units, _got_fs, meta = DataLoader.load_audio_video(path)
 
     assert channels == ["L", "R"]
     assert units == {"L": "Pa", "R": "Pa"}
     assert meta["source_kind"] == "audio"
     assert meta["channels"] == 2
+    loaded_l = np.asarray(data["L"], dtype=np.float32)
+    loaded_r = np.asarray(data["R"], dtype=np.float32)
+    expected_l = _pcm16_expected_float32(left)
+    expected_r = _pcm16_expected_float32(right)
+    assert len(loaded_l) == n and len(loaded_r) == n
+    np.testing.assert_allclose(loaded_l, expected_l, rtol=0, atol=0)
+    np.testing.assert_allclose(loaded_r, expected_r, rtol=0, atol=0)
+    assert not np.allclose(loaded_l, loaded_r)
+    assert float(np.max(np.abs(loaded_l))) > 0.2
+    assert float(np.max(np.abs(loaded_r))) > 0.2
 
 
 def test_load_audio_video_no_audio_stream_raises(monkeypatch):

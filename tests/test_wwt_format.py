@@ -8,23 +8,44 @@
 """
 from __future__ import annotations
 import struct
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from mf4_analyzer.io.loader import DataLoader
+from tests.realfile_corpus import (
+    EXPLORE_WWT_ENV,
+    CorpusSupplyError,
+    extra_wwt_glob_paths,
+    resolve_realfile_sample,
+    resolve_realfile_samples,
+)
 
-_ROOT = Path(__file__).resolve().parent.parent
-SAMPLE_DIR = _ROOT / "testdoc" / "2024_3_17"
-SAMPLE_DIR_V2 = _ROOT / "testdoc" / "wwt"
+
+def _wwt_named(sample_id):
+    try:
+        return resolve_realfile_sample(sample_id)
+    except CorpusSupplyError as exc:
+        if exc.optional:
+            pytest.skip(str(exc))
+        pytest.fail(str(exc))
 
 
-def _sample(name, base=SAMPLE_DIR):
-    p = base / name
-    if not p.exists():
-        pytest.skip(f"sample not found: {p}")
-    return str(p)
+def _wwt_legacy_optional(relative):
+    """Named tests whose files are not in the registered default corpus."""
+    from tests.realfile_corpus import realfile_root, is_require_realfile
+
+    root = realfile_root()
+    if root is None:
+        pytest.skip(
+            f"UNAUDITED WWT named sample {relative}: set TRACELAB_REALFILE_ROOT"
+        )
+    path = root / relative
+    if not path.is_file():
+        if is_require_realfile():
+            pytest.fail(f"required WWT named sample missing: {path}")
+        pytest.skip(f"UNAUDITED WWT named sample missing: {path}")
+    return str(path)
 
 
 # ---------------------------------------------------------------- 合成文件工具
@@ -52,7 +73,7 @@ def _make_record(tag, n, name=b"ch", unit=b"", a=1.0, b=0.001, c=0.0,
 # ------------------------------------------------------- 2024_3_17 基础样本
 
 def test_yp_ss_single_group_scaling_and_skipped():
-    groups = DataLoader.load_wwt(_sample("YP_SS_X04-CSER_000009.wwt"))
+    groups = DataLoader.load_wwt(str(_wwt_named("wwt-yp-ss-000009")[1]))
     # 第一个 Zeit 块（n=2293）下只有 n=6 的 Tol_* 公差曲线 → 不产出组
     assert len(groups) == 1
     g = groups[0]
@@ -100,7 +121,7 @@ def test_yp_ss_single_group_scaling_and_skipped():
 
 
 def test_sfns_5_merges_identical_time_axes_into_one_group():
-    groups = DataLoader.load_wwt(_sample("SFNS_5_X04-CSER_000009.wwt"))
+    groups = DataLoader.load_wwt(str(_wwt_named("wwt-sfns-5-000009")[1]))
     # 两个 Zeit 块参数相同（n=69600, dt=0.001）→ 合并成一组
     assert len(groups) == 1
     g = groups[0]
@@ -122,7 +143,7 @@ def test_sfns_5_merges_identical_time_axes_into_one_group():
 
 
 def test_nltnp_unit_degree_decode_and_float32_channel():
-    groups = DataLoader.load_wwt(_sample("NLTNP_X04-CSER_000009.wwt"))
+    groups = DataLoader.load_wwt(str(_wwt_named("wwt-nltnp-000009")[1]))
     # 第一个 Zeit 块（1024 Hz）下全是 n=20 的评价曲线 → 只剩一组
     assert len(groups) == 1
     g = groups[0]
@@ -140,19 +161,27 @@ def test_nltnp_unit_degree_decode_and_float32_channel():
     assert ss.max() == pytest.approx(57.16, abs=0.01)
 
 
+def _wwt_format_samples():
+    try:
+        return resolve_realfile_samples("wwt")
+    except CorpusSupplyError as exc:
+        if exc.optional:
+            pytest.skip(str(exc))
+        pytest.fail(str(exc))
+
+
 def test_all_samples_load():
-    if not SAMPLE_DIR.exists():
-        pytest.skip(f"sample dir not found: {SAMPLE_DIR}")
-    samples = sorted(SAMPLE_DIR.glob("*.wwt"))
-    assert len(samples) == 8
-    for p in samples:
-        groups = DataLoader.load_wwt(str(p))
+    registered = [(e, p) for e, p in _wwt_format_samples() if e.get("group") == "2024_3_17"]
+    if not registered:
+        pytest.skip("UNAUDITED WWT 2024_3_17 registered samples")
+    assert len(registered) == 8
+    for _entry, path in registered:
+        groups = DataLoader.load_wwt(str(path))
         assert groups
         for g in groups:
             assert g["channels"][0] == "Time"
             assert len(g["channels"]) > 1
             assert len(g["data"]) > 0
-            # 多组才有区分后缀
             assert (g["label_suffix"] == "") == (len(groups) == 1)
 
 
@@ -162,7 +191,7 @@ def test_servo_drive_stiffness_pars_resync():
     """091293 文件中间夹一条 Pars 计算通道（数据区 500 字节、无长度字段）：
     重同步必须精确恢复边界，其后的 3 条 Floa 通道才解析得出正确值。"""
     groups = DataLoader.load_wwt(
-        _sample("Servo drive stiffness_000089.wwt", SAMPLE_DIR_V2))
+        _wwt_legacy_optional("wwt/Servo drive stiffness_000089.wwt"))
     assert len(groups) == 1
     g = groups[0]
     t = g["data"]["Time"].to_numpy()
@@ -217,7 +246,7 @@ def test_u_can_200401_version_short_block_and_pars():
     records_parsed=32 且 4 条 Pars 各自进 skipped。
     """
     groups = DataLoader.load_wwt(
-        _sample("U-Can_EO3_000089.wwt", SAMPLE_DIR_V2))
+        str(_wwt_named("wwt-u-can-eo3-000089")[1]))
     assert len(groups) == 1
     g = groups[0]
     t = g["data"]["Time"].to_numpy()
@@ -270,12 +299,12 @@ def test_u_can_200401_version_short_block_and_pars():
 
 
 def test_all_v2_samples_load():
-    if not SAMPLE_DIR_V2.exists():
-        pytest.skip(f"sample dir not found: {SAMPLE_DIR_V2}")
-    samples = sorted(SAMPLE_DIR_V2.glob("*.wwt"))
-    assert len(samples) >= 4          # ≥ 逆向时的 4 个（目录可能新增样本）
-    for p in samples:
-        groups = DataLoader.load_wwt(str(p))
+    registered = [(e, p) for e, p in _wwt_format_samples() if e.get("group") == "wwt-v2"]
+    if not registered:
+        pytest.skip("UNAUDITED WWT v2 registered samples")
+    assert len(registered) == 4
+    for _entry, path in registered:
+        groups = DataLoader.load_wwt(str(path))
         assert groups
         for g in groups:
             assert g["channels"][0] == "Time"
@@ -411,10 +440,8 @@ def test_pars_resync_accepts_zeit_with_dirty_name_padding(tmp_path):
 
 def test_dc2e_0011_loads_main_measurement_group():
     """Real-file anchor: UCAN-b6_DC2E_0011 must keep the 13144-pt measurement."""
-    p = _ROOT / "testdoc" / "UCAN-b6_DC2E_0011.wwt"
-    if not p.exists():
-        pytest.skip(f"sample not found: {p}")
-    groups = DataLoader.load_wwt(str(p))
+    p = _wwt_legacy_optional("UCAN-b6_DC2E_0011.wwt")
+    groups = DataLoader.load_wwt(p)
     assert len(groups) == 2
     lengths = sorted(len(g["data"]["Time"]) for g in groups)
     assert lengths == [1988, 13144]
@@ -502,3 +529,19 @@ def test_truncated_record_header_rejected(tmp_path):
     p.write_bytes(_make_header(1) + b"\0" * 20)   # 记录头不足 156 字节
     with pytest.raises(ValueError, match="截断"):
         DataLoader.load_wwt(str(p))
+
+
+def test_wwt_extra_corpus_glob_is_opt_in_by_default(monkeypatch):
+    monkeypatch.delenv(EXPLORE_WWT_ENV, raising=False)
+    assert extra_wwt_glob_paths() == []
+
+
+def test_wwt_extra_corpus_glob_explore_without_root_is_optional(monkeypatch):
+    from tests.realfile_corpus import CORPUS_ROOT_ENV, REQUIRE_CORPUS_ENV
+
+    monkeypatch.delenv(CORPUS_ROOT_ENV, raising=False)
+    monkeypatch.delenv(REQUIRE_CORPUS_ENV, raising=False)
+    monkeypatch.setenv(EXPLORE_WWT_ENV, "1")
+    with pytest.raises(CorpusSupplyError) as exc:
+        extra_wwt_glob_paths()
+    assert exc.value.optional is True

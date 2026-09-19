@@ -219,3 +219,98 @@ def test_missing_nbr_of_scans_raises_header_error(tmp_path):
     _strip_header_line(p, "nbr of scans:")
     with pytest.raises(ValueError, match=r"nbr of scans"):
         parse_head_hdf(p)
+
+
+def test_realfile_corpus_does_not_import_product_parser():
+    from pathlib import Path
+
+    text = Path(__file__).with_name("realfile_corpus.py").read_text(encoding="utf-8")
+    assert "import mf4_analyzer" not in text
+    assert "from mf4_analyzer" not in text
+
+
+def test_realfile_corpus_missing_config_is_optional(monkeypatch):
+    from tests.realfile_corpus import (
+        CORPUS_ROOT_ENV,
+        REQUIRE_CORPUS_ENV,
+        CorpusSupplyError,
+        resolve_realfile_sample,
+    )
+
+    monkeypatch.delenv(CORPUS_ROOT_ENV, raising=False)
+    monkeypatch.delenv(REQUIRE_CORPUS_ENV, raising=False)
+    monkeypatch.delenv("TRACELAB_HEAD_HDF_SAMPLE", raising=False)
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_realfile_sample("head-hdf-260417-ripple")
+    assert exc.value.optional is True
+    assert "UNAUDITED" in str(exc.value)
+
+
+def test_realfile_corpus_required_missing_config_is_failure(monkeypatch):
+    from tests.realfile_corpus import (
+        CORPUS_ROOT_ENV,
+        REQUIRE_CORPUS_ENV,
+        CorpusSupplyError,
+        resolve_realfile_sample,
+    )
+
+    monkeypatch.delenv(CORPUS_ROOT_ENV, raising=False)
+    monkeypatch.delenv("TRACELAB_HEAD_HDF_SAMPLE", raising=False)
+    monkeypatch.setenv(REQUIRE_CORPUS_ENV, "1")
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_realfile_sample("head-hdf-260417-ripple")
+    assert exc.value.optional is False
+    assert CORPUS_ROOT_ENV in str(exc.value)
+
+
+def test_realfile_corpus_bad_explicit_path_is_failure(tmp_path, monkeypatch):
+    from tests.realfile_corpus import CorpusSupplyError, resolve_realfile_sample
+
+    monkeypatch.setenv("TRACELAB_HEAD_HDF_SAMPLE", str(tmp_path / "no-such.hdf"))
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_realfile_sample("head-hdf-260417-ripple")
+    assert exc.value.optional is False
+    assert "not a file" in str(exc.value)
+
+
+def test_realfile_corpus_hash_mismatch_is_failure(tmp_path, monkeypatch):
+    from tests.realfile_corpus import CorpusSupplyError, resolve_realfile_sample
+
+    fake = tmp_path / "mismatch.hdf"
+    fake.write_bytes(b"not-the-registered-head-hdf")
+    monkeypatch.setenv("TRACELAB_HEAD_HDF_SAMPLE", str(fake))
+    with pytest.raises(CorpusSupplyError) as exc:
+        resolve_realfile_sample("head-hdf-260417-ripple")
+    assert exc.value.optional is False
+    assert "hash" in str(exc.value).lower()
+
+
+def test_realfile_corpus_good_sample_resolves(tmp_path, monkeypatch):
+    from tests.realfile_corpus import (
+        REQUIRE_CORPUS_ENV,
+        sha256_file,
+        resolve_realfile_sample,
+        read_realfile_manifest,
+    )
+
+    payload = read_realfile_manifest()
+    good = tmp_path / "good.bin"
+    good.write_bytes(b"portable-realfile-identity")
+    digest = sha256_file(good)
+    sample = {
+        "id": "helper-good",
+        "relative_path": "good.bin",
+        "format": "bin",
+        "scene": "helper happy path",
+        "path_env": "TRACELAB_HELPER_GOOD_SAMPLE",
+        "sha256": digest,
+    }
+    manifest = tmp_path / "manifest.json"
+    import json
+    manifest.write_text(json.dumps({"samples": [sample]}), encoding="utf-8")
+    monkeypatch.setenv("TRACELAB_HELPER_GOOD_SAMPLE", str(good))
+    monkeypatch.setenv(REQUIRE_CORPUS_ENV, "1")
+    entry, path = resolve_realfile_sample("helper-good", manifest_path=manifest)
+    assert entry["id"] == "helper-good"
+    assert path == good
+    assert payload["samples"], "checked-in manifest must still list real samples"

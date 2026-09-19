@@ -1,0 +1,439 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "never_claim_full_coverage_from_focused": true,
+    "unmapped_defaults": "coordinator-inspect",
+    "wide_infra_requires_integration_gate": true,
+    "preserve_collector_identity_repair": true,
+    "do_not_freeze_argument_order_to_hide_fixture_loss": true,
+    "no_scan_cache_across_mutations": true,
+    "focused_pass_is_not_full_pass": true,
+    "first_version_owners_only": [
+      "signal",
+      "io",
+      "batch",
+      "pin",
+      "view",
+      "canvas",
+      "acquisition",
+      "ui_kit",
+      "selector"
+    ]
+  },
+  "acceptance_sets": {
+    "focused": {
+      "when": "Every related code change. Owner tests plus the explicit boundary tests named by the matching route.",
+      "command": "{python} -m pytest {nodes} -q",
+      "result_scope": "PASS applies only to the selected nodes. It is not a full-integration PASS."
+    },
+    "full_integration": {
+      "when": "Stable milestone, merge/release, or a wide conftest/pytest-config change after infra regressions.",
+      "note": "Default suite still inherits pytest.ini addopts -m 'not slow'. Main and acquisition_ui are sequential fresh processes. One coordinator. Do not overlap another pytest in this checkout.",
+      "commands": [
+        "{python} scripts/run_test_gate.py --full-suite",
+        "{python} -m pytest --ignore=tests/acquisition_ui",
+        "{python} -m pytest tests/acquisition_ui"
+      ],
+      "result_scope": "PASS is the default (non-slow) integration set only. It is not slow, real-file, native, Cocoa, or Windows frozen acceptance."
+    },
+    "slow": {
+      "when": "Performance contract changes or the scheduled performance acceptance.",
+      "command": "{python} -m pytest -m slow -o addopts=",
+      "note": "pytest.ini defaults to not slow. Override addopts so -m slow is not AND-ed with not slow. Keep every existing slow node; do not shrink the set to look faster.",
+      "known_nodes": [
+        "tests/perf/test_timedomain_pan_perf.py",
+        "tests/ui/test_pg_timedomain_canvas.py (slow-marked items only)"
+      ]
+    },
+    "real_file": {
+      "when": "Format/loader/algorithm changes that the real-sample contract covers, and release acceptance that needs those samples.",
+      "command": "{python} -m pytest tests/integration/test_head_hdf_realfile.py tests/integration/test_t08_order_cot_e2e.py -q",
+      "nodes": [
+        "tests/integration/test_head_hdf_realfile.py",
+        "tests/integration/test_t08_order_cot_e2e.py"
+      ],
+      "result_scope": "Missing samples make that item unverified. Do not treat focused or default full PASS as real-file PASS."
+    },
+    "native": {
+      "when": "Native import/runtime modules change, or a release that claims native Vector/XCP/Windows runtime.",
+      "command": "{python} -m pytest tests/test_native_import_boundaries.py tests/test_windows_runtime_dependencies.py tests/test_windows_runtime_verifier.py -q",
+      "nodes": [
+        "tests/test_native_import_boundaries.py",
+        "tests/test_windows_runtime_dependencies.py",
+        "tests/test_windows_runtime_verifier.py",
+        "tests/test_p0_a2l_probe_import_safety.py"
+      ]
+    },
+    "frozen": {
+      "when": "Packaging, hidden imports, Windows build scripts, or frozen Batch/render smoke.",
+      "command": "{python} -m pytest tests/test_packaging_imports.py tests/test_windows_build_script.py tests/test_frozen_batch_acceptance.py tests/test_frozen_batch_render_smoke.py -q",
+      "nodes": [
+        "tests/test_packaging_imports.py",
+        "tests/test_windows_build_script.py",
+        "tests/test_frozen_batch_acceptance.py",
+        "tests/test_frozen_batch_render_smoke.py",
+        "tests/test_verify_ultraview_visuals.py"
+      ]
+    }
+  },
+  "infra": {
+    "pytest_config": [
+      "pytest.ini",
+      "conftest.py"
+    ],
+    "conftest": [
+      "conftest.py",
+      "tests/conftest.py",
+      "tests/ui/conftest.py",
+      "tests/acquisition_ui/conftest.py"
+    ],
+    "shared_helpers": [
+      "tests/conftest.py",
+      "tests/ui/conftest.py",
+      "tests/acquisition_ui/conftest.py"
+    ],
+    "required_nodes": [
+      "tests/test_conftest_autouse_scope.py"
+    ],
+    "infra_regressions": [
+      "tests/test_conftest_autouse_scope.py",
+      "tests/ui/test_qsettings_isolation.py",
+      "tests/ui/test_app_style_isolation.py",
+      "tests/ui/test_qt_fixture_lifecycle.py"
+    ],
+    "requires_stable_integration_gate": true,
+    "note": "Wide fixture/config changes run infra regressions first, then a coordinator-owned stable integration gate. Do not default to all tests or to an empty set. tests/test_conftest_autouse_scope.py stays the collector-identity repair gate; do not freeze pytest argument order to hide fixture loss."
+  },
+  "selector": {
+    "id": "selector",
+    "source_paths": [
+      "scripts/select_test_gate.py",
+      "scripts/test_gate_routes.json"
+    ],
+    "owner_tests": [
+      "tests/test_test_gate_selection.py"
+    ],
+    "boundary_tests": []
+  },
+  "owners": [
+    {
+      "id": "signal",
+      "label": "signal/filter/spectrogram",
+      "source_paths": [
+        "mf4_analyzer/signal/"
+      ],
+      "owner_tests": [
+        "tests/signal/",
+        "tests/test_filters.py",
+        "tests/test_spectrogram.py",
+        "tests/test_spectrogram_weighting.py",
+        "tests/test_signal_adaptive.py",
+        "tests/test_fft_amplitude_normalization.py",
+        "tests/test_fft_weighting.py",
+        "tests/test_order_analysis.py",
+        "tests/test_order_weighting.py",
+        "tests/test_frf.py",
+        "tests/test_frf_scipy_parity.py",
+        "tests/test_weighting.py",
+        "tests/test_window_equivalence.py",
+        "tests/test_nonuniform_fft_preflight.py",
+        "tests/test_nonuniform_fft_recovery.py",
+        "tests/test_custom_x_paths.py"
+      ],
+      "boundary_tests": [
+        "tests/test_signal_no_gui_import.py"
+      ],
+      "suggested_extra_gates": []
+    },
+    {
+      "id": "io",
+      "label": "IO/real-file",
+      "source_paths": [
+        "mf4_analyzer/io/"
+      ],
+      "owner_tests": [
+        "tests/test_ascii_loader.py",
+        "tests/test_asc_can_loader.py",
+        "tests/test_audio_loader.py",
+        "tests/test_blf_dbc_candidates.py",
+        "tests/test_blf_loader.py",
+        "tests/test_channel_frame.py",
+        "tests/test_csv_format_sniff.py",
+        "tests/test_csv_header_loading.py",
+        "tests/test_excel_loader.py",
+        "tests/test_file_data_audio.py",
+        "tests/test_file_data_short_name_ellipsis.py",
+        "tests/test_file_data_time_axis.py",
+        "tests/test_head_hdf.py",
+        "tests/test_head_hdf_loader.py",
+        "tests/test_importer_runtime_smoke.py",
+        "tests/test_io_load_notices.py",
+        "tests/test_mat_format.py",
+        "tests/test_mf4_loader.py",
+        "tests/test_source_adapters.py",
+        "tests/test_tdms_loader.py",
+        "tests/test_wwt_display.py",
+        "tests/test_wwt_document.py",
+        "tests/test_wwt_export.py",
+        "tests/test_wwt_format.py",
+        "tests/test_wwt_inplace.py",
+        "tests/test_wwt_writer.py",
+        "tests/test_zfd_format.py"
+      ],
+      "boundary_tests": [],
+      "suggested_extra_gates": [
+        "real_file"
+      ]
+    },
+    {
+      "id": "batch",
+      "label": "Batch",
+      "source_paths": [
+        "mf4_analyzer/batch.py",
+        "mf4_analyzer/batch_*.py",
+        "mf4_analyzer/batch_render_qt/",
+        "mf4_analyzer/renderer_import_policy.py"
+      ],
+      "owner_tests": [
+        "tests/test_batch_compute_time_axis.py",
+        "tests/test_batch_frf_export.py",
+        "tests/test_batch_frf_pairing.py",
+        "tests/test_batch_grouping_display_name.py",
+        "tests/test_batch_heatmap_producer_contract.py",
+        "tests/test_batch_loader_dispatch.py",
+        "tests/test_batch_manifest.py",
+        "tests/test_batch_output.py",
+        "tests/test_batch_preprocess.py",
+        "tests/test_batch_preset_dataclass.py",
+        "tests/test_batch_preset_io.py",
+        "tests/test_batch_recipe.py",
+        "tests/test_batch_render_qt.py",
+        "tests/test_batch_render_qt_display_envelope.py",
+        "tests/test_batch_render_qt_frf.py",
+        "tests/test_batch_render_qt_heatmap.py",
+        "tests/test_batch_render_qt_ssaa.py",
+        "tests/test_batch_renderer.py",
+        "tests/test_batch_runner.py",
+        "tests/test_batch_series_spool.py",
+        "tests/test_batch_slice_export.py",
+        "tests/test_batch_source_integration.py",
+        "tests/test_batch_statistics.py",
+        "tests/test_batch_time_group_acceptance.py",
+        "tests/test_batch_validation.py",
+        "tests/test_batch_weighting.py"
+      ],
+      "boundary_tests": [
+        "tests/test_batch_run_reporter.py",
+        "tests/test_batch_render_import_boundary.py",
+        "tests/test_batch_qt_render_parity.py"
+      ],
+      "suggested_extra_gates": [
+        "frozen"
+      ]
+    },
+    {
+      "id": "pin",
+      "label": "Pin",
+      "source_paths": [
+        "mf4_analyzer/ui/chart_stack/pinned_cursor_controller.py",
+        "mf4_analyzer/ui/chart_stack/pinning/",
+        "mf4_analyzer/ui/pg_canvas/pinned_cursor_overlay.py"
+      ],
+      "owner_tests": [
+        "tests/test_pinned_cursor_facts_rules.py",
+        "tests/test_pinned_cursor_state.py",
+        "tests/ui/test_pin_commands.py",
+        "tests/ui/test_pin_sampling_adapter.py",
+        "tests/ui/test_pinned_cursor_architecture.py",
+        "tests/ui/test_pinned_cursor_capture.py",
+        "tests/ui/test_pinned_cursor_facts.py",
+        "tests/ui/test_pinned_cursor_geometry.py",
+        "tests/ui/test_pinned_cursor_interaction.py",
+        "tests/ui/test_pinned_cursor_lifecycle.py",
+        "tests/ui/test_pinned_cursor_panels.py"
+      ],
+      "boundary_tests": [],
+      "suggested_extra_gates": []
+    },
+    {
+      "id": "view",
+      "label": "View",
+      "source_paths": [
+        "mf4_analyzer/ui/view_state.py"
+      ],
+      "owner_tests": [
+        "tests/test_view_overlay_state.py",
+        "tests/ui/test_view_activation_timing.py",
+        "tests/ui/test_view_appearance_boundary.py",
+        "tests/ui/test_view_appearance_isolation.py",
+        "tests/ui/test_view_bridge.py",
+        "tests/ui/test_view_channel_scope.py",
+        "tests/ui/test_view_manager.py",
+        "tests/ui/test_view_manager_bulk_close.py",
+        "tests/ui/test_view_manager_factory.py",
+        "tests/ui/test_view_marker_activation.py",
+        "tests/ui/test_view_state.py",
+        "tests/ui/test_view_state_isolation.py",
+        "tests/ui/test_view_switch_integration.py",
+        "tests/ui/test_view_switch_reentrancy.py",
+        "tests/ui/test_view_tabbar.py",
+        "tests/ui/test_view_tabbar_mount.py"
+      ],
+      "boundary_tests": [],
+      "suggested_extra_gates": []
+    },
+    {
+      "id": "canvas",
+      "label": "canvas",
+      "source_paths": [
+        "mf4_analyzer/ui/pg_canvas/",
+        "mf4_analyzer/ui/pg_canvases.py",
+        "mf4_analyzer/ui/canvases.py",
+        "mf4_analyzer/render_profile.py"
+      ],
+      "owner_tests": [
+        "tests/test_render_profile.py",
+        "tests/ui/test_custom_x_cursor_contract.py",
+        "tests/ui/test_custom_x_path_cache.py",
+        "tests/ui/test_frf_canvas.py",
+        "tests/ui/test_overlay_grid_ticks.py",
+        "tests/ui/test_pg_canvas_decomposition_characterization.py",
+        "tests/ui/test_pg_channel_key_dict.py",
+        "tests/ui/test_pg_cursor_placement.py",
+        "tests/ui/test_pg_dense_raster.py",
+        "tests/ui/test_pg_diagnostics_seams.py",
+        "tests/ui/test_pg_heatmap_canvas.py",
+        "tests/ui/test_pg_line_canvas.py",
+        "tests/ui/test_pg_multifile_samename_curves.py",
+        "tests/ui/test_pg_quality_backstop.py",
+        "tests/ui/test_pg_remarks.py",
+        "tests/ui/test_pg_timedomain_canvas.py",
+        "tests/ui/test_pg_timedomain_remarks.py"
+      ],
+      "boundary_tests": [
+        "tests/ui/test_pg_canvas_backref_invariants.py"
+      ],
+      "suggested_extra_gates": [
+        "slow"
+      ]
+    },
+    {
+      "id": "acquisition",
+      "label": "acquisition",
+      "source_paths": [
+        "mf4_analyzer/acquisition/",
+        "mf4_analyzer/acquisition_capture/",
+        "mf4_analyzer/acquisition_ui/"
+      ],
+      "owner_tests": [
+        "tests/acquisition_ui/",
+        "tests/test_acquisition_a2l_events.py",
+        "tests/test_acquisition_band_helpers.py",
+        "tests/test_acquisition_capture_backends.py",
+        "tests/test_acquisition_capture_cli.py",
+        "tests/test_acquisition_capture_controller.py",
+        "tests/test_acquisition_capture_health.py",
+        "tests/test_acquisition_capture_ring_buffer.py",
+        "tests/test_acquisition_capture_session.py",
+        "tests/test_acquisition_capture_writer.py",
+        "tests/test_acquisition_config_store.py",
+        "tests/test_acquisition_manifest.py",
+        "tests/test_acquisition_measurement_search.py",
+        "tests/test_acquisition_preflight.py",
+        "tests/test_acquisition_preflight_estimates.py",
+        "tests/test_acquisition_regression.py",
+        "tests/test_acquisition_runtime_smoke.py",
+        "tests/test_acquisition_settings_overrides.py",
+        "tests/test_acquisition_signals.py",
+        "tests/test_acquisition_smoke.py",
+        "tests/test_cli_vector_backend.py",
+        "tests/test_daq_map_builder.py",
+        "tests/test_dto_decode.py",
+        "tests/test_ifdata_xcp_parser.py",
+        "tests/test_p0_a2l_probe.py",
+        "tests/test_p0_a2l_probe_import_safety.py",
+        "tests/test_p0_mf4_probe.py",
+        "tests/test_p0_vector_probe.py",
+        "tests/test_p0_xcp_probe.py",
+        "tests/test_pyxcp_029_contract.py",
+        "tests/test_pyxcp_daq_policy.py",
+        "tests/test_pyxcp_readiness_red_contract.py",
+        "tests/test_pyxcp_runtime.py",
+        "tests/test_transport_config.py",
+        "tests/test_vector_hw_probe.py",
+        "tests/test_vector_probe_stages.py",
+        "tests/test_vector_xcp_backend.py",
+        "tests/test_xcp_auth.py",
+        "tests/test_xcp_daq_session.py"
+      ],
+      "boundary_tests": [
+        "tests/test_native_import_boundaries.py",
+        "tests/ui/test_import_boundaries.py"
+      ],
+      "suggested_extra_gates": [
+        "native"
+      ]
+    },
+    {
+      "id": "ui_kit",
+      "label": "UI kit",
+      "source_paths": [
+        "mf4_analyzer/ui_kit/"
+      ],
+      "owner_tests": [
+        "tests/ui_kit/"
+      ],
+      "boundary_tests": [
+        "tests/ui_kit/test_qss_border_shorthand.py",
+        "tests/ui/test_import_boundaries.py"
+      ],
+      "suggested_extra_gates": []
+    }
+  ],
+  "documented_test_helpers": [
+    {
+      "helper": "tests/ui/test_ultraview_page.py",
+      "consumers_sample": [
+        "tests/ui/test_ultraview_author_multiselect.py",
+        "tests/ui/test_ultraview_page_wiring.py",
+        "tests/ui/test_ultraview_sticky_slice.py"
+      ],
+      "note": "Live helper graph is scanned from current files. This records a confirmed v1 example; it is not a bulk split of every cross-test import."
+    },
+    {
+      "helper": "tests/ui/test_pg_timedomain_canvas.py",
+      "consumers_sample": [
+        "tests/ui/test_overlay_grid_ticks.py"
+      ],
+      "note": "_pg_canvas helper imported by overlay tick tests."
+    },
+    {
+      "helper": "tests/ui/test_view_switch_integration.py",
+      "consumers_sample": [
+        "tests/ui/test_split_routing.py",
+        "tests/ui/test_split_focus_routing.py"
+      ],
+      "note": "Multi-level chain continues into split_per_pane_controls via split helpers."
+    },
+    {
+      "helper": "tests/ui/test_pinned_cursor_geometry.py",
+      "consumers_sample": [
+        "tests/ui/test_pinned_cursor_interaction.py"
+      ]
+    },
+    {
+      "helper": "tests/ui_kit/_qss_parse.py",
+      "consumers_sample": [
+        "tests/ui_kit/test_qss_duplicate_selectors.py",
+        "tests/ui_kit/test_qss_palette_ratchet.py",
+        "tests/ui_kit/test_qss_selector_liveness.py"
+      ]
+    },
+    {
+      "helper": "tests/zfd_corpus.py",
+      "consumers_sample": [
+        "tests/test_zfd_format.py"
+      ]
+    }
+  ]
+}

@@ -136,6 +136,48 @@ def _assert_document_fits(pill):
     assert "—" in text or any(ch.isdigit() for ch in text)
 
 
+def _pill_space_state(pill):
+    return {
+        "visible": pill.isVisible(),
+        "awaiting_space": pill.awaiting_space(),
+        "space_hidden": pill._space_hidden,
+        "visibility_requested": pill._visibility_requested,
+        "host_pending": pill._host_pending,
+        "geometry": (
+            pill.geometry().x(),
+            pill.geometry().y(),
+            pill.geometry().width(),
+            pill.geometry().height(),
+        ),
+        "detail": pill.detail_text()[:80] if callable(getattr(pill, "detail_text", None)) else None,
+    }
+
+
+def _assert_fft_readout_has_space(pill, *, context):
+    """Geometries that should fit a readout must actually show it.
+
+    ``awaiting_space()`` is not a success path here. Forcing it True on a
+    50-channel 1000x700 scene that has room must fail this contract.
+    """
+    state = _pill_space_state(pill)
+    assert pill.awaiting_space() is False, (
+        f"{context}: awaiting_space=True on a scene that must have room; last={state}"
+    )
+    assert pill.isVisible(), (
+        f"{context}: pill hidden on a scene that must show a readout; last={state}"
+    )
+
+
+def _assert_fft_readout_awaiting_space(pill, *, context):
+    state = _pill_space_state(pill)
+    assert pill.awaiting_space() is True, (
+        f"{context}: expected hidden awaiting_space readout; last={state}"
+    )
+    assert pill.isVisible() is False, (
+        f"{context}: pill still visible while awaiting space; last={state}"
+    )
+
+
 def test_cursor_display_model_stays_qt_free():
     src = REPO_ROOT / "mf4_analyzer" / "ui" / "cursor_display_model.py"
     tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
@@ -229,9 +271,10 @@ def test_fft_pill_stays_inside_spectrum_safe_rect(
     if mini:
         pill._toggle_mode()
         qapp.processEvents()
-    assert pill.isVisible() or pill.awaiting_space()
-    if pill.awaiting_space():
-        return
+    _assert_fft_readout_has_space(
+        pill,
+        context=f"{width}x{height} count={count} long_name={long_name} {mode} mini={mini}",
+    )
     safe = _spectrum_safe_rect(cs)
     _assert_inside(pill, safe)
     _assert_document_fits(pill)
@@ -245,8 +288,7 @@ def test_fft_fifty_channels_stay_inside_spectrum_safe_rect(
     cs, canvas = _make_fft_stack(qtbot, qapp, width=1000, height=700, count=50)
     _arm_dual(cs, canvas, qapp)
     pill = cs._pill
-    if pill.awaiting_space():
-        return
+    _assert_fft_readout_has_space(pill, context="50-channel 1000x700")
     visible = pill.visible_channel_count()
     assert 0 < visible < 50
     omitted = 50 - visible
@@ -256,18 +298,35 @@ def test_fft_fifty_channels_stay_inside_spectrum_safe_rect(
 
 
 def test_fft_low_height_omits_whole_channel_blocks(qapp, qtbot, production_style):
-    cs, canvas = _make_fft_stack(qtbot, qapp, width=650, height=280, count=16)
+    cs, canvas = _make_fft_stack(qtbot, qapp, width=1000, height=500, count=16)
     _arm_dual(cs, canvas, qapp)
     pill = cs._pill
-    if pill.awaiting_space():
-        return
+    _assert_fft_readout_has_space(pill, context="16-channel 1000x500")
     projection = pill._display_projection
     assert projection is not None
     visible = pill.visible_channel_count()
-    assert 0 < visible <= len(projection.blocks)
-    if visible < len(projection.blocks):
-        omitted = len(projection.blocks) - visible
-        assert f"+{omitted} channels" in pill.detail_text()
+    assert 0 < visible < len(projection.blocks), (
+        f"low-height readout must drop whole channel blocks; "
+        f"visible={visible} blocks={len(projection.blocks)} "
+        f"last={_pill_space_state(pill)}"
+    )
+    omitted = len(projection.blocks) - visible
+    assert f"+{omitted} channels" in pill.detail_text()
+    _assert_inside(pill, _spectrum_safe_rect(cs))
+    _assert_document_fits(pill)
+
+
+def test_fft_insufficient_space_hides_pill_and_restores(
+    qapp, qtbot, production_style,
+):
+    cs, canvas = _make_fft_stack(qtbot, qapp, width=650, height=280, count=16)
+    _arm_dual(cs, canvas, qapp)
+    pill = cs._pill
+    _assert_fft_readout_awaiting_space(pill, context="16-channel 650x280")
+    cs.resize(1000, 700)
+    qapp.processEvents()
+    _arm_dual(cs, canvas, qapp)
+    _assert_fft_readout_has_space(pill, context="restored 1000x700")
     _assert_inside(pill, _spectrum_safe_rect(cs))
     _assert_document_fits(pill)
 

@@ -1,58 +1,84 @@
-"""MATLAB .mat 解析：真实样本锚点 + 端到端 + 错误路径。
+"""MATLAB .mat 解析：真实样本锚点 + 可移植合成 oracle + 错误路径。
 
-锚点值来自 scipy 对 ``testdoc/175rpm_-45deg-270tighten.mat`` 的分析——改动变量
-筛选 / 时间轴识别 / 分组会在这里翻红。
+真实锚点来自 scipy 对注册样本 ``exporttowwt/175rpm_-45deg-270tighten.mat``
+的分析——改动变量筛选 / 时间轴识别 / 分组会在这里翻红。默认套件跑合成
+数值/时间轴，不依赖客户文件。额外语料不得靠 glob 改变默认工作量。
 """
 from __future__ import annotations
-from pathlib import Path
 
-import numpy as np
 import pytest
+import numpy as np
 
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.io.loader import DataLoader
-
-_ROOT = Path(__file__).resolve().parent.parent
-SAMPLE = _ROOT / "testdoc" / "175rpm_-45deg-270tighten.mat"
+from tests.realfile_corpus import CorpusSupplyError, resolve_realfile_sample
 
 
-def _sample():
-    if not SAMPLE.exists():
-        pytest.skip(f"sample not found: {SAMPLE}")
-    return str(SAMPLE)
+def _mat_sample():
+    try:
+        return resolve_realfile_sample("mat-175rpm-tighten")
+    except CorpusSupplyError as exc:
+        if exc.optional:
+            pytest.skip(str(exc))
+        pytest.fail(str(exc))
 
 
-# 通道 -> (first, min, max)
-_ANCHORS = {
-    "A1___angle": (-0.043936, -0.043936, 44100.0),
-    "A2___Load_Torque": (1.8551, -0.00037216, 70.0),
-    "E1___M_Lsp_1": (0.068359, -4.0137, 4.1113),
-    "E3___Load_Torque": (1.5625, -73.34, 73.047),
-    "E17__angle": (-0.043945, -120.23, 44220.0),
-}
+def test_mat_synthetic_time_axis_and_numeric_oracles(tmp_path):
+    from scipy.io import savemat
+
+    n = 1000
+    dt = 0.002
+    t = np.arange(n, dtype=np.float64) * dt
+    torque = 3.5 * t + 0.25
+    angle = np.sin(2 * np.pi * 4.0 * t)
+    path = tmp_path / "synth.mat"
+    savemat(str(path), {"t": t, "Torque": torque, "Angle": angle})
+
+    groups = DataLoader.load_mat(str(path))
+    assert len(groups) == 1
+    g = groups[0]
+    assert g["label_suffix"] == ""
+    assert "Time" in g["channels"]
+    assert "t" not in g["channels"]
+    signal_cols = [c for c in g["channels"] if c != "Time"]
+    assert set(signal_cols) == {"Torque", "Angle"}
+    got_t = g["data"]["Time"].to_numpy()
+    np.testing.assert_allclose(got_t, t, rtol=0, atol=0)
+    assert got_t[1] - got_t[0] == pytest.approx(dt)
+    np.testing.assert_allclose(g["data"]["Torque"].to_numpy(), torque, rtol=0, atol=0)
+    np.testing.assert_allclose(g["data"]["Angle"].to_numpy(), angle, rtol=0, atol=0)
+    fd = FileData(
+        str(path), g["data"], g["channels"], g["units"], 0,
+        source_metadata=g["source_metadata"],
+        channel_metadata=g["channel_metadata"],
+        label_suffix=g["label_suffix"],
+    )
+    assert fd._time_source == "column"
+    assert fd.fs == pytest.approx(1.0 / dt, rel=1e-9)
+    assert len(fd.time_array) == n
 
 
 def test_mat_single_group_five_channels_anchors():
-    groups = DataLoader.load_mat(_sample())
+    entry, path = _mat_sample()
+    groups = DataLoader.load_mat(str(path))
     assert len(groups) == 1
     g = groups[0]
     assert g["label_suffix"] == ""
 
-    # Time 存在，t 变量不作为信号列
+    anchors = {name: tuple(vals) for name, vals in entry["anchors"].items()}
     assert "Time" in g["channels"]
     assert "t" not in g["channels"]
     signal_cols = [c for c in g["channels"] if c != "Time"]
     assert len(signal_cols) == 5
-    assert set(signal_cols) == set(_ANCHORS)
+    assert set(signal_cols) == set(anchors)
 
-    # 时间轴 1000 Hz / 284988 点，均匀
     t = g["data"]["Time"].to_numpy()
-    assert len(t) == 284988
+    assert len(t) == entry["sample_count"]
     assert t[0] == pytest.approx(0.0)
-    assert t[-1] == pytest.approx(284.987, abs=1e-3)
-    assert t[1] - t[0] == pytest.approx(0.001, abs=1e-6)
+    assert t[-1] == pytest.approx(entry["t_end"], abs=1e-3)
+    assert t[1] - t[0] == pytest.approx(entry["dt"], abs=1e-6)
 
-    for col, (first, vmin, vmax) in _ANCHORS.items():
+    for col, (first, vmin, vmax) in anchors.items():
         v = g["data"][col].to_numpy()
         assert v[0] == pytest.approx(first, rel=1e-3, abs=1e-4), f"{col} first"
         assert v.min() == pytest.approx(vmin, rel=1e-3, abs=1e-4), f"{col} min"
@@ -61,24 +87,25 @@ def test_mat_single_group_five_channels_anchors():
 
     smeta = g["source_metadata"]
     assert smeta["source_kind"] == "mat"
-    assert smeta["source_filename"] == "175rpm_-45deg-270tighten.mat"
+    assert smeta["source_filename"] == path.name
     assert smeta["skipped_vars"] == []
-    assert smeta["mat_version"]      # 非空（v4）
+    assert smeta["mat_version"]
 
     assert g["channel_metadata"]["A1___angle"]["mat_variable"] == "A1___angle"
 
 
 def test_mat_end_to_end_filedata_column_time_source():
-    groups = DataLoader.load_mat(_sample())
+    entry, path = _mat_sample()
+    groups = DataLoader.load_mat(str(path))
     g = groups[0]
-    fd = FileData(_sample(), g["data"], g["channels"], g["units"], 0,
+    fd = FileData(str(path), g["data"], g["channels"], g["units"], 0,
                   source_metadata=g["source_metadata"],
                   channel_metadata=g["channel_metadata"],
                   label_suffix=g["label_suffix"])
-    assert fd._time_source == "column"      # Time 列被识别
+    assert fd._time_source == "column"
     assert fd.fs == pytest.approx(1000.0, rel=1e-6)
     ta = fd.time_array
-    assert ta is not None and len(ta) == 284988
+    assert ta is not None and len(ta) == entry["sample_count"]
     diffs = np.diff(ta)
     np.testing.assert_allclose(diffs, diffs[0], rtol=1e-6)
 

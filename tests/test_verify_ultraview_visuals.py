@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import ast
-import contextlib
+import copy
 import json
 from pathlib import Path
 
@@ -71,6 +71,48 @@ def _matching(errors: list[str], needle: str) -> list[str]:
     return [error for error in errors if needle in error]
 
 
+def _app_style_snapshot(app):
+    from PyQt5.QtGui import QFont, QPalette
+
+    return (
+        app.styleSheet(),
+        app.style().objectName(),
+        QPalette(app.palette()),
+        QFont(app.font()),
+    )
+
+
+def _restore_app_style(app, baseline) -> None:
+    sheet, style_name, palette, font = baseline
+    if app.styleSheet() != sheet:
+        app.setStyleSheet(sheet)
+    if app.style().objectName() != style_name:
+        app.setStyle(style_name)
+    if app.palette() != palette:
+        app.setPalette(palette)
+    if app.font() != font:
+        app.setFont(font)
+
+
+@pytest.fixture(scope="module")
+def _ultraview_generated_bundle(tmp_path_factory, qapp):
+    """Generate shots once, then restore QApplication chrome after closing owners."""
+
+    dest = tmp_path_factory.mktemp("ultraview-visuals")
+    baseline = _app_style_snapshot(qapp)
+    try:
+        manifest = generate(dest)
+    finally:
+        _restore_app_style(qapp, baseline)
+    return dest, manifest
+
+
+@pytest.fixture
+def ultraview_visuals(_ultraview_generated_bundle):
+    dest, manifest = _ultraview_generated_bundle
+    return dest, copy.deepcopy(manifest)
+
+
 def test_default_output_is_gitignored_state_dir():
     assert DEFAULT_OUTPUT.parts[-2:] == (".state", "ultraview-p0")
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -89,19 +131,19 @@ def test_harness_does_not_import_main_window():
             assert node.module != "mf4_analyzer.ui"
 
 
-def test_ultraview_visual_harness_geometry_and_contact_sheet(qapp, tmp_path):
-    manifest = generate(tmp_path)
+def test_ultraview_visual_harness_geometry_and_contact_sheet(ultraview_visuals):
+    dest, manifest = ultraview_visuals
     assert manifest["schema_version"] == MANIFEST_SCHEMA_VERSION
     for name in REQUIRED_SHOTS:
         info = manifest["shots"][name]
-        path = tmp_path / info["path"]
+        path = dest / info["path"]
         assert path.is_file(), name
         assert path.stat().st_size > 100, name
         assert info["width"] >= 10 and info["height"] >= 10
-    contact = tmp_path / manifest["contact_sheet"]
+    contact = dest / manifest["contact_sheet"]
     assert contact.is_file()
     assert contact.stat().st_size > 1000
-    assert (tmp_path / "manifest.json").is_file()
+    assert (dest / "manifest.json").is_file()
     statuses = {
         card["status"]
         for card in manifest["geometry"]["four_status_1440"]["cards"]
@@ -143,9 +185,9 @@ def test_required_shots_cover_pointer_minimap_and_laser_facts():
     assert "arrange_after_1280" not in REQUIRED_SHOTS
 
 
-def test_visual_harness_routes_all_four_current_layout_actions(qapp, tmp_path):
+def test_visual_harness_routes_all_four_current_layout_actions(ultraview_visuals):
     """The verifier drives the live controls, not a retired layout helper."""
-    manifest = generate(tmp_path)
+    _dest, manifest = ultraview_visuals
     routes = manifest["geometry"]["layout_actions_1280"]
     assert routes["smart_layout"] == {"label": "智能排版", "requests": 1}
     assert routes["compact_arrange"] == {"label": "紧凑排列", "requests": 1}
@@ -182,13 +224,13 @@ def test_library_contract_catches_wrong_width_clipped_section_and_removed_contro
     )
 
 
-def test_library_shot_records_the_single_grouped_path(qapp, tmp_path):
-    with contextlib.suppress(GeometryError):
-        generate(tmp_path)
-    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+def test_library_shot_records_the_single_grouped_path(ultraview_visuals):
+    dest, manifest = ultraview_visuals
+    on_disk = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
     name = "library_groups_1280"
-    assert (tmp_path / manifest["shots"][name]["path"]).is_file(), name
-    facts = manifest["geometry"][name]["library"]
+    assert (dest / on_disk["shots"][name]["path"]).is_file(), name
+    facts = on_disk["geometry"][name]["library"]
+    assert facts == manifest["geometry"][name]["library"]
     assert facts["panel"]["visible"] is True
     assert facts["panel"]["w"] == _library_constants()["LIBRARY_DEFAULT_WIDTH"]
     assert facts["panel"]["h"] > 0

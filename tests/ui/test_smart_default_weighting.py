@@ -136,12 +136,15 @@ def test_load_one_registers_wav_as_audio_source_with_fs(qapp, qtbot, tmp_path):
     from mf4_analyzer.io import DataLoader, FileData
     from mf4_analyzer.ui.main_window import MainWindow
 
-    if not hasattr(DataLoader, "load_audio_video"):
-        pytest.skip("DataLoader.load_audio_video is not merged yet")
-    if "fs" not in inspect.signature(FileData).parameters:
-        pytest.skip("FileData(fs=...) is not merged yet")
-    if not hasattr(FileData, "is_audio_source"):
-        pytest.skip("FileData.is_audio_source() is not merged yet")
+    assert hasattr(DataLoader, "load_audio_video"), (
+        "DataLoader.load_audio_video is missing; a merged product API must fail, not skip"
+    )
+    assert "fs" in inspect.signature(FileData).parameters, (
+        "FileData(fs=...) is missing; a merged product API must fail, not skip"
+    )
+    assert hasattr(FileData, "is_audio_source"), (
+        "FileData.is_audio_source() is missing; a merged product API must fail, not skip"
+    )
 
     fs = 48_000
     n = 2_400

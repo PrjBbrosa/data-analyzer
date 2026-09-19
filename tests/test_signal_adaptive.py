@@ -638,15 +638,99 @@ def test_non_tail_count_matches_averaged_fft_loop():
     n_samples = 10000
     nfft = 4096
     overlap = 0.5
+    hop = nfft // 2  # 50% overlap → integer hop, independent of adaptive.py
+    starts = list(range(0, n_samples - nfft + 1, hop))
+    assert starts == [0, 2048, 4096]
+    assert non_tail_frame_count(n_samples, nfft, overlap) == 3
+    assert segmented_analysis_hop(nfft, overlap) == hop
+    n_segments = max((n_samples - nfft) // hop + 1, 1)
+    assert n_segments == 3
+
     sig = np.zeros(n_samples, dtype=float)
     freq, _amp, _psd = FFTAnalyzer.compute_averaged_fft(
         sig, 1000.0, "hanning", nfft, overlap,
     )
-    assert non_tail_frame_count(n_samples, nfft, overlap) == 3
-    hop = segmented_analysis_hop(nfft, overlap)
-    n_segments = max((n_samples - nfft) // hop + 1, 1)
-    assert n_segments == 3
     assert freq.shape[0] == nfft // 2
+
+    # Tail start is not on the hop grid, so a burst living only past the last
+    # complete frame must not join the average. Completing-frame starts above
+    # already lock the three window origins.
+    tail_start = n_samples - nfft
+    assert tail_start not in starts
+
+    _assert_averaged_fft_every_complete_frame_participates()
+    _assert_averaged_fft_excludes_tail_frame(n_samples, nfft, overlap, starts, hop)
+
+
+def _assert_averaged_fft_every_complete_frame_participates():
+    """Disjoint frames with amplitudes 1, 2, 4: dropping any frame breaks mean(P)."""
+    nfft = 4096
+    overlap = 0.0
+    hop = nfft
+    n_frames = 3
+    tail_extra = 500
+    n_samples = nfft * n_frames + tail_extra
+    fs = 1000.0
+    starts = [i * hop for i in range(n_frames)]
+    assert starts == [0, 4096, 8192]
+    assert non_tail_frame_count(n_samples, nfft, overlap) == 3
+    assert n_samples - nfft not in starts
+
+    k = 8
+    freq_hz = k * fs / nfft
+    amps = (1.0, 2.0, 4.0)
+    t_frame = np.arange(nfft) / fs
+    sig = np.zeros(n_samples, dtype=float)
+    isolated_powers = []
+    for start, amp in zip(starts, amps):
+        frame = amp * np.sin(2.0 * np.pi * freq_hz * t_frame)
+        sig[start:start + nfft] = frame
+        _f, _a, psd = FFTAnalyzer.compute_averaged_fft(
+            frame, fs, "hanning", nfft, overlap,
+        )
+        bin_idx = int(np.argmin(np.abs(_f - freq_hz)))
+        isolated_powers.append(float(psd[bin_idx]))
+
+    freq, _amp, psd = FFTAnalyzer.compute_averaged_fft(
+        sig, fs, "hanning", nfft, overlap,
+    )
+    bin_idx = int(np.argmin(np.abs(freq - freq_hz)))
+    expected = float(np.mean(isolated_powers))
+    assert psd[bin_idx] == pytest.approx(expected, rel=1e-12)
+    dropped_last = float(np.mean(isolated_powers[:-1]))
+    dropped_first = float(np.mean(isolated_powers[1:]))
+    assert dropped_last != pytest.approx(expected, rel=1e-6)
+    assert dropped_first != pytest.approx(expected, rel=1e-6)
+
+
+def _assert_averaged_fft_excludes_tail_frame(n_samples, nfft, overlap, starts, hop):
+    fs = 1000.0
+    k = 8
+    freq_hz = k * fs / nfft
+    t_frame = np.arange(nfft) / fs
+    tone = np.sin(2.0 * np.pi * freq_hz * t_frame)
+
+    complete = np.zeros(n_samples, dtype=float)
+    for start in starts:
+        complete[start:start + nfft] += tone
+
+    after_last = starts[-1] + nfft
+    tail_only = np.zeros(n_samples, dtype=float)
+    burst_n = n_samples - after_last
+    tail_only[after_last:] = 50.0 * np.sin(
+        2.0 * np.pi * freq_hz * np.arange(burst_n) / fs,
+    )
+
+    freq, _amp, psd_complete = FFTAnalyzer.compute_averaged_fft(
+        complete, fs, "hanning", nfft, overlap,
+    )
+    _f, _a, psd_tail = FFTAnalyzer.compute_averaged_fft(
+        tail_only, fs, "hanning", nfft, overlap,
+    )
+    bin_idx = int(np.argmin(np.abs(freq - freq_hz)))
+    assert psd_complete[bin_idx] > 1e-6
+    assert psd_tail[bin_idx] == pytest.approx(0.0, abs=1e-18)
+    assert hop * len(starts) + nfft > n_samples or starts[-1] + nfft <= n_samples
 
 
 def test_auto_nfft_decision_is_frozen_and_does_not_zero_pad():
