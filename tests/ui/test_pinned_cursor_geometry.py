@@ -11,17 +11,20 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import QEvent, QPointF, QRect, QSettings, Qt
-from PyQt5.QtGui import QFont, QFontMetrics, QImage
-from PyQt5.QtWidgets import QApplication, QPushButton, QScrollArea
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSettings, Qt
+from PyQt5.QtGui import QFont, QFontMetrics, QImage, QMouseEvent, QPainter
+from PyQt5.QtWidgets import QApplication, QPushButton, QScrollArea, QWidget
 
 from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import (
     PINNED_OFFSCREEN_TEXT,
     PINNED_UNREPRESENTABLE_TEXT,
     PinnedAxisLabel,
+    axis_label_outer_size,
     cluster_label_text,
     layout_pinned_axis_labels,
+    route_panel_tether,
+    tether_candidate_ports,
 )
 from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
 
@@ -141,6 +144,52 @@ def _pin(cs, canvas, values, *, domain="time", mode="single", expand=False):
         QApplication.processEvents()
         controller.flush_layout()
     return cs.pinned_cursors_for_canvas(canvas).records
+
+
+def _send_mouse(widget, etype, local, *, button=Qt.LeftButton, buttons=None):
+    local = QPoint(local)
+    window = widget.window()
+    window_pos = widget.mapTo(window, local) if window is not None else QPoint(local)
+    global_pos = widget.mapToGlobal(local)
+    if buttons is None:
+        if etype == QEvent.MouseButtonRelease:
+            buttons = Qt.NoButton
+        elif etype == QEvent.MouseMove:
+            buttons = Qt.LeftButton
+        else:
+            buttons = button
+    event = QMouseEvent(
+        etype,
+        QPointF(local),
+        QPointF(window_pos),
+        QPointF(global_pos),
+        button,
+        Qt.MouseButtons(buttons),
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(widget, event)
+    return QPoint(global_pos)
+
+
+def _tether_points_in_panel_local(canvas, pill):
+    overlay = canvas._pinned_overlay
+    glw = canvas._glw
+    viewport = glw.viewport()
+    points = []
+    for item in overlay.tether_items():
+        path = item.path()
+        for index in range(path.elementCount()):
+            element = path.elementAt(index)
+            view = glw.mapFromScene(QPointF(element.x, element.y))
+            local = pill.mapFromGlobal(viewport.mapToGlobal(view))
+            points.append(local)
+    return points
+
+
+def _save_pin_evidence(cs, name):
+    evidence = _REPO_ROOT / ".state" / "pin-remediation"
+    evidence.mkdir(parents=True, exist_ok=True)
+    cs.stack.grab().save(str(evidence / name))
 
 
 def test_native_pin_coordinate_mappings_exit_cleanly_in_subprocess(tmp_path):
@@ -327,6 +376,127 @@ def test_layout_does_not_shove_infinitely_left(qapp):
         item.canvas_rect[0] + item.canvas_rect[2] <= 120
         for item in items
     )
+
+
+def test_axis_label_outer_size_matches_the_painted_caption_contract(
+    qapp, qtbot, production_style,
+):
+    """The layout chip and its real QFrame reserve the same outer size."""
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.resize(260, 80)
+    label = PinnedAxisLabel(host)
+    host.show()
+    label.show()
+    qapp.processEvents()
+    text = "P12·A/B"
+    metrics = QFontMetrics(label._caption.font())
+    expected_width, expected_height = axis_label_outer_size(text, metrics)
+    margins = label.layout().contentsMargins()
+    assert expected_width >= (
+        metrics.horizontalAdvance(text) + margins.left() + margins.right() + 2
+    )
+    assert expected_height >= (
+        metrics.height() + margins.top() + margins.bottom() + 2
+    )
+
+    items = layout_pinned_axis_labels(
+        [{
+            "record_id": "record-12",
+            "ordinal": 12,
+            "endpoint": "x",
+            "text": text,
+            "canvas_x": 120.0,
+            "offscreen": None,
+        }],
+        axis_left=20,
+        axis_right=220,
+        axis_top=80,
+        axis_height=expected_height,
+        fm=metrics,
+    )
+    assert len(items) == 1
+    assert items[0].canvas_rect[2:] == (expected_width, expected_height)
+    label.apply_geom(items[0])
+    qapp.processEvents()
+    assert label.size().width() == expected_width
+    assert label.size().height() == expected_height
+    assert label._caption.contentsRect().width() >= metrics.horizontalAdvance(text)
+
+    # Render the production QLabel, rather than trusting its size hint alone:
+    # every caption ink pixel must keep a margin inside the frame content.
+    image = QImage(label._caption.size(), QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    label._caption.render(painter)
+    painter.end()
+    ink = [
+        (x, y)
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y).alpha() > 24
+    ]
+    assert ink
+    assert min(x for x, _y in ink) > 0
+    assert max(x for x, _y in ink) < image.width() - 1
+    assert min(y for _x, y in ink) >= 0
+    assert max(y for _x, y in ink) < image.height()
+
+
+def test_expanded_panel_tether_targets_the_opened_endpoint_and_cleans_up(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    record = _pin(cs, canvas, [(0.25, 0.75)], mode="dual")[0]
+    controller = cs._pinned_cursors
+
+    label = next(
+        label for label in controller.axis_labels_for(canvas)
+        if label.geom() is not None
+        and any(
+            member[:2] == (record.record_id, "a")
+            for member in label.geom().members
+        )
+    )
+    qtbot.mouseClick(label, Qt.LeftButton, pos=label.rect().center())
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    overlay = canvas._pinned_overlay
+    assert overlay.tether_endpoint_keys_for(record.record_id) == ("a",)
+    assert len(overlay.tether_items()) == 1
+    assert len(overlay.tether_port_items()) == 1
+    tether_path = overlay.tether_items()[0].path()
+    target = tether_path.elementAt(tether_path.elementCount() - 1)
+    line = overlay.lines_for(record.record_id, "a")[0]
+    expected_target = line.getViewBox().mapViewToScene(
+        QPointF(float(line.value()), 0.0)
+    )
+    assert target.x == pytest.approx(expected_target.x(), abs=0.75)
+
+    qtbot.mouseClick(label, Qt.LeftButton, pos=label.rect().center())
+    qapp.processEvents()
+    assert overlay.tether_endpoint_keys_for(record.record_id) == ()
+    assert overlay.tether_items() == ()
+    assert overlay.tether_port_items() == ()
+
+    # A restored/programmatic expansion has no selected A/B endpoint, so its
+    # neutral port forks to both lines rather than implying an active side.
+    controller.toggle_record_panel(canvas, record.record_id)
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    assert overlay.tether_endpoint_keys_for(record.record_id) == ("a", "b")
+    assert len(overlay.tether_items()) == 2
+    port_before = overlay._tethers[0].panel_port
+    pill = controller.pills_for(canvas)[0]
+    start = pill.rect().center()
+    qtbot.mousePress(pill, Qt.LeftButton, pos=start)
+    qtbot.mouseRelease(pill, Qt.LeftButton, pos=start + QPoint(-30, 16))
+    qapp.processEvents()
+    assert overlay._tethers[0].panel_port != port_before
 
 
 def test_time_overlay_line_tracks_physical_x_after_pan_zoom(
@@ -1261,3 +1431,131 @@ def test_font_revision_forces_typeset(
     cs._pinned_cursors.reflow_visible()
     cs._pinned_cursors.flush_layout()
     assert len(calls) == 1
+
+
+def test_route_panel_tether_stays_outside_a_covering_panel():
+    """The old A-path (158,65)→(86,3) sat entirely inside a 318×66 card."""
+    panel = QRectF(0.0, 0.0, 318.0, 66.0)
+    host = QRectF(-20.0, -20.0, 800.0, 400.0)
+    ports = tether_candidate_ports(panel)
+    port, paths = route_panel_tether(
+        panel_rect=panel,
+        ports=ports,
+        obstacles=(),
+        target_xs=(86.0,),
+        host_rect=host,
+    )
+    assert port is not None
+    assert paths
+    for path in paths:
+        assert len(path) >= 2
+        for point in path:
+            assert not panel.contains(QPointF(*point))
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("P12·A", "P12·B", "P12·A/B", "电机转矩", "P12·A/B-超长名称"),
+)
+def test_production_overlay_metrics_match_widget_and_hit_rect(
+    qapp, qtbot, production_style, text,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    overlay = canvas._pinned_overlay
+    fm, margins = overlay._axis_label_style()
+    width, height = axis_label_outer_size(text, fm, content_margins=margins)
+    items = layout_pinned_axis_labels(
+        [{
+            "record_id": "record-12",
+            "ordinal": 12,
+            "endpoint": "x",
+            "text": text,
+            "canvas_x": 160.0,
+            "offscreen": None,
+        }],
+        axis_left=20,
+        axis_right=420,
+        axis_top=80,
+        axis_height=height,
+        fm=fm,
+        content_margins=margins,
+    )
+    assert len(items) == 1
+    assert items[0].canvas_rect[2:] == (width, height)
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.resize(480, 120)
+    host.show()
+    label = PinnedAxisLabel(host)
+    label.show()
+    qapp.processEvents()
+    label.apply_geom(items[0])
+    qapp.processEvents()
+    assert label.size().width() == width
+    assert label.size().height() == height
+    assert label.rect() == QRect(0, 0, width, height)
+    image = QImage(label.size(), QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    label.render(painter)
+    painter.end()
+    ink = [
+        (x, y)
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y).alpha() > 24
+    ]
+    assert ink
+    assert min(x for x, _y in ink) >= 0
+    assert max(x for x, _y in ink) <= width - 1
+    assert min(y for _x, y in ink) >= 0
+    assert max(y for _x, y in ink) <= height - 1
+
+
+def test_tether_path_leaves_the_expanded_panel_and_follows_drag(
+    qapp, qtbot, production_style,
+):
+    cs = _make_stack(qtbot, qapp, width=1200, height=720)
+    canvas = cs.canvas_time
+    _plot_time(canvas)
+    qapp.processEvents()
+    _wait_host(qtbot, canvas)
+    record = _pin(cs, canvas, [(0.25, 0.75)], mode="dual", expand=False)[0]
+    controller = cs._pinned_cursors
+    label = next(
+        item for item in controller.axis_labels_for(canvas)
+        if item.geom() is not None
+        and any(
+            member[:2] == (record.record_id, "a")
+            for member in item.geom().members
+        )
+    )
+    qtbot.mouseClick(label, Qt.LeftButton, pos=label.rect().center())
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    pill = controller.pills_for(canvas)[0]
+    overlay = canvas._pinned_overlay
+    assert overlay.tether_endpoint_keys_for(record.record_id) == ("a",)
+    _save_pin_evidence(cs, "tether-a-after.png")
+    inside = [
+        point for point in _tether_points_in_panel_local(canvas, pill)
+        if pill.rect().adjusted(1, 1, -1, -1).contains(point)
+    ]
+    assert inside == []
+    port_before = overlay._tethers[0].panel_port
+    start = pill.rect().center()
+    _send_mouse(pill, QEvent.MouseButtonPress, start)
+    _send_mouse(pill, QEvent.MouseMove, start + QPoint(48, 24))
+    qapp.processEvents()
+    assert overlay._tethers[0].panel_port != port_before
+    inside_drag = [
+        point for point in _tether_points_in_panel_local(canvas, pill)
+        if pill.rect().adjusted(1, 1, -1, -1).contains(point)
+    ]
+    assert inside_drag == []
+    _send_mouse(pill, QEvent.MouseButtonRelease, start + QPoint(48, 24))
+    qapp.processEvents()

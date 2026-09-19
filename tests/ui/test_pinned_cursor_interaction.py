@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import QEvent, QPoint, Qt
-from PyQt5.QtGui import QCursor, QKeyEvent
+from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt5.QtGui import QCursor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QLineEdit
 
 from mf4_analyzer.ui.chart_stack import ChartStack
@@ -105,6 +105,67 @@ def _axis_label_for(cs, canvas, record_id, endpoint):
 
 def _drag_delta():
     return max(24, QApplication.startDragDistance() + 8)
+
+
+def _send_mouse(
+    widget, etype, local, *, button=Qt.LeftButton, buttons=None, global_pos=None,
+):
+    """Dispatch a QMouseEvent that carries a real screen-space globalPos."""
+    local = QPoint(local)
+    window = widget.window()
+    window_pos = widget.mapTo(window, local) if window is not None else QPoint(local)
+    if global_pos is None:
+        global_pos = widget.mapToGlobal(local)
+    else:
+        global_pos = QPoint(global_pos)
+    if buttons is None:
+        if etype == QEvent.MouseButtonRelease:
+            buttons = Qt.NoButton
+        elif etype == QEvent.MouseMove:
+            buttons = Qt.LeftButton
+        else:
+            buttons = button
+    event = QMouseEvent(
+        etype,
+        QPointF(local),
+        QPointF(window_pos),
+        QPointF(global_pos),
+        button,
+        Qt.MouseButtons(buttons),
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(widget, event)
+    return QPoint(global_pos)
+
+
+def _endpoint_value(record, endpoint):
+    if endpoint == "a":
+        return record.ax
+    if endpoint == "b":
+        return record.bx
+    return record.x
+
+
+def _expected_committed_endpoint(cs, canvas, original, endpoint, press_global, release_global):
+    overlay = canvas._pinned_overlay
+    original_value = _endpoint_value(original, endpoint)
+    dx = release_global.x() - press_global.x()
+    viewport_pos = overlay.bottom_axis_viewport_pos_for_physical(original_value)
+    viewport = canvas._glw.viewport()
+    endpoint_global = viewport.mapToGlobal(viewport_pos)
+    pending = QPoint(int(round(endpoint_global.x() + dx)), endpoint_global.y())
+    mapped = overlay.bottom_axis_global_to_viewport(pending)
+    raw = cs._pinned_cursors._physical_x(canvas, original.domain, mapped)
+    controller = cs._pinned_cursors
+    owner = controller._owner(canvas)
+    requested = controller._commands.requested_endpoint(
+        original, endpoint, raw, controller._axis_edit_bounds(owner),
+    )
+    sample = controller._evaluate_intent(canvas, requested)
+    candidate, _sample = controller._commands.accept_endpoint_sample(
+        requested, endpoint, sample,
+    )
+    return controller._commands.endpoint_value(candidate, endpoint)
 
 
 def test_a01_mouse_over_plot_without_click_pins(qapp, qtbot):
@@ -326,6 +387,34 @@ def test_bottom_label_drag_previews_without_dirty_then_commits_once(qapp, qtbot)
     assert transaction_states == [True, False]
 
 
+def test_bottom_label_direct_release_commits_without_a_mouse_move(qapp, qtbot):
+    """A rapid press/release still owns the release coordinate as a drag."""
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.35, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    controller = cs._pinned_cursors
+    revisions = []
+    controller.intent_changed.connect(
+        lambda: revisions.append(controller.user_intent_revision)
+    )
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+    start = label.rect().center()
+    release = QPoint(start.x() + _drag_delta(), start.y())
+
+    qtbot.mousePress(label, Qt.LeftButton, pos=start)
+    # No intermediate mouse move: this is the reported fast-drop path.
+    qtbot.mouseRelease(label, Qt.LeftButton, pos=release)
+    qapp.processEvents()
+
+    moved = _records(cs)[0]
+    assert moved.x != pytest.approx(original.x)
+    assert moved.panel_expanded is False
+    assert revisions == [controller.user_intent_revision]
+    assert not controller.is_axis_edit_active(canvas)
+
+
 def test_bottom_label_drag_escape_and_cursor_mode_cancel_are_zero_dirty(qapp, qtbot):
     cs = _make_stack(qtbot, qapp)
     canvas = cs.canvas_time
@@ -512,3 +601,165 @@ def test_coincident_dual_members_expose_separate_a_b_targets(qapp, qtbot):
     assert a_button.property("record_id") == original.record_id
     assert b_button.property("record_id") == original.record_id
     assert a_button is not b_button
+
+
+def test_queued_layout_keeps_committed_user_anchor_and_ignores_drag_reflow(
+    qapp, qtbot,
+):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.35, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    record = _records(cs)[0]
+    controller = cs._pinned_cursors
+    controller.toggle_record_panel(canvas, record.record_id)
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+    pill = controller.pills_for(canvas)[0]
+    start_pos = QPoint(pill.pos())
+    controller.reflow_visible()
+    pending = controller._projector._pending_owners
+    assert pending
+    assert all(len(item) == 2 for item in pending)
+
+    start = pill.rect().center()
+    delta = QPoint(36, 28)
+    _send_mouse(pill, QEvent.MouseButtonPress, start)
+    _send_mouse(pill, QEvent.MouseMove, start + delta)
+    qapp.processEvents()
+    dragged = QPoint(pill.pos())
+    assert pill.is_dragging()
+    assert dragged != start_pos
+    controller.reflow_visible()
+    qapp.processEvents()
+    assert pill.pos() == dragged
+    _send_mouse(pill, QEvent.MouseButtonRelease, start + delta)
+    qapp.processEvents()
+    qapp.processEvents()
+    controller.flush_layout(canvas)
+    qapp.processEvents()
+
+    committed = _records(cs)[0]
+    assert pill.is_user_placed()
+    assert committed.anchor != record.anchor
+    expected = controller._projector._pos_from_anchor(
+        committed.anchor, pill, pill.safe_rect(),
+    )
+    assert pill.pos() == QPoint(*expected)
+    assert pill.pos() != start_pos
+
+
+@pytest.mark.parametrize(
+    "mode,payload,endpoint,other",
+    [
+        ("single", {"x": 0.35}, "x", None),
+        ("dual", {"ax": 0.25, "bx": 0.75}, "a", "b"),
+        ("dual", {"ax": 0.25, "bx": 0.75}, "b", "a"),
+        ("dual", {"ax": 0.42, "bx": 0.42}, "a", "b"),
+        ("dual", {"ax": 0.80, "bx": 0.20}, "a", "b"),
+    ],
+)
+def test_bottom_label_release_commits_the_expected_sample(
+    qapp, qtbot, mode, payload, endpoint, other,
+):
+    cs = _make_stack(qtbot, qapp, mode=mode)
+    canvas = cs.canvas_time
+    collection, _ = next_record(empty_collection(), {
+        "mode": mode,
+        "domain": "time",
+        "x_unit": "s",
+        "bindings": [{"fid": "fid-a", "channel": "speed"}],
+        **payload,
+    })
+    cs.set_pinned_cursors_for_canvas(canvas, collection)
+    qapp.processEvents()
+    original = _records(cs)[0]
+    controller = cs._pinned_cursors
+    revisions = []
+    controller.intent_changed.connect(
+        lambda: revisions.append(controller.user_intent_revision)
+    )
+    label = _axis_label_for(cs, canvas, original.record_id, endpoint)
+    target = label
+    if label.geom() is not None and label.geom().kind == "cluster":
+        QApplication.sendEvent(label, QEvent(QEvent.Enter))
+        qapp.processEvents()
+        target = next(
+            button for button in label._buttons
+            if button.property("endpoint") == endpoint
+        )
+    start = target.rect().center()
+    release = QPoint(start.x() + _drag_delta(), start.y())
+    press_global = _send_mouse(target, QEvent.MouseButtonPress, start)
+    move_global = QPoint(press_global.x() + 8, press_global.y())
+    _send_mouse(
+        target, QEvent.MouseMove, QPoint(start.x() + 8, start.y()),
+        global_pos=move_global,
+    )
+    release_global = QPoint(press_global.x() + _drag_delta(), press_global.y())
+    _send_mouse(
+        target, QEvent.MouseButtonRelease, release, global_pos=release_global,
+    )
+    qapp.processEvents()
+
+    moved = _records(cs)[0]
+    expected = _expected_committed_endpoint(
+        cs, canvas, original, endpoint, press_global, release_global,
+    )
+    assert _endpoint_value(moved, endpoint) == pytest.approx(expected, abs=1e-9)
+    assert revisions == [controller.user_intent_revision]
+    if other is not None:
+        assert _endpoint_value(moved, other) == pytest.approx(
+            _endpoint_value(original, other)
+        )
+    assert moved.panel_expanded is False
+    assert not controller.is_axis_edit_active(canvas)
+
+
+def test_bottom_label_click_within_threshold_toggles_without_commit(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.4, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    controller = cs._pinned_cursors
+    revisions = []
+    controller.intent_changed.connect(
+        lambda: revisions.append(controller.user_intent_revision)
+    )
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+    start = label.rect().center()
+    jitter = max(1, QApplication.startDragDistance() - 1)
+    _send_mouse(label, QEvent.MouseButtonPress, start)
+    _send_mouse(label, QEvent.MouseButtonRelease, QPoint(start.x() + jitter, start.y()))
+    qapp.processEvents()
+    moved = _records(cs)[0]
+    assert moved.x == pytest.approx(original.x)
+    assert moved.panel_expanded is True
+    assert revisions == [controller.user_intent_revision]
+
+
+def test_bottom_label_release_coordinate_wins_over_last_move(qapp, qtbot):
+    cs = _make_stack(qtbot, qapp)
+    canvas = cs.canvas_time
+    _aim(qtbot, canvas, 0.3, cs._pinned_cursors)
+    _press_p(_viewport(canvas))
+    original = _records(cs)[0]
+    label = _axis_label_for(cs, canvas, original.record_id, "x")
+    start = label.rect().center()
+    move = QPoint(start.x() + _drag_delta(), start.y())
+    release = QPoint(start.x() + _drag_delta() * 2, start.y())
+    press_global = _send_mouse(label, QEvent.MouseButtonPress, start)
+    _send_mouse(label, QEvent.MouseMove, move)
+    qapp.processEvents()
+    release_global = _send_mouse(label, QEvent.MouseButtonRelease, release)
+    qapp.processEvents()
+    moved = _records(cs)[0]
+    expected = _expected_committed_endpoint(
+        cs, canvas, original, "x", press_global, release_global,
+    )
+    moved_from_last_move = _expected_committed_endpoint(
+        cs, canvas, original, "x", press_global, label.mapToGlobal(move),
+    )
+    assert moved.x == pytest.approx(expected, abs=1e-9)
+    assert moved.x != pytest.approx(moved_from_last_move, abs=1e-6)

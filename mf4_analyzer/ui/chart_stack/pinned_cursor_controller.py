@@ -166,6 +166,9 @@ class _PinHostPorts:
     def on_confirmed_hit(self, hit):
         self._c._pin_at_mouse(hit)
 
+    def collection_for(self, canvas):
+        return self._c.collection_for(canvas)
+
     def stack_widget(self):
         host = self._c._host
         return getattr(host, "stack", None) if _widget_alive(host) else None
@@ -226,8 +229,8 @@ class _PinHostPorts:
     def on_display_mode(self, canvas, record_id, mode):
         self._c._commit_display_mode(canvas, record_id, mode)
 
-    def on_toggle_panel(self, canvas, record_id):
-        self._c.toggle_record_panel(canvas, record_id)
+    def on_toggle_panel(self, canvas, record_id, endpoint=None):
+        self._c.toggle_record_panel(canvas, record_id, endpoint=endpoint)
 
     def on_edit_started(self, canvas, record_id, endpoint, global_pos):
         self._c.begin_axis_edit(canvas, record_id, endpoint, global_pos)
@@ -516,7 +519,7 @@ class PinnedCursorController(QObject):
             return
         self._projector.raise_record(id(canvas), canvas, str(record_id))
 
-    def toggle_record_panel(self, canvas, record_id: str) -> None:
+    def toggle_record_panel(self, canvas, record_id: str, *, endpoint=None) -> None:
         """Commit one record's independent bottom-Pn expand/collapse intent."""
         owner = self._owner(canvas)
         if owner is None or owner.collection is None:
@@ -528,6 +531,11 @@ class PinnedCursorController(QObject):
         if result.collection is None or result.record is None:
             return
         owner.collection = result.collection
+        self._projector.set_panel_endpoint(
+            id(canvas),
+            record_id,
+            endpoint if result.record.panel_expanded is True else None,
+        )
         self._project_record(
             owner,
             result.record,
@@ -591,7 +599,10 @@ class PinnedCursorController(QObject):
         record_id, endpoint = str(record_id), str(endpoint)
         intent = self._intent(owner, record_id)
         value = self._endpoint_value(intent, endpoint)
-        if value is None or owner.availability.get(record_id, PIN_STATUS_READY) != PIN_STATUS_READY:
+        if value is None:
+            return False
+        status = owner.availability.get(record_id, PIN_STATUS_READY)
+        if status not in {PIN_STATUS_READY, PIN_STATUS_UNAVAILABLE}:
             return False
         overlay = self._axis_edit_overlay(owner)
         position_for = getattr(overlay, "bottom_axis_viewport_pos_for_physical", None)

@@ -10,13 +10,16 @@ from dataclasses import dataclass, field
 from functools import partial
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QObject, QRect, QTimer, Qt
+from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, QTimer, Qt
 
 from ...pg_canvas.pinned_cursor_overlay import (
     PINNED_OFFSCREEN_TEXT,
     PinnedAxisLabel,
     PinnedOverlayEndpoint,
+    PinnedPanelTether,
     PinnedOverlayRecord,
+    PinnedTetherPort,
+    tether_candidate_ports,
 )
 from ...pinned_cursor_facts import (
     UNAVAILABLE_TEXT,
@@ -47,11 +50,17 @@ INCOMPATIBLE_AXIS_TEXT = "X 轴已更改"
 
 _NUDGE_STEP = 28
 _NUDGE_LIMIT = 72
-_PILL_LOCAL_EVENTS = frozenset({
+_PILL_HOVER_EVENTS = frozenset({
     QEvent.Enter,
     QEvent.Leave,
     QEvent.FocusIn,
     QEvent.FocusOut,
+})
+_PILL_GEOMETRY_EVENTS = frozenset({
+    QEvent.Move,
+    QEvent.Resize,
+    QEvent.Show,
+    QEvent.Hide,
 })
 
 
@@ -78,6 +87,7 @@ class _PresentationState:
     request_serial: int = 0
     layout_fingerprints: dict = field(default_factory=dict)
     content_revisions: dict = field(default_factory=dict)
+    panel_endpoints: dict = field(default_factory=dict)
 
 
 class PinPanelProjector(QObject):
@@ -211,6 +221,7 @@ class PinPanelProjector(QObject):
         state.auto_panel_safe_rect = None
         state.layout_fingerprints.clear()
         state.content_revisions.clear()
+        state.panel_endpoints.clear()
         state.pending = False
 
     def destroy_record(self, key, record_id) -> None:
@@ -222,6 +233,7 @@ class PinPanelProjector(QObject):
         state.auto_panel_rects.pop(record_id, None)
         state.layout_fingerprints.pop(record_id, None)
         state.content_revisions.pop(record_id, None)
+        state.panel_endpoints.pop(record_id, None)
 
     @staticmethod
     def destroy_pill(pill) -> None:
@@ -249,9 +261,12 @@ class PinPanelProjector(QObject):
         if not isinstance(watched, CursorPill):
             return False
         etype = event.type()
-        if etype not in _PILL_LOCAL_EVENTS:
+        if etype in _PILL_HOVER_EVENTS:
+            self._on_pinned_pill_event(watched, event)
             return False
-        self._on_pinned_pill_event(watched, event)
+        if etype in _PILL_GEOMETRY_EVENTS:
+            self._on_pinned_pill_geometry(watched)
+            return False
         return False
 
     def request_reflow(self, owners) -> None:
@@ -263,7 +278,7 @@ class PinPanelProjector(QObject):
     def flush_layout(self, owners=None) -> None:
         """Apply pending final geometry now. Does not sample or mark intent."""
         if owners:
-            self._merge_owner_snapshots(owners)
+            self._store_pending_owners(owners)
         self._cancel_layout_timer()
         self._apply_pending_layout()
 
@@ -294,6 +309,8 @@ class PinPanelProjector(QObject):
                     if getattr(pill, "_visibility_requested", False):
                         pill._set_space_hidden(True)
                     continue
+                if pill.is_dragging():
+                    continue
                 self._apply_pill_geometry(
                     state, pill, intent, collection, record_id,
                     safe_changed=safe_changed,
@@ -307,6 +324,7 @@ class PinPanelProjector(QObject):
             overlay = getattr(canvas, "_pinned_overlay", None)
             if overlay is not None:
                 overlay.reproject()
+            self.sync_tethers(key, canvas)
 
     def project_record(
         self,
@@ -365,7 +383,7 @@ class PinPanelProjector(QObject):
         ports.update_pill_content(pill, card, update)
         self._remember_typeset(state, pill, intent)
         if expanded:
-            if pill.is_user_placed():
+            if pill.is_user_placed() and not pill.is_dragging():
                 self.apply_anchor(
                     pill, collection, pill_record_id=intent.record_id,
                 )
@@ -438,6 +456,73 @@ class PinPanelProjector(QObject):
                 continue
             label.set_highlighted(str(record_id) in label.record_ids())
 
+    def set_panel_endpoint(self, key, record_id, endpoint) -> None:
+        """Remember only the current visual target of an expanded panel."""
+        state = self.state_for(key)
+        if endpoint in {"x", "a", "b"}:
+            state.panel_endpoints[str(record_id)] = str(endpoint)
+        else:
+            state.panel_endpoints.pop(str(record_id), None)
+
+    def sync_tethers(self, key, canvas) -> None:
+        """Project visible pinned cards as transient canvas-local tether DTOs."""
+        state = self._states.get(key)
+        overlay = getattr(canvas, "_pinned_overlay", None) if _widget_alive(canvas) else None
+        stack = self._ports.stack_widget()
+        if state is None or overlay is None or not _widget_alive(stack):
+            if overlay is not None:
+                overlay.set_tethers(())
+            return
+        host = overlay.host_rect()
+        tethers = []
+        mapped_panels = []
+        for record in overlay.records():
+            pill = state.pills.get(str(record.record_id))
+            if not _widget_alive(pill) or not pill.isVisible():
+                continue
+            mapped = self._map_stack_rect_to_canvas(canvas, stack, pill.geometry())
+            if mapped is None:
+                continue
+            mapped_panels.append((str(record.record_id), pill, mapped, record))
+        obstacles_by_id = {
+            record_id: (
+                float(rect.x()), float(rect.y()),
+                float(rect.width()), float(rect.height()),
+            )
+            for record_id, _pill, rect, _record in mapped_panels
+        }
+        for record_id, pill, mapped, record in mapped_panels:
+            endpoints = tuple(str(endpoint.key) for endpoint in record.endpoints)
+            active = state.panel_endpoints.get(str(record.record_id))
+            selected = (active,) if active in endpoints else endpoints
+            if not selected:
+                continue
+            ports = tether_candidate_ports(mapped)
+            if not ports:
+                continue
+            obstacles = tuple(
+                rect for other_id, rect in obstacles_by_id.items()
+                if other_id != record_id
+            )
+            tethers.append(PinnedPanelTether(
+                record_id=str(record.record_id),
+                endpoints=selected,
+                panel_rect=(
+                    float(mapped.x()), float(mapped.y()),
+                    float(mapped.width()), float(mapped.height()),
+                ),
+                ports=ports,
+                obstacles=obstacles,
+                panel_port=ports[0].point,
+                host_rect=(
+                    None if host is None else (
+                        float(host.x()), float(host.y()),
+                        float(host.width()), float(host.height()),
+                    )
+                ),
+            ))
+        overlay.set_tethers(tuple(tethers))
+
     def flash_duplicate(self, key, canvas, record_id) -> None:
         if not record_id:
             return
@@ -455,6 +540,7 @@ class PinPanelProjector(QObject):
         on_moved = getattr(self._ports, "on_user_moved", None)
         if callable(on_moved):
             on_moved(canvas, record_id)
+        self.sync_tethers(key, canvas)
 
     def anchor_from_pill(self, pill) -> PinnedCursorAnchor:
         return self._anchor_from_pill(pill)
@@ -550,12 +636,13 @@ class PinPanelProjector(QObject):
             pill = state.pills.get(intent.record_id)
             if not _widget_alive(pill):
                 continue
-            if pill.is_user_placed():
+            if pill.is_user_placed() or pill.is_dragging():
                 continue
             candidates.append((intent, pill))
         if not candidates:
             state.auto_panel_rects.clear()
             state.auto_panel_safe_rect = None
+            self.sync_tethers(key, canvas)
             return
         safe = candidates[0][1].safe_rect()
         if not safe.isValid() or safe.width() <= 0 or safe.height() <= 0:
@@ -617,6 +704,7 @@ class PinPanelProjector(QObject):
             record_id: QRect(rect) for record_id, rect in placed.items()
         }
         state.auto_panel_safe_rect = QRect(safe)
+        self.sync_tethers(key, canvas)
 
     def apply_anchor(self, pill, collection, *, pill_record_id) -> None:
         if collection is None:
@@ -654,6 +742,20 @@ class PinPanelProjector(QObject):
         x = max(safe.left(), min(x, safe.right() - pill.width() + 1))
         y = max(safe.top(), min(y, safe.bottom() - pill.height() + 1))
         return x, y
+
+    @staticmethod
+    def _map_stack_rect_to_canvas(canvas, stack, rect):
+        if not isinstance(rect, QRect) or not rect.isValid():
+            return None
+        try:
+            top_left = canvas.mapFromGlobal(stack.mapToGlobal(rect.topLeft()))
+            bottom_right = canvas.mapFromGlobal(stack.mapToGlobal(rect.bottomRight()))
+        except RuntimeError:
+            return None
+        mapped = QRect(top_left, bottom_right).normalized()
+        if not mapped.isValid():
+            return None
+        return mapped
 
     @staticmethod
     def _anchor_from_pill(pill) -> PinnedCursorAnchor:
@@ -715,6 +817,7 @@ class PinPanelProjector(QObject):
             availability=availability,
             axis_edit=axis_edit,
         ))
+        self.sync_tethers(key, canvas)
 
     def overlay_records(
         self,
@@ -820,7 +923,9 @@ class PinPanelProjector(QObject):
             label = state.axis_labels.get(label_key)
             if not _widget_alive(label):
                 label = PinnedAxisLabel(stack)
-                label.clicked.connect(partial(ports.on_toggle_panel, canvas))
+                label.panel_requested.connect(
+                    partial(ports.on_toggle_panel, canvas)
+                )
                 label.edit_started.connect(partial(ports.on_edit_started, canvas))
                 label.edit_preview.connect(partial(ports.on_edit_preview, canvas))
                 label.edit_committed.connect(partial(ports.on_edit_committed, canvas))
@@ -891,7 +996,7 @@ class PinPanelProjector(QObject):
         if pill.pin_role() != "pinned":
             return
         etype = event.type()
-        if etype not in _PILL_LOCAL_EVENTS:
+        if etype not in _PILL_HOVER_EVENTS:
             return
         key, record_id = self.canvas_and_record_for_pill(pill)
         if key is None:
@@ -905,19 +1010,43 @@ class PinPanelProjector(QObject):
         else:
             self.set_hover(canvas, None)
 
+    def _on_pinned_pill_geometry(self, pill) -> None:
+        """Follow a live panel without sampling or writing the collection."""
+        if self._in_layout or pill.pin_role() != "pinned":
+            return
+        key, _record_id = self.canvas_and_record_for_pill(pill)
+        if key is None:
+            return
+        state = self._states.get(key)
+        canvas = state.canvas if state is not None else None
+        if not _widget_alive(canvas):
+            return
+        try:
+            self.sync_tethers(key, canvas)
+        except RuntimeError:
+            return
+
     def _store_pending_owners(self, owners) -> None:
-        self._merge_owner_snapshots(owners)
-        for key, _canvas, _collection in owners:
+        self._merge_owner_keys(owners)
+        for key, _canvas, *_rest in owners:
             state = self.state_for(key)
             state.pending = True
             state.pending_token = state.layout_token
             state.request_serial += 1
 
-    def _merge_owner_snapshots(self, owners) -> None:
-        by_key = {item[0]: item for item in self._pending_owners}
+    def _merge_owner_keys(self, owners) -> None:
+        by_key = {item[0]: item[:2] for item in self._pending_owners}
         for item in owners:
-            by_key[item[0]] = item
+            if not item:
+                continue
+            by_key[item[0]] = (item[0], item[1])
         self._pending_owners = list(by_key.values())
+
+    def _resolve_owner_collection(self, key, canvas):
+        getter = getattr(self._ports, "collection_for", None)
+        if callable(getter):
+            return getter(canvas)
+        return None
 
     def _has_pending(self) -> bool:
         return any(state.pending for state in self._states.values())
@@ -956,13 +1085,14 @@ class PinPanelProjector(QObject):
             return
         owners = []
         started = {}
-        for key, canvas, collection in list(self._pending_owners):
+        for key, canvas, *_rest in list(self._pending_owners):
             state = self._states.get(key)
             if state is None or not state.pending:
                 continue
             if state.pending_token != state.layout_token:
                 state.pending = False
                 continue
+            collection = self._resolve_owner_collection(key, canvas)
             owners.append((key, canvas, collection))
             started[key] = state.request_serial
         self._in_layout = True
@@ -980,7 +1110,7 @@ class PinPanelProjector(QObject):
                     state.pending = False
                     state.applied_token = state.layout_token
             self._pending_owners = [
-                item for item in self._pending_owners
+                item[:2] for item in self._pending_owners
                 if self._states.get(item[0]) is not None
                 and self._states[item[0]].pending
             ]
@@ -1016,6 +1146,8 @@ class PinPanelProjector(QObject):
                     if getattr(pill, "_visibility_requested", False):
                         pill._set_space_hidden(True)
                     continue
+                if pill.is_dragging():
+                    continue
                 safe = pill.safe_rect()
                 if not safe.isValid() or safe.width() <= 0 or safe.height() <= 0:
                     continue
@@ -1029,6 +1161,12 @@ class PinPanelProjector(QObject):
     def _apply_pill_geometry(
         self, state, pill, intent, collection, record_id, *, safe_changed,
     ) -> None:
+        if pill.is_dragging():
+            if safe_changed:
+                clamp = getattr(pill, "_clamp_to_safe_rect", None)
+                if callable(clamp):
+                    clamp()
+            return
         projection = getattr(pill, "_display_projection", None)
         awaiting = bool(pill.awaiting_space())
         content_rev = state.content_revisions.get(record_id, 0)

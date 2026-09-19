@@ -255,6 +255,8 @@ lesson by default.
 | [Time-domain drawing intent belongs only to ViewState](view-state-isolation-no-session-truth.md) | Changing time-domain co-axis merge/split, filter intent, channel color | See lesson |
 | [Offscreen QDialog.exec Must Fail Fast](offscreen-qdialog-exec-must-fail-fast.md) | Combined UI pytest, `QDialog.exec_()`, preset load, confirmation boxes, or a session that appears stuck at a progress percentage. | See lesson |
 | [Qt5 Coordinate Mapping Must Respect Widget Ancestry](qt5-mapto-descendant-native-crash.md) | Mapping QWidget coordinates into descendant widgets or QGraphicsView scenes, especially Pin geometry timers. | See lesson |
+| [Pinned Axis Labels Must Commit Release And Share Outer Geometry](pinned-axis-label-release-and-outer-geometry.md) | Changing bottom pinned-cursor labels, their drag handling, or their | See lesson |
+| [Pin layout queues current collection; tethers stay outside QWidget panels](pin-layout-queue-and-widget-tethers.md) | Changing pinned-panel layout timers, user-placed anchors, or | See lesson |
 
 ## Selection Rules
 

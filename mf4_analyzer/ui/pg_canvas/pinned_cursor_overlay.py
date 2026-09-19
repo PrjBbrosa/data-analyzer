@@ -10,12 +10,14 @@ from typing import Callable
 
 import pyqtgraph as pg
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PyQt5.QtCore import QEvent, QLineF, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsEllipseItem,
     QGraphicsLineItem,
+    QGraphicsPathItem,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -31,6 +33,8 @@ PINNED_OFFSCREEN_TEXT = "视野外"
 PINNED_UNREPRESENTABLE_TEXT = "不可用"
 
 _LABEL_H = 16
+_LABEL_CONTENT_MARGINS = (3, 0, 3, 0)
+_LABEL_FRAME_ALLOWANCE = 1
 _LABEL_GAP = 3
 _EDGE_PAD = 2
 _TINY_HOST_W = 40
@@ -38,6 +42,10 @@ _MAX_LABEL_ROWS = 3
 _LINE_Z = 800
 _EXTREMA_Z = 850
 _LEADER_Z = 790
+_TETHER_Z = 795
+_TETHER_CLEARANCE = 6.0
+_TETHER_STUB = 8.0
+_TETHER_PORT_RADIUS = 2.25
 _SINGLE_COLOR = "#54749d"
 _A_COLOR = "#2563eb"
 _B_COLOR = "#dc2626"
@@ -108,6 +116,12 @@ def _leader_pen():
     return _LEADER_PEN
 
 
+def _tether_pen(highlighted=False):
+    color = QColor("#607892")
+    color.setAlpha(185 if highlighted else 118)
+    return QPen(color, 1.0, Qt.DashLine)
+
+
 def cluster_label_text(ordinals):
     """Compact cluster copy: consecutive ``P3–P7``, otherwise ``+N``."""
     values = tuple(sorted({int(item) for item in ordinals if int(item) >= 1}))
@@ -124,8 +138,43 @@ def cluster_label_text(ordinals):
     return f"+{len(values)}"
 
 
-def _label_width(text, fm):
-    return max(18, int(fm.horizontalAdvance(str(text))) + 8)
+def axis_label_outer_size(text, fm, *, content_margins=None):
+    """Return the painted chip's one canonical device-independent size.
+
+    ``layout_pinned_axis_labels`` and :class:`PinnedAxisLabel` must agree on
+    the *outer* rect: the caption's actual advance, the QHBoxLayout margins,
+    and the one-pixel painted frame.  ``QFontMetrics`` already reflects the
+    current logical DPI, so no second DPR scale may be applied here.
+    """
+    left, top, right, bottom = (
+        _LABEL_CONTENT_MARGINS if content_margins is None else tuple(content_margins)
+    )
+    frame = _LABEL_FRAME_ALLOWANCE * 2
+    width = max(
+        18,
+        int(fm.horizontalAdvance(str(text))) + left + right + frame,
+    )
+    # QLabel's single-line size hint follows line spacing rather than only the
+    # glyph bounding height; reserving that leading keeps the bottom border
+    # from squeezing the real painted caption on platform font substitutions.
+    content_height = max(int(fm.height()), int(fm.lineSpacing()))
+    height = max(_LABEL_H, content_height + top + bottom + frame)
+    return width, height
+
+
+def axis_label_member_min_width(text, fm, *, content_margins=None):
+    """Member-button width uses the same horizontal ink budget as the chip."""
+    left, _top, right, _bottom = (
+        _LABEL_CONTENT_MARGINS if content_margins is None else tuple(content_margins)
+    )
+    return max(
+        18,
+        int(fm.horizontalAdvance(str(text))) + left + right + _LABEL_FRAME_ALLOWANCE * 2,
+    )
+
+
+def _label_width(text, fm, *, content_margins=None):
+    return axis_label_outer_size(text, fm, content_margins=content_margins)[0]
 
 
 def _group_label_text(group):
@@ -153,6 +202,233 @@ class PinnedOverlayRecord:
     domain: str
     endpoints: tuple[PinnedOverlayEndpoint, ...]
     extrema: tuple = ()
+
+
+@dataclass(frozen=True)
+class PinnedTetherPort:
+    """A candidate exit on the outside of a pinned panel, in canvas pixels."""
+
+    side: str
+    point: tuple[float, float]
+
+
+@dataclass(frozen=True)
+class PinnedPanelTether:
+    """Transient panel-to-line projection in canvas coordinates only."""
+
+    record_id: str
+    endpoints: tuple[str, ...]
+    panel_port: tuple[float, float]
+    visible: bool = True
+    panel_rect: tuple[float, float, float, float] | None = None
+    ports: tuple[PinnedTetherPort, ...] = ()
+    obstacles: tuple[tuple[float, float, float, float], ...] = ()
+    host_rect: tuple[float, float, float, float] | None = None
+
+
+def _as_rectf(rect):
+    if rect is None:
+        return None
+    if isinstance(rect, QRectF):
+        return QRectF(rect)
+    if isinstance(rect, QRect):
+        return QRectF(rect)
+    try:
+        x, y, w, h = rect
+    except (TypeError, ValueError):
+        return None
+    return QRectF(float(x), float(y), float(w), float(h))
+
+
+def _inflate_rect(rect, margin):
+    mapped = _as_rectf(rect)
+    if mapped is None or not mapped.isValid():
+        return None
+    return mapped.adjusted(-margin, -margin, margin, margin)
+
+
+def _point_in_rect(point, rect):
+    if rect is None or not rect.isValid():
+        return False
+    return rect.contains(QPointF(float(point[0]), float(point[1])))
+
+
+def _segment_hits_rect(p1, p2, rect):
+    if rect is None or not rect.isValid():
+        return False
+    start = QPointF(float(p1[0]), float(p1[1]))
+    end = QPointF(float(p2[0]), float(p2[1]))
+    if rect.contains(start) or rect.contains(end):
+        return True
+    line = QLineF(start, end)
+    edges = (
+        QLineF(rect.topLeft(), rect.topRight()),
+        QLineF(rect.topRight(), rect.bottomRight()),
+        QLineF(rect.bottomRight(), rect.bottomLeft()),
+        QLineF(rect.bottomLeft(), rect.topLeft()),
+    )
+    hit_point = QPointF()
+    for edge in edges:
+        hit = line.intersect(edge, hit_point)
+        if hit == QLineF.BoundedIntersection:
+            return True
+    return False
+
+
+def _path_hits_rects(points, rects):
+    if len(points) < 2:
+        return any(_point_in_rect(points[0], rect) for rect in rects) if points else False
+    for rect in rects:
+        for point in points:
+            if _point_in_rect(point, rect):
+                return True
+        for index in range(len(points) - 1):
+            if _segment_hits_rect(points[index], points[index + 1], rect):
+                return True
+    return False
+
+
+def tether_candidate_ports(panel_rect, *, clearance=_TETHER_CLEARANCE):
+    """Return outside ports for a panel rectangle in canvas coordinates."""
+    rect = _as_rectf(panel_rect)
+    if rect is None or not rect.isValid():
+        return ()
+    gap = max(_TETHER_PORT_RADIUS + 2.0, float(clearance))
+    cx = rect.center().x()
+    cy = rect.center().y()
+    return (
+        PinnedTetherPort("bottom", (cx, rect.bottom() + gap)),
+        PinnedTetherPort("left", (rect.left() - gap, cy)),
+        PinnedTetherPort("right", (rect.right() + gap, cy)),
+        PinnedTetherPort("top", (cx, rect.top() - gap)),
+    )
+
+
+def _stub_end(port, *, length=_TETHER_STUB):
+    x, y = port.point
+    if port.side == "bottom":
+        return (x, y + length)
+    if port.side == "top":
+        return (x, y - length)
+    if port.side == "left":
+        return (x - length, y)
+    return (x + length, y)
+
+
+def _blocked_rects(panel_rect, obstacles, *, margin=1.0):
+    blocked = []
+    for item in (panel_rect,) + tuple(obstacles or ()):
+        inflated = _inflate_rect(item, margin)
+        if inflated is not None:
+            blocked.append(inflated)
+    return tuple(blocked)
+
+
+def _visible_target_y(target_x, host, blocked):
+    if host is None or not host.isValid():
+        return None
+    candidates = []
+    for rect in blocked:
+        candidates.append(rect.bottom() + _TETHER_CLEARANCE)
+        candidates.append(rect.top() - _TETHER_CLEARANCE)
+    candidates.extend((
+        host.center().y(),
+        host.top() + host.height() * 0.38,
+        host.top() + host.height() * 0.62,
+        host.bottom() - 12.0,
+        host.top() + 12.0,
+    ))
+    for y in candidates:
+        point = (float(target_x), float(y))
+        if not host.contains(QPointF(*point)):
+            continue
+        if any(_point_in_rect(point, rect) for rect in blocked):
+            continue
+        return float(y)
+    return None
+
+
+def _candidate_paths(port, target):
+    px, py = port.point
+    tx, ty = target
+    stub = _stub_end(port)
+    return (
+        (port.point, (tx, py), target),
+        (port.point, (px, ty), target),
+        (port.point, stub, (tx, stub[1]), target),
+        (port.point, stub, (stub[0], ty), target),
+        (port.point, stub, (tx, stub[1]), (tx, ty)),
+    )
+
+
+def route_panel_tether(
+    *,
+    panel_rect,
+    ports,
+    obstacles,
+    target_xs,
+    host_rect,
+    share_stub=False,
+):
+    """Return visible canvas-space polylines that stay outside panel rects.
+
+    ``target_xs`` are canvas X positions on the real cursor line.  The Y is
+    chosen so the landing sits on that line *and* outside every blocked panel.
+    If no clear route exists, only the first outside port is returned.
+    """
+    host = _as_rectf(host_rect)
+    blocked = _blocked_rects(panel_rect, obstacles)
+    port_list = tuple(ports or tether_candidate_ports(panel_rect))
+    targets = []
+    for target_x in target_xs:
+        y = _visible_target_y(target_x, host, blocked)
+        if y is None:
+            continue
+        targets.append((float(target_x), y))
+    chosen_port = port_list[0] if port_list else None
+    if chosen_port is None:
+        return None, ()
+    if not targets:
+        return chosen_port, ()
+
+    def first_clear(paths_for_port):
+        for path in paths_for_port:
+            if not _path_hits_rects(path, blocked):
+                return path
+        return None
+
+    if share_stub and len(targets) > 1:
+        for port in port_list:
+            stub = _stub_end(port)
+            branches = []
+            ok = True
+            shared = (port.point, stub)
+            if _path_hits_rects(shared, blocked):
+                continue
+            for target in targets:
+                branch = first_clear((
+                    (stub, (target[0], stub[1]), target),
+                    (stub, (stub[0], target[1]), target),
+                    (stub, target),
+                ))
+                if branch is None:
+                    ok = False
+                    break
+                branches.append((port.point,) + branch)
+            if ok:
+                return port, tuple(branches)
+    for port in port_list:
+        paths = []
+        ok = True
+        for target in targets:
+            path = first_clear(_candidate_paths(port, target))
+            if path is None:
+                ok = False
+                break
+            paths.append(path)
+        if ok:
+            return port, tuple(paths)
+    return chosen_port, ()
 
 
 @dataclass(frozen=True)
@@ -190,6 +466,7 @@ def layout_pinned_axis_labels(
     axis_height,
     fm,
     axis_floor=None,
+    content_margins=None,
 ):
     """Place axis-edge chips in a finite band. Never shove infinitely left."""
     left = int(axis_left)
@@ -197,6 +474,13 @@ def layout_pinned_axis_labels(
     top = int(axis_top)
     height = max(12, int(axis_height))
     width = right - left
+    margins = (
+        _LABEL_CONTENT_MARGINS if content_margins is None else tuple(content_margins)
+    )
+
+    def chip_width(text):
+        return axis_label_outer_size(text, fm, content_margins=margins)[0]
+
     if width < 8 or not endpoints:
         return ()
 
@@ -214,7 +498,7 @@ def layout_pinned_axis_labels(
         text = _group_label_text(endpoints) if len(ordinals) > 1 else (
             endpoints[0]["text"] if endpoints else "P"
         )
-        chip_w = min(width, _label_width(text, fm))
+        chip_w = min(width, chip_width(text))
         rect = (left + _EDGE_PAD, top, chip_w, height)
         items.append(PinnedLabelGeom(
             key="tiny",
@@ -254,7 +538,7 @@ def layout_pinned_axis_labels(
             text = f"{text}▶"
         elif offscreen == "unrepresentable":
             text = PINNED_UNREPRESENTABLE_TEXT
-        chip_w = _label_width(text, fm)
+        chip_w = chip_width(text)
         true_x = float(group[0]["canvas_x"])
         if edge_x is not None:
             center = float(edge_x)
@@ -306,8 +590,8 @@ def layout_pinned_axis_labels(
             continue
         prev = groups[-1][-1]
         span = (
-            _label_width(prev["text"], fm) / 2.0
-            + _label_width(item["text"], fm) / 2.0
+            chip_width(prev["text"]) / 2.0
+            + chip_width(item["text"]) / 2.0
             + _LABEL_GAP
         )
         if abs(item["canvas_x"] - prev["canvas_x"]) <= span:
@@ -434,7 +718,7 @@ def _merge_overlapping_labels(placed, *, fm, left, right, top, height):
             ordinals = prev.ordinals + geom.ordinals
             members = prev.members + geom.members
             text = cluster_label_text(ordinals)
-            chip_w = _label_width(text, fm)
+            chip_w = axis_label_outer_size(text, fm)[0]
             true_x = (prev.true_x + geom.true_x) / 2.0
             x = int(round(true_x - chip_w / 2.0))
             x = max(left + _EDGE_PAD, min(x, right - chip_w - _EDGE_PAD))
@@ -492,6 +776,7 @@ class PinnedAxisLabel(QFrame):
     """
 
     clicked = pyqtSignal(str)
+    panel_requested = pyqtSignal(str, str)
     hover_changed = pyqtSignal(object)
     edit_started = pyqtSignal(str, str, object)
     edit_preview = pyqtSignal(str, str, object, object)
@@ -515,7 +800,7 @@ class PinnedAxisLabel(QFrame):
         self._press = None
         self._dragged = False
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(3, 0, 3, 0)
+        lay.setContentsMargins(*_LABEL_CONTENT_MARGINS)
         lay.setSpacing(2)
         self._caption = QLabel(self)
         self._caption.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -535,6 +820,9 @@ class PinnedAxisLabel(QFrame):
         self._caption.setText(geom.text)
         self._caption.setVisible(not self._expanded)
         x, y, w, h = geom.canvas_rect
+        # The solver already measured this caption with the production font
+        # and frame.  Applying a second, larger size here would desync the
+        # hit target from the laid-out chip.
         if self._expanded and geom.kind == "cluster" and len(geom.members) > 1:
             self._release_size_constraint()
             self._ensure_members(geom)
@@ -579,7 +867,7 @@ class PinnedAxisLabel(QFrame):
 
     def _member_min_width(self, button, text):
         fm = QFontMetrics(button.font())
-        return max(18, int(fm.horizontalAdvance(str(text))) + 8)
+        return axis_label_member_min_width(text, fm)
 
     def _ensure_members(self, geom):
         if self._buttons and len(self._buttons) == len(geom.members):
@@ -671,8 +959,9 @@ class PinnedAxisLabel(QFrame):
         try:
             source.grabMouse()
         except RuntimeError:
-            self._press = None
-            return False
+            # Offscreen and some QPA plugins refuse grabMouse.  The press
+            # source still owns the matching move/release we dispatch to it.
+            pass
         return True
 
     def _move_pointer(self, source, event):
@@ -695,16 +984,27 @@ class PinnedAxisLabel(QFrame):
         press = self._press
         if press is None or press[0] is not source:
             return False
+        global_pos = self._event_global_pos(source, event)
         try:
             source.releaseMouse()
         except RuntimeError:
             pass
         self._press = None
         self.setCursor(Qt.PointingHandCursor)
+        # A native or offscreen QPA may coalesce a short drag into its final
+        # release.  The release coordinate remains authoritative: do the same
+        # threshold classification here that ``_move_pointer`` would have
+        # performed, rather than cancelling the provisional edit as a click.
+        if (
+            not self._dragged
+            and not (self._geom is not None and self._geom.offscreen)
+            and abs(global_pos.x() - press[3].x())
+            > QApplication.startDragDistance()
+        ):
+            self._dragged = True
         if self._dragged:
             self.edit_committed.emit(
-                press[1], press[2], self._event_global_pos(source, event),
-                event.modifiers(),
+                press[1], press[2], global_pos, event.modifiers(),
             )
         else:
             # ``begin_axis_edit`` snapshots before the threshold so a drag can
@@ -713,6 +1013,7 @@ class PinnedAxisLabel(QFrame):
             # toggling the panel; otherwise the next label press restores an
             # old collapsed projection over the newly expanded card.
             self.edit_cancelled.emit(press[1], press[2])
+            self.panel_requested.emit(press[1], press[2])
             self.clicked.emit(press[1])
         self._dragged = False
         return True
@@ -856,9 +1157,12 @@ class PinnedCursorOverlay(_CanvasBackref):
     _owned_names = frozenset({
         "_kind",
         "_records",
+        "_tethers",
         "_highlight_id",
         "_line_items",
         "_leader_items",
+        "_tether_items",
+        "_tether_port_items",
         "_extrema_items",
         "_item_owners",
         "_layout",
@@ -867,6 +1171,8 @@ class PinnedCursorOverlay(_CanvasBackref):
         "_rebuild_hooks",
         "_projecting",
         "_label_font",
+        "_label_probe",
+        "_label_size_cache",
         "_geom_timer",
         "_line_highlight",
     })
@@ -876,9 +1182,12 @@ class PinnedCursorOverlay(_CanvasBackref):
         super().__init__(canvas)
         self._kind = str(kind)
         self._records = ()
+        self._tethers = ()
         self._highlight_id = None
         self._line_items = {}
         self._leader_items = []
+        self._tether_items = []
+        self._tether_port_items = []
         self._extrema_items = []
         self._item_owners = {}
         self._layout = PinnedOverlayLayout(
@@ -890,6 +1199,8 @@ class PinnedCursorOverlay(_CanvasBackref):
         self._projecting = False
         self._label_font = QFont()
         self._label_font.setPointSize(9)
+        self._label_probe = None
+        self._label_size_cache = {}
         self._line_highlight = {}
         self._geom_timer = QTimer(canvas)
         self._geom_timer.setSingleShot(True)
@@ -904,8 +1215,25 @@ class PinnedCursorOverlay(_CanvasBackref):
         self._records = tuple(records or ())
         self.reproject()
 
+    def set_tethers(self, tethers) -> None:
+        """Apply transient panel ports without changing Pin facts or intent."""
+        self._tethers = tuple(tethers or ())
+        self._sync_tethers()
+
     def records(self):
         return self._records
+
+    def tether_items(self):
+        return tuple(item for item in self._tether_items if _alive(item))
+
+    def tether_port_items(self):
+        return tuple(item for item in self._tether_port_items if _alive(item))
+
+    def tether_endpoint_keys_for(self, record_id):
+        for tether in self._tethers:
+            if tether.visible and str(tether.record_id) == str(record_id):
+                return tuple(tether.endpoints)
+        return ()
 
     def layout(self) -> PinnedOverlayLayout:
         return self._layout
@@ -917,6 +1245,7 @@ class PinnedCursorOverlay(_CanvasBackref):
         target = None if record_id in (None, "", (), []) else record_id
         self._highlight_id = target
         self._apply_highlight()
+        self._sync_tethers()
 
     def highlight_id(self):
         return self._highlight_id
@@ -952,14 +1281,19 @@ class PinnedCursorOverlay(_CanvasBackref):
         self._remove_items(self._all_managed_items())
         self._line_items = {}
         self._leader_items = []
+        self._tether_items = []
+        self._tether_port_items = []
         self._extrema_items = []
         self._item_owners = {}
         self._line_highlight = {}
 
     def clear(self) -> None:
         self._records = ()
+        self._tethers = ()
         self._highlight_id = None
         self.clear_items()
+        self._destroy_label_probe()
+        self._label_size_cache = {}
         self._layout = PinnedOverlayLayout(
             host_rect=None, items=(), offscreen_ids=frozenset(), pending=True,
         )
@@ -999,6 +1333,7 @@ class PinnedCursorOverlay(_CanvasBackref):
                         host_rect=None, items=(), offscreen_ids=frozenset(),
                         pending=pending,
                     ))
+                    self._sync_tethers()
                 self._layout = PinnedOverlayLayout(
                     host_rect=None if host is None else (
                         host.x(), host.y(), host.width(), host.height()
@@ -1012,10 +1347,12 @@ class PinnedCursorOverlay(_CanvasBackref):
                 self._sync_extrema()
                 self._layout = self._build_layout(host)
                 self._sync_leaders(self._layout)
+                self._sync_tethers()
                 self._apply_highlight()
             else:
                 self._layout = self._build_layout(host)
                 self._sync_leaders(self._layout)
+                self._sync_tethers()
             callback = self._on_layout
             if callable(callback):
                 callback(self._layout)
@@ -1479,7 +1816,7 @@ class PinnedCursorOverlay(_CanvasBackref):
             )
         vb = self._bottom_viewbox()
         view_range = self._view_range(vb) if vb is not None else None
-        fm = QFontMetrics(self._label_font)
+        fm, margins = self._axis_label_style()
         endpoints = []
         offscreen_ids = set()
         for record in self._records:
@@ -1512,8 +1849,9 @@ class PinnedCursorOverlay(_CanvasBackref):
                 })
             if flags and all(flag in ("left", "right") for flag in flags):
                 offscreen_ids.add(record.record_id)
-        tiny = host.width() < _TINY_HOST_W or host.height() < _LABEL_H + 2
-        axis_top = host.bottom() - _LABEL_H - 1
+        label_height = axis_label_outer_size("P", fm, content_margins=margins)[1]
+        tiny = host.width() < _TINY_HOST_W or host.height() < label_height + 2
+        axis_top = host.bottom() - label_height - 1
         if axis_top < host.top():
             axis_top = host.top()
         items = layout_pinned_axis_labels(
@@ -1521,9 +1859,10 @@ class PinnedCursorOverlay(_CanvasBackref):
             axis_left=host.left(),
             axis_right=host.right(),
             axis_top=axis_top,
-            axis_height=_LABEL_H,
+            axis_height=label_height,
             fm=fm,
             axis_floor=host.top(),
+            content_margins=margins,
         )
         return PinnedOverlayLayout(
             host_rect=(host.x(), host.y(), host.width(), host.height()),
@@ -1583,6 +1922,223 @@ class PinnedCursorOverlay(_CanvasBackref):
             except RuntimeError:
                 pass
 
+    def _axis_label_style(self):
+        """Return polished caption metrics and the widget's content margins."""
+        probe = self._ensure_label_probe()
+        font = self._label_font
+        margins = _LABEL_CONTENT_MARGINS
+        if probe is not None:
+            try:
+                probe.ensurePolished()
+                probe._caption.ensurePolished()
+                font = probe._caption.font()
+                box = probe.layout().contentsMargins()
+                margins = (box.left(), box.top(), box.right(), box.bottom())
+            except RuntimeError:
+                font = self._label_font
+        return QFontMetrics(font), margins
+
+    def _ensure_label_probe(self):
+        probe = self._label_probe
+        if _alive(probe):
+            return probe
+        canvas = self._c
+        if not _alive(canvas):
+            self._label_probe = None
+            return None
+        probe = PinnedAxisLabel(canvas)
+        probe.hide()
+        probe.setAttribute(Qt.WA_DontShowOnScreen, True)
+        self._label_probe = probe
+        return probe
+
+    def _destroy_label_probe(self) -> None:
+        probe = self._label_probe
+        self._label_probe = None
+        if not _alive(probe):
+            return
+        try:
+            probe.hide()
+            probe.setParent(None)
+            probe.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _sync_tethers(self) -> None:
+        """Project expanded panel ports to their visible position line(s).
+
+        Tethers are deliberately independent of label-avoidance leaders:
+        labels are laid out in canvas coordinates, while these are supplied by
+        the presenter from a live ``CursorPill`` position.  Neither path may
+        mutate records, samples, or persisted anchors.  The scene stays under
+        the QWidget panels, so visibility comes from routing outside those
+        rects rather than from z-order.
+        """
+        glw = getattr(self._c, "_glw", None)
+        canvas = self._c
+        host = self._host_rect()
+        bottom_vb = self._bottom_viewbox()
+        wanted_paths = []
+        wanted_ports = []
+        if (
+            _alive(glw)
+            and _alive(canvas)
+            and host is not None
+            and _alive(bottom_vb)
+        ):
+            try:
+                scene = glw.scene()
+                viewport = glw.viewport()
+            except (RuntimeError, TypeError, AttributeError):
+                scene = None
+                viewport = None
+            if scene is not None and _alive(viewport):
+                records = {str(record.record_id): record for record in self._records}
+
+                def to_scene(point):
+                    return glw.mapToScene(
+                        viewport.mapFrom(canvas, QPointF(*point).toPoint())
+                    )
+
+                for tether in self._tethers:
+                    if not tether.visible:
+                        continue
+                    record = records.get(str(tether.record_id))
+                    if record is None:
+                        continue
+                    endpoints = {
+                        str(endpoint.key): endpoint for endpoint in record.endpoints
+                    }
+                    target_xs = []
+                    for endpoint_key in tether.endpoints:
+                        endpoint = endpoints.get(str(endpoint_key))
+                        if endpoint is None:
+                            continue
+                        view_x = self._view_x(endpoint.physical_x)
+                        target_x = self._canvas_x(bottom_vb, view_x)
+                        if (
+                            target_x is None
+                            or target_x < host.left() - 0.5
+                            or target_x > host.right() + 0.5
+                        ):
+                            continue
+                        target_xs.append(float(target_x))
+                    host_tuple = tether.host_rect
+                    if host_tuple is None:
+                        host_tuple = (
+                            float(host.x()), float(host.y()),
+                            float(host.width()), float(host.height()),
+                        )
+                    share_stub = (
+                        len(tether.endpoints) > 1 and len(target_xs) > 1
+                    )
+                    port, paths = route_panel_tether(
+                        panel_rect=tether.panel_rect,
+                        ports=tether.ports,
+                        obstacles=tether.obstacles,
+                        target_xs=target_xs,
+                        host_rect=host_tuple,
+                        share_stub=share_stub,
+                    )
+                    if port is None:
+                        try:
+                            fallback = (
+                                float(tether.panel_port[0]),
+                                float(tether.panel_port[1]),
+                            )
+                        except (TypeError, ValueError, IndexError):
+                            continue
+                        port = PinnedTetherPort("bottom", fallback)
+                    highlighted = self._is_highlighted(str(tether.record_id))
+                    tooltip = ""
+                    if not paths:
+                        missing = len(target_xs) < len(tether.endpoints)
+                        tooltip = (
+                            PINNED_OFFSCREEN_TEXT if missing
+                            else PINNED_UNREPRESENTABLE_TEXT
+                        )
+                    try:
+                        port_scene = to_scene(port.point)
+                    except (RuntimeError, TypeError, AttributeError, ValueError):
+                        continue
+                    wanted_ports.append((port_scene, scene, highlighted, tooltip))
+                    for points in paths:
+                        try:
+                            scene_points = [to_scene(point) for point in points]
+                        except (
+                            RuntimeError, TypeError, AttributeError, ValueError,
+                        ):
+                            continue
+                        if not scene_points:
+                            continue
+                        path = QPainterPath(scene_points[0])
+                        for scene_point in scene_points[1:]:
+                            path.lineTo(scene_point)
+                        wanted_paths.append((path, scene, highlighted, ""))
+
+        self._sync_tether_graphics(
+            self._tether_items,
+            wanted_paths,
+            QGraphicsPathItem,
+            lambda item, path, highlighted: self._set_tether_path(
+                item, path, highlighted,
+            ),
+        )
+        self._sync_tether_graphics(
+            self._tether_port_items,
+            wanted_ports,
+            QGraphicsEllipseItem,
+            self._set_tether_port,
+        )
+
+    def _sync_tether_graphics(self, items, wanted, item_type, apply) -> None:
+        while len(items) > len(wanted):
+            self._remove_items((items.pop(),))
+        if not wanted:
+            return
+        scene = wanted[0][1]
+        if any(
+            not _alive(item) or item.scene() is not scene
+            for item in items
+        ):
+            self._remove_items(tuple(items))
+            items.clear()
+        while len(items) < len(wanted):
+            item = item_type()
+            item.setZValue(_TETHER_Z)
+            try:
+                scene.addItem(item)
+            except (RuntimeError, TypeError):
+                break
+            items.append(item)
+        for item, values in zip(items, wanted):
+            if not _alive(item):
+                continue
+            try:
+                apply(item, values[0], values[2])
+                if len(values) > 3:
+                    item.setToolTip(values[3] or "")
+                item.setVisible(True)
+            except RuntimeError:
+                pass
+
+    @staticmethod
+    def _set_tether_path(item, path, highlighted) -> None:
+        item.setPath(path)
+        item.setPen(_tether_pen(highlighted))
+
+    @staticmethod
+    def _set_tether_port(item, point, highlighted) -> None:
+        radius = _TETHER_PORT_RADIUS
+        item.setRect(
+            point.x() - radius, point.y() - radius, radius * 2, radius * 2,
+        )
+        pen = _tether_pen(highlighted)
+        item.setPen(pen)
+        fill = QColor(pen.color())
+        fill.setAlpha(210 if highlighted else 145)
+        item.setBrush(pg.mkBrush(fill))
+
     def _apply_highlight(self) -> None:
         extrema_needed = False
         for (record_id, endpoint_key), items in self._line_items.items():
@@ -1609,6 +2165,8 @@ class PinnedCursorOverlay(_CanvasBackref):
         for group in self._line_items.values():
             items.extend(group)
         items.extend(self._leader_items)
+        items.extend(self._tether_items)
+        items.extend(self._tether_port_items)
         items.extend(self._extrema_items)
         return items
 
@@ -1649,6 +2207,12 @@ __all__ = [
     "PinnedOverlayEndpoint",
     "PinnedOverlayLayout",
     "PinnedOverlayRecord",
+    "PinnedPanelTether",
+    "PinnedTetherPort",
+    "axis_label_member_min_width",
+    "axis_label_outer_size",
     "cluster_label_text",
     "layout_pinned_axis_labels",
+    "route_panel_tether",
+    "tether_candidate_ports",
 ]
