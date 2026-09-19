@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import ast
 import importlib
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QSettings, Qt
+from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel, QLineEdit, QPushButton
 
@@ -110,37 +113,37 @@ def test_demo_source_has_no_page_snapshot_cache():
 
 
 def test_two_arg_and_native_settings_stay_in_temp_dir(tmp_path):
-    from mf4_analyzer.ui import motion_demo
-
+    """Keep the diagnostic's process-global QSettings shim in a child process."""
     settings_dir = tmp_path / "demo-settings"
-    canary = f"motion-demo-{tmp_path.name}"
-    motion_demo.install_isolated_qsettings(settings_dir)
-    try:
-        assert motion_demo.verify_settings_isolated(settings_dir)
-        two = QSettings("MF4Analyzer", "DataAnalyzer")
-        two.setValue("isolation_probe", canary)
-        two.sync()
-        two_path = Path(str(two.fileName())).resolve()
-        assert two_path.is_relative_to(settings_dir.resolve())
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    env.setdefault("TMPDIR", "/tmp")
+    env.setdefault("MPLCONFIGDIR", "/tmp")
+    code = r"""
+import sys
+from pathlib import Path
 
-        native = QSettings(
-            QSettings.NativeFormat,
-            QSettings.UserScope,
-            "MF4Analyzer",
-            "DataAnalyzer",
-        )
-        native.setValue("isolation_probe_native", canary)
-        native.sync()
-        native_path = Path(str(native.fileName())).resolve()
-        assert native_path.is_relative_to(settings_dir.resolve())
-        written = "\n".join(
-            path.read_text(encoding="utf-8", errors="ignore")
-            for path in settings_dir.rglob("*")
-            if path.is_file()
-        )
-        assert canary in written
-    finally:
-        motion_demo.restore_isolated_qsettings()
+from mf4_analyzer.ui import motion_demo
+
+settings_dir = Path(sys.argv[1])
+motion_demo.install_isolated_qsettings(settings_dir)
+try:
+    assert motion_demo.verify_settings_isolated(settings_dir)
+    print(settings_dir)
+finally:
+    motion_demo.restore_isolated_qsettings()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(settings_dir)],
+        cwd=str(REPO_ROOT),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert Path(completed.stdout.strip().splitlines()[-1]).resolve() == settings_dir.resolve()
 
 
 def test_apply_demo_chrome_restores_stylesheet(qapp, restore_stylesheet):

@@ -16,6 +16,9 @@ from mf4_analyzer.render_profile import (
 )
 
 
+_RENDER_PROFILE_IMPORT_PROBE_TIMEOUT_SECONDS = 30
+
+
 def _labels(ticks):
     return [label for _coord, label in ticks]
 
@@ -140,5 +143,6 @@ def test_render_profile_stays_importable_without_any_gui_toolkit():
     completed = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True, text=True, check=True,
+        timeout=_RENDER_PROFILE_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
     assert completed.stdout.strip() == ""

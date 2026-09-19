@@ -44,6 +44,7 @@ from mf4_analyzer.ui.pinned_cursor_state import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO_ROOT / "mf4_analyzer" / "ui" / "pinned_cursor_state.py"
+_PINNED_CURSOR_STATE_IMPORT_TIMEOUT_S = 30
 
 
 def _uuid() -> str:
@@ -701,6 +702,7 @@ print(
         text=True,
         capture_output=True,
         check=False,
+        timeout=_PINNED_CURSOR_STATE_IMPORT_TIMEOUT_S,
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)

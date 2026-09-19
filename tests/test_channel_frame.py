@@ -23,6 +23,9 @@ from mf4_analyzer.io import blf_format  # noqa: E402
 from tests._helpers.blf_factory import write_sample_blf, write_two_message_dbc  # noqa: E402
 
 
+_CHANNEL_FRAME_IMPORT_TIMEOUT_S = 30
+
+
 def _load_sample(tmp_path):
     dbc = write_two_message_dbc(tmp_path / "bus.dbc")
     blf = write_sample_blf(tmp_path / "log.blf", n=5)
@@ -236,6 +239,7 @@ print(json.dumps(blocked))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_CHANNEL_FRAME_IMPORT_TIMEOUT_S,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == []

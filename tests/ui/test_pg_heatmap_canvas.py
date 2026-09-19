@@ -4036,10 +4036,7 @@ def test_plot_result_matrix_invariant_across_window_rerenders(qapp):
 
 
 def test_heatmap_context_menu_custom_slot_item_availability(canvas, monkeypatch):
-    from PyQt5.QtCore import QSettings
     from PyQt5.QtWidgets import QToolButton, QWidget
-    settings = QSettings("MF4AnalyzerTest", "HeatmapCustomSlot")
-    settings.clear()
     canvas.register_copy_image_handler(lambda: None)
     menu = _open_context_menu(canvas._plot.vb, monkeypatch)
     panel = _inline_panel(menu)
@@ -4050,7 +4047,6 @@ def test_heatmap_context_menu_custom_slot_item_availability(canvas, monkeypatch)
     # mouse-mode controller, so controller-backed actions resolve to None).
     assert panel.findChild(QToolButton, "pgContextActionItem_copy_image").isEnabled()
     assert not panel.findChild(QToolButton, "pgContextActionItem_export").isEnabled()
-    settings.clear()
 
 
 def test_heatmap_plot_does_not_emit_viewport_intent(canvas, qapp):

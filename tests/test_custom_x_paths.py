@@ -29,6 +29,9 @@ from mf4_analyzer.signal.custom_x_paths import (
 )
 
 
+_CUSTOM_X_IMPORT_PROBE_TIMEOUT_SECONDS = 30
+
+
 def _noisy_single_cycle():
     """One physical out-and-back path with deterministic quantisation chatter."""
     forward = np.linspace(-83.0, 83.0, 2001)
@@ -478,6 +481,7 @@ print(json.dumps({'blocked': blocked, 'marker': 'clean'}))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_CUSTOM_X_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)

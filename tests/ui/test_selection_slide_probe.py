@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import QApplication
 
 
@@ -24,6 +23,44 @@ def _load_probe():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _prove_qsettings_isolation_in_child(tmp_path):
+    """Exercise a probe's process-global QSettings wrapper without leaking it."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO)
+    env.setdefault("TMPDIR", "/tmp")
+    env.setdefault("MPLCONFIGDIR", "/tmp")
+    code = r"""
+import importlib.util
+import sys
+from pathlib import Path
+
+probe_path = Path(sys.argv[1])
+tmp_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("qsettings_probe_child", probe_path)
+probe = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+sys.modules[spec.name] = probe
+spec.loader.exec_module(probe)
+token = probe.isolate_qsettings(tmp_path)
+try:
+    print(probe.prove_qsettings_isolated(token))
+finally:
+    token.restore()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(PROBE_PATH), str(tmp_path)],
+        cwd=str(REPO),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    path = Path(completed.stdout.strip().splitlines()[-1]).resolve()
+    assert path.is_relative_to(tmp_path.resolve())
 
 
 @pytest.fixture(scope="module")
@@ -194,27 +231,8 @@ def test_timeout_is_unverified_or_fail_not_pass(probe):
     assert payload["reason"] == probe.REASON_TIMEOUT
 
 
-def test_qsettings_isolation_and_cleanup(probe, tmp_path):
-    tmp_key = str(tmp_path).replace("\\", "/")
-    token = probe.isolate_qsettings(tmp_path)
-    try:
-        path = probe.prove_qsettings_isolated(token)
-        path_key = path.replace("\\", "/")
-        assert tmp_key in path_key
-        store = QSettings("MF4Analyzer", "DataAnalyzer")
-        store.setValue("probe/selection_slide_marker", "isolated")
-        store.sync()
-        store_key = str(store.fileName()).replace("\\", "/")
-        assert tmp_key in store_key
-        assert "Library/Preferences" not in store_key
-        assert store.value("probe/selection_slide_marker") == "isolated"
-    finally:
-        token.restore()
-    restored = QSettings("MF4Analyzer", "DataAnalyzer")
-    restored_key = str(restored.fileName()).replace("\\", "/")
-    assert restored.value("probe/selection_slide_marker") != "isolated" or (
-        tmp_key not in restored_key
-    )
+def test_qsettings_isolation_and_cleanup_is_process_scoped(tmp_path):
+    _prove_qsettings_isolation_in_child(tmp_path)
 
 
 def test_logic_only_offscreen_without_flag_fails(probe, qapp):

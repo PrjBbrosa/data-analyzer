@@ -73,10 +73,9 @@ def _entries(count, *, long_name=False, distinct_sources=False):
 
 
 def _make_fft_stack(qtbot, qapp, *, width, height, count, long_name=False):
-    settings = QSettings(
-        str(Path("/tmp") / f"fft-cursor-{width}x{height}-{count}.ini"),
-        QSettings.IniFormat,
-    )
+    # The UI fixture provides a current-item INI for the bare constructor.
+    # A fixed /tmp filename would share cursor state across items.
+    settings = QSettings()
     cs = ChartStack(cursor_settings=settings)
     qtbot.addWidget(cs)
     cs.resize(width, height)
@@ -315,8 +314,8 @@ def test_fft_live_update_writes_projection_once(qapp, qtbot, production_style):
     assert counts["single_detail"] == 0
 
 
-def test_fft_toggle_does_not_replay_time_cache(qapp, qtbot, production_style):
-    settings = QSettings(str(Path("/tmp") / "fft-cursor-toggle.ini"), QSettings.IniFormat)
+def test_fft_toggle_does_not_replay_time_cache(qapp, qtbot, production_style, tmp_path):
+    settings = QSettings(str(tmp_path / "fft-cursor-toggle.ini"), QSettings.IniFormat)
     cs = ChartStack(cursor_settings=settings)
     qtbot.addWidget(cs)
     cs.resize(1000, 700)
@@ -370,9 +369,9 @@ def test_fft_toggle_does_not_replay_time_cache(qapp, qtbot, production_style):
 
 
 def test_switching_to_fft_hides_time_pill_before_spectrum_readout(
-    qapp, qtbot, production_style,
+    qapp, qtbot, production_style, tmp_path,
 ):
-    settings = QSettings(str(Path("/tmp") / "fft-cursor-hide.ini"), QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "fft-cursor-hide.ini"), QSettings.IniFormat)
     cs = ChartStack(cursor_settings=settings)
     qtbot.addWidget(cs)
     cs.resize(900, 600)

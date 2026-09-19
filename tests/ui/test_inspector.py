@@ -2525,11 +2525,9 @@ def test_persistent_top_has_collapser(qapp):
     """PersistentTop must wrap its three groups in a single collapsible
     container that defaults to expanded.
     """
-    from PyQt5.QtCore import QSettings
-    from mf4_analyzer.ui.inspector_sections import PersistentTop
-    # The collapser persists its state in QSettings; clear it so this test
-    # does not depend on whatever a previous run / fixture left behind.
-    settings = QSettings("MF4Analyzer", "DataAnalyzer")
+    from mf4_analyzer.ui.inspector_sections import PersistentTop, _preset_settings
+    # The UI fixture redirects the product factory to this item's INI store.
+    settings = _preset_settings()
     settings.remove("inspector/persistent_top/expanded")
     settings.remove("inspector/persistent_top/expanded_v2")
     pt = PersistentTop()
@@ -2553,9 +2551,8 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
     keeping every documented attribute reachable (programmatic access works
     even when the body is hidden).
     """
-    from PyQt5.QtCore import QSettings
-    from mf4_analyzer.ui.inspector_sections import PersistentTop
-    settings = QSettings("MF4Analyzer", "DataAnalyzer")
+    from mf4_analyzer.ui.inspector_sections import PersistentTop, _preset_settings
+    settings = _preset_settings()
     settings.remove("inspector/persistent_top/expanded")
     settings.remove("inspector/persistent_top/expanded_v2")
     pt = PersistentTop()
@@ -2844,9 +2841,9 @@ def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     shared signal-type display names: 频率 / 均衡 / 时间, plus 自定义."""
     from PyQt5.QtWidgets import QPushButton
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
-    # Use a fresh QSettings org/app per test by wiping any prior overrides
-    from PyQt5.QtCore import QSettings
-    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    # Clear only the current item's injected product store.
+    from mf4_analyzer.ui.inspector_sections import _preset_settings
+    s = _preset_settings()
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
     s.remove("fft_time/preset_custom/4")
@@ -2913,9 +2910,9 @@ def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
 def test_fft_time_preset_bar_save_overrides_builtin(qtbot):
     """Saving over a slot persists user values; loading then applies the
     override (not the builtin)."""
-    from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
-    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    from mf4_analyzer.ui.inspector_sections import _preset_settings
+    s = _preset_settings()
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
     ctx = FFTTimeContextual()
@@ -2941,9 +2938,9 @@ def test_fft_time_preset_bar_save_overrides_builtin(qtbot):
 def test_fft_time_preset_bar_reset_restores_builtin(qtbot):
     """Reset-to-default removes the override; subsequent load applies the
     original builtin params (R3 C)."""
-    from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
-    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    from mf4_analyzer.ui.inspector_sections import _preset_settings
+    s = _preset_settings()
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
     ctx = FFTTimeContextual()
@@ -3531,9 +3528,9 @@ def test_checkbox_indicator_has_visible_checked_state():
 def test_fft_time_preset_bar_default_names(qtbot):
     """Default slot labels for the FFTTime preset bar must be the shared
     signal-type display names: 频率 / 均衡 / 时间, plus 自定义."""
-    from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
-    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    from mf4_analyzer.ui.inspector_sections import _preset_settings
+    s = _preset_settings()
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
     s.remove("fft_time/preset_custom/4")
@@ -3551,9 +3548,9 @@ def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     """After resetting an overridden slot, the slot text must restore to
     the signal-type builtin name (频率) — not the legacy 诊断模式.
     """
-    from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
-    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    from mf4_analyzer.ui.inspector_sections import _preset_settings
+    s = _preset_settings()
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
     w = FFTTimeContextual()
@@ -6775,10 +6772,9 @@ def test_set_recommended_for_unit_highlights_correct_slot(qapp, qtbot):
 
 def test_preset_hover_card_builtin_blurb(qtbot):
     """Built-in preset hover card sub-label shows blurb, not '已保存参数快照'."""
-    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual, _preset_settings
     from PyQt5.QtWidgets import QLabel
-    from PyQt5.QtCore import QSettings
-    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    s = _preset_settings()
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
     ctx = FFTTimeContextual()

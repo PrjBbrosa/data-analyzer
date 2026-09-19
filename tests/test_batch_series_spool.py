@@ -13,6 +13,9 @@ import pytest
 from mf4_analyzer.batch_render import BatchSeries
 
 
+_BATCH_SERIES_SPOOL_IMPORT_TIMEOUT_S = 30
+
+
 def _series(*, panel: int = 0, size: int = 3) -> BatchSeries:
     return BatchSeries(
         x=np.arange(size, dtype=float),
@@ -263,6 +266,7 @@ print(json.dumps(blocked))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_BATCH_SERIES_SPOOL_IMPORT_TIMEOUT_S,
     )
 
     assert result.returncode == 0, result.stderr

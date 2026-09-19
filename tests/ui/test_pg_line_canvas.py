@@ -3862,10 +3862,7 @@ def test_interactive_path_keeps_the_150ms_quiet_window(qapp):
 
 
 def test_fft_line_context_menu_has_custom_action_slot(canvas, monkeypatch):
-    from PyQt5.QtCore import QSettings
     from PyQt5.QtWidgets import QToolButton, QWidget
-    settings = QSettings("MF4AnalyzerTest", "LineCustomSlot")
-    settings.clear()
     canvas.register_copy_image_handler(lambda: None)
     menu = _open_context_menu(canvas._plot_time.vb, monkeypatch)
     panel = _inline_panel(menu)
@@ -3874,7 +3871,6 @@ def test_fft_line_context_menu_has_custom_action_slot(canvas, monkeypatch):
     assert custom.current_action_id() == "copy_image"
     main = custom.findChild(QToolButton, "pgContextCustomActionMain")
     assert main.isEnabled()  # copy handler injected -> usable
-    settings.clear()
 
 
 def test_plot_spectra_does_not_emit_viewport_intent(canvas, qapp):

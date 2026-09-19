@@ -15,11 +15,9 @@ from mf4_analyzer.ui.ultraview_capture_facts import hide_transient_overlays
 from tests.ui.test_ultraview_capture import _make_coord, _ref
 
 
-def _settings(name):
-    return QSettings(
-        str(Path("/tmp") / f"pinned-capture-{name}.ini"),
-        QSettings.IniFormat,
-    )
+def _settings(_name):
+    """Use the UI fixture's per-item QSettings store, never a shared /tmp INI."""
+    return QSettings()
 
 
 def _make_stack(qtbot, qapp, *, width=1100, height=640):

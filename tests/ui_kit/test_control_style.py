@@ -26,6 +26,7 @@ from mf4_analyzer.ui_kit.icons import render_qss_template
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _QSS_PATH = _REPO_ROOT / "mf4_analyzer" / "ui_kit" / "style.qss"
+_CONTROL_STYLE_IMPORT_TIMEOUT_S = 30
 
 _EXPECTED_COLOR_TOKENS = {
     "CONTROL_ACCENT",
@@ -145,6 +146,7 @@ raise SystemExit(1 if loaded else 0)
         text=True,
         capture_output=True,
         check=False,
+        timeout=_CONTROL_STYLE_IMPORT_TIMEOUT_S,
     )
     assert result.returncode == 0, result.stderr or result.stdout
 

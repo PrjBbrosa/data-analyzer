@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PyQt5.QtCore import qInstallMessageHandler
+from PyQt5.QtCore import qInstallMessageHandler, qWarning
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui_kit.control_style import CONTROL_QSS_TOKENS
@@ -53,9 +53,11 @@ def test_rendered_stylesheet_has_no_leftover_placeholders():
     )
 
 
-def test_rendered_stylesheet_parses_with_a_live_widget(qapp):
+def _assert_rendered_stylesheet_parses_with_a_live_widget(qapp):
     messages: list[str] = []
-    qInstallMessageHandler(lambda _mode, _ctx, text: messages.append(text))
+    previous_handler = qInstallMessageHandler(
+        lambda _mode, _ctx, text: messages.append(text)
+    )
     old_sheet = qapp.styleSheet()
     probe = QWidget()
     try:
@@ -68,7 +70,26 @@ def test_rendered_stylesheet_parses_with_a_live_widget(qapp):
             f"fall back to platform defaults: {parse_errors}"
         )
     finally:
-        qInstallMessageHandler(None)
+        qInstallMessageHandler(previous_handler)
         qapp.setStyleSheet(old_sheet)
         probe.deleteLater()
         qapp.processEvents()
+
+
+def test_rendered_stylesheet_parses_with_a_live_widget(qapp):
+    _assert_rendered_stylesheet_parses_with_a_live_widget(qapp)
+
+
+def test_live_stylesheet_parse_keeps_preexisting_qt_message_handler(qapp):
+    received: list[str] = []
+
+    def preceding_handler(_mode, _context, text):
+        received.append(text)
+
+    original_handler = qInstallMessageHandler(preceding_handler)
+    try:
+        _assert_rendered_stylesheet_parses_with_a_live_widget(qapp)
+        qWarning("stylesheet-parse-handler-survives")
+        assert received == ["stylesheet-parse-handler-survives"]
+    finally:
+        qInstallMessageHandler(original_handler)

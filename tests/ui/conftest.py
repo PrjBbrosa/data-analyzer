@@ -5,6 +5,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PyQt5 import sip
+from PyQt5.QtCore import QCoreApplication, QEvent
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.render_profile import DENSE_DISCRETE_POLICY_ENABLED
@@ -102,18 +104,26 @@ def pytest_runtest_teardown(item):
         return (yield)
     finally:
         _PINNED_TOPLEVELS.clear()
+        app = QApplication.instance()
+        if app is not None:
+            # pytest-qt and fixture finalizers queue ``deleteLater`` while
+            # the top-level paint pin is held.  Release that pin only after
+            # their work, then deliver precisely DeferredDelete events before
+            # the next item; do not sweep all widgets or delete session-owned
+            # objects that this item never owned.
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            app.processEvents()
         gc.collect()
+        _restore_item_app_style(item)
+        _restore_qsettings_default_format(item)
         _assert_pinned_cursor_filters_not_accumulated(item)
 
 
 def _assert_pinned_cursor_filters_not_accumulated(item):
     """F-P1-3: living app-level pin filters must not accumulate across tests."""
-    try:
-        from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
-            PinnedCursorController,
-        )
-    except Exception:
-        return
+    from mf4_analyzer.ui.chart_stack.pinned_cursor_controller import (
+        PinnedCursorController,
+    )
     living = 0
     for obj in gc.get_objects():
         try:
@@ -135,16 +145,73 @@ _MODAL_EXEC_FAIL_MS = 800
 
 @pytest.fixture(autouse=True)
 def _fail_fast_unstubbed_modal_exec(qapp, monkeypatch, request):
-    """Refuse to let an offscreen QDialog.exec_() block the session.
+    """Refuse unstubbed synchronous Qt prompts in offscreen tests.
 
     Combined UI pytest hung 2h+ at 0% CPU in
     ``PresetBar._confirm_axis_preservation`` → ``box.exec_()`` because no
     click ever arrived. Tests that drive a dialog with ``QTimer.singleShot(0)``
     still finish; a forgotten modal fails in <1s instead of hanging.
-    Opt out with ``@pytest.mark.allow_blocking_modal``.
+
+    ``QMenu`` owns its ``exec`` implementations instead of inheriting the
+    ``QDialog`` methods, so it needs its own pre-call guard. Native static
+    helpers (file/color/font/input pickers and message-box conveniences) can
+    bypass the Python ``QDialog.exec`` wrapper entirely; unlike a constructed
+    dialog there is no reliable object to close on a timeout.  Tests must
+    explicitly stub those APIs with the intended result.
+
+    ``allow_blocking_modal`` remains an escape hatch only for constructed
+    dialogs that a test drives itself. It deliberately cannot permit native
+    static helpers or ``QMenu.exec`` because those have no reliable cleanup
+    path in headless CI.
     """
     from PyQt5.QtCore import QTimer
-    from PyQt5.QtWidgets import QDialog
+    from PyQt5.QtWidgets import (
+        QColorDialog,
+        QDialog,
+        QFileDialog,
+        QFontDialog,
+        QInputDialog,
+        QMenu,
+        QMessageBox,
+    )
+
+    def _fail_before_native_modal(*_args, _api_name, **_kwargs):
+        raise RuntimeError(
+            f"{_api_name} attempted in {request.node.nodeid}. "
+            "Stub this native modal API with the intended user decision."
+        )
+
+    def _guard_native_static_methods() -> None:
+        for klass, methods in (
+            (QMessageBox, ("about", "aboutQt", "critical", "information", "question", "warning")),
+            (QFileDialog, (
+                "getExistingDirectory",
+                "getOpenFileName",
+                "getOpenFileNames",
+                "getSaveFileName",
+                "getOpenFileUrl",
+                "getOpenFileUrls",
+                "getSaveFileUrl",
+            )),
+            (QInputDialog, ("getDouble", "getInt", "getItem", "getMultiLineText", "getText")),
+            (QColorDialog, ("getColor",)),
+            (QFontDialog, ("getFont",)),
+        ):
+            for method in methods:
+                monkeypatch.setattr(
+                    klass,
+                    method,
+                    lambda *_args, _api_name=f"{klass.__name__}.{method}()", **_kwargs:
+                    _fail_before_native_modal(*_args, _api_name=_api_name, **_kwargs),
+                )
+
+    _guard_native_static_methods()
+
+    def _guarded_menu_exec(*_args, **_kwargs):
+        _fail_before_native_modal(*_args, _api_name="QMenu.exec()", **_kwargs)
+
+    monkeypatch.setattr(QMenu, "exec_", _guarded_menu_exec)
+    monkeypatch.setattr(QMenu, "exec", _guarded_menu_exec)
 
     if request.node.get_closest_marker("allow_blocking_modal"):
         yield
@@ -152,17 +219,33 @@ def _fail_fast_unstubbed_modal_exec(qapp, monkeypatch, request):
     original = QDialog.exec_
 
     def _guarded(dialog, *args, **kwargs):
-        timed_out = []
+        timed_out = False
+        timeout = QTimer(dialog)
+        timeout.setSingleShot(True)
 
         def _timeout():
-            timed_out.append(True)
+            nonlocal timed_out
+            if sip.isdeleted(dialog):
+                return
+            timed_out = True
             try:
                 dialog.reject()
             except RuntimeError:
                 pass
 
-        QTimer.singleShot(_MODAL_EXEC_FAIL_MS, _timeout)
-        result = original(dialog, *args, **kwargs)
+        timeout.timeout.connect(_timeout)
+        timeout.start(_MODAL_EXEC_FAIL_MS)
+        try:
+            result = original(dialog, *args, **kwargs)
+        finally:
+            # A static ``singleShot`` cannot be cancelled: after an early
+            # accept/reject it could reject the next ``exec_`` on the same
+            # dialog.  This timer belongs to exactly one invocation and is
+            # stopped before the wrapper returns, including exception/deletion
+            # paths.  ``dialog`` may have deleted its children while exec'ing.
+            if not sip.isdeleted(timeout):
+                timeout.stop()
+                timeout.deleteLater()
         if timed_out:
             title = ""
             try:
@@ -182,7 +265,7 @@ def _fail_fast_unstubbed_modal_exec(qapp, monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_qsettings(tmp_path, monkeypatch):
+def _isolate_qsettings(tmp_path, monkeypatch, request):
     """Keep UI tests from polluting the real MF4Analyzer/DataAnalyzer store.
 
     Constructing a persistent UI widget (Inspector param sections,
@@ -226,10 +309,18 @@ def _isolate_qsettings(tmp_path, monkeypatch):
     # ``BatchPanelPrefsStore``; this only covers the implicit default.
     monkeypatch.setattr(_batch_settings_mod, "_default_settings", _temp_settings)
 
+    previous_default_format = QSettings.defaultFormat()
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
     QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, str(tmp_path))
-    yield
+    try:
+        yield
+    finally:
+        # ``setPath`` has no getter and therefore cannot be truthfully
+        # snapshotted.  Restoring the default format after every complete item
+        # prevents the next non-UI test from selecting this item's stale INI
+        # path; the next UI item installs its own path before using it.
+        request.node._qsettings_default_format = previous_default_format
 
 
 @pytest.fixture(scope="session")
@@ -240,7 +331,7 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_app_style(qapp):
+def _isolate_app_style(qapp, request):
     """Undo any application-wide style/stylesheet a test installs.
 
     ``qapp`` is session-scoped, so ``qapp.setStyleSheet(...)`` /
@@ -251,8 +342,8 @@ def _isolate_app_style(qapp):
     dB-reference delete button from 30px to 32px, three files later.
 
     Tests that legitimately need the real QSS keep doing so; this only
-    guarantees they cannot leak it. Restoring per test is cheap — Qt only
-    repolishes widgets that still exist.
+    guarantees they cannot leak it.  Restoration is deferred until this
+    module's teardown hook has delivered owned DeferredDelete events.
 
     This UI-layer snapshot is the second restore. ``tests/conftest.py``
     already rolls the app back after every item under ``tests/`` (including
@@ -260,13 +351,43 @@ def _isolate_app_style(qapp):
     sees). Both layers are idempotent; dropping this one would lose the
     three historical leak bugs named above.
     """
-    style_name = qapp.style().objectName()
-    sheet = qapp.styleSheet()
+    from PyQt5.QtGui import QFont, QPalette
+
+    request.node._ui_app_style_baseline = (
+        qapp.styleSheet(),
+        qapp.style().objectName(),
+        QPalette(qapp.palette()),
+        QFont(qapp.font()),
+    )
     yield
-    if qapp.styleSheet() != sheet:
-        qapp.setStyleSheet(sheet)
-    if qapp.style().objectName() != style_name:
-        qapp.setStyle(style_name)
+
+
+def _restore_item_app_style(item) -> None:
+    baseline = getattr(item, "_ui_app_style_baseline", None)
+    if baseline is None:
+        return
+    app = QApplication.instance()
+    if app is not None:
+        sheet, style_name, palette, font = baseline
+        if app.styleSheet() != sheet:
+            app.setStyleSheet(sheet)
+        if app.style().objectName() != style_name:
+            app.setStyle(style_name)
+        if app.palette() != palette:
+            app.setPalette(palette)
+        if app.font() != font:
+            app.setFont(font)
+    delattr(item, "_ui_app_style_baseline")
+
+
+def _restore_qsettings_default_format(item) -> None:
+    previous_default_format = getattr(item, "_qsettings_default_format", None)
+    if previous_default_format is None:
+        return
+    from PyQt5.QtCore import QSettings
+
+    QSettings.setDefaultFormat(previous_default_format)
+    delattr(item, "_qsettings_default_format")
 
 
 @pytest.fixture(autouse=True)
@@ -285,10 +406,8 @@ def _own_chartstacks(qapp, monkeypatch):
     yield
     qapp.processEvents()
     for cs in created:
-        try:
+        if not sip.isdeleted(cs):
             cs.deleteLater()
-        except Exception:
-            pass
     created.clear()
     qapp.processEvents()
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,10 @@ from PyQt5.QtGui import QColor, QImage, QPainter
 
 from mf4_analyzer._palette import FILE_PALETTES
 from mf4_analyzer.batch_image_options import BatchRenderOptions
+
+
+_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S = 15.0
+_BATCH_RENDER_SUBPROCESS_TIMEOUT_S = 60
 
 
 def _qt_api():
@@ -1093,11 +1098,17 @@ def test_render_on_gui_thread_marshals_result_and_exception(qapp):
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
     while thread.is_alive():
         qapp.processEvents()
         thread.join(0.01)
+        if thread.is_alive() and time.monotonic() >= deadline:
+            pytest.fail(
+                "render-on-GUI-thread worker did not finish within "
+                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
+            )
     assert observed["result"][1] == "ok"
     assert observed["result"][0] == threading.get_ident()
     assert isinstance(observed["exception"], ValueError)
@@ -1135,11 +1146,17 @@ def test_worker_render_preserves_warnings_out_on_gui_thread(
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
     while thread.is_alive():
         qapp.processEvents()
         thread.join(0.01)
+        if thread.is_alive() and time.monotonic() >= deadline:
+            pytest.fail(
+                "warning-render worker did not finish within "
+                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
+            )
 
     assert "exception" not in observed
     assert observed["path"].is_file()
@@ -1185,11 +1202,17 @@ def test_worker_render_paints_on_gui_thread_and_encodes_on_caller_thread(
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
     while thread.is_alive():
         qapp.processEvents()
         thread.join(0.01)
+        if thread.is_alive() and time.monotonic() >= deadline:
+            pytest.fail(
+                "paint-and-encode worker did not finish within "
+                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
+            )
 
     assert "exception" not in observed
     assert observed["build_thread"] == threading.main_thread().ident
@@ -1265,11 +1288,17 @@ def test_worker_png_encode_failure_is_raised_unchanged_on_caller_thread(
         except BaseException as exc:
             observed["exception"] = exc
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+    deadline = time.monotonic() + _BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S
     while thread.is_alive():
         qapp.processEvents()
         thread.join(0.01)
+        if thread.is_alive() and time.monotonic() >= deadline:
+            pytest.fail(
+                "encode-failure worker did not finish within "
+                f"{_BATCH_RENDER_GUI_DISPATCH_TIMEOUT_S}s while GUI events were pumped"
+            )
 
     assert observed["save_thread"] == observed["caller_thread"]
     assert observed["exception"] is marker
@@ -1284,12 +1313,15 @@ def test_non_main_thread_without_app_fails_clearly_in_subprocess(tmp_path):
 import threading
 from mf4_analyzer.batch_render_qt._dispatch import ensure_app
 result = []
+WORKER_JOIN_TIMEOUT_S = 10.0
 def run():
     try:
         ensure_app()
     except BaseException as exc:
         result.append(type(exc).__name__ + ':' + str(exc))
-t = threading.Thread(target=run); t.start(); t.join()
+t = threading.Thread(target=run); t.start(); t.join(WORKER_JOIN_TIMEOUT_S)
+if t.is_alive():
+    raise TimeoutError('ensure_app worker did not finish within %ss' % WORKER_JOIN_TIMEOUT_S)
 print(result[0])
 """.strip(),
         encoding="utf-8",
@@ -1312,6 +1344,7 @@ print(result[0])
         text=True,
         capture_output=True,
         check=True,
+        timeout=_BATCH_RENDER_SUBPROCESS_TIMEOUT_S,
     )
     assert "RuntimeError" in completed.stdout
     assert "non-main thread" in completed.stdout
@@ -1344,6 +1377,7 @@ except BaseException as exc:
         text=True,
         capture_output=True,
         check=True,
+        timeout=_BATCH_RENDER_SUBPROCESS_TIMEOUT_S,
     )
     assert "RuntimeError" in completed.stdout
     assert "QCoreApplication cannot host QWidget rendering" in completed.stdout
@@ -1380,6 +1414,7 @@ except BaseException as exc:
         text=True,
         capture_output=True,
         check=True,
+        timeout=_BATCH_RENDER_SUBPROCESS_TIMEOUT_S,
     )
     assert "RuntimeError" in completed.stdout
     assert "application is exiting" in completed.stdout

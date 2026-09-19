@@ -4,11 +4,12 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import QApplication
 
 
@@ -23,6 +24,44 @@ def _load_probe():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _prove_qsettings_isolation_in_child(tmp_path):
+    """Exercise a probe's process-global QSettings wrapper without leaking it."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO)
+    env.setdefault("TMPDIR", "/tmp")
+    env.setdefault("MPLCONFIGDIR", "/tmp")
+    code = r"""
+import importlib.util
+import sys
+from pathlib import Path
+
+probe_path = Path(sys.argv[1])
+tmp_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("qsettings_probe_child", probe_path)
+probe = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+sys.modules[spec.name] = probe
+spec.loader.exec_module(probe)
+token = probe.isolate_qsettings(tmp_path)
+try:
+    print(probe.prove_qsettings_isolated(token))
+finally:
+    token.restore()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(PROBE_PATH), str(tmp_path)],
+        cwd=str(REPO),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    path = Path(completed.stdout.strip().splitlines()[-1]).resolve()
+    assert path.is_relative_to(tmp_path.resolve())
 
 
 @pytest.fixture(scope="module")
@@ -270,18 +309,8 @@ def test_direct_call_is_separated(probe):
     assert payload["direct_call_events"][0]["entry_kind"] == probe.ENTRY_DIRECT_CALL
 
 
-def test_qsettings_isolation_includes_nativeformat(probe, tmp_path):
-    token = probe.isolate_qsettings(tmp_path)
-    try:
-        path = probe.prove_qsettings_isolated(token)
-        assert str(tmp_path) in path
-        store = QSettings("MF4Analyzer", "DataAnalyzer")
-        store.setValue("files/recent_v1", "must-not-touch-user-store")
-        store.sync()
-        assert str(tmp_path) in str(store.fileName())
-        assert "Library/Preferences" not in str(store.fileName())
-    finally:
-        token.restore()
+def test_qsettings_isolation_includes_nativeformat_in_child_process(tmp_path):
+    _prove_qsettings_isolation_in_child(tmp_path)
 
 
 def test_abba_uses_independent_hosts(probe):

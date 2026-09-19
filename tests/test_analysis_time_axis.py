@@ -5,6 +5,9 @@ import pytest
 from mf4_analyzer.analysis_time_axis import prepare_analysis_time_axis
 
 
+_ANALYSIS_TIME_AXIS_IMPORT_TIMEOUT_S = 30
+
+
 def test_rebuild_preserves_source_and_absolute_selection_origin():
     original = np.array([12.0, 12.009, 12.02, 12.029, 12.04])
     before = original.copy()
@@ -42,11 +45,26 @@ def test_explicit_rate_is_analysis_only_and_keeps_origin():
 def test_neutral_preparation_imports_without_gui():
     import subprocess
     import sys
-    subprocess.run([
+    command = [
         sys.executable, '-c',
         'import sys; import mf4_analyzer.analysis_time_axis; '
         'assert not any(k.startswith(("PyQt5", "mf4_analyzer.ui")) for k in sys.modules)',
-    ], check=True)
+    ]
+    try:
+        subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=_ANALYSIS_TIME_AXIS_IMPORT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            "analysis-time-axis import subprocess timed out after "
+            f"{_ANALYSIS_TIME_AXIS_IMPORT_TIMEOUT_S}s\n"
+            f"command: {exc.cmd!r}\nstdout:\n{exc.stdout or ''}\n"
+            f"stderr:\n{exc.stderr or ''}"
+        )
 
 
 def test_nonmonotonic_rebuild_keeps_length_origin_and_original_values():

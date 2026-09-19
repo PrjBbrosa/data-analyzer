@@ -16,6 +16,9 @@ from mf4_analyzer.batch_validation import (
 )
 
 
+_BATCH_VALIDATION_IMPORT_TIMEOUT_S = 30
+
+
 def test_validate_outputs_requires_at_least_one_selected_output():
     issues = validate_outputs(SimpleNamespace(
         export_data=False,
@@ -191,6 +194,7 @@ assert not any(name == 'matplotlib' or name.startswith('matplotlib.')
         text=True,
         capture_output=True,
         check=False,
+        timeout=_BATCH_VALIDATION_IMPORT_TIMEOUT_S,
     )
 
     assert result.returncode == 0, result.stderr

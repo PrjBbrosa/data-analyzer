@@ -2,6 +2,9 @@ import subprocess
 import sys
 
 
+_A2L_IMPORT_PROBE_TIMEOUT_SECONDS = 30
+
+
 def test_a2l_probe_dataclasses_import_without_pya2l():
     code = r"""
 import importlib.abc
@@ -25,6 +28,7 @@ print(A2LSummary.__name__, MeasurementSummary.__name__)
         check=False,
         capture_output=True,
         text=True,
+        timeout=_A2L_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

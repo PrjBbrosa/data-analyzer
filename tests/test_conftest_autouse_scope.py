@@ -28,6 +28,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROOT_CONFTEST = REPO_ROOT / "conftest.py"
+_CHILD_PYTEST_TIMEOUT_S = 30
 
 
 def _write(path, body):
@@ -78,6 +79,7 @@ def _run(root, *args):
         cwd=root,
         capture_output=True,
         text=True,
+        timeout=_CHILD_PYTEST_TIMEOUT_S,
     )
 
 

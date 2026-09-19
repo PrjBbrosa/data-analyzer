@@ -5,6 +5,9 @@ import sys
 import pytest
 
 
+_ANALYSIS_PRESETS_IMPORT_TIMEOUT_S = 30
+
+
 # Display-axis keys every fft / order_time preset now carries so applying a
 # preset also restores the axis windows (previously only fft_time did).  The
 # ranges are neutral placeholders — auto is on, so the numbers are inert until
@@ -315,15 +318,27 @@ def test_unknown_method_or_key_is_explicit():
 
 
 def test_provider_import_does_not_load_pyqt():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; import mf4_analyzer.analysis_presets; "
-                "raise SystemExit(any(name.startswith('PyQt5') for name in sys.modules))"
-            ),
-        ],
-        check=False,
-    )
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import sys; import mf4_analyzer.analysis_presets; "
+            "raise SystemExit(any(name.startswith('PyQt5') for name in sys.modules))"
+        ),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=_ANALYSIS_PRESETS_IMPORT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            "analysis-presets import subprocess timed out after "
+            f"{_ANALYSIS_PRESETS_IMPORT_TIMEOUT_S}s\n"
+            f"command: {exc.cmd!r}\nstdout:\n{exc.stdout or ''}\n"
+            f"stderr:\n{exc.stderr or ''}"
+        )
     assert result.returncode == 0

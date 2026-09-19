@@ -10,6 +10,9 @@ import sys
 import pytest
 
 
+_IMPORT_PROBE_TIMEOUT_SECONDS = 30
+
+
 def test_batch_renderer_import_does_not_load_ui_package_or_main_window():
     repo_root = Path(__file__).resolve().parents[1]
     script = """
@@ -32,6 +35,7 @@ print(json.dumps(blocked))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr
@@ -72,6 +76,7 @@ print(json.dumps(blocked))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr
@@ -115,6 +120,7 @@ print(json.dumps(sorted(
         text=True,
         capture_output=True,
         check=False,
+        timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

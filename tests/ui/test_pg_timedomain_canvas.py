@@ -10913,8 +10913,14 @@ class TestCompanionDashStyleSync(TestFilterCompanionOverlay):
         canvas.deleteLater()
 
 
-def test_custom_action_registry_and_persistence(monkeypatch):
+def _test_ini_settings(tmp_path, name):
+    """Return a per-item settings store for context-menu persistence tests."""
     from PyQt5.QtCore import QSettings
+
+    return QSettings(str(tmp_path / f"{name}.ini"), QSettings.IniFormat)
+
+
+def test_custom_action_registry_and_persistence(monkeypatch, tmp_path):
     from mf4_analyzer.ui.pg_canvas import context_menu as cm
 
     assert cm._CUSTOM_ACTION_ORDER == [
@@ -10924,14 +10930,12 @@ def test_custom_action_registry_and_persistence(monkeypatch):
     assert set(cm._CUSTOM_ACTION_LABELS) == set(cm._CUSTOM_ACTION_ORDER)
     assert set(cm._CUSTOM_ACTION_ICONS) == set(cm._CUSTOM_ACTION_ORDER)
 
-    settings = QSettings("MF4AnalyzerTest", "RegistryCase")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "registry")
     assert cm._load_custom_action(settings) == "copy_image"
     cm._save_custom_action("back", settings)
     assert cm._load_custom_action(settings) == "back"
     settings.setValue(cm._CUSTOM_ACTION_SETTINGS_KEY, "bogus")
     assert cm._load_custom_action(settings) == "copy_image"
-    settings.clear()
 
 
 def test_resolve_custom_action_maps_to_handlers():
@@ -10983,37 +10987,30 @@ def _make_custom_button(qapp, *, copy=lambda: None, settings=None):
     return menu, btn
 
 
-def test_custom_button_default_binding_and_objectnames(qapp):
-    from PyQt5.QtCore import QSettings, Qt
+def test_custom_button_default_binding_and_objectnames(qapp, tmp_path):
+    from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QToolButton
-    settings = QSettings("MF4AnalyzerTest", "CustomBtnDefault")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "custom-button-default")
     _menu, btn = _make_custom_button(qapp, settings=settings)
     assert btn.objectName() == "pgContextCustomActionButton"
     assert btn.findChild(QToolButton, "pgContextCustomActionMain") is not None
     assert btn.findChild(QToolButton, "pgContextCustomActionCaret") is not None
     assert btn.current_action_id() == "copy_image"
     assert btn.testAttribute(Qt.WA_TranslucentBackground)
-    settings.clear()
 
 
-def test_custom_button_disabled_when_handler_missing(qapp):
-    from PyQt5.QtCore import QSettings
+def test_custom_button_disabled_when_handler_missing(qapp, tmp_path):
     from PyQt5.QtWidgets import QToolButton
-    settings = QSettings("MF4AnalyzerTest", "CustomBtnDisabled")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "custom-button-disabled")
     _menu, btn = _make_custom_button(qapp, copy=None, settings=settings)
     main = btn.findChild(QToolButton, "pgContextCustomActionMain")
     assert not main.isEnabled()
-    settings.clear()
 
 
-def test_custom_button_main_runs_handler_and_closes_menu(qapp):
-    from PyQt5.QtCore import QSettings
+def test_custom_button_main_runs_handler_and_closes_menu(qapp, tmp_path):
     from PyQt5.QtWidgets import QToolButton
     calls = {"copy": 0, "closed": 0}
-    settings = QSettings("MF4AnalyzerTest", "CustomBtnRun")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "custom-button-run")
     menu, btn = _make_custom_button(
         qapp, copy=lambda: calls.__setitem__("copy", calls["copy"] + 1),
         settings=settings,
@@ -11023,14 +11020,11 @@ def test_custom_button_main_runs_handler_and_closes_menu(qapp):
     main.click()
     assert calls["copy"] == 1
     assert calls["closed"] == 1
-    settings.clear()
 
 
-def test_custom_button_caret_expands_list_and_rebinds(qapp):
-    from PyQt5.QtCore import QSettings
+def test_custom_button_caret_expands_list_and_rebinds(qapp, tmp_path):
     from PyQt5.QtWidgets import QMenu, QToolButton, QWidget
-    settings = QSettings("MF4AnalyzerTest", "CustomBtnRebind")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "custom-button-rebind")
     menu, btn = _make_custom_button(qapp, settings=settings)
     closed = {"n": 0}
     menu.close = lambda: closed.__setitem__("n", closed["n"] + 1)
@@ -11049,28 +11043,22 @@ def test_custom_button_caret_expands_list_and_rebinds(qapp):
     assert btn.findChild(QWidget, "pgContextActionList") is None  # collapsed
     assert closed["n"] == 0  # menu NOT closed on rebind
     assert not btn.findChildren(QMenu)  # no nested QMenu
-    settings.clear()
 
 
-def test_custom_button_list_item_disabled_when_unavailable(qapp):
-    from PyQt5.QtCore import QSettings
+def test_custom_button_list_item_disabled_when_unavailable(qapp, tmp_path):
     from PyQt5.QtWidgets import QToolButton
-    settings = QSettings("MF4AnalyzerTest", "CustomBtnItemDisabled")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "custom-button-item-disabled")
     menu, btn = _make_custom_button(qapp, copy=None, settings=settings)
     btn.findChild(QToolButton, "pgContextCustomActionCaret").click()
     copy_item = btn.findChild(QToolButton, "pgContextActionItem_copy_image")
     assert not copy_item.isEnabled()
     back_item = btn.findChild(QToolButton, "pgContextActionItem_back")
     assert back_item.isEnabled()
-    settings.clear()
 
 
-def test_inline_mouse_row_slot_order_zoom_pan_custom(qapp, monkeypatch):
-    from PyQt5.QtCore import QSettings
+def test_inline_mouse_row_slot_order_zoom_pan_custom(qapp, monkeypatch, tmp_path):
     from PyQt5.QtWidgets import QButtonGroup, QToolButton, QWidget
-    settings = QSettings("MF4AnalyzerTest", "MouseRowOrder")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "mouse-row-order")
     canvas = _pg_canvas(qapp)
     canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
     vb = canvas.axes_list[0].view_box
@@ -11094,14 +11082,11 @@ def test_inline_mouse_row_slot_order_zoom_pan_custom(qapp, monkeypatch):
     assert names.index("pgContextZoomButton") \
         < names.index("pgContextPanButton") \
         < names.index("pgContextCustomActionButton")
-    settings.clear()
 
 
-def test_copy_image_handler_injected_and_invoked(qapp, monkeypatch):
-    from PyQt5.QtCore import QSettings
+def test_copy_image_handler_injected_and_invoked(qapp, monkeypatch, tmp_path):
     from PyQt5.QtWidgets import QToolButton, QWidget
-    settings = QSettings("MF4AnalyzerTest", "CopyInject")
-    settings.clear()
+    settings = _test_ini_settings(tmp_path, "copy-inject")
     fired = {"n": 0}
     canvas = _pg_canvas(qapp)
     canvas.register_copy_image_handler(lambda: fired.__setitem__("n", fired["n"] + 1))
@@ -11115,7 +11100,6 @@ def test_copy_image_handler_injected_and_invoked(qapp, monkeypatch):
     assert main.isEnabled()
     main.click()
     assert fired["n"] == 1
-    settings.clear()
 
 
 def test_time_card_diagnostics_pill_summarizes_and_expands(qapp, qtbot):

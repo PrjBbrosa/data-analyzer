@@ -25,6 +25,9 @@ from mf4_analyzer.batch_output import (
 )
 
 
+_BATCH_OUTPUT_IMPORT_TIMEOUT_S = 30
+
+
 class _Source:
     def __init__(self, filepath: Path, label_suffix: str = ""):
         self.filepath = filepath
@@ -752,6 +755,7 @@ print(json.dumps(blocked))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_BATCH_OUTPUT_IMPORT_TIMEOUT_S,
     )
 
     assert result.returncode == 0, result.stderr

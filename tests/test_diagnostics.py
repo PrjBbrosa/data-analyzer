@@ -17,24 +17,59 @@ import pytest
 from mf4_analyzer import diagnostics
 
 
+_MUTATED_NAMED_LOGGERS = (
+    "tests.diagnostics.throttle",
+    "tests.diagnostics.bound",
+    "tests.diagnostics.ten_thousand",
+    "tests.diagnostics.cross_key_sweep",
+    "tests.diagnostics.manual_flush",
+    "tests.diagnostics.expired_manual_flush",
+    "tests.diagnostics.eviction",
+    "tests.diagnostics.lock_probe",
+)
+
+
+def _snapshot_named_logger_state():
+    return [
+        (logger, tuple(logger.handlers), logger.level, logger.propagate)
+        for name in _MUTATED_NAMED_LOGGERS
+        for logger in (logging.getLogger(name),)
+    ]
+
+
+def _restore_named_logger_state(states):
+    for logger, old_handlers, old_level, old_propagate in states:
+        for handler in list(logger.handlers):
+            if handler not in old_handlers:
+                logger.removeHandler(handler)
+                handler.close()
+        logger.handlers[:] = old_handlers
+        logger.setLevel(old_level)
+        logger.propagate = old_propagate
+
+
 @pytest.fixture(autouse=True)
 def _isolate_diagnostics_state():
     root = logging.getLogger()
     old_level = root.level
     old_handlers = list(root.handlers)
+    named_logger_states = _snapshot_named_logger_state()
     old_last_sweep = getattr(diagnostics, "_last_sweep", None)
     diagnostics._THROTTLE_STATE.clear()
     if old_last_sweep is not None:
         diagnostics._last_sweep = 0.0
-    yield
-    diagnostics._THROTTLE_STATE.clear()
-    if old_last_sweep is not None:
-        diagnostics._last_sweep = old_last_sweep
-    for handler in list(root.handlers):
-        if handler not in old_handlers:
-            root.removeHandler(handler)
-            handler.close()
-    root.setLevel(old_level)
+    try:
+        yield
+    finally:
+        diagnostics._THROTTLE_STATE.clear()
+        if old_last_sweep is not None:
+            diagnostics._last_sweep = old_last_sweep
+        for handler in list(root.handlers):
+            if handler not in old_handlers:
+                root.removeHandler(handler)
+                handler.close()
+        root.setLevel(old_level)
+        _restore_named_logger_state(named_logger_states)
 
 
 def test_logging_level_maps_names_numbers_and_unknowns(monkeypatch):
@@ -606,3 +641,23 @@ def test_app_main_wires_diagnostics_in_required_order(monkeypatch, tmp_path):
     assert len(error_callbacks) == 1
     error_callbacks[0]("probe error")
     assert events[-1] == ("toast", "probe error", "error")
+
+
+def test_diagnostics_isolation_restores_named_logger_state():
+    logger = logging.getLogger("tests.diagnostics.throttle")
+    baseline_handler = logging.NullHandler()
+    logger.handlers[:] = [baseline_handler]
+    logger.setLevel(logging.ERROR)
+    logger.propagate = True
+
+    state = _isolate_diagnostics_state.__wrapped__()
+    next(state)
+    logger.handlers[:] = [logging.StreamHandler()]
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    with pytest.raises(RuntimeError, match="simulated test failure"):
+        state.throw(RuntimeError("simulated test failure"))
+
+    assert logger.handlers == [baseline_handler]
+    assert logger.level == logging.ERROR
+    assert logger.propagate is True

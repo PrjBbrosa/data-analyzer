@@ -26,6 +26,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "mf4_analyzer"
+_IMPORT_PROBE_TIMEOUT_SECONDS = 30
 
 
 def _iter_py_files(pkg_dir: Path):
@@ -122,6 +123,26 @@ def test_ui_kit_never_imports_from_analyzer_ui_or_acquisition_ui():
         "ui_kit must not import from ui or acquisition_ui; offending "
         f"imports: {real_violations!r}"
     )
+
+
+def test_chart_appearance_model_does_not_import_qt_or_canvas():
+    src = PACKAGE_ROOT / "ui" / "chart_appearance_model.py"
+    imported = _imported_module_names(src)
+    forbidden = (
+        "PyQt5",
+        "pyqtgraph",
+        "mf4_analyzer.ui.pg_canvas",
+        "mf4_analyzer.ui.main_window",
+        "mf4_analyzer.ui.view_state",
+        "mf4_analyzer.ui.chart_stack",
+        "mf4_analyzer.acquisition_ui",
+    )
+    violations = [
+        name
+        for name in imported
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+    ]
+    assert not violations, violations
 
 
 def test_navigator_order_does_not_import_qt_or_mainwindow():
@@ -465,6 +486,7 @@ print(json.dumps(blocked))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == []

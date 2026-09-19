@@ -3235,11 +3235,11 @@ def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
     assert card._hint_context.full_text() == "registry controlled"
 
 
-def test_bottom_hint_bar_discovery_slot_advances_when_marked(qapp):
+def test_bottom_hint_bar_discovery_slot_advances_when_marked(qapp, tmp_path):
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.chart_stack import ChartStack
 
-    settings = QSettings(".pytmp/test_hints/chart-stack.ini", QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "chart-stack.ini"), QSettings.IniFormat)
     settings.clear()
     cs = ChartStack()
     for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
@@ -3252,12 +3252,12 @@ def test_bottom_hint_bar_discovery_slot_advances_when_marked(qapp):
     assert card._hint_discovery.text() == "复制按钮导出带游标读数的图片并标注"
 
 
-def test_copy_button_marks_copy_image_discovered(qapp):
+def test_copy_button_marks_copy_image_discovered(qapp, tmp_path):
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui import hints
     from mf4_analyzer.ui.chart_stack import ChartStack
 
-    settings = QSettings(".pytmp/test_hints/chart-copy.ini", QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "chart-copy.ini"), QSettings.IniFormat)
     settings.clear()
     cs = ChartStack()
     for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
@@ -3268,12 +3268,12 @@ def test_copy_button_marks_copy_image_discovered(qapp):
     assert "chart.copy_image" in hints.load_discovered(settings)
 
 
-def test_shortcut_action_marks_shortcuts_discovered(qapp):
+def test_shortcut_action_marks_shortcuts_discovered(qapp, tmp_path):
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui import hints
     from mf4_analyzer.ui.chart_stack import ChartStack
 
-    settings = QSettings(".pytmp/test_hints/chart-shortcut.ini", QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "chart-shortcut.ini"), QSettings.IniFormat)
     settings.clear()
     cs = ChartStack()
     for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):

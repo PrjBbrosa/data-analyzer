@@ -30,11 +30,9 @@ def production_style(qapp):
     qapp.setStyleSheet(previous)
 
 
-def _settings(name):
-    return QSettings(
-        str(Path("/tmp") / f"pinned-geom-{name}.ini"),
-        QSettings.IniFormat,
-    )
+def _settings(_name):
+    """Use the UI fixture's per-item QSettings store, never a shared /tmp INI."""
+    return QSettings()
 
 
 def _make_stack(qtbot, qapp, *, width=1100, height=640):

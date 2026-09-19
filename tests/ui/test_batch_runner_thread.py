@@ -52,28 +52,33 @@ def test_runner_thread_marshals_real_render_to_gui_and_returns_complete_result(
     )
     runner = BatchRunner({0: fd})
     th = BatchRunnerThread(runner, preset, tmp_path / "out")
-    events, results = [], []
+    events, results, thread_finished = [], [], []
     th.progress.connect(events.append)
     th.finished_with_result.connect(results.append)
+    th.finished.connect(lambda: thread_finished.append(True))
     th.start()
-    qtbot.waitUntil(lambda: len(results) == 1, timeout=10_000)
-    assert results[0].status == "done"
-    assert render_threads == [qapp.thread()]
-    assert len(encode_thread_ids) == 1
-    assert encode_thread_ids[0] != threading.main_thread().ident
-    item = results[0].items[0]
-    assert item.warnings == ["gui-thread-render-warning"]
-    assert set(item.artifact_facts) == {"data", "image"}
-    assert all(
-        facts["checksum_status"] == "complete" and facts["sha256"]
-        for facts in item.artifact_facts.values()
-    )
-    manifest = load_batch_manifest(results[0].manifest_path)
-    assert manifest["entries"][0]["warnings"] == [
-        "gui-thread-render-warning"
-    ]
-    assert set(manifest["entries"][0]["artifacts"]) == {"data", "image"}
-    assert any(e.kind == "run_finished" for e in events)
+    try:
+        qtbot.waitUntil(lambda: len(results) == 1, timeout=10_000)
+        assert results[0].status == "done"
+        assert render_threads == [qapp.thread()]
+        assert len(encode_thread_ids) == 1
+        assert encode_thread_ids[0] != threading.main_thread().ident
+        item = results[0].items[0]
+        assert item.warnings == ["gui-thread-render-warning"]
+        assert set(item.artifact_facts) == {"data", "image"}
+        assert all(
+            facts["checksum_status"] == "complete" and facts["sha256"]
+            for facts in item.artifact_facts.values()
+        )
+        manifest = load_batch_manifest(results[0].manifest_path)
+        assert manifest["entries"][0]["warnings"] == [
+            "gui-thread-render-warning"
+        ]
+        assert set(manifest["entries"][0]["artifacts"]) == {"data", "image"}
+        assert any(e.kind == "run_finished" for e in events)
+    finally:
+        th.request_cancel()
+        qtbot.waitUntil(lambda: bool(thread_finished), timeout=2_000)
 
 
 def test_runner_thread_propagates_gui_render_failure_and_rolls_back_set(
@@ -102,20 +107,60 @@ def test_runner_thread_propagates_gui_render_failure_and_rolls_back_set(
     )
     output_dir = tmp_path / "out"
     thread = BatchRunnerThread(BatchRunner({0: fd}), preset, output_dir)
-    results = []
+    results, thread_finished = [], []
     thread.finished_with_result.connect(results.append)
+    thread.finished.connect(lambda: thread_finished.append(True))
 
     thread.start()
-    qtbot.waitUntil(lambda: len(results) == 1, timeout=10_000)
+    try:
+        qtbot.waitUntil(lambda: len(results) == 1, timeout=10_000)
 
-    result = results[0]
-    assert result.status == "blocked"
-    assert result.items[0].status == "failed"
-    assert "gui-render-marker" in result.items[0].message
-    assert not list(output_dir.glob("*.csv"))
-    assert not list(output_dir.glob("*.png"))
-    assert not list(output_dir.glob(".*.batch-stage.*"))
-    assert not list(output_dir.glob(".*.batch-reserve"))
+        result = results[0]
+        assert result.status == "blocked"
+        assert result.items[0].status == "failed"
+        assert "gui-render-marker" in result.items[0].message
+        assert not list(output_dir.glob("*.csv"))
+        assert not list(output_dir.glob("*.png"))
+        assert not list(output_dir.glob(".*.batch-stage.*"))
+        assert not list(output_dir.glob(".*.batch-reserve"))
+    finally:
+        thread.request_cancel()
+        qtbot.waitUntil(lambda: bool(thread_finished), timeout=2_000)
+
+
+def test_runner_thread_cancellation_waits_for_result_and_qthread_finished(
+    qtbot, tmp_path,
+):
+    """Cancellation owns both the business result and the thread lifetime."""
+    import threading
+
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
+
+    started = threading.Event()
+
+    class _CancellationAwareRunner:
+        def run(self, _preset, _output_dir, *, cancel_token, **_kwargs):
+            started.set()
+            assert cancel_token.wait(2.0), "test teardown must request cancel"
+            return BatchRunResult(status="cancelled")
+
+    thread = BatchRunnerThread(
+        _CancellationAwareRunner(), "preset", tmp_path / "out",
+    )
+    results, thread_finished = [], []
+    thread.finished_with_result.connect(results.append)
+    thread.finished.connect(lambda: thread_finished.append(True))
+    thread.start()
+    try:
+        qtbot.waitUntil(started.is_set, timeout=1_000)
+        thread.request_cancel()
+        qtbot.waitUntil(lambda: len(results) == 1, timeout=2_000)
+        qtbot.waitUntil(lambda: bool(thread_finished), timeout=2_000)
+        assert results[0].status == "cancelled"
+    finally:
+        thread.request_cancel()
+        qtbot.waitUntil(lambda: not thread.isRunning(), timeout=2_000)
 
 
 def test_sheet_cancel_button_unlocks_editing(qtbot, tmp_path):

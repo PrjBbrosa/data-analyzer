@@ -52,6 +52,7 @@ SERIALIZATION_PATH = (
     / "serialization.py"
 )
 CORE_DIR = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ultraview_core"
+_ULTRAVIEW_IMPORT_PROBE_TIMEOUT_SECONDS = 30
 
 
 def _imported_modules(path: Path) -> list[str]:
@@ -275,6 +276,7 @@ print(json.dumps({"blocked": blocked, "ref": state.UltraViewRef.__name__}))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_ULTRAVIEW_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
@@ -308,6 +310,7 @@ print(json.dumps(blocked))
         text=True,
         capture_output=True,
         check=False,
+        timeout=_ULTRAVIEW_IMPORT_PROBE_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == []
