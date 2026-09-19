@@ -292,6 +292,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 keys=(_sc("cursor_off"), _sc("cursor_single"), _sc("cursor_dual")),
             ),
             QuickRow(
+                "固定当前读数",
+                keys=(_sc("pin_cursor"),),
+                sub="仅时域 / 频谱 / 频响数据图，不必先点。总览 Board 与图片标注里 P 仍是画笔。",
+            ),
+            QuickRow(
                 "平移 / 框选模式",
                 keys=(_sc("pan"), _sc("zoom")),
             ),
@@ -411,6 +416,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "双游标",
                 sub="点 A、B：时间轴显示 ΔT/1/ΔT；Custom X 显示单位/ΔX。无法可靠区分会提示。",
                 keys=(_sc("cursor_dual"),),
+            ),
+            QuickRow(
+                "固定读数面板",
+                keys=(_sc("pin_cursor"),),
+                sub="单游标按 P 固定鼠标处；双游标先点 A、B 再 P。关游标不隐藏已固定。蓝图钉取消固定并原地接回；× 关闭可撤销一次。每张独立 −/+。",
             ),
             QuickRow(
                 "游标显示设置",

@@ -49,6 +49,7 @@ from ..ultraview_capture_facts import (
     CAPABILITY_OK,
     MIN_CAPTURE_EDGE as _MIN_CAPTURE_EDGE,
     collect_widget_capture_facts,
+    finite_or_none,
     hide_transient_overlays,
     iter_overlay_hosts as _iter_overlay_hosts,
     widget_visible_and_sized,
@@ -105,6 +106,53 @@ _SECTION_X_UNIT = {
     "frf": "Hz",
     "order": "s",
 }
+
+
+def _pin_revision(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pin_intent_row(intent, *, data_revision=None) -> list:
+    if intent is None:
+        return []
+    anchor = getattr(intent, "anchor", None)
+    return [
+        str(getattr(intent, "record_id", "") or ""),
+        int(getattr(intent, "ordinal", 0) or 0),
+        str(getattr(intent, "mode", "") or ""),
+        str(getattr(intent, "domain", "") or ""),
+        finite_or_none(getattr(intent, "x", None)),
+        finite_or_none(getattr(intent, "ax", None)),
+        finite_or_none(getattr(intent, "bx", None)),
+        str(getattr(intent, "presentation", "full") or "full"),
+        str(getattr(anchor, "h_edge", "right") if anchor is not None else "right"),
+        str(getattr(anchor, "v_edge", "top") if anchor is not None else "top"),
+        finite_or_none(getattr(anchor, "nx", None) if anchor is not None else None),
+        finite_or_none(getattr(anchor, "ny", None) if anchor is not None else None),
+        _pin_revision(data_revision),
+    ]
+
+
+def _pin_rows_from_collection(collection) -> list:
+    records = getattr(collection, "records", None) or ()
+    return [_pin_intent_row(item) for item in records]
+
+
+def _as_pin_payload(value) -> list:
+    if not value:
+        return []
+    rows = []
+    for item in value:
+        if isinstance(item, (list, tuple)):
+            rows.append(list(item))
+        else:
+            rows.append(item)
+    return rows
 
 
 @dataclass(frozen=True)
@@ -1312,7 +1360,48 @@ class UltraViewCaptureCoordinator(QObject):
             "cursor_mode": str(getattr(state, "cursor_mode", None) or "off"),
             "cursor_geometry": geometry,
             "pill": pill,
+            "pins": self._pin_payload(window, ref, state, widget=widget, stored=stored),
         }
+
+    def _pin_payload(self, window, ref, state, *, widget, stored) -> list:
+        pins = None
+        if widget is not None and _alive(widget):
+            pins = self._pin_fingerprint(window, widget)
+        if pins is None and stored is not None and stored.pin_fingerprint is not None:
+            pins = stored.pin_fingerprint
+        if pins is None:
+            pins = self._pin_fingerprint_from_state(state, ref)
+        return _as_pin_payload(pins)
+
+    def _pin_fingerprint(self, window, widget):
+        stack = getattr(window, "chart_stack", None) if window is not None else None
+        getter = getattr(stack, "pinned_cursor_fingerprint", None)
+        if not callable(getter):
+            return None
+        rows = []
+        for host in _iter_overlay_hosts(widget):
+            try:
+                value = getter(host)
+            except (TypeError, RuntimeError):
+                continue
+            if not value:
+                continue
+            rows.extend(_as_pin_payload(value))
+        return rows
+
+    def _pin_fingerprint_from_state(self, state, ref) -> list:
+        if state is None:
+            return []
+        if getattr(ref, "section", None) == "time":
+            return _pin_rows_from_collection(
+                getattr(state, "pinned_cursors", None)
+            )
+        rows = []
+        for pane in getattr(state, "panes", ()) or ():
+            rows.extend(
+                _pin_rows_from_collection(getattr(pane, "pinned_cursors", None))
+            )
+        return rows
 
     def _pill_fingerprint(self, window, widget):
         stack = getattr(window, "chart_stack", None) if window is not None else None
@@ -1735,11 +1824,18 @@ class UltraViewCaptureCoordinator(QObject):
             pill = self._pill_fingerprint(self._window, widget)
         if pill is not None and not isinstance(pill, tuple):
             pill = tuple(pill)
+        pins = self._pin_fingerprint(self._window, widget)
+        if pins is not None:
+            pins = tuple(
+                tuple(row) if isinstance(row, list) else row
+                for row in pins
+            )
         return PresentationRuntimeFacts(
             markup_revision=captured.markup_revision,
             visible_pane_count=visible,
             cursor_geometry=geometry,
             pill_fingerprint=pill,
+            pin_fingerprint=pins,
         )
 
     def _runtime_facts_for(self, ref: UltraViewRef) -> PresentationRuntimeFacts:
@@ -1752,6 +1848,9 @@ class UltraViewCaptureCoordinator(QObject):
             return facts
         if live:
             live_facts = self._facts_from_widget(widget)
+            pin_fingerprint = live_facts.pin_fingerprint
+            if pin_fingerprint is None and stored is not None:
+                pin_fingerprint = stored.pin_fingerprint
             facts = PresentationRuntimeFacts(
                 markup_revision=live_facts.markup_revision,
                 visible_pane_count=live_facts.visible_pane_count,
@@ -1759,6 +1858,7 @@ class UltraViewCaptureCoordinator(QObject):
                 pill_fingerprint=(
                     stored.pill_fingerprint if stored is not None else None
                 ),
+                pin_fingerprint=pin_fingerprint,
             )
             self._runtime.commit(ref, facts)
             return facts

@@ -156,6 +156,7 @@ class FakeCanvas(QWidget):
         self._armed_item = _VisItem(True, value=1.0)
         self._remark_item = _VisItem(True)
         self._scale_box = _VisItem(True)
+        self._pin_line = _VisItem(True)
         self._cursor = SimpleNamespace(
             dual=False,
             ax=None,
@@ -555,6 +556,33 @@ def test_presentation_digest_pixel_affecting_field_matrix(qapp):
     state.chart_appearance = default_chart_appearance()
     assert coord.current_digest_for(ref) == baseline
 
+    from dataclasses import replace as _replace
+    from mf4_analyzer.ui.pinned_cursor_state import (
+        PinnedCursorAnchor,
+        empty_collection,
+        next_record,
+    )
+
+    collection, _intent = next_record(
+        empty_collection(),
+        {"mode": "single", "domain": "time", "x": 0.25, "x_unit": "s"},
+    )
+    state.pinned_cursors = collection
+    pinned = coord.current_digest_for(ref)
+    assert pinned != baseline
+    mini = _replace(collection.records[0], presentation="mini")
+    state.pinned_cursors = _replace(collection, records=(mini,))
+    assert coord.current_digest_for(ref) != pinned
+    moved = _replace(
+        mini,
+        anchor=PinnedCursorAnchor(h_edge="left", v_edge="top", nx=0.2, ny=0.4),
+    )
+    state.pinned_cursors = _replace(collection, records=(moved,))
+    moved_digest = coord.current_digest_for(ref)
+    assert moved_digest != pinned
+    state.pinned_cursors = empty_collection()
+    assert coord.current_digest_for(ref) == baseline
+
     canvas = FakeCanvas()
     coord.bind_canvas(canvas, ref)
     canvas.markup_revision = 3
@@ -880,14 +908,17 @@ def test_transient_overlays_hidden_but_markup_revision_is_captured(qapp):
         assert canvas._armed_item.isVisible() is True
         assert canvas._scale_box.isVisible() is False
         assert canvas._remark_item.isVisible() is True
+        assert canvas._pin_line.isVisible() is True
     canvas._cursor.dual = False
     with hide_transient_overlays(canvas):
         assert canvas._cursor_item.isVisible() is False
         assert canvas._armed_item.isVisible() is True
         assert canvas._scale_box.isVisible() is False
         assert canvas._remark_item.isVisible() is True
+        assert canvas._pin_line.isVisible() is True
     assert canvas._cursor_item.isVisible() is True
     assert canvas._scale_box.isVisible() is True
+    assert canvas._pin_line.isVisible() is True
 
     coord.request_capture(ref, canvas, "overlay")
     _flush()
@@ -968,6 +999,8 @@ class _FakeReadoutPill:
 class _PillStack:
     def __init__(self) -> None:
         self._pill = _FakeReadoutPill()
+        self.pins = []
+        self.highlight = None
 
     def cursor_pill_fingerprint(self, canvas=None):
         pill = self._pill
@@ -975,6 +1008,9 @@ class _PillStack:
             return None
         detail = pill.detail_text() if pill.has_detail() else ""
         return (pill.primary_text(), detail)
+
+    def pinned_cursor_fingerprint(self, canvas=None):
+        return list(self.pins)
 
 
 def test_dual_cursor_geometry_survives_canvas_rebind(qapp):
@@ -1045,6 +1081,91 @@ def test_pill_fingerprint_survives_hidden_source_page(qapp):
     assert derive_preview_status(
         True, True, captured, current
     ) == STATUS_FRESH
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_pin_digest_changes_on_add_full_mini_move_not_hover(qapp):
+    window, coord = _make_coord()
+    stack = _PillStack()
+    window.chart_stack = stack
+    state = window.view_manager.get(0)
+    state.view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    baseline = coord.current_digest_for(ref)
+    row = [
+        "pin-1", 1, "single", "time", 0.4, None, None, "full",
+        "right", "top", 1.0, 0.0, 2,
+    ]
+    stack.pins = [list(row)]
+    added = coord.current_digest_for(ref)
+    assert added != baseline
+
+    mini = list(row)
+    mini[7] = "mini"
+    stack.pins = [mini]
+    assert coord.current_digest_for(ref) != added
+
+    moved = list(mini)
+    moved[10] = 0.15
+    moved[11] = 0.55
+    stack.pins = [moved]
+    moved_digest = coord.current_digest_for(ref)
+    assert moved_digest != added
+
+    revised = list(moved)
+    revised[12] = 9
+    stack.pins = [revised]
+    assert coord.current_digest_for(ref) != moved_digest
+
+    highlighted = coord.current_digest_for(ref)
+    stack.highlight = "pin-1"
+    assert coord.current_digest_for(ref) == highlighted
+    stack.highlight = None
+    assert coord.current_digest_for(ref) == highlighted
+
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_pin_fingerprint_survives_hidden_and_rebind(qapp):
+    from mf4_analyzer.ui.ultraview_state import STATUS_FRESH, derive_preview_status
+
+    window, coord = _make_coord()
+    stack = _PillStack()
+    stack.pins = [[
+        "pin-1", 1, "single", "time", 0.4, None, None, "full",
+        "right", "top", 1.0, 0.0, 2,
+    ]]
+    window.chart_stack = stack
+    manager = window.view_manager
+    state_a = manager.get(0)
+    state_a.view_id = "view-a"
+    idx_b = manager.new_view()
+    state_b = manager.get(idx_b)
+    state_b.view_id = "view-b"
+    canvas = FakeCanvas()
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    coord.bind_canvas(canvas, ref_a)
+    coord.request_capture(ref_a, canvas, "pin-visible")
+    _flush()
+    record = coord.store.get(ref_a)
+    assert record is not None
+    captured = record.captured_digest
+    assert captured == coord.current_digest_for(ref_a)
+
+    canvas.hide()
+    assert coord.current_digest_for(ref_a) == captured
+    stack.pins = []
+    coord.bind_canvas(canvas, ref_b)
+    current = coord.current_digest_for(ref_a)
+    assert current == captured
+    assert derive_preview_status(True, True, captured, current) == STATUS_FRESH
     canvas.deleteLater()
     coord.clear()
     coord.deleteLater()

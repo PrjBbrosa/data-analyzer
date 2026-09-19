@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 
+from .pinned_cursor_state import collection_from_dict
 from .view_overlay_state import (
     normalize_cursor_placement,
     normalize_remarks,
@@ -69,7 +70,7 @@ def apply_params_from_state(ctx, state) -> None:
     _write_preset_baseline(ctx, None)
 
 
-def capture_overlay_from_canvas(canvas, pane) -> None:
+def capture_overlay_from_canvas(canvas, pane, chart_stack=None) -> None:
     """Write live analysis remarks / frequency placement onto one pane."""
     snapshot = getattr(canvas, "snapshot_remarks", None)
     if callable(snapshot):
@@ -79,9 +80,13 @@ def capture_overlay_from_canvas(canvas, pane) -> None:
         pane.cursor_placement = normalize_cursor_placement(
             placement(), cursor_mode=getattr(pane, "cursor_mode", "off"),
         )
+    host = chart_stack if chart_stack is not None else canvas
+    getter = getattr(host, "pinned_cursors_for_canvas", None)
+    if callable(getter):
+        pane.pinned_cursors = collection_from_dict(getter(canvas))
 
 
-def apply_overlay_to_canvas(canvas, pane) -> None:
+def apply_overlay_to_canvas(canvas, pane, chart_stack=None) -> None:
     """Replace canvas overlay intent from the pane. Plot closeout projects."""
     restore = getattr(canvas, "restore_remarks", None)
     if callable(restore):
@@ -89,3 +94,7 @@ def apply_overlay_to_canvas(canvas, pane) -> None:
     restore_placement = getattr(canvas, "restore_cursor_placement", None)
     if callable(restore_placement):
         restore_placement(getattr(pane, "cursor_placement", None))
+    host = chart_stack if chart_stack is not None else canvas
+    setter = getattr(host, "set_pinned_cursors_for_canvas", None)
+    if callable(setter):
+        setter(canvas, getattr(pane, "pinned_cursors", None))

@@ -375,8 +375,9 @@ def hide_transient_overlays(widget, *, section: str = "unknown"):
     """Hide hover/rubber-band items via each host's public overlay API.
 
     Hover follow lines (single and dual) are transient. Dual armed A/B
-    lines and extreme markers stay visible so the snapshot matches
-    copy-as-image. Persistent remarks are not in the transient set.
+    lines, extreme markers, and pinned-cursor overlay lines stay visible
+    so the snapshot matches copy-as-image. Persistent remarks are not in
+    the transient set. Pin overlay items must not join the transient set.
     """
     hidden = []
     try:

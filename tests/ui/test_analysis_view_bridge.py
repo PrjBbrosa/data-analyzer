@@ -270,3 +270,80 @@ def test_apply_overlay_to_canvas_restores_pane_overlay():
     apply_overlay_to_canvas(canvas, pane)
     assert canvas.remarks == pane.remarks
     assert canvas.placement == {"ax": 12.0, "bx": 40.0}
+
+
+def _sample_pins(fid="fid-a", channel="rpm", x=40.0):
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    collection = empty_collection()
+    collection, _intent = next_record(collection, {
+        "mode": "single",
+        "domain": "frequency",
+        "x": x,
+        "x_unit": "Hz",
+        "bindings": [{"fid": fid, "channel": channel}],
+    })
+    return collection
+
+
+class _PinOverlayCanvas(_StubOverlayCanvas):
+    def __init__(self, collection=None):
+        super().__init__()
+        self._pins = collection
+        self.applied_pins = "<unset>"
+
+    def pinned_cursors_for_canvas(self, canvas):
+        return self._pins
+
+    def set_pinned_cursors_for_canvas(self, canvas, collection):
+        self.applied_pins = collection
+
+
+def test_capture_overlay_keeps_pins_without_seam():
+    pins = _sample_pins()
+    pane = PaneState(pinned_cursors=pins)
+    capture_overlay_from_canvas(_HeatmapStubCanvas(), pane)
+    assert pane.pinned_cursors is pins
+
+
+def test_capture_and_apply_overlay_pins_use_optional_seam():
+    live = _sample_pins(x=33.0)
+    canvas = _PinOverlayCanvas(live)
+    pane = PaneState()
+    capture_overlay_from_canvas(canvas, pane)
+    assert pane.pinned_cursors.records[0].x == 33.0
+    assert pane.pinned_cursors.scope_id == live.scope_id
+
+    stored = _sample_pins(x=8.0)
+    pane.pinned_cursors = stored
+    apply_overlay_to_canvas(canvas, pane)
+    assert canvas.applied_pins is stored
+    assert pane.pinned_cursors is stored
+
+
+class _PinHost:
+    def __init__(self, collection):
+        self._pins = collection
+        self.applied = "<unset>"
+
+    def pinned_cursors_for_canvas(self, canvas):
+        return self._pins
+
+    def set_pinned_cursors_for_canvas(self, canvas, collection):
+        self.applied = collection
+
+
+def test_overlay_pin_seam_prefers_chart_stack_host():
+    host_pins = _sample_pins(x=12.0)
+    canvas_pins = _sample_pins(x=99.0)
+    host = _PinHost(host_pins)
+    canvas = _PinOverlayCanvas(canvas_pins)
+    pane = PaneState()
+    capture_overlay_from_canvas(canvas, pane, chart_stack=host)
+    assert pane.pinned_cursors.records[0].x == 12.0
+
+    stored = _sample_pins(x=4.0)
+    pane.pinned_cursors = stored
+    apply_overlay_to_canvas(canvas, pane, chart_stack=host)
+    assert host.applied is stored
+    assert canvas.applied_pins == "<unset>"

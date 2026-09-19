@@ -11,7 +11,7 @@ import re
 from html import escape, unescape
 from math import ceil
 
-from PyQt5.QtCore import QRect, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPen, QTextDocument, QTextOption,
 )
@@ -32,10 +32,44 @@ _CURSOR_PILL_RADIUS = 9.0
 _CURSOR_PILL_BG = QColor(255, 255, 255, 235)
 _CURSOR_PILL_BORDER = QColor("#d8e0eb")
 
-# Gap kept on the toggle's right and the clearance reserved on the first line so
-# the corner-pinned +/- button never overlaps the primary readout text.
+# Gap kept on the toggle's right. Live and pinned share one title-action
+# reserve (P hint / pin / +/- / close) so the first pin does not jump.
 _TOGGLE_EDGE_GAP = 4
-_TOGGLE_FIRST_LINE_RESERVE = 24
+_ACTION_BTN = 16
+_TITLE_ACTION_COUNT = 3
+_TITLE_ACTION_RESERVE = (
+    _TITLE_ACTION_COUNT * _ACTION_BTN
+    + _TITLE_ACTION_COUNT * _TOGGLE_EDGE_GAP
+)
+_TOGGLE_FIRST_LINE_RESERVE = _TITLE_ACTION_RESERVE
+_CURSOR_PILL_HIGHLIGHT = QColor("#6591df")
+_PIN_CHROME_QSS = """
+QPushButton#cursorPillPin, QPushButton#cursorPillClose {
+    background: rgba(100, 116, 139, 0.15);
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgba(100, 116, 139, 0.3);
+    border-radius: 3px;
+    color: #475569;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 0px;
+    min-width: 16px;
+    min-height: 16px;
+    max-width: 16px;
+    max-height: 16px;
+}
+QPushButton#cursorPillPin[pinned="true"] {
+    background: #427de4;
+    border-color: #427de4;
+    color: #ffffff;
+}
+QLabel#cursorPillPinHint {
+    color: #71839d;
+    font-size: 10px;
+    background: transparent;
+}
+"""
 
 _CURSOR_HTML_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
 
@@ -340,11 +374,18 @@ class CursorPill(QFrame):
     user can drag it anywhere inside the canvas area."""
 
     display_mode_changed = pyqtSignal(str)
+    unpin_requested = pyqtSignal()
+    close_requested = pyqtSignal()
+    moved = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._space_hidden = False
         self._visibility_requested = False
+        self._pin_role = "live"
+        self._ordinal = 0
+        self._live_hint = ""
+        self._highlighted = False
         self.setObjectName("cursorPill")
         self.setCursor(Qt.OpenHandCursor)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -357,11 +398,9 @@ class CursorPill(QFrame):
         self._primary.setVisible(False)
         self._primary.setTextFormat(Qt.RichText)
         self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
-        # Reserve room on the first line's right so the corner-pinned toggle
-        # never overlaps the readout even when the primary line is the widest
-        # row (e.g. dual-cursor A·B·ΔT·1/ΔT). Only the first line is padded; the
-        # detail block below keeps the full width.
-        self._primary.setContentsMargins(0, 0, _TOGGLE_FIRST_LINE_RESERVE, 0)
+        # Reserve the shared title-action strip (P hint/pin + +/- + close)
+        # so live→pinned does not change the first-line width.
+        self._primary.setContentsMargins(0, 0, _TITLE_ACTION_RESERVE, 0)
         self._detail = _DocumentLabel("", self)
         self._detail.setObjectName("cursorPillDetail")
         self._detail.setTextFormat(Qt.RichText)
@@ -406,11 +445,37 @@ class CursorPill(QFrame):
         # delivery timing.
         self._toggle_btn = QPushButton("−", self)
         self._toggle_btn.setObjectName("cursorPillToggle")
-        self._toggle_btn.setFixedSize(16, 16)
+        self._toggle_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
         self._toggle_btn.setCursor(Qt.ArrowCursor)
         self._toggle_btn.clicked.connect(self._toggle_mode)
+        self._pin_btn = QPushButton(self)
+        self._pin_btn.setObjectName("cursorPillPin")
+        self._pin_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
+        self._pin_btn.setCursor(Qt.ArrowCursor)
+        self._pin_btn.setText("P")
+        self._pin_btn.setToolTip("取消固定，继续调整")
+        self._pin_btn.setProperty("pinned", "true")
+        self._pin_btn.clicked.connect(self._emit_unpin)
+        self._close_btn = QPushButton("×", self)
+        self._close_btn.setObjectName("cursorPillClose")
+        self._close_btn.setFixedSize(_ACTION_BTN, _ACTION_BTN)
+        self._close_btn.setCursor(Qt.ArrowCursor)
+        self._close_btn.setToolTip("关闭这一张面板")
+        self._close_btn.clicked.connect(self._emit_close)
+        self._pin_hint = QLabel(self)
+        self._pin_hint.setObjectName("cursorPillPinHint")
+        self._pin_hint.setFixedHeight(_ACTION_BTN)
+        self._pin_hint.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._pin_hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._pin_btn.setStyleSheet(_PIN_CHROME_QSS)
+        self._close_btn.setStyleSheet(_PIN_CHROME_QSS)
+        self._highlight_timer = QTimer(self)
+        self._highlight_timer.setSingleShot(True)
+        self._highlight_timer.setInterval(900)
+        self._highlight_timer.timeout.connect(self._clear_highlight)
         self._update_toggle_button()
-        self._position_toggle()
+        self._sync_pin_chrome()
+        self._position_title_actions()
 
     def setVisible(self, visible):
         self._visibility_requested = bool(visible)
@@ -432,20 +497,89 @@ class CursorPill(QFrame):
             super().setVisible(self._visibility_requested)
 
     def _position_toggle(self):
-        """Pin the +/- toggle to the pill's top-right corner."""
-        btn = self._toggle_btn
-        btn.move(self.width() - btn.width() - _TOGGLE_EDGE_GAP, _TOGGLE_EDGE_GAP)
-        btn.raise_()
+        self._position_title_actions()
+
+    def _position_title_actions(self):
+        """Keep P hint / pin / +/- / close on one reserved right-edge strip."""
+        y = _TOGGLE_EDGE_GAP
+        right = self.width() - _TOGGLE_EDGE_GAP
+        self._close_btn.move(right - _ACTION_BTN, y)
+        right -= _ACTION_BTN + _TOGGLE_EDGE_GAP
+        self._toggle_btn.move(right - _ACTION_BTN, y)
+        right -= _ACTION_BTN + _TOGGLE_EDGE_GAP
+        self._pin_btn.move(right - _ACTION_BTN, y)
+        hint_width = max(_ACTION_BTN, self._pin_hint.sizeHint().width())
+        hint_width = min(hint_width, right)
+        self._pin_hint.setGeometry(
+            right - hint_width, y, hint_width, _ACTION_BTN,
+        )
+        self._close_btn.raise_()
+        self._toggle_btn.raise_()
+        self._pin_btn.raise_()
+        self._pin_hint.raise_()
+
+    def _emit_unpin(self):
+        self.unpin_requested.emit()
+
+    def _emit_close(self):
+        self.close_requested.emit()
+
+    def pin_role(self):
+        return self._pin_role
+
+    def ordinal(self):
+        return self._ordinal
+
+    def set_ordinal(self, ordinal):
+        self._ordinal = int(ordinal or 0)
+
+    def set_pin_role(self, role):
+        next_role = "pinned" if role == "pinned" else "live"
+        if next_role == self._pin_role:
+            self._sync_pin_chrome()
+            return
+        self._pin_role = next_role
+        self._sync_pin_chrome()
+
+    def set_live_hint(self, text):
+        self._live_hint = str(text or "")
+        self._sync_pin_chrome()
+
+    def is_dragging(self):
+        return self._drag_offset is not None
+
+    def flash_highlight(self):
+        self._highlighted = True
+        self.raise_()
+        self.update()
+        self._highlight_timer.start()
+
+    def _clear_highlight(self):
+        self._highlighted = False
+        self.update()
+
+    def _sync_pin_chrome(self):
+        pinned = self._pin_role == "pinned"
+        self._pin_btn.setVisible(pinned)
+        self._close_btn.setVisible(pinned)
+        hint = self._live_hint if (not pinned) else ""
+        self._pin_hint.setText("P" if hint else "")
+        self._pin_hint.setToolTip(hint)
+        self._pin_hint.setVisible(bool(hint) and not pinned)
+        self._pin_btn.setProperty("pinned", "true" if pinned else "false")
+        self._pin_btn.style().unpolish(self._pin_btn)
+        self._pin_btn.style().polish(self._pin_btn)
+        self._position_title_actions()
 
     def adjustSize(self):
         # Every content/width change funnels through adjustSize(); reposition the
         # corner toggle here so it never depends on resize-event delivery timing.
         super().adjustSize()
-        self._position_toggle()
+        self._position_title_actions()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._position_toggle()
+        self._position_title_actions()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -453,7 +587,8 @@ class CursorPill(QFrame):
             painter.setRenderHint(QPainter.Antialiasing, True)
             rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
             painter.setBrush(_CURSOR_PILL_BG)
-            painter.setPen(QPen(_CURSOR_PILL_BORDER, 1.0))
+            border = _CURSOR_PILL_HIGHLIGHT if self._highlighted else _CURSOR_PILL_BORDER
+            painter.setPen(QPen(border, 1.4 if self._highlighted else 1.0))
             painter.drawRoundedRect(rect, _CURSOR_PILL_RADIUS, _CURSOR_PILL_RADIUS)
         finally:
             painter.end()
@@ -496,13 +631,13 @@ class CursorPill(QFrame):
         text = self._primary_original
         self._primary.setVisible(bool(text))
         if budget > 0:
-            text = self._primary_for_budget(text, max(1, budget - _TOGGLE_FIRST_LINE_RESERVE))
+            text = self._primary_for_budget(text, max(1, budget - _TITLE_ACTION_RESERVE))
         if budget > 0:
             if self._display_projection is None:
                 # Legacy full/mini details retain their intrinsic widths. The
                 # primary has a ceiling, not a permanently occupied grid.
-                budget = min(budget, self._primary_html_width(text) + _TOGGLE_FIRST_LINE_RESERVE)
-            self._primary.set_document_html(text, max(1, budget - _TOGGLE_FIRST_LINE_RESERVE))
+                budget = min(budget, self._primary_html_width(text) + _TITLE_ACTION_RESERVE)
+            self._primary.set_document_html(text, max(1, budget - _TITLE_ACTION_RESERVE))
         else:
             self._primary.setText(text)
         if budget > 0:
@@ -951,7 +1086,7 @@ class CursorPill(QFrame):
         primary_min = max((self._primary_html_width(part)
                            for part in primary_fragments), default=0.0)
         table_width = min(content + _TABLE_EDGE_CLEARANCE,
-                          max(table_width, min(primary_min + _TOGGLE_FIRST_LINE_RESERVE,
+                          max(table_width, min(primary_min + _TITLE_ACTION_RESERVE,
                                                compute_wcap(safe.width()) - 20)))
         self._pane_content_width = table_width
         self._detail.setMaximumWidth(int(ceil(table_width)))
@@ -995,7 +1130,7 @@ class CursorPill(QFrame):
         """Keep an unfit readout explicit without splitting a numeric token."""
         self._primary.hide()
         width = min(max(1, safe.width() - 20),
-                    ceil(self._measure_body_text(_OUT_OF_SPACE_TEXT)) + _TOGGLE_FIRST_LINE_RESERVE)
+                    ceil(self._measure_body_text(_OUT_OF_SPACE_TEXT)) + _TITLE_ACTION_RESERVE)
         self._pane_content_width = width
         self._detail.setMaximumWidth(ceil(width))
         html = f'<span style="font-size:11px;color:#64748b;">{_OUT_OF_SPACE_TEXT}</span>'
@@ -1209,6 +1344,7 @@ class CursorPill(QFrame):
         if e.button() == Qt.LeftButton and self._drag_offset is not None:
             self._drag_offset = None
             self.setCursor(Qt.OpenHandCursor)
+            self.moved.emit()
             e.accept()
             return
         super().mouseReleaseEvent(e)

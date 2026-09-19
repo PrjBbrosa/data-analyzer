@@ -640,6 +640,9 @@ class ViewMixin:
         )
 
     def _project_view_controls(self, idx):
+        ensure = getattr(self, "_ensure_pinned_cursor_lifecycle_hooks", None)
+        if callable(ensure):
+            ensure()
         if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return
         invalidate = getattr(self.navigator, "invalidate_channel_filter_context", None)
@@ -1077,6 +1080,9 @@ class ViewMixin:
             )
 
     def _render_view_onto_canvas(self, idx, canvas, *, update_primary_ui):
+        ensure = getattr(self, "_ensure_pinned_cursor_lifecycle_hooks", None)
+        if callable(ensure):
+            ensure()
         if canvas is None:
             return
         if not (0 <= idx < len(self.view_manager.views)):

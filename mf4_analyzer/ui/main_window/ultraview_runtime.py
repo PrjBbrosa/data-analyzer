@@ -18,6 +18,9 @@ class PresentationRuntimeFacts:
     # binding — rebound or hidden canvases would look like source changes.
     cursor_geometry: tuple = ()
     pill_fingerprint: tuple | None = None
+    # Stable pinned-cursor presentation (intent, full/mini, anchors,
+    # result revision). Hover highlight is never included.
+    pin_fingerprint: tuple | None = None
 
 
 class PresentationRuntimeLedger:

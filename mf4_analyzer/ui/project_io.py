@@ -25,17 +25,18 @@ Stable top-level keys (exactly :data:`PROJECT_PAYLOAD_KEYS`):
   view_id, attached_file_ids, checked, hidden_channels, colors, plot_mode,
   cursor_mode, xlim, ylims, overlay_primary, axis_opts, remarks,
   cursor_placement, curve_bindings, hidden_curve_binding_ids, time_filter,
-  chart_appearance). Retired WWT display keys
+  chart_appearance, optional pinned_cursors). Retired WWT display keys
   ``x_viewport_intent`` / ``native_ticks`` are stripped. ``time_filter`` is
   the authority for time-domain filter intent. ``chart_appearance`` holds
   View-local chart-options title / Y label / log / grid and filter-companion
-  colors.
+  colors. ``pinned_cursors`` is optional P-key pin intent; missing → empty.
 * ``view_manager`` — ``{active, split_pairs}``.
 * ``analysis_views`` — per section ``{active, views: AnalysisViewState.to_dict()}``
   (schema, name, tab_color, view_id, attached_file_ids, panes, params,
   compare). Pane rows persist sources / rpm / FRF io / time_range / xlim /
   ylim / ylims / effective_time_range / cursor_mode / remarks /
-  cursor_placement. ``PaneState.source_time_view_id`` is **not** written.
+  cursor_placement / optional pinned_cursors.
+  ``PaneState.source_time_view_id`` is **not** written.
 * ``filter`` — compatibility input for schema 1–3 (project-level Inspector
   filter). Schema 4 writes ``null``; time-domain Views own ``time_filter``.
 * ``ultraview`` — ``workspace_to_payload`` Board/workspace blob (schema,
@@ -59,6 +60,11 @@ from pathlib import Path
 import tempfile
 from collections.abc import Mapping
 
+from .pinned_cursor_state import (
+    collection_from_dict,
+    collection_to_dict,
+    remap_collection_fids,
+)
 from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
 from .view_overlay_state import remap_remarks
 from .view_state import (
@@ -509,6 +515,13 @@ def _remap_channel_axis_groups(value, fid_map: dict) -> dict[str, str]:
     return groups
 
 
+def _remap_pinned_cursors(raw, fid_map: dict) -> dict:
+    """Rewrite known pin fids; keep unknown fids. Bad records are dropped."""
+    return collection_to_dict(
+        remap_collection_fids(collection_from_dict(raw), fid_map)
+    )
+
+
 def remap_view_fids(views: list, fid_map: dict) -> list:
     """Rewrite the fid of every channel reference in a list of
     ``ViewState.to_dict()`` payloads, dropping references whose fid is absent
@@ -613,6 +626,9 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
 
         v["remarks"] = remap_remarks(view.get("remarks"), fid_map)
         # cursor_placement has no fid; keep the payload as copied above.
+        v["pinned_cursors"] = _remap_pinned_cursors(
+            view.get("pinned_cursors"), fid_map,
+        )
 
         from .time_curve_bindings import (
             prune_hidden_curve_binding_ids,
@@ -674,6 +690,9 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
                         if source and source[0] in fid_map else None
                     )
                 pn["remarks"] = remap_remarks(pane.get("remarks"), fid_map)
+                pn["pinned_cursors"] = _remap_pinned_cursors(
+                    pane.get("pinned_cursors"), fid_map,
+                )
                 panes.append(pn)
             v["panes"] = panes
             if "attached_file_ids" in view:

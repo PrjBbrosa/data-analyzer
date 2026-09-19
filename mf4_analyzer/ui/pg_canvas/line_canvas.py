@@ -36,7 +36,10 @@ from mf4_analyzer.signal.display_ranges import (
 # function the time-domain renderer bills its frames with, so the analysis rows
 # cannot drift into a second definition of "how much does this cost to paint".
 from mf4_analyzer.render_profile import envelope_ink_dev_px
-from mf4_analyzer.ui.cursor_display_model import FrequencyCursorChannel
+from mf4_analyzer.ui.cursor_display_model import (
+    FrequencyCursorChannel,
+    PinnedCursorSample,
+)
 
 # Overlay AA point-density budget, shared with TimeDomainCanvasPG (canvas.py:
 # 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so
@@ -92,6 +95,7 @@ from .remarks import (
     viewport_pos_to_scene,
 )
 from .overlay_intent import AnalysisRemarkStore, snapshot_frequency_cursor
+from .pinned_cursor_overlay import PinnedCursorOverlay
 from mf4_analyzer.ui.view_overlay_state import normalize_cursor_placement
 from ._shared import show_major_grid_left_bottom_only
 from ._split_mixin import (
@@ -418,6 +422,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._cursor_lines = self._make_frequency_cursor_lines("#64748b")
         self._cursor_a_lines = self._make_frequency_cursor_lines("#1769e0")
         self._cursor_b_lines = self._make_frequency_cursor_lines("#d97706")
+        self._pinned_overlay = PinnedCursorOverlay(self, kind="frequency")
         self._cursor_mode = "off"
         self._cursor_a_frequency = None
         self._cursor_b_frequency = None
@@ -3790,21 +3795,83 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         rows = self.readout_at(float(frequency))
         return float(rows[0][1]) if rows else None
 
-    def set_cursor_frequency(self, frequency) -> str:
-        snapped = self._nearest_frequency(frequency)
+    def evaluate_frequency_cursor(self, frequency):
+        """Return ``(snapped_hz, channels)`` without moving lines or emitting."""
+        try:
+            query = float(frequency)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(query):
+            return None
+        snapped = self._nearest_frequency(query)
         if snapped is None:
+            return None
+        channels = self._frequency_cursor_channels(mode="single", freq=snapped)
+        return snapped, tuple(channels)
+
+    def evaluate_frequency_cursor_sample(self, frequency):
+        result = self.evaluate_frequency_cursor(frequency)
+        if result is None:
+            return None
+        snapped, channels = result
+        return PinnedCursorSample(
+            binding_generation=int(self._spectrum_display_generation),
+            data_revision=int(self._spectrum_display_revision),
+            domain="frequency",
+            mode="single",
+            x=snapped,
+            channels=channels,
+        )
+
+    def evaluate_dual_frequency_cursor(self, a_frequency, b_frequency):
+        """Return ``(a_hz, b_hz, channels)`` or None. Incomplete B is None."""
+        if b_frequency is None:
+            return None
+        try:
+            a_query = float(a_frequency)
+            b_query = float(b_frequency)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(a_query) or not np.isfinite(b_query):
+            return None
+        a_value = self._nearest_frequency(a_query)
+        b_value = self._nearest_frequency(b_query)
+        if a_value is None or b_value is None:
+            return None
+        channels = self._frequency_cursor_channels(
+            mode="dual", a_value=a_value, b_value=b_value,
+        )
+        return a_value, b_value, tuple(channels)
+
+    def evaluate_dual_frequency_cursor_sample(self, a_frequency, b_frequency):
+        result = self.evaluate_dual_frequency_cursor(a_frequency, b_frequency)
+        if result is None:
+            return None
+        a_value, b_value, channels = result
+        return PinnedCursorSample(
+            binding_generation=int(self._spectrum_display_generation),
+            data_revision=int(self._spectrum_display_revision),
+            domain="frequency",
+            mode="dual",
+            ax=a_value,
+            bx=b_value,
+            channels=channels,
+        )
+
+    def set_cursor_frequency(self, frequency) -> str:
+        result = self.evaluate_frequency_cursor(frequency)
+        if result is None:
             self.cursor_info.emit("")
             self.frequency_cursor_channels.emit(())
             return ""
+        snapped, channels = result
         self._show_frequency_cursor_lines(self._cursor_lines, snapped)
         # Keep the public return value's legacy plain-text contract.  Only
         # the UI signal needs the separator-rich payload that CursorPill uses
         # to build its time-style vertical detail rows.
         readout = self.format_readout(snapped)
         self.cursor_info.emit(self._format_single_cursor_readout(snapped))
-        self.frequency_cursor_channels.emit(
-            self._frequency_cursor_channels(mode="single", freq=snapped)
-        )
+        self.frequency_cursor_channels.emit(channels)
         return readout
 
     def _format_single_cursor_readout(self, freq: float) -> str:
@@ -3854,9 +3921,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self.frequency_cursor_rows.emit([])
             self.frequency_cursor_channels.emit(())
             return primary
-        b_value = self._nearest_frequency(b_frequency)
-        if b_value is None:
+        evaluated = self.evaluate_dual_frequency_cursor(a_frequency, b_frequency)
+        if evaluated is None:
             return ""
+        a_value, b_value, channels = evaluated
         self._cursor_b_frequency = b_value
         self._show_frequency_cursor_lines(self._cursor_b_lines, b_value)
         primary = _CURSOR_HTML_SEP.join((
@@ -3870,11 +3938,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self.frequency_cursor_rows.emit(
             self._frequency_cursor_rows(a_value, b_value)
         )
-        self.frequency_cursor_channels.emit(
-            self._frequency_cursor_channels(
-                mode="dual", a_value=a_value, b_value=b_value,
-            )
-        )
+        self.frequency_cursor_channels.emit(channels)
         return primary
 
     def _frequency_cursor_rows(

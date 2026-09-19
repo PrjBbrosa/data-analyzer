@@ -260,3 +260,28 @@ def test_capture_facts_are_not_written_onto_board_or_project_payload(qapp):
     canvas.deleteLater()
     coord.clear()
     coord.deleteLater()
+
+
+def test_pin_overlay_items_stay_out_of_transient_capture_sets(qapp):
+    canvases = [
+        _show(TimeDomainCanvasPG()),
+        _show(PgLineCanvas()),
+        _show(PgFrfCanvas()),
+    ]
+    heatmap = _show(PgHeatmapCanvas(with_slice=True))
+    try:
+        assert not hasattr(heatmap, "_pinned_overlay")
+        for canvas in canvases:
+            overlay = canvas._pinned_overlay
+            transients = list(canvas.iter_transient_overlay_items())
+            for item in overlay.iter_lines():
+                assert item not in transients
+            for item in overlay._all_managed_items():
+                assert item not in transients
+            facts = canvas.presentation_capture_facts()
+            assert facts.host_kind in {"time", "fft", "frf"}
+            assert facts.pill_fingerprint is None
+    finally:
+        heatmap.deleteLater()
+        for canvas in canvases:
+            canvas.deleteLater()

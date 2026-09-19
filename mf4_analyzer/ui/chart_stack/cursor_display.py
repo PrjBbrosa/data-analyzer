@@ -28,6 +28,7 @@ from ..cursor_display_model import (
     CursorTableRow,
     CursorPresentation,
     FrequencyCursorChannel,
+    FrfCursorSample,
     _OPTION_NAMES,
     enabled_value_fields,
 )
@@ -798,6 +799,88 @@ def build_fft_cursor_presentation(
         mini=projection.mini,
         omit_visible_source_prefix=omit_prefix,
         metric_labels=metric_labels,
+    )
+
+
+def live_pin_hint_text(cursor_mode: str, *, dual_complete: bool = True) -> str:
+    """Live title chrome only. Pinned pills show a pin button instead."""
+    if cursor_mode == "single":
+        return "P 固定"
+    if cursor_mode == "dual":
+        return "P 固定此组" if dual_complete else ""
+    return ""
+
+
+def build_frf_cursor_presentation(
+    sample: FrfCursorSample | None,
+    *,
+    mini: bool,
+    layout_category: str = "natural",
+) -> CursorPresentation:
+    """Project FRF evaluate facts into the shared table (one panel, three rows)."""
+    if sample is None:
+        return build_fft_cursor_presentation(
+            (), cursor_mode="single", mini=mini, layout_category=layout_category,
+        )
+    unit = str(sample.magnitude_unit or "")
+    if sample.a is not None and sample.b is not None:
+        channels = (
+            FrequencyCursorChannel(
+                identity="magnitude",
+                source_label="",
+                channel_label="|H|",
+                a_value=sample.a.magnitude,
+                b_value=sample.b.magnitude,
+                delta_ab=sample.delta_magnitude,
+                unit_suffix=unit,
+            ),
+            FrequencyCursorChannel(
+                identity="phase",
+                source_label="",
+                channel_label="phase",
+                a_value=sample.a.phase_deg,
+                b_value=sample.b.phase_deg,
+                delta_ab=sample.delta_phase_deg,
+                unit_suffix="°",
+            ),
+            FrequencyCursorChannel(
+                identity="coherence",
+                source_label="",
+                channel_label="coherence",
+                a_value=sample.a.coherence,
+                b_value=sample.b.coherence,
+                delta_ab=sample.delta_coherence,
+            ),
+        )
+        return build_fft_cursor_presentation(
+            channels, cursor_mode="dual", mini=mini,
+            layout_category=layout_category,
+        )
+    channels = (
+        FrequencyCursorChannel(
+            identity="magnitude",
+            source_label="",
+            channel_label="|H|",
+            value=sample.magnitude,
+            unit_suffix=unit,
+        ),
+        FrequencyCursorChannel(
+            identity="phase",
+            source_label="",
+            channel_label="phase",
+            value=sample.phase_deg,
+            unit_suffix="°",
+        ),
+        FrequencyCursorChannel(
+            identity="coherence",
+            source_label="",
+            channel_label="coherence",
+            value=sample.coherence,
+        ),
+    )
+    return build_fft_cursor_presentation(
+        channels, cursor_mode="single", mini=mini,
+        layout_category=layout_category,
     )
 
 

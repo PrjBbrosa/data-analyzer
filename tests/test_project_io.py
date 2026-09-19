@@ -441,6 +441,77 @@ def test_remap_rewrites_remarks_fid_drops_missing_and_keeps_cursor_placement():
     assert out["cursor_placement"] == {"ax": 1.0, "bx": 2.5, "placing": True}
 
 
+def _sample_pin_payload(*, fid="f0", extra_bindings=None, **overrides):
+    from uuid import uuid4
+    from mf4_analyzer.ui.pinned_cursor_state import collection_from_dict, collection_to_dict
+
+    bindings = [{"fid": fid, "channel": "torque"}]
+    if extra_bindings:
+        bindings.extend(extra_bindings)
+    raw = {
+        "payload_version": 1,
+        "scope_id": str(uuid4()),
+        "next_ordinal": 2,
+        "records": [{
+            "payload_version": 1,
+            "record_id": str(uuid4()),
+            "ordinal": 1,
+            "mode": "single",
+            "domain": "channel",
+            "x": 0.4,
+            "x_unit": "mm",
+            "axis_identity": [fid, "steer_angle"],
+            "bindings": bindings,
+            "presentation": "full",
+        }],
+    }
+    raw.update(overrides)
+    return collection_to_dict(collection_from_dict(raw))
+
+
+def test_remap_rewrites_known_pin_fids_keeps_unknown_and_cursor_placement():
+    pins = _sample_pin_payload(
+        fid="f0",
+        extra_bindings=[{"fid": "missing", "channel": "rpm"}],
+    )
+    view = {
+        "name": "V",
+        "tab_color": "#fff",
+        "checked": [["f0", "rpm"]],
+        "cursor_placement": {"ax": 1.0, "bx": 2.5},
+        "pinned_cursors": pins,
+    }
+    out = pio.remap_view_fids([view], {"f0": "f9"})[0]
+    assert out["cursor_placement"] == {"ax": 1.0, "bx": 2.5}
+    remapped = out["pinned_cursors"]
+    record = remapped["records"][0]
+    assert remapped["scope_id"] == pins["scope_id"]
+    assert record["record_id"] == pins["records"][0]["record_id"]
+    assert record["ordinal"] == 1
+    assert record["axis_identity"] == ["f9", "steer_angle"]
+    assert record["bindings"][0]["fid"] == "f9"
+    assert record["bindings"][1]["fid"] == "missing"
+
+
+def test_corrupt_pin_record_does_not_break_project_payload(tmp_path):
+    from mf4_analyzer.ui.view_state import ViewState
+
+    doc = _doc()
+    pins = _sample_pin_payload()
+    pins["records"].append({"payload_version": 1, "mode": "nope", "ordinal": 2})
+    doc.views[0]["pinned_cursors"] = pins
+    path = tmp_path / "pins.tlproj"
+    pio.save_project_to_json(doc, path)
+    loaded = pio.load_project_from_json(path)
+    state = ViewState.from_dict(loaded.views[0])
+    assert len(state.pinned_cursors.records) == 1
+    assert state.pinned_cursors.records[0].x == 0.4
+    remapped = pio.remap_view_fids(loaded.views, {"f0": "f9"})[0]
+    again = ViewState.from_dict(remapped)
+    assert len(again.pinned_cursors.records) == 1
+    assert again.pinned_cursors.records[0].bindings[0].fid == "f9"
+
+
 def test_ultraview_field_is_last_and_positional_construction_unchanged():
     import dataclasses
 

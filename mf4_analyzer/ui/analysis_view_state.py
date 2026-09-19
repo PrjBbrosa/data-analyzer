@@ -19,6 +19,12 @@ from typing import Any, Iterable, Mapping, Sequence
 from uuid import uuid4
 
 from ..db_reference import migrate_legacy_reference_params
+from .pinned_cursor_state import (
+    PinnedCursorCollection,
+    collection_from_dict,
+    collection_to_dict,
+    empty_collection,
+)
 from .view_overlay_state import (
     normalize_cursor_placement,
     normalize_remarks,
@@ -42,7 +48,8 @@ MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for late
 # migration off "params has db_reference and no db_reference_mode", NOT this
 # number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
-_SCHEMA = 10
+# schema 11 adds optional per-pane ``pinned_cursors`` (P-key pin intent).
+_SCHEMA = 11
 _PRESET_BASELINE_VERSION = 2
 _PRESET_BASELINE_SUPPORTED_VERSIONS = frozenset({1, 2})
 _PRESET_BASELINE_KINDS = frozenset({"fft", "fft_time", "order", "frf"})
@@ -249,6 +256,7 @@ class PaneState:
     # time-domain ViewState; analysis canvases reproject after recompute.
     remarks: list[dict[str, Any]] = field(default_factory=list)
     cursor_placement: dict[str, Any] | None = None
+    pinned_cursors: PinnedCursorCollection = field(default_factory=empty_collection)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -276,6 +284,7 @@ class PaneState:
             "cursor_placement": normalize_cursor_placement(
                 self.cursor_placement, cursor_mode=self.cursor_mode,
             ),
+            "pinned_cursors": collection_to_dict(self.pinned_cursors),
         }
 
     @classmethod
@@ -315,6 +324,7 @@ class PaneState:
                 data.get("cursor_placement"),
                 cursor_mode=_cursor_mode_from_data(data),
             ),
+            pinned_cursors=collection_from_dict(data.get("pinned_cursors")),
         )
 
 

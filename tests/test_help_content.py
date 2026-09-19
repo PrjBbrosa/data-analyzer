@@ -380,8 +380,8 @@ def test_help_has_no_developer_jargon():
 
 def test_panel_guides_cover_new_topics():
     checks = {
-        "time-domain-guide.html": ["滤波", "框选", "Shift", "原始辅助线", "游标显示设置", "色标", "⋯"],
-        "fft-guide.html": ["A 计权", "查看全部", "游标显示设置", "色标", "⋯"],
+        "time-domain-guide.html": ["滤波", "框选", "Shift", "原始辅助线", "游标显示设置", "按 P 可固定读数", "色标", "⋯"],
+        "fft-guide.html": ["A 计权", "查看全部", "游标显示设置", "按 P 可固定当前读数", "色标", "⋯"],
         "ffttime-guide.html": ["A 计权", "游标显示设置", "色标", "⋯"],
         "order-analysis-guide.html": ["加权", "采样率", "游标显示设置", "色标", "⋯"],
     }
@@ -403,7 +403,7 @@ def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
         "20log10", "1 ratio-unit", "output/input", "严格同时间轴",
         "NumPy-only", "SciPy", "custom-X", "common",
         "available_per_source", "frequency_hz", "pxy_imag",
-        "默认关闭", "2–9", "双游标", "Δf", "保留，不做自动补偿",
+        "默认关闭", "2–9", "双游标", "Δf", "按 P 固定同一频率", "保留，不做自动补偿",
     ):
         assert keyword in text, f"FRF guide missing: {keyword}"
     assert "先复用同一签名" in text
@@ -513,9 +513,12 @@ def test_cheat_sheet_matches_runtime_desktop_shortcuts():
         "Alt+Up/Down",
     ):
         assert phrase in blob, f"cheat sheet missing {phrase!r}"
+    assert "固定当前读数" in blob
+    assert "Board 与标注里仍是画笔" in blob
     project = next(slide for slide in _deck_data()["slides"] if slide.get("id") == "project")
     project_blob = json.dumps(project, ensure_ascii=False)
     assert "有未保存更改时可保存、不保存或取消" in project_blob
+    assert "固定读数" in project_blob
     assert "全局撤销栈" not in project_blob
 
 
@@ -551,3 +554,34 @@ def test_ultraview_p3_surfaces_drop_alt_drag_copy():
         text = path.read_text(encoding="utf-8")
         for phrase in banned:
             assert phrase not in text, f"{path.name} still has {phrase!r}"
+
+
+def test_help_documents_chart_pin_not_heatmap_or_board_pen():
+    time_guide = (HELP / "time-domain-guide.html").read_text(encoding="utf-8")
+    fft_guide = (HELP / "fft-guide.html").read_text(encoding="utf-8")
+    frf_guide = FRF_GUIDE.read_text(encoding="utf-8")
+    ffttime = (HELP / "ffttime-guide.html").read_text(encoding="utf-8")
+    order = (HELP / "order-analysis-guide.html").read_text(encoding="utf-8")
+    ultraview = (HELP / "ultraview-guide.html").read_text(encoding="utf-8")
+    current_manual, _changelog = MANUAL.read_text(encoding="utf-8").split(
+        '  "changelog": [', 1,
+    )
+    published = PUBLISHED_GUIDE.read_text(encoding="utf-8")
+
+    assert "按 P 可固定读数" in time_guide
+    assert "不必先点" in time_guide
+    assert "关游标不隐藏已固定" in time_guide
+    assert "按 P 可固定当前读数" in fft_guide
+    assert "按 P 固定同一频率" in frf_guide
+    assert "关游标不隐藏已固定" in frf_guide
+    assert "按 P 可固定" not in ffttime
+    assert "按 P 可固定" not in order
+    assert "固定当前读数" in current_manual
+    assert "Board 与标注里仍是画笔" in current_manual
+    assert "固定读数" in current_manual
+    assert "P 固定读数" in published
+    assert "不必先点击" in published
+    assert "Board 与图片标注里 P 仍是画笔" in published
+    assert "已固定面板" in published
+    assert "P 打开画笔" not in ultraview
+    assert "P</b> 打开纵向画笔" in ultraview

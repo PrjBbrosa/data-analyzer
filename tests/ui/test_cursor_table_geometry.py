@@ -588,7 +588,10 @@ def test_long_underscore_name_uses_two_lines_before_elision(qapp, qtbot, product
 
 @pytest.mark.parametrize('width', [360, 500, 800])
 def test_primary_paint_bounds_reserve_actual_toggle_margin(qapp, qtbot, production_style, width):
-    from mf4_analyzer.ui.chart_stack.cursor_pill import _CURSOR_HTML_SEP
+    from mf4_analyzer.ui.chart_stack.cursor_pill import (
+        _CURSOR_HTML_SEP,
+        _TITLE_ACTION_RESERVE,
+    )
     parent, pill = make_pill(qtbot, width)
     fields = ('A=28.2041s', 'B=24.7643s', 'ΔT=-3.4399s', '1/ΔT=0.29Hz')
     pill.set_primary(_CURSOR_HTML_SEP.join(fields))
@@ -596,7 +599,7 @@ def test_primary_paint_bounds_reserve_actual_toggle_margin(qapp, qtbot, producti
     pill.show()
     qapp.processEvents()
     doc = pill._primary.document
-    assert pill._primary.contentsMargins().right() == 24
+    assert pill._primary.contentsMargins().right() == _TITLE_ACTION_RESERVE
     assert doc.size().width() <= pill._primary.contentsRect().width()
     block = doc.begin()
     while block.isValid():

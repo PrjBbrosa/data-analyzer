@@ -113,6 +113,7 @@ from mf4_analyzer.ui.pg_canvas.fonts import (
 )
 from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
+from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import PinnedCursorOverlay
 from mf4_analyzer.ui.pg_canvas.ticks_math import (
     _quantize_range_key,
     _frame_to_nice,
@@ -675,6 +676,7 @@ class TimeDomainCanvasPG(QWidget):
         # Decomposition collaborators. Most keep only a canvas back-reference;
         # Phase 4.2 starts moving cohesive state into the owning collaborator.
         self._cursor = CursorController(self)
+        self._pinned_overlay = PinnedCursorOverlay(self, kind="time")
         self._annotations = AnnotationManager(self)
         self._tick_density_controller = TickDensityController(self)
         self._overlay_axes = OverlayAxisManager(self)
@@ -3348,6 +3350,9 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_axes.reset_for_rebuild()
         self._subplot_label_specs = []
         self._cursor.clear_items()
+        overlay = getattr(self, "_pinned_overlay", None)
+        if overlay is not None:
+            overlay.clear_items()
         self._cursor.invalidate_custom_x_path_cache()
         self.set_cursor_x_axis_context(None)
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
@@ -3511,6 +3516,18 @@ class TimeDomainCanvasPG(QWidget):
     def snapshot_cursor_placement(self):
         fn = getattr(self._cursor, "snapshot_placement", None)
         return fn() if callable(fn) else None
+
+    def evaluate_single_cursor(self, x):
+        fn = getattr(self._cursor, "evaluate_single_cursor", None)
+        return fn(x) if callable(fn) else ()
+
+    def evaluate_dual_cursor(self, ax, bx):
+        fn = getattr(self._cursor, "evaluate_dual_cursor", None)
+        return fn(ax, bx) if callable(fn) else ()
+
+    def data_x_from_viewport_pos(self, viewport_pos):
+        fn = getattr(self._cursor, "data_x_from_viewport_pos", None)
+        return fn(viewport_pos) if callable(fn) else None
 
     def restore_cursor_placement(self, placement):
         fn = getattr(self._cursor, "restore_placement", None)

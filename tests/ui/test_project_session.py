@@ -1553,6 +1553,65 @@ def test_project_roundtrip_restores_remarks_and_dual_cursor(qapp, tmp_path):
         assert name in blob
 
 
+def test_project_roundtrip_restores_pinned_cursors(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.pinned_cursor_state import (
+        collection_to_dict,
+        empty_collection,
+        next_record,
+    )
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=40)
+    proj = tmp_path / "pins.tlproj"
+
+    mw = MainWindow()
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+    mw.save_project(proj)
+
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    saved_fid = raw["files"][0]["fid"]
+    collection = empty_collection()
+    collection, intent = next_record(collection, {
+        "mode": "single",
+        "domain": "time",
+        "x": 0.12,
+        "x_unit": "s",
+        "bindings": [{"fid": saved_fid, "channel": "rpm"}],
+        "presentation": "full",
+    })
+    raw["views"][0]["pinned_cursors"] = collection_to_dict(collection)
+    raw["views"][0]["cursor_placement"] = {"ax": 0.10, "bx": 0.20}
+    raw["views"][0]["cursor_mode"] = "off"
+    proj.write_text(json.dumps(raw), encoding="utf-8")
+
+    mw2 = MainWindow()
+    mw2.resize(1200, 800)
+    mw2.show()
+    mw2.open_project(proj)
+    qapp.processEvents()
+
+    restored_fid = next(iter(mw2.files))
+    restored = mw2.view_manager.get(0)
+    assert restored.cursor_mode == "off"
+    assert restored.cursor_placement["ax"] == pytest.approx(0.10)
+    assert restored.cursor_placement["bx"] == pytest.approx(0.20)
+    assert restored.pinned_cursors.scope_id == collection.scope_id
+    pin = restored.pinned_cursors.records[0]
+    assert pin.record_id == intent.record_id
+    assert pin.ordinal == 1
+    assert pin.x == pytest.approx(0.12)
+    assert pin.bindings[0].fid == restored_fid
+    assert pin.bindings[0].channel == "rpm"
+
+
 def test_reopen_with_frf_view_keeps_time_dual_cursor_pill(qapp, tmp_path, qtbot):
     """Off-screen FRF restore must not clear the shared time-domain pill."""
     from mf4_analyzer.ui.main_window import MainWindow

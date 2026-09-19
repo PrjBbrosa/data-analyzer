@@ -125,6 +125,7 @@ def test_keyboard_chips_match_shortcut_registry():
     assert hints.shortcut_tooltip("cursor_off") == "Ctrl+3"
     assert hints.shortcut_tooltip("cursor_single") == "Ctrl+4"
     assert hints.shortcut_tooltip("cursor_dual") == "Ctrl+5"
+    assert hints.shortcut_tooltip("pin_cursor") == "P"
     assert hints.shortcut_tooltip("pan") == "Ctrl+G"
     assert hints.shortcut_tooltip("zoom") == "Ctrl+B"
     # The catalog's helper must reflect those exact strings.
@@ -132,6 +133,7 @@ def test_keyboard_chips_match_shortcut_registry():
     assert home in chips
     assert "Ctrl+1" in chips
     assert "Ctrl+3" in chips
+    assert "P" in chips
     assert "Ctrl+G" in chips
     assert "Ctrl+B" in chips
     back = native_text_for(CommandId.VIEW_BACK)
@@ -219,6 +221,40 @@ def test_quickref_explains_the_pane_local_frequency_cursor_modes():
     assert "pane" in row.sub and "默认关闭" in row.sub
     assert "隐名称" in row.sub
     assert "+N" in row.sub
+
+
+def test_quickref_documents_chart_pin_not_board_pen():
+    pin_key = hints.shortcut_tooltip("pin_cursor")
+    assert pin_key == "P"
+
+    shortcuts = next(g for g in quickref.QUICKREF if g.title == "快捷键")
+    shortcut_row = next(row for row in shortcuts.rows if row.desc == "固定当前读数")
+    assert shortcut_row.keys == (pin_key,)
+    assert "时域" in shortcut_row.sub and "频谱" in shortcut_row.sub
+    assert "频响" in shortcut_row.sub
+    assert "不必先点" in shortcut_row.sub
+    assert "Board" in shortcut_row.sub
+    assert "画笔" in shortcut_row.sub
+    assert "全局" not in shortcut_row.sub
+    assert "工具栏" not in shortcut_row.desc and "工具栏" not in shortcut_row.sub
+
+    group = next(g for g in quickref.QUICKREF if g.title == "游标")
+    pin_row = next(row for row in group.rows if row.desc == "固定读数面板")
+    assert pin_row.keys == (pin_key,)
+    assert pin_row.keys == (quickref._sc("pin_cursor"),)
+    for phrase in (
+        "单游标", "双游标", "A、B", "关游标", "不隐藏", "蓝图钉",
+        "取消固定", "原地", "×", "撤销", "−/+",
+    ):
+        assert phrase in pin_row.sub, phrase
+    dual = next(row for row in group.rows if row.desc == "双游标")
+    assert "点 A、B" in dual.sub
+
+    board = next(g for g in quickref.QUICKREF if g.title == "总览 · Board 与自由网格")
+    haystack = " ".join(f"{row.desc} {row.sub}" for row in board.rows)
+    assert "P 打开画笔" in haystack
+    assert "固定当前读数" not in haystack
+    assert "固定读数面板" not in haystack
 
 
 def test_quickref_documents_time_cursor_display_settings():

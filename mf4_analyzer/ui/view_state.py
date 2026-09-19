@@ -20,6 +20,13 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
+from .pinned_cursor_state import (
+    PinnedCursorCollection,
+    collection_from_dict,
+    collection_to_dict,
+    duplicate_collection,
+    empty_collection,
+)
 from .time_curve_bindings import TimeCurveBinding, parse_curve_bindings
 from .view_overlay_state import normalize_cursor_placement, normalize_remarks
 
@@ -407,6 +414,8 @@ def is_reusable_blank_view(state: "ViewState") -> bool:
         return False
     if state.curve_bindings or state.remarks or state.cursor_placement:
         return False
+    if getattr(getattr(state, "pinned_cursors", None), "records", ()):
+        return False
     if getattr(state, "hidden_curve_binding_ids", None):
         return False
     if state.xlim is not None or state.ylims:
@@ -451,6 +460,8 @@ class ViewState:
     chart_appearance: dict[str, Any] = field(
         default_factory=default_chart_appearance
     )
+    # Last for positional-compat. Optional; missing JSON → empty collection.
+    pinned_cursors: PinnedCursorCollection = field(default_factory=empty_collection)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -477,6 +488,7 @@ class ViewState:
         data["chart_appearance"] = normalize_chart_appearance(
             self.chart_appearance
         )
+        data["pinned_cursors"] = collection_to_dict(self.pinned_cursors)
         return data
 
     @classmethod
@@ -521,6 +533,7 @@ class ViewState:
             chart_appearance=normalize_chart_appearance(
                 data.get("chart_appearance")
             ),
+            pinned_cursors=collection_from_dict(data.get("pinned_cursors")),
         )
 
 
@@ -652,6 +665,17 @@ def _coerce_pair(value: Any) -> tuple[float, float] | None:
     if not (span > magnitude * _DEGENERATE_SPAN_RATIO and span > 0.0):
         return None
     return (lo_f, hi_f)
+
+
+def _remint_pinned_cursors(state: Any) -> None:
+    """Give a duplicated View/pane fresh pin scope_id and record UUIDs."""
+    collection = getattr(state, "pinned_cursors", None)
+    if collection is not None:
+        state.pinned_cursors = duplicate_collection(collection)
+    for pane in getattr(state, "panes", None) or ():
+        pane_collection = getattr(pane, "pinned_cursors", None)
+        if pane_collection is not None:
+            pane.pinned_cursors = duplicate_collection(pane_collection)
 
 
 class ViewManager(QObject):
@@ -894,6 +918,7 @@ class ViewManager(QObject):
         copied.name = f"{source.name} 副本"
         if hasattr(copied, "view_id"):
             copied.view_id = str(uuid4())
+        _remint_pinned_cursors(copied)
         self.views.insert(idx + 1, copied)
         self.active = self._index_of_state(active_state)
         self._restore_pairs_by_object(pairs)

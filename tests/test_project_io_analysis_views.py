@@ -94,6 +94,55 @@ def test_remap_analysis_remarks_rewrites_fid_and_drops_missing():
     assert pane["cursor_placement"] == {"ax": 12.0, "bx": 40.0}
 
 
+def test_remap_analysis_pins_rewrites_known_fids_keeps_unknown():
+    from uuid import uuid4
+    from mf4_analyzer.ui.pinned_cursor_state import (
+        collection_from_dict,
+        collection_to_dict,
+    )
+
+    pins = collection_to_dict(collection_from_dict({
+        "payload_version": 1,
+        "scope_id": str(uuid4()),
+        "next_ordinal": 2,
+        "records": [{
+            "payload_version": 1,
+            "record_id": str(uuid4()),
+            "ordinal": 1,
+            "mode": "single",
+            "domain": "frequency",
+            "x": 40.0,
+            "x_unit": "Hz",
+            "bindings": [
+                {"fid": "f1", "channel": "vib"},
+                {"fid": "gone", "channel": "rpm"},
+            ],
+        }],
+    }))
+    analysis_views = {
+        "fft": {
+            "active": 0,
+            "views": [{
+                "schema": 11,
+                "name": "FFT",
+                "tab_color": "#2d7ff9",
+                "panes": [{
+                    "sources": [["f1", "vib"]],
+                    "cursor_placement": {"ax": 12.0, "bx": 40.0},
+                    "pinned_cursors": pins,
+                }],
+            }],
+        },
+    }
+    out = remap_analysis_view_fids(analysis_views, {"f1": "F1"})
+    pane = out["fft"]["views"][0]["panes"][0]
+    assert pane["cursor_placement"] == {"ax": 12.0, "bx": 40.0}
+    record = pane["pinned_cursors"]["records"][0]
+    assert record["bindings"][0]["fid"] == "F1"
+    assert record["bindings"][1]["fid"] == "gone"
+    assert record["ordinal"] == 1
+
+
 def test_remap_frf_role_endpoints_is_directional_and_symmetric():
     analysis_views = {
         "frf": {
@@ -156,7 +205,7 @@ def test_analysis_view_schema6_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 10
+    assert d["schema"] == 11
     assert d["preset_baseline"] is None
 
     v2 = AnalysisViewState.from_dict(d)
@@ -240,7 +289,7 @@ def test_preset_baseline_round_trips_through_project_json(tmp_path):
     )
     loaded = load_project_from_json(path)
     payload = loaded.analysis_views["fft"]["views"][0]
-    assert payload["schema"] == 10
+    assert payload["schema"] == 11
     assert payload["params"]["nfft"] == 4096
     assert payload["preset_baseline"]["kind"] == "fft"
     assert payload["preset_baseline"]["slot"] == 2
@@ -310,7 +359,7 @@ def test_v2_preset_baseline_round_trips_through_project_json(tmp_path):
     )
     loaded = load_project_from_json(path)
     payload = loaded.analysis_views["fft"]["views"][0]
-    assert payload["schema"] == 10
+    assert payload["schema"] == 11
     assert payload["preset_baseline"]["version"] == 2
     restored = AnalysisViewState.from_dict(payload)
     assert restored.preset_baseline["source_payload"]["overlap"] == 50
@@ -366,7 +415,7 @@ def test_project_json_time_range_omits_drafts_and_keeps_none_as_full(tmp_path):
     )
     loaded = load_project_from_json(path)
     views = loaded.analysis_views["fft"]["views"]
-    assert views[0]["schema"] == 10
+    assert views[0]["schema"] == 11
     assert views[0]["panes"][0].get("time_range") in (None, [])
     assert views[1]["panes"][0]["time_range"] == [0.25, 0.75]
     for pane in (views[0]["panes"][0], views[1]["panes"][0]):

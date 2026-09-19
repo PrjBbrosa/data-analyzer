@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from mf4_analyzer.ui.main_window import MainWindow
+from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
     PER_SOURCE_NAME,
@@ -124,6 +125,40 @@ def test_close_all_resets_session_and_reopen_uses_time_axis(qapp, qtbot, tmp_pat
     assert win.inspector.top.xaxis_mode() == TIME_MODE
     assert win._custom_xaxis.spec.mode == TIME_MODE
     assert win._custom_xaxis.spec.resolver is None
+
+
+def _pinned(fid, channel="sig"):
+    collection = empty_collection()
+    collection, _intent = next_record(collection, {
+        "mode": "single",
+        "domain": "time",
+        "x": 0.4,
+        "x_unit": "s",
+        "bindings": [{"fid": fid, "channel": channel}],
+        "presentation": "full",
+    })
+    return collection
+
+
+def test_close_last_file_clears_pins_not_display_prefs(qapp, qtbot, tmp_path):
+    win, fid_a, fid_b = _load_two(qtbot, tmp_path)
+    before_options = win.chart_stack.cursor_display_options()
+    pins = _pinned(fid_a)
+    win.chart_stack.set_pinned_cursors_for_canvas(win.canvas_time, pins)
+    win.view_manager.views[0].pinned_cursors = pins
+    assert win.chart_stack.pinned_cursors_for_canvas(win.canvas_time).records
+
+    win._close(fid_a, force=True)
+    assert fid_b in win.files
+    remaining = win.view_manager.views[0].pinned_cursors.records
+    assert remaining == ()
+    assert win.chart_stack.pinned_cursors_for_canvas(win.canvas_time).records == ()
+
+    win._close(fid_b, force=True)
+    _assert_empty_workspace_defaults(win)
+    assert win.chart_stack.pinned_cursors_for_canvas(win.canvas_time).records == ()
+    assert win.chart_stack._pinned_cursors.pills_for(win.canvas_time) == ()
+    assert win.chart_stack.cursor_display_options() == before_options
 
 
 def test_close_last_file_one_by_one_resets_session(qapp, qtbot, tmp_path):

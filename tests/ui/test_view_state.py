@@ -82,6 +82,8 @@ def test_viewstate_defaults_are_empty():
     assert st.curve_bindings == []
     assert st.hidden_curve_binding_ids == []
     assert st.time_filter["enabled"] is False
+    assert st.pinned_cursors.records == ()
+    assert st.pinned_cursors.next_ordinal == 1
     assert st.chart_appearance["x_scale"] == "linear"
     assert st.chart_appearance["axes"] == {}
     assert st.chart_appearance["companion_colors"] == {}
@@ -218,6 +220,7 @@ def test_viewstate_from_dict_legacy_payload_has_empty_overlay_fields():
 
     assert st.remarks == []
     assert st.cursor_placement is None
+    assert st.pinned_cursors.records == ()
 
 
 def test_viewstate_remarks_and_dual_placement_roundtrip_through_dict():
@@ -450,3 +453,67 @@ def test_reset_to_defaults_preserving_ids_emits_once_and_normalizes_split_pairs(
     assert emissions.count("views") == 1
     assert emissions.count(("active", 0)) == 1
     assert emissions.count(("split", None)) == 1
+
+
+def _sample_pins(fid="f0", channel="torque", x=1.25):
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    collection = empty_collection()
+    collection, _intent = next_record(collection, {
+        "mode": "single",
+        "domain": "time",
+        "x": x,
+        "x_unit": "s",
+        "bindings": [{"fid": fid, "channel": channel}],
+        "presentation": "full",
+    })
+    return collection
+
+
+def test_viewstate_pinned_cursors_roundtrip_and_missing_field_is_empty():
+    pins = _sample_pins()
+    st = ViewState(
+        name="View 1",
+        tab_color="#2d7ff9",
+        cursor_mode="off",
+        cursor_placement={"ax": 1.0, "bx": 2.0},
+        pinned_cursors=pins,
+    )
+    payload = json.loads(json.dumps(st.to_dict()))
+    again = ViewState.from_dict(payload)
+    assert again.cursor_mode == "off"
+    assert again.cursor_placement == {"ax": 1.0, "bx": 2.0}
+    assert again.pinned_cursors.scope_id == pins.scope_id
+    assert again.pinned_cursors.records[0].record_id == pins.records[0].record_id
+    assert again.pinned_cursors.records[0].ordinal == 1
+    assert again.pinned_cursors.records[0].x == 1.25
+    assert again.pinned_cursors.records[0].bindings[0].fid == "f0"
+
+    missing = ViewState.from_dict({"name": "Legacy", "tab_color": "#2d7ff9"})
+    assert missing.pinned_cursors.records == ()
+    assert missing.pinned_cursors.scope_id != pins.scope_id
+
+
+def test_nonempty_pins_are_not_a_reusable_blank_view():
+    blank = ViewState(name="View 1", tab_color="#2d7ff9")
+    assert is_reusable_blank_view(blank) is True
+    blank.pinned_cursors = _sample_pins()
+    assert is_reusable_blank_view(blank) is False
+
+
+def test_duplicate_remints_pin_scope_and_record_ids(qapp):
+    manager = ViewManager()
+    original = manager.get(0)
+    original.pinned_cursors = _sample_pins()
+    original_scope = original.pinned_cursors.scope_id
+    original_record = original.pinned_cursors.records[0].record_id
+    original_ordinal = original.pinned_cursors.records[0].ordinal
+
+    idx = manager.duplicate(0)
+    copied = manager.get(idx)
+    assert copied.pinned_cursors.scope_id != original_scope
+    assert copied.pinned_cursors.records[0].record_id != original_record
+    assert copied.pinned_cursors.records[0].ordinal == original_ordinal
+    assert copied.pinned_cursors.records[0].x == 1.25
+    assert original.pinned_cursors.scope_id == original_scope
+    assert original.pinned_cursors.records[0].record_id == original_record

@@ -251,7 +251,10 @@ class AnalysisSectionPage(QWidget):
         width to ``pane_canvas(0).grab_pixmap(scale)``). Split: each pane's
         ``grab_pixmap`` laid out left-to-right with a thin white gutter,
         mirroring the time-domain ``chart_stack._combined_split_pixmap`` so
-        both export paths read the same. Device-pixel-ratio is normalized to
+        both export paths read the same. Each pane's own pinned pills and
+        Pn labels are composited onto that pane before the side-by-side
+        layout so primary chrome is never painted onto the secondary.
+        Device-pixel-ratio is normalized to
         1.0 on each grab BEFORE composing so the widths add in real pixels
         (a Retina 2× DPR pixmap would otherwise report half its pixel width
         to ``width()``, mis-sizing the canvas). Null/degenerate grabs are
@@ -260,6 +263,7 @@ class AnalysisSectionPage(QWidget):
         from PyQt5.QtGui import QPainter, QPixmap
         from PyQt5.QtCore import Qt
 
+        compositor = getattr(self, "_pin_chrome_compositor", None)
         pixes = []
         for card in self._cards:
             canvas = getattr(card, 'canvas', None)
@@ -271,6 +275,11 @@ class AnalysisSectionPage(QWidget):
             pix = pixmap_as_device_pixels(pix)
             if pix is None or pix.isNull():
                 continue
+            if callable(compositor):
+                try:
+                    compositor(pix, canvas)
+                except (RuntimeError, TypeError):
+                    pass
             pixes.append(pix)
         if not pixes:
             return None

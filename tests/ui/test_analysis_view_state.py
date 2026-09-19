@@ -45,7 +45,7 @@ def test_analysis_view_default_attachment_is_explicitly_empty():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     assert v.attached_file_ids == []
     payload = v.to_dict()
-    assert payload["schema"] == 10
+    assert payload["schema"] == 11
     assert payload["attached_file_ids"] == []
     assert payload["preset_baseline"] is None
     restored = AnalysisViewState.from_dict(payload)
@@ -132,6 +132,7 @@ def test_from_dict_tolerates_missing_fields():
     assert v.panes[0].time_range is None
     assert v.panes[0].remarks == []
     assert v.panes[0].cursor_placement is None
+    assert v.panes[0].pinned_cursors.records == ()
     assert v.params == {}
     assert v.preset_baseline is None
     assert isinstance(v.view_id, str) and v.view_id
@@ -147,7 +148,7 @@ def test_none_time_range_round_trip_stays_full():
     restored = PaneState.from_dict(payload)
     assert restored.time_range is None
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
-    assert view.to_dict()["schema"] == 10
+    assert view.to_dict()["schema"] == 11
     assert AnalysisViewState.from_dict(view.to_dict()).panes[0].time_range is None
 
 
@@ -252,7 +253,7 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
 
     payload = view.to_dict()
 
-    assert payload["schema"] == 10
+    assert payload["schema"] == 11
     assert payload["attached_file_ids"] == []
     assert payload["preset_baseline"] is None
     legacy = AnalysisViewState.from_dict({
@@ -336,7 +337,7 @@ def test_preset_baseline_round_trip_preserves_fields_and_deep_copies_params():
     view.preset_baseline = _baseline(params=original_params)
 
     payload = view.to_dict()
-    assert payload["schema"] == 10
+    assert payload["schema"] == 11
     assert payload["preset_baseline"]["kind"] == "fft"
     assert payload["preset_baseline"]["slot"] == 2
     assert payload["preset_baseline"]["display_name"] == "均衡"
@@ -435,7 +436,7 @@ def test_v2_preset_baseline_round_trip_keeps_source_payload_and_deep_copies():
     view = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
     view.preset_baseline = original
     payload = view.to_dict()
-    assert payload["schema"] == 10
+    assert payload["schema"] == 11
     assert payload["preset_baseline"]["version"] == 2
     assert payload["preset_baseline"]["source_payload"]["overlap"] == 50
     payload["preset_baseline"]["source_payload"]["overlap"] = 1
@@ -517,3 +518,69 @@ def test_reference_change_invalidates_only_fft_amplitude_axis():
     assert owner._analysis_changed_range_axes(before, after, 'fft') == ('y',)
     assert owner._analysis_changed_range_axes(before, after, 'fft_time') == ()
     assert owner._analysis_changed_range_axes(before, after, 'order') == ()
+
+
+def _sample_pins(fid="f1", channel="vib_x", x=12.0, domain="frequency"):
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    collection = empty_collection()
+    collection, _intent = next_record(collection, {
+        "mode": "single",
+        "domain": domain,
+        "x": x,
+        "x_unit": "Hz",
+        "bindings": [{"fid": fid, "channel": channel}],
+        "presentation": "mini",
+    })
+    return collection
+
+
+def test_pane_pinned_cursors_roundtrip_and_schema11():
+    pins = _sample_pins()
+    pane = PaneState(
+        sources=[("f1", "vib_x")],
+        cursor_mode="off",
+        cursor_placement={"ax": 12.0, "bx": 40.0},
+        pinned_cursors=pins,
+    )
+    payload = pane.to_dict()
+    restored = PaneState.from_dict(payload)
+    assert restored.cursor_placement == {"ax": 12.0, "bx": 40.0}
+    assert restored.pinned_cursors.scope_id == pins.scope_id
+    assert restored.pinned_cursors.records[0].ordinal == 1
+    assert restored.pinned_cursors.records[0].x == 12.0
+    view = AnalysisViewState(name="FFT", tab_color="#2d7ff9", panes=[pane])
+    assert view.to_dict()["schema"] == 11
+    again = AnalysisViewState.from_dict(view.to_dict())
+    assert again.panes[0].pinned_cursors.records[0].record_id == pins.records[0].record_id
+
+
+def test_schema10_payload_loads_with_empty_pins():
+    restored = AnalysisViewState.from_dict({
+        "schema": 10,
+        "name": "Legacy",
+        "tab_color": "#2d7ff9",
+        "panes": [{
+            "sources": [["f1", "a"]],
+            "cursor_placement": {"ax": 1.0, "bx": 2.0},
+        }],
+    })
+    assert restored.panes[0].pinned_cursors.records == ()
+    assert restored.panes[0].cursor_placement == {"ax": 1.0, "bx": 2.0}
+    assert restored.to_dict()["schema"] == 11
+
+
+def test_duplicate_analysis_view_remints_pane_pin_ids(qapp):
+    from mf4_analyzer.ui.view_state import ViewManager
+
+    manager = ViewManager(state_factory=AnalysisViewState)
+    original = manager.get(0)
+    original.panes[0].pinned_cursors = _sample_pins()
+    original_scope = original.panes[0].pinned_cursors.scope_id
+    original_record = original.panes[0].pinned_cursors.records[0].record_id
+    idx = manager.duplicate(0)
+    copied = manager.get(idx)
+    assert copied.panes[0].pinned_cursors.scope_id != original_scope
+    assert copied.panes[0].pinned_cursors.records[0].record_id != original_record
+    assert copied.panes[0].pinned_cursors.records[0].ordinal == 1
+    assert original.panes[0].pinned_cursors.scope_id == original_scope

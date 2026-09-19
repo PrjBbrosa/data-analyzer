@@ -155,9 +155,11 @@ TIME_CARD_SHORTCUTS = (
     ("cursor_dual", "双游标", "Ctrl+5"),
 )
 
+# Chart P pins a readout; it is not a toolbar button. Board/markup still use P for 画笔.
 _SHORTCUTS = {
     **NAV_SHORTCUTS,
     **{key: shortcut for key, _label, shortcut in TIME_CARD_SHORTCUTS},
+    "pin_cursor": "P",
 }
 
 _HINTS = (
@@ -512,6 +514,31 @@ _HINTS = (
         modes=frozenset({"time"}),
         cursor_modes=frozenset({"dual"}),
         priority=120,
+    ),
+    Hint(
+        id="cursor.pin_single",
+        text="P 固定当前读数",
+        surface="context",
+        modes=frozenset({"time", "fft", "frf"}),
+        cursor_modes=frozenset({"single"}),
+        priority=115,
+    ),
+    Hint(
+        id="cursor.pin_dual",
+        text="先放 A/B，P 固定此组",
+        surface="context",
+        modes=frozenset({"time", "fft", "frf"}),
+        cursor_modes=frozenset({"dual"}),
+        priority=110,
+    ),
+    Hint(
+        id="cursor.pin_off",
+        text="关游标不隐藏已固定",
+        surface="context",
+        tier="A",
+        modes=frozenset({"time", "fft", "frf"}),
+        cursor_modes=frozenset({"off"}),
+        priority=63,
     ),
     # ---- 频响（FRF）----
     # The explicit toolbar control enables the shared three-plot frequency

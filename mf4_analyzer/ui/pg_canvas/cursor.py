@@ -31,6 +31,8 @@ from mf4_analyzer.ui.cursor_display_model import (
     CursorDisplayBranch,
     CursorDisplayChannel,
     CursorDisplayOptions,
+    CursorExtremaFact,
+    PinnedCursorSample,
 )
 from mf4_analyzer.ui.plot_helpers import (
     DualCursorBranch,
@@ -96,6 +98,7 @@ class CursorController(_CanvasBackref):
         "_cursor_display_options",
         "_source_label_resolver",
         "_custom_x_path_cache",
+        "_cursor_data_revision",
         "_x_axis_context",
         "visible",
         "dual",
@@ -119,6 +122,9 @@ class CursorController(_CanvasBackref):
         "_hide_dual_cursor_extreme_markers",
         "_update_dual_cursor_extreme_markers",
         "_cursor_data_x_from_viewport_pos",
+        "data_x_from_viewport_pos",
+        "evaluate_single_cursor",
+        "evaluate_dual_cursor",
         "_handle_cursor_mouse_move",
         "_handle_cursor_mouse_press",
         "_scene_y_from_viewport_pos",
@@ -153,6 +159,7 @@ class CursorController(_CanvasBackref):
         self._cursor_display_options = None
         self._source_label_resolver = None
         self._custom_x_path_cache = {}
+        self._cursor_data_revision = 0
         self._x_axis_context = None
 
     @property
@@ -269,6 +276,7 @@ class CursorController(_CanvasBackref):
         keys only. ``channel`` is the composite identity used in
         ``channel_data``.
         """
+        self._cursor_data_revision += 1
         if data_id is None and channel is None:
             self._custom_x_path_cache.clear()
             return
@@ -695,6 +703,9 @@ class CursorController(_CanvasBackref):
             return None
         return x
 
+    def data_x_from_viewport_pos(self, viewport_pos):
+        return self._cursor_data_x_from_viewport_pos(viewport_pos)
+
     def _handle_cursor_mouse_move(self, event_or_pos):
         if not self._cursor_visible:
             return False
@@ -868,17 +879,10 @@ class CursorController(_CanvasBackref):
                 pass
         return hidden
 
-    def _emit_single_cursor_html(self, x):
-        sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
+    def _collect_single_cursor_payload(self, x):
+        """Return ``(html_parts, rows)`` for one X without emitting or drawing."""
         custom_x = self._is_custom_x_cursor()
-        if custom_x:
-            parts = [
-                f'<span style="color:#111827;">'
-                f'X={self._format_cursor_axis_number(x)}'
-                f'{self._cursor_x_unit_suffix()}</span>'
-            ]
-        else:
-            parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
+        parts = []
         rows = []
         for channel_key, ch, (tf, sf, color, u) in self._visible_channel_items():
             source_label, channel_label = resolve_cursor_source_label(
@@ -929,7 +933,191 @@ class CursorController(_CanvasBackref):
                     unit_suffix=unit_s,
                     current_value=float(value),
                 ))
-        rows = apply_cursor_source_prefix_policy(rows)
+        return parts, apply_cursor_source_prefix_policy(rows)
+
+    def evaluate_single_cursor(self, x):
+        x_value = _finite_float(x)
+        if x_value is None:
+            return ()
+        _parts, rows = self._collect_single_cursor_payload(x_value)
+        return tuple(rows)
+
+    def evaluate_single_cursor_sample(self, x):
+        x_value = _finite_float(x)
+        if x_value is None:
+            return None
+        channels = self.evaluate_single_cursor(x_value)
+        diagnostic = ""
+        if len(channels) == 1:
+            diagnostic = str(channels[0].diagnostic or "")
+        return PinnedCursorSample(
+            data_revision=int(self._cursor_data_revision),
+            domain="custom" if self._is_custom_x_cursor() else "time",
+            mode="single",
+            x=x_value,
+            channels=channels,
+            diagnostic=diagnostic,
+        )
+
+    def _cursor_display_channel_from_dual_row(self, row):
+        """Same field mapping as ChartStack._cursor_display_channel_from_dual."""
+        if isinstance(row, CursorDisplayChannel):
+            return row
+        if not hasattr(row, "channel_name"):
+            name, minimum, maximum, average, delta, unit_suffix, color = row[:7]
+            return CursorDisplayChannel(
+                identity=name,
+                source_label="",
+                channel_label=str(name),
+                color=str(color or "#111827"),
+                unit_suffix=str(unit_suffix or ""),
+                delta=delta,
+                min_value=minimum,
+                max_value=maximum,
+                avg_value=average,
+            )
+        name = str(getattr(row, "label", "") or getattr(row, "channel_name", ""))
+        identity = getattr(row, "identity", None)
+        source_label, channel_label = resolve_cursor_source_label(
+            name, identity, self._source_label_resolver
+        )
+        branches = tuple(
+            CursorDisplayBranch(
+                branch.branch_label,
+                min_value=branch.min_value,
+                max_value=branch.max_value,
+                avg_value=branch.avg,
+                delta_value=getattr(branch, "delta", None),
+            )
+            for branch in getattr(row, "branches", ())
+        )
+        return CursorDisplayChannel(
+            identity=identity,
+            source_label=source_label,
+            channel_label=channel_label,
+            color=str(getattr(row, "color", "#111827") or "#111827"),
+            unit_suffix=str(getattr(row, "unit_suffix", "") or ""),
+            delta=getattr(row, "delta", None),
+            min_value=getattr(row, "min_value", None),
+            max_value=getattr(row, "max_value", None),
+            avg_value=getattr(row, "avg", None),
+            branches=branches,
+            diagnostic=str(getattr(row, "status", "") or ""),
+        )
+
+    @staticmethod
+    def _extrema_facts(points):
+        facts = []
+        for item in points or ():
+            if item is None or len(item) < 5:
+                continue
+            min_x = _finite_float(item[1])
+            min_y = _finite_float(item[2])
+            max_x = _finite_float(item[3])
+            max_y = _finite_float(item[4])
+            if None in (min_x, min_y, max_x, max_y):
+                continue
+            facts.append(CursorExtremaFact(
+                identity=item[0],
+                min_x=min_x,
+                min_y=min_y,
+                max_x=max_x,
+                max_y=max_y,
+            ))
+        return tuple(facts)
+
+    def _collect_dual_cursor_rows(self, ax, bx):
+        """Return ``(DualCursorRow list, extrema tuples)`` without emit/draw."""
+        dual = []
+        extreme_points = []
+        custom_x = self._is_custom_x_cursor()
+        xlo, xhi = min(ax, bx), max(ax, bx)
+        for channel_key, ch, (tf, sf, color, u) in self._visible_channel_items():
+            if not len(tf):
+                continue
+            y_suffix = f" {u}" if u else ""
+            if custom_x:
+                row, extrema = self._build_custom_x_dual_row(
+                    channel_key, ch, tf, sf, color, y_suffix, xlo, xhi, ax, bx,
+                )
+                dual.append(row)
+                extreme_points.extend(extrema)
+                continue
+            m = (tf >= xlo) & (tf <= xhi)
+            seg = sf[m]
+            if not len(seg):
+                continue
+            segment_indices = np.flatnonzero(m)
+            finite = np.isfinite(seg)
+            if np.any(finite):
+                finite_segment = seg[finite]
+                finite_indices = segment_indices[finite]
+                min_idx = int(finite_indices[int(np.argmin(finite_segment))])
+                max_idx = int(finite_indices[int(np.argmax(finite_segment))])
+                extreme_points.append((
+                    channel_key,
+                    float(tf[min_idx]),
+                    float(sf[min_idx]),
+                    float(tf[max_idx]),
+                    float(sf[max_idx]),
+                ))
+            delta = _interp_cursor_value(tf, sf, bx) - _interp_cursor_value(
+                tf, sf, ax
+            )
+            dual.append(DualCursorRow(
+                channel_name=ch,
+                min_value=float(np.min(seg)),
+                max_value=float(np.max(seg)),
+                avg=float(np.mean(seg)),
+                delta=float(delta),
+                unit_suffix=y_suffix,
+                color=color,
+                identity=channel_key,
+                label=ch,
+                mode=TIME_MODE,
+            ))
+        return dual, extreme_points
+
+    def evaluate_dual_cursor_sample(self, ax, bx):
+        ax_value = _finite_float(ax)
+        bx_value = _finite_float(bx)
+        if ax_value is None or bx_value is None:
+            return None
+        dual, extrema = self._collect_dual_cursor_rows(ax_value, bx_value)
+        channels = tuple(apply_cursor_source_prefix_policy(
+            tuple(self._cursor_display_channel_from_dual_row(row) for row in dual)
+        ))
+        diagnostic = ""
+        if len(channels) == 1:
+            diagnostic = str(channels[0].diagnostic or "")
+        return PinnedCursorSample(
+            data_revision=int(self._cursor_data_revision),
+            domain="custom" if self._is_custom_x_cursor() else "time",
+            mode="dual",
+            ax=ax_value,
+            bx=bx_value,
+            channels=channels,
+            extrema=self._extrema_facts(extrema),
+            diagnostic=diagnostic,
+        )
+
+    def evaluate_dual_cursor(self, ax, bx):
+        sample = self.evaluate_dual_cursor_sample(ax, bx)
+        return () if sample is None else sample.channels
+
+    def _emit_single_cursor_html(self, x):
+        sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
+        custom_x = self._is_custom_x_cursor()
+        if custom_x:
+            parts = [
+                f'<span style="color:#111827;">'
+                f'X={self._format_cursor_axis_number(x)}'
+                f'{self._cursor_x_unit_suffix()}</span>'
+            ]
+        else:
+            parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
+        channel_parts, rows = self._collect_single_cursor_payload(x)
+        parts.extend(channel_parts)
         self.cursor_info.emit(sep.join(parts))
         self.single_cursor_rows.emit(rows)
 
@@ -1039,7 +1227,9 @@ class CursorController(_CanvasBackref):
             return "当前 X 不在有效路径内"
         return self._custom_x_status(reason)
 
-    def _build_custom_x_dual_row(self, channel_key, ch, tf, sf, color, unit_suffix, xlo, xhi):
+    def _build_custom_x_dual_row(
+        self, channel_key, ch, tf, sf, color, unit_suffix, xlo, xhi, ax, bx,
+    ):
         ctx = self._x_axis_context
         x_unit = str(getattr(ctx, "unit", "") or "").strip()
         tf_array = np.asarray(tf)
@@ -1082,7 +1272,7 @@ class CursorController(_CanvasBackref):
             and full.indices[-1] >= selected.indices[-1]
         )
         for direction, delta in sample_custom_x_dual_delta_from_paths(
-            replace(result, accepted=sampling_legs), self._ax, self._bx,
+            replace(result, accepted=sampling_legs), ax, bx,
         ):
             delta_by_dir[int(direction)] = delta
         if result.unique_pair:
@@ -1186,51 +1376,9 @@ class CursorController(_CanvasBackref):
                 info.append(f"ΔT={dx:.4f}s")
                 if abs(dx) > 1e-12:
                     info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
-            xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
-            for channel_key, ch, (tf, sf, color, u) in self._visible_channel_items():
-                if not len(tf):
-                    continue
-                y_suffix = f" {u}" if u else ""
-                if custom_x:
-                    row, extrema = self._build_custom_x_dual_row(
-                        channel_key, ch, tf, sf, color, y_suffix, xlo, xhi,
-                    )
-                    dual.append(row)
-                    extreme_points.extend(extrema)
-                    continue
-                m = (tf >= xlo) & (tf <= xhi)
-                seg = sf[m]
-                if not len(seg):
-                    continue
-                segment_indices = np.flatnonzero(m)
-                finite = np.isfinite(seg)
-                if np.any(finite):
-                    finite_segment = seg[finite]
-                    finite_indices = segment_indices[finite]
-                    min_idx = int(finite_indices[int(np.argmin(finite_segment))])
-                    max_idx = int(finite_indices[int(np.argmax(finite_segment))])
-                    extreme_points.append((
-                        channel_key,
-                        float(tf[min_idx]),
-                        float(sf[min_idx]),
-                        float(tf[max_idx]),
-                        float(sf[max_idx]),
-                    ))
-                delta = _interp_cursor_value(tf, sf, self._bx) - _interp_cursor_value(
-                    tf, sf, self._ax
-                )
-                dual.append(DualCursorRow(
-                    channel_name=ch,
-                    min_value=float(np.min(seg)),
-                    max_value=float(np.max(seg)),
-                    avg=float(np.mean(seg)),
-                    delta=float(delta),
-                    unit_suffix=y_suffix,
-                    color=color,
-                    identity=channel_key,
-                    label=ch,
-                    mode=TIME_MODE,
-                ))
+            dual, extreme_points = self._collect_dual_cursor_rows(
+                self._ax, self._bx,
+            )
         if info:
             primary_html = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
                             .join(f'<span style="color:#111827;">{p}</span>' for p in info))

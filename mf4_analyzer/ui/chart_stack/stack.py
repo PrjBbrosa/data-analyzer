@@ -49,7 +49,9 @@ from .cursor_display import (
     FrequencyCursorChannel,
     build_cursor_presentation,
     build_fft_cursor_presentation,
+    live_pin_hint_text,
 )
+from .pinned_cursor_controller import PinnedCursorController
 from ..plot_helpers import (
     apply_cursor_source_prefix_policy,
     dual_row_is_custom_x,
@@ -89,6 +91,7 @@ class ChartStack(QWidget):
     # Time-domain channel MIME drop. ``zone`` is ``plot`` or ``xaxis``.
     # Carries (canvas, (fid, channel), zone); MainWindow owns View writes.
     channel_drop_requested = pyqtSignal(object, object, str)
+    pin_feedback = pyqtSignal(str)
 
     def __init__(self, parent=None, *, cursor_settings=None):
         super().__init__(parent)
@@ -282,6 +285,9 @@ class ChartStack(QWidget):
                 self.add_to_ultraview_requested.emit
             )
             self._wire_ultraview_entry(page.ultraview_entry)
+            page._pin_chrome_compositor = as_weak_callable(
+                self._composite_cursor_pill_onto
+            )
         # The time card's copy button lives on the shared toolbar; route it to
         # the focused pane so 复制为图片 captures whichever pane is focused.
         self._time_card.copy_image_requested.connect(self._copy_focused_card_image)
@@ -333,6 +339,12 @@ class ChartStack(QWidget):
         self._pill_layout_refresh.setInterval(0)
         self._pill_layout_refresh.timeout.connect(self._reposition_pill)
         self._pill_secondary = None  # created/destroyed with enter/exit_split
+        self._pinned_cursors = PinnedCursorController(self)
+        self._pinned_cursors.pin_feedback.connect(self.pin_feedback.emit)
+        self._pinned_cursors.bind_canvas(self.canvas_time)
+        self._pinned_cursors.bind_canvas(self.canvas_fft)
+        self._pinned_cursors.bind_canvas(self.canvas_frf)
+        self._install_analysis_pin_split_hooks()
         self._active_cursor_card = self._time_card
         # Pass the SOURCE canvas so the pill picks the right per-pane cursor
         # mode (single/dual formatting) and anchors over the emitting pane.
@@ -539,6 +551,86 @@ class ChartStack(QWidget):
             and self._secondary_card.isVisibleTo(self._time_split)
         )
 
+    def pinned_cursors_for_canvas(self, canvas):
+        """Return the pin collection for ``canvas`` (Task 4 capture seam)."""
+        return self._pinned_cursors.collection_for(canvas)
+
+    def set_pinned_cursors_for_canvas(self, canvas, collection):
+        """Replace the pin collection for ``canvas`` (Task 4 apply seam)."""
+        self._pinned_cursors.set_collection(canvas, collection)
+
+    def pinned_cursor_fingerprint(self, canvas=None):
+        """Stable pin digest for UltraView. Hover highlight is omitted."""
+        controller = getattr(self, "_pinned_cursors", None)
+        getter = getattr(controller, "capture_fingerprint_for", None)
+        if not callable(getter):
+            return ()
+        try:
+            return getter(canvas)
+        except (TypeError, RuntimeError):
+            return ()
+
+    def consume_live_cursor_pill(self, canvas):
+        """Hide the live candidate after a successful pin. Pins stay."""
+        source = self.canvas_time if canvas is None else canvas
+        self._drop_cursor_canvas_state(source)
+        pill = self._pill_for_canvas(source)
+        card = self._card_for_canvas(source)
+        self._clear_cursor_pill_content(pill, card)
+
+    def restore_live_from_pin(self, canvas, snapshot, pos, mode):
+        """Unpin: the pinned pill becomes the live candidate in-place."""
+        self.set_cursor_mode_for_canvas(canvas, mode)
+        pill = self._pill_for_canvas(canvas)
+        card = self._card_for_canvas(canvas)
+        if pill is None:
+            return
+
+        def update():
+            if snapshot:
+                pill.restore_snapshot(snapshot)
+            pill.set_pin_role("live")
+            snap_fn = getattr(canvas, "snapshot_cursor_placement", None)
+            snap = snap_fn() if callable(snap_fn) else None
+            dual_complete = mode != "dual" or (
+                isinstance(snap, dict) and snap.get("bx") is not None
+            )
+            pill.set_live_hint(
+                live_pin_hint_text(mode, dual_complete=bool(dual_complete))
+            )
+            pill.mark_user_placed(True)
+            if pos is not None:
+                pill.move(int(pos[0]), int(pos[1]))
+            pill.setVisible(True)
+
+        self._update_pill_content(pill, card, update)
+        pill.raise_()
+
+    def _install_analysis_pin_split_hooks(self):
+        for page in (self.page_fft, self.page_frf):
+            page.enter_split = partial(
+                self._analysis_pin_enter_split, page, page.enter_split,
+            )
+            page.exit_split = partial(
+                self._analysis_pin_exit_split, page, page.exit_split,
+            )
+
+    def _analysis_pin_enter_split(self, page, original):
+        before = list(page._cards)
+        original()
+        for card in page._cards:
+            if card in before:
+                continue
+            canvas = getattr(card, "canvas", None)
+            if canvas is not None:
+                self._pinned_cursors.bind_canvas(canvas)
+
+    def _analysis_pin_exit_split(self, page, original):
+        if page.pane_count() >= 2:
+            canvas = page.pane_canvas(1)
+            self._pinned_cursors.unbind_canvas(canvas)
+        original()
+
     def secondary_canvas(self):
         if self._secondary_card is None:
             return None
@@ -612,13 +704,19 @@ class ChartStack(QWidget):
         return self._time_card
 
     def _combined_split_pixmap(self):
-        """Return primary+secondary canvas pixels side-by-side while split."""
+        """Return primary+secondary canvas pixels side-by-side while split.
+
+        Each half gets that pane's own live pill, pinned pills, and axis
+        labels. Primary chrome is never painted onto the secondary half.
+        """
         if not self.split_active() or self._secondary_card is None:
             return None
         left = _grab_pixmap_hidpi(self.canvas_time)
         right = _grab_pixmap_hidpi(self._secondary_card.canvas)
         if left is None or right is None or left.isNull() or right.isNull():
             return None
+        self._composite_cursor_pill_onto(left, self.canvas_time)
+        self._composite_cursor_pill_onto(right, self._secondary_card.canvas)
         gap = 8
         out = QPixmap(
             left.width() + gap + right.width(),
@@ -1055,6 +1153,7 @@ class ChartStack(QWidget):
                 )
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)
+            self._pinned_cursors.bind_canvas(canvas)
         self._secondary_card.setVisible(True)
         total = max(2, self._time_split.width())
         left = max(1, total // 2)
@@ -1065,6 +1164,7 @@ class ChartStack(QWidget):
         self._refresh_focus_borders()
         self._sync_secondary_controls_to_focus()
         self._sync_shared_nav_highlight()
+        self._pinned_cursors.reflow_visible()
 
     def _on_secondary_plot_mode_changed(self, mode):
         """Replot the secondary canvas in the new layout (subplot↔overlay).
@@ -1121,6 +1221,7 @@ class ChartStack(QWidget):
         # disable the now-hidden secondary's.
         self._sync_secondary_controls_to_focus()
         self._sync_shared_nav_highlight()
+        self._pinned_cursors.reflow_visible()
 
     def _emit_open_ultraview(self, _checked=False):
         self.open_ultraview_requested.emit()
@@ -1280,6 +1381,7 @@ class ChartStack(QWidget):
             self._constrain_page_transition_overlay_to_plot_surface()
         self.mode_changed.emit(mode)
         self._sync_cursor_pill_to_mode(mode)
+        self._pinned_cursors.reflow_visible()
 
     def page_transition(self) -> PageTransitionController:
         """Return the stack-local presentation compositor.
@@ -1669,6 +1771,21 @@ class ChartStack(QWidget):
         """Set cursor mode on the card/canvas owning ``canvas`` without signals."""
         if mode not in ('off', 'single', 'dual'):
             return
+        if isinstance(canvas, (PgLineCanvas, PgFrfCanvas)):
+            card = self._card_for_canvas(canvas)
+            setter = getattr(card, "set_cursor_mode", None)
+            if callable(setter):
+                try:
+                    setter(mode, notify=False)
+                except TypeError:
+                    blocked = card.blockSignals(True)
+                    try:
+                        setter(mode)
+                    finally:
+                        card.blockSignals(blocked)
+            else:
+                canvas.set_cursor_mode(mode)
+            return
         if (self._secondary_card is not None
                 and canvas is self._secondary_card.canvas):
             self._set_secondary_cursor_mode_silent(mode)
@@ -1794,7 +1911,7 @@ class ChartStack(QWidget):
     def grab_presentation_pixmap(
         self, target, *, scale=1.0, cancel_page_transition=True,
     ):
-        """Grab canvas pixels plus the overlapping cursor pill.
+        """Grab canvas pixels plus overlapping live/pinned cursor chrome.
 
         Copy-to-clipboard uses hi-DPI ``scale``; UltraView uses ``1.0``.
         Does not touch the clipboard. Time-domain split copy still uses
@@ -1850,53 +1967,103 @@ class ChartStack(QWidget):
             page = self.page_for_mode.get(mode)
         return canvas, page
 
+    def _iter_cursor_chrome_for_canvas(self, canvas):
+        """Axis labels, then pinned pills, then the live pill (top)."""
+        seen = set()
+        controller = getattr(self, "_pinned_cursors", None)
+        if controller is not None:
+            for widget in controller.axis_labels_for(canvas):
+                ident = id(widget)
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                yield widget
+            for widget in controller.pills_for(canvas):
+                ident = id(widget)
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                yield widget
+        live = self._pill_for_canvas(canvas)
+        if live is not None and id(live) not in seen:
+            yield live
+
+    def _stack_floater_overlaps_canvas(self, widget, canvas, canvas_origin):
+        try:
+            if not widget.isVisible():
+                return False
+            geo = widget.geometry()
+            canvas_w = int(canvas.width())
+            canvas_h = int(canvas.height())
+        except RuntimeError:
+            return False
+        if geo.width() <= 0 or geo.height() <= 0:
+            return False
+        rel_x = geo.x() - canvas_origin.x()
+        rel_y = geo.y() - canvas_origin.y()
+        return (
+            rel_x + geo.width() > 0
+            and rel_x < canvas_w
+            and rel_y + geo.height() > 0
+            and rel_y < canvas_h
+        )
+
     def _composite_cursor_pill_onto(self, pix, canvas):
-        """Paint the overlapping cursor pill onto ``pix`` in bitmap space."""
-        pill = self._pill_for_canvas(canvas)
-        if pill is None or pix is None or pix.isNull():
+        """Paint overlapping live/pinned pills and Pn labels onto ``pix``.
+
+        Stack floaters are mapped stack → canvas → pixmap with the same
+        scale_x/scale_y used for hi-DPI copy. Does not call canvas.grab
+        for chrome. Each call is one canvas owner; split/combined paths
+        invoke this once per pane so primary P1 never lands on secondary.
+        """
+        if pix is None or pix.isNull() or canvas is None:
             return
         try:
-            if not pill.isVisible():
-                return
             canvas_w = max(1, int(canvas.width()))
             canvas_h = max(1, int(canvas.height()))
-        except RuntimeError:
-            return
-        scale_x = max(1.0, float(pix.width()) / float(canvas_w))
-        scale_y = max(1.0, float(pix.height()) / float(canvas_h))
-        try:
             canvas_origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
         except (RuntimeError, TypeError):
             return
-        pill_geo = pill.geometry()
-        rel_x = pill_geo.x() - canvas_origin.x()
-        rel_y = pill_geo.y() - canvas_origin.y()
-        if not (rel_x + pill_geo.width() > 0 and rel_x < canvas.width()
-                and rel_y + pill_geo.height() > 0 and rel_y < canvas.height()):
+        scale_x = max(1.0, float(pix.width()) / float(canvas_w))
+        scale_y = max(1.0, float(pix.height()) / float(canvas_h))
+        painter = None
+        try:
+            for widget in self._iter_cursor_chrome_for_canvas(canvas):
+                if not self._stack_floater_overlaps_canvas(
+                    widget, canvas, canvas_origin,
+                ):
+                    continue
+                geo = widget.geometry()
+                rel_x = geo.x() - canvas_origin.x()
+                rel_y = geo.y() - canvas_origin.y()
+                target = QRect(
+                    int(round(rel_x * scale_x)),
+                    int(round(rel_y * scale_y)),
+                    int(round(geo.width() * scale_x)),
+                    int(round(geo.height() * scale_y)),
+                )
+                if painter is None:
+                    painter = QPainter(pix)
+                painter.drawPixmap(
+                    target,
+                    self._grab_pill_scaled(max(scale_x, scale_y), widget),
+                )
+        except RuntimeError:
             return
-        painter = QPainter(pix)
-        target = QRect(
-            int(round(rel_x * scale_x)),
-            int(round(rel_y * scale_y)),
-            int(round(pill_geo.width() * scale_x)),
-            int(round(pill_geo.height() * scale_y)),
-        )
-        painter.drawPixmap(
-            target,
-            self._grab_pill_scaled(max(scale_x, scale_y), pill),
-        )
-        painter.end()
+        finally:
+            if painter is not None:
+                painter.end()
 
     def _copy_card_image(self, card):
         """Capture the card's canvas for MainWindow to publish. For the
-        time-domain card, the floating cursor pill (if visible and overlapping
-        the canvas) is composited onto the captured pixmap so the screenshot
-        matches what the user sees on screen.
+        time-domain card, the floating cursor chrome (live pill, pinned
+        pills, Pn labels) overlapping the canvas is composited onto the
+        captured pixmap so the screenshot matches what the user sees.
 
         The canvas is grabbed at a hi-DPI scale (spec §E) for a crisp,
         DPI-independent bitmap; the canvas caps the magnification for
-        speed. The cursor pill's position AND size are scaled by the SAME
-        effective factor so it still lines up on the magnified bitmap."""
+        speed. Floater position AND size are scaled by the SAME
+        effective factor so they still line up on the magnified bitmap."""
         if (self.current_mode() == 'time'
                 and self.split_active()
                 and card in (self._time_card, self._secondary_card)):
@@ -1909,9 +2076,9 @@ class ChartStack(QWidget):
             self.image_captured.emit(pix)
 
     def _grab_pill_scaled(self, scale, pill=None):
-        """Grab the cursor pill at ``scale``× for crisp compositing.
+        """Grab a stack floater at ``scale``× for crisp compositing.
 
-        At 1× this is a plain ``QPixmap`` grab; above 1× the pill widget is
+        At 1× this is a plain ``QPixmap`` grab; above 1× the widget is
         re-rendered into a magnified QImage (sharp text, not an upscale)."""
         if pill is None:
             pill = self._pill
@@ -2018,6 +2185,10 @@ class ChartStack(QWidget):
     def _on_cursor_info(self, text, source=None):
         if not self._cursor_source_on_screen(source):
             return
+        if text:
+            self._pinned_cursors.clear_live_suppressed(source)
+        elif self._pinned_cursors.is_live_suppressed(source):
+            return
         mode = self._cursor_mode_for_canvas(source)
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
@@ -2092,6 +2263,10 @@ class ChartStack(QWidget):
     def _on_dual_cursor_info(self, text, source=None):
         if not self._cursor_source_on_screen(source):
             return
+        if text:
+            self._pinned_cursors.clear_live_suppressed(source)
+        elif self._pinned_cursors.is_live_suppressed(source):
+            return
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         if self._is_managed_frequency_canvas(source):
@@ -2121,6 +2296,7 @@ class ChartStack(QWidget):
         if not self._cursor_source_on_screen(source):
             return
         source = self.canvas_time if source is None else source
+        self._pinned_cursors.clear_live_suppressed(source)
         self._cancel_legacy_detail_fallback(source)
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
@@ -2142,6 +2318,7 @@ class ChartStack(QWidget):
         if not self._cursor_source_on_screen(source):
             return
         source = self.canvas_time if source is None else source
+        self._pinned_cursors.clear_live_suppressed(source)
         self._cancel_legacy_detail_fallback(source)
         self._active_cursor_card = self._card_for_canvas(source)
         channels = tuple(rows or ())
@@ -2246,6 +2423,8 @@ class ChartStack(QWidget):
         return ""
 
     def _refresh_cursor_projection(self, source, primary=_CURSOR_PRIMARY_UNSET):
+        if self._pinned_cursors.is_live_suppressed(source):
+            return
         cached = self._cursor_snapshot(source)
         if cached is None:
             return
@@ -2275,6 +2454,17 @@ class ChartStack(QWidget):
         def update():
             if apply_primary:
                 pill._primary_original = primary_text
+            pill.set_pin_role("live")
+            dual_complete = True
+            if cursor_mode == "dual":
+                snap_fn = getattr(source, "snapshot_cursor_placement", None)
+                snap = snap_fn() if callable(snap_fn) else None
+                dual_complete = bool(
+                    isinstance(snap, dict) and snap.get("bx") is not None
+                )
+            pill.set_live_hint(
+                live_pin_hint_text(cursor_mode, dual_complete=dual_complete)
+            )
             pill.set_display_projection(projection)
             if self._cursor_pill_visible_for_mode(self.current_mode(), source) and (
                 channels or pill.primary_text() or primary_text
@@ -2282,6 +2472,7 @@ class ChartStack(QWidget):
                 pill.setVisible(True)
 
         self._update_pill_content(pill, card, update)
+        self._pinned_cursors.nudge_live(source)
 
     def _cancel_legacy_detail_fallback(self, source):
         source = self.canvas_time if source is None else source
@@ -2363,6 +2554,7 @@ class ChartStack(QWidget):
             return
         if source is None:
             return
+        self._pinned_cursors.clear_live_suppressed(source)
         self._cancel_legacy_detail_fallback(source)
         self._active_cursor_card = self._card_for_canvas(source)
         mode = self._cursor_mode_for_canvas(source)
@@ -2422,6 +2614,9 @@ class ChartStack(QWidget):
         for canvas in (self.canvas_time, self.secondary_canvas()):
             if canvas is not None:
                 canvas.set_cursor_display_options(options)
+                overlay = getattr(canvas, "_pinned_overlay", None)
+                if overlay is not None:
+                    overlay.reproject()
         if source_card is not None:
             for card in (self._time_card, self._secondary_card):
                 if card is not None and card is not source_card:
@@ -2499,6 +2694,7 @@ class ChartStack(QWidget):
             self._pill.setVisible(False)
             if self._pill_secondary is not None:
                 self._pill_secondary.setVisible(False)
+            self._pinned_cursors.reflow_visible()
             return
         if current != 'time':
             active_mode = getattr(self._active_cursor_card, '_chart_mode', None)
@@ -2506,14 +2702,17 @@ class ChartStack(QWidget):
                 self._pill.setVisible(False)
                 if self._pill_secondary is not None:
                     self._pill_secondary.setVisible(False)
+                self._pinned_cursors.reflow_visible()
                 return
             if self._pill_secondary is not None:
                 self._pill_secondary.setVisible(False)
             self._reposition_one_pill(self._pill, self._active_cursor_card)
+            self._pinned_cursors.reflow_visible()
             return
         self._reposition_one_pill(self._pill, self._time_card)
         if self._pill_secondary is not None and self._secondary_card is not None:
             self._reposition_one_pill(self._pill_secondary, self._secondary_card)
+        self._pinned_cursors.reflow_visible()
 
     def _reposition_one_pill(self, pill, card):
         """Anchor ``pill`` to ``card``'s canvas top-right corner (or honour
@@ -2581,6 +2780,41 @@ class ChartStack(QWidget):
         safe = mapped.adjusted(8, 8, -8, -8)
         return pill.set_safe_rect(safe if safe.isValid() else None)
 
+    def map_canvas_rect_to_stack(self, canvas, rect):
+        """Map a canvas-local rect through viewport/stack. Never the full stack."""
+        if canvas is None or rect is None:
+            return None
+        source = QRect(rect)
+        if not source.isValid() or source.width() <= 0 or source.height() <= 0:
+            return None
+        stack = self.stack
+        try:
+            top_left = canvas.mapTo(stack, source.topLeft())
+            bottom_right = canvas.mapTo(stack, source.bottomRight())
+        except (RuntimeError, TypeError):
+            return None
+        mapped = QRect(top_left, bottom_right).intersected(stack.contentsRect())
+        if not mapped.isValid() or mapped.width() <= 0 or mapped.height() <= 0:
+            return None
+        return mapped
+
+    def pinned_cursor_host_on_stack(self, canvas):
+        """Owner host rect in stack coordinates. Pending geometry returns None."""
+        host = None
+        overlay = getattr(canvas, "_pinned_overlay", None)
+        if overlay is not None:
+            host = overlay.host_rect()
+        if host is None:
+            provider = getattr(canvas, "frequency_cursor_host_rect", None)
+            if callable(provider):
+                try:
+                    host = provider()
+                except (RuntimeError, TypeError, AttributeError):
+                    host = None
+        if host is None or not QRect(host).isValid() or host.width() <= 1:
+            return None
+        return self.map_canvas_rect_to_stack(canvas, QRect(host))
+
     def resizeEvent(self, event):
         self._page_transition.cancel("stack-resize")
         super().resizeEvent(event)
@@ -2591,8 +2825,7 @@ class ChartStack(QWidget):
         self._reposition_pill()
 
     def clear_cursor_pill(self):
-        """Clear pill content and hide it; preserves the user-placed flag so a
-        subsequent cursor activation reappears at the spot the user chose."""
+        """Clear live pill content only. Pinned records stay on the owner."""
         for card in (self._time_card, self._secondary_card):
             if card is not None:
                 card.close_cursor_display_popover()
@@ -2603,6 +2836,7 @@ class ChartStack(QWidget):
         self._cursor_rows_by_canvas.clear()
         self._pending_fft_primary.clear()
         self._pending_cursor_primary.clear()
+        self._pinned_cursors.reflow_visible()
 
     def cursor_pill_snapshot(self):
         """Return the current floating cursor pill UI state.

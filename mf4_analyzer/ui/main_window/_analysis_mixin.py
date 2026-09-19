@@ -676,9 +676,13 @@ class AnalysisMixin:
         for pane_idx in range(min(page.pane_count(), len(state.panes))):
             capture_overlay_from_canvas(
                 page.pane_canvas(pane_idx), state.panes[pane_idx],
+                chart_stack=self.chart_stack,
             )
 
     def _apply_analysis_overlay(self, section, state):
+        ensure = getattr(self, "_ensure_pinned_cursor_lifecycle_hooks", None)
+        if callable(ensure):
+            ensure()
         from ..analysis_view_bridge import apply_overlay_to_canvas
 
         page = self._analysis_page(section)
@@ -686,6 +690,7 @@ class AnalysisMixin:
         for pane_idx in range(min(page.pane_count(), len(state.panes))):
             apply_overlay_to_canvas(
                 page.pane_canvas(pane_idx), state.panes[pane_idx],
+                chart_stack=self.chart_stack,
             )
 
     def _sync_active_analysis_params(self, section):
@@ -2604,7 +2609,7 @@ class AnalysisMixin:
     def _rebind_pane_overlay(self, canvas, pane) -> None:
         from ..analysis_view_bridge import apply_overlay_to_canvas
 
-        apply_overlay_to_canvas(canvas, pane)
+        apply_overlay_to_canvas(canvas, pane, chart_stack=self.chart_stack)
 
     def _show_analysis_empty_hint(self, canvas):
         canvas.show_empty_hint("点击『计算』生成")

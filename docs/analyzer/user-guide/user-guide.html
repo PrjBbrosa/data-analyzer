@@ -1408,6 +1408,7 @@
       <li><b>标准快捷键</b>：Windows/Linux 用 Ctrl+Tab / Ctrl+Shift+Tab 切换 View；macOS 显示 Meta+Tab（⌃⇥）/ Meta+Shift+Tab（⌃⇧⇥）。图表复位是 Ctrl+R。</li>
       <li><b>Esc 分层</b>：每次只关闭最内层的菜单、弹层或临时编辑；不会退出应用、删除 View 或跨层清空状态。</li>
       <li><b>游标显示设置</b>：时域游标旁的设置可分别开关最小值点、最大值点及双游标 Min / Max / Avg / 差值；− 可收成 mini，完整内容仍在提示中。</li>
+      <li><b>P 固定读数</b>：鼠标停在时域 / 频谱 / 频响数据图上按 P，留下独立读数面板，不必先点击。关游标不隐藏已固定；Board 与图片标注里 P 仍是画笔。</li>
     </ul>
   </section>
 
@@ -1467,7 +1468,7 @@
 
     <details class="faq">
       <summary>图复制出来粘到 PPT 里没有游标和读数？</summary>
-      <div class="faq-body">用图表工具栏的 <b>📋 复制为图片</b>，它会把当前可见的游标线和读数一起复制。</div>
+      <div class="faq-body">用图表工具栏的 <b>📋 复制为图片</b>，它会把当前可见的游标线、活动读数和已固定面板一起复制。</div>
     </details>
 
     <details class="faq">
@@ -1573,7 +1574,7 @@ const chartDescs = {
   overlay:  {t:'叠加',          d:'多通道画在同一坐标系上，便于对比。默认选项。',                                                                  meta:'仅在多通道时有意义'},
   annotate: {t:'标注 · 开启/关闭', d:'开启后：左键单击图上任意点，添加一个带读数的标注；右键单击删除最近一个标注。',                            meta:'状态按钮 · 文案会变'},
   clear:    {t:'标注 · 清除',   d:'一次清空当前图表里的所有标注。',                                                                                meta:'不可撤销'},
-  copy:     {t:'复制为图片',    d:'把当前图（含可见游标线和读数）复制到剪贴板，可直接粘到 PPT 或聊天窗口。',                                      meta:'推荐用这个'},
+  copy:     {t:'复制为图片',    d:'把当前图（含可见游标线、活动读数和已固定面板）复制到剪贴板，可直接粘到 PPT 或聊天窗口。',                      meta:'推荐用这个'},
   options:  {t:'图表选项',      d:'展开 X/Y/Z 轴的进阶设置：自动范围 / 手动范围 / 标签字号 / 是否对数刻度等。',                                  meta:'每个模式可选项不同'}
 };
 const chartDetail = document.getElementById('chartDetail');

@@ -115,6 +115,72 @@ class FrequencyCursorChannel:
 
 
 @dataclass(frozen=True)
+class FrfCursorPoint:
+    """One FRF sample at a snapped physical frequency. Never log10(view-x)."""
+
+    frequency_hz: float
+    magnitude: float | None = None
+    phase_deg: float | None = None
+    coherence: float | None = None
+
+
+@dataclass(frozen=True)
+class FrfCursorSample:
+    """FRF cursor facts. Frequencies are always Hz, never log10.
+
+    Single mode fills the top-level frequency/magnitude/phase/coherence
+    fields. Dual mode fills ``a`` / ``b`` plus signed B−A deltas using the
+    current owner definition (no extra angle wrap).
+    """
+
+    frequency_hz: float | None = None
+    magnitude: float | None = None
+    phase_deg: float | None = None
+    coherence: float | None = None
+    magnitude_unit: str = ""
+    a: FrfCursorPoint | None = None
+    b: FrfCursorPoint | None = None
+    delta_frequency_hz: float | None = None
+    delta_magnitude: float | None = None
+    delta_phase_deg: float | None = None
+    delta_coherence: float | None = None
+
+
+@dataclass(frozen=True)
+class CursorExtremaFact:
+    """Time-domain dual-cursor min/max marker fact already computed by the owner."""
+
+    identity: object
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+
+
+@dataclass(frozen=True)
+class PinnedCursorSample:
+    """Runtime cache of pin facts. Not persisted.
+
+    Carries owner identity, binding generation, data revision, the actual
+    sampled coordinates, structured channel or FRF facts, and extrema when
+    the time-domain owner already computed them for markers.
+    """
+
+    owner_identity: object = None
+    binding_generation: int | None = None
+    data_revision: int | None = None
+    domain: str = ""
+    mode: str = ""
+    x: float | None = None
+    ax: float | None = None
+    bx: float | None = None
+    channels: tuple[CursorDisplayChannel | FrequencyCursorChannel, ...] = ()
+    frf_sample: FrfCursorSample | None = None
+    extrema: tuple[CursorExtremaFact, ...] = ()
+    diagnostic: str = ""
+
+
+@dataclass(frozen=True)
 class CursorPresentation:
     blocks: tuple[CursorDisplayBlock, ...]
     html: str
@@ -159,9 +225,13 @@ __all__ = [
     "CursorDisplayChannel",
     "CursorDisplayOptions",
     "CursorDisplayRow",
+    "CursorExtremaFact",
     "CursorTableRow",
     "CursorPresentation",
     "FrequencyCursorChannel",
+    "FrfCursorPoint",
+    "FrfCursorSample",
+    "PinnedCursorSample",
     "_OPTION_NAMES",
     "enabled_value_fields",
 ]

@@ -43,6 +43,7 @@ def test_context_hints_filter_by_mode_and_tier_priority():
         "coaxis.gesture",
         "filter.view_scope",
         "chart_options.view_scope",
+        "cursor.pin_off",
     ]
 
     subplot = HintState(mode="time", plot_mode="subplot")
@@ -54,6 +55,7 @@ def test_context_hints_filter_by_mode_and_tier_priority():
         "coaxis.gesture",
         "filter.view_scope",
         "chart_options.view_scope",
+        "cursor.pin_off",
     ]
 
     dual = HintState(mode="time", plot_mode="overlay", cursor_mode="dual")
@@ -99,6 +101,7 @@ def test_context_hints_suppress_recently_used_ids():
         "coaxis.gesture",
         "filter.view_scope",
         "chart_options.view_scope",
+        "cursor.pin_off",
     ]
 
 
@@ -321,7 +324,72 @@ def test_view_history_hint_migrates_camera_off_ctrl_z():
 def test_shortcut_tooltip_returns_exact_registered_key():
     assert hints.shortcut_tooltip("pan") == "Ctrl+G"
     assert hints.shortcut_tooltip("btn_overlay") == "Ctrl+2"
+    assert hints.shortcut_tooltip("pin_cursor") == "P"
     assert hints.shortcut_tooltip("missing") is None
+
+
+def test_pinned_cursor_hints_are_mode_gated_and_not_global_p():
+    by_id = {hint.id: hint for hint in hints.all_hints()}
+    pin_ids = ("cursor.pin_single", "cursor.pin_dual", "cursor.pin_off")
+    pin_modes = frozenset({"time", "fft", "frf"})
+    for hint_id, cursor_mode, phrase in (
+        ("cursor.pin_single", "single", "P 固定当前读数"),
+        ("cursor.pin_dual", "dual", "先放 A/B"),
+        ("cursor.pin_off", "off", "不隐藏已固定"),
+    ):
+        hint = by_id[hint_id]
+        assert hint.surface == "context"
+        assert hint.modes == pin_modes
+        assert hint.cursor_modes == frozenset({cursor_mode})
+        assert phrase in hint.text
+        assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+        assert "工具栏" not in hint.text
+
+    assert "P 开画笔" in by_id["ultraview.existing_markup"].text
+    assert "pin_cursor" not in {
+        key for key, _label, _shortcut in hints.TIME_CARD_SHORTCUTS
+    }
+
+    for mode, plot_mode, cursor_mode, expected in (
+        ("time", "overlay", "single", "cursor.pin_single"),
+        ("fft", "", "single", "cursor.pin_single"),
+        ("frf", "", "single", "cursor.pin_single"),
+        ("time", "overlay", "dual", "cursor.pin_dual"),
+        ("fft", "", "dual", "cursor.pin_dual"),
+        ("frf", "", "dual", "cursor.pin_dual"),
+        ("time", "overlay", "off", "cursor.pin_off"),
+        ("fft", "", "off", "cursor.pin_off"),
+        ("frf", "", "off", "cursor.pin_off"),
+    ):
+        ids = [
+            hint.id
+            for hint in hints.context_hints(
+                HintState(mode=mode, plot_mode=plot_mode, cursor_mode=cursor_mode)
+            )
+        ]
+        assert expected in ids, (mode, cursor_mode, ids)
+        other = set(pin_ids) - {expected}
+        assert not other.intersection(ids), (mode, cursor_mode, ids)
+
+    dual_ids = [
+        hint.id
+        for hint in hints.context_hints(
+            HintState(mode="time", plot_mode="overlay", cursor_mode="dual")
+        )
+    ]
+    assert dual_ids[0] == "cursor.dual_ab"
+    assert dual_ids.index("cursor.dual_ab") < dual_ids.index("cursor.pin_dual")
+
+    for mode, plot_mode in (
+        ("fft_time", ""),
+        ("order", ""),
+        ("ultraview", ""),
+    ):
+        ids = {
+            hint.id
+            for hint in hints.context_hints(HintState(mode=mode, plot_mode=plot_mode))
+        }
+        assert not set(pin_ids).intersection(ids), (mode, ids)
 
 
 def test_registry_hints_quickref_shortcut_texts_agree():

@@ -710,3 +710,96 @@ def test_capture_view_picks_up_canvas_remarks_and_dual_placement():
 
     assert state.remarks == [dict(_REMARK)]
     assert state.cursor_placement == {"ax": 0.5, "bx": 1.5}
+
+
+def _sample_pins(fid="f0", channel="torque", x=1.25):
+    from mf4_analyzer.ui.pinned_cursor_state import empty_collection, next_record
+
+    collection = empty_collection()
+    collection, _intent = next_record(collection, {
+        "mode": "single",
+        "domain": "time",
+        "x": x,
+        "x_unit": "s",
+        "bindings": [{"fid": fid, "channel": channel}],
+    })
+    return collection
+
+
+class _PinStack(_Stack):
+    def __init__(self):
+        super().__init__()
+        self.secondary = _Canvas()
+        self._focused = self.canvas_time
+        self._pins = {}
+        self.applied = []
+
+    def focused_canvas(self):
+        return self._focused
+
+    def pinned_cursors_for_canvas(self, canvas):
+        return self._pins.get(id(canvas))
+
+    def set_pinned_cursors_for_canvas(self, canvas, collection):
+        self.applied.append((canvas, collection))
+        self._pins[id(canvas)] = collection
+
+
+def test_capture_keeps_pins_when_stack_seam_is_absent():
+    win = _Window()
+    pins = _sample_pins()
+    state = ViewState(name="v", tab_color="#000000", pinned_cursors=pins)
+    view_bridge.capture_controls_into(state, win)
+    assert state.pinned_cursors is pins
+
+
+def test_capture_and_apply_pins_are_pane_local_not_shared_projection():
+    win = _Window()
+    stack = _PinStack()
+    win.chart_stack = stack
+    stack._focused = stack.canvas_time
+    primary_pins = _sample_pins(x=1.0)
+    secondary_pins = _sample_pins(x=9.0)
+    stack._pins[id(stack.canvas_time)] = primary_pins
+    stack._pins[id(stack.secondary)] = secondary_pins
+
+    secondary_state = ViewState(name="B", tab_color="#000000")
+    view_bridge.capture_controls_into(secondary_state, win, stack.secondary)
+    assert secondary_state.pinned_cursors.records[0].x == 9.0
+    assert secondary_state.pinned_cursors.scope_id == secondary_pins.scope_id
+
+    apply_pins = _sample_pins(x=4.5)
+    apply_state = ViewState(
+        name="B", tab_color="#000000", pinned_cursors=apply_pins,
+    )
+    view_bridge.apply_controls_from_state(apply_state, win, stack.secondary)
+    assert stack.applied[-1][0] is stack.secondary
+    assert stack.applied[-1][1].records[0].x == 4.5
+
+
+def test_capture_shared_axis_opts_follows_window_focus_during_card_transition():
+    win = _Window()
+    stack = _PinStack()
+    win.chart_stack = stack
+    win._focused_view_idx = 1
+    win._canvas_for_view_index = (
+        lambda idx: stack.secondary if idx == 1 else stack.canvas_time
+    )
+    stack._focused = stack.canvas_time
+    win.inspector.top._tick_density = (21, 9)
+
+    leaving = ViewState(
+        name="B",
+        tab_color="#000000",
+        axis_opts={"tick_density": {"x": 13, "y": 7}},
+    )
+    view_bridge.capture_controls_into(leaving, win, stack.secondary)
+    assert leaving.axis_opts["tick_density"] == {"x": 21, "y": 9}
+
+    unfocused = ViewState(
+        name="A",
+        tab_color="#000000",
+        axis_opts={"tick_density": {"x": 8, "y": 5}},
+    )
+    view_bridge.capture_controls_into(unfocused, win, stack.canvas_time)
+    assert unfocused.axis_opts["tick_density"] == {"x": 8, "y": 5}

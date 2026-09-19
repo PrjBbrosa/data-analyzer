@@ -10,6 +10,7 @@ import pytest
 from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
+from mf4_analyzer.ui.pg_canvas.pinned_cursor_overlay import PinnedCursorOverlay
 from mf4_analyzer.ui.pg_canvas.quality import QualityManager
 from mf4_analyzer.ui.pg_canvas.renderer import Renderer
 from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
@@ -39,6 +40,7 @@ EXPECTED_WRITE_THROUGH = {
     # and on a trip) but the storage stays one bare attribute hop from the
     # paint path.
     "QualityManager": {"_aa_backstop_armed"},
+    "PinnedCursorOverlay": set(),
     # _SliceStrip writes its whole state through on purpose, which is why the
     # set is long rather than empty. The slice cursor position, direction and
     # AA flag have to stay readable as canvas._slice_* -- tests and
@@ -64,6 +66,7 @@ COLLABORATOR_CLASSES = (
     TickDensityController,
     AnnotationManager,
     QualityManager,
+    PinnedCursorOverlay,
 )
 
 

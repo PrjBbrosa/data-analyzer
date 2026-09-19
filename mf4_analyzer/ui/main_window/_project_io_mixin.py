@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from time import monotonic
 
-from PyQt5.QtCore import QEventLoop, QSettings
+from PyQt5.QtCore import QEventLoop, QSettings, Qt
 from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ...blf_dbc_candidates import (
@@ -89,6 +89,50 @@ class ProjectIOMixin:
         if holder is None:
             return False
         return holder.mark_user_mutation(token)
+
+    def _ensure_pinned_cursor_lifecycle_hooks(self):
+        """Connect pin user-intent to project dirty. Idempotent."""
+        controller = getattr(
+            getattr(self, "chart_stack", None), "_pinned_cursors", None,
+        )
+        if controller is None:
+            return
+        try:
+            controller.intent_changed.connect(
+                self._on_pinned_cursor_intent_changed, Qt.UniqueConnection,
+            )
+        except TypeError:
+            pass
+
+    def _on_pinned_cursor_intent_changed(self):
+        self._note_user_project_mutation(token="pinned_cursor")
+
+    def _drop_pinned_cursor_identities(self, *, fids=(), channels=()):
+        """Remove closed source/channel identities from View/Pane pin records."""
+        controller = getattr(
+            getattr(self, "chart_stack", None), "_pinned_cursors", None,
+        )
+        if controller is None:
+            return
+        filter_fn = controller.filter_collection_identities
+        view_manager = getattr(self, "view_manager", None)
+        for state in getattr(view_manager, "views", ()) or ():
+            collection = getattr(state, "pinned_cursors", None)
+            if collection is None:
+                continue
+            state.pinned_cursors = filter_fn(
+                collection, fids=fids, channels=channels,
+            )
+        for manager in (getattr(self, "analysis_managers", None) or {}).values():
+            for state in getattr(manager, "views", ()) or ():
+                for pane in getattr(state, "panes", ()) or ():
+                    collection = getattr(pane, "pinned_cursors", None)
+                    if collection is None:
+                        continue
+                    pane.pinned_cursors = filter_fn(
+                        collection, fids=fids, channels=channels,
+                    )
+        controller.drop_closed_identities(fids=fids, channels=channels)
 
     def _on_project_semantic_views_changed(self):
         self._note_user_project_mutation()
@@ -1884,6 +1928,7 @@ class ProjectIOMixin:
         self._invalidate_all_analysis_caches_for_fid(fid)
         self._remove_file_from_all_time_views(fid)
         self._remove_file_from_all_analysis_views(fid)
+        self._drop_pinned_cursor_identities(fids=(fid,))
         del self.files[fid]
         self.navigator_order.remove_fid(fid)
         self.navigator.remove_file(fid, emit=False)
@@ -1994,6 +2039,10 @@ class ProjectIOMixin:
         chart_stack = getattr(self, "chart_stack", None)
         if chart_stack is not None:
             chart_stack.clear_cursor_pill()
+            self._ensure_pinned_cursor_lifecycle_hooks()
+            controller = getattr(chart_stack, "_pinned_cursors", None)
+            if controller is not None:
+                controller.clear_all()
         # ``active_changed`` above synchronously applies the active Time View,
         # including its record-tree projection.  The close presenter uses this
         # to avoid performing the same projection a second time.

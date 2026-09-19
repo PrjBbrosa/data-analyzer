@@ -11,6 +11,7 @@ from dataclasses import replace
 import json
 from typing import Any, Iterable
 
+from .pinned_cursor_state import collection_from_dict
 from .time_xaxis import CustomXAxisSpec, CHANNEL_MODE, EXACT_SOURCE
 from .view_overlay_state import (
     normalize_cursor_placement,
@@ -145,9 +146,21 @@ def _canvas_owns_shared_projection(window, canvas) -> bool:
     projection of the focused time pane. Capturing or restoring those
     widgets into a different pane's View would stamp the focused filter
     onto the compare View.
+
+    ChartStack updates ``focused_canvas()`` before MainWindow moves
+    ``_focused_view_idx``. Inspector ownership follows that index until
+    the leave-capture finishes, otherwise tick density and filters from
+    the leaving pane are dropped.
     """
     if canvas is None:
         return True
+    canvas_for_idx = getattr(window, "_canvas_for_view_index", None)
+    if callable(canvas_for_idx):
+        idx = getattr(window, "_focused_view_idx", None)
+        if idx is not None:
+            current = canvas_for_idx(idx)
+            if current is not None:
+                return current is canvas
     chart_stack = getattr(window, "chart_stack", None)
     if chart_stack is None:
         return True
@@ -201,6 +214,10 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     state.cursor_placement = normalize_cursor_placement(
         live_placement, cursor_mode=state.cursor_mode
     )
+    # Pins are pane-local; do not gate on the shared navigator/filter projection.
+    getter = getattr(chart_stack, "pinned_cursors_for_canvas", None)
+    if callable(getter):
+        state.pinned_cursors = collection_from_dict(getter(target))
 
 
 def capture_canvas_ranges_into(state: ViewState, canvas) -> None:
@@ -284,6 +301,9 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
         restore_filter = getattr(window, "_restore_view_time_filter", None)
         if callable(restore_filter):
             restore_filter(getattr(state, "time_filter", None))
+    setter = getattr(chart_stack, "set_pinned_cursors_for_canvas", None)
+    if callable(setter):
+        setter(target, getattr(state, "pinned_cursors", None))
 
 
 def apply_view(state: ViewState, window) -> None:

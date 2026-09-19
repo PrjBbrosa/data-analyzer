@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
@@ -50,6 +50,12 @@ from .remarks import (
     viewport_pos_to_scene,
 )
 from .overlay_intent import AnalysisRemarkStore, snapshot_frequency_cursor
+from .pinned_cursor_overlay import PinnedCursorOverlay
+from mf4_analyzer.ui.cursor_display_model import (
+    FrfCursorPoint,
+    FrfCursorSample,
+    PinnedCursorSample,
+)
 from mf4_analyzer.ui.view_overlay_state import normalize_cursor_placement
 from mf4_analyzer.ui.ultraview_capture_facts import (
     analysis_idle_timer_is_busy,
@@ -319,10 +325,12 @@ class PgFrfCanvas(QWidget):
         self._cursor_lines = self._make_cursor_lines("#64748b")
         self._cursor_a_lines = self._make_cursor_lines("#1769e0")
         self._cursor_b_lines = self._make_cursor_lines("#d97706")
+        self._pinned_overlay = PinnedCursorOverlay(self, kind="frf")
         self._cursor_mode = "off"
         self._cursor_a_frequency = None
         self._cursor_b_frequency = None
         self._next_dual_cursor = "a"
+        self._cursor_data_revision = 0
 
         # The three FRF panels share the standard pyqtgraph point-remark
         # artist/interaction contract used by FFT and heatmap canvases.  The
@@ -1033,6 +1041,7 @@ class PgFrfCanvas(QWidget):
             raise ValueError("FRF result arrays must have equal length")
         self._note_presentation_content_invalidated()
         self._cancel_presentation_paint_ack()
+        self._cursor_data_revision += 1
         # Point labels include panel values, so a new calculation must
         # re-snap Y. Intent stays; Qt items are a projection.
         self._drop_remark_projection()
@@ -1058,6 +1067,7 @@ class PgFrfCanvas(QWidget):
     def set_display_params(self, params) -> None:
         self._note_presentation_content_invalidated()
         self._cancel_presentation_paint_ack()
+        self._cursor_data_revision += 1
         old_xlim = self.get_xlim()
         self._display_params.update(
             self._normalise_display_params(dict(params or {}))
@@ -1772,43 +1782,175 @@ class PgFrfCanvas(QWidget):
             self._cursor_b_frequency = normalized.get("bx")
         self._project_frequency_cursors()
 
+    @staticmethod
+    def _optional_finite(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(number):
+            return None
+        return number
+
+    @staticmethod
+    def _format_frf_qty(value, spec):
+        number = float("nan") if value is None else float(value)
+        return format(number, spec)
+
+    @staticmethod
+    def _signed_delta(a_value, b_value):
+        if a_value is None or b_value is None:
+            return None
+        return b_value - a_value
+
+    def _frf_point_at_index(self, index) -> FrfCursorPoint | None:
+        if index is None:
+            return None
+        frequency = self._optional_finite(self._draw_frequencies[index])
+        if frequency is None:
+            return None
+        return FrfCursorPoint(
+            frequency_hz=frequency,
+            magnitude=self._optional_finite(self._draw_magnitude[index]),
+            phase_deg=self._optional_finite(self._draw_phase[index]),
+            coherence=self._optional_finite(self._draw_coherence[index]),
+        )
+
+    def _frf_sample_from_index(self, index) -> FrfCursorSample | None:
+        point = self._frf_point_at_index(index)
+        if point is None:
+            return None
+        return FrfCursorSample(
+            frequency_hz=point.frequency_hz,
+            magnitude=point.magnitude,
+            phase_deg=point.phase_deg,
+            coherence=point.coherence,
+            magnitude_unit=self._magnitude_unit_suffix(),
+        )
+
+    def evaluate_frequency_cursor(self, hz):
+        """Return structured FRF facts at the snapped Hz. Does not draw or emit."""
+        query = self._optional_finite(hz)
+        if query is None:
+            return None
+        idx = self._nearest_frequency_index(query)
+        if idx is None:
+            return None
+        return self._frf_sample_from_index(idx)
+
+    def evaluate_frequency_cursor_sample(self, hz):
+        sample = self.evaluate_frequency_cursor(hz)
+        if sample is None:
+            return None
+        return PinnedCursorSample(
+            data_revision=int(self._cursor_data_revision),
+            domain="frf",
+            mode="single",
+            x=sample.frequency_hz,
+            frf_sample=sample,
+        )
+
+    def evaluate_dual_frequency_cursor(self, a_hz, b_hz):
+        """All-or-nothing A/B facts. Incomplete or failed B is None, no mutation."""
+        if b_hz is None:
+            return None
+        a_query = self._optional_finite(a_hz)
+        b_query = self._optional_finite(b_hz)
+        if a_query is None or b_query is None:
+            return None
+        a_index = self._nearest_frequency_index(a_query)
+        b_index = self._nearest_frequency_index(b_query)
+        if a_index is None or b_index is None:
+            return None
+        a_point = self._frf_point_at_index(a_index)
+        b_point = self._frf_point_at_index(b_index)
+        if a_point is None or b_point is None:
+            return None
+        return FrfCursorSample(
+            magnitude_unit=self._magnitude_unit_suffix(),
+            a=a_point,
+            b=b_point,
+            delta_frequency_hz=b_point.frequency_hz - a_point.frequency_hz,
+            delta_magnitude=self._signed_delta(a_point.magnitude, b_point.magnitude),
+            delta_phase_deg=self._signed_delta(a_point.phase_deg, b_point.phase_deg),
+            delta_coherence=self._signed_delta(a_point.coherence, b_point.coherence),
+        )
+
+    def evaluate_dual_frequency_cursor_sample(self, a_hz, b_hz):
+        sample = self.evaluate_dual_frequency_cursor(a_hz, b_hz)
+        if sample is None:
+            return None
+        return PinnedCursorSample(
+            data_revision=int(self._cursor_data_revision),
+            domain="frf",
+            mode="dual",
+            ax=None if sample.a is None else sample.a.frequency_hz,
+            bx=None if sample.b is None else sample.b.frequency_hz,
+            frf_sample=sample,
+        )
+
     def set_cursor_frequency(self, frequency) -> str:
         idx = self._nearest_frequency_index(frequency)
         if idx is None:
             self.cursor_info.emit("")
             return ""
-        f_value = float(self._draw_frequencies[idx])
-        self._show_frequency_lines(self._cursor_lines, f_value)
+        sample = self._frf_sample_from_index(idx)
+        if sample is None:
+            self.cursor_info.emit("")
+            return ""
+        self._show_frequency_lines(self._cursor_lines, sample.frequency_hz)
         text = (
-            f"f={f_value:g} Hz | "
-            f"|H|={self._draw_magnitude[idx]:.5g}"
-            f"{self._magnitude_unit_suffix()} | "
-            f"phase={self._draw_phase[idx]:.5g}° | "
-            f"coherence={self._draw_coherence[idx]:.4g}"
+            f"f={sample.frequency_hz:g} Hz | "
+            f"|H|={self._format_frf_qty(sample.magnitude, '.5g')}"
+            f"{sample.magnitude_unit} | "
+            f"phase={self._format_frf_qty(sample.phase_deg, '.5g')}° | "
+            f"coherence={self._format_frf_qty(sample.coherence, '.4g')}"
         )
         self.cursor_info.emit(text)
         return text
 
     def _format_dual_sample(self, prefix, index) -> str:
-        frequency = float(self._draw_frequencies[index])
+        point = self._frf_point_at_index(index)
+        if point is None:
+            frequency = float(self._draw_frequencies[index])
+            return (
+                f"{prefix}: f={frequency:g} Hz | "
+                f"|H|={self._draw_magnitude[index]:.5g}{self._magnitude_unit_suffix()} | "
+                f"phase={self._draw_phase[index]:.5g}° | "
+                f"coherence={self._draw_coherence[index]:.4g}"
+            )
         return (
-            f"{prefix}: f={frequency:g} Hz | "
-            f"|H|={self._draw_magnitude[index]:.5g}{self._magnitude_unit_suffix()} | "
-            f"phase={self._draw_phase[index]:.5g}° | "
-            f"coherence={self._draw_coherence[index]:.4g}"
+            f"{prefix}: f={point.frequency_hz:g} Hz | "
+            f"|H|={self._format_frf_qty(point.magnitude, '.5g')}{self._magnitude_unit_suffix()} | "
+            f"phase={self._format_frf_qty(point.phase_deg, '.5g')}° | "
+            f"coherence={self._format_frf_qty(point.coherence, '.4g')}"
         )
 
     def _format_dual_delta(self, a_index, b_index) -> str:
         """Return the highlighted B-minus-A readout for every FRF Y axis."""
-        magnitude = self._draw_magnitude[b_index] - self._draw_magnitude[a_index]
-        phase = self._draw_phase[b_index] - self._draw_phase[a_index]
-        coherence = self._draw_coherence[b_index] - self._draw_coherence[a_index]
+        sample = self.evaluate_dual_frequency_cursor(
+            self._draw_frequencies[a_index],
+            self._draw_frequencies[b_index],
+        )
+        if sample is None:
+            magnitude = self._draw_magnitude[b_index] - self._draw_magnitude[a_index]
+            phase = self._draw_phase[b_index] - self._draw_phase[a_index]
+            coherence = self._draw_coherence[b_index] - self._draw_coherence[a_index]
+            return (
+                f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
+                "ΔY："
+                f"Δ|H|={magnitude:+.5g}{escape(self._magnitude_unit_suffix())} | "
+                f"Δphase={phase:+.5g}° | "
+                f"Δcoherence={coherence:+.4g}"
+                "</span>"
+            )
         return (
             f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
             "ΔY："
-            f"Δ|H|={magnitude:+.5g}{escape(self._magnitude_unit_suffix())} | "
-            f"Δphase={phase:+.5g}° | "
-            f"Δcoherence={coherence:+.4g}"
+            f"Δ|H|={self._format_frf_qty(sample.delta_magnitude, '+.5g')}"
+            f"{escape(sample.magnitude_unit)} | "
+            f"Δphase={self._format_frf_qty(sample.delta_phase_deg, '+.5g')}° | "
+            f"Δcoherence={self._format_frf_qty(sample.delta_coherence, '+.4g')}"
             "</span>"
         )
 
@@ -1831,12 +1973,18 @@ class PgFrfCanvas(QWidget):
         b_index = self._nearest_frequency_index(b_frequency)
         if b_index is None:
             return ""
-        self._cursor_b_frequency = float(self._draw_frequencies[b_index])
+        sample = self.evaluate_dual_frequency_cursor(
+            self._draw_frequencies[a_index],
+            self._draw_frequencies[b_index],
+        )
+        if sample is None or sample.a is None or sample.b is None:
+            return ""
+        self._cursor_b_frequency = sample.b.frequency_hz
         self._show_frequency_lines(self._cursor_b_lines, self._cursor_b_frequency)
-        delta = self._cursor_b_frequency - self._cursor_a_frequency
+        delta = sample.delta_frequency_hz
         primary = (
-            f"A={self._cursor_a_frequency:g} Hz | "
-            f"B={self._cursor_b_frequency:g} Hz | "
+            f"A={sample.a.frequency_hz:g} Hz | "
+            f"B={sample.b.frequency_hz:g} Hz | "
             f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
             f"Δf={delta:+g} Hz</span>"
         )
@@ -1860,6 +2008,53 @@ class PgFrfCanvas(QWidget):
     def cursor_enabled(self) -> bool:
         """Whether this FRF pane exposes its linked frequency readout."""
         return self._cursor_mode != "off"
+
+    def frequency_cursor_host_rect(self):
+        """Union of the three FRF data viewports in this widget's coordinates.
+
+        Returns ``None`` when any required ViewBox has no usable layout yet.
+        Coordinates are Qt logical pixels of this widget, not scene or device
+        pixels. Split panes must not share this rect with another canvas.
+        """
+        try:
+            if sip.isdeleted(self):
+                return None
+            if self.width() <= 0 or self.height() <= 0:
+                return None
+            glw = self._glw
+            mapped = None
+            for plot in self.plots:
+                view_box = getattr(plot, "vb", None)
+                if view_box is None:
+                    return None
+                scene_rect = view_box.sceneBoundingRect()
+                if (
+                    scene_rect is None
+                    or scene_rect.isNull()
+                    or scene_rect.width() <= 1
+                    or scene_rect.height() <= 1
+                ):
+                    return None
+                top_left = glw.mapFromScene(scene_rect.topLeft())
+                bottom_right = glw.mapFromScene(scene_rect.bottomRight())
+                view_rect = QRect(
+                    int(min(top_left.x(), bottom_right.x())),
+                    int(min(top_left.y(), bottom_right.y())),
+                    max(1, int(abs(bottom_right.x() - top_left.x()))),
+                    max(1, int(abs(bottom_right.y() - top_left.y()))),
+                )
+                part = QRect(
+                    glw.mapTo(self, view_rect.topLeft()),
+                    glw.mapTo(self, view_rect.bottomRight()),
+                ).intersected(self.rect())
+                if not part.isValid() or part.width() <= 1 or part.height() <= 1:
+                    return None
+                mapped = part if mapped is None else mapped.united(part)
+            if mapped is None or not mapped.isValid() or mapped.width() <= 1:
+                return None
+            return mapped
+        except (RuntimeError, TypeError, AttributeError, ValueError):
+            return None
 
     def set_cursor_enabled(self, enabled: bool) -> None:
         """Compatibility bridge for schema-4 callers (true → single)."""
@@ -1927,6 +2122,7 @@ class PgFrfCanvas(QWidget):
     def clear(self) -> None:
         self._note_presentation_content_invalidated()
         self._cancel_presentation_paint_ack()
+        self._cursor_data_revision += 1
         self.clear_remarks()
         self._result = None
         self._context = {}
